@@ -79,7 +79,7 @@ ADR checks them again when it is written.
 
 Open item: the line numbers of this section are not checked again at the
 pinned upstream commits. The check needs a read of the upstream repositories.
-The owner decides whether this session has that access. Until the check is
+The owner decides which access the check needs. Until the check is
 done, a line number in this section is a claim from the earlier review.
 
 **OpenTofu provider network mirror protocol**

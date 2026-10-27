@@ -90,7 +90,7 @@ dropped from the RFC.
 - **ADR 194 decision 4.** "Needs attention" also holds each `forget`, each
   `import` and each move.
 - **ADR 225 decision 12.** A carried signature also keeps the view basis of
-  the signature that it carries from (section F).
+  the signature that it carries from (section F, **recommendation**).
 
 The resume of a multi-unit apply (ADR 190 decision 8) is not in this
 list. It is an open question (question 8).
@@ -250,6 +250,8 @@ different from an unknown `action_reason`, which is only a hint.
 | OpenTofu `["no-op"]` with `previous_address` | `move` | Needs attention |
 | OpenTofu `change.importing` present, with `["delete"]`, `["delete", "create"]` or `["create", "delete"]` | `delete` or `replace`, with the flag `importing` | Needs attention |
 | OpenTofu `change.importing` present, with any other actions, also `["no-op"]` | `import` | Needs attention |
+| OpenTofu `previous_address` present, with `["delete"]`, `["delete", "create"]` or `["create", "delete"]` | `delete` or `replace`, with the flag `movedFrom` | Needs attention |
+| OpenTofu `previous_address` present, with `["update"]` | `move`, with the paths of the update | Needs attention |
 | OpenTofu `["no-op"]` without `previous_address` and without `importing` | none | not in the summary |
 | Pulumi `same` with `movedFrom` (an alias rename: the URN of `oldState` differs from the URN of the step) | `move` | Needs attention |
 | Pulumi `same` without `movedFrom` | none | not in the summary |

@@ -309,7 +309,7 @@ for each progress message. The audit log keeps its own retention (ADR 68).
 job artifacts (ADR 152), as the stored plan does. The table goes in the
 table list of the backup domain, which is `Tables` in `pkg/backup/backup.go`,
 next to `job_plans` and `job_logs`. A redaction of a plan or a log (ADR 151
-decision 8, ADR 152 decision 10) also redacts the `error` text of its rows.
+decision 11, ADR 152 decision 10) also redacts the `error` text of its rows.
 ADR 151 and ADR 152 name plans and logs as the redacted items only. A future
 ADR needs to name the `error` text of the rows, and the period of the rows.
 ADR 152 decision 3 gives the periods of plans and logs only.
@@ -598,13 +598,11 @@ The owner keeps these. Each recommendation is the author's.
 
 ## Open items for the same pull request
 
-The agent did not do these items. The lead agent does them.
-
 ### User documentation page (ADR 214)
 
 The user documentation (ADR 66) needs a page that states these limits in
 plain words. The page ships in the same pull request as the feature it
-describes (ADR 214). The page is not created here.
+describes (ADR 214). The page is not part of this pull request.
 
 - A CLI-driven OpenTofu run is invisible to the server. The server sees no
   action, no plan and no log of it.
@@ -614,8 +612,6 @@ describes (ADR 214). The page is not created here.
   `actions` has `complete == false` for Pulumi (C1).
 
 ### Issue for the e2e spike (proposed text)
-
-The agent cannot open issues. The lead agent opens this issue.
 
 Title: E2E spike: OpenTofu provider actions, and Pulumi refresh with hooks
 

@@ -297,13 +297,12 @@ does not retry by itself. `egress.ErrRefused` and other `4xx` stop at once
 `unknown` call, the server looks for the job that the first attempt may have
 made. These rules hold together:
 
-- **Minimum wait.** The reconciliation starts no sooner than 175 seconds
-  after the last attempt. This value is a proposal. It assumes a request
-  limit of AWX of about 115 seconds, plus a 60 second margin. That limit is
-  not checked (open question 11). The reconciliation starts only after the
-  claim of that attempt ended. AWX may create the job during the start
-  request, so the job can appear after the send, up to that limit. The queue
-  time before a worker starts the request is not checked (open question 11). Before that, the redeliver is
+- **Minimum wait.** The reconciliation starts no sooner than 90 seconds
+  after the last attempt (the 30 second request timeout plus a 60 second
+  margin), and only after the claim of that attempt ended. A longer wait is
+  open (question 11). AWX may create the job during the start request, so the
+  job can appear after the send, up to the request timeout. The queue time
+  before a worker starts the request is not checked (question 11). Before that, the redeliver is
   refused and the answer names the time to wait.
 - **Clock skew.** The server reads the `Date` header of the AWX answer and
   measures the skew against its own clock. Above 60 seconds, the
@@ -744,8 +743,9 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
    internal CA, or does the server trust store cover it?
 10. How long does the server keep call history: 30 days as for deliveries,
     or 400 days as for stored plans?
-11. Check the AWX request limit and the gateway timeouts before the 175
-    second wait (section C) is final. This check is not done. The AWX source
+11. Check the AWX request limit and the gateway timeouts before the 90
+    second wait (section C) is final. The wait is longer if AWX can create the
+    job row later than 90 seconds after the send. This check is not done. The AWX source
     and the gateway settings of an AWX installation (for example nginx) or of
     Ansible Automation Platform were not read for this RFC. The owner must name
     the deployment that the wait covers, and the check must read its settings.

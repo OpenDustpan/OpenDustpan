@@ -590,7 +590,7 @@ because a collection label has no bound.
 
 | Metric | Definition from data we hold | What we lack |
 | --- | --- | --- |
-| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89, accepted by ADR 271, where push events are not yet returned). Or the commit time from the source snapshot. The author sets a commit time, so the server cannot rely on it, and it can be wrong. |
+| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89, accepted by ADR 271). Or the commit time from the source snapshot. The author sets a commit time, so the server cannot rely on it, and it can be wrong. |
 | Change failure rate | apply jobs that a person linked to an incident as `cause` (ADR 147 decision 12), divided by all succeeded apply jobs | links only exist where people make them. Option: also count an apply that failed after it wrote state. |
 | Time to restore | for an incident linked to a unit of the collection: resolved time minus detection time (ADR 147 decision 1) | nothing for incidents. Option: also the time from a failed apply to the next succeeded apply of the same unit, with no incident. |
 | Deployment frequency | succeeded apply jobs, and state writes with no job | nothing |
@@ -844,7 +844,9 @@ The owner keeps these. Each recommendation is the author's.
    exporter) or B3 (none)? Measured on 2026-10-27 with Go 1.27.3 and
    OpenTelemetry v1.47.0, a small server program with `otlptracehttp` and
    `sdk/trace` grew from 5.4 MB to 21.2 MB (stripped: from 3.6 MB to 14.5
-   MB). The package count of the build grew from 190 to 395. The program is
+   MB). The package count of the build grew from 190 to 395. The baseline
+   figures (5.4 MB, 3.6 MB stripped, 190 packages) are not reproduced, and the
+   contents of the baseline program are not recorded here. The program is
    not the server, and it has no `otel/metric` package. A measure of the
    server itself is still open. Recommendation: B2, and so
    supersede ADR 32 decision 1, with a stdlib exporter as in ADR 60
@@ -873,7 +875,7 @@ The owner keeps these. Each recommendation is the author's.
    wants. Recommendation: IDs by default, names behind a setting.
 7. Lead time: the merge time from the push event of the Git host only, or
    also the commit time as a fallback? Recommendation: the push event only.
-   The server shows no lead time until it records a push event. ADR 271 accepts RFC 89, but the Git host does not yet return its push events.
+   The server shows no lead time until it records a push event. ADR 271 accepts RFC 89. Whether the Git host returns push events is not checked.
 8. Trace export for each namespace (a tenant of a hosted installation sends
    its own job traces to its own collector)? Recommendation: not in v1. The
    installation target only.
