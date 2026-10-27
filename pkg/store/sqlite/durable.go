@@ -15,6 +15,10 @@ import (
 
 var _ durable.Store = (*DurableOperations)(nil)
 
+// A restore cancels through the guard of its swap step, so the store must
+// have it.
+var _ durable.StepCanceler = (*DurableOperations)(nil)
+
 // DurableOperations is the store of durable operations on the database of a
 // Store. It implements durable.Store. It shares the connection, the lock of
 // the restore swap and the step transaction bound of its Store.
@@ -503,6 +507,51 @@ func (o *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	return s.inControlTx(ctx, func(q *db.Queries) error {
 		return cancelDurable(ctx, q, id)
 	})
+}
+
+// CancelBefore implements durable.StepCanceler. The read of the step and the
+// cancel run in one transaction, and a write transaction of SQLite holds the
+// database, so a step record and the cancel run one after the other.
+func (o *DurableOperations) CancelBefore(ctx context.Context, id durable.ID, step string) error {
+	if step == "" {
+		return fmt.Errorf("cancel durable operation %s before a step with no name: %w", id, durable.ErrInvalid)
+	}
+
+	s := o.store
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
+		row, err := q.GetDurableOperation(ctx, string(id))
+		if errors.Is(err, sql.ErrNoRows) {
+			return durable.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("read durable operation: %w", err)
+		}
+
+		if row.State == string(durable.StateSucceeded) || row.State == string(durable.StateFailed) {
+			return durable.ErrFinished
+		}
+
+		done, err := q.CountDurableStep(ctx, db.CountDurableStepParams{OperationID: row.ID, Name: step})
+		if err != nil {
+			return fmt.Errorf("read durable step: %w", err)
+		}
+
+		if done > 0 {
+			return durable.ErrStepDone
+		}
+
+		return cancelDurable(ctx, q, id)
+	})
+	if err != nil {
+		return fmt.Errorf("cancel durable operation %s before step %q: %w", id, step, err)
+	}
+
+	return nil
 }
 
 // cancelDurable applies the rules of durable.Store.Cancel to the operation id

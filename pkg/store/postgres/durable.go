@@ -35,6 +35,10 @@ type DurableOperations struct {
 
 var _ durable.Store = (*DurableOperations)(nil)
 
+// A restore cancels through the guard of its swap step, so the store must
+// have it.
+var _ durable.StepCanceler = (*DurableOperations)(nil)
+
 // DurableOperations returns the store of durable operations on the database
 // of s.
 func (s *Store) DurableOperations() *DurableOperations {
@@ -384,6 +388,46 @@ func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	})
 	if err != nil {
 		return fmt.Errorf("cancel durable operation %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// CancelBefore implements durable.StepCanceler. It locks the operation row
+// first, as recordStep does, so a step record and the cancel run one after
+// the other and only one of them wins.
+func (d *DurableOperations) CancelBefore(ctx context.Context, id durable.ID, step string) error {
+	if step == "" {
+		return fmt.Errorf("cancel durable operation %s before a step with no name: %w", id, durable.ErrInvalid)
+	}
+
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+		row, err := q.LockDurableOperation(ctx, string(id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return durable.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("lock operation: %w", err)
+		}
+
+		if row.State == string(durable.StateSucceeded) || row.State == string(durable.StateFailed) {
+			return durable.ErrFinished
+		}
+
+		done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: step})
+		if err != nil {
+			return fmt.Errorf("read step: %w", err)
+		}
+
+		if done {
+			return durable.ErrStepDone
+		}
+
+		return cancelDurable(ctx, q, id)
+	})
+	if err != nil {
+		return fmt.Errorf("cancel durable operation %s before step %q: %w", id, step, err)
 	}
 
 	return nil
