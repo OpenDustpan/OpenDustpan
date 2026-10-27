@@ -179,6 +179,7 @@ func TestRendererConformance(t *testing.T) {
 			Platform:     chat.Slack,
 			Host:         fakeHost,
 			SingleHost:   true,
+			OperatorHost: false,
 			MaxBody:      fakeMaxBody,
 			Decode:       decodeFake,
 			Markup:       []string{"<", ">"},

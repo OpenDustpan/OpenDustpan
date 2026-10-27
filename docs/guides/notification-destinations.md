@@ -10,8 +10,8 @@ a `sink`.
 
 **This version sends one message to a destination: the test message.** The
 server does not yet send other notifications to a destination by itself. The
-signed webhook and the Slack chat destination have a sender. The kind `email`
-and the other chat platforms have none yet, so you can make and read their
+signed webhook, the Slack chat destination and the Mattermost chat destination
+have a sender. The kind `email` and the other chat platforms have none yet, so you can make and read their
 destinations, but the test route answers `sink.no-sender` for them. See
 `docs/guides/slack-notifications.md` for Slack.
 

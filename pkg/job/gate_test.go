@@ -7,11 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
+
+// devInstallation is the policy of a dev installation: every signature counts.
+//
+//nolint:gochecknoglobals // A frozen policy shared by the tests of this file.
+var devInstallation = gate.ApproverPolicy{Production: false, IsDev: nil}
 
 func TestGateStatus(t *testing.T) {
 	t.Parallel()
@@ -85,7 +91,7 @@ func TestGateStatus(t *testing.T) {
 				Timeout:   0,
 				BindPlan:  false,
 			}
-			if got := g.Status(tt.approvals, "al"); got != tt.want {
+			if got := g.Status(tt.approvals, "al", devInstallation); got != tt.want {
 				t.Fatalf("Status() = %s, want %s", got, tt.want)
 			}
 		})
@@ -165,7 +171,7 @@ func TestConfirmationGateStatus(t *testing.T) {
 				g := job.ConfirmationGate(false)
 				g.AllowSelf = allowSelf
 
-				if got := g.Status(tt.approvals, "al"); got != tt.want {
+				if got := g.Status(tt.approvals, "al", devInstallation); got != tt.want {
 					t.Fatalf("Status(allowSelf %t) = %s, want %s", allowSelf, got, tt.want)
 				}
 			}
@@ -211,7 +217,7 @@ func TestGatesStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := job.GatesStatus(tt.gates, tt.approvals, "al"); got != tt.want {
+			if got := job.GatesStatus(tt.gates, tt.approvals, "al", devInstallation); got != tt.want {
 				t.Fatalf("GatesStatus() = %s, want %s", got, tt.want)
 			}
 		})
