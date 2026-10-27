@@ -280,9 +280,27 @@ Encryption of a whole backup is not decided (ADR 30, RFC 8).
   header. Set `--public-url` to the external URL, and `--trusted-proxies`
   when the proxy adds one. The next section says how the server reads it.
 - **Browsers.** Only origins in `--allowed-origins` get CORS headers.
-- **Response headers.** The server sets no `Content-Security-Policy`,
-  `Strict-Transport-Security`, `X-Content-Type-Options` or `X-Frame-Options`
-  header. Set them in a reverse proxy if you need them.
+- **Response headers.** When the server serves the console (`--console-dir`),
+  each console response carries these headers. The API responses do not.
+  - `X-Content-Type-Options: nosniff`.
+  - `X-Frame-Options: DENY`.
+  - `Content-Security-Policy`. The default is below.
+  - `Strict-Transport-Security: max-age=31536000`, only when the server
+    serves TLS (`--tls-cert`). The server never sends it on plain HTTP.
+
+  ```text
+  default-src 'self'; connect-src 'self' <each origin in --allowed-origins>;
+  img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none';
+  base-uri 'none'; form-action 'self'
+  ```
+
+  Each header has a setting (`--console-content-type-options`,
+  `--console-frame-options`, `--console-csp`, `--console-hsts`). A value
+  replaces the default. The value `off` sends no header. A value with a line
+  break or a character that is not printable ASCII stops the start. If a
+  reverse proxy sets the same header, turn the server header off, or make the
+  proxy replace the header and not add a second one. The server headers and
+  the proxy headers are separate layers: keep both when you can.
 
 ## Client address and trusted proxies
 

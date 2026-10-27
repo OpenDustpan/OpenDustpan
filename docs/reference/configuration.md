@@ -17,6 +17,10 @@ the same list.
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
 | `--console-dir` | `DUSTPAN_CONSOLE_DIR` | `console-dir` | (none) |
 | `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none). A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with `Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests. |
+| `--console-content-type-options` | `DUSTPAN_CONSOLE_CONTENT_TYPE_OPTIONS` | `console-content-type-options` | (none: the server sends `nosniff`). A value is sent as given. `off` sends no header. It applies to the console files only. |
+| `--console-frame-options` | `DUSTPAN_CONSOLE_FRAME_OPTIONS` | `console-frame-options` | (none: the server sends `DENY`). A value is sent as given. `off` sends no header. It applies to the console files only. |
+| `--console-csp` | `DUSTPAN_CONSOLE_CSP` | `console-csp` | (none: the server sends `default-src 'self'; connect-src 'self' <each allowed origin>; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`). A value is sent as given. `off` sends no header. It applies to the console files only. |
+| `--console-hsts` | `DUSTPAN_CONSOLE_HSTS` | `console-hsts` | (none: the server sends `max-age=31536000` when it serves TLS, and nothing without TLS). A value is sent as given. `off` sends no header. The server never sends it without `--tls-cert`. It applies to the console files only. |
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |

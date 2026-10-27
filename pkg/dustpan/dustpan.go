@@ -197,6 +197,7 @@ type settings struct {
 	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
+	consoleHeaders       ConsoleHeaders
 	proxies              proxySettings
 	tlsCertFile          string
 	tlsKeyFile           string
@@ -454,6 +455,13 @@ func WithPublicURL(raw string) Option {
 // cross-origin, for example "https://dustpan.acme.internal".
 func WithAllowedOrigins(origins ...string) Option {
 	return func(o *settings) { o.allowedOrigins = origins }
+}
+
+// WithConsoleHeaders sets the security headers of the web console files. A
+// field that is empty keeps the default; ConsoleHeaderOff sends no header.
+// Strict-Transport-Security goes out only with WithTLS.
+func WithConsoleHeaders(h ConsoleHeaders) Option {
+	return func(o *settings) { o.consoleHeaders = h }
 }
 
 // WithBeforeServe sets a function that Run calls after the start-up checks
@@ -750,44 +758,47 @@ func defaultSettings() *settings {
 		listener:                nil,
 		consoleDir:              "",
 		allowedOrigins:          nil,
-		proxies:                 proxySettings{prefixes: nil, header: ""},
-		tlsCertFile:             "",
-		tlsKeyFile:              "",
-		publicURL:               "",
-		oidcProviders:           nil,
-		signInHTTPClient:        nil,
-		gate:                    nil,
-		signInGate:              nil,
-		sessionCookies:          nil,
-		version:                 "",
-		maxCheckpointBytes:      0,
-		maxSecretBatchBytes:     0,
-		maxStateBytes:           0,
-		softDeleteRetention:     0,
-		maxBodyBytesInFlight:    0,
-		backupTarget:            nil,
-		backupTargetName:        "",
-		beforeServe:             nil,
-		installationKind:        "",
-		kindStore:               nil,
-		devSignIn:               nil,
-		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
-		auditChain:              audit.ChainOn,
-		auditChainInterval:      auditChainCheckInterval,
-		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
-		auditSinks:              nil,
-		instanceID:              "",
-		auditShipper:            nil,
-		auditSigner:             nil,
-		durableStore:            nil,
-		runners:                 nil,
-		sourceFilters:           nil,
-		jobClaimer:              nil,
-		components:              AllComponents(),
-		operationLease:          0,
-		watch:                   nil,
-		allowDevBackups:         false,
-		allowDevHint:            "",
+		consoleHeaders: ConsoleHeaders{
+			ContentTypeOptions: "", FrameOptions: "", ContentSecurityPolicy: "", StrictTransportSecurity: "",
+		},
+		proxies:               proxySettings{prefixes: nil, header: ""},
+		tlsCertFile:           "",
+		tlsKeyFile:            "",
+		publicURL:             "",
+		oidcProviders:         nil,
+		signInHTTPClient:      nil,
+		gate:                  nil,
+		signInGate:            nil,
+		sessionCookies:        nil,
+		version:               "",
+		maxCheckpointBytes:    0,
+		maxSecretBatchBytes:   0,
+		maxStateBytes:         0,
+		softDeleteRetention:   0,
+		maxBodyBytesInFlight:  0,
+		backupTarget:          nil,
+		backupTargetName:      "",
+		beforeServe:           nil,
+		installationKind:      "",
+		kindStore:             nil,
+		devSignIn:             nil,
+		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
+		auditChain:            audit.ChainOn,
+		auditChainInterval:    auditChainCheckInterval,
+		ipAllowlists:          &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
+		auditSinks:            nil,
+		instanceID:            "",
+		auditShipper:          nil,
+		auditSigner:           nil,
+		durableStore:          nil,
+		runners:               nil,
+		sourceFilters:         nil,
+		jobClaimer:            nil,
+		components:            AllComponents(),
+		operationLease:        0,
+		watch:                 nil,
+		allowDevBackups:       false,
+		allowDevHint:          "",
 	}
 }
 
@@ -1557,6 +1568,10 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	}
 
 	if err := checkAllowedOrigins(cfg.allowedOrigins); err != nil {
+		return baseurl.Resolver{}, err
+	}
+
+	if err := checkConsoleHeaders(cfg.consoleHeaders, cfg.allowedOrigins); err != nil {
 		return baseurl.Resolver{}, err
 	}
 
@@ -4023,7 +4038,12 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	)
 
 	if cfg.consoleDir != "" {
-		console, err := consoleHandler(cfg.consoleDir)
+		headers := cfg.consoleHeaders.resolve(cfg.allowedOrigins)
+		if cfg.tlsCertFile != "" {
+			headers = append(headers, cfg.consoleHeaders.hsts()...)
+		}
+
+		console, err := consoleHandler(cfg.consoleDir, headers)
 		if err != nil {
 			return err
 		}

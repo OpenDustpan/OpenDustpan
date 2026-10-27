@@ -20,7 +20,10 @@ import (
 // consoleHandler serves a built single-page app from dir, for GET and HEAD
 // only. Paths without a file extension that do not exist fall back to
 // index.html, so client-side routes survive a page reload.
-func consoleHandler(dir string) (http.Handler, error) {
+//
+// Each response carries the security headers in headers, including the
+// error answers of the file server. The API handlers do not pass through it.
+func consoleHandler(dir string, headers []consoleHeader) (http.Handler, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open console directory: %w", err)
@@ -34,6 +37,10 @@ func consoleHandler(dir string) (http.Handler, error) {
 	files := http.FileServerFS(fsys)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range headers {
+			w.Header().Set(h.name, h.value)
+		}
+
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			writeRouteError(
@@ -57,6 +64,128 @@ func consoleHandler(dir string) (http.Handler, error) {
 
 		files.ServeHTTP(w, r)
 	}), nil
+}
+
+// ConsoleHeaderOff is the value that turns one console response header off.
+const ConsoleHeaderOff = "off"
+
+const (
+	defaultContentTypeOptions = "nosniff"
+	defaultFrameOptions       = "DENY"
+	defaultHSTS               = "max-age=31536000"
+)
+
+// ConsoleHeaders sets the security headers of the responses that serve the
+// web console files. Each field has three states: empty keeps the built-in
+// default, ConsoleHeaderOff sends no header, and any other value is the
+// header value. The headers apply to the console files only, never to the API
+// routes.
+type ConsoleHeaders struct {
+	// ContentTypeOptions is X-Content-Type-Options. Default: nosniff.
+	ContentTypeOptions string
+	// FrameOptions is X-Frame-Options. Default: DENY.
+	FrameOptions string
+	// ContentSecurityPolicy is Content-Security-Policy. The default is built
+	// from the allowed origins: see defaultCSP.
+	ContentSecurityPolicy string
+	// StrictTransportSecurity is Strict-Transport-Security. Default:
+	// max-age=31536000. The server sends it only when it serves TLS.
+	StrictTransportSecurity string
+}
+
+// consoleHeader is one header that the console handler sets.
+type consoleHeader struct {
+	name  string
+	value string
+}
+
+// defaultCSP is the Content-Security-Policy of the console when the operator
+// sets none. The console may call the API of this server and of the listed
+// origins.
+func defaultCSP(origins []string) string {
+	connect := append([]string{"'self'"}, origins...)
+
+	return "default-src 'self'; connect-src " + strings.Join(connect, " ") +
+		"; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
+		"base-uri 'none'; form-action 'self'"
+}
+
+// headerValue answers the value to send for a header: def when the setting is
+// empty, and "" when the setting turns the header off.
+func headerValue(value, def string) string {
+	if value == ConsoleHeaderOff {
+		return ""
+	}
+
+	if value == "" {
+		return def
+	}
+
+	return value
+}
+
+// resolve answers the headers to send on every console response.
+func (h ConsoleHeaders) resolve(origins []string) []consoleHeader {
+	var out []consoleHeader
+
+	for _, c := range []consoleHeader{
+		{"X-Content-Type-Options", headerValue(h.ContentTypeOptions, defaultContentTypeOptions)},
+		{"X-Frame-Options", headerValue(h.FrameOptions, defaultFrameOptions)},
+		{"Content-Security-Policy", headerValue(h.ContentSecurityPolicy, defaultCSP(origins))},
+	} {
+		if c.value != "" {
+			out = append(out, c)
+		}
+	}
+
+	return out
+}
+
+// hsts answers the Strict-Transport-Security header, or nothing when the
+// setting turns it off. The caller adds it only when the server serves TLS:
+// the header never goes out on plain HTTP.
+func (h ConsoleHeaders) hsts() []consoleHeader {
+	value := headerValue(h.StrictTransportSecurity, defaultHSTS)
+	if value == "" {
+		return nil
+	}
+
+	return []consoleHeader{{"Strict-Transport-Security", value}}
+}
+
+// checkConsoleHeaders refuses a header value that is not printable ASCII, so
+// a value cannot carry a line break into the response. It also refuses an
+// allowed origin that cannot sit safely in a CSP source list.
+func checkConsoleHeaders(h ConsoleHeaders, origins []string) error {
+	fields := []struct{ name, value string }{
+		{"ContentTypeOptions", h.ContentTypeOptions},
+		{"FrameOptions", h.FrameOptions},
+		{"ContentSecurityPolicy", h.ContentSecurityPolicy},
+		{"StrictTransportSecurity", h.StrictTransportSecurity},
+	}
+
+	for _, f := range fields {
+		if strings.ContainsFunc(f.value, func(r rune) bool { return r < ' ' || r > '~' }) {
+			return fmt.Errorf(
+				"%w: WithConsoleHeaders: %s must hold printable ASCII only, with no line break",
+				ErrInvalidOption, f.name,
+			)
+		}
+	}
+
+	for _, o := range origins {
+		// Defense in depth: checkAllowedOrigins checks the form of each
+		// origin too; this check stays so that a space or a semicolon never
+		// reaches the policy, whatever that check accepts.
+		if strings.ContainsAny(o, " ;,'\"") {
+			return fmt.Errorf(
+				"%w: WithAllowedOrigins: origin %q cannot go into the console Content-Security-Policy",
+				ErrInvalidOption, o,
+			)
+		}
+	}
+
+	return nil
 }
 
 // withCORS lets the listed console origins call the API with credentials.
