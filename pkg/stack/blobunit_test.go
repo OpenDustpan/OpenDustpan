@@ -47,7 +47,13 @@ func TestSupersedeDeleteStaysInTheUpdate(t *testing.T) {
 			putAll(t, f.blobs, []string{victim})
 			putForeignCheckpoint(t, f, s, victim, 5)
 
-			saveErr := f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(6, envelope(`{"n":6}`)))
+			saveErr := f.svc.SaveCheckpoint(
+				t.Context(),
+				f.ref,
+				s.Update.ID,
+				s.Token,
+				checkpoint(6, envelope(`{"n":6}`)),
+			)
 			if saveErr != nil {
 				t.Fatalf("save: %v", saveErr)
 			}

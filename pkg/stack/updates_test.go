@@ -1001,7 +1001,11 @@ func TestCheckpointRules(t *testing.T) {
 	}{
 		{name: "first", in: checkpoint(2, envelope(`{"v":2}`)), want: nil},
 		{name: "retried", in: checkpoint(2, envelope(`{"v":2}`)), want: nil},
-		{name: "same sequence, other content", in: checkpoint(2, envelope(`{"v":3}`)), want: stack.ErrCheckpointConflict},
+		{
+			name: "same sequence, other content",
+			in:   checkpoint(2, envelope(`{"v":3}`)),
+			want: stack.ErrCheckpointConflict,
+		},
 		{name: "older sequence", in: checkpoint(1, envelope(`{}`)), want: stack.ErrStaleCheckpoint},
 		{name: "too large", in: checkpoint(3, string(make([]byte, 2048))), want: stack.ErrTooLarge},
 		{name: "no schema version", in: stack.CheckpointInput{
@@ -1639,7 +1643,9 @@ func TestStartKeepsReferencedBlobs(t *testing.T) {
 	ctx := t.Context()
 	first := f.started(t, stack.KindUpdate)
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
+	in := checkpoint(1, envelope(`{"a":1}`))
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, in); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
 
