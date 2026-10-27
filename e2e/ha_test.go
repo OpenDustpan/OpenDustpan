@@ -114,19 +114,19 @@ func runHighAvailability(t *testing.T, pair backupPair, store e2e.Store) {
 	t.Run("3 kill during backup", func(t *testing.T) { haKillDuringBackup(t, env) })
 
 	t.Run("4 restart during restore", func(t *testing.T) {
-		t.Skip("needs W1: a restore is a durable operation that a worker process runs")
+		t.Skip("needs restore as a durable operation that a worker process runs")
 	})
 	t.Run("5 rolling deploy", func(t *testing.T) {
-		t.Skip("needs W2: version rows of each instance and the minimum version check")
+		t.Skip("needs the write-path minimum version check")
 	})
 
 	t.Run("6 schedules", func(t *testing.T) { haSchedules(t, env) })
 
 	t.Run("7 database outage", func(t *testing.T) {
-		t.Skip("needs W3: 503 with Retry-After when the store is not available")
+		t.Skip("needs 503 with Retry-After on store loss")
 	})
 	t.Run("8 no worker", func(t *testing.T) {
-		t.Skip("needs W4: the worker check on every route that starts a durable operation")
+		t.Skip("needs the worker admission check on backup routes")
 	})
 }
 

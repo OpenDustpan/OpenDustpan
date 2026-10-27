@@ -60,3 +60,15 @@ jobs:
           # The size of the exit test: 500 MB of checkpoint data in the backup.
           E2E_HA_BACKUP_MB: "500"
         run: make e2e-ha
+      - name: Show the report
+        if: ${{ !cancelled() }}
+        run: |
+          for f in e2e/report/ha-alternation-*.json; do
+            [ -f "$f" ] || continue
+            {
+              echo "### Requests per tool and instance: $(basename "$f" .json)"
+              echo '```json'
+              cat "$f"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
