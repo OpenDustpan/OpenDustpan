@@ -1,13 +1,15 @@
 ---
 rfc: 105
 title: Blob deletes while a backup runs, from the purge, the checkpoint replace and the journal build
-status: discussing
+status: accepted
+adr: 280
 created: 2026-10-25
 ---
 
 # RFC 105. Blob deletes while a backup runs, from the purge, the checkpoint replace and the journal build
 
-Status: discussing. This RFC started as the second half of issue #722: the
+Status: accepted as [ADR 280](../adr/0280-milestone-7-high-availability-on-one-database.md),
+option 3. This RFC started as the second half of issue #722: the
 guard between the purge of a unit and a backup that runs at the same time. The
 first half (one sweep at a time across instances) is in draft PR #1917. The
 implementer gave four options in
@@ -622,4 +624,7 @@ each check that looks redundant.
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Accepted on 2026-10-27 by the project owner: option 3, as the proposal
+gives it. The decision is in
+[ADR 280](../adr/0280-milestone-7-high-availability-on-one-database.md),
+decision 7. The open questions above are not decided.
