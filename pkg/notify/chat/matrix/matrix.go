@@ -133,15 +133,16 @@ func hasEventID(body []byte) bool {
 }
 
 // Render returns the request for c. See chat.Renderer. It also returns an
-// error that matches notify.ErrInvalid for a notification ID with two dots in
-// a row, which the path of the request cannot hold.
+// error that matches notify.ErrInvalid for a notification ID that is a dot or
+// has two dots in a row, which the path of the request cannot hold.
 func (Renderer) Render(c chat.Content) (chat.Request, error) {
 	if err := c.Validate(); err != nil {
 		return chat.Request{}, fmt.Errorf("render Matrix message: %w", err)
 	}
 
-	if strings.Contains(c.NotificationID, "..") {
-		return chat.Request{}, fmt.Errorf("%w: the notification ID has two dots in a row", notify.ErrInvalid)
+	if c.NotificationID == "." || strings.Contains(c.NotificationID, "..") {
+		return chat.Request{}, fmt.Errorf("%w: the notification ID is a dot or has two dots in a row",
+			notify.ErrInvalid)
 	}
 
 	// Drop links from the end until the body fits. The fixed parts always fit,

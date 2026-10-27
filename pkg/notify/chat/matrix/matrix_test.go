@@ -192,9 +192,11 @@ func TestRenderIsAPutWithTheNotificationIDAsTheTransactionID(t *testing.T) {
 func TestRenderRefusesATransactionIDWithTwoDots(t *testing.T) {
 	t.Parallel()
 
-	_, err := matrix.New().Render(content(func(c *chat.Content) { c.NotificationID = "a..b" }))
-	if !errors.Is(err, notify.ErrInvalid) {
-		t.Fatalf("Render = %v, want ErrInvalid: the path of the request cannot hold two dots", err)
+	for _, id := range []string{"a..b", "..", "...", ".", "a..", "..a"} {
+		_, err := matrix.New().Render(content(func(c *chat.Content) { c.NotificationID = id }))
+		if !errors.Is(err, notify.ErrInvalid) {
+			t.Errorf("Render with the ID %q = %v, want ErrInvalid: the path of the request cannot hold it", id, err)
+		}
 	}
 
 	for _, id := range []string{"a.b", "a-b_c", "N.1.2"} {

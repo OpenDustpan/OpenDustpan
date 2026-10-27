@@ -35,9 +35,12 @@ func TestSenderPostsAMatrixEvent(t *testing.T) {
 	}
 
 	r := got[0]
-	if r.method != http.MethodPut || r.path != "/_matrix/client/v3/rooms/!room:example.org/send/m.room.message/ntf-1" ||
-		r.header.Get("Authorization") != "Bearer "+authCanary {
-		t.Errorf("request = %s %s with Authorization %q", r.method, r.path, r.header.Get("Authorization"))
+	// The target on the wire keeps the encoded room ID of the URL of the sink.
+	const wantURI = "/_matrix/client/v3/rooms/%21room%3Aexample.org/send/m.room.message/ntf-1"
+
+	if r.method != http.MethodPut || r.uri != wantURI || r.header.Get("Authorization") != "Bearer "+authCanary {
+		t.Errorf("request = %s %s with Authorization %q, want %s", r.method, r.uri, r.header.Get("Authorization"),
+			wantURI)
 	}
 
 	var ev struct {

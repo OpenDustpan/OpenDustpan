@@ -191,3 +191,32 @@ func TestReplaceAccessToken(t *testing.T) {
 		t.Fatalf("Replace with an empty token = %v, want ErrAccessToken", err)
 	}
 }
+
+// TestReplaceRefusesAPathThatLeavesItsPlace sends a hostile URL to the replace
+// of a chat sink: a segment that decodes to a slash or to a dot segment would
+// lead the request, with the token of the sink, to another path on the host.
+func TestReplaceRefusesAPathThatLeavesItsPlace(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newTokenFixture(t)
+
+	made, err := f.svc.Create(t.Context(), f.caller, shop, matrixSink(authCanary))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for _, path := range []string{"/rooms/x%2F..%2F..%2Fadmin", "/rooms/%2e%2e", "/rooms/../admin", "/rooms/a%3Fb"} {
+		url := "https://chat.example.com/_matrix/client/v3" + path
+
+		_, err = f.svc.Replace(t.Context(), f.caller, shop, made.Sink.ID, sinks.Change{
+			Version: 1, Name: "Ops room", Target: nil, URL: &url, AccessToken: nil,
+		})
+		if !errors.Is(err, notify.ErrInvalid) {
+			t.Errorf("Replace with the path %q = %v, want ErrInvalid", path, err)
+		}
+
+		if err != nil && strings.Contains(err.Error(), "admin") {
+			t.Errorf("the error holds a part of the URL: %v", err)
+		}
+	}
+}

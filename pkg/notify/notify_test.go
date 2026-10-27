@@ -622,6 +622,27 @@ func TestChatHost(t *testing.T) {
 		{"https://chat.googleapis.com/v1/spaces/S/messages?key=k", "chat.googleapis.com", nil},
 		{"https://mattermost.example.com/hooks/x", "mattermost.example.com", nil},
 		{"https://matrix.example.com:8448/_matrix/x", "matrix.example.com:8448", nil},
+		// The path stays in its place: an encoded room ID passes, and a segment
+		// that decodes to a slash or a dot segment does not.
+		{"https://m.example.com/_matrix/client/v3/rooms/%21room%3Aexample.org", "m.example.com", nil},
+		{"https://m.example.com/rooms/a%20b%C3%A9/", "m.example.com", nil},
+		{"https://m.example.com/rooms/...", "m.example.com", nil},
+		{"https://m.example.com/rooms/a.b", "m.example.com", nil},
+		{"https://m.example.com/rooms/x%2F..%2F..%2Fadmin", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/x%2f..%2fadmin", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/%2e%2e", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/%2E%2E/send", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/%2e", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/..", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/./x", "", notify.ErrInvalid},
+		{"https://m.example.com/a/../b", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/a%5Cb", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/a%3Fb", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/a%23b", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/a%00b", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/a%0Ab", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/a%7Fb", "", notify.ErrInvalid},
+		{"https://m.example.com/rooms/%zz", "", egress.ErrRefused},
 	}
 
 	for _, tc := range cases {

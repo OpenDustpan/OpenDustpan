@@ -282,14 +282,20 @@ func checkRequest(t *testing.T, req chat.Request, c chat.Content) {
 		return
 	}
 
-	if len(suffix) > chat.MaxPathSuffixLen || suffix[0] != '/' || strings.HasPrefix(suffix, "//") ||
-		strings.ContainsAny(suffix, "?#\\:") || strings.Contains(suffix, "..") ||
-		strings.ContainsFunc(suffix, func(r rune) bool { return r < 0x21 || r == 0x7f }) {
+	if badSuffix(suffix) {
 		t.Errorf(
 			"Request.PathSuffix = %q, want a relative path with no query, fragment, dot segment or control character",
 			suffix,
 		)
 	}
+}
+
+// badSuffix reports whether suffix breaks the contract of Request.PathSuffix.
+func badSuffix(suffix string) bool {
+	return len(suffix) > chat.MaxPathSuffixLen || suffix[0] != '/' || strings.HasPrefix(suffix, "//") ||
+		strings.ContainsAny(suffix, "?#\\:") || strings.Contains(suffix, "..") ||
+		strings.HasSuffix(suffix, "/.") || strings.Contains(suffix, "/./") ||
+		strings.ContainsFunc(suffix, func(r rune) bool { return r < 0x21 || r == 0x7f })
 }
 
 func testRenderBounds(t *testing.T, h Harness) {
