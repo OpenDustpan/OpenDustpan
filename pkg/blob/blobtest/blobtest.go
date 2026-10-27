@@ -97,6 +97,41 @@ func Run(t *testing.T, newStore Factory) {
 	})
 
 	runScope(t, newStore)
+	runPending(t)
+}
+
+// pendingCases returns the cases of the new Put contract and of the paged list.
+// Each one skips until its adapter work lands. The first two replace "second
+// put on one key fails with ErrExists" and "parallel put on one key gives one
+// success" when the port change lands: a store can then replace an object,
+// and only a reader that sees a part of each object fails.
+func pendingCases() []string {
+	return []string{
+		"second put on one key replaces it or fails with ErrExists",
+		"parallel put on one key leaves one whole object",
+		"get during a replace returns the whole old or the whole new object",
+		"failed replace leaves the old object",
+		"list page holds at most the limit ordered by key",
+		"list pages walk every object once",
+		"list page of a missing prefix is empty",
+		"list page with a limit out of range is ErrInvalidPage",
+		"list page with an invalid after key is ErrInvalidKey",
+		"list page stays inside its prefix",
+		"parallel deletes at the fixed concurrency remove every key",
+	}
+}
+
+// runPending lists the pending cases, so that each one shows in the test
+// output as skipped.
+func runPending(t *testing.T) {
+	t.Helper()
+
+	for _, name := range pendingCases() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			t.Skip("not implemented")
+		})
+	}
 }
 
 func testRoundTrip(t *testing.T, s blob.Store) {
