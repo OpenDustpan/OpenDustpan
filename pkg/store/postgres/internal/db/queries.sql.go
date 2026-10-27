@@ -5662,7 +5662,8 @@ func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItem
 
 const getJob = `-- name: GetJob :one
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
-       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE j.id = $1
@@ -5683,6 +5684,7 @@ type GetJobRow struct {
 	Body             string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	StateChangedAtMs int64
 }
 
 func (q *Queries) GetJob(ctx context.Context, id string) (GetJobRow, error) {
@@ -5703,13 +5705,15 @@ func (q *Queries) GetJob(ctx context.Context, id string) (GetJobRow, error) {
 		&i.Body,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.StateChangedAtMs,
 	)
 	return i, err
 }
 
 const getJobByKey = `-- name: GetJobByKey :one
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
-       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE n.name = $1 AND j.idempotency_key = $2
@@ -5735,6 +5739,7 @@ type GetJobByKeyRow struct {
 	Body             string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	StateChangedAtMs int64
 }
 
 func (q *Queries) GetJobByKey(ctx context.Context, arg GetJobByKeyParams) (GetJobByKeyRow, error) {
@@ -5755,6 +5760,7 @@ func (q *Queries) GetJobByKey(ctx context.Context, arg GetJobByKeyParams) (GetJo
 		&i.Body,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.StateChangedAtMs,
 	)
 	return i, err
 }
@@ -8734,12 +8740,12 @@ func (q *Queries) InsertItemKey(ctx context.Context, arg InsertItemKeyParams) (i
 const insertJob = `-- name: InsertJob :exec
 INSERT INTO jobs (
     id, namespace_id, unit_id, seq, state, wait, current_phase, current_changes, current_operation,
-    idempotency_key, version, body, created_at_ms, updated_at_ms
+    idempotency_key, version, body, created_at_ms, updated_at_ms, state_changed_at_ms
 ) VALUES (
     $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), $3,
     $4, $5, $6, $7, $8,
     $9, $10, $11, $12,
-    $13, $14
+    $13, $14, $15
 )
 `
 
@@ -8758,6 +8764,7 @@ type InsertJobParams struct {
 	Body             string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	StateChangedAtMs int64
 }
 
 func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) error {
@@ -8776,6 +8783,7 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) error {
 		arg.Body,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.StateChangedAtMs,
 	)
 	return err
 }
@@ -10051,7 +10059,8 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 
 const listAwaitingJobsOfUnit = `-- name: ListAwaitingJobsOfUnit :many
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
-       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE j.namespace_id = (SELECT x.id FROM namespaces AS x WHERE x.name = $1)
@@ -10079,6 +10088,7 @@ type ListAwaitingJobsOfUnitRow struct {
 	Body             string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	StateChangedAtMs int64
 }
 
 func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJobsOfUnitParams) ([]ListAwaitingJobsOfUnitRow, error) {
@@ -10105,6 +10115,7 @@ func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJo
 			&i.Body,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.StateChangedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -12446,6 +12457,7 @@ func (q *Queries) ListObjectContext(ctx context.Context, arg ListObjectContextPa
 const listOrphanJobs = `-- name: ListOrphanJobs :many
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms,
        d.state AS op_state
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
@@ -12472,6 +12484,7 @@ type ListOrphanJobsRow struct {
 	Body             string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	StateChangedAtMs int64
 	OpState          pgtype.Text
 }
 
@@ -12501,6 +12514,7 @@ func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int32) ([]ListOrph
 			&i.Body,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.StateChangedAtMs,
 			&i.OpState,
 		); err != nil {
 			return nil, err
@@ -17493,8 +17507,9 @@ const updateJob = `-- name: UpdateJob :execrows
 UPDATE jobs
 SET state = $1, wait = $2, current_phase = $3,
     current_changes = $4, current_operation = $5,
-    version = $6, body = $7, updated_at_ms = $8
-WHERE id = $9 AND version = $10
+    version = $6, body = $7, updated_at_ms = $8,
+    state_changed_at_ms = $9
+WHERE id = $10 AND version = $11
 `
 
 type UpdateJobParams struct {
@@ -17506,6 +17521,7 @@ type UpdateJobParams struct {
 	Version          int64
 	Body             string
 	UpdatedAtMs      int64
+	StateChangedAtMs int64
 	ID               string
 	PrevVersion      int64
 }
@@ -17522,6 +17538,7 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, er
 		arg.Version,
 		arg.Body,
 		arg.UpdatedAtMs,
+		arg.StateChangedAtMs,
 		arg.ID,
 		arg.PrevVersion,
 	)

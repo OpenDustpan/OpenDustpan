@@ -173,7 +173,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"freezes list, end once, and validate", testFreezes},
-	}, createRuleCases())
+	}, createRuleCases(), reconcileCases())
 
 	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases()) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -249,6 +249,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 		Version:        0,
 		CreatedAt:      time.Time{},
 		UpdatedAt:      time.Time{},
+		StateChangedAt: time.Time{},
 	}
 
 	for i, k := range phases {

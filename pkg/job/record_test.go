@@ -38,10 +38,25 @@ func recordJob() *job.Job {
 	apply.Phase, apply.ChangesResources = job.PhaseApply, true
 
 	return &job.Job{
-		ID: "job-1", State: job.StateRunning, Current: 0, Wait: job.WaitNone, Reason: "", StartedBy: "", Source: "",
-		Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone,
+		ID:             "job-1",
+		State:          job.StateRunning,
+		Current:        0,
+		Wait:           job.WaitNone,
+		Reason:         "",
+		StartedBy:      "",
+		Source:         "",
+		Agent:          "",
+		AgentMode:      "",
+		BreakGlass:     nil,
+		Delivery:       nil,
+		Closed:         nil,
+		Verification:   job.VerificationNone,
 		Trigger:        nil,
-		IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		IdempotencyKey: "",
+		RequestHash:    "",
+		Version:        0,
+		CreatedAt:      time.Time{},
+		UpdatedAt:      time.Time{},
 		Spec: job.Spec{
 			Unit:      identity.Object{},
 			Operation: job.OperationApply,
@@ -61,7 +76,12 @@ func recordJob() *job.Job {
 			Delivery:  "",
 			Defaulted: nil,
 		},
-		Phases: []job.Phase{emptyPhase(job.PhasePlan), emptyPhase(job.PhaseApply), emptyPhase(job.PhaseDeliver)},
+		Phases: []job.Phase{
+			emptyPhase(job.PhasePlan),
+			emptyPhase(job.PhaseApply),
+			emptyPhase(job.PhaseDeliver),
+		},
+		StateChangedAt: time.Time{},
 	}
 }
 

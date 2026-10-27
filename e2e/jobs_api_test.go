@@ -33,6 +33,7 @@ type jobDoc struct {
 	Operation string      `json:"operation"`
 	Executor  string      `json:"executor"`
 	State     string      `json:"state"`
+	Wait      string      `json:"wait"`
 	Pool      string      `json:"pool"`
 	PoolID    string      `json:"poolID"`
 	Phases    []jobDocRow `json:"phases"`

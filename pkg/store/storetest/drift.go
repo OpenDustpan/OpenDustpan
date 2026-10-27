@@ -142,6 +142,7 @@ func storeDriftJob(t *testing.T, b DriftBackend, u graph.Unit, purpose job.Purpo
 		Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 0,
 		Trigger:   nil,
 		CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		StateChangedAt: time.Time{},
 	}
 
 	entry := audit.Entry{

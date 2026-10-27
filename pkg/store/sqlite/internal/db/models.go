@@ -466,6 +466,7 @@ type Job struct {
 	Body             string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	StateChangedAtMs int64
 }
 
 type JobFreeze struct {

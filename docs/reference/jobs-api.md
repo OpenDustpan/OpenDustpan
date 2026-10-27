@@ -124,6 +124,32 @@ The `errorCode` is a stable code for a program.
 | 422 | `job.unsupported` | The operation or the tool is not available in this version. The namespace has no default pool, or has more than one. The request names no code location. |
 | 429 | `job.limit` | The workspace has 16 open jobs, or the namespace has 1,000 |
 
+## What the server does with a job on its own
+
+The server runs the schedule `job.reconcile` once each minute. One instance
+runs each tick. The schedule does these steps in this order:
+
+1. It ends each job that is `dispatched`, `running` or `canceling` while the
+   durable operation of its phase ended with no result for the job, or does not
+   exist. A restore of a backup makes jobs of the second kind. A `dispatched`
+   job or a `running` job ends `failed`. A `canceling` job ends `canceled`,
+   unless a step that changes resources began. Then it ends `failed`. The
+   `reason` of a job that a restore left is `restored`.
+2. It ends each job that stays too long in one state, with the state `expired`
+   and a `reason` that names the state and the time. A job does not start again
+   after this. The limits are 7 days for `queued`, 1 day for `dispatched` and
+   14 days for `awaiting-state`. The time starts when the job enters the state.
+3. It dispatches each `queued` job whose wait ended. A job whose gate needs
+   approval goes to `awaiting-approval`. A job whose plan is stale goes back to
+   its plan phase. A job that still waits for a busy workspace, a change freeze
+   or a manual lock stays `queued`, and the server writes nothing for it.
+
+Each change that the schedule makes writes an audit entry. The subject of the
+entry is `@server`, the principal kind is `service`, and the entry holds the
+job ID. The reason starts with `job.reconcile:` and says why the schedule made
+the change. A server with no durable store does not run the
+schedule.
+
 ## The job document
 
 | Field | Content |

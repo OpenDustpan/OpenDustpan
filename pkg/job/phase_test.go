@@ -378,6 +378,7 @@ func jobIn(s job.State, d *job.DeliveryResult) job.Job {
 		Version:        1,
 		CreatedAt:      time.Time{},
 		UpdatedAt:      time.Time{},
+		StateChangedAt: time.Time{},
 	}
 }
 

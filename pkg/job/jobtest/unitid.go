@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -159,7 +160,10 @@ func testParallelNamespaces(t *testing.T, h Harness) {
 		t.Fatalf("parallel creates: %v", err)
 	}
 
-	got := pageAll(t, h, job.Filter{Namespace: "", UnitID: "", States: nil, Limit: pageSize, After: ""})
+	got := pageAll(t, h, job.Filter{
+		Namespace: "", UnitID: "", States: nil, Limit: pageSize, After: "",
+		StateChangedBefore: time.Time{},
+	})
 	if len(got) != namespaces*perNamespace || !sameSet(got, want) {
 		t.Fatalf("paging over all namespaces returned %d jobs (%d distinct), want %d", len(got),
 			len(slices.Compact(sortedIDs(got))), namespaces*perNamespace)
@@ -168,7 +172,10 @@ func testParallelNamespaces(t *testing.T, h Harness) {
 	for i := range fixtures {
 		ns := fixtures[i].fence.Namespace
 
-		own := pageAll(t, h, job.Filter{Namespace: ns, UnitID: "", States: nil, Limit: nsPageSize, After: ""})
+		own := pageAll(t, h, job.Filter{
+			Namespace: ns, UnitID: "", States: nil, Limit: nsPageSize, After: "",
+			StateChangedBefore: time.Time{},
+		})
 		if len(own) != perNamespace {
 			t.Fatalf("paging in %s returned %d jobs, want %d", ns, len(own), perNamespace)
 		}
