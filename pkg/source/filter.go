@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"opendustpan.org/opendustpan/pkg/egress"
 )
 
 var (
@@ -295,16 +297,25 @@ func SplitHTTPS(s string) (HTTPSURL, bool) {
 	return HTTPSURL{Host: host, Parts: parts}, true
 }
 
-// validHost reports whether h is empty, or is labels of ASCII letters,
-// digits and '-', with '.' between them. An empty host is for the caller
-// to refuse. A host with any other character, for example a non-ASCII
-// letter that looks like an ASCII one, a '_' or a port, never matches a
-// pattern.
+// validHost reports whether h is empty, or is a host name of labels of
+// ASCII letters, digits and '-', with '.' between them. An empty host is
+// for the caller to refuse. A host with any other character, for example a
+// non-ASCII letter that looks like an ASCII one, a '_', a port or the
+// brackets of an IPv6 address, never matches a pattern. A host that is an
+// IP address (for example 169.254.169.254), a number that a resolver reads
+// as an IPv4 address (2130706433, 0x7f000001 or 0177.0.0.1), localhost, or
+// a name under localhost is refused, as is any address in a loopback,
+// private, link-local, unique local, metadata or reserved range. A host
+// name passes: the connection checks the resolved address of each dial.
 func validHost(h string) bool {
 	if h == "" {
 		return true
 	}
 
+	// Defense in depth: the egress rules below refuse the same hosts and
+	// more; this label check stays so that a change to the rules cannot
+	// open a host with a character that is not a letter, a digit, '.' or
+	// '-'. Neither layer relies on the other.
 	for label := range strings.SplitSeq(h, ".") {
 		if label == "" {
 			return false
@@ -317,5 +328,7 @@ func validHost(h string) bool {
 		}
 	}
 
-	return true
+	// The one list of refused hosts and addresses is the egress rules. The
+	// label check above does not stop an address in the allowed characters.
+	return egress.CheckURL("https://"+h, egress.HTTPSOnly) == nil
 }

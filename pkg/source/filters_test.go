@@ -396,6 +396,13 @@ func TestSplitHTTPS(t *testing.T) {
 		{"punycode host", "https://xn--gt-9ja.example.com/a", "xn--gt-9ja.example.com", "a", true},
 		{"non-ASCII host", "https://gіt.example.com/a", "", "", false},
 		{"NUL", "https://git.example.com/a\x00b", "", "", false},
+		{"IPv4 host", "https://169.254.169.254/a", "", "", false},
+		{"loopback host", "https://127.0.0.1/a", "", "", false},
+		{"decimal host", "https://2130706433/a", "", "", false},
+		{"hexadecimal host", "https://0x7f000001/a", "", "", false},
+		{"localhost host", "https://localhost/a", "", "", false},
+		{"name under localhost", "https://git.localhost/a", "", "", false},
+		{"name that holds an address", "https://127.0.0.1.example.com/a", "127.0.0.1.example.com", "a", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
