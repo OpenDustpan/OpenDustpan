@@ -1158,33 +1158,47 @@ func stepNames(op durable.Operation) []string {
 	return names
 }
 
-// TestRunnerDoesNotReleaseAClaimAnotherInstanceTook proves the fence at a
-// stop: when the stop signal arrives together with the answer that the claim
-// is lost, the runner writes nothing, so the instance that took the operation
-// keeps its claim.
-func TestRunnerDoesNotReleaseAClaimAnotherInstanceTook(t *testing.T) {
+// staleReleaseStore answers each Release with ErrClaimLost, as a store does
+// for a claim that another instance took, and keeps the claim it received.
+type staleReleaseStore struct {
+	durable.Store
+
+	released chan durable.Claim
+}
+
+func (s *staleReleaseStore) Release(_ context.Context, c durable.Claim) error {
+	s.released <- c
+
+	return durable.ErrClaimLost
+}
+
+// TestRunnerReleaseAtStopCarriesTheClaimToken proves the fence at a stop: the
+// runner releases with the claim that it holds, token included, so the store
+// refuses the release of a claim that another instance took. The refusal is
+// not an error of the runner and starts no other write.
+func TestRunnerReleaseAtStopCarriesTheClaimToken(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	store := newCountingStore(durabletest.NewMem().Store())
-	store.extend = func(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
-		cancel()
-
-		return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}, durable.ErrClaimLost
-	}
-
+	store := &staleReleaseStore{Store: durabletest.NewMem().Store(), released: make(chan durable.Claim, 1)}
 	started := make(chan struct{})
 	op := start(t, store, "k")
 
-	if err := newTestRunner(t, store, "a", blockUntilDone("two", started)).RunOnce(ctx); err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	stop := runInBackground(t, newTestRunner(t, store, "a", blockUntilDone("two", started)))
+
+	<-started
+	stop()
+
+	held := mustGet(t, store.Store, op.ID).Claim
+	if held.Token == 0 {
+		t.Fatalf("operation has no claim after a refused release: %+v", held)
 	}
 
-	got := mustGet(t, store, op.ID)
-	if store.ends() != 0 || got.Claim.Owner != "a" || got.State != durable.StateRunning {
-		t.Fatalf("after a stop with a lost claim: %d end writes, operation %+v; want no write and the claim untouched",
-			store.ends(), got)
+	select {
+	case got := <-store.released:
+		if got.Token != held.Token || got.Owner != "a" {
+			t.Fatalf("release carried claim %+v, want the live claim %+v", got, held)
+		}
+	default:
+		t.Fatal("the runner did not release at the stop")
 	}
 }
