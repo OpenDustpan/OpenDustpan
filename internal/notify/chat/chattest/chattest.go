@@ -32,6 +32,10 @@ type Harness struct {
 	// SingleHost is true for a platform with one public host. CheckHost must
 	// refuse Host with a port, and any host with user information.
 	SingleHost bool
+	// OperatorHost is true for a platform that the operator hosts, so that
+	// CheckHost takes any host that the egress rules take. The suite then does
+	// not expect CheckHost to refuse a sub-domain of Host.
+	OperatorHost bool
 	// MaxBody is the largest request body that the platform takes, in bytes.
 	// Zero means chat.MaxRequestBytes. A platform with a lower limit, for
 	// example about 28 KB for Microsoft Teams, sets it.
@@ -224,10 +228,11 @@ func testHostAccepted(t *testing.T, h Harness) {
 func testHostRefused(t *testing.T, h Harness) {
 	t.Helper()
 
-	hosts := append(
-		[]string{"", "localhost", "169.254.169.254", h.Host + ".evil.example", "user@" + h.Host},
-		h.RefusedHosts...,
-	)
+	hosts := append([]string{"", "localhost", "169.254.169.254", "user@" + h.Host}, h.RefusedHosts...)
+	if !h.OperatorHost {
+		hosts = append(hosts, h.Host+".evil.example")
+	}
+
 	if h.SingleHost {
 		hosts = append(hosts, h.Host+":8443", h.Host+":443")
 	}

@@ -90,9 +90,10 @@ The answer never holds the URL, the answer of the receiver or the text of an
 error. A destination of a kind or a chat platform with no sender answers 422
 `sink.no-sender`. The platform `slack` has a sender. The host of a `slack`
 destination is `hooks.slack.com` or `hooks.slack-gov.com`, and any other host
-answers 400 `sink.platform-host` when you make or change the destination. A
-destination whose sealed URL is missing, does not open, or has another host
-than the `target` answers 422 `sink.no-url`, and the server sends nothing. Set
+answers 400 `sink.platform-host` when you make or change the destination. The
+platform `mattermost` has a sender. Its host is any host that the outbound
+rules allow, because you host the server. A destination whose sealed URL is
+missing, does not open, or has another host than the `target` answers 422 `sink.no-url`, and the server sends nothing. Set
 the URL again with a change. See `docs/guides/slack-notifications.md` for the
 message.
 
