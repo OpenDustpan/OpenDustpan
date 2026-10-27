@@ -282,6 +282,78 @@ func (c *Cluster) Kill(t *testing.T, i int) {
 	}
 }
 
+// Signal sends the stop signal to server i, as a SIGTERM to its process: it
+// cancels the context of Run and returns at once; the server stays in the
+// cluster until the returned function ran. That function waits until Run returns, closes the handles of the server and
+// fails the
+// test when Run returns an error or does not return in time. Signal fails
+// the test when server i does not run.
+func (c *Cluster) Signal(t *testing.T, i int) func() {
+	t.Helper()
+
+	c.mu.Lock()
+	in := c.instances[i]
+	c.mu.Unlock()
+
+	if in == nil {
+		t.Fatalf("stop server %d: the server does not run", i)
+	}
+
+	in.cancel()
+
+	return func() {
+		t.Helper()
+
+		// The server stays in the cluster until Run returned, so the test
+		// can still send requests to it in the drain.
+		c.mu.Lock()
+		c.instances[i] = nil
+		c.mu.Unlock()
+
+		if err := in.wait(); err != nil {
+			t.Errorf("stop server %d: %v", i, err)
+		}
+
+		in.closeHandles()
+		c.transport.CloseIdleConnections()
+	}
+}
+
+// Stop stops server i with the stop signal and waits until it returned. It
+// keeps the database connections open, so the server can release its work.
+func (c *Cluster) Stop(t *testing.T, i int) {
+	t.Helper()
+
+	c.Signal(t, i)()
+}
+
+// DoStream sends a request with Token to server i, with body as the request
+// body, and returns the status and the answer body. Unlike Do, it returns the
+// error of the request, so a goroutine can call it.
+func (c *Cluster) DoStream(ctx context.Context, i int, method, path string, body io.Reader) (int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.URL(i)+path, body)
+	if err != nil {
+		return 0, "", fmt.Errorf("new request: %w", err)
+	}
+
+	req.Header.Set("Authorization", authScheme(path)+Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s on server %d: %w", method, path, i, err)
+	}
+
+	data, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return 0, "", fmt.Errorf("read answer: %w", err)
+	}
+
+	return resp.StatusCode, string(data), nil
+}
+
 // Restart starts server i again after Kill, with new handles on the same
 // database, blob directory and key, and waits until it answers ready. It
 // fails the test when server i still runs.

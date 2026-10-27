@@ -202,6 +202,10 @@ type Env struct {
 	backendCmd *exec.Cmd
 	// backendLogs holds the combined output of backendCmd.
 	backendLogs *lockedBuffer
+	// ha is the cluster of server binaries behind the proxy when
+	// E2E_INSTANCES is above 1, else nil. backendCmd, backendPort and
+	// backendLogs are then empty: the cluster owns the processes.
+	ha *HACluster
 	// certBundle holds a PEM bundle with the certificates of both servers
 	// of a pair. Empty for a single server, which trusts server.pem.
 	certBundle string
@@ -524,6 +528,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendPort:   "",
 		backendCmd:    nil,
 		backendLogs:   nil,
+		ha:            nil,
 		certBundle:    "",
 		dbProxy:       build.dbProxy,
 		dbURL:         build.dbURL,

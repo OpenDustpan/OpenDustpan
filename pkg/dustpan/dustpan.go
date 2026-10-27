@@ -144,6 +144,18 @@ const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 30 * time.Second
+	// DefaultDrainPeriod is the drain that the binary sets with
+	// WithDrainPeriod: the time between the stop signal and the start of the
+	// shutdown. In it, GET /health/ready answers 503 and the server serves
+	// all other requests, so a load balancer takes the instance out of its
+	// pool before the listener closes. It is fixed: the Helm chart waits in
+	// preStop first, and the drain and the shutdown together stay inside
+	// maxStopTime.
+	DefaultDrainPeriod = 10 * time.Second
+	// maxStopTime is the limit of the drain and the shutdown together. The
+	// pod grace period of the Helm chart is 60 s, and the preStop wait takes
+	// 15 s of it.
+	maxStopTime = 45 * time.Second
 	// maxHeaderBytes caps the request headers that the server reads. net/http
 	// answers 431 past it, so a client cannot grow an audit entry past it
 	// through headers.
@@ -218,6 +230,8 @@ type settings struct {
 	disablePulumiJournaling bool
 	// auditChain is the hash chain setting. See WithAuditChain.
 	auditChain audit.ChainSetting
+	// drainPeriod is the drain before the shutdown. See WithDrainPeriod.
+	drainPeriod time.Duration
 	// auditChainInterval is the time between two audit chain checks. See
 	// WithAuditChainCheckInterval.
 	auditChainInterval time.Duration
@@ -660,6 +674,10 @@ type Server struct {
 	// schedule.
 	idempotency      idempotency.Store
 	idempotencyEvery time.Duration
+	// ready is the readiness probe. Run makes it answer 503 when the drain
+	// starts. drainPeriod is the length of the drain.
+	ready       *readiness
+	drainPeriod time.Duration
 	// auditChainEvery is the period of the audit chain check: the schedule
 	// audit-chain-check, or the loop of each instance without a durable
 	// store.
@@ -782,6 +800,7 @@ func defaultSettings() *settings {
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainOn,
 		auditChainInterval:      auditChainCheckInterval,
+		drainPeriod:             0,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
 		instanceID:              "",
@@ -1060,21 +1079,22 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		handler:      withStartGate(handlers.served, started, cfg.logger),
 		started:      started,
 		ungated:      handlers.ungated, mounted: &mount, root: handlers.root,
-		logger:           cfg.logger,
-		listenAddr:       cfg.listenAddr,
-		listener:         cfg.listener,
-		secrets:          svc.secrets,
-		secretKeys:       cfg.secretKeys,
-		secretWrapper:    cfg.secretWrapper,
-		workspaces:       svc.workspaces,
-		backups:          backups,
-		restores:         mount.restores,
-		now:              cfg.now,
-		registry:         observed.Registry(),
-		tlsCertFile:      cfg.tlsCertFile,
-		tlsKeyFile:       cfg.tlsKeyFile,
-		observed:         observed,
-		chain:            mount.chain,
+		logger:        cfg.logger,
+		listenAddr:    cfg.listenAddr,
+		listener:      cfg.listener,
+		secrets:       svc.secrets,
+		secretKeys:    cfg.secretKeys,
+		secretWrapper: cfg.secretWrapper,
+		workspaces:    svc.workspaces,
+		backups:       backups,
+		restores:      mount.restores,
+		now:           cfg.now,
+		registry:      observed.Registry(),
+		tlsCertFile:   cfg.tlsCertFile,
+		tlsKeyFile:    cfg.tlsKeyFile,
+		observed:      observed,
+		chain:         mount.chain,
+		ready:         mount.ready, drainPeriod: cfg.drainPeriod,
 		tokens:           svc.tokens,
 		tempAdmins:       svc.tempAdmins,
 		shipper:          shipper,
@@ -1516,6 +1536,15 @@ func newTFEHandler(
 	return handler, nil
 }
 
+// checkPeriods validates the options that set a length of time.
+func checkPeriods(cfg *settings) error {
+	if err := checkDrainPeriod(cfg.drainPeriod); err != nil {
+		return err
+	}
+
+	return checkAuditChainInterval(cfg.auditChainInterval)
+}
+
 // checkSettings validates the required options and the TLS and public URL
 // settings. It returns the parsed public URL resolver.
 func checkSettings(cfg *settings) (baseurl.Resolver, error) {
@@ -1539,7 +1568,7 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, err
 	}
 
-	if err := checkAuditChainInterval(cfg.auditChainInterval); err != nil {
+	if err := checkPeriods(cfg); err != nil {
 		return baseurl.Resolver{}, err
 	}
 
@@ -2263,7 +2292,37 @@ func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Li
 	case <-ctx.Done():
 	}
 
+	if err := s.drain(ctx, serveErr); err != nil {
+		return err
+	}
+
 	return shutdownServer(ctx, srv, serveErr)
+}
+
+// drain makes GET /health/ready answer 503, then keeps serving for
+// s.drainPeriod, so a load balancer takes this instance out of its pool
+// before the listener closes. It ends early with the serve error when the
+// server stops serving during the drain.
+func (s *Server) drain(ctx context.Context, serveErr <-chan error) error {
+	if s.ready != nil {
+		s.ready.drain()
+	}
+
+	s.logger.InfoContext(ctx, "draining: readiness answers 503", slog.Duration("period", s.drainPeriod))
+
+	if s.drainPeriod <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(s.drainPeriod)
+	defer timer.Stop()
+
+	select {
+	case err := <-serveErr:
+		return fmt.Errorf("serve: %w", err)
+	case <-timer.C:
+		return nil
+	}
 }
 
 // closeListener closes ln after a failed start and answers the close

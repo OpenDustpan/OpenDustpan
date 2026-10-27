@@ -14615,11 +14615,26 @@ func waitForToolStatus(ctx context.Context, t *testing.T, env *e2e.Env, want int
 
 	deadline := time.Now().Add(30 * time.Second)
 
+	// Each instance caches the state for itself, so with several instances
+	// the answer must come from every one of them: the proxy sends a run of
+	// that many requests to each instance once.
+	need, streak := 1, 0
+	if env.HAEnabled() {
+		need = env.HA(t).Size()
+	}
+
 	for time.Now().Before(deadline) {
 		status, _, err := env.APIStatus(ctx, http.MethodGet, "/api/user", "")
 		if err == nil && status == want {
-			return
+			streak++
+			if streak >= need {
+				return
+			}
+
+			continue
 		}
+
+		streak = 0
 
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
