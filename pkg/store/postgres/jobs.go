@@ -79,7 +79,7 @@ var _ jobstore.Runner = jobRunner{s: nil}
 // and a lock write that starts later waits for the dispatch.
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {
 	err := pgx.BeginFunc(ctx, r.s.pool, func(tx pgx.Tx) error {
-		if _, err := readWritable(ctx, tx, readStateSQL, nil); err != nil {
+		if _, err := readWritable(ctx, tx, readStateSQL, nil, r.s.binaryVersion); err != nil {
 			return err
 		}
 

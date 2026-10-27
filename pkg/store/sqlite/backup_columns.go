@@ -508,6 +508,10 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 				backupColAtMs,
 			},
 		},
+		{
+			table:   backup.TableInstanceVersions,
+			columns: []string{"id", "binary_version", backupColStartedAtMs},
+		},
 	}
 }
 

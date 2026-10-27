@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -348,6 +349,12 @@ func classifyNamespace(err error) (int, string, bool) {
 		return http.StatusMisdirectedRequest, namespace.ErrNotHome.Error(), true
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again after the Retry-After time", true
+	case errors.Is(err, schema.ErrBinaryBelowMinimum):
+		if below, ok := errors.AsType[*schema.MinimumError](err); ok {
+			return http.StatusServiceUnavailable, below.WriteText(), true
+		}
+
+		return http.StatusServiceUnavailable, schema.ErrBinaryBelowMinimum.Error(), true
 	case errors.Is(err, namespace.ErrUnavailable):
 		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again after the Retry-After time", true
 	default:

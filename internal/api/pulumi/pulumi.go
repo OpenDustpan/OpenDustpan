@@ -47,6 +47,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -1025,7 +1026,7 @@ func classifyAuth(err error) (failure, bool) {
 // material.
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
-		classifyAuth, classifyNamespace, classifyRequest, classifyStack,
+		classifyAuth, classifyNamespace, classifyRequest, classifyMinimum, classifyStack,
 	} {
 		if f, ok := try(err); ok {
 			return f
@@ -1044,6 +1045,25 @@ func classify(err error) failure {
 	default:
 		return classifyUpdate(err)
 	}
+}
+
+// classifyMinimum maps a write that this binary is too old to make: 503 with
+// the text that names both versions, and the versions as the arguments of the
+// code. ok is false for any other error.
+func classifyMinimum(err error) (failure, bool) {
+	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		return unmatched(), false
+	}
+
+	below, ok := errors.AsType[*schema.MinimumError](err)
+	if !ok {
+		return coded(http.StatusServiceUnavailable, schema.ErrBinaryBelowMinimum.Error(),
+			errcode.SchemaBinaryBelowMinimum), true
+	}
+
+	return coded(http.StatusServiceUnavailable, below.WriteText(), errcode.SchemaBinaryBelowMinimum,
+		errcode.Identifier("binaryVersion", below.BinaryVersion),
+		errcode.Identifier("minimumVersion", below.SchemaMinimum)), true
 }
 
 // classifyNamespace maps the errors of the namespaces. ok is false for any

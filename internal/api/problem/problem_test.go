@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 var (
@@ -97,6 +98,12 @@ func TestSharedClasses(t *testing.T) {
 		{"fenced", namespace.ErrFenced, http.StatusConflict, errcode.NamespaceFenced},
 		{"not home", namespace.ErrNotHome, http.StatusMisdirectedRequest, errcode.NamespaceNotHome},
 		{"maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable, errcode.MaintenanceInMaintenance},
+		{
+			"binary below the minimum",
+			&schema.MinimumError{SchemaMinimum: "v0.5.0", BinaryVersion: "v0.4.0"},
+			http.StatusServiceUnavailable,
+			errcode.SchemaBinaryBelowMinimum,
+		},
 	}
 
 	for _, tc := range cases {

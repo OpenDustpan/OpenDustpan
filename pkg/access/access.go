@@ -107,7 +107,11 @@ var families = map[identity.Action]Family{
 	identity.ActionServerRestore:     FamilyOperator,
 	identity.ActionServerMaintenance: FamilyOperator,
 	identity.ActionServerObserve:     FamilyOperator,
-	identity.ActionServerReadAudit:   FamilyOperator,
+	// The version rows of the server processes: the list, and the delete of
+	// the row of a process that died.
+	identity.ActionServerReadInstances:  FamilyOperator,
+	identity.ActionServerDeleteInstance: FamilyOperator,
+	identity.ActionServerReadAudit:      FamilyOperator,
 	// The installation settings (ADR 63); RFC 68 decides their API.
 	identity.ActionServerManageSettings: FamilyOperator,
 	// A change of the audit chain. Off also needs the administration

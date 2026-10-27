@@ -388,6 +388,12 @@ type InstallationSecretKey struct {
 	CreatedAtMs int64
 }
 
+type InstanceVersion struct {
+	ID            string
+	BinaryVersion string
+	StartedAtMs   int64
+}
+
 type Inventory struct {
 	Namespace     string
 	Tool          string

@@ -415,6 +415,7 @@ func serverOptions(
 		dustpan.WithDriftStore(store.DriftResults()),
 		dustpan.WithInstanceID(InstanceID(i)),
 		dustpan.WithInstallationKindStore(store),
+		dustpan.WithInstanceStore(store),
 	}
 }
 

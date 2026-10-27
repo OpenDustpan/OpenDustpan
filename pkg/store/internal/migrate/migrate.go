@@ -313,3 +313,33 @@ func CollapseVersion(versions []int64) int64 {
 
 	return next
 }
+
+// CheckInstances refuses a pending migration that sets a minimum binary
+// version while an instance row is below that minimum. It returns an
+// *schema.InstancesBelowMinimumError for the first such migration, in the
+// order of pending, and nil when no migration sets a minimum or no row is
+// below it. The rows are not a liveness lease: a row of an instance that
+// crashed blocks the migration until an administrator deletes it. A row whose
+// version does not parse counts as below, so the check fails closed. A dev
+// build row passes, as a dev build passes every minimum.
+func CheckInstances(pending []Migration, rows []schema.InstanceRow) error {
+	for _, m := range pending {
+		if m.MinBinaryVersion == "" {
+			continue
+		}
+
+		var below []schema.InstanceRow
+
+		for _, row := range rows {
+			if schema.CheckMinimum(m.MinBinaryVersion, row.BinaryVersion) != nil {
+				below = append(below, row)
+			}
+		}
+
+		if len(below) > 0 {
+			return &schema.InstancesBelowMinimumError{Migration: m.Name, Minimum: m.MinBinaryVersion, Instances: below}
+		}
+	}
+
+	return nil
+}

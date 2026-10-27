@@ -63,6 +63,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) testHandler {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -105,6 +105,7 @@ func newAuditChainHandler(
 		Gates:            nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
