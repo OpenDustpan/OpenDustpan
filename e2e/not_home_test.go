@@ -19,9 +19,10 @@ const foreignNamespace = "e2e-foreign"
 // never runs in it.
 const foreignInstallation = "e2e-other"
 
-// notHomeMessage is the text of the server refusal of a write to a namespace
-// that another installation owns.
-const notHomeMessage = "this installation is not the primary installation of the namespace"
+// notHomeMessage is the part of the server refusal that the tool prints on one
+// line: the refusal names the primary installation of the namespace. The tool
+// wraps a longer text across lines.
+const notHomeMessage = foreignInstallation
 
 // notHomeLockError is the error the http backend of OpenTofu prints when the
 // server refuses its LOCK with 421 Misdirected Request.
