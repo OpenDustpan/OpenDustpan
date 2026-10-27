@@ -26,7 +26,7 @@ const (
 // treats the process as live.
 func processStartTime(pid int) (time.Time, error) {
 	// A Windows process ID has 32 bits. No process has an ID outside that range.
-	if pid <= 0 || pid > math.MaxUint32 {
+	if pid <= 0 || uint64(pid) > math.MaxUint32 {
 		return time.Time{}, errNoProcess
 	}
 
