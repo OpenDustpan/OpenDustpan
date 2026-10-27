@@ -4,14 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
+	"strconv"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
+
+// checkedAt returns the time of the drift check of the fake.
+func checkedAt() *time.Time {
+	at := now.Add(-time.Hour)
+
+	return &at
+}
 
 var errBroken = errors.New("broken source")
 
@@ -26,6 +36,8 @@ type fakeSources struct {
 	outputs     objectcontext.OutputsData
 	jobs        []objectcontext.JobSummary
 	historyErr  error
+	driftData   objectcontext.DriftData
+	driftErr    error
 }
 
 // chainOf returns the chain of the fixture unit, or of its resource.
@@ -99,6 +111,10 @@ func (f *fakeSources) OpenCounts(context.Context, graph.Unit) (map[string]int64,
 	return map[string]int64{"managed-twice": 1}, nil
 }
 
+func (f *fakeSources) Drift(context.Context, graph.Unit) (objectcontext.DriftData, error) {
+	return f.driftData, f.driftErr
+}
+
 func (f *fakeSources) Layers(_ context.Context, chain []objectcontext.Ref) ([]bool, error) {
 	out := make([]bool, len(chain))
 	for i, r := range chain {
@@ -163,12 +179,25 @@ func baseFake() *fakeSources {
 		},
 		jobs:       nil,
 		historyErr: nil,
+		driftData: objectcontext.DriftData{
+			CheckedAt: checkedAt(), Status: "drifted", JobID: "job-9", Truncated: false,
+			Addresses: []string{"aws_s3_bucket.logs", "aws_s3_bucket.assets"},
+		},
+		driftErr: nil,
 	}
 }
 
 func allSources(f *fakeSources) objectcontext.Sources {
 	return objectcontext.Sources{
-		Inventory: f, Context: f, Access: f, Dependencies: f, History: f, Jobs: f, Findings: f, Audit: auditPort{f},
+		Inventory:    f,
+		Context:      f,
+		Access:       f,
+		Dependencies: f,
+		History:      f,
+		Jobs:         f,
+		Findings:     f,
+		Drift:        f,
+		Audit:        auditPort{f},
 	}
 }
 
@@ -273,6 +302,97 @@ func readCases() []readCase {
 			want: map[objectcontext.Section]objectcontext.Status{"changes": "unavailable"}, err: nil, check: nil,
 		},
 		{
+			name: "a drifted unit answers its addresses", setup: nothing, object: unitRef,
+			include: []objectcontext.Section{"drift"},
+			want:    map[objectcontext.Section]objectcontext.Status{"drift": "ok"}, err: nil,
+			check: checkDrift(objectcontext.DriftData{
+				CheckedAt: checkedAt(), Status: "drifted", JobID: "job-9", Truncated: false,
+				Addresses: []string{"aws_s3_bucket.logs", "aws_s3_bucket.assets"},
+			}),
+		},
+		{
+			name: "a unit with no check is unknown",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.driftData = objectcontext.DriftData{
+					CheckedAt: nil, Status: "unknown", JobID: "", Addresses: nil, Truncated: false,
+				}
+			},
+			object: unitRef, include: []objectcontext.Section{"drift"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "ok"}, err: nil,
+			check: checkDrift(objectcontext.DriftData{
+				CheckedAt: nil, Status: "unknown", JobID: "", Addresses: []string{}, Truncated: false,
+			}),
+		},
+		{
+			name: "no unit:read on the unit: the drift section is denied, like any other",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.denied[string(identity.ActionUnitRead)] = true
+			},
+			object: unitRef, include: []objectcontext.Section{"drift", "health"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "denied", "health": "denied"}, err: nil,
+			check: checkDriftHidden,
+		},
+		{
+			name: "no drift service: the section is unavailable, the call goes on",
+			setup: func(_ *fakeSources, s *objectcontext.Sources) {
+				s.Drift = nil
+			},
+			object: unitRef, include: []objectcontext.Section{"drift", "health"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "unavailable", "health": "ok"}, err: nil,
+			check: checkDriftHidden,
+		},
+		{
+			name: "a source that has no data is unavailable",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.driftErr = objectcontext.ErrUnavailable
+			},
+			object: unitRef, include: []objectcontext.Section{"drift"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "unavailable"}, err: nil,
+			check: checkDriftHidden,
+		},
+		{
+			name: "a broken drift source fails the call",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.driftErr = errBroken
+			},
+			object: unitRef, include: []objectcontext.Section{"drift"}, want: nil, err: errBroken, check: nil,
+		},
+		{
+			name: "more addresses than the limit are cut and flagged",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.driftData.Addresses = manyAddresses(objectcontext.MaxReadDriftAddresses + 1)
+			},
+			object: unitRef, include: []objectcontext.Section{"drift"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "partial"}, err: nil,
+			check: checkDriftCut,
+		},
+		{
+			name: "a check that cut its own list is partial",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.driftData.Truncated = true
+			},
+			object: unitRef, include: []objectcontext.Section{"drift"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "partial"}, err: nil, check: nil,
+		},
+		{
+			name: "a resource that the unit lists shows its own entry alone",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.driftData.Addresses = []string{"aws_s3_bucket.logs", resRef.Resource}
+			},
+			object: resRef, include: []objectcontext.Section{"drift"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "ok"}, err: nil,
+			check: checkDriftAddresses([]string{resRef.Resource}),
+		},
+		{
+			name: "a resource that the unit does not list shows no address",
+			setup: func(f *fakeSources, _ *objectcontext.Sources) {
+				f.driftData.Addresses = []string{"aws_s3_bucket.other"}
+			},
+			object: resRef, include: []objectcontext.Section{"drift"},
+			want: map[objectcontext.Section]objectcontext.Status{"drift": "ok"}, err: nil,
+			check: checkDriftAddresses([]string{}),
+		},
+		{
 			name: "a section that does not apply", setup: nothing, object: collRef,
 			include: []objectcontext.Section{"health"}, want: nil, err: objectcontext.ErrUnknownSection, check: nil,
 		},
@@ -287,6 +407,60 @@ func readCases() []readCase {
 			},
 			err: nil, check: nil,
 		},
+	}
+}
+
+// manyAddresses returns n distinct resource addresses.
+func manyAddresses(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "aws_s3_bucket.b" + strconv.Itoa(i)
+	}
+
+	return out
+}
+
+// checkDrift checks that the drift section holds exactly want.
+func checkDrift(want objectcontext.DriftData) func(*testing.T, objectcontext.Document) {
+	return func(t *testing.T, doc objectcontext.Document) {
+		t.Helper()
+
+		got, ok := doc.Sections[objectcontext.SectionDrift].Data.(objectcontext.DriftData)
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("drift data %+v, want %+v", doc.Sections[objectcontext.SectionDrift].Data, want)
+		}
+	}
+}
+
+// checkDriftAddresses checks the addresses of the drift section.
+func checkDriftAddresses(want []string) func(*testing.T, objectcontext.Document) {
+	return func(t *testing.T, doc objectcontext.Document) {
+		t.Helper()
+
+		got, ok := doc.Sections[objectcontext.SectionDrift].Data.(objectcontext.DriftData)
+		if !ok || !slices.Equal(got.Addresses, want) || got.Addresses == nil {
+			t.Errorf("drift data %+v, want the addresses %v", doc.Sections[objectcontext.SectionDrift].Data, want)
+		}
+	}
+}
+
+// checkDriftHidden checks that the drift section holds no data.
+func checkDriftHidden(t *testing.T, doc objectcontext.Document) {
+	t.Helper()
+
+	if a := doc.Sections[objectcontext.SectionDrift]; a.Data != nil {
+		t.Errorf("drift answer %+v, want no data", a)
+	}
+}
+
+// checkDriftCut checks that the section holds the limit and says that it cut.
+func checkDriftCut(t *testing.T, doc objectcontext.Document) {
+	t.Helper()
+
+	got, ok := doc.Sections[objectcontext.SectionDrift].Data.(objectcontext.DriftData)
+	if !ok || len(got.Addresses) != objectcontext.MaxReadDriftAddresses || !got.Truncated {
+		t.Errorf("drift data %+v, want %d addresses and truncated", doc.Sections[objectcontext.SectionDrift].Data,
+			objectcontext.MaxReadDriftAddresses)
 	}
 }
 
@@ -406,7 +580,15 @@ func TestNewReaderNeedsPorts(t *testing.T) {
 	f := baseFake()
 
 	_, err := objectcontext.NewReader(objectcontext.Sources{
-		Inventory: f, Context: nil, Access: f, Dependencies: nil, History: nil, Jobs: nil, Findings: nil, Audit: nil,
+		Inventory:    f,
+		Context:      nil,
+		Access:       f,
+		Dependencies: nil,
+		History:      nil,
+		Jobs:         nil,
+		Findings:     nil,
+		Drift:        nil,
+		Audit:        nil,
 	})
 	if !errors.Is(err, objectcontext.ErrInvalidObject) {
 		t.Errorf("NewReader with no context port: %v, want ErrInvalidObject", err)

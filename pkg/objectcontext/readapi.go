@@ -92,6 +92,10 @@ const (
 	// the age of the latest state item and the counts of open
 	// unmanaged-resource findings that name the unit.
 	SectionHealth Section = "health"
+	// SectionDrift is the drift status of the unit, the time and the job of
+	// the latest drift check, and the first addresses of the resources that
+	// differ. It holds no attribute name and no attribute value.
+	SectionDrift Section = "drift"
 	// SectionAudit is the newest audit entries whose object is the unit.
 	SectionAudit Section = "audit"
 )
@@ -181,6 +185,13 @@ func SectionCatalog() []SectionSpec {
 			Object:  RoleTarget,
 			Kinds:   unitKinds(),
 			Default: true,
+		},
+		{
+			Section: SectionDrift,
+			Action:  identity.ActionUnitRead,
+			Object:  RoleTarget,
+			Kinds:   unitKinds(),
+			Default: false,
 		},
 		{
 			Section: SectionAudit,
