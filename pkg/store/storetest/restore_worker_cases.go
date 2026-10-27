@@ -308,7 +308,11 @@ func runAsync(t *testing.T, restores *backup.RestoreService, gate *stepGate) <-c
 // and its operation end, as the worker of one instance does, and returns the
 // row. A takeover after the finish write ends the row first, and the
 // operation at its next claim.
-func (r *workerRig) driveToEnd(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) backup.RestoreRecord {
+func (r *workerRig) driveToEnd(
+	t *testing.T,
+	restores *backup.RestoreService,
+	id backup.RestoreID,
+) backup.RestoreRecord {
 	t.Helper()
 
 	deadline := time.Now().Add(StuckTestLimit)
@@ -319,7 +323,8 @@ func (r *workerRig) driveToEnd(t *testing.T, restores *backup.RestoreService, id
 			t.Fatalf("get restore %s: %v", id, err)
 		}
 
-		if (row.State == backup.RestoreSucceeded || row.State == backup.RestoreFailed) && r.opOf(t, id).State.Terminal() {
+		if (row.State == backup.RestoreSucceeded || row.State == backup.RestoreFailed) &&
+			r.opOf(t, id).State.Terminal() {
 			return row
 		}
 
@@ -1080,7 +1085,12 @@ func testWorkerOverwritingBlobs(t *testing.T, newStore RestoreFactory) {
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, backup.RestoreStepCopyBlobs, gatePauseLive)
 	a := r.service(t, workerService{
-		owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: overwritingBlobs{deleteWatch: r.live}, lockWait: 0,
+		owner:    "instance-a",
+		ops:      gate,
+		live:     nil,
+		maint:    nil,
+		blobs:    overwritingBlobs{deleteWatch: r.live},
+		lockWait: 0,
 	})
 
 	id := r.start(t, a, false, false)
