@@ -1,6 +1,7 @@
 package dustpan_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -128,6 +129,30 @@ func TestConsoleSecurityHeaders(t *testing.T) {
 			map[string]string{"X-Content-Type-Options": "", "X-Frame-Options": "DENY"},
 		},
 		{
+			"off in upper case",
+			[]dustpan.Option{dustpan.WithConsoleHeaders(hdr("ContentTypeOptions", "OFF"))},
+			"/",
+			map[string]string{"X-Content-Type-Options": "", "X-Frame-Options": "DENY"},
+		},
+		{
+			"off in mixed case",
+			[]dustpan.Option{dustpan.WithConsoleHeaders(hdr("FrameOptions", "Off"))},
+			"/",
+			map[string]string{"X-Frame-Options": "", "X-Content-Type-Options": "nosniff"},
+		},
+		{
+			"off with spaces",
+			[]dustpan.Option{dustpan.WithConsoleHeaders(hdr("ContentSecurityPolicy", " off "))},
+			"/",
+			map[string]string{"Content-Security-Policy": "", "X-Frame-Options": "DENY"},
+		},
+		{
+			"HSTS off in upper case with TLS",
+			append([]dustpan.Option{dustpan.WithConsoleHeaders(hdr("StrictTransportSecurity", "OFF"))}, tlsFiles...),
+			"/",
+			map[string]string{"Strict-Transport-Security": ""},
+		},
+		{
 			"frame options off",
 			[]dustpan.Option{dustpan.WithConsoleHeaders(hdr("FrameOptions", dustpan.ConsoleHeaderOff))},
 			"/",
@@ -247,6 +272,42 @@ func TestConsoleHeadersRefuseUnsafeValues(t *testing.T) {
 			)...)
 			if err == nil {
 				t.Fatal("NewServer accepted an unsafe header value")
+			}
+		})
+	}
+}
+
+// TestConsoleCSPRefusesHostileOrigins sends origins that would add a
+// directive or a source to the policy. No public input reaches the origin
+// check of the console headers without the allowed-origins check running
+// first: WithAllowedOrigins is the only source of the origins. So this test
+// drives both layers through the public option and checks the outcome: the
+// server does not start, and no policy is built from the origin.
+func TestConsoleCSPRefusesHostileOrigins(t *testing.T) {
+	t.Parallel()
+
+	hostile := map[string]string{
+		"directive injection": "https://a.example;script-src *",
+		"two sources":         "https://a.example, https://b.example",
+		"space":               "https://a.example https://b.example",
+		"quote":               "https://a.example'",
+		"double quote":        `https://a.example"`,
+		"comma":               "https://a.example,https://b.example",
+		"line break":          "https://a.example\r\nX-Evil: 1",
+	}
+
+	for name, origin := range hostile {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+
+			_, err := dustpan.NewServer(append(
+				fullServerOptions(t, st, blobs, authn),
+				dustpan.WithConsoleDir(t.TempDir()), dustpan.WithAllowedOrigins(origin),
+			)...)
+			if !errors.Is(err, dustpan.ErrInvalidOption) {
+				t.Fatalf("NewServer with origin %q: err = %v, want ErrInvalidOption", origin, err)
 			}
 		})
 	}

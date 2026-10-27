@@ -77,7 +77,7 @@ const (
 
 // ConsoleHeaders sets the security headers of the responses that serve the
 // web console files. Each field has three states: empty keeps the built-in
-// default, ConsoleHeaderOff sends no header, and any other value is the
+// default, ConsoleHeaderOff (in any case) sends no header, and any other value is the
 // header value. The headers apply to the console files only, never to the API
 // routes.
 type ConsoleHeaders struct {
@@ -91,6 +91,16 @@ type ConsoleHeaders struct {
 	// StrictTransportSecurity is Strict-Transport-Security. Default:
 	// max-age=31536000. The server sends it only when it serves TLS.
 	StrictTransportSecurity string
+}
+
+// noConsoleHeaders answers console header settings that keep every default.
+func noConsoleHeaders() ConsoleHeaders {
+	return ConsoleHeaders{
+		ContentTypeOptions:      "",
+		FrameOptions:            "",
+		ContentSecurityPolicy:   "",
+		StrictTransportSecurity: "",
+	}
 }
 
 // consoleHeader is one header that the console handler sets.
@@ -110,10 +120,12 @@ func defaultCSP(origins []string) string {
 		"base-uri 'none'; form-action 'self'"
 }
 
-// headerValue answers the value to send for a header: def when the setting is
-// empty, and "" when the setting turns the header off.
+// headerValue answers the value to send for a header: def when the setting
+// is empty, and "" when the setting turns the header off. The word off is
+// read without case and without the spaces around it.
 func headerValue(value, def string) string {
-	if value == ConsoleHeaderOff {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, ConsoleHeaderOff) {
 		return ""
 	}
 

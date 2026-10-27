@@ -294,9 +294,11 @@ Encryption of a whole backup is not decided (ADR 30, RFC 8).
   base-uri 'none'; form-action 'self'
   ```
 
+  The `connect-src` list follows `--allowed-origins`. A console that calls an API on another origin needs that origin in `--allowed-origins`.
+
   Each header has a setting (`--console-content-type-options`,
   `--console-frame-options`, `--console-csp`, `--console-hsts`). A value
-  replaces the default. The value `off` sends no header. A value with a line
+  replaces the default. The value `off`, in any case, sends no header. A value with a line
   break or a character that is not printable ASCII stops the start. If a
   reverse proxy sets the same header, turn the server header off, or make the
   proxy replace the header and not add a second one. The server headers and
