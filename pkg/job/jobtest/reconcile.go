@@ -1,12 +1,16 @@
 package jobtest
 
 import (
+	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -32,6 +36,10 @@ func reconcileCases() []suiteCase {
 		{"the reconcile expires nothing before a timeout", testReconcileNotYet},
 		{"the reconcile ends the orphans and no other job", testReconcileOrphans},
 		{"a second run of the reconcile changes nothing", testReconcileTwice},
+		{"two reconcilers at the same time dispatch each queued job once", testReconcileConcurrent},
+		{"a failed read of the orphans does not stop the expiry and the dispatch", testReconcileOrphanReadFails},
+		{"two reconcilers at the same time dispatch each queued job once", testReconcileConcurrent},
+		{"a failed read of the orphans does not stop the expiry and the dispatch", testReconcileOrphanReadFails},
 	}
 }
 
@@ -40,8 +48,16 @@ func reconcileCases() []suiteCase {
 func reconciler(t *testing.T, h Harness, ahead time.Duration) *job.Reconciler {
 	t.Helper()
 
+	return reconcilerOver(t, h, h.Jobs, ahead)
+}
+
+// reconcilerOver returns the reconciler over the job store jobs and the
+// namespaces of h, with a clock that is ahead of the real time by ahead.
+func reconcilerOver(t *testing.T, h Harness, jobs job.Store, ahead time.Duration) *job.Reconciler {
+	t.Helper()
+
 	r, err := job.NewReconciler(job.ReconcilerConfig{
-		Store:           h.Jobs,
+		Store:           jobs,
 		Namespaces:      h.Namespaces,
 		QueueTimeout:    0,
 		DispatchTimeout: 0,
@@ -85,8 +101,8 @@ func reconcileEntries(t *testing.T, h Harness, f fixture, id job.ID) int {
 
 	for i := range entries {
 		e := &entries[i]
-		if e.Subject == job.ReconcileSubject && e.JobID == string(id) && e.PrincipalKind == "service" &&
-			e.Reason != "" {
+		if e.Subject == history.ServerSubject && e.JobID == string(id) && e.PrincipalKind == "service" &&
+			strings.HasPrefix(e.Reason, job.ReconcileName+": ") {
 			n++
 		}
 	}
@@ -446,4 +462,90 @@ func testReconcileTwice(t *testing.T, h Harness) {
 	if res := runReconcile(t, h, job.DefaultQueueTimeout+time.Hour); res != none {
 		t.Fatalf("second reconcile = %+v; want no change", res)
 	}
+}
+
+// concurrentJobs is the number of queued jobs of the concurrent case.
+const concurrentJobs = 6
+
+func testReconcileConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	// Plan jobs do not hold the unit, so all of them can dispatch.
+	queued := make([]job.ID, 0, concurrentJobs)
+	for range concurrentJobs {
+		queued = append(queued, create(t, h, f, newJob(f.unit, job.OperationPlan, ""), nil).ID)
+	}
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		total   int
+		failure error
+	)
+
+	for range 2 {
+		wg.Go(func() {
+			res, err := reconciler(t, h, 0).Reconcile(t.Context())
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			total += res.Dispatched
+			failure = errors.Join(failure, err)
+		})
+	}
+
+	wg.Wait()
+
+	if failure != nil || total != concurrentJobs {
+		t.Fatalf("two parallel reconciles dispatched %d jobs, error %v; want %d dispatches, one for each job",
+			total, failure, concurrentJobs)
+	}
+
+	for _, id := range queued {
+		got, err := h.Jobs.Get(t.Context(), id)
+		if err != nil || got.State != job.StateDispatched || got.Phases[0].Operation == "" {
+			t.Fatalf("job %s = %s, %v; want dispatched with one operation", id, got.State, err)
+		}
+
+		if n := reconcileEntries(t, h, f, id); n != 1 {
+			t.Fatalf("job %s has %d audit entries of the reconcile, want 1", id, n)
+		}
+	}
+}
+
+// failingOrphans is a job store whose read of the orphans fails.
+type failingOrphans struct {
+	job.Store
+}
+
+var errOrphanRead = errors.New("the read of the orphans failed")
+
+// Orphans implements job.Store.
+func (failingOrphans) Orphans(context.Context, int) ([]job.Orphan, error) {
+	return nil, errOrphanRead
+}
+
+func testReconcileOrphanReadFails(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	fx := newExpiryFixture(t, h, f)
+
+	r := reconcilerOver(t, h, failingOrphans{Store: h.Jobs}, job.DefaultQueueTimeout+time.Hour)
+
+	res, err := r.Reconcile(t.Context())
+	if err != nil || res.Failed != 1 || res.Expired != 2 {
+		t.Fatalf(
+			"Reconcile with a failed read of the orphans = %+v, %v; want two expired jobs and one failure",
+			res,
+			err,
+		)
+	}
+
+	assertState(t, h, fx.queued.ID, job.StateExpired)
+	assertState(t, h, fx.dispatched.ID, job.StateExpired)
+	assertState(t, h, fx.awaiting.ID, job.StateAwaitingState)
 }

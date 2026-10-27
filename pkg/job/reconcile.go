@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -30,10 +31,6 @@ const (
 	// schedule.
 	ReconcileInterval = time.Minute
 )
-
-// ReconcileSubject is the subject of the audit entries that the reconcile
-// writes. It is a service of the server, not a person.
-const ReconcileSubject = "job.reconcile"
 
 // Limits of one run of the reconcile.
 const (
@@ -159,8 +156,9 @@ type ReconcileResult struct {
 
 // Reconcile runs the work once: first it ends the orphans, so that their units
 // are free, then it expires the jobs past a timeout, and last it dispatches
-// the queued jobs. It returns an error for a read that failed and for
-// maintenance mode, which refuses every write. A job that it cannot change is
+// the queued jobs. It returns an error for a read of the expiry or the dispatch
+// that failed and for maintenance mode, which refuses every write. A failed
+// read of the orphans is logged and counted, and the run goes on. A job that it cannot change is
 // in the result and in the log, not in the error.
 func (r *Reconciler) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	run := reconcileRun{
@@ -222,7 +220,12 @@ func (run *reconcileRun) endOrphans(ctx context.Context) error {
 	for range maxReconcilePages {
 		orphans, err := run.r.cfg.Store.Orphans(ctx, run.r.cfg.Batch)
 		if err != nil {
-			return fmt.Errorf("read orphans: %w", err)
+			// The expiry and the dispatch do not need the orphans. They run in
+			// this tick, and the next tick reads the orphans again.
+			run.res.Failed++
+			run.r.cfg.Log.Warn("job reconcile could not read the orphans", slog.String("error", err.Error()))
+
+			return nil
 		}
 
 		ended := 0
@@ -588,10 +591,30 @@ func (run *reconcileRun) entry(j *Job, action identity.Action, why string) audit
 	unit := j.Spec.Unit
 
 	return audit.Entry{
-		At: run.now, Namespace: unit.Namespace(), Subject: ReconcileSubject, IDPSubject: "", TokenID: "",
-		Action: string(action), Object: unit.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
-		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: why,
+		At:            run.now,
+		Namespace:     unit.Namespace(),
+		Subject:       history.ServerSubject,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        string(action),
+		Object:        unit.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      unit.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		PrincipalKind: audit.PrincipalKindService,
+		JobID:         string(j.ID),
+		Reason:        ReconcileName + ": " + why,
 	}
 }

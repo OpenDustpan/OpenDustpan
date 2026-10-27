@@ -145,8 +145,9 @@ runs each tick. The schedule does these steps in this order:
    or a manual lock stays `queued`, and the server writes nothing for it.
 
 Each change that the schedule makes writes an audit entry. The subject of the
-entry is `job.reconcile`, the principal kind is `service`, and the entry holds
-the job ID and the reason. A server with no durable store does not run the
+entry is `@server`, the principal kind is `service`, and the entry holds the
+job ID. The reason starts with `job.reconcile:` and says why the schedule made
+the change. A server with no durable store does not run the
 schedule.
 
 ## The job document
