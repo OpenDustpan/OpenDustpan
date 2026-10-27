@@ -391,7 +391,7 @@ func Namespace(err error) (Problem, bool) {
 		return answer(
 			http.StatusMisdirectedRequest,
 			errcode.NamespaceNotHome,
-			"namespace is not homed in this region",
+			namespace.ErrNotHome.Error(),
 		), true
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return answer(http.StatusServiceUnavailable, errcode.MaintenanceInMaintenance,

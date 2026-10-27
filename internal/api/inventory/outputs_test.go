@@ -95,7 +95,7 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
-	nsSvc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Region: "test-region"})
+	nsSvc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

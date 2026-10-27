@@ -75,7 +75,7 @@ func runNamespaceCreate(t *testing.T, server, token, name string, extra ...strin
 }
 
 // TestNamespaceCommandSuccess proves the command posts the name and prints
-// the created namespace with its region.
+// the created namespace with its primary installation.
 func TestNamespaceCommandSuccess(t *testing.T) {
 	t.Setenv(adminTokenEnvVar, "test-token")
 
@@ -83,7 +83,7 @@ func TestNamespaceCommandSuccess(t *testing.T) {
 		t,
 		"test-token",
 		http.StatusCreated,
-		`{"name":"acme","homeRegion":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
+		`{"name":"acme","primaryInstallation":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
 	)
 
 	out, err := runNamespaceCreate(t, fake.server.URL, "test-token", "acme")
@@ -91,8 +91,8 @@ func TestNamespaceCommandSuccess(t *testing.T) {
 		t.Fatalf("namespace create: %v", err)
 	}
 
-	if !strings.Contains(out, "created namespace acme in region test") {
-		t.Fatalf("namespace output lacks the namespace and region:\n%s", out)
+	if !strings.Contains(out, "created namespace acme, primary installation test") {
+		t.Fatalf("namespace output lacks the namespace and installation:\n%s", out)
 	}
 
 	got, ok := fake.token.Load().(string)
@@ -107,7 +107,7 @@ func TestNamespaceCommandUsesFirstToken(t *testing.T) {
 		t,
 		"first-token",
 		http.StatusCreated,
-		`{"name":"beta","homeRegion":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
+		`{"name":"beta","primaryInstallation":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
 	)
 
 	out, err := runNamespaceCreate(t, fake.server.URL, "first-token,second-token", "beta")
@@ -214,7 +214,7 @@ func TestNamespaceCommandServerFromEnvironment(t *testing.T) {
 		t,
 		"test-token",
 		http.StatusCreated,
-		`{"name":"acme","homeRegion":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
+		`{"name":"acme","primaryInstallation":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
 	)
 
 	t.Setenv(adminTokenEnvVar, "test-token")

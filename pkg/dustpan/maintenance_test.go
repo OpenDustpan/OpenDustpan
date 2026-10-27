@@ -83,7 +83,7 @@ func TestMaintenanceGatePulumi(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	enterMaintenanceMode(t, f)
 
@@ -122,7 +122,7 @@ func TestMaintenanceGateTFE(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	enterMaintenanceMode(t, f)
 
@@ -172,7 +172,7 @@ func TestMaintenanceGateInventory(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	enterMaintenanceMode(t, f)
 
@@ -225,7 +225,7 @@ func TestMaintenanceGateAnswersBeforeAuth(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t)
-			f.createNamespace(t, "acme", region)
+			f.createNamespace(t, "acme", installationName)
 
 			enterMaintenanceMode(t, f)
 
@@ -258,7 +258,7 @@ func TestMaintenanceKeepsDiscovery(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	status, _, body := f.doRaw(t, http.MethodGet, "/.well-known/terraform.json", "")
 	if status != http.StatusOK || !strings.Contains(body, "tfe.v2") {
@@ -289,7 +289,7 @@ func TestMaintenanceKeepsServerAPIAndProbes(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	if err := f.store.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
 		t.Fatalf("enter maintenance mode: %v", err)
@@ -327,7 +327,7 @@ func TestMaintenanceEnterThroughAPI(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	status, _, body := f.doRaw(t, http.MethodPost, "/api/server/maintenance/enter", "Bearer "+adminToken)
 	if status != http.StatusOK || !strings.Contains(body, `"state":"maintenance"`) {
@@ -408,7 +408,7 @@ func TestNewServerRequiresMaintenanceStore(t *testing.T) {
 	st, blobs, authn := requireServerPorts(t)
 
 	_, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(namespaceOnlyStore{store: st}),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

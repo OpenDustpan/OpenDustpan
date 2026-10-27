@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	adminToken = "admin-token"
-	region     = "eu-west"
+	adminToken       = "admin-token"
+	installationName = "eu-west"
 )
 
 // sourceFilterURL is the path of the source filter of the namespace acme.
@@ -121,7 +121,9 @@ type env struct {
 func serve(t *testing.T, s stores, authz identity.Authorizer) (*sourcefilter.Handler, *httptest.Server) {
 	t.Helper()
 
-	service, err := namespace.NewService(namespace.Config{Store: s.namespaces, Now: nil, Region: region})
+	service, err := namespace.NewService(
+		namespace.Config{Store: s.namespaces, Now: nil, Installation: installationName},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -149,8 +151,12 @@ func newEnv(t *testing.T, open func(t *testing.T) stores, authz identity.Authori
 	s := open(t)
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "acme", HomeRegion: region,
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.namespaces.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace: %v", err)

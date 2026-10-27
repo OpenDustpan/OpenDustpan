@@ -95,14 +95,14 @@ last unit of a loop are the same unit.
 | 403 | `access.denied` | The caller lacks an action, or the stack or workspace to change does not exist |
 | 403 | `access.ip-not-allowed`, `session.csrf`, `session.other-site`, `gate.limited`, `gate.rule-failed` | Another cause of a 403, for example an address outside the IP allowlist of the namespace |
 | 404 | `trigger.not-found` | The namespace, the unit or the trigger does not exist, or the caller cannot read it. One code answers all of these |
-| 421 | `namespace.not-home` | The namespace is not homed in the region of the server |
+| 421 | `namespace.not-home` | The namespace has another primary installation |
 | 503 | `maintenance.in-maintenance` | The installation is in maintenance mode |
 | 409 | `lock.locked` | A manual lock refuses the request. `errorArgs` names the `holder`, the time `since`, the locked object (`lockedKind`: `namespace`, `collection`, `stack` or `workspace`, and `locked`) and the refused unit (`refusedKind`: `stack` or `workspace`, and `refused`). Each name has the form `namespace` or `namespace/name`. It never holds the reason of the lock |
 | 500 | `server.internal` | The server failed with an error that it does not classify |
 | 409 | `trigger.cycle` | The `follows` trigger closes a loop of units |
 | 409 | `trigger.disabled` | A fire of a trigger that is off |
 | 409 | `trigger.fire-conflict` | A second fire with the same key, or without a key in the same minute, with another reason or location |
-| 409 | `namespace.fenced` | The namespace moved to another region during the call. Try again. |
+| 409 | `namespace.fenced` | The namespace moved to another installation during the call. Try again. |
 | 409, 422, 429 | `job.frozen`, `job.unsupported`, `job.limit` | The refusal of the job service |
 | 403 | `job.policy-denied`, `job.gate-enforced`, `job.agent-denied` | The refusal of the job service |
 

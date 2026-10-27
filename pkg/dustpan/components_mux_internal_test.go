@@ -45,7 +45,7 @@ func newMuxServer(t *testing.T, set Components) *Server {
 	}
 
 	srv, err := NewServer(
-		WithRegion("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
+		WithInstallation("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st), WithSecretWrapper(wrapper),
 		WithWorkspaceStore(st), WithStateStore(st), WithBlobStore(blobs), WithInventoryReader(st),
 		WithAuthenticator(authn), WithComponents(set),

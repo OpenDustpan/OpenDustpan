@@ -71,16 +71,16 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	clk := newClock()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       clk.now,
-		Name:            "acme",
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           clk.now,
+		Name:                "acme",
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns, reads: atomic.Int64{}}, Now: clk.Now, Region: "local"},
+		namespace.Config{Store: &memNamespaces{ns: ns, reads: atomic.Int64{}}, Now: clk.Now, Installation: "local"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

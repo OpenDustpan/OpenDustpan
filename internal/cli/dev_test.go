@@ -59,7 +59,7 @@ func TestDevFlagSet(t *testing.T) {
 	}
 
 	for _, refused := range []string{
-		"config", "database", "region", "blob-store", "blob-dir", "backup-target", "key-encryption-key-file",
+		"config", "database", "installation", "blob-store", "blob-dir", "backup-target", "key-encryption-key-file",
 		"generate-key-encryption-key", "audit-sink", "oidc-issuer", "trusted-proxies", "tls-cert", "tls-key",
 		"public-url",
 	} {

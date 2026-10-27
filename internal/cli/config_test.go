@@ -26,11 +26,11 @@ func TestParseConfigAccepts(t *testing.T) {
 		{"empty file", "", cli.ConfigFile{}},
 		{"comment only", "# nothing\n", cli.ConfigFile{}},
 		{"empty mapping", "{}", cli.ConfigFile{}},
-		{"plain string", "region: eu-west\n", cli.ConfigFile{"region": "eu-west"}},
-		{"no stays a string", "region: no\n", cli.ConfigFile{"region": "no"}},
-		{"on stays a string", "region: on\n", cli.ConfigFile{"region": "on"}},
-		{"yes stays a string", "region: yes\n", cli.ConfigFile{"region": "yes"}},
-		{"quoted true is a string", "region: \"true\"\n", cli.ConfigFile{"region": "true"}},
+		{"plain string", "installation: eu-west\n", cli.ConfigFile{"installation": "eu-west"}},
+		{"no stays a string", "installation: no\n", cli.ConfigFile{"installation": "no"}},
+		{"on stays a string", "installation: on\n", cli.ConfigFile{"installation": "on"}},
+		{"yes stays a string", "installation: yes\n", cli.ConfigFile{"installation": "yes"}},
+		{"quoted true is a string", "installation: \"true\"\n", cli.ConfigFile{"installation": "true"}},
 		{"quoted number is a string", "listen: \"8080\"\n", cli.ConfigFile{"listen": "8080"}},
 		{"empty string", "console-dir: \"\"\n", cli.ConfigFile{"console-dir": ""}},
 		{"bool true", "disable-pulumi-journaling: true\n", cli.ConfigFile{"disable-pulumi-journaling": "true"}},
@@ -45,9 +45,9 @@ func TestParseConfigAccepts(t *testing.T) {
 		}},
 		{
 			"JSON shape with comments",
-			"{\n  # the region\n  \"region\": \"eu-west\",\n  \"max-state-bytes\": 0,\n" +
+			"{\n  # the installation\n  \"installation\": \"eu-west\",\n  \"max-state-bytes\": 0,\n" +
 				"  \"disable-pulumi-journaling\": true\n}\n",
-			cli.ConfigFile{"region": "eu-west", "max-state-bytes": "0", "disable-pulumi-journaling": "true"},
+			cli.ConfigFile{"installation": "eu-west", "max-state-bytes": "0", "disable-pulumi-journaling": "true"},
 		},
 		{"key for a variable", "admin-token-file: /run/secrets/tokens\n", cli.ConfigFile{
 			"admin-token-file": "/run/secrets/tokens",
@@ -123,17 +123,17 @@ func TestParseConfigRefuses(t *testing.T) {
 		text string
 		want error
 	}{
-		{"too large", "region: " + strings.Repeat("x", cli.MaxConfigBytes) + "\n", cli.ErrConfigTooLarge},
-		{"bad syntax", "region: [" + canaryValue + "\n", cli.ErrConfigSyntax},
-		{"two documents", "region: a\n---\nregion: b\n", cli.ErrConfigShape},
+		{"too large", "installation: " + strings.Repeat("x", cli.MaxConfigBytes) + "\n", cli.ErrConfigTooLarge},
+		{"bad syntax", "installation: [" + canaryValue + "\n", cli.ErrConfigSyntax},
+		{"two documents", "installation: a\n---\nregion: b\n", cli.ErrConfigShape},
 		{"scalar root", canaryValue + "\n", cli.ErrConfigShape},
 		{"sequence root", "- " + canaryValue + "\n", cli.ErrConfigShape},
 		{"alias bomb", aliasBomb, cli.ErrConfigAlias},
-		{"anchor on a value", "region: &r " + canaryValue + "\n", cli.ErrConfigAlias},
-		{"alias of a value", "region: &r " + canaryValue + "\nlisten: *r\n", cli.ErrConfigAlias},
-		{"merge key", "base: &b {region: x}\n<<: *b\n", cli.ErrConfigAlias},
-		{"duplicate key", "region: " + canaryValue + "\nregion: " + canaryValue + "\n", cli.ErrConfigDuplicate},
-		{"duplicate key with equal value", "region: a\nregion: a\n", cli.ErrConfigDuplicate},
+		{"anchor on a value", "installation: &r " + canaryValue + "\n", cli.ErrConfigAlias},
+		{"alias of a value", "installation: &r " + canaryValue + "\nlisten: *r\n", cli.ErrConfigAlias},
+		{"merge key", "base: &b {installation: x}\n<<: *b\n", cli.ErrConfigAlias},
+		{"duplicate key", "installation: " + canaryValue + "\nregion: " + canaryValue + "\n", cli.ErrConfigDuplicate},
+		{"duplicate key with equal value", "installation: a\nregion: a\n", cli.ErrConfigDuplicate},
 		{"unknown key", "regoin: " + canaryValue + "\n", cli.ErrConfigUnknown},
 		{"flag without a file key", "server: " + canaryValue + "\n", cli.ErrConfigUnknown},
 		{"secret without a file key", "DUSTPAN_ADMIN_TOKEN: " + canaryValue + "\n", cli.ErrConfigUnknown},
@@ -152,13 +152,13 @@ func TestParseConfigRefuses(t *testing.T) {
 		{"int octal", "max-state-bytes: 0o10\n", cli.ErrConfigType},
 		{"int float", "max-state-bytes: 1.5\n", cli.ErrConfigType},
 		{"int too large", "max-state-bytes: 99999999999999999999\n", cli.ErrConfigType},
-		{"string as int", "region: 12\n", cli.ErrConfigType},
-		{"string as bool", "region: true\n", cli.ErrConfigType},
-		{"string null", "region: null\n", cli.ErrConfigType},
-		{"string sequence", "region: [" + canaryValue + "]\n", cli.ErrConfigType},
-		{"string mapping", "region: {a: " + canaryValue + "}\n", cli.ErrConfigType},
-		{"string binary tag", "region: !!binary Y2FuYXJ5\n", cli.ErrConfigType},
-		{"string custom tag", "region: !secret " + canaryValue + "\n", cli.ErrConfigType},
+		{"string as int", "installation: 12\n", cli.ErrConfigType},
+		{"string as bool", "installation: true\n", cli.ErrConfigType},
+		{"string null", "installation: null\n", cli.ErrConfigType},
+		{"string sequence", "installation: [" + canaryValue + "]\n", cli.ErrConfigType},
+		{"string mapping", "installation: {a: " + canaryValue + "}\n", cli.ErrConfigType},
+		{"string binary tag", "installation: !!binary Y2FuYXJ5\n", cli.ErrConfigType},
+		{"string custom tag", "installation: !secret " + canaryValue + "\n", cli.ErrConfigType},
 		{"sensitive value of the wrong type", "database: [" + canaryValue + "]\n", cli.ErrConfigType},
 		{"database with a password", "database: postgres://u:" + canaryValue + "@db/d\n", cli.ErrConfigPassword},
 		{
@@ -171,11 +171,11 @@ func TestParseConfigRefuses(t *testing.T) {
 		{"int leading plus", "max-state-bytes: +7\n", cli.ErrConfigType},
 		{"int minus zero", "max-state-bytes: -0\n", cli.ErrConfigType},
 		{"int underscore", "max-state-bytes: 1_000\n", cli.ErrConfigType},
-		{"unknown anchor", "region: *" + canaryValue + "\n", cli.ErrConfigSyntax},
-		{"syntax error after a value", "region: \"" + canaryValue + "\" x: [\n", cli.ErrConfigSyntax},
-		{"tab in indentation", "region: x\n\t" + canaryValue + ": y\n", cli.ErrConfigSyntax},
+		{"unknown anchor", "installation: *" + canaryValue + "\n", cli.ErrConfigSyntax},
+		{"syntax error after a value", "installation: \"" + canaryValue + "\" x: [\n", cli.ErrConfigSyntax},
+		{"tab in indentation", "installation: x\n\t" + canaryValue + ": y\n", cli.ErrConfigSyntax},
 		{"long unknown key", strings.Repeat("k", 32) + canaryValue + ": x\n", cli.ErrConfigUnknown},
-		{"date for a string", "region: 2026-10-14\n", cli.ErrConfigType},
+		{"date for a string", "installation: 2026-10-14\n", cli.ErrConfigType},
 	}
 
 	for _, tc := range cases {
@@ -258,7 +258,7 @@ func TestDecoderErrorsNeverHoldTheValue(t *testing.T) {
 func TestParseConfigErrorShape(t *testing.T) {
 	t.Parallel()
 
-	_, err := cli.ParseConfig([]byte("region: a\nlisten: *unknownAnchorName\n"))
+	_, err := cli.ParseConfig([]byte("installation: a\nlisten: *unknownAnchorName\n"))
 	if err == nil || err.Error() != "config file is not valid YAML" && !strings.HasPrefix(err.Error(),
 		"config file is not valid YAML: line ") {
 		t.Fatalf("syntax error = %v, want the fixed rule text", err)
@@ -290,7 +290,7 @@ func TestReadConfigFile(t *testing.T) {
 
 	dir := t.TempDir()
 
-	prefix := "region: "
+	prefix := "installation: "
 	atCap := prefix + strings.Repeat("x", cli.MaxConfigBytes-len(prefix))
 	overCap := atCap + "x"
 
@@ -308,8 +308,8 @@ func TestReadConfigFile(t *testing.T) {
 		t.Fatalf("ReadConfigFile at the cap: %v", err)
 	}
 
-	if len(got["region"]) != cli.MaxConfigBytes-len(prefix) {
-		t.Errorf("region has %d bytes", len(got["region"]))
+	if len(got["installation"]) != cli.MaxConfigBytes-len(prefix) {
+		t.Errorf("installation has %d bytes", len(got["installation"]))
 	}
 
 	if _, err := cli.ReadConfigFile(overPath); !errors.Is(err, cli.ErrConfigTooLarge) {
@@ -331,7 +331,7 @@ func TestConfigExampleDecodes(t *testing.T) {
 		t.Fatalf("ParseConfig(ConfigExample): %v", err)
 	}
 
-	if got["region"] != "eu-west" || got["disable-pulumi-journaling"] != "false" {
+	if got["installation"] != "eu-west" || got["disable-pulumi-journaling"] != "false" {
 		t.Errorf("ParseConfig(ConfigExample) = %v", got)
 	}
 }

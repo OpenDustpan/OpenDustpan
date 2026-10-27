@@ -42,7 +42,7 @@ func TestTofuLockInfoNamesMountedRoutes(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t)
-			f.createNamespace(t, "acme", region)
+			f.createNamespace(t, "acme", installationName)
 			workspaceInCollection(t, f)
 
 			routes := refusedRoutes(t, f, tc.lock)

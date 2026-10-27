@@ -828,12 +828,12 @@ func checkKeepMismatchNamespace(t *testing.T, s RestoreStore) {
 	sink, sum, files := exportPortable(t, ports.stager)
 
 	fresh := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "freshns",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "freshns",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, fresh); err != nil {
@@ -1001,12 +1001,12 @@ func checkKeepMismatchPrincipal(t *testing.T, s RestoreStore) {
 	sink, sum, files := exportPortable(t, ports.stager)
 
 	fresh := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "freshprn",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "freshprn",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, fresh); err != nil {

@@ -246,18 +246,18 @@ func seedWrappedKey(t *testing.T, st keySeedStore, key []byte) {
 	t.Helper()
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            "acme",
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -428,7 +428,7 @@ func seedSecondKey(t *testing.T, path string, key []byte) {
 		}
 	}()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

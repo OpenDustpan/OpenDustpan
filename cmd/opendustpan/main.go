@@ -191,13 +191,13 @@ func main() {
 
 // common holds the flags shared by every subcommand.
 type common struct {
-	database string
-	region   string
+	database     string
+	installation string
 }
 
 func (c *common) register(fs *flag.FlagSet) {
 	cli.ByFlag("database").String(fs, &c.database)
-	cli.ByFlag("region").String(fs, &c.region)
+	cli.ByFlag("installation").String(fs, &c.installation)
 }
 
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
@@ -1036,7 +1036,7 @@ func (f *serveFlags) serverOptions(
 	}
 
 	opts := append([]dustpan.Option{
-		dustpan.WithRegion(namespace.Region(f.region)),
+		dustpan.WithInstallation(namespace.InstallationName(f.installation)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

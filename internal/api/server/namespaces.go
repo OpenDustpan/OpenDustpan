@@ -3,8 +3,8 @@ package server
 // Namespace routes of the installation API: create a namespace, and list
 // the namespaces the caller may read.
 //
-// POST /api/server/namespaces creates a namespace homed in the region of
-// the server. The bootstrap admin token calls it on an empty installation
+// POST /api/server/namespaces creates a namespace whose primary installation is the installation
+// of the server. The bootstrap admin token calls it on an empty installation
 // for the first namespace. It needs the action server:create-namespace on
 // the installation. A creator with a stored principal holds the
 // namespace-admin role on the new namespace: the grant and the namespace
@@ -53,17 +53,17 @@ type createNamespaceRequest struct {
 }
 
 // createNamespaceResponse answers a created namespace: its stable ID, name,
-// home region, failover version and creation time. Times are UTC in RFC 3339 with
+// primary installation, failover version and creation time. Times are UTC in RFC 3339 with
 // nanoseconds, the wire form of backup times.
 //
 // Contract: never remove or rename these fields. The command and the console
 // read only this API, and they update on their own schedule.
 type createNamespaceResponse struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	HomeRegion      string `json:"homeRegion"`
-	FailoverVersion int64  `json:"failoverVersion"`
-	CreatedAt       string `json:"createdAt"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	PrimaryInstallation string `json:"primaryInstallation"`
+	FailoverVersion     int64  `json:"failoverVersion"`
+	CreatedAt           string `json:"createdAt"`
 }
 
 // decodeNamespaceName reads body as a create request and answers the parsed
@@ -103,7 +103,7 @@ func resolveCreateNamespace(w http.ResponseWriter, r *http.Request) (identity.Ob
 }
 
 // createNamespace serves POST /api/server/namespaces: it creates a namespace
-// homed in the region of the server and answers 201 with it. A duplicate
+// with the installation of the server as primary installation and answers 201 with it. A duplicate
 // answers 409. A bad name answers 400.
 func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
@@ -130,11 +130,11 @@ func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, p iden
 	}
 
 	h.writeJSON(ctx, w, http.StatusCreated, createNamespaceResponse{
-		ID:              ns.ID.String(),
-		Name:            ns.Name.String(),
-		HomeRegion:      ns.HomeRegion.String(),
-		FailoverVersion: ns.FailoverVersion,
-		CreatedAt:       ns.CreatedAt.UTC().Format(time.RFC3339Nano),
+		ID:                  ns.ID.String(),
+		Name:                ns.Name.String(),
+		PrimaryInstallation: ns.PrimaryInstallation.String(),
+		FailoverVersion:     ns.FailoverVersion,
+		CreatedAt:           ns.CreatedAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -295,11 +295,11 @@ func (h *Handler) readNamespacePage(
 	}
 	for i := range page {
 		out.Namespaces = append(out.Namespaces, createNamespaceResponse{
-			ID:              page[i].ID.String(),
-			Name:            page[i].Name.String(),
-			HomeRegion:      page[i].HomeRegion.String(),
-			FailoverVersion: page[i].FailoverVersion,
-			CreatedAt:       page[i].CreatedAt.UTC().Format(time.RFC3339Nano),
+			ID:                  page[i].ID.String(),
+			Name:                page[i].Name.String(),
+			PrimaryInstallation: page[i].PrimaryInstallation.String(),
+			FailoverVersion:     page[i].FailoverVersion,
+			CreatedAt:           page[i].CreatedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
 

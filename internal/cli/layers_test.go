@@ -81,30 +81,30 @@ func TestResolvePrecedence(t *testing.T) {
 		wantSource cli.Source
 		wantLayers int
 	}{
-		{"default", "region", nil, nil, nil, "local", cli.SourceDefault, 0},
-		{"file", "region", nil, nil, cli.ConfigFile{"region": "f"}, "f", cli.SourceFile, 1},
+		{"default", "installation", nil, nil, nil, "local", cli.SourceDefault, 0},
+		{"file", "installation", nil, nil, cli.ConfigFile{"installation": "f"}, "f", cli.SourceFile, 1},
 		{
-			"env over file", "region", nil,
-			map[string]string{"DUSTPAN_REGION": "e"},
-			cli.ConfigFile{"region": "f"},
+			"env over file", "installation", nil,
+			map[string]string{"DUSTPAN_INSTALLATION": "e"},
+			cli.ConfigFile{"installation": "f"},
 			"e", cli.SourceEnv, 2,
 		},
 		{
-			"flag over env and file", "region",
-			[]string{"--region=x"},
-			map[string]string{"DUSTPAN_REGION": "e"},
-			cli.ConfigFile{"region": "f"},
+			"flag over env and file", "installation",
+			[]string{"--installation=x"},
+			map[string]string{"DUSTPAN_INSTALLATION": "e"},
+			cli.ConfigFile{"installation": "f"},
 			"x", cli.SourceFlag, 3,
 		},
 		{
-			"empty env is not set", "region", nil,
-			map[string]string{"DUSTPAN_REGION": ""},
-			cli.ConfigFile{"region": "f"},
+			"empty env is not set", "installation", nil,
+			map[string]string{"DUSTPAN_INSTALLATION": ""},
+			cli.ConfigFile{"installation": "f"},
 			"f", cli.SourceFile, 1,
 		},
 		{
-			"blank env is not set", "region", nil,
-			map[string]string{"DUSTPAN_REGION": " \t "},
+			"blank env is not set", "installation", nil,
+			map[string]string{"DUSTPAN_INSTALLATION": " \t "},
 			nil,
 			"local", cli.SourceDefault, 0,
 		},
@@ -235,9 +235,9 @@ func linesByLevel(t *testing.T, buf *bytes.Buffer, level string) map[string]logL
 func TestLogResolved(t *testing.T) {
 	t.Parallel()
 
-	fs := serveFlagSet(t, "--region=same", "--listen=:9090")
-	env := map[string]string{"DUSTPAN_REGION": "same", "DUSTPAN_LOG_LEVEL": "debug"}
-	file := cli.ConfigFile{"region": "same", "log-level": "warn", "max-state-bytes": "7"}
+	fs := serveFlagSet(t, "--installation=same", "--listen=:9090")
+	env := map[string]string{"DUSTPAN_INSTALLATION": "same", "DUSTPAN_LOG_LEVEL": "debug"}
+	file := cli.ConfigFile{"installation": "same", "log-level": "warn", "max-state-bytes": "7"}
 
 	resolved, err := cli.Resolve(fs, cli.ServeSettings(), mapLookup(env), file)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestLogResolved(t *testing.T) {
 	}
 
 	wantInfo := map[string][2]string{
-		"region":          {"same", "flag"},
+		"installation":    {"same", "flag"},
 		"listen":          {":9090", "flag"},
 		"log-level":       {"debug", "env"},
 		"max-state-bytes": {"7", "file"},
@@ -268,8 +268,8 @@ func TestLogResolved(t *testing.T) {
 	}
 
 	wantWarn := map[string]logLine{
-		"region":    {"layer": "flag", "overridden": "env,file", "flag": "same", "env": "same", "file": "same"},
-		"log-level": {"layer": "env", "overridden": "file", "env": "debug", "file": "warn"},
+		"installation": {"layer": "flag", "overridden": "env,file", "flag": "same", "env": "same", "file": "same"},
+		"log-level":    {"layer": "env", "overridden": "file", "env": "debug", "file": "warn"},
 	}
 
 	warns := linesByLevel(t, &buf, "WARN")
@@ -456,16 +456,16 @@ func TestResolveRefusesUserInfo(t *testing.T) {
 func TestLayeredLookup(t *testing.T) {
 	t.Parallel()
 
-	file := cli.ConfigFile{"admin-token-file": "/from-file", "region": "r"}
+	file := cli.ConfigFile{"admin-token-file": "/from-file", "installation": "r"}
 
-	lookup := cli.LayeredLookup(mapLookup(map[string]string{"DUSTPAN_REGION": "env"}), file)
+	lookup := cli.LayeredLookup(mapLookup(map[string]string{"DUSTPAN_INSTALLATION": "env"}), file)
 
 	if got, ok := lookup("DUSTPAN_ADMIN_TOKEN_FILE"); !ok || got != "/from-file" {
 		t.Errorf("DUSTPAN_ADMIN_TOKEN_FILE = %q, %v", got, ok)
 	}
 
-	if got, ok := lookup("DUSTPAN_REGION"); !ok || got != "env" {
-		t.Errorf("DUSTPAN_REGION = %q, %v", got, ok)
+	if got, ok := lookup("DUSTPAN_INSTALLATION"); !ok || got != "env" {
+		t.Errorf("DUSTPAN_INSTALLATION = %q, %v", got, ok)
 	}
 
 	if got, ok := lookup("DUSTPAN_ADMIN_TOKEN"); ok {
@@ -494,8 +494,12 @@ func TestChanges(t *testing.T) {
 		return resolved
 	}
 
-	old := resolve(cli.ConfigFile{"region": "eu-west", "database": "sqlite:" + canaryValue + "-a", "listen": ":1"})
-	current := resolve(cli.ConfigFile{"region": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"})
+	old := resolve(
+		cli.ConfigFile{"installation": "eu-west", "database": "sqlite:" + canaryValue + "-a", "listen": ":1"},
+	)
+	current := resolve(
+		cli.ConfigFile{"installation": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"},
+	)
 
 	changes := cli.Changes(old, current)
 
@@ -504,7 +508,7 @@ func TestChanges(t *testing.T) {
 		got = append(got, c.Key+":"+*c.Old+">"+c.New+"@"+c.Layer+"/"+c.TakesEffect)
 	}
 
-	want := []string{"database:set>set@file/next start", "region:eu-west>us-east@file/next start"}
+	want := []string{"database:set>set@file/next start", "installation:eu-west>us-east@file/next start"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("Changes = %v, want %v", got, want)
 	}
@@ -513,7 +517,9 @@ func TestChanges(t *testing.T) {
 		t.Fatal("a change holds a sensitive value")
 	}
 
-	same := resolve(cli.ConfigFile{"region": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"})
+	same := resolve(
+		cli.ConfigFile{"installation": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"},
+	)
 
 	if again := cli.Changes(current, same); len(again) != 0 {
 		t.Fatalf("Changes of equal values = %+v, want none", again)
@@ -532,14 +538,14 @@ func TestSnapshotEnvKeepsNoSecret(t *testing.T) {
 		"DUSTPAN_DATABASE":           secretDB,
 		"DUSTPAN_ADMIN_TOKEN":        "token-" + canaryValue,
 		"DUSTPAN_KEY_ENCRYPTION_KEY": "kek-" + canaryValue,
-		"DUSTPAN_REGION":             "eu-west",
+		"DUSTPAN_INSTALLATION":       "eu-west",
 		"DUSTPAN_ADMIN_TOKEN_FILE":   " ",
 	}
 
 	snapshot := cli.SnapshotEnv(mapLookup(vars), cli.DeclaredEnvs())
 
-	if got, ok := snapshot("DUSTPAN_REGION"); !ok || got != "eu-west" {
-		t.Errorf("DUSTPAN_REGION = %q, %v; want eu-west", got, ok)
+	if got, ok := snapshot("DUSTPAN_INSTALLATION"); !ok || got != "eu-west" {
+		t.Errorf("DUSTPAN_INSTALLATION = %q, %v; want eu-west", got, ok)
 	}
 
 	for _, key := range []string{"DUSTPAN_DATABASE", "DUSTPAN_ADMIN_TOKEN", "DUSTPAN_KEY_ENCRYPTION_KEY"} {

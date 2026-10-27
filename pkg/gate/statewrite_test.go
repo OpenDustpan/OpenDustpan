@@ -130,7 +130,7 @@ func newSWEnv(t *testing.T, units swFacts, engineErr error) swEnv {
 		}
 	})
 
-	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

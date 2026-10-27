@@ -11,17 +11,17 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// foreignNamespace is a namespace that another region owns. The server reads
+// foreignNamespace is a namespace that another installation owns. The server reads
 // it but refuses every write to it.
 const foreignNamespace = "e2e-foreign"
 
-// foreignRegion is the home region of foreignNamespace. The server under test
+// foreignInstallation is the primary installation of foreignNamespace. The server under test
 // never runs in it.
-const foreignRegion = "e2e-other"
+const foreignInstallation = "e2e-other"
 
 // notHomeMessage is the text of the server refusal of a write to a namespace
-// that another region owns.
-const notHomeMessage = "namespace is not homed in this region"
+// that another installation owns.
+const notHomeMessage = "this installation is not the primary installation of the namespace"
 
 // notHomeLockError is the error the http backend of OpenTofu prints when the
 // server refuses its LOCK with 421 Misdirected Request.
@@ -45,19 +45,19 @@ output "greeting" {
 `
 
 // tofuNotHomeScenario proves with the real OpenTofu CLI that a write to a
-// namespace that another region owns fails with 421, not with an internal
+// namespace that another installation owns fails with 421, not with an internal
 // error: init with the cloud block cannot create the workspace, and apply
 // through the http backend cannot take the lock.
 func tofuNotHomeScenario(t *testing.T, env *e2e.Env, backendEnv []string) {
 	t.Helper()
 
 	ctx := t.Context()
-	env.CreateForeignNamespace(ctx, t, foreignNamespace, foreignRegion)
+	env.CreateForeignNamespace(ctx, t, foreignNamespace, foreignInstallation)
 
 	cloudDir := t.TempDir()
 	writeProjectFile(t, cloudDir, fmt.Sprintf(tofuCloudConfig, env.Host(), foreignNamespace, e2e.Workspace))
 
-	env.StepIn(ctx, t, cloudDir, failStep("init in a namespace of another region",
+	env.StepIn(ctx, t, cloudDir, failStep("init in a namespace of another installation",
 		outputContains(notHomeMessage), "init", "-input=false", "-no-color"))
 
 	httpDir := t.TempDir()
@@ -65,14 +65,14 @@ func tofuNotHomeScenario(t *testing.T, env *e2e.Env, backendEnv []string) {
 	writeTofuHTTPConfig(t, httpDir, address)
 
 	env.StepIn(ctx, t, httpDir, e2e.StepSpec{
-		Check: nil, Name: "init http backend in a namespace of another region",
+		Check: nil, Name: "init http backend in a namespace of another installation",
 		Args: []string{"init", "-input=false", "-no-color"},
 		Env:  backendEnv, Stdin: "", Fail: false, Redact: false,
 	})
 
 	// The http backend prints the status of a refused LOCK, not its body.
 	env.StepIn(ctx, t, httpDir, e2e.StepSpec{
-		Check: outputContains(notHomeLockError), Name: "apply in a namespace of another region",
+		Check: outputContains(notHomeLockError), Name: "apply in a namespace of another installation",
 		Args: []string{"apply", "-input=false", "-auto-approve", "-no-color"},
 		Env:  backendEnv, Stdin: "", Fail: true, Redact: false,
 	})

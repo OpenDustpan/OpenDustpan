@@ -73,7 +73,7 @@ func startFaultServer(t *testing.T) *faultServer {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(faultRegion),
+		dustpan.WithInstallation(faultRegion),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -101,12 +101,12 @@ func startFaultServer(t *testing.T) *faultServer {
 	t.Cleanup(ts.Close)
 
 	faultNamespace := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            namespace.Name(faultNS),
-		HomeRegion:      namespace.Region(faultRegion),
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                namespace.Name(faultNS),
+		PrimaryInstallation: namespace.InstallationName(faultRegion),
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := st.CreateNamespace(ctx, faultNamespace); err != nil {

@@ -36,7 +36,7 @@ Each error answer has the header `Cache-Control: no-store`.
 | 404 | `namespace.not-found` | No namespace with this name |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 409 | `request.idempotency-key-lost` | A newer request took the `Idempotency-Key` before this request ended |
-| 421 | `namespace.not-home` | The namespace has its home region in another region |
+| 421 | `namespace.not-home` | The namespace has another primary installation |
 | 429 | `auth.rate-limited` | Too many failed sign-ins from this address |
 | 500 | `server.internal` | An error that the server does not classify. The message is `internal error` |
 | 503 | `maintenance.in-maintenance` | The installation is in maintenance mode |

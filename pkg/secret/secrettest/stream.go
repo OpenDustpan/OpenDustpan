@@ -73,7 +73,7 @@ func (w *streamWrapper) Unwrap(_ context.Context, sealed, aad []byte) ([]byte, e
 func streamService(t *testing.T, s Store) *secret.Service {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -107,18 +107,18 @@ func streamScope(t *testing.T, id string) secret.Scope {
 	return scope
 }
 
-// streamNamespace creates the acme namespace for stream tests, homed in the
-// region of the stream service.
+// streamNamespace creates the acme namespace for stream tests, with the
+// installation of the stream service as primary installation.
 func streamNamespace(t *testing.T, s Store) {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		Name:            "acme",
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		Name:                "acme",
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

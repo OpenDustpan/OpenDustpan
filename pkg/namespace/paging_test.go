@@ -89,15 +89,15 @@ func (f *storeOnly) Ping(_ context.Context) error {
 	return nil
 }
 
-// openService returns a Service on store. Region and Now are fixed, so only
+// openService returns a Service on store. Installation and Now are fixed, so only
 // the store varies between cases.
 func openService(t *testing.T, store namespace.Store) *namespace.Service {
 	t.Helper()
 
 	svc, err := namespace.NewService(namespace.Config{
-		Store:  store,
-		Now:    time.Now,
-		Region: namespace.Region("eu-west"),
+		Store:        store,
+		Now:          time.Now,
+		Installation: namespace.InstallationName("eu-west"),
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

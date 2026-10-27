@@ -102,7 +102,7 @@ func newWiredSignIn(t *testing.T) wiredSignIn {
 	log := &lockedLog{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	srv, err := NewServer(
-		WithRegion("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
+		WithInstallation("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st), WithSecretWrapper(wrapper),
 		WithWorkspaceStore(st), WithStateStore(st), WithBlobStore(blobs), WithInventoryReader(st),
 		WithAuthenticator(authn), WithListener(ln), WithClock(clock.Now),

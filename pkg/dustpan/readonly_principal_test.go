@@ -197,7 +197,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 		}
 	})
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: installationName})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

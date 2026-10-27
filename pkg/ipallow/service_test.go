@@ -164,14 +164,14 @@ type fixture struct {
 }
 
 // newFixture returns a service over a fake store holding the namespace acme,
-// homed in the local region.
+// whose primary installation is the local installation.
 func newFixture(t *testing.T, enabled bool) fixture {
 	t.Helper()
 
 	store := newFakeStore()
 	fixed := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
 
-	namespaces, nsErr := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, nsErr := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if nsErr != nil {
 		t.Fatalf("namespace service: %v", nsErr)
 	}
@@ -229,7 +229,7 @@ func testEntry() audit.Entry {
 func TestNewServiceMissingDependencies(t *testing.T) {
 	t.Parallel()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: newFakeStore(), Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: newFakeStore(), Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestRemoveWhileDisabled(t *testing.T) {
 func serviceNamespaces(t *testing.T, store *fakeStore) *namespace.Service {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

@@ -66,7 +66,7 @@ func TestNonServeCommandsOpenNoStore(t *testing.T) {
 		t,
 		"test-token",
 		http.StatusCreated,
-		`{"name":"acme","homeRegion":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
+		`{"name":"acme","primaryInstallation":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
 	)
 	upgrade := newCheckFakeServer(t, "/api/server/upgrade-check", http.StatusOK, upgradeCheckBody(t, nil))
 

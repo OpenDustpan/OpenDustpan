@@ -64,12 +64,12 @@ func openSeededKeepStore(t *testing.T) *Store {
 	})
 
 	seed := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now().UTC(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now().UTC(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), seed); err != nil {
@@ -158,12 +158,12 @@ func TestKeepAccessHoldsWriteLockAcrossSwap(t *testing.T) {
 
 	go func() {
 		rival := namespace.Namespace{
-			ID:              namespace.NewID(),
-			CreatedAt:       time.Now().UTC(),
-			Name:            "rival",
-			HomeRegion:      "eu-west",
-			FailoverVersion: 1,
-			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+			ID:                  namespace.NewID(),
+			CreatedAt:           time.Now().UTC(),
+			Name:                "rival",
+			PrimaryInstallation: "eu-west",
+			FailoverVersion:     1,
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 		}
 		writeDone <- s.CreateNamespace(context.WithoutCancel(ctx), rival)
 	}()

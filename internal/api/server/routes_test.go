@@ -272,7 +272,7 @@ func newServiceBackedHandlerOf(
 	restores := newRouteTestRestores(t, st, service, live, target)
 	seedRouteTestRows(t, st, seeds)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -1491,7 +1491,9 @@ func TestUnknownPathAnswersJSON404(t *testing.T) {
 func TestNewHandlerRequiresDependencies(t *testing.T) {
 	t.Parallel()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test"},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -1649,7 +1651,9 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		t.Fatalf("new service: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test"},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

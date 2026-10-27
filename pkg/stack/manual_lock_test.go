@@ -304,15 +304,15 @@ func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Servic
 
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1,
+		ID: namespace.NewID(), CreatedAt: now, Name: "acme", PrimaryInstallation: "local", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{
-			Store:  &memNamespaces{ns: ns, reads: atomic.Int64{}},
-			Now:    func() time.Time { return now },
-			Region: "local",
+			Store:        &memNamespaces{ns: ns, reads: atomic.Int64{}},
+			Now:          func() time.Time { return now },
+			Installation: "local",
 		},
 	)
 	if err != nil {

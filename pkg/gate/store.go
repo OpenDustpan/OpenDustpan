@@ -92,8 +92,8 @@ func Reason(e audit.Entry) string {
 //     set that a stored gate, approval default or ownership rule reads,
 //     returns ErrInvalid. The error names each reader.
 //
-// A check for a narrower scope reads the namespaces that this region
-// holds. A check across regions is not part of this version.
+// A check for a narrower scope reads the namespaces that this installation
+// holds. A check across installations is not part of this version.
 type Objects[T Object] interface {
 	// Get returns the object id of scope. It returns ErrNotFound when
 	// scope holds no such object.

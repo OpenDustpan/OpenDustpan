@@ -65,7 +65,7 @@ func newLargeOutputsFixture(t *testing.T, n int64) largeOutputsFixture {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -128,7 +128,7 @@ func newDefaultOutputsFixture(t *testing.T) largeOutputsFixture {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -181,7 +181,7 @@ func prepareLargeWorkspace(
 ) (workspace.Workspace, workspace.PendingState) {
 	t.Helper()
 
-	f.base.createNamespace(t, "acme", region)
+	f.base.createNamespace(t, "acme", installationName)
 
 	ctx := t.Context()
 
@@ -328,7 +328,7 @@ func checkTooSmallBody(t *testing.T, body string) {
 func prepareHTTPWorkspace(t *testing.T, f largeOutputsFixture) (workspace.Workspace, string) {
 	t.Helper()
 
-	f.base.createNamespace(t, "acme", region)
+	f.base.createNamespace(t, "acme", installationName)
 
 	ctx := t.Context()
 

@@ -4,13 +4,13 @@ package cli
 const ServeSynopsis = "Run the server with the built-in adapters."
 
 // ServeFlags holds the flag names of the serve command in reference order:
-// the configuration file, then the database, region, network, storage, key
+// the configuration file, then the database, installation, network, storage, key
 // and limit settings.
 func ServeFlags() []*Setting {
 	return SettingsFor(
 		"config",
 		"database",
-		"region",
+		"installation",
 		"components",
 		"listen",
 		"console-dir",

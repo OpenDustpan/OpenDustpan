@@ -97,7 +97,7 @@ A purge cannot be undone.
 - 409: a gate gave an error. The message holds the error code and the ID of the
   decision record.
 - 503: the policy engine did not answer.
-- 421: the namespace is not homed in this region.
+- 421: this installation is not the primary installation of the namespace.
 
 A restore and a purge of the same unit can run at the same time. Each runs
 in its own fenced transaction. The second one answers 404 or 409 and changes
@@ -112,7 +112,7 @@ The server runs the retention expiry one time each hour. The first run starts
 one hour after the server starts. The run does two things:
 
 1. It purges each deleted unit whose retention period ended, in every
-   namespace that has its home in this region. Each purge runs in its own
+   namespace whose primary installation is this installation. Each purge runs in its own
    fenced transaction and writes one audit entry with the subject `@server`
    and the action `unit:purge`.
 2. It finishes the blob purge records. A purge deletes the blobs of the unit

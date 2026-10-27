@@ -323,12 +323,12 @@ func createChainNamespace(t *testing.T, st *sqlite.Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            "acme",
-		HomeRegion:      region,
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := st.CreateNamespace(t.Context(), ns); err != nil {
@@ -478,7 +478,7 @@ func runChainServer(
 	registerConsole(t, addr, st)
 
 	srv, err := dustpan.NewServer(append(append([]dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

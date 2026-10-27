@@ -251,7 +251,7 @@ func classifyTooLarge(err error) (errorClass, bool) {
 }
 
 // classifyNamespace maps the namespace errors of a write: a fenced write to
-// 409, a namespace homed in another region to 421, and a database that does
+// 409, a namespace whose primary installation is another installation to 421, and a database that does
 // not answer to 503. ok is false for any other error.
 func classifyNamespace(err error) (errorClass, bool) {
 	switch {

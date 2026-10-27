@@ -591,12 +591,12 @@ func checkPostgresCut(t *testing.T, base string) {
 // pgNamespace returns a namespace row for a PostgreSQL cut write.
 func pgNamespace(name string) namespace.Namespace {
 	return namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            namespace.Name(name),
-		HomeRegion:      namespace.Region(faultRegion),
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                namespace.Name(name),
+		PrimaryInstallation: namespace.InstallationName(faultRegion),
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 

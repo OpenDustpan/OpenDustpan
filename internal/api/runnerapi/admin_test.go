@@ -63,14 +63,18 @@ func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
 	})
 
 	err = s.CreateNamespace(t.Context(), namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "acme", HomeRegion: region,
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	service, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Region: region})
+	service, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Installation: installationName})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -392,8 +396,12 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 	e := newEnv(t)
 
 	other := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "globex", HomeRegion: region,
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                "globex",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := e.store.namespaces.CreateNamespace(t.Context(), other); err != nil {
 		t.Fatalf("create namespace: %v", err)

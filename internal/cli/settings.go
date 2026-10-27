@@ -128,10 +128,10 @@ var Settings = []*Setting{
 		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later",
 	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
-		"region", "DUSTPAN_REGION", "local",
-		"region this server is authoritative for (DUSTPAN_REGION)",
+		"installation", "DUSTPAN_INSTALLATION", "local",
+		"name of this installation, the primary installation of the namespaces it creates (DUSTPAN_INSTALLATION)",
 		"`local`",
-	).WithFile("region"),
+	).WithFile("installation"),
 	stringSetting(
 		"components", "DUSTPAN_COMPONENTS", "all",
 		"components this process runs: all, or a comma-separated list of api and worker (DUSTPAN_COMPONENTS)",

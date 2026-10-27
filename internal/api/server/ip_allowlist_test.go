@@ -63,7 +63,7 @@ func openIPAllowFixture(t *testing.T) (*sqlite.Store, *namespace.Service) {
 
 	st := openRouteTestStore(t)
 
-	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

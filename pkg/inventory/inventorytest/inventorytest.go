@@ -48,12 +48,12 @@ func makeNamespace(t *testing.T, f Fixture, name namespace.Name) namespace.Fence
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       base(),
-		Name:            name,
-		HomeRegion:      "local",
-		FailoverVersion: suiteFenceVersion,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           base(),
+		Name:                name,
+		PrimaryInstallation: "local",
+		FailoverVersion:     suiteFenceVersion,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := f.CreateNamespace(t.Context(), ns); err != nil {

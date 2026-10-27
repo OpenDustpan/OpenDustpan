@@ -367,8 +367,12 @@ func revMustNamespace(t *testing.T, s RevocationStore) namespace.Fence {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: revAt(0), Name: revNamespace, HomeRegion: "eu-west", FailoverVersion: 1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           revAt(0),
+		Name:                revNamespace,
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

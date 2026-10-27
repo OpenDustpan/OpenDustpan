@@ -85,12 +85,12 @@ func ToStackRow(st stack.Stack) StackRow {
 // FromNamespaceRow converts a row into a domain namespace.
 func FromNamespaceRow(row NamespaceRow) namespace.Namespace {
 	return namespace.Namespace{
-		CreatedAt:       FromMillis(row.CreatedAtMs),
-		ID:              namespace.ID(row.ID),
-		Name:            namespace.Name(row.Name),
-		HomeRegion:      namespace.Region(row.HomeRegion),
-		Overrides:       namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
-		FailoverVersion: row.FailoverVersion,
+		CreatedAt:           FromMillis(row.CreatedAtMs),
+		ID:                  namespace.ID(row.ID),
+		Name:                namespace.Name(row.Name),
+		PrimaryInstallation: namespace.InstallationName(row.HomeRegion),
+		Overrides:           namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
+		FailoverVersion:     row.FailoverVersion,
 	}
 }
 
@@ -98,7 +98,7 @@ func FromNamespaceRow(row NamespaceRow) namespace.Namespace {
 func ToNamespaceRow(ns namespace.Namespace) NamespaceRow {
 	return NamespaceRow{
 		Name:                ns.Name.String(),
-		HomeRegion:          ns.HomeRegion.String(),
+		HomeRegion:          ns.PrimaryInstallation.String(),
 		FailoverVersion:     ns.FailoverVersion,
 		CreatedAtMs:         Millis(ns.CreatedAt),
 		AllowForcedWrites:   ns.Overrides.Forced,

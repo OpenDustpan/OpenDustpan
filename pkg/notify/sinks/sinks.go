@@ -39,7 +39,7 @@ const signingKeyBytes = 32
 
 // Namespaces reads the namespace that a write fences. namespace.Service
 // implements it. WritableHere returns namespace.ErrNotHome for a namespace
-// that another region owns.
+// that another installation owns.
 type Namespaces interface {
 	Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 	WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
@@ -502,8 +502,9 @@ func (s *Service) checkPort(sink *notify.Sink, secrets []notify.SinkSecret) erro
 }
 
 // fence returns the fence of ns. It returns namespace.ErrNotHome when the
-// namespace is homed in another region, so that no write and no test of a
-// sink runs in a region that does not own the namespace.
+// primary installation of the namespace is another installation, so that no
+// write and no test of a sink runs on an installation that is not the primary
+// installation of the namespace.
 func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {
 	n, err := s.namespaces.WritableHere(ctx, ns)
 	if err != nil {

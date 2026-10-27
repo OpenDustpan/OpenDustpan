@@ -94,7 +94,7 @@ func newBlobAuditWorld(t *testing.T) blobAuditWorld {
 	t.Cleanup(ts.Close)
 
 	f := fixture{store: st, server: ts, srv: srv}
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	savePulumiCheckpoint(t, f)
 

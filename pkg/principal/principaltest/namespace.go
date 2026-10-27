@@ -59,7 +59,7 @@ func mustCreateNamespace(t *testing.T, s NamespaceStore, ns namespace.Name) {
 
 	err := s.CreateNamespace(t.Context(), namespace.Namespace{
 		ID:        namespace.NewID(),
-		CreatedAt: time.Unix(0, 0), Name: ns, HomeRegion: "",
+		CreatedAt: time.Unix(0, 0), Name: ns, PrimaryInstallation: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})
 	if err != nil {

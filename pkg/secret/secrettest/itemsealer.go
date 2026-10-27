@@ -101,7 +101,7 @@ func NewSealerRig(t *testing.T, index ItemKeyStore, blobs blob.Store) *SealerRig
 
 	for _, name := range []namespace.Name{"acme", "other"} {
 		ns := namespace.Namespace{
-			ID: namespace.NewID(), CreatedAt: itemKeyTime(), Name: name, HomeRegion: "local",
+			ID: namespace.NewID(), CreatedAt: itemKeyTime(), Name: name, PrimaryInstallation: "local",
 			FailoverVersion: itemKeyFenceVersion, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 		}
 		if err := index.CreateNamespace(t.Context(), ns); err != nil {

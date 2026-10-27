@@ -289,7 +289,7 @@ func (o Outcome) Rule() (ID, bool) {
 // computes it when it loads the configuration: a gate whose CheckedWith is
 // not the engine version and the schema version of the current build is
 // checked again with Engine.Check, and a diagnostic of the gate gives
-// StateInvalid. So each region computes the same state from the same
+// StateInvalid. So each installation computes the same state from the same
 // stored gate, with no fence and no audit entry.
 type State string
 

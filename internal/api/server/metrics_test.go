@@ -60,7 +60,9 @@ func newMetricsHandler(
 ) testHandler {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test"},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

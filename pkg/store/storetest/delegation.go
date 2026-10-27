@@ -144,7 +144,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 
 	err = st.CreateNamespace(t.Context(), namespace.Namespace{
 		ID:        namespace.NewID(),
-		CreatedAt: time.Unix(0, 0), Name: "acme", HomeRegion: "",
+		CreatedAt: time.Unix(0, 0), Name: "acme", PrimaryInstallation: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})
 	if err != nil {

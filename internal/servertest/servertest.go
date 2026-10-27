@@ -54,8 +54,8 @@ const EnvURL = "DUSTPAN_TEST_POSTGRES_URL"
 // Do sends it.
 const Token = "servertest-token-0123456789abcdef0123"
 
-// Region is the region of every server of a cluster.
-const Region namespace.Region = "eu-west"
+// Installation is the installation name of every server of a cluster.
+const Installation namespace.InstallationName = "eu-west"
 
 // key is the key-encryption key that every server of a cluster shares.
 const key = "0123456789abcdef0123456789abcdef"
@@ -389,7 +389,7 @@ func serverOptions(
 	logger := slog.New(slog.NewTextHandler(t.Output(), nil)).With(slog.Int("server", i))
 
 	return []dustpan.Option{
-		dustpan.WithRegion(Region),
+		dustpan.WithInstallation(Installation),
 		dustpan.WithNamespaceStore(store),
 		dustpan.WithStackStore(store),
 		dustpan.WithUpdateStore(store),

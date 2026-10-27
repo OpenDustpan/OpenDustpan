@@ -63,8 +63,8 @@ func (stubNamespaceStore) Ping(_ context.Context) error {
 	return nil
 }
 
-// homedNamespaceStore answers every namespace homed in the test region, so
-// stack writes pass the home-region check.
+// homedNamespaceStore answers every namespace whose primary installation is the test installation, so
+// stack writes pass the primary-installation check.
 type homedNamespaceStore struct{}
 
 func (homedNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Namespace) error {
@@ -76,19 +76,19 @@ func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) 
 
 	out.ID = namespace.ID("ns-" + name.String())
 	out.Name = name
-	out.HomeRegion = "test-region"
+	out.PrimaryInstallation = "test-region"
 
 	return out, nil
 }
 
 func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Time{},
-		Name:            "acme",
-		HomeRegion:      "test-region",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Time{},
+		Name:                "acme",
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return []namespace.Namespace{ns}, nil
@@ -416,7 +416,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -480,7 +480,7 @@ func newAuditedEnforcingHandler(
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -1597,7 +1597,7 @@ func newDeleteHandlerWithAudit(
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

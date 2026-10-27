@@ -61,7 +61,7 @@ func TestMetricsCountsPerAdapter(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	status, body := f.do(t, http.MethodGet, "/api/user", adminToken, "")
 	if status != http.StatusOK {
@@ -167,7 +167,7 @@ func TestMetricsRouteLabelIsPattern(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	for _, stack := range []string{"alpha", "beta"} {
 		createStack(t, f, stack)
@@ -200,7 +200,7 @@ func TestMetricsNeverHoldsCanaries(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	//nolint:gosec // Canary values for the never-held test, not credentials.
 	tokenCanary := "canary-token-9f2c7a4e1b5d3a7c8e6f0a2b4d6c8e0a"

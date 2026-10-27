@@ -132,12 +132,12 @@ func (oneNamespace) CreateNamespace(context.Context, namespace.Namespace) error 
 
 func (oneNamespace) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Time{},
-		Name:            name,
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Time{},
+		Name:                name,
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -158,7 +158,7 @@ type fixture struct {
 func newFixture(t *testing.T, wrapperID string, keys *memKeys) fixture {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestOpenKeyBindsScope(t *testing.T) {
 	ctx := t.Context()
 	wrapper := &recordingWrapper{mu: sync.Mutex{}, inner: newWrapper(t, "kek-1"), aads: nil}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}

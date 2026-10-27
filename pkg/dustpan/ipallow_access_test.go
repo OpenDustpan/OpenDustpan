@@ -121,12 +121,12 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 	})
 
 	acme := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Unix(0, 0),
-		Name:            "acme",
-		HomeRegion:      region,
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Unix(0, 0),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if nsErr := st.CreateNamespace(t.Context(), acme); nsErr != nil {
@@ -171,7 +171,7 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 	}
 
 	srv, err := dustpan.NewServer(append(signInOptions(t, st),
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

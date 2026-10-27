@@ -553,7 +553,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -2781,7 +2781,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	t.Parallel()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

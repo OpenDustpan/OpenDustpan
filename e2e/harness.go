@@ -67,11 +67,11 @@ const (
 	// administrators, so the AdminOnly authorizer allows both.
 	SubjectB = "admin-2"
 
-	region         = "e2e"
-	actor          = "e2e"
-	tokenBytes     = 24
-	commandTimeout = 2 * time.Minute
-	waitDelay      = 5 * time.Second
+	installationName = "e2e"
+	actor            = "e2e"
+	tokenBytes       = 24
+	commandTimeout   = 2 * time.Minute
+	waitDelay        = 5 * time.Second
 	// killWait bounds the wait for the marker file that triggers the kill
 	// of a running CLI. It stays well under commandTimeout, so the kill and
 	// the reap always finish before the step times out.
@@ -738,7 +738,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		append(
 			featureStoreOptions(tb, st, wrapper, args),
 			[]dustpan.Option{
-				dustpan.WithRegion(region),
+				dustpan.WithInstallation(installationName),
 				dustpan.WithNamespaceStore(st),
 				dustpan.WithStackStore(st),
 				dustpan.WithUpdateStore(st),
@@ -1027,7 +1027,7 @@ func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) {
 	})
 }
 
-// CreateNamespace creates a namespace homed in the test region through the
+// CreateNamespace creates a namespace whose primary installation is the test installation through the
 // installation API, for steps that need more than the Namespace namespace
 // NewEnv creates. It proves the namespace create route with the bootstrap
 // admin token.
@@ -1036,28 +1036,28 @@ func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	e.createNamespaceThroughAPI(ctx, tb, name)
 }
 
-// CreateForeignNamespace stores a namespace homed in region, so a step can
-// prove what the server answers for a namespace that another region owns.
-// The installation API creates namespaces in the server's own region only,
+// CreateForeignNamespace stores a namespace whose primary installation is installationName, so a step can
+// prove what the server answers for a namespace that another installation owns.
+// The installation API creates namespaces in the server's own installation only,
 // so this is a direct store write. The binary server owns its database, so
 // the write runs while the binary is stopped, on a handle that is closed
 // before the binary starts again. The in-process server writes through its
 // own store.
-func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, region string) {
+func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, installationName string) {
 	tb.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            namespace.Name(name),
-		HomeRegion:      namespace.Region(region),
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                namespace.Name(name),
+		PrimaryInstallation: namespace.InstallationName(installationName),
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if e.binPath == "" {
 		if err := e.inprocess.CreateNamespace(ctx, ns); err != nil {
-			tb.Fatalf("create namespace %q homed in %q: %v", name, region, err)
+			tb.Fatalf("create namespace %q with primary installation %q: %v", name, installationName, err)
 		}
 
 		return
@@ -2629,17 +2629,17 @@ func (e *Env) createNamespaceThroughAPI(ctx context.Context, tb testing.TB, name
 	}
 
 	var doc struct {
-		Name            string `json:"name"`
-		HomeRegion      string `json:"homeRegion"`
-		FailoverVersion int64  `json:"failoverVersion"`
+		Name                string `json:"name"`
+		PrimaryInstallation string `json:"primaryInstallation"`
+		FailoverVersion     int64  `json:"failoverVersion"`
 	}
 
 	if err := json.Unmarshal([]byte(body), &doc); err != nil {
 		tb.Fatalf("decode namespace %q %q: %v", name, body, err)
 	}
 
-	if doc.Name != name || doc.HomeRegion != region || doc.FailoverVersion != 1 {
-		tb.Fatalf("namespace answers %+v, want %q in %q at version 1", doc, name, region)
+	if doc.Name != name || doc.PrimaryInstallation != installationName || doc.FailoverVersion != 1 {
+		tb.Fatalf("namespace answers %+v, want %q in %q at version 1", doc, name, installationName)
 	}
 }
 

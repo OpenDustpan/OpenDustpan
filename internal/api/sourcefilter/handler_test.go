@@ -609,7 +609,9 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, openSQLite, identity.AdminOnly{})
-	service, err := namespace.NewService(namespace.Config{Store: e.store.namespaces, Now: nil, Region: region})
+	service, err := namespace.NewService(
+		namespace.Config{Store: e.store.namespaces, Now: nil, Installation: installationName},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

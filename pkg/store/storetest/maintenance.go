@@ -179,12 +179,12 @@ type maintenanceWrite struct {
 // installation scope and four at namespace scope. existing is a stack of ns.
 func maintenanceWrites(ctx context.Context, s Store, ns namespace.Namespace, existing stack.Stack) []maintenanceWrite {
 	other := namespace.Namespace{
-		CreatedAt:       now(),
-		ID:              namespace.NewID(),
-		Name:            "other",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:           now(),
+		ID:                  namespace.NewID(),
+		Name:                "other",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return []maintenanceWrite{

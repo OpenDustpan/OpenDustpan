@@ -113,12 +113,12 @@ func seedPlanNamespaces(t *testing.T, s *Store, n int) {
 
 	for i := range n {
 		ns := namespace.Namespace{
-			ID:              namespace.NewID(),
-			CreatedAt:       now,
-			Name:            namespace.Name(fmt.Sprintf("ns-%05d", i)),
-			HomeRegion:      "eu-west",
-			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
-			FailoverVersion: 1,
+			ID:                  namespace.NewID(),
+			CreatedAt:           now,
+			Name:                namespace.Name(fmt.Sprintf("ns-%05d", i)),
+			PrimaryInstallation: "eu-west",
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
+			FailoverVersion:     1,
 		}
 
 		if err := s.CreateNamespace(t.Context(), ns); err != nil {

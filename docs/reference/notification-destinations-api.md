@@ -113,10 +113,10 @@ sends no message and writes no audit entry. A test of a destination whose
 address the rules refuse counts against the limits too. Each server instance
 applies the limits on its own.
 
-The server sends the message only after these steps: the namespace has its home
-region here, the limits take the test, the address passes the outbound rules,
+The server sends the message only after these steps: this installation is the primary
+installation of the namespace, the limits take the test, the address passes the outbound rules,
 and the first audit entry is written under the fence of the namespace. A
-namespace of another region answers 421 `namespace.not-home`. A moved fence
+namespace of another installation answers 421 `namespace.not-home`. A moved fence
 answers 409 `namespace.fenced`.
 
 ## Error codes
@@ -130,7 +130,7 @@ answers 409 `namespace.fenced`.
 | 404 | `sink.not-found` | No destination with this ID in the namespace |
 | 409 | `sink.conflict` | The destination changed since you read it |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
-| 421 | `namespace.not-home` | The namespace has its home region in another region |
+| 421 | `namespace.not-home` | The namespace has another primary installation |
 | 429 | `sink.test-rate-limited` | A limit of the test route refuses the test |
 | 422 | `sink.no-sender` | The server has no sender for the kind or the chat platform of the destination |
 | 422 | `sink.no-url` | The server cannot use the sealed URL of the destination: set the URL again |

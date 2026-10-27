@@ -91,7 +91,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 
 	stores := openBackupDeps(t)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -902,7 +902,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -1027,7 +1027,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

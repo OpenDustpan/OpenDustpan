@@ -32,7 +32,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

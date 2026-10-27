@@ -247,7 +247,7 @@ func openStore(t *testing.T) (*sqlite.Store, *secret.Service, *namespace.Service
 		}
 	})
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "test-region"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

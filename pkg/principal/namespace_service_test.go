@@ -74,7 +74,7 @@ func TestCreateNamespacePrincipalRefusesNamespaceServicePrefix(t *testing.T) {
 	st := openStore(t)
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Unix(0, 0), Name: "acme", HomeRegion: "",
+		ID: namespace.NewID(), CreatedAt: time.Unix(0, 0), Name: "acme", PrimaryInstallation: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})
 	if err != nil {
