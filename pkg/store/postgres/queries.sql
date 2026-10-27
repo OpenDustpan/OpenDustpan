@@ -3818,24 +3818,26 @@ WHERE n.name = sqlc.arg(namespace);
 -- name: InsertJob :exec
 INSERT INTO jobs (
     id, namespace_id, unit_id, seq, state, wait, current_phase, current_changes, current_operation,
-    idempotency_key, version, body, created_at_ms, updated_at_ms
+    idempotency_key, version, body, created_at_ms, updated_at_ms, state_changed_at_ms
 ) VALUES (
     sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(unit_id),
     sqlc.arg(seq), sqlc.arg(state), sqlc.arg(wait), sqlc.arg(current_phase), sqlc.arg(current_changes),
     sqlc.arg(current_operation), sqlc.arg(idempotency_key), sqlc.arg(version), sqlc.arg(body),
-    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms), sqlc.arg(state_changed_at_ms)
 );
 
 -- name: GetJob :one
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
-       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE j.id = sqlc.arg(id);
 
 -- name: GetJobByKey :one
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
-       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND j.idempotency_key = sqlc.arg(idempotency_key);
@@ -3846,7 +3848,8 @@ WHERE n.name = sqlc.arg(namespace) AND j.idempotency_key = sqlc.arg(idempotency_
 UPDATE jobs
 SET state = sqlc.arg(state), wait = sqlc.arg(wait), current_phase = sqlc.arg(current_phase),
     current_changes = sqlc.arg(current_changes), current_operation = sqlc.arg(current_operation),
-    version = sqlc.arg(version), body = sqlc.arg(body), updated_at_ms = sqlc.arg(updated_at_ms)
+    version = sqlc.arg(version), body = sqlc.arg(body), updated_at_ms = sqlc.arg(updated_at_ms),
+    state_changed_at_ms = sqlc.arg(state_changed_at_ms)
 WHERE id = sqlc.arg(id) AND version = sqlc.arg(prev_version);
 
 -- name: CountOpenJobsOfUnit :one
@@ -3871,7 +3874,8 @@ LIMIT 1;
 
 -- name: ListAwaitingJobsOfUnit :many
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
-       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE j.namespace_id = (SELECT x.id FROM namespaces AS x WHERE x.name = sqlc.arg(namespace))
@@ -3883,6 +3887,7 @@ ORDER BY j.seq;
 -- phase does not exist or ended. op_state is NULL for a missing operation.
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       j.state_changed_at_ms,
        d.state AS op_state
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id

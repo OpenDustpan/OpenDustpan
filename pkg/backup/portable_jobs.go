@@ -23,6 +23,7 @@ func portableJobTables() []PortableTable {
 				{Name: portColBody, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: "state_changed_at_ms", Kind: KindTime},
 			},
 		},
 		{

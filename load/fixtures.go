@@ -188,6 +188,7 @@ func seedFixtureJob(ctx context.Context, p ports, unit identity.Object, fence na
 		StartedBy: loadProject, Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil,
 		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
 		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		StateChangedAt: time.Time{},
 	}
 
 	stored, _, err := p.jobs.Create(ctx, queued, nil, fence, nil)

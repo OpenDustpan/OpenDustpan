@@ -11,6 +11,8 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -64,6 +66,14 @@ func listOps(t *testing.T, srv *Server, kind durable.Kind) []durable.Operation {
 func waitForTwoRuns(t *testing.T, srv *Server, kind durable.Kind) {
 	t.Helper()
 
+	waitForRuns(t, srv, kind, 2)
+}
+
+// waitForRuns polls until at least want operations of kind reached a terminal
+// state, or fails after scheduleTestDeadline.
+func waitForRuns(t *testing.T, srv *Server, kind durable.Kind, want int) {
+	t.Helper()
+
 	deadline := time.Now().Add(scheduleTestDeadline)
 
 	for {
@@ -76,12 +86,12 @@ func waitForTwoRuns(t *testing.T, srv *Server, kind durable.Kind) {
 			}
 		}
 
-		if ended >= 2 {
+		if ended >= want {
 			return
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("ended operations of %s = %d, want at least 2: two runs prove progress", kind, ended)
+			t.Fatalf("ended operations of %s = %d, want at least %d", kind, ended, want)
 		}
 
 		select {
@@ -126,6 +136,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
 		kind:             kindState{store: nil, principals: nil, kind: ""},
 		tempAdmins:       nil,
+		reconciler:       nil,
 		handler:          nil,
 		started:          nil,
 		ungated:          nil,
@@ -357,4 +368,66 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 	wg.Wait()
 
 	checkTickKeysOnce(t, a, kindInactivity)
+}
+
+// TestJobScheduleReconcileRuns proves that a server with a reconciler lists the
+// schedule job.reconcile with an interval of one minute and a runner kind, and
+// that the first tick runs the reconcile to a successful end.
+func TestJobScheduleReconcileRuns(t *testing.T) {
+	t.Parallel()
+
+	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	reconciler, err := job.NewReconciler(job.ReconcilerConfig{
+		Store: store.Jobs(), Namespaces: store, QueueTimeout: 0, DispatchTimeout: 0, StateTimeout: 0,
+		MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: true, IsDev: nil}, Batch: 0, Now: nil, Log: nil,
+	})
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+
+	srv := testServer(store.DurableOperations(), "a")
+	srv.reconciler = reconciler
+
+	var found *durable.ScheduleSpec
+
+	for _, spec := range srv.jobSchedules() {
+		if spec.Name == job.ReconcileName {
+			found = &spec
+		}
+	}
+
+	if found == nil || found.Kind != job.KindReconcile || found.Interval != time.Minute {
+		t.Fatalf("schedules = %+v, want %s every minute with kind %s", srv.jobSchedules(), job.ReconcileName,
+			job.KindReconcile)
+	}
+
+	pair := newPair(t, srv)
+
+	ctx, cancel := context.WithTimeout(t.Context(), scheduleTestDeadline)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() { pair.Sched.Run(ctx) })
+	wg.Go(func() { pair.Run.Run(ctx) })
+
+	waitForRuns(t, srv, job.KindReconcile, 1)
+	cancel()
+	wg.Wait()
+
+	for _, op := range listOps(t, srv, job.KindReconcile) {
+		if op.State != durable.StateSucceeded {
+			t.Fatalf("operation %s of the reconcile = %s, want succeeded", op.ID, op.State)
+		}
+	}
 }

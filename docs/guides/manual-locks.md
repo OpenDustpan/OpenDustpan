@@ -76,7 +76,8 @@ covers:
   start in a change freeze. It gives no way past a manual lock. The way out is the
   force-unlock.
 
-When the lock goes, the next dispatch takes the queued job.
+When the lock goes, the schedule `job.reconcile` dispatches the queued job at its
+next run. It runs each minute.
 
 ## What the tools print
 

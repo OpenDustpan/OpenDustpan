@@ -126,8 +126,7 @@ func stepNamed(steps []Step, name string) (*Step, bool) {
 const ReasonRestored = "restored"
 
 // AfterOperationEnded returns the event that a reconcile schedule applies to
-// the job of o. A later change adds that schedule: no code in the server
-// calls this function yet. o is a job that is dispatched, running or
+// the job of o. The Reconciler of the schedule job.reconcile calls it. o is a job that is dispatched, running or
 // canceling while the durable operation of its current phase ended with no
 // Finish, or does not exist (o.Missing, after a restore). Store.Orphans
 // returns such jobs. The rule:

@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
@@ -102,6 +103,13 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	if s.reconciler != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: job.ReconcileName, Kind: job.KindReconcile, Version: job.ReconcileVersion,
+			Interval: job.ReconcileInterval, Input: nil,
+		})
+	}
+
 	return specs
 }
 
@@ -130,7 +138,34 @@ func (s *Server) jobKinds() []durable.KindSpec {
 		kinds = append(kinds, jobKind(kindAuditChain, s.chain.check))
 	}
 
+	if s.reconciler != nil {
+		kinds = append(kinds, s.reconcileKind())
+	}
+
 	return kinds
+}
+
+// reconcileKind returns the runner kind of the reconcile schedule. Its step
+// returns the error of a run, so the runner counts a failed run as a failed
+// attempt, and it defers a run in maintenance mode: the writes of the reconcile
+// wait, as for the other jobs. A job that one run could not change is not an
+// error of the run. It is in the log and in the result.
+func (s *Server) reconcileKind() durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       job.KindReconcile,
+		Version:    job.ReconcileVersion,
+		MinVersion: job.ReconcileVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				_, err := s.reconciler.Reconcile(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("job reconcile: %w", err)
+				}
+
+				return nil, nil
+			}},
+		},
+	}
 }
 
 // jobKind returns the runner kind of a job with one step that runs body.

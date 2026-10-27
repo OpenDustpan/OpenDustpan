@@ -311,6 +311,7 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 	now := time.Now().UTC()
 	stored := copyJob(&j)
 	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
+	stored.StateChangedAt = now
 
 	if j.State == job.StateAwaitingApproval {
 		stored.State, stored.Wait = job.StateAwaitingApproval, job.WaitNone
@@ -377,9 +378,7 @@ func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
 			continue
 		}
 
-		if (f.Namespace != "" && j.Spec.Unit.Namespace() != f.Namespace) ||
-			(f.UnitID != "" && j.Spec.Unit.UnitID() != f.UnitID) ||
-			(len(f.States) > 0 && !slices.Contains(f.States, j.State)) {
+		if !selects(&f, j) {
 			continue
 		}
 
@@ -390,6 +389,20 @@ func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
 	}
 
 	return out, nil
+}
+
+// selects reports whether the filter f selects the job j.
+func selects(f *job.Filter, j *job.Job) bool {
+	switch {
+	case f.Namespace != "" && j.Spec.Unit.Namespace() != f.Namespace:
+		return false
+	case f.UnitID != "" && j.Spec.Unit.UnitID() != f.UnitID:
+		return false
+	case len(f.States) > 0 && !slices.Contains(f.States, j.State):
+		return false
+	default:
+		return f.StateChangedBefore.IsZero() || j.StateChangedAt.Before(f.StateChangedBefore)
+	}
 }
 
 // Apply implements job.Store.
@@ -431,6 +444,10 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 
 	if err := m.applyIn(ctx, cur, &next, &c, now); err != nil {
 		return job.Job{}, err
+	}
+
+	if next.State != cur.State {
+		next.StateChangedAt = now
 	}
 
 	m.jobs[next.ID] = &next
@@ -488,6 +505,7 @@ func (m *memDB) ObserveStateVersion(ctx context.Context, v job.StateVersion, fen
 
 		next.Version++
 		next.UpdatedAt = time.Now().UTC()
+		next.StateChangedAt = next.UpdatedAt
 		m.jobs[id] = &next
 		closed = append(closed, copyJob(&next))
 	}

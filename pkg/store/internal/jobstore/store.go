@@ -91,6 +91,7 @@ func createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.StartRequest, e
 	stored := *j
 	stored.Phases = clonePhases(j.Phases)
 	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
+	stored.StateChangedAt = now
 
 	// A job whose first gate needs approval is stored in awaiting-approval,
 	// in this transaction, so that no queued job with a closed gate is ever
@@ -150,6 +151,7 @@ func (s *Store) List(ctx context.Context, f job.Filter) ([]job.Job, error) {
 	err := s.run.Read(ctx, func(tx Tx) error {
 		rows, err := tx.List(ctx, Query{
 			Namespace: f.Namespace, UnitID: f.UnitID, States: f.States, Limit: limit, After: f.After,
+			StateChangedBeforeMs: millisOrZero(f.StateChangedBefore),
 		})
 		if err != nil {
 			return err
@@ -461,6 +463,7 @@ func rowOf(j *job.Job) (Row, error) {
 		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), UnitID: j.Spec.Unit.UnitID(), Seq: 0, State: j.State,
 		Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version,
 		Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
+		StateChangedMs: j.StateChangedAt.UnixMilli(),
 	}
 
 	if j.Current < len(j.Phases) {
@@ -478,6 +481,7 @@ func jobOf(r *Row) (job.Job, error) {
 		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
 		Verification: job.VerificationNone, IdempotencyKey: r.Key, RequestHash: "", Version: r.Version,
 		CreatedAt: time.UnixMilli(r.CreatedMs).UTC(), UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(),
+		StateChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
 	}
 
 	if err := decodeBody(r.Body, &j); err != nil {
@@ -571,6 +575,7 @@ func noJob() job.Job {
 		Version:        0,
 		CreatedAt:      time.Time{},
 		UpdatedAt:      time.Time{},
+		StateChangedAt: time.Time{},
 	}
 }
 
