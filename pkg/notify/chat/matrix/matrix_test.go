@@ -3,6 +3,7 @@ package matrix_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 	"net/http"
 	"regexp"
@@ -16,15 +17,40 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify/chat/matrix"
 )
 
-const zw = "​"
+const zw = "\u200b"
 
 // event is the content of a Matrix message, as the tests read it.
 type event struct {
-	Msgtype       string         `json:"msgtype"`
-	Body          string         `json:"body"`
-	Format        string         `json:"format"`
-	FormattedBody string         `json:"formatted_body"`
-	Mentions      map[string]any `json:"m.mentions"`
+	Msgtype       string
+	Body          string
+	Format        string
+	FormattedBody string
+	Mentions      map[string]any
+}
+
+// parseEvent reads the fields of an event. The names of the fields are those
+// of the Matrix specification, which a struct tag cannot write in the style of
+// the linter.
+func parseEvent(raw []byte) (event, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return event{}, fmt.Errorf("parse an event: %w", err)
+	}
+
+	var ev event
+
+	for key, dst := range map[string]any{
+		"msgtype": &ev.Msgtype, "body": &ev.Body, "format": &ev.Format, "formatted_body": &ev.FormattedBody,
+		"m.mentions": &ev.Mentions,
+	} {
+		if v, ok := fields[key]; ok {
+			if err := json.Unmarshal(v, dst); err != nil {
+				return event{}, fmt.Errorf("parse an event: %w", err)
+			}
+		}
+	}
+
+	return ev, nil
 }
 
 var tag = regexp.MustCompile(`<[^>]*>`)
@@ -33,10 +59,9 @@ var tag = regexp.MustCompile(`<[^>]*>`)
 // without its tags and with its entities as they are. The plain body is text
 // for a client that shows no HTML, and the tests below read it on its own.
 func decode(body []byte) ([]string, error) {
-	var ev event
-
-	if err := json.Unmarshal(body, &ev); err != nil {
-		return nil, err //nolint:wrapcheck // A test helper.
+	ev, err := parseEvent(body)
+	if err != nil {
+		return nil, fmt.Errorf("decode the body: %w", err)
 	}
 
 	return []string{tag.ReplaceAllString(ev.FormattedBody, " ")}, nil
@@ -135,8 +160,8 @@ func render(t *testing.T, c chat.Content) (chat.Request, event) {
 		t.Fatalf("Render: %v", err)
 	}
 
-	var ev event
-	if err = json.Unmarshal(req.Body, &ev); err != nil {
+	ev, err := parseEvent(req.Body)
+	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 
@@ -282,18 +307,7 @@ func TestRenderLimits(t *testing.T) {
 	} {
 		req, ev := render(t, c)
 
-		for _, text := range []string{ev.Body, ev.FormattedBody} {
-			if !utf8.ValidString(text) || strings.Contains(text, "�") {
-				t.Errorf("%s: a text is cut inside a character", name)
-			}
-		}
-
-		// A cut inside an entity leaves a lone & in the HTML.
-		for _, part := range strings.Split(tag.ReplaceAllString(ev.FormattedBody, "\n"), "\n") {
-			if i := strings.LastIndexByte(part, '&'); i >= 0 && !strings.Contains(part[i:], ";") {
-				t.Errorf("%s: a text is cut inside an entity: %q", name, part)
-			}
-		}
+		checkNotCut(t, name, ev)
 
 		if len(req.Body) > matrix.MaxBody {
 			t.Errorf("%s: body of %d bytes, want at most %d", name, len(req.Body), matrix.MaxBody)
@@ -301,6 +315,24 @@ func TestRenderLimits(t *testing.T) {
 
 		if html.UnescapeString(tag.ReplaceAllString(ev.FormattedBody, "")) == "" {
 			t.Errorf("%s: no text", name)
+		}
+	}
+}
+
+// checkNotCut checks that no text of ev is cut inside a character or an entity.
+func checkNotCut(t *testing.T, name string, ev event) {
+	t.Helper()
+
+	for _, text := range []string{ev.Body, ev.FormattedBody} {
+		if !utf8.ValidString(text) || strings.Contains(text, "\ufffd") {
+			t.Errorf("%s: a text is cut inside a character", name)
+		}
+	}
+
+	// A cut inside an entity leaves a lone & in the HTML.
+	for part := range strings.SplitSeq(tag.ReplaceAllString(ev.FormattedBody, "\n"), "\n") {
+		if i := strings.LastIndexByte(part, '&'); i >= 0 && !strings.Contains(part[i:], ";") {
+			t.Errorf("%s: a text is cut inside an entity: %q", name, part)
 		}
 	}
 }

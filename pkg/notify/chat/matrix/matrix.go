@@ -62,7 +62,7 @@ const (
 	// ellipsis ends a text that the renderer cut.
 	ellipsis = "…"
 	// zeroWidthSpace breaks the tokens that a client turns into a mention or a link.
-	zeroWidthSpace = "​"
+	zeroWidthSpace = "\u200b"
 	// sendPath is the path after the URL of the room, before the transaction ID.
 	sendPath = "/send/m.room.message/"
 	// eventIDKey is the field of the answer that names the event.
@@ -112,17 +112,24 @@ func (Renderer) CheckHost(host string) error {
 // event that the homeserver maybe took is not posted twice. The error text
 // never holds the body.
 func (Renderer) Check(status int, body []byte) error {
-	if status == http.StatusOK {
-		var answer map[string]json.RawMessage
-
-		var id string
-
-		if json.Unmarshal(body, &answer) == nil && json.Unmarshal(answer[eventIDKey], &id) == nil && id != "" {
-			return nil
-		}
+	if status == http.StatusOK && hasEventID(body) {
+		return nil
 	}
 
 	return fmt.Errorf("%w: the Matrix homeserver did not answer with an event ID", notify.ErrPermanent)
+}
+
+// hasEventID reports whether body is a JSON object with a non-empty string
+// field event_id.
+func hasEventID(body []byte) bool {
+	var answer map[string]json.RawMessage
+	if json.Unmarshal(body, &answer) != nil {
+		return false
+	}
+
+	var id string
+
+	return json.Unmarshal(answer[eventIDKey], &id) == nil && id != ""
 }
 
 // Render returns the request for c. See chat.Renderer. It also returns an
@@ -192,31 +199,31 @@ func build(c chat.Content, shown int) map[string]any {
 		page = append(page, h)
 	}
 
-	title := encode(c.Title, maxTitle, true)
+	title := encodeLine(c.Title, maxTitle)
 	add(style+": "+title.plain, "<b>"+style+": "+title.html+"</b>")
 
-	product := encode(c.Product, maxProduct, true)
+	product := encodeLine(c.Product, maxProduct)
 	add(product.plain, "<i>"+product.html+"</i>")
 
 	if c.Summary != "" {
-		summary := encode(c.Summary, maxSummary, false)
+		summary := encode(c.Summary, maxSummary)
 		add("\n"+summary.plain, "<br/>"+lineBreaks(summary.html))
 	}
 
 	for _, f := range c.Fields {
-		label := encode(f.Label, maxLabel, true)
+		label := encodeLine(f.Label, maxLabel)
 		if f.Value == "" {
 			add(label.plain, "<b>"+label.html+"</b>")
 
 			continue
 		}
 
-		value := encode(f.Value, maxValue, false)
+		value := encode(f.Value, maxValue)
 		add(label.plain+": "+value.plain, "<b>"+label.html+"</b>: "+lineBreaks(value.html))
 	}
 
 	for _, l := range c.Links[:shown] {
-		linkTitle := encode(l.Title, maxLinkTitle, true)
+		linkTitle := encodeLine(l.Title, maxLinkTitle)
 		url := target(l.URL)
 		add(linkTitle.plain+": "+url, `<a href="`+html.EscapeString(url)+`">`+linkTitle.html+"</a>")
 	}
@@ -243,14 +250,15 @@ func lineBreaks(h string) string { return strings.ReplaceAll(h, "\n", "<br/>") }
 
 // severityLabel returns the word that shows a severity.
 func severityLabel(s notify.Severity) string {
-	switch s {
-	case notify.SeverityCritical:
+	if s == notify.SeverityCritical {
 		return "Critical"
-	case notify.SeverityWarning:
-		return "Warning"
-	default:
-		return "Info"
 	}
+
+	if s == notify.SeverityWarning {
+		return "Warning"
+	}
+
+	return "Info"
 }
 
 // target percent-encodes the characters of a URL that end an attribute or
@@ -273,63 +281,76 @@ func target(raw string) string {
 	return b.String()
 }
 
+// encodeLine is encode for a text that stays on its line: a line feed becomes
+// a space.
+func encodeLine(s string, limit int) text {
+	return encode(strings.ReplaceAll(s, "\n", " "), limit)
+}
+
 // encode encodes s in both forms of the event. Each form has at most limit
 // bytes. It cuts s, and ends it with an ellipsis, when an encoded form does not
 // fit. It cuts between characters, and so never inside an entity or a
-// character. With single set, a line feed becomes a space, so that a name
-// stays on its line.
-func encode(s string, limit int, single bool) text {
-	if single {
-		s = strings.ReplaceAll(s, "\n", " ")
-	}
-
+// character.
+func encode(s string, limit int) text {
 	rs := []rune(s)
-	plain := make([]string, len(rs))
-	page := make([]string, len(rs))
+	pieces := make([]text, len(rs))
 	sumPlain, sumHTML := 0, 0
 
 	for i := range rs {
-		plain[i], page[i] = encodeRune(rs, i)
-		sumPlain += len(plain[i])
-		sumHTML += len(page[i])
+		pieces[i] = encodeRune(rs, i)
+		sumPlain += len(pieces[i].plain)
+		sumHTML += len(pieces[i].html)
 	}
 
 	if sumPlain <= limit && sumHTML <= limit {
-		return text{plain: strings.Join(plain, ""), html: strings.Join(page, "")}
+		return joinPieces(pieces)
 	}
 
-	var p, h strings.Builder
+	var cut []text
 
-	for i := range rs {
-		if p.Len()+len(plain[i]) > limit-len(ellipsis) || h.Len()+len(page[i]) > limit-len(ellipsis) {
+	p, h := 0, 0
+
+	for _, piece := range pieces {
+		if p+len(piece.plain) > limit-len(ellipsis) || h+len(piece.html) > limit-len(ellipsis) {
 			break
 		}
 
-		p.WriteString(plain[i])
-		h.WriteString(page[i])
+		p += len(piece.plain)
+		h += len(piece.html)
+
+		cut = append(cut, piece)
 	}
 
-	p.WriteString(ellipsis)
-	h.WriteString(ellipsis)
+	return joinPieces(append(cut, text{plain: ellipsis, html: ellipsis}))
+}
+
+// joinPieces joins the pieces of each form.
+func joinPieces(pieces []text) text {
+	var p, h strings.Builder
+
+	for _, piece := range pieces {
+		p.WriteString(piece.plain)
+		h.WriteString(piece.html)
+	}
 
 	return text{plain: p.String(), html: h.String()}
 }
 
 // encodeRune returns the plain form and the HTML form of rs[i].
-func encodeRune(rs []rune, i int) (string, string) {
+func encodeRune(rs []rune, i int) text {
 	r := rs[i]
 
 	switch {
 	case !utf8.ValidRune(r):
-		return "�", "�"
+		return text{plain: "\ufffd", html: "\ufffd"}
 	case strings.ContainsRune("@#!", r):
-		return string(r) + zeroWidthSpace, string(r) + zeroWidthSpace
+		return text{plain: string(r) + zeroWidthSpace, html: string(r) + zeroWidthSpace}
 	case r == ':' && i+1 < len(rs) && rs[i+1] == '/':
-		return ":" + zeroWidthSpace, ":" + zeroWidthSpace
+		return text{plain: ":" + zeroWidthSpace, html: ":" + zeroWidthSpace}
 	case r == '.' && afterWWW(rs, i):
-		return "." + zeroWidthSpace, "." + zeroWidthSpace
+		return text{plain: "." + zeroWidthSpace, html: "." + zeroWidthSpace}
 	default:
-		return string(r), html.EscapeString(string(r))
+		return text{plain: string(r), html: html.EscapeString(string(r))}
 	}
 }
 
