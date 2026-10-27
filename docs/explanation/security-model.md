@@ -28,6 +28,12 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
   each later request answers 401. A request in flight when the revoke commits
   may finish. An update that a bootstrap administrator token started has no
   such token, so no check runs.
+- **The console session cookie is `SameSite=Strict`.** A request with the
+  session cookie and no `Origin` header is refused when it is a read that the
+  browser marks cross-site, and when it can change state without
+  `Sec-Fetch-Site: same-origin`. A method that can change state also needs
+  the `X-Dustpan-CSRF` header. The sign-in cookie stays `SameSite=Lax`, so
+  the return from the identity provider works.
 
 Planned: users, teams and roles (RFC 19), scoped access tokens (RFC 20), and
 single sign-on with directory sync (RFC 21).
@@ -280,9 +286,29 @@ Encryption of a whole backup is not decided (ADR 30, RFC 8).
   header. Set `--public-url` to the external URL, and `--trusted-proxies`
   when the proxy adds one. The next section says how the server reads it.
 - **Browsers.** Only origins in `--allowed-origins` get CORS headers.
-- **Response headers.** The server sets no `Content-Security-Policy`,
-  `Strict-Transport-Security`, `X-Content-Type-Options` or `X-Frame-Options`
-  header. Set them in a reverse proxy if you need them.
+- **Response headers.** When the server serves the console (`--console-dir`),
+  each console response carries these headers. The API responses do not.
+  - `X-Content-Type-Options: nosniff`.
+  - `X-Frame-Options: DENY`.
+  - `Content-Security-Policy`. The default is below.
+  - `Strict-Transport-Security: max-age=31536000`, only when the server
+    serves TLS (`--tls-cert`). The server never sends it on plain HTTP.
+
+  ```text
+  default-src 'self'; connect-src 'self' <each origin in --allowed-origins>;
+  img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none';
+  base-uri 'none'; form-action 'self'
+  ```
+
+  The `connect-src` list follows `--allowed-origins`. A console that calls an API on another origin needs that origin in `--allowed-origins`.
+
+  Each header has a setting (`--console-content-type-options`,
+  `--console-frame-options`, `--console-csp`, `--console-hsts`). A value
+  replaces the default. The value `off`, in any case, sends no header. A value with a line
+  break or a character that is not printable ASCII stops the start. If a
+  reverse proxy sets the same header, turn the server header off, or make the
+  proxy replace the header and not add a second one. The server headers and
+  the proxy headers are separate layers: keep both when you can.
 
 ## Client address and trusted proxies
 

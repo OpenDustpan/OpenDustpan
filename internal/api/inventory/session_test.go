@@ -106,6 +106,7 @@ func TestSessionCookieNeedsCSRF(t *testing.T) {
 	target := "/api/inventory/deleted-units/pulumi/stk-1/restore"
 
 	req, _ := cookieRequest(t, http.MethodPost, target)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	rec := serveCookie(h, req)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "X-Dustpan-CSRF") {
@@ -115,6 +116,7 @@ func TestSessionCookieNeedsCSRF(t *testing.T) {
 
 	req, secret := cookieRequest(t, http.MethodPost, target)
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	if rec := serveCookie(h, req); rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("POST with the cookie and the CSRF value = %d %s, want past the sign-in", rec.Code, rec.Body.String())
@@ -174,6 +176,7 @@ func TestSessionRestoreRecordsTheConsoleChannel(t *testing.T) {
 
 	req, secret := cookieRequest(t, http.MethodPost, restoreTarget)
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Dustpan-Channel", "api")
 
 	if rec := serveCookie(h, req); rec.Code != http.StatusOK {
@@ -202,6 +205,7 @@ func sessionChange(t *testing.T, method, target string, secret session.Secret, b
 		SameSite: http.SameSiteLaxMode,
 	})
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Dustpan-Channel", "api")
 
 	return req

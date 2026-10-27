@@ -340,6 +340,7 @@ func (f fixture) do(t *testing.T, r request) response {
 			SameSite: http.SameSiteLaxMode,
 		})
 		req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(cookieSecret))
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 	}
 
 	for k, v := range r.headers {

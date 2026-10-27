@@ -404,7 +404,7 @@ func TestDevCodeSignsInOnce(t *testing.T) {
 		t.Fatal("first request set no session cookie")
 	}
 
-	checkBrowserCookie(t, apiserver.SessionCookie, cookie)
+	checkBrowserCookie(t, apiserver.SessionCookie, cookie, http.SameSiteStrictMode)
 
 	if got := env.limiter.count(); got != 0 {
 		t.Fatalf("failure budget spent %d times by a right code, want 0", got)
