@@ -181,8 +181,11 @@ and key, and values that the release needs.
 {{- if not (gt (int .Values.preStopSeconds) (int .Values.probes.readiness.periodSeconds)) -}}
 {{- fail (printf "replicas is %d and preStopSeconds is %d: the preStop wait must be longer than probes.readiness.periodSeconds (%d). Raise preStopSeconds" (int .Values.replicas) (int .Values.preStopSeconds) (int .Values.probes.readiness.periodSeconds)) -}}
 {{- end -}}
-{{- if not (gt (int .Values.terminationGracePeriodSeconds) (int .Values.preStopSeconds)) -}}
-{{- fail (printf "terminationGracePeriodSeconds (%d) must be longer than preStopSeconds (%d), or Kubernetes stops the pod before the server shuts down. Raise terminationGracePeriodSeconds" (int .Values.terminationGracePeriodSeconds) (int .Values.preStopSeconds)) -}}
+{{- if lt (int .Values.terminationGracePeriodSeconds) (add (int .Values.preStopSeconds) 30) -}}
+{{- fail (printf "terminationGracePeriodSeconds (%d) must be at least preStopSeconds (%d) + 30, the shutdown timeout of the server, or Kubernetes stops the pod before the server finishes its requests. Raise terminationGracePeriodSeconds to %d or more" (int .Values.terminationGracePeriodSeconds) (int .Values.preStopSeconds) (add (int .Values.preStopSeconds) 30)) -}}
+{{- end -}}
+{{- if and .Values.podDisruptionBudget.enabled (ge (int .Values.podDisruptionBudget.minAvailable) (int .Values.replicas)) -}}
+{{- fail (printf "podDisruptionBudget.minAvailable (%d) must be less than replicas (%d), or no pod can leave during a node drain. Lower minAvailable, raise replicas, or set podDisruptionBudget.enabled to false" (int .Values.podDisruptionBudget.minAvailable) (int .Values.replicas)) -}}
 {{- end -}}
 {{- range .Values.server.extraEnv -}}
 {{- $name := .name -}}

@@ -30,7 +30,7 @@ A test compares this page with `values.yaml`. The test fails when a key is not o
 | Key | Default | Description |
 | --- | --- | --- |
 | `podDisruptionBudget.enabled` | `true` | Make a PodDisruptionBudget for the server pods. The chart makes it only when `replicas` is above 1. |
-| `podDisruptionBudget.minAvailable` | `1` | The number of server pods that must stay available during a voluntary disruption. |
+| `podDisruptionBudget.minAvailable` | `1` | The number of server pods that must stay available during a voluntary disruption. It must be less than `replicas`, or the chart refuses the install. |
 
 ## `spreadAcrossNodes`
 
@@ -42,7 +42,7 @@ A test compares this page with `values.yaml`. The test fails when a key is not o
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `preStopSeconds` | `15` | When `replicas` is above 1, the seconds that a server pod waits in a `preStop` hook before it gets SIGTERM. The wait lets the pod leave the Service endpoints while it still answers. It must be more than `probes.readiness.periodSeconds` and less than `terminationGracePeriodSeconds`, or the chart refuses the install. |
+| `preStopSeconds` | `15` | When `replicas` is above 1, the seconds that a server pod waits in a `preStop` hook before it gets SIGTERM. At the start of termination the pod leaves the Service endpoints. The wait gives load balancers time to stop sending requests while the pod still answers. The readiness probe does not fail in this time. It must be more than `probes.readiness.periodSeconds`. `terminationGracePeriodSeconds` must be at least this value + 30. The chart refuses the install otherwise. |
 
 ## `worker`
 
@@ -311,7 +311,7 @@ The container security context. The schema holds each value fixed. The root file
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `terminationGracePeriodSeconds` | `30` | The time in seconds that the pod has to stop. |
+| `terminationGracePeriodSeconds` | `60` | The time in seconds that the pod has to stop. The server needs up to 30 s to finish its requests. With `replicas` above 1, it must be at least `preStopSeconds` + 30. |
 
 ## Notes on nested keys
 

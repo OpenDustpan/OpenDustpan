@@ -18,12 +18,6 @@ blobStore:
   s3:
     bucket: dustpan-state
     prefix: prod
-backup:
-  target:
-    type: s3
-    s3:
-      bucket: dustpan-backups
-      prefix: prod
 image:
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 server:
@@ -36,3 +30,18 @@ server:
 worker:
   enabled: true
   replicas: 2
+backup:
+  target:
+    type: s3
+    s3:
+      bucket: dustpan-backups
+      prefix: prod
+  schedule:
+    enabled: true
+    tokenSecret:
+      name: opendustpan-backup-token
+networkPolicy:
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx

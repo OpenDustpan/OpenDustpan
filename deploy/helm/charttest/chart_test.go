@@ -73,6 +73,38 @@ func TestTemplateGolden(t *testing.T) {
 	}
 }
 
+// TestNetworkPolicySelector checks that the NetworkPolicy selects the server
+// and worker pods by component, and that no part of it selects the backup
+// CronJob pods as its subject, because the backup client must reach the
+// server and the policy limits egress of the pods it selects.
+func TestNetworkPolicySelector(t *testing.T) {
+	t.Parallel()
+
+	helm := requireHelm(t)
+
+	res := run(t, helm, []string{
+		"template", "release", chartDir, "--kube-version", kubeVersion,
+		"--namespace", "dustpan",
+		"--values", filepath.Join(chartDir, "ci", "ha.yaml"),
+		"--show-only", "templates/networkpolicy.yaml",
+	})
+	if res.err != nil {
+		t.Fatalf("helm template: %v\n%s", res.err, res.stderr)
+	}
+
+	want := "  podSelector:\n    matchLabels:\n      app.kubernetes.io/name: opendustpan\n" +
+		"      app.kubernetes.io/instance: release\n    matchExpressions:\n" +
+		"      - key: app.kubernetes.io/component\n        operator: In\n        values:\n" +
+		"          - server\n          - worker\n"
+	if !strings.Contains(res.stdout, want) {
+		t.Errorf("NetworkPolicy podSelector does not select component In [server, worker]:\n%s", res.stdout)
+	}
+
+	if !strings.Contains(res.stdout, "app.kubernetes.io/component: backup") {
+		t.Errorf("NetworkPolicy ingress has no rule for the backup pods:\n%s", res.stdout)
+	}
+}
+
 // TestTemplateRefused renders values that the chart refuses, and expects the
 // helm error to name each setting that is wrong. The default values are one
 // case: an install with no Secret names fails. Helm versions write the path
@@ -194,13 +226,22 @@ func TestTemplateRefused(t *testing.T) {
 			wantText: [][]string{{"the preStop wait must be longer than probes.readiness.periodSeconds"}},
 		},
 		{
-			name:    "grace period not longer than the preStop wait",
+			name:    "grace period below the preStop wait and the shutdown timeout",
 			useBase: true,
 			set: append(s3Blob(),
 				"--set", "replicas=2",
-				"--set", "terminationGracePeriodSeconds=15",
+				"--set", "terminationGracePeriodSeconds=40",
 			),
-			wantText: [][]string{{"must be longer than preStopSeconds"}},
+			wantText: [][]string{{"must be at least preStopSeconds (15) + 30"}},
+		},
+		{
+			name:    "minAvailable not less than replicas",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "podDisruptionBudget.minAvailable=2",
+			),
+			wantText: [][]string{{"podDisruptionBudget.minAvailable (2) must be less than replicas (2)"}},
 		},
 		{
 			name:     "worker with the fs blob store",

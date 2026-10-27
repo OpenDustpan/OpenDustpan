@@ -130,7 +130,7 @@ The chart can run several replicas of one installation. The [several instances g
 - The Deployment uses `RollingUpdate` with `maxUnavailable` 0 and `maxSurge` 1. A new pod must be ready before Kubernetes stops an old pod.
 - The chart makes a PodDisruptionBudget with `minAvailable` 1. Set `podDisruptionBudget.enabled: false` to leave it out.
 - With `spreadAcrossNodes: true`, the chart adds a soft topology spread constraint over `kubernetes.io/hostname`. The scheduler prefers a different node for each pod, and it still schedules a pod when it cannot.
-- A `preStop` hook waits `preStopSeconds` (15 by default) before the pod gets SIGTERM. The wait is longer than the readiness period, so the pod leaves the Service endpoints while it still answers. `terminationGracePeriodSeconds` must be longer than the wait.
+- A `preStop` hook waits `preStopSeconds` (15 by default) before the pod gets SIGTERM. At the start of termination the pod leaves the Service endpoints. The wait gives load balancers time to stop sending requests while the pod still answers. The wait is longer than the readiness period. The server needs up to 30 s to finish its requests, so `terminationGracePeriodSeconds` must be at least `preStopSeconds` + 30. The default is 60.
 - The chart refuses these settings with a message that names the setting:
   - `blobStore.type: fs`
   - `backup.target.type: dir`
@@ -138,6 +138,8 @@ The chart can run several replicas of one installation. The [several instances g
   - a `sqlite:` value in `server.extraEnv`
 
   The chart cannot read the database URL in its Secret. Put a PostgreSQL URL in it.
+- The chart cannot read a sink variable that uses `valueFrom`, as it cannot read the Secret URL. Make sure that the Secret holds no `file:` sink.
+- `podDisruptionBudget.minAvailable` must be less than `replicas`. The chart refuses the install otherwise.
 
 Use an S3-compatible store for the blobs and for the backup target, and one PostgreSQL database. You run the database and the object store, and you keep them available.
 

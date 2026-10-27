@@ -36,7 +36,7 @@ replicas: 1
 
 # A PodDisruptionBudget with minAvailable 1 for the server pods. The chart
 # makes it only when replicas is above 1, because a budget of 1 for one pod
-# blocks every node drain.
+# blocks every node drain. minAvailable must be less than replicas.
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
@@ -48,11 +48,13 @@ podDisruptionBudget:
 spreadAcrossNodes: true
 
 # The seconds that a server pod waits in a preStop hook before it gets
-# SIGTERM, when replicas is above 1. The wait lets the readiness probe fail
-# and the Service endpoint go away while the pod still answers. It must be
-# more than probes.readiness.periodSeconds, and less than
-# terminationGracePeriodSeconds. 0 turns the hook off, and the chart then
-# refuses replicas above 1.
+# SIGTERM, when replicas is above 1. At the start of termination the pod
+# leaves the Service endpoints, and the wait gives the load balancers and the
+# kube-proxy rules time to stop sending requests to it while it still
+# answers. The readiness probe does not fail in this time. It must be more
+# than probes.readiness.periodSeconds. terminationGracePeriodSeconds must be
+# at least this value + 30, the shutdown timeout of the server. 0 turns the
+# hook off, and the chart then refuses replicas above 1.
 preStopSeconds: 15
 
 # An optional second Deployment that runs `opendustpan serve --components
@@ -363,4 +365,4 @@ tolerations: []
 affinity: {}
 topologySpreadConstraints: []
 priorityClassName: ""
-terminationGracePeriodSeconds: 30
+terminationGracePeriodSeconds: 60

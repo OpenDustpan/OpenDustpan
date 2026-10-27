@@ -1,0 +1,16 @@
+# Refused: minAvailable that equals replicas, so no pod can leave in a drain.
+# want: podDisruptionBudget.minAvailable (2) must be less than replicas (2)
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+replicas: 2
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state
