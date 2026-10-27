@@ -996,6 +996,21 @@ func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsPa
 	return count, err
 }
 
+const countEnabledBreakGlassPrincipal = `-- name: CountEnabledBreakGlassPrincipal :one
+SELECT COUNT(*) FROM principals
+WHERE id = $1 AND namespace = '' AND break_glass AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+`
+
+// 1 when the principal is an enabled break-glass account of the
+// installation, so a write that changed no row of it was the refusal of the
+// last one.
+func (q *Queries) CountEnabledBreakGlassPrincipal(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, countEnabledBreakGlassPrincipal, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countEndedGrantRecords = `-- name: CountEndedGrantRecords :one
 SELECT (SELECT COUNT(*) FROM principals p WHERE $1::text = 'principal' AND p.id = $2::text
           AND p.deleted_at_ms IS NOT NULL)
@@ -3118,7 +3133,12 @@ func (q *Queries) DeletePersonPreferences(ctx context.Context, principalID strin
 
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = $1
-WHERE id = $2 AND namespace = $3 AND num_nulls(deleted_at_ms) = 1
+WHERE principals.id = $2 AND principals.namespace = $3 AND num_nulls(principals.deleted_at_ms) = 1
+  AND (NOT principals.break_glass OR principals.disabled_at_ms IS NOT NULL OR EXISTS (
+    SELECT 1 FROM principals o
+    WHERE o.id <> principals.id AND o.break_glass AND o.kind = 'person' AND o.namespace = ''
+      AND o.deleted_at_ms IS NULL AND o.disabled_at_ms IS NULL
+  ))
 `
 
 type DeletePrincipalParams struct {
@@ -3130,6 +3150,10 @@ type DeletePrincipalParams struct {
 // The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
 // Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
+// An enabled break-glass account stays while no other enabled break-glass
+// account exists: the condition is in the write, so the check and the change
+// are one statement. A disabled account is not the last enabled one, so its
+// end is allowed.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
 	if err != nil {
@@ -3540,7 +3564,12 @@ func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInac
 const disablePrincipal = `-- name: DisablePrincipal :execrows
 UPDATE principals SET disabled_at_ms = $1::bigint,
   updated_at_ms = $1::bigint
-WHERE id = $2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+WHERE principals.id = $2 AND principals.deleted_at_ms IS NULL AND principals.disabled_at_ms IS NULL
+  AND (NOT principals.break_glass OR EXISTS (
+    SELECT 1 FROM principals o
+    WHERE o.id <> principals.id AND o.break_glass AND o.kind = 'person' AND o.namespace = ''
+      AND o.deleted_at_ms IS NULL AND o.disabled_at_ms IS NULL
+  ))
 `
 
 type DisablePrincipalParams struct {
@@ -3549,7 +3578,9 @@ type DisablePrincipalParams struct {
 }
 
 // Disables the principal. A principal that is disabled or ended stays as it
-// is. The write only narrows access.
+// is. The write only narrows access. An enabled break-glass account stays
+// enabled while no other enabled break-glass account exists: the condition is
+// in the write, so the check and the change are one statement.
 func (q *Queries) DisablePrincipal(ctx context.Context, arg DisablePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, disablePrincipal, arg.DisabledAtMs, arg.ID)
 	if err != nil {

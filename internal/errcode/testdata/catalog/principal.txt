@@ -1,6 +1,7 @@
 principal.already-exists
 principal.disabled
 principal.invalid
+principal.last-break-glass
 principal.managed-by-directory
 principal.not-disabled
 principal.not-found

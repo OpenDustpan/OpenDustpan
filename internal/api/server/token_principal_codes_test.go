@@ -100,6 +100,10 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			"last site administrator", access.ErrLastSiteAdministrator, http.StatusConflict,
 			errcode.AccessLastSiteAdministrator, nil, "",
 		},
+		{
+			"last break-glass account", principal.ErrLastBreakGlass, http.StatusConflict,
+			errcode.PrincipalLastBreakGlass, nil, "",
+		},
 		{"principal not found", principal.ErrNotFound, http.StatusNotFound, errcode.PrincipalNotFound, nil, ""},
 		{
 			"no principal store", apiserver.ErrNoPrincipalStoreForTest, http.StatusNotImplemented,

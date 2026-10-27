@@ -76,8 +76,11 @@ type RecordStore interface {
 	// cannot use them until EnablePrincipal clears the disable time. The
 	// write runs in maintenance mode, as a revocation does. It returns
 	// ErrNotFound when no such principal exists, ErrDisabled when it is
-	// disabled, and access.ErrLastSiteAdministrator when it disables the last
-	// site administrator (see Store).
+	// disabled, access.ErrLastSiteAdministrator when it disables the last
+	// site administrator (see Store), and ErrLastBreakGlass when it disables
+	// the last enabled break-glass account. The store checks this in the
+	// transaction of the write, so two concurrent disables of the last two
+	// accounts disable one.
 	DisablePrincipal(ctx context.Context, id string, e audit.Entry) error
 }
 

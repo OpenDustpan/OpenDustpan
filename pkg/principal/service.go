@@ -225,9 +225,10 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 
 // DeletePrincipal ends the principal with the ID id and its memberships,
 // with the entry e. The store revokes its grants in the same transaction, so
-// the Guard checks that caller holds every action that they give. The
-// delete of a principal of a namespace goes to the audit log of the
-// namespace, with its fence.
+// the Guard checks that caller holds every action that they give. It
+// returns ErrLastBreakGlass when the principal is the last enabled
+// break-glass account. The delete of a principal of a namespace goes to the
+// audit log of the namespace, with its fence.
 func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
 	if err := s.checkPrincipal(ctx, caller, id); err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
@@ -282,8 +283,10 @@ func (s *Service) EnablePrincipal(
 // caller holds every action that the grants of the principal give, so that a
 // caller cannot lock out a principal with more rights than their own. The
 // check is a read and the write works in maintenance mode, as a revocation
-// does. It returns ErrNotFound when no such principal exists and ErrDisabled
-// when it is disabled.
+// does. It returns ErrNotFound when no such principal exists, ErrDisabled
+// when it is disabled, and ErrLastBreakGlass when it is the last enabled
+// break-glass account: the store refuses that in the same transaction as the
+// write.
 func (s *Service) DisablePrincipal(
 	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
 ) error {

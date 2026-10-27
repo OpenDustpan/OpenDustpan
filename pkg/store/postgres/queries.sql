@@ -1412,8 +1412,24 @@ WHERE id = $3 AND namespace = $4 AND num_nulls(deleted_at_ms) = 1;
 -- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
 -- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
+-- An enabled break-glass account stays while no other enabled break-glass
+-- account exists: the condition is in the write, so the check and the change
+-- are one statement. A disabled account is not the last enabled one, so its
+-- end is allowed.
 UPDATE principals SET deleted_at_ms = $1
-WHERE id = $2 AND namespace = $3 AND num_nulls(deleted_at_ms) = 1;
+WHERE principals.id = $2 AND principals.namespace = $3 AND num_nulls(principals.deleted_at_ms) = 1
+  AND (NOT principals.break_glass OR principals.disabled_at_ms IS NOT NULL OR EXISTS (
+    SELECT 1 FROM principals o
+    WHERE o.id <> principals.id AND o.break_glass AND o.kind = 'person' AND o.namespace = ''
+      AND o.deleted_at_ms IS NULL AND o.disabled_at_ms IS NULL
+  ));
+
+-- name: CountEnabledBreakGlassPrincipal :one
+-- 1 when the principal is an enabled break-glass account of the
+-- installation, so a write that changed no row of it was the refusal of the
+-- last one.
+SELECT COUNT(*) FROM principals
+WHERE id = $1 AND namespace = '' AND break_glass AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
 
 -- name: EndMembershipsOfPrincipal :exec
 UPDATE group_members SET removed_at_ms = $1
@@ -2441,10 +2457,17 @@ WHERE principal_id = $2 AND ended_at_ms IS NULL;
 
 -- name: DisablePrincipal :execrows
 -- Disables the principal. A principal that is disabled or ended stays as it
--- is. The write only narrows access.
+-- is. The write only narrows access. An enabled break-glass account stays
+-- enabled while no other enabled break-glass account exists: the condition is
+-- in the write, so the check and the change are one statement.
 UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint,
   updated_at_ms = sqlc.arg('disabled_at_ms')::bigint
-WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
+WHERE principals.id = sqlc.arg('id') AND principals.deleted_at_ms IS NULL AND principals.disabled_at_ms IS NULL
+  AND (NOT principals.break_glass OR EXISTS (
+    SELECT 1 FROM principals o
+    WHERE o.id <> principals.id AND o.break_glass AND o.kind = 'person' AND o.namespace = ''
+      AND o.deleted_at_ms IS NULL AND o.disabled_at_ms IS NULL
+  ));
 
 -- name: DisablePrincipalForExpiry :execrows
 -- Disables the principal at the expiry of its temporary administrator

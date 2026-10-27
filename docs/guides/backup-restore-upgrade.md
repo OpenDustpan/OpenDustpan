@@ -233,7 +233,10 @@ restore applies. These writes run, each with its audit entry:
   grants and tokens of the principal stay, and the principal can not use them
   until an administrator enables it again. The check of a disable in normal
   operation stays in force: the caller holds every action that the grants of
-  the principal give.
+  the principal give. The server refuses the disable of the last enabled
+  break-glass account with 409 and the error code `principal.last-break-glass`,
+  also in maintenance mode. Keep a second enabled break-glass account first
+  (see [Keep a break-glass account](break-glass-accounts.md)).
 - the expiry of a temporary administrator, which ends the record, disables the
   principal, revokes its grants and tokens and ends its group memberships.
 
