@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/chat"
+	"opendustpan.org/opendustpan/pkg/notify/chat/matrix"
 	"opendustpan.org/opendustpan/pkg/notify/chat/mattermost"
 	"opendustpan.org/opendustpan/pkg/notify/chat/slack"
 	"opendustpan.org/opendustpan/pkg/notify/chat/teams"
@@ -36,7 +37,7 @@ func WithSinkStore(st notify.SinkStore) Option {
 
 // WithSinkSenders adds senders for the test route of a sink, one for each sink
 // kind. A sender replaces the built-in sender of its kind. The server has the
-// signed webhook sender and the chat sender for Slack, Mattermost and Teams
+// signed webhook sender and the chat sender for Slack, Mattermost, Teams and Matrix
 // built in, so a caller needs this option for a test double of one of them, or for a kind that has
 // no built-in sender yet.
 func WithSinkSenders(senders ...notify.Sender) Option {
@@ -52,7 +53,7 @@ func WithSinkPorts(p egress.Ports) Option {
 }
 
 // sinkSenders returns the senders of the test route: the built-in signed
-// webhook sender and the built-in chat sender (Slack, Mattermost and Teams),
+// webhook sender and the built-in chat sender (Slack, Mattermost, Teams and Matrix),
 // unless a sender of the kind is set, and then the set ones.
 func sinkSenders(cfg *settings) []notify.Sender {
 	out := slices.Clone(cfg.sinks.senders)
@@ -65,7 +66,7 @@ func sinkSenders(cfg *settings) []notify.Sender {
 		out = append(
 			out,
 			chat.NewSender(
-				[]chat.Renderer{slack.New(), mattermost.New(), teams.New()},
+				[]chat.Renderer{slack.New(), mattermost.New(), teams.New(), matrix.New()},
 				chat.WithPorts(cfg.sinks.ports),
 			),
 		)

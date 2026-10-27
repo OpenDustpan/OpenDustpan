@@ -270,25 +270,9 @@ func sinkTestSteps(t *testing.T, env *e2e.Env, hook sinkDoc, key string) {
 
 		return sinkNeverContains("example.invalid", key, "hooks")(body)
 	}))
-	// A Slack sink has a sender, and its test goes to the real host of Slack,
-	// so the steps here use a Matrix sink, which has no adapter yet. The test of
-	// a Slack sink is in TestSlackSink, with a receiver on the machine of the
-	// test.
-	var matrix sinkDoc
-
-	sinkStep(t, env, sinkCase("make a Matrix sink", http.MethodPost, sinksBase, http.StatusCreated).
-		withBody(`{"kind":"chat","platform":"matrix","name":"Matrix","url":"https://matrix.example.invalid/`+sinkChatMarker+`"}`).
-		checking(func(body string) error { return rememberSink(body, &matrix, nil) }))
-	sinkStep(t, env, sinkCase("a platform with no adapter has no sender yet", http.MethodPost,
-		sinksBase+"/"+matrix.ID+"/test", http.StatusUnprocessableEntity).checking(func(body string) error {
-		if !strings.Contains(body, "sink.no-sender") {
-			return fmt.Errorf("%w: want sink.no-sender in %s", errSinkAnswer, body)
-		}
-
-		return sinkNeverContains(sinkChatMarker)(body)
-	}))
-	sinkStep(t, env, sinkCase("delete the Matrix sink", http.MethodDelete, sinksBase+"/"+matrix.ID,
-		http.StatusNoContent))
+	// A chat sink has a sender for each platform, and its test goes to the real
+	// host of the platform. The test of a Slack sink is in TestSlackSink, with a
+	// receiver on the machine of the test.
 	sinkStep(t, env, sinkCase("the test of an unknown sink", http.MethodPost, sinksBase+"/snk-doesnotexist/test",
 		http.StatusNotFound))
 }
