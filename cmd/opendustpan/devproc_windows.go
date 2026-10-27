@@ -15,9 +15,9 @@ const (
 	// needs. The syscall package does not define it. It is the weakest right
 	// that GetProcessTimes accepts.
 	processQueryLimitedInformation = 0x1000
-	// errorInvalidParameter is what OpenProcess answers for an ID that no
+	// errInvalidParameter is what OpenProcess answers for an ID that no
 	// process has.
-	errorInvalidParameter syscall.Errno = 87
+	errInvalidParameter syscall.Errno = 87
 )
 
 // processStartTime answers the creation time of the process with the ID pid.
@@ -32,15 +32,24 @@ func processStartTime(pid int) (time.Time, error) {
 
 	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
 	if err != nil {
-		if errors.Is(err, errorInvalidParameter) {
+		if errors.Is(err, errInvalidParameter) {
 			return time.Time{}, errNoProcess
 		}
 
 		return time.Time{}, fmt.Errorf("%w: open process %d: %w", errStartUnknown, pid, err)
 	}
 
-	defer func() { _ = syscall.CloseHandle(handle) }()
+	began, err := createdAt(handle, pid)
 
+	if closeErr := syscall.CloseHandle(handle); closeErr != nil && err == nil {
+		return time.Time{}, fmt.Errorf("%w: close process %d: %w", errStartUnknown, pid, closeErr)
+	}
+
+	return began, err
+}
+
+// createdAt reads the creation time of the open process handle.
+func createdAt(handle syscall.Handle, pid int) (time.Time, error) {
 	var created, exited, kernel, user syscall.Filetime
 	if err := syscall.GetProcessTimes(handle, &created, &exited, &kernel, &user); err != nil {
 		return time.Time{}, fmt.Errorf("%w: get process times %d: %w", errStartUnknown, pid, err)
