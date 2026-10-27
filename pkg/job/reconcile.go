@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -63,6 +64,12 @@ type ReconcilerConfig struct {
 	// MaxPlanAge is the oldest plan that an apply phase applies. Zero takes
 	// DefaultMaxPlanAge.
 	MaxPlanAge time.Duration
+	// Approvers decides which signatures count when the reconcile reads the
+	// gate of a queued job, as at the dispatch of a phase: a dev subject
+	// fills no slot on a production installation. The zero value is a
+	// production installation that matches no dev subject, and then no
+	// signature counts: fail closed.
+	Approvers gate.ApproverPolicy
 	// Batch is the number of jobs that one query reads. Zero takes
 	// DefaultReconcileBatch.
 	Batch int
@@ -349,7 +356,7 @@ func (run *reconcileRun) dispatchJob(ctx context.Context, j *Job) error {
 
 	p := &j.Phases[j.Current]
 
-	status := GatesStatus(p.Gates, p.Approvals, j.StartedBy)
+	status := GatesStatus(p.Gates, p.Approvals, j.StartedBy, run.r.cfg.Approvers)
 	if status == GateOpen {
 		return run.dispatch(ctx, j)
 	}

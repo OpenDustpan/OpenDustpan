@@ -59,6 +59,7 @@ func devJobCase() devStripCase {
 			"id": "job-dev", "namespace_id": namespaceID, "unit_id": "unt-dev", "seq": 1000, "state": "queued",
 			"wait": "", "current_phase": 0, "current_changes": false, "current_operation": "",
 			"idempotency_key": "", "version": 1, "body": devJobBody, "created_at_ms": 1, "updated_at_ms": 1,
+			"state_changed_at_ms": 1,
 		})
 	}
 	tc.classes = map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: 2}
@@ -91,7 +92,7 @@ func checkDevJobAfterStrip(t *testing.T, dst DevDataStore) {
 	row := jobstore.Row{
 		ID: "job-dev", Namespace: "acme", UnitID: "unt-dev", Seq: 1000, State: job.StateQueued, Wait: job.WaitNone,
 		Phase: 0, Changes: false, Operation: "", Key: "", Version: 1, Body: textOf(mine, "body"),
-		CreatedMs: 1, UpdatedMs: 1,
+		CreatedMs: 1, UpdatedMs: 1, StateChangedMs: 1,
 	}
 
 	got, err := jobstore.Decode(&row)

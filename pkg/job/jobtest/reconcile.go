@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -25,6 +26,7 @@ func reconcileCases() []suiteCase {
 		{"the reconcile leaves a locked job queued and dispatches it after the unlock", testReconcileLocked},
 		{"the reconcile dispatches a queued job when the unit is free again", testReconcileUnitBusy},
 		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
+		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
 		{"the reconcile sends a queued job with a stale plan back to its plan phase", testReconcileStalePlan},
 		{"the reconcile expires the jobs past their queue, dispatch and state timeouts", testReconcileExpires},
 		{"the reconcile expires nothing before a timeout", testReconcileNotYet},
@@ -39,8 +41,16 @@ func reconciler(t *testing.T, h Harness, ahead time.Duration) *job.Reconciler {
 	t.Helper()
 
 	r, err := job.NewReconciler(job.ReconcilerConfig{
-		Store: h.Jobs, Namespaces: h.Namespaces, QueueTimeout: 0, DispatchTimeout: 0, StateTimeout: 0,
-		MaxPlanAge: 0, Batch: 0, Now: func() time.Time { return time.Now().Add(ahead) }, Log: nil,
+		Store:           h.Jobs,
+		Namespaces:      h.Namespaces,
+		QueueTimeout:    0,
+		DispatchTimeout: 0,
+		StateTimeout:    0,
+		MaxPlanAge:      0,
+		Approvers:       gate.ApproverPolicy{Production: false, IsDev: nil},
+		Batch:           0,
+		Now:             func() time.Time { return time.Now().Add(ahead) },
+		Log:             nil,
 	})
 	if err != nil {
 		t.Fatalf("NewReconciler = %v", err)
@@ -218,6 +228,30 @@ func testReconcileGate(t *testing.T, h Harness) {
 	}
 
 	assertState(t, h, queued.ID, job.StateAwaitingApproval)
+}
+
+func testReconcileApprovedGate(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Phases[0].Gates = []job.Gate{{
+		Type: job.GateApproval, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		BindPlan: false,
+	}}
+	j.Phases[0].Approvals = []job.Approval{{
+		Gate: job.GateApproval, Subject: "bo", Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
+		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
+	}}
+	queued := create(t, h, f, j, nil)
+
+	// An approved job goes back to queued, and the reconcile dispatches it. It
+	// does not send the job to approval again.
+	if res := runReconcile(t, h, 0); res.Dispatched != 1 || res.Gated != 0 {
+		t.Fatalf("reconcile of a queued job with an approved gate = %+v; want one dispatch", res)
+	}
+
+	assertState(t, h, queued.ID, job.StateDispatched)
 }
 
 func testReconcileStalePlan(t *testing.T, h Harness) {

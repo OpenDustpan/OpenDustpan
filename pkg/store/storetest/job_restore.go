@@ -7,6 +7,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -103,7 +104,7 @@ func reconcileRestored(t *testing.T, b JobBackup, seeded restoredJobs) {
 
 	r, err := job.NewReconciler(job.ReconcilerConfig{
 		Store: b.Jobs, Namespaces: b.Namespaces, QueueTimeout: 0, DispatchTimeout: 0, StateTimeout: 0,
-		MaxPlanAge: 0, Batch: 0, Now: nil, Log: nil,
+		MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: false, IsDev: nil}, Batch: 0, Now: nil, Log: nil,
 	})
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)

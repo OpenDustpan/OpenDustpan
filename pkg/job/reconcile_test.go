@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -27,7 +28,8 @@ func (stubNamespaces) GetNamespace(context.Context, namespace.Name) (namespace.N
 func reconcilerConfig(change func(*job.ReconcilerConfig)) job.ReconcilerConfig {
 	cfg := job.ReconcilerConfig{
 		Store: stubStore{Store: nil}, Namespaces: stubNamespaces{}, QueueTimeout: 0, DispatchTimeout: 0,
-		StateTimeout: 0, MaxPlanAge: 0, Batch: 0, Now: nil, Log: nil,
+		StateTimeout: 0, MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: true, IsDev: nil}, Batch: 0,
+		Now: nil, Log: nil,
 	}
 
 	change(&cfg)

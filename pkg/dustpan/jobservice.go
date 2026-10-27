@@ -10,9 +10,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/jobgate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 
@@ -86,8 +88,19 @@ func newJobReconciler(svc services, cfg *settings) (*job.Reconciler, error) {
 	}
 
 	r, err := job.NewReconciler(job.ReconcilerConfig{
-		Store: cfg.jobStore, Namespaces: jobNamespaces{namespaces: svc.namespaces}, QueueTimeout: 0,
-		DispatchTimeout: 0, StateTimeout: 0, MaxPlanAge: 0, Batch: 0, Now: cfg.now, Log: log,
+		Store:           cfg.jobStore,
+		Namespaces:      jobNamespaces{namespaces: svc.namespaces},
+		QueueTimeout:    0,
+		DispatchTimeout: 0,
+		StateTimeout:    0,
+		MaxPlanAge:      0,
+		Approvers: gate.ApproverPolicy{
+			Production: cfg.installationKind != installation.KindDev,
+			IsDev:      principal.IsDevSubject,
+		},
+		Batch: 0,
+		Now:   cfg.now,
+		Log:   log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("job reconcile: %w", err)
