@@ -20,36 +20,45 @@ package backup
 //
 // # Steps
 //
-// Each step does one fenced write that records the step in the transaction
-// of the write, with the rules of durable.Store.RecordStep. The other work of
-// a step is safe to do again, and safe when a holder that lost its claim
-// does it late. The runner skips a recorded step after a takeover.
+// Each step does exactly one fenced write that records the step in the
+// transaction of the write, with the rules of durable.Store.RecordStep. So
+// "the step is recorded" means "the effect of the step committed". The other
+// work of a step is safe to do again, and safe when a holder that lost its
+// claim does it late. The runner skips a recorded step after a takeover.
 //
 //	step               work                                       fenced write that records the step
-//	stage              read and pin the manifest, verify the SQL  the runner records the staging area
-//	                   part, stage it into the staging area of     and the pinned manifest as the result
-//	                   this restore and this claim token
-//	check              key check, blob check of the target, dev   RecordRestoreReport: the dev report
-//	                   data detect (and remove, on production)    on the restores row
-//	                   on the staging area of the stage result
-//	enter-maintenance  maintenance.Service.EnterFenced, with      FencedStore.SetStateIfFenced: the
-//	                   force when the request asks for it          compare-and-set to maintenance
-//	pre-backup         Service.Run of the pre-backup ID of the     MarkRestoreApplying: applying, with
-//	                   input; a second run waits for that backup   the pre-backup ID
+//	stage              read and pin the manifest, verify the SQL  the runner records the staging area,
+//	                   part, drop the areas of earlier tokens of   the pinned manifest and the dev report
+//	                   this restore, stage into the area of this
+//	                   claim token, run the dev strip in it
+//	check              key check, blob check of the target; it    RecordRestoreReport: the dev report of
+//	                   only reads the staging area                 the stage result on the restores row
+//	enter-maintenance  maintenance.Service.EnterWith a writer     ConfirmRestoreMaintenance: the state is
+//	                   bound to the claim (see below)              maintenance; the result says "entered"
+//	pre-backup         start the backup of the pre-backup ID as   MarkRestoreApplying: applying, with the
+//	                   its own durable operation, and wait for it  pre-backup ID
 //	copy-blobs         pin the manifest again, copy each blob     the runner records the step
-//	                   to the live store; a key that exists is
-//	                   verified, not copied
-//	swap               the swap of the staging area of the stage  RestoreStaging.ApplyRestoreArea, in
-//	                   result into the live data, the fence of    the swap transaction
+//	                   with the rules of "Blobs" below
+//	swap               the swap of the staging area of the stage  RestoreStaging.ApplyRestoreArea, in the
+//	                   result into the live data, the fence of     swap transaction
 //	                   every namespace, the control rows kept
-//	after-apply        the after-apply hook, the audit entry of   RecordRestoreReport: the dev report
-//	                   the restore, the final dev report
-//	cleanup            drop the old live data and each staging    RestoreStaging.CleanRestoreAreas, in
-//	                   area of this restore, and the areas of     the drop transaction (PostgreSQL), or
-//	                   each restore that ended                    after the removals (SQLite)
-//	leave-maintenance  maintenance.Service.LeaveFenced            FencedStore.SetStateIfFenced: the
-//	                                                              compare-and-set to normal
-//	finish             the end of the restores row                FinishRestore: succeeded
+//	after-apply        the after-apply hook; check that each blob AppendRestoreAudit: the audit entry of
+//	                   the restored data names exists, and copy    the restore, in one transaction with
+//	                   a missing one again from the pinned backup  the step record
+//	leave-maintenance  when the enter result says "entered":      ConfirmRestoreMaintenance: the state is
+//	                   maintenance.Service.LeaveWith the writer    normal, or the hold keeps maintenance
+//	cleanup            drop the old live data and each staging    RestoreStaging.CleanRestoreAreas, in the
+//	                   area of this restore, the areas of each     drop transaction (PostgreSQL), or after
+//	                   restore that ended, and the temporary       the removals (SQLite)
+//	                   blob keys of this restore
+//	finish             the end of the restores row with the       FinishRestore: succeeded
+//	                   final dev report
+//
+// Cleanup runs after leave-maintenance: the previous schema is not live, so
+// its drop needs no maintenance mode, and a long read that holds a lock on
+// the old tables does not keep the installation in maintenance mode. The row
+// stays applying until finish, so no other restore starts before the cleanup
+// ends.
 //
 // A check-only restore runs stage and check. Each later step except cleanup
 // and finish returns at once with no write, and the runner records it.
@@ -59,52 +68,121 @@ package backup
 //
 // A StagingArea is named by the restore ID and the claim token of the holder
 // that staged it. The stage result names the area, so each later step finds
-// it on any instance. A holder that loses its claim during stage writes only
-// into its own area, never into the area of the new holder. An area that no
-// stage result names is an orphan. Cleanup drops the orphans of its own
-// restore, and the areas of each restore whose row ended. It keeps an area
-// whose restore has no row in this registry: another installation can share
-// the database.
+// it on any instance. Stage writes only into the area of its own token: a
+// holder that loses its claim during stage never writes into the area of the
+// new holder. Stage first drops the areas of the earlier tokens of its
+// restore, which no stage result names, so a series of takeovers keeps no
+// series of copies. The dev strip runs in stage, before the runner records
+// the stage result. After that record, the area is read-only until the swap.
+// Cleanup drops each area of its own restore, and the areas of each restore
+// whose row ended. It keeps an area whose restore has no row in this
+// registry: another installation can share the database.
+//
+// # Maintenance mode
+//
+// maintenance.Service.Enter writes maintenance with a compare-and-set, lists
+// the active work again, and moves back to normal when work raced the write,
+// up to its attempt limit. Each such write of the restore goes through a
+// maintenance.StateWriter that the restore binds to its claim:
+// RestoreOperations.SetRestoreMaintenance checks the fence, changes the
+// state with a compare-and-set, and sets the maintenance flag of the restores
+// row, in one transaction. It records no step. When the second list of the
+// active work finds nothing, ConfirmRestoreMaintenance checks the fence,
+// checks that the state is still maintenance, and records the step with the
+// flag as the result "entered". So a takeover after the confirm never enters
+// again, and a takeover before it sees the flag of the row, not a guess.
+//
+// When the state is already maintenance at the start of the step, and the
+// flag of the row is not set, another party entered it, for example an
+// operator. The restore then confirms with "entered" false. Leave-maintenance,
+// RestoreEnd.LeaveMaintenance and FailEndedRestores leave maintenance mode
+// only when the flag says that this restore entered it. They never leave the
+// maintenance mode of an operator.
+//
+// With force, Enter cancels the active work. That is a change outside the
+// fence, so a holder that lost its claim can still cancel work. Three
+// measures limit it: the runner cancels the step context when a renewal of
+// the lease fails, the writer checks the fence again just before each cancel
+// (StateWriter.Check), and each cancel writes an audit entry that names the
+// restore ID and the claim token (StateWriter.Actor). The new holder cancels
+// the same work in any case. The risk that stays is work that started after
+// the fence check and before the stale cancel.
+//
+// While the maintenance hold of the server is true, LeaveWith answers
+// maintenance.ErrHeld and changes nothing. The leave-maintenance step then
+// confirms the state maintenance: the hold keeps maintenance mode.
+//
+// # Blobs
+//
+// The blob store can lack conditional writes: a Put can overwrite a key and
+// never answer blob.ErrExists. So copy-blobs and after-apply follow these
+// rules:
+//
+//   - The restore verifies the bytes of the backup before any Put to a live
+//     key. It copies each object to a temporary key of the restore and the
+//     claim token, with the check of the size and the checksum, and then
+//     copies the checked bytes to the live key.
+//   - The restore never deletes a live key. A failed check deletes only the
+//     temporary key. Cleanup deletes the temporary keys of the restore.
+//   - A live key that exists is verified. When its bytes differ, the restore
+//     overwrites it with the checked bytes, or fails with ErrCorrupt when the
+//     store refuses the overwrite.
+//   - A blob deleter waits while a backup or a restore runs: the guard port of
+//     the blob deletes answers "running" for a restore row that is checking
+//     or applying.
+//   - After the swap, after-apply checks that each blob that the restored
+//     data names exists, and copies a missing one again from the pinned
+//     backup, before leave-maintenance.
+//
+// One window stays open: a deleter that read the guard before StartRestore,
+// and stalls past the check of after-apply, can still delete a blob that the
+// restored data names.
 //
 // # Failure, cancel and the end of the operation
 //
 // A step that fails for a reason that no retry can fix (a corrupt backup, a
 // refused enter, a dev backup) ends the restore with FinishRestore, with the
-// fence of the finish step and RestoreEnd.LeaveMaintenance when the restore
-// entered maintenance mode and did not leave it. It returns the error as
-// permanent. Any other error of a step is a retry with backoff, as for every
-// durable operation.
+// fence of the finish step and RestoreEnd.LeaveMaintenance. It returns the
+// error as permanent. Any other error of a step is a retry with backoff, as
+// for every durable operation.
 //
-// While the maintenance hold of the server is true, LeaveFenced answers
-// maintenance.ErrHeld and changes nothing. The leave-maintenance step then
-// records itself with no change, as the leave of a restore did before: the
-// hold keeps maintenance mode.
-//
-// RestoreService.Cancel goes through durable.StepCanceler.CancelBefore with the swap step:
-// before the swap it stops the operation, and the swap transaction refuses
-// to commit after it. After the swap it changes nothing and the service
-// answers ErrRestoreSwapped.
+// RestoreService.Cancel, and the route POST /api/server/restores/{id}/cancel,
+// go through durable.StepCanceler.CancelBefore with the swap step: before the
+// swap it stops the operation, and the swap transaction refuses to commit
+// after it. After the swap it changes nothing, and the answer is
+// ErrRestoreSwapped (409). A restore that ended answers 409 too, a restore
+// that a cancel already stopped answers 202 again, and an unknown ID answers
+// 404. Each cancel writes an audit entry.
 //
 // An operation can end with no finish write: a cancel, a step that panicked,
 // or too many holders that stopped. RestoreService.Work then calls
 // FailEndedRestores once in each lease period. It marks the row failed, and
-// leaves maintenance mode when the operation recorded enter-maintenance and
-// not leave-maintenance, in one transaction for each row. While the row is
-// checking or applying, no other restore can start, so that leave can never
-// end the maintenance mode of a later restore.
+// leaves maintenance mode when the flag of the row says that this restore
+// entered it, in one transaction for each row. While the row is checking or
+// applying, no other restore can start, so that leave can never end the
+// maintenance mode of a later restore.
 //
 // # What a takeover does at each step
 //
-//	stage              stages again into a new area; the area of the old holder is an orphan
-//	check              checks the area of the stage result again; the dev strip removes nothing more
-//	enter-maintenance  enters again; a second enter keeps maintenance mode
-//	pre-backup         waits for the backup of the pre-backup ID, or starts it
-//	copy-blobs         verifies the blobs that the old holder copied
+// A takeover after the fenced write of a step skips the step. A takeover
+// before it runs the step again:
+//
+//	stage              stages again into the area of the new token, after it drops the earlier areas
+//	check              checks again; the area of the stage result is read-only
+//	enter-maintenance  the flag of the row tells whether this restore entered; Enter skips its writes when
+//	                   the state is maintenance, and the confirm records the flag
+//	pre-backup         waits for the backup operation of the pre-backup ID, which runs on its own
+//	copy-blobs         verifies the live keys that the old holder copied
 //	swap               the swap committed with its step record, or it did not commit at all
-//	after-apply        runs the hook again; the audit entry can occur two times
+//	after-apply        runs the hook and the blob check again; the audit entry commits once, with the record
+//	leave-maintenance  the state is normal, or the hold keeps maintenance; the confirm records it
 //	cleanup            drops again; a drop of an area that does not exist does nothing
-//	leave-maintenance  leaves again; a second leave keeps normal operation
 //	finish             finishes the row, which is still applying
+//
+// A holder that lost its claim and continues its work changes nothing that
+// the fence protects: each of its fenced writes fails. Outside the fence it
+// can write into its own staging area, copy checked bytes to a live key,
+// copy a temporary key, and, with force, cancel active work, as above.
 //
 // A start of another instance does nothing to a running restore: it claims
 // no operation with a live claim, and FailEndedRestores fails only rows whose
@@ -119,7 +197,9 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
 var (
@@ -135,7 +215,7 @@ var (
 const RestoreOperationKind durable.Kind = "restore"
 
 // RestoreOperationVersion is the version of the steps of
-// RestoreOperationKind.
+// RestoreOperationKind. A change of the step names or their order raises it.
 const RestoreOperationVersion = 1
 
 // The steps of the restore operation, in order. RestoreSteps returns the
@@ -148,8 +228,8 @@ const (
 	RestoreStepCopyBlobs        = "copy-blobs"
 	RestoreStepSwap             = "swap"
 	RestoreStepAfterApply       = "after-apply"
-	RestoreStepCleanup          = "cleanup"
 	RestoreStepLeaveMaintenance = "leave-maintenance"
+	RestoreStepCleanup          = "cleanup"
 	RestoreStepFinish           = "finish"
 )
 
@@ -164,8 +244,8 @@ func RestoreSteps() []string {
 		RestoreStepCopyBlobs,
 		RestoreStepSwap,
 		RestoreStepAfterApply,
-		RestoreStepCleanup,
 		RestoreStepLeaveMaintenance,
+		RestoreStepCleanup,
 		RestoreStepFinish,
 	}
 }
@@ -254,9 +334,13 @@ type RestoreEnd struct {
 	// Error is the text for an operator. It is empty for RestoreSucceeded.
 	Error   string
 	EndedAt time.Time
+	// DevReport, when it is not nil, replaces the dev report of the row: the
+	// final report of the restore.
+	DevReport *DevStripReport
 	// LeaveMaintenance moves the installation to normal operation in the
-	// transaction of the end, when it is in maintenance mode. A failed
-	// restore that entered maintenance mode and did not leave it sets it.
+	// transaction of the end, but only when the maintenance flag of the row
+	// says that this restore entered maintenance mode and the state is still
+	// maintenance. A failed restore whose maintenance hold is false sets it.
 	LeaveMaintenance bool
 }
 
@@ -268,10 +352,20 @@ type RestoreEnd struct {
 // its operation.
 //
 // A method that takes a StepFence checks it with the rules of
-// durable.Store.RecordStep and records its step, in the transaction of its
-// own write. It checks the fence first: a stale claim changes nothing and
-// learns nothing about the row. It returns durable.ErrClaimLost too when the
-// operation of the fence is not the operation of the restore.
+// durable.Store.RecordStep, in the transaction of its own write, and, unless
+// it says otherwise, records its step there. It checks the fence first, so a
+// stale claim changes nothing and learns nothing about the row: it returns
+// durable.ErrClaimLost when f is not the live claim, also when the operation
+// of f is not the operation of the restore, durable.ErrCanceled when a cancel
+// is requested, and durable.ErrStepDone when the step of f is recorded. Then
+// it returns ErrRestoreNotFound when the row does not exist, and
+// ErrRestoreNotRunning when the row is not in the state that the method
+// needs. On an error it changes nothing.
+//
+// The restores row has a maintenance flag: true while this restore holds the
+// maintenance mode that it entered. Only SetRestoreMaintenance sets it.
+//
+//nolint:interfacebloat // One contract for the restores row of a running restore: every method reads or changes that row.
 type RestoreOperations interface {
 	// StartRestore stores r as a checking restore, with r.DevReport when it
 	// is not nil, and starts the operation start, in one transaction. It
@@ -279,7 +373,8 @@ type RestoreOperations interface {
 	// ErrRestoreExists when the ID is taken, ErrRestoreRunning when another
 	// restore is checking or applying, and durable.ErrKeyConflict when start
 	// is not of RestoreOperationKind under RestoreOperationKey(r.ID), or when
-	// its key already names an operation. On an error it stores nothing.
+	// its key already names an operation. It returns durable.ErrInvalid for
+	// a start that fails Validate. On an error it stores nothing.
 	StartRestore(ctx context.Context, r RestoreRecord, start durable.StartRequest) error
 
 	// GetRestore returns the restore row id, or ErrRestoreNotFound.
@@ -288,34 +383,54 @@ type RestoreOperations interface {
 	// ListRestores returns every restore row, newest first.
 	ListRestores(ctx context.Context) ([]RestoreRecord, error)
 
-	// MarkRestoreApplying moves the restore id from checking to applying,
-	// records the pre-backup ID and the step of f. It returns
-	// ErrRestoreNotFound when id does not exist, and ErrRestoreNotRunning when
-	// the row is not checking.
-	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id RestoreID, preBackupID ID) error
-
-	// RecordRestoreReport stores report on the running restore id and records
-	// the step of f. It returns ErrRestoreNotFound when id does not exist, and
-	// ErrRestoreNotRunning when the row ended.
+	// RecordRestoreReport stores report on the checking or applying restore
+	// id and records the step of f.
 	RecordRestoreReport(ctx context.Context, f durable.StepFence, id RestoreID, report DevStripReport) error
 
-	// FinishRestore moves the running restore end.ID to end.State, with the
-	// error text and the end time, and records the step of f. With
-	// end.LeaveMaintenance it also moves the installation to normal operation
-	// when it is in maintenance mode. It returns the finished row. It returns
-	// ErrRestoreNotRunning for a state other than RestoreSucceeded and
-	// RestoreFailed, and for a row that ended, and ErrRestoreNotFound when the
-	// row does not exist.
+	// SetRestoreMaintenance stores the installation state next only when the
+	// stored state is expected, with the rules of maintenance.Store.SetStateIf,
+	// and sets the maintenance flag of the checking or applying restore id to
+	// next == maintenance.StateMaintenance, in one transaction. It checks f
+	// and records no step. It returns the errors of SetStateIf after the
+	// errors of the fence and the row.
+	SetRestoreMaintenance(
+		ctx context.Context, f durable.StepFence, id RestoreID, expected, next maintenance.State,
+	) error
+
+	// ConfirmRestoreMaintenance checks that the installation state is want,
+	// and records the step of f with the maintenance flag of the checking or
+	// applying restore id as the result, in one transaction. It returns the
+	// flag. It returns maintenance.ErrStateChanged when the state is not want.
+	ConfirmRestoreMaintenance(
+		ctx context.Context, f durable.StepFence, id RestoreID, want maintenance.State,
+	) (entered bool, err error)
+
+	// MarkRestoreApplying moves the restore id from checking to applying,
+	// records the pre-backup ID and the step of f.
+	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id RestoreID, preBackupID ID) error
+
+	// AppendRestoreAudit appends e to the audit log of the installation and
+	// records the step of f, in one transaction, so the entry commits once.
+	// It returns the stored entry. The restore id must be applying.
+	AppendRestoreAudit(ctx context.Context, f durable.StepFence, id RestoreID, e audit.Entry) (audit.Entry, error)
+
+	// FinishRestore moves the checking or applying restore end.ID to
+	// end.State, with the error text, the end time and end.DevReport, and
+	// records the step of f, in one transaction. With end.LeaveMaintenance
+	// it leaves maintenance mode as RestoreEnd says, and clears the flag. It
+	// returns the finished row. It returns ErrRestoreNotRunning for a state
+	// other than RestoreSucceeded and RestoreFailed.
 	FinishRestore(ctx context.Context, f durable.StepFence, end RestoreEnd) (RestoreRecord, error)
 
 	// FailEndedRestores marks failed each checking or applying row whose
 	// operation ended canceled or failed, with the error text
 	// RestoreCanceledText or RestoreStoppedText and the end time endedAt.
-	// When the operation recorded RestoreStepEnterMaintenance and not
-	// RestoreStepLeaveMaintenance, and leave is true, it moves the
-	// installation to normal operation in the transaction of that row. It
-	// keeps a row whose operation runs, also with an expired claim. It
-	// returns the rows that it marked failed.
+	// When leave is true and the maintenance flag of the row is set, it moves
+	// the installation to normal operation, if the state is maintenance, and
+	// clears the flag, in the transaction of that row. It keeps a row whose
+	// operation is pending or runs, also with an expired claim. It returns
+	// the rows that it marked failed. It takes no fence: it changes only rows
+	// whose operation ended.
 	FailEndedRestores(ctx context.Context, endedAt time.Time, leave bool) ([]RestoreRecord, error)
 }
 
@@ -330,6 +445,19 @@ const (
 	RestoreStoppedText = "restore stopped with no end; start the restore again"
 )
 
+// RestoreStageInput is what StageRestore loads into a staging area and how
+// it removes dev data from it.
+type RestoreStageInput struct {
+	Open    PortableOpener
+	Want    Summary
+	Files   []PortableFile
+	Options StageOptions
+	// Strip runs the dev data strip with StripMode on the staged area, before
+	// StageRestore returns. A restore into a production installation sets it.
+	Strip     bool
+	StripMode DevStripMode
+}
+
 // RestoreStaging is the staging port of a restore that runs as a durable
 // operation. Each area has a name that a StagingArea gives, so every
 // instance on the database finds the area that a stage result names. It
@@ -338,46 +466,61 @@ const (
 // storetest.
 //
 // A method that takes a StagingArea derives the name of its schema or its
-// file from the area only, and checks the name against the prefix of its
-// staging areas before it changes anything.
+// file from the area only. Before it changes anything, it checks the area
+// with NewStagingArea and returns ErrInvalidRestoreID for an area that fails.
+// It never reads a name from the area in another way.
 type RestoreStaging interface {
-	// StageRestore removes the area a when it exists, then stages the table
-	// files into a with the checks of PortableStager.StagePortable. A failed
-	// stage removes a. The live data stays unchanged.
-	StageRestore(
-		ctx context.Context, a StagingArea, open PortableOpener, want Summary, files []PortableFile, opts StageOptions,
-	) (Summary, error)
-
-	// StripRestoreArea runs the dev data strip of DevStripper.StripDevStaged
-	// on the area a. It returns ErrCorrupt when a does not exist.
-	StripRestoreArea(ctx context.Context, a StagingArea, mode DevStripMode) (DevStripReport, error)
+	// StageRestore drops each area of a.Restore with a token up to a.Token,
+	// a itself included, then stages in.Files into a with the checks of
+	// PortableStager.StagePortable, and, with in.Strip, runs the dev data
+	// strip of DevStripper.StripDevStaged on a. It returns the summary and
+	// the report of the strip, which is empty without in.Strip. A failed
+	// stage drops a. The live data stays unchanged. It never touches an area
+	// of a higher token: that is the area of a newer holder. It returns
+	// ErrInvalidRestoreID for an area that is not valid, the errors of
+	// CheckStageKind and CheckStageSchema, ErrCorrupt when the staged data
+	// does not match in.Want, ErrDevBackupRefused and ErrDevStripIncomplete
+	// from the strip, and the error of a table file that open fails to read.
+	// The stage result of the runner names a after it returns. From then on
+	// the area is read-only until ApplyRestoreArea.
+	StageRestore(ctx context.Context, a StagingArea, in RestoreStageInput) (Summary, DevStripReport, error)
 
 	// ApplyRestoreArea swaps the area a into the live data, as
 	// Applier.ApplyStaging does, or as AccessKeepingApplier does when
 	// keepAccess is true. It checks f and records its step in the swap
-	// transaction, before the first change. On PostgreSQL the old live data
-	// stays as the previous schema of the restore of a, for CleanRestoreAreas.
-	// It returns ErrCorrupt when a does not exist, and the errors of
-	// durable.Store.RecordStep, with no change.
+	// transaction, before the first change, with the rules of
+	// durable.Store.RecordStep, so a cancel with CancelBefore and the swap
+	// have one winner. On PostgreSQL the old live data stays as the previous
+	// schema of the restore of a, for CleanRestoreAreas. It returns
+	// ErrInvalidRestoreID for an area that is not valid, ErrCorrupt when a does
+	// not exist, the errors of the fence, ErrDevBackupRefused and
+	// ErrRestoreAccessMismatch, with no change.
 	ApplyRestoreArea(
 		ctx context.Context, f durable.StepFence, a StagingArea, keepAccess bool,
 	) (KeepAccessResult, error)
 
 	// CleanRestoreAreas drops the old live data and every staging area of the
-	// restore of f, and every area of a restore whose row in this registry
+	// restore id, and every area of a restore whose row in this registry
 	// ended. It keeps the areas of a restore that has no row in this
-	// registry, and of a running restore other than its own. Each drop waits
-	// for its locks for lockWait at most, and then fails with no change. It
-	// checks f before the first drop and records its step: on PostgreSQL in
-	// the transaction of the drops, and on SQLite after the file removals. It
-	// returns the areas that it dropped. It returns durable.ErrClaimLost when
-	// the operation of f is not the operation of restore id.
+	// registry, and of a running restore other than id. Each drop waits for
+	// its locks for lockWait at most. It checks f before the first drop and
+	// records its step: on PostgreSQL in the transaction of the drops, and on
+	// SQLite after the file removals. It returns the areas that it dropped. It
+	// returns ErrInvalidRestoreID for an id that is not valid, the errors of
+	// the fence, also durable.ErrClaimLost when the operation of f is not the
+	// operation of restore id, and ErrRestoreBusy when a drop waited lockWait,
+	// with no drop on PostgreSQL. The caller retries ErrRestoreBusy.
 	CleanRestoreAreas(
 		ctx context.Context, f durable.StepFence, id RestoreID, lockWait time.Duration,
 	) ([]StagingArea, error)
 
 	// ListRestoreAreas returns the staging areas of this database, also the
-	// areas of a restore that has no row in this registry. A schema or a file
-	// whose name has the staging prefix but does not parse is not listed.
+	// areas of a restore that has no row in this registry, ordered by restore
+	// and token. A schema or a file whose name has the staging prefix but
+	// does not parse is not listed. It returns the read error of the store.
 	ListRestoreAreas(ctx context.Context) ([]StagingArea, error)
 }
+
+// ErrRestoreBusy reports a drop of the cleanup that waited for its locks
+// longer than the limit. The cleanup step tries again with backoff.
+var ErrRestoreBusy = errors.New("restore cleanup waits for a lock on the old data")

@@ -111,8 +111,8 @@ func TestRestoreSteps(t *testing.T) {
 	// The step names are stored in the step records of running operations,
 	// so the list and its order are part of the operation version.
 	want := []string{
-		"stage", "check", "enter-maintenance", "pre-backup", "copy-blobs", "swap", "after-apply", "cleanup",
-		"leave-maintenance", "finish",
+		"stage", "check", "enter-maintenance", "pre-backup", "copy-blobs", "swap", "after-apply",
+		"leave-maintenance", "cleanup", "finish",
 	}
 
 	if !slices.Equal(steps, want) {

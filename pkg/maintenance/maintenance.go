@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -129,19 +128,24 @@ type Store interface {
 	SetStateIf(ctx context.Context, expected, next State) error
 }
 
-// FencedStore is the part of the installation state port that a durable
-// operation uses: a change of the state under the claim of the operation. A
-// holder that lost its claim can then never enter or leave maintenance mode.
-// Each SQL store adapter implements it on the database of its durable.Store,
-// and runs the conformance cases of package storetest.
-type FencedStore interface {
-	// SetStateIfFenced stores next only when the stored state is expected,
-	// as SetStateIf does, and checks and records the step of f with the
-	// rules of durable.Store.RecordStep, in one transaction. It checks the
-	// fence first, and returns the errors of RecordStep. Then it returns the
-	// errors of SetStateIf. On an error it changes nothing: a changed state
-	// records no step.
-	SetStateIfFenced(ctx context.Context, expected, next State, f durable.StepFence) error
+// StateWriter changes the installation state for a caller that holds a
+// claim, for example a restore that runs as a durable operation. The
+// service methods EnterWith and LeaveWith run the sequence of Enter and
+// Leave, and make each state write through it. Then a caller that lost its
+// claim can never enter or leave maintenance mode.
+type StateWriter interface {
+	// SetStateIf stores next only when the stored state is expected, with
+	// the rules of Store.SetStateIf, and with the claim check of the caller
+	// in the same transaction. It returns the error of the claim check
+	// first, and changes nothing then.
+	SetStateIf(ctx context.Context, expected, next State) error
+	// Check returns nil while the claim of the caller is live. EnterWith
+	// calls it just before it cancels active work, and cancels nothing when
+	// it fails.
+	Check(ctx context.Context) error
+	// Actor names the caller in the audit entry of each cancel, for example
+	// the restore ID and the claim token.
+	Actor() string
 }
 
 // Service enters and leaves maintenance mode. The zero value is not usable:
