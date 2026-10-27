@@ -38,11 +38,12 @@ func editJSON(start, end int, newText string) string {
 // deltaPrefix and deltaSuffix wrap the text that the delta cases edit into a
 // deployment object: a deployment must be a JSON object.
 const (
-	deltaPrefix = `{"a":"`
-	deltaSuffix = `"}`
+	deltaPrefix = `{"deployment":{"a":"`
+	deltaSuffix = `"}}`
 )
 
-// deltaDoc returns the deployment object that holds text.
+// deltaDoc returns the versioned envelope, as a sequenced save stores it, around
+// the deployment object that holds text.
 func deltaDoc(text string) string {
 	return deltaPrefix + text + deltaSuffix
 }
@@ -99,8 +100,8 @@ func TestCheckpointDeltaValid(t *testing.T) {
 		t.Fatalf("export: %v", err)
 	}
 
-	if got := string(cp.Deployment); got != deltaDoc("abXYef") {
-		t.Errorf("export = %q, want %q", got, deltaDoc("abXYef"))
+	if got, want := string(cp.Deployment), `{"a":"abXYef"}`; got != want {
+		t.Errorf("export = %q, want %q", got, want)
 	}
 }
 
@@ -330,6 +331,12 @@ func assertExport(t *testing.T, f updatesFixture, want string) {
 		t.Fatalf("export: %v", err)
 	}
 
+	// want is the stored text of a sequenced save. The export serves the
+	// deployment that the envelope wraps.
+	if inner, ok := strings.CutPrefix(want, `{"deployment":`); ok {
+		want = strings.TrimSuffix(inner, `}`)
+	}
+
 	if got := string(cp.Deployment); got != want {
 		t.Errorf("export = %q, want %q", got, want)
 	}
@@ -380,7 +387,9 @@ func FuzzCheckpointDelta(f *testing.F) {
 				t.Fatalf("export after delta: %v", exportErr)
 			}
 
-			sum := sha256.Sum256(cp.Deployment)
+			// The hash covers the stored envelope; the export serves the
+			// deployment it wraps.
+			sum := sha256.Sum256([]byte(envelope(string(cp.Deployment))))
 			if hex.EncodeToString(sum[:]) != in.Hash {
 				t.Fatal("saved deployment does not match the delta hash")
 			}
