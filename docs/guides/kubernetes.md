@@ -121,7 +121,31 @@ The chart makes a NetworkPolicy by default. It lets every source reach the serve
 
 ## One instance
 
-The chart runs one instance. The schema refuses `replicas` above 1, because the server work for several instances is not complete. The [several instances guide](several-instances.md) gives the current status. The Deployment uses the `Recreate` strategy, so each upgrade has a short time with no server.
+By default the chart runs one instance. The Deployment uses the `Recreate` strategy, so each upgrade has a short time with no server. Two pods cannot share the `ReadWriteOnce` claims of the `fs` blob store and the `dir` backup target. A rolling update with one replica would start the new pod while the old pod still runs.
+
+## Several instances
+
+The chart can run several replicas of one installation. The [several instances guide](several-instances.md) describes the layout and the settings of the server. This section lists what the chart does when `replicas` is above 1.
+
+- The Deployment uses `RollingUpdate` with `maxUnavailable` 0 and `maxSurge` 1. A new pod must be ready before Kubernetes stops an old pod.
+- The chart makes a PodDisruptionBudget with `minAvailable` 1. Set `podDisruptionBudget.enabled: false` to leave it out.
+- With `spreadAcrossNodes: true`, the chart adds a soft topology spread constraint over `kubernetes.io/hostname`. The scheduler prefers a different node for each pod, and it still schedules a pod when it cannot.
+- A `preStop` hook waits `preStopSeconds` (15 by default) before the pod gets SIGTERM. At the start of termination the pod leaves the Service endpoints. The wait gives load balancers time to stop sending requests while the pod still answers. The wait is longer than the readiness period. The server needs up to 30 s to finish its requests, so `terminationGracePeriodSeconds` must be at least `preStopSeconds` + 30. The default is 60.
+- The chart refuses these settings with a message that names the setting:
+  - `blobStore.type: fs`
+  - `backup.target.type: dir`
+  - a `file:` item in `DUSTPAN_AUDIT_SINK` or `DUSTPAN_LOG_SINK` in `server.extraEnv`
+  - a `sqlite:` value in `server.extraEnv`
+
+  The chart cannot read the database URL in its Secret. Put a PostgreSQL URL in it.
+- The chart cannot read a sink variable that uses `valueFrom`, as it cannot read the Secret URL. Make sure that the Secret holds no `file:` sink.
+- `podDisruptionBudget.minAvailable` must be less than `replicas`. The chart refuses the install otherwise.
+
+Use an S3-compatible store for the blobs and for the backup target, and one PostgreSQL database. You run the database and the object store, and you keep them available.
+
+To run the background work in separate pods, set `worker.enabled: true`. The chart then makes a second Deployment that runs `--components worker`, with its own `worker.replicas`. The server Deployment runs `--components api`. The worker pods get no Service and no client traffic.
+
+The `ci/ha.yaml` profile of the chart shows a values file with 3 replicas.
 
 ## Probes
 
@@ -152,7 +176,7 @@ The server applies migrations when it starts. The chart has no migration Job and
 
 ## Roll back
 
-`helm rollback` to a revision with the same app version changes values only. It is safe. A rollback to an older app version works while the minimum binary version of the schema is not above the old binary. Otherwise the old pod refuses to start and names both versions. With the `Recreate` strategy, the server is then down until you roll forward again.
+`helm rollback` to a revision with the same app version changes values only. It is safe. A rollback to an older app version works while the minimum binary version of the schema is not above the old binary. Otherwise the old pod refuses to start and names both versions. With the `Recreate` strategy (one replica), the server is then down until you roll forward again.
 
 The project has no down migration. To go back past a migration that cannot be undone, restore the backup from before the upgrade into an empty database. Then install the older chart. The [backup guide](backup-restore-upgrade.md) shows the restore steps.
 

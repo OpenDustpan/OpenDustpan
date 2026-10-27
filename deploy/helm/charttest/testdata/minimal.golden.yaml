@@ -18,7 +18,12 @@ spec:
     matchLabels:
       app.kubernetes.io/name: opendustpan
       app.kubernetes.io/instance: release
-      app.kubernetes.io/component: server
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - server
+          - worker
   policyTypes:
     - Ingress
     - Egress
@@ -148,7 +153,7 @@ spec:
     spec:
       serviceAccountName: release-opendustpan
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: 60
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch

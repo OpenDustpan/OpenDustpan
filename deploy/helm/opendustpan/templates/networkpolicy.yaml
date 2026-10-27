@@ -9,7 +9,13 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      {{- include "opendustpan.selectorLabels" . | nindent 6 }}
+      {{- include "opendustpan.podSelectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - server
+          - worker
   policyTypes:
     - Ingress
     - Egress

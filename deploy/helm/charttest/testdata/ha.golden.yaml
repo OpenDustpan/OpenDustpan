@@ -1,0 +1,520 @@
+---
+# Source: opendustpan/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: release-opendustpan
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opendustpan
+      app.kubernetes.io/instance: release
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - server
+          - worker
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opendustpan
+              app.kubernetes.io/instance: release
+              app.kubernetes.io/component: backup
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - ipBlock:
+            cidr: ::/0
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 443
+---
+# Source: opendustpan/templates/poddisruptionbudget.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: release-opendustpan
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opendustpan
+      app.kubernetes.io/instance: release
+      app.kubernetes.io/component: server
+---
+# Source: opendustpan/templates/cronjob-backup.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-opendustpan-backup
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: backup
+automountServiceAccountToken: false
+---
+# Source: opendustpan/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-opendustpan
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+automountServiceAccountToken: false
+---
+# Source: opendustpan/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-opendustpan
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+# Source: opendustpan/templates/deployment-worker.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-opendustpan-worker
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opendustpan
+      app.kubernetes.io/instance: release
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opendustpan
+        app.kubernetes.io/instance: release
+        app.kubernetes.io/component: worker
+      annotations:
+    spec:
+      serviceAccountName: release-opendustpan
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: "ghcr.io/opendustpan/opendustpan@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - --components=worker
+            - "--log-level=info"
+            - "--log-format=json"
+            - "--blob-store=s3://dustpan-state/prod"
+            - "--backup-target=s3://dustpan-backups/prod"
+            - "--s3-endpoint=https://s3.example"
+            - "--s3-region=eu-west-1"
+            - "--public-url=https://dustpan.example"
+          env:
+            - name: DUSTPAN_LISTEN
+              value: ":8080"
+            - name: DUSTPAN_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-database"
+                  key: "database-url"
+            - name: DUSTPAN_KEY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-key-encryption-key"
+                  key: "key-encryption-key"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-s3"
+                  key: "AWS_ACCESS_KEY_ID"
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-s3"
+                  key: "AWS_SECRET_ACCESS_KEY"
+            - name: DUSTPAN_AUDIT_SINK
+              value: siem=syslog+tls://logs.example:6514 blob:audit
+            - name: DUSTPAN_LOG_SINK
+              value: stderr syslog+tls://logs.example:6514
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: HTTP
+            failureThreshold: 60
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: opendustpan
+              app.kubernetes.io/instance: release
+              app.kubernetes.io/component: worker
+---
+# Source: opendustpan/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-opendustpan
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opendustpan
+      app.kubernetes.io/instance: release
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opendustpan
+        app.kubernetes.io/instance: release
+        app.kubernetes.io/component: server
+      annotations:
+    spec:
+      serviceAccountName: release-opendustpan
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: "ghcr.io/opendustpan/opendustpan@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - --components=api
+            - "--log-level=info"
+            - "--log-format=json"
+            - --console-dir=/console
+            - "--blob-store=s3://dustpan-state/prod"
+            - "--backup-target=s3://dustpan-backups/prod"
+            - "--s3-endpoint=https://s3.example"
+            - "--s3-region=eu-west-1"
+            - "--public-url=https://dustpan.example"
+          env:
+            - name: DUSTPAN_LISTEN
+              value: ":8080"
+            - name: DUSTPAN_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-database"
+                  key: "database-url"
+            - name: DUSTPAN_KEY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-key-encryption-key"
+                  key: "key-encryption-key"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-s3"
+                  key: "AWS_ACCESS_KEY_ID"
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-s3"
+                  key: "AWS_SECRET_ACCESS_KEY"
+            - name: DUSTPAN_AUDIT_SINK
+              value: siem=syslog+tls://logs.example:6514 blob:audit
+            - name: DUSTPAN_LOG_SINK
+              value: stderr syslog+tls://logs.example:6514
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: HTTP
+            failureThreshold: 60
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 15
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: opendustpan
+              app.kubernetes.io/instance: release
+              app.kubernetes.io/component: server
+---
+# Source: opendustpan/templates/cronjob-backup.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: release-opendustpan-backup
+  namespace: dustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "17 2 * * *"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 21600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: opendustpan
+            app.kubernetes.io/instance: release
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: Never
+          serviceAccountName: release-opendustpan-backup
+          automountServiceAccountToken: false
+          securityContext:
+            fsGroup: 65532
+            fsGroupChangePolicy: OnRootMismatch
+            runAsGroup: 65532
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: "ghcr.io/opendustpan/opendustpan@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+              imagePullPolicy: IfNotPresent
+              args:
+                - backup
+                - "--server=http://release-opendustpan.dustpan.svc:80"
+              env:
+                - name: DUSTPAN_ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: "opendustpan-backup-token"
+                      key: "token"
+              resources:
+                limits:
+                  memory: 128Mi
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                privileged: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
