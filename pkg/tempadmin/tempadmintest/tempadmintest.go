@@ -66,6 +66,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a delete of the principal removes its record", test: testDeleteRemovesRecord},
 		{name: "a new person with a reused subject has no record", test: testReusedSubjectNoRecord},
 		{name: "each write appends its audit entry in @server", test: testAuditEntries},
+		{name: "awaiting review lists only ended records with no mark", test: testAwaitingReview},
+		{name: "a review mark keeps the first time and writes no entry", test: testReviewMarkOnce},
+		{name: "a review mark of a missing or an active record fails", test: testReviewMarkRefused},
 	}
 
 	for _, tc := range cases {
@@ -102,6 +105,9 @@ const reason = "every administrator lost access"
 
 // alicePrincipalID is the principal ID of alice in the suite.
 const alicePrincipalID = "prn-alice"
+
+// bobPrincipalID is the principal ID of bob in the suite.
+const bobPrincipalID = "prn-bob"
 
 // groupPageLimit is the page size of a group listing of the suite.
 const groupPageLimit = 10
@@ -172,13 +178,14 @@ func mustRecord(t *testing.T, s Store, id, subject string, created int) tempadmi
 	t.Helper()
 
 	r := tempadmin.TempAdmin{
-		CreatedAt:   at(created),
-		ExpiresAt:   at(created).Add(tempadmin.Lifetime),
-		EndedAt:     time.Time{},
-		PrincipalID: id,
-		Subject:     subject,
-		CreatedBy:   createdBy,
-		Reason:      reason,
+		CreatedAt:      at(created),
+		ExpiresAt:      at(created).Add(tempadmin.Lifetime),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    id,
+		Subject:        subject,
+		CreatedBy:      createdBy,
+		Reason:         reason,
 	}
 
 	if err := s.CreateTempAdmin(t.Context(), r, entry(tempadmin.Ref(id))); err != nil {
@@ -249,13 +256,14 @@ func testDuplicate(t *testing.T, s Store) {
 	mustRecord(t, s, alicePrincipalID, "alice", 0)
 
 	dup := tempadmin.TempAdmin{
-		CreatedAt:   at(minuteLater),
-		ExpiresAt:   at(minuteLater).Add(tempadmin.Lifetime),
-		EndedAt:     time.Time{},
-		PrincipalID: alicePrincipalID,
-		Subject:     "alice",
-		CreatedBy:   createdBy,
-		Reason:      reason,
+		CreatedAt:      at(minuteLater),
+		ExpiresAt:      at(minuteLater).Add(tempadmin.Lifetime),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    alicePrincipalID,
+		Subject:        "alice",
+		CreatedBy:      createdBy,
+		Reason:         reason,
 	}
 
 	err := s.CreateTempAdmin(t.Context(), dup, entry(tempadmin.Ref(alicePrincipalID)))
@@ -266,13 +274,14 @@ func testMissingPrincipal(t *testing.T, s Store) {
 	t.Helper()
 
 	r := tempadmin.TempAdmin{
-		CreatedAt:   at(0),
-		ExpiresAt:   at(0).Add(tempadmin.Lifetime),
-		EndedAt:     time.Time{},
-		PrincipalID: "prn-ghost",
-		Subject:     "ghost",
-		CreatedBy:   createdBy,
-		Reason:      reason,
+		CreatedAt:      at(0),
+		ExpiresAt:      at(0).Add(tempadmin.Lifetime),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    "prn-ghost",
+		Subject:        "ghost",
+		CreatedBy:      createdBy,
+		Reason:         reason,
 	}
 
 	err := s.CreateTempAdmin(t.Context(), r, entry(tempadmin.Ref("prn-ghost")))
@@ -295,8 +304,8 @@ func testList(t *testing.T, s Store) {
 	t.Helper()
 
 	mustPrincipal(t, s, alicePrincipalID, "alice")
-	mustPrincipal(t, s, "prn-bob", "bob")
-	mustRecord(t, s, "prn-bob", "bob", minuteLatest)
+	mustPrincipal(t, s, bobPrincipalID, "bob")
+	mustRecord(t, s, bobPrincipalID, "bob", minuteLatest)
 	mustRecord(t, s, alicePrincipalID, "alice", 0)
 
 	all, err := s.ListTempAdmins(t.Context())
@@ -304,7 +313,7 @@ func testList(t *testing.T, s Store) {
 		t.Fatalf("list temporary administrators: %v", err)
 	}
 
-	if len(all) != 2 || all[0].PrincipalID != alicePrincipalID || all[1].PrincipalID != "prn-bob" {
+	if len(all) != 2 || all[0].PrincipalID != alicePrincipalID || all[1].PrincipalID != bobPrincipalID {
 		t.Fatalf("list = %v, want alice then bob by expiry", all)
 	}
 }
@@ -747,4 +756,138 @@ func listServerObjects(ctx context.Context, lister auditLister) ([]string, error
 	}
 
 	return out, nil
+}
+
+// expireRecord ends the record of id.
+func expireRecord(t *testing.T, s Store, id string) {
+	t.Helper()
+
+	if err := s.ExpireTempAdmin(t.Context(), id, entry(tempadmin.Ref(id))); err != nil {
+		t.Fatalf("expire temporary administrator %q: %v", id, err)
+	}
+}
+
+// awaiting returns the principal IDs of the records that await a review.
+func awaiting(t *testing.T, s Store) []string {
+	t.Helper()
+
+	all, err := s.ListTempAdminsAwaitingReview(t.Context())
+	if err != nil {
+		t.Fatalf("list records awaiting review: %v", err)
+	}
+
+	ids := make([]string, 0, len(all))
+	for i := range all {
+		ids = append(ids, all[i].PrincipalID)
+	}
+
+	return ids
+}
+
+func testAwaitingReview(t *testing.T, s Store) {
+	t.Helper()
+
+	if got := awaiting(t, s); len(got) != 0 {
+		t.Fatalf("awaiting review of an empty store = %v, want none", got)
+	}
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustPrincipal(t, s, bobPrincipalID, "bob")
+	mustPrincipal(t, s, "prn-carol", "carol")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
+	mustRecord(t, s, bobPrincipalID, "bob", minuteLatest)
+	mustRecord(t, s, "prn-carol", "carol", minuteLater)
+
+	if got := awaiting(t, s); len(got) != 0 {
+		t.Fatalf("awaiting review before any expiry = %v, want none: a record that works has no review", got)
+	}
+
+	expireRecord(t, s, bobPrincipalID)
+	expireRecord(t, s, alicePrincipalID)
+
+	got := awaiting(t, s)
+	if len(got) != 2 || got[0] != alicePrincipalID || got[1] != bobPrincipalID {
+		t.Fatalf("awaiting review = %v, want alice then bob by expiry, and not carol, who works", got)
+	}
+
+	if err := s.MarkTempAdminReviewOpened(t.Context(), alicePrincipalID, at(minuteLater)); err != nil {
+		t.Fatalf("mark review opened: %v", err)
+	}
+
+	got = awaiting(t, s)
+	if len(got) != 1 || got[0] != bobPrincipalID {
+		t.Fatalf("awaiting review after the mark of alice = %v, want bob only", got)
+	}
+}
+
+func testReviewMarkOnce(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
+	expireRecord(t, s, alicePrincipalID)
+
+	before := auditCount(t, s)
+
+	if err := s.MarkTempAdminReviewOpened(t.Context(), alicePrincipalID, at(minuteLater)); err != nil {
+		t.Fatalf("mark review opened: %v", err)
+	}
+
+	if err := s.MarkTempAdminReviewOpened(t.Context(), alicePrincipalID, at(minuteLatest)); err != nil {
+		t.Fatalf("second mark of the review: %v", err)
+	}
+
+	got, err := s.GetTempAdmin(t.Context(), alicePrincipalID)
+	if err != nil {
+		t.Fatalf("get temporary administrator: %v", err)
+	}
+
+	if !got.ReviewOpenedAt.Equal(at(minuteLater)) {
+		t.Fatalf("review opened at %s, want the first mark %s", got.ReviewOpenedAt, at(minuteLater))
+	}
+
+	if after := auditCount(t, s); after != before {
+		t.Fatalf("audit entries after the marks = %d, want %d: a mark writes no entry", after, before)
+	}
+
+	if all, listErr := s.ListTempAdmins(t.Context()); listErr != nil || len(all) != 1 ||
+		!all[0].ReviewOpenedAt.Equal(at(minuteLater)) {
+		t.Fatalf("list = %+v, %v; want the mark in the listed record", all, listErr)
+	}
+}
+
+func testReviewMarkRefused(t *testing.T, s Store) {
+	t.Helper()
+
+	err := s.MarkTempAdminReviewOpened(t.Context(), "prn-ghost", at(minuteLater))
+	wantErr(t, "mark of a missing record", err, tempadmin.ErrNotFound)
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
+
+	err = s.MarkTempAdminReviewOpened(t.Context(), alicePrincipalID, at(minuteLater))
+	wantErr(t, "mark of a record that works", err, tempadmin.ErrInvalid)
+
+	got, getErr := s.GetTempAdmin(t.Context(), alicePrincipalID)
+	if getErr != nil || !got.ReviewOpenedAt.IsZero() {
+		t.Fatalf("record after the refused mark = %+v, %v; want no mark", got, getErr)
+	}
+}
+
+// auditCount returns the count of entries in @server, or skips the test
+// when the store keeps no audit log to read.
+func auditCount(t *testing.T, s Store) int {
+	t.Helper()
+
+	lister, ok := s.(auditLister)
+	if !ok {
+		t.Skip("the store keeps no audit log to read")
+	}
+
+	objects, err := listServerObjects(t.Context(), lister)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	return len(objects)
 }

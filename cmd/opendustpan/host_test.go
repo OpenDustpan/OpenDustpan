@@ -587,13 +587,14 @@ type failSweepStore struct {
 // ListTempAdmins implements tempadmin.Store with one record past its expiry.
 func (failSweepStore) ListTempAdmins(context.Context) ([]tempadmin.TempAdmin, error) {
 	return []tempadmin.TempAdmin{{
-		CreatedAt:   time.UnixMilli(1),
-		ExpiresAt:   time.UnixMilli(2),
-		EndedAt:     time.Time{},
-		PrincipalID: "prn_ended",
-		Subject:     "ended",
-		CreatedBy:   "test",
-		Reason:      "test",
+		CreatedAt:      time.UnixMilli(1),
+		ExpiresAt:      time.UnixMilli(2),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    "prn_ended",
+		Subject:        "ended",
+		CreatedBy:      "test",
+		Reason:         "test",
 	}}, nil
 }
 
