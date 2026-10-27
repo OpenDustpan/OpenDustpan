@@ -551,7 +551,7 @@ func testCheckRefusals(t *testing.T, h Harness) {
 
 	for _, a := range h.Refusals {
 		err := h.Renderer.Check(a.Status, a.Body)
-		if !errors.Is(err, notify.ErrPermanent) && !errors.Is(err, notify.ErrTemporary) {
+		if err == nil || !errors.Is(err, notify.ErrPermanent) && !errors.Is(err, notify.ErrTemporary) {
 			t.Errorf("Check(%d, refusal) = %v, want ErrPermanent or ErrTemporary", a.Status, err)
 
 			continue
