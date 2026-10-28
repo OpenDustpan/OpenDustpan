@@ -407,7 +407,7 @@ func pgControlTables() []pgCopyTable {
 			table: backup.TableRestores,
 			columns: []string{
 				"id", pgColState, "backup_id", "pre_backup_id", "requested_by",
-				pgColStartedAtMs, pgColEndedAtMs, "error", "dev_report", "maintenance_entered",
+				pgColStartedAtMs, pgColEndedAtMs, "error", "dev_report", "maintenance_entered", "audit_events",
 			},
 			orderBy: []string{pgColStartedAtMs, "id"},
 		},

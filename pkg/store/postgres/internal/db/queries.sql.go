@@ -6539,6 +6539,25 @@ func (q *Queries) GetRestore(ctx context.Context, id string) (GetRestoreRow, err
 	return i, err
 }
 
+const getRestoreAuditEvents = `-- name: GetRestoreAuditEvents :one
+SELECT state, audit_events
+FROM restores
+WHERE id = $1
+`
+
+type GetRestoreAuditEventsRow struct {
+	State       string
+	AuditEvents string
+}
+
+// Reads the state of one restore and the object texts of its audit events.
+func (q *Queries) GetRestoreAuditEvents(ctx context.Context, id string) (GetRestoreAuditEventsRow, error) {
+	row := q.db.QueryRow(ctx, getRestoreAuditEvents, id)
+	var i GetRestoreAuditEventsRow
+	err := row.Scan(&i.State, &i.AuditEvents)
+	return i, err
+}
+
 const getRestoreMaintenance = `-- name: GetRestoreMaintenance :one
 SELECT state, maintenance_entered
 FROM restores
@@ -14360,6 +14379,23 @@ func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	return err
 }
 
+const lockInstallationState = `-- name: LockInstallationState :one
+SELECT state
+FROM installation
+WHERE id = 1
+FOR UPDATE
+`
+
+// The installation state, with the row locked FOR UPDATE until the end of the
+// transaction, so a leave of maintenance mode waits for the swap of a
+// restore that checked the state.
+func (q *Queries) LockInstallationState(ctx context.Context) (string, error) {
+	row := q.db.QueryRow(ctx, lockInstallationState)
+	var state string
+	err := row.Scan(&state)
+	return state, err
+}
+
 const lockNamespaceCreatesExclusive = `-- name: LockNamespaceCreatesExclusive :exec
 SELECT pg_advisory_xact_lock(
   hashtextextended('namespace-creates:' || current_schema() || ':' || $1::text, 0))
@@ -16700,6 +16736,27 @@ type SetPendingContentKeyParams struct {
 // matches no row, so a late attempt reports no change.
 func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingContentKeyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setPendingContentKey, arg.ContentKey, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setRestoreAuditEvents = `-- name: SetRestoreAuditEvents :execrows
+UPDATE restores
+SET audit_events = $1
+WHERE id = $2 AND state IN ('checking', 'applying')
+`
+
+type SetRestoreAuditEventsParams struct {
+	AuditEvents string
+	ID          string
+}
+
+// Stores the audit events of one running restore. A restore that does not
+// run matches no row.
+func (q *Queries) SetRestoreAuditEvents(ctx context.Context, arg SetRestoreAuditEventsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setRestoreAuditEvents, arg.AuditEvents, arg.ID)
 	if err != nil {
 		return 0, err
 	}

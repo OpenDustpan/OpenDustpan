@@ -450,7 +450,8 @@ const backupColumns = `id, state, started_at_ms, ended_at_ms, target, error`
 
 // restoreColumns lists the columns of restores, for the copy of the control
 // tables.
-const restoreColumns = `id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report`
+const restoreColumns = `id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report, ` +
+	`maintenance_entered, audit_events`
 
 // keepControlStatements replace the rows of each table of
 // backup.ControlTables in the staged file (main) with the rows of the live

@@ -104,6 +104,8 @@ type restoreServiceLive struct {
 	maint   *restoreServiceMaintenance
 	entered map[backup.RestoreID]bool
 	areas   []backup.StagingArea
+	// events holds the stored audit events of each restore.
+	events map[backup.RestoreID]string
 }
 
 // devLiveState holds what the fake live store does for the dev data ports.
@@ -1952,6 +1954,7 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 		maint:   nil,
 		entered: map[backup.RestoreID]bool{},
 		areas:   nil,
+		events:  map[backup.RestoreID]string{},
 	}
 }
 

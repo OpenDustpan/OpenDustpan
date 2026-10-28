@@ -1066,6 +1066,15 @@ WHERE b.state = 'running'
   AND o.kind = sqlc.arg('kind')
   AND o.state IN ('failed', 'canceled');
 
+-- name: LockInstallationState :one
+-- The installation state, with the row locked FOR UPDATE until the end of the
+-- transaction, so a leave of maintenance mode waits for the swap of a
+-- restore that checked the state.
+SELECT state
+FROM installation
+WHERE id = 1
+FOR UPDATE;
+
 -- name: GetInstallationState :one
 -- The installation state: normal or maintenance. The migration seeds the
 -- one row; a missing row is a fault.
@@ -1176,6 +1185,19 @@ WHERE id = $2 AND state = 'checking';
 -- of its warnings. A restore that does not run matches no row.
 UPDATE restores
 SET dev_report = $1
+WHERE id = $2 AND state IN ('checking', 'applying');
+
+-- name: GetRestoreAuditEvents :one
+-- Reads the state of one restore and the object texts of its audit events.
+SELECT state, audit_events
+FROM restores
+WHERE id = $1;
+
+-- name: SetRestoreAuditEvents :execrows
+-- Stores the audit events of one running restore. A restore that does not
+-- run matches no row.
+UPDATE restores
+SET audit_events = $1
 WHERE id = $2 AND state IN ('checking', 'applying');
 
 -- name: SetRestoreMaintenanceEntered :execrows

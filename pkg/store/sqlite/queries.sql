@@ -1045,6 +1045,19 @@ UPDATE restores
 SET dev_report = ?
 WHERE id = ? AND state IN ('checking', 'applying');
 
+-- name: GetRestoreAuditEvents :one
+-- Reads the state of one restore and the object texts of its audit events.
+SELECT state, audit_events
+FROM restores
+WHERE id = ?;
+
+-- name: SetRestoreAuditEvents :execrows
+-- Stores the audit events of one running restore. A restore that does not
+-- run matches no row.
+UPDATE restores
+SET audit_events = ?
+WHERE id = ? AND state IN ('checking', 'applying');
+
 -- name: SetRestoreMaintenanceEntered :execrows
 -- Sets whether one running restore holds the maintenance mode that it
 -- entered. A restore that does not run matches no row.

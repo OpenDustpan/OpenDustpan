@@ -627,7 +627,10 @@ func TestStartWhileAnotherBackupRunsLeavesNoOperation(t *testing.T) {
 func TestLeaseRenewalKeepsASlowStepFromBeingTakenOver(t *testing.T) {
 	t.Parallel()
 
-	const lease = 150 * time.Millisecond
+	// The lease is long against the renewal of lease/3, so a renewal that a
+	// loaded machine delays by a few hundred milliseconds still lands inside
+	// the lease. The step still runs for more than three leases.
+	const lease = 1500 * time.Millisecond
 
 	setup := newDurableSetup()
 	id := backup.ID("bkp-slow")

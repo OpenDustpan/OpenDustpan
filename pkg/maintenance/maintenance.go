@@ -140,9 +140,11 @@ type StateWriter interface {
 	// first, and changes nothing then.
 	SetStateIf(ctx context.Context, expected, next State) error
 	// Check returns nil while the claim of the caller is live. EnterWith
-	// calls it just before it cancels active work, and cancels nothing when
-	// it fails.
-	Check(ctx context.Context) error
+	// calls it just before it cancels unit, the reference of one active
+	// work, and cancels nothing when it fails. A writer can store the cancel
+	// of unit for its audit in the same check, so the record exists before
+	// the cancel.
+	Check(ctx context.Context, unit string) error
 	// Actor names the caller in the audit entry of each cancel, for example
 	// the restore ID and the claim token.
 	Actor() string
@@ -463,7 +465,7 @@ func (w storeWriter) SetStateIf(ctx context.Context, expected, next State) error
 }
 
 // Check implements StateWriter: the store has no claim.
-func (storeWriter) Check(context.Context) error { return nil }
+func (storeWriter) Check(context.Context, string) error { return nil }
 
 // Actor implements StateWriter: Enter and Leave of a request name no actor.
 func (storeWriter) Actor() string { return "" }
@@ -747,7 +749,7 @@ func (s *Service) cancelWork(ctx context.Context, w StateWriter, work activeWork
 
 	for _, u := range work {
 		// A caller with a claim that it lost cancels nothing more.
-		if err := w.Check(ctx); err != nil {
+		if err := w.Check(ctx, u.reference); err != nil {
 			return nil, fmt.Errorf("check the claim before the cancel of %s: %w", u.reference, err)
 		}
 

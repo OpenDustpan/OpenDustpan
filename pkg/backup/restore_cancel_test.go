@@ -9,9 +9,10 @@ import (
 )
 
 // TestRestoreCancel proves the answers of RestoreService.Cancel: before the
-// swap it stops the restore, the row ends failed with the cancel text, every
-// namespace is fenced and nothing is applied; a second cancel is accepted
-// again; after the swap, after the end and for an unknown ID it refuses.
+// swap it stops the restore, the row ends failed with the cancel text, and
+// nothing is applied; a cancel before the enter of maintenance mode fences no
+// namespace; a second cancel is accepted again; after the swap, after the end
+// and for an unknown ID it refuses.
 func TestRestoreCancel(t *testing.T) {
 	t.Parallel()
 
@@ -49,8 +50,10 @@ func cancelBeforeSwap(t *testing.T, setup *restoreServiceSetup) {
 		t.Fatalf("restore = %q (%s), want failed with the cancel text", row.State, row.Error)
 	}
 
-	if got := setup.live.counts(); got.applied != 0 || got.bumped != 1 {
-		t.Fatalf("applied = %d, bumped = %d, want no apply and one fence", got.applied, got.bumped)
+	// The cancel came before the enter of maintenance mode: the restore
+	// changed nothing, so no namespace is fenced.
+	if got := setup.live.counts(); got.applied != 0 || got.bumped != 0 {
+		t.Fatalf("applied = %d, bumped = %d, want no apply and no fence", got.applied, got.bumped)
 	}
 
 	if err := setup.service.Cancel(t.Context(), id); err != nil {

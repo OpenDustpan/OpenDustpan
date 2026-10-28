@@ -342,6 +342,69 @@ func (s *Store) MarkRestoreApplying(
 	})
 }
 
+// RecordRestoreEvent implements backup.RestoreOperations.
+func (s *Store) RecordRestoreEvent(
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, object string,
+) error {
+	// Defense in depth: AddRestoreEvent checks the object in the
+	// transaction too; this check stays so that no query runs for an object
+	// that cannot be stored.
+	if err := backup.ValidateRestoreEvent(object); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		if _, _, err := fencedRestore(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		row, err := q.GetRestoreAuditEvents(ctx, id.String())
+		if errors.Is(err, sql.ErrNoRows) {
+			return backup.ErrRestoreNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select restore audit events: %w", err)
+		}
+
+		if row.State != string(backup.RestoreChecking) && row.State != string(backup.RestoreApplying) {
+			return backup.ErrRestoreNotRunning
+		}
+
+		events, changed, err := backup.AddRestoreEvent(row.AuditEvents, object)
+		if err != nil || !changed {
+			return err
+		}
+
+		params := db.SetRestoreAuditEventsParams{AuditEvents: events, ID: id.String()}
+		if _, err := q.SetRestoreAuditEvents(ctx, params); err != nil {
+			return fmt.Errorf("store restore audit events: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// RestoreEvents implements backup.RestoreOperations.
+func (s *Store) RestoreEvents(ctx context.Context, id backup.RestoreID) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row, err := s.queries.GetRestoreAuditEvents(ctx, id.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, backup.ErrRestoreNotFound
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("select restore audit events: %w", err)
+	}
+
+	return backup.DecodeRestoreEvents(row.AuditEvents)
+}
+
 // RestoreMaintenanceEntered implements backup.RestoreOperations.
 func (s *Store) RestoreMaintenanceEntered(ctx context.Context, id backup.RestoreID) (bool, error) {
 	s.mu.RLock()
@@ -738,6 +801,18 @@ func (s *Store) ApplyRestoreArea(
 				row, now, fenceErr = fencedRestore(ctx, q, f, a.Restore)
 				if fenceErr != nil {
 					return fenceErr
+				}
+
+				// The swap runs only in maintenance mode, so no tool traffic
+				// writes during it. The store write lock holds the state
+				// until the rename.
+				state, stateErr := q.GetInstallationState(ctx)
+				if stateErr != nil {
+					return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
+				}
+
+				if maintenance.State(state) != maintenance.StateMaintenance {
+					return fmt.Errorf("swap restore area %s in state %q: %w", a, state, maintenance.ErrStateChanged)
 				}
 
 				if _, statErr := os.Stat(path); statErr != nil {

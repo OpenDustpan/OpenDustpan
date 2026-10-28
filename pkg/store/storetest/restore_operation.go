@@ -3,6 +3,7 @@ package storetest
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,7 @@ func restoreOperationCases() []restoreCase {
 			test: testRestoreOpFinishLeaves,
 		},
 		{name: "the audit entry of a restore commits once with its step", test: testRestoreOpAudit},
+		{name: "audit events are stored under the fence, once each, in order", test: testRestoreOpEvents},
 		{name: "ended operations fail their running restore rows", test: testRestoreOpFailEnded},
 		{name: "live operations keep their running restore rows", test: testRestoreOpFailEndedLive},
 	}...)
@@ -235,6 +237,52 @@ func testRestoreOpStartRefused(t *testing.T, newStore RestoreFactory) {
 				t.Fatalf("operations after a refused start = %+v, %v, want none", all, err)
 			}
 		})
+	}
+}
+
+func testRestoreOpEvents(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ops := restorePortsOf(t, s).ops
+	durableOps := s.DurableOperationsPort()
+	ctx := t.Context()
+	id := mustStartRestoreOp(t, ops)
+	held := mustClaimRestoreOp(t, durableOps, "instance-a")
+	enter := held.Claim.Step(backup.RestoreStepEnterMaintenance)
+
+	for _, object := range []string{"first", "second", "first"} {
+		if err := ops.RecordRestoreEvent(ctx, enter, id, object); err != nil {
+			t.Fatalf("record event %q: %v", object, err)
+		}
+	}
+
+	// An event records no step: the confirm of the enter does.
+	mustLackStep(t, durableOps, held.ID, backup.RestoreStepEnterMaintenance)
+
+	for _, bad := range []string{"", "a line\nbreak", "a return\rhere", strings.Repeat("x", 4096)} {
+		if err := ops.RecordRestoreEvent(ctx, enter, id, bad); !errors.Is(err, backup.ErrRestoreEventInvalid) {
+			t.Fatalf("record event of %d bytes: error = %v, want ErrRestoreEventInvalid", len(bad), err)
+		}
+	}
+
+	taken := replaceClaim(t, durableOps, held)
+
+	if err := ops.RecordRestoreEvent(ctx, enter, id, "stale"); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("record event by the replaced holder: error = %v, want ErrClaimLost", err)
+	}
+
+	if err := ops.RecordRestoreEvent(ctx, taken.Claim.Step(backup.RestoreStepEnterMaintenance), id, "third"); err != nil {
+		t.Fatalf("record event by the live holder: %v", err)
+	}
+
+	events, err := ops.RestoreEvents(ctx, id)
+	if err != nil || !slices.Equal(events, []string{"first", "second", "third"}) {
+		t.Fatalf("events = %q, %v; want first, second, third", events, err)
+	}
+
+	if _, err := ops.RestoreEvents(ctx, backup.MintRestoreID()); !errors.Is(err, backup.ErrRestoreNotFound) {
+		t.Fatalf("events of an unknown restore: error = %v, want ErrRestoreNotFound", err)
 	}
 }
 

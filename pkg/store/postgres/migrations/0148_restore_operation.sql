@@ -4,3 +4,10 @@
 -- restore never leaves the maintenance mode of an operator. The restores
 -- table survives the swap of a restore.
 ALTER TABLE restores ADD COLUMN maintenance_entered BOOLEAN NOT NULL DEFAULT false;
+
+-- The object texts of the audit entries of the running restore: the work
+-- that its enter canceled and the live blobs that it repaired, as a JSON
+-- list. The restore stores each one when it acts, so the entries survive the
+-- swap, which replaces the audit log, and a takeover; it writes them after
+-- the swap or at its end.
+ALTER TABLE restores ADD COLUMN audit_events TEXT NOT NULL DEFAULT '[]';

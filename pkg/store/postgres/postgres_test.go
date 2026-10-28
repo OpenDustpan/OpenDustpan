@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1188,6 +1189,35 @@ func openBackup(t *testing.T, base string) *backupStore {
 
 	return &backupStore{Store: s, url: schemaURL, t: t}
 }
+
+// DropRestoreArea implements storetest.RestoreAreaDropper: it drops the
+// staging schema of a, as the cleanup of the store does, with no record.
+func (s *backupStore) DropRestoreArea(ctx context.Context, a backup.StagingArea) error {
+	if _, err := backup.NewStagingArea(a.Restore, a.Token); err != nil {
+		return err
+	}
+
+	schema := "restore_stage_" + strings.TrimPrefix(a.Restore.String(), "rst-") + "_" + strconv.FormatInt(a.Token, 10)
+
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			s.t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, err := conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{schema}.Sanitize()+" CASCADE"); err != nil {
+		return fmt.Errorf("drop schema %s: %w", schema, err)
+	}
+
+	return nil
+}
+
+var _ storetest.RestoreAreaDropper = (*backupStore)(nil)
 
 // Close implements storetest.Reopener: it releases the pool. Closing twice is
 // safe, so the cleanup above stays.

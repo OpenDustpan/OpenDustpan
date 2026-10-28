@@ -159,6 +159,53 @@ func (l *restoreServiceLive) ConfirmRestoreMaintenance(
 	return entered, l.recordFence(ctx, f, id, result)
 }
 
+// RecordRestoreEvent implements backup.RestoreOperations.
+func (l *restoreServiceLive) RecordRestoreEvent(
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, object string,
+) error {
+	if err := l.checkFence(ctx, f, id); err != nil {
+		return err
+	}
+
+	if err := l.requireRunning(ctx, id); err != nil {
+		return err
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	stored := l.events[id]
+	if stored == "" {
+		stored = "[]"
+	}
+
+	events, _, err := backup.AddRestoreEvent(stored, object)
+	if err != nil {
+		return err
+	}
+
+	l.events[id] = events
+
+	return nil
+}
+
+// RestoreEvents implements backup.RestoreOperations.
+func (l *restoreServiceLive) RestoreEvents(ctx context.Context, id backup.RestoreID) ([]string, error) {
+	if _, err := l.registry.GetRestore(ctx, id); err != nil {
+		return nil, err
+	}
+
+	l.mu.Lock()
+	stored := l.events[id]
+	l.mu.Unlock()
+
+	if stored == "" {
+		stored = "[]"
+	}
+
+	return backup.DecodeRestoreEvents(stored)
+}
+
 // RestoreMaintenanceEntered implements backup.RestoreOperations.
 func (l *restoreServiceLive) RestoreMaintenanceEntered(ctx context.Context, id backup.RestoreID) (bool, error) {
 	if _, err := l.registry.GetRestore(ctx, id); err != nil {
@@ -346,6 +393,10 @@ func (l *restoreServiceLive) ApplyRestoreArea(
 ) (backup.KeepAccessResult, error) {
 	if err := l.checkFence(ctx, f, a.Restore); err != nil {
 		return backup.KeepAccessResult{}, err
+	}
+
+	if state := l.maint.current(); state != maintenance.StateMaintenance {
+		return backup.KeepAccessResult{}, fmt.Errorf("swap in state %q: %w", state, maintenance.ErrStateChanged)
 	}
 
 	kept, err := applyMode{keepAccess: keepAccess}.apply(ctx, l)

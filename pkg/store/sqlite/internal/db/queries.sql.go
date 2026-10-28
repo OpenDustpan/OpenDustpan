@@ -5961,6 +5961,25 @@ func (q *Queries) GetRestore(ctx context.Context, id string) (GetRestoreRow, err
 	return i, err
 }
 
+const getRestoreAuditEvents = `-- name: GetRestoreAuditEvents :one
+SELECT state, audit_events
+FROM restores
+WHERE id = ?
+`
+
+type GetRestoreAuditEventsRow struct {
+	State       string
+	AuditEvents string
+}
+
+// Reads the state of one restore and the object texts of its audit events.
+func (q *Queries) GetRestoreAuditEvents(ctx context.Context, id string) (GetRestoreAuditEventsRow, error) {
+	row := q.db.QueryRowContext(ctx, getRestoreAuditEvents, id)
+	var i GetRestoreAuditEventsRow
+	err := row.Scan(&i.State, &i.AuditEvents)
+	return i, err
+}
+
 const getRestoreMaintenance = `-- name: GetRestoreMaintenance :one
 SELECT state, maintenance_entered
 FROM restores
@@ -16108,6 +16127,27 @@ type SetPendingContentKeyParams struct {
 // matches no row, so a late attempt reports no change.
 func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingContentKeyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setPendingContentKey, arg.ContentKey, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setRestoreAuditEvents = `-- name: SetRestoreAuditEvents :execrows
+UPDATE restores
+SET audit_events = ?
+WHERE id = ? AND state IN ('checking', 'applying')
+`
+
+type SetRestoreAuditEventsParams struct {
+	AuditEvents string
+	ID          string
+}
+
+// Stores the audit events of one running restore. A restore that does not
+// run matches no row.
+func (q *Queries) SetRestoreAuditEvents(ctx context.Context, arg SetRestoreAuditEventsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setRestoreAuditEvents, arg.AuditEvents, arg.ID)
 	if err != nil {
 		return 0, err
 	}

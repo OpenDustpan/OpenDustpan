@@ -31,7 +31,7 @@ func (w *fakeWriter) SetStateIf(ctx context.Context, expected, next maintenance.
 	return w.store.SetStateIf(ctx, expected, next)
 }
 
-func (w *fakeWriter) Check(context.Context) error {
+func (w *fakeWriter) Check(context.Context, string) error {
 	w.checks++
 
 	if w.lost {

@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
 // restoreStagingCases are the cases of backup.RestoreStaging.
@@ -213,7 +214,25 @@ func testRestoreAreaSwapFenced(t *testing.T, newStore RestoreFactory) {
 
 	mustLackStep(t, durableOps, taken.ID, backup.RestoreStepSwap)
 
+	// The swap runs only in maintenance mode: in normal mode the live holder
+	// is refused too, and nothing changes.
 	swap := taken.Claim.Step(backup.RestoreStepSwap)
+	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, false); !errors.Is(
+		err, maintenance.ErrStateChanged,
+	) {
+		t.Fatalf("swap in normal mode: error = %v, want ErrStateChanged", err)
+	}
+
+	if got := r.areas(t); !slices.Contains(got, area) {
+		t.Fatalf("staging areas after a swap in normal mode = %+v, want %s kept", got, area)
+	}
+
+	mustLackStep(t, durableOps, taken.ID, backup.RestoreStepSwap)
+
+	if err := r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
 	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, false); err != nil {
 		t.Fatalf("swap by the live holder: %v", err)
 	}

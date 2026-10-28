@@ -478,6 +478,7 @@ func sqliteControlTables() []sqliteBackupTable {
 				"error",
 				"dev_report",
 				"maintenance_entered",
+				"audit_events",
 			},
 		},
 		{

@@ -125,18 +125,25 @@ package backup
 //   - The restore never deletes a live key. A failed check deletes only the
 //     temporary key. Cleanup deletes the temporary keys of the restore.
 //   - A live key that exists is verified. When its bytes differ, the restore
-//     overwrites it with the checked bytes, or fails with ErrCorrupt when the
-//     store refuses the overwrite.
-//   - A blob deleter waits while a backup or a restore runs: the guard port of
-//     the blob deletes answers "running" for a restore row that is checking
-//     or applying.
+//     stores the repair as an audit event under the fence, then overwrites
+//     the key with the checked bytes, or fails with ErrCorrupt when the store
+//     refuses the overwrite.
+//   - The copy from the temporary key to the live key reads the temporary key
+//     a second time, and checks those bytes after the Put. A temporary key
+//     that answers other bytes the second time leaves a live key with bytes
+//     that do not match, and the step fails. A retry overwrites them on a
+//     store with no conditional writes; a store with conditional writes
+//     fails the restore with ErrCorrupt.
 //   - After the swap, after-apply checks that each blob that the restored
 //     data names exists, and copies a missing one again from the pinned
 //     backup, before leave-maintenance.
 //
-// One window stays open: a deleter that read the guard before StartRestore,
-// and stalls past the check of after-apply, can still delete a blob that the
-// restored data names.
+// No blob deleter waits for a running restore yet: the guard port of the
+// blob deletes does not exist. So the after-apply check is the only
+// protection, and a deleter that runs at any time during the restore, and
+// deletes a key after that check, can delete a blob that the restored data
+// names. The guard must count a restore row that is checking or applying as
+// running.
 //
 // # Failure, cancel and the end of the operation
 //
@@ -158,7 +165,10 @@ package backup
 // or too many holders that stopped. RestoreService.Work then calls
 // FailEndedRestores once in each lease period. It marks the row failed, and
 // leaves maintenance mode when the flag of the row says that this restore
-// entered it, in one transaction for each row. While the row is checking or
+// entered it, in one transaction for each row. Before that it fences every
+// namespace when such a restore recorded enter-maintenance and is not
+// check-only, and logs the restore IDs; a restore that stopped in stage or
+// check changed no live data, so it fences nothing. While the row is checking or
 // applying, no other restore can start, so that leave can never end the
 // maintenance mode of a later restore.
 //
@@ -169,8 +179,9 @@ package backup
 //
 //	stage              stages again into the area of the new token, after it drops the earlier areas
 //	check              checks again; the area of the stage result is read-only
-//	enter-maintenance  the flag of the row tells whether this restore entered; Enter skips its writes when
-//	                   the state is maintenance, and the confirm records the flag
+//	enter-maintenance  the flag of the row tells whether this restore entered; with the flag set and the state
+//	                   maintenance it lists the active work again; with no flag, or the flag set and the state
+//	                   normal, it enters; the confirm records the flag
 //	pre-backup         waits for the backup operation of the pre-backup ID, which runs on its own
 //	copy-blobs         verifies the live keys that the old holder copied
 //	swap               the swap committed with its step record, or it did not commit at all
@@ -179,10 +190,18 @@ package backup
 //	cleanup            drops again; a drop of an area that does not exist does nothing
 //	finish             finishes the row, which is still applying
 //
+// A restore that fails records the cleanup step, and after the swap the
+// after-apply step, before the finish step, out of the order of the steps.
+// The runner skips a recorded step, so the order does not matter.
+//
 // A holder that lost its claim and continues its work changes nothing that
 // the fence protects: each of its fenced writes fails. Outside the fence it
 // can write into its own staging area, copy checked bytes to a live key,
-// copy a temporary key, and, with force, cancel active work, as above.
+// copy a temporary key, and, with force, cancel active work, as above. Each
+// cancel and each repair is stored as an audit event of the restore under
+// the fence before it happens, so a holder that stops after it leaves the
+// record. The after-apply step, or the end of a failed restore, writes the
+// audit entries of the events.
 //
 // A start of another instance does nothing to a running restore: it claims
 // no operation with a live claim, and FailEndedRestores fails only rows whose
@@ -195,6 +214,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -211,6 +231,9 @@ var (
 	// ErrRestoreSwapped reports a cancel of a restore that already swapped
 	// the staged data into the live data. Such a restore runs to its end.
 	ErrRestoreSwapped = errors.New("restore already swapped the data and cannot be canceled")
+	// ErrRestoreEventInvalid reports an audit event of a restore that is
+	// empty, too long, holds a line break, or does not fit the row.
+	ErrRestoreEventInvalid = errors.New("invalid restore audit event")
 )
 
 // RestoreOperationKind is the durable kind of a restore.
@@ -422,6 +445,22 @@ type RestoreOperations interface {
 		ctx context.Context, f durable.StepFence, id RestoreID, entries []audit.Entry,
 	) ([]audit.Entry, error)
 
+	// RecordRestoreEvent adds object, the object text of one audit entry,
+	// to the audit events of the checking or applying restore id, under the
+	// fence f, and records no step. The events live on the restores row, so
+	// they survive the swap, which replaces the audit log; the restore
+	// writes their audit entries after the swap, or at its end. An object
+	// that the row already holds changes nothing. It checks f with the rules
+	// of durable.Store.RecordStep, and checks object with
+	// ValidateRestoreEvent. It returns the errors of the fence,
+	// ErrRestoreNotFound, ErrRestoreNotRunning and ErrRestoreEventInvalid.
+	RecordRestoreEvent(ctx context.Context, f durable.StepFence, id RestoreID, object string) error
+
+	// RestoreEvents returns the audit events of the restore id in the order
+	// that RecordRestoreEvent added them, with no fence. It returns
+	// ErrRestoreNotFound when id does not exist.
+	RestoreEvents(ctx context.Context, id RestoreID) ([]string, error)
+
 	// RestoreMaintenanceEntered returns the maintenance flag of the restore
 	// id, with no fence: true while the restore holds the maintenance mode
 	// that it entered. It returns ErrRestoreNotFound when id does not exist.
@@ -620,4 +659,81 @@ func DecodeRestoreSwap(result []byte) (KeepAccessResult, error) {
 	}
 
 	return KeepAccessResult(out), nil
+}
+
+// MaxRestoreEvents bounds the audit events of one restore.
+const MaxRestoreEvents = 1000
+
+// maxRestoreEventBytes bounds the object text of one audit event.
+const maxRestoreEventBytes = 2048
+
+// ValidateRestoreEvent returns ErrRestoreEventInvalid for an object text that
+// is empty, longer than 2048 bytes, or holds a carriage return or a line feed.
+func ValidateRestoreEvent(object string) error {
+	if object == "" || len(object) > maxRestoreEventBytes || strings.ContainsAny(object, "\r\n") {
+		return fmt.Errorf("%w: %d bytes", ErrRestoreEventInvalid, len(object))
+	}
+
+	return nil
+}
+
+// AddRestoreEvent returns the encoded events of the stored text with object
+// added at the end, and whether it changed them. An object that the events
+// already hold changes nothing. It returns ErrRestoreEventInvalid for an
+// object that ValidateRestoreEvent refuses or that does not fit, and
+// ErrCorrupt for stored text that DecodeRestoreEvents refuses.
+func AddRestoreEvent(stored, object string) (string, bool, error) {
+	if err := ValidateRestoreEvent(object); err != nil {
+		return "", false, err
+	}
+
+	events, err := DecodeRestoreEvents(stored)
+	if err != nil {
+		return "", false, err
+	}
+
+	if slices.Contains(events, object) {
+		return stored, false, nil
+	}
+
+	if len(events) >= MaxRestoreEvents {
+		return "", false, fmt.Errorf("%w: the restore holds %d events", ErrRestoreEventInvalid, len(events))
+	}
+
+	out, err := json.Marshal(append(events, object))
+	if err != nil {
+		return "", false, fmt.Errorf("encode the restore audit events: %w", err)
+	}
+
+	return string(out), true, nil
+}
+
+// DecodeRestoreEvents returns the events of the stored text of a restores
+// row. It returns ErrCorrupt for text that is not a JSON list of strings, or
+// for an event that ValidateRestoreEvent refuses.
+func DecodeRestoreEvents(stored string) ([]string, error) {
+	var events []string
+
+	if err := json.Unmarshal([]byte(stored), &events); err != nil {
+		return nil, fmt.Errorf("%w: the restore audit events do not decode", ErrCorrupt)
+	}
+
+	if len(events) > MaxRestoreEvents {
+		return nil, fmt.Errorf("%w: the restore holds %d audit events", ErrCorrupt, len(events))
+	}
+
+	for _, event := range events {
+		// Defense in depth: the record checks each event before it stores
+		// it; this check stays so that a row of another version, or a
+		// restored backup, puts no other text into an audit entry.
+		if err := ValidateRestoreEvent(event); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
+		}
+	}
+
+	if events == nil {
+		events = []string{}
+	}
+
+	return events, nil
 }

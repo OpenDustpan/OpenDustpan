@@ -688,6 +688,7 @@ type Restore struct {
 	Error              string
 	DevReport          string
 	MaintenanceEntered bool
+	AuditEvents        string
 }
 
 type Role struct {

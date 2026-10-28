@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -551,8 +552,9 @@ func (s *RestoreService) failEnded(ctx context.Context) {
 
 // failEndedOnce marks failed the rows of restores whose operation ended
 // failed or canceled. It leaves the maintenance mode that such a restore
-// entered, unless the hold of the server keeps it. A failure here is not
-// final: the next period tries again, and the row stays running until then.
+// entered, unless the hold of the server keeps it, and writes the audit
+// entries of each row that it marked. A failure here is not final: the next
+// period tries again, and the row stays running until then.
 func (s *RestoreService) failEndedOnce(ctx context.Context) {
 	held, err := s.maintenance.Held(ctx)
 	if err != nil {
@@ -560,9 +562,18 @@ func (s *RestoreService) failEndedOnce(ctx context.Context) {
 		held = true
 	}
 
+	ops, err := s.endedOperations(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.WarnContext(ctx, "restore operations were not read", slog.String("error", durable.ErrorClass(err)))
+		}
+
+		return
+	}
+
 	// The fence comes before the rows fail: when it fails, the next round
 	// still sees the ended restore and fences again.
-	if fenceErr := s.fenceEnded(ctx); fenceErr != nil {
+	if fenceErr := s.fenceEnded(ctx, ops); fenceErr != nil {
 		if ctx.Err() == nil {
 			s.logger.WarnContext(ctx, "namespaces were not fenced after a restore that stopped",
 				slog.String("error", durable.ErrorClass(fenceErr)))
@@ -580,18 +591,20 @@ func (s *RestoreService) failEndedOnce(ctx context.Context) {
 	for i := range rows {
 		s.logger.WarnContext(ctx, "restore ended with no end write and was marked failed",
 			slog.String("restore_id", rows[i].ID.String()), slog.String("error", rows[i].Error))
+
+		if op, ok := ops[RestoreOperationKey(rows[i].ID)]; ok {
+			s.auditEnded(ctx, op)
+		}
 	}
 }
 
-// fenceEnded increments the failover version of every namespace when a
-// checking or applying restore row has an operation that ended: the restore
-// stopped with no end write. A stop before the swap leaves the live data
-// unchanged, and the swap fences in its own transaction, but the fence keeps
-// leases from before the restore from working after any stop of a restore.
-func (s *RestoreService) fenceEnded(ctx context.Context) error {
+// endedOperations returns the operations of the checking or applying restore
+// rows that ended, by their start key: the restores that stopped with no end
+// write.
+func (s *RestoreService) endedOperations(ctx context.Context) (map[string]durable.Operation, error) {
 	rows, err := s.live.ListRestores(ctx)
 	if err != nil {
-		return fmt.Errorf("list restores: %w", err)
+		return nil, fmt.Errorf("list restores: %w", err)
 	}
 
 	running := make(map[string]bool)
@@ -602,26 +615,107 @@ func (s *RestoreService) fenceEnded(ctx context.Context) error {
 		}
 	}
 
+	ended := make(map[string]durable.Operation)
+
 	if len(running) == 0 {
-		return nil
+		return ended, nil
 	}
 
 	ops, err := s.operations.List(ctx, durable.Filter{Kind: RestoreOperationKind, States: nil, Limit: 0})
 	if err != nil {
-		return fmt.Errorf("list restore operations: %w", err)
+		return nil, fmt.Errorf("list restore operations: %w", err)
 	}
 
 	for i := range ops {
 		if running[ops[i].Key] && ops[i].State.Terminal() {
-			if _, err := s.live.BumpFailoverVersions(ctx); err != nil {
-				return fmt.Errorf("fence namespaces after a stopped restore: %w", err)
-			}
-
-			return nil
+			ended[ops[i].Key] = ops[i]
 		}
 	}
 
+	return ended, nil
+}
+
+// fenceEnded increments the failover version of every namespace once when an
+// ended restore of ops entered maintenance mode and is not check-only: such a
+// restore can have canceled work, and its swap can have committed. A restore
+// that stopped in stage or check changed no live data, so its stop leaves the
+// leases, locks and update tokens of the installation alone. Each fence
+// writes a log line that names the restores.
+func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.Operation) error {
+	var stopped []string
+
+	for _, op := range ops {
+		in, err := readRestoreInput(op)
+		if err != nil {
+			// An input that does not decode is a restore of unknown scope:
+			// fail closed and fence.
+			stopped = append(stopped, op.Key)
+
+			continue
+		}
+
+		if _, entered := op.Step(RestoreStepEnterMaintenance); entered && !in.CheckOnly {
+			stopped = append(stopped, in.ID.String())
+		}
+	}
+
+	if len(stopped) == 0 {
+		return nil
+	}
+
+	slices.Sort(stopped)
+
+	n, err := s.live.BumpFailoverVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("fence namespaces after a stopped restore: %w", err)
+	}
+
+	s.logger.WarnContext(ctx, "fenced every namespace after a restore that stopped in maintenance mode",
+		slog.String("restores", strings.Join(stopped, ", ")), slog.Int64("namespaces", n))
+
 	return nil
+}
+
+// auditEnded writes the audit entries of the restore of op, which a sweep
+// marked failed. After the swap, when the after-apply step did not write
+// them, it writes the entries of that step, because the swap replaced the
+// audit log. Before the swap it writes the audit events of the restore.
+func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
+	in, err := readRestoreInput(op)
+	if err != nil {
+		return
+	}
+
+	_, swapped := op.Step(RestoreStepSwap)
+	_, applied := op.Step(RestoreStepAfterApply)
+
+	if !swapped {
+		s.appendEvents(ctx, in)
+
+		return
+	}
+
+	if applied {
+		return
+	}
+
+	store, ok := s.live.(serverAuditAppender)
+	if !ok {
+		return
+	}
+
+	entries, err := s.afterApplyEntries(ctx, op, in)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "audit entries of a restore were not built", slog.String("restore_id", in.ID.String()))
+
+		return
+	}
+
+	for i := range entries {
+		if _, err := store.AppendServer(ctx, entries[i]); err != nil {
+			s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", in.ID.String()))
+		}
+	}
 }
 
 // storedRestoreSentinels lists the sentinels whose own text a restore row

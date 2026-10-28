@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
+	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -834,8 +836,9 @@ type backupStore struct {
 }
 
 var (
-	_ storetest.Reopener       = (*backupStore)(nil)
-	_ storetest.StagingWitness = (*backupStore)(nil)
+	_ storetest.RestoreAreaDropper = (*backupStore)(nil)
+	_ storetest.Reopener           = (*backupStore)(nil)
+	_ storetest.StagingWitness     = (*backupStore)(nil)
 	// Defense in depth: a store with no runner port fails to build here, so the runner round trip cannot be skipped.
 	_ storetest.RunnerSeeder = (*backupStore)(nil)
 )
@@ -863,6 +866,21 @@ func openBackup(t *testing.T) storetest.BackupStore { //nolint:ireturn // Factor
 	})
 
 	return b
+}
+
+// DropRestoreArea implements storetest.RestoreAreaDropper: it removes the
+// staging file of a, and the journal files next to it, as the cleanup of the
+// store does, with no record.
+func (s *backupStore) DropRestoreArea(_ context.Context, a backup.StagingArea) error {
+	staged := s.path + ".stage-" + a.Restore.String() + "-" + strconv.FormatInt(a.Token, 10)
+
+	for _, name := range []string{staged, staged + "-wal", staged + "-shm", staged + "-journal"} {
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", name, err)
+		}
+	}
+
+	return nil
 }
 
 // Close releases the handle. It runs once, so the cleanup and the reopen
