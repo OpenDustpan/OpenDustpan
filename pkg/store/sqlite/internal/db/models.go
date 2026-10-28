@@ -157,8 +157,9 @@ type DriftResult struct {
 }
 
 type DurableHeartbeat struct {
-	Owner string
-	AtMs  int64
+	Owner   string
+	AtMs    int64
+	LeaseMs int64
 }
 
 type DurableOperation struct {

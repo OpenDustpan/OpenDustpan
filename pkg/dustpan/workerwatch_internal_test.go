@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/api/server"
+	noworker "opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/pkg/durable"
 )
 
@@ -69,7 +69,7 @@ func startOldOperation(t *testing.T, store durable.Store) {
 }
 
 // admit answers the result of the start gate of w, with a fresh read.
-func admit(t *testing.T, w *workerWatch) error {
+func admitStartOf(t *testing.T, w *workerWatch) error {
 	t.Helper()
 
 	w.mu.Lock()
@@ -91,14 +91,14 @@ func TestNoWorkerRefusesAfterTwoLeasesAndNotBefore(t *testing.T) {
 	api := newTestWatch(st.DurableOperations(), apiOnly(), beatLease, time.Now)
 	api.begin(t.Context())
 
-	if err := admit(t, api); err != nil {
+	if err := admitStartOf(t, api); err != nil {
 		t.Fatalf("start right after the process began: %v, want it admitted", err)
 	}
 
 	pauseFor(t, beatWait)
 
-	err := admit(t, api)
-	if !errors.Is(err, server.ErrNoWorker) {
+	err := admitStartOf(t, api)
+	if !errors.Is(err, noworker.ErrNoWorker) {
 		t.Fatalf("start after 2 leases with no worker: %v, want ErrNoWorker", err)
 	}
 }
@@ -142,7 +142,7 @@ func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 		}
 	}
 
-	if admitErr := admit(t, api); admitErr != nil {
+	if admitErr := admitStartOf(t, api); admitErr != nil {
 		t.Fatalf("start while a worker renews a claim: %v, want it admitted", admitErr)
 	}
 
@@ -196,7 +196,7 @@ func TestRollingUpgradeGivesNoRefusal(t *testing.T) {
 		pauseFor(t, beatLease/8)
 	}
 
-	if err := admit(t, api); err != nil {
+	if err := admitStartOf(t, api); err != nil {
 		t.Fatalf("start while old workers beat: %v, want it admitted", err)
 	}
 
@@ -223,13 +223,13 @@ func TestWorkerThatStopsIsMissedAfterTwoLeases(t *testing.T) {
 
 	claimAttempt(t, tracked)
 
-	if err := admit(t, api); err != nil {
+	if err := admitStartOf(t, api); err != nil {
 		t.Fatalf("start right after a heartbeat: %v, want it admitted", err)
 	}
 
 	pauseFor(t, beatWait)
 
-	if err := admit(t, api); !errors.Is(err, server.ErrNoWorker) {
+	if err := admitStartOf(t, api); !errors.Is(err, noworker.ErrNoWorker) {
 		t.Fatalf("start 2 leases after the last heartbeat: %v, want ErrNoWorker", err)
 	}
 }
@@ -417,5 +417,50 @@ func TestGateComponentsPassesEverythingWithAPI(t *testing.T) {
 
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("status %d, want the status of the next handler", rec.Code)
+	}
+}
+
+// TestWorkerLeaseDecidesWhenAWorkerIsAbsent proves that the start gate counts
+// 2 lease periods of the worker that wrote the heartbeat, and not 2 lease
+// periods of the process that reads it: an api process with a shorter lease
+// than its worker admits the start while the worker lives, and an api process
+// with a longer lease refuses it as soon as the worker is silent for 2 of its
+// own periods.
+func TestWorkerLeaseDecidesWhenAWorkerIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		apiLease    time.Duration
+		workerLease time.Duration
+		wantErr     error
+	}{
+		{"api lease shorter than the worker lease", beatLease, 20 * beatLease, nil},
+		{"api lease equal to the worker lease", beatLease, beatLease, noworker.ErrNoWorker},
+		{"api lease longer than the worker lease", 20 * beatLease, beatLease, noworker.ErrNoWorker},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			st := openTestStore(t)
+			api := newTestWatch(st.DurableOperations(), apiOnly(), tc.apiLease, time.Now)
+			api.begin(t.Context())
+
+			worker := newTestWatch(st.DurableOperations(), workerOnly(), tc.workerLease, time.Now)
+			worker.owner = "worker-1"
+			worker.beatIfDue(t.Context())
+
+			// The worker beat once and is silent from now on. The wait is past
+			// 2 periods of the shorter lease and far below 2 of the longer one.
+			pauseFor(t, beatWait)
+
+			err := admitStartOf(t, api)
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Fatalf("start with the heartbeat of a worker with lease %v read by an api with lease %v: %v, want %v",
+					tc.workerLease, tc.apiLease, err, tc.wantErr)
+			}
+		})
 	}
 }

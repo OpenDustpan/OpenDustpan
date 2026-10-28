@@ -5,17 +5,10 @@ import (
 	"errors"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
-
-// ErrNoWorker reports a request that starts a durable operation while no
-// worker claimed or renewed a claim for 2 lease periods. The request answers 503.
-var ErrNoWorker = errors.New("no worker claimed work")
-
-// noWorkerMessage is the answer to a request that ErrNoWorker refuses. It
-// names the command that helps.
-const noWorkerMessage = "no worker claimed or renewed a claim for 2 lease periods: " +
-	"start a worker with opendustpan serve --components worker"
 
 // UnclaimedOperation is a durable operation that no worker holds. Seconds is
 // how long it has waited.
@@ -56,22 +49,15 @@ type WorkerSource interface {
 	Components() []string
 	// WorkerReport answers the due schedules and the unclaimed operations.
 	WorkerReport(ctx context.Context) (WorkerReport, error)
-	// AdmitStart answers nil when a request may start a durable operation,
-	// and an error wrapping ErrNoWorker when no worker claimed or renewed a
-	// claim for 2 lease periods.
-	AdmitStart(ctx context.Context) error
+	admit.Source
 }
 
 // admitStart answers false and writes the refusal when no worker claimed
-// work for 2 lease periods. It admits every start when no source is wired.
-// Only a route that inserts a durable operation calls it. A backup and a
-// restore run in the process that took the request, so they need no worker.
+// work for 2 lease periods of the worker. It admits every start when no
+// source is wired. Every route that inserts a durable operation calls it
+// before the insert.
 func (h *Handler) admitStart(ctx context.Context, w http.ResponseWriter) bool {
-	if h.workers == nil {
-		return true
-	}
-
-	if err := h.workers.AdmitStart(ctx); err != nil {
+	if err := admit.Start(ctx, h.workers); err != nil {
 		h.writeError(ctx, w, err)
 
 		return false
@@ -182,8 +168,8 @@ func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request, _ identity.P
 
 // classifyWorker maps ErrNoWorker to 503 with the command that helps.
 func classifyWorker(err error) (failure, bool) {
-	if errors.Is(err, ErrNoWorker) {
-		return fail(http.StatusServiceUnavailable, noWorkerMessage), true
+	if errors.Is(err, admit.ErrNoWorker) {
+		return failCoded(http.StatusServiceUnavailable, admit.Message, errcode.WorkerAbsent), true
 	}
 
 	return fail(0, ""), false

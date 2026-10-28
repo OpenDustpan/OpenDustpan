@@ -36,7 +36,7 @@ func TestBeatDeletesStaleBeats(t *testing.T) {
 		t.Fatalf("insert beats: %v", err)
 	}
 
-	if err = s.DurableOperations().Beat(t.Context(), "new"); err != nil {
+	if err = s.DurableOperations().Beat(t.Context(), "new", time.Minute); err != nil {
 		t.Fatalf("Beat: %v", err)
 	}
 

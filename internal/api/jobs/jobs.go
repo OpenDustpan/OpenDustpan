@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -47,6 +48,9 @@ type Config struct {
 	// Starter starts jobs. Nil serves the read route only: a server that lacks
 	// a port of the job service starts no job.
 	Starter job.Starter
+	// Workers tells the start of a durable operation whether a worker runs.
+	// Nil admits every start.
+	Workers admit.Source
 	// Pools names the runner pool of a job in the answer. Nil answers the pool
 	// ID only: a server without runner stores has no pool to name.
 	Pools         runner.PoolReader
@@ -71,6 +75,7 @@ type Handler struct {
 	namespaces *namespace.Service
 	jobs       job.Store
 	starter    job.Starter
+	workers    admit.Source
 	pools      runner.PoolReader
 	authn      identity.Authenticator
 	sessions   *sessionauth.Checker
@@ -107,6 +112,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces: cfg.Namespaces,
 		jobs:       cfg.Jobs,
 		starter:    cfg.Starter,
+		workers:    cfg.Workers,
 		pools:      cfg.Pools,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,

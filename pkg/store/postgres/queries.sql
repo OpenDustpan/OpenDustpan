@@ -2803,14 +2803,16 @@ WHERE name = sqlc.arg('name')::text AND next_run_at_ms = sqlc.arg('due_at_ms')::
 -- transaction of the write.
 
 -- name: UpsertDurableHeartbeat :exec
-INSERT INTO durable_heartbeats (owner, at_ms) VALUES (sqlc.arg('owner')::text, sqlc.arg('now_ms')::bigint)
-ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms;
+INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+VALUES (sqlc.arg('owner')::text, sqlc.arg('now_ms')::bigint, sqlc.arg('lease_ms')::bigint)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms;
 
 -- name: DeleteStaleDurableHeartbeats :exec
 DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms')::bigint;
 
 -- name: GetLatestDurableHeartbeat :one
-SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1;
+SELECT owner, at_ms, lease_ms FROM durable_heartbeats
+ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
 
 -- name: GetNamespaceID :one
 -- The stable ID of the namespace that has the name now.
