@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
@@ -49,7 +50,9 @@ const migrationLockID int64 = 0x6f64706e
 // Store implements namespace.Store, stack.Store and the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) on PostgreSQL.
 type Store struct {
-	pool    *pgxpool.Pool
+	pool *pgxpool.Pool
+	// txs starts the transactions of the API paths and translates their errors.
+	txs     guardedPool
 	queries *db.Queries
 	// gate serves the ports of gate.Store over this store.
 	gate *gatestore.Store
@@ -185,7 +188,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	}
 
 	s := &Store{
-		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
+		pool: pool, txs: guardedPool{pool: pool}, queries: db.New(guardedDB{inner: pool}), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
 		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
 		beforeLockDelete: nil, stateLockWait: 0,
 		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
@@ -233,7 +236,7 @@ func (s *Store) CloseContext(ctx context.Context) {
 // ErrUnavailable without driver text.
 func (s *Store) Ping(ctx context.Context) error {
 	if err := s.pool.Ping(ctx); err != nil {
-		return fmt.Errorf("ping postgres database: %w", namespace.ErrUnavailable)
+		return fmt.Errorf("ping postgres database: %w", storeerr.New(storeerr.ConnectionFailed, err))
 	}
 
 	return nil
@@ -938,7 +941,7 @@ func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) e
 
 // runTx runs before, when set, and then fn in one transaction.
 func (s *Store) runTx(ctx context.Context, fn func(q *db.Queries) error, before func(tx pgx.Tx) error) error {
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
 		if before != nil {
 			if err := before(tx); err != nil {
 				return err
@@ -1003,6 +1006,12 @@ func readWritable(
 	}
 
 	if err := errors.Join(lockErr, scanErr, results.Close()); err != nil {
+		// A database that does not answer is not a state that cannot be read:
+		// the write is temporary, and the client tries it again.
+		if unavailable := translate(err); storeerr.Is(unavailable) {
+			return nil, fmt.Errorf("read installation state postgres database: %w", unavailable)
+		}
+
 		return nil, fmt.Errorf("read installation state postgres database: %w", maintenance.ErrUnavailable)
 	}
 
@@ -1076,7 +1085,7 @@ func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) 
 // inSnapshotConn is inSnapshotTx for a read that also runs a hand-written
 // statement: fn gets the transaction itself.
 func (s *Store) inSnapshotConn(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), fn)
+	err := pgx.BeginTxFunc(ctx, s.txs, s.snapshotOptions(), fn)
 	if err != nil {
 		return fmt.Errorf("snapshot transaction: %w", readConflict(err))
 	}
@@ -1165,7 +1174,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
 		return migrateTx(
 			ctx,
 			tx,

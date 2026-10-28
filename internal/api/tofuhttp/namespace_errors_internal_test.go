@@ -58,6 +58,10 @@ func TestWriteErrorNamespaceSentinels(t *testing.T) {
 				t.Fatalf("Retry-After set = %t, want %t", got, tc.retryAfter)
 			}
 
+			if tc.retryAfter && rec.Header().Get("Retry-After") != "5" {
+				t.Fatalf("Retry-After = %q, want 5", rec.Header().Get("Retry-After"))
+			}
+
 			if body := rec.Body.String(); !strings.Contains(body, tc.message) {
 				t.Fatalf("body = %q, want it to hold %q", body, tc.message)
 			}

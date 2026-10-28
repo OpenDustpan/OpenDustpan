@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -519,7 +520,7 @@ func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, e
 
 	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
 
-	conn, err := sql.Open("sqlite", dsn)
+	conn, err := openGuarded(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -569,7 +570,7 @@ func (s *Store) Ping(ctx context.Context) error {
 	defer s.mu.RUnlock()
 
 	if err := s.conn.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping sqlite database: %w", namespace.ErrUnavailable)
+		return fmt.Errorf("ping sqlite database: %w", storeerr.New(storeerr.ConnectionFailed, err))
 	}
 
 	return nil
@@ -1301,6 +1302,11 @@ func (s *Store) runTx(
 // missing or the stored value is unknown: a write never passes on a read error.
 func (s *Store) checkWritable(ctx context.Context, q *db.Queries) error {
 	row, err := q.GetWriteState(ctx)
+	if storeerr.Is(err) {
+		// A database that does not answer is temporary: the client tries again.
+		return fmt.Errorf("read installation state sqlite database: %w", err)
+	}
+
 	if err != nil {
 		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
 	}

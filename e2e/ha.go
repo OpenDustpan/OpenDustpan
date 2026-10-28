@@ -769,3 +769,50 @@ func retryable(method string, err error) bool {
 		return false
 	}
 }
+
+// InstanceResponse is the answer of one instance to Send.
+type InstanceResponse struct {
+	Status int
+	Header http.Header
+	Body   string
+}
+
+// Send sends one request to instance i, not through the proxy, so a test can
+// see what that instance answers. header holds the extra request headers.
+func (c *HACluster) Send(
+	ctx context.Context, i int, method, path string, header http.Header, body string,
+) (InstanceResponse, error) {
+	inst := c.instances[i]
+
+	var reader io.Reader = http.NoBody
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, inst.url+path, reader)
+	if err != nil {
+		return InstanceResponse{}, fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	for name, values := range header {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+
+	resp, err := inst.transport.RoundTrip(req)
+	if err != nil {
+		return InstanceResponse{}, fmt.Errorf("%s %s on instance %d: %w", method, path, i, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to its end below.
+	}()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return InstanceResponse{}, fmt.Errorf("read %s %s on instance %d: %w", method, path, i, err)
+	}
+
+	return InstanceResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(raw)}, nil
+}
