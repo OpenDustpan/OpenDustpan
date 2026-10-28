@@ -134,7 +134,14 @@ func (c haCLI) start(ctx context.Context, t *testing.T, extra []string, args ...
 func (c haCLI) run(ctx context.Context, t *testing.T, args ...string) e2e.Result {
 	t.Helper()
 
-	res, err := c.env.RunAs(ctx, c.install, c.dir, nil, args...)
+	return c.runWith(ctx, t, nil, args...)
+}
+
+// runWith is run with NAME=value pairs for this command only.
+func (c haCLI) runWith(ctx context.Context, t *testing.T, extra []string, args ...string) e2e.Result {
+	t.Helper()
+
+	res, err := c.env.RunAs(ctx, c.install, c.dir, extra, args...)
 	if err != nil {
 		t.Fatalf("%s %s: %v", c.install.Tool, strings.Join(args, " "), err)
 	}

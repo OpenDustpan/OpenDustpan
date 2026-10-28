@@ -190,7 +190,10 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 	t.Logf("PostgreSQL started after %s", time.Since(outageStart).Round(time.Second))
 
 	// No instance restarts: the same processes turn ready.
+	startedAt := time.Now()
+
 	haWaitReadiness(ctx, t, cluster, http.StatusOK)
+	t.Logf("instances ready %s after the database started", time.Since(startedAt).Round(100*time.Millisecond))
 
 	<-up.done
 	<-apply.done
@@ -209,8 +212,10 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 	// lease ends or someone cancels it, and the server says so. The same
 	// commands then run again and succeed. Then nothing is left to change.
 	haCancelStuckUpdate(ctx, t, env, project)
-	project.pulumi.run(ctx, t, "up", "--yes", "--non-interactive", "--stack", project.stack)
-	project.tofu.run(ctx, t, "apply", "-input=false", "-auto-approve", "-no-color")
+	project.pulumi.runWith(ctx, t, []string{"E2E_HA_PULUMI_STARTED=" + project.pulumiMarker},
+		"up", "--yes", "--non-interactive", "--stack", project.stack)
+	project.tofu.runWith(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + project.tofuMarker},
+		"apply", "-input=false", "-auto-approve", "-no-color")
 	project.pulumi.run(ctx, t, "preview", "--expect-no-changes", "--non-interactive", "--stack", project.stack)
 	project.tofu.run(ctx, t, "plan", "-detailed-exitcode", "-input=false", "-no-color")
 
@@ -351,7 +356,10 @@ func haShortOutage(t *testing.T, env *e2e.Env, pair backupPair, window haRetryWi
 
 	env.StartDatabase(t)
 
+	startedAt := time.Now()
+
 	haWaitReadiness(ctx, t, cluster, http.StatusOK)
+	t.Logf("instances ready %s after the database started", time.Since(startedAt).Round(100*time.Millisecond))
 
 	up.wait(t, "pulumi up")
 	apply.wait(t, "tofu apply")
