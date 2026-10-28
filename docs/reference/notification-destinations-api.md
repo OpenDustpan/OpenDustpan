@@ -135,8 +135,13 @@ class `temporary`, the same as a name that does not resolve. The class
 A test over a limit answers 429 `sink.test-rate-limited` with the header
 `Retry-After` (whole seconds) and `errorArgs.retryAfterSeconds`. The server
 sends no message and writes no audit entry. A test of a destination whose
-address the rules refuse counts against the limits too. Each server instance
-applies the limits on its own.
+address the rules refuse counts against the limits too. The limits count in
+the database, so they hold for all server instances of one installation. Each
+limit uses fixed windows, and a refused test counts in its window too.
+
+When the server cannot read or write the count, it sends no message and
+answers 503 `sink.test-limit-unavailable`. A test that the server cannot count
+would be a test without a limit.
 
 The server sends the message only after these steps: this installation is the primary
 installation of the namespace, the limits take the test, the address passes the outbound rules,
@@ -158,6 +163,7 @@ answers 409 `namespace.fenced`.
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 421 | `namespace.not-home` | The namespace has another primary installation |
 | 429 | `sink.test-rate-limited` | A limit of the test route refuses the test |
+| 503 | `sink.test-limit-unavailable` | The server cannot count the tests, so it refuses the test |
 | 422 | `sink.no-sender` | The server has no sender for the kind or the chat platform of the destination |
 | 422 | `sink.no-url` | The server cannot use the sealed URL of the destination: set the URL again |
 

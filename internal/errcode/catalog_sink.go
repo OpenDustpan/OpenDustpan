@@ -17,6 +17,9 @@ const (
 	SinkNotFound = "sink.not-found"
 	// SinkPlatformHost means that the URL of the notification destination names a host of the platform.
 	SinkPlatformHost = "sink.platform-host"
+	// SinkTestLimitUnavailable means that the server cannot count the tests of notification destinations, so it
+	// refuses the test.
+	SinkTestLimitUnavailable = "sink.test-limit-unavailable"
 	// SinkTestRateLimited means that the request is over the limit of tests of the notification destination or of the
 	// namespace.
 	SinkTestRateLimited = "sink.test-rate-limited"
@@ -38,6 +41,11 @@ func sinkSpecs() []Spec {
 		{
 			Code:    SinkPlatformHost,
 			Meaning: "the URL of the notification destination names a host of the platform",
+			Args:    nil,
+		},
+		{
+			Code:    SinkTestLimitUnavailable,
+			Meaning: "the server cannot count the tests of notification destinations, so it refuses the test",
 			Args:    nil,
 		},
 		{

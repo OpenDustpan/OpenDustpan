@@ -77,7 +77,12 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 	// write, so that a refused request leaves no entry and a request that the
 	// address check refuses counts against the limit too: a caller cannot write
 	// audit entries without bound.
-	if wait := s.limiter.take(ns, id, s.now()); wait > 0 {
+	wait, err := s.limiter.take(ctx, ns, id, s.now())
+	if err != nil {
+		return TestResult{}, fmt.Errorf("test sink %s: %w", id, err)
+	}
+
+	if wait > 0 {
 		return TestResult{}, &RateLimitedError{RetryAfter: wait}
 	}
 
