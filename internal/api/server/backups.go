@@ -80,6 +80,10 @@ func (h *Handler) startBackup(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	if !h.admitStart(ctx, w) {
+		return
+	}
+
 	id := backup.ID(ident.NewID(backupIDPrefix))
 
 	if err := h.backups.Start(ctx, id); err != nil {

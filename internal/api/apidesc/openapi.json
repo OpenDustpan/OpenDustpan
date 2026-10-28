@@ -1164,6 +1164,7 @@
           "view.limit",
           "view.not-found",
           "view.not-person",
+          "worker.absent",
           "workspace.already-exists",
           "workspace.changed-concurrently",
           "workspace.client-encrypted",

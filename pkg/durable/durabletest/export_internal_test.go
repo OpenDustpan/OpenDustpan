@@ -45,7 +45,7 @@ func (m *Mem) OldBeat(owner string, age time.Duration) {
 	m.db.mu.Lock()
 	defer m.db.mu.Unlock()
 
-	m.db.beats[owner] = m.db.now().Add(-age)
+	m.db.beats[owner] = memBeat{at: m.db.now().Add(-age), lease: time.Minute}
 }
 
 // BeatOwners returns the owners that m holds a beat of.

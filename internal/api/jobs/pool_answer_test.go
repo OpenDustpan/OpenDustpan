@@ -50,9 +50,18 @@ func newPoolHandler(
 	}
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: namespaces, Jobs: jobs, Starter: starter, Pools: pools, Authenticator: tokenAuthenticator{},
-		Authorizer: newAuthorizer(holdsBoth()...), Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil,
-		Sessions: nil, Logger: logger,
+		Namespaces:     namespaces,
+		Jobs:           jobs,
+		Starter:        starter,
+		Workers:        nil,
+		Pools:          pools,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     newAuthorizer(holdsBoth()...),
+		Audit:          newTestAudit(),
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         logger,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

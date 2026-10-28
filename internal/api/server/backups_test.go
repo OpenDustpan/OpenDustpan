@@ -138,6 +138,17 @@ func newBackupFixture(
 ) backupFixture {
 	t.Helper()
 
+	return newBackupFixtureWorkers(t, stores, exporter, now, nil)
+}
+
+// newBackupFixtureWorkers is newBackupFixture with the worker check of the
+// server.
+func newBackupFixtureWorkers(
+	t *testing.T, stores backupStores, exporter backup.PortableExporter, now func() time.Time,
+	workers apiserver.WorkerSource,
+) backupFixture {
+	t.Helper()
+
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
 		Kinds:       stores.registry,
@@ -180,7 +191,7 @@ func newBackupFixture(
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
-		Workers:          nil,
+		Workers:          workers,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,

@@ -38,6 +38,9 @@ func RunHeartbeats(t *testing.T, newHarness HeartbeatFactory) {
 		{"a beat of the same owner moves its time", testSameOwnerRenews},
 		{"an empty owner is not valid", testBeatEmptyOwner},
 		{"an instance clock ahead or behind cannot move a beat", testBeatClockSkew},
+		{"a beat records the lease of its owner", testBeatLease},
+		{"a lease that is not positive is not valid", testBeatInvalidLease},
+		{"the beat that stays valid the longest wins over a later beat", testLongestValidWins},
 	}
 
 	for _, tc := range cases {
@@ -48,11 +51,20 @@ func RunHeartbeats(t *testing.T, newHarness HeartbeatFactory) {
 	}
 }
 
+// beatLease is the lease period that mustBeat records.
+const beatLease = 30 * time.Second
+
 func mustBeat(t *testing.T, s durable.HeartbeatStore, owner string) {
 	t.Helper()
 
-	if err := s.Beat(t.Context(), owner); err != nil {
-		t.Fatalf("Beat(%q): %v", owner, err)
+	mustBeatLease(t, s, owner, beatLease)
+}
+
+func mustBeatLease(t *testing.T, s durable.HeartbeatStore, owner string, lease time.Duration) {
+	t.Helper()
+
+	if err := s.Beat(t.Context(), owner, lease); err != nil {
+		t.Fatalf("Beat(%q, %v): %v", owner, lease, err)
 	}
 }
 
@@ -151,7 +163,7 @@ func testBeatEmptyOwner(t *testing.T, h HeartbeatHarness) {
 	t.Helper()
 
 	s := h.Open(t, 0)
-	if err := s.Beat(t.Context(), ""); !errors.Is(err, durable.ErrInvalid) {
+	if err := s.Beat(t.Context(), "", beatLease); !errors.Is(err, durable.ErrInvalid) {
 		t.Errorf("Beat with an empty owner: error = %v, want ErrInvalid", err)
 	}
 
@@ -174,5 +186,59 @@ func testBeatClockSkew(t *testing.T, h HeartbeatHarness) {
 
 		checkNear(t, "At from an instance "+name, beat.At)
 		checkNear(t, "Now from an instance "+name, beat.Now)
+	}
+}
+
+func testBeatLease(t *testing.T, h HeartbeatHarness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+	mustBeatLease(t, s, "worker-a", 90*time.Second)
+
+	if beat := mustLastBeat(t, s); beat.Lease != 90*time.Second {
+		t.Errorf("LastBeat lease = %v, want %v", beat.Lease, 90*time.Second)
+	}
+
+	mustBeatLease(t, s, "worker-a", 5*time.Second)
+
+	if beat := mustLastBeat(t, s); beat.Lease != 5*time.Second {
+		t.Errorf("LastBeat lease after a beat with another lease = %v, want %v", beat.Lease, 5*time.Second)
+	}
+
+	if beat := mustLastBeat(t, h.Open(t, 0)); beat.Lease != 5*time.Second {
+		t.Errorf("LastBeat lease from another handle = %v, want %v", beat.Lease, 5*time.Second)
+	}
+}
+
+func testBeatInvalidLease(t *testing.T, h HeartbeatHarness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+
+	for _, lease := range []time.Duration{0, -time.Second} {
+		if err := s.Beat(t.Context(), "worker-a", lease); !errors.Is(err, durable.ErrInvalid) {
+			t.Errorf("Beat with lease %v: error = %v, want ErrInvalid", lease, err)
+		}
+	}
+
+	if beat := mustLastBeat(t, s); beat.Owner != "" || !beat.At.IsZero() {
+		t.Errorf("LastBeat after a failed beat = %+v, want no beat", beat)
+	}
+}
+
+// testLongestValidWins proves that a worker with a long lease still counts
+// when a worker with a short lease beats later: the beat that stays valid the
+// longest is the answer.
+func testLongestValidWins(t *testing.T, h HeartbeatHarness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+	mustBeatLease(t, s, "long", time.Hour)
+	pause(t, 5*time.Millisecond)
+	mustBeatLease(t, s, "short", time.Second)
+
+	beat := mustLastBeat(t, s)
+	if beat.Owner != "long" || beat.Lease != time.Hour {
+		t.Errorf("LastBeat = %+v, want the beat of the owner with the lease of 1 hour", beat)
 	}
 }
