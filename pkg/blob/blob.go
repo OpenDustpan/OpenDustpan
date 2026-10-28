@@ -26,8 +26,16 @@ var (
 	ErrNotFound = errors.New("blob not found")
 	// ErrInvalidKey reports a key that fails validation.
 	ErrInvalidKey = errors.New("invalid blob key")
-	// ErrExists reports that an object already exists under the key.
+	// ErrExists reports that an object already exists under the key. A
+	// store can return it from Put, but a caller must not depend on it to
+	// find the one winner of two writes.
 	ErrExists = errors.New("blob already exists")
+	// ErrThrottled reports that the store asked the client to slow down, for
+	// example with an S3 SlowDown answer, and the retries of the adapter did
+	// not get through. A caller backs off and tries again later.
+	ErrThrottled = errors.New("blob store throttled the request")
+	// ErrInvalidPage reports a page request with a limit out of range.
+	ErrInvalidPage = errors.New("invalid blob list page")
 )
 
 const maxKeyLength = 512
@@ -64,12 +72,24 @@ type Object struct {
 	Key        Key
 }
 
-// Store is the object storage port. A caller writes each key once. A caller
-// never calls Put on a key that already holds an object. Put on an existing
-// key fails with ErrExists and leaves the first object unchanged.
+// Store is the object storage port.
+//
+// A store does not decide which of two writes wins. The database decides: a
+// caller writes each attempt under a key that is unique to that attempt, and
+// the fenced row that names the key decides which attempt counts. A blob
+// that no committed row names is garbage, and a reaper deletes it. So the
+// correctness of a caller never depends on a store capability, for example
+// on conditional writes.
+//
+// Every method can return ErrThrottled. The port has no batch delete: a
+// caller deletes many objects with parallel single Delete calls, at a fixed
+// concurrency, and backs off on ErrThrottled.
 type Store interface {
-	// Put stores the contents of r under key. It returns ErrExists when the
-	// key already holds an object.
+	// Put stores the contents of r under key. Put on a key that already
+	// holds an object can replace the object, or fail with ErrExists and
+	// leave the old object unchanged. A reader sees the whole old object or
+	// the whole new object, never a part of each. A failed Put leaves the
+	// old object, or no object when the key held none.
 	Put(ctx context.Context, key Key, r io.Reader) error
 	// Get opens the object under key, or returns ErrNotFound. The caller closes it.
 	Get(ctx context.Context, key Key) (io.ReadCloser, error)
