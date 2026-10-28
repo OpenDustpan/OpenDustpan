@@ -112,6 +112,11 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
+During a rolling deploy, a worker that runs a binary below the minimum binary
+version of the schema fails the check step of a restore, and the step is
+retried. A worker on a new binary can take the retry and continue the
+restore. When the step fails 5 times, the restore fails and changes nothing.
+
 Before the server applies anything, it checks the manifest, the
 key-encryption key, every named blob, and the SQL part, then loads the SQL
 data into a staging area and checks the staged data. A failed check stops

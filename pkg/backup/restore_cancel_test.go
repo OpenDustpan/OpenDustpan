@@ -147,14 +147,16 @@ func TestRestoreCheckRefusesABinaryBelowTheMinimum(t *testing.T) {
 
 	setup := newRestoreServiceSetup(t)
 
+	// Set the answer before the start: the worker can run the check step
+	// before the next line of the test.
+	setup.live.mu.Lock()
+	setup.live.minErr = errBelowMinimum
+	setup.live.mu.Unlock()
+
 	id, err := startRestoreOf(t, setup, plainRestore())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-
-	setup.live.mu.Lock()
-	setup.live.minErr = errBelowMinimum
-	setup.live.mu.Unlock()
 
 	row := waitRestoreEnd(t, setup.regs, id)
 	if row.State != backup.RestoreFailed {
