@@ -228,10 +228,21 @@ matrix, the suite does these steps:
 6. **Schedules.** It sets each job schedule to a 10 s interval through the
    test settings, runs for 60 s, and checks that each tick ran on exactly one
    instance (`durable_operations` start keys).
-7. **Database outage.** It stops PostgreSQL for 60 s while `tofu apply` and
-   `pulumi up` run. Every instance answers 503 on `/health/ready` and 503
-   (not 500) on API writes, with `Retry-After`. After the database returns,
-   the instances turn ready with no restart and both commands complete.
+7. **Database outage.** It stops PostgreSQL in two parts, with the proxy of
+   the suite in front of the database.
+   - 7a. Long outage. It stops PostgreSQL for 60 s while `tofu apply` and
+     `pulumi up` run. Every instance answers 503 on `/health/ready`, and 503
+     (not 500) on API writes, with `Retry-After`. After the database returns,
+     the instances turn ready with no restart. A command that fails in the
+     outage fails with a 503 message and leaves no half-written state version
+     and no lock on the workspace. A Pulumi update that the outage stopped
+     stays running until `pulumi cancel` ends it. After that, the same
+     commands run again and complete, and the next `pulumi preview` and
+     `tofu plan` show no changes. The step measures how long each CLI version
+     retries one write before the command fails.
+   - 7b. Short outage. It stops PostgreSQL for less than the smallest retry
+     window of 7a, with a margin. `tofu apply` and `pulumi up` both complete
+     with exit 0.
 8. **No worker.** With only `api` instances, a backup request and an audit
    chain approval answer 503 with the text that names `--components worker`.
 
