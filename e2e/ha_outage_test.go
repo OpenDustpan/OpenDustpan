@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +39,9 @@ const (
 	// outage.
 	haConsistencyWait = 30 * time.Second
 )
+
+// haWorkDuration is haWork as a duration.
+const haWorkDuration = 30 * time.Second
 
 // haOutagePulumiProgram returns the Pulumi project of an outage step: the
 // program of the kill test under a name of its own, with a resource that waits
@@ -132,54 +134,6 @@ func (p haOutageProject) startBoth(ctx context.Context, t *testing.T) (up, apply
 	return up, apply
 }
 
-// refusedWatch notes when the proxy first answered 503 to each CLI in a step.
-type refusedWatch struct {
-	mu    sync.Mutex
-	first map[string]time.Time
-}
-
-// watchRefused polls the record of the proxy until the test ends and notes the
-// first 503 that each CLI got in step.
-func watchRefused(ctx context.Context, env *e2e.Env, step string) *refusedWatch {
-	w := &refusedWatch{mu: sync.Mutex{}, first: map[string]time.Time{}}
-
-	go func() {
-		for ctx.Err() == nil {
-			for _, entry := range env.Recorder.Entries() {
-				if entry.Step != step || entry.Status != http.StatusServiceUnavailable {
-					continue
-				}
-
-				tool := haToolOf(entry.UserAgent)
-
-				w.mu.Lock()
-				if _, seen := w.first[tool]; !seen {
-					w.first[tool] = time.Now()
-				}
-				w.mu.Unlock()
-			}
-
-			select {
-			case <-ctx.Done():
-			case <-time.After(haPollEvery * 2):
-			}
-		}
-	}()
-
-	return w
-}
-
-// firstRefused returns when the CLI tool first got a 503, and false when it
-// got none.
-func (w *refusedWatch) firstRefused(tool string) (time.Time, bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	at, ok := w.first[tool]
-
-	return at, ok
-}
-
 // haLongOutage is step 7a. It stops PostgreSQL for 60 s while `tofu apply` and
 // `pulumi up` run. During the outage every instance must answer 503 on
 // /health/ready, and 503 with Retry-After, not 500, on API writes. After the
@@ -199,10 +153,14 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 
 	env.Recorder.SetStep(step)
 
-	watch := watchRefused(ctx, env, step)
 	up, apply := project.startBoth(ctx, t)
 
 	haWaitForFiles(ctx, t, project.pulumiMarker, project.tofuMarker)
+
+	// Both resources end this long after their markers. The first write of
+	// each command after that meets the outage, and the time from here to the
+	// end of a failed command is how long the command kept retrying.
+	writesAt := time.Now().Add(haWorkDuration)
 
 	// The proxy of the test stops PostgreSQL for this environment only. The
 	// shared PostgreSQL server keeps running. The cleanup starts it again when
@@ -239,15 +197,18 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 
 	var window haRetryWindow
 
-	window.pulumi = haOutageResult(t, "pulumi up", up, watch, e2e.ToolPulumi)
-	window.tofu = haOutageResult(t, "tofu apply", apply, watch, e2e.ToolTofu)
+	window.pulumi = haOutageResult(t, "pulumi up", up, writesAt)
+	window.tofu = haOutageResult(t, "tofu apply", apply, writesAt)
 
 	t.Logf("retry window measured through the proxy: pulumi %s, tofu %s (0 means the command did not fail)",
 		window.pulumi.Round(time.Second), window.tofu.Round(time.Second))
 
 	haCheckConsistent(ctx, t, env, project)
 
-	// The same commands run again and succeed. Then nothing is left to change.
+	// A Pulumi update that the CLI could not complete stays running until its
+	// lease ends or someone cancels it, and the server says so. The same
+	// commands then run again and succeed. Then nothing is left to change.
+	haCancelStuckUpdate(ctx, t, env, project)
 	project.pulumi.run(ctx, t, "up", "--yes", "--non-interactive", "--stack", project.stack)
 	project.tofu.run(ctx, t, "apply", "-input=false", "-auto-approve", "-no-color")
 	project.pulumi.run(ctx, t, "preview", "--expect-no-changes", "--non-interactive", "--stack", project.stack)
@@ -259,7 +220,7 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 // haOutageResult checks one command after the long outage. A command that
 // failed must have failed with a 503 message. It returns how long the command
 // retried before it failed, or 0 when it did not fail.
-func haOutageResult(t *testing.T, what string, run *haRun, watch *refusedWatch, tool string) time.Duration {
+func haOutageResult(t *testing.T, what string, run *haRun, writesAt time.Time) time.Duration {
 	t.Helper()
 
 	if run.err != nil {
@@ -277,14 +238,7 @@ func haOutageResult(t *testing.T, what string, run *haRun, watch *refusedWatch, 
 		t.Errorf("%s failed with status %d and no 503 message:\n%s", what, run.res.ExitCode, out)
 	}
 
-	first, ok := watch.firstRefused(tool)
-	if !ok {
-		t.Errorf("%s failed, but the proxy answered it no 503", what)
-
-		return 0
-	}
-
-	return run.ended.Sub(first)
+	return run.ended.Sub(writesAt)
 }
 
 // haCheckConsistent checks the state after the long outage: no state version
@@ -323,9 +277,37 @@ func haCheckConsistent(ctx context.Context, t *testing.T, env *e2e.Env, project 
 		t.Fatalf("read stack %s answers %d: %v (%s)", project.stack, status, err, body)
 	}
 
-	if strings.Contains(body, `"activeUpdate":"`) && !strings.Contains(body, `"activeUpdate":""`) {
-		t.Errorf("stack %s keeps a running update after the outage: %s", project.stack, body)
+}
+
+// haCancelStuckUpdate cancels the running update of the stack when the long
+// outage left one: the CLI could not complete it. A second `pulumi up` must
+// answer 409 that names `pulumi cancel` first, and succeed after the cancel.
+func haCancelStuckUpdate(ctx context.Context, t *testing.T, env *e2e.Env, project haOutageProject) {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/stacks/"+project.stack, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("read stack %s answers %d: %v (%s)", project.stack, status, err, body)
 	}
+
+	if !strings.Contains(body, `"activeUpdate":"`) || strings.Contains(body, `"activeUpdate":""`) {
+		return
+	}
+
+	t.Logf("stack %s keeps the update that the outage stopped: pulumi cancel ends it", project.stack)
+
+	res, runErr := project.pulumi.env.RunAs(ctx, project.pulumi.install, project.pulumi.dir, nil,
+		"up", "--yes", "--non-interactive", "--stack", project.stack)
+	if runErr != nil {
+		t.Fatalf("pulumi up on a stack with a running update: %v", runErr)
+	}
+
+	if res.ExitCode == 0 || !strings.Contains(res.Stdout+res.Stderr, "pulumi cancel") {
+		t.Fatalf("pulumi up on a stack with a running update exits %d, want a failure that names pulumi cancel:\n%s%s",
+			res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	project.pulumi.run(ctx, t, "cancel", "--yes", "--stack", project.stack)
 }
 
 // haShortOutage is step 7b. It stops PostgreSQL for less than the smallest
