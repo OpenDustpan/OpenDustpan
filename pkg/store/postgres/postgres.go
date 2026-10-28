@@ -188,10 +188,21 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	}
 
 	s := &Store{
-		pool: pool, txs: guardedPool{pool: pool}, queries: db.New(guardedDB{inner: pool}), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
-		beforeLockDelete: nil, stateLockWait: 0,
-		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
+		pool:                pool,
+		txs:                 guardedPool{pool: pool},
+		queries:             db.New(guardedDB{inner: pool}),
+		stagingMu:           sync.Mutex{},
+		stagingSchema:       "",
+		keepAccessHook:      nil,
+		betweenProfileReads: atomic.Pointer[func()]{},
+		snapshotBegin:       snapshotBeginQuery(live),
+		beforeLockDelete:    nil,
+		stateLockWait:       0,
+		binaryVersion:       "",
+		gate:                nil,
+		kind:                "",
+		noMigrate:           false,
+		logger:              slog.New(slog.DiscardHandler),
 	}
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 

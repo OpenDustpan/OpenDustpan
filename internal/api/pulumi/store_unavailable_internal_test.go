@@ -62,7 +62,8 @@ func TestWriteErrorStoreLost(t *testing.T) {
 				t.Fatalf("decode body %q: %v", rec.Body.String(), err)
 			}
 
-			if body.Code != http.StatusServiceUnavailable || body.Message == "" || body.ErrorCode != errcode.NamespaceUnavailable {
+			if body.Code != http.StatusServiceUnavailable || body.Message == "" ||
+				body.ErrorCode != errcode.NamespaceUnavailable {
 				t.Fatalf("body = %+v, want code 503, a message and %s", body, errcode.NamespaceUnavailable)
 			}
 		})

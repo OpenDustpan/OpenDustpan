@@ -124,7 +124,10 @@ func (c *guardedConn) PrepareContext(ctx context.Context, query string) (driver.
 func (c *guardedConn) Close() error { return translate(c.inner.Close()) }
 
 func (c *guardedConn) Begin() (driver.Tx, error) {
-	return c.BeginTx(context.Background(), driver.TxOptions{Isolation: driver.IsolationLevel(sql.LevelDefault), ReadOnly: false})
+	return c.BeginTx(
+		context.Background(),
+		driver.TxOptions{Isolation: driver.IsolationLevel(sql.LevelDefault), ReadOnly: false},
+	)
 }
 
 func (c *guardedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
@@ -211,7 +214,7 @@ type guardedRows struct{ driver.Rows }
 func (r *guardedRows) Next(dest []driver.Value) error {
 	err := r.Rows.Next(dest)
 	if errors.Is(err, io.EOF) {
-		return err
+		return io.EOF
 	}
 
 	return translate(err)

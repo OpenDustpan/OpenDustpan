@@ -32,9 +32,9 @@ const (
 	// haShortMargin is the time that the short outage stays below the smallest
 	// retry window of the two commands.
 	haShortMargin = 6 * time.Second
-	// haShortMin and haShortMax bound the length of the short outage.
-	haShortMin = 2 * time.Second
-	haShortMax = 10 * time.Second
+	// haShortFloor and haShortCeiling bound the length of the short outage.
+	haShortFloor   = 2 * time.Second
+	haShortCeiling = 10 * time.Second
 	// haConsistencyWait bounds the wait for the checks of the state after the
 	// outage.
 	haConsistencyWait = 30 * time.Second
@@ -94,11 +94,20 @@ type haOutageProject struct {
 	pulumiMarker, tofuMarker string
 }
 
+// haOutageSpec names the projects of an outage step and sets how long their
+// resources wait, in seconds.
+type haOutageSpec struct {
+	name  string
+	sleep string
+}
+
 // haNewOutageProject writes the projects of an outage step and prepares the
 // stack and the workspace.
 func haNewOutageProject(
-	ctx context.Context, t *testing.T, env *e2e.Env, pair backupPair, name string, sleep string,
+	ctx context.Context, t *testing.T, env *e2e.Env, pair backupPair, spec haOutageSpec,
 ) haOutageProject {
+	name, sleep := spec.name, spec.sleep
+
 	t.Helper()
 
 	pulumiDir, tofuDir, markers := t.TempDir(), t.TempDir(), t.TempDir()
@@ -123,12 +132,12 @@ func haNewOutageProject(
 }
 
 // startBoth starts `pulumi up` and `tofu apply` in the background.
-func (p haOutageProject) startBoth(ctx context.Context, t *testing.T) (up, apply *haRun) {
+func (p haOutageProject) startBoth(ctx context.Context, t *testing.T) (*haRun, *haRun) {
 	t.Helper()
 
-	up = p.pulumi.start(ctx, t, []string{"E2E_HA_PULUMI_STARTED=" + p.pulumiMarker},
+	up := p.pulumi.start(ctx, t, []string{"E2E_HA_PULUMI_STARTED=" + p.pulumiMarker},
 		"up", "--yes", "--non-interactive", "--stack", p.stack)
-	apply = p.tofu.start(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + p.tofuMarker},
+	apply := p.tofu.start(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + p.tofuMarker},
 		"apply", "-input=false", "-auto-approve", "-no-color")
 
 	return up, apply
@@ -149,7 +158,7 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 
 	ctx := t.Context()
 	cluster := env.HA(t)
-	project := haNewOutageProject(ctx, t, env, pair, "haoutage", haWork)
+	project := haNewOutageProject(ctx, t, env, pair, haOutageSpec{name: "haoutage", sleep: haWork})
 
 	env.Recorder.SetStep(step)
 
@@ -200,8 +209,16 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 
 	var window haRetryWindow
 
-	window.pulumi = haOutageResult(t, env, "pulumi up", step, e2e.ToolPulumi, up, writesAt)
-	window.tofu = haOutageResult(t, env, "tofu apply", step, e2e.ToolTofu, apply, writesAt)
+	window.pulumi = haOutageResult(
+		t,
+		env,
+		haOutageRun{what: "pulumi up", step: step, tool: e2e.ToolPulumi, run: up, writesAt: writesAt},
+	)
+	window.tofu = haOutageResult(
+		t,
+		env,
+		haOutageRun{what: "tofu apply", step: step, tool: e2e.ToolTofu, run: apply, writesAt: writesAt},
+	)
 
 	t.Logf("retry window measured through the proxy: pulumi %s, tofu %s (0 means the command did not fail)",
 		window.pulumi.Round(time.Second), window.tofu.Round(time.Second))
@@ -226,27 +243,34 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 // failed must have failed with a 503 message. It returns how long the command
 // retried its first write that met the outage before it gave up, from the
 // record of the proxy, or 0 when the command did not fail.
-func haOutageResult(
-	t *testing.T, env *e2e.Env, what, step, tool string, run *haRun, writesAt time.Time,
-) time.Duration {
+func haOutageResult(t *testing.T, env *e2e.Env, r haOutageRun) time.Duration {
 	t.Helper()
 
+	run := r.run
+
 	if run.err != nil {
-		t.Fatalf("%s: %v", what, run.err)
+		t.Fatalf("%s: %v", r.what, run.err)
 	}
 
 	if run.res.ExitCode == 0 {
-		t.Logf("%s completed in %s: it retried through the outage", what, run.res.Duration.Round(time.Second))
+		t.Logf("%s completed in %s: it retried through the outage", r.what, run.res.Duration.Round(time.Second))
 
 		return 0
 	}
 
 	out := run.res.Stdout + run.res.Stderr
 	if !strings.Contains(out, "503") && !strings.Contains(strings.ToLower(out), "service unavailable") {
-		t.Errorf("%s failed with status %d and no 503 message:\n%s", what, run.res.ExitCode, out)
+		t.Errorf("%s failed with status %d and no 503 message:\n%s", r.what, run.res.ExitCode, out)
 	}
 
-	return haWriteRetries(env, step, tool, writesAt)
+	return haWriteRetries(env, r.step, r.tool, r.writesAt)
+}
+
+// haOutageRun is a command of the long outage with what the check needs.
+type haOutageRun struct {
+	what, step, tool string
+	run              *haRun
+	writesAt         time.Time
 }
 
 // haWriteRetries returns the time between the first attempt of the first write
@@ -277,8 +301,7 @@ func haWriteRetries(env *e2e.Env, step, tool string, writesAt time.Time) time.Du
 }
 
 // haCheckConsistent checks the state after the long outage: no state version
-// of the workspace is pending, no lock holds the workspace, and the stack has
-// no running update.
+// of the workspace is pending, and no lock holds the workspace.
 func haCheckConsistent(ctx context.Context, t *testing.T, env *e2e.Env, project haOutageProject) {
 	t.Helper()
 
@@ -288,9 +311,9 @@ func haCheckConsistent(ctx context.Context, t *testing.T, env *e2e.Env, project 
 	conn := haConnect(ctx, t, env)
 
 	var pending int
-	if err := conn.QueryRow(ctx,
-		`SELECT count(*) FROM state_versions sv JOIN workspaces w ON w.id = sv.workspace_id `+
-			`WHERE w.name = $1 AND sv.status = 'pending'`, project.workspace).Scan(&pending); err != nil {
+	pendingQuery := `SELECT count(*) FROM state_versions sv JOIN workspaces w ON w.id = sv.workspace_id ` +
+		`WHERE w.name = $1 AND sv.status = 'pending'`
+	if err := conn.QueryRow(ctx, pendingQuery, project.workspace).Scan(&pending); err != nil {
 		t.Fatalf("count pending state versions: %v", err)
 	}
 
@@ -299,7 +322,8 @@ func haCheckConsistent(ctx context.Context, t *testing.T, env *e2e.Env, project 
 	}
 
 	var lockID string
-	if err := conn.QueryRow(ctx, `SELECT lock_id FROM workspaces WHERE name = $1`, project.workspace).Scan(&lockID); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT lock_id FROM workspaces WHERE name = $1`, project.workspace).
+		Scan(&lockID); err != nil {
 		t.Fatalf("read the lock of %s: %v", project.workspace, err)
 	}
 
@@ -311,7 +335,6 @@ func haCheckConsistent(ctx context.Context, t *testing.T, env *e2e.Env, project 
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("read stack %s answers %d: %v (%s)", project.stack, status, err, body)
 	}
-
 }
 
 // haCancelStuckUpdate cancels the running update of the stack when the long
@@ -355,7 +378,7 @@ func haShortOutage(t *testing.T, env *e2e.Env, pair backupPair, window haRetryWi
 	ctx := t.Context()
 	cluster := env.HA(t)
 	sleep := strconv.Itoa(haShortWork)
-	project := haNewOutageProject(ctx, t, env, pair, "haquick", sleep)
+	project := haNewOutageProject(ctx, t, env, pair, haOutageSpec{name: "haquick", sleep: sleep})
 
 	length := haShortOutageLength(window)
 
@@ -376,7 +399,11 @@ func haShortOutage(t *testing.T, env *e2e.Env, pair backupPair, window haRetryWi
 	}
 
 	env.StopDatabase(t)
-	t.Logf("PostgreSQL stopped for %s (smallest measured retry window %s)", length, window.smallest().Round(time.Second))
+	t.Logf(
+		"PostgreSQL stopped for %s (smallest measured retry window %s)",
+		length,
+		window.smallest().Round(time.Second),
+	)
 
 	select {
 	case <-ctx.Done():
@@ -404,10 +431,10 @@ func haShortOutage(t *testing.T, env *e2e.Env, pair backupPair, window haRetryWi
 func haShortOutageLength(window haRetryWindow) time.Duration {
 	smallest := window.smallest()
 	if smallest == 0 {
-		return haShortMax
+		return haShortCeiling
 	}
 
-	return min(max(smallest-haShortMargin, haShortMin), haShortMax)
+	return min(max(smallest-haShortMargin, haShortFloor), haShortCeiling)
 }
 
 // haWaitReadiness waits until every instance answers want on /health/ready.
@@ -419,7 +446,11 @@ func haWaitReadiness(ctx context.Context, t *testing.T, cluster *e2e.HACluster, 
 
 	for i := range cluster.Size() {
 		for {
-			resp, err := cluster.Send(ctx, i, http.MethodGet, "/health/ready", nil, "")
+			resp, err := cluster.Send(
+				ctx,
+				i,
+				e2e.InstanceRequest{Method: http.MethodGet, Path: "/health/ready", Header: nil, Body: ""},
+			)
 			if err == nil && resp.Status == want {
 				break
 			}
@@ -456,8 +487,11 @@ func haCheckWritesRefused(ctx context.Context, t *testing.T, env *e2e.Env, clust
 		body   string
 	}{
 		{
-			"pulumi create stack", http.MethodPost,
-			"/api/stacks/" + e2e.Namespace + "/" + e2e.Project, pulumiHeader, `{"stackName":"outage` + strconv.Itoa(i) + `"}`,
+			"pulumi create stack",
+			http.MethodPost,
+			"/api/stacks/" + e2e.Namespace + "/" + e2e.Project,
+			pulumiHeader,
+			`{"stackName":"outage` + strconv.Itoa(i) + `"}`,
 		},
 		{
 			"tfe create workspace", http.MethodPost,
@@ -475,8 +509,14 @@ func haCheckWritesRefused(ctx context.Context, t *testing.T, env *e2e.Env, clust
 		},
 	}
 
-	for _, w := range writes {
-		resp, err := cluster.Send(ctx, i, w.method, w.path, w.header, w.body)
+	for idx := range writes {
+		w := &writes[idx]
+
+		resp, err := cluster.Send(
+			ctx,
+			i,
+			e2e.InstanceRequest{Method: w.method, Path: w.path, Header: w.header, Body: w.body},
+		)
 		if err != nil {
 			t.Errorf("instance %d: %s: %v", i, w.name, err)
 

@@ -38,7 +38,9 @@ func TestWriteErrorStoreLost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			h := &Handler{logger: slog.New(slog.DiscardHandler)}
+			var h Handler
+
+			h.logger = slog.New(slog.DiscardHandler)
 
 			rec := httptest.NewRecorder()
 			h.writeError(t.Context(), rec, tc.err)

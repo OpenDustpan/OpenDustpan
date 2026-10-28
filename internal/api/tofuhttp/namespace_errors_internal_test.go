@@ -54,13 +54,7 @@ func TestWriteErrorNamespaceSentinels(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 
-			if got := rec.Header().Get("Retry-After") != ""; got != tc.retryAfter {
-				t.Fatalf("Retry-After set = %t, want %t", got, tc.retryAfter)
-			}
-
-			if tc.retryAfter && rec.Header().Get("Retry-After") != "5" {
-				t.Fatalf("Retry-After = %q, want 5", rec.Header().Get("Retry-After"))
-			}
+			checkRetryAfter(t, rec, tc.retryAfter)
 
 			if body := rec.Body.String(); !strings.Contains(body, tc.message) {
 				t.Fatalf("body = %q, want it to hold %q", body, tc.message)
@@ -70,5 +64,21 @@ func TestWriteErrorNamespaceSentinels(t *testing.T) {
 				t.Fatalf("body = %q, want no request detail", body)
 			}
 		})
+	}
+}
+
+// checkRetryAfter checks that rec names Retry-After 5 when want is true, and
+// no Retry-After when it is false.
+func checkRetryAfter(t *testing.T, rec *httptest.ResponseRecorder, want bool) {
+	t.Helper()
+
+	got := rec.Header().Get("Retry-After")
+
+	switch {
+	case want && got != "5":
+		t.Fatalf("Retry-After = %q, want 5", got)
+	case !want && got != "":
+		t.Fatalf("Retry-After = %q, want none", got)
+	default:
 	}
 }

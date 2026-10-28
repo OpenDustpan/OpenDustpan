@@ -27,7 +27,10 @@ func TestWriteErrorStoreLost(t *testing.T) {
 		{"wrapped sentinel", fmt.Errorf("create state version: transaction: %w", namespace.ErrUnavailable)},
 		{"connection failed", fmt.Errorf("%w: connection failed: %w", namespace.ErrUnavailable, syscall.ECONNREFUSED)},
 		{"connection lost", errors.Join(namespace.ErrUnavailable, io.ErrUnexpectedEOF)},
-		{"server shutdown", fmt.Errorf("write: %w", fmt.Errorf("%w: server is shutting down", namespace.ErrUnavailable))},
+		{
+			"server shutdown",
+			fmt.Errorf("write: %w", fmt.Errorf("%w: server is shutting down", namespace.ErrUnavailable)),
+		},
 		{"read only", fmt.Errorf("write: %w: database is read-only", namespace.ErrUnavailable)},
 		{"busy", fmt.Errorf("write: %w: database is busy", namespace.ErrUnavailable)},
 	}

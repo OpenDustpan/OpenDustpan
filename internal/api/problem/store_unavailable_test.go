@@ -23,8 +23,6 @@ import (
 func TestWriterStoreLost(t *testing.T) {
 	t.Parallel()
 
-	errDomain := errors.New("domain error")
-
 	other := func(error) (problem.Problem, bool) {
 		return problem.New(http.StatusConflict, errcode.ServerInternal, "conflict"), true
 	}
@@ -47,7 +45,11 @@ func TestWriterStoreLost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			rec := writeWith(t, problem.Writer{Logger: slog.New(slog.DiscardHandler), Classify: other, KeepDenied: nil}, tc.err)
+			rec := writeWith(
+				t,
+				problem.Writer{Logger: slog.New(slog.DiscardHandler), Classify: other, KeepDenied: nil},
+				tc.err,
+			)
 
 			assertStoreLost(t, rec)
 		})

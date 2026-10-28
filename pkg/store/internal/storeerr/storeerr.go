@@ -57,7 +57,7 @@ func (e *Error) Unwrap() []error {
 // Is reports whether err already is an Error, so that an adapter does not
 // translate twice.
 func Is(err error) bool {
-	_, ok := errors.AsType[*Error](err)
+	var target *Error
 
-	return ok
+	return errors.As(err, &target)
 }

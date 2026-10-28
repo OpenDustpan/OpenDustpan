@@ -31,11 +31,13 @@ func classify(err error) (storeerr.Class, bool) {
 		return "", false
 	}
 
-	if _, ok := errors.AsType[*pgconn.ConnectError](err); ok {
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) {
 		return storeerr.ConnectionFailed, true
 	}
 
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
 		return classifyCode(pgErr.Code)
 	}
 
@@ -44,7 +46,9 @@ func classify(err error) (storeerr.Class, bool) {
 		return "", false
 	}
 
-	if _, ok := errors.AsType[*net.OpError](err); ok ||
+	var opErr *net.OpError
+
+	if errors.As(err, &opErr) ||
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, syscall.ECONNREFUSED) {
@@ -87,9 +91,9 @@ func translate(err error) error {
 // statement, so no call site does.
 type guardedDB struct {
 	inner interface {
-		Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-		Query(context.Context, string, ...any) (pgx.Rows, error)
-		QueryRow(context.Context, string, ...any) pgx.Row
+		Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+		Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+		QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	}
 }
 
@@ -127,8 +131,8 @@ func (r guardedRow) Scan(dest ...any) error { return translate(r.Row.Scan(dest..
 // not.
 type guardedPool struct {
 	pool interface {
-		Begin(context.Context) (pgx.Tx, error)
-		BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
+		Begin(ctx context.Context) (pgx.Tx, error)
+		BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 	}
 }
 
