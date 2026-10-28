@@ -636,7 +636,7 @@ func (s *RestoreService) endedOperations(ctx context.Context) (map[string]durabl
 }
 
 // fenceEnded increments the failover version of every namespace once when an
-// ended restore of ops entered maintenance mode and is not check-only: such a
+// ended restore of ops is not check-only and touchedLive reports it: such a
 // restore can have canceled work, and its swap can have committed. A restore
 // that stopped in stage or check changed no live data, so its stop leaves the
 // leases, locks and update tokens of the installation alone. Each fence
@@ -656,7 +656,16 @@ func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.
 			continue
 		}
 
-		if _, entered := op.Step(RestoreStepEnterMaintenance); entered && !in.CheckOnly {
+		if in.CheckOnly {
+			continue
+		}
+
+		touched, err := s.touchedLive(ctx, op, in.ID)
+		if err != nil {
+			return err
+		}
+
+		if touched {
 			stopped = append(stopped, in.ID.String())
 		}
 	}
@@ -676,6 +685,32 @@ func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.
 		slog.String("restores", strings.Join(stopped, ", ")), slog.Int64("namespaces", n))
 
 	return nil
+}
+
+// touchedLive reports whether the restore id of op can have changed the
+// installation: it recorded enter-maintenance, or its row holds the
+// maintenance flag of an enter that it did not confirm, or it stored audit
+// events, which it stores before each forced cancel and each repair.
+func (s *RestoreService) touchedLive(ctx context.Context, op durable.Operation, id RestoreID) (bool, error) {
+	if _, entered := op.Step(RestoreStepEnterMaintenance); entered {
+		return true, nil
+	}
+
+	flag, err := s.live.RestoreMaintenanceEntered(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("read the maintenance flag of restore %s: %w", id, err)
+	}
+
+	if flag {
+		return true, nil
+	}
+
+	events, err := s.live.RestoreEvents(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("read the audit events of restore %s: %w", id, err)
+	}
+
+	return len(events) > 0, nil
 }
 
 // auditEnded writes the audit entries of the restore of op, which a sweep

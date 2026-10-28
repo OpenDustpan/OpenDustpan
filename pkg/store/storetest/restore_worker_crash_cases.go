@@ -42,6 +42,10 @@ func restoreCrashCases() []restoreCase {
 		{name: "a cancel in the check step fences no namespace", test: testCancelInCheckFencesNothing},
 		{name: "a canceled check-only restore fences no namespace", test: testCanceledCheckOnlyFencesNothing},
 		{name: "a cancel after the enter fences every namespace once", test: testCancelAfterEnterFences},
+		{
+			name: "a restore that stopped after a forced cancel and before the confirm is fenced once",
+			test: testStopAfterForcedCancelFences,
+		},
 	}
 }
 
@@ -58,6 +62,9 @@ const (
 	// crashInCleanup removes the staging areas of the restores that ended,
 	// with no record, and stops the holder before the fenced cleanup.
 	crashInCleanup
+	// crashAfterCancelEvent stops the holder after it stored the audit event
+	// of a forced cancel, before its write of maintenance mode.
+	crashAfterCancelEvent
 )
 
 // crashingLive is the live store of one instance. It stops the holder at one
@@ -81,6 +88,23 @@ func (c crashingLive) SetRestoreMaintenance(
 	}
 
 	if c.at == crashAfterEnterWrite && next == maintenance.StateMaintenance && c.fired.CompareAndSwap(false, true) {
+		c.gate.crash()
+
+		return durable.ErrClaimLost
+	}
+
+	return nil
+}
+
+// RecordRestoreEvent implements backup.RestoreOperations.
+func (c crashingLive) RecordRestoreEvent(
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, object string,
+) error {
+	if err := c.RestoreLive.RecordRestoreEvent(ctx, f, id, object); err != nil {
+		return fmt.Errorf("record restore event: %w", err)
+	}
+
+	if c.at == crashAfterCancelEvent && c.fired.CompareAndSwap(false, true) {
 		c.gate.crash()
 
 		return durable.ErrClaimLost
@@ -421,4 +445,40 @@ func testCancelAfterEnterFences(t *testing.T, newStore RestoreFactory) {
 
 	r.mustUnchanged(t)
 	mustState(t, r.st, maintenance.StateNormal)
+}
+
+func testStopAfterForcedCancelFences(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+	before := r.failoverVersion(t)
+	c := newCrashRig(t, r, crashAfterCancelEvent, nil)
+	held := r.opOf(t, c.id)
+
+	// The holder stored the cancel of the raced work and stopped before its
+	// write of maintenance mode: no enter step, no flag, one event.
+	mustState(t, r.st, maintenance.StateNormal)
+
+	if entered, err := r.st.RestoreMaintenanceEntered(t.Context(), c.id); err != nil || entered {
+		t.Fatalf("maintenance flag = %t, %v; want false", entered, err)
+	}
+
+	if err := c.b.Cancel(t.Context(), c.id); err != nil {
+		t.Fatalf("cancel restore %s: %v", c.id, err)
+	}
+
+	row := r.driveToEnd(t, c.b, c.id)
+	if row.State != backup.RestoreFailed || row.Error != backup.RestoreCanceledText {
+		t.Fatalf("restore = %q (%s), want failed with %q", row.State, row.Error, backup.RestoreCanceledText)
+	}
+
+	if got := r.failoverVersion(t); got != before+1 {
+		t.Fatalf("failover version = %d, want %d: the sweep fences once after a forced cancel", got, before+1)
+	}
+
+	if n := c.canceledEntries(t, held.Claim.Token, "stack acme/web update enter-1"); n != 1 {
+		t.Fatalf("audit entries of the forced cancel = %d, want 1", n)
+	}
+
+	r.mustUnchanged(t)
 }

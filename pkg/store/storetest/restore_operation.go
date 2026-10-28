@@ -3,6 +3,7 @@ package storetest
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,7 @@ func restoreOperationCases() []restoreCase {
 		},
 		{name: "the audit entry of a restore commits once with its step", test: testRestoreOpAudit},
 		{name: "audit events are stored under the fence, once each, in order", test: testRestoreOpEvents},
+		{name: "audit events past the limit keep one summary and never fail", test: testRestoreOpEventsPastLimit},
 		{name: "ended operations fail their running restore rows", test: testRestoreOpFailEnded},
 		{name: "live operations keep their running restore rows", test: testRestoreOpFailEndedLive},
 	}...)
@@ -284,6 +286,34 @@ func testRestoreOpEvents(t *testing.T, newStore RestoreFactory) {
 
 	if _, err := ops.RestoreEvents(ctx, backup.MintRestoreID()); !errors.Is(err, backup.ErrRestoreNotFound) {
 		t.Fatalf("events of an unknown restore: error = %v, want ErrRestoreNotFound", err)
+	}
+}
+
+func testRestoreOpEventsPastLimit(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ops := restorePortsOf(t, s).ops
+	ctx := t.Context()
+	id := mustStartRestoreOp(t, ops)
+	held := mustClaimRestoreOp(t, s.DurableOperationsPort(), "instance-a")
+	enter := held.Claim.Step(backup.RestoreStepEnterMaintenance)
+
+	// A forced enter can cancel more units than the limit: each record still
+	// succeeds.
+	for i := range backup.MaxRestoreEvents + 2 {
+		if err := ops.RecordRestoreEvent(ctx, enter, id, "cancel "+strconv.Itoa(i)); err != nil {
+			t.Fatalf("record event %d: %v", i, err)
+		}
+	}
+
+	events, err := ops.RestoreEvents(ctx, id)
+	if err != nil {
+		t.Fatalf("read the events: %v", err)
+	}
+
+	if len(events) != backup.MaxRestoreEvents || !strings.Contains(events[len(events)-1], ": 3 more") {
+		t.Fatalf("events = %d with the last %q, want the limit with a summary of 3", len(events), events[len(events)-1])
 	}
 }
 

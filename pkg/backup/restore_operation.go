@@ -166,9 +166,11 @@ package backup
 // FailEndedRestores once in each lease period. It marks the row failed, and
 // leaves maintenance mode when the flag of the row says that this restore
 // entered it, in one transaction for each row. Before that it fences every
-// namespace when such a restore recorded enter-maintenance and is not
-// check-only, and logs the restore IDs; a restore that stopped in stage or
-// check changed no live data, so it fences nothing. While the row is checking or
+// namespace when such a restore is not check-only and recorded
+// enter-maintenance, holds the maintenance flag of an enter that it did not
+// confirm, or stored audit events (each forced cancel stores one first), and
+// logs the restore IDs. A restore that stopped in stage or check changed no
+// live data, so it fences nothing. While the row is checking or
 // applying, no other restore can start, so that leave can never end the
 // maintenance mode of a later restore.
 //
@@ -679,12 +681,20 @@ func ValidateRestoreEvent(object string) error {
 
 // AddRestoreEvent returns the encoded events of the stored text with object
 // added at the end, and whether it changed them. An object that the events
-// already hold changes nothing. It returns ErrRestoreEventInvalid for an
-// object that ValidateRestoreEvent refuses or that does not fit, and
-// ErrCorrupt for stored text that DecodeRestoreEvents refuses.
+// already hold changes nothing. The last of the MaxRestoreEvents places holds
+// a summary event: once the other places are full, each new object adds one
+// to the count of that summary instead, so a forced enter that cancels more
+// units than the limit still records each cancel, and never fails for the
+// limit. It returns ErrRestoreEventInvalid for an object that
+// ValidateRestoreEvent refuses, and ErrCorrupt for stored text that
+// DecodeRestoreEvents refuses.
 func AddRestoreEvent(stored, object string) (string, bool, error) {
 	if err := ValidateRestoreEvent(object); err != nil {
 		return "", false, err
+	}
+
+	if strings.HasPrefix(object, restoreEventOverflowHead) {
+		return "", false, fmt.Errorf("%w: the object has the form of the summary event", ErrRestoreEventInvalid)
 	}
 
 	events, err := DecodeRestoreEvents(stored)
@@ -696,16 +706,57 @@ func AddRestoreEvent(stored, object string) (string, bool, error) {
 		return stored, false, nil
 	}
 
-	if len(events) >= MaxRestoreEvents {
-		return "", false, fmt.Errorf("%w: the restore holds %d events", ErrRestoreEventInvalid, len(events))
+	switch {
+	case len(events) < MaxRestoreEvents-1:
+		events = append(events, object)
+	case len(events) == MaxRestoreEvents-1:
+		events = append(events, restoreEventOverflow(1))
+	default:
+		count, ok := restoreEventOverflowCount(events[len(events)-1])
+		if !ok {
+			return "", false, fmt.Errorf("%w: the last restore audit event is not the summary", ErrCorrupt)
+		}
+
+		events[len(events)-1] = restoreEventOverflow(count + 1)
 	}
 
-	out, err := json.Marshal(append(events, object))
+	out, err := json.Marshal(events)
 	if err != nil {
 		return "", false, fmt.Errorf("encode the restore audit events: %w", err)
 	}
 
 	return string(out), true, nil
+}
+
+// restoreEventOverflowHead starts the summary event of the events past the
+// limit.
+const restoreEventOverflowHead = "restore audit events past the limit of 999: "
+
+// restoreEventOverflow returns the summary event of count events past the
+// limit.
+func restoreEventOverflow(count int64) string {
+	return restoreEventOverflowHead + strconv.FormatInt(count, 10) + " more cancels or repairs, in the log lines"
+}
+
+// restoreEventOverflowCount returns the count of a summary event, and
+// whether event is one.
+func restoreEventOverflowCount(event string) (int64, bool) {
+	rest, ok := strings.CutPrefix(event, restoreEventOverflowHead)
+	if !ok {
+		return 0, false
+	}
+
+	digits, _, ok := strings.Cut(rest, " ")
+	if !ok {
+		return 0, false
+	}
+
+	count, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || count < 1 {
+		return 0, false
+	}
+
+	return count, true
 }
 
 // DecodeRestoreEvents returns the events of the stored text of a restores
