@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // errNotFound is the one answer for an unknown namespace, an unknown pool, an
@@ -177,6 +178,16 @@ func classifyProtocolOther(
 	case errors.Is(err, namespace.ErrNotHome),
 		errors.Is(err, maintenance.ErrInMaintenance):
 		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrNotHome)
+	case errors.Is(err, schema.ErrBinaryBelowMinimum):
+		// The text names both versions and nothing else, so a runner can show it.
+		message := schema.ErrBinaryBelowMinimum.Error()
+		if below, ok := errors.AsType[*schema.MinimumError](err); ok {
+			message = below.WriteText()
+		}
+
+		return http.StatusServiceUnavailable, protocol.Error{
+			Code: protocol.ErrorUnavailable, Message: message, Supported: "",
+		}
 	default:
 		return http.StatusInternalServerError, protocol.Error{
 			Code: protocol.ErrorUnavailable, Message: internalMessage, Supported: "",

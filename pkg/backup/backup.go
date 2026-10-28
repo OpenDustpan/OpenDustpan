@@ -75,6 +75,10 @@ const (
 	// and that ran in maintenance mode. A restore applies them again after
 	// the swap.
 	TableMaintenanceRevocations = "maintenance_revocations"
+	// TableInstanceVersions holds the version row of each running server
+	// process. The rows describe the processes that run now, so a restore
+	// keeps the live rows.
+	TableInstanceVersions = "instance_versions"
 )
 
 // Tables lists every table that an export covers, in foreign-key order, so an

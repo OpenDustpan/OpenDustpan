@@ -210,6 +210,13 @@ const (
 	// ActionServerObserve allows reading installation metrics. Its object
 	// is ServerObject.
 	ActionServerObserve Action = "server:observe"
+	// ActionServerReadInstances allows listing the version rows of the server
+	// processes of the installation. Its object is ServerObject.
+	ActionServerReadInstances Action = "server:read-instances"
+	// ActionServerDeleteInstance allows deleting the version row of a server
+	// process, for example of a process that died without a clean stop. Its
+	// object is ServerObject. The action does not stop a process.
+	ActionServerDeleteInstance Action = "server:delete-instance"
 	// ActionServerReadAudit allows reading the audit entries of the
 	// installation, the scope @server (ADR 60, decision 7). Its object is
 	// ServerObject.

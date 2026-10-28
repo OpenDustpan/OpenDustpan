@@ -137,6 +137,7 @@ func gateHandler(
 		Metrics: stubMetrics{}, Version: "test", Schema: st, Journal: nil, Principals: nil, Access: nil,
 		Tokens: nil, Audit: st, OnAuditFailure: nil, IPAllowlists: nil, Gates: port, SessionPolicy: nil,
 		DeletedUnits: nil, AuditChain: nil, AuditSinks: nil, SignIn: nil, CheckpointEpochs: nil, DenialLimiter: nil,
+		Instances: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

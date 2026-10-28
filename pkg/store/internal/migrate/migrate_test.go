@@ -419,3 +419,101 @@ func TestLoadRefusesDuplicateVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckInstances(t *testing.T) {
+	t.Parallel()
+
+	contract := func(name, minimum string) migrate.Migration {
+		return migrate.Migration{Name: name, SQL: "", MinBinaryVersion: minimum, Version: 0}
+	}
+
+	rows := []schema.InstanceRow{
+		{ID: "old", BinaryVersion: "v0.4.0"},
+		{ID: "at", BinaryVersion: "v0.5.0"},
+		{ID: "dev", BinaryVersion: "dev"},
+		{ID: "older", BinaryVersion: "v0.1.0"},
+	}
+
+	cases := []struct {
+		name      string
+		pending   []migrate.Migration
+		rows      []schema.InstanceRow
+		wantName  string
+		wantNamed []string
+	}{
+		{name: "no pending migration", pending: nil, rows: rows, wantName: "", wantNamed: nil},
+		{
+			name:      "no minimum set",
+			pending:   []migrate.Migration{contract("a.sql", "")},
+			rows:      rows,
+			wantName:  "",
+			wantNamed: nil,
+		},
+		{
+			name:      "no rows",
+			pending:   []migrate.Migration{contract("a.sql", "v0.5.0")},
+			rows:      nil,
+			wantName:  "",
+			wantNamed: nil,
+		},
+		{
+			name:      "rows below are named in table order",
+			pending:   []migrate.Migration{contract("a.sql", "v0.5.0")},
+			rows:      rows,
+			wantName:  "a.sql",
+			wantNamed: []string{"old", "older"},
+		},
+		{
+			name:    "the first migration that finds rows is named",
+			pending: []migrate.Migration{contract("a.sql", "v0.1.0"), contract("b.sql", "v0.4.5")}, rows: rows,
+			wantName: "b.sql", wantNamed: []string{"old", "older"},
+		},
+		{
+			name:      "a row that does not parse counts as below",
+			pending:   []migrate.Migration{contract("a.sql", "v0.1.0")},
+			rows:      []schema.InstanceRow{{ID: "odd", BinaryVersion: "1.x"}},
+			wantName:  "a.sql",
+			wantNamed: []string{"odd"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkInstancesCase(t, tc.wantName, tc.wantNamed, migrate.CheckInstances(tc.pending, tc.rows))
+		})
+	}
+}
+
+// checkInstancesCase fails when err is not the refusal of the migration
+// wantName that names the rows wantNamed. An empty wantName wants no error.
+func checkInstancesCase(t *testing.T, wantName string, wantNamed []string, err error) {
+	t.Helper()
+
+	if wantName == "" {
+		if err != nil {
+			t.Fatalf("CheckInstances = %v, want nil", err)
+		}
+
+		return
+	}
+
+	below, ok := errors.AsType[*schema.InstancesBelowMinimumError](err)
+	if !ok || !errors.Is(err, schema.ErrInstancesBelowMinimum) {
+		t.Fatalf("CheckInstances = %v, want an InstancesBelowMinimumError", err)
+	}
+
+	if below.Migration != wantName {
+		t.Errorf("migration = %q, want %q", below.Migration, wantName)
+	}
+
+	var named []string
+	for _, row := range below.Instances {
+		named = append(named, row.ID)
+	}
+
+	if !slices.Equal(named, wantNamed) {
+		t.Errorf("named rows = %v, want %v", named, wantNamed)
+	}
+}

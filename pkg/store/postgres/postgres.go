@@ -875,14 +875,29 @@ const writeLockSQL = `SELECT pg_advisory_xact_lock_shared($1, hashtext(current_s
 // readStateSQL reads the installation state. A later statement than the
 // lock, so a READ COMMITTED snapshot cannot be older than the lock: a write
 // that waited for an enter reads maintenance mode.
-const readStateSQL = `SELECT state FROM installation WHERE id = 1`
+//
+// The statement also returns the minimum binary versions that the migrations
+// record, so a write of a binary below the minimum fails in its own
+// transaction (see minimumsSQL).
+const readStateSQL = `SELECT
+	(SELECT state FROM installation WHERE id = 1),
+	` + minimumsSQL
+
+// minimumsSQL is the column of the read-state statements that returns the
+// distinct minimum binary versions that schema_migrations records. Go takes
+// the highest one with schema.HighestMinimum, because the comparison of
+// versions has rules (pre-release identifiers) that SQL does not have. The
+// column is NULL when no migration sets a minimum.
+const minimumsSQL = `(SELECT array_agg(DISTINCT min_binary_version) FROM schema_migrations
+		WHERE min_binary_version <> '')`
 
 // readStateAndFenceSQL reads the installation state and the failover version
 // of the namespace in one statement, and holds the namespace row FOR SHARE so
 // a promotion waits until the transaction ends.
 const readStateAndFenceSQL = `SELECT
 	(SELECT state FROM installation WHERE id = 1),
-	(SELECT failover_version FROM namespaces WHERE name = $1 FOR SHARE)`
+	(SELECT failover_version FROM namespaces WHERE name = $1 FOR SHARE),
+	` + minimumsSQL
 
 // inTx runs fn in a write transaction. It first takes the shared write lock
 // and reads the installation state, so a write fails with
@@ -898,7 +913,7 @@ const readStateAndFenceSQL = `SELECT
 // Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, func(tx pgx.Tx) error {
-		_, err := readWritable(ctx, tx, readStateSQL, nil)
+		_, err := readWritable(ctx, tx, readStateSQL, nil, s.binaryVersion)
 
 		return err
 	})
@@ -943,14 +958,18 @@ func (s *Store) runTx(ctx context.Context, fn func(q *db.Queries) error, before 
 // round trip, as two statements. Each statement has its own READ COMMITTED
 // snapshot, so the read comes after the lock: a write that waited for an
 // enter reads maintenance mode. readSQL returns the installation state in its
-// first column. With fenceName set, it takes the namespace name as its only
-// argument and returns the failover version in a second column, which
+// first column and the minimum binary versions of the schema in its last
+// column. With fenceName set, it takes the namespace name as its only
+// argument and returns the failover version in the second column, which
 // readWritable returns (nil for a missing namespace row).
 //
-// It returns maintenance.ErrInMaintenance in maintenance mode, and
+// It returns maintenance.ErrInMaintenance in maintenance mode, a
+// *schema.MinimumError when binaryVersion is below the highest minimum, and
 // maintenance.ErrUnavailable when the state cannot be read, the row is
 // missing or the stored value is unknown: a write never passes on a read error.
-func readWritable(ctx context.Context, tx pgx.Tx, readSQL string, fenceName *string) (*int64, error) {
+func readWritable(
+	ctx context.Context, tx pgx.Tx, readSQL string, fenceName *string, binaryVersion string,
+) (*int64, error) {
 	var batch pgx.Batch
 
 	batch.Queue(writeLockSQL, writeLockClass)
@@ -962,8 +981,9 @@ func readWritable(ctx context.Context, tx pgx.Tx, readSQL string, fenceName *str
 	}
 
 	var (
-		state   *string
-		version *int64
+		state    *string
+		version  *int64
+		minimums []string
 	)
 
 	results := tx.SendBatch(ctx, &batch)
@@ -976,9 +996,9 @@ func readWritable(ctx context.Context, tx pgx.Tx, readSQL string, fenceName *str
 		row := results.QueryRow()
 
 		if fenceName != nil {
-			scanErr = row.Scan(&state, &version)
+			scanErr = row.Scan(&state, &version, &minimums)
 		} else {
-			scanErr = row.Scan(&state)
+			scanErr = row.Scan(&state, &minimums)
 		}
 	}
 
@@ -1002,7 +1022,28 @@ func readWritable(ctx context.Context, tx pgx.Tx, readSQL string, fenceName *str
 		return nil, maintenance.ErrInMaintenance
 	}
 
+	if err := checkWriteMinimum(minimums, binaryVersion); err != nil {
+		return nil, err
+	}
+
 	return version, nil
+}
+
+// checkWriteMinimum fails a write whose binary is below the highest minimum
+// binary version that the schema records. It returns the *schema.MinimumError
+// as it is, so the API names both versions. A minimum that does not parse
+// fails closed with maintenance.ErrUnavailable.
+func checkWriteMinimum(minimums []string, binaryVersion string) error {
+	err := schema.CheckMinimums(minimums, binaryVersion)
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		return err
+	}
+
+	return fmt.Errorf("check schema minimum postgres database: %w", maintenance.ErrUnavailable)
 }
 
 // inSnapshotTx runs fn in a REPEATABLE READ, read-only transaction, so each
@@ -1101,7 +1142,7 @@ func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q
 	name := fence.Namespace.String()
 
 	return s.runTx(ctx, fn, func(tx pgx.Tx) error {
-		version, err := readWritable(ctx, tx, readStateAndFenceSQL, &name)
+		version, err := readWritable(ctx, tx, readStateAndFenceSQL, &name, s.binaryVersion)
 		if err != nil {
 			return err
 		}
@@ -1187,6 +1228,10 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 		return fmt.Errorf("%w: %d", schema.ErrMigrationsPending, len(plan.Pending))
 	}
 
+	if err := checkInstances(ctx, tx, plan.Pending); err != nil {
+		return err
+	}
+
 	for _, m := range plan.Pending {
 		if err := apply(ctx, tx, m); err != nil {
 			return err
@@ -1194,6 +1239,47 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 	}
 
 	return nil
+}
+
+// checkInstances refuses a pending migration that sets a minimum binary
+// version while an instance version row is below it, and names the rows. The
+// caller holds the migration lock in tx. Before the migration that adds the
+// table, no instance wrote a row, so the check passes. Nothing renews a row,
+// so the row of an instance that crashed blocks the migration until an
+// administrator deletes it.
+func checkInstances(ctx context.Context, tx pgx.Tx, pending []migrate.Migration) error {
+	if !slices.ContainsFunc(pending, func(m migrate.Migration) bool { return m.MinBinaryVersion != "" }) {
+		return nil
+	}
+
+	var present bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('instance_versions') IS NOT NULL`).Scan(&present); err != nil {
+		return fmt.Errorf("check instance versions table: %w", err)
+	}
+
+	if !present {
+		return nil
+	}
+
+	rows, err := tx.Query(ctx, `SELECT id, binary_version FROM instance_versions ORDER BY started_at_ms, id`)
+	if err != nil {
+		return fmt.Errorf("read instance versions: %w", err)
+	}
+
+	instances, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (schema.InstanceRow, error) {
+		var inst schema.InstanceRow
+
+		if scanErr := row.Scan(&inst.ID, &inst.BinaryVersion); scanErr != nil {
+			return inst, fmt.Errorf("scan instance version: %w", scanErr)
+		}
+
+		return inst, nil
+	})
+	if err != nil {
+		return fmt.Errorf("read instance versions: %w", err)
+	}
+
+	return migrate.CheckInstances(pending, instances)
 }
 
 // recordedMigrations returns the rows of schema_migrations, ordered by

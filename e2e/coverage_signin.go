@@ -53,6 +53,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Preferences:    nil,
 		GitHost:        nil,
 		Idempotency:    nil,
+		Instances:      nil,
 		Workers:        nil,
 		TempAdmins:     nil,
 		Now:            nil,

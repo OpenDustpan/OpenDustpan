@@ -84,7 +84,7 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 	defer release()
 
 	return r.s.jobTx(ctx, false, func(tx *sql.Tx, q *db.Queries) error {
-		if err := checkWritable(ctx, q); err != nil {
+		if err := r.s.checkWritable(ctx, q); err != nil {
 			return err
 		}
 

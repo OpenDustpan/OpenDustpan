@@ -190,6 +190,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 		InstallationKind: parts.kind,
 		Workers:          nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

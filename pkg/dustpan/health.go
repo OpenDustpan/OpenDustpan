@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // readinessTimeout bounds each readiness check: the store ping and the blob
@@ -57,6 +59,7 @@ const (
 	checkStore        = "store"
 	checkBlob         = "blob"
 	checkClaimLoop    = "claim-loop"
+	checkMinimum      = "binary-minimum"
 	checkDraining     = "draining"
 	infoAuditChain    = "audit-chain"
 	chainAdmits       = "admits"
@@ -96,9 +99,12 @@ type readinessSettings struct {
 	blobs       pinger
 	watch       *workerWatch
 	chainAdmits func(context.Context) bool
-	timeout     time.Duration
-	failures    *metrics.Counter
-	logger      *slog.Logger
+	// minimum checks the binary version against the minimum of the schema, or
+	// is nil for a store without the check.
+	minimum  minimumChecker
+	timeout  time.Duration
+	failures *metrics.Counter
+	logger   *slog.Logger
 }
 
 // newReadinessHandler returns the readiness probe over store and blobs. Each
@@ -140,8 +146,9 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 
 	if cfg.components.Has(ComponentAPI) {
 		part := componentChecks{
-			name:  ComponentAPI,
-			pings: []readinessCheck{{name: checkStore, ping: cfg.store}, {name: checkBlob, ping: cfg.blobs}},
+			name: ComponentAPI,
+			pings: append([]readinessCheck{{name: checkStore, ping: cfg.store}, {name: checkBlob, ping: cfg.blobs}},
+				minimumChecks(cfg.minimum)...),
 			tests: nil,
 			infos: nil,
 		}
@@ -161,7 +168,7 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 	if cfg.components.Has(ComponentWorker) {
 		rd.parts = append(rd.parts, componentChecks{
 			name:  ComponentWorker,
-			pings: []readinessCheck{{name: checkStore, ping: cfg.store}},
+			pings: append([]readinessCheck{{name: checkStore, ping: cfg.store}}, minimumChecks(cfg.minimum)...),
 			tests: []stateCheck{
 				{name: checkClaimLoop, ok: func(context.Context) bool { return cfg.watch.claimLoopRan() }},
 			},
@@ -170,6 +177,38 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 	}
 
 	return rd
+}
+
+// minimumPing makes the check of the binary version against the minimum of
+// the schema a readiness ping.
+type minimumPing struct {
+	checker minimumChecker
+}
+
+// Ping returns an error only when the check knows that the binary of this
+// process is below the minimum binary version of the schema. Such a process
+// cannot write, so the probe answers 503 and a load balancer takes it out of
+// the pool. The body names the check binary-minimum and holds no version text.
+// When the check cannot read the minimum, because the store is not available,
+// it does not fail: the check of the store already reports that cause, and one
+// cause gives one entry in the failed list.
+func (p minimumPing) Ping(ctx context.Context) error {
+	err := p.checker.CheckBinaryMinimum(ctx)
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		return fmt.Errorf("binary below the minimum: %w", err)
+	}
+
+	return nil
+}
+
+// minimumChecks returns the readiness check of the binary minimum, or none
+// for a store without the check.
+func minimumChecks(checker minimumChecker) []readinessCheck {
+	if checker == nil {
+		return nil
+	}
+
+	return []readinessCheck{{name: checkMinimum, ping: minimumPing{checker: checker}}}
 }
 
 // ServeHTTP implements http.Handler.

@@ -1140,7 +1140,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 		return nil, err
 	}
 	opts = append(opts, dustpan.WithSinkPorts(ports), dustpan.WithInstallationKind(f.kind()),
-		dustpan.WithInstallationKindStore(st))
+		dustpan.WithInstallationKindStore(st), dustpan.WithInstanceStore(st))
 
 	return append(opts, profileStoreOption(st, wrapper)...), nil
 }
@@ -1717,6 +1717,7 @@ type store interface {
 	accesstoken.HostStore
 	tempadmin.Store
 	installation.KindStore
+	installation.InstanceStore
 	close()
 }
 
