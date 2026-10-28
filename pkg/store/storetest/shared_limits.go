@@ -121,22 +121,34 @@ type SinkBackend interface {
 	NotificationSinks() notify.SinkStore
 }
 
-// NewSharedSinkService returns a sink service on the handle store that counts
-// the limits in counter and sends with sender. When makeNamespace is true, it
-// also makes the namespace ns, which must be new in the database.
-func NewSharedSinkService(
-	t *testing.T, store SinkBackend, counter authgate.FailureCounter, sender notify.Sender,
-	ns namespace.Name, makeNamespace bool,
-) *sinks.Service {
+// SinkServiceInput describes one sink service of NewSharedSinkService.
+type SinkServiceInput struct {
+	// Store is the handle that the service uses.
+	Store SinkBackend
+	// Counter holds the shared count of the limits.
+	Counter authgate.FailureCounter
+	// Sender sends the test messages.
+	Sender notify.Sender
+	// Namespace is the namespace of the sinks.
+	Namespace namespace.Name
+	// MakeNamespace makes Namespace, which must be new in the database. Set
+	// it for one service of a database only.
+	MakeNamespace bool
+}
+
+// NewSharedSinkService returns a sink service as in describes it.
+func NewSharedSinkService(t *testing.T, in SinkServiceInput) *sinks.Service {
 	t.Helper()
+
+	store := in.Store
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	if makeNamespace {
-		if _, createErr := namespaces.Create(t.Context(), ns); createErr != nil {
+	if in.MakeNamespace {
+		if _, createErr := namespaces.Create(t.Context(), in.Namespace); createErr != nil {
 			t.Fatalf("create namespace: %v", createErr)
 		}
 	}
@@ -155,7 +167,7 @@ func NewSharedSinkService(
 
 	svc, err := sinks.NewService(sinks.Config{
 		Store: store.NotificationSinks(), Sealer: notify.SinkSealer{Namespaces: secrets, Installation: nil},
-		Namespaces: namespaces, Senders: []notify.Sender{sender}, Ports: egress.Ports{}, Counter: counter,
+		Namespaces: namespaces, Senders: []notify.Sender{in.Sender}, Ports: egress.Ports{}, Counter: in.Counter,
 		Now: nil,
 	})
 	if err != nil {

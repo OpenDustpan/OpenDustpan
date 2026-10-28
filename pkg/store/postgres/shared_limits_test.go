@@ -4,7 +4,6 @@ import (
 	"os"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -32,8 +31,26 @@ func TestSharedLimits(t *testing.T) {
 		return storetest.SharedLimits{
 			Stores: [2]storetest.WorkspaceStore{first, second},
 			Services: [2]*sinks.Service{
-				storetest.NewSharedSinkService(t, first, authgate.FailureCounter(first), sender, shop, true),
-				storetest.NewSharedSinkService(t, second, breakable, sender, shop, false),
+				storetest.NewSharedSinkService(
+					t,
+					storetest.SinkServiceInput{
+						Store:         first,
+						Counter:       first,
+						Sender:        sender,
+						Namespace:     shop,
+						MakeNamespace: true,
+					},
+				),
+				storetest.NewSharedSinkService(
+					t,
+					storetest.SinkServiceInput{
+						Store:         second,
+						Counter:       breakable,
+						Sender:        sender,
+						Namespace:     shop,
+						MakeNamespace: false,
+					},
+				),
 			},
 			Namespace:     shop,
 			SecondCounter: breakable,
