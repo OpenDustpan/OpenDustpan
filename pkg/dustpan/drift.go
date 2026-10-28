@@ -51,6 +51,7 @@ func newDriftHandler(svc services, cfg *settings, onFailure func(), starter job.
 		Units:          cfg.inventoryReader,
 		Results:        cfg.driftStore,
 		Checker:        checker,
+		Workers:        cfg.watch,
 		Authenticator:  cfg.authenticator,
 		Authorizer:     cfg.authorizer,
 		Audit:          neutralAudit,

@@ -451,7 +451,7 @@ func pgEmptiedTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableDurableHeartbeats,
-			columns: []string{pgColOwner, pgColAtMs},
+			columns: []string{pgColOwner, pgColAtMs, "lease_ms"},
 			orderBy: []string{pgColOwner},
 		},
 	}

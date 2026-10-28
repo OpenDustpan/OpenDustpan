@@ -61,7 +61,7 @@ func TestMemBeatPrunesStaleOwners(t *testing.T) {
 	m.OldBeat("dead", durable.HeartbeatRetention+time.Minute)
 	m.OldBeat("alive", durable.HeartbeatRetention-time.Minute)
 
-	if err := m.HeartbeatHarness().Open(t, 0).Beat(t.Context(), "new"); err != nil {
+	if err := m.HeartbeatHarness().Open(t, 0).Beat(t.Context(), "new", time.Minute); err != nil {
 		t.Fatalf("Beat: %v", err)
 	}
 

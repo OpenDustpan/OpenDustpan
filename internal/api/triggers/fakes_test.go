@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/triggers"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
@@ -409,6 +410,13 @@ func newRig(t *testing.T, authz identity.Authorizer) *rig {
 func newRigLogged(t *testing.T, authz identity.Authorizer, logger *slog.Logger) *rig {
 	t.Helper()
 
+	return newRigWorkers(t, authz, logger, nil)
+}
+
+// newRigWorkers returns a rig whose handler asks workers before a fire.
+func newRigWorkers(t *testing.T, authz identity.Authorizer, logger *slog.Logger, workers admit.Source) *rig {
+	t.Helper()
+
 	r := &rig{
 		h:      nil,
 		store:  newStore(),
@@ -445,10 +453,18 @@ func newRigLogged(t *testing.T, authz identity.Authorizer, logger *slog.Logger) 
 	}
 
 	r.h, err = triggers.NewHandler(triggers.Config{
-		Namespaces: namespaces, Units: r.inv, Store: r.store, Manager: manager, Authenticator: tokenAuthenticator{},
-		Authorizer: authz, Audit: &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
-		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
-		Logger: logger,
+		Namespaces:     namespaces,
+		Units:          r.inv,
+		Store:          r.store,
+		Manager:        manager,
+		Workers:        workers,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Audit:          &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         logger,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -5531,13 +5531,14 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 }
 
 const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
-SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1
+SELECT owner, at_ms, lease_ms FROM durable_heartbeats
+ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbeat, error) {
 	row := q.db.QueryRowContext(ctx, getLatestDurableHeartbeat)
 	var i DurableHeartbeat
-	err := row.Scan(&i.Owner, &i.AtMs)
+	err := row.Scan(&i.Owner, &i.AtMs, &i.LeaseMs)
 	return i, err
 }
 
@@ -17294,19 +17295,21 @@ func (q *Queries) UpsertDriftResult(ctx context.Context, arg UpsertDriftResultPa
 
 const upsertDurableHeartbeat = `-- name: UpsertDurableHeartbeat :exec
 
-INSERT INTO durable_heartbeats (owner, at_ms) VALUES (?1, ?2)
-ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms
+INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+VALUES (?1, ?2, ?3)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms
 `
 
 type UpsertDurableHeartbeatParams struct {
-	Owner string
-	NowMs int64
+	Owner   string
+	NowMs   int64
+	LeaseMs int64
 }
 
 // Durable heartbeats. Every time comes from DatabaseNowMs, the clock of the
 // store, read in the transaction of the write.
 func (q *Queries) UpsertDurableHeartbeat(ctx context.Context, arg UpsertDurableHeartbeatParams) error {
-	_, err := q.db.ExecContext(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs)
+	_, err := q.db.ExecContext(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs, arg.LeaseMs)
 	return err
 }
 
