@@ -242,7 +242,7 @@ func TestReadinessDrains(t *testing.T) {
 		},
 		"with components": func(failures *metrics.Counter) *readiness {
 			return newComponentReadiness(readinessSettings{
-				components: api, store: blocked, blobs: blocked, watch: nil, chainAdmits: nil,
+				components: api, store: blocked, blobs: blocked, watch: nil, chainAdmits: nil, minimum: nil,
 				timeout: time.Minute, failures: failures, logger: logger,
 			})
 		},
