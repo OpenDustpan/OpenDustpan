@@ -1,59 +1,69 @@
 package backup
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
-// RestoreLive is the live store ports that a server-side restore needs: the
-// check ports of CheckRestore (ADR 38 decision 3), the one-step swap of
-// ApplyStaging (decision 6), and the fencing of BumpFailoverVersions
-// (decision 7). Every store adapter serves them from one database connection.
-//
-// KindReader, DevStripper and DevReportRecorder are part of it, so a live
-// store that lacks one cannot run a restore: NewRestoreService fails with
-// ErrMissingDependency and no restore runs without the dev data rules.
+// RestoreLive is the live store ports that a restore needs: the export that
+// reads the live summary, the key peek of the key check, the installation
+// kind of the dev data rules, the restores table and the staging areas of a
+// restore that runs as a durable operation. Every SQL store adapter serves
+// them from one database.
 type RestoreLive interface {
-	CheckStore
-	Applier
-	Fencer
+	PortableExporter
+	KeyPeeker
 	KindReader
-	DevStripper
-	DevReportRecorder
+	Fencer
+	RestoreOperations
+	RestoreStaging
 }
 
-// RestoreMaintenance enters and leaves maintenance mode around the apply
-// (ADR 38 decision 4). The server wires the domain service; tests stub the
-// two calls.
+// RestoreMaintenance enters and leaves maintenance mode around the swap
+// (ADR 38 decision 4), with each state write through a writer that the
+// restore binds to its claim. The server wires the domain service.
 type RestoreMaintenance interface {
-	// Enter moves the installation to maintenance mode. While an update or
-	// a run is active it reports maintenance.ErrActiveWork naming each one,
-	// unless force cancels them first.
-	Enter(ctx context.Context, force bool) (maintenance.EnterResult, error)
-	// Leave moves the installation back to normal operation.
-	Leave(ctx context.Context) error
+	// Get returns the installation state.
+	Get(ctx context.Context) (maintenance.State, error)
+	// EnterWith moves the installation to maintenance mode through the
+	// writer of opts. While an update or a run is active it reports
+	// maintenance.ErrActiveWork naming each one, unless opts.Force cancels
+	// them first.
+	EnterWith(ctx context.Context, opts maintenance.EnterOptions) (maintenance.EnterResult, error)
+	// RecheckWith lists the active work again for a restore that entered
+	// maintenance mode and lost its claim before its confirm.
+	RecheckWith(ctx context.Context, opts maintenance.EnterOptions) (maintenance.EnterResult, error)
+	// LeaveWith moves the installation back to normal operation through w.
+	// It reports maintenance.ErrHeld while the hold of the server keeps
+	// maintenance mode.
+	LeaveWith(ctx context.Context, w maintenance.StateWriter) error
+	// Held reports whether the hold of the server keeps maintenance mode.
+	Held(ctx context.Context) (bool, error)
 }
 
 // RestoreRequest asks for one restore: the backup to apply, whether to check
 // only, whether to cancel active work, who asked, and whether to keep the
 // current access tables. KeepAccessTables is true when the caller does not
 // hold server:restore-access: the restore replaces the other data and keeps
-// the current rows of the access tables.
+// the current rows of the access tables. PreBackupID names the backup of the
+// live data that the restore takes before the swap; empty mints one.
 type RestoreRequest struct {
 	BackupID         ID
 	PreBackupID      ID
@@ -65,14 +75,16 @@ type RestoreRequest struct {
 
 // RestoreConfig holds the dependencies of a RestoreService.
 type RestoreConfig struct {
-	// Live is the live SQL store: checks stage in it, the apply swaps it,
-	// and the fence bumps it.
+	// Live is the live SQL store: the checks read it, the restores table
+	// and the staging areas live in it.
 	Live RestoreLive
-	// Registry tracks the restores table.
-	Registry RestoreRegistry
-	// Backups takes the backup of the live data before the apply.
+	// Operations keeps the durable operation of each restore. It must also
+	// implement durable.StepCanceler. Live starts the operation in the
+	// transaction of the restore row, so both must name one database.
+	Operations durable.Store
+	// Backups takes the backup of the live data before the swap.
 	Backups *Service
-	// Maintenance enters and leaves maintenance mode around the apply.
+	// Maintenance enters and leaves maintenance mode around the swap.
 	Maintenance RestoreMaintenance
 	// Blobs is the live content store the restore copies into.
 	Blobs blob.Store
@@ -85,11 +97,11 @@ type RestoreConfig struct {
 	// that the backup holds no namespace with it as primary installation. A
 	// blank name disables the warning.
 	Installation string
-	// AfterApply runs after the swap with the rows preserved, while the
-	// server still holds maintenance mode, so a restore of data that
-	// predates a later change converges to it: for example, the server
-	// compares the restored audit log with the stored chain state. A failure
-	// fails the restore. Nil skips it.
+	// AfterApply runs after the swap, while the server still holds
+	// maintenance mode, so a restore of data that predates a later change
+	// converges to it: for example, the server compares the restored audit
+	// log with the stored chain state. It must be safe to run again after a
+	// takeover. A failure fails the restore. Nil skips it.
 	AfterApply func(ctx context.Context) error
 	// Admit runs when a restore starts, before it records the restore. An
 	// error refuses the restore: the server refuses a restore while a
@@ -105,18 +117,36 @@ type RestoreConfig struct {
 	// allow a dev backup, for example the flag in code quotes. Empty leaves
 	// the sentence out.
 	AllowDevHint string
-	Now          func() time.Time
-	Logger       *slog.Logger
+	// Owner names this instance in the claims on restore operations, for
+	// status only. An empty Owner means "restore".
+	Owner string
+	// Lease is the time from a claim or a renewal to its expiry. Zero means
+	// the default of the durable runner.
+	Lease time.Duration
+	// CleanupLockWait bounds the wait of each drop of the cleanup step for
+	// its locks. Zero means DefaultCleanupLockWait.
+	CleanupLockWait time.Duration
+	// RetryBase is the delay before the first retry of a failed step. Each
+	// next retry doubles it, up to durable.DefaultBackoffMax. Zero means
+	// durable.DefaultBackoffBase.
+	RetryBase time.Duration
+	Now       func() time.Time
+	Logger    *slog.Logger
 }
 
-// RestoreService runs online restores of a whole installation (ADR 38): it
-// checks the backup, enters maintenance mode, backs up the live data, copies
-// the blobs, swaps the staged SQL data in one step, increments the failover
-// version of every namespace, and leaves maintenance mode, also after a
-// failure. A check-only request runs the same checks and applies nothing.
+// DefaultCleanupLockWait bounds the wait of each drop of the cleanup step for
+// its locks. A drop that waits longer fails the attempt, and the step tries
+// again with backoff.
+const DefaultCleanupLockWait = 5 * time.Second
+
+// RestoreService runs online restores of a whole installation (ADR 38) as
+// durable operations of RestoreOperationKind. Start records the restore and
+// its operation; a worker of any instance runs the steps that the doc
+// comment of RestoreOperationKind names.
 type RestoreService struct {
 	live         RestoreLive
-	registry     RestoreRegistry
+	operations   durable.Store
+	canceler     durable.StepCanceler
 	backups      *Service
 	maintenance  RestoreMaintenance
 	blobs        blob.Store
@@ -127,29 +157,23 @@ type RestoreService struct {
 	admit        func(ctx context.Context) error
 	allowDev     bool
 	devHint      string
+	lease        time.Duration
+	lockWait     time.Duration
 	now          func() time.Time
 	logger       *slog.Logger
-	mu           sync.Mutex
-	running      bool
-	// inflight holds the latest known row of each restore this process
-	// started and has not finished yet. The swap in applyPinned replaces
-	// the live data with staged data that predates the restore row, so
-	// the registry loses the row between the swap and recreateAfterSwap.
-	// Get serves the held row across that window instead of answering
-	// ErrRestoreNotFound.
-	inflightMu sync.RWMutex
-	inflight   map[RestoreID]RestoreRecord
+	runner       *durable.Runner
 }
 
-// NewRestoreService returns a RestoreService. Live, Registry, Backups,
-// Maintenance, Blobs and Target are required. A nil Now means time.Now; a nil
-// Logger discards the restore log line.
+// NewRestoreService returns a RestoreService. Live, Operations, Backups,
+// Maintenance, Blobs and Target are required, and Operations must implement
+// durable.StepCanceler. A nil Now means time.Now; a nil Logger discards the
+// restore log lines.
 func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 	switch {
 	case cfg.Live == nil:
 		return nil, fmt.Errorf("%w: live store", ErrMissingDependency)
-	case cfg.Registry == nil:
-		return nil, fmt.Errorf("%w: restore registry", ErrMissingDependency)
+	case cfg.Operations == nil:
+		return nil, fmt.Errorf("%w: durable operations", ErrMissingDependency)
 	case cfg.Backups == nil:
 		return nil, fmt.Errorf("%w: backup service", ErrMissingDependency)
 	case cfg.Maintenance == nil:
@@ -160,19 +184,20 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		return nil, fmt.Errorf("%w: target", ErrMissingDependency)
 	}
 
+	canceler, ok := cfg.Operations.(durable.StepCanceler)
+	if !ok {
+		return nil, fmt.Errorf("%w: the durable operations cannot cancel before a step", ErrMissingDependency)
+	}
+
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
 	}
 
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-
-	return &RestoreService{
+	s := &RestoreService{
 		live:         cfg.Live,
-		registry:     cfg.Registry,
+		operations:   cfg.Operations,
+		canceler:     canceler,
 		backups:      cfg.Backups,
 		maintenance:  cfg.Maintenance,
 		blobs:        cfg.Blobs,
@@ -183,109 +208,73 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		admit:        cfg.Admit,
 		allowDev:     cfg.AllowDevBackups,
 		devHint:      cfg.AllowDevHint,
+		lease:        cmp.Or(cfg.Lease, durable.DefaultLease),
+		lockWait:     cmp.Or(cfg.CleanupLockWait, DefaultCleanupLockWait),
 		now:          now,
-		logger:       logger,
-		mu:           sync.Mutex{},
-		running:      false,
-		inflightMu:   sync.RWMutex{},
-		inflight:     map[RestoreID]RestoreRecord{},
-	}, nil
+		logger:       cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
+		runner:       nil,
+	}
+
+	runner, err := s.newRunner(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	s.runner = runner
+
+	return s, nil
 }
 
-// Start begins restore id in the background and returns at once, so an HTTP
-// handler answers 202 before the restore ends. It claims the single restore
-// slot and stores id as a checking row before it returns, so a second Start
-// while one runs answers ErrRestoreRunning and a GET sees the row at once.
-// The background work detaches from ctx: a canceled request never stops the
-// restore. The result lands in the registry row, where Get shows it: callers
-// poll until the row leaves checking and applying.
-func (s *RestoreService) Start(
-	ctx context.Context, id RestoreID, req RestoreRequest,
-) error {
-	if err := ctx.Err(); err != nil {
+// Start records restore id and starts its durable operation, in one
+// transaction, and returns at once, so an HTTP handler answers 202 before
+// the restore ends. It does not run the restore: a worker of any instance
+// claims the operation. A second Start while one restore runs answers
+// ErrRestoreRunning, and a GET sees the row at once. A canceled request never
+// stops the restore. A dev backup into a production installation is refused
+// here, before the row exists.
+func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreRequest) error {
+	warnings, err := s.admitStart(ctx, id, req)
+	if err != nil {
+		return err
+	}
+
+	input, err := startInput(id, req)
+	if err != nil {
+		return err
+	}
+
+	start, err := s.runner.StartRequest(RestoreOperationKind, RestoreOperationKey(id), input)
+	if err != nil {
 		return fmt.Errorf("begin restore %s: %w", id, err)
 	}
 
-	if err := s.claim(); err != nil {
-		return fmt.Errorf("begin restore %s: %w", id, err)
+	record := RestoreRecord{
+		StartedAt: s.now().UTC(), EndedAt: time.Time{}, ID: id, BackupID: req.BackupID, PreBackupID: "",
+		RequestedBy: req.RequestedBy, Error: "", State: RestoreChecking, DevReport: nil,
 	}
 
-	releaseOnErr := true
-
-	defer func() {
-		if releaseOnErr {
-			s.release()
-		}
-	}()
-
-	if runningErr := s.runningElsewhere(ctx, id); runningErr != nil {
-		return fmt.Errorf("begin restore %s: %w", id, runningErr)
+	if len(warnings) > 0 {
+		report := emptyDevReport()
+		report.Warnings = warnings
+		record.DevReport = &report
 	}
 
-	if s.admit != nil {
-		if err := s.admit(ctx); err != nil {
-			return fmt.Errorf("begin restore %s: %w", id, err)
-		}
+	if err := s.live.StartRestore(ctx, record, start); err != nil {
+		return fmt.Errorf("create restore %s: %w", id, err)
 	}
-
-	// A dev backup into a production installation is refused here, before the
-	// row exists, so the caller gets the refusal at once.
-	warnings, devErr := s.startDevCheck(ctx, req.BackupID)
-	if devErr != nil {
-		return fmt.Errorf("begin restore %s: %w", id, devErr)
-	}
-
-	create := RestoreRecord{
-		StartedAt:   s.now().UTC(),
-		EndedAt:     time.Time{},
-		ID:          id,
-		BackupID:    req.BackupID,
-		PreBackupID: "",
-		RequestedBy: req.RequestedBy,
-		Error:       "",
-		State:       RestoreChecking,
-		DevReport:   nil,
-	}
-
-	if createErr := s.registry.CreateRestore(ctx, create); createErr != nil {
-		return fmt.Errorf("create restore %s: %w", id, createErr)
-	}
-
-	s.recordStartWarnings(ctx, id, warnings)
-
-	s.trackRestore(create)
-
-	if winnerErr := s.yieldToEarlierRunner(ctx, create); winnerErr != nil {
-		_, _ = s.registry.FinishRestore( //nolint:errcheck // Loser row records its own refusal.
-			ctx, id, RestoreFailed, sanitizeRestoreError(winnerErr), s.now().UTC(),
-		)
-		s.untrackRestore(id)
-
-		return fmt.Errorf("begin restore %s: %w", id, winnerErr)
-	}
-
-	releaseOnErr = false
-
-	go s.finish(context.WithoutCancel(ctx), id, req)
 
 	return nil
 }
 
-// Get returns the restore row id, or ErrRestoreNotFound. While the swap in
-// applyPinned hides the registry row between the swap and recreateAfterSwap,
-// Get serves the row this process holds for the running restore, so polling
-// never sees a transient 404.
+// Get returns the restore row id, or ErrRestoreNotFound. Any instance
+// answers it: the row lives in the control tables, which the swap keeps.
 func (s *RestoreService) Get(ctx context.Context, id RestoreID) (RestoreRecord, error) {
-	record, err := s.registry.GetRestore(ctx, id)
-	if err == nil {
-		return record, nil
+	record, err := s.live.GetRestore(ctx, id)
+	if err != nil {
+		return RestoreRecord{}, fmt.Errorf("get restore %s: %w", id, err)
 	}
 
-	if held, ok := s.inflightRecord(id); ok && errors.Is(err, ErrRestoreNotFound) {
-		return held, nil
-	}
-
-	return RestoreRecord{}, fmt.Errorf("get restore %s: %w", id, err)
+	return record, nil
 }
 
 // ReadManifest returns the manifest of backup id from the target. A backup
@@ -300,9 +289,9 @@ func (s *RestoreService) ReadManifest(ctx context.Context, id ID) (Manifest, err
 	return manifest, nil
 }
 
-// List returns every restore row, newest first, from the registry.
+// List returns every restore row, newest first.
 func (s *RestoreService) List(ctx context.Context) ([]RestoreRecord, error) {
-	records, err := s.registry.ListRestores(ctx)
+	records, err := s.live.ListRestores(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list restores: %w", err)
 	}
@@ -310,227 +299,473 @@ func (s *RestoreService) List(ctx context.Context) ([]RestoreRecord, error) {
 	return records, nil
 }
 
-// Running reports whether a restore runs: one that this service started
-// and that did not end, or a row of the registry that is still checking or
-// applying, from this instance or from another one.
+// Running reports whether a restore row is checking or applying, on any
+// instance.
 func (s *RestoreService) Running(ctx context.Context) (bool, error) {
-	s.mu.Lock()
-	local := s.running
-	s.mu.Unlock()
-
-	if local {
-		return true, nil
-	}
-
-	err := s.runningElsewhere(ctx, "")
-	if errors.Is(err, ErrRestoreRunning) {
-		return true, nil
-	}
-
+	records, err := s.live.ListRestores(ctx)
 	if err != nil {
 		return false, fmt.Errorf("list restores: %w", err)
+	}
+
+	for i := range records {
+		if records[i].State == RestoreChecking || records[i].State == RestoreApplying {
+			return true, nil
+		}
 	}
 
 	return false, nil
 }
 
-// recordStartWarnings puts the warnings that the kinds decide on the row from
-// the start, so the answer of the start carries them. The restore replaces
-// them with what it finds.
-func (s *RestoreService) recordStartWarnings(ctx context.Context, id RestoreID, warnings []RestoreWarningCode) {
-	if len(warnings) == 0 {
+// Cancel stops restore id before its swap. It returns nil when the cancel is
+// accepted, also when a cancel already stopped the restore. It returns
+// ErrRestoreNotFound for an unknown restore, ErrRestoreSwapped when the
+// restore already swapped the data, and ErrRestoreNotRunning when the
+// restore ended. The check of the swap and the cancel are one transaction,
+// and the swap transaction checks the cancel, so a restore never ends
+// canceled after its swap. The row ends failed when the operation ends: the
+// failed-row sweep of the workers marks it, and Cancel runs that sweep once
+// at once.
+func (s *RestoreService) Cancel(ctx context.Context, id RestoreID) error {
+	record, err := s.live.GetRestore(ctx, id)
+	if err != nil {
+		return fmt.Errorf("cancel restore %s: %w", id, err)
+	}
+
+	op, err := s.operationOf(ctx, id)
+	if err != nil {
+		return fmt.Errorf("cancel restore %s: %w", id, err)
+	}
+
+	if record.State != RestoreChecking && record.State != RestoreApplying {
+		// A cancel that a cancel already stopped is accepted again.
+		if record.State == RestoreFailed && op.State == durable.StateCanceled {
+			return nil
+		}
+
+		return fmt.Errorf("cancel restore %s: %w", id, ErrRestoreNotRunning)
+	}
+
+	err = s.canceler.CancelBefore(ctx, op.ID, RestoreStepSwap)
+
+	switch {
+	case errors.Is(err, durable.ErrStepDone):
+		return fmt.Errorf("cancel restore %s: %w", id, ErrRestoreSwapped)
+	case errors.Is(err, durable.ErrFinished):
+		// An operation that a cancel already ended accepts the cancel again,
+		// also before the row is marked failed.
+		if ended, getErr := s.operations.Get(ctx, op.ID); getErr == nil && ended.State == durable.StateCanceled {
+			s.failEndedOnce(ctx)
+
+			return nil
+		}
+
+		return fmt.Errorf("cancel restore %s: %w", id, ErrRestoreNotRunning)
+	case err != nil:
+		return fmt.Errorf("cancel restore %s: %w", id, err)
+	}
+
+	s.failEndedOnce(ctx)
+
+	return nil
+}
+
+// Work claims and runs restore operations until ctx ends, and marks failed
+// the restore rows whose operation ended without a finish write. A worker
+// process calls it. When ctx ends during a step, the runner releases the
+// claim, so another instance, or this one after a restart, continues the
+// restore. Work returns after the loops stopped.
+func (s *RestoreService) Work(ctx context.Context) {
+	var wg sync.WaitGroup
+
+	wg.Go(func() { s.runner.Run(ctx) })
+	wg.Go(func() { s.failEnded(ctx) })
+
+	wg.Wait()
+}
+
+// RunOnce claims one restore operation and runs it until it ends, until the
+// runner loses its claim, or until ctx ends, and then marks failed the rows
+// of ended operations once. It returns the error of durable.Runner.RunOnce.
+// A command that runs one restore with no worker calls it.
+func (s *RestoreService) RunOnce(ctx context.Context) error {
+	err := s.runner.RunOnce(ctx)
+
+	s.failEndedOnce(ctx)
+
+	if err != nil {
+		return fmt.Errorf("run a restore operation: %w", err)
+	}
+
+	return nil
+}
+
+// newRunner builds the runner that claims and runs the restore operations.
+// It stops a step at the first renewal that fails, because the steps change
+// things outside the fence: blob copies and, with force, the cancel of
+// active work.
+func (s *RestoreService) newRunner(cfg RestoreConfig) (*durable.Runner, error) {
+	runner, err := durable.NewRunner(durable.RunnerConfig{
+		Store: cfg.Operations,
+		Owner: cmp.Or(cfg.Owner, "restore"),
+		Kinds: []durable.KindSpec{{
+			Kind:       RestoreOperationKind,
+			Version:    RestoreOperationVersion,
+			MinVersion: RestoreOperationVersion,
+			Steps:      s.steps(),
+		}},
+		Lease:       cfg.Lease,
+		RenewEvery:  0,
+		PollEvery:   0,
+		MaxAttempts: 0,
+		ExpiryLimit: 0,
+		Backoff: durable.Backoff{
+			Base: cmp.Or(cfg.RetryBase, durable.DefaultBackoffBase),
+			Max:  durable.DefaultBackoffMax,
+		},
+		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:       0,
+		Deferred:           nil,
+		StopOnRenewalError: true,
+		Logger:             cfg.Logger,
+		Rand:               nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("restore runner: %w", err)
+	}
+
+	return runner, nil
+}
+
+// refuseWhileRunning returns ErrRestoreRunning when a restore row is
+// checking or applying.
+func (s *RestoreService) refuseWhileRunning(ctx context.Context) error {
+	rows, err := s.live.ListRestores(ctx)
+	if err != nil {
+		return fmt.Errorf("list restores: %w", err)
+	}
+
+	for i := range rows {
+		if rows[i].State == RestoreChecking || rows[i].State == RestoreApplying {
+			return ErrRestoreRunning
+		}
+	}
+
+	return nil
+}
+
+// operationOf returns the durable operation of restore id.
+func (s *RestoreService) operationOf(ctx context.Context, id RestoreID) (durable.Operation, error) {
+	ops, err := s.operations.List(ctx, durable.Filter{Kind: RestoreOperationKind, States: nil, Limit: 0})
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("list restore operations: %w", err)
+	}
+
+	for i := range ops {
+		if ops[i].Key == RestoreOperationKey(id) {
+			return ops[i], nil
+		}
+	}
+
+	return durable.Operation{}, ErrRestoreNotFound
+}
+
+// admitStart checks the IDs of a start, runs the admit hook, refuses the
+// start while a restore runs, and compares the kinds of the backup and the
+// installation. It returns the warnings of the kinds.
+func (s *RestoreService) admitStart(
+	ctx context.Context,
+	id RestoreID,
+	req RestoreRequest,
+) ([]RestoreWarningCode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	if _, err := ParseRestoreID(id.String()); err != nil {
+		return nil, fmt.Errorf("begin restore: %w", err)
+	}
+
+	if _, err := ParseID(req.BackupID.String()); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	if s.admit != nil {
+		if err := s.admit(ctx); err != nil {
+			return nil, fmt.Errorf("begin restore %s: %w", id, err)
+		}
+	}
+
+	// A restore that runs refuses the start before it reads the target. The
+	// insert of StartRestore checks it again in its transaction: two starts
+	// at the same time pass this read, and only one insert commits.
+	if err := s.refuseWhileRunning(ctx); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	warnings, err := s.startDevCheck(ctx, req.BackupID)
+	if err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	return warnings, nil
+}
+
+// startInput returns the input of the operation of restore id, with a new
+// pre-backup ID when req names none.
+func startInput(id RestoreID, req RestoreRequest) ([]byte, error) {
+	in := restoreInput{
+		ID: id, BackupID: req.BackupID, PreBackupID: req.PreBackupID, CheckOnly: req.CheckOnly, Force: req.Force,
+		RequestedBy: req.RequestedBy, KeepAccessTables: req.KeepAccessTables,
+	}
+
+	if in.PreBackupID == "" {
+		in.PreBackupID = ID(ident.NewID("bkp-"))
+	}
+
+	if _, err := ParseID(in.PreBackupID.String()); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	input, err := json.Marshal(in)
+	if err != nil {
+		return nil, fmt.Errorf("encode input of restore %s: %w", id, err)
+	}
+
+	return input, nil
+}
+
+// failEnded marks failed the rows of restores whose operation ended failed
+// or canceled, once in each lease period, until ctx ends.
+func (s *RestoreService) failEnded(ctx context.Context) {
+	ticker := time.NewTicker(s.lease)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.failEndedOnce(ctx)
+		}
+	}
+}
+
+// failEndedOnce marks failed the rows of restores whose operation ended
+// failed or canceled. It leaves the maintenance mode that such a restore
+// entered, unless the hold of the server keeps it, and writes the audit
+// entries of each row that it marked. A failure here is not final: the next
+// period tries again, and the row stays running until then.
+func (s *RestoreService) failEndedOnce(ctx context.Context) {
+	held, err := s.maintenance.Held(ctx)
+	if err != nil {
+		// A hold that cannot be read keeps maintenance mode: fail closed.
+		held = true
+	}
+
+	ops, err := s.endedOperations(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.WarnContext(ctx, "restore operations were not read", slog.String("error", durable.ErrorClass(err)))
+		}
+
 		return
 	}
 
-	report := emptyDevReport()
-	report.Warnings = warnings
-
-	if err := s.live.RecordDevReport(ctx, id, report); err != nil {
-		s.logger.ErrorContext(ctx, "record the restore warnings failed", slog.String("restore_id", id.String()))
-	}
-}
-
-// claim takes the single restore slot, or reports ErrRestoreRunning.
-func (s *RestoreService) claim() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.running {
-		return ErrRestoreRunning
-	}
-
-	s.running = true
-
-	return nil
-}
-
-// release frees the single restore slot.
-func (s *RestoreService) release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.running = false
-}
-
-// trackRestore remembers the latest known row of a running restore, so Get
-// can serve it while the swap hides the registry row.
-func (s *RestoreService) trackRestore(record RestoreRecord) {
-	s.inflightMu.Lock()
-	defer s.inflightMu.Unlock()
-
-	if s.inflight == nil {
-		s.inflight = map[RestoreID]RestoreRecord{}
-	}
-
-	s.inflight[record.ID] = record
-}
-
-// untrackRestore forgets a restore that reached its end state in the
-// registry, so later reads come from the stored row.
-func (s *RestoreService) untrackRestore(id RestoreID) {
-	s.inflightMu.Lock()
-	defer s.inflightMu.Unlock()
-
-	delete(s.inflight, id)
-}
-
-// inflightRecord returns the held row of a running restore, if this process
-// started it and has not finished it yet.
-func (s *RestoreService) inflightRecord(id RestoreID) (RestoreRecord, bool) {
-	s.inflightMu.RLock()
-	defer s.inflightMu.RUnlock()
-
-	record, ok := s.inflight[id]
-
-	return record, ok
-}
-
-// runningElsewhere reports ErrRestoreRunning when the registry already
-// holds a checking or applying row. The in-memory claim stops two starts on
-// one process; this check stops a start on one process while another process
-// runs one, because both share the same database.
-func (s *RestoreService) runningElsewhere(ctx context.Context, _ RestoreID) error {
-	records, err := s.registry.ListRestores(ctx)
-	if err != nil {
-		return err
-	}
-
-	for i := range records {
-		if records[i].State == RestoreChecking || records[i].State == RestoreApplying {
-			return ErrRestoreRunning
+	// The fence comes before the rows fail: when it fails, the next round
+	// still sees the ended restore and fences again.
+	if fenceErr := s.fenceEnded(ctx, ops); fenceErr != nil {
+		if ctx.Err() == nil {
+			s.logger.WarnContext(ctx, "namespaces were not fenced after a restore that stopped",
+				slog.String("error", durable.ErrorClass(fenceErr)))
 		}
-	}
-
-	return nil
-}
-
-// yieldToEarlierRunner reports ErrRestoreRunning when a concurrent Start won
-// the slot: after CreateRestore, two starters can both hold a checking row,
-// so the later starter (by start time, then ID) yields to the earlier one.
-// The loser marks its own row failed; the winner keeps running.
-func (s *RestoreService) yieldToEarlierRunner(ctx context.Context, own RestoreRecord) error {
-	records, err := s.registry.ListRestores(ctx)
-	if err != nil {
-		return err
-	}
-
-	for i := range records {
-		record := records[i]
-		if record.ID == own.ID {
-			continue
-		}
-
-		if record.State != RestoreChecking && record.State != RestoreApplying {
-			continue
-		}
-
-		if record.StartedAt.Before(own.StartedAt) {
-			return ErrRestoreRunning
-		}
-
-		if record.StartedAt.Equal(own.StartedAt) && record.ID < own.ID {
-			return ErrRestoreRunning
-		}
-	}
-
-	return nil
-}
-
-// finish runs a restore that Start began: checks, maintenance mode, backup
-// of the live data, blob copy, the one-step swap, fencing, and the leave.
-// The slot goes free before the row reaches its end state, while the row
-// still reads checking or applying: a client that polls GET to the end state
-// and starts the next restore at once never meets the stale in-memory flag,
-// and a start that arrives before the row finishes is still refused through
-// the registry. Errors land in the row as sanitized text, where Get shows them
-// to the operator; the sanitized detail goes to the server log. It leaves
-// maintenance mode when the restore ends, also after a failure.
-func (s *RestoreService) finish(ctx context.Context, id RestoreID, req RestoreRequest) {
-	restoreErr := s.restore(ctx, id, req)
-	end := s.now().UTC()
-
-	// The slot frees first, so a client that read the end state starts the
-	// next restore at once; the registry still refuses an early start.
-	s.release()
-
-	if restoreErr != nil {
-		// Background result: the registry row records the outcome, and a
-		// finish failure leaves the row running for the next server start
-		// to mark failed. When the swap hid the row and the recreate never
-		// ran, FinishRestore reports not found: create the failed row so
-		// the restore stays visible.
-		text := sanitizeRestoreError(restoreErr)
-		if _, finishErr := s.registry.FinishRestore(ctx, id, RestoreFailed, text, end); finishErr != nil &&
-			errors.Is(finishErr, ErrRestoreNotFound) {
-			s.createFinishedRow(
-				ctx,
-				restoreOutcome{id: id, req: req, state: RestoreFailed, errText: text, full: nil},
-				end,
-			)
-		}
-
-		s.untrackRestore(id)
-		s.logRestore(ctx, restoreOutcome{id: id, req: req, state: RestoreFailed, errText: text, full: restoreErr})
 
 		return
 	}
 
-	// Background result, as above.
-	if _, finishErr := s.registry.FinishRestore(ctx, id, RestoreSucceeded, "", end); finishErr != nil &&
-		errors.Is(finishErr, ErrRestoreNotFound) {
-		s.createFinishedRow(ctx, restoreOutcome{id: id, req: req, state: RestoreSucceeded, errText: "", full: nil}, end)
+	rows, err := s.live.FailEndedRestores(ctx, s.now().UTC(), !held)
+	if err != nil && ctx.Err() == nil {
+		s.logger.WarnContext(ctx, "restore rows of ended operations were not marked failed",
+			slog.String("error", durable.ErrorClass(err)))
 	}
 
-	s.untrackRestore(id)
-	s.logRestore(ctx, restoreOutcome{id: id, req: req, state: RestoreSucceeded, errText: "", full: nil})
+	for i := range rows {
+		s.logger.WarnContext(ctx, "restore ended with no end write and was marked failed",
+			slog.String("restore_id", rows[i].ID.String()), slog.String("error", rows[i].Error))
+
+		if op, ok := ops[RestoreOperationKey(rows[i].ID)]; ok {
+			s.auditEnded(ctx, op)
+		}
+	}
 }
 
-// createFinishedRow stores the end state of out.id when the swap hid the row
-// and the recreate never ran, so FinishRestore had no row to finish. The
-// held row, when present, keeps the start time, the backup, the pre-backup
-// and the requester. Best effort: the row is the record, and a failed create
-// leaves the held row for the next server start to mark failed.
-func (s *RestoreService) createFinishedRow(ctx context.Context, out restoreOutcome, end time.Time) {
-	record := RestoreRecord{
-		StartedAt:   end,
-		EndedAt:     end,
-		ID:          out.id,
-		BackupID:    out.req.BackupID,
-		PreBackupID: out.req.PreBackupID,
-		RequestedBy: out.req.RequestedBy,
-		Error:       out.errText,
-		State:       out.state,
-		DevReport:   nil,
+// endedOperations returns the operations of the checking or applying restore
+// rows that ended, by their start key: the restores that stopped with no end
+// write.
+func (s *RestoreService) endedOperations(ctx context.Context) (map[string]durable.Operation, error) {
+	rows, err := s.live.ListRestores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list restores: %w", err)
 	}
 
-	if held, ok := s.inflightRecord(out.id); ok {
-		record.StartedAt = held.StartedAt
-		record.BackupID = held.BackupID
-		record.PreBackupID = held.PreBackupID
-		record.RequestedBy = held.RequestedBy
+	running := make(map[string]bool)
+
+	for i := range rows {
+		if rows[i].State == RestoreChecking || rows[i].State == RestoreApplying {
+			running[RestoreOperationKey(rows[i].ID)] = true
+		}
 	}
 
-	_ = s.registry.CreateRestore(ctx, record) //nolint:errcheck // The row is the record.
+	ended := make(map[string]durable.Operation)
+
+	if len(running) == 0 {
+		return ended, nil
+	}
+
+	ops, err := s.operations.List(ctx, durable.Filter{Kind: RestoreOperationKind, States: nil, Limit: 0})
+	if err != nil {
+		return nil, fmt.Errorf("list restore operations: %w", err)
+	}
+
+	for i := range ops {
+		if running[ops[i].Key] && ops[i].State.Terminal() {
+			ended[ops[i].Key] = ops[i]
+		}
+	}
+
+	return ended, nil
+}
+
+// fenceEnded increments the failover version of every namespace once when an
+// ended restore of ops is not check-only and touchedLive reports it: such a
+// restore can have canceled work, and its swap can have committed. A restore
+// that stopped in stage or check changed no live data, so its stop leaves the
+// leases, locks and update tokens of the installation alone. Each fence
+// writes a log line that names the restores.
+func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.Operation) error {
+	var stopped []string
+
+	for key := range ops {
+		op := ops[key]
+
+		in, err := readRestoreInput(op)
+		if err != nil {
+			// An input that does not decode is a restore of unknown scope:
+			// fail closed and fence.
+			stopped = append(stopped, op.Key)
+
+			continue
+		}
+
+		if in.CheckOnly {
+			continue
+		}
+
+		touched, err := s.touchedLive(ctx, op, in.ID)
+		if err != nil {
+			return err
+		}
+
+		if touched {
+			stopped = append(stopped, in.ID.String())
+		}
+	}
+
+	if len(stopped) == 0 {
+		return nil
+	}
+
+	slices.Sort(stopped)
+
+	n, err := s.live.BumpFailoverVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("fence namespaces after a stopped restore: %w", err)
+	}
+
+	s.logger.WarnContext(ctx, "fenced every namespace after a restore that stopped in maintenance mode",
+		slog.String("restores", strings.Join(stopped, ", ")), slog.Int64("namespaces", n))
+
+	return nil
+}
+
+// touchedLive reports whether the restore id of op can have changed the
+// installation: it recorded enter-maintenance, or its row holds the
+// maintenance flag of an enter that it did not confirm, or it stored audit
+// events, which it stores before each forced cancel and each repair.
+func (s *RestoreService) touchedLive(ctx context.Context, op durable.Operation, id RestoreID) (bool, error) {
+	if _, entered := op.Step(RestoreStepEnterMaintenance); entered {
+		return true, nil
+	}
+
+	flag, err := s.live.RestoreMaintenanceEntered(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("read the maintenance flag of restore %s: %w", id, err)
+	}
+
+	if flag {
+		return true, nil
+	}
+
+	events, err := s.live.RestoreEvents(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("read the audit events of restore %s: %w", id, err)
+	}
+
+	return len(events) > 0, nil
+}
+
+// auditEnded writes the audit entries of the restore of op, which a sweep
+// marked failed. After the swap, when the after-apply step did not write
+// them, it writes the entries of that step, because the swap replaced the
+// audit log. Before the swap it writes the audit events of the restore.
+func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
+	in, err := readRestoreInput(op)
+	if err != nil {
+		return
+	}
+
+	_, swapped := op.Step(RestoreStepSwap)
+	_, applied := op.Step(RestoreStepAfterApply)
+
+	if !swapped {
+		s.appendEvents(ctx, in)
+
+		return
+	}
+
+	if applied {
+		return
+	}
+
+	store, ok := s.live.(serverAuditAppender)
+	if !ok {
+		return
+	}
+
+	entries, err := s.afterApplyEntries(ctx, op, in)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"audit entries of a restore were not built",
+			slog.String("restore_id", in.ID.String()),
+		)
+
+		return
+	}
+
+	for i := range entries {
+		if _, err := store.AppendServer(ctx, entries[i]); err != nil {
+			s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", in.ID.String()))
+		}
+	}
+}
+
+// storedRestoreSentinels lists the sentinels whose own text a restore row
+// stores, in the order that sanitizeRestoreError tests them.
+//
+//nolint:gochecknoglobals // A frozen list of sentinels, like the table lists of this package.
+var storedRestoreSentinels = []error{
+	ErrManifestKindInvalid, ErrDevStripIncomplete, ErrRestoreRunning, ErrRestoreAccessMismatch, ErrCorrupt,
+	ErrSchemaBeforeBaseline, ErrSchemaMismatch, ErrNotFound, ErrRestoreNotFound,
 }
 
 // restoreOutcome carries one finished restore to the log line.
@@ -540,6 +775,35 @@ type restoreOutcome struct {
 	state   RestoreState
 	errText string
 	full    error
+}
+
+// logObjectPath matches a quoted backup-target object path, for example
+// "backups/bkp-1/manifest.json" or "blobs/namespaces/ns-1/pulumi/stk-1/upd-1/0": storage layout, not
+// data. Blob content keys without the target prefix stay, so the log still
+// names the blob that failed.
+var logObjectPath = regexp.MustCompile(`"[^"]*(?:backups|blobs)/[^"]*"`)
+
+// logToken matches a token value after the word token. Our own messages
+// never print one, but a wrapped foreign error may carry it.
+var logToken = regexp.MustCompile(`(?i)\btoken\s+("[^"]*"|\S+)`)
+
+// logFrame is one error of the flattened cause chain: its own text, whether
+// it wraps nothing further, and the value for the sentinel check.
+type logFrame struct {
+	value error
+	text  string
+	leaf  bool
+}
+
+// pinnedManifest pins the manifest fields the second stage must still match,
+// so a target mutated after the check cannot be applied.
+type pinnedManifest struct {
+	sqlSize  int64
+	sqlSHA   string
+	schema   int
+	dialect  Dialect
+	kind     installation.Kind
+	wrappers []string
 }
 
 // sanitizeRestoreError maps a restore failure to the stable text stored in
@@ -580,15 +844,6 @@ func sanitizeRestoreError(err error) string {
 	}
 
 	return "restore failed"
-}
-
-// storedRestoreSentinels lists the sentinels whose own text a restore row
-// stores, in the order that sanitizeRestoreError tests them.
-//
-//nolint:gochecknoglobals // A frozen list of sentinels, like the table lists of this package.
-var storedRestoreSentinels = []error{
-	ErrManifestKindInvalid, ErrDevStripIncomplete, ErrRestoreRunning, ErrRestoreAccessMismatch, ErrCorrupt,
-	ErrSchemaBeforeBaseline, ErrSchemaMismatch, ErrNotFound, ErrRestoreNotFound,
 }
 
 // activeWorkMessage answers the stored text for a refused maintenance
@@ -633,7 +888,7 @@ func secretRestoreMessage(err error) (string, bool) {
 // second error line, so the operator can tell which table, blob or check
 // failed from the log alone.
 func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
-	record, getErr := s.registry.GetRestore(ctx, out.id)
+	record, getErr := s.live.GetRestore(ctx, out.id)
 	pre := out.req.PreBackupID.String()
 
 	if getErr == nil && record.PreBackupID != "" {
@@ -673,16 +928,6 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 	}
 }
 
-// logObjectPath matches a quoted backup-target object path, for example
-// "backups/bkp-1/manifest.json" or "blobs/namespaces/ns-1/pulumi/stk-1/upd-1/0": storage layout, not
-// data. Blob content keys without the target prefix stay, so the log still
-// names the blob that failed.
-var logObjectPath = regexp.MustCompile(`"[^"]*(?:backups|blobs)/[^"]*"`)
-
-// logToken matches a token value after the word token. Our own messages
-// never print one, but a wrapped foreign error may carry it.
-var logToken = regexp.MustCompile(`(?i)\btoken\s+("[^"]*"|\S+)`)
-
 // sanitizeLogError renders err for the server log: our own wrapping context
 // with object paths and tokens redacted, down to the first foreign leaf,
 // which never reaches the log. Known sentinels stay: they name the cause
@@ -714,14 +959,6 @@ func sanitizeLogError(err error) string {
 	}
 
 	return strings.Join(parts, ": ")
-}
-
-// logFrame is one error of the flattened cause chain: its own text, whether
-// it wraps nothing further, and the value for the sentinel check.
-type logFrame struct {
-	value error
-	text  string
-	leaf  bool
 }
 
 // flattenLogFrames flattens err into its wrapping messages, outermost first.
@@ -839,294 +1076,6 @@ func isLogSentinel(err error) bool {
 	}
 }
 
-// restore runs the restore order of ADR 38 decisions 3 to 9: checks,
-// maintenance mode (canceling active work with force), backup of the live
-// data, blob copy, the one-step swap, fencing, and the leave. A failed check
-// or a refused enter stops the restore and leaves the live data as it was,
-// with no backup taken. A check-only request runs the same checks and applies
-// nothing.
-func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreRequest) error {
-	pinned, pinErr := s.pinManifest(ctx, req.BackupID)
-	if pinErr != nil {
-		return pinErr
-	}
-
-	// Layer 1: compare the kind of the backup with the kind of the live
-	// installation before anything stages and before maintenance mode.
-	dev, devErr := s.devKinds(ctx, pinned)
-	if devErr != nil {
-		return devErr
-	}
-
-	checkInput := CheckInput{
-		Target:       s.target,
-		Live:         s.live,
-		Key:          s.key,
-		ID:           req.BackupID,
-		Installation: s.installation,
-		Stage:        StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
-		AfterStage:   nil,
-	}
-
-	if dev.production() {
-		checkInput.AfterStage = func(ctx context.Context) error { return s.detectStaged(ctx, dev) }
-	}
-
-	if _, _, checkErr := CheckRestore(ctx, checkInput); checkErr != nil {
-		return checkErr
-	}
-
-	dev.checkOnly = req.CheckOnly
-
-	if req.CheckOnly {
-		// A check-only restore reports what it would remove and changes
-		// nothing else.
-		return s.recordDevReport(ctx, id, dev)
-	}
-
-	if _, enterErr := s.maintenance.Enter(ctx, req.Force); enterErr != nil {
-		return fmt.Errorf("enter maintenance mode for restore %s: %w", id, enterErr)
-	}
-
-	// The server leaves maintenance mode when the restore ends, also after
-	// a failure: the deferred leave runs before the error returns.
-	defer func() {
-		_ = s.maintenance.Leave(context.WithoutCancel(ctx)) //nolint:errcheck // Best-effort leave.
-	}()
-
-	// The pre-backup runs after Enter, so a forced restore backs up the live
-	// data with the active work already canceled (ADR 38 decisions 5 and 8):
-	// the undo restores the state the restore actually replaced, and a
-	// refused restore takes no backup at all.
-	preID := req.PreBackupID
-	if preID == "" {
-		preID = ID(ident.NewID("bkp-"))
-	}
-
-	pre, backupErr := s.backups.Run(ctx, preID)
-	if backupErr != nil {
-		return fmt.Errorf("backup live data before restore %s: %w", id, backupErr)
-	}
-
-	if markErr := s.registry.MarkRestoreApplying(ctx, id, pre.ID); markErr != nil {
-		return fmt.Errorf("mark restore %s applying: %w", id, markErr)
-	}
-
-	// Remember the applying row before the swap hides it: Get serves the
-	// held row while the registry loses it.
-	if marked, getErr := s.registry.GetRestore(ctx, id); getErr == nil {
-		s.trackRestore(marked)
-	}
-
-	return s.applyPinned(ctx, id, req, applyInput{pinned: pinned, pre: pre, dev: dev})
-}
-
-// applyPinned stages the pinned backup, copies its blobs, swaps the staged
-// data in one fenced step, and preserves the restore row and the pre-backup
-// row across the swap. The control tables stay across the swap with the live
-// rows, so the running restore stays readable during the swap and the
-// pre-backup row survives it. The manifest is pinned again first, so a
-// target mutated after the checks cannot be applied. When req keeps the
-// access tables, the swap keeps the current rows of the access tables and
-// replaces the other tables.
-func (s *RestoreService) applyPinned(
-	ctx context.Context, id RestoreID, req RestoreRequest, in applyInput,
-) error {
-	pinned, pre, dev := in.pinned, in.pre, in.dev
-
-	backupID := req.BackupID
-	if repinErr := s.repinManifest(ctx, backupID, pinned); repinErr != nil {
-		return repinErr
-	}
-
-	stageOpts := StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev}
-	if stageErr := s.stage(ctx, backupID, stageOpts); stageErr != nil {
-		return fmt.Errorf("stage backup %s for restore %s: %w", backupID, id, stageErr)
-	}
-
-	// The staging area goes away with the swap; a failed apply discards it
-	// here, so no staging area survives the restore either way.
-	defer func() {
-		_ = s.live.DiscardStaging(context.WithoutCancel(ctx)) //nolint:errcheck // Best-effort cleanup.
-	}()
-
-	// Layer 2: the staged data decides, not the kind in the manifest. The
-	// strip never touches a live table, so a refusal or a failure here leaves
-	// the live data as it was. The report is in the restore record before the
-	// swap.
-	if dev.production() {
-		if stripErr := s.stripStaged(ctx, dev); stripErr != nil {
-			return stripErr
-		}
-	}
-
-	if recordErr := s.recordDevReport(ctx, id, dev); recordErr != nil {
-		return recordErr
-	}
-
-	if copyErr := s.copyBlobs(ctx, backupID); copyErr != nil {
-		return fmt.Errorf("copy blobs for restore %s: %w", id, copyErr)
-	}
-
-	// The control tables stay across the swap with the live rows, so the
-	// restore row and the pre-backup row survive it. Remember the applying
-	// row before the swap: Get serves the held row while the swap runs, so
-	// any handle reads the same row during the swap.
-	before, err := s.registry.GetRestore(ctx, id)
-	if err != nil {
-		return fmt.Errorf("read restore %s before the swap: %w", id, err)
-	}
-
-	s.trackRestore(before)
-
-	kept, err := s.applyStaged(ctx, id, req)
-	if err != nil {
-		return err
-	}
-
-	// The swap kept the control rows. A later step that fails still runs
-	// the after-apply step, which the restored data needs, and the restore
-	// fails with both errors.
-	if err := s.afterSwap(ctx, before, pre); err != nil {
-		return errors.Join(err, s.runAfterApply(ctx, id))
-	}
-
-	// The audit entry for the start went away with the old live data: the
-	// swap replaced audit_entries from the backup. Write the entry after the
-	// swap, in the restored data, so it survives. The access mode lives in
-	// the existing object field: no new column. A lost entry does not fail
-	// the restore.
-	s.appendRestoreAudit(ctx, id, req)
-
-	s.finishDevReport(ctx, id, req, dev, kept)
-
-	return s.runAfterApply(ctx, id)
-}
-
-// applyInput carries what applyPinned needs besides the request: the pinned
-// manifest, the backup of the live data, and the dev data state.
-type applyInput struct {
-	pinned pinnedManifest
-	pre    Record
-	dev    *devRun
-}
-
-// finishDevReport folds what the swap dropped into the report, writes the
-// audit entries of the removed dev data, and stores the final report in the
-// restore record. A failed append never fails the restore: the record gets
-// the warning WarnAuditAppendFailed and the server logs an error.
-func (s *RestoreService) finishDevReport(
-	ctx context.Context, id RestoreID, req RestoreRequest, dev *devRun, kept KeepAccessResult,
-) {
-	if kept.DroppedTempAdmins > 0 {
-		if dev.report.Classes == nil {
-			dev.report.Classes = map[DevRemovalClass]int64{}
-		}
-
-		dev.report.Classes[RemovedTempAdmins] += kept.DroppedTempAdmins
-	}
-
-	appended := s.appendDevAudit(ctx, id, req, dev)
-
-	dev.report.Warnings = dev.warnings()
-	if !appended {
-		dev.report.Warnings = append(dev.report.Warnings, WarnAuditAppendFailed)
-	}
-
-	if kept.DroppedTempAdmins == 0 && appended {
-		return
-	}
-
-	// The restores table survives the swap. A failure to write the record
-	// again leaves the report that the record held before the swap.
-	if err := s.live.RecordDevReport(ctx, id, dev.report); err != nil {
-		s.logger.ErrorContext(ctx, "record the dev data report failed", slog.String("restore_id", id.String()))
-	}
-}
-
-// afterSwap preserves the restore row and the pre-backup row across the
-// swap. The control tables stay across the swap, so both rows survive it:
-// the recreate does nothing when the row is already there, and the
-// pre-backup preserve does nothing when its row is already listed.
-func (s *RestoreService) afterSwap(ctx context.Context, before RestoreRecord, pre Record) error {
-	if err := s.recreateAfterSwap(ctx, before); err != nil {
-		return err
-	}
-
-	if err := s.backups.PreserveAfterRestore(ctx, pre); err != nil {
-		return fmt.Errorf("record pre-backup %s after the swap: %w", pre.ID, err)
-	}
-
-	return nil
-}
-
-// runAfterApply runs the after-apply step of the restore id. The step runs
-// while maintenance mode still holds, so the restored data converges before
-// tool traffic returns. A failure fails the restore.
-func (s *RestoreService) runAfterApply(ctx context.Context, id RestoreID) error {
-	if s.afterApply == nil {
-		return nil
-	}
-
-	if err := s.afterApply(ctx); err != nil {
-		return fmt.Errorf("after the apply of restore %s: %w", id, err)
-	}
-
-	return nil
-}
-
-// appendRestoreAudit writes the audit entry of restore id after the swap, in
-// the restored data, so the entry survives the swap that replaced
-// audit_entries from the backup. The object names whether the access tables
-// were replaced or kept. The live store keeps the entry; a store without the
-// server audit port skips it. Best effort: a lost entry never fails the
-// restore.
-func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, req RestoreRequest) {
-	store, ok := s.live.(interface {
-		AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
-	})
-	if !ok {
-		return
-	}
-
-	mode := "replaced"
-	if req.KeepAccessTables {
-		mode = "kept"
-	}
-
-	entry := audit.Entry{
-		At:            s.now().UTC(),
-		Namespace:     audit.ServerScope,
-		Subject:       req.RequestedBy,
-		IDPSubject:    "",
-		TokenID:       "",
-		Action:        string(identity.ActionServerRestore),
-		Object:        "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + s.devFlagText() + ")",
-		Version:       "",
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      "",
-		UserAgent:     "",
-		Channel:       audit.ChannelAPI,
-		Kind:          audit.KindChange,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     "",
-		ObjectID:      "",
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: "",
-		JobID:         "",
-	}
-
-	if _, err := store.AppendServer(ctx, entry); err != nil {
-		s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", id.String()))
-	}
-}
-
 // devFlagText names in the audit entry of a restore that the server runs with
 // the setting that lets a production installation restore a dev backup. It is
 // empty when the setting is off, which is the normal case.
@@ -1136,44 +1085,6 @@ func (s *RestoreService) devFlagText() string {
 	}
 
 	return ""
-}
-
-// applyStaged swaps the staged backup live. When req keeps the access
-// tables, the swap keeps the current rows of the access tables and replaces
-// the other tables.
-func (s *RestoreService) applyStaged(
-	ctx context.Context, id RestoreID, req RestoreRequest,
-) (KeepAccessResult, error) {
-	if !req.KeepAccessTables {
-		if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
-			return noKeepResult(), fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
-		}
-
-		return noKeepResult(), nil
-	}
-
-	keeper, ok := s.live.(AccessKeepingApplier)
-	if !ok {
-		return noKeepResult(), fmt.Errorf("apply staged data for restore %s: %w", id, ErrMissingDependency)
-	}
-
-	kept, applyErr := keeper.ApplyStagingKeepingAccess(ctx)
-	if applyErr != nil {
-		return noKeepResult(), fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
-	}
-
-	return kept, nil
-}
-
-// pinnedManifest pins the manifest fields the second stage must still match,
-// so a target mutated after the check cannot be applied.
-type pinnedManifest struct {
-	sqlSize  int64
-	sqlSHA   string
-	schema   int
-	dialect  Dialect
-	kind     installation.Kind
-	wrappers []string
 }
 
 // pinManifest reads the manifest of id before the checks.
@@ -1215,106 +1126,6 @@ func (s *RestoreService) repinManifest(ctx context.Context, id ID, pinned pinned
 		manifest.SchemaVersion != pinned.schema || manifest.Dialect != pinned.dialect ||
 		manifest.InstallationKind != pinned.kind {
 		return fmt.Errorf("%w: backup %s changed after the checks", ErrCorrupt, id)
-	}
-
-	return nil
-}
-
-// recreateAfterSwap stores the restore row again when the swap replaced it.
-// The control tables stay across the swap, so the row usually survives and
-// the recreate does nothing: a Get that finds the row returns at once. When
-// an older store dropped the row with the old live data, the recreate stores
-// it again in applying with the ID, the start time, the backup, the
-// pre-backup and the requester, so FinishRestore can move it to its end
-// state. The backup cannot hold the same ID: IDs are unique per restore.
-func (s *RestoreService) recreateAfterSwap(ctx context.Context, before RestoreRecord) error {
-	if _, err := s.registry.GetRestore(ctx, before.ID); err == nil {
-		return nil
-	}
-
-	recreated := RestoreRecord{
-		StartedAt:   before.StartedAt,
-		EndedAt:     time.Time{},
-		ID:          before.ID,
-		BackupID:    before.BackupID,
-		PreBackupID: before.PreBackupID,
-		RequestedBy: before.RequestedBy,
-		Error:       "",
-		State:       RestoreApplying,
-		DevReport:   nil,
-	}
-
-	if err := s.registry.CreateRestore(ctx, recreated); err != nil {
-		return fmt.Errorf("record restore %s after the swap: %w", before.ID, err)
-	}
-
-	return nil
-}
-
-// stage loads the SQL part of backup id into the staging area a second time,
-// after the checks passed and the live backup is taken. The checks staged
-// and discarded it; the apply needs it staged again. It verifies the SQL
-// part against the manifest first, and staging checks the data again (row
-// counts, foreign keys, blob references), so the swap only moves checked
-// data.
-func (s *RestoreService) stage(ctx context.Context, id ID, opts StageOptions) error {
-	manifest, err := readManifest(ctx, s.target, id)
-	if err != nil {
-		return err
-	}
-
-	if _, shaErr := parseSQLSHA(manifest, id); shaErr != nil {
-		return shaErr
-	}
-
-	if verifyErr := verifySQLPart(ctx, s.target, id, manifest.SQLFiles); verifyErr != nil {
-		return verifyErr
-	}
-
-	wantBlobs, blobsErr := parseManifestBlobs(manifest, id)
-	if blobsErr != nil {
-		return blobsErr
-	}
-
-	plan := stagePlan{want: restoreWant(manifest, wantBlobs), files: manifest.SQLFiles, opts: opts}
-
-	if _, stageErr := stageBackup(ctx, s.target, s.live, id, plan); stageErr != nil {
-		return stageErr
-	}
-
-	return nil
-}
-
-// copyBlobs copies every blob the manifest of backup id names from the
-// target into the live blob store. Blobs are write-once, so this adds keys
-// and changes none: a key the live store already holds is verified, not
-// copied again. Live blobs that the restored data does not name become
-// orphans for the sweep (issue 203).
-func (s *RestoreService) copyBlobs(ctx context.Context, id ID) error {
-	manifest, err := readManifest(ctx, s.target, id)
-	if err != nil {
-		return err
-	}
-
-	for _, ref := range manifest.Blobs {
-		if err := s.copyBlob(ctx, ref); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// copyBlob copies one blob from the target into the live store. A key the
-// live store already holds is verified against the manifest instead: on a
-// size or checksum mismatch it reports ErrCorrupt.
-func (s *RestoreService) copyBlob(ctx context.Context, ref ManifestBlob) error {
-	if err := copyRestoreBlob(ctx, s.target, s.blobs, ref); err != nil {
-		if !errors.Is(err, blob.ErrExists) {
-			return err
-		}
-
-		return s.verifyLiveBlob(ctx, ref)
 	}
 
 	return nil
@@ -1370,9 +1181,4 @@ func MintRestoreID() RestoreID {
 // never taken.
 func MintRestoreIDs() (RestoreID, ID) {
 	return MintRestoreID(), ID(ident.NewID("bkp-"))
-}
-
-// noKeepResult is the result of a swap that dropped nothing.
-func noKeepResult() KeepAccessResult {
-	return KeepAccessResult{DroppedTempAdmins: 0}
 }

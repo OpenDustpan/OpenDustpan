@@ -173,8 +173,7 @@ func TestRestoreAllowsDevBackupWithTheSetting(t *testing.T) {
 }
 
 // TestRestoreStagesWithTheKindAndTheSetting proves that the service passes the
-// pinned manifest kind and the setting in the options of every stage call (the
-// check and the apply).
+// pinned manifest kind and the setting in the options of the one stage call.
 func TestRestoreStagesWithTheKindAndTheSetting(t *testing.T) {
 	t.Parallel()
 
@@ -207,16 +206,16 @@ func TestRestoreStagesWithTheKindAndTheSetting(t *testing.T) {
 			want := backup.StageOptions{BackupKind: tc.manifest, AllowDev: tc.allow}
 			got := setup.live.devSnapshot().stageOpts
 
-			if len(got) != 2 || got[0] != want || got[1] != want {
-				t.Fatalf("stage options = %+v, want two calls with %+v", got, want)
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("stage options = %+v, want one call with %+v", got, want)
 			}
 		})
 	}
 }
 
 // TestRestoreRefusesAKindThatChangedAfterTheCheck changes the kind in the
-// manifest while the check stages. The pin of the manifest refuses the restore
-// before the apply (layer 1e).
+// manifest while the stage step runs. The pin of the manifest refuses the
+// restore in the check step, before the apply (layer 1e).
 func TestRestoreRefusesAKindThatChangedAfterTheCheck(t *testing.T) {
 	t.Parallel()
 
@@ -230,9 +229,18 @@ func TestRestoreRefusesAKindThatChangedAfterTheCheck(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
+	ran := make(chan struct{})
+
+	go func() {
+		defer close(ran)
+
+		setup.regs.runWorker(t.Context())
+	}()
+
 	awaitStageCalls(t, setup, 1)
 	setManifestKind(t, setup, installation.KindDev)
 	close(block)
+	<-ran
 
 	row := waitRestoreEnd(t, setup.regs, id)
 	if row.State != backup.RestoreFailed || !strings.Contains(row.Error, backup.ErrCorrupt.Error()) {
@@ -286,9 +294,15 @@ func TestRestoreStripsDevDataSettingOff(t *testing.T) {
 	}
 
 	snap := setup.live.devSnapshot()
-	if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 || snap.discards == 0 {
-		t.Fatalf("applies %d, enters %d, discards %d, want a refusal before maintenance mode with a discard",
-			setup.live.counts().applied, setup.maint.counts().enters, snap.discards)
+
+	areas, err := setup.live.ListRestoreAreas(t.Context())
+	if err != nil {
+		t.Fatalf("list restore areas: %v", err)
+	}
+
+	if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 || len(areas) != 0 {
+		t.Fatalf("applies %d, enters %d, areas %v, want a refusal before maintenance mode with no area",
+			setup.live.counts().applied, setup.maint.counts().enters, areas)
 	}
 
 	if slices.Contains(snap.strips, backup.DevStripRemove) {
@@ -374,11 +388,11 @@ func TestRestoreStripThatDoesNotFinishDiscardsTheStagingArea(t *testing.T) {
 }
 
 // TestRestoreFailsWhenTheStripCannotLook proves that a strip that cannot look
-// fails the restore.
+// fails the restore. With the setting off the strip only looks.
 func TestRestoreFailsWhenTheStripCannotLook(t *testing.T) {
 	t.Parallel()
 
-	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
+	setup := newRestoreServiceSetup(t)
 	setup.live.dev.stripErr[backup.DevStripDetect] = errStripLook
 
 	id, err := startRestoreOf(t, setup, plainRestore())

@@ -296,17 +296,18 @@ func newChainRunner(cfg *settings, chain *auditChain) (*durable.Runner, error) {
 				Steps:      []durable.Step{{Name: auditChainStep, Run: chain.runMigrationStep}},
 			},
 		},
-		Lease:        cfg.operationLease,
-		RenewEvery:   0,
-		PollEvery:    0,
-		MaxAttempts:  0,
-		ExpiryLimit:  0,
-		Backoff:      durable.Backoff{Base: 0, Max: 0},
-		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout: 0,
-		Deferred:     nil,
-		Logger:       cfg.logger,
-		Rand:         nil,
+		Lease:              cfg.operationLease,
+		RenewEvery:         0,
+		PollEvery:          0,
+		MaxAttempts:        0,
+		ExpiryLimit:        0,
+		Backoff:            durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:       0,
+		Deferred:           nil,
+		StopOnRenewalError: false,
+		Logger:             cfg.logger,
+		Rand:               nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("audit chain migration runner: %w", err)
@@ -1522,7 +1523,7 @@ func bindAuditChain(chain *auditChain, maint *maintenance.Service, restores *bac
 
 	chain.maint = maint
 
-	switch registry, ok := cfg.namespaceStore.(backup.RestoreRegistry); {
+	switch registry, ok := cfg.namespaceStore.(restoreLister); {
 	case restores != nil:
 		chain.restoreRunning = restores.Running
 	case ok:
@@ -1534,9 +1535,14 @@ func bindAuditChain(chain *auditChain, maint *maintenance.Service, restores *bac
 	}
 }
 
+// restoreLister lists the restore rows of a store.
+type restoreLister interface {
+	ListRestores(ctx context.Context) ([]backup.RestoreRecord, error)
+}
+
 // restoreRowRunning reports whether registry holds a restore that is still
 // checking or applying.
-func restoreRowRunning(ctx context.Context, registry backup.RestoreRegistry) (bool, error) {
+func restoreRowRunning(ctx context.Context, registry restoreLister) (bool, error) {
 	records, err := registry.ListRestores(ctx)
 	if err != nil {
 		return false, fmt.Errorf("list restores: %w", err)

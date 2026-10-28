@@ -10,15 +10,10 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/devstrip"
-	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
-var (
-	_ backup.DevStripper       = (*Store)(nil)
-	_ backup.DevReportRecorder = (*Store)(nil)
-)
+var _ backup.DevStripper = (*Store)(nil)
 
 // pgDevDialect matches in PostgreSQL. lower() depends on the collation of the
 // database and can fold a non-ASCII letter, so the match uses translate() with
@@ -117,14 +112,22 @@ func (s *Store) StripDevStaged(ctx context.Context, mode backup.DevStripMode) (b
 		return backup.DevStripReport{}, backup.ErrCorrupt
 	}
 
-	if !hasStagingPrefix(s.stagingSchema) {
-		return backup.DevStripReport{}, fmt.Errorf("strip staging schema %q: %w", s.stagingSchema, backup.ErrCorrupt)
+	return s.stripSchema(ctx, s.stagingSchema, mode)
+}
+
+// stripSchema runs the dev data strip of StripDevStaged on the staging
+// schema staging.
+func (s *Store) stripSchema(
+	ctx context.Context, staging string, mode backup.DevStripMode,
+) (backup.DevStripReport, error) {
+	if !hasStagingPrefix(staging) {
+		return backup.DevStripReport{}, fmt.Errorf("strip staging schema %q: %w", staging, backup.ErrCorrupt)
 	}
 
 	var report backup.DevStripReport
 
 	err := inBackupTx(ctx, s.pool, readWriteOpts(), func(tx pgx.Tx) error {
-		if _, err := setSearchPath(ctx, tx, s.stagingSchema); err != nil {
+		if _, err := setSearchPath(ctx, tx, staging); err != nil {
 			return err
 		}
 
@@ -227,23 +230,4 @@ func dropDanglingTempAdmins(ctx context.Context, tx pgx.Tx, staging string) (int
 	}
 
 	return tag.RowsAffected(), nil
-}
-
-// RecordDevReport implements backup.DevReportRecorder.
-func (s *Store) RecordDevReport(ctx context.Context, id backup.RestoreID, report backup.DevStripReport) error {
-	text, err := codec.EncodeDevReport(report)
-	if err != nil {
-		return err
-	}
-
-	n, err := s.queries.SetRestoreDevReport(ctx, db.SetRestoreDevReportParams{DevReport: text, ID: id.String()})
-	if err != nil {
-		return fmt.Errorf("store restore dev report: %w", err)
-	}
-
-	if n == 0 {
-		return backup.ErrRestoreNotFound
-	}
-
-	return nil
 }

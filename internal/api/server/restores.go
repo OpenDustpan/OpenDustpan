@@ -1,20 +1,26 @@
 package server
 
 // Restore routes of the installation API (ADR 38 decision 1): start a
-// restore, list the restores this installation ran, and read one restore
-// with its manifest.
+// restore, list the restores this installation ran, read one restore with its
+// manifest, and cancel a restore before its swap.
 //
 // POST /api/server/restores starts a restore in the background and answers
 // 202 with the restore ID. The body names the backup ID from the configured
 // target, whether to check only, and whether to cancel active work. Only one
-// restore runs at a time; a second start answers 409. GET
+// restore runs at a time; a second start answers 409. A worker of any
+// instance runs the restore, and any instance answers its state. GET
 // /api/server/restores lists the rows of the restores table, newest first.
 // GET /api/server/restores/{id} answers the state (checking, applying,
 // succeeded or failed) and, when the restore succeeded, the manifest of the
 // restored backup. The backup taken before the apply appears in GET and List
 // only after the service takes it.
 //
-// All three need the action server:restore on the installation (@server).
+// POST /api/server/restores/{id}/cancel stops a restore before its swap and
+// answers 202. A restore that a cancel already stopped answers 202 again. A
+// restore that swapped the data answers 409 with restore.swapped, a restore
+// that ended answers 409 with restore.ended, and an unknown ID answers 404.
+//
+// All four need the action server:restore on the installation (@server).
 // The backup comes only from the restore service the server was wired with:
 // no request field, header or query value sets the target.
 
@@ -22,11 +28,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -134,6 +142,12 @@ func (h *Handler) startRestore(
 	if err != nil {
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	// A restore is a durable operation that a worker runs: with no worker,
+	// the start answers 503 before it stores anything.
+	if !h.admitStart(ctx, w) {
 		return
 	}
 
@@ -377,4 +391,62 @@ func devDataOf(record backup.RestoreRecord) *devDataJSON {
 	}
 
 	return &devDataJSON{Principals: record.DevReport.Classes[backup.RemovedPrincipals], Classes: classes}
+}
+
+// cancelRestoreResponse answers an accepted cancel: the ID of the restore.
+// Poll GET /api/server/restores/{id} until the restore leaves checking and
+// applying.
+type cancelRestoreResponse struct {
+	ID string `json:"id"`
+}
+
+// cancelRestore stops a restore before its swap and answers 202. It writes an
+// audit entry for each cancel that names a valid restore ID: success for an
+// accepted cancel, failure for a refused one.
+func (h *Handler) cancelRestore(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	if h.restores == nil {
+		h.writeError(ctx, w, errNoBackupTarget)
+
+		return
+	}
+
+	// The ID must match the pattern of the restore IDs. An ID that cannot
+	// exist answers as an unknown restore, before any read.
+	id, err := backup.ParseRestoreID(r.PathValue("id"))
+	if err != nil {
+		h.writeError(ctx, w, backup.ErrRestoreNotFound)
+
+		return
+	}
+
+	cancelErr := h.restores.Cancel(ctx, id)
+
+	outcome := audit.OutcomeSuccess
+	if cancelErr != nil {
+		outcome = audit.OutcomeFailure
+	}
+
+	if !errors.Is(cancelErr, backup.ErrRestoreNotFound) {
+		h.appendServerChange(r, p, serverChange{
+			at:      time.Now().UTC(),
+			action:  identity.ActionServerRestore,
+			object:  "cancel of restore " + id.String(),
+			outcome: outcome,
+		})
+	}
+
+	switch {
+	case cancelErr == nil:
+		h.writeJSON(ctx, w, http.StatusAccepted, cancelRestoreResponse{ID: id.String()})
+	case errors.Is(cancelErr, backup.ErrRestoreSwapped):
+		h.writeCoded(ctx, w, failCoded(http.StatusConflict, backup.ErrRestoreSwapped.Error(),
+			errcode.RestoreSwapped, errcode.Identifier("restore", id.String())))
+	case errors.Is(cancelErr, backup.ErrRestoreNotRunning):
+		h.writeCoded(ctx, w, failCoded(http.StatusConflict, backup.ErrRestoreNotRunning.Error(),
+			errcode.RestoreEnded, errcode.Identifier("restore", id.String())))
+	default:
+		h.writeError(ctx, w, cancelErr)
+	}
 }

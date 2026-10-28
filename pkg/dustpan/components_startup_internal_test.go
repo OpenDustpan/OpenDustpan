@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -49,67 +48,6 @@ func TestApiOnlyStartLeavesTheMigrationPending(t *testing.T) {
 
 			if !tc.runs && got.Attempt != 0 {
 				t.Fatalf("operation attempt = %d after an api-only start, want 0: nothing claimed it", got.Attempt)
-			}
-		})
-	}
-}
-
-// registrySpy records the calls that the start-up steps make.
-type registrySpy struct {
-	backup.RestoreRegistry
-
-	failedRestores int
-	fenced         int
-	fenceErr       error
-}
-
-func (r *registrySpy) FailRunningRestores(context.Context, time.Time, string) error {
-	r.failedRestores++
-
-	return nil
-}
-
-func (r *registrySpy) ListRestores(context.Context) ([]backup.RestoreRecord, error) {
-	return []backup.RestoreRecord{{
-		StartedAt: time.Time{}, EndedAt: time.Time{}, ID: "", BackupID: "", PreBackupID: "", RequestedBy: "",
-		Error: "", State: backup.RestoreApplying, DevReport: nil,
-	}}, nil
-}
-
-func (r *registrySpy) BumpFailoverVersions(context.Context) (int64, error) {
-	r.fenced++
-
-	return 1, r.fenceErr
-}
-
-// TestStartFailsRestoresOnlyWithAPI proves that a process without the api
-// component, which takes no restore, leaves the running restores of the api
-// processes alone at start, and fences no namespace.
-func TestStartFailsRestoresOnlyWithAPI(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name string
-		set  Components
-		want int
-	}{
-		{name: "worker only", set: workerOnly(), want: 0},
-		{name: "api only", set: apiOnly(), want: 1},
-		{name: "all", set: AllComponents(), want: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			spy := &registrySpy{RestoreRegistry: nil, failedRestores: 0, fenced: 0, fenceErr: nil}
-			srv := testServer(nil, "a")
-			srv.components, srv.now, srv.restoreRegistry = tc.set, time.Now, spy
-
-			if err := srv.failStoppedRestores(t.Context()); err != nil {
-				t.Fatalf("fail stopped restores: %v", err)
-			}
-
-			if spy.failedRestores != tc.want || spy.fenced != tc.want {
-				t.Fatalf("failed restores %d, fences %d; want %d of each", spy.failedRestores, spy.fenced, tc.want)
 			}
 		})
 	}

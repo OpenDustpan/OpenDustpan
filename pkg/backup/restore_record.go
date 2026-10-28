@@ -69,41 +69,10 @@ var (
 	// cannot finish.
 	ErrRestoreNotRunning = errors.New("restore is not running")
 	// ErrRestoreRunning reports a second restore started while one runs.
-	// Only one restore runs at a time.
+	// Only one restore runs at a time, across every instance on the
+	// database.
 	ErrRestoreRunning = errors.New("restore already running")
 )
-
-// RestoreRegistry tracks the restores table: one row for each restore. Rows
-// carry no fence: they describe the installation, not one namespace. A
-// server that starts marks every running row failed.
-type RestoreRegistry interface {
-	// CreateRestore stores r as a running restore. It returns
-	// ErrRestoreExists if the ID is taken, and ErrRestoreRunning when another
-	// restore of the installation is checking or applying: one restore runs
-	// at a time, across every instance on the database.
-	CreateRestore(ctx context.Context, r RestoreRecord) error
-	// FinishRestore moves the running restore id to state, which is
-	// RestoreSucceeded or RestoreFailed, with the error text and the end
-	// time. Any other state reports ErrRestoreNotRunning. It returns the
-	// finished row, ErrRestoreNotFound if id does not exist, or
-	// ErrRestoreNotRunning if the row is not running.
-	FinishRestore(
-		ctx context.Context, id RestoreID, state RestoreState, errText string, endedAt time.Time,
-	) (RestoreRecord, error)
-	// GetRestore returns the restore row id, or ErrRestoreNotFound.
-	GetRestore(ctx context.Context, id RestoreID) (RestoreRecord, error)
-	// MarkRestoreApplying moves the restore id from checking to applying and
-	// records the backup taken before the apply. It returns ErrRestoreNotFound
-	// if id does not exist, or ErrRestoreNotRunning if the row already left
-	// checking.
-	MarkRestoreApplying(ctx context.Context, id RestoreID, preBackupID ID) error
-	// ListRestores returns every restore row, newest first.
-	ListRestores(ctx context.Context) ([]RestoreRecord, error)
-	// FailRunningRestores marks every running row failed with the error
-	// text and the end time. The server calls it at start, after a stop
-	// during a restore.
-	FailRunningRestores(ctx context.Context, endedAt time.Time, errText string) error
-}
 
 // Applier swaps the staged restore data into the live data in one step and
 // fences it (ADR 38 decisions 6 and 7): a file rename plus a fence for

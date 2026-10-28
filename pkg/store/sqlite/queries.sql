@@ -1015,9 +1015,11 @@ UPDATE installation
 SET kind = ?
 WHERE id = 1 AND kind IS NULL;
 
--- name: CreateRestore :execrows
-INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+-- name: InsertRestore :execrows
+-- Stores one checking restore. The unique index on the running restores, and
+-- the primary key, make a second running restore or a taken ID match no row.
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report)
+VALUES (?, 'checking', ?, '', ?, ?, 0, '', ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetRestore :one
@@ -1030,11 +1032,18 @@ SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_a
 FROM restores
 ORDER BY started_at_ms DESC, id ASC;
 
--- name: FinishRestore :execrows
--- Moves one running restore to its end state. A finished restore matches no
--- row, so a retry reports no change.
+-- name: GetRestoreMaintenance :one
+-- Reads the state of one restore and whether it holds the maintenance mode
+-- that it entered.
+SELECT state, maintenance_entered
+FROM restores
+WHERE id = ?;
+
+-- name: EndRestore :execrows
+-- Moves one running restore to its end state with its final dev report, and
+-- clears its maintenance flag. A finished restore matches no row.
 UPDATE restores
-SET state = ?, error = ?, ended_at_ms = ?
+SET state = ?, error = ?, ended_at_ms = ?, dev_report = ?, maintenance_entered = 0
 WHERE id = ? AND state IN ('checking', 'applying');
 
 -- name: MarkRestoreApplying :execrows
@@ -1045,18 +1054,31 @@ SET state = 'applying', pre_backup_id = ?
 WHERE id = ? AND state = 'checking';
 
 -- name: SetRestoreDevReport :execrows
--- Stores the report of the dev data of one restore, with the codes of its
--- warnings. A restore that does not exist matches no row.
+-- Stores the report of the dev data of one running restore, with the codes
+-- of its warnings. A restore that does not run matches no row.
 UPDATE restores
 SET dev_report = ?
+WHERE id = ? AND state IN ('checking', 'applying');
+
+-- name: GetRestoreAuditEvents :one
+-- Reads the state of one restore and the object texts of its audit events.
+SELECT state, audit_events
+FROM restores
 WHERE id = ?;
 
--- name: FailRunningRestores :exec
--- Marks every running restore failed. The server calls it at start, after a
--- stop during a restore.
+-- name: SetRestoreAuditEvents :execrows
+-- Stores the audit events of one running restore. A restore that does not
+-- run matches no row.
 UPDATE restores
-SET state = 'failed', error = ?, ended_at_ms = ?
-WHERE state IN ('checking', 'applying');
+SET audit_events = ?
+WHERE id = ? AND state IN ('checking', 'applying');
+
+-- name: SetRestoreMaintenanceEntered :execrows
+-- Sets whether one running restore holds the maintenance mode that it
+-- entered. A restore that does not run matches no row.
+UPDATE restores
+SET maintenance_entered = ?
+WHERE id = ? AND state IN ('checking', 'applying');
 
 -- name: BumpFailoverVersions :execrows
 -- Increments the failover version of every namespace by one (ADR 38

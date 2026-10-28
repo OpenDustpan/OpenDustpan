@@ -35,6 +35,10 @@ type DurableOperations struct {
 
 var _ durable.Store = (*DurableOperations)(nil)
 
+// A restore cancels through the guard of its swap step, so the store must
+// have it.
+var _ durable.StepCanceler = (*DurableOperations)(nil)
+
 // DurableOperations returns the store of durable operations on the database
 // of s.
 func (s *Store) DurableOperations() *DurableOperations {
@@ -307,23 +311,52 @@ func (d *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence,
 // step record commit together. The time of the expiry check is the database
 // clock when recordStep runs, not when the transaction started.
 func recordStep(ctx context.Context, q *db.Queries, f durable.StepFence, result []byte) error {
-	row, now, err := lockLive(ctx, q, f.Operation, f.Token)
+	row, now, err := checkStep(ctx, q, f)
 	if err != nil {
 		return err
 	}
 
+	return insertStep(ctx, q, stepAt{row: row, now: now}, f, result)
+}
+
+// checkStep checks f with the rules of durable.Store.RecordStep in the
+// transaction of q, and records nothing. It locks the operation row, so the
+// fence holds until the transaction ends: a write that checks the fence and
+// records no step, or records it later in the transaction, calls it. It
+// returns the locked row and the time of the database clock.
+func checkStep(ctx context.Context, q *db.Queries, f durable.StepFence) (db.DurableOperation, int64, error) {
+	row, now, err := lockLive(ctx, q, f.Operation, f.Token)
+	if err != nil {
+		return db.DurableOperation{}, 0, err
+	}
+
 	if row.CancelRequested {
-		return durable.ErrCanceled
+		return db.DurableOperation{}, 0, durable.ErrCanceled
 	}
 
 	done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: f.Step})
 	if err != nil {
-		return fmt.Errorf("read step: %w", err)
+		return db.DurableOperation{}, 0, fmt.Errorf("read step: %w", err)
 	}
 
 	if done {
-		return durable.ErrStepDone
+		return db.DurableOperation{}, 0, durable.ErrStepDone
 	}
+
+	return row, now, nil
+}
+
+// stepAt is the row of an operation that checkStep returned, and the time of
+// the store clock that it read, in one transaction.
+type stepAt struct {
+	row db.DurableOperation
+	now int64
+}
+
+// insertStep records the step of f with result on the row of at, which
+// checkStep returned in the same transaction, at the time of at.
+func insertStep(ctx context.Context, q *db.Queries, at stepAt, f durable.StepFence, result []byte) error {
+	row, now := at.row, at.now
 
 	step := db.InsertDurableStepParams{OperationID: row.ID, Name: f.Step, Result: nonNilBytes(result), NowMs: now}
 	if err := q.InsertDurableStep(ctx, step); err != nil {
@@ -384,6 +417,46 @@ func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	})
 	if err != nil {
 		return fmt.Errorf("cancel durable operation %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// CancelBefore implements durable.StepCanceler. It locks the operation row
+// first, as recordStep does, so a step record and the cancel run one after
+// the other and only one of them wins.
+func (d *DurableOperations) CancelBefore(ctx context.Context, id durable.ID, step string) error {
+	if step == "" {
+		return fmt.Errorf("cancel durable operation %s before a step with no name: %w", id, durable.ErrInvalid)
+	}
+
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+		row, err := q.LockDurableOperation(ctx, string(id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return durable.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("lock operation: %w", err)
+		}
+
+		if row.State == string(durable.StateSucceeded) || row.State == string(durable.StateFailed) {
+			return durable.ErrFinished
+		}
+
+		done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: step})
+		if err != nil {
+			return fmt.Errorf("read step: %w", err)
+		}
+
+		if done {
+			return durable.ErrStepDone
+		}
+
+		return cancelDurable(ctx, q, id)
+	})
+	if err != nil {
+		return fmt.Errorf("cancel durable operation %s before step %q: %w", id, step, err)
 	}
 
 	return nil

@@ -685,15 +685,17 @@ type RegistryRelease struct {
 }
 
 type Restore struct {
-	ID          string
-	State       string
-	BackupID    string
-	PreBackupID string
-	RequestedBy string
-	StartedAtMs int64
-	EndedAtMs   pgtype.Int8
-	Error       string
-	DevReport   string
+	ID                 string
+	State              string
+	BackupID           string
+	PreBackupID        string
+	RequestedBy        string
+	StartedAtMs        int64
+	EndedAtMs          pgtype.Int8
+	Error              string
+	DevReport          string
+	MaintenanceEntered bool
+	AuditEvents        string
 }
 
 type Role struct {
