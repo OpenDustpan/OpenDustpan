@@ -112,7 +112,7 @@ func (c crashingLive) CleanRestoreAreas(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, lockWait time.Duration,
 ) ([]backup.StagingArea, error) {
 	if c.at == crashInCleanup && c.fired.CompareAndSwap(false, true) {
-		areas, err := c.RestoreLive.ListRestoreAreas(ctx)
+		areas, err := c.ListRestoreAreas(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list restore areas: %w", err)
 		}

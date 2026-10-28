@@ -856,8 +856,14 @@ func testWorkerTakeover(t *testing.T, newStore RestoreFactory, step string) {
 
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, step, gateCrash)
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
-	b := r.service(t, workerService{owner: "instance-b", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
+	b := r.service(
+		t,
+		workerService{owner: "instance-b", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	aDone := runAsync(t, a, gate)
@@ -876,8 +882,14 @@ func testWorkerStaleHolder(t *testing.T, newStore RestoreFactory, step string) {
 
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, step, gatePauseStale)
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
-	b := r.service(t, workerService{owner: "instance-b", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
+	b := r.service(
+		t,
+		workerService{owner: "instance-b", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	aDone := runAsync(t, a, gate)
@@ -909,7 +921,10 @@ func testWorkerOtherStart(t *testing.T, newStore RestoreFactory, step string) {
 		live = pausingStage{RestoreLive: r.st, gate: gate}
 	}
 
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: live, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: gate, live: live, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	aDone := runAsync(t, a, gate)
@@ -917,7 +932,10 @@ func testWorkerOtherStart(t *testing.T, newStore RestoreFactory, step string) {
 
 	held := r.opOf(t, id)
 
-	c := r.service(t, workerService{owner: "instance-c", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	c := r.service(
+		t,
+		workerService{owner: "instance-c", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 	workFor(t, c, 2*workerLease)
 
 	row, err := r.st.GetRestore(t.Context(), id)
@@ -982,8 +1000,22 @@ func testWorkerSwapKill(t *testing.T, newStore RestoreFactory) {
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, backup.RestoreStepSwap, gateNone)
 	killer := swapKiller{RestoreLive: r.st, gate: gate}
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: killer, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
-	b := r.service(t, workerService{owner: "instance-b", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{
+			owner:      "instance-a",
+			ops:        gate,
+			live:       killer,
+			maint:      nil,
+			blobs:      nil,
+			lockWait:   0,
+			afterApply: nil,
+		},
+	)
+	b := r.service(
+		t,
+		workerService{owner: "instance-b", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	aDone := runAsync(t, a, gate)
@@ -1021,8 +1053,22 @@ func cancelBefore(
 	}
 
 	gate := newStepGate(t, r, step, gatePauseLive)
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: nil, maint: maint, blobs: nil, lockWait: 0, afterApply: nil})
-	c := r.service(t, workerService{owner: "instance-c", ops: nil, live: nil, maint: maint, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{
+			owner:      "instance-a",
+			ops:        gate,
+			live:       nil,
+			maint:      maint,
+			blobs:      nil,
+			lockWait:   0,
+			afterApply: nil,
+		},
+	)
+	c := r.service(
+		t,
+		workerService{owner: "instance-c", ops: nil, live: nil, maint: maint, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	r.failover = r.failoverVersion(t)
 
@@ -1067,8 +1113,14 @@ func testWorkerCancelAfterSwap(t *testing.T, newStore RestoreFactory) {
 
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, backup.RestoreStepAfterApply, gatePauseLive)
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
-	c := r.service(t, workerService{owner: "instance-c", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
+	c := r.service(
+		t,
+		workerService{owner: "instance-c", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	aDone := runAsync(t, a, gate)
@@ -1123,12 +1175,13 @@ func testWorkerOverwritingBlobs(t *testing.T, newStore RestoreFactory) {
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, backup.RestoreStepCopyBlobs, gatePauseLive)
 	a := r.service(t, workerService{
-		owner:    "instance-a",
-		ops:      gate,
-		live:     nil,
-		maint:    nil,
-		blobs:    overwritingBlobs{deleteWatch: r.live},
-		lockWait: 0,
+		owner:      "instance-a",
+		ops:        gate,
+		live:       nil,
+		maint:      nil,
+		blobs:      overwritingBlobs{deleteWatch: r.live},
+		afterApply: nil,
+		lockWait:   0,
 	})
 
 	id := r.start(t, a, false, false)
@@ -1157,7 +1210,10 @@ func testWorkerCorruptObject(t *testing.T, newStore RestoreFactory) {
 	before := r.liveBlobBytes(t)
 	putBlob(t, r.target, mustBlobKey(t, "blobs/"+r.seed.liveBlob.String()), []byte("corrupt"))
 
-	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	if row := r.driveToEnd(t, a, id); row.State != backup.RestoreFailed {
@@ -1177,7 +1233,10 @@ func testWorkerDeleterInFlight(t *testing.T, newStore RestoreFactory) {
 
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, backup.RestoreStepAfterApply, gatePauseLive)
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	aDone := runAsync(t, a, gate)
@@ -1203,7 +1262,10 @@ func testWorkerOperatorMaintenance(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("enter maintenance mode as an operator: %v", err)
 	}
 
-	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, false)
 	if row := r.driveToEnd(t, a, id); row.State != backup.RestoreSucceeded {
@@ -1248,7 +1310,8 @@ func testWorkerCleanupBusy(t *testing.T, newStore RestoreFactory) {
 	calls := &atomic.Int32{}
 	live := busyCleanup{RestoreLive: r.st, calls: calls}
 	a := r.service(t, workerService{
-		owner: "instance-a", ops: nil, live: live, maint: nil, blobs: nil, lockWait: time.Millisecond, afterApply: nil})
+		owner: "instance-a", ops: nil, live: live, maint: nil, blobs: nil, lockWait: time.Millisecond, afterApply: nil,
+	})
 
 	id := r.start(t, a, false, false)
 	r.driveToEnd(t, a, id)
@@ -1263,7 +1326,10 @@ func testWorkerCheckOnly(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	r := newWorkerRig(t, newStore)
-	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, true, false)
 	if row := r.driveToEnd(t, a, id); row.State != backup.RestoreSucceeded || row.PreBackupID != "" {
@@ -1350,7 +1416,10 @@ func testWorkerForceAudit(t *testing.T, newStore RestoreFactory) {
 
 	r := newWorkerRig(t, newStore)
 	maint := forcedMaintenance{inner: StateMaintenance{State: r.st, Hold: false}}
-	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: maint, blobs: nil, lockWait: 0, afterApply: nil})
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: nil, live: nil, maint: maint, blobs: nil, lockWait: 0, afterApply: nil},
+	)
 
 	id := r.start(t, a, false, true)
 	r.driveToEnd(t, a, id)

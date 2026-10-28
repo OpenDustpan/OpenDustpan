@@ -1197,7 +1197,7 @@ func (s *backupStore) DropRestoreArea(ctx context.Context, a backup.StagingArea)
 		return err
 	}
 
-	schema := "restore_stage_" + strings.TrimPrefix(a.Restore.String(), "rst-") + "_" + strconv.FormatInt(a.Token, 10)
+	area := "restore_stage_" + strings.TrimPrefix(a.Restore.String(), "rst-") + "_" + strconv.FormatInt(a.Token, 10)
 
 	conn, err := pgx.Connect(ctx, s.url)
 	if err != nil {
@@ -1210,8 +1210,8 @@ func (s *backupStore) DropRestoreArea(ctx context.Context, a backup.StagingArea)
 		}
 	}()
 
-	if _, err := conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{schema}.Sanitize()+" CASCADE"); err != nil {
-		return fmt.Errorf("drop schema %s: %w", schema, err)
+	if _, err := conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{area}.Sanitize()+" CASCADE"); err != nil {
+		return fmt.Errorf("drop schema %s: %w", area, err)
 	}
 
 	return nil

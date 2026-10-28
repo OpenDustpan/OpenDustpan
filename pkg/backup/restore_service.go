@@ -644,7 +644,9 @@ func (s *RestoreService) endedOperations(ctx context.Context) (map[string]durabl
 func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.Operation) error {
 	var stopped []string
 
-	for _, op := range ops {
+	for key := range ops {
+		op := ops[key]
+
 		in, err := readRestoreInput(op)
 		if err != nil {
 			// An input that does not decode is a restore of unknown scope:
@@ -706,7 +708,11 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 
 	entries, err := s.afterApplyEntries(ctx, op, in)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "audit entries of a restore were not built", slog.String("restore_id", in.ID.String()))
+		s.logger.ErrorContext(
+			ctx,
+			"audit entries of a restore were not built",
+			slog.String("restore_id", in.ID.String()),
+		)
 
 		return
 	}

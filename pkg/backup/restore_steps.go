@@ -523,14 +523,9 @@ func (s *RestoreService) stepEnter(ctx context.Context, sc durable.StepContext, 
 		return nil, nil
 	}
 
-	entered, err := s.live.RestoreMaintenanceEntered(ctx, in.ID)
-	if err != nil {
-		return nil, fmt.Errorf("read the maintenance flag of restore %s: %w", in.ID, err)
-	}
-
 	opts := maintenance.EnterOptions{Force: in.Force, Writer: s.writer(sc.Fence, in.ID)}
 
-	res, err := s.enterOrRecheck(ctx, in.ID, entered, opts)
+	res, err := s.enterOrRecheck(ctx, in.ID, opts)
 
 	canceled := canceledOf(res, err)
 	s.logCanceled(ctx, in, sc.Fence, canceled)
@@ -553,15 +548,32 @@ func (s *RestoreService) stepEnter(ctx context.Context, sc durable.StepContext, 
 // flag that is set while the state is normal means that an operator left
 // maintenance mode after that enter, so the restore enters it again.
 func (s *RestoreService) enterOrRecheck(
-	ctx context.Context, id RestoreID, entered bool, opts maintenance.EnterOptions,
+	ctx context.Context, id RestoreID, opts maintenance.EnterOptions,
 ) (maintenance.EnterResult, error) {
+	entered, err := s.live.RestoreMaintenanceEntered(ctx, id)
+	if err != nil {
+		return maintenance.EnterResult{
+			Canceled: nil,
+		}, fmt.Errorf(
+			"read the maintenance flag of restore %s: %w",
+			id,
+			err,
+		)
+	}
+
 	if !entered {
 		return s.maintenance.EnterWith(ctx, opts)
 	}
 
 	state, err := s.maintenance.Get(ctx)
 	if err != nil {
-		return maintenance.EnterResult{Canceled: nil}, fmt.Errorf("read the installation state for restore %s: %w", id, err)
+		return maintenance.EnterResult{
+			Canceled: nil,
+		}, fmt.Errorf(
+			"read the installation state for restore %s: %w",
+			id,
+			err,
+		)
 	}
 
 	if state != maintenance.StateMaintenance {
@@ -1045,7 +1057,12 @@ func tempKey(id RestoreID, token int64, key string) (blob.Key, error) {
 //     a repair: the restore overwrites it, and writes a log line and an
 //     audit entry. A store that refuses the overwrite fails the copy with
 //     ErrCorrupt.
-func (s *RestoreService) copyBlob(ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob) error {
+func (s *RestoreService) copyBlob(
+	ctx context.Context,
+	in restoreInput,
+	fence durable.StepFence,
+	ref ManifestBlob,
+) error {
 	live, err := blob.ParseKey(ref.Key)
 	if err != nil {
 		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
@@ -1072,7 +1089,10 @@ func (s *RestoreService) copyBlob(ctx context.Context, in restoreInput, fence du
 	differs := !isNotFound(verifyErr)
 	if differs {
 		if recordErr := s.live.RecordRestoreEvent(ctx, fence, in.ID, repairAuditObject(in, ref.Key)); recordErr != nil {
-			return errors.Join(fmt.Errorf("record the repair of blob %q: %w", ref.Key, recordErr), s.blobs.Delete(ctx, tmp))
+			return errors.Join(
+				fmt.Errorf("record the repair of blob %q: %w", ref.Key, recordErr),
+				s.blobs.Delete(ctx, tmp),
+			)
 		}
 	}
 

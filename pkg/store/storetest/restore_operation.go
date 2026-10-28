@@ -272,7 +272,8 @@ func testRestoreOpEvents(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("record event by the replaced holder: error = %v, want ErrClaimLost", err)
 	}
 
-	if err := ops.RecordRestoreEvent(ctx, taken.Claim.Step(backup.RestoreStepEnterMaintenance), id, "third"); err != nil {
+	live := taken.Claim.Step(backup.RestoreStepEnterMaintenance)
+	if err := ops.RecordRestoreEvent(ctx, live, id, "third"); err != nil {
 		t.Fatalf("record event by the live holder: %v", err)
 	}
 
