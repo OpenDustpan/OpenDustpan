@@ -15,6 +15,7 @@ import (
 	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
@@ -97,6 +98,10 @@ type Config struct {
 	// Ports are the ports that a sink may send to. The zero value allows the
 	// port 443 only.
 	Ports egress.Ports
+	// Counter holds the shared count of the limits of the test route. Required:
+	// the limits hold for all instances of one installation only when they
+	// count in the database that the instances share.
+	Counter authgate.FailureCounter
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -115,8 +120,8 @@ type Service struct {
 // NewService returns a Service. It returns ErrMissingDependency when the
 // store, the sealer or the namespace port is missing.
 func NewService(cfg Config) (*Service, error) {
-	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Sealer.Namespaces == nil {
-		return nil, fmt.Errorf("%w: store, sealer and namespaces", ErrMissingDependency)
+	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Sealer.Namespaces == nil || cfg.Counter == nil {
+		return nil, fmt.Errorf("%w: store, sealer, namespaces and counter", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -131,7 +136,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, sealer: cfg.Sealer, namespaces: cfg.Namespaces, senders: senders, ports: cfg.Ports,
-		limiter: newTestLimiter(), now: now,
+		limiter: newTestLimiter(cfg.Counter), now: now,
 	}, nil
 }
 

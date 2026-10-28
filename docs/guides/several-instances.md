@@ -163,6 +163,18 @@ Set `--trusted-proxies` (`DUSTPAN_TRUSTED_PROXIES`) to the addresses of the load
 
 Send health checks to the readiness probe. The [observe guide](observe.md) gives the probe paths.
 
+## Limits that count in each instance
+
+These limits count in the memory of one instance. The limit of the installation is the limit of one instance times the number of instances.
+
+| Limit | What it bounds | Effect with several instances |
+| --- | --- | --- |
+| `--max-body-bytes-in-flight` | The memory that large request bodies hold at one time. | Each instance keeps its own budget. This is the intended effect: the limit protects the memory of one process. |
+| Audit entries of refused requests | One audit entry for each refused action, object kind and scope in each minute, with a count of the others. | Each instance writes its own first entry for a key in a minute. The entries of the same denial can be as many as the instances. |
+| Checks of a Git host connection | One check of a connection in 10 seconds, and 30 checks of an installation of the Git host in 1 minute. | Each instance applies the limits. The checks that the Git host receives can be as many as the instances times the limit. |
+
+Three limits count in the database, so they hold for all instances. They are the sign-in failure budget, the limit of pending state versions of a workspace, and the limits of the test of a notification destination.
+
 ## Limits
 
 - SQLite holds one instance only. Do not start two processes on one SQLite file.

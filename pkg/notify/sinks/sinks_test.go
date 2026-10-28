@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -227,11 +228,14 @@ func person(kind identity.Kind) identity.Principal {
 	}
 }
 
+func testNow() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) }
+
 // config returns a service config over store, with the senders.
 func config(store notify.SinkStore, ns sinks.Namespaces, senders ...notify.Sender) sinks.Config {
 	return sinks.Config{
 		Store: store, Sealer: notifytest.Sealer(), Namespaces: ns, Senders: senders, Ports: egress.Ports{},
-		Now: func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) },
+		Counter: authgatetest.NewMemory(testNow),
+		Now:     testNow,
 	}
 }
 
@@ -266,6 +270,8 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 	noNamespaces := config(newFakeStore(), nil)
 	noSealer := config(newFakeStore(), fakeNamespaces{notHome: false})
 	noSealer.Sealer = notify.SinkSealer{Namespaces: nil, Installation: nil}
+	noCounter := config(newFakeStore(), fakeNamespaces{notHome: false})
+	noCounter.Counter = nil
 
 	cases := []struct {
 		name string
@@ -274,6 +280,7 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 		{"no store", noStore},
 		{"no namespaces", noNamespaces},
 		{"no sealer", noSealer},
+		{"no counter", noCounter},
 	}
 
 	for _, tc := range cases {

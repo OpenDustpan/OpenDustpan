@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -51,6 +52,7 @@ func serviceWith(t *testing.T, f fixture, ports egress.Ports, ns fakeNamespaces,
 	cfg := config(f.store, ns, f.hook)
 	cfg.Ports = ports
 	cfg.Now = c.Now
+	cfg.Counter = authgatetest.NewMemory(c.Now)
 
 	svc, err := sinks.NewService(cfg)
 	if err != nil {
