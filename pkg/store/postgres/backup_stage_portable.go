@@ -25,28 +25,7 @@ func (s *Store) StagePortable(
 	files []backup.PortableFile,
 	opts backup.StageOptions,
 ) (backup.Summary, error) {
-	// Layer 1: compare the kind of the backup with the kind that this
-	// database holds, before any row loads. The service checks too; this
-	// check stays so that a caller of the port cannot skip it.
-	live, kindErr := s.ReadKind(ctx)
-	if kindErr != nil {
-		return backup.Summary{}, fmt.Errorf("stage portable backup: %w", kindErr)
-	}
-
-	if err := backup.CheckStageKind(opts, live); err != nil {
-		return backup.Summary{}, err
-	}
-
-	version, err := s.schemaVersion(ctx)
-	if err != nil {
-		return backup.Summary{}, err
-	}
-
-	if schemaErr := backup.CheckStageSchema(want.SchemaVersion, version); schemaErr != nil {
-		return backup.Summary{}, fmt.Errorf("stage portable backup: %w", schemaErr)
-	}
-
-	index, err := backup.IndexPortableFiles(files, want.RowCounts)
+	in, err := s.portableStage(ctx, open, want, files, opts)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -56,13 +35,55 @@ func (s *Store) StagePortable(
 		return backup.Summary{}, err
 	}
 
-	return s.buildStaging(ctx, stagingInput{
-		staging: staging,
+	in.staging = staging
+
+	return s.buildStaging(ctx, in)
+}
+
+// portableStage checks a stage of a portable backup before any row loads,
+// and returns what buildChecked needs, with no staging schema name.
+func (s *Store) portableStage(
+	ctx context.Context,
+	open backup.PortableOpener,
+	want backup.Summary,
+	files []backup.PortableFile,
+	opts backup.StageOptions,
+) (stagingInput, error) {
+	var none stagingInput
+
+	// Layer 1: compare the kind of the backup with the kind that this
+	// database holds, before any row loads. The service checks too; this
+	// check stays so that a caller of the port cannot skip it.
+	live, kindErr := s.ReadKind(ctx)
+	if kindErr != nil {
+		return none, fmt.Errorf("stage portable backup: %w", kindErr)
+	}
+
+	if err := backup.CheckStageKind(opts, live); err != nil {
+		return none, err
+	}
+
+	version, err := s.schemaVersion(ctx)
+	if err != nil {
+		return none, err
+	}
+
+	if schemaErr := backup.CheckStageSchema(want.SchemaVersion, version); schemaErr != nil {
+		return none, fmt.Errorf("stage portable backup: %w", schemaErr)
+	}
+
+	index, err := backup.IndexPortableFiles(files, want.RowCounts)
+	if err != nil {
+		return none, err
+	}
+
+	return stagingInput{
+		staging: "",
 		load: func(ctx context.Context, schema string) error {
 			return s.loadPortableStaging(ctx, schema, open, index)
 		},
 		want: want,
-	})
+	}, nil
 }
 
 // loadPortableStaging loads each table file into the staging schema, in the

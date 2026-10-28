@@ -2454,6 +2454,12 @@ func restoreAllowEntries() []AllowEntry {
 			Reason: "Operator route: only the restore command reads a restore. " +
 				"The harness step polls it until it succeeds and checks the manifest.",
 		},
+		{
+			Method: http.MethodPost, Path: "/api/server/restores/{id}/cancel",
+			CoveringTest: "TestCancelRestoreBeforeTheSwap",
+			Reason: "Operator route: no CLI command cancels a restore. The tests of the installation API " +
+				"cancel a restore before the swap, after the swap and after the end.",
+		},
 	}
 }
 

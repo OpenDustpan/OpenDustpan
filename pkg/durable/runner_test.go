@@ -64,20 +64,21 @@ func (r *recorder) count(name string) int {
 // attempts, no jitter.
 func testConfig(store durable.Store, owner string, steps ...durable.Step) durable.RunnerConfig {
 	return durable.RunnerConfig{
-		Store:        store,
-		Owner:        owner,
-		Kinds:        []durable.KindSpec{{Kind: testKind, Version: 1, MinVersion: 1, Steps: steps}},
-		Lease:        testLease,
-		RenewEvery:   testRenew,
-		PollEvery:    testPoll,
-		MaxAttempts:  3,
-		ExpiryLimit:  3,
-		Backoff:      durable.Backoff{Base: 10 * time.Millisecond, Max: 20 * time.Millisecond},
-		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout: time.Second,
-		Deferred:     nil,
-		Logger:       nil,
-		Rand:         func() float64 { return 0 },
+		Store:              store,
+		Owner:              owner,
+		Kinds:              []durable.KindSpec{{Kind: testKind, Version: 1, MinVersion: 1, Steps: steps}},
+		Lease:              testLease,
+		RenewEvery:         testRenew,
+		PollEvery:          testPoll,
+		MaxAttempts:        3,
+		ExpiryLimit:        3,
+		Backoff:            durable.Backoff{Base: 10 * time.Millisecond, Max: 20 * time.Millisecond},
+		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:       time.Second,
+		Deferred:           nil,
+		StopOnRenewalError: false,
+		Logger:             nil,
+		Rand:               func() float64 { return 0 },
 	}
 }
 
@@ -962,6 +963,45 @@ func TestRunnerStopsAStepBeforeTheLeaseEndsWithNoRenewal(t *testing.T) {
 	if store.releases.Load() != 1 || store.completes.Load()+store.fails.Load() != 0 ||
 		got.State != durable.StatePending || got.Expiries != 0 || got.Failures != 0 {
 		t.Fatalf("after a stop near the end of the lease: %d releases, operation %+v; want one release, pending, "+
+			"no expiry and no failure", store.releases.Load(), got)
+	}
+}
+
+func TestRunnerStopsAStepAtTheFirstFailedRenewal(t *testing.T) {
+	t.Parallel()
+
+	inner := durabletest.NewMem().Store()
+	store := newCountingStore(inner)
+	store.extend = func(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
+		return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}, errNetwork
+	}
+
+	stopped := make(chan time.Time, 1)
+	step := durable.Step{Name: "one", Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+		<-ctx.Done()
+		stopped <- time.Now()
+
+		return nil, ctx.Err()
+	}}
+
+	op := start(t, store, "k")
+	cfg := testConfig(store, "a", step)
+	cfg.StopOnRenewalError = true
+	began := time.Now()
+
+	if err := newRunner(t, cfg).RunOnce(t.Context()); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("RunOnce with a failed renewal: error = %v, want ErrClaimLost", err)
+	}
+
+	// The first renewal comes after testRenew. The step stops then, long
+	// before the margin of the lease.
+	if took := (<-stopped).Sub(began); took >= testLease/2 {
+		t.Fatalf("the step stopped %v after the claim, want soon after the first renewal %v", took, testRenew)
+	}
+
+	got := mustGet(t, inner, op.ID)
+	if store.releases.Load() != 1 || got.State != durable.StatePending || got.Expiries != 0 || got.Failures != 0 {
+		t.Fatalf("after a stop at a failed renewal: %d releases, operation %+v; want one release, pending, "+
 			"no expiry and no failure", store.releases.Load(), got)
 	}
 }

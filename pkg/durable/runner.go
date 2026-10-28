@@ -137,7 +137,14 @@ type RunnerConfig struct {
 	// with no failure, so the attempt does not count toward MaxAttempts, and
 	// waits the claim backoff before it claims again. Nil defers nothing.
 	Deferred func(err error) bool
-	Logger   *slog.Logger
+	// StopOnRenewalError stops the step at the first renewal that fails,
+	// with the rules of a stop near the end of the lease: the runner
+	// releases the claim while it is live, and Run backs off. A kind whose
+	// steps change things outside the fence, so that a holder must stop as
+	// soon as it can lose its claim, sets it. The default waits for the end
+	// of the lease minus the margin.
+	StopOnRenewalError bool
+	Logger             *slog.Logger
 	// Rand returns a number in [0, 1) for the jitter of Backoff.
 	Rand func() float64
 }
@@ -670,6 +677,12 @@ func (r *Runner) renew(
 			return
 		default:
 			log.WarnContext(ctx, "durable operation claim renewal failed", slog.String("error", ErrorClass(err)))
+
+			if r.cfg.StopOnRenewalError {
+				stop(errLeaseDeadline)
+
+				return
+			}
 		}
 	}
 }

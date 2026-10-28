@@ -1,38 +1,14 @@
 package sqlite_test
 
 import (
-	"context"
-	"fmt"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
-
-// itemKeyMaintenance enters and leaves maintenance mode in the stored
-// installation state, as the maintenance service does for a restore.
-type itemKeyMaintenance struct{ state maintenance.Store }
-
-// Enter implements backup.RestoreMaintenance.
-func (m itemKeyMaintenance) Enter(ctx context.Context, _ bool) (maintenance.EnterResult, error) {
-	if err := m.state.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance); err != nil {
-		return maintenance.EnterResult{Canceled: nil}, fmt.Errorf("enter maintenance mode: %w", err)
-	}
-
-	return maintenance.EnterResult{Canceled: nil}, nil
-}
-
-// Leave implements backup.RestoreMaintenance.
-func (m itemKeyMaintenance) Leave(ctx context.Context) error {
-	if err := m.state.SetState(ctx, maintenance.StateNormal); err != nil {
-		return fmt.Errorf("leave maintenance mode: %w", err)
-	}
-
-	return nil
-}
 
 // TestItemKeyBackupRestore proves that a backup copies the wrapped item key
 // blobs and that content opens after a restore brought back a lost blob.
@@ -68,9 +44,24 @@ func TestItemKeyBackupRestore(t *testing.T) {
 		}
 
 		restores, err := backup.NewRestoreService(backup.RestoreConfig{
-			Live: st, Registry: st, Backups: backups, Maintenance: itemKeyMaintenance{state: st},
-			Blobs: live, Target: in.Target, Key: in.Key, Installation: "test", AfterApply: nil, Admit: nil,
-			AllowDevBackups: false, AllowDevHint: "", Now: nil, Logger: nil,
+			Live:            st,
+			Operations:      st.DurableOperationsPort(),
+			Backups:         backups,
+			Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
+			Blobs:           live,
+			Target:          in.Target,
+			Key:             in.Key,
+			Installation:    "test",
+			AfterApply:      nil,
+			Admit:           nil,
+			AllowDevBackups: false,
+			AllowDevHint:    "",
+			Owner:           "",
+			Lease:           0,
+			CleanupLockWait: 0,
+			RetryBase:       time.Millisecond,
+			Now:             nil,
+			Logger:          nil,
 		})
 		if err != nil {
 			t.Fatalf("new restore service: %v", err)

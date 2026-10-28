@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -62,7 +63,6 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		name string
 	}{
 		{name: "restores table creates, finishes, gets and lists", test: testRestoreRegistry},
-		{name: "restart marks every running restore failed", test: testRestoreRestartFailsRunning},
 		{name: "one restore runs at a time", test: testRestoreOneRunning},
 		{name: "a backup starts after a restore of a running snapshot", test: testRestoreThenBackup},
 		{name: "a restore starts after a restore of a running snapshot", test: testRestoreThenRestore},
@@ -112,6 +112,13 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			tc.test(t, newStore)
 		})
 	}
+
+	for _, tc := range restoreOperationCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.test(t, newStore)
+		})
+	}
 }
 
 // newRestoreRecord returns a running restore record with the given start time.
@@ -129,15 +136,58 @@ func newRestoreRecord(id backup.RestoreID, backupID backup.ID, startedAt time.Ti
 	}
 }
 
-// mustCreateRestore stores a running restore row, failing on error.
+// mustCreateRestore starts a checking restore row with its operation,
+// failing on error.
 func mustCreateRestore(t *testing.T, s RestoreStore, r backup.RestoreRecord) backup.RestoreRecord {
 	t.Helper()
 
-	if err := s.CreateRestore(t.Context(), r); err != nil {
-		t.Fatalf("create restore %s: %v", r.ID, err)
+	if err := restorePortsOf(t, s).ops.StartRestore(t.Context(), r, restoreOpStart(r.ID)); err != nil {
+		t.Fatalf("start restore %s: %v", r.ID, err)
 	}
 
 	return r
+}
+
+// restoreClaim returns the live claim of the operation of restore id in s,
+// and claims the operation when no claim holds it.
+func restoreClaim(t *testing.T, s RestoreStore, id backup.RestoreID) durable.Claim {
+	t.Helper()
+
+	ops := s.DurableOperationsPort()
+
+	all := restoreOps(t, ops)
+	for i := range all {
+		op := &all[i]
+		if op.Key != backup.RestoreOperationKey(id) {
+			continue
+		}
+
+		if op.State == durable.StateRunning {
+			return op.Claim
+		}
+
+		claimed := mustClaimRestoreOp(t, ops, "instance-a")
+		if claimed.ID != op.ID {
+			t.Fatalf("claim took operation %s, want the operation %s of restore %s", claimed.ID, op.ID, id)
+		}
+
+		return claimed.Claim
+	}
+
+	t.Fatalf("restore %s has no operation", id)
+
+	return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}
+}
+
+// mustMarkApplying moves the restore id to applying with the pre-backup ID,
+// under the claim of its operation, failing on error.
+func mustMarkApplying(t *testing.T, s RestoreStore, id backup.RestoreID, pre backup.ID) {
+	t.Helper()
+
+	fence := restoreClaim(t, s, id).Step(backup.RestoreStepPreBackup)
+	if err := restorePortsOf(t, s).ops.MarkRestoreApplying(t.Context(), fence, id, pre); err != nil {
+		t.Fatalf("mark restore %s applying: %v", id, err)
+	}
 }
 
 // mustGetRestore reads one restore row, failing on error.
@@ -161,13 +211,24 @@ type restoreFinish struct {
 	EndedAt time.Time
 }
 
-// mustFinishRestore finishes a running restore row, failing on error.
+// mustFinishRestore finishes a running restore row under the claim of its
+// operation, and completes the operation, failing on error.
 func mustFinishRestore(t *testing.T, s RestoreStore, finish restoreFinish) backup.RestoreRecord {
 	t.Helper()
 
-	got, err := s.FinishRestore(t.Context(), finish.ID, finish.State, finish.Error, finish.EndedAt)
+	claim := restoreClaim(t, s, finish.ID)
+	end := backup.RestoreEnd{
+		ID: finish.ID, State: finish.State, Error: finish.Error, EndedAt: finish.EndedAt, DevReport: nil,
+		LeaveMaintenance: false,
+	}
+
+	got, err := restorePortsOf(t, s).ops.FinishRestore(t.Context(), claim.Step(backup.RestoreStepFinish), end)
 	if err != nil {
 		t.Fatalf("finish restore %s: %v", finish.ID, err)
+	}
+
+	if err := s.DurableOperationsPort().Complete(t.Context(), claim); err != nil {
+		t.Fatalf("complete the operation of restore %s: %v", finish.ID, err)
 	}
 
 	return got
@@ -191,7 +252,7 @@ func testRestoreRegistry(t *testing.T, newStore RestoreFactory) {
 }
 
 // checkRestoreCreateAndGet creates the first running row, proves a duplicate
-// create and a missing get fail, and returns the row.
+// start and a missing get fail, and returns the row.
 func checkRestoreCreateAndGet(t *testing.T, s RestoreStore) backup.RestoreRecord {
 	t.Helper()
 
@@ -201,9 +262,9 @@ func checkRestoreCreateAndGet(t *testing.T, s RestoreStore) backup.RestoreRecord
 		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
 	)
 
-	err := s.CreateRestore(ctx, first)
+	err := restorePortsOf(t, s).ops.StartRestore(ctx, first, restoreOpStart(first.ID))
 	if !errors.Is(err, backup.ErrRestoreExists) {
-		t.Fatalf("create duplicate restore: err = %v, want ErrRestoreExists", err)
+		t.Fatalf("start duplicate restore: err = %v, want ErrRestoreExists", err)
 	}
 
 	if got := mustGetRestore(t, s, first.ID); got != first {
@@ -219,37 +280,48 @@ func checkRestoreCreateAndGet(t *testing.T, s RestoreStore) backup.RestoreRecord
 }
 
 // checkRestoreFinishPaths finishes the first row succeeded, then proves a
-// second finish and a finish of a missing row fail.
+// second finish fails, and that a fence of another restore cannot finish it.
 func checkRestoreFinishPaths(t *testing.T, s RestoreStore, first backup.RestoreRecord) {
 	t.Helper()
 
 	ctx := t.Context()
 	endedAt := now().Add(time.Hour)
-	finished := mustFinishRestore(t, s, restoreFinish{
-		ID:      first.ID,
-		State:   backup.RestoreSucceeded,
-		Error:   "",
-		EndedAt: endedAt,
-	})
+	claim := restoreClaim(t, s, first.ID)
+	end := backup.RestoreEnd{
+		ID: first.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: endedAt, DevReport: nil,
+		LeaveMaintenance: false,
+	}
+
+	finished, err := restorePortsOf(t, s).ops.FinishRestore(ctx, claim.Step(backup.RestoreStepFinish), end)
+	if err != nil {
+		t.Fatalf("finish restore: %v", err)
+	}
 
 	if finished.State != backup.RestoreSucceeded || !finished.EndedAt.Equal(endedAt) || finished.Error != "" {
 		t.Fatalf("finished restore = %+v, want succeeded at %v without error", finished, endedAt)
 	}
 
-	_, err := s.FinishRestore(ctx, first.ID, backup.RestoreFailed, "again", endedAt)
+	end.State, end.Error = backup.RestoreFailed, "again"
+
+	_, err = restorePortsOf(t, s).ops.FinishRestore(ctx, claim.Step("finish-again"), end)
 	if !errors.Is(err, backup.ErrRestoreNotRunning) {
 		t.Fatalf("finish a finished restore: err = %v, want ErrRestoreNotRunning", err)
 	}
 
-	_, err = s.FinishRestore(ctx, backup.RestoreID(ident.NewID("rst-")), backup.RestoreFailed, "no", endedAt)
-	if !errors.Is(err, backup.ErrRestoreNotFound) {
-		t.Fatalf("finish a missing restore: err = %v, want ErrRestoreNotFound", err)
+	end.ID = backup.RestoreID(ident.NewID("rst-"))
+
+	_, err = restorePortsOf(t, s).ops.FinishRestore(ctx, claim.Step("finish-other"), end)
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("finish another restore under this claim: err = %v, want ErrClaimLost", err)
+	}
+
+	if err := s.DurableOperationsPort().Complete(ctx, claim); err != nil {
+		t.Fatalf("complete the operation: %v", err)
 	}
 }
 
 // checkRestoreApplying moves a second row to applying with the pre-backup ID,
-// proves a second mark and a mark of a missing row fail, finishes it, and
-// returns it.
+// proves a second mark fails, finishes it, and returns it.
 func checkRestoreApplying(t *testing.T, s RestoreStore, first backup.RestoreRecord) backup.RestoreRecord {
 	t.Helper()
 
@@ -259,22 +331,17 @@ func checkRestoreApplying(t *testing.T, s RestoreStore, first backup.RestoreReco
 	)
 	preID := backup.ID(ident.NewID("bkp-"))
 
-	if err := s.MarkRestoreApplying(ctx, applying.ID, preID); err != nil {
-		t.Fatalf("mark restore applying: %v", err)
-	}
+	mustMarkApplying(t, s, applying.ID, preID)
 
 	if got := mustGetRestore(t, s, applying.ID); got.State != backup.RestoreApplying || got.PreBackupID != preID {
 		t.Fatalf("applying restore = %+v, want applying with pre-backup %s", got, preID)
 	}
 
-	err := s.MarkRestoreApplying(ctx, applying.ID, preID)
+	again := restoreClaim(t, s, applying.ID).Step("pre-backup-again")
+
+	err := restorePortsOf(t, s).ops.MarkRestoreApplying(ctx, again, applying.ID, preID)
 	if !errors.Is(err, backup.ErrRestoreNotRunning) {
 		t.Fatalf("mark an applying restore again: err = %v, want ErrRestoreNotRunning", err)
-	}
-
-	err = s.MarkRestoreApplying(ctx, backup.RestoreID(ident.NewID("rst-")), preID)
-	if !errors.Is(err, backup.ErrRestoreNotFound) {
-		t.Fatalf("mark a missing restore: err = %v, want ErrRestoreNotFound", err)
 	}
 
 	applied := mustFinishRestore(t, s, restoreFinish{
@@ -355,6 +422,7 @@ func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	s := newStore(t)
+	ops := restorePortsOf(t, s).ops
 	first := mustCreateRestore(
 		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
 	)
@@ -364,19 +432,27 @@ func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
 		now().Add(time.Minute),
 	)
 
-	if err := s.CreateRestore(t.Context(), second); !errors.Is(err, backup.ErrRestoreRunning) {
+	err := ops.StartRestore(
+		t.Context(),
+		second,
+		restoreOpStart(second.ID),
+	)
+	if !errors.Is(err, backup.ErrRestoreRunning) {
 		t.Fatalf("second restore while one checks: err = %v, want ErrRestoreRunning", err)
 	}
 
-	if err := s.MarkRestoreApplying(t.Context(), first.ID, backup.ID(ident.NewID("bkp-"))); err != nil {
-		t.Fatalf("mark restore applying: %v", err)
-	}
+	mustMarkApplying(t, s, first.ID, backup.ID(ident.NewID("bkp-")))
 
-	if err := s.CreateRestore(t.Context(), second); !errors.Is(err, backup.ErrRestoreRunning) {
+	err = ops.StartRestore(
+		t.Context(),
+		second,
+		restoreOpStart(second.ID),
+	)
+	if !errors.Is(err, backup.ErrRestoreRunning) {
 		t.Fatalf("second restore while one applies: err = %v, want ErrRestoreRunning", err)
 	}
 
-	if err := s.CreateRestore(t.Context(), first); !errors.Is(err, backup.ErrRestoreExists) {
+	if err := ops.StartRestore(t.Context(), first, restoreOpStart(first.ID)); !errors.Is(err, backup.ErrRestoreExists) {
 		t.Fatalf("taken restore ID: err = %v, want ErrRestoreExists", err)
 	}
 
@@ -438,9 +514,7 @@ func testRestoreThenRestore(t *testing.T, newStore RestoreFactory) {
 			)
 
 			if applying {
-				if err := ps.src.MarkRestoreApplying(ctx, held.ID, backup.ID(ident.NewID("bkp-"))); err != nil {
-					t.Fatalf("mark restore applying: %v", err)
-				}
+				mustMarkApplying(t, ps.src, held.ID, backup.ID(ident.NewID("bkp-")))
 			}
 
 			applySnapshot(t, ps)
@@ -454,7 +528,7 @@ func testRestoreThenRestore(t *testing.T, newStore RestoreFactory) {
 				backup.ID(ident.NewID("bkp-")),
 				now().Add(time.Hour),
 			)
-			if err := ps.dst.CreateRestore(ctx, next); err != nil {
+			if err := restorePortsOf(t, ps.dst).ops.StartRestore(ctx, next, restoreOpStart(next.ID)); err != nil {
 				t.Fatalf("start a restore after the restore: %v, want nil", err)
 			}
 		})
@@ -481,9 +555,7 @@ func testRestoreRecordsEndAfterSwap(t *testing.T, newStore RestoreFactory) {
 	)
 
 	preBackupID := backup.ID(ident.NewID("bkp-"))
-	if err := ps.dst.MarkRestoreApplying(ctx, current.ID, preBackupID); err != nil {
-		t.Fatalf("mark restore applying: %v", err)
-	}
+	mustMarkApplying(t, ps.dst, current.ID, preBackupID)
 
 	applySnapshot(t, ps)
 
@@ -516,78 +588,6 @@ func applySnapshot(t *testing.T, ps portableStores) {
 
 	if err := ps.dst.ApplyStaging(t.Context()); err != nil {
 		t.Fatalf("apply staging area: %v", err)
-	}
-}
-
-// testRestoreRestartFailsRunning marks a running row failed at the next start,
-// with the error text, and leaves finished rows alone.
-func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
-	t.Helper()
-
-	s := newStore(t)
-
-	if err := s.FailRunningRestores(t.Context(), now(), "no restore is running"); err != nil {
-		t.Fatalf("fail running restores: %v", err)
-	}
-
-	// One restore runs at a time: the finished row runs and ends first, then
-	// an applying row fails at one restart, then a checking row at the next.
-	done := mustCreateRestore(
-		t,
-		s,
-		newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)),
-	)
-	endedAt := now().Add(2 * time.Hour)
-	finished := mustFinishRestore(t, s, restoreFinish{
-		ID:      done.ID,
-		State:   backup.RestoreSucceeded,
-		Error:   "",
-		EndedAt: endedAt,
-	})
-
-	applying := mustCreateRestore(
-		t,
-		s,
-		newRestoreRecord(
-			backup.RestoreID(ident.NewID("rst-")),
-			backup.ID(ident.NewID("bkp-")),
-			now().Add(30*time.Minute),
-		),
-	)
-
-	if err := s.MarkRestoreApplying(t.Context(), applying.ID, backup.ID(ident.NewID("bkp-"))); err != nil {
-		t.Fatalf("mark restore applying: %v", err)
-	}
-
-	err := s.FailRunningRestores(t.Context(), now().Add(150*time.Minute), "server stopped during restore")
-	if err != nil {
-		t.Fatalf("fail running restores: %v", err)
-	}
-
-	if stalled := mustGetRestore(t, s, applying.ID); stalled.State != backup.RestoreFailed {
-		t.Fatalf("applying restore after restart = %+v, want failed", stalled)
-	}
-
-	running := mustCreateRestore(
-		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
-	)
-
-	restartedAt := now().Add(3 * time.Hour)
-
-	if err := s.FailRunningRestores(t.Context(), restartedAt, "server stopped during restore"); err != nil {
-		t.Fatalf("fail running restores: %v", err)
-	}
-
-	got := mustGetRestore(t, s, running.ID)
-
-	if got.State != backup.RestoreFailed || got.Error != "server stopped during restore" ||
-		!got.EndedAt.Equal(restartedAt) || !got.StartedAt.Equal(running.StartedAt) ||
-		got.BackupID != running.BackupID {
-		t.Fatalf("restarted restore = %+v, want failed with the error text and end time", got)
-	}
-
-	if untouched := mustGetRestore(t, s, done.ID); untouched != finished {
-		t.Fatalf("finished restore after restart = %+v, want %+v", untouched, finished)
 	}
 }
 
@@ -635,15 +635,6 @@ func testRestoreRowSurvivesReopen(t *testing.T, newStore RestoreFactory) {
 
 	if gotFinished := mustGetRestore(t, reopened, finished.ID); gotFinished != finished {
 		t.Fatalf("finished restore after reopen = %+v, want %+v", gotFinished, finished)
-	}
-
-	failErr := reopened.FailRunningRestores(t.Context(), now().Add(3*time.Hour), "server stopped during restore")
-	if failErr != nil {
-		t.Fatalf("fail running restores: %v", failErr)
-	}
-
-	if after := mustGetRestore(t, reopened, running.ID); after.State != backup.RestoreFailed {
-		t.Fatalf("restarted restore after reopen = %+v, want failed", after)
 	}
 }
 

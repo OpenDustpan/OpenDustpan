@@ -100,3 +100,55 @@ func checkNoWorkerAnswer(t *testing.T, body string) {
 		t.Errorf("code = %q, want %q", doc.ErrorCode, errcode.WorkerAbsent)
 	}
 }
+
+// TestStartRestoreNeedsAWorker proves that the start of a restore, which
+// inserts a durable operation, answers 503 worker.absent when no worker runs,
+// and stores no restore.
+func TestStartRestoreNeedsAWorker(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		workers    func() apiserver.WorkerSource
+		wantStatus int
+		wantRows   int
+	}{
+		{
+			"no worker", func() apiserver.WorkerSource { return workerSource{admittest.NoWorker()} },
+			http.StatusServiceUnavailable, 0,
+		},
+		{
+			"a worker runs", func() apiserver.WorkerSource { return workerSource{admittest.Worker()} },
+			http.StatusAccepted, 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stores := openBackupDeps(t)
+			fix := newRestoreFixtureWorkers(t, stores, stores.target, nil, tc.workers())
+
+			status, body := serveRestore(
+				t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"bkp-missing000000000001"}`,
+			)
+			if status != tc.wantStatus {
+				t.Fatalf("POST /api/server/restores = %d %s, want %d", status, body, tc.wantStatus)
+			}
+
+			rows, err := fix.restores.List(t.Context())
+			if err != nil {
+				t.Fatalf("list restores: %v", err)
+			}
+
+			if len(rows) != tc.wantRows {
+				t.Fatalf("restores = %d, want %d", len(rows), tc.wantRows)
+			}
+
+			if tc.wantStatus == http.StatusServiceUnavailable {
+				checkNoWorkerAnswer(t, body)
+			}
+		})
+	}
+}

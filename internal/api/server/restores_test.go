@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // restoreFixture is a Handler with a backup service and a restore service
@@ -30,6 +31,27 @@ type restoreFixture struct {
 	namespaces *namespace.Service
 	backups    *backup.Service
 	restores   *backup.RestoreService
+	audit      *testAudit
+}
+
+// workRestores runs the restore worker of restores until the end of the
+// test, as the worker of a server does, and waits for it to stop.
+func workRestores(t *testing.T, restores *backup.RestoreService) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		restores.Work(ctx)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 }
 
 // newRestoreFixture builds a Handler with a backup service and a restore
@@ -48,6 +70,27 @@ func newRestoreFixture(t *testing.T) restoreFixture {
 // backup target through target instead of the fresh target store. A test
 // passes a gated target to hold a restore before it reads the target.
 func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store) restoreFixture {
+	t.Helper()
+
+	return newRestoreFixtureHooked(t, stores, target, nil)
+}
+
+// newRestoreFixtureHooked builds the fixture of newRestoreFixtureOver with
+// afterApply as the after-apply step of the restore service.
+func newRestoreFixtureHooked(
+	t *testing.T, stores backupStores, target blob.Store, afterApply func(context.Context) error,
+) restoreFixture {
+	t.Helper()
+
+	return newRestoreFixtureWorkers(t, stores, target, afterApply, nil)
+}
+
+// newRestoreFixtureWorkers builds the fixture of newRestoreFixtureHooked
+// with workers as the worker check of the handler.
+func newRestoreFixtureWorkers(
+	t *testing.T, stores backupStores, target blob.Store, afterApply func(context.Context) error,
+	workers apiserver.WorkerSource,
+) restoreFixture {
 	t.Helper()
 
 	backups, err := backup.NewService(backup.Config{
@@ -71,19 +114,22 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:         stores.registry,
-		Registry:     stores.registry,
-		Backups:      backups,
-		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
-		Blobs:        stores.live,
-		Target:       target,
-		Key:          nil,
-		Installation: "test",
-		AfterApply:   nil,
-		Admit:        nil,
-
+		Live:            stores.registry,
+		Operations:      stores.registry.DurableOperationsPort(),
+		Backups:         backups,
+		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
+		Blobs:           stores.live,
+		Target:          target,
+		Key:             nil,
+		Installation:    "test",
+		AfterApply:      afterApply,
+		Admit:           nil,
 		AllowDevBackups: false,
 		AllowDevHint:    "",
+		Owner:           "",
+		Lease:           0,
+		CleanupLockWait: 0,
+		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
 	})
@@ -91,16 +137,20 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		t.Fatalf("new restore service: %v", err)
 	}
 
+	workRestores(t, restores)
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
+	aud := newTestAudit()
+
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
-		Workers:          nil,
+		Workers:          workers,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -118,7 +168,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            newTestAudit(),
+		Audit:            aud,
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -135,7 +185,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		t.Fatalf("handler: %v", err)
 	}
 
-	return restoreFixture{handler: handler, namespaces: namespaces, backups: backups, restores: restores}
+	return restoreFixture{handler: handler, namespaces: namespaces, backups: backups, restores: restores, audit: aud}
 }
 
 // serveRestore sends one installation API request with the test token and
@@ -885,25 +935,30 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:         stores.registry,
-		Registry:     stores.registry,
-		Backups:      backups,
-		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
-		Blobs:        stores.live,
-		Target:       stores.target,
-		Key:          nil,
-		Installation: "test",
-		AfterApply:   nil,
-		Admit:        nil,
-
+		Live:            stores.registry,
+		Operations:      stores.registry.DurableOperationsPort(),
+		Backups:         backups,
+		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
+		Blobs:           stores.live,
+		Target:          stores.target,
+		Key:             nil,
+		Installation:    "test",
+		AfterApply:      nil,
+		Admit:           nil,
 		AllowDevBackups: false,
 		AllowDevHint:    "",
+		Owner:           "",
+		Lease:           0,
+		CleanupLockWait: 0,
+		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
 	}
+
+	workRestores(t, restores)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
@@ -1011,25 +1066,30 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:         stores.registry,
-		Registry:     stores.registry,
-		Backups:      backups,
-		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
-		Blobs:        stores.live,
-		Target:       stores.target,
-		Key:          nil,
-		Installation: "test",
-		AfterApply:   nil,
-		Admit:        nil,
-
+		Live:            stores.registry,
+		Operations:      stores.registry.DurableOperationsPort(),
+		Backups:         backups,
+		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
+		Blobs:           stores.live,
+		Target:          stores.target,
+		Key:             nil,
+		Installation:    "test",
+		AfterApply:      nil,
+		Admit:           nil,
 		AllowDevBackups: false,
 		AllowDevHint:    "",
+		Owner:           "",
+		Lease:           0,
+		CleanupLockWait: 0,
+		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
 	}
+
+	workRestores(t, restores)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {

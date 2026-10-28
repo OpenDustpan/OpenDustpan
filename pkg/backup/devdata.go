@@ -88,15 +88,6 @@ func CheckStageKind(opts StageOptions, live installation.Kind) error {
 	return nil
 }
 
-// DevReportRecorder stores the removal report in the restore record before
-// the swap. The restores table survives the swap, so the report is still
-// there if the audit entries cannot be written.
-type DevReportRecorder interface {
-	// RecordDevReport stores report in the record of restore id. It returns
-	// ErrRestoreNotFound for an unknown ID.
-	RecordDevReport(ctx context.Context, id RestoreID, report DevStripReport) error
-}
-
 // DevRemovalClass names one class of data that the strip removes.
 type DevRemovalClass string
 

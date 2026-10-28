@@ -26,52 +26,8 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 		return backup.KeepAccessResult{}, backup.ErrCorrupt
 	}
 
-	staged := s.stagingPath
-
-	// The audit chain record is bookkeeping of this installation: the
-	// staged file takes the value of the live database. The control tables
-	// stay across the swap with the live rows. Read the chain before the
-	// write lock, because the read takes the read lock.
-	keep, err := s.liveBookkeeping(ctx)
+	dropped, err := s.swapStaged(ctx, swapPlan{staged: s.stagingPath, keepAccess: true, before: nil, after: nil})
 	if err != nil {
-		return backup.KeepAccessResult{}, err
-	}
-
-	// Hold the write lock from the live snapshot through the swap, so a
-	// revoke between the copy and the swap cannot be lost. Lock order is
-	// stagingMu before mu.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// A binary below the minimum of the live database must not swap in a
-	// file that it built.
-	if minErr := s.checkSwapMinimumLocked(ctx); minErr != nil {
-		return backup.KeepAccessResult{}, minErr
-	}
-
-	// The check covers the whole staging area, also the access tables that
-	// the swap does not take, and runs before any write to the staged file.
-	if checkErr := s.checkSwapDevLocked(ctx, staged); checkErr != nil {
-		return backup.KeepAccessResult{}, checkErr
-	}
-
-	if keepErr := s.keepLiveAccessTables(ctx, staged); keepErr != nil {
-		return backup.KeepAccessResult{}, keepErr
-	}
-
-	// The swap takes temp_admins from the backup and keeps the live
-	// principals, so a staged row can name a principal that the live
-	// principals table does not hold.
-	dropped, err := dropDanglingTempAdmins(ctx, staged)
-	if err != nil {
-		return backup.KeepAccessResult{}, err
-	}
-
-	if err := fenceStagedFile(ctx, staged, s.path, keep); err != nil {
-		return backup.KeepAccessResult{}, err
-	}
-
-	if err := s.swapDatabaseLocked(ctx, staged); err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 

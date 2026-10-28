@@ -3,6 +3,7 @@ package sqlite
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -100,5 +101,38 @@ func requireApplied(t *testing.T, s *Store, version int64) {
 
 	if last := applied[len(applied)-1]; last.Version != version || last.MinBinaryVersion != "v0.5.0" {
 		t.Fatalf("newest applied migration = %+v, want %d with the minimum v0.5.0", last, version)
+	}
+}
+
+// TestRestoreAreaSwapOnBinaryBelowMinimum proves that the swap step of a
+// restore operation is refused on a binary below the minimum of the live
+// database, in the swap, with no change: the area stays, the step is not
+// recorded, and the live database and its minimum stay as they were.
+func TestRestoreAreaSwapOnBinaryBelowMinimum(t *testing.T) {
+	t.Parallel()
+
+	s := openWithBinary(t, "v0.4.0")
+	ns := createAcme(t, s)
+	staged := storetest.StageRestoreArea(t, s)
+
+	if err := s.apply(t.Context(), contractMigration("v0.5.0")); err != nil {
+		t.Fatalf("apply the contract migration: %v", err)
+	}
+
+	if _, err := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false); !errors.Is(
+		err, schema.ErrBinaryBelowMinimum,
+	) {
+		t.Fatalf("swap of the restore area = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	areas, err := s.ListRestoreAreas(t.Context())
+	if err != nil || !slices.Contains(areas, staged.Area) {
+		t.Fatalf("restore areas = %v, %v; want %s kept", areas, err, staged.Area)
+	}
+
+	requireApplied(t, s, 9999)
+
+	if _, err := s.GetNamespace(t.Context(), ns.Name); err != nil {
+		t.Fatalf("live namespace after the refused swap: %v", err)
 	}
 }

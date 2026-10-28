@@ -26,11 +26,40 @@ func (s *Store) StagePortable(
 	files []backup.PortableFile,
 	opts backup.StageOptions,
 ) (backup.Summary, error) {
+	index, err := s.portableStage(ctx, want, files, opts)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	temp, err := snapshotPath(filepath.Dir(s.path))
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	sum, err := s.buildCheckedStaging(ctx, temp, open, index, want)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	if err := s.keepStaged(temp); err != nil {
+		removeSnapshot(temp)
+
+		return backup.Summary{}, err
+	}
+
+	return sum, nil
+}
+
+// portableStage checks a stage of a portable backup before any row loads,
+// and returns the index of its table files.
+func (s *Store) portableStage(
+	ctx context.Context, want backup.Summary, files []backup.PortableFile, opts backup.StageOptions,
+) (map[string]backup.PortableFile, error) {
 	// Layer 1: compare the kind of the backup with the kind that this
 	// database holds, before any row loads. The service checks too; this
 	// check stays so that a caller of the port cannot skip it.
 	if kindErr := s.checkStageKind(ctx, opts); kindErr != nil {
-		return backup.Summary{}, kindErr
+		return nil, kindErr
 	}
 
 	version, err := func() (int64, error) {
@@ -40,20 +69,29 @@ func (s *Store) StagePortable(
 		return schemaVersion(ctx, s.conn)
 	}()
 	if err != nil {
-		return backup.Summary{}, err
+		return nil, err
 	}
 
 	if schemaErr := backup.CheckStageSchema(want.SchemaVersion, int(version)); schemaErr != nil {
-		return backup.Summary{}, fmt.Errorf("stage portable backup: %w", schemaErr)
+		return nil, fmt.Errorf("stage portable backup: %w", schemaErr)
 	}
 
 	index, err := backup.IndexPortableFiles(files, want.RowCounts)
 	if err != nil {
-		return backup.Summary{}, err
+		return nil, err
 	}
 
-	temp, err := s.buildPortableStaging(ctx, open, index)
-	if err != nil {
+	return index, nil
+}
+
+// buildCheckedStaging builds the staging file at path, loads the table files
+// and checks the staged data against want. It returns the summary. A failure
+// removes the file.
+func (s *Store) buildCheckedStaging(
+	ctx context.Context, path string, open backup.PortableOpener, index map[string]backup.PortableFile,
+	want backup.Summary,
+) (backup.Summary, error) {
+	if err := s.buildPortableStaging(ctx, path, open, index); err != nil {
 		return backup.Summary{}, err
 	}
 
@@ -61,11 +99,11 @@ func (s *Store) StagePortable(
 
 	defer func() {
 		if !kept {
-			removeSnapshot(temp)
+			removeSnapshot(path)
 		}
 	}()
 
-	sum, err := checkRestoreFile(ctx, temp, want)
+	sum, err := checkRestoreFile(ctx, path, want)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -78,31 +116,22 @@ func (s *Store) StagePortable(
 		return backup.Summary{}, fmt.Errorf("staged backup: %w", err)
 	}
 
-	if err := s.keepStaged(temp); err != nil {
-		return backup.Summary{}, err
-	}
-
 	kept = true
 
 	return sum, nil
 }
 
-// buildPortableStaging creates the staging file next to the live database,
-// migrated to this schema, and loads the table files into it. It returns the
-// path of the file. A failed load removes it.
+// buildPortableStaging creates the staging file at path next to the live
+// database, migrated to this schema, and loads the table files into it. A
+// failed load removes it.
 func (s *Store) buildPortableStaging(
-	ctx context.Context, open backup.PortableOpener, index map[string]backup.PortableFile,
-) (string, error) {
-	temp, err := snapshotPath(filepath.Dir(s.path))
+	ctx context.Context, path string, open backup.PortableOpener, index map[string]backup.PortableFile,
+) error {
+	staged, err := Open(ctx, path)
 	if err != nil {
-		return "", err
-	}
+		removeSnapshot(path)
 
-	staged, err := Open(ctx, temp)
-	if err != nil {
-		removeSnapshot(temp)
-
-		return "", fmt.Errorf("create staging file: %w", err)
+		return fmt.Errorf("create staging file: %w", err)
 	}
 
 	loadErr := loadPortableTables(ctx, staged.conn, open, index)
@@ -112,12 +141,12 @@ func (s *Store) buildPortableStaging(
 	}
 
 	if loadErr != nil {
-		removeSnapshot(temp)
+		removeSnapshot(path)
 
-		return "", loadErr
+		return loadErr
 	}
 
-	return temp, nil
+	return nil
 }
 
 // loadPortableTables loads each table file into the staging database, in the

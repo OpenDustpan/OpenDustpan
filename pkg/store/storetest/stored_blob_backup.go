@@ -482,6 +482,9 @@ func waitRestoreEnd(t *testing.T, restores *backup.RestoreService, id backup.Res
 			return row
 		}
 
+		// No worker runs in the case: it runs the restore operation itself.
+		runRestoreWorker(t, restores)
+
 		if time.Now().After(deadline) {
 			t.Fatalf("restore %s did not end", id)
 		}

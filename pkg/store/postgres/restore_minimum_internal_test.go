@@ -3,6 +3,7 @@ package postgres
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -71,7 +72,7 @@ func TestRestoreOnBinaryBelowMinimum(t *testing.T) {
 			stageExport(t, old)
 
 			current := openAt(t, url, "v0.5.0")
-			applyContract(t, current, "v0.5.0")
+			applyContract(t, current)
 
 			if err := old.CheckBinaryMinimum(t.Context()); !errors.Is(err, schema.ErrBinaryBelowMinimum) {
 				t.Fatalf("start check = %v, want ErrBinaryBelowMinimum", err)
@@ -91,5 +92,40 @@ func TestRestoreOnBinaryBelowMinimum(t *testing.T) {
 				t.Fatalf("live namespace after the refused swap: %v", err)
 			}
 		})
+	}
+}
+
+// TestRestoreAreaSwapOnBinaryBelowMinimum proves that the swap step of a
+// restore operation is refused in the swap transaction on a binary below the
+// minimum of the live schema, with no change: the area stays, the step is
+// not recorded, and the live schema and its minimum stay as they were. The
+// old handle stands for the old binary, and a second handle stands for the
+// new binary that raises the minimum.
+func TestRestoreAreaSwapOnBinaryBelowMinimum(t *testing.T) {
+	t.Parallel()
+
+	url := membershipURL(t)
+	old := openAt(t, url, "v0.4.0")
+	ns := createAcme(t, old)
+	staged := storetest.StageRestoreArea(t, old)
+
+	current := openAt(t, url, "v0.5.0")
+	applyContract(t, current)
+
+	if _, err := old.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false); !errors.Is(
+		err, schema.ErrBinaryBelowMinimum,
+	) {
+		t.Fatalf("swap of the restore area = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	areas, err := current.ListRestoreAreas(t.Context())
+	if err != nil || !slices.Contains(areas, staged.Area) {
+		t.Fatalf("restore areas = %v, %v; want %s kept", areas, err, staged.Area)
+	}
+
+	requireApplied(t, current, 9999)
+
+	if _, err := current.GetNamespace(t.Context(), ns.Name); err != nil {
+		t.Fatalf("live namespace after the refused swap: %v", err)
 	}
 }

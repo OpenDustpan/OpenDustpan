@@ -526,20 +526,21 @@ const takeoverRunnerLease = time.Minute
 // takeoverRunnerConfig answers the runner config of owner with kinds.
 func takeoverRunnerConfig(store durable.Store, owner string, kinds []durable.KindSpec) durable.RunnerConfig {
 	return durable.RunnerConfig{
-		Store:        store,
-		Owner:        owner,
-		Kinds:        kinds,
-		Lease:        takeoverRunnerLease,
-		RenewEvery:   0,
-		PollEvery:    0,
-		MaxAttempts:  0,
-		ExpiryLimit:  0,
-		Backoff:      durable.Backoff{Base: 0, Max: 0},
-		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout: 0,
-		Deferred:     nil,
-		Logger:       nil,
-		Rand:         nil,
+		Store:              store,
+		Owner:              owner,
+		Kinds:              kinds,
+		Lease:              takeoverRunnerLease,
+		RenewEvery:         0,
+		PollEvery:          0,
+		MaxAttempts:        0,
+		ExpiryLimit:        0,
+		Backoff:            durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:       0,
+		Deferred:           nil,
+		StopOnRenewalError: false,
+		Logger:             nil,
+		Rand:               nil,
 	}
 }
 

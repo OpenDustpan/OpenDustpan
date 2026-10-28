@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
 // errSealedOpen is the injected failure of opening a tampered sealed blob.
@@ -153,10 +154,19 @@ func restoreStreamedBackup(
 	}
 	regs := newRestoreServiceRegistry()
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
-	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
+	maint := &restoreServiceMaintenance{
+		mu:       sync.Mutex{},
+		enterErr: nil,
+		enters:   0,
+		leaves:   0,
+		order:    order,
+		state:    maintenance.StateNormal,
+		held:     false,
+	}
 	backupRegs := newFakeRegistry()
 	blobs := newMemStore()
 	live := newRestoreServiceLive(liveChecks, regs)
+	live.maint = maint
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Kinds:       fixedKind(installation.KindProduction),
@@ -179,7 +189,7 @@ func restoreStreamedBackup(
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:            live,
-		Registry:        regs,
+		Operations:      live.ops,
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
@@ -192,12 +202,18 @@ func restoreStreamedBackup(
 		Logger:          nil,
 		AllowDevBackups: false,
 		AllowDevHint:    "",
+		Owner:           "",
+		Lease:           0,
+		CleanupLockWait: 0,
+		RetryBase:       time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	restoreID := backup.RestoreID("rst-stream00000000001")
+	regs.setWorker(service)
+
+	restoreID := backup.MintRestoreID()
 
 	startErr := service.Start(t.Context(), restoreID, backup.RestoreRequest{
 		BackupID:         id,
