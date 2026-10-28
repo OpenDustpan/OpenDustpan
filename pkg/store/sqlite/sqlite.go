@@ -570,7 +570,7 @@ func (s *Store) Ping(ctx context.Context) error {
 	defer s.mu.RUnlock()
 
 	if err := s.conn.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping sqlite database: %w", storeerr.New(storeerr.ConnectionFailed, err))
+		return fmt.Errorf("ping sqlite database: %w", namespace.ErrUnavailable)
 	}
 
 	return nil

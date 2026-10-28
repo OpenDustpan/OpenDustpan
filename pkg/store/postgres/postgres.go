@@ -247,7 +247,7 @@ func (s *Store) CloseContext(ctx context.Context) {
 // ErrUnavailable without driver text.
 func (s *Store) Ping(ctx context.Context) error {
 	if err := s.pool.Ping(ctx); err != nil {
-		return fmt.Errorf("ping postgres database: %w", storeerr.New(storeerr.ConnectionFailed, err))
+		return fmt.Errorf("ping postgres database: %w", namespace.ErrUnavailable)
 	}
 
 	return nil
