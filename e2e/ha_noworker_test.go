@@ -24,18 +24,27 @@ const (
 )
 
 // haNoWorkerRoute is a route of the installation API that inserts a durable
-// operation and needs no other setup than the token.
+// operation. call sends the request: the approval of an audit chain change
+// needs a console session with a recent sign-in, the other routes take the
+// token.
 type haNoWorkerRoute struct {
-	name   string
-	method string
-	path   string
+	name string
+	call func(ctx context.Context) (int, string, error)
 }
 
 // haNoWorkerRoutes returns the routes that the step calls.
-func haNoWorkerRoutes() []haNoWorkerRoute {
+func haNoWorkerRoutes(env *e2e.Env, console func(e2e.SessionRequest) (int, string)) []haNoWorkerRoute {
 	return []haNoWorkerRoute{
-		{"start a backup", http.MethodPost, "/api/server/backups"},
-		{"approve an audit chain change", http.MethodPost, "/api/server/audit/chain"},
+		{"start a backup", func(ctx context.Context) (int, string, error) {
+			return env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+		}},
+		{"approve an audit chain change", func(context.Context) (int, string, error) {
+			status, body := console(
+				e2e.SessionRequest{Method: http.MethodPost, Path: "/api/server/audit/chain", Body: ""},
+			)
+
+			return status, body, nil
+		}},
 	}
 }
 
@@ -57,10 +66,13 @@ func haNoWorker(t *testing.T, env *e2e.Env) {
 
 	haWaitNoWorker(ctx, t, env, cluster.Size())
 
+	// The sign-in is recent when the requests start.
+	routes := haNoWorkerRoutes(env, env.FreshAdminSession(ctx, t))
+
 	// Two rounds of the proxy reach every instance at least once.
 	for round := range 2 * cluster.Size() {
-		for _, route := range haNoWorkerRoutes() {
-			haCheckNoWorker(ctx, t, env, route, round)
+		for _, route := range routes {
+			haCheckNoWorker(ctx, t, route, round)
 		}
 	}
 
@@ -69,10 +81,10 @@ func haNoWorker(t *testing.T, env *e2e.Env) {
 
 // haCheckNoWorker calls route and fails unless it answers 503 with the code
 // and the text of a start with no worker.
-func haCheckNoWorker(ctx context.Context, t *testing.T, env *e2e.Env, route haNoWorkerRoute, round int) {
+func haCheckNoWorker(ctx context.Context, t *testing.T, route haNoWorkerRoute, round int) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, route.method, route.path, "")
+	status, body, err := route.call(ctx)
 	if err != nil {
 		t.Fatalf("%s, request %d: %v", route.name, round, err)
 	}
