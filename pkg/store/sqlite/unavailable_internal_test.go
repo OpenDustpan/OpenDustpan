@@ -123,23 +123,23 @@ func checkBusy(t *testing.T, tc busyCase) {
 		t.Fatal("got no error")
 	}
 
+	if driverErr, ok := errors.AsType[*sqlite.Error](err); !ok || driverErr == nil {
+		t.Fatalf("err = %v lost the driver error", err)
+	}
+
 	var got *storeerr.Error
 
 	translated := errors.As(err, &got)
 
-	var driverErr *sqlite.Error
+	if !tc.unavailable {
+		if translated || errors.Is(err, namespace.ErrUnavailable) {
+			t.Fatalf("err = %v, want a pass-through", err)
+		}
 
-	kept := errors.As(err, &driverErr)
+		return
+	}
 
-	switch {
-	case tc.unavailable && (!translated || !errors.Is(err, namespace.ErrUnavailable) || got.Class() != storeerr.Busy):
+	if !translated || !errors.Is(err, namespace.ErrUnavailable) || got.Class() != storeerr.Busy {
 		t.Fatalf("err = %v, want ErrUnavailable of class busy", err)
-	case tc.unavailable && !kept:
-		t.Fatalf("err = %v lost the driver error", err)
-	case !tc.unavailable && (translated || errors.Is(err, namespace.ErrUnavailable)):
-		t.Fatalf("err = %v, want a pass-through", err)
-	case !tc.unavailable && !kept:
-		t.Fatalf("err = %v is not a driver error", err)
-	default:
 	}
 }

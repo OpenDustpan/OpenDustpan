@@ -106,9 +106,9 @@ type haOutageSpec struct {
 func haNewOutageProject(
 	ctx context.Context, t *testing.T, env *e2e.Env, pair backupPair, spec haOutageSpec,
 ) haOutageProject {
-	name, sleep := spec.name, spec.sleep
-
 	t.Helper()
+
+	name, sleep := spec.name, spec.sleep
 
 	pulumiDir, tofuDir, markers := t.TempDir(), t.TempDir(), t.TempDir()
 
@@ -132,7 +132,7 @@ func haNewOutageProject(
 }
 
 // startBoth starts `pulumi up` and `tofu apply` in the background.
-func (p haOutageProject) startBoth(ctx context.Context, t *testing.T) (*haRun, *haRun) {
+func (p haOutageProject) startBoth(ctx context.Context, t *testing.T) haOutageRuns {
 	t.Helper()
 
 	up := p.pulumi.start(ctx, t, []string{"E2E_HA_PULUMI_STARTED=" + p.pulumiMarker},
@@ -140,7 +140,12 @@ func (p haOutageProject) startBoth(ctx context.Context, t *testing.T) (*haRun, *
 	apply := p.tofu.start(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + p.tofuMarker},
 		"apply", "-input=false", "-auto-approve", "-no-color")
 
-	return up, apply
+	return haOutageRuns{up: up, apply: apply}
+}
+
+// haOutageRuns are the two commands of an outage step.
+type haOutageRuns struct {
+	up, apply *haRun
 }
 
 // haLongOutage is step 7a. It stops PostgreSQL for 60 s while `tofu apply` and
@@ -162,7 +167,8 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 
 	env.Recorder.SetStep(step)
 
-	up, apply := project.startBoth(ctx, t)
+	runs := project.startBoth(ctx, t)
+	up, apply := runs.up, runs.apply
 
 	haWaitForFiles(ctx, t, project.pulumiMarker, project.tofuMarker)
 
@@ -282,7 +288,11 @@ func haWriteRetries(env *e2e.Env, step, tool string, writesAt time.Time) time.Du
 		path        string
 	)
 
-	for _, entry := range env.Recorder.Entries() {
+	entries := env.Recorder.Entries()
+
+	for i := range entries {
+		entry := &entries[i]
+
 		if entry.Step != step || haToolOf(entry.UserAgent) != tool || entry.Status != http.StatusServiceUnavailable ||
 			entry.Method == http.MethodGet || entry.At.Before(writesAt.Add(-haPollEvery)) {
 			continue
@@ -322,8 +332,8 @@ func haCheckConsistent(ctx context.Context, t *testing.T, env *e2e.Env, project 
 	}
 
 	var lockID string
-	if err := conn.QueryRow(ctx, `SELECT lock_id FROM workspaces WHERE name = $1`, project.workspace).
-		Scan(&lockID); err != nil {
+	lockQuery := `SELECT lock_id FROM workspaces WHERE name = $1`
+	if err := conn.QueryRow(ctx, lockQuery, project.workspace).Scan(&lockID); err != nil {
 		t.Fatalf("read the lock of %s: %v", project.workspace, err)
 	}
 
@@ -384,7 +394,8 @@ func haShortOutage(t *testing.T, env *e2e.Env, pair backupPair, window haRetryWi
 
 	env.Recorder.SetStep("7b short database outage")
 
-	up, apply := project.startBoth(ctx, t)
+	runs := project.startBoth(ctx, t)
+	up, apply := runs.up, runs.apply
 
 	haWaitForFiles(ctx, t, project.pulumiMarker, project.tofuMarker)
 

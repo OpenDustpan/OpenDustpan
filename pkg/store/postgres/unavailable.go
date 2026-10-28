@@ -31,13 +31,11 @@ func classify(err error) (storeerr.Class, bool) {
 		return "", false
 	}
 
-	var connectErr *pgconn.ConnectError
-	if errors.As(err, &connectErr) {
+	if connectErr, ok := errors.AsType[*pgconn.ConnectError](err); ok && connectErr != nil {
 		return storeerr.ConnectionFailed, true
 	}
 
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr != nil {
 		return classifyCode(pgErr.Code)
 	}
 
@@ -46,16 +44,23 @@ func classify(err error) (storeerr.Class, bool) {
 		return "", false
 	}
 
-	var opErr *net.OpError
-
-	if errors.As(err, &opErr) ||
-		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
-		errors.Is(err, syscall.ECONNREFUSED) {
+	if connectionLost(err) {
 		return storeerr.ConnectionFailed, true
 	}
 
 	return "", false
+}
+
+// connectionLost reports whether err is a failure of the network connection
+// to the database.
+func connectionLost(err error) bool {
+	if opErr, ok := errors.AsType[*net.OpError](err); ok && opErr != nil {
+		return true
+	}
+
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // classifyCode maps a SQLSTATE code to a class.

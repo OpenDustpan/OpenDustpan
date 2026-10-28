@@ -63,8 +63,7 @@ func TestTranslate(t *testing.T) {
 	// A real connect error: nothing listens on port 1.
 	_, connectErr := pgconn.Connect(t.Context(), "postgres://u@127.0.0.1:1/d?sslmode=disable&connect_timeout=2")
 
-	var asConnect *pgconn.ConnectError
-	if !errors.As(connectErr, &asConnect) {
+	if asConnect, ok := errors.AsType[*pgconn.ConnectError](connectErr); !ok || asConnect == nil {
 		t.Fatalf("connect to a closed port: err = %v, want a ConnectError", connectErr)
 	}
 
