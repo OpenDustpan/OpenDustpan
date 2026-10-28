@@ -37,13 +37,13 @@ func openAt(t *testing.T, url, binary string) *Store {
 	return s
 }
 
-// applyContract applies a contract migration with the minimum to the schema
+// applyContract applies a contract migration with the minimum v0.5.0 to the schema
 // of s, as the new binary of a rolling deploy does.
-func applyContract(t *testing.T, s *Store, minimum string) {
+func applyContract(t *testing.T, s *Store) {
 	t.Helper()
 
 	err := pgx.BeginFunc(t.Context(), s.pool, func(tx pgx.Tx) error {
-		return apply(t.Context(), tx, contractMigration(minimum))
+		return apply(t.Context(), tx, contractMigration("v0.5.0"))
 	})
 	if err != nil {
 		t.Fatalf("apply the contract migration: %v", err)
@@ -130,7 +130,7 @@ func TestWriteBelowMinimum(t *testing.T) {
 			old := openAt(t, url, tt.binary)
 			ns := createAcme(t, old)
 
-			applyContract(t, openAt(t, url, "v0.5.0"), "v0.5.0")
+			applyContract(t, openAt(t, url, "v0.5.0"))
 
 			for _, attempt := range writeAttempts(t, old, ns) {
 				checkWriteResult(t, tt, attempt.name, attempt.do())
@@ -198,7 +198,7 @@ func TestControlWriteIgnoresMinimum(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	applyContract(t, openAt(t, url, "v0.5.0"), "v0.5.0")
+	applyContract(t, openAt(t, url, "v0.5.0"))
 
 	if err := old.UnregisterInstance(t.Context(), "old"); err != nil {
 		t.Fatalf("unregister after the minimum went up: %v", err)

@@ -72,7 +72,7 @@ func TestRestoreOnBinaryBelowMinimum(t *testing.T) {
 			stageExport(t, old)
 
 			current := openAt(t, url, "v0.5.0")
-			applyContract(t, current, "v0.5.0")
+			applyContract(t, current)
 
 			if err := old.CheckBinaryMinimum(t.Context()); !errors.Is(err, schema.ErrBinaryBelowMinimum) {
 				t.Fatalf("start check = %v, want ErrBinaryBelowMinimum", err)
@@ -110,7 +110,7 @@ func TestRestoreAreaSwapOnBinaryBelowMinimum(t *testing.T) {
 	staged := storetest.StageRestoreArea(t, old)
 
 	current := openAt(t, url, "v0.5.0")
-	applyContract(t, current, "v0.5.0")
+	applyContract(t, current)
 
 	if _, err := old.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false); !errors.Is(
 		err, schema.ErrBinaryBelowMinimum,
