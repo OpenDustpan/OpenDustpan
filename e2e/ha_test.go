@@ -31,8 +31,9 @@ const haReportDirMode = 0o750
 // 1 (make e2e-ha). With one instance it skips.
 //
 // The steps run in order on one cluster per pair: alternation, a kill during
-// work, a kill during a backup, the job schedules and a missing worker. The
-// steps for a restore, a rolling deploy and a database outage are named skips:
+// work, a kill during a backup, a kill during a restore, the job schedules and
+// a missing worker. The steps for a rolling deploy and a database outage are
+// named skips:
 // each waits for server code that does not exist yet, and a skip says so. The
 // step for a missing worker runs last, because it restarts every instance
 // with only the api component.
@@ -115,9 +116,7 @@ func runHighAvailability(t *testing.T, pair backupPair, store e2e.Store) {
 	t.Run("2 kill during work", func(t *testing.T) { haKillDuringWork(t, env, pair) })
 	t.Run("3 kill during backup", func(t *testing.T) { haKillDuringBackup(t, env) })
 
-	t.Run("4 restart during restore", func(t *testing.T) {
-		t.Skip("needs restore as a durable operation that a worker process runs")
-	})
+	t.Run("4 restart during restore", func(t *testing.T) { haRestartDuringRestore(t, env) })
 	t.Run("5 rolling deploy", func(t *testing.T) {
 		t.Skip("needs the write-path minimum version check")
 	})
