@@ -95,7 +95,9 @@ func (l *testLimiter) take(ctx context.Context, ns namespace.Name, id string, no
 		return 0, fmt.Errorf("%w: %w", ErrLimitUnavailable, err)
 	}
 
-	l.prune(ctx, now)
+	if pruneErr := l.prune(ctx, now); pruneErr != nil {
+		return 0, fmt.Errorf("%w: %w", ErrLimitUnavailable, pruneErr)
+	}
 
 	if space.Count > TestNamespaceBurst {
 		return waitOf(space, TestNamespaceWindow), nil
@@ -111,19 +113,30 @@ func waitOf(c authgate.FailureCount, length time.Duration) time.Duration {
 }
 
 // prune deletes the windows that ended, at most once in each
-// TestNamespaceWindow in this process. A failed prune leaves ended windows in
-// the table: no limit reads a window that ended, and the sign-in gate prunes
-// the same table, so the error does not need an answer here.
-func (l *testLimiter) prune(ctx context.Context, now time.Time) {
+// TestNamespaceWindow in this process. A prune that fails is tried again at
+// the next test, and its error fails that test: a database that cannot prune
+// cannot keep the count either.
+func (l *testLimiter) prune(ctx context.Context, now time.Time) error {
 	l.mu.Lock()
 	due := l.prunedAt.IsZero() || now.Sub(l.prunedAt) >= TestNamespaceWindow
 
+	previous := l.prunedAt
 	if due {
 		l.prunedAt = now
 	}
 	l.mu.Unlock()
 
-	if due {
-		_, _ = l.counter.PruneFailures(ctx, TestNamespaceWindow)
+	if !due {
+		return nil
 	}
+
+	if _, err := l.counter.PruneFailures(ctx, TestNamespaceWindow); err != nil {
+		l.mu.Lock()
+		l.prunedAt = previous
+		l.mu.Unlock()
+
+		return fmt.Errorf("prune the count of tests: %w", err)
+	}
+
+	return nil
 }

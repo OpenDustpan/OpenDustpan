@@ -11,10 +11,12 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -56,13 +58,13 @@ var ErrCounterBroken = errors.New("the shared count is broken")
 // counter that it wraps, until Break makes each call fail. It stands for a
 // handle that has lost its connection to the database only for the count.
 type BreakableCounter struct {
-	authgate.FailureCounter
+	inner  authgate.FailureCounter
 	broken atomic.Bool
 }
 
 // NewBreakableCounter returns a counter that passes its calls to inner.
 func NewBreakableCounter(inner authgate.FailureCounter) *BreakableCounter {
-	return &BreakableCounter{FailureCounter: inner, broken: atomic.Bool{}}
+	return &BreakableCounter{inner: inner, broken: atomic.Bool{}}
 }
 
 // Break makes each later call fail with ErrCounterBroken.
@@ -76,12 +78,91 @@ func (b *BreakableCounter) AddFailure(
 		return authgate.FailureCount{At: time.Time{}, End: time.Time{}, Count: 0}, ErrCounterBroken
 	}
 
-	count, err := b.FailureCounter.AddFailure(ctx, source, length)
+	count, err := b.inner.AddFailure(ctx, source, length)
 	if err != nil {
 		return authgate.FailureCount{At: time.Time{}, End: time.Time{}, Count: 0}, fmt.Errorf("add failure: %w", err)
 	}
 
 	return count, nil
+}
+
+// PruneFailures implements authgate.FailureCounter.
+func (b *BreakableCounter) PruneFailures(ctx context.Context, age time.Duration) (int64, error) {
+	if b.broken.Load() {
+		return 0, ErrCounterBroken
+	}
+
+	n, err := b.inner.PruneFailures(ctx, age)
+	if err != nil {
+		return 0, fmt.Errorf("prune failures: %w", err)
+	}
+
+	return n, nil
+}
+
+// PruneFailuresAt implements authgate.FailureCounter.
+func (b *BreakableCounter) PruneFailuresAt(ctx context.Context, now time.Time, age time.Duration) (int64, error) {
+	if b.broken.Load() {
+		return 0, ErrCounterBroken
+	}
+
+	n, err := b.inner.PruneFailuresAt(ctx, now, age)
+	if err != nil {
+		return 0, fmt.Errorf("prune failures at: %w", err)
+	}
+
+	return n, nil
+}
+
+// SinkBackend is a store handle that can serve a sink service.
+type SinkBackend interface {
+	namespace.Store
+	secret.KeyStore
+	NotificationSinks() notify.SinkStore
+}
+
+// NewSharedSinkService returns a sink service on the handle store that counts
+// the limits in counter and sends with sender. When makeNamespace is true, it
+// also makes the namespace ns, which must be new in the database.
+func NewSharedSinkService(
+	t *testing.T, store SinkBackend, counter authgate.FailureCounter, sender notify.Sender,
+	ns namespace.Name, makeNamespace bool,
+) *sinks.Service {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "test-region"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	if makeNamespace {
+		if _, createErr := namespaces.Create(t.Context(), ns); createErr != nil {
+			t.Fatalf("create namespace: %v", createErr)
+		}
+	}
+
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("wrapper: %v", err)
+	}
+
+	secrets, err := secret.NewService(secret.Config{
+		Keys: store, Wrapper: wrapper, Namespaces: namespaces, Now: nil, MaxBatchBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("secret service: %v", err)
+	}
+
+	svc, err := sinks.NewService(sinks.Config{
+		Store: store.NotificationSinks(), Sealer: notify.SinkSealer{Namespaces: secrets, Installation: nil},
+		Namespaces: namespaces, Senders: []notify.Sender{sender}, Ports: egress.Ports{}, Counter: counter,
+		Now: nil,
+	})
+	if err != nil {
+		t.Fatalf("sink service: %v", err)
+	}
+
+	return svc
 }
 
 // SharedLimits is what one case of RunSharedLimits runs on: two handles on
