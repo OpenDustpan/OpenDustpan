@@ -1412,6 +1412,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Preferences:      nil,
 		GitHost:          coverageGitHost(tb),
 		Idempotency:      nil,
+		Instances:        nil,
 		Workers:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},

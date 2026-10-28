@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -1235,7 +1236,7 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	}
 	defer release()
 
-	return s.runTx(ctx, fn, checkWritable)
+	return s.runTx(ctx, fn, s.checkWritable)
 }
 
 // holdWrite takes the shared hold of the enter gate for a checked write and
@@ -1292,17 +1293,19 @@ func (s *Store) runTx(
 	return nil
 }
 
-// checkWritable reads the installation state in the transaction of q. It
-// returns maintenance.ErrInMaintenance in maintenance mode, and
+// checkWritable reads the installation state and the minimum binary versions
+// of the schema in the transaction of q, in one statement. It returns
+// maintenance.ErrInMaintenance in maintenance mode, a *schema.MinimumError
+// when the binary of the store is below the highest minimum, and
 // maintenance.ErrUnavailable when the state cannot be read, the row is
 // missing or the stored value is unknown: a write never passes on a read error.
-func checkWritable(ctx context.Context, q *db.Queries) error {
-	raw, err := q.GetInstallationState(ctx)
+func (s *Store) checkWritable(ctx context.Context, q *db.Queries) error {
+	row, err := q.GetWriteState(ctx)
 	if err != nil {
 		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
 	}
 
-	state, err := maintenance.ParseState(raw)
+	state, err := maintenance.ParseState(row.State)
 	if err != nil {
 		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
 	}
@@ -1311,7 +1314,24 @@ func checkWritable(ctx context.Context, q *db.Queries) error {
 		return maintenance.ErrInMaintenance
 	}
 
-	return nil
+	return checkWriteMinimum(row.Minimums, s.binaryVersion)
+}
+
+// checkWriteMinimum fails a write whose binary is below the highest minimum
+// binary version that the schema records. It returns the *schema.MinimumError
+// as it is, so the API names both versions. A minimum that does not parse
+// fails closed with maintenance.ErrUnavailable.
+func checkWriteMinimum(minimums, binaryVersion string) error {
+	err := schema.CheckMinimums(strings.Split(minimums, ","), binaryVersion)
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		return err
+	}
+
+	return fmt.Errorf("check schema minimum sqlite database: %w", maintenance.ErrUnavailable)
 }
 
 // inReadTx runs fn in a read-only transaction. It begins as DEFERRED, not
@@ -1418,13 +1438,77 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("%w: %d", schema.ErrMigrationsPending, len(plan.Pending))
 	}
 
-	for _, m := range plan.Pending {
-		if applyErr := s.apply(ctx, m); applyErr != nil {
-			return applyErr
+	return s.applyPending(ctx, plan.Pending)
+}
+
+// applyPending applies the pending migrations in order. It first refuses a
+// migration that sets a minimum binary version while an instance row is below
+// it, so the check runs before any migration changes the schema.
+func (s *Store) applyPending(ctx context.Context, pending []migrate.Migration) error {
+	if err := s.checkInstances(ctx, pending); err != nil {
+		return err
+	}
+
+	for _, m := range pending {
+		if err := s.apply(ctx, m); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// checkInstances refuses a pending migration that sets a minimum binary
+// version while an instance version row is below it, and names the rows.
+// Before the migration that adds the table, no instance wrote a row, so the
+// check passes. Nothing renews a row, so the row of an instance that crashed
+// blocks the migration until an administrator deletes it.
+func (s *Store) checkInstances(ctx context.Context, pending []migrate.Migration) error {
+	if !slices.ContainsFunc(pending, func(m migrate.Migration) bool { return m.MinBinaryVersion != "" }) {
+		return nil
+	}
+
+	var tables int64
+
+	err := s.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'instance_versions'`,
+	).Scan(&tables)
+	if err != nil {
+		return fmt.Errorf("check instance versions table: %w", err)
+	}
+
+	if tables == 0 {
+		return nil
+	}
+
+	rows, err := s.conn.QueryContext(ctx, `SELECT id, binary_version FROM instance_versions ORDER BY started_at_ms, id`)
+	if err != nil {
+		return fmt.Errorf("read instance versions: %w", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	var instances []schema.InstanceRow
+
+	for rows.Next() {
+		var inst schema.InstanceRow
+
+		if scanErr := rows.Scan(&inst.ID, &inst.BinaryVersion); scanErr != nil {
+			return fmt.Errorf("read instance versions: %w", scanErr)
+		}
+
+		instances = append(instances, inst)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read instance versions: %w", rowsErr)
+	}
+
+	return migrate.CheckInstances(pending, instances)
 }
 
 // sqlQueryer runs one query on a connection or in a transaction.

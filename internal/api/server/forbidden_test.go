@@ -63,6 +63,7 @@ func forbiddenHandler(t *testing.T, err error) testHandler {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if newErr != nil {
 		t.Fatalf("handler: %v", newErr)

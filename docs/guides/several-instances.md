@@ -122,6 +122,31 @@ A restore runs in the process that took the request, so it needs no worker. Send
 
 A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops with SIGTERM, it gives the claim back, and another `worker` process continues the backup at once. When the instance dies with no clean stop, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
 
+## Roll out a new release
+
+You can replace the instances of one installation one at a time. A release can set a minimum binary version in the schema. An instance with a binary below the minimum must stop writing, because the schema no longer holds what that binary needs.
+
+Each instance writes one row at start-up: its instance ID, the version of its binary and its start time. A clean stop deletes the row. The row is not a lease. Nothing renews it, and nothing reads it to decide that an instance is live. An instance that dies without a clean stop leaves its row.
+
+`GET /api/server/instances` lists the rows, oldest start first. It needs the action `server:read-instances`.
+
+```json
+{"instances": [{"id": "ins-4q2n7xk5b6d3m1p0a8wz", "binaryVersion": "v0.3.0", "startedAt": "2026-10-20T08:00:00Z"}]}
+```
+
+`DELETE /api/server/instances/{id}` deletes one row and answers 204. It needs the action `server:delete-instance`. It writes one entry in the audit log of the installation (the scope `@server`), with the action and the ID in the value path `/instances/{id}`. It does not stop the instance. Use it for the row of an instance that died.
+
+The request needs a running instance. A binary below the minimum cannot write. When a dead instance blocks a migration, the new instance fails to start, and no instance answers the request. Start one instance of the old binary, at or above the current minimum. Delete the row, stop that instance, and start the new instance again.
+
+These checks use the minimum:
+
+- **Writes.** Each write of an instance compares the version of its binary with the highest minimum in the schema. A binary below the minimum fails the write in its own transaction. The Pulumi CLI, OpenTofu and the API get 503. The error code is `schema.binary-below-minimum`, and the text names both versions: `binary version v0.3.0 is below v0.4.0, the minimum binary version of the database schema, so this instance cannot write: stop this instance and run version v0.4.0 or later`. Reads still work. The row delete at a clean stop still works.
+- **Migrations.** A migration that sets a new minimum does not run while a row below that minimum exists. The new instance fails to start with an error that names the migration, the new minimum and each row: `migration 0200_example.sql sets the minimum binary version v0.4.0 while 1 instance rows are below it: ins-4q2n7xk5b6d3m1p0a8wz (v0.3.0): stop these instances, or delete the row of an instance that no longer runs (DELETE /api/server/instances/{id}), and start again`. Stop the old instances, or delete the rows of the instances that no longer run, and start the new instance again.
+- **Readiness.** An instance with a binary below the minimum answers 503 on the readiness probe. The `failed` list names the check `binary-minimum`, so a load balancer takes the instance out of the pool. The body holds no version text.
+- **Restore.** A restore on a binary below the minimum fails when it starts and again in the swap. The error names both versions. The live data and the minimum stay as they were. Start the restore on an instance of the new binary.
+
+A dev build passes every minimum check: the write check, the migration check, the readiness check and the restore check. A restore never replaces the rows, and a backup does not hold them.
+
 ## Settings that stay on one host
 
 Some targets write to the disk of the host that runs the instance. Each instance then holds a part of the data.

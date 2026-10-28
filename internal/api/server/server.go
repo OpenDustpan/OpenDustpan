@@ -157,6 +157,10 @@ type Config struct {
 	// Idempotency serves the Idempotency-Key header of the Git host writes. Nil
 	// makes each request with the header answer 400.
 	Idempotency *idempotent.Middleware
+	// Instances keeps the version rows of the server processes. Nil means the
+	// store keeps none: the instance routes are not mounted. Both SQL adapters
+	// keep them.
+	Instances installation.InstanceStore
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -211,6 +215,7 @@ type Handler struct {
 	preferences    *preferences.Service
 	gitHost        *forge.Service
 	idem           *idempotent.Middleware
+	instances      installation.InstanceStore
 	mux            *patternMux
 	routes         []Route
 }
@@ -277,6 +282,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		preferences:    cfg.Preferences,
 		gitHost:        cfg.GitHost,
 		idem:           cfg.Idempotency,
+		instances:      cfg.Instances,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -598,7 +604,7 @@ func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
 		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
 		classifyIPAllowlist, classifyGateConfig, classifySessionPolicy, classifySignIn, classifyProviders,
-		classifyGitHost, classifyRequest,
+		classifyGitHost, classifyInstance, classifyRequest,
 	} {
 		if f, ok := try(err); ok {
 			return f
@@ -755,6 +761,21 @@ func classifyMaintenance(err error) (failure, bool) {
 			errcode.MaintenanceUnavailable), true
 	default:
 		return fail(0, ""), false
+	}
+}
+
+// belowMinimumText returns the text of the answer to a write that this binary
+// is too old to make, and the versions as the arguments of the code. The text
+// names both versions.
+func belowMinimumText(err error) (string, []errcode.Value) {
+	below, ok := errors.AsType[*schema.MinimumError](err)
+	if !ok {
+		return schema.ErrBinaryBelowMinimum.Error(), nil
+	}
+
+	return below.WriteText(), []errcode.Value{
+		errcode.Identifier("binaryVersion", below.BinaryVersion),
+		errcode.Identifier("minimumVersion", below.SchemaMinimum),
 	}
 }
 

@@ -87,9 +87,11 @@ func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, staging string) (in
 		return 0, err
 	}
 
-	// The check covers the whole staging area, also the access tables that
-	// the swap does not take, and runs before any write.
-	if err := checkSwapDev(ctx, tx, staging); err != nil {
+	// The checks cover the minimum binary version of the live schema, so that
+	// a binary below it cannot swap in a schema that it built, and the whole
+	// staging area, also the access tables that the swap does not take. They
+	// run before any write.
+	if err := s.checkSwap(ctx, tx, staging); err != nil {
 		return 0, err
 	}
 

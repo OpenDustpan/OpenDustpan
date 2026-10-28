@@ -421,6 +421,11 @@ func pgControlTables() []pgCopyTable {
 			columns: []string{"id", pgColKind, pgColTarget, "end_reason", "actor", pgColObject, pgColAtMs},
 			orderBy: []string{"id"},
 		},
+		{
+			table:   backup.TableInstanceVersions,
+			columns: []string{"id", "binary_version", pgColStartedAtMs},
+			orderBy: []string{"id"},
+		},
 	}
 
 	return slices.Concat(core, pgRunnerControlTables())
