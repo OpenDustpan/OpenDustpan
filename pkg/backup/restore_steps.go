@@ -499,6 +499,16 @@ func (s *RestoreService) stepCheck(ctx context.Context, sc durable.StepContext, 
 		return nil, err
 	}
 
+	// The worker checks the minimum binary version of the live schema too:
+	// the start ran on another instance, and a binary below the minimum must
+	// not swap in data that it staged. The swap checks it again in its own
+	// transaction. The error is a retry, so a newer worker can take it.
+	if checker, ok := s.live.(installation.MinimumChecker); ok {
+		if err := checker.CheckBinaryMinimum(ctx); err != nil {
+			return nil, fmt.Errorf("check the binary of restore %s: %w", in.ID, err)
+		}
+	}
+
 	check := backupKeyCheck{target: s.target, peeker: s.live, id: in.BackupID, manifest: manifest, key: s.key}
 	if err := check.run(ctx); err != nil {
 		return nil, err

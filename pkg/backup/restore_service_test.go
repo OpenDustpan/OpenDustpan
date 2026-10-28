@@ -106,6 +106,8 @@ type restoreServiceLive struct {
 	areas   []backup.StagingArea
 	// events holds the stored audit events of each restore.
 	events map[backup.RestoreID]string
+	// minErr is the answer of CheckBinaryMinimum.
+	minErr error
 }
 
 // devLiveState holds what the fake live store does for the dev data ports.
@@ -236,6 +238,15 @@ func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, err
 	l.bumped++
 
 	return 1, nil
+}
+
+// CheckBinaryMinimum implements installation.MinimumChecker with the answer
+// of the test.
+func (l *restoreServiceLive) CheckBinaryMinimum(context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.minErr
 }
 
 // ReadKind implements backup.KindReader with the kind of the test.
@@ -1955,6 +1966,7 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 		entered: map[backup.RestoreID]bool{},
 		areas:   nil,
 		events:  map[backup.RestoreID]string{},
+		minErr:  nil,
 	}
 }
 

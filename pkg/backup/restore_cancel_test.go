@@ -134,3 +134,34 @@ func cancelUnknown(t *testing.T, setup *restoreServiceSetup) {
 		t.Fatalf("cancel of an unknown restore: err = %v, want ErrRestoreNotFound", err)
 	}
 }
+
+// errBelowMinimum is the answer of a store whose binary is below the minimum
+// of the live schema.
+var errBelowMinimum = errors.New("binary version is below the minimum of the database schema")
+
+// TestRestoreCheckRefusesABinaryBelowTheMinimum proves that the check step of
+// the worker refuses a binary below the minimum binary version of the live
+// schema: the restore fails and applies nothing.
+func TestRestoreCheckRefusesABinaryBelowTheMinimum(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+
+	id, err := startRestoreOf(t, setup, plainRestore())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	setup.live.mu.Lock()
+	setup.live.minErr = errBelowMinimum
+	setup.live.mu.Unlock()
+
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State != backup.RestoreFailed {
+		t.Fatalf("restore = %q (%s), want failed", row.State, row.Error)
+	}
+
+	if got := setup.live.counts(); got.applied != 0 {
+		t.Fatalf("applied = %d, want no apply on a binary below the minimum", got.applied)
+	}
+}
