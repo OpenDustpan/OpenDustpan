@@ -200,8 +200,8 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 
 	var window haRetryWindow
 
-	window.pulumi = haOutageResult(t, "pulumi up", up, writesAt)
-	window.tofu = haOutageResult(t, "tofu apply", apply, writesAt)
+	window.pulumi = haOutageResult(t, env, "pulumi up", step, e2e.ToolPulumi, up, writesAt)
+	window.tofu = haOutageResult(t, env, "tofu apply", step, e2e.ToolTofu, apply, writesAt)
 
 	t.Logf("retry window measured through the proxy: pulumi %s, tofu %s (0 means the command did not fail)",
 		window.pulumi.Round(time.Second), window.tofu.Round(time.Second))
@@ -224,8 +224,11 @@ func haLongOutage(t *testing.T, env *e2e.Env, pair backupPair) haRetryWindow {
 
 // haOutageResult checks one command after the long outage. A command that
 // failed must have failed with a 503 message. It returns how long the command
-// retried before it failed, or 0 when it did not fail.
-func haOutageResult(t *testing.T, what string, run *haRun, writesAt time.Time) time.Duration {
+// retried its first write that met the outage before it gave up, from the
+// record of the proxy, or 0 when the command did not fail.
+func haOutageResult(
+	t *testing.T, env *e2e.Env, what, step, tool string, run *haRun, writesAt time.Time,
+) time.Duration {
 	t.Helper()
 
 	if run.err != nil {
@@ -243,7 +246,34 @@ func haOutageResult(t *testing.T, what string, run *haRun, writesAt time.Time) t
 		t.Errorf("%s failed with status %d and no 503 message:\n%s", what, run.res.ExitCode, out)
 	}
 
-	return run.ended.Sub(writesAt)
+	return haWriteRetries(env, step, tool, writesAt)
+}
+
+// haWriteRetries returns the time between the first attempt of the first write
+// of tool that got 503 after writesAt and the last attempt of the same write.
+func haWriteRetries(env *e2e.Env, step, tool string, writesAt time.Time) time.Duration {
+	var (
+		first, last time.Time
+		method      string
+		path        string
+	)
+
+	for _, entry := range env.Recorder.Entries() {
+		if entry.Step != step || haToolOf(entry.UserAgent) != tool || entry.Status != http.StatusServiceUnavailable ||
+			entry.Method == http.MethodGet || entry.At.Before(writesAt.Add(-haPollEvery)) {
+			continue
+		}
+
+		if first.IsZero() {
+			first, method, path = entry.At, entry.Method, entry.Path
+		}
+
+		if entry.Method == method && entry.Path == path {
+			last = entry.At
+		}
+	}
+
+	return last.Sub(first)
 }
 
 // haCheckConsistent checks the state after the long outage: no state version
