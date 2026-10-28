@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,10 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
+
+// errMinimumRead stands for a check that cannot read the minimum because the
+// store is not available.
+var errMinimumRead = errors.New("minimum not readable")
 
 // errChain stands for a restore that the audit chain does not admit.
 var errChain = errors.New("chain waits")
@@ -50,6 +55,12 @@ func TestReadinessReportsABinaryBelowTheMinimum(t *testing.T) {
 			wantBody:   "binary-minimum",
 		},
 		{name: "at the minimum", minimum: stubMinimum{err: nil}, wantStatus: http.StatusOK, wantBody: ""},
+		{
+			name:       "minimum not readable",
+			minimum:    stubMinimum{err: errMinimumRead},
+			wantStatus: http.StatusOK,
+			wantBody:   "",
+		},
 		{name: "store without the check", minimum: nil, wantStatus: http.StatusOK, wantBody: ""},
 	}
 
@@ -131,6 +142,72 @@ func TestRestoreStartCheck(t *testing.T) {
 
 			if err := admit(t.Context()); !errors.Is(err, tt.wantErr) {
 				t.Fatalf("admit = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestStoreDownListsOnlyTheStore proves that, when the store is not
+// available, the probe lists only "store" in the failed list. The check of the
+// binary minimum cannot read the minimum then, and it does not fail: the check
+// of the store already reports the cause. A binary that is known to be below
+// the minimum still fails, and then it is the only entry when the store works.
+func TestStoreDownListsOnlyTheStore(t *testing.T) {
+	t.Parallel()
+
+	below := &schema.MinimumError{SchemaMinimum: "v0.5.0", BinaryVersion: "v0.4.0"}
+
+	tests := []struct {
+		name     string
+		store    stubPinger
+		minimum  stubMinimum
+		wantBody string
+	}{
+		{
+			name:  "store down, minimum not readable",
+			store: stubPinger{err: errProbeStoreCanary, block: false}, minimum: stubMinimum{err: errMinimumRead},
+			wantBody: `"failed":["store"]`,
+		},
+		{
+			name: "store down, minimum not readable, wrapped as the stores return it",
+			store: stubPinger{
+				err:   errProbeStoreCanary,
+				block: false,
+			},
+			minimum:  stubMinimum{err: fmt.Errorf("read: %w", errMinimumRead)},
+			wantBody: `"failed":["store"]`,
+		},
+		{
+			name:  "store works, binary below the minimum",
+			store: stubPinger{err: nil, block: false}, minimum: stubMinimum{err: below},
+			wantBody: `"failed":["binary-minimum"]`,
+		},
+		{
+			name:  "store down and binary below the minimum",
+			store: stubPinger{err: errProbeStoreCanary, block: false}, minimum: stubMinimum{err: below},
+			wantBody: `"failed":["store","binary-minimum"]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rd := newComponentReadiness(readinessSettings{
+				components: Components{api: true, worker: false}, store: tt.store,
+				blobs: stubPinger{err: nil, block: false}, watch: nil, chainAdmits: nil, minimum: tt.minimum,
+				timeout:  50 * time.Millisecond,
+				failures: metrics.NewRegistry().NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
+				logger:   slog.New(slog.DiscardHandler),
+			})
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health/ready", http.NoBody)
+			rec := httptest.NewRecorder()
+
+			rd.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Fatalf("probe = %d %s, want 503 with %s", rec.Code, rec.Body.String(), tt.wantBody)
 			}
 		})
 	}

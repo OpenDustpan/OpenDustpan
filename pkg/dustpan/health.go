@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // readinessTimeout bounds each readiness check: the store ping and the blob
@@ -183,12 +185,16 @@ type minimumPing struct {
 	checker minimumChecker
 }
 
-// Ping returns an error when the binary of this process is below the minimum
-// binary version of the schema. Such a process cannot write, so the probe
-// answers 503 and a load balancer takes it out of the pool. The body names
-// the check binary-minimum and holds no version text.
+// Ping returns an error only when the check knows that the binary of this
+// process is below the minimum binary version of the schema. Such a process
+// cannot write, so the probe answers 503 and a load balancer takes it out of
+// the pool. The body names the check binary-minimum and holds no version text.
+// When the check cannot read the minimum, because the store is not available,
+// it does not fail: the check of the store already reports that cause, and one
+// cause gives one entry in the failed list.
 func (p minimumPing) Ping(ctx context.Context) error {
-	if err := p.checker.CheckBinaryMinimum(ctx); err != nil {
+	err := p.checker.CheckBinaryMinimum(ctx)
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
 		return fmt.Errorf("binary below the minimum: %w", err)
 	}
 
