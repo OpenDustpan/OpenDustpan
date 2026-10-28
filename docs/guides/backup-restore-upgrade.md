@@ -106,7 +106,8 @@ at a time. A second start while one runs answers 409.
 
 The server answers the start with 202 and the restore ID. A `worker` process
 runs the restore in steps, and records the result of each step in the
-database. Run at least one `worker` process, or the restore waits. When the
+database. Run at least one `worker` process. When no worker claimed work for
+2 lease periods, the start answers 503 with the error code `worker.absent`. When the
 process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
