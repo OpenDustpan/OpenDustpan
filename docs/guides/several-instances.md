@@ -145,7 +145,7 @@ These checks use the minimum:
 - **Readiness.** An instance with a binary below the minimum answers 503 on the readiness probe. The `failed` list names the check `binary-minimum`, so a load balancer takes the instance out of the pool. The body holds no version text.
 - **Restore.** A restore on a binary below the minimum fails when it starts and again in the swap. The error names both versions. The live data and the minimum stay as they were. Start the restore on an instance of the new binary.
 
-A dev build passes each minimum. A restore never replaces the rows, and a backup does not hold them.
+A dev build passes every minimum check: the write check, the migration check, the readiness check and the restore check. A restore never replaces the rows, and a backup does not hold them.
 
 ## Settings that stay on one host
 
