@@ -102,8 +102,10 @@ type haCLI struct {
 // haRun is one CLI command that runs in the background.
 type haRun struct {
 	done chan struct{}
-	res  e2e.Result
-	err  error
+	// ended is the time the command ended; valid after done closes.
+	ended time.Time
+	res   e2e.Result
+	err   error
 }
 
 // start runs the command in the background. The test waits for it with
@@ -118,6 +120,7 @@ func (c haCLI) start(ctx context.Context, t *testing.T, extra []string, args ...
 		defer close(run.done)
 
 		run.res, run.err = c.env.RunAs(ctx, c.install, c.dir, extra, args...)
+		run.ended = time.Now()
 	}()
 
 	// A test that ends early cancels its context, which ends the command.

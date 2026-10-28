@@ -122,7 +122,10 @@ func runHighAvailability(t *testing.T, pair backupPair, store e2e.Store) {
 
 	t.Run("6 schedules", func(t *testing.T) { haSchedules(t, env) })
 
-	t.Run("7 database outage", func(t *testing.T) { haDatabaseOutage(t, env, pair) })
+	var window haRetryWindow
+
+	t.Run("7a database outage", func(t *testing.T) { window = haLongOutage(t, env, pair) })
+	t.Run("7b short database outage", func(t *testing.T) { haShortOutage(t, env, pair, window) })
 	t.Run("8 no worker", func(t *testing.T) {
 		t.Skip("needs the worker admission check on backup routes")
 	})
