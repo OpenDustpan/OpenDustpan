@@ -127,9 +127,8 @@ func checkBusy(t *testing.T, tc busyCase) {
 		t.Fatalf("err = %v lost the driver error", err)
 	}
 
-	var got *storeerr.Error
-
-	translated := errors.As(err, &got)
+	got, translated := errors.AsType[*storeerr.Error](err)
+	translated = translated && got != nil
 
 	if !tc.unavailable {
 		if translated || errors.Is(err, namespace.ErrUnavailable) {
