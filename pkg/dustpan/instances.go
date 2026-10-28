@@ -107,13 +107,9 @@ func (s *Server) unregisterInstance(ctx context.Context) {
 	s.logger.InfoContext(ctx, "instance version row deleted at stop", slog.String("instance_id", s.instances.id))
 }
 
-// minimumChecker is the check that both SQL adapters make of the binary
-// version against the minimum binary version of the live schema.
-type minimumChecker interface {
-	// CheckBinaryMinimum returns a *schema.MinimumError when the binary of the
-	// store is below the highest minimum of the schema.
-	CheckBinaryMinimum(ctx context.Context) error
-}
+// minimumChecker is the check of the binary version against the minimum
+// binary version of the live schema. Both SQL adapters meet it.
+type minimumChecker = installation.MinimumChecker
 
 // restoreMinimumAdmit returns the start check of a restore: it refuses a
 // restore on a binary below the minimum binary version of the live schema. The

@@ -91,6 +91,18 @@ type InstanceStore interface {
 	DeleteInstance(ctx context.Context, id string) error
 }
 
+// MinimumChecker is the check of the binary version of a store against the
+// minimum binary version of the live schema. Both built-in stores meet it,
+// and their black-box tests pin that. The server uses it for the start check
+// of a restore and for the readiness probe, so a store that lacks it skips both.
+type MinimumChecker interface {
+	// CheckBinaryMinimum returns an error that wraps
+	// schema.ErrBinaryBelowMinimum when the binary of the store is below the
+	// highest minimum binary version of the schema, and nil otherwise. It
+	// reads no installation state, so it also works in maintenance mode.
+	CheckBinaryMinimum(ctx context.Context) error
+}
+
 // ValidInstanceID returns an error that wraps ErrInvalidInstance when id is
 // not an allowed instance ID.
 func ValidInstanceID(id string) error {
