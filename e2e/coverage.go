@@ -27,6 +27,7 @@ import (
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
+	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
@@ -1030,6 +1031,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Namespaces: coverageNamespaces(tb),
 		Senders:    nil,
 		Ports:      egress.Ports{},
+		Counter:    authgatetest.NewMemory(nil),
 		Now:        nil,
 	})
 	if err != nil {

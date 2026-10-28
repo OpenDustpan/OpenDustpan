@@ -1026,9 +1026,9 @@ func (s *Service) BeginState(
 	}
 
 	// Declares of one workspace share a stripe from here to the create,
-	// which trims contention on the cap check below. The store enforces
-	// the cap where concurrent declares serialize, so the check below is
-	// only an early refusal with a count.
+	// which trims contention in this process. The stripe and the cap check
+	// in admitDeclare do not hold the cap across instances. The store
+	// enforces the cap where concurrent declares serialize.
 	unlock, err := s.admitDeclare(ctx, w)
 	if err != nil {
 		return PendingState{}, err
