@@ -948,6 +948,21 @@ WHERE state = 'running'
         AND o.kind = sqlc.arg('kind')
         AND o.state IN ('failed', 'canceled'));
 
+-- name: GetWriteState :one
+-- The installation state and the minimum binary versions that the migrations
+-- record, in one statement: a checked write reads both. minimums is a comma
+-- separated list of the distinct minimums, empty when no migration sets one.
+-- A version has no comma, so the list splits without loss.
+SELECT
+    i.state AS state,
+    CAST(COALESCE((
+        SELECT group_concat(DISTINCT m.min_binary_version)
+        FROM schema_migrations AS m
+        WHERE m.min_binary_version <> ''
+    ), '') AS TEXT) AS minimums
+FROM installation AS i
+WHERE i.id = 1;
+
 -- name: GetInstallationState :one
 -- The installation state: normal or maintenance. The migration seeds the
 -- one row; a missing row is a fault.
@@ -2462,14 +2477,16 @@ WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
 -- store, read in the transaction of the write.
 
 -- name: UpsertDurableHeartbeat :exec
-INSERT INTO durable_heartbeats (owner, at_ms) VALUES (sqlc.arg('owner'), sqlc.arg('now_ms'))
-ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms;
+INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+VALUES (sqlc.arg('owner'), sqlc.arg('now_ms'), sqlc.arg('lease_ms'))
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms;
 
 -- name: DeleteStaleDurableHeartbeats :exec
 DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms');
 
 -- name: GetLatestDurableHeartbeat :one
-SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1;
+SELECT owner, at_ms, lease_ms FROM durable_heartbeats
+ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
 
 -- Sign-in failure budget. The upsert is one atomic write, so concurrent adds
 -- each count once. The window comes from DatabaseNowMs, the clock of the
@@ -4129,3 +4146,23 @@ UPDATE job_log_chunks
 SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5)
 WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
   AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: UpsertInstanceVersion :exec
+-- Writes the version row of one server process. A row with the same ID is
+-- replaced, so a process that starts again with its ID keeps one row.
+INSERT INTO instance_versions (id, binary_version, started_at_ms)
+VALUES (sqlc.arg(id), sqlc.arg(binary_version), sqlc.arg(started_at_ms))
+ON CONFLICT (id) DO UPDATE
+SET binary_version = excluded.binary_version, started_at_ms = excluded.started_at_ms;
+
+-- name: DeleteInstanceVersion :execrows
+-- Deletes the version row of one server process. It deletes nothing when no
+-- row has the ID.
+DELETE FROM instance_versions
+WHERE id = sqlc.arg(id);
+
+-- name: ListInstanceVersions :many
+-- Lists every version row, oldest start first.
+SELECT id, binary_version, started_at_ms
+FROM instance_versions
+ORDER BY started_at_ms, id;

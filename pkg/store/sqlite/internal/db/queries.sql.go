@@ -2562,6 +2562,21 @@ func (q *Queries) DeleteImportUnits(ctx context.Context, arg DeleteImportUnitsPa
 	return err
 }
 
+const deleteInstanceVersion = `-- name: DeleteInstanceVersion :execrows
+DELETE FROM instance_versions
+WHERE id = ?1
+`
+
+// Deletes the version row of one server process. It deletes nothing when no
+// row has the ID.
+func (q *Queries) DeleteInstanceVersion(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteInstanceVersion, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteInventory = `-- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?
@@ -5466,13 +5481,14 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 }
 
 const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
-SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1
+SELECT owner, at_ms, lease_ms FROM durable_heartbeats
+ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbeat, error) {
 	row := q.db.QueryRowContext(ctx, getLatestDurableHeartbeat)
 	var i DurableHeartbeat
-	err := row.Scan(&i.Owner, &i.AtMs)
+	err := row.Scan(&i.Owner, &i.AtMs, &i.LeaseMs)
 	return i, err
 }
 
@@ -7148,6 +7164,34 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.DeletedAtMs,
 		&i.DeletedName,
 	)
+	return i, err
+}
+
+const getWriteState = `-- name: GetWriteState :one
+SELECT
+    i.state AS state,
+    CAST(COALESCE((
+        SELECT group_concat(DISTINCT m.min_binary_version)
+        FROM schema_migrations AS m
+        WHERE m.min_binary_version <> ''
+    ), '') AS TEXT) AS minimums
+FROM installation AS i
+WHERE i.id = 1
+`
+
+type GetWriteStateRow struct {
+	State    string
+	Minimums string
+}
+
+// The installation state and the minimum binary versions that the migrations
+// record, in one statement: a checked write reads both. minimums is a comma
+// separated list of the distinct minimums, empty when no migration sets one.
+// A version has no comma, so the list splits without loss.
+func (q *Queries) GetWriteState(ctx context.Context) (GetWriteStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getWriteState)
+	var i GetWriteStateRow
+	err := row.Scan(&i.State, &i.Minimums)
 	return i, err
 }
 
@@ -10935,6 +10979,36 @@ func (q *Queries) ListInstallationWrapperIDs(ctx context.Context) ([]string, err
 			return nil, err
 		}
 		items = append(items, wrapper_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInstanceVersions = `-- name: ListInstanceVersions :many
+SELECT id, binary_version, started_at_ms
+FROM instance_versions
+ORDER BY started_at_ms, id
+`
+
+// Lists every version row, oldest start first.
+func (q *Queries) ListInstanceVersions(ctx context.Context) ([]InstanceVersion, error) {
+	rows, err := q.db.QueryContext(ctx, listInstanceVersions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InstanceVersion
+	for rows.Next() {
+		var i InstanceVersion
+		if err := rows.Scan(&i.ID, &i.BinaryVersion, &i.StartedAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -17306,19 +17380,41 @@ func (q *Queries) UpsertDriftResult(ctx context.Context, arg UpsertDriftResultPa
 
 const upsertDurableHeartbeat = `-- name: UpsertDurableHeartbeat :exec
 
-INSERT INTO durable_heartbeats (owner, at_ms) VALUES (?1, ?2)
-ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms
+INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+VALUES (?1, ?2, ?3)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms
 `
 
 type UpsertDurableHeartbeatParams struct {
-	Owner string
-	NowMs int64
+	Owner   string
+	NowMs   int64
+	LeaseMs int64
 }
 
 // Durable heartbeats. Every time comes from DatabaseNowMs, the clock of the
 // store, read in the transaction of the write.
 func (q *Queries) UpsertDurableHeartbeat(ctx context.Context, arg UpsertDurableHeartbeatParams) error {
-	_, err := q.db.ExecContext(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs)
+	_, err := q.db.ExecContext(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs, arg.LeaseMs)
+	return err
+}
+
+const upsertInstanceVersion = `-- name: UpsertInstanceVersion :exec
+INSERT INTO instance_versions (id, binary_version, started_at_ms)
+VALUES (?1, ?2, ?3)
+ON CONFLICT (id) DO UPDATE
+SET binary_version = excluded.binary_version, started_at_ms = excluded.started_at_ms
+`
+
+type UpsertInstanceVersionParams struct {
+	ID            string
+	BinaryVersion string
+	StartedAtMs   int64
+}
+
+// Writes the version row of one server process. A row with the same ID is
+// replaced, so a process that starts again with its ID keeps one row.
+func (q *Queries) UpsertInstanceVersion(ctx context.Context, arg UpsertInstanceVersionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertInstanceVersion, arg.ID, arg.BinaryVersion, arg.StartedAtMs)
 	return err
 }
 

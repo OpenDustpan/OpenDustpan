@@ -2838,14 +2838,16 @@ WHERE name = sqlc.arg('name')::text AND next_run_at_ms = sqlc.arg('due_at_ms')::
 -- transaction of the write.
 
 -- name: UpsertDurableHeartbeat :exec
-INSERT INTO durable_heartbeats (owner, at_ms) VALUES (sqlc.arg('owner')::text, sqlc.arg('now_ms')::bigint)
-ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms;
+INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+VALUES (sqlc.arg('owner')::text, sqlc.arg('now_ms')::bigint, sqlc.arg('lease_ms')::bigint)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms;
 
 -- name: DeleteStaleDurableHeartbeats :exec
 DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms')::bigint;
 
 -- name: GetLatestDurableHeartbeat :one
-SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1;
+SELECT owner, at_ms, lease_ms FROM durable_heartbeats
+ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
 
 -- name: GetNamespaceID :one
 -- The stable ID of the namespace that has the name now.
@@ -4529,3 +4531,23 @@ UPDATE job_log_chunks
 SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5)
 WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
   AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: UpsertInstanceVersion :exec
+-- Writes the version row of one server process. A row with the same ID is
+-- replaced, so a process that starts again with its ID keeps one row.
+INSERT INTO instance_versions (id, binary_version, started_at_ms)
+VALUES (sqlc.arg(id), sqlc.arg(binary_version), sqlc.arg(started_at_ms))
+ON CONFLICT (id) DO UPDATE
+SET binary_version = excluded.binary_version, started_at_ms = excluded.started_at_ms;
+
+-- name: DeleteInstanceVersion :execrows
+-- Deletes the version row of one server process. It deletes nothing when no
+-- row has the ID.
+DELETE FROM instance_versions
+WHERE id = sqlc.arg(id);
+
+-- name: ListInstanceVersions :many
+-- Lists every version row, oldest start first.
+SELECT id, binary_version, started_at_ms
+FROM instance_versions
+ORDER BY started_at_ms, id;

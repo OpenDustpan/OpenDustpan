@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -62,7 +63,10 @@ type Config struct {
 	Store trigger.Store
 	// Manager saves, reads, deletes and fires triggers, and checks the actions
 	// of the caller at each call.
-	Manager       *trigger.Manager
+	Manager *trigger.Manager
+	// Workers tells the start of a durable operation whether a worker runs.
+	// Nil admits every start.
+	Workers       admit.Source
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses.
@@ -86,6 +90,7 @@ type Handler struct {
 	units      coreinventory.Reader
 	store      trigger.Store
 	manager    *trigger.Manager
+	workers    admit.Source
 	authn      identity.Authenticator
 	sessions   *sessionauth.Checker
 	guard      *refusal.Recorder
@@ -126,6 +131,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		units:      cfg.Units,
 		store:      cfg.Store,
 		manager:    cfg.Manager,
+		workers:    cfg.Workers,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("triggers"),

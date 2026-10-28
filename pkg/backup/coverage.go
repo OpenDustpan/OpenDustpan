@@ -24,7 +24,8 @@ var ErrCoverage = errors.New("backup column list and schema differ")
 // stays readable during the swap and the pre-backup row survives it. The
 // revocation journal holds the writes that only reduce access and that ran
 // in maintenance mode: the swap keeps it and applies it to the restored
-// access tables. The schema holds every table of Tables and of ControlTables,
+// access tables. The instance version rows describe the server processes
+// that run now, so the swap keeps them. The schema holds every table of Tables and of ControlTables,
 // and no other table (schema_migrations and audit_chain_state aside, which
 // the adapters keep as bookkeeping). Treat the list as a constant and never mutate it.
 //
@@ -40,6 +41,7 @@ var ControlTables = []string{
 	TableRestores,
 	TableInstallation,
 	TableMaintenanceRevocations,
+	TableInstanceVersions,
 	"runner_claims",
 	"runner_handoff_tokens",
 	"runner_sessions",

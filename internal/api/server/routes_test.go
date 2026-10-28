@@ -351,6 +351,7 @@ func newServiceBackedHandlerOf(
 		Preferences:      preferences.NewService(st, st, nil),
 		GitHost:          nil,
 		Idempotency:      nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1557,6 +1558,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	}
 
 	cases := []struct {
@@ -1717,6 +1719,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1759,6 +1762,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)

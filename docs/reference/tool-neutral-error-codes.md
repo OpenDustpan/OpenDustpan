@@ -31,15 +31,19 @@ Each error answer has the header `Cache-Control: no-store`.
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
 | 400 | `namespace.invalid-name` | The name of the namespace is not valid |
+| 400 | `instance.invalid-id` | The instance ID of a `DELETE /api/server/instances/{id}` request has a character that is not allowed, or a wrong length |
 | 401 | `auth.unauthenticated` | The request has no valid token and no valid session |
 | 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
 | 404 | `namespace.not-found` | No namespace with this name |
+| 404 | `instance.not-found` | No instance version row has this ID |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 409 | `request.idempotency-key-lost` | A newer request took the `Idempotency-Key` before this request ended |
 | 421 | `namespace.not-home` | The namespace has another primary installation |
 | 429 | `auth.rate-limited` | Too many failed sign-ins from this address |
 | 500 | `server.internal` | An error that the server does not classify. The message is `internal error` |
 | 503 | `maintenance.in-maintenance` | The installation is in maintenance mode |
+| 503 | `schema.binary-below-minimum` | The binary version of this server is below the minimum binary version of the database schema, so this server cannot write. The arguments are `binaryVersion` and `minimumVersion` |
+| 503 | `worker.absent` | No worker claimed or renewed a claim for 2 lease periods of the worker. The server refuses a request that starts a durable operation. Start a worker with `opendustpan serve --components worker` |
 
 ## Inventory API
 

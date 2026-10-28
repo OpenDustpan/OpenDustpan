@@ -145,6 +145,12 @@ func (h *Handler) startRestore(
 		return
 	}
 
+	// A restore is a durable operation that a worker runs: with no worker,
+	// the start answers 503 before it stores anything.
+	if !h.admitStart(ctx, w) {
+		return
+	}
+
 	id := backup.MintRestoreID()
 	keepAccess := !canReplaceAccess(ctx, h, p)
 

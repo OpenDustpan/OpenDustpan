@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -257,6 +258,14 @@ func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity
 
 	in, err := readFireInput(w, r)
 	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// A fire starts a job, which inserts a durable operation that only a
+	// worker runs.
+	if err = admit.Start(ctx, h.workers); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

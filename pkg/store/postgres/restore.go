@@ -189,10 +189,11 @@ func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *i
 		}
 	}
 
-	// The check covers the whole staging area, in the swap transaction,
-	// before the first rename, also the access tables that a swap that
-	// keeps them does not take.
-	if err := checkSwapDev(ctx, tx, plan.staging); err != nil {
+	// The checks cover the minimum binary version of the live schema, so
+	// that a binary below it cannot swap in a schema that it built, and the
+	// whole staging area, in the swap transaction, before the first rename,
+	// also the access tables that a swap that keeps them does not take.
+	if err := s.checkSwap(ctx, tx, plan.staging); err != nil {
 		return err
 	}
 
@@ -427,6 +428,7 @@ var controlSchemaTables = []string{
 	backup.TableRestores,
 	backup.TableInstallation,
 	backup.TableMaintenanceRevocations,
+	backup.TableInstanceVersions,
 }
 
 // keepChainState replaces the audit chain state of the restored schema live

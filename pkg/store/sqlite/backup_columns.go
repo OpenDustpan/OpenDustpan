@@ -510,6 +510,10 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 				backupColAtMs,
 			},
 		},
+		{
+			table:   backup.TableInstanceVersions,
+			columns: []string{"id", "binary_version", backupColStartedAtMs},
+		},
 	}
 }
 
@@ -530,7 +534,7 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		},
 		{
 			table:   backup.TableDurableHeartbeats,
-			columns: []string{"owner", backupColAtMs},
+			columns: []string{"owner", backupColAtMs, "lease_ms"},
 		},
 	}
 }

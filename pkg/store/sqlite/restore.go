@@ -163,6 +163,12 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 		}
 	}
 
+	// A binary below the minimum of the live database must not swap in a
+	// file that it built.
+	if minErr := s.checkSwapMinimumLocked(ctx); minErr != nil {
+		return 0, minErr
+	}
+
 	// The check covers the whole staging area, also the access tables that
 	// a swap that keeps them does not take, and runs before any write to the
 	// staged file.
@@ -477,6 +483,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.runner_sessions`,
 	`DELETE FROM main.runner_nonces`,
 	`DELETE FROM main.maintenance_revocations`,
+	`DELETE FROM main.instance_versions`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
@@ -504,6 +511,8 @@ var keepControlStatements = []string{
 		`SELECT ` + runnerNonceColumns + ` FROM live.runner_nonces`,
 	`INSERT INTO main.maintenance_revocations (` + revocationColumns + `) ` +
 		`SELECT ` + revocationColumns + ` FROM live.maintenance_revocations`,
+	`INSERT INTO main.instance_versions (id, binary_version, started_at_ms) ` +
+		`SELECT id, binary_version, started_at_ms FROM live.instance_versions`,
 }
 
 // The columns of the control tables of the runner protocol, for the copy of

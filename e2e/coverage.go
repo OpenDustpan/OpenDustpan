@@ -847,6 +847,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
+		Workers:        nil,
 		Jobs:           struct{ job.Store }{nil},
 		Starter:        struct{ job.Starter }{nil},
 		Pools:          nil,
@@ -917,6 +918,7 @@ func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 
 	handler, err := triggersapi.NewHandler(triggersapi.Config{
 		Namespaces:     namespaces,
+		Workers:        nil,
 		Units:          coverageReader{},
 		Store:          struct{ trigger.Store }{nil},
 		Manager:        manager,
@@ -948,6 +950,7 @@ func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 
 	handler, err := driftapi.NewHandler(driftapi.Config{
 		Namespaces:     namespaces,
+		Workers:        nil,
 		Units:          coverageReader{},
 		Results:        struct{ drift.Store }{nil},
 		Checker:        struct{ drift.Checker }{nil},
@@ -1409,6 +1412,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Preferences:      nil,
 		GitHost:          coverageGitHost(tb),
 		Idempotency:      nil,
+		Instances:        nil,
 		Workers:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},

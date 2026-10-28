@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -42,6 +43,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // Problem is the answer to an error: a status, a code of the catalog with
@@ -327,7 +329,21 @@ func Shared(err error) (Problem, bool) {
 		return p, true
 	}
 
-	return Namespace(err)
+	if p, ok := Namespace(err); ok {
+		return p, true
+	}
+
+	return Worker(err)
+}
+
+// Worker returns the answer to a start that the worker check refused: 503
+// with the command that starts a worker.
+func Worker(err error) (Problem, bool) {
+	if errors.Is(err, admit.ErrNoWorker) {
+		return answer(http.StatusServiceUnavailable, errcode.WorkerAbsent, admit.Message), true
+	}
+
+	return Pass()
 }
 
 // Auth returns the answer to an error of the authentication or the
@@ -396,9 +412,30 @@ func Namespace(err error) (Problem, bool) {
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return answer(http.StatusServiceUnavailable, errcode.MaintenanceInMaintenance,
 			maintenance.ErrInMaintenance.Error()+": try again later"), true
+	case errors.Is(err, schema.ErrBinaryBelowMinimum):
+		return belowMinimum(err), true
 	default:
 		return Pass()
 	}
+}
+
+// belowMinimum returns the answer to a write that this binary is too old to
+// make: 503, the text that names both versions, and the two versions as the
+// arguments of the code.
+func belowMinimum(err error) Problem {
+	below, ok := errors.AsType[*schema.MinimumError](err)
+	if !ok {
+		return answer(http.StatusServiceUnavailable, errcode.SchemaBinaryBelowMinimum,
+			schema.ErrBinaryBelowMinimum.Error())
+	}
+
+	p := answer(http.StatusServiceUnavailable, errcode.SchemaBinaryBelowMinimum, below.WriteText())
+	p.Values = []errcode.Value{
+		errcode.Identifier("binaryVersion", below.BinaryVersion),
+		errcode.Identifier("minimumVersion", below.SchemaMinimum),
+	}
+
+	return p
 }
 
 // Built returns the answer of status and message for an answer a that

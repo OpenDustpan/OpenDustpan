@@ -1,6 +1,6 @@
 # 31. S3-compatible object storage
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11. Decisions 3 and 4 superseded by ADR 281
 
 ## Context
 

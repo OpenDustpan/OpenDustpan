@@ -82,6 +82,17 @@ func newRestoreFixtureHooked(
 ) restoreFixture {
 	t.Helper()
 
+	return newRestoreFixtureWorkers(t, stores, target, afterApply, nil)
+}
+
+// newRestoreFixtureWorkers builds the fixture of newRestoreFixtureHooked
+// with workers as the worker check of the handler.
+func newRestoreFixtureWorkers(
+	t *testing.T, stores backupStores, target blob.Store, afterApply func(context.Context) error,
+	workers apiserver.WorkerSource,
+) restoreFixture {
+	t.Helper()
+
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,
 		Kinds:       stores.registry,
@@ -139,7 +150,7 @@ func newRestoreFixtureHooked(
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
-		Workers:          nil,
+		Workers:          workers,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -168,6 +179,7 @@ func newRestoreFixtureHooked(
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -635,6 +647,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -845,6 +858,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -984,6 +998,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		Gates:            nil,
 		SessionPolicy:    nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1114,6 +1129,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		Gates:            nil,
 		SessionPolicy:    nil,
 		DenialLimiter:    nil,
+		Instances:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

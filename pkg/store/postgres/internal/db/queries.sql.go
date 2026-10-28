@@ -2811,6 +2811,21 @@ func (q *Queries) DeleteImportUnits(ctx context.Context, arg DeleteImportUnitsPa
 	return err
 }
 
+const deleteInstanceVersion = `-- name: DeleteInstanceVersion :execrows
+DELETE FROM instance_versions
+WHERE id = $1
+`
+
+// Deletes the version row of one server process. It deletes nothing when no
+// row has the ID.
+func (q *Queries) DeleteInstanceVersion(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteInstanceVersion, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteInventory = `-- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3
@@ -5981,13 +5996,14 @@ func (q *Queries) GetLatestCheckpointByRef(ctx context.Context, arg GetLatestChe
 }
 
 const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
-SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1
+SELECT owner, at_ms, lease_ms FROM durable_heartbeats
+ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbeat, error) {
 	row := q.db.QueryRow(ctx, getLatestDurableHeartbeat)
 	var i DurableHeartbeat
-	err := row.Scan(&i.Owner, &i.AtMs)
+	err := row.Scan(&i.Owner, &i.AtMs, &i.LeaseMs)
 	return i, err
 }
 
@@ -11502,6 +11518,33 @@ func (q *Queries) ListInstallationWrapperIDs(ctx context.Context) ([]string, err
 			return nil, err
 		}
 		items = append(items, wrapper_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInstanceVersions = `-- name: ListInstanceVersions :many
+SELECT id, binary_version, started_at_ms
+FROM instance_versions
+ORDER BY started_at_ms, id
+`
+
+// Lists every version row, oldest start first.
+func (q *Queries) ListInstanceVersions(ctx context.Context) ([]InstanceVersion, error) {
+	rows, err := q.db.Query(ctx, listInstanceVersions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InstanceVersion
+	for rows.Next() {
+		var i InstanceVersion
+		if err := rows.Scan(&i.ID, &i.BinaryVersion, &i.StartedAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -17901,19 +17944,41 @@ func (q *Queries) UpsertDriftResult(ctx context.Context, arg UpsertDriftResultPa
 
 const upsertDurableHeartbeat = `-- name: UpsertDurableHeartbeat :exec
 
-INSERT INTO durable_heartbeats (owner, at_ms) VALUES ($1::text, $2::bigint)
-ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms
+INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+VALUES ($1::text, $2::bigint, $3::bigint)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms
 `
 
 type UpsertDurableHeartbeatParams struct {
-	Owner string
-	NowMs int64
+	Owner   string
+	NowMs   int64
+	LeaseMs int64
 }
 
 // Durable heartbeats. Every time comes from the database clock, read in the
 // transaction of the write.
 func (q *Queries) UpsertDurableHeartbeat(ctx context.Context, arg UpsertDurableHeartbeatParams) error {
-	_, err := q.db.Exec(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs)
+	_, err := q.db.Exec(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs, arg.LeaseMs)
+	return err
+}
+
+const upsertInstanceVersion = `-- name: UpsertInstanceVersion :exec
+INSERT INTO instance_versions (id, binary_version, started_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (id) DO UPDATE
+SET binary_version = excluded.binary_version, started_at_ms = excluded.started_at_ms
+`
+
+type UpsertInstanceVersionParams struct {
+	ID            string
+	BinaryVersion string
+	StartedAtMs   int64
+}
+
+// Writes the version row of one server process. A row with the same ID is
+// replaced, so a process that starts again with its ID keeps one row.
+func (q *Queries) UpsertInstanceVersion(ctx context.Context, arg UpsertInstanceVersionParams) error {
+	_, err := q.db.Exec(ctx, upsertInstanceVersion, arg.ID, arg.BinaryVersion, arg.StartedAtMs)
 	return err
 }
 

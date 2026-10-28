@@ -114,13 +114,38 @@ With `api` processes only, nobody runs the background work. Four signs show that
 - The metric `dustpan_oldest_unclaimed_operation_age_seconds` shows how long the oldest unclaimed operation or due schedule waits. It is 0 when none waits. It does not decide the refusal below. A long job, or a schedule that an older worker does not know, leaves work unclaimed while the workers run.
 - `GET /api/server/worker` of the installation API shows `silentSeconds` and lists each due schedule and each operation that no worker claimed for more than 2 lease periods. It needs the action `server:observe`.
 
-Each worker records a heartbeat in the store when it claims work or renews a claim. The time of the store counts, not the clock of the process that reads it. When no worker claimed or renewed a claim for 2 lease periods, an `api` process refuses each request that inserts a durable operation with 503. Today that is the approval of an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process counts the 2 lease periods from the time it began to watch. So it never refuses a start right after it began. A start of a process never fails a restore that another instance runs.
+Each worker records a heartbeat in the store when it claims work or renews a claim. The heartbeat holds the lease period of the worker. The `api` process reads the time of the store, not its own clock. It also reads the lease period of the worker, not its own lease period. Suppose no worker claimed or renewed a claim for 2 lease periods of the worker. Then the `api` process refuses each request that inserts a durable operation. It answers 503 with the error code `worker.absent`. These requests start a backup, start a job, start a drift check, fire a trigger or approve an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process counts the 2 lease periods from the time it began to watch. So it never refuses a start right after it began. A start of a process never fails a restore that another instance runs.
 
 `GET /api/server/components` lists the components of the process that answers.
 
 A restore is a durable operation too. The `api` process that took the request stores it, and a `worker` process runs its steps. The worker loads the backup into a staging area and checks it. Then it enters maintenance mode, takes the backup of the live data and copies the blobs. Then it swaps the staged data into the live data, leaves maintenance mode and drops the staging area. Each step records its result in the database. When the instance that runs a restore stops, another `worker` process continues the restore after the lease ends, from the step after the last recorded step. Run at least one `worker` process with enough time and memory for a restore, or the restore waits. Any instance answers the state of a restore, and any instance takes a cancel before the swap.
 
 A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops with SIGTERM, it gives the claim back, and another `worker` process continues the backup at once. When the instance dies with no clean stop, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
+
+## Roll out a new release
+
+You can replace the instances of one installation one at a time. A release can set a minimum binary version in the schema. An instance with a binary below the minimum must stop writing, because the schema no longer holds what that binary needs.
+
+Each instance writes one row at start-up: its instance ID, the version of its binary and its start time. A clean stop deletes the row. The row is not a lease. Nothing renews it, and nothing reads it to decide that an instance is live. An instance that dies without a clean stop leaves its row.
+
+`GET /api/server/instances` lists the rows, oldest start first. It needs the action `server:read-instances`.
+
+```json
+{"instances": [{"id": "ins-4q2n7xk5b6d3m1p0a8wz", "binaryVersion": "v0.3.0", "startedAt": "2026-10-20T08:00:00Z"}]}
+```
+
+`DELETE /api/server/instances/{id}` deletes one row and answers 204. It needs the action `server:delete-instance`. It writes one entry in the audit log of the installation (the scope `@server`), with the action and the ID in the value path `/instances/{id}`. It does not stop the instance. Use it for the row of an instance that died.
+
+The request needs a running instance. A binary below the minimum cannot write. When a dead instance blocks a migration, the new instance fails to start, and no instance answers the request. Start one instance of the old binary, at or above the current minimum. Delete the row, stop that instance, and start the new instance again.
+
+These checks use the minimum:
+
+- **Writes.** Each write of an instance compares the version of its binary with the highest minimum in the schema. A binary below the minimum fails the write in its own transaction. The Pulumi CLI, OpenTofu and the API get 503. The error code is `schema.binary-below-minimum`, and the text names both versions: `binary version v0.3.0 is below v0.4.0, the minimum binary version of the database schema, so this instance cannot write: stop this instance and run version v0.4.0 or later`. Reads still work. The row delete at a clean stop still works.
+- **Migrations.** A migration that sets a new minimum does not run while a row below that minimum exists. The new instance fails to start with an error that names the migration, the new minimum and each row: `migration 0200_example.sql sets the minimum binary version v0.4.0 while 1 instance rows are below it: ins-4q2n7xk5b6d3m1p0a8wz (v0.3.0): stop these instances, or delete the row of an instance that no longer runs (DELETE /api/server/instances/{id}), and start again`. Stop the old instances, or delete the rows of the instances that no longer run, and start the new instance again.
+- **Readiness.** An instance with a binary below the minimum answers 503 on the readiness probe. The `failed` list names the check `binary-minimum`, so a load balancer takes the instance out of the pool. The body holds no version text.
+- **Restore.** A restore on a binary below the minimum fails when it starts and again in the swap. The error names both versions. The live data and the minimum stay as they were. Start the restore on an instance of the new binary.
+
+A dev build passes every minimum check: the write check, the migration check, the readiness check and the restore check. A restore never replaces the rows, and a backup does not hold them.
 
 ## Settings that stay on one host
 

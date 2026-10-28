@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -16,9 +17,13 @@ var _ durable.HeartbeatStore = (*DurableOperations)(nil)
 
 // Beat implements durable.HeartbeatStore. The upsert and the delete of the
 // stale beats run in one transaction, at the time of the database.
-func (d *DurableOperations) Beat(ctx context.Context, owner string) error {
+func (d *DurableOperations) Beat(ctx context.Context, owner string, lease time.Duration) error {
 	if owner == "" {
 		return fmt.Errorf("heartbeat owner is empty: %w", durable.ErrInvalid)
+	}
+
+	if lease <= 0 {
+		return fmt.Errorf("heartbeat lease %v is not positive: %w", lease, durable.ErrInvalid)
 	}
 
 	return d.store.inControlTx(ctx, func(q *db.Queries) error {
@@ -32,7 +37,10 @@ func (d *DurableOperations) Beat(ctx context.Context, owner string) error {
 			return fmt.Errorf("delete stale durable heartbeats: %w", err)
 		}
 
-		err = q.UpsertDurableHeartbeat(ctx, db.UpsertDurableHeartbeatParams{Owner: owner, NowMs: now})
+		err = q.UpsertDurableHeartbeat(
+			ctx,
+			db.UpsertDurableHeartbeatParams{Owner: owner, NowMs: now, LeaseMs: scheduleMs(lease)},
+		)
 		if err != nil {
 			return fmt.Errorf("write durable heartbeat: %w", err)
 		}
@@ -63,6 +71,7 @@ func (d *DurableOperations) LastBeat(ctx context.Context) (durable.Beat, error) 
 		}
 
 		beat.Owner, beat.At = row.Owner, codec.FromMillis(row.AtMs)
+		beat.Lease = time.Duration(row.LeaseMs) * time.Millisecond
 
 		return nil
 	})

@@ -270,6 +270,8 @@ type settings struct {
 	installationKind installation.Kind
 	kindStore        installation.KindStore
 	devSignIn        *devsignin.Config
+	// instanceStore keeps the instance version rows. See WithInstanceStore.
+	instanceStore installation.InstanceStore
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -688,6 +690,9 @@ type Server struct {
 	// kind is the installation kind of this server and the store that keeps
 	// its claim.
 	kind kindState
+	// instances is the instance version row of this server and the store that
+	// keeps it.
+	instances instanceState
 	// durable keeps the job schedules, or is nil without them. inactivityEvery
 	// and deletedEvery are the periods of those schedules.
 	durable      DurableStore
@@ -796,6 +801,7 @@ func defaultSettings() *settings {
 		beforeServe:             nil,
 		installationKind:        "",
 		kindStore:               nil,
+		instanceStore:           nil,
 		devSignIn:               nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainOn,
@@ -1103,11 +1109,11 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		signInRequests:   mount.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, mount.signIn),
-		kind:             newKindState(cfg),
-		durable:          cfg.durableStore,
-		durableOwner:     durableOwner(cfg),
-		reconciler:       reconciler,
-		inactivityEvery:  sweepEvery, deletedEvery: deletedSweepEvery,
+		kind:             newKindState(cfg), instances: newInstanceState(cfg),
+		durable:         cfg.durableStore,
+		durableOwner:    durableOwner(cfg),
+		reconciler:      reconciler,
+		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components,
 		watch:      cfg.watch, auditChainEvery: cfg.auditChainInterval,
@@ -1389,12 +1395,19 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		admits = chain.admits
 	}
 
+	// A store without the check leaves minimum nil: the probe skips the check.
+	var minimum minimumChecker
+	if checker, ok := cfg.namespaceStore.(minimumChecker); ok {
+		minimum = checker
+	}
+
 	return newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		store:       cfg.namespaceStore,
 		blobs:       cfg.blobStore,
 		watch:       cfg.watch,
 		chainAdmits: admits,
+		minimum:     minimum,
 		timeout:     readinessTimeout,
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
@@ -1917,6 +1930,10 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 // is done before these start-up steps end, Run returns nil: the caller asked
 // it to stop, and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
+	// The row of this process goes at every return of Run, after the workers
+	// stopped, also when a start-up step failed after it wrote the row.
+	defer s.unregisterInstance(ctx)
+
 	if err := s.Start(ctx); err != nil {
 		return startUpResult(ctx, err)
 	}
@@ -2359,6 +2376,10 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 // startUp adds no second prefix.
 func (s *Server) startUp(ctx context.Context) error {
 	if err := s.claimInstallationKind(ctx); err != nil {
+		return err
+	}
+
+	if err := s.registerInstance(ctx); err != nil {
 		return err
 	}
 
@@ -2893,6 +2914,7 @@ func newServerHandler(
 		Preferences:      newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
+		Instances:        cfg.instanceStore,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -3483,11 +3505,11 @@ func newRestoreService(
 		return nil, errRestoreNeedsOperations
 	}
 
-	var admit func(ctx context.Context) error
+	admit := restoreMinimumAdmit(cfg.namespaceStore)
 
 	var steps []restoreStep
 	if deps.chain != nil {
-		admit = deps.chain.admitRestore
+		admit = admitBoth(admit, deps.chain.admitRestore)
 		steps = append(steps, deps.chain.afterRestore)
 
 		if deps.chain.checkpoints != nil {
