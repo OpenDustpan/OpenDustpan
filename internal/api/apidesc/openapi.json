@@ -887,6 +887,7 @@
             "preferences.field-read-only": "#/components/schemas/PreferencesFieldReadOnlyError",
             "request.body-too-large": "#/components/schemas/RequestBodyTooLargeError",
             "request.idempotency-key-replayed-secret": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError",
+            "schema.binary-below-minimum": "#/components/schemas/SchemaBinaryBelowMinimumError",
             "sink.test-rate-limited": "#/components/schemas/SinkTestRateLimitedError",
             "stack.no-state-at-time": "#/components/schemas/StackNoStateAtTimeError",
             "stack.reveal-path-too-long": "#/components/schemas/StackRevealPathTooLongError",
@@ -923,6 +924,9 @@
           },
           {
             "$ref": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError"
+          },
+          {
+            "$ref": "#/components/schemas/SchemaBinaryBelowMinimumError"
           },
           {
             "$ref": "#/components/schemas/SinkTestRateLimitedError"
@@ -983,6 +987,8 @@
           "gate.unavailable",
           "git-host.app-not-registered",
           "git-host.installation-not-assigned",
+          "instance.invalid-id",
+          "instance.not-found",
           "job.agent-denied",
           "job.frozen",
           "job.gate-enforced",
@@ -1082,6 +1088,7 @@
           "runner.pool-in-use",
           "runner.retired",
           "runner.token-used",
+          "schema.binary-below-minimum",
           "secret.console-session",
           "secret.key-not-configured",
           "secret.not-decrypted",
@@ -3115,6 +3122,51 @@
         ],
         "type": "object"
       },
+      "SchemaBinaryBelowMinimumError": {
+        "description": "The error answer with the code schema.binary-below-minimum.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/SchemaBinaryBelowMinimumErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "schema.binary-below-minimum"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "SchemaBinaryBelowMinimumErrorArgs": {
+        "description": "The arguments of the text of the error with the code schema.binary-below-minimum.",
+        "properties": {
+          "binaryVersion": {
+            "type": "string"
+          },
+          "minimumVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "binaryVersion",
+          "minimumVersion"
+        ],
+        "type": "object"
+      },
       "SinkTestRateLimitedError": {
         "description": "The error answer with the code sink.test-rate-limited.",
         "properties": {
@@ -4110,7 +4162,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.14.0"
+    "version": "0.15.0"
   },
   "openapi": "3.1.0",
   "paths": {

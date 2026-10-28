@@ -1,0 +1,1 @@
+schema.binary-below-minimum binaryVersion:identifier minimumVersion:identifier

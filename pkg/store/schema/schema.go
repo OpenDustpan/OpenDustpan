@@ -58,9 +58,71 @@ func (e *MinimumError) Error() string {
 	)
 }
 
+// WriteText is the text that an API answers for a write that this binary is
+// too old to make. It names both versions and the one action: stop this
+// instance, and run a binary at or above the minimum. It holds no driver
+// text, so an adapter can send it to a client.
+func (e *MinimumError) WriteText() string {
+	return fmt.Sprintf(
+		"binary version %s is below %s, the minimum binary version of the database schema, so this instance "+
+			"cannot write: stop this instance and run version %s or later",
+		e.BinaryVersion,
+		e.SchemaMinimum,
+		e.SchemaMinimum,
+	)
+}
+
 // Unwrap returns ErrBinaryBelowMinimum, so errors.Is finds the sentinel.
 func (e *MinimumError) Unwrap() error {
 	return ErrBinaryBelowMinimum
+}
+
+// ErrInstancesBelowMinimum reports a migration that raises the minimum binary
+// version while instance version rows below the new minimum exist. The error
+// is an *InstancesBelowMinimumError.
+var ErrInstancesBelowMinimum = errors.New("instances run a binary below the minimum binary version of a migration")
+
+// InstanceRow is the ID and the binary version of one row of the instance
+// version table, as the migration check reads it.
+type InstanceRow struct {
+	// ID is the instance ID.
+	ID string
+	// BinaryVersion is the binary version that the instance wrote at start-up.
+	BinaryVersion string
+}
+
+// InstancesBelowMinimumError reports the migration that raises the minimum
+// binary version and the instance rows below that minimum. The adapters
+// return it from the migration check, and the migration applies nothing.
+type InstancesBelowMinimumError struct {
+	// Migration is the file name of the migration that raises the minimum.
+	Migration string
+	// Minimum is the minimum binary version that the migration sets.
+	Minimum string
+	// Instances are the rows below Minimum, in the order of the table.
+	Instances []InstanceRow
+}
+
+// Error names the migration, the new minimum and each row, and the two ways
+// to go on: stop the instance, or delete the row of an instance that no longer
+// runs.
+func (e *InstancesBelowMinimumError) Error() string {
+	rows := make([]string, 0, len(e.Instances))
+	for _, row := range e.Instances {
+		rows = append(rows, row.ID+" ("+row.BinaryVersion+")")
+	}
+
+	return fmt.Sprintf(
+		"migration %s sets the minimum binary version %s while %d instance rows are below it: %s: "+
+			"stop these instances, or delete the row of an instance that no longer runs "+
+			"(DELETE /api/server/instances/{id}), and start again",
+		e.Migration, e.Minimum, len(e.Instances), strings.Join(rows, ", "),
+	)
+}
+
+// Unwrap returns ErrInstancesBelowMinimum, so errors.Is finds the sentinel.
+func (e *InstancesBelowMinimumError) Unwrap() error {
+	return ErrInstancesBelowMinimum
 }
 
 // ErrBadBinaryVersion reports a binary version that is not a release
@@ -282,6 +344,20 @@ func HighestMinimum(values []string) (string, error) {
 	}
 
 	return highest, nil
+}
+
+// CheckMinimums is CheckMinimum for the minimum binary versions that the
+// migrations record: it takes the highest one and compares binaryVersion with
+// it. Empty entries count as no minimum. The write path of the stores calls it
+// on every checked write, with the minimums that its read-state statement
+// returns, so a binary below the minimum fails in its own transaction.
+func CheckMinimums(minimums []string, binaryVersion string) error {
+	highest, err := HighestMinimum(minimums)
+	if err != nil {
+		return fmt.Errorf("read schema minimum: %w", err)
+	}
+
+	return CheckMinimum(highest, binaryVersion)
 }
 
 // CheckMinimum returns a *MinimumError when binaryVersion is below minimum.

@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -29,6 +30,16 @@ func TestStateErrorCodes(t *testing.T) {
 		{
 			"maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable,
 			none(errcode.MaintenanceInMaintenance),
+		},
+		{
+			"binary below the minimum",
+			&schema.MinimumError{SchemaMinimum: "v0.5.0", BinaryVersion: "v0.4.0"},
+			http.StatusServiceUnavailable,
+			errcodetest.Want{
+				Code:        errcode.SchemaBinaryBelowMinimum,
+				Args:        map[string]any{"binaryVersion": "v0.4.0", "minimumVersion": "v0.5.0"},
+				RequestBody: nil,
+			},
 		},
 		{"fenced", namespace.ErrFenced, http.StatusConflict, none(errcode.NamespaceFenced)},
 		{"not home", namespace.ErrNotHome, http.StatusMisdirectedRequest, none(errcode.NamespaceNotHome)},

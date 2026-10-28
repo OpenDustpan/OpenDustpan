@@ -145,7 +145,7 @@ _Avoid_: Cluster, instance (one server process), deployment
 _Copy says_: "installation", explained once: "one OpenDustpan setup, with its database, its blob store and its key-encryption key". For one program, write "the server".
 
 **Instance**:
-One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
+One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63). Each start also writes the version row of the instance: the instance ID, the version of its binary and the start time. A clean stop deletes the row, and an administrator can delete the row of a process that died. The row is not a lease: nothing renews it, and nothing reads it to decide that an instance is live.
 _Avoid_: Node, replica (alone), host
 _Copy says_: "server process". Never write "instance" in copy.
 
