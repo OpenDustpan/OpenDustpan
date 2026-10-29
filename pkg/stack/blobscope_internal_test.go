@@ -481,6 +481,16 @@ func TestCheckCheckpointBlobKey(t *testing.T) {
 	}{
 		{"a save of the update", scopeNS, good, true},
 		{"the first save", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/0", true},
+		{"a save with an attempt ID", scopeNS, good + "-k3j9x0a1b2c3d4e5f6g7", true},
+		{"a first save with an attempt ID", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/0-abcdefgh", true},
+		{"an attempt ID that is too short", scopeNS, good + "-abc", false},
+		{"an attempt ID that is too long", scopeNS, good + "-" + strings.Repeat("a", 65), false},
+		{"an attempt ID with a capital letter", scopeNS, good + "-ABCDEFGHIJ", false},
+		{"an attempt ID with a dot", scopeNS, good + "-abcdefgh.ij", false},
+		{"an empty attempt ID", scopeNS, good + "-", false},
+		{"a second dash", scopeNS, good + "-abcdefgh-ijklmnop", false},
+		{"a leading zero", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/03", false},
+		{"a sign", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/+3", false},
 		{"another namespace", scopeOther2, good, false},
 		{"same namespace, another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/3", false},
 		{"same namespace, stack ID as a string prefix", scopeNS, "namespaces/ns-scope-a/pulumi/stk-10/upd-1/3", false},
@@ -624,5 +634,47 @@ func TestListRefusesAKeyOutsideTheStack(t *testing.T) {
 
 	if len(rec.got) != 1 || rec.got[0].op != "list" || rec.got[0].where != scopeaudit.OutsideUnitDirectory {
 		t.Fatalf("refusals = %+v, want one list refusal in the stack directory", rec.got)
+	}
+}
+
+// TestNextBlobKeyReadsBothLayouts checks that the key after a row key comes
+// from the number of the key, with or without an attempt ID, and that a key
+// outside the prefix or with a bad name fails without naming the key.
+func TestNextBlobKeyReadsBothLayouts(t *testing.T) {
+	t.Parallel()
+
+	const prefix = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/"
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+		ok   bool
+	}{
+		{"a number", prefix + "4", prefix + "5", true},
+		{"a number with an attempt ID", prefix + "4-abcdefghij", prefix + "5", true},
+		{"outside the prefix", "namespaces/ns-scope-a/pulumi/stk-1/upd-2/4", "", false},
+		{"not a number", prefix + "x", "", false},
+		{"a bad attempt ID", prefix + "4-ABC", "", false},
+		{"a number at the limit", prefix + "2147483647", "", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := nextBlobKey(prefix, blob.Key(tc.raw))
+			if tc.ok != (err == nil) {
+				t.Fatalf("err = %v, want ok = %v", err, tc.ok)
+			}
+
+			if !tc.ok && !errors.Is(err, ErrCheckpointMismatch) {
+				t.Fatalf("err = %v, want ErrCheckpointMismatch", err)
+			}
+
+			if got.String() != tc.want {
+				t.Fatalf("key = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

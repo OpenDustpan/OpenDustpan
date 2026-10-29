@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -1602,7 +1603,8 @@ func checkpointBlobKey(bl *scopedBlobs, stackID ID, id UpdateID, seq int64, prev
 }
 
 // nextBlobKey mints the key after raw in prefix: the same prefix with the
-// trailing sequence number plus one. A key outside prefix, or one without a
+// trailing sequence number plus one. The number may carry an attempt ID, which
+// the next key drops. A key outside prefix, or one without a
 // trailing number, is a corrupt record, which fails with ErrCheckpointMismatch
 // and never names the key.
 func nextBlobKey(prefix string, raw blob.Key) (blob.Key, error) {
@@ -1611,12 +1613,12 @@ func nextBlobKey(prefix string, raw blob.Key) (blob.Key, error) {
 		return "", ErrCheckpointMismatch
 	}
 
-	n, err := strconv.Atoi(rest)
-	if err != nil {
-		return "", fmt.Errorf("checkpoint key: %w", errors.Join(ErrCheckpointMismatch, err))
+	name, ok := parseCheckpointName(rest)
+	if !ok || name.number >= math.MaxInt32 {
+		return "", ErrCheckpointMismatch
 	}
 
-	key, err := blob.ParseKey(prefix + strconv.Itoa(n+1))
+	key, err := blob.ParseKey(prefix + strconv.FormatUint(name.number+1, 10))
 	if err != nil {
 		return "", ErrCheckpointMismatch
 	}
