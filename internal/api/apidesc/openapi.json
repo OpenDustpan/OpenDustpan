@@ -887,6 +887,9 @@
             "preferences.field-read-only": "#/components/schemas/PreferencesFieldReadOnlyError",
             "request.body-too-large": "#/components/schemas/RequestBodyTooLargeError",
             "request.idempotency-key-replayed-secret": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError",
+            "restore.ended": "#/components/schemas/RestoreEndedError",
+            "restore.swapped": "#/components/schemas/RestoreSwappedError",
+            "schema.binary-below-minimum": "#/components/schemas/SchemaBinaryBelowMinimumError",
             "sink.test-rate-limited": "#/components/schemas/SinkTestRateLimitedError",
             "stack.no-state-at-time": "#/components/schemas/StackNoStateAtTimeError",
             "stack.reveal-path-too-long": "#/components/schemas/StackRevealPathTooLongError",
@@ -923,6 +926,15 @@
           },
           {
             "$ref": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError"
+          },
+          {
+            "$ref": "#/components/schemas/RestoreEndedError"
+          },
+          {
+            "$ref": "#/components/schemas/RestoreSwappedError"
+          },
+          {
+            "$ref": "#/components/schemas/SchemaBinaryBelowMinimumError"
           },
           {
             "$ref": "#/components/schemas/SinkTestRateLimitedError"
@@ -983,6 +995,8 @@
           "gate.unavailable",
           "git-host.app-not-registered",
           "git-host.installation-not-assigned",
+          "instance.invalid-id",
+          "instance.not-found",
           "job.agent-denied",
           "job.frozen",
           "job.gate-enforced",
@@ -1074,6 +1088,8 @@
           "request.precondition-failed",
           "request.precondition-required",
           "restore.blobs-missing",
+          "restore.ended",
+          "restore.swapped",
           "runner.immutable",
           "runner.invalid",
           "runner.limit",
@@ -1082,6 +1098,7 @@
           "runner.pool-in-use",
           "runner.retired",
           "runner.token-used",
+          "schema.binary-below-minimum",
           "secret.console-session",
           "secret.key-not-configured",
           "secret.not-decrypted",
@@ -1100,6 +1117,7 @@
           "sink.no-url",
           "sink.not-found",
           "sink.platform-host",
+          "sink.test-limit-unavailable",
           "sink.test-rate-limited",
           "source.filter-invalid",
           "source.filter-unreadable",
@@ -1164,6 +1182,7 @@
           "view.limit",
           "view.not-found",
           "view.not-person",
+          "worker.absent",
           "workspace.already-exists",
           "workspace.changed-concurrently",
           "workspace.client-encrypted",
@@ -3068,6 +3087,88 @@
         ],
         "type": "object"
       },
+      "RestoreEndedError": {
+        "description": "The error answer with the code restore.ended.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/RestoreEndedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "restore.ended"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "RestoreEndedErrorArgs": {
+        "description": "The arguments of the text of the error with the code restore.ended.",
+        "properties": {
+          "restore": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "restore"
+        ],
+        "type": "object"
+      },
+      "RestoreSwappedError": {
+        "description": "The error answer with the code restore.swapped.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/RestoreSwappedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "restore.swapped"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "RestoreSwappedErrorArgs": {
+        "description": "The arguments of the text of the error with the code restore.swapped.",
+        "properties": {
+          "restore": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "restore"
+        ],
+        "type": "object"
+      },
       "SaveTriggerRequest": {
         "properties": {
           "enabled": {
@@ -3112,6 +3213,51 @@
           "frequency",
           "kind",
           "source"
+        ],
+        "type": "object"
+      },
+      "SchemaBinaryBelowMinimumError": {
+        "description": "The error answer with the code schema.binary-below-minimum.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/SchemaBinaryBelowMinimumErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "schema.binary-below-minimum"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "SchemaBinaryBelowMinimumErrorArgs": {
+        "description": "The arguments of the text of the error with the code schema.binary-below-minimum.",
+        "properties": {
+          "binaryVersion": {
+            "type": "string"
+          },
+          "minimumVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "binaryVersion",
+          "minimumVersion"
         ],
         "type": "object"
       },
@@ -4110,7 +4256,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.14.0"
+    "version": "0.18.0"
   },
   "openapi": "3.1.0",
   "paths": {

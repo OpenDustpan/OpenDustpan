@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -99,6 +100,21 @@ type errorClass struct {
 	detail string
 	code   string
 	args   []errcode.Value
+}
+
+// belowMinimumText returns the detail of the answer to a write that this
+// binary is too old to make, and the versions as the arguments of the code.
+// The detail names both versions.
+func belowMinimumText(err error) (string, []errcode.Value) {
+	below, ok := errors.AsType[*schema.MinimumError](err)
+	if !ok {
+		return schema.ErrBinaryBelowMinimum.Error(), nil
+	}
+
+	return below.WriteText(), []errcode.Value{
+		errcode.Identifier("binaryVersion", below.BinaryVersion),
+		errcode.Identifier("minimumVersion", below.SchemaMinimum),
+	}
 }
 
 // unclassified returns what a classify function returns, with false, for an
@@ -285,6 +301,16 @@ func classifyNamespace(err error) (errorClass, bool) {
 			detail: maintenance.ErrInMaintenance.Error() + ": try again after the Retry-After time",
 			code:   errcode.MaintenanceInMaintenance,
 			args:   nil,
+		}, true
+	case errors.Is(err, schema.ErrBinaryBelowMinimum):
+		detail, args := belowMinimumText(err)
+
+		return errorClass{
+			status: http.StatusServiceUnavailable,
+			title:  titleServiceUnavailable,
+			detail: detail,
+			code:   errcode.SchemaBinaryBelowMinimum,
+			args:   args,
 		}, true
 	case errors.Is(err, namespace.ErrUnavailable):
 		return errorClass{

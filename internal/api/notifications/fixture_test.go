@@ -317,8 +317,13 @@ func buildFixtureFull(
 	}
 
 	svc, err := sinks.NewService(sinks.Config{
-		Store: sinkStore, Sealer: notify.SinkSealer{Namespaces: secrets, Installation: nil},
-		Namespaces: namespaces, Senders: append([]notify.Sender{hook}, extra...), Ports: egress.Ports{}, Now: nil,
+		Store:      sinkStore,
+		Sealer:     notify.SinkSealer{Namespaces: secrets, Installation: nil},
+		Namespaces: namespaces,
+		Senders:    append([]notify.Sender{hook}, extra...),
+		Ports:      egress.Ports{},
+		Counter:    store,
+		Now:        nil,
 	})
 	if err != nil {
 		t.Fatalf("sink service: %v", err)

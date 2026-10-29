@@ -271,6 +271,15 @@ func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
 		return Record{}, err
 	}
 
+	return s.Await(ctx, id)
+}
+
+// Await blocks until backup id ends, and returns the finished row, or
+// ErrFailed with the error text of the row. It claims the operation of the
+// backup itself when no instance holds it, as Run does, and polls the row
+// while another instance holds it. It returns ErrNotFound when no row has
+// the ID.
+func (s *Service) Await(ctx context.Context, id ID) (Record, error) {
 	for {
 		// An operation that ended with no finish write (a step that
 		// panicked, too many holders) leaves its row running. When no worker
@@ -502,17 +511,18 @@ func (s *Service) newRunner(cfg Config) (*durable.Runner, error) {
 				{Name: StepFinish, Run: s.stepFinish},
 			},
 		}},
-		Lease:        cfg.Lease,
-		RenewEvery:   0,
-		PollEvery:    0,
-		MaxAttempts:  0,
-		ExpiryLimit:  0,
-		Backoff:      durable.Backoff{Base: 0, Max: 0},
-		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout: 0,
-		Deferred:     nil,
-		Logger:       cfg.Logger,
-		Rand:         nil,
+		Lease:              cfg.Lease,
+		RenewEvery:         0,
+		PollEvery:          0,
+		MaxAttempts:        0,
+		ExpiryLimit:        0,
+		Backoff:            durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:       0,
+		Deferred:           nil,
+		StopOnRenewalError: false,
+		Logger:             cfg.Logger,
+		Rand:               nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup runner: %w", err)

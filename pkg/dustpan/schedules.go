@@ -248,9 +248,10 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 		WriteTimeout: 0,
 		// Maintenance mode refuses the checked writes of a job. The operation
 		// waits, and the wait counts no attempt.
-		Deferred: func(err error) bool { return errors.Is(err, maintenance.ErrInMaintenance) },
-		Logger:   s.logger,
-		Rand:     nil,
+		Deferred:           func(err error) bool { return errors.Is(err, maintenance.ErrInMaintenance) },
+		StopOnRenewalError: false,
+		Logger:             s.logger,
+		Rand:               nil,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("job runner: %w", err)

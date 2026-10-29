@@ -43,6 +43,7 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		Namespaces:     svc.namespaces,
 		Jobs:           cfg.jobStore,
 		Starter:        starter,
+		Workers:        cfg.watch,
 		Pools:          pools,
 		Authenticator:  cfg.authenticator,
 		Authorizer:     cfg.authorizer,

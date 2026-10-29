@@ -9,13 +9,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/idempotency"
 )
 
-// DurableHolder is an optional store capability for the control table case
-// of the restore suite: the store of durable operations on the database of
-// the store.
-type DurableHolder interface {
-	DurableStore() durable.Store
-}
-
 // durableRestoreKind is the operation kind of the control table case.
 const durableRestoreKind durable.Kind = "restore-kind"
 
@@ -28,25 +21,14 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	src := newStore(t)
-
-	srcOps, ok := src.(DurableHolder)
-	if !ok {
-		t.Skip("the store keeps no durable operations")
-	}
-
 	dst := newStore(t)
-
-	dstOps, ok := dst.(DurableHolder)
-	if !ok {
-		t.Skip("the store keeps no durable operations")
-	}
 
 	ps := portableRestoreStores(t, src, dst)
 	ctx := t.Context()
 
-	mustStartDurable(t, srcOps.DurableStore(), "from-backup")
+	mustStartDurable(t, src.DurableOperationsPort(), "from-backup")
 
-	live := dstOps.DurableStore()
+	live := dst.DurableOperationsPort()
 	mustStartDurable(t, live, "live")
 	first := mustClaimDurable(t, live)
 
@@ -60,7 +42,7 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 	// A store that also keeps schedules: the backup holds a schedule that is
 	// due, and the live schedule has claimed its tick. The operation of that
 	// tick is live too.
-	schedules, hasSchedules := scheduleStores(srcOps.DurableStore(), live)
+	schedules, hasSchedules := scheduleStores(src.DurableOperationsPort(), live)
 	if hasSchedules {
 		mustEnsureSchedule(t, schedules.src)
 		mustEnsureSchedule(t, schedules.dst)
@@ -84,7 +66,7 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("apply staged backup: %v", err)
 	}
 
-	ops, err := dstOps.DurableStore().List(ctx, durable.Filter{Kind: "", States: nil, Limit: 0})
+	ops, err := dst.DurableOperationsPort().List(ctx, durable.Filter{Kind: "", States: nil, Limit: 0})
 	if err != nil {
 		t.Fatalf("list durable operations: %v", err)
 	}
@@ -92,7 +74,7 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 	checkKeptOperations(t, ops, want)
 
 	// The live holder keeps its claim across the restore.
-	if _, err := dstOps.DurableStore().Extend(ctx, held.Claim, time.Minute); err != nil {
+	if _, err := dst.DurableOperationsPort().Extend(ctx, held.Claim, time.Minute); err != nil {
 		t.Fatalf("extend of the live claim after the restore: %v", err)
 	}
 

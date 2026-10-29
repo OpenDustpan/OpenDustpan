@@ -22,6 +22,7 @@ func sweepChainServer(
 
 	return &Server{
 		kind:             kindState{store: nil, principals: nil, kind: ""},
+		instances:        instanceState{store: nil, id: "", version: "", registered: nil},
 		ready:            nil,
 		drainPeriod:      0,
 		tempAdmins:       nil,
@@ -40,7 +41,6 @@ func sweepChainServer(
 		workspaces:       nil,
 		backups:          nil,
 		restores:         nil,
-		restoreRegistry:  nil,
 		now:              nil,
 		registry:         nil,
 		tlsCertFile:      "",

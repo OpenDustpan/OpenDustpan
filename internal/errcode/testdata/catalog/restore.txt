@@ -1,1 +1,3 @@
 restore.blobs-missing
+restore.ended restore:identifier
+restore.swapped restore:identifier

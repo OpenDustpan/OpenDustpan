@@ -157,8 +157,9 @@ type DriftResult struct {
 }
 
 type DurableHeartbeat struct {
-	Owner string
-	AtMs  int64
+	Owner   string
+	AtMs    int64
+	LeaseMs int64
 }
 
 type DurableOperation struct {
@@ -386,6 +387,12 @@ type InstallationSecretKey struct {
 	WrapperID   string
 	Ciphertext  []byte
 	CreatedAtMs int64
+}
+
+type InstanceVersion struct {
+	ID            string
+	BinaryVersion string
+	StartedAtMs   int64
 }
 
 type Inventory struct {
@@ -678,15 +685,17 @@ type RegistryRelease struct {
 }
 
 type Restore struct {
-	ID          string
-	State       string
-	BackupID    string
-	PreBackupID string
-	RequestedBy string
-	StartedAtMs int64
-	EndedAtMs   int64
-	Error       string
-	DevReport   string
+	ID                 string
+	State              string
+	BackupID           string
+	PreBackupID        string
+	RequestedBy        string
+	StartedAtMs        int64
+	EndedAtMs          int64
+	Error              string
+	DevReport          string
+	MaintenanceEntered int64
+	AuditEvents        string
 }
 
 type Role struct {

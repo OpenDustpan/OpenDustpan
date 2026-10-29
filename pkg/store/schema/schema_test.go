@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -281,5 +282,77 @@ func TestCheckBaseline(t *testing.T) {
 		"no binary can upgrade this database. Start the server on an empty database"
 	if before.Error() != want {
 		t.Fatalf("message = %q, want %q", before.Error(), want)
+	}
+}
+
+func TestCheckMinimums(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		minimums []string
+		binary   string
+		want     error
+		wantMin  string
+	}{
+		{name: "none", minimums: nil, binary: "v0.1.0", want: nil, wantMin: ""},
+		{name: "empty entries", minimums: []string{"", ""}, binary: "v0.1.0", want: nil, wantMin: ""},
+		{name: "at the highest", minimums: []string{"v0.2.0", "v0.5.0"}, binary: "v0.5.0", want: nil, wantMin: ""},
+		{
+			name: "below the highest", minimums: []string{"v0.5.0", "v0.2.0"}, binary: "v0.4.0",
+			want: schema.ErrBinaryBelowMinimum, wantMin: "v0.5.0",
+		},
+		{
+			name: "numeric order, not text order", minimums: []string{"v0.9.0", "v0.10.0"}, binary: "v0.9.5",
+			want: schema.ErrBinaryBelowMinimum, wantMin: "v0.10.0",
+		},
+		{name: "dev passes", minimums: []string{"v9.0.0"}, binary: "dev", want: nil, wantMin: ""},
+		{name: "bad minimum", minimums: []string{"latest"}, binary: "v1.0.0", want: schema.ErrBadMinimum, wantMin: ""},
+		{
+			name:     "bad binary",
+			minimums: []string{"v0.1.0"},
+			binary:   "1.x",
+			want:     schema.ErrBadBinaryVersion,
+			wantMin:  "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := schema.CheckMinimums(tc.minimums, tc.binary)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("CheckMinimums(%v, %q) = %v, want %v", tc.minimums, tc.binary, err, tc.want)
+			}
+
+			if tc.wantMin == "" {
+				return
+			}
+
+			below, ok := errors.AsType[*schema.MinimumError](err)
+			if !ok || below.SchemaMinimum != tc.wantMin || below.BinaryVersion != tc.binary {
+				t.Fatalf("error = %+v, want a MinimumError that names %s and %s", below, tc.wantMin, tc.binary)
+			}
+		})
+	}
+}
+
+func TestInstancesBelowMinimumErrorNamesTheRows(t *testing.T) {
+	t.Parallel()
+
+	err := error(&schema.InstancesBelowMinimumError{
+		Migration: "0200_contract.sql", Minimum: "v0.5.0",
+		Instances: []schema.InstanceRow{{ID: "i-1", BinaryVersion: "v0.4.0"}, {ID: "i-2", BinaryVersion: "v0.3.0"}},
+	})
+
+	if !errors.Is(err, schema.ErrInstancesBelowMinimum) {
+		t.Fatalf("errors.Is(%v, ErrInstancesBelowMinimum) = false, want true", err)
+	}
+
+	for _, want := range []string{"0200_contract.sql", "v0.5.0", "i-1 (v0.4.0)", "i-2 (v0.3.0)", "DELETE /api/server/instances"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
 	}
 }

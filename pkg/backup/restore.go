@@ -185,36 +185,6 @@ func portableOpener(ctx context.Context, target blob.Store, id ID) PortableOpene
 	}
 }
 
-// copyRestoreBlob streams one blob from the target into the destination.
-func copyRestoreBlob(ctx context.Context, target, dest blob.Store, ref ManifestBlob) error {
-	source, err := blob.ParseKey("blobs/" + ref.Key)
-	if err != nil {
-		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
-	}
-
-	reader, err := target.Get(ctx, source)
-	if err != nil {
-		if isNotFound(err) {
-			return &MissingObjectError{Key: source}
-		}
-
-		return fmt.Errorf("read backup object %q: %w", source, err)
-	}
-
-	putErr := putRestoreBlob(ctx, dest, ref, reader)
-	closeErr := reader.Close()
-
-	if putErr != nil {
-		return putErr
-	}
-
-	if closeErr != nil {
-		return fmt.Errorf("close backup object %q: %w", source, closeErr)
-	}
-
-	return nil
-}
-
 // putRestoreBlob Puts the bytes of reader under the key of ref while the
 // object check hashes them with MD5 and counts them. On a mismatch it deletes
 // the copied object.

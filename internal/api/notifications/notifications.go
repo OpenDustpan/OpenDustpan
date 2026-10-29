@@ -144,6 +144,13 @@ func sinkErrors(err error) (problem.Problem, bool) {
 	}
 
 	switch {
+	case errors.Is(err, sinks.ErrLimitUnavailable):
+		// The text names no cause: the cause is a database error.
+		return problem.New(
+			http.StatusServiceUnavailable,
+			errcode.SinkTestLimitUnavailable,
+			"the server cannot count the tests of notification destinations: try again later",
+		), true
 	case errors.Is(err, notify.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.SinkNotFound, "notification destination not found"), true
 	case errors.Is(err, notify.ErrConflict):

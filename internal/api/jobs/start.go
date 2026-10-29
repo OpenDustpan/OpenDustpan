@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
@@ -95,6 +96,13 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 
 	req, err := h.startRequest(r, t, body, key)
 	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// A start inserts a durable operation, and only a worker runs it.
+	if err = admit.Start(ctx, h.workers); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

@@ -74,9 +74,10 @@ when the blob can be named by a snapshot that was taken before the delete.
 | 11 | Item key cleanup | `pkg/secret/itemsealer.go`, through `ItemKeyBlobs.Delete` | The key blob of a seal whose SQL write failed | Seal | No: no committed row names it |
 | 12 | Other stores | `pkg/job/artifactblobs.go` (`DeletePlanPart`), `internal/registry/service/publish.go`, `internal/unitimport/upload/upload.go` | Plan parts, registry objects, import uploads | Various | No: a snapshot does not name these blobs |
 | 13 | Backup and restore | `pkg/backup/service.go` (`clearPartial`, `copyPlainBlob`), `pkg/backup/restore.go` (`putRestoreBlob`) | Objects in a backup target, or a bad copy that the restore just wrote | Backup, restore | No: not a live blob that a snapshot names |
+| 14 | Restore as a durable operation | `pkg/backup/restore_operation.go`: the steps `copy-blobs`, `after-apply` and `cleanup` | No live key. It writes live keys with bytes that it checked first, and deletes only its temporary keys and its staging areas. It counts as running for the guard: while its row is checking or applying, rows 1 to 8 wait. | Restore | Yes, as a running party of the guard (amendment of 2026-10-27, below) |
 
 Rows 1 to 8 need the guard. Rows 9 to 13 do not, for the reason in the last
-column.
+column. Row 14 deletes no live key, but the guard must count it as running.
 
 A new deleter must be added to this table, and the conformance tests below
 must cover it.
@@ -628,3 +629,33 @@ Accepted on 2026-10-27 by the project owner: option 3, as the proposal
 gives it. The decision is in
 [ADR 280](../adr/0280-milestone-7-high-availability-on-one-database.md),
 decision 7. The open questions above are not decided.
+
+## Amendment of 2026-10-27: a restore counts as running
+
+The design of the restore as a durable operation (milestone 7, work item W1)
+adds row 14. A restore copies the blobs of the backup into the live store
+before its swap, and the swap brings back rows that name them. A deleter that
+read the guard before the restore, and stalls, can then delete a blob that
+the restored data names. Neither order argument of the proof above applies,
+because the restored snapshot has no order relative to the commit of the
+deleter.
+
+So the guard port answers "running" for a running backup **or a running
+restore**: a restores row that is checking or applying. It is the same small
+port and one more read of the same registry. This answers open question 1
+for the restore: a restore counts as running.
+
+The restore also follows these rules, because the blob store can lack
+conditional writes:
+
+- It checks the bytes of the backup before any write to a live key, through
+  a temporary key of the restore and the claim token.
+- It never deletes a live key. A failed check deletes only the temporary key.
+- After the swap, and before it leaves maintenance mode, it checks that each
+  blob that the restored data names exists, and copies a missing one again
+  from the backup.
+
+One window stays open: a deleter that read the guard before the restore
+started, and stalls past the check after the swap, can still delete a blob
+that the restored data names. The conformance tests of the restore cover a
+deleter in flight across the restore.

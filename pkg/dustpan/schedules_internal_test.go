@@ -135,6 +135,7 @@ func checkTickKeysOnce(t *testing.T, srv *Server, kind durable.Kind) {
 func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
 		kind:             kindState{store: nil, principals: nil, kind: ""},
+		instances:        instanceState{store: nil, id: "", version: "", registered: nil},
 		ready:            nil,
 		drainPeriod:      0,
 		tempAdmins:       nil,
@@ -153,7 +154,6 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		workspaces:       nil,
 		backups:          nil,
 		restores:         nil,
-		restoreRegistry:  nil,
 		now:              nil,
 		registry:         nil,
 		tlsCertFile:      "",

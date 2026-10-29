@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // errorAnswer is one error and the answer that the adapter gives for it.
@@ -94,6 +95,13 @@ func TestLayerErrorsCarryACode(t *testing.T) {
 			"maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable,
 			errcode.MaintenanceInMaintenance, nil,
 		},
+		{
+			"binary below the minimum",
+			&schema.MinimumError{SchemaMinimum: "v0.5.0", BinaryVersion: "v0.4.0"},
+			http.StatusServiceUnavailable,
+			errcode.SchemaBinaryBelowMinimum,
+			map[string]any{"binaryVersion": "v0.4.0", "minimumVersion": "v0.5.0"},
+		},
 		{"unknown", errUnknown, http.StatusInternalServerError, errcode.ServerInternal, nil},
 	})
 }
@@ -153,5 +161,24 @@ func TestBodyRefusalsCarryACode(t *testing.T) {
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
 				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: []byte(tc.body)})
 		})
+	}
+}
+
+// TestBelowMinimumNamesBothVersions proves that the answer to a write that a
+// binary below the minimum made names both versions, as the Pulumi CLI shows
+// the message to the user.
+func TestBelowMinimumNamesBothVersions(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/user", http.NoBody)
+
+	pulumi.WriteError(rec, req, fmt.Errorf("operation: %w",
+		&schema.MinimumError{SchemaMinimum: "v0.5.0", BinaryVersion: "v0.4.0"}))
+
+	for _, want := range []string{"v0.4.0", "v0.5.0"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("body %s does not name %s", rec.Body.String(), want)
+		}
 	}
 }

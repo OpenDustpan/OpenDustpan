@@ -87,6 +87,7 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 		Units:          cfg.inventoryReader,
 		Store:          cfg.triggerStore,
 		Manager:        manager,
+		Workers:        cfg.watch,
 		Authenticator:  cfg.authenticator,
 		Authorizer:     cfg.authorizer,
 		Audit:          ports.entries,

@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -87,7 +88,16 @@ func newSinksHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
 	}
 
+	// The limits of the test route count in the database that the instances
+	// share. A store that keeps no counter cannot hold them across instances,
+	// so the server refuses to build the route.
+	counter, ok := cfg.namespaceStore.(authgate.FailureCounter)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no shared count for the limits of tests: %w", ErrMissingOption)
+	}
+
 	service, err := sinks.NewService(sinks.Config{
+		Counter:    counter,
 		Store:      cfg.sinks.store,
 		Sealer:     notify.SinkSealer{Namespaces: svc.secrets, Installation: nil},
 		Namespaces: svc.namespaces,

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
@@ -87,6 +88,14 @@ func (h *Handler) startCheck(w http.ResponseWriter, r *http.Request, p identity.
 	}
 
 	req := checkRequest(r, t, body)
+	// A check starts a job, which inserts a durable operation that only a
+	// worker runs.
+	if err = admit.Start(ctx, h.workers); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	actor := job.Actor{Principal: p, Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{}}
 
 	id, err := h.checker.Check(ctx, actor, req)

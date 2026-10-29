@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -920,35 +922,6 @@ func TestItemKeyBackupRestore(t *testing.T) {
 	})
 }
 
-// restoreAuditMaintenance enters and leaves maintenance mode in the stored
-// installation state, as the maintenance service does for a restore: the
-// restore then runs with the real state check, and the audit entry after the
-// swap must pass it.
-type restoreAuditMaintenance struct {
-	state maintenance.Store
-}
-
-// Enter implements backup.RestoreMaintenance.
-func (m restoreAuditMaintenance) Enter(
-	ctx context.Context, _ bool,
-) (maintenance.EnterResult, error) {
-	err := m.state.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance)
-	if err != nil {
-		return maintenance.EnterResult{Canceled: nil}, fmt.Errorf("enter maintenance mode: %w", err)
-	}
-
-	return maintenance.EnterResult{Canceled: nil}, nil
-}
-
-// Leave implements backup.RestoreMaintenance.
-func (m restoreAuditMaintenance) Leave(ctx context.Context) error {
-	if err := m.state.SetState(ctx, maintenance.StateNormal); err != nil {
-		return fmt.Errorf("leave maintenance mode: %w", err)
-	}
-
-	return nil
-}
-
 // TestRestoreLeavesAuditEntryAfterSwap proves a restore that runs through the
 // swap leaves the restore audit entry, with the access mode, in the restored
 // audit log: an entry written before the swap would go away with the old
@@ -1081,9 +1054,9 @@ func newRestoreAuditServices(
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:         st,
-		Registry:     st,
+		Operations:   st.DurableOperationsPort(),
 		Backups:      backups,
-		Maintenance:  restoreAuditMaintenance{state: st},
+		Maintenance:  storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:        live,
 		Target:       target,
 		Key:          key,
@@ -1093,6 +1066,10 @@ func newRestoreAuditServices(
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",
+		Owner:           "",
+		Lease:           0,
+		CleanupLockWait: 0,
+		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
 	})
@@ -1128,6 +1105,12 @@ func waitRestoreSucceeded(t *testing.T, restores *backup.RestoreService, id back
 
 		if time.Now().After(deadline) {
 			t.Fatalf("restore %s never succeeded", id)
+		}
+
+		// No worker runs in this test: the wait runs the due step, as a
+		// worker does.
+		if runErr := restores.RunOnce(ctx); runErr != nil && !errors.Is(runErr, durable.ErrNoWork) {
+			t.Logf("run a restore operation: %v", runErr)
 		}
 
 		select {
@@ -1206,6 +1189,35 @@ func openBackup(t *testing.T, base string) *backupStore {
 
 	return &backupStore{Store: s, url: schemaURL, t: t}
 }
+
+// DropRestoreArea implements storetest.RestoreAreaDropper: it drops the
+// staging schema of a, as the cleanup of the store does, with no record.
+func (s *backupStore) DropRestoreArea(ctx context.Context, a backup.StagingArea) error {
+	if _, err := backup.NewStagingArea(a.Restore, a.Token); err != nil {
+		return err
+	}
+
+	area := "restore_stage_" + strings.TrimPrefix(a.Restore.String(), "rst-") + "_" + strconv.FormatInt(a.Token, 10)
+
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			s.t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, err := conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{area}.Sanitize()+" CASCADE"); err != nil {
+		return fmt.Errorf("drop schema %s: %w", area, err)
+	}
+
+	return nil
+}
+
+var _ storetest.RestoreAreaDropper = (*backupStore)(nil)
 
 // Close implements storetest.Reopener: it releases the pool. Closing twice is
 // safe, so the cleanup above stays.

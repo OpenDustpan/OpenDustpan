@@ -131,6 +131,7 @@ func api(name string, bodies, skip []string) errcodetest.Adapter {
 // each subdirectory of a gated adapter, and why.
 func ungated() map[string]string {
 	return map[string]string{
+		"admit":         "a helper of the adapters; its error reaches the error writer of each adapter",
 		"apidesc":       "the API description; it writes no error answer",
 		"auditrequired": "a helper of the adapters; it writes no error answer",
 		"idempotent":    "a helper of the adapters; its errors reach the error writer of each adapter",

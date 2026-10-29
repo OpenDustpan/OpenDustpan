@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -49,7 +50,10 @@ type Config struct {
 	Results drift.Store
 	// Checker starts the drift checks. Nil serves the read route only: a
 	// server that lacks a port of the job service starts no job.
-	Checker       drift.Checker
+	Checker drift.Checker
+	// Workers tells the start of a durable operation whether a worker runs.
+	// Nil admits every start.
+	Workers       admit.Source
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses.
@@ -73,6 +77,7 @@ type Handler struct {
 	units      coreinventory.Reader
 	results    drift.Store
 	checker    drift.Checker
+	workers    admit.Source
 	authn      identity.Authenticator
 	sessions   *sessionauth.Checker
 	guard      *refusal.Recorder
@@ -111,6 +116,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		units:      cfg.Units,
 		results:    cfg.Results,
 		checker:    cfg.Checker,
+		workers:    cfg.Workers,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("drift"),

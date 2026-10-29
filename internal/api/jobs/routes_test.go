@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
@@ -232,7 +233,22 @@ func newStartHandler(
 ) testHandler {
 	t.Helper()
 
+	return newWorkerHandler(t, authz, handlerDeps{jobs: jobs, starter: starter, entries: entries}, nil)
+}
+
+// handlerDeps are the stores and services behind a test handler.
+type handlerDeps struct {
+	jobs    job.Store
+	starter job.Starter
+	entries audit.Store
+}
+
+// newWorkerHandler is newStartHandler with the worker check of the start.
+func newWorkerHandler(t *testing.T, authz identity.Authorizer, deps handlerDeps, workers admit.Source) testHandler {
+	t.Helper()
+
 	// The handler needs an audit store; a test that reads the entries passes its own.
+	entries := deps.entries
 	if entries == nil {
 		entries = newTestAudit()
 	}
@@ -246,8 +262,9 @@ func newStartHandler(
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
-		Jobs:           jobs,
-		Starter:        starter,
+		Jobs:           deps.jobs,
+		Starter:        deps.starter,
+		Workers:        workers,
 		Pools:          nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
@@ -771,6 +788,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		Namespaces:     nil,
 		Jobs:           nil,
 		Starter:        nil,
+		Workers:        nil,
 		Pools:          nil,
 		Authenticator:  nil,
 		Authorizer:     nil,
