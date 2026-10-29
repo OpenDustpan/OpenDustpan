@@ -19,6 +19,7 @@ make bench-s3
 
 `scripts/bench-s3.sh` starts four containers on a private Docker network.
 It publishes their ports on 127.0.0.1 only.
+The Toxiproxy API has no authentication. The script publishes it on 127.0.0.1 only, so only a process on the host can change the proxies.
 It writes throwaway credentials to a temporary directory with mode 0700 and deletes the directory, the containers and the network at the end.
 The results go to `bench-s3-out/`: `results.json`, `results.md`, `images.txt`, and one report and one log of the load harness for each step in `load/`.
 
@@ -156,6 +157,7 @@ The two modes took turns, one write each.
 | intercontinental | Garage | 156.6 / 171.2 | 155.9 / 166.3 | 172.5 / 183.0 | 172.0 / 185.0 | 1420 / 1497 | 1500 / 1519 |
 
 The samples were 100 for 10 KiB, 50 for 1 MiB and 8 for 100 MiB.
+The 100 MiB rows have 8 samples only. Their differences between the two modes are within the noise of the run, in both directions.
 The `blob/s3` adapter adds its local staging and hash to each write: about 5 ms for 1 MiB and 400 to 1,000 ms for 100 MiB.
 `results.md` of a run holds the adapter column.
 

@@ -4,7 +4,7 @@
 # It starts MinIO, Garage, PostgreSQL 18 and Toxiproxy as containers pinned
 # by digest on a private Docker network, writes throwaway credentials to a
 # private temporary directory, builds the load harness, and runs
-# go run ./load/s3bench. It removes the containers, the network and the
+# cmd/s3bench. It removes the containers, the network and the
 # credentials at the end, also after a failure.
 #
 # MinIO enforces If-None-Match on PUT. Garage ignores it. Toxiproxy sits
@@ -13,7 +13,7 @@
 #
 # Environment:
 #   BENCH_S3_OUT    output directory (default bench-s3-out)
-#   BENCH_S3_ARGS   extra arguments for load/s3bench, for example
+#   BENCH_S3_ARGS   extra arguments for cmd/s3bench, for example
 #                   "-quick" or "-profiles eu-metro -limits"
 #   BENCH_S3_NAME   name prefix of the containers and the network
 #                   (default odp-bench-s3)
@@ -21,7 +21,8 @@
 #                   and the next three (MinIO, Garage, PostgreSQL)
 #                   (default 18474)
 #
-# Docker must run. The script publishes ports on 127.0.0.1 only.
+# Docker must run. The script publishes ports on 127.0.0.1 only. The
+# Toxiproxy API has no authentication, so it must stay on 127.0.0.1.
 set -euo pipefail
 
 # Images, pinned by digest. MinIO no longer publishes images to Docker Hub
@@ -202,7 +203,7 @@ COMMON=(
 )
 
 bench() {
-	"$WORK/s3bench" "$1" "${COMMON[@]}" "${EXTRA_ARGS[@]}" "${@:2}"
+	"$WORK/s3bench" "$1" "${COMMON[@]}" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} "${@:2}"
 }
 
 # run_load runs the blob flows of the load harness for one step on one
