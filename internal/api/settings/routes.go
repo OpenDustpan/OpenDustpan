@@ -131,11 +131,11 @@ func slicesConcat(lists ...[]identity.Action) []identity.Action {
 // callers cannot mutate handler state through the result.
 func (h *Handler) Routes() []Route {
 	out := make([]Route, len(h.routes))
-	for i, route := range h.routes {
-		out[i] = route
-		out[i].Reads = append([]identity.Action(nil), route.Reads...)
-		out[i].Actions = append([]identity.Action(nil), route.Actions...)
-		out[i].Extra = append([]identity.Action(nil), route.Extra...)
+	for i := range h.routes {
+		out[i] = h.routes[i]
+		out[i].Reads = append([]identity.Action(nil), h.routes[i].Reads...)
+		out[i].Actions = append([]identity.Action(nil), h.routes[i].Actions...)
+		out[i].Extra = append([]identity.Action(nil), h.routes[i].Extra...)
 	}
 
 	return out

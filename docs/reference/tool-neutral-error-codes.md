@@ -7,7 +7,8 @@ The text of `message` can change.
 
 This page lists the codes that all tool-neutral APIs share, and the codes of
 the inventory API, the context API and the audit API. The pages of the
-notification destinations API and the profiles API list their own codes.
+notification destinations API, the profiles API and the
+[unit settings API](unit-settings-api.md) list their own codes.
 
 ## The body
 

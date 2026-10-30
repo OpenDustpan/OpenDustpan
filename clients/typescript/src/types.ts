@@ -1226,7 +1226,6 @@ export interface UnitSettingsSuggestion {
   readonly observedAt: string;
   readonly repository: string;
   readonly source: string;
-  readonly updateId: string;
 }
 
 export interface UnitSettingsSuggestions {

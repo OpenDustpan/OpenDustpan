@@ -153,18 +153,43 @@ const (
 	unitBulkPath     = "/api/dustpan/v1/namespaces/" + refusalNamespace + "/unit-settings/bulk-put"
 )
 
-func (fx *unitSettingsFixture) step(
-	ctx context.Context, t *testing.T, token string, spec e2e.APIStepSpec, headers map[string]string,
-) {
-	t.Helper()
-
-	spec.UserAgent = unitSettingsAgent
-	spec.Scheme = "token"
-
-	fx.env.APIStepWithHeadersAs(ctx, t, token, spec, headers)
+// unitStep is one request of the scenario.
+type unitStep struct {
+	name, method, path, body string
+	want                     int
+	check                    func(string) error
+	version                  string
 }
 
-func ifMatchHeader(version string) map[string]string { return map[string]string{"If-Match": version} }
+// readStep is a GET.
+func readStep(name, path string, want int, check func(string) error) unitStep {
+	return unitStep{name: name, method: http.MethodGet, path: path, body: "", want: want, check: check, version: ""}
+}
+
+// sending returns the step as a request with a body and the version that the
+// caller read. An empty version sends no If-Match header.
+func (s unitStep) sending(method, body, version string) unitStep {
+	s.method = method
+	s.body = body
+	s.version = version
+
+	return s
+}
+
+// run sends the step with the token of a person.
+func (fx *unitSettingsFixture) run(ctx context.Context, t *testing.T, token string, s unitStep) {
+	t.Helper()
+
+	var headers map[string]string
+	if s.version != "" {
+		headers = map[string]string{"If-Match": s.version}
+	}
+
+	fx.env.APIStepWithHeadersAs(ctx, t, token, e2e.APIStepSpec{
+		UserAgent: unitSettingsAgent, Name: s.name, Method: s.method, Path: s.path, Body: s.body, Want: s.want,
+		Scheme: "token", Check: s.check,
+	}, headers)
+}
 
 // checkOrigins checks the version and the origin of the fields of a document.
 func checkOrigins(version int64, origins map[string]string) func(string) error {
@@ -193,12 +218,10 @@ func checkOrigins(version int64, origins map[string]string) func(string) error {
 func (fx *unitSettingsFixture) readsADefaultView(ctx context.Context, t *testing.T) {
 	t.Helper()
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "read the settings of a unit with no record", Method: http.MethodGet, Path: fx.settings(fx.webID),
-		Want: http.StatusOK, Check: checkOrigins(0, map[string]string{
+	fx.run(ctx, t, fx.admin, readStep("read the settings of a unit with no record", fx.settings(fx.webID),
+		http.StatusOK, checkOrigins(0, map[string]string{
 			"executor": "built-in-default", "directory": "built-in-default", "pool": "built-in-default",
-		}),
-	}, nil)
+		})))
 }
 
 // writesWithTheVersionThatWasRead stores the settings, reads them back with the
@@ -206,39 +229,54 @@ func (fx *unitSettingsFixture) readsADefaultView(ctx context.Context, t *testing
 func (fx *unitSettingsFixture) writesWithTheVersionThatWasRead(ctx context.Context, t *testing.T) {
 	t.Helper()
 
+	path := fx.settings(fx.webID)
 	body := `{"pool":"` + fx.pool + `","codeLocation":{"repository":"acme/infra","ref":"main","directory":"stacks/web"}}`
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "store the settings with the version that was read", Method: http.MethodPut, Path: fx.settings(fx.webID),
-		Body: body, Want: http.StatusOK, Check: checkOrigins(1, map[string]string{
-			"pool": "unit", "repository": "unit", "ref": "unit", "directory": "unit", "executor": "built-in-default",
-		}),
-	}, ifMatchHeader(`"0"`))
-
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "read the stored settings", Method: http.MethodGet, Path: fx.settings(fx.webID), Want: http.StatusOK,
-		Check: checkOrigins(1, map[string]string{"pool": "unit", "repository": "unit"}),
-	}, nil)
-
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "refuse a write with a stale version", Method: http.MethodPut, Path: fx.settings(fx.webID),
-		Body: body, Want: http.StatusPreconditionFailed, Check: inDoc("request.precondition-failed"),
-	}, ifMatchHeader(`"0"`))
-
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "refuse a write with no version", Method: http.MethodPut, Path: fx.settings(fx.webID),
-		Body: body, Want: http.StatusPreconditionRequired, Check: inDoc("request.precondition-required"),
-	}, nil)
-
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "answer the suggestions and set no field", Method: http.MethodGet,
-		Path: fx.settings(fx.webID) + "/suggestions", Want: http.StatusOK, Check: inDoc(`"suggestions"`),
-	}, nil)
-
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "read the settings again after the suggestions", Method: http.MethodGet, Path: fx.settings(fx.webID),
-		Want: http.StatusOK, Check: checkOrigins(1, nil),
-	}, nil)
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"store the settings with the version that was read",
+			path,
+			http.StatusOK,
+			checkOrigins(1, map[string]string{
+				"pool":       "unit",
+				"repository": "unit",
+				"ref":        "unit",
+				"directory":  "unit",
+				"executor":   "built-in-default",
+			}),
+		).sending(http.MethodPut, body, `"0"`),
+	)
+	fx.run(ctx, t, fx.admin, readStep("read the stored settings", path, http.StatusOK,
+		checkOrigins(1, map[string]string{"pool": "unit", "repository": "unit"})))
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"refuse a write with a stale version",
+			path,
+			http.StatusPreconditionFailed,
+			inDoc("request.precondition-failed"),
+		).sending(http.MethodPut, body, `"0"`),
+	)
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"refuse a write with no version",
+			path,
+			http.StatusPreconditionRequired,
+			inDoc("request.precondition-required"),
+		).sending(http.MethodPut, body, ""),
+	)
+	fx.run(ctx, t, fx.admin, readStep("answer the suggestions and set no field", path+"/suggestions",
+		http.StatusOK, inDoc(`"suggestions"`)))
+	fx.run(ctx, t, fx.admin, readStep("read the settings again after the suggestions", path, http.StatusOK,
+		checkOrigins(1, nil)))
 }
 
 // refusesWhatItMust sends the refusals of a viewer, of a person with no grant
@@ -246,37 +284,48 @@ func (fx *unitSettingsFixture) writesWithTheVersionThatWasRead(ctx context.Conte
 func (fx *unitSettingsFixture) refusesWhatItMust(ctx context.Context, t *testing.T) {
 	t.Helper()
 
-	fx.step(ctx, t, fx.viewer, e2e.APIStepSpec{
-		Name: "let a viewer read the settings", Method: http.MethodGet, Path: fx.settings(fx.webID), Want: http.StatusOK,
-	}, nil)
+	path := fx.settings(fx.webID)
 
-	fx.step(ctx, t, fx.viewer, e2e.APIStepSpec{
-		Name: "refuse a write by a viewer", Method: http.MethodPut, Path: fx.settings(fx.webID), Body: `{}`,
-		Want: http.StatusForbidden,
-	}, ifMatchHeader(`"1"`))
-
-	fx.step(ctx, t, fx.outside, e2e.APIStepSpec{
-		Name: "answer not found to a person with no grant", Method: http.MethodGet, Path: fx.settings(fx.webID),
-		Want: http.StatusNotFound, Check: inDoc("unit-settings.not-found"),
-	}, nil)
+	fx.run(ctx, t, fx.viewer, readStep("let a viewer read the settings", path, http.StatusOK, nil))
+	fx.run(
+		ctx,
+		t,
+		fx.viewer,
+		readStep("refuse a write by a viewer", path, http.StatusForbidden, nil).sending(http.MethodPut, `{}`, `"1"`),
+	)
+	fx.run(ctx, t, fx.outside, readStep("answer not found to a person with no grant", path, http.StatusNotFound,
+		inDoc("unit-settings.not-found")))
 
 	for name, body := range map[string]string{
 		"a directory outside the repository": `{"codeLocation":{"directory":"../x"}}`,
 		"a directory in CI configuration":    `{"codeLocation":{"directory":"a/.github/b"}}`,
 		"a ref with a leading dash":          `{"codeLocation":{"ref":"--upload-pack=x"}}`,
-		"a file outside the directory":       `{"writeBack":{"files":["../secrets.yaml"]}}`,
+		"a file outside the directory":       `{"writeBack":{"files":["../other.yaml"]}}`,
 	} {
-		fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-			Name: "refuse " + name, Method: http.MethodPut, Path: fx.settings(fx.webID), Body: body,
-			Want: http.StatusBadRequest, Check: inDoc("unit-settings.invalid"),
-		}, ifMatchHeader(`"1"`))
+		fx.run(
+			ctx,
+			t,
+			fx.admin,
+			readStep(
+				"refuse "+name,
+				path,
+				http.StatusBadRequest,
+				inDoc("unit-settings.invalid"),
+			).sending(http.MethodPut, body, `"1"`),
+		)
 	}
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "refuse a connection that the namespace does not have", Method: http.MethodPut,
-		Path: fx.settings(fx.webID), Body: `{"codeLocation":{"connection":"gitconn-0123456789abcdef0123456789abcdef"}}`,
-		Want: http.StatusUnprocessableEntity, Check: inDoc("unit-settings.connection-unknown"),
-	}, ifMatchHeader(`"1"`))
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"refuse a connection that the namespace does not have",
+			path,
+			http.StatusUnprocessableEntity,
+			inDoc("unit-settings.connection-unknown"),
+		).sending(http.MethodPut, `{"codeLocation":{"connection":"gitconn-0123456789abcdef0123456789abcdef"}}`, `"1"`),
+	)
 }
 
 // setsNamespaceDefaults sets the default pool and reads it as the origin of the
@@ -284,26 +333,43 @@ func (fx *unitSettingsFixture) refusesWhatItMust(ctx context.Context, t *testing
 func (fx *unitSettingsFixture) setsNamespaceDefaults(ctx context.Context, t *testing.T) {
 	t.Helper()
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "read the unit defaults", Method: http.MethodGet, Path: unitDefaultsPath, Want: http.StatusOK,
-		Check: inDoc(`"version":0`),
-	}, nil)
+	fx.run(ctx, t, fx.admin, readStep("read the unit defaults", unitDefaultsPath, http.StatusOK,
+		inDoc(`"version":0`)))
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"set the default pool",
+			unitDefaultsPath,
+			http.StatusOK,
+			inDoc(fx.pool, `"version":1`),
+		).sending(http.MethodPut, `{"pool":"`+fx.pool+`"}`, `"0"`),
+	)
+	fx.run(
+		ctx,
+		t,
+		fx.viewer,
+		readStep(
+			"refuse a change of the defaults by a viewer",
+			unitDefaultsPath,
+			http.StatusForbidden,
+			nil,
+		).sending(http.MethodPut, `{"pool":""}`, `"1"`),
+	)
+	fx.run(ctx, t, fx.admin, readStep("show the default pool as the origin of the pool of a unit",
+		fx.settings(fx.dbID), http.StatusOK, checkOrigins(0, map[string]string{"pool": "namespace-default"})))
+}
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "set the default pool", Method: http.MethodPut, Path: unitDefaultsPath,
-		Body: `{"pool":"` + fx.pool + `"}`, Want: http.StatusOK, Check: inDoc(fx.pool, `"version":1`),
-	}, ifMatchHeader(`"0"`))
+// bulkResultOf is one result of a bulk answer.
+type bulkResultOf struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
 
-	fx.step(ctx, t, fx.viewer, e2e.APIStepSpec{
-		Name: "refuse a change of the defaults by a viewer", Method: http.MethodPut,
-		Path: unitDefaultsPath, Body: `{"pool":""}`, Want: http.StatusForbidden,
-	}, ifMatchHeader(`"1"`))
-
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "show the default pool as the origin of the pool of a unit", Method: http.MethodGet,
-		Path: fx.settings(fx.dbID), Want: http.StatusOK,
-		Check: checkOrigins(0, map[string]string{"pool": "namespace-default"}),
-	}, nil)
+// bulkAnswerOf is the answer of a bulk call.
+type bulkAnswerOf struct {
+	Results []bulkResultOf `json:"results"`
 }
 
 // linksManyUnits applies one body to two units with the bulk call. One item
@@ -313,36 +379,46 @@ func (fx *unitSettingsFixture) linksManyUnits(ctx context.Context, t *testing.T)
 
 	body := fmt.Sprintf(
 		`{"units":[{"id":%q,"version":0},{"id":%q,"version":0}],"settings":{"codeLocation":{"repository":"acme/infra","ref":"main"}}}`,
-		fx.dbID, fx.webID,
+		fx.dbID,
+		fx.webID,
 	)
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "link two units with the bulk call", Method: http.MethodPost, Path: unitBulkPath, Body: body,
-		Want: http.StatusOK, Check: func(res string) error {
-			var out struct {
-				Results []struct {
-					ID     string `json:"id"`
-					Status string `json:"status"`
-				} `json:"results"`
-			}
+	check := func(res string) error {
+		var out bulkAnswerOf
+		if err := json.Unmarshal([]byte(res), &out); err != nil || len(out.Results) != 2 {
+			return fmt.Errorf("%w: %s", errUnitSettingsDoc, res)
+		}
 
-			if err := json.Unmarshal([]byte(res), &out); err != nil || len(out.Results) != 2 {
-				return fmt.Errorf("%w: %s", errUnitSettingsDoc, res)
-			}
+		if out.Results[0].ID != fx.dbID || out.Results[0].Status != "ok" ||
+			out.Results[1].ID != fx.webID || out.Results[1].Status != "error" {
+			return fmt.Errorf("%w: want db ok and web stale: %s", errUnitSettingsDoc, res)
+		}
 
-			if out.Results[0].ID != fx.dbID || out.Results[0].Status != "ok" ||
-				out.Results[1].ID != fx.webID || out.Results[1].Status != "error" {
-				return fmt.Errorf("%w: want db ok and web stale: %s", errUnitSettingsDoc, res)
-			}
+		return nil
+	}
 
-			return nil
-		},
-	}, nil)
-
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "refuse a bulk call with no unit", Method: http.MethodPost, Path: unitBulkPath,
-		Body: `{"units":[],"settings":{}}`, Want: http.StatusBadRequest, Check: inDoc("unit-settings.bulk-size"),
-	}, nil)
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"link two units with the bulk call",
+			unitBulkPath,
+			http.StatusOK,
+			check,
+		).sending(http.MethodPost, body, ""),
+	)
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"refuse a bulk call with no unit",
+			unitBulkPath,
+			http.StatusBadRequest,
+			inDoc("unit-settings.bulk-size"),
+		).sending(http.MethodPost, `{"units":[],"settings":{}}`, ""),
+	)
 }
 
 // resetsAndAudits resets a unit to the defaults and reads the audit entries of
@@ -350,20 +426,22 @@ func (fx *unitSettingsFixture) linksManyUnits(ctx context.Context, t *testing.T)
 func (fx *unitSettingsFixture) resetsAndAudits(ctx context.Context, t *testing.T) {
 	t.Helper()
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "reset the settings of a unit", Method: http.MethodDelete, Path: fx.settings(fx.webID),
-		Want: http.StatusNoContent,
-	}, ifMatchHeader(`"1"`))
+	path := fx.settings(fx.webID)
 
-	fx.step(ctx, t, fx.admin, e2e.APIStepSpec{
-		Name: "read the reset settings", Method: http.MethodGet, Path: fx.settings(fx.webID), Want: http.StatusOK,
-		Check: checkOrigins(0, map[string]string{"repository": "built-in-default"}),
-	}, nil)
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep("reset the settings of a unit", path, http.StatusNoContent, nil).sending(http.MethodDelete, "", `"1"`),
+	)
+	fx.run(ctx, t, fx.admin, readStep("read the reset settings", path, http.StatusOK,
+		checkOrigins(0, map[string]string{"repository": "built-in-default"})))
 
 	var changed, reset, defaults int
 
-	for _, e := range readAuditEntries(ctx, t, fx.env, refusalNamespace) {
-		switch e.Action {
+	entries := readAuditEntries(ctx, t, fx.env, refusalNamespace)
+	for i := range entries {
+		switch entries[i].Action {
 		case "unit-settings-changed":
 			changed++
 		case "unit-settings-reset":

@@ -50,7 +50,9 @@ func (h *Handler) resolveNamespace(r *http.Request) (target, error) {
 		return target{}, err
 	}
 
-	return target{ns: ns, unit: coreinventory.Entry{}, obj: identity.NamespaceObject(ns.Name)}, nil
+	var none coreinventory.Entry
+
+	return target{ns: ns, unit: none, obj: identity.NamespaceObject(ns.Name)}, nil
 }
 
 // resolveUnit finds the live unit with the unit ID of the path in the namespace

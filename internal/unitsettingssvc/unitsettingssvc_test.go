@@ -40,13 +40,13 @@ func newRig(t *testing.T, withDefaultConn bool) *rig {
 	}
 
 	conns := memConnections{records: []forge.ConnectionRecord{
-		{Namespace: ns, ID: connRW, Push: true, Default: withDefaultConn},
-		{Namespace: ns, ID: connRO, Push: false},
+		connection(ns, connRW, true, withDefaultConn),
+		connection(ns, connRO, false, false),
 	}}
 	pools := memPools{pools: []runner.Pool{
-		{ID: poolJobs, Namespace: ns, Purpose: runner.PurposeJobs},
-		{ID: poolSwp, Namespace: ns, Purpose: runner.PurposeSweeps},
-		{ID: poolFar, Namespace: "beta", Purpose: runner.PurposeJobs},
+		pool(poolJobs, ns, runner.PurposeJobs),
+		pool(poolSwp, ns, runner.PurposeSweeps),
+		pool(poolFar, "beta", runner.PurposeJobs),
 	}}
 	store := newMemStore()
 
@@ -61,13 +61,22 @@ func newRig(t *testing.T, withDefaultConn bool) *rig {
 }
 
 func entry() audit.Entry {
-	return audit.Entry{Subject: "ada", Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, Channel: audit.ChannelAPI}
+	return audit.Entry{
+		At: time.Time{}, Namespace: "", Subject: "ada", IDPSubject: "", TokenID: "", Action: "", Object: "",
+		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
+		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+	}
+}
+
+func emptyConfig() unitsettingssvc.Config {
+	return unitsettingssvc.Config{Store: nil, Fences: nil, Connections: nil, Pools: nil, Now: nil}
 }
 
 func TestNewNeedsEveryDependency(t *testing.T) {
 	t.Parallel()
 
-	if _, err := unitsettingssvc.New(unitsettingssvc.Config{}); !errors.Is(err, unitsettingssvc.ErrMissingDependency) {
+	if _, err := unitsettingssvc.New(emptyConfig()); !errors.Is(err, unitsettingssvc.ErrMissingDependency) {
 		t.Fatalf("New = %v, want ErrMissingDependency", err)
 	}
 }
@@ -123,7 +132,9 @@ func TestPutStampsTheEntryAndTheFence(t *testing.T) {
 	t.Parallel()
 
 	r := newRig(t, true)
-	s := unitsettings.Settings{Unit: r.unit, CodeLocation: unitsettings.CodeLocation{Repository: "acme/infra", Ref: "main"}}
+	s := settingsFor(r.unit)
+	s.CodeLocation.Repository = "acme/infra"
+	s.CodeLocation.Ref = "main"
 
 	view, err := r.svc.Put(t.Context(), &s, 0, entry())
 	if err != nil {
@@ -166,8 +177,16 @@ func TestPutRefusesWhatThePlannerCouldNotUse(t *testing.T) {
 		}, unitsettingssvc.ErrConnectionLacksCapability},
 		{"unknown pool", func(s *unitsettings.Settings) { s.Pool = "rp-nope" }, unitsettingssvc.ErrPoolUnknown},
 		{"pool for sweeps", func(s *unitsettings.Settings) { s.Pool = poolSwp }, unitsettingssvc.ErrPoolUnknown},
-		{"pool of another namespace", func(s *unitsettings.Settings) { s.Pool = poolFar }, unitsettingssvc.ErrPoolUnknown},
-		{"invalid directory", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "../x" }, unitsettings.ErrInvalid},
+		{
+			"pool of another namespace",
+			func(s *unitsettings.Settings) { s.Pool = poolFar },
+			unitsettingssvc.ErrPoolUnknown,
+		},
+		{
+			"invalid directory",
+			func(s *unitsettings.Settings) { s.CodeLocation.Directory = "../x" },
+			unitsettings.ErrInvalid,
+		},
 	}
 
 	for _, tc := range cases {
@@ -175,7 +194,7 @@ func TestPutRefusesWhatThePlannerCouldNotUse(t *testing.T) {
 			t.Parallel()
 
 			r := newRig(t, true)
-			s := unitsettings.Settings{Unit: r.unit}
+			s := settingsFor(r.unit)
 			tc.mutate(&s)
 
 			if _, err := r.svc.Put(t.Context(), &s, 0, entry()); !errors.Is(err, tc.want) {
@@ -193,13 +212,18 @@ func TestPutAcceptsAReadWriteConnectionForWriteBack(t *testing.T) {
 	t.Parallel()
 
 	r := newRig(t, false)
-	s := unitsettings.Settings{Unit: r.unit, Executor: job.ExecutorWriteBack}
+	s := settingsFor(r.unit)
+	s.Executor = job.ExecutorWriteBack
 	s.CodeLocation.Connection = connRW
 	s.ReviewRequests.Enabled = true
 
 	if _, err := r.svc.Put(t.Context(), &s, 0, entry()); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
+}
+
+func needs(connection string, steps bool) unitsettingssvc.Needs {
+	return unitsettingssvc.Needs{Connection: connection, Steps: steps}
 }
 
 func TestNeedsOf(t *testing.T) {
@@ -212,27 +236,36 @@ func TestNeedsOf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	step := job.Step{Name: "x", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu"}}
+	step := job.Step{
+		Name: "x", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu"}, Env: nil, Dir: "", Timeout: 0,
+		AllowFailure: false, ChangesResources: false, Outputs: nil,
+	}
 
 	cases := []struct {
 		name   string
 		mutate func(s *unitsettings.Settings)
 		want   unitsettingssvc.Needs
 	}{
-		{"nothing new", func(*unitsettings.Settings) {}, unitsettingssvc.Needs{}},
-		{"names a connection", func(s *unitsettings.Settings) { s.CodeLocation.Connection = connRO },
-			unitsettingssvc.Needs{Connection: connRO}},
-		{"names the default connection", func(s *unitsettings.Settings) { s.CodeLocation.Connection = connRW },
-			unitsettingssvc.Needs{Connection: connRW}},
-		{"changes the steps", func(s *unitsettings.Settings) { s.Steps = []job.Step{step} },
-			unitsettingssvc.Needs{Steps: true}},
+		{"nothing new", func(*unitsettings.Settings) {}, needs("", false)},
+		{
+			"names a connection", func(s *unitsettings.Settings) { s.CodeLocation.Connection = connRO },
+			needs(connRO, false),
+		},
+		{
+			"names the default connection", func(s *unitsettings.Settings) { s.CodeLocation.Connection = connRW },
+			needs(connRW, false),
+		},
+		{
+			"changes the steps", func(s *unitsettings.Settings) { s.Steps = []job.Step{step} },
+			needs("", true),
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := unitsettings.Settings{Unit: r.unit}
+			s := settingsFor(r.unit)
 			tc.mutate(&s)
 
 			if got := unitsettingssvc.NeedsOf(&cur, &s); got != tc.want {
@@ -246,7 +279,7 @@ func TestNeedsOfDropsToTheDefaultConnection(t *testing.T) {
 	t.Parallel()
 
 	r := newRig(t, true)
-	s := unitsettings.Settings{Unit: r.unit}
+	s := settingsFor(r.unit)
 	s.CodeLocation.Connection = connRO
 
 	view, err := r.svc.Put(t.Context(), &s, 0, entry())
@@ -256,7 +289,7 @@ func TestNeedsOfDropsToTheDefaultConnection(t *testing.T) {
 
 	// A write that clears the named connection moves the effective connection
 	// to the default one, which is a new connection for the unit.
-	next := unitsettings.Settings{Unit: r.unit}
+	next := settingsFor(r.unit)
 	if got := unitsettingssvc.NeedsOf(&view, &next); got.Connection != connRW {
 		t.Fatalf("NeedsOf = %+v, want the default connection", got)
 	}
@@ -266,7 +299,8 @@ func TestResetAndDefaults(t *testing.T) {
 	t.Parallel()
 
 	r := newRig(t, true)
-	s := unitsettings.Settings{Unit: r.unit, Pool: poolJobs}
+	s := settingsFor(r.unit)
+	s.Pool = poolJobs
 
 	if _, err := r.svc.Put(t.Context(), &s, 0, entry()); err != nil {
 		t.Fatal(err)
@@ -281,12 +315,14 @@ func TestResetAndDefaults(t *testing.T) {
 		t.Fatalf("SetDefaults = %+v, %v", d, err)
 	}
 
-	if _, err := r.svc.SetDefaults(t.Context(), "acme", poolSwp, 1, entry()); !errors.Is(err, unitsettingssvc.ErrPoolUnknown) {
+	_, err = r.svc.SetDefaults(t.Context(), "acme", poolSwp, 1, entry())
+	if !errors.Is(err, unitsettingssvc.ErrPoolUnknown) {
 		t.Fatalf("SetDefaults of a sweeps pool = %v, want ErrPoolUnknown", err)
 	}
 
 	view, err := r.svc.Read(t.Context(), r.unit)
-	if err != nil || view.Effective.Pool.Value != poolJobs || view.Effective.Pool.Origin != unitsettings.OriginNamespaceDefault {
+	if err != nil || view.Effective.Pool.Value != poolJobs ||
+		view.Effective.Pool.Origin != unitsettings.OriginNamespaceDefault {
 		t.Fatalf("Read = %+v, %v, want the pool from the namespace default", view, err)
 	}
 }
@@ -294,11 +330,17 @@ func TestResetAndDefaults(t *testing.T) {
 func TestCapabilitiesFollowThePushFlag(t *testing.T) {
 	t.Parallel()
 
-	if c := unitsettingssvc.Capabilities(&forge.ConnectionRecord{Push: false}); c.Has(forge.CapCommit) || c.Has(forge.CapReview) {
+	if c := unitsettingssvc.Capabilities(recordPtr(false)); c.Has(forge.CapCommit) || c.Has(forge.CapReview) {
 		t.Fatalf("a read-only connection has %v", c)
 	}
 
-	if c := unitsettingssvc.Capabilities(&forge.ConnectionRecord{Push: true}); !c.Has(forge.CapCommit) || !c.Has(forge.CapReview) {
+	if c := unitsettingssvc.Capabilities(recordPtr(true)); !c.Has(forge.CapCommit) || !c.Has(forge.CapReview) {
 		t.Fatalf("a push connection has %v", c)
 	}
+}
+
+func recordPtr(push bool) *forge.ConnectionRecord {
+	rec := connection("acme", connRW, push, false)
+
+	return &rec
 }

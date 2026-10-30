@@ -131,7 +131,6 @@ type suggestionBody struct {
 	Repository string `json:"repository"`
 	Commit     string `json:"commit"`
 	Source     string `json:"source"`
-	UpdateID   string `json:"updateId"`
 	ObservedAt string `json:"observedAt"`
 }
 

@@ -129,43 +129,23 @@ func (s *Service) Read(ctx context.Context, unit identity.Object) (View, error) 
 
 	switch {
 	case errors.Is(err, unitsettings.ErrNotFound):
-		rec = unitsettings.Settings{Unit: unit}
+		rec = emptyRecord(unit)
 	case err != nil:
 		return View{}, fmt.Errorf("read unit settings: %w", err)
+	default:
 	}
 
 	return s.view(ctx, &rec)
 }
 
-// view completes a record into a View.
-func (s *Service) view(ctx context.Context, rec *unitsettings.Settings) (View, error) {
-	ns := rec.Unit.Namespace()
+// emptyRecord is the record of a unit that has none: no field is set, and the
+// version is 0.
+func emptyRecord(unit identity.Object) unitsettings.Settings {
+	var rec unitsettings.Settings
 
-	defaults, err := s.store.Defaults(ctx, ns)
-	if err != nil {
-		return View{}, fmt.Errorf("read unit defaults: %w", err)
-	}
+	rec.Unit = unit
 
-	conns, err := s.connections.ListConnections(ctx, ns)
-	if err != nil {
-		return View{}, fmt.Errorf("list git host connections: %w", err)
-	}
-
-	pools, err := s.pools.Pools(ctx, ns)
-	if err != nil {
-		return View{}, fmt.Errorf("list runner pools: %w", err)
-	}
-
-	c := unitsettings.Context{
-		DefaultConnection: defaultConnection(conns),
-		HasJobPool:        hasJobPool(pools),
-		DefaultFiles:      DefaultFiles(rec.Unit),
-	}
-
-	return View{
-		Settings: *rec, Defaults: defaults, Effective: unitsettings.Resolve(rec, defaults, c),
-		DefaultConnection: c.DefaultConnection,
-	}, nil
+	return rec
 }
 
 func defaultConnection(conns []forge.ConnectionRecord) string {
@@ -275,8 +255,8 @@ func (s *Service) Put(
 		return View{}, err
 	}
 
-	if err := s.checkReferences(ctx, in, &cur); err != nil {
-		return View{}, err
+	if refErr := s.checkReferences(ctx, in, &cur); refErr != nil {
+		return View{}, refErr
 	}
 
 	fence, err := s.fences.Fence(ctx, in.Unit.Namespace())
@@ -347,7 +327,7 @@ func (s *Service) Defaults(ctx context.Context, ns namespace.Name) (unitsettings
 func (s *Service) SetDefaults(
 	ctx context.Context, ns namespace.Name, pool string, expected int64, e audit.Entry,
 ) (unitsettings.NamespaceDefaults, error) {
-	d := unitsettings.NamespaceDefaults{Namespace: ns, Pool: pool}
+	d := unitsettings.NamespaceDefaults{Namespace: ns, Pool: pool, Version: 0, UpdatedAt: time.Time{}}
 	if err := d.Validate(); err != nil {
 		return unitsettings.NamespaceDefaults{}, fmt.Errorf("unit defaults: %w", err)
 	}
@@ -373,6 +353,37 @@ func (s *Service) SetDefaults(
 	}
 
 	return stored, nil
+}
+
+// view completes a record into a View.
+func (s *Service) view(ctx context.Context, rec *unitsettings.Settings) (View, error) {
+	ns := rec.Unit.Namespace()
+
+	defaults, err := s.store.Defaults(ctx, ns)
+	if err != nil {
+		return View{}, fmt.Errorf("read unit defaults: %w", err)
+	}
+
+	conns, err := s.connections.ListConnections(ctx, ns)
+	if err != nil {
+		return View{}, fmt.Errorf("list git host connections: %w", err)
+	}
+
+	pools, err := s.pools.Pools(ctx, ns)
+	if err != nil {
+		return View{}, fmt.Errorf("list runner pools: %w", err)
+	}
+
+	c := unitsettings.Context{
+		DefaultConnection: defaultConnection(conns),
+		HasJobPool:        hasJobPool(pools),
+		DefaultFiles:      DefaultFiles(rec.Unit),
+	}
+
+	return View{
+		Settings: *rec, Defaults: defaults, Effective: unitsettings.Resolve(rec, defaults, c),
+		DefaultConnection: c.DefaultConnection,
+	}, nil
 }
 
 // stamp sets the fields of e that the service owns.
@@ -503,8 +514,6 @@ type Suggestion struct {
 	// Source says where the suggestion comes from, for example
 	// pulumi-update.
 	Source string
-	// UpdateID is the ID of the update that gave the git details.
-	UpdateID string
 	// ObservedAt is the time of the update.
 	ObservedAt time.Time
 }

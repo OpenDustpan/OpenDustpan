@@ -136,7 +136,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h.routes = h.buildRoutes()
-	for _, route := range h.routes {
+	for i := range h.routes {
+		route := h.routes[i]
 		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
 	}
 
@@ -213,7 +214,8 @@ func (h *Handler) writer() problem.Writer {
 // this classifier runs, and the shared classes answer the rest.
 func classify(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, unitsettings.ErrUnknownUnit):
+	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound),
+		errors.Is(err, unitsettings.ErrUnknownUnit):
 		return problem.New(http.StatusNotFound, errcode.UnitSettingsNotFound, errNotFound.Error()), true
 	case errors.Is(err, errNoRecord), errors.Is(err, unitsettings.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.UnitSettingsNotFound, errNoRecord.Error()), true
@@ -262,9 +264,9 @@ func classifyBody(err error) (problem.Problem, bool) {
 	return problem.Pass()
 }
 
-func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
+func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))

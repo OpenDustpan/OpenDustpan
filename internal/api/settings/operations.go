@@ -18,7 +18,8 @@ func operationLabels() map[string]apidesc.Label {
 		apidesc.Pattern(http.MethodGet, unitSettingsPath): apidesc.Name("getUnitSettings", tagSettings).
 			On(apidesc.KindUnit).WithETag().WithBodies(apidesc.NoBody, settingsResponseSchema()),
 		apidesc.Pattern(http.MethodPut, unitSettingsPath): apidesc.Name("replaceUnitSettings", tagSettings).
-			On(apidesc.KindUnit).WithETag().WithIfMatchRequired().WithBodies(settingsSchema(), settingsResponseSchema()),
+			On(apidesc.KindUnit).
+			WithETag().WithIfMatchRequired().WithBodies(settingsSchema(), settingsResponseSchema()),
 		apidesc.Pattern(http.MethodDelete, unitSettingsPath): apidesc.Name("resetUnitSettings", tagSettings).
 			On(apidesc.KindUnit).WithIfMatchRequired().WithBodies(apidesc.NoBody, apidesc.NoBody),
 		apidesc.Pattern(http.MethodGet, suggestionsPath): apidesc.Name("getUnitSettingsSuggestions", tagSettings).
@@ -87,7 +88,9 @@ func requestParts() []apidesc.Declaration {
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
-	for _, route := range h.routes {
+	for i := range h.routes {
+		route := &h.routes[i]
+
 		// The wrapper reads the namespace of the path before the actions on the
 		// object, for each route that is not public.
 		var namespaceActions []string

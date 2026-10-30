@@ -29,8 +29,13 @@ answers 412.
 | `POST /namespaces/{namespace}/git-host-connections/{id}/check` | `namespace:manage-git-host-connections` | the namespace | The account, the capabilities and what each feature misses |
 
 The role installation operator has the two actions of the installation. The role
-admin has the two actions of a namespace. The role maintainer has
-`namespace:read-git-host-connections`.
+admin has the actions of a namespace. The role maintainer has
+`namespace:read-git-host-connections` and `namespace:use-git-host-connection`.
+
+The action `namespace:use-git-host-connection` lets a person name a connection
+in the settings of a unit, in addition to the action on the unit. It lets the
+person point a unit at the credentials of the connection. See the
+[unit settings API](unit-settings-api.md).
 
 ## Documents
 

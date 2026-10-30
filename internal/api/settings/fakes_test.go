@@ -90,9 +90,10 @@ func entries() []coreinventory.Entry {
 func (fakeInventory) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventory.Entry, error) {
 	var out []coreinventory.Entry
 
-	for _, e := range entries() {
-		if e.Namespace == ns {
-			out = append(out, e)
+	all := entries()
+	for i := range all {
+		if all[i].Namespace == ns {
+			out = append(out, all[i])
 		}
 	}
 
@@ -109,9 +110,10 @@ func (f fakeInventory) QueryUnits(ctx context.Context, q coreinventory.UnitQuery
 }
 
 func (fakeInventory) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
-	for _, e := range entries() {
-		if e.UnitID == unitID {
-			return e, nil
+	all := entries()
+	for i := range all {
+		if all[i].UnitID == unitID {
+			return all[i], nil
 		}
 	}
 
@@ -131,7 +133,7 @@ type memStore struct {
 
 func newMemStore() *memStore {
 	return &memStore{
-		mu: sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: unitsettings.NamespaceDefaults{},
+		mu: sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: noDefaults(),
 		entries: nil, writes: 0, failWith: nil,
 	}
 }
@@ -172,7 +174,9 @@ func (m *memStore) Put(
 	return next, nil
 }
 
-func (m *memStore) Delete(_ context.Context, unit identity.Object, expected int64, _ namespace.Fence, e audit.Entry) error {
+func (m *memStore) Delete(
+	_ context.Context, unit identity.Object, expected int64, _ namespace.Fence, e audit.Entry,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -242,11 +246,44 @@ func (fences) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, erro
 	return namespace.Fence{Namespace: ns, FailoverVersion: 1}, nil
 }
 
+// noDefaults are the unit defaults of a namespace that never set them.
+func noDefaults() unitsettings.NamespaceDefaults {
+	return unitsettings.NamespaceDefaults{Namespace: "", Pool: "", Version: 0, UpdatedAt: time.Time{}}
+}
+
+// connection is the default connection with push access of the namespace ns.
+func connection(ns namespace.Name, id string) forge.ConnectionRecord {
+	return forge.ConnectionRecord{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), Namespace: ns, ID: id, Kind: forge.KindGitHub,
+		Auth: forge.AuthApp, Scope: forge.AppScopeInstallation, InstallationID: "1", Version: 1, Push: true,
+		Default: true,
+	}
+}
+
+// jobsPool is a runner pool for jobs.
+func jobsPool(id string, ns namespace.Name) runner.Pool {
+	return runner.Pool{
+		ID:          id,
+		Namespace:   ns,
+		Name:        "ci",
+		Purpose:     runner.PurposeJobs,
+		Lease:       0,
+		Concurrency: 0,
+		Isolation:   nil,
+		GitCredentials: runner.GitCredentials{
+			Mode:   "",
+			Helper: "",
+		},
+		CreatedAt: time.Unix(0, 0),
+		UpdatedAt: time.Unix(0, 0),
+	}
+}
+
 type connections struct{}
 
 func (connections) GetConnection(_ context.Context, ns namespace.Name, id string) (forge.ConnectionRecord, error) {
 	if ns == "acme" && id == connRW {
-		return forge.ConnectionRecord{Namespace: ns, ID: id, Push: true, Default: true}, nil
+		return connection(ns, id), nil
 	}
 
 	return forge.ConnectionRecord{}, forge.ErrConnectionNotFound
@@ -257,14 +294,14 @@ func (connections) ListConnections(_ context.Context, ns namespace.Name) ([]forg
 		return nil, nil
 	}
 
-	return []forge.ConnectionRecord{{Namespace: ns, ID: connRW, Push: true, Default: true}}, nil
+	return []forge.ConnectionRecord{connection(ns, connRW)}, nil
 }
 
 type pools struct{}
 
 func (pools) Pool(_ context.Context, id string) (runner.Pool, error) {
 	if id == poolJobs {
-		return runner.Pool{ID: id, Namespace: "acme", Purpose: runner.PurposeJobs}, nil
+		return jobsPool(id, "acme"), nil
 	}
 
 	return runner.Pool{}, runner.ErrNotFound
@@ -275,7 +312,7 @@ func (pools) Pools(_ context.Context, ns namespace.Name) ([]runner.Pool, error) 
 		return nil, nil
 	}
 
-	return []runner.Pool{{ID: poolJobs, Namespace: ns, Purpose: runner.PurposeJobs}}, nil
+	return []runner.Pool{jobsPool(poolJobs, ns)}, nil
 }
 
 // suggester gives one suggestion for any unit.
@@ -287,7 +324,7 @@ func (s suggester) Suggest(context.Context, identity.Object) ([]unitsettingssvc.
 	}
 
 	return []unitsettingssvc.Suggestion{{
-		Repository: "acme/infra", Commit: "0123456789abcdef", Source: "pulumi-update", UpdateID: "upd-1",
+		Repository: "acme/infra", Commit: "0123456789abcdef", Source: "pulumi-update",
 		ObservedAt: time.Unix(1_700_000_000, 0),
 	}}, nil
 }

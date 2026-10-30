@@ -4432,17 +4432,13 @@
           },
           "source": {
             "type": "string"
-          },
-          "updateId": {
-            "type": "string"
           }
         },
         "required": [
           "commit",
           "observedAt",
           "repository",
-          "source",
-          "updateId"
+          "source"
         ],
         "type": "object"
       },

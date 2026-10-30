@@ -10,6 +10,24 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// shapeProblem returns what is wrong with the row of a route, or "".
+func shapeProblem(route *settings.Route) string {
+	declared := len(route.Reads) + len(route.Actions) + len(route.Extra)
+
+	switch {
+	case route.Scope != settings.ScopeAuthorized:
+		return "is not authorized: this API serves no public route"
+	case declared == 0 && route.Method != http.MethodGet:
+		return "declares no action"
+	case route.Resolve == nil || route.Serve == nil:
+		return "declares no resolver or no handler"
+	case route.Method != http.MethodGet && len(route.Actions)+len(route.Extra) == 0:
+		return "is a write route with no action"
+	default:
+		return ""
+	}
+}
+
 // TestRoutesDeclareActions walks every route and fails for a route with no
 // scope, no action, no resolver or no handler, and for a write route with no
 // action. It checks both directions: every served pattern has a table row, and
@@ -18,28 +36,19 @@ func TestRoutesDeclareActions(t *testing.T) {
 	t.Parallel()
 
 	handler := newRig(t, fullAccess()...).h
-	byPattern := map[string]settings.Route{}
+	byPattern := map[string]bool{}
 
-	for _, route := range handler.Routes() {
-		pattern := route.Method + " " + route.Path
-		if _, dup := byPattern[pattern]; dup {
+	routes := handler.Routes()
+	for i := range routes {
+		pattern := routes[i].Method + " " + routes[i].Path
+		if byPattern[pattern] {
 			t.Fatalf("duplicate route %q", pattern)
 		}
 
-		byPattern[pattern] = route
+		byPattern[pattern] = true
 
-		declared := len(route.Reads) + len(route.Actions) + len(route.Extra)
-
-		switch {
-		case route.Scope != settings.ScopeAuthorized:
-			t.Errorf("route %q is not authorized: this API serves no public route", pattern)
-		case declared == 0 && route.Method != http.MethodGet:
-			t.Errorf("route %q declares no action", pattern)
-		case route.Resolve == nil || route.Serve == nil:
-			t.Errorf("route %q declares no resolver or no handler", pattern)
-		case route.Method != http.MethodGet && len(route.Actions)+len(route.Extra) == 0:
-			t.Errorf("route %q: a write route needs an action", pattern)
-		default:
+		if problem := shapeProblem(&routes[i]); problem != "" {
+			t.Errorf("route %q %s", pattern, problem)
 		}
 	}
 
@@ -49,7 +58,7 @@ func TestRoutesDeclareActions(t *testing.T) {
 	}
 
 	for _, pattern := range served {
-		if _, ok := byPattern[pattern]; !ok {
+		if !byPattern[pattern] {
 			t.Errorf("pattern %q is served and has no table row", pattern)
 		}
 	}
@@ -81,32 +90,44 @@ func TestRoutesNeedSignIn(t *testing.T) {
 	}
 }
 
+// checksOf returns the checks that the wrapper makes for route, in order, and
+// the number of them that are reads.
+func checksOf(route *settings.Route) ([]string, int) {
+	object := "opentofu:acme/net"
+	if strings.Contains(route.Path, "/settings/unit-defaults") || strings.Contains(route.Path, "/unit-settings/") {
+		object = "acme"
+	}
+
+	checks := make([]string, 0, 1+len(route.Reads)+len(route.Actions))
+	checks = append(checks, "namespace:read acme")
+
+	for _, a := range route.Reads {
+		checks = append(checks, string(a)+" "+object)
+	}
+
+	reads := len(checks)
+
+	for _, a := range route.Actions {
+		checks = append(checks, string(a)+" "+object)
+	}
+
+	return checks, reads
+}
+
 // TestRoutesCheckTheirActionsInOrder proves for each route that the wrapper
 // reads the namespace first, then the reads, then the actions, and that a
 // caller who lacks a read gets 404 and a caller who lacks an action gets 403.
 func TestRoutesCheckTheirActionsInOrder(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range newRig(t, fullAccess()...).h.Routes() {
+	routes := newRig(t, fullAccess()...).h.Routes()
+	for i := range routes {
+		route := &routes[i]
+		name := route.Method + " " + route.Path
 		path := strings.NewReplacer("{namespace}", "acme", "{unit_id}", netID).Replace(route.Path)
-		object := "opentofu:acme/net"
+		checks, reads := checksOf(route)
 
-		if strings.Contains(route.Path, "/settings/unit-defaults") || strings.Contains(route.Path, "/unit-settings/") {
-			object = "acme"
-		}
-
-		checks := []string{"namespace:read acme"}
-		for _, a := range route.Reads {
-			checks = append(checks, string(a)+" "+object)
-		}
-
-		reads := len(checks)
-
-		for _, a := range route.Actions {
-			checks = append(checks, string(a)+" "+object)
-		}
-
-		for held := range len(checks) {
+		for held := range checks {
 			r := newRig(t, slices.Clone(checks[:held])...)
 			rec := r.call(t, route.Method, path, "{}", ifMatch(`"0"`))
 
@@ -116,12 +137,11 @@ func TestRoutesCheckTheirActionsInOrder(t *testing.T) {
 			}
 
 			if rec.Code != want {
-				t.Errorf("route %q holding %d of %d checks = %d, want %d", route.Method+" "+route.Path, held,
-					len(checks), rec.Code, want)
+				t.Errorf("route %q holding %d of %d checks = %d, want %d", name, held, len(checks), rec.Code, want)
 			}
 
 			if seen := r.authz.seen(); len(seen) == 0 || seen[0] != "namespace:read acme" {
-				t.Errorf("route %q: the first check is %v, want namespace:read first", route.Method+" "+route.Path, seen)
+				t.Errorf("route %q: the first check is %v, want namespace:read first", name, seen)
 			}
 		}
 	}

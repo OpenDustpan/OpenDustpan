@@ -3,6 +3,7 @@ package settings
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	w.Header().Set("ETag", etag(view.Settings.Version))
-	h.writeJSON(ctx, w, http.StatusOK, settingsOf(&view))
+	h.writeJSON(ctx, w, settingsOf(&view))
 }
 
 // putSettings answers PUT .../units/{unit_id}/settings with the settings that
@@ -50,7 +51,7 @@ func (h *Handler) putSettings(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	var body settingsBody
-	if err := decodeBody(w, r, &body); err != nil {
+	if err = decodeBody(w, r, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -64,7 +65,7 @@ func (h *Handler) putSettings(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	w.Header().Set("ETag", etag(view.Settings.Version))
-	h.writeJSON(ctx, w, http.StatusOK, settingsOf(&view))
+	h.writeJSON(ctx, w, settingsOf(&view))
 }
 
 // replace stores body as the settings of the unit of t, over the record at
@@ -82,7 +83,7 @@ func (h *Handler) replace(
 		return unitsettingssvc.View{}, err
 	}
 
-	if err := in.Validate(); err != nil {
+	if err = in.Validate(); err != nil {
 		return unitsettingssvc.View{}, fmt.Errorf("unit settings: %w", err)
 	}
 
@@ -97,8 +98,8 @@ func (h *Handler) replace(
 		return unitsettingssvc.View{}, unitsettings.ErrConflict
 	}
 
-	if err := h.authorizeExtra(r, p, t, &cur, &in); err != nil {
-		return unitsettingssvc.View{}, err
+	if authErr := h.authorizeExtra(r, p, t, &cur, &in); authErr != nil {
+		return unitsettingssvc.View{}, authErr
 	}
 
 	view, err := h.service.Put(ctx, &in, expected, entryOf(r, p))
@@ -198,13 +199,12 @@ func (h *Handler) getSuggestions(w http.ResponseWriter, r *http.Request, _ ident
 		for i := range found {
 			s := &found[i]
 			out.Suggestions = append(out.Suggestions, suggestionBody{
-				Repository: s.Repository, Commit: s.Commit, Source: s.Source, UpdateID: s.UpdateID,
-				ObservedAt: wireTime(s.ObservedAt),
+				Repository: s.Repository, Commit: s.Commit, Source: s.Source, ObservedAt: wireTime(s.ObservedAt),
 			})
 		}
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, out)
+	h.writeJSON(ctx, w, out)
 }
 
 // getDefaults answers GET .../settings/unit-defaults with the unit defaults of
@@ -220,7 +220,7 @@ func (h *Handler) getDefaults(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	w.Header().Set("ETag", etag(d.Version))
-	h.writeJSON(ctx, w, http.StatusOK, defaultsOf(&d))
+	h.writeJSON(ctx, w, defaultsOf(&d))
 }
 
 // putDefaults answers PUT .../settings/unit-defaults with the defaults that the
@@ -236,7 +236,7 @@ func (h *Handler) putDefaults(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	var body defaultsBody
-	if err := decodeBody(w, r, &body); err != nil {
+	if err = decodeBody(w, r, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -250,7 +250,7 @@ func (h *Handler) putDefaults(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	w.Header().Set("ETag", etag(d.Version))
-	h.writeJSON(ctx, w, http.StatusOK, defaultsOf(&d))
+	h.writeJSON(ctx, w, defaultsOf(&d))
 }
 
 func defaultsOf(d *unitsettings.NamespaceDefaults) defaultsResponse {
@@ -295,7 +295,7 @@ func (h *Handler) bulkPut(w http.ResponseWriter, r *http.Request, p identity.Pri
 		out.Results = append(out.Results, h.bulkItem(r, p, t, item, body.Settings))
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, out)
+	h.writeJSON(ctx, w, out)
 }
 
 // bulkItem runs one item of a bulk call.
@@ -351,7 +351,7 @@ func (h *Handler) bulkFailure(r *http.Request, id string, err error) bulkResult 
 	}
 
 	if pr.Status >= http.StatusInternalServerError {
-		h.logger.ErrorContext(r.Context(), "bulk item failed", "status", pr.Status)
+		h.logger.ErrorContext(r.Context(), "bulk item failed", slog.Int("status", pr.Status))
 	}
 
 	return bulkResult{ID: id, Status: statusError, Version: 0, Error: &failure}

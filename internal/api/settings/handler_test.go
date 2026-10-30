@@ -44,24 +44,33 @@ func wantStatus(t *testing.T, rec *httptest.ResponseRecorder, status int, code s
 	}
 }
 
+// locationOf is the code location of an answer.
+type locationOf struct {
+	Connection string `json:"connection"`
+	Repository string `json:"repository"`
+	Directory  string `json:"directory"`
+}
+
+// fieldsOf is the settings of an answer.
+type fieldsOf struct {
+	Executor     string     `json:"executor"`
+	Pool         string     `json:"pool"`
+	CodeLocation locationOf `json:"codeLocation"`
+}
+
+// effectiveOf is the effective value of one field of an answer.
+type effectiveOf struct {
+	Value  any    `json:"value"`
+	Origin string `json:"origin"`
+}
+
 // answerOf decodes the settings answer.
 type answerOf struct {
-	UnitID    string `json:"unitID"`
-	Version   int64  `json:"version"`
-	UpdatedAt string `json:"updatedAt"`
-	Settings  struct {
-		Executor     string `json:"executor"`
-		Pool         string `json:"pool"`
-		CodeLocation struct {
-			Connection string `json:"connection"`
-			Repository string `json:"repository"`
-			Directory  string `json:"directory"`
-		} `json:"codeLocation"`
-	} `json:"settings"`
-	Effective map[string]struct {
-		Value  any    `json:"value"`
-		Origin string `json:"origin"`
-	} `json:"effective"`
+	UnitID    string                 `json:"unitID"`
+	Version   int64                  `json:"version"`
+	UpdatedAt string                 `json:"updatedAt"`
+	Settings  fieldsOf               `json:"settings"`
+	Effective map[string]effectiveOf `json:"effective"`
 }
 
 func decode(t *testing.T, rec *httptest.ResponseRecorder) answerOf {
@@ -151,6 +160,8 @@ func TestWriteNeedsTheVersionThatTheCallerRead(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			rec := r.call(t, http.MethodPut, settingsPath, validBody, tc.header)
 			wantStatus(t, rec, tc.status, tc.code)
 
@@ -214,18 +225,18 @@ func TestPutRefusesHostileValues(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"directory with dot dot":      `{"codeLocation":{"directory":"../x"}}`,
-		"absolute directory":          `{"codeLocation":{"directory":"/etc"}}`,
-		"directory in CI config":      `{"codeLocation":{"directory":"a/.github/b"}}`,
-		"ref with a leading dash":     `{"codeLocation":{"ref":"--upload-pack=x"}}`,
-		"ref with a control char":     `{"codeLocation":{"ref":"main\u0000"}}`,
-		"repository with credentials": `{"codeLocation":{"repository":"https://u:p@host/a/b"}}`,
-		"file outside the directory":  `{"writeBack":{"files":["../secrets.yaml"]}}`,
-		"file in CI config":           `{"writeBack":{"files":[".github/workflows/x.yml"]}}`,
-		"unknown executor":            `{"executor":"shell"}`,
-		"step with a credential env":  `{"steps":[{"name":"a","role":"tool","phase":"plan","args":["x"],"env":{"AWS_SECRET_ACCESS_KEY":"x"}}]}`,
-		"timeout that would wrap":     `{"steps":[{"name":"a","role":"tool","phase":"plan","args":["x"],"timeoutSeconds":9223372036}]}`,
-		"pool that is not an ID":      `{"pool":"x; drop"}`,
+		"directory in the parent":      `{"codeLocation":{"directory":"../x"}}`,
+		"absolute directory":           `{"codeLocation":{"directory":"/etc"}}`,
+		"directory in CI config":       `{"codeLocation":{"directory":"a/.github/b"}}`,
+		"ref with a leading dash":      `{"codeLocation":{"ref":"--upload-pack=x"}}`,
+		"ref with a control char":      `{"codeLocation":{"ref":"main\u0000"}}`,
+		"repository as an scp address": `{"codeLocation":{"repository":"git@host:a/b"}}`,
+		"file outside the directory":   `{"writeBack":{"files":["../other.yaml"]}}`,
+		"file in CI config":            `{"writeBack":{"files":[".github/workflows/x.yml"]}}`,
+		"unknown executor":             `{"executor":"shell"}`,
+		"step with a reserved env":     `{"steps":[{"name":"a","role":"tool","phase":"plan","args":["x"],"env":{"TF_CLI_CONFIG_FILE":"x"}}]}`,
+		"timeout that would wrap":      `{"steps":[{"name":"a","role":"tool","phase":"plan","args":["x"],"timeoutSeconds":9223372036}]}`,
+		"pool that is not an ID":       `{"pool":"x; drop"}`,
 	}
 
 	for name, body := range cases {
@@ -256,8 +267,10 @@ func TestPutRefusesBadBodies(t *testing.T) {
 		{"unknown field", `{"unit":"x"}`, http.StatusBadRequest, errcode.RequestBodyInvalid},
 		{"two documents", `{} {}`, http.StatusBadRequest, errcode.RequestBodyInvalid},
 		{"invalid UTF-8", "{\"pool\":\"\xff\"}", http.StatusBadRequest, errcode.RequestBodyInvalid},
-		{"too large", `{"pool":"` + strings.Repeat("a", 300<<10) + `"}`, http.StatusRequestEntityTooLarge,
-			errcode.RequestBodyTooLarge},
+		{
+			"too large", `{"pool":"` + strings.Repeat("a", 300<<10) + `"}`, http.StatusRequestEntityTooLarge,
+			errcode.RequestBodyTooLarge,
+		},
 	}
 
 	for _, tc := range cases {
@@ -300,8 +313,10 @@ func TestIdempotencyKeyIsRefusedOnEveryWrite(t *testing.T) {
 	header := map[string]string{"If-Match": `"0"`, "Idempotency-Key": "k-1"}
 
 	for _, tc := range []struct{ method, path string }{
-		{http.MethodPut, settingsPath}, {http.MethodDelete, settingsPath},
-		{http.MethodPut, defaultsPath}, {http.MethodPost, bulkPath},
+		{http.MethodPut, settingsPath},
+		{http.MethodDelete, settingsPath},
+		{http.MethodPut, defaultsPath},
+		{http.MethodPost, bulkPath},
 	} {
 		wantStatus(t, r.call(t, tc.method, tc.path, "{}", header), http.StatusBadRequest,
 			errcode.RequestIdempotencyKeyUnsupported)
@@ -355,6 +370,18 @@ func TestWriteWithoutManageIsForbiddenAndAudited(t *testing.T) {
 	}
 }
 
+// suggestionOf is one suggestion of an answer.
+type suggestionOf struct {
+	Repository string `json:"repository"`
+	Commit     string `json:"commit"`
+	Source     string `json:"source"`
+}
+
+// suggestionsOut is the suggestion answer.
+type suggestionsOut struct {
+	Suggestions []suggestionOf `json:"suggestions"`
+}
+
 func TestSuggestionsNeverSetAField(t *testing.T) {
 	t.Parallel()
 
@@ -363,14 +390,7 @@ func TestSuggestionsNeverSetAField(t *testing.T) {
 	rec := r.call(t, http.MethodGet, suggestionsPath, "", nil)
 	wantStatus(t, rec, http.StatusOK, "")
 
-	var out struct {
-		Suggestions []struct {
-			Repository string `json:"repository"`
-			Commit     string `json:"commit"`
-			Source     string `json:"source"`
-		} `json:"suggestions"`
-	}
-
+	var out suggestionsOut
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.Suggestions) != 1 ||
 		out.Suggestions[0].Repository != "acme/infra" {
 		t.Fatalf("answer = %s, %v", rec.Body.String(), err)
@@ -382,7 +402,8 @@ func TestSuggestionsNeverSetAField(t *testing.T) {
 
 	// No source gives an empty list, never null.
 	empty := newRigWith(t, nil, fullAccess()...)
-	if body := empty.call(t, http.MethodGet, suggestionsPath, "", nil).Body.String(); !strings.Contains(body, `"suggestions":[]`) {
+	body := empty.call(t, http.MethodGet, suggestionsPath, "", nil).Body.String()
+	if !strings.Contains(body, `"suggestions":[]`) {
 		t.Fatalf("answer without a source = %s", body)
 	}
 
@@ -402,14 +423,25 @@ func TestUnitDefaults(t *testing.T) {
 		t.Fatalf("ETag = %q", rec.Header().Get("ETag"))
 	}
 
-	wantStatus(t, r.call(t, http.MethodPut, defaultsPath, `{"pool":"`+poolJobs+`"}`, nil), http.StatusPreconditionRequired, "")
+	wantStatus(
+		t,
+		r.call(t, http.MethodPut, defaultsPath, `{"pool":"`+poolJobs+`"}`, nil),
+		http.StatusPreconditionRequired,
+		"",
+	)
 	wantStatus(t, r.call(t, http.MethodPut, defaultsPath, `{"pool":"rp-nope"}`, ifMatch(`"0"`)),
 		http.StatusUnprocessableEntity, errcode.UnitSettingsPoolUnknown)
 	wantStatus(t, r.call(t, http.MethodPut, defaultsPath, `{"pool":"`+poolJobs+`"}`, ifMatch(`"0"`)), http.StatusOK, "")
-	wantStatus(t, r.call(t, http.MethodPut, defaultsPath, `{"pool":""}`, ifMatch(`"0"`)), http.StatusPreconditionFailed, "")
+	wantStatus(
+		t,
+		r.call(t, http.MethodPut, defaultsPath, `{"pool":""}`, ifMatch(`"0"`)),
+		http.StatusPreconditionFailed,
+		"",
+	)
 
 	// The unit now takes the pool from the namespace and says so.
-	if a := decode(t, r.call(t, http.MethodGet, settingsPath, "", nil)); a.Effective["pool"].Origin != "namespace-default" {
+	a := decode(t, r.call(t, http.MethodGet, settingsPath, "", nil))
+	if a.Effective["pool"].Origin != "namespace-default" {
 		t.Fatalf("origin of the pool = %q, want namespace-default", a.Effective["pool"].Origin)
 	}
 }
@@ -423,16 +455,42 @@ func TestDefaultsWritesNeedNamespaceAdmin(t *testing.T) {
 	wantStatus(t, r.call(t, http.MethodPut, defaultsPath, `{"pool":""}`, ifMatch(`"0"`)), http.StatusForbidden, "")
 }
 
+// bulkErrorOf is the error of one item of a bulk answer.
+type bulkErrorOf struct {
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
+}
+
+// bulkItemOf is one result of a bulk answer.
+type bulkItemOf struct {
+	ID      string       `json:"id"`
+	Status  string       `json:"status"`
+	Version int64        `json:"version"`
+	Error   *bulkErrorOf `json:"error"`
+}
+
 type bulkOut struct {
-	Results []struct {
-		ID      string `json:"id"`
-		Status  string `json:"status"`
-		Version int64  `json:"version"`
-		Error   *struct {
-			Code      int    `json:"code"`
-			ErrorCode string `json:"errorCode"`
-		} `json:"error"`
-	} `json:"results"`
+	Results []bulkItemOf `json:"results"`
+}
+
+// bulkWant is the result that a test expects for one item.
+type bulkWant struct {
+	id, status string
+	code       int
+}
+
+func checkBulkItem(t *testing.T, i int, got *bulkItemOf, want bulkWant) {
+	t.Helper()
+
+	if got.ID != want.id || got.Status != want.status {
+		t.Errorf("result %d = %+v, want %+v", i, got, want)
+
+		return
+	}
+
+	if want.code != 0 && (got.Error == nil || got.Error.Code != want.code) {
+		t.Errorf("result %d has error %+v, want status %d", i, got.Error, want.code)
+	}
 }
 
 func TestBulkAppliesEachItemOnItsOwn(t *testing.T) {
@@ -442,8 +500,14 @@ func TestBulkAppliesEachItemOnItsOwn(t *testing.T) {
 	r := newRig(t, "namespace:read acme", "unit:read "+netObject, "unit:manage "+netObject,
 		"unit:read "+appObject)
 
-	body := fmt.Sprintf(`{"units":[{"id":%q,"version":0},{"id":%q,"version":0},{"id":%q,"version":0},{"id":"nope","version":0},{"id":%q,"version":4}],"settings":%s}`,
-		netID, appID, otherID, netID, validBody)
+	body := fmt.Sprintf(
+		`{"units":[{"id":%q,"version":0},{"id":%q,"version":0},{"id":%q,"version":0},{"id":"nope","version":0},{"id":%q,"version":4}],"settings":%s}`,
+		netID,
+		appID,
+		otherID,
+		netID,
+		validBody,
+	)
 
 	rec := r.call(t, http.MethodPost, bulkPath, body, nil)
 	wantStatus(t, rec, http.StatusOK, "")
@@ -453,19 +517,16 @@ func TestBulkAppliesEachItemOnItsOwn(t *testing.T) {
 		t.Fatalf("answer = %s, %v", rec.Body.String(), err)
 	}
 
-	want := []struct {
-		id, status string
-		code       int
-	}{
-		{netID, "ok", 0}, {appID, "error", http.StatusForbidden}, {otherID, "error", http.StatusNotFound},
-		{"nope", "error", http.StatusNotFound}, {netID, "error", http.StatusPreconditionFailed},
+	want := []bulkWant{
+		{netID, "ok", 0},
+		{appID, "error", http.StatusForbidden},
+		{otherID, "error", http.StatusNotFound},
+		{"nope", "error", http.StatusNotFound},
+		{netID, "error", http.StatusPreconditionFailed},
 	}
 
-	for i, w := range want {
-		got := out.Results[i]
-		if got.ID != w.id || got.Status != w.status || (w.code != 0 && (got.Error == nil || got.Error.Code != w.code)) {
-			t.Errorf("result %d = %+v, want %+v", i, got, w)
-		}
+	for i := range want {
+		checkBulkItem(t, i, &out.Results[i], want[i])
 	}
 
 	if out.Results[0].Version != 1 || r.store.written() != 1 {
@@ -492,7 +553,12 @@ func TestBulkRefusesASizeOutsideTheLimit(t *testing.T) {
 		"too many":      `{"units":[` + strings.Join(units, ",") + `],"settings":` + validBody + `}`,
 		"missing units": `{"settings":` + validBody + `}`,
 	} {
-		wantStatus(t, r.call(t, http.MethodPost, bulkPath, body, nil), http.StatusBadRequest, errcode.UnitSettingsBulkSize)
+		wantStatus(
+			t,
+			r.call(t, http.MethodPost, bulkPath, body, nil),
+			http.StatusBadRequest,
+			errcode.UnitSettingsBulkSize,
+		)
 
 		_ = name
 	}

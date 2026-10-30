@@ -25,8 +25,11 @@ type memStore struct {
 
 func newMemStore() *memStore {
 	return &memStore{
-		mu: sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: unitsettings.NamespaceDefaults{},
-		entries: nil, fences: nil,
+		mu:       sync.Mutex{},
+		records:  map[string]unitsettings.Settings{},
+		defaults: unitsettings.NamespaceDefaults{Namespace: "", Pool: "", Version: 0, UpdatedAt: time.Time{}},
+		entries:  nil,
+		fences:   nil,
 	}
 }
 
@@ -124,9 +127,9 @@ type memConnections struct{ records []forge.ConnectionRecord }
 func (m memConnections) GetConnection(
 	_ context.Context, ns namespace.Name, id string,
 ) (forge.ConnectionRecord, error) {
-	for _, r := range m.records {
-		if r.Namespace == ns && r.ID == id {
-			return r, nil
+	for i := range m.records {
+		if m.records[i].Namespace == ns && m.records[i].ID == id {
+			return m.records[i], nil
 		}
 	}
 
@@ -136,9 +139,9 @@ func (m memConnections) GetConnection(
 func (m memConnections) ListConnections(_ context.Context, ns namespace.Name) ([]forge.ConnectionRecord, error) {
 	var out []forge.ConnectionRecord
 
-	for _, r := range m.records {
-		if r.Namespace == ns {
-			out = append(out, r)
+	for i := range m.records {
+		if m.records[i].Namespace == ns {
+			out = append(out, m.records[i])
 		}
 	}
 
@@ -149,9 +152,9 @@ func (m memConnections) ListConnections(_ context.Context, ns namespace.Name) ([
 type memPools struct{ pools []runner.Pool }
 
 func (m memPools) Pool(_ context.Context, id string) (runner.Pool, error) {
-	for _, p := range m.pools {
-		if p.ID == id {
-			return p, nil
+	for i := range m.pools {
+		if m.pools[i].ID == id {
+			return m.pools[i], nil
 		}
 	}
 
@@ -161,9 +164,9 @@ func (m memPools) Pool(_ context.Context, id string) (runner.Pool, error) {
 func (m memPools) Pools(_ context.Context, ns namespace.Name) ([]runner.Pool, error) {
 	var out []runner.Pool
 
-	for _, p := range m.pools {
-		if p.Namespace == ns {
-			out = append(out, p)
+	for i := range m.pools {
+		if m.pools[i].Namespace == ns {
+			out = append(out, m.pools[i])
 		}
 	}
 
@@ -171,3 +174,31 @@ func (m memPools) Pools(_ context.Context, ns namespace.Name) ([]runner.Pool, er
 }
 
 func fixedNow() time.Time { return time.Unix(1_800_000_000, 0) }
+
+// connection is a connection of the namespace ns.
+func connection(ns namespace.Name, id string, push, isDefault bool) forge.ConnectionRecord {
+	return forge.ConnectionRecord{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), Namespace: ns, ID: id, Kind: forge.KindGitHub,
+		Auth: forge.AuthApp, Scope: forge.AppScopeInstallation, InstallationID: "1", Version: 1, Push: push,
+		Default: isDefault,
+	}
+}
+
+// pool is a runner pool of the namespace ns.
+func pool(id string, ns namespace.Name, purpose runner.Purpose) runner.Pool {
+	return runner.Pool{
+		ID: id, Namespace: ns, Name: "ci", Purpose: purpose, Lease: 0, Concurrency: 0, Isolation: nil,
+		GitCredentials: runner.GitCredentials{Mode: "", Helper: ""}, CreatedAt: time.Unix(0, 0),
+		UpdatedAt: time.Unix(0, 0),
+	}
+}
+
+// settingsFor is the empty record of unit: no field is set.
+func settingsFor(unit identity.Object) unitsettings.Settings {
+	return unitsettings.Settings{
+		Unit: unit, Executor: "", Pool: "",
+		CodeLocation:   unitsettings.CodeLocation{Connection: "", Repository: "", Ref: "", Directory: ""},
+		WriteBack:      unitsettings.WriteBack{Delivery: "", Files: nil},
+		ReviewRequests: unitsettings.ReviewRequests{Enabled: false}, Steps: nil, Version: 0, UpdatedAt: time.Time{},
+	}
+}

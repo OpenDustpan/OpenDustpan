@@ -993,7 +993,8 @@ func coverageSettingsRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 	routes := handler.Routes()
 	out := make([]RouteRef, 0, len(routes))
 
-	for _, route := range routes {
+	for i := range routes {
+		route := &routes[i]
 		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
 	}
 
@@ -2721,8 +2722,8 @@ func triggerAllowEntries() []AllowEntry {
 // that the real OpenTofu CLI made.
 func unitSettingsAllowEntries() []AllowEntry {
 	const (
-		unit      = "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings"
-		namespace = "/api/dustpan/v1/namespaces/{namespace}"
+		unit = "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings"
+		base = "/api/dustpan/v1/namespaces/{namespace}"
 	)
 
 	return allowRoutes(
@@ -2732,9 +2733,9 @@ func unitSettingsAllowEntries() []AllowEntry {
 		RouteRef{Method: http.MethodPut, Path: unit},
 		RouteRef{Method: http.MethodDelete, Path: unit},
 		RouteRef{Method: http.MethodGet, Path: unit + "/suggestions"},
-		RouteRef{Method: http.MethodGet, Path: namespace + "/settings/unit-defaults"},
-		RouteRef{Method: http.MethodPut, Path: namespace + "/settings/unit-defaults"},
-		RouteRef{Method: http.MethodPost, Path: namespace + "/unit-settings/bulk-put"},
+		RouteRef{Method: http.MethodGet, Path: base + "/settings/unit-defaults"},
+		RouteRef{Method: http.MethodPut, Path: base + "/settings/unit-defaults"},
+		RouteRef{Method: http.MethodPost, Path: base + "/unit-settings/bulk-put"},
 	)
 }
 

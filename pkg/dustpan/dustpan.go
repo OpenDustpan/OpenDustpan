@@ -1335,17 +1335,9 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	triggers, err := newTriggersHandler(svc, cfg, onFailure)
+	late, err := newTriggersAndSettingsHandlers(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
-	}
-
-	var unitSettings http.Handler
-
-	if handler, ok, usErr := newUnitSettingsHandler(svc, cfg, onFailure); usErr != nil {
-		return neutralHandlers{}, usErr
-	} else if ok {
-		unitSettings = handler
 	}
 
 	var sourceFilter http.Handler
@@ -1360,8 +1352,8 @@ func newNeutralHandlers(
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
 		jobs:         jobAPIs.jobs,
-		triggers:     triggers,
-		unitSettings: unitSettings,
+		triggers:     late.triggers,
+		unitSettings: late.unitSettings,
 		drift:        jobAPIs.drift,
 		registry:     registries,
 

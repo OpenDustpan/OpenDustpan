@@ -1503,7 +1503,6 @@ export const decodeUnitSettingsSuggestion: Decoder<UnitSettingsSuggestion> = obj
   observedAt: string,
   repository: string,
   source: string,
-  updateId: string,
 });
 
 /** The validator of UnitSettingsSuggestions. */

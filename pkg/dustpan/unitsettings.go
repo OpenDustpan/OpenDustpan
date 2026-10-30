@@ -19,6 +19,37 @@ func WithUnitSettingsStore(st unitsettings.Store) Option {
 	return func(o *settings) { o.unitSettingsStore = st }
 }
 
+// triggerAndSettingsHandlers holds the trigger API and the unit settings API.
+// Each is nil when the server lacks what it needs.
+type triggerAndSettingsHandlers struct {
+	triggers     http.Handler
+	unitSettings http.Handler
+}
+
+// newTriggersAndSettingsHandlers builds the trigger API and the unit settings
+// API.
+func newTriggersAndSettingsHandlers(svc services, cfg *settings, onFailure func()) (triggerAndSettingsHandlers, error) {
+	var out triggerAndSettingsHandlers
+
+	triggers, err := newTriggersHandler(svc, cfg, onFailure)
+	if err != nil {
+		return out, err
+	}
+
+	out.triggers = triggers
+
+	handler, ok, err := newUnitSettingsHandler(svc, cfg, onFailure)
+	if err != nil {
+		return out, err
+	}
+
+	if ok {
+		out.unitSettings = handler
+	}
+
+	return out, nil
+}
+
 // newUnitSettingsHandler builds the unit settings API. The bool is false when
 // the server lacks the store of the settings, the Git host store, the runner
 // stores or the inventory, which the checks of a write read. It answers
