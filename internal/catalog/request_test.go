@@ -192,9 +192,20 @@ func (g *groupNames) remove(name string) {
 
 func approveOf(groups ...string) policy.Decision {
 	return policy.Decision{
-		Effect: policy.EffectApprove, Reasons: nil, Approvals: &policy.Approvals{Groups: groups, Count: 1},
+		Effect: policy.EffectApprove, Reasons: nil,
+		Approvals: &policy.Approvals{
+			Rule: strings.ToLower(strings.Join(groups, "-")), Groups: groups, Count: 1,
+		},
 		Engine: "", PolicyVersion: "",
 	}
+}
+
+// approveOfRule is an approve decision of the rule, by the groups.
+func approveOfRule(rule string, groups ...string) policy.Decision {
+	d := approveOf(groups...)
+	d.Approvals.Rule = rule
+
+	return d
 }
 
 func TestGateFor(t *testing.T) {
@@ -211,6 +222,12 @@ func TestGateFor(t *testing.T) {
 			decisions:  []policy.Decision{approveOf("security"), approveOf("dba")},
 			wantGroups: [][]string{{"dba"}, {"security"}},
 			wantIDs:    [][]string{{"group-2"}, {"group-1"}},
+		},
+		{
+			name:       "two rules with the same group give two gates",
+			decisions:  []policy.Decision{approveOfRule("security", "dba"), approveOfRule("cost", "dba")},
+			wantGroups: [][]string{{"dba"}, {"dba"}},
+			wantIDs:    [][]string{{"group-2"}, {"group-2"}},
 		},
 		{
 			name:       "a name in another case is the same group",
@@ -275,7 +292,7 @@ func TestGateForRefusesAGroupThatCannotBeResolved(t *testing.T) {
 			// would have refused the decision first.
 			d := policy.Combined{
 				Effect: policy.EffectApprove, Reasons: nil,
-				Approvals: []policy.Approvals{{Groups: []string{tt.group}, Count: 1}},
+				Approvals: []policy.Approvals{{Rule: "ops", Groups: []string{tt.group}, Count: 1}},
 			}
 
 			gates, err := catalog.GateFor(t.Context(), &d, true, newGroupNames("security", "dba"))
