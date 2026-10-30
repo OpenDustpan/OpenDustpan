@@ -17,10 +17,9 @@ func TestSlotColumnRefusesAnEnabledScheduleTriggerWithoutOne(t *testing.T) {
 		t.Fatal("an enabled schedule trigger lost its next slot")
 	}
 
-	if _, err := s.pool.Exec(
-		t.Context(),
-		`UPDATE triggers SET enabled = 0, next_slot_ms = 0 WHERE id = 's1'`,
-	); err != nil {
+	const off = `UPDATE triggers SET enabled = 0, next_slot_ms = 0 WHERE id = 's1'`
+
+	if _, err := s.pool.Exec(t.Context(), off); err != nil {
 		t.Fatalf("switch the trigger off: %v", err)
 	}
 
