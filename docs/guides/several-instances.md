@@ -157,6 +157,49 @@ These checks use the minimum:
 
 A dev build passes every minimum check: the write check, the migration check, the readiness check and the restore check. A restore never replaces the rows, and a backup does not hold them.
 
+## When the database does not answer
+
+The database can stop, restart or fail over to a replica. While an instance cannot reach the database, it does these things:
+
+- `/health/ready` answers 503. A load balancer with a health check on this route takes the instance out of its pool.
+- Each API answers a request that needs the database with 503 and the header `Retry-After: 5`, not 500. The Pulumi Cloud-compatible API answers `{"code": 503, "message": "..."}`. The TFE-compatible API answers a JSON:API error. The other APIs answer their usual error body. The error code is `namespace.unavailable`.
+- The instance does not restart. When the database answers again, `/health/ready` answers 200 and the instance serves requests again.
+
+The adapters treat these failures as a database that does not answer:
+
+- A failed connection.
+- The SQLSTATE codes 08000, 08001, 08003, 08004, 08006 and 08007 (a connection exception).
+- The SQLSTATE codes 57P01, 57P02 and 57P03 (the database server stops, crashes or does not accept connections yet).
+- The SQLSTATE code 25006 (a read-only database, for example after a failover to a replica).
+- The SQLSTATE code 53300 (too many connections). A session that ends frees a connection, so a new try can work.
+- A SQLite database that stays busy after its busy timeout.
+
+Other errors of the database stay errors with status 500. For example, 08P01 (protocol violation) is a bug. The codes 53200 (out of memory) and 53100 (disk full) are server faults. A new try is likely to meet them again.
+
+### How long a CLI command retries
+
+The Pulumi CLI and OpenTofu retry a request that gets 503. The retry has a limit. A database outage that is longer than the limit makes the running command fail. The command fails with a message that has the status 503.
+
+The e2e suite measured these times on 2026-10-28. For each version, the time is how long the CLI sent the same write again before the command failed. The suite measured them through its own proxy. The proxy answers 503 with `Retry-After: 1` when no instance is ready. The times are measurements. They are not a guarantee, and they may differ for another version, another proxy or another load.
+
+| CLI version | Time that it retried one write |
+| --- | --- |
+| Pulumi 3.200.0 | 14 s |
+| Pulumi 3.250.0 | 13 s |
+| Pulumi 3.272.0 | 14 s |
+| OpenTofu 1.11.14 | More than 30 s. The command did not fail in an outage of 60 s. It completed 6 s after the database came back. |
+| OpenTofu 1.12.7 | More than 30 s. The command did not fail in an outage of 60 s. It completed 7 s after the database came back. |
+| OpenTofu 1.13.2 | More than 30 s. The command did not fail in an outage of 60 s. It completed 6 s after the database came back. |
+
+In the same suite, an outage of 7 s to 8 s did not stop `pulumi up` or `tofu apply`. Both commands completed with exit 0.
+
+A database failover that is longer than these times makes running CLI commands fail. A command that failed leaves the state as it was before the write:
+
+- OpenTofu: no state version stays pending, and the workspace has no lock.
+- Pulumi: the update that the CLI could not complete stays running until its lease ends. A new `pulumi up` then answers 409 and names `pulumi cancel`. Run `pulumi cancel`, and run the command again. It completes.
+
+Run the same command again after the database answers. The next `pulumi preview` and `tofu plan` show no changes.
+
 ## Settings that stay on one host
 
 Some targets write to the disk of the host that runs the instance. Each instance then holds a part of the data.
