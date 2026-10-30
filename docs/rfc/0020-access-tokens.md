@@ -57,6 +57,35 @@ The project owner chose this life cycle. It covers each access token.
 - A CLI access token of a person is created after a sign-in. It has an
   expiry. See RFC 21 for the sign-in step.
 
+## Proposal for mTLS and the expiry email (2026-10-30)
+
+Status of this section: a proposal, ready to accept as an ADR with RFC 21.
+It decides nothing. The full text, with the precedent, the security layers,
+the e2e steps and the work items, is in
+[RFC 21](0021-directory-sync-and-sign-in.md), section "Proposal for the rest
+of milestone 4 (2026-10-30)", subsections P10 and P11. This section lists only
+the answers to the questions of this RFC.
+
+- (e2e) Which tool CLIs can send a TLS client certificate, and can a workload
+  use mTLS at the exchange endpoint? The exchange endpoint accepts a client
+  certificate as well as a JWT (RFC 21 P10). The e2e step receives a token with a
+  certificate and runs `tofu plan` with it. So a tool that cannot send a
+  certificate still works. Which tool CLIs send a certificate stays an e2e
+  fact for the work item.
+- How does mTLS work when a proxy of the operator ends TLS? One named header
+  with a named encoding, read only from a trusted proxy that also proves
+  itself, and the server checks the chain again against the trust bundle
+  (RFC 21 P10).
+- The lifetime of an exchanged token: ADR 69 decision 6 answers it (1 hour,
+  a setting).
+- Where the SMTP settings live: ADR 212 decision 2 answers it. RFC 21 P11
+  proposes the names and the TLS rule (owner question O3 of RFC 21).
+- Who receives the expiry email of a service token: the persons who hold
+  `principal:manage-tokens` on its principal, and its maker when the maker is
+  a person (RFC 21 P11).
+- The default maximum lifetime and the warning days: ADR 69 decisions 2 and
+  5 answer them.
+
 ## Open questions
 
 Each "lead proposal" is a proposed default from the project lead for the

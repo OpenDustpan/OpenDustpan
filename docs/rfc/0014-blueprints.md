@@ -189,3 +189,6 @@ sets for sources with no git commit, on 2026-10-18.
 [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
 decision 6 gives the read of the options of a blueprint form its own action.
 A question of this RFC that these ADRs do not decide needs a new RFC.
+[RFC 111](0111-blueprint-rollouts-and-the-migration-of-answers.md) is that
+RFC for two open questions of ADR 112: the batch for a rollout, and the
+migration of answers.
