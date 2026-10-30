@@ -57,7 +57,8 @@ project owner. Do not ask the project owner anything.
 
 1. Fetch and push with the full URL
    `https://github.com/OpenDustpan/OpenDustpan.git`.
-2. Push with one plain `git push` command. Put no other command in it.
+2. Push only with this form, and put no other command in the same line:
+   `git push -u https://github.com/OpenDustpan/OpenDustpan.git HEAD:<branch>`.
 3. Do not amend, rebase, force-push, stash or reset.
 4. Do not add `//nolint` or `nosemgrep`. Fix the code.
 5. Do not add a dependency.

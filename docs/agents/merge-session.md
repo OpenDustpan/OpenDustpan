@@ -12,7 +12,7 @@ the PM one report at the end, or one report when you stop.
 - Do not run a package subset as a merge gate. The gate is the full
   `make check` and the full `make e2e` on the combined tip.
 - Do not skip, disable or delete a test to make a gate pass.
-- Push with one plain `git push` command. Put no other command in it.
+- Push only with `git push -u https://github.com/OpenDustpan/OpenDustpan.git HEAD:<branch>`. Put no other command in the same line.
 - If a permission or safety classifier refuses a command, stop. Report the
   refusal text to the PM.
 
@@ -75,8 +75,10 @@ the PM one report at the end, or one report when you stop.
       request and main as parents:
       `git commit-tree 'T<i>^{tree}' -p <PR head sha> -p refs/remotes/origin/main -m "Merge main into <branch>"`.
       The command prints the sha of the new commit.
-   3. Push that commit to the branch of the pull request:
-      `git push https://github.com/OpenDustpan/OpenDustpan.git <new sha>:refs/heads/<branch>`.
+   3. Check out that commit: `git switch --detach <new sha>`. Then push it
+      to the branch of the pull request with the one allowed push form, and
+      no other command in the same line:
+      `git push -u https://github.com/OpenDustpan/OpenDustpan.git HEAD:<branch>`.
       The head of the pull request is a parent of the new commit, so the
       push is not a force-push.
    4. Read the pull request body. Check its closing keywords.
