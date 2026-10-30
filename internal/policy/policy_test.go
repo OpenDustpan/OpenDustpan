@@ -1,6 +1,9 @@
 package policy_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -430,5 +433,128 @@ func TestCedar(t *testing.T) {
 		if err := d.Validate(); err != nil {
 			t.Fatalf("CedarDecision(%v, %v) is not valid: %v", tc.first, tc.second, err)
 		}
+	}
+}
+
+// TestVerifyFailsClosed sends hostile headers and secrets straight to Verify,
+// as if the caller had checked nothing.
+func TestVerifyFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	secret := []byte(strings.Repeat("s", policy.MinSecretBytes))
+	body := []byte(`{"kind":"job.start","schemaVersion":1,"document":{}}`)
+	at := time.Unix(1_790_000_000, 0)
+
+	good, err := policy.Sign(body, at, secret)
+	if err != nil {
+		t.Fatalf("Sign() = %v", err)
+	}
+
+	_, sig, _ := strings.Cut(good, ",")
+	ts := "t=1790000000"
+
+	// A signature that anyone can make with an empty key.
+	forged := func(key []byte) string {
+		m := hmac.New(sha256.New, key)
+		m.Write([]byte("1790000000."))
+		m.Write(body)
+
+		return "t=1790000000,v1=" + hex.EncodeToString(m.Sum(nil))
+	}
+
+	cases := []struct {
+		name   string
+		header string
+		secret []byte
+		want   error
+	}{
+		{"an empty secret", forged(nil), nil, policy.ErrSecret},
+		{"a short secret", forged([]byte("short")), []byte("short"), policy.ErrSecret},
+		{
+			"a header above the limit",
+			good + "," + strings.Repeat("x=y,", policy.MaxSignatureHeaderBytes), secret, policy.ErrSignature,
+		},
+		{"t two times", ts + "," + ts + "," + sig, secret, policy.ErrSignature},
+		{"t two times with another time", ts + ",t=1," + sig, secret, policy.ErrSignature},
+		{"no v1", ts, secret, policy.ErrSignature},
+		{"too many v1", ts + strings.Repeat(","+sig, policy.MaxSignatures+1), secret, policy.ErrSignature},
+		{"a time with a plus sign", "t=+1790000000," + sig, secret, policy.ErrSignature},
+		{"a time with a leading zero", "t=01790000000," + sig, secret, policy.ErrSignature},
+		{"a time with a space", "t= 1790000000," + sig, secret, policy.ErrSignature},
+		{"an empty header", "", secret, policy.ErrSignature},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy.Verify(tc.header, body, tc.secret, at)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Verify() = %v, want %v", err, tc.want)
+			}
+
+			if strings.Contains(err.Error(), "x=y") {
+				t.Fatalf("Verify() = %q, the error quotes the header", err)
+			}
+		})
+	}
+
+	if err := policy.Verify(good, body, secret, at); err != nil {
+		t.Fatalf("Verify(good) = %v, want nil", err)
+	}
+}
+
+// TestDecisionGroups sends approver groups that a caller must not resolve.
+func TestDecisionGroups(t *testing.T) {
+	t.Parallel()
+
+	tooMany := make([]string, policy.MaxApprovalGroups+1)
+	for i := range tooMany {
+		tooMany[i] = "g" + strings.Repeat("a", i%5)
+	}
+
+	cases := []struct {
+		name   string
+		groups []string
+		ok     bool
+	}{
+		{"none", nil, true},
+		{"two names", []string{"dba", "security"}, true},
+		{"the most groups", tooMany[:policy.MaxApprovalGroups], true},
+		{"above the limit", tooMany, false},
+		{"an empty name", []string{""}, false},
+		{"a name with a space", []string{"bad name"}, false},
+		{"a name with a newline", []string{"dba\nx"}, false},
+		{"a name with a slash", []string{"../dba"}, false},
+		{"a long name", []string{strings.Repeat("a", 101)}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := approve(1, tc.groups...).Validate()
+			if tc.ok != (err == nil) || (err != nil && !errors.Is(err, policy.ErrInvalidDecision)) {
+				t.Fatalf("Validate() = %v, want ok %v", err, tc.ok)
+			}
+
+			if err != nil && strings.Contains(err.Error(), "bad name") {
+				t.Fatalf("Validate() = %q, the error quotes a group", err)
+			}
+
+			_, cerr := policy.Combine([]policy.Decision{approve(1, tc.groups...)})
+			if tc.ok != (cerr == nil) {
+				t.Fatalf("Combine() = %v, want ok %v", cerr, tc.ok)
+			}
+		})
+	}
+}
+
+func TestParseWebhookAnswerRefusesBadGroups(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"effect":"approve","approvals":{"groups":["bad name"],"count":1}}`)
+	if _, err := policy.ParseWebhookAnswer(body); !errors.Is(err, policy.ErrInvalidDecision) {
+		t.Fatalf("ParseWebhookAnswer() = %v, want ErrInvalidDecision", err)
 	}
 }

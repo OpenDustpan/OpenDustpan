@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 var (
@@ -111,6 +113,8 @@ const (
 	MaxReasonBytes = 1 << 10
 	// MaxApprovals bounds the approvals that one decision asks for.
 	MaxApprovals = 10
+	// MaxApprovalGroups bounds the groups of the approvals of one decision.
+	MaxApprovalGroups = 32
 	// MaxAnswerBytes bounds the answer of an engine over the network.
 	MaxAnswerBytes = 64 << 10
 )
@@ -136,7 +140,8 @@ type Decision struct {
 
 // Validate reports whether d is a decision within the limits. It returns
 // ErrInvalidDecision otherwise. A decision of EffectApprove needs from 1 to
-// MaxApprovals approvals. Another effect has no approvals. The error text
+// MaxApprovals approvals, by at most MaxApprovalGroups groups that each have a
+// valid group name. Another effect has no approvals. The error text
 // never quotes a value of d, because d can come from the answer of an
 // engine over the network.
 func (d Decision) Validate() error {
@@ -155,9 +160,29 @@ func (d Decision) Validate() error {
 		return fmt.Errorf("%w: %d approvals, give 1 to %d", ErrInvalidDecision, d.Approvals.Count, MaxApprovals)
 	case d.Effect != EffectApprove && d.Approvals != nil:
 		return fmt.Errorf("%w: approvals on the effect %q", ErrInvalidDecision, d.Effect)
+	case d.Approvals != nil:
+		return validateGroups(d.Approvals.Groups)
 	default:
 		return nil
 	}
+}
+
+// validateGroups checks the approver groups of a decision. The answer of an
+// engine over the network is untrusted, so a group name is checked here too,
+// before the caller resolves it.
+func validateGroups(groups []string) error {
+	if len(groups) > MaxApprovalGroups {
+		return fmt.Errorf("%w: %d approver groups, the limit is %d", ErrInvalidDecision, len(groups),
+			MaxApprovalGroups)
+	}
+
+	for i, g := range groups {
+		if principal.ValidateGroupName(g) != nil {
+			return fmt.Errorf("%w: the approver group %d has a name that is not valid", ErrInvalidDecision, i)
+		}
+	}
+
+	return nil
 }
 
 func validateReasons(reasons []string) error {
