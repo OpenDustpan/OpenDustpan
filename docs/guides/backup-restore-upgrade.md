@@ -274,6 +274,12 @@ a blob key that a restore does not write", and writes an audit entry that names
 the key. To find the cause, compare the manifest of the backup with a copy that
 you trust.
 
+The backup itself makes the same check. When a row of the data names a blob
+under such a prefix, the backup fails with a text that names the key and tells
+you to delete the row that names it. No backup is written that a restore would
+refuse. A restore also pins the whole manifest when it stages the backup, and it
+refuses a manifest that changed in the target after that.
+
 ### Revocations in maintenance mode
 
 A write that only reduces access runs in maintenance mode. You can end a

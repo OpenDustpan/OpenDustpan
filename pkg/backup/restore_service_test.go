@@ -108,6 +108,14 @@ type restoreServiceLive struct {
 	events map[backup.RestoreID]string
 	// minErr is the answer of CheckBinaryMinimum.
 	minErr error
+	// afterStage runs once StageRestore has staged, and onApplying runs at
+	// the start of MarkRestoreApplying (the pre-backup step). A test uses
+	// them to change the backup target at a chosen point of the restore.
+	afterStage func()
+	onApplying func()
+	// stageBlobs are added to the blobs of the staged summary: rows of the
+	// staged data that name a blob.
+	stageBlobs []backup.BlobRef
 }
 
 // devLiveState holds what the fake live store does for the dev data ports.
@@ -1961,12 +1969,15 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 			stripErr: map[backup.DevStripMode]error{}, dropped: 0, order: nil, appendErr: nil,
 			stageOpts: nil, strips: nil, records: nil, appends: nil, discards: 0,
 		},
-		ops:     durabletest.NewMem().Store(),
-		maint:   nil,
-		entered: map[backup.RestoreID]bool{},
-		areas:   nil,
-		events:  map[backup.RestoreID]string{},
-		minErr:  nil,
+		ops:        durabletest.NewMem().Store(),
+		maint:      nil,
+		entered:    map[backup.RestoreID]bool{},
+		areas:      nil,
+		events:     map[backup.RestoreID]string{},
+		minErr:     nil,
+		afterStage: nil,
+		onApplying: nil,
+		stageBlobs: nil,
 	}
 }
 

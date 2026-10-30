@@ -740,6 +740,12 @@ func (s *Service) backup(
 			slog.String("backup", id.String()), slog.Int("blobs", n), slog.String("first", exported.sum.Unverified[0]))
 	}
 
+	// The export refuses a key that a restore would refuse, so a poisoned row
+	// cannot make this backup and every later one unrestorable.
+	if keyErr := checkExportKeys(id, exported.sum.Blobs); keyErr != nil {
+		return keyErr
+	}
+
 	ordered := orderBlobs(exported.sum.Blobs)
 
 	stored := make([]ManifestBlob, 0, len(ordered))

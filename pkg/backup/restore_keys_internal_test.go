@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
 )
@@ -114,5 +115,73 @@ func TestRefuseKeysFailsClosedWhenTheEventIsLost(t *testing.T) {
 	err = s.refuseKeys(t.Context(), noFence(), in, bad)
 	if !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("refuseKeys with a lost claim: err = %v, want ErrClaimLost", err)
+	}
+}
+
+// TestCopyManifestBlobsChecksTheWholeManifestFirst sends a manifest with a good
+// key and then a hostile key straight to the copy, as if the stage, the check
+// and the pin of the manifest had not refused it. The copy refuses before it
+// copies the first key: the service has no blob store, and a copy of the good
+// key would panic on it.
+func TestCopyManifestBlobsChecksTheWholeManifestFirst(t *testing.T) {
+	t.Parallel()
+
+	live := &eventLive{RestoreLive: nil, events: nil, err: nil}
+	s := keyService(live)
+	manifest := manifestWith(
+		ManifestBlob{Key: "namespaces/ns-abc/pulumi/stk-1/upd-1/1", Size: 1, MD5: "", Sealed: false},
+		ManifestBlob{Key: "audit-checkpoints/epochs/0001/6163/abc", Size: 1, MD5: "", Sealed: false},
+	)
+
+	err := s.copyManifestBlobs(t.Context(), noFence(), keyInput(), manifest)
+	if !errors.Is(err, ErrProtectedKey) {
+		t.Fatalf("copyManifestBlobs: err = %v, want ErrProtectedKey", err)
+	}
+
+	if len(live.events) != 1 {
+		t.Fatalf("events = %v, want one refusal", live.events)
+	}
+}
+
+// TestManifestDigestCoversTheBlobList proves that a change of the blob list
+// changes the digest that the stage pins.
+func TestManifestDigestCoversTheBlobList(t *testing.T) {
+	t.Parallel()
+
+	one := manifestWith(ManifestBlob{Key: "namespaces/ns-a/x", Size: 1, MD5: "", Sealed: false})
+	two := manifestWith(
+		ManifestBlob{Key: "namespaces/ns-a/x", Size: 1, MD5: "", Sealed: false},
+		ManifestBlob{Key: "namespaces/ns-a/y", Size: 1, MD5: "", Sealed: false},
+	)
+
+	a, err := manifestDigest(one)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+
+	again, err := manifestDigest(one)
+	if err != nil || again != a {
+		t.Fatalf("digest of one manifest twice = %q and %q, %v, want equal", a, again, err)
+	}
+
+	b, err := manifestDigest(two)
+	if err != nil || b == a {
+		t.Fatalf("digest of two manifests = %q and %q, %v, want different", a, b, err)
+	}
+
+	pinned := pinnedManifest{
+		sqlSize: 0, sqlSHA: "", schema: 0, dialect: "", kind: "", wrappers: nil, digest: a,
+	}
+	if err := checkPinnedManifest(manifestWith(), "bkp-1", pinned); err == nil {
+		t.Fatal("checkPinnedManifest accepted a manifest that is not the pinned one")
+	}
+}
+
+// manifestWith returns a manifest that holds blobs and nothing else.
+func manifestWith(blobs ...ManifestBlob) Manifest {
+	return Manifest{
+		CreatedAt: time.Time{}, ID: "bkp-1", Dialect: "", PrimaryInstallations: nil, WrapperIDs: nil, Blobs: blobs,
+		Version: "", SQLSHA256: "", Format: 0, SchemaVersion: 0, SQLSize: 0, RowCounts: nil, SQLFormat: "",
+		SQLFiles: nil, InstallationKind: "", Unverified: nil,
 	}
 }

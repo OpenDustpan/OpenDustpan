@@ -222,6 +222,14 @@ func (l *restoreServiceLive) RestoreMaintenanceEntered(ctx context.Context, id b
 func (l *restoreServiceLive) MarkRestoreApplying(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID,
 ) error {
+	l.mu.Lock()
+	hook := l.onApplying
+	l.mu.Unlock()
+
+	if hook != nil {
+		hook()
+	}
+
 	if err := l.recordFence(ctx, f, id, nil); err != nil {
 		return err
 	}
@@ -367,7 +375,13 @@ func (l *restoreServiceLive) StageRestore(
 
 	l.mu.Lock()
 	l.areas = append(l.areas, a)
+	after := l.afterStage
+	sum.Blobs = append(slices.Clone(sum.Blobs), l.stageBlobs...)
 	l.mu.Unlock()
+
+	if after != nil {
+		after()
+	}
 
 	return sum, report, nil
 }

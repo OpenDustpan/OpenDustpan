@@ -3,6 +3,8 @@ package backup
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -812,6 +814,10 @@ type pinnedManifest struct {
 	dialect  Dialect
 	kind     installation.Kind
 	wrappers []string
+	// digest is the SHA-256 of the whole manifest, in hex: the blob list, the
+	// row counts and every other field. A manifest that a person swapped in
+	// the target after the stage has another digest.
+	digest string
 }
 
 // sanitizeRestoreError maps a restore failure to the stable text stored in
@@ -1095,6 +1101,20 @@ func (s *RestoreService) devFlagText() string {
 	return ""
 }
 
+// manifestDigest returns the SHA-256 of the manifest in hex. It encodes the
+// parsed manifest, so two reads of one manifest give one digest, and a change
+// to any field, the blob list included, gives another.
+func manifestDigest(manifest Manifest) (string, error) {
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return "", fmt.Errorf("encode manifest of backup %s: %w", manifest.ID, err)
+	}
+
+	sum := sha256.Sum256(raw)
+
+	return hex.EncodeToString(sum[:]), nil
+}
+
 // pinManifest reads the manifest of id before the checks.
 func (s *RestoreService) pinManifest(ctx context.Context, id ID) (pinnedManifest, error) {
 	manifest, err := readManifest(ctx, s.target, id)
@@ -1107,6 +1127,11 @@ func (s *RestoreService) pinManifest(ctx context.Context, id ID) (pinnedManifest
 		return pinnedManifest{}, parseErr
 	}
 
+	digest, err := manifestDigest(manifest)
+	if err != nil {
+		return pinnedManifest{}, err
+	}
+
 	return pinnedManifest{
 		sqlSize:  manifest.SQLSize,
 		sqlSHA:   string(sha),
@@ -1114,25 +1139,44 @@ func (s *RestoreService) pinManifest(ctx context.Context, id ID) (pinnedManifest
 		dialect:  manifest.Dialect,
 		kind:     manifest.InstallationKind,
 		wrappers: append([]string{}, manifest.WrapperIDs...),
+		digest:   digest,
 	}, nil
 }
 
-// repinManifest rereads the manifest after the pre-backup and refuses to
-// apply when it changed since the checks: fail closed on target mutation.
-func (s *RestoreService) repinManifest(ctx context.Context, id ID, pinned pinnedManifest) error {
+// readPinnedManifest reads the manifest of id once and refuses it when it is
+// not the manifest that the stage pinned: fail closed on a change of the
+// target. A step uses the manifest that this call returns and reads no
+// second copy, so no swap can fall between the check and the use.
+func (s *RestoreService) readPinnedManifest(ctx context.Context, id ID, pinned pinnedManifest) (Manifest, error) {
 	manifest, err := readManifest(ctx, s.target, id)
 	if err != nil {
-		return err
+		return Manifest{}, err
 	}
 
+	if err := checkPinnedManifest(manifest, id, pinned); err != nil {
+		return Manifest{}, err
+	}
+
+	return manifest, nil
+}
+
+// checkPinnedManifest refuses a manifest that differs from the pinned one in
+// the SQL part, the schema, the dialect, the kind, or in any other field: the
+// digest covers the whole manifest.
+func checkPinnedManifest(manifest Manifest, id ID, pinned pinnedManifest) error {
 	sha, parseErr := parseSQLSHA(manifest, id)
 	if parseErr != nil {
 		return parseErr
 	}
 
+	digest, err := manifestDigest(manifest)
+	if err != nil {
+		return err
+	}
+
 	if manifest.SQLSize != pinned.sqlSize || string(sha) != pinned.sqlSHA ||
 		manifest.SchemaVersion != pinned.schema || manifest.Dialect != pinned.dialect ||
-		manifest.InstallationKind != pinned.kind {
+		manifest.InstallationKind != pinned.kind || digest != pinned.digest {
 		return fmt.Errorf("%w: backup %s changed after the checks", ErrCorrupt, id)
 	}
 

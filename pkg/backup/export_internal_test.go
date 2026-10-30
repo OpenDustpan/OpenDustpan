@@ -3,7 +3,6 @@ package backup
 import (
 	"context"
 	"crypto"
-	"io"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 )
@@ -22,12 +21,6 @@ func CheckObjectBytes(h crypto.Hash, sum string, size int64, data []byte) error 
 	}
 
 	return check.verify("test-object")
-}
-
-// PutRestoreBlobForTest runs putRestoreBlob: it copies one blob of a restore
-// into dest and refuses a copy that does not match ref.
-func PutRestoreBlobForTest(ctx context.Context, dest blob.Store, ref ManifestBlob, reader io.Reader) error {
-	return putRestoreBlob(ctx, dest, ref, reader)
 }
 
 // VerifyLiveBlobForTest runs verifyLiveBlob: it checks that the live store

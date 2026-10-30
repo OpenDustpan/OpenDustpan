@@ -27,10 +27,11 @@ const storeCheckPrefix = "store-checks"
 const namespaceKeyPrefix = "namespaces"
 
 // protectedFirstSegments returns the first segments of the keys that the server
-// owns and that a restore never writes: the audit checkpoint copies, the
-// objects of a store check, and the temporary keys of a restore.
+// owns and that a restore never writes, besides the audit checkpoint copies
+// (audit.IsCheckpointKey decides those): the objects of a store check, and the
+// temporary keys of a restore.
 func protectedFirstSegments() []string {
-	return []string{audit.CheckpointPrefix, storeCheckPrefix, tempKeyPrefix}
+	return []string{storeCheckPrefix, tempKeyPrefix}
 }
 
 // protectedKey reports whether key is under a prefix that the server owns.
@@ -142,6 +143,21 @@ func (s *RestoreService) refuseKeys(
 		}
 
 		return keyErr
+	}
+
+	return nil
+}
+
+// checkExportKeys returns ErrProtectedKey for the first blob key of refs that a
+// restore does not write. A backup that names such a key could never be
+// restored, so the export refuses it before it copies anything. The text names
+// the key, because the operator must find the row that names it.
+func checkExportKeys(id ID, refs []BlobRef) error {
+	for _, ref := range refs {
+		if err := checkRestoreKey(ref.Key); err != nil {
+			return fmt.Errorf("backup %s: the data names a blob key that a restore does not write: "+
+				"delete the row that names it: %w", id, err)
+		}
 	}
 
 	return nil
