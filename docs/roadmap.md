@@ -326,7 +326,7 @@ workstations, with no runner.
 
 | Where   | Item                                                                        | Part                            | State |
 |---------|-----------------------------------------------------------------------------|---------------------------------|-------|
-| server  | [RFC 6](rfc/0006-runners-and-remote-runs.md) Runners and remote runs        | all                             | accepted (ADR 282); ADR 139 proposed |
+| server  | [RFC 6](rfc/0006-runners-and-remote-runs.md) Runners and remote runs        | all                             | accepted (ADR 282); ADR 139 accepted, the runner in its own repository |
 | server  | [RFC 5](rfc/0005-profiles.md) Profiles                                      | all                             | discussing; core accepted |
 | server  | [RFC 12](rfc/0012-api-edits-and-write-back.md) API edits and write-back     | all                             | accepted in part |
 | server  | [RFC 13](rfc/0013-policy-and-approvals.md) Policy and approvals             | all: the gates and approvals of ADRs 222 to 230 | accepted |
@@ -552,6 +552,9 @@ design is in its ADRs.
 ## Later
 
 Wanted, but not in an ordered milestone yet. Each row says what it waits on.
+
+RFCs 107 to 110 hold gaps that were never in the proposal of RFC 6. So their
+place here is not a scope cut of milestone 5.
 
 | Item                                                                                               | Waits on                                                        |
 |----------------------------------------------------------------------------------------------------|-----------------------------------------------------------------|

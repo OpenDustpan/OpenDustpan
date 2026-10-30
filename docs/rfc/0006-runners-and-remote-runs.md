@@ -9,7 +9,7 @@ adr: 282
 # RFC 6. Runners and remote runs
 
 Status: accepted as [ADR 282](../adr/0282-runners-and-remote-runs-accept-rfc-6.md)
-on 2026-10-30. ADRs 100 to 103 and 130 to 138 hold the decisions. Where
+on 2026-10-30. ADRs 100 to 103 and 130 to 139 hold the decisions. Where
 this RFC and one of those ADRs differ, the ADR applies.
 
 ## Problem
@@ -164,7 +164,7 @@ _Avoid_: Deployment, hosted run
 ## Gaps from the competitor review
 
 Added 2026-10-10 from the research doc "IaC and TACOS landscape". ADR 282
-decision 5 moves the open gaps to RFCs 107 to 110, and decision 6 names
+decision 6 moves the open gaps to RFCs 107 to 110, and decision 7 names
 the decisions that answer the others.
 
 - Log secret masking, such as `::add-mask` (Spacelift).
@@ -196,7 +196,8 @@ entries for Job and the _Avoid_ entry "executor".
 
 Accepted on 2026-10-30 as
 [ADR 282](../adr/0282-runners-and-remote-runs-accept-rfc-6.md). The project
-owner decided it. ADR 139 stays proposed. The open
+owner decided it. ADR 282 also accepts ADR 139, with the runner in its
+own repository, `OpenDustpan/dustpan-runner`. The open
 gaps of the competitor review move to
 [RFC 107](0107-run-limits-and-the-run-queue.md),
 [RFC 108](0108-run-options-re-runs-and-run-variables.md),
