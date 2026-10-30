@@ -270,7 +270,7 @@ func TestRuleValidate(t *testing.T) {
 		{"project", func(r *collection.Rule) { r.Project = "a b" }, collection.ErrInvalidPattern},
 		{"stack", func(r *collection.Rule) { r.Stack = "" }, collection.ErrInvalidPattern},
 		{"collection", func(r *collection.Rule) { r.Collection = "-x-" }, collection.ErrInvalidName},
-		{"position", func(r *collection.Rule) { r.Position = 0 }, collection.ErrInvalidPosition},
+		{"position", func(r *collection.Rule) { r.Position = -1 }, collection.ErrInvalidPosition},
 	}
 
 	for _, tt := range tests {

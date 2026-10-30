@@ -183,11 +183,12 @@ type Rule struct {
 }
 
 // Validate checks the tool, the patterns, the collection name and the position
-// of the rule, and returns the error of the first one that is invalid. Every
+// of the rule (0 or more; the store reads 0 as "the end" for a new rule and as
+// "the current place" for a change), and returns the error of the first one that is invalid. Every
 // PlacementStore adapter calls it before a write, so a caller that builds a
 // Pattern without ParsePattern cannot store a pattern that was not checked.
 func (r Rule) Validate() error {
-	if r.Position < 1 {
+	if r.Position < 0 {
 		return fmt.Errorf("%w: %d", ErrInvalidPosition, r.Position)
 	}
 
@@ -289,21 +290,32 @@ func quoteName(s string) string {
 // PlacementStore is the persistence port for placement rules. Every write
 // checks the fence and appends its audit entry in the same transaction. The
 // rules of a namespace keep the positions 1 to n with no gap: a write shifts
-// the positions of the other rules in the same transaction. Every adapter runs
-// RunPlacement in pkg/collection/collectiontest. The store does not check that
-// one rule hides another: PlacementService does.
+// the positions of the other rules in the same transaction.
+//
+// The store also keeps the list free of hidden rules. Each create and update
+// reads the list in the transaction that writes it, applies the change, and
+// runs CheckPlacementOrder on the result. A change that leaves a hidden rule
+// returns ErrPlacementConflict and is not stored, also when two callers write
+// at the same time. Every adapter runs RunPlacement in
+// pkg/collection/collectiontest.
 type PlacementStore interface {
 	// CreatePlacementRule inserts r at r.Position and moves the rules from that
-	// position on down by one place. It returns ErrNotFound when r.Collection
-	// does not exist in the namespace, ErrInvalidPosition when r.Position is
-	// not from 1 to the count of rules plus 1, ErrTooManyPlacementRules at
-	// MaxPlacementRules, and namespace.ErrFenced when the fence is stale.
+	// position on down by one place. Position 0 means the end of the list, read
+	// in the same transaction. It returns ErrNotFound when r.Collection does not
+	// exist in the namespace, ErrInvalidPosition when r.Position is not 0 or from
+	// 1 to the count of rules plus 1, ErrPlacementConflict when the result has a
+	// hidden rule, ErrTooManyPlacementRules at MaxPlacementRules, and
+	// namespace.ErrFenced when the fence is stale. It also returns ErrNotFound
+	// when r.Namespace is not the namespace of the fence.
 	CreatePlacementRule(ctx context.Context, r Rule, fence namespace.Fence, e audit.Entry) error
 	// UpdatePlacementRule replaces the tool, the patterns and the collection of
-	// the rule r.ID, and moves it to r.Position. It does not change the
-	// creator or the creation time. It returns ErrPlacementRuleNotFound,
-	// ErrNotFound for a missing collection, ErrInvalidPosition when r.Position
-	// is not from 1 to the count of rules, and namespace.ErrFenced.
+	// the rule r.ID, and moves it to r.Position. Position 0 keeps the place of
+	// the rule. It does not change the creator or the creation time. It returns
+	// ErrPlacementRuleNotFound (also when r.Namespace is not the namespace of the
+	// fence), ErrNotFound for a missing collection, ErrInvalidPosition when
+	// r.Position is not 0 or from 1 to the count of rules,
+	// ErrPlacementConflict when the result has a hidden rule, and
+	// namespace.ErrFenced.
 	UpdatePlacementRule(ctx context.Context, r Rule, fence namespace.Fence, e audit.Entry) error
 	// DeletePlacementRule removes the rule id and closes the gap in the
 	// positions. It returns ErrPlacementRuleNotFound or namespace.ErrFenced.
@@ -313,4 +325,35 @@ type PlacementStore interface {
 	// ListPlacementRules returns the rules of ns in list order. A namespace with
 	// no rule gives an empty list.
 	ListPlacementRules(ctx context.Context, ns namespace.Name) ([]Rule, error)
+}
+
+// CheckPlacementOrder checks the rules, in list order, for the rule with the ID
+// changed: no earlier rule may hide it, and it may not hide a later rule. It
+// returns ErrPlacementConflict, with a message that names the two rules, for a
+// hidden rule. A list that does not hold the ID passes.
+func CheckPlacementOrder(rules []Rule, changed string) error {
+	i := slices.IndexFunc(rules, func(r Rule) bool { return r.ID == changed })
+	if i < 0 {
+		return nil
+	}
+
+	r := &rules[i]
+
+	for j := range i {
+		if rules[j].Hides(*r) {
+			return fmt.Errorf("%w: rule %q already matches every unit of %q, "+
+				"so this rule never matches: put it before that rule or narrow its patterns",
+				ErrPlacementConflict, rules[j].Text(), r.Text())
+		}
+	}
+
+	for j := i + 1; j < len(rules); j++ {
+		if r.Hides(rules[j]) {
+			return fmt.Errorf("%w: rule %q would match every unit of %q, "+
+				"so that rule never matches: put it after that rule or narrow its patterns",
+				ErrPlacementConflict, r.Text(), rules[j].Text())
+		}
+	}
+
+	return nil
 }

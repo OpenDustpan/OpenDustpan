@@ -3,7 +3,6 @@ package collection
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"time"
 
@@ -32,7 +31,8 @@ type PlacementConfig struct {
 
 // PlacementService implements the placement rule use cases. It reads the fence
 // of the namespace before each write, so a write carries the failover version
-// that the namespace has now. It also keeps the list free of hidden rules.
+// that the namespace has now. The store keeps the list free of hidden rules, in
+// the transaction of each write.
 type PlacementService struct {
 	store      PlacementStore
 	namespaces namespace.Store
@@ -55,8 +55,10 @@ func NewPlacementService(cfg PlacementConfig) (*PlacementService, error) {
 }
 
 // Create makes a rule in ns with a new stable ID and appends by. The creator
-// is the subject of by. It returns ErrPlacementConflict when an earlier rule
-// hides the new rule, or when the new rule hides a later one.
+// is the subject of by. Position 0 puts the rule at the end. The store decides
+// the place and checks the order inside the transaction of the write. It returns
+// ErrPlacementConflict when an earlier rule hides the new rule, or when the new
+// rule hides a later one.
 func (s *PlacementService) Create(
 	ctx context.Context, ns namespace.Name, in RuleInput, by audit.Entry,
 ) (Rule, error) {
@@ -69,42 +71,26 @@ func (s *PlacementService) Create(
 		return Rule{}, err
 	}
 
-	rules, err := s.store.ListPlacementRules(ctx, ns)
-	if err != nil {
-		return Rule{}, fmt.Errorf("list placement rules of %s: %w", ns, err)
-	}
-
 	at := s.now().UTC()
 	r := Rule{
 		CreatedAt: at, ID: ident.NewID("plr-"), Namespace: ns, Tool: in.Tool, Project: in.Project,
 		Stack: in.Stack, Collection: in.Collection, CreatedBy: by.Subject, Position: in.Position,
 	}
 
-	if r.Position == 0 {
-		r.Position = len(rules) + 1
-	}
-
-	if r.Position < 1 || r.Position > len(rules)+1 {
-		return Rule{}, fmt.Errorf("%w: %d is not from 1 to %d", ErrInvalidPosition, r.Position, len(rules)+1)
-	}
-
-	if err := checkConflicts(slices.Insert(slices.Clone(rules), r.Position-1, r), r.ID); err != nil {
-		return Rule{}, err
-	}
-
 	by.At = at
 	by.ObjectID = r.ID
+	by.Version = auditText(&r)
 
-	by.Version = r.Text() + "; position " + strconv.Itoa(r.Position)
 	if err := s.store.CreatePlacementRule(ctx, r, fence, by); err != nil {
 		return Rule{}, fmt.Errorf("create placement rule in %s: %w", ns, err)
 	}
 
-	return r, nil
+	return s.store.GetPlacementRule(ctx, ns, r.ID)
 }
 
-// Update replaces the content of the rule id and appends by. It returns
-// ErrPlacementConflict under the same conditions as Create.
+// Update replaces the content of the rule id and appends by. Position 0 keeps
+// the place of the rule. It returns ErrPlacementConflict under the same
+// conditions as Create.
 func (s *PlacementService) Update(
 	ctx context.Context, ns namespace.Name, id string, in RuleInput, by audit.Entry,
 ) (Rule, error) {
@@ -117,42 +103,33 @@ func (s *PlacementService) Update(
 		return Rule{}, err
 	}
 
-	rules, err := s.store.ListPlacementRules(ctx, ns)
-	if err != nil {
-		return Rule{}, fmt.Errorf("list placement rules of %s: %w", ns, err)
-	}
-
-	idx := slices.IndexFunc(rules, func(r Rule) bool { return r.ID == id })
-	if idx < 0 {
-		return Rule{}, fmt.Errorf("placement rule %s: %w", id, ErrPlacementRuleNotFound)
-	}
-
-	r := rules[idx]
-	r.Tool, r.Project, r.Stack, r.Collection = in.Tool, in.Project, in.Stack, in.Collection
-
-	r.Position = in.Position
-	if r.Position == 0 {
-		r.Position = idx + 1
-	}
-
-	if r.Position < 1 || r.Position > len(rules) {
-		return Rule{}, fmt.Errorf("%w: %d is not from 1 to %d", ErrInvalidPosition, r.Position, len(rules))
-	}
-
-	rest := slices.Delete(slices.Clone(rules), idx, idx+1)
-	if err := checkConflicts(slices.Insert(rest, r.Position-1, r), r.ID); err != nil {
-		return Rule{}, err
+	r := Rule{
+		ID: id, Namespace: ns, Tool: in.Tool, Project: in.Project, Stack: in.Stack,
+		Collection: in.Collection, Position: in.Position,
+		// The store keeps the creator and the creation time of the stored rule.
+		CreatedAt: time.Time{}, CreatedBy: "",
 	}
 
 	by.At = s.now().UTC()
-	by.ObjectID = r.ID
+	by.ObjectID = id
+	by.Version = auditText(&r)
 
-	by.Version = r.Text() + "; position " + strconv.Itoa(r.Position)
 	if err := s.store.UpdatePlacementRule(ctx, r, fence, by); err != nil {
 		return Rule{}, fmt.Errorf("update placement rule %s: %w", id, err)
 	}
 
-	return r, nil
+	return s.store.GetPlacementRule(ctx, ns, id)
+}
+
+// auditText returns the text that the audit entry of a make or a change holds:
+// the tool, the patterns and the collection, and the position when the caller
+// named one.
+func auditText(r *Rule) string {
+	if r.Position == 0 {
+		return r.Text()
+	}
+
+	return r.Text() + "; position " + strconv.Itoa(r.Position)
 }
 
 // Delete removes the rule id and appends by.
@@ -214,35 +191,6 @@ func checkRuleInput(in RuleInput) error {
 	}
 
 	return validateRuleFields(in.Tool, in.Project, in.Stack, in.Collection)
-}
-
-// checkConflicts checks the list rules, in list order, for the rule with ID
-// changed: no earlier rule may hide it, and it may not hide a later rule.
-func checkConflicts(rules []Rule, changed string) error {
-	i := slices.IndexFunc(rules, func(r Rule) bool { return r.ID == changed })
-	if i < 0 {
-		return nil
-	}
-
-	r := &rules[i]
-
-	for j := range i {
-		if rules[j].Hides(*r) {
-			return fmt.Errorf("%w: rule %q already matches every unit of %q, "+
-				"so this rule never matches: put it before that rule or narrow its patterns",
-				ErrPlacementConflict, rules[j].Text(), r.Text())
-		}
-	}
-
-	for j := i + 1; j < len(rules); j++ {
-		if r.Hides(rules[j]) {
-			return fmt.Errorf("%w: rule %q would match every unit of %q, "+
-				"so that rule never matches: put it after that rule or narrow its patterns",
-				ErrPlacementConflict, r.Text(), rules[j].Text())
-		}
-	}
-
-	return nil
 }
 
 func (s *PlacementService) fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {

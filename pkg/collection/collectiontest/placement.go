@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -47,6 +48,11 @@ func RunPlacement(t *testing.T, newStore PlacementFactory) {
 		{name: "a namespace holds at most the limit of rules", test: testRuleLimit},
 		{name: "a failed audit write leaves the rules as they were", test: testRuleAuditRollsBack},
 		{name: "a deleted collection takes its rules with it", test: testRuleCollectionDelete},
+		{name: "a create that leaves a hidden rule is refused", test: testRuleCreateHidden},
+		{name: "an update or a move that leaves a hidden rule is refused", test: testRuleUpdateHidden},
+		{name: "two writers never store a hidden rule", test: testRuleConcurrentHidden},
+		{name: "position 0 means the end for a create and the same place for an update", test: testRulePositionZero},
+		{name: "a rule of another namespace than the fence is refused", test: testRuleFenceNamespaceMismatch},
 	}
 
 	for _, tc := range cases {
@@ -204,7 +210,7 @@ func testRuleInvalidPosition(t *testing.T, s PlacementStore) {
 	ns := newNamespace(t, s, "acme")
 	mustAdd(t, s, ns, ruleSpec{"a", "*", collA}, 0)
 
-	for _, pos := range []int{0, -1, 3, 1 << 30} {
+	for _, pos := range []int{-1, thirdPlace, 1 << 30} {
 		ensureCollection(t, s, ns, collB)
 
 		r := collection.Rule{
@@ -388,7 +394,7 @@ func testRuleMove(t *testing.T, s PlacementStore) {
 	wantProjects(t, s, ns.Name, "d", "b", "c", "a")
 
 	bad := ids["a"]
-	for _, pos := range []int{0, -1, 5} {
+	for _, pos := range []int{-1, 5} {
 		bad.Position = pos
 
 		err := s.UpdatePlacementRule(t.Context(), bad, ns.Fence(), auditFor(ns.Fence()))
@@ -551,4 +557,199 @@ func testRuleCollectionDelete(t *testing.T, s PlacementStore) {
 	}
 
 	wantProjects(t, s, ns.Name, "b", "d")
+}
+
+// newRule builds a rule of ns without a store call. The collection must exist.
+func newRule(t *testing.T, ns namespace.Name, spec ruleSpec) collection.Rule {
+	t.Helper()
+
+	return collection.Rule{
+		CreatedAt: now(), ID: ident.NewID("plr-"), Namespace: ns, Tool: collection.ToolPulumi,
+		Project: collection.Pattern(spec.project), Stack: collection.Pattern(spec.stack),
+		Collection: mustName(t, spec.coll), CreatedBy: testSubject, Position: 0,
+	}
+}
+
+func testRuleCreateHidden(t *testing.T, s PlacementStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	mustAdd(t, s, ns, ruleSpec{"a", "*", collA}, 0)
+
+	for name, spec := range map[string]ruleSpec{
+		"narrower after wider": {"a", "x*", collB},
+		"same patterns":        {"a", "*", collB},
+	} {
+		if _, err := addRule(t, s, ns, spec, 0); !errors.Is(err, collection.ErrPlacementConflict) {
+			t.Errorf("%s: err = %v, want ErrPlacementConflict", name, err)
+		}
+	}
+
+	// A wider rule in front of a narrower one hides it.
+	mustAdd(t, s, ns, ruleSpec{"b", "x*", collB}, 0)
+
+	if _, err := addRule(t, s, ns, ruleSpec{"b", "*", collA}, 1); !errors.Is(err, collection.ErrPlacementConflict) {
+		t.Errorf("wider before narrower: err = %v, want ErrPlacementConflict", err)
+	}
+
+	wantProjects(t, s, ns.Name, "a", "b")
+}
+
+func testRuleUpdateHidden(t *testing.T, s PlacementStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	narrow := mustAdd(t, s, ns, ruleSpec{"a", "x*", collA}, 0)
+	wide := mustAdd(t, s, ns, ruleSpec{"a", "*", collB}, 0)
+
+	moved := wide
+	moved.Position = 1
+
+	err := s.UpdatePlacementRule(t.Context(), moved, ns.Fence(), auditFor(ns.Fence()))
+	if !errors.Is(err, collection.ErrPlacementConflict) {
+		t.Errorf("move of the wide rule first: err = %v, want ErrPlacementConflict", err)
+	}
+
+	widened := narrow
+	widened.Stack = "*"
+
+	err = s.UpdatePlacementRule(t.Context(), widened, ns.Fence(), auditFor(ns.Fence()))
+	if !errors.Is(err, collection.ErrPlacementConflict) {
+		t.Errorf("widening the first rule: err = %v, want ErrPlacementConflict", err)
+	}
+
+	got, err := s.GetPlacementRule(t.Context(), ns.Name, narrow.ID)
+	if err != nil || got.Stack != "x*" {
+		t.Errorf("rule after the refused update = %+v, %v, want the old stack", got, err)
+	}
+
+	wantProjects(t, s, ns.Name, "a", "a")
+}
+
+// testRuleConcurrentHidden makes two writers race. The rule "a" / "*" hides
+// "a" / "x*" when it comes first. Each writer puts its rule at the end. The
+// outcomes that are valid are: "x*" then "*", or "*" alone with the "x*" write
+// refused. The list "*" then "x*" is never valid.
+func testRuleConcurrentHidden(t *testing.T, s PlacementStore) {
+	t.Helper()
+
+	const rounds = 20
+
+	for round := range rounds {
+		ns := newNamespace(t, s, "race"+strconv.Itoa(round))
+		ensureCollection(t, s, ns, collA)
+
+		rules := []collection.Rule{
+			newRule(t, ns.Name, ruleSpec{"a", "*", collA}),
+			newRule(t, ns.Name, ruleSpec{"a", "x*", collA}),
+		}
+
+		for _, err := range createTogether(t, s, ns, rules) {
+			if err != nil && !errors.Is(err, collection.ErrPlacementConflict) {
+				t.Fatalf("round %d: unexpected error %v", round, err)
+			}
+		}
+
+		assertNoHiddenRule(t, s, ns.Name, round)
+	}
+}
+
+// createTogether creates the rules at the same time, each in its own goroutine,
+// and returns the error of each create.
+func createTogether(t *testing.T, s PlacementStore, ns namespace.Namespace, rules []collection.Rule) []error {
+	t.Helper()
+
+	errs := make([]error, len(rules))
+
+	var wg sync.WaitGroup
+
+	for i := range rules {
+		wg.Go(func() {
+			errs[i] = s.CreatePlacementRule(t.Context(), rules[i], ns.Fence(), auditFor(ns.Fence()))
+		})
+	}
+
+	wg.Wait()
+
+	return errs
+}
+
+// assertNoHiddenRule fails the test when the store holds a rule that another
+// rule hides.
+func assertNoHiddenRule(t *testing.T, s PlacementStore, ns namespace.Name, round int) {
+	t.Helper()
+
+	list, err := s.ListPlacementRules(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("ListPlacementRules: %v", err)
+	}
+
+	for i := range list {
+		if checkErr := collection.CheckPlacementOrder(list, list[i].ID); checkErr != nil {
+			t.Fatalf("round %d: the store holds a hidden rule: %v", round, checkErr)
+		}
+	}
+}
+
+func testRulePositionZero(t *testing.T, s PlacementStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	first := mustAdd(t, s, ns, ruleSpec{"a", "*", collA}, 0)
+	mustAdd(t, s, ns, ruleSpec{"b", "*", collB}, 0)
+	third := newRule(t, ns.Name, ruleSpec{"c", "*", collA})
+
+	if err := s.CreatePlacementRule(t.Context(), third, ns.Fence(), auditFor(ns.Fence())); err != nil {
+		t.Fatalf("create at position 0: %v", err)
+	}
+
+	wantProjects(t, s, ns.Name, "a", "b", "c")
+
+	first.Position = 0
+	first.Collection = mustName(t, collB)
+
+	if err := s.UpdatePlacementRule(t.Context(), first, ns.Fence(), auditFor(ns.Fence())); err != nil {
+		t.Fatalf("update at position 0: %v", err)
+	}
+
+	wantProjects(t, s, ns.Name, "a", "b", "c")
+}
+
+// testRuleFenceNamespaceMismatch sends a rule of one namespace under the fence
+// of another. The store must refuse each write and change nothing in either
+// namespace. Defense in depth: the service reads the fence of the namespace that
+// it writes, so this guard is the last layer.
+func testRuleFenceNamespaceMismatch(t *testing.T, s PlacementStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	other := newNamespace(t, s, "globex")
+	own := mustAdd(t, s, ns, ruleSpec{"a", "*", collA}, 0)
+	foreign := mustAdd(t, s, other, ruleSpec{"x", "*", collB}, 0)
+
+	// Create: the rule names globex, the fence names acme.
+	stray := newRule(t, other.Name, ruleSpec{"y", "*", collB})
+
+	err := s.CreatePlacementRule(t.Context(), stray, ns.Fence(), auditFor(ns.Fence()))
+	if err == nil {
+		t.Error("create of a rule of another namespace succeeded")
+	}
+
+	// Update: the rule is in globex, the fence names acme.
+	changed := foreign
+	changed.Project = "changed"
+
+	err = s.UpdatePlacementRule(t.Context(), changed, ns.Fence(), auditFor(ns.Fence()))
+	if !errors.Is(err, collection.ErrPlacementRuleNotFound) {
+		t.Errorf("update under the wrong fence: err = %v, want ErrPlacementRuleNotFound", err)
+	}
+
+	// Delete: the rule is in globex, the fence names acme.
+	err = s.DeletePlacementRule(t.Context(), other.Name, foreign.ID, ns.Fence(), auditFor(ns.Fence()))
+	if !errors.Is(err, collection.ErrPlacementRuleNotFound) {
+		t.Errorf("delete under the wrong fence: err = %v, want ErrPlacementRuleNotFound", err)
+	}
+
+	wantProjects(t, s, ns.Name, own.Project.String())
+	wantProjects(t, s, other.Name, "x")
 }

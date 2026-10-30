@@ -45,8 +45,24 @@ func (m *memPlacements) CreatePlacementRule(
 		return err
 	}
 
-	m.rules = slices.Insert(m.rules, r.Position-1, r)
-	m.renumber()
+	if r.Position == 0 {
+		r.Position = len(m.rules) + 1
+	}
+
+	if r.Position < 1 || r.Position > len(m.rules)+1 {
+		return collection.ErrInvalidPosition
+	}
+
+	next := slices.Insert(slices.Clone(m.rules), r.Position-1, r)
+	for i := range next {
+		next[i].Position = i + 1
+	}
+
+	if err := collection.CheckPlacementOrder(next, r.ID); err != nil {
+		return err
+	}
+
+	m.rules = next
 	m.entries = append(m.entries, e)
 
 	return nil
@@ -66,10 +82,26 @@ func (m *memPlacements) UpdatePlacementRule(
 		return collection.ErrPlacementRuleNotFound
 	}
 
+	if r.Position == 0 {
+		r.Position = i + 1
+	}
+
+	if r.Position < 1 || r.Position > len(m.rules) {
+		return collection.ErrInvalidPosition
+	}
+
 	r.CreatedAt, r.CreatedBy = m.rules[i].CreatedAt, m.rules[i].CreatedBy
-	m.rules = slices.Delete(m.rules, i, i+1)
-	m.rules = slices.Insert(m.rules, r.Position-1, r)
-	m.renumber()
+	next := slices.Insert(slices.Delete(slices.Clone(m.rules), i, i+1), r.Position-1, r)
+
+	for j := range next {
+		next[j].Position = j + 1
+	}
+
+	if err := collection.CheckPlacementOrder(next, r.ID); err != nil {
+		return err
+	}
+
+	m.rules = next
 	m.entries = append(m.entries, e)
 
 	return nil

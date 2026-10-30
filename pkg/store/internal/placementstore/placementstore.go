@@ -12,9 +12,14 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 )
 
-// Insert returns ids with id added at the 1-based position pos. The position
-// must be from 1 to len(ids)+1, otherwise it returns collection.ErrInvalidPosition.
+// Insert returns ids with id added at the 1-based position pos. Position 0 means
+// the end. Otherwise the position must be from 1 to len(ids)+1, or it returns
+// collection.ErrInvalidPosition.
 func Insert(ids []string, id string, pos int) ([]string, error) {
+	if pos == 0 {
+		pos = len(ids) + 1
+	}
+
 	if pos < 1 || pos > len(ids)+1 {
 		return nil, fmt.Errorf("%w: %d is not from 1 to %d", collection.ErrInvalidPosition, pos, len(ids)+1)
 	}
@@ -22,14 +27,18 @@ func Insert(ids []string, id string, pos int) ([]string, error) {
 	return slices.Insert(slices.Clone(ids), pos-1, id), nil
 }
 
-// Move returns ids with id taken out and put at the 1-based position pos. The
-// position must be from 1 to len(ids), otherwise it returns
-// collection.ErrInvalidPosition. It returns collection.ErrPlacementRuleNotFound
-// when ids does not hold id.
+// Move returns ids with id taken out and put at the 1-based position pos.
+// Position 0 keeps the current place. Otherwise the position must be from 1 to
+// len(ids), or it returns collection.ErrInvalidPosition. It returns
+// collection.ErrPlacementRuleNotFound when ids does not hold id.
 func Move(ids []string, id string, pos int) ([]string, error) {
 	idx := slices.Index(ids, id)
 	if idx < 0 {
 		return nil, collection.ErrPlacementRuleNotFound
+	}
+
+	if pos == 0 {
+		pos = idx + 1
 	}
 
 	if pos < 1 || pos > len(ids) {

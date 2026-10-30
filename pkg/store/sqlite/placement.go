@@ -67,7 +67,11 @@ func (s *Store) CreatePlacementRule(
 			return fmt.Errorf("insert placement rule: %w", err)
 		}
 
-		return renumberPlacementRules(ctx, q, r.Namespace, ordered)
+		if renumErr := renumberPlacementRules(ctx, q, r.Namespace, ordered); renumErr != nil {
+			return renumErr
+		}
+
+		return checkPlacementOrder(ctx, q, r.Namespace, r.ID)
 	})
 }
 
@@ -117,7 +121,11 @@ func (s *Store) UpdatePlacementRule(
 			return collection.ErrPlacementRuleNotFound
 		}
 
-		return renumberPlacementRules(ctx, q, r.Namespace, ordered)
+		if renumErr := renumberPlacementRules(ctx, q, r.Namespace, ordered); renumErr != nil {
+			return renumErr
+		}
+
+		return checkPlacementOrder(ctx, q, r.Namespace, r.ID)
 	})
 }
 
@@ -205,6 +213,27 @@ func placementRuleFromRow(row *db.GetPlacementRuleRow) collection.Rule {
 		CreatedBy:  row.CreatedBy,
 		Position:   int(row.Position),
 	}
+}
+
+// checkPlacementOrder reads the rules of ns in the caller's transaction and
+// returns collection.ErrPlacementConflict when a rule hides the rule changed, or
+// the rule changed hides another. The caller holds the write lock of the
+// namespace, so no other writer changes the list between the read and the
+// commit. A conflict rolls back the transaction of the write.
+func checkPlacementOrder(ctx context.Context, q *db.Queries, ns namespace.Name, changed string) error {
+	rows, err := q.ListPlacementRules(ctx, ns.String())
+	if err != nil {
+		return fmt.Errorf("select placement rules: %w", err)
+	}
+
+	rules := make([]collection.Rule, 0, len(rows))
+
+	for i := range rows {
+		row := db.GetPlacementRuleRow(rows[i])
+		rules = append(rules, placementRuleFromRow(&row))
+	}
+
+	return collection.CheckPlacementOrder(rules, changed)
 }
 
 // renumberPlacementRules gives the rules of ns the positions 1 to n in the
