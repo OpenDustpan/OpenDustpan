@@ -1327,14 +1327,19 @@ func (s *Updates) sweepStackOnStart(ctx context.Context, ns namespace.ID, ref Re
 // cleanup failure never fails the start, and the blobs stay for the next
 // sweep. No log line names a blob key.
 func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID) {
-	listed, err := bl.listAll(ctx, bl.stackPrefix(stackID))
+	// The sweep goes page by page: each page is listed, then the keep set is
+	// read for the page, then the orphans of the page go. So the sweep never
+	// holds the blobs of the whole stack.
+	target := sweepTarget{ref: ref, stackID: stackID, update: ""}
+
+	err := blob.WalkPages(ctx, bl, bl.stackPrefix(stackID), func(page []blob.Object) error {
+		s.sweepOrphans(ctx, bl, target, page)
+
+		return nil
+	})
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
 	}
-
-	s.sweepOrphans(ctx, bl, sweepTarget{ref: ref, stackID: stackID, update: ""}, listed)
 }
 
 // resolveCheckpoint fills the deployment of a checkpoint row: it reads and

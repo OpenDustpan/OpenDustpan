@@ -28,6 +28,7 @@ func runPages(t *testing.T, newStore Factory) {
 		{"list page stays inside its prefix", testPageInsidePrefix},
 		{"list page with an after key outside the prefix is ErrInvalidKey", testPageAfterOutside},
 		{"list walk sees a key added during the walk once or not at all", testPageAddedDuringWalk},
+		{"list pages keep the byte order of the keys", testPageByteOrder},
 		{"list page with a canceled context fails", testPageCanceled},
 	}
 
@@ -319,4 +320,72 @@ func testPageCanceled(t *testing.T, s blob.Store) {
 	if _, err := s.ListPage(ctx, blob.PageRequest{Prefix: "unit/", After: "", Limit: 10}); err == nil {
 		t.Fatal("page with a canceled context = nil error, want error")
 	}
+}
+
+// testPageByteOrder proves that every page follows the byte order of the key
+// text, not the order of a directory tree: "a-c" sorts before "a/b", because
+// "-" is byte 0x2d and "/" is 0x2f. A page can start after a key inside a
+// directory and after the key of a whole directory.
+func testPageByteOrder(t *testing.T, s blob.Store) {
+	t.Helper()
+
+	names := []string{
+		"unit/a/b", "unit/a-c", "unit/a.b", "unit/a_b", "unit/a0", "unit/a/b-1", "unit/a/d/e", "unit/a/c", "unit/b",
+	}
+
+	for _, name := range names {
+		put(t, s, mustKey(t, name), []byte("x"))
+	}
+
+	want := slices.Clone(names)
+	slices.Sort(want)
+
+	for _, limit := range []int{1, 2, 3, len(names)} {
+		if got := walkPages(t, s, limit); !slices.Equal(got, want) {
+			t.Fatalf("limit %d: walk = %v, want %v", limit, got, want)
+		}
+	}
+
+	// A page that starts after any key, also one that is not stored, holds the
+	// stored keys after it.
+	for _, after := range append(slices.Clone(want), "unit/a/aa", "unit/a-", "unit/a/d/f", "unit/a0z") {
+		var wantAfter []string
+
+		for _, name := range want {
+			if name > after {
+				wantAfter = append(wantAfter, name)
+			}
+		}
+
+		got := page(t, s, blob.PageRequest{Prefix: "unit/", After: blob.Key(after), Limit: blob.MaxPageLimit})
+		if keys := objectKeys(got.Objects); !slices.Equal(keys, wantAfter) && (len(keys) != 0 || len(wantAfter) != 0) {
+			t.Fatalf("after %q: page = %v, want %v", after, keys, wantAfter)
+		}
+	}
+}
+
+// walkPages reads every page under "unit/" with the limit and returns the
+// keys in the order that the pages gave them.
+func walkPages(t *testing.T, s blob.Store, limit int) []string {
+	t.Helper()
+
+	var (
+		got   []string
+		after blob.Key
+	)
+
+	for range blob.MaxPageLimit {
+		p := page(t, s, blob.PageRequest{Prefix: "unit/", After: after, Limit: limit})
+		got = append(got, objectKeys(p.Objects)...)
+
+		if p.Next == "" {
+			return got
+		}
+
+		after = p.Next
+	}
+
+	t.Fatal("walk does not end")
+
+	return nil
 }

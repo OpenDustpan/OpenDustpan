@@ -1481,7 +1481,10 @@ func randomIndex(n int) int {
 
 // listObjects walks every page under dir and returns the objects. The check
 // needs the names of all copies of a directory to group them, so it keeps the
-// objects of one directory, not their contents.
+// objects of one directory, not their contents. The directory stays small:
+// it holds the checkpoints of one scope in one epoch, at most
+// MaxCheckpointCopies copies of each sequence, and a copy is a few hundred
+// bytes of names and times.
 func listObjects(ctx context.Context, store blob.Store, dir string) ([]blob.Object, error) {
 	var out []blob.Object
 

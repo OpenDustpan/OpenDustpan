@@ -96,9 +96,11 @@ type Store interface {
 	// Delete removes the object under key. Deleting a missing key is not an error.
 	Delete(ctx context.Context, key Key) error
 	// ListPage returns one page of the objects under req.Prefix, ordered by
-	// key, as PageRequest describes. A caller that needs every object walks
-	// the pages with Walk. A caller lists one unit to find stored objects no
-	// record references.
+	// key, as PageRequest describes. It returns ErrInvalidPage for a limit out
+	// of range, and ErrInvalidKey for an After that is not a valid key or that
+	// is outside the prefix. A caller that needs every object walks the pages
+	// with Walk or WalkPages. A caller lists one unit to find stored objects
+	// no record references.
 	ListPage(ctx context.Context, req PageRequest) (Page, error)
 	// Ping returns nil when the store can serve a request, and an error
 	// otherwise. The error holds no credential and no path.

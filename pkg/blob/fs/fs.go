@@ -148,20 +148,60 @@ func (s *Store) Delete(ctx context.Context, key blob.Key) error {
 // no directory yields an empty page. The temporary directory never lists:
 // in-flight uploads stay invisible until their link lands.
 //
-// A directory tree does not list in the order of the keys, so the adapter
-// reads the names under the prefix and sorts them before it cuts the page.
-// It keeps the names in memory, not the contents.
+// The adapter walks the tree in the byte order of the keys and stops after
+// Limit objects past After. A directory is read and sorted as a whole, but a
+// directory that sorts wholly before After is not read, and no directory
+// after the page is read. It stats only the files that it lists.
 func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	if err := req.Validate(); err != nil {
 		return blob.Page{}, fmt.Errorf("list %s: %w", req.Prefix, err)
 	}
 
-	objects, err := s.listAll(ctx, req.Prefix)
+	if err := ctx.Err(); err != nil {
+		return blob.Page{}, fmt.Errorf("list %s: %w", req.Prefix, err)
+	}
+
+	dir := strings.TrimSuffix(req.Prefix, "/")
+	if dir == "" {
+		dir = "."
+	}
+
+	info, err := s.root.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return blob.Page{Objects: nil, Next: ""}, nil
+	}
+
 	if err != nil {
+		return blob.Page{}, fmt.Errorf("list %s: %w", req.Prefix, err)
+	}
+
+	if !info.IsDir() {
+		// A prefix that names a file lists just it; anything else
+		// yields an empty page.
+		if key, keyErr := blob.ParseKey(dir); keyErr == nil {
+			one := []blob.Object{{ModifiedAt: info.ModTime().UTC(), Key: key}}
+
+			return blob.PageOf(one, req), nil
+		}
+
+		return blob.Page{Objects: nil, Next: ""}, nil
+	}
+
+	// One object more than the limit shows whether the store holds more.
+	w := &pageWalk{after: req.After.String(), max: req.Limit + 1, out: nil}
+
+	if err := s.descend(ctx, dir, w); err != nil {
 		return blob.Page{}, err
 	}
 
-	return blob.PageOf(objects, req), nil
+	page := blob.Page{Objects: w.out, Next: ""}
+
+	if len(w.out) > req.Limit {
+		page.Objects = w.out[:req.Limit]
+		page.Next = w.out[req.Limit-1].Key
+	}
+
+	return page, nil
 }
 
 // Ping reports whether the directory exists and accepts writes. It writes a
@@ -191,63 +231,56 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
-// listAll returns every object under prefix, ordered by key.
-func (s *Store) listAll(ctx context.Context, prefix string) ([]blob.Object, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("list %s: %w", prefix, err)
-	}
-
-	dir := strings.TrimSuffix(prefix, "/")
-	if dir == "" {
-		dir = "."
-	}
-
-	info, err := s.root.Stat(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("list %s: %w", prefix, err)
-	}
-
-	if !info.IsDir() {
-		// A prefix that names a file lists just it; anything else
-		// yields an empty list.
-		if key, keyErr := blob.ParseKey(dir); keyErr == nil {
-			return []blob.Object{{ModifiedAt: info.ModTime().UTC(), Key: key}}, nil
-		}
-
-		return nil, nil
-	}
-
-	var out []blob.Object
-
-	if err := s.listDir(dir, &out); err != nil {
-		return nil, err
-	}
-
-	slices.SortFunc(out, func(a, b blob.Object) int {
-		return strings.Compare(a.Key.String(), b.Key.String())
-	})
-
-	return out, nil
+// pageWalk is the state of one ListPage: the key to start after, the count of
+// objects at which the walk stops, and the objects so far.
+type pageWalk struct {
+	after string
+	out   []blob.Object
+	max   int
 }
 
-// listDir appends every object under dir to out.
-func (s *Store) listDir(dir string, out *[]blob.Object) error {
+// full reports whether the walk holds all the objects that it needs.
+func (w *pageWalk) full() bool { return len(w.out) >= w.max }
+
+// descend adds the objects under dir to w in the byte order of their keys,
+// and stops when w is full. The entries of a directory sort by the key text:
+// a file by its name and a directory by its name and a slash, so "a-c" comes
+// before "a/b".
+func (s *Store) descend(ctx context.Context, dir string, w *pageWalk) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("list %s: %w", dir, err)
+	}
+
 	entries, err := s.readDirEntries(dir)
 	if err != nil {
 		return err
 	}
 
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
+		return strings.Compare(entrySortName(a), entrySortName(b))
+	})
+
 	for _, entry := range entries {
-		if err := s.listEntry(dir, entry, out); err != nil {
+		if w.full() {
+			return nil
+		}
+
+		if err := s.listEntry(ctx, dir, entry, w); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// entrySortName returns the text that orders entry among the entries of its
+// directory: the keys below a directory all start with its name and a slash.
+func entrySortName(entry fs.DirEntry) string {
+	if entry.IsDir() {
+		return entry.Name() + "/"
+	}
+
+	return entry.Name()
 }
 
 // readDirEntries returns the entries of dir.
@@ -271,10 +304,11 @@ func (s *Store) readDirEntries(dir string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-// listEntry appends entry to out, descending into directories. The
+// listEntry adds entry to w, descending into directories. A directory whose
+// keys all sort at or before the key to start after is not read. The
 // temporary directory never lists: in-flight uploads stay invisible until
 // their link lands.
-func (s *Store) listEntry(dir string, entry fs.DirEntry, out *[]blob.Object) error {
+func (s *Store) listEntry(ctx context.Context, dir string, entry fs.DirEntry, w *pageWalk) error {
 	name := path.Join(dir, entry.Name())
 
 	if entry.IsDir() {
@@ -282,7 +316,16 @@ func (s *Store) listEntry(dir string, entry fs.DirEntry, out *[]blob.Object) err
 			return nil
 		}
 
-		return s.listDir(name, out)
+		sub := name + "/"
+		if w.after != "" && sub < w.after && !strings.HasPrefix(w.after, sub) {
+			return nil
+		}
+
+		return s.descend(ctx, name, w)
+	}
+
+	if w.after != "" && name <= w.after {
+		return nil
 	}
 
 	key, keyErr := blob.ParseKey(name)
@@ -292,7 +335,7 @@ func (s *Store) listEntry(dir string, entry fs.DirEntry, out *[]blob.Object) err
 			return fmt.Errorf("list %s: %w", dir, err)
 		}
 
-		*out = append(*out, blob.Object{ModifiedAt: info.ModTime().UTC(), Key: key})
+		w.out = append(w.out, blob.Object{ModifiedAt: info.ModTime().UTC(), Key: key})
 	}
 
 	return nil

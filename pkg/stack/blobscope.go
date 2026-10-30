@@ -155,9 +155,20 @@ func (b *scopedBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.
 		return blob.Page{}, b.refusePrefix(ctx, req.Prefix)
 	}
 
+	// Defense in depth: the view checks the position too. This check stays so
+	// that a list never starts from a key outside the directory of the stack,
+	// whatever the view and the store under it do.
+	if req.After != "" && !strings.HasPrefix(req.After.String(), b.allowed) {
+		return blob.Page{}, b.record(ctx, "list", b.whereOf(req.After))
+	}
+
 	page, err := b.view.ListPage(ctx, req)
 	if err != nil {
 		return blob.Page{}, b.refuse(ctx, "list", err)
+	}
+
+	if page.Next != "" && !strings.HasPrefix(page.Next.String(), b.allowed) {
+		return blob.Page{}, b.record(ctx, "list", b.whereOf(page.Next))
 	}
 
 	for i := range page.Objects {
@@ -178,9 +189,11 @@ func (b *scopedBlobs) Ping(ctx context.Context) error {
 	return nil
 }
 
-// listAll walks every page under prefix and returns the objects. A caller
-// that needs the whole listing of one update or one stack uses it, and a
-// caller that can act on each object as it arrives uses blob.Walk.
+// listAll walks every page under prefix and returns the objects. Only a
+// caller that lists the directory of one update uses it: that directory holds
+// the saves and the journal batches of one update, and the sweep that runs
+// after each save keeps it small. A caller that lists a stack acts on each page
+// as it arrives with blob.WalkPages.
 func (b *scopedBlobs) listAll(ctx context.Context, prefix string) ([]blob.Object, error) {
 	var out []blob.Object
 

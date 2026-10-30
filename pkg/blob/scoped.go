@@ -110,6 +110,19 @@ func (v *Scoped) ListPage(ctx context.Context, req PageRequest) (Page, error) {
 		return Page{}, ErrOutOfScope
 	}
 
+	// Defense in depth: the adapters validate the request too, and a cache or a
+	// fault wrapper sends it on unchanged. These checks stay so that a chain of
+	// stores with one layer that forgets to validate cannot list from a limit
+	// or from a position that the port refuses, or from a key of another
+	// namespace. They do not rely on the store under the view.
+	if err := req.Validate(); err != nil {
+		return Page{}, err
+	}
+
+	if req.After != "" && !v.inScope(req.After) {
+		return Page{}, ErrOutOfScope
+	}
+
 	page, err := v.store.ListPage(ctx, req)
 	if err != nil {
 		return Page{}, err

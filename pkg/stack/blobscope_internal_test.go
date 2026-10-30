@@ -651,3 +651,96 @@ func TestListRefusesAKeyOutsideTheStack(t *testing.T) {
 		t.Fatalf("refusals = %+v, want one list refusal in the stack directory", rec.got)
 	}
 }
+
+// nextFault answers a Next key that it was given, and counts the requests that
+// reach it, as an adapter that does not check the request would.
+type nextFault struct {
+	*countingStore
+
+	next blob.Key
+}
+
+func (n *nextFault) ListPage(context.Context, blob.PageRequest) (blob.Page, error) {
+	n.mu.Lock()
+	n.calls++
+	n.mu.Unlock()
+
+	return blob.Page{Objects: nil, Next: n.next}, nil
+}
+
+// listRun is the outcome of listRefusal: the page and the error of the call,
+// the refusals that the view recorded and the count of requests that reached
+// the store.
+type listRun struct {
+	err      error
+	refusals []recordedRefusal
+	page     blob.Page
+	calls    int
+}
+
+// listRefusal lists the stack through a store that answers next, with the
+// position after.
+func listRefusal(t *testing.T, after, next blob.Key) listRun {
+	t.Helper()
+
+	rec := &scopeRecorder{err: nil, got: nil}
+	store := &nextFault{countingStore: newCountingStore(), next: next}
+
+	access, err := newBlobAccess(store, rec)
+	if err != nil {
+		t.Fatalf("access: %v", err)
+	}
+
+	b, err := access.scope(scopeNS, scopeStack)
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+
+	req := blob.PageRequest{Prefix: b.stackPrefix(scopeStack), After: after, Limit: 10}
+	page, err := b.ListPage(t.Context(), req)
+
+	return listRun{err: err, refusals: rec.got, page: page, calls: store.calls}
+}
+
+// TestListPageChecksAfterAndNextAgainstTheStack checks that the layer under the
+// delete of a purge and of a sweep refuses a position outside the directory of
+// the stack: an After key of another stack never reaches the store, and a Next
+// key of another stack never reaches the caller.
+func TestListPageChecksAfterAndNextAgainstTheStack(t *testing.T) {
+	t.Parallel()
+
+	other := blob.Key("namespaces/" + string(scopeNS) + "/pulumi/stk-2/upd-1/1")
+	elsewhere := blob.Key("namespaces/" + scopeOther + "/pulumi/stk-1/upd-1/1")
+
+	cases := []struct {
+		name      string
+		after     blob.Key
+		next      blob.Key
+		wantCalls int
+		want      scopeaudit.Where
+	}{
+		{"after of another stack", other, "", 0, scopeaudit.OutsideUnitDirectory},
+		{"after of another namespace", elsewhere, "", 0, scopeaudit.OutsideNamespace},
+		{"next of another stack", "", other, 1, scopeaudit.OutsideUnitDirectory},
+		{"next of another namespace", "", elsewhere, 1, scopeaudit.OutsideNamespace},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := listRefusal(t, tc.after, tc.next)
+			if !errors.Is(run.err, blob.ErrOutOfScope) || len(run.page.Objects) != 0 || run.page.Next != "" {
+				t.Fatalf("page = %v, err = %v; want an empty page and blob.ErrOutOfScope", run.page, run.err)
+			}
+
+			if run.calls != tc.wantCalls {
+				t.Fatalf("store saw %d calls, want %d", run.calls, tc.wantCalls)
+			}
+
+			if len(run.refusals) != 1 || run.refusals[0].op != "list" || run.refusals[0].where != tc.want {
+				t.Fatalf("refusals = %+v, want one list refusal at %v", run.refusals, tc.want)
+			}
+		})
+	}
+}

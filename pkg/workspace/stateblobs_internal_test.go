@@ -329,7 +329,7 @@ func TestStateBlobsListRefusesHostileWorkspaces(t *testing.T) {
 
 			b, store, refusals := newScopeBlobs(t)
 
-			_, err := b.list(context.Background(), acmeID, ws)
+			_, err := listState(context.Background(), b, acmeID, ws)
 			if !errors.Is(err, blob.ErrOutOfScope) {
 				t.Fatalf("err = %v, want blob.ErrOutOfScope", err)
 			}
@@ -354,7 +354,7 @@ func TestStateBlobsListRefusesNoWorkspace(t *testing.T) {
 
 	b, store, refusals := newScopeBlobs(t)
 
-	listed, err := b.list(t.Context(), acmeID, "")
+	listed, err := listState(t.Context(), b, acmeID, "")
 	if !errors.Is(err, blob.ErrOutOfScope) || len(listed) != 0 {
 		t.Fatalf("list = %v, %v, want no blobs and %v", listed, err, blob.ErrOutOfScope)
 	}
@@ -388,12 +388,12 @@ func TestStateBlobsInScope(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 
-	listed, err := b.list(ctx, acmeID, testWS)
+	listed, err := listState(ctx, b, acmeID, testWS)
 	if err != nil || len(listed) != 1 || listed[0].Key != key {
 		t.Fatalf("list = %v, %v, want only %q", listed, err, key)
 	}
 
-	if other, listErr := b.list(ctx, otherID, testWS); listErr != nil || len(other) != 0 {
+	if other, listErr := listState(ctx, b, otherID, testWS); listErr != nil || len(other) != 0 {
 		t.Fatalf("list of other = %v, %v, want none", other, listErr)
 	}
 
@@ -608,7 +608,7 @@ func TestStateBlobsDeleteEveryShapeInTheDirectory(t *testing.T) {
 		}
 	}
 
-	listed, err := b.list(ctx, acmeID, testWS)
+	listed, err := listState(ctx, b, acmeID, testWS)
 	if err != nil || len(listed) != 4 {
 		t.Fatalf("list = %d, %v, want 4", len(listed), err)
 	}
@@ -619,11 +619,24 @@ func TestStateBlobsDeleteEveryShapeInTheDirectory(t *testing.T) {
 		}
 	}
 
-	if left, listErr := b.list(ctx, acmeID, testWS); listErr != nil || len(left) != 0 {
+	if left, listErr := listState(ctx, b, acmeID, testWS); listErr != nil || len(left) != 0 {
 		t.Fatalf("list after the delete = %d, %v, want none", len(left), listErr)
 	}
 
 	if got := refusals.all(); len(got) != 0 {
 		t.Fatalf("refusals = %v, want none", got)
 	}
+}
+
+// listState collects every blob of the workspace ws in a test.
+func listState(ctx context.Context, b *stateBlobs, ns namespace.ID, ws ID) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := b.walk(ctx, ns, ws, func(page []blob.Object) error {
+		out = append(out, page...)
+
+		return nil
+	})
+
+	return out, err
 }

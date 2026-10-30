@@ -65,9 +65,15 @@ func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, 
 			return blob.Page{}, fmt.Errorf("s3: list %s: %w", req.Prefix, err)
 		}
 
+		want := req.Limit - len(out)
+
+		if err := checkAnswer(raw, listPrefix, startAfter, want); err != nil {
+			return blob.Page{}, fmt.Errorf("s3: list %s: %w", req.Prefix, err)
+		}
+
 		out = append(out, s.pageObjects(raw)...)
 
-		if !raw.IsTruncated || len(raw.Contents) == 0 {
+		if !raw.IsTruncated {
 			return blob.Page{Objects: out, Next: ""}, nil
 		}
 
@@ -79,6 +85,43 @@ func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, 
 			return blob.Page{Objects: out, Next: out[len(out)-1].Key}, nil
 		}
 	}
+}
+
+// checkAnswer fails closed on an answer that breaks the rules of the request.
+// Every name must be under listPrefix, after startAfter, and after the name
+// before it, and the answer must hold at most maxKeys names. A truncated
+// answer must hold a name, because the next request starts after the last
+// one: an answer that says more follow and holds nothing would end the listing
+// with objects missing. Each failure wraps blob.ErrInvalidPage.
+//
+// Defense in depth: a store that keeps the rules of ListObjectsV2 never breaks
+// them. This check stays so that a store that ignores prefix, start-after or
+// max-keys cannot show a key of another directory, a key twice, or a shorter
+// listing than the store holds. It does not rely on the caller of ListPage.
+func checkAnswer(raw listResult, listPrefix, startAfter string, maxKeys int) error {
+	if raw.IsTruncated && len(raw.Contents) == 0 {
+		return fmt.Errorf("the store says more keys follow and sends none: %w", blob.ErrInvalidPage)
+	}
+
+	if len(raw.Contents) > maxKeys {
+		return fmt.Errorf("the store sent %d keys for max-keys %d: %w", len(raw.Contents), maxKeys, blob.ErrInvalidPage)
+	}
+
+	last := startAfter
+
+	for _, content := range raw.Contents {
+		if !strings.HasPrefix(content.Key, listPrefix) {
+			return fmt.Errorf("the store sent a key outside the prefix: %w", blob.ErrInvalidPage)
+		}
+
+		if content.Key <= last {
+			return fmt.Errorf("the store sent a key that is not after the one before it: %w", blob.ErrInvalidPage)
+		}
+
+		last = content.Key
+	}
+
+	return nil
 }
 
 // listPrefix returns the object name prefix that List sends for prefix:

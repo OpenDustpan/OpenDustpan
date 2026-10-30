@@ -318,3 +318,55 @@ func TestListFailsOnAccessDenied(t *testing.T) {
 		t.Fatalf("server saw %d calls, want 1", calls)
 	}
 }
+
+// TestListPageRefusesHostileAnswers proves the adapter fails closed on an
+// answer that breaks the rules of the request: a truncated answer with no key,
+// a key outside the prefix, a key at or before start-after, keys out of order,
+// and more keys than max-keys. Each case sends the answer to a store that has
+// no other layer to stop it.
+func TestListPageRefusesHostileAnswers(t *testing.T) {
+	t.Parallel()
+
+	modified := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name   string
+		after  blob.Key
+		limit  int
+		answer string
+	}{
+		{"truncated with no key", "", 2, truncatedListPage(modified)},
+		{"key outside the prefix", "", 2, listPage(modified, "pfx/tofu/ws-1/a", "pfx/tofu/ws-2/b")},
+		{"key of another store prefix", "", 2, listPage(modified, "other/tofu/ws-1/a")},
+		{"key before start-after", "tofu/ws-1/m", 2, listPage(modified, "pfx/tofu/ws-1/a")},
+		{"key equal to start-after", "tofu/ws-1/m", 2, listPage(modified, "pfx/tofu/ws-1/m")},
+		{"keys out of order", "", 2, listPage(modified, "pfx/tofu/ws-1/b", "pfx/tofu/ws-1/a")},
+		{"key twice", "", 2, listPage(modified, "pfx/tofu/ws-1/a", "pfx/tofu/ws-1/a")},
+		{"more keys than max-keys", "", 1, listPage(modified, "pfx/tofu/ws-1/a", "pfx/tofu/ws-1/b")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeServer(t, func(*http.Request, []byte, int) (int, string) {
+				return http.StatusOK, tc.answer
+			})
+			server := httptest.NewServer(fake)
+			t.Cleanup(server.Close)
+
+			s := openStore(t, server, testSigner(server.URL, nil), "pfx")
+
+			req := blob.PageRequest{Prefix: "tofu/ws-1", After: tc.after, Limit: tc.limit}
+
+			page, err := s.ListPage(t.Context(), req)
+			if !errors.Is(err, blob.ErrInvalidPage) || len(page.Objects) != 0 || page.Next != "" {
+				t.Fatalf("page = %v, err = %v; want an empty page and ErrInvalidPage", page, err)
+			}
+
+			if calls := fake.calls(); calls != 1 {
+				t.Fatalf("server saw %d calls, want 1", calls)
+			}
+		})
+	}
+}

@@ -174,43 +174,76 @@ func TestWalkStopsOnTheErrorOfTheCallback(t *testing.T) {
 	}
 }
 
+// scriptStore answers the pages in order, whatever the request is.
+type scriptStore struct {
+	blob.Store
+
+	pages []blob.Page
+	call  int
+}
+
+func (s *scriptStore) ListPage(context.Context, blob.PageRequest) (blob.Page, error) {
+	if s.call >= len(s.pages) {
+		return blob.Page{Objects: nil, Next: ""}, nil
+	}
+
+	page := s.pages[s.call]
+	s.call++
+
+	return page, nil
+}
+
+// pg returns a page that holds the keys and answers next.
+func pg(next blob.Key, keys ...string) blob.Page {
+	return blob.Page{Objects: objects(keys...), Next: next}
+}
+
 func TestWalkFailsClosed(t *testing.T) {
 	t.Parallel()
 
+	invalid := blob.ErrInvalidPage
+	good := pg("a/2", "a/1", "a/2")
+	tooMany := make([]blob.Object, 0, blob.MaxPageLimit+1)
+
+	for i := range blob.MaxPageLimit + 1 {
+		tooMany = append(tooMany, blob.Object{Key: blob.Key(fmt.Sprintf("a/k-%06d", i)), ModifiedAt: time.Time{}})
+	}
+
 	cases := []struct {
 		name  string
-		store blob.Store
+		pages []blob.Page
+		err   error
 		want  error
-		calls int
+		seen  []string
 	}{
-		{
-			"a store error ends the walk",
-			stuckStore{Store: nil, page: blob.Page{Objects: nil, Next: ""}, err: blob.ErrThrottled},
-			blob.ErrThrottled, 0,
-		},
-		{
-			"a next key that does not advance",
-			stuckStore{Store: nil, page: blob.Page{Objects: objects("a/1"), Next: "a/1"}, err: nil},
-			blob.ErrInvalidPage, 2,
-		},
-		{
-			"a next key with an empty page",
-			stuckStore{Store: nil, page: blob.Page{Objects: nil, Next: "a/1"}, err: nil},
-			blob.ErrInvalidPage, 0,
-		},
+		{"a store error ends the walk", nil, blob.ErrThrottled, blob.ErrThrottled, nil},
+		{"a next key that does not advance", []blob.Page{pg("a/1", "a/1"), good}, nil, invalid, []string{"a/1"}},
+		{"a next key with an empty page", []blob.Page{pg("a/1")}, nil, invalid, nil},
+		{"a next key behind the last key", []blob.Page{pg("a/1", "a/1", "a/2")}, nil, invalid, nil},
+		{"a next key past the last key", []blob.Page{pg("a/2", "a/1")}, nil, invalid, nil},
+		{"objects out of order", []blob.Page{pg("", "a/2", "a/1")}, nil, invalid, nil},
+		{"an object twice in a page", []blob.Page{pg("", "a/1", "a/1")}, nil, invalid, nil},
+		{"a second page at the first", []blob.Page{good, pg("", "a/2", "a/3")}, nil, invalid, []string{"a/1", "a/2"}},
+		{"a second page before the first", []blob.Page{good, pg("", "a/0")}, nil, invalid, []string{"a/1", "a/2"}},
+		{"more objects than the largest page", []blob.Page{{Objects: tooMany, Next: ""}}, nil, invalid, nil},
 	}
 
 	for _, tc := range cases {
-		calls := 0
+		var store blob.Store = &scriptStore{Store: nil, pages: tc.pages, call: 0}
+		if tc.err != nil {
+			store = stuckStore{Store: nil, page: blob.Page{Objects: nil, Next: ""}, err: tc.err}
+		}
 
-		err := blob.Walk(t.Context(), tc.store, "a/", func(blob.Object) error {
-			calls++
+		var seen []string
+
+		err := blob.Walk(t.Context(), store, "a/", func(o blob.Object) error {
+			seen = append(seen, o.Key.String())
 
 			return nil
 		})
 
-		if !errors.Is(err, tc.want) || calls != tc.calls {
-			t.Errorf("%s: err = %v after %d calls, want %v after %d", tc.name, err, calls, tc.want, tc.calls)
+		if !errors.Is(err, tc.want) || !slices.Equal(seen, tc.seen) {
+			t.Errorf("%s: err = %v after %v, want %v after %v", tc.name, err, seen, tc.want, tc.seen)
 		}
 	}
 }
