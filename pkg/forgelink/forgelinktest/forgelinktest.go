@@ -138,10 +138,10 @@ func must(t *testing.T, what string, err error) {
 
 // start stores the request of token for principal, made at the start of the
 // fixtures, and returns its hash.
-func start(t *testing.T, h Harness, token, principal string) string {
+func start(t *testing.T, h Harness, token, holder string) string {
 	t.Helper()
 
-	r, err := forgelink.NewRequest(token, principal, at(0))
+	r, err := forgelink.NewRequest(token, holder, at(0))
 	must(t, "new request", err)
 	must(t, "create request", h.Store.CreateRequest(t.Context(), r))
 
@@ -157,12 +157,12 @@ func prove(t *testing.T, h Harness, hash, id, login string) {
 }
 
 // accept accepts the request hash for principal at one minute after the start.
-func accept(t *testing.T, h Harness, hash, principal, previous string) (forgelink.Link, string, error) {
+func accept(t *testing.T, h Harness, hash, who, previous string) (forgelink.Link, string, error) {
 	t.Helper()
 
 	accepted, err := h.Store.AcceptRequest(
 		t.Context(),
-		acceptance(hash, principal, previous, at(acceptAt)),
+		acceptance(hash, who, previous, at(acceptAt)),
 		linkEntry(),
 	)
 
@@ -170,13 +170,13 @@ func accept(t *testing.T, h Harness, hash, principal, previous string) (forgelin
 }
 
 // link makes a link of the account id to principal by a full request.
-func link(t *testing.T, h Harness, token, principal, id string) {
+func link(t *testing.T, h Harness, token, holder, id string) {
 	t.Helper()
 
-	hash := start(t, h, token, principal)
+	hash := start(t, h, token, holder)
 	prove(t, h, hash, id, "login-"+id)
 
-	_, _, err := accept(t, h, hash, principal, "")
+	_, _, err := accept(t, h, hash, holder, "")
 	must(t, "accept", err)
 }
 

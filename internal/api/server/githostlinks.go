@@ -40,6 +40,9 @@ const (
 	principalGitHostLinks   = "/api/dustpan/v1/principals/{principal}/linked-accounts/{kind}/{host}/{account}"
 )
 
+// gitHostLinkRouteCount is the number of routes of the links when the intake is set.
+const gitHostLinkRouteCount = 6
+
 // maxGitHostLinkBodyBytes bounds the body of a route of the links. A token has
 // at most 512 bytes.
 const maxGitHostLinkBodyBytes = 4 * 1024
@@ -262,7 +265,8 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 
 	manage := []identity.Action{identity.ActionCallerManageGitHostLinks}
 
-	routes := []Route{
+	routes := make([]Route, 0, gitHostLinkRouteCount)
+	routes = append(routes, []Route{
 		{
 			Method: http.MethodGet, Path: gitHostLinksPath, Scope: ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
@@ -277,7 +281,7 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 			Actions: []identity.Action{identity.ActionServerManagePrincipals}, Resolve: resolveServer, ActionsFor: nil,
 			Serve: h.deletePrincipalGitHostLink,
 		},
-	}
+	}...)
 
 	// A request that no Git host account can prove makes no link, so the routes
 	// that start, show and accept one wait for the intake of the signed events.

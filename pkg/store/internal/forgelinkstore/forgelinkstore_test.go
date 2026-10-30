@@ -26,6 +26,22 @@ type fakeTx struct {
 	uses      int
 }
 
+// noLink is the zero link row: the account has no link.
+func noLink() forgelinkstore.LinkRow {
+	var none forgelinkstore.LinkRow
+
+	return none
+}
+
+// newFakeTx returns a fakeTx that holds the request row and, when held is not
+// the zero row, the link row.
+func newFakeTx(request forgelinkstore.RequestRow, held forgelinkstore.LinkRow) *fakeTx {
+	return &fakeTx{
+		request: request, link: held, hasLink: held != noLink(), useFails: false, swapFails: false,
+		inserts: 0, replaces: 0, uses: 0,
+	}
+}
+
 func (x *fakeTx) Request(_ context.Context, _ string) (forgelinkstore.RequestRow, bool, error) {
 	return x.request, true, nil
 }
@@ -56,28 +72,38 @@ func (x *fakeTx) UseRequest(_ context.Context, _, _ string, _ int64) (bool, erro
 	return !x.useFails, nil
 }
 
-var now = time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)
+// start is the time of the fixtures.
+func start() time.Time { return time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC) }
 
 // provedRequest returns the row of a request of prn-ana that account 42 proved.
 func provedRequest(t *testing.T) forgelinkstore.RequestRow {
 	t.Helper()
 
-	r, err := forgelink.NewRequest(strings.Repeat("a", forgelink.MinTokenLen), "prn-ana", now)
+	r, err := forgelink.NewRequest(strings.Repeat("a", forgelink.MinTokenLen), "prn-ana", start())
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
 
 	row := forgelinkstore.RequestRowOf(r)
 	row.ProvedKind, row.ProvedHost, row.ProvedAccountID = string(forge.KindGitHub), "github.com", "42"
-	row.ProvedLogin, row.ProvedDeliveryID, row.ProvedAtMs = "ana-gh", "d1", now.Add(time.Second).UnixMilli()
+	row.ProvedLogin, row.ProvedDeliveryID, row.ProvedAtMs = "ana-gh", "d1", start().Add(time.Second).UnixMilli()
 
 	return row
 }
 
 func accept(previous string) forgelink.Acceptance {
+	var lost audit.Entry
+
 	return forgelink.Acceptance{
 		TokenSHA256: forgelink.HashToken(strings.Repeat("a", forgelink.MinTokenLen)), Principal: "prn-ana",
-		Previous: previous, At: now.Add(time.Minute), Lost: audit.Entry{},
+		Previous: previous, At: start().Add(time.Minute), Lost: lost,
+	}
+}
+
+// heldBy returns the link row of account 42 that principal holds.
+func heldBy(principal string) forgelinkstore.LinkRow {
+	return forgelinkstore.LinkRow{
+		Kind: "github", Host: "github.com", AccountID: "42", Login: "x", PrincipalID: principal, LinkedAtMs: 1,
 	}
 }
 
@@ -87,7 +113,8 @@ func accept(previous string) forgelink.Acceptance {
 func TestApplyAcceptFailsWhenTheUseChangesNoRow(t *testing.T) {
 	t.Parallel()
 
-	tx := &fakeTx{request: provedRequest(t), useFails: true}
+	tx := newFakeTx(provedRequest(t), noLink())
+	tx.useFails = true
 
 	_, err := forgelinkstore.ApplyAccept(t.Context(), tx, accept(""))
 	if !errors.Is(err, forgelink.ErrUsed) || tx.uses != 1 {
@@ -101,19 +128,8 @@ func TestApplyAcceptFailsWhenTheUseChangesNoRow(t *testing.T) {
 func TestApplyAcceptFailsWhenTheReplaceChangesNoRow(t *testing.T) {
 	t.Parallel()
 
-	tx := &fakeTx{
-		request:   provedRequest(t),
-		hasLink:   true,
-		swapFails: true,
-		link: forgelinkstore.LinkRow{
-			Kind:        "github",
-			Host:        "github.com",
-			AccountID:   "42",
-			Login:       "x",
-			PrincipalID: "prn-bob",
-			LinkedAtMs:  1,
-		},
-	}
+	tx := newFakeTx(provedRequest(t), heldBy("prn-bob"))
+	tx.swapFails = true
 
 	_, err := forgelinkstore.ApplyAccept(t.Context(), tx, accept("prn-bob"))
 	if !errors.Is(err, forgelink.ErrConflict) || tx.replaces != 1 || tx.uses != 0 {
@@ -121,39 +137,36 @@ func TestApplyAcceptFailsWhenTheReplaceChangesNoRow(t *testing.T) {
 	}
 }
 
-func TestApplyAcceptMakesAndReplacesALink(t *testing.T) {
+func TestApplyAcceptMakesALink(t *testing.T) {
 	t.Parallel()
 
-	tx := &fakeTx{request: provedRequest(t)}
+	tx := newFakeTx(provedRequest(t), noLink())
 
 	got, err := forgelinkstore.ApplyAccept(t.Context(), tx, accept(""))
 	if err != nil || got.Link.Principal != "prn-ana" || got.Replaced != "" || tx.inserts != 1 || tx.uses != 1 {
 		t.Fatalf("accept = %+v, %v, %d inserts, %d uses", got, err, tx.inserts, tx.uses)
 	}
+}
 
-	held := &fakeTx{
-		request: provedRequest(t),
-		hasLink: true,
-		link: forgelinkstore.LinkRow{
-			Kind:        "github",
-			Host:        "github.com",
-			AccountID:   "42",
-			Login:       "x",
-			PrincipalID: "prn-bob",
-			LinkedAtMs:  1,
-		},
-	}
+func TestApplyAcceptReplacesTheLinkThatThePersonSaw(t *testing.T) {
+	t.Parallel()
 
-	got, err = forgelinkstore.ApplyAccept(t.Context(), held, accept("prn-bob"))
-	if err != nil || got.Replaced != "prn-bob" || held.replaces != 1 || held.uses != 1 {
-		t.Fatalf("replace = %+v, %v, %d replaces, %d uses", got, err, held.replaces, held.uses)
+	tx := newFakeTx(provedRequest(t), heldBy("prn-bob"))
+
+	got, err := forgelinkstore.ApplyAccept(t.Context(), tx, accept("prn-bob"))
+	if err != nil || got.Replaced != "prn-bob" || tx.replaces != 1 || tx.uses != 1 {
+		t.Fatalf("replace = %+v, %v, %d replaces, %d uses", got, err, tx.replaces, tx.uses)
 	}
+}
+
+func TestApplyAcceptNeverReplacesSilently(t *testing.T) {
+	t.Parallel()
 
 	for _, previous := range []string{"", "prn-cy"} {
-		again := &fakeTx{request: held.request, hasLink: true, link: held.link}
+		tx := newFakeTx(provedRequest(t), heldBy("prn-bob"))
 
-		_, err = forgelinkstore.ApplyAccept(t.Context(), again, accept(previous))
-		if !errors.Is(err, forgelink.ErrConflict) || again.replaces != 0 || again.uses != 0 {
+		_, err := forgelinkstore.ApplyAccept(t.Context(), tx, accept(previous))
+		if !errors.Is(err, forgelink.ErrConflict) || tx.replaces != 0 || tx.uses != 0 {
 			t.Errorf("accept with previous %q = %v, want ErrConflict and no write", previous, err)
 		}
 	}

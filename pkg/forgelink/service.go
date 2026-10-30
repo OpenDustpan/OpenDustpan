@@ -15,6 +15,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
+// The keys of the changes of an audit entry of a link.
+const (
+	keyChange    = "forgeLink.change"
+	keyPrincipal = "forgeLink.principal"
+)
+
 // tokenBytes is the number of random bytes of a link token.
 const tokenBytes = 32
 
@@ -212,8 +218,8 @@ func (s *Service) Accept(
 	e.Changes = append(slices.Clone(e.Changes), accountChanges(r.Proved.Account, r.Proved.Login)...)
 	e.Changes = append(
 		e.Changes,
-		audit.Change{Key: "forgeLink.change", Old: nil, New: "linked", Layer: "", TakesEffect: ""},
-		audit.Change{Key: "forgeLink.principal", Old: nil, New: person.ID, Layer: "", TakesEffect: ""},
+		audit.Change{Key: keyChange, Old: nil, New: "linked", Layer: "", TakesEffect: ""},
+		audit.Change{Key: keyPrincipal, Old: nil, New: person.ID, Layer: "", TakesEffect: ""},
 	)
 
 	if previous != "" {
@@ -325,8 +331,8 @@ func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e
 	e.Changes = append(slices.Clone(e.Changes), accountChanges(a, current.Login)...)
 	e.Changes = append(
 		e.Changes,
-		audit.Change{Key: "forgeLink.change", Old: nil, New: "deleted", Layer: "", TakesEffect: ""},
-		audit.Change{Key: "forgeLink.principal", Old: nil, New: principalID, Layer: "", TakesEffect: ""},
+		audit.Change{Key: keyChange, Old: nil, New: "deleted", Layer: "", TakesEffect: ""},
+		audit.Change{Key: keyPrincipal, Old: nil, New: principalID, Layer: "", TakesEffect: ""},
 	)
 
 	if err := s.store.DeleteLink(ctx, a, e); err != nil {
@@ -351,8 +357,8 @@ func (s *Service) lostEntry(base audit.Entry, now time.Time, r Request, previous
 	e.Changes = append(e.Changes, accountChanges(r.Proved.Account, r.Proved.Login)...)
 	e.Changes = append(
 		e.Changes,
-		audit.Change{Key: "forgeLink.change", Old: nil, New: "replaced", Layer: "", TakesEffect: ""},
-		audit.Change{Key: "forgeLink.principal", Old: nil, New: previous, Layer: "", TakesEffect: ""},
+		audit.Change{Key: keyChange, Old: nil, New: "replaced", Layer: "", TakesEffect: ""},
+		audit.Change{Key: keyPrincipal, Old: nil, New: previous, Layer: "", TakesEffect: ""},
 		audit.Change{Key: "forgeLink.replacedBy", Old: nil, New: r.Principal, Layer: "", TakesEffect: ""},
 		audit.Change{
 			Key:         "forgeLink.notice",
