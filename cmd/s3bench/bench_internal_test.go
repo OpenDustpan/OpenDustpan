@@ -353,3 +353,22 @@ func TestVerdictInvalidWithErrors(t *testing.T) {
 		t.Fatalf("verdict with errors = %q", got)
 	}
 }
+
+func TestSelectsFamily(t *testing.T) {
+	t.Parallel()
+
+	all, err := parseOptions("protocol", nil)
+	if err != nil || !all.selectsFamily("Pulumi checkpoint") {
+		t.Fatalf("an empty -families selects nothing (parse error %v)", err)
+	}
+
+	some, err := parseOptions("protocol", []string{"-families", "audit-checkpoint-check-read, job-log-chunk"})
+	if err != nil {
+		t.Fatalf("parse -families: %v", err)
+	}
+
+	if !some.selectsFamily("audit checkpoint check (read)") || !some.selectsFamily("job log chunk") ||
+		some.selectsFamily("Pulumi checkpoint") {
+		t.Fatal("-families selects the wrong families")
+	}
+}

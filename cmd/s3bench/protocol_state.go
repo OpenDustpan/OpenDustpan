@@ -239,6 +239,10 @@ func runProtocolStores(ctx context.Context, logger *slog.Logger, o options, ps p
 		}
 
 		for _, f := range protocolFamilies() {
+			if !o.selectsFamily(f.Name) {
+				continue
+			}
+
 			if err := runner.runFamily(ctx, f, done, save); err != nil {
 				return err
 			}
@@ -502,4 +506,21 @@ func largestGap(results []protoResult, key groupKey) time.Duration {
 	}
 
 	return largest
+}
+
+// selectsFamily reports whether the -families flag selects the family name:
+// an empty flag selects all; else the flag lists slugs (see slugOf), split
+// by commas.
+func (o options) selectsFamily(name string) bool {
+	if o.families == "" {
+		return true
+	}
+
+	for part := range strings.SplitSeq(o.families, ",") {
+		if strings.TrimSpace(part) == slugOf(name) {
+			return true
+		}
+	}
+
+	return false
 }

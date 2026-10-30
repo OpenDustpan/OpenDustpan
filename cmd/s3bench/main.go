@@ -106,6 +106,7 @@ type options struct {
 	protoOps     int
 	protoRuns    int
 	protoConc    int
+	families     string
 }
 
 // parseOptions parses the flags of subcommand cmd.
@@ -116,7 +117,7 @@ func parseOptions(cmd string, args []string) (options, error) {
 		out: "", secretsDir: "", toxiproxyAPI: "", listenHost: "", connectHost: "",
 		ports: map[string]int{}, upstreams: map[string]string{}, bucket: "", stores: nil,
 		profiles: "", profile: "", quick: false, limits: false, limitS3: "", limitDB: "", limitStore: "", only: "",
-		protoOps: 0, protoRuns: 0, protoConc: 0,
+		protoOps: 0, protoRuns: 0, protoConc: 0, families: "",
 	}
 
 	fs.StringVar(&o.out, "out", "bench-s3-out", "results `dir`: results.json, results.md and load/")
@@ -143,6 +144,8 @@ func parseOptions(cmd string, args []string) (options, error) {
 	fs.IntVar(&o.protoOps, "ops", defaultProtocolOps, "protocol: operations of each run")
 	fs.IntVar(&o.protoRuns, "runs", defaultProtocolRuns, "protocol: runs of each path")
 	fs.IntVar(&o.protoConc, "concurrency", defaultProtocolConc, "protocol: client `workers` of each run")
+	fs.StringVar(&o.families, "families", "",
+		"protocol: comma-separated family `slugs`, for example pulumi-checkpoint (default all)")
 	fs.StringVar(&o.only, "only", "", "measure: comma-separated `parts`: puts, sequences, sweep (default all)")
 
 	if err := fs.Parse(args); err != nil {
