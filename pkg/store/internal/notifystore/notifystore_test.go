@@ -71,12 +71,18 @@ func TestStoredRowsAreUntrusted(t *testing.T) {
 	}
 
 	subs := []notifystore.SubscriptionRow{
-		{ID: "sub-1", Scope: "shop", SinkID: "snk-1", Types: `["nope.*"]`, Objects: `[]`, MinSeverity: 0,
-			State: "active", Reason: "", CreatedBy: "alice", Version: 1},
-		{ID: "sub-1", Scope: "shop", SinkID: "snk-1", Types: `[]`, Objects: `[]`, MinSeverity: 0,
-			State: "active", Reason: "", CreatedBy: "alice", Version: 0},
-		{ID: "sub-1", Scope: "shop", SinkID: "snk-1", Types: `[]`, Objects: `[]`, MinSeverity: 0,
-			State: "weird", Reason: "", CreatedBy: "alice", Version: 1},
+		{
+			ID: "sub-1", Scope: "shop", SinkID: "snk-1", Types: `["nope.*"]`, Objects: `[]`, MinSeverity: 0,
+			State: "active", Reason: "", CreatedBy: "alice", Version: 1,
+		},
+		{
+			ID: "sub-1", Scope: "shop", SinkID: "snk-1", Types: `[]`, Objects: `[]`, MinSeverity: 0,
+			State: "active", Reason: "", CreatedBy: "alice", Version: 0,
+		},
+		{
+			ID: "sub-1", Scope: "shop", SinkID: "snk-1", Types: `[]`, Objects: `[]`, MinSeverity: 0,
+			State: "weird", Reason: "", CreatedBy: "alice", Version: 1,
+		},
 	}
 
 	for _, r := range subs {

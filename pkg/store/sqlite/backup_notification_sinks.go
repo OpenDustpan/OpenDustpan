@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/sinkstore"
@@ -22,7 +23,7 @@ const (
 // sqliteSinkBackupTables holds the backup columns of the notification sink
 // tables, in the order of backup.Tables.
 func sqliteSinkBackupTables() []sqliteBackupTable {
-	return []sqliteBackupTable{
+	return slices.Concat([]sqliteBackupTable{
 		{
 			table: "notification_sinks",
 			columns: []string{
@@ -38,6 +39,13 @@ func sqliteSinkBackupTables() []sqliteBackupTable {
 			table:   "notification_sink_refs",
 			columns: []string{sinkColScope, sinkColRef},
 		},
+	}, sqliteOutboxBackupTables())
+}
+
+// sqliteOutboxBackupTables holds the backup columns of the outbox, the subscription and the
+// delivery tables, in the order of backup.Tables.
+func sqliteOutboxBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
 		{
 			table: "notifications",
 			columns: []string{

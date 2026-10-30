@@ -79,8 +79,9 @@ attributes, recipients, dedupe_key, at_ms FROM ` + stagingTable(staging, "notifi
 	}, func(rows pgx.Rows) error {
 		var r notifystore.NotificationRow
 
-		if err := rows.Scan(&r.Scope, &r.Sequence, &r.ID, &r.Type, &r.Object, &r.ObjectID, &r.Subject, &r.Agent,
-			&r.Severity, &r.Summary, &r.Links, &r.Attributes, &r.Recipients, &r.DedupeKey, &r.AtMs); err != nil {
+		err := rows.Scan(&r.Scope, &r.Sequence, &r.ID, &r.Type, &r.Object, &r.ObjectID, &r.Subject, &r.Agent,
+			&r.Severity, &r.Summary, &r.Links, &r.Attributes, &r.Recipients, &r.DedupeKey, &r.AtMs)
+		if err != nil {
 			return fmt.Errorf("read staged notifications: %w", backup.ErrExportRead)
 		}
 
@@ -100,8 +101,9 @@ func checkStagedSubscriptionRows(ctx context.Context, pool *pgxpool.Pool, stagin
 	}, func(rows pgx.Rows) error {
 		var r notifystore.SubscriptionRow
 
-		if err := rows.Scan(&r.ID, &r.Scope, &r.SinkID, &r.Types, &r.Objects, &r.MinSeverity, &r.State,
-			&r.Reason, &r.CreatedBy, &r.Version); err != nil {
+		err := rows.Scan(&r.ID, &r.Scope, &r.SinkID, &r.Types, &r.Objects, &r.MinSeverity, &r.State,
+			&r.Reason, &r.CreatedBy, &r.Version)
+		if err != nil {
 			return fmt.Errorf("read staged subscriptions: %w", backup.ErrExportRead)
 		}
 
@@ -122,9 +124,10 @@ next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version FROM ` +
 	}, func(rows pgx.Rows) error {
 		var r notifystore.DeliveryRow
 
-		if err := rows.Scan(&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact,
+		err := rows.Scan(&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact,
 			&r.Principal, &r.State, &r.Attempts, &r.NextAtMs, &r.LastError, &r.DeliveredAtMs, &r.Owner,
-			&r.LeaseUntilMs, &r.Version); err != nil {
+			&r.LeaseUntilMs, &r.Version)
+		if err != nil {
 			return fmt.Errorf("read staged deliveries: %w", backup.ErrExportRead)
 		}
 

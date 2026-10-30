@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -23,7 +24,7 @@ const (
 // pgCopySinkTables holds the COPY columns of the notification sink tables, in
 // the order of backup.Tables.
 func pgCopySinkTables() []pgCopyTable {
-	return []pgCopyTable{
+	return slices.Concat([]pgCopyTable{
 		{
 			table: "notification_sinks",
 			columns: []string{
@@ -41,6 +42,13 @@ func pgCopySinkTables() []pgCopyTable {
 			columns: []string{sinkColScope, sinkColRef},
 			orderBy: []string{sinkColScope, sinkColRef},
 		},
+	}, pgCopyOutboxTables())
+}
+
+// pgCopyOutboxTables holds the backup columns of the outbox, the subscription and the
+// delivery tables, in the order of backup.Tables.
+func pgCopyOutboxTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
 			table: "notifications",
 			columns: []string{

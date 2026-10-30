@@ -82,8 +82,9 @@ attributes, recipients, dedupe_key, at_ms FROM notifications`,
 	}, func(rows *sql.Rows) error {
 		var r notifystore.NotificationRow
 
-		if err := rows.Scan(&r.Scope, &r.Sequence, &r.ID, &r.Type, &r.Object, &r.ObjectID, &r.Subject, &r.Agent,
-			&r.Severity, &r.Summary, &r.Links, &r.Attributes, &r.Recipients, &r.DedupeKey, &r.AtMs); err != nil {
+		err := rows.Scan(&r.Scope, &r.Sequence, &r.ID, &r.Type, &r.Object, &r.ObjectID, &r.Subject, &r.Agent,
+			&r.Severity, &r.Summary, &r.Links, &r.Attributes, &r.Recipients, &r.DedupeKey, &r.AtMs)
+		if err != nil {
 			return fmt.Errorf("read staged notifications: %w", backup.ErrExportRead)
 		}
 
@@ -103,8 +104,9 @@ FROM notification_subscriptions`,
 	}, func(rows *sql.Rows) error {
 		var r notifystore.SubscriptionRow
 
-		if err := rows.Scan(&r.ID, &r.Scope, &r.SinkID, &r.Types, &r.Objects, &r.MinSeverity, &r.State,
-			&r.Reason, &r.CreatedBy, &r.Version); err != nil {
+		err := rows.Scan(&r.ID, &r.Scope, &r.SinkID, &r.Types, &r.Objects, &r.MinSeverity, &r.State,
+			&r.Reason, &r.CreatedBy, &r.Version)
+		if err != nil {
 			return fmt.Errorf("read staged subscriptions: %w", backup.ErrExportRead)
 		}
 
@@ -124,9 +126,10 @@ next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version FROM not
 	}, func(rows *sql.Rows) error {
 		var r notifystore.DeliveryRow
 
-		if err := rows.Scan(&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact,
+		err := rows.Scan(&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact,
 			&r.Principal, &r.State, &r.Attempts, &r.NextAtMs, &r.LastError, &r.DeliveredAtMs, &r.Owner,
-			&r.LeaseUntilMs, &r.Version); err != nil {
+			&r.LeaseUntilMs, &r.Version)
+		if err != nil {
 			return fmt.Errorf("read staged deliveries: %w", backup.ErrExportRead)
 		}
 
@@ -153,21 +156,21 @@ func eachStaged(ctx context.Context, conn *sql.DB, q stagedQuery, check func(row
 		return fmt.Errorf("read staged %s: %w", q.what, backup.ErrExportRead)
 	}
 
-	var checkErr error
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
 
-	for checkErr == nil && rows.Next() {
-		checkErr = check(rows)
+	for rows.Next() {
+		if checkErr := check(rows); checkErr != nil {
+			return checkErr
+		}
 	}
 
-	rowsErr := rows.Err()
-	closeErr := rows.Close()
-
-	switch {
-	case checkErr != nil:
-		return checkErr
-	case rowsErr != nil || closeErr != nil:
+	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("read staged %s: %w", q.what, backup.ErrExportRead)
-	default:
-		return nil
 	}
+
+	return nil
 }

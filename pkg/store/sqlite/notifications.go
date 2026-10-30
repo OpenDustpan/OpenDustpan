@@ -42,12 +42,12 @@ var (
 func (k NotificationStore) SinkSecrets(
 	ctx context.Context, scope namespace.Name, id string,
 ) ([]notify.SealedSecret, error) {
-	return sinks{s: k.s}.SinkSecrets(ctx, scope, id)
+	return sinks(k).SinkSecrets(ctx, scope, id)
 }
 
 // Sinks implements notify.Subscriptions.
 func (k NotificationStore) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, error) {
-	return sinks{s: k.s}.Sinks(ctx, scope)
+	return sinks(k).Sinks(ctx, scope)
 }
 
 // scopedWrite names the row of a write: how to find its scope, and the error
@@ -462,12 +462,13 @@ func (k NotificationStore) PutSink(
 		}
 
 		if changed {
-			if suspendErr := suspendSubscriptionsOf(
+			suspendErr := suspendSubscriptionsOf(
 				ctx,
 				q,
 				sinkChange{scope: s.Scope, sink: s.ID, version: stored.Version},
 				e,
-			); suspendErr != nil {
+			)
+			if suspendErr != nil {
 				return suspendErr
 			}
 		}

@@ -240,12 +240,14 @@ func checkServedAndNotWritten(t *testing.T, s *Store) {
 	}
 }
 
-// scopeGoneStatements points the rows of a sink table at a scope that names no
-// namespace.
-var scopeGoneStatements = map[string]string{
-	"notification_sinks":        `UPDATE notification_sinks SET scope = 'gone'`,
-	"notification_sink_secrets": `UPDATE notification_sink_secrets SET scope = 'gone'`,
-	"notification_sink_refs":    `UPDATE notification_sink_refs SET scope = 'gone'`,
+// scopeGoneStatement returns the statement that points the rows of a sink
+// table at a scope that names no namespace.
+func scopeGoneStatement(table string) string {
+	return map[string]string{
+		"notification_sinks":        `UPDATE notification_sinks SET scope = 'gone'`,
+		"notification_sink_secrets": `UPDATE notification_sink_secrets SET scope = 'gone'`,
+		"notification_sink_refs":    `UPDATE notification_sink_refs SET scope = 'gone'`,
+	}[table]
 }
 
 // TestCheckStagedSinksRefusesAMissingNamespace proves that a sink, a secret
@@ -274,7 +276,7 @@ func TestCheckStagedSinksRefusesAMissingNamespace(t *testing.T) {
 func dropNamespace(t *testing.T, s *Store, table string) {
 	t.Helper()
 
-	if _, err := s.conn.ExecContext(t.Context(), scopeGoneStatements[table]); err != nil {
+	if _, err := s.conn.ExecContext(t.Context(), scopeGoneStatement(table)); err != nil {
 		t.Fatalf("change the scope of %s: %v", table, err)
 	}
 }

@@ -114,7 +114,10 @@ var devColumnDecisions = map[string]devDecision{
 		reason: "ID of the principal whose access decides the delivery; the check before each attempt " +
 			"skips the delivery when the principal is gone",
 	},
-	"notification_deliveries.owner":       {strip: false, reason: "name of an instance that holds the claim, not of a person"},
+	"notification_deliveries.owner": {
+		strip:  false,
+		reason: "name of an instance that holds the claim, not of a person",
+	},
 	"job_freezes.ended_by":                {strip: false, reason: "history text of who ended the freeze"},
 	"runner_join_tokens.created_by":       {strip: false, reason: "history text of who made the join token"},
 	"runner_join_tokens.used_by":          {strip: false, reason: "ID of a runner, not of a person"},

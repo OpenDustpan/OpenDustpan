@@ -60,7 +60,14 @@ func TestCheckStagedNotificationsRefusesBadRows(t *testing.T) {
 				}
 			}
 
-			if err := checkStagedNotifications(t.Context(), s.pool, currentSchema(t, s)); !errors.Is(err, backup.ErrCorrupt) {
+			if err := checkStagedNotifications(
+				t.Context(),
+				s.pool,
+				currentSchema(t, s),
+			); !errors.Is(
+				err,
+				backup.ErrCorrupt,
+			) {
 				t.Fatalf("check = %v, want ErrCorrupt", err)
 			}
 		})

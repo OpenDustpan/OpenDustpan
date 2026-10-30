@@ -238,12 +238,14 @@ func checkServedAndNotWritten(t *testing.T, s *Store) {
 	}
 }
 
-// scopeGoneStatements points the rows of a sink table at a scope that names no
-// namespace.
-var scopeGoneStatements = map[string]string{
-	"notification_sinks":        `UPDATE notification_sinks SET scope = 'gone'`,
-	"notification_sink_secrets": `UPDATE notification_sink_secrets SET scope = 'gone'`,
-	"notification_sink_refs":    `UPDATE notification_sink_refs SET scope = 'gone'`,
+// scopeGoneStatement returns the statement that points the rows of a sink
+// table at a scope that names no namespace.
+func scopeGoneStatement(table string) string {
+	return map[string]string{
+		"notification_sinks":        `UPDATE notification_sinks SET scope = 'gone'`,
+		"notification_sink_secrets": `UPDATE notification_sink_secrets SET scope = 'gone'`,
+		"notification_sink_refs":    `UPDATE notification_sink_refs SET scope = 'gone'`,
+	}[table]
 }
 
 // TestCheckStagedSinksRefusesAMissingNamespace proves that a sink, a secret
@@ -259,7 +261,7 @@ func TestCheckStagedSinksRefusesAMissingNamespace(t *testing.T) {
 			s := openForSavedViews(t)
 			seedSink(t, s)
 
-			stmt := scopeGoneStatements[table]
+			stmt := scopeGoneStatement(table)
 			if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
 				t.Fatalf("%s: %v", stmt, execErr)
 			}
