@@ -9,10 +9,11 @@
 # "latest" job with a green "pinned" job means that a new CLI release changed
 # something. It does not mean that the server broke, and it does not block a
 # release. This holds only when the test TestDriftAPI passes under
-# E2E_SERVER=binary: today it fails there with "a drift record needs the
-# in-process server" and keeps both jobs red. Do not copy this file before that
-# test is fixed (issue 2048, pull request 2061). Read the contract.md part of the job summary: it lists what the new
-# release reads that the newest contract file does not have.
+# E2E_SERVER=binary. Today it fails there with "a drift record needs the
+# in-process server" and keeps both jobs red, so do not copy this file before
+# that test is fixed.
+# Read the contract.md part of the job summary: it lists what the new release
+# reads that the newest contract file does not have.
 # The step summary shows summary.md and contract.md of the report directory.
 # The reports hold the names of the response headers and never the value of a
 # request header, so no secret reaches the summary.
