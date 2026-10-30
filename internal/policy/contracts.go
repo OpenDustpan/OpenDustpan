@@ -15,7 +15,7 @@ type OPACall struct {
 
 // ParseOPAAnswer reads the answer of the Data API of an OPA server. The
 // policy at the path must give a decision as its result:
-// {"result": {"effect": ..., "reasons": [...], "approvals": {...}}}. A
+// {"result": {"effect": ..., "reasons": [...], "approvals": {"rule": ...}}}. A
 // missing result is an undefined decision, which usually means a wrong path.
 // ParseOPAAnswer returns ErrInvalidDecision for it, never a deny. It also
 // returns ErrInvalidDecision for an answer over MaxAnswerBytes, an unknown
@@ -146,7 +146,7 @@ func CedarRequests(subject string, groups []string, kind Kind, resource CedarEnt
 // CedarDecision joins the answers of the two requests of CedarRequests.
 // Deny on the first gives EffectDeny. Allow on the first and deny on the
 // second gives EffectApprove with approvals, which come from a setting of
-// the namespace. Allow on both gives EffectAllow. policies are the IDs of
+// the namespace and name an approval rule (Approvals.Rule). Allow on both gives EffectAllow. policies are the IDs of
 // the Cedar policies that decided, which become the reasons.
 func CedarDecision(first, second bool, approvals Approvals, policies []string) Decision {
 	d := Decision{Effect: EffectAllow, Reasons: policies, Approvals: nil, Engine: "cedar", PolicyVersion: ""}
