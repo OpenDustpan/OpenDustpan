@@ -1043,7 +1043,7 @@ can later serve the SSH factor of RFC 102.
   address, applies the installation IP list (P9), and writes an audit entry
   for each refusal, with the reason code and no document text.
 
-**The amendment of ADR 245 (PM proposes, the ADR names it).** ADR 245
+**The amendment of ADR 245 (owner decision O14).** ADR 245
 decision 12 says that a test fails when a package other than
 `cmd/opendustpan` names the host issuer, and when a package other than
 `pkg/accesstoken` and its suite calls `CreateHostRecovery`. Decision 1 rests
@@ -1229,7 +1229,9 @@ numbers must not collide. That group now holds 14 items. To run some of them
 at the same time, the PM can give each `store` item its migration number when
 the item starts. This needs a check that the migration runner accepts a gap
 in the numbers while an item is open. The work item that first does it
-checks that.
+checks that, and also checks that it does not conflict with the hash of each
+file in TestFrozenMigrations or with the collapse rule of ADR 73. This is a
+process note, not part of the design.
 
 ### Proposed terms
 
@@ -1271,6 +1273,7 @@ Each question has a yes or no answer. "Yes" accepts the recommendation.
 | O11 | Can the project add `github.com/russellhaering/gosaml2`, `goxmldsig` (Apache-2.0) and `github.com/beevik/etree` (BSD-2-Clause) for SAML? | Yes |
 | O12 | Does a bootstrap admin token stay outside "require MFA" (P7)? | Yes |
 | O13 | RFC 102 is still `discussing`. Does built-in MFA use its TOTP design now, independent of the rest of RFC 102 (P7)? The design is question 5, option B: one shared factor, RFC 6238 on the standard library, and separate failure counters. | Yes |
+| O14 | Can break-glass mode 2 recover over the network (P12)? This amends ADR 245 decision 12. `internal/recovery` may also reach the host issuer. The network path rests on the offline key, not on shell access (decision 1). The result is the same bounded temporary administrator as the host path. | Yes |
 
 **Precedent and the cost of the alternative, for each question.** The
 subsection of each item gives the full text. "No" means that the owner refuses
@@ -1337,6 +1340,12 @@ the recommendation.
   800-63B-4 (one use of each code, fetched). GitHub sudo mode accepts TOTP
   (fetched). Cost of "no": TOTP for built-in MFA waits for the ADR of RFC
   102, so W5 and W7 wait. Passkeys (W3, W4) do not wait.
+- **O14, a network path for mode 2 (amends ADR 245 decision 12).**
+  Precedent: none. No product signs a recovery request (P12). Vault and
+  Keycloak recover from the host or with a quorum of keys (fetched). Cost of
+  "no": mode 2 has no path that ADR 245 allows, so ADR 57 mode 2 cannot ship
+  as designed. It could only become a host command that checks a signature,
+  which gives nothing that mode 1 does not give.
 
 The PM decisions of this proposal, each with its precedent: the LDAP check at
 sign-in and the hourly sync (P2), the CAS design (P4), the OAuth 2.0 groups
