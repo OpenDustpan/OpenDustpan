@@ -150,6 +150,128 @@ worked into the proposal above.
 - A blast-radius view over the dependency edges (Harness, Atmos Pro).
 - Downstream runs when an output changes are RFC 24.
 
+## Proposal for Milestone 5: sharing rules and job-token reads (2026-10-30)
+
+This section is ready to accept. ADR 213 decision 1 and ADR 273 decide the
+rules, the checks, the routes and the answers. The rules, the setting and
+the `Checker` for a principal are in the code. The `Checker` denies each
+read by a job token today ("read by a job token is not served yet"). This
+section gives the build of the job path and answers the two points that
+ADR 273 left open. Facts about other products are in the research note
+[m5-precedents](../research/m5-precedents.md).
+
+### Questions and recommendations
+
+1. **Whose grants decide check 2 for each kind of job start in Milestone
+   5.** ADR 273 decision 5 names the starter, the last saver of a trigger
+   and the attachment authority. Milestone 5 adds starts that these names
+   do not cover yet:
+
+   | Start | Principal of check 2 |
+   | --- | --- |
+   | A person or a token through the job API | the starter |
+   | A trigger of the kind `schedule`, `follows` or `review-request-push` | the last saver of the trigger (ADR 267 decision 14) |
+   | The apply of a change order of a review request after the merge (RFC 27) | the principal who asked for the apply: the linked person who merged, or the person who pressed apply |
+   | A pre-merge apply by a comment command (RFC 27) | the principal linked to the account of the comment |
+   | A remote run of the OpenTofu CLI (RFC 30) | the principal of the token of the CLI |
+
+   *Recommendation:* this table, as one function `job.GrantsPrincipal`,
+   with a table-driven test. A start whose principal the function cannot
+   name fails closed at each read.
+2. **`tfe_outputs` in a job (ADR 273 "Not decided here").** The `tfe`
+   provider reads outputs with its own token, and remote state sharing does
+   not apply to it in HCP Terraform. In a job, the provider has no token
+   unless it reads the credentials helper of the launcher.
+   - (a) Serve `tfe_outputs` to the job token where an e2e step shows that
+     the provider of the pinned version reads the token from the CLI
+     configuration of the launcher. Else the docs say that `tfe_outputs`
+     works on a workstation only.
+   - (b) Never in a job.
+
+   *Recommendation: (a)*, with the e2e step first. The answer has the
+   fields of ADR 273 decision 7 and, for a sensitive output, `null` when
+   check 2 has no `unit:read-secrets`. HCP Terraform answers `null` for a
+   sensitive value to a reader with no state access.
+3. **A Pulumi program in a job that reads OpenTofu outputs (ADR 273 "Not
+   decided here").** The `terraform` package of Pulumi takes the token of
+   the remote state as an argument of the program. ADR 213 says that the
+   job token never goes in a variable.
+   - (a) In a job, the program reads the outputs through the profile block
+     `outputs/opendustpan` (ADR 207 decision 7), which the launcher writes
+     as stack config. The program does not hold a token.
+   - (b) The launcher puts the job token in the Pulumi config of the step.
+
+   *Recommendation: (a).* (b) puts a credential in a file that the program
+   can print, and a stack config is part of the stored plan. The docs page
+   shows the profile block as the way for a job.
+
+   The exit test of Milestone 5 (step 13) also has an OpenTofu job read an
+   output of a Pulumi stack. OpenTofu has no built-in way to read a Pulumi
+   stack (ADR 273 decision 8). The same profile block serves it: the job
+   opens `outputs/opendustpan` for the stack, and the launcher writes the
+   values in the variables file of `exports.opentofu` (ADR 203 decision 6).
+   A secret output reaches OpenTofu as a variable value, so the docs say to
+   declare that variable `sensitive`. The checks of ADR 273 decision 5
+   apply, with the attachment authority as the principal of check 2.
+
+### Ports
+
+The ports exist (`outputshare.Checker`, `Attachments`, `States`,
+`stack.OutputCiphertexts`). The build adds:
+
+- In `internal/outputsharesvc`, the job path of the `Checker`: it reads the
+  job of the job-ID claim through a small port `JobReader` (the unit, the
+  state, the trigger, the change order origin and the attachments of the
+  spec), applies question 1, and denies a job that is not running.
+- In `internal/api/tfe` and `internal/api/pulumi`, the reduced answers of
+  ADR 273 decision 7 for a job token of another unit, and the decrypt check
+  of decision 6.
+- `graph.Edges.Record` with the evidence `job` at each read (ADR 153
+  decision 4).
+
+### End-to-end steps
+
+ADR 213 and ADR 273 name the steps. Each runs in a job on a test runner
+with the real CLI:
+
+1. A Pulumi stack reference in a job reads a plain and a secret output of
+   another stack, with a rule and with the grants. With no rule, the read
+   fails. A decrypt of a ciphertext that is not an output fails with 403.
+2. A `terraform_remote_state` data source in a job reads the outputs of
+   another workspace. The state file that the job gets holds no resource.
+3. The step of question 2 for `tfe_outputs`.
+4. The step of question 3: a Pulumi program reads an OpenTofu output
+   through the profile block, and an OpenTofu job reads a plain and a
+   secret output of a Pulumi stack through the same block. With no rule,
+   both reads fail with 403.
+5. The edge with the evidence `job` shows in the graph of the consumer.
+
+### Security tests (ADR 250)
+
+| Step | Test |
+| --- | --- |
+| Check at the boundary | A job token whose job-ID claim names a job of another namespace, a job that ended, and a job of another unit than the token. |
+| Contain | The reduced Pulumi deployment for a producer with 10,000 resources holds only the root stack outputs. The reduced OpenTofu state holds no `resources`. |
+| Limit | A decrypt batch of more than the batch limit is refused. A ciphertext of the producer's config (not an output) is refused. |
+| Authorization at the point of use | A rule that a person removes during the job: the next read fails. A starter who loses `unit:read-outputs`: the next read fails. |
+| Fail closed | An error of `JobReader`, of `States` or of the identity store denies and writes the audit entry in the producer namespace. |
+
+### Work items
+
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
+
+| ID | Item | Size | Conflict group | Depends on |
+| --- | --- | --- | --- | --- |
+| OS-1 | The job path of the `Checker`, `JobReader`, `job.GrantsPrincipal`, conformance cases | M | outputshare | M5-1 |
+| OS-2 | OpenTofu routes: the reduced workspace, state version and download answers, e2e step 2 | M | api-tfe | OS-1 |
+| OS-3 | Pulumi routes: the reduced stack and export answers, the decrypt check, e2e step 1 | M | api-pulumi | OS-1 |
+| OS-4 | The edge with the evidence `job`, e2e step 5 | S | graph | OS-2, OS-3 |
+| OS-5 | `tfe_outputs` in a job (question 2) and the profile block path (question 3), with their e2e steps and the docs page section | M | api-tfe | OS-2, PF-7 of RFC 5 |
+
 ## Outcome
 
 Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)

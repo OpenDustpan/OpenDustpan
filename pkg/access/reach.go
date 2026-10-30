@@ -202,8 +202,11 @@ func reachAdd(r *Reach, obj identity.Object, action identity.Action) {
 // An act-as edge comes from a grant that holds principal:manage-tokens on
 // a service principal directly, or from a grant that holds
 // namespace:manage-principal-tokens on a namespace, which reaches the
-// service principals of that namespace. Trust rules will add another edge
-// source at trustRuleTargets.
+// service principals of that namespace. A workload trust rule adds no edge:
+// a create of a rule needs principal:manage-tokens on the principal of the
+// rule, so a principal that can make a rule already reaches that principal
+// through the grant that gives the action. The issuer of a rule is outside
+// the installation and holds no grant.
 func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
 	switch {
 	case cfg.Grants == nil:
@@ -390,17 +393,6 @@ func (w *reachWalker) expand(ctx context.Context) error {
 		}
 	}
 
-	for _, id := range trustRuleTargets() {
-		w.enqueue(id)
-	}
-
-	return nil
-}
-
-// trustRuleTargets returns the principals that the trust rules of the
-// installation let the reach act as. Trust rules are not stored yet, so it
-// returns none. It is the place to add that edge source later.
-func trustRuleTargets() []string {
 	return nil
 }
 

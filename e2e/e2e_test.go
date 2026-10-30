@@ -99,6 +99,10 @@ func TestCLIs(t *testing.T) {
 		// Fails for every served route that no step reached, so an
 		// endpoint can never land without its e2e step again.
 		checkRouteCoverage(t, reports)
+
+		// Fails when a CLI version loses a route, a status or a field that its
+		// contract file records, and lists the new reads of a version with no file.
+		checkContracts(t, reports)
 	})
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
@@ -765,6 +769,27 @@ func writeReport(t *testing.T, r e2e.Run) {
 
 	if err := e2e.WriteRun(e2e.ReportDir(), r); err != nil {
 		t.Errorf("write report: %v", err)
+	}
+}
+
+// consoleLink checks that stdout has the console link "(<host>)" or
+// "(<host>/<subject>)". The host holds the scheme and the port. The path is
+// not part of what the step records, so either shape passes, and any other
+// path fails.
+func consoleLink(host string) func(e2e.Result) error {
+	pattern := regexp.MustCompile(`\(` + regexp.QuoteMeta(host) + `(/` + regexp.QuoteMeta(e2e.Subject) + `)?\)`)
+
+	return func(r e2e.Result) error {
+		if !pattern.MatchString(r.Stdout) {
+			return fmt.Errorf(
+				"%w: stdout lacks the console link %q, with the path %q or none",
+				errUnexpected,
+				host,
+				"/"+e2e.Subject,
+			)
+		}
+
+		return nil
 	}
 }
 
@@ -3877,6 +3902,7 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	}
 
 	checkAuditChain(ctx, t, env, org)
+	checkAuditExport(ctx, t, env, org)
 }
 
 // checkAuditEntryRead proves that GET /api/audit/entries/{sequence} reads
@@ -4265,21 +4291,24 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 
 	ctx := t.Context()
 
-	const (
-		apiURL = "http://api.dustpan.test"
-		appURL = "http://app.dustpan.test/" + e2e.Subject
-	)
+	const apiURL = "http://api.dustpan.test"
+
+	// The step records where the CLI takes the console host from: the backend
+	// URL or PULUMI_CONSOLE_DOMAIN. The scheme and the host must be exact. The
+	// path after the host is the CLI's choice: releases before 3.273.0 add the
+	// subject, later releases print the host alone. Any other path fails.
+	appURL := "http://app.dustpan.test"
 
 	// The CLI inherits the console URL scheme from the backend URL, so the
 	// override keeps http on a plain-HTTP server and https on a TLS server.
-	overrideURL := "http://console.example.test:3000/" + e2e.Subject
+	overrideURL := "http://console.example.test:3000"
 	if strings.HasPrefix(env.URL, "https://") {
-		overrideURL = "https://console.example.test:3000/" + e2e.Subject
+		overrideURL = "https://console.example.test:3000"
 	}
 
 	env.Step(ctx, t, step("console url from 127.0.0.1", contains("as "+e2e.Subject+" ()\n"), "login"))
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: contains("(" + appURL + ")"),
+		Check: consoleLink(appURL),
 		Name:  "console url from api. host",
 		Args:  []string{"login"},
 		// The fake host does not resolve, so the CLI sends its requests through the
@@ -4290,7 +4319,7 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 		Redact: false,
 	})
 	env.Step(ctx, t, e2e.StepSpec{
-		Check:  contains("(" + overrideURL + ")"),
+		Check:  consoleLink(overrideURL),
 		Name:   "console url from PULUMI_CONSOLE_DOMAIN",
 		Args:   []string{"login"},
 		Env:    []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
