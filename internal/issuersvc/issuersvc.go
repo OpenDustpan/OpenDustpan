@@ -156,6 +156,49 @@ func checkPublicURL(raw string) (string, error) {
 	return trimmed, nil
 }
 
+// OwnsIssuer reports whether iss is an issuer of this installation: the
+// public URL or a URL under it, the issuer base URL or a URL under it, or the
+// issuerURL of any namespace. It is the one check for all of them. A token
+// with such an iss is a token that this installation signs, so it must never
+// authenticate to this installation as a workload: a trust rule for it is
+// refused when it is made, and again when a token is exchanged, because a
+// namespace can set an issuerURL after a rule exists.
+//
+// The comparison ignores the case of the scheme and the host, a trailing dot
+// of the host, the default port, user information and a trailing slash. It
+// fails closed: when the list of the issuerURLs cannot be read, the error
+// comes back and the caller must refuse.
+func (s *Service) OwnsIssuer(ctx context.Context, iss string) (bool, error) {
+	if s.ownsHost(iss) {
+		return true, nil
+	}
+
+	urls, err := s.store.IssuerURLs(ctx)
+	if err != nil {
+		return false, fmt.Errorf("read the issuer URLs of the namespaces: %w", err)
+	}
+
+	for _, u := range urls {
+		if profile.SameIssuer(u, iss) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// ownsHost reports whether iss is at or under the public URL or the issuer
+// base URL.
+func (s *Service) ownsHost(iss string) bool {
+	for _, base := range s.ownURLs() {
+		if profile.IssuerAtOrUnder(base, iss) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ownURLs returns the URLs that name this server: the public URL and the issuer
 // base URL. An audience at one of their hosts is refused.
 func (s *Service) ownURLs() []string {

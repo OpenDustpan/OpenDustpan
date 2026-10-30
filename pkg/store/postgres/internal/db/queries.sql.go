@@ -12241,6 +12241,32 @@ func (q *Queries) ListIssuerKeys(ctx context.Context, namespaceID string) ([]Lis
 	return items, nil
 }
 
+const listIssuerURLs = `-- name: ListIssuerURLs :many
+SELECT DISTINCT issuer_url FROM issuer_settings WHERE issuer_url <> '' ORDER BY issuer_url
+`
+
+// Every issuer URL that a namespace sets, ordered. The server compares them
+// with the issuer of a trust rule.
+func (q *Queries) ListIssuerURLs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listIssuerURLs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var issuer_url string
+		if err := rows.Scan(&issuer_url); err != nil {
+			return nil, err
+		}
+		items = append(items, issuer_url)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listItemKeyWrapperIDs = `-- name: ListItemKeyWrapperIDs :many
 SELECT DISTINCT wrapper_id
 FROM item_keys

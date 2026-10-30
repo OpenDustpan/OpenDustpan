@@ -129,8 +129,9 @@ func newFixture(t *testing.T) fixture {
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz,
-		InstallationURLs: []string{"https://dustpan.example.com", "https://issuer.example.com/base/"}, CheckURL: nil,
-		Now: nil,
+		InstallationURLs: []string{"https://dustpan.example.com", "https://issuer.example.com/base/"}, OwnIssuer: nil,
+		CheckURL: nil,
+		Now:      nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

@@ -51,6 +51,7 @@ func RunIssuer(t *testing.T, newStore IssuerFactory) {
 		{"a copy check keeps the version and only the listed keys", testIssuerCopyCheck},
 		{"a change of issuerURL clears the copy check", testIssuerCopyCheckResets},
 		{"a copy check of another URL or of no URL is refused", testIssuerCopyCheckURL},
+		{"every set issuerURL is listed", testIssuerURLs},
 		{"a namespace is found by its ID", testIssuerResolve},
 	}
 
@@ -784,6 +785,53 @@ func testIssuerCopyCheckURL(t *testing.T, s IssuerStore) {
 	check := profile.CopyCheck{At: epoch(), URL: set.IssuerURL, OK: true, Steps: nil, Verified: nil}
 	err = s.Issuer.RecordCopyCheck(t.Context(), other.Name, check, other.Fence(), issuerEntries(other.Name))
 	wantErr(t, "a namespace with no settings", err, profile.ErrConflict)
+}
+
+func testIssuerURLs(t *testing.T, s IssuerStore) {
+	t.Helper()
+
+	got, err := s.Issuer.IssuerURLs(t.Context())
+	if err != nil || len(got) != 0 {
+		t.Fatalf("IssuerURLs with no settings = %v, %v; want none", got, err)
+	}
+
+	acme := issuerNamespace(t, s, "acme")
+	globex := issuerNamespace(t, s, "globex")
+	initech := issuerNamespace(t, s, "initech")
+
+	for _, tc := range []struct {
+		ns  namespace.Namespace
+		url string
+	}{
+		{globex, "https://b.example.com/globex"}, {acme, "https://a.example.com/acme"}, {initech, ""},
+	} {
+		set := issuerSettings(tc.ns.Name)
+		set.IssuerURL = tc.url
+
+		if _, err = s.Issuer.PutIssuerSettings(t.Context(), set, 0, tc.ns.Fence(), issuerEntries(tc.ns.Name)); err != nil {
+			t.Fatalf("put %s: %v", tc.ns.Name, err)
+		}
+	}
+
+	want := []string{"https://a.example.com/acme", "https://b.example.com/globex"}
+
+	got, err = s.Issuer.IssuerURLs(t.Context())
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("IssuerURLs = %v, %v; want %v, ordered, without the empty URL", got, err, want)
+	}
+
+	// A cleared URL leaves the list.
+	cleared := issuerSettings(acme.Name)
+	cleared.IssuerURL = ""
+
+	if _, err = s.Issuer.PutIssuerSettings(t.Context(), cleared, 1, acme.Fence(), issuerEntries(acme.Name)); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+
+	got, err = s.Issuer.IssuerURLs(t.Context())
+	if err != nil || !slices.Equal(got, want[1:]) {
+		t.Errorf("IssuerURLs after a clear = %v, %v; want %v", got, err, want[1:])
+	}
 }
 
 func testIssuerResolve(t *testing.T, s IssuerStore) {

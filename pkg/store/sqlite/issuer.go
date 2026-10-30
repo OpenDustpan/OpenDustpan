@@ -209,6 +209,19 @@ func (i *Issuer) GetIssuerSettings(ctx context.Context, ns namespace.Name) (prof
 	}, nil
 }
 
+// IssuerURLs implements profile.IssuerSettingsStore.
+func (i *Issuer) IssuerURLs(ctx context.Context) ([]string, error) {
+	i.store.mu.RLock()
+	defer i.store.mu.RUnlock()
+
+	urls, err := i.store.queries.ListIssuerURLs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select issuer URLs: %w", err)
+	}
+
+	return urls, nil
+}
+
 // PutIssuerSettings implements profile.IssuerSettingsStore.
 func (i *Issuer) PutIssuerSettings(
 	ctx context.Context, s profile.IssuerSettings, ifVersion int64, fence namespace.Fence, e []audit.Entry,

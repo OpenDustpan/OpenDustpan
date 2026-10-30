@@ -181,6 +181,23 @@ func (m *memIssuer) PutIssuerSettings(
 	return s, nil
 }
 
+func (m *memIssuer) IssuerURLs(context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []string
+
+	for _, s := range m.settings {
+		if s.IssuerURL != "" && !slices.Contains(out, s.IssuerURL) {
+			out = append(out, s.IssuerURL)
+		}
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
 func (m *memIssuer) RecordCopyCheck(
 	_ context.Context, ns namespace.Name, c profile.CopyCheck, f namespace.Fence, es []audit.Entry,
 ) error {

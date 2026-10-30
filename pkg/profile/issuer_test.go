@@ -458,3 +458,57 @@ func TestParseKeyID(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeIssuerJoinsEveryWriteOfOneAddress(t *testing.T) {
+	t.Parallel()
+
+	want := "https://dustpan.example.com/oidc/ns-1"
+
+	for _, raw := range []string{
+		"https://dustpan.example.com/oidc/ns-1", "https://dustpan.example.com/oidc/ns-1/", "HTTPS://DUSTPAN.Example.COM/oidc/ns-1",
+		"https://dustpan.example.com./oidc/ns-1", "https://dustpan.example.com:443/oidc/ns-1",
+		"https://user@dustpan.example.com/oidc/ns-1", " https://dustpan.example.com/oidc/ns-1 ",
+		"https://dustpan.example.com/oidc/ns-1?x=1", "https://dustpan.example.com/oidc/ns-1#f",
+	} {
+		if got := profile.NormalizeIssuer(raw); got != want {
+			t.Errorf("NormalizeIssuer(%q) = %q, want %q", raw, got, want)
+		}
+	}
+
+	for _, raw := range []string{
+		"https://dustpan.example.com:8443/oidc/ns-1", "http://dustpan.example.com/oidc/ns-1",
+		"https://dustpan.example.com/oidc/NS-1", "https://dustpan.example.com.evil.net/oidc/ns-1",
+		"https://dustpan.example.com/oidc/ns-10", "not a url", "",
+	} {
+		if profile.SameIssuer(raw, want) {
+			t.Errorf("SameIssuer(%q, %q) is true", raw, want)
+		}
+	}
+}
+
+func TestIssuerAtOrUnderRefusesOnlyTheBaseAndWhatIsUnderIt(t *testing.T) {
+	t.Parallel()
+
+	const base = "https://Dustpan.example.com:443/"
+
+	for iss, want := range map[string]bool{
+		"https://dustpan.example.com": true, "https://dustpan.example.com/oidc/ns-1": true,
+		"https://DUSTPAN.example.com./oidc": true, "https://dustpan.example.com:443/a/b": true,
+		"https://dustpan.example.com.evil.net": false, "https://dustpan.example.comx": false,
+		"https://dustpan.example.com:8443": false, "https://other.example.com/dustpan.example.com": false,
+		"": false,
+	} {
+		if got := profile.IssuerAtOrUnder(base, iss); got != want {
+			t.Errorf("IssuerAtOrUnder(%q, %q) = %v, want %v", base, iss, got, want)
+		}
+	}
+
+	if profile.IssuerAtOrUnder("", "https://dustpan.example.com") || profile.IssuerAtOrUnder("  ", "x") {
+		t.Error("an empty base holds an issuer")
+	}
+
+	if !profile.IssuerAtOrUnder("https://dustpan.example.com/base", "https://dustpan.example.com/base/ns") ||
+		profile.IssuerAtOrUnder("https://dustpan.example.com/base", "https://dustpan.example.com/basement") {
+		t.Error("the path of the base is not compared by segment")
+	}
+}

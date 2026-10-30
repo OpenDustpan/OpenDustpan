@@ -4226,6 +4226,11 @@ ON CONFLICT (namespace_id) DO UPDATE SET
     copy_check = CASE WHEN issuer_settings.issuer_url = excluded.issuer_url THEN issuer_settings.copy_check ELSE '' END
 WHERE issuer_settings.version = excluded.version - 1;
 
+-- name: ListIssuerURLs :many
+-- Every issuer URL that a namespace sets, ordered. The server compares them
+-- with the issuer of a trust rule.
+SELECT DISTINCT issuer_url FROM issuer_settings WHERE issuer_url <> '' ORDER BY issuer_url;
+
 -- name: UpdateIssuerCopyCheck :execrows
 -- Stores the last copy check when the issuer URL that it checked is the stored
 -- one. It keeps the version, so a copy check never changes the entity tag of

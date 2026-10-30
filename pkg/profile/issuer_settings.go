@@ -3,6 +3,7 @@ package profile
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -242,6 +243,48 @@ func CheckIssuerBaseURL(raw string) error {
 	return nil
 }
 
+// NormalizeIssuer returns the form of an issuer URL in which two writes of one
+// address are equal: the scheme and the host in lower case, no trailing dot
+// of the host, no default port, no user information, no query, no fragment and
+// no trailing slash of the path. A value that is not an absolute URL with a
+// host comes back trimmed and in lower case, so it matches only itself.
+func NormalizeIssuer(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+
+	u, err := url.Parse(trimmed)
+	if err != nil || !u.IsAbs() || u.Hostname() == "" {
+		return strings.ToLower(trimmed)
+	}
+
+	host := strings.TrimRight(strings.ToLower(u.Hostname()), ".")
+	scheme := strings.ToLower(u.Scheme)
+
+	if port := u.Port(); port != "" && !(scheme == "https" && port == "443") && !(scheme == "http" && port == "80") {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+
+	return scheme + "://" + host + strings.TrimRight(u.EscapedPath(), "/")
+}
+
+// SameIssuer reports whether a and b are one issuer URL, after NormalizeIssuer.
+func SameIssuer(a, b string) bool {
+	return NormalizeIssuer(a) == NormalizeIssuer(b)
+}
+
+// IssuerAtOrUnder reports whether the issuer iss is the URL base or a URL under
+// it, after NormalizeIssuer. An empty base holds nothing.
+func IssuerAtOrUnder(base, iss string) bool {
+	if strings.TrimSpace(base) == "" {
+		return false
+	}
+
+	b, i := NormalizeIssuer(base), NormalizeIssuer(iss)
+
+	return i == b || strings.HasPrefix(i, b+"/")
+}
+
 func quoteShort(s string) string {
 	if len(s) > maxEchoURL {
 		s = s[:maxEchoURL] + "..."
@@ -276,6 +319,10 @@ type IssuerSettingsStore interface {
 	PutIssuerSettings(
 		ctx context.Context, s IssuerSettings, ifVersion int64, f namespace.Fence, e []audit.Entry,
 	) (IssuerSettings, error)
+	// IssuerURLs lists the issuerURL of every namespace that sets one, ordered
+	// and without repeats. The server needs the list to refuse a trust rule
+	// for an issuer that it signs for itself.
+	IssuerURLs(ctx context.Context) ([]string, error)
 	// RecordCopyCheck stores the outcome of a copy check. It does not change
 	// Version. Verified keeps only IDs that the check lists. ErrConflict when
 	// c.URL is not the stored issuerURL, also when a PATCH changed it after

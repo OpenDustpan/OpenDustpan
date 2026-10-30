@@ -66,6 +66,11 @@ type Config struct {
 	// installation, for example its public URL. A rule refuses an issuer at
 	// or under each of them.
 	InstallationURLs []string
+	// OwnIssuer is the check of the issuers that this installation signs for
+	// itself: its public URL, its issuer base URL and the issuerURL of each
+	// namespace. Nil means that the installation has no issuer, and only
+	// InstallationURLs apply.
+	OwnIssuer OwnIssuer
 	// CheckURL checks the issuer of a discovery rule against the egress
 	// rules of the server. Nil means the egress rules with no allowed
 	// range.
@@ -74,12 +79,20 @@ type Config struct {
 	Now func() time.Time
 }
 
+// OwnIssuer decides whether an issuer is an issuer of this installation.
+// *issuersvc.Service meets it. An error means that the answer is unknown, and
+// the caller refuses.
+type OwnIssuer interface {
+	OwnsIssuer(ctx context.Context, issuer string) (bool, error)
+}
+
 // Service implements the use cases of the trust rules.
 type Service struct {
 	store      trustrule.Store
 	namespaces Namespaces
 	principals Principals
 	authz      identity.Authorizer
+	ownIssuer  OwnIssuer
 	ownURLs    []*url.URL
 	checkURL   func(raw string) error
 	now        func() time.Time
@@ -127,7 +140,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, principals: cfg.Principals, authz: cfg.Authorizer,
-		ownURLs: own, checkURL: checkURL, now: now,
+		ownIssuer: cfg.OwnIssuer, ownURLs: own, checkURL: checkURL, now: now,
 	}, nil
 }
 
@@ -176,7 +189,7 @@ func (s *Service) Create(
 		return trustrule.Rule{}, err
 	}
 
-	if err := s.CheckIssuer(r.Issuer); err != nil {
+	if err := s.CheckOwnIssuer(ctx, r.Issuer); err != nil {
 		return trustrule.Rule{}, err
 	}
 
@@ -223,6 +236,38 @@ func (s *Service) Create(
 func (s *Service) CheckIssuer(issuer string) error {
 	u, err := url.Parse(issuer)
 	if err == nil && s.ownsURL(u) {
+		return fmt.Errorf("%w: %q", trustrule.ErrIssuerRefused, issuer)
+	}
+
+	return nil
+}
+
+// CheckOwnIssuer returns trustrule.ErrIssuerRefused when issuer is an issuer of
+// this installation, by CheckIssuer or by the OwnIssuer of the config. When the
+// OwnIssuer cannot answer, the issuer is refused: the check fails closed. A
+// later exchange of a token calls it again, because a namespace can set an
+// issuerURL after a rule exists.
+//
+// Defense in depth: the static check of CheckIssuer and the check of the
+// issuer service stay both, so a missing issuer service never lets an issuer
+// of the public URL through, and the lookup of the issuerURLs never depends on
+// the form of the public URL.
+func (s *Service) CheckOwnIssuer(ctx context.Context, issuer string) error {
+	if err := s.CheckIssuer(issuer); err != nil {
+		return err
+	}
+
+	if s.ownIssuer == nil {
+		return nil
+	}
+
+	owns, err := s.ownIssuer.OwnsIssuer(ctx, issuer)
+	if err != nil {
+		return fmt.Errorf("%w: %q: the server cannot tell whether it signs for this issuer: %w",
+			trustrule.ErrIssuerRefused, issuer, err)
+	}
+
+	if owns {
 		return fmt.Errorf("%w: %q", trustrule.ErrIssuerRefused, issuer)
 	}
 
