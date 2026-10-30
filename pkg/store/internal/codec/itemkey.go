@@ -83,9 +83,8 @@ func FromItemKeyRow(r ItemKeyRow) (secret.ItemKey, error) {
 
 // itemKeyBlobInfo reads and checks the blob columns of a row: a version in
 // 1 to secret.MaxItemKeyVersion, a size in 1 to secret.MaxWrappedItemKeyBytes,
-// an MD5 of 16 bytes, and an attempt part that is valid or empty. An empty
-// attempt part is a row of the first key layout, which stays readable. It
-// returns an error that wraps secret.ErrInvalidItemRef for a row that fails.
+// an MD5 of 16 bytes, and a valid attempt part. It returns an error that
+// wraps secret.ErrInvalidItemRef for a row that fails.
 func itemKeyBlobInfo(r ItemKeyRow) (secret.ItemKeyBlobInfo, error) {
 	if r.BlobVersion < 1 || r.BlobVersion > secret.MaxItemKeyVersion {
 		return secret.ItemKeyBlobInfo{}, fmt.Errorf("%w: item key %q has blob version %d",
@@ -106,7 +105,7 @@ func itemKeyBlobInfo(r ItemKeyRow) (secret.ItemKeyBlobInfo, error) {
 
 	copy(sum[:], r.BlobMd5)
 
-	if r.BlobAttempt != "" && !secret.ValidItemKeyAttempt(r.BlobAttempt) {
+	if !secret.ValidItemKeyAttempt(r.BlobAttempt) {
 		return secret.ItemKeyBlobInfo{}, fmt.Errorf("%w: item key %q has a blob attempt part that is not valid",
 			secret.ErrInvalidItemRef, r.ID)
 	}
@@ -137,12 +136,6 @@ func CheckNewItemKey(k secret.ItemKey, fence namespace.Fence) error {
 
 	if _, err := itemKeyBlobInfo(ToItemKeyRow(k)); err != nil {
 		return err
-	}
-
-	// A new record always names a key with an attempt part. Only a row of the
-	// first key layout, which no writer makes now, has none.
-	if k.Blob.Attempt == "" {
-		return fmt.Errorf("%w: item key %q names a blob key with no attempt part", secret.ErrInvalidItemRef, k.ID)
 	}
 
 	switch {

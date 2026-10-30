@@ -259,7 +259,7 @@ SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 UNION ALL
 SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text
-       || CASE WHEN k.blob_attempt = '' THEN '' ELSE '-' || k.blob_attempt END AS content_key,
+       || '-' || k.blob_attempt AS content_key,
        k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
 FROM item_keys AS k
 WHERE k.shredded_at_ms = 0

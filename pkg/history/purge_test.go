@@ -205,7 +205,9 @@ const nsID2 = "ns-tsrqponmlkjihgfedcba"
 func itemKeyBlob(t *testing.T, ns string, id secret.ItemKeyID, version int) blob.Key {
 	t.Helper()
 
-	key, err := blob.ParseKey("namespaces/" + ns + "/item-keys/" + string(id) + "/v" + strconv.Itoa(version))
+	key, err := blob.ParseKey(
+		"namespaces/" + ns + "/item-keys/" + string(id) + "/v" + strconv.Itoa(version) + "-abcdefghij0123456789",
+	)
 	if err != nil {
 		t.Fatalf("key: %v", err)
 	}
@@ -231,19 +233,9 @@ func TestGaps(t *testing.T) {
 		{name: "the key blob of a redaction", key: itemKeyBlob(t, nsID, r.ItemKey, 1), want: true},
 		{name: "a later version of the key blob of a redaction", key: itemKeyBlob(t, nsID, r.ItemKey, 7), want: true},
 		{
-			name: "an attempt of the key blob of a redaction",
-			key:  blob.Key(itemKeyBlob(t, nsID, r.ItemKey, 1).String() + "-abcdefghij0123456789"),
+			name: "another attempt of the key blob of a redaction",
+			key:  blob.Key("namespaces/" + nsID + "/item-keys/" + string(r.ItemKey) + "/v1-0123456789abcdefghij"),
 			want: true,
-		},
-		{
-			name: "an attempt of a key blob of a purged unit",
-			key:  blob.Key(itemKeyBlob(t, nsID, tb.ItemKeys[0], 3).String() + "-abcdefghij0123456789"),
-			want: true,
-		},
-		{
-			name: "an attempt of another key blob",
-			key:  blob.Key(itemKeyBlob(t, nsID, secret.NewItemKeyID(), 1).String() + "-abcdefghij0123456789"),
-			want: false,
 		},
 		{name: "a key blob of a purged unit", key: itemKeyBlob(t, nsID, tb.ItemKeys[0], 1), want: true},
 		{

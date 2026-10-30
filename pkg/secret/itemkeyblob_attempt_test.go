@@ -84,24 +84,25 @@ func checkNewKey(t *testing.T, b *secret.ItemKeyBlobs, id secret.ItemKeyID, vers
 	return key
 }
 
-// TestItemKeyBlobsPutRefusesAKeyWithNoAttempt sends a key of the first layout
-// straight to Put, as if a writer had skipped NewKey. A second write to such a
-// key could replace a blob that a record names, so Put refuses it before the
-// store sees it.
+// TestItemKeyBlobsPutRefusesAKeyWithNoAttempt sends a key with no attempt
+// part straight to Put, as if a writer had skipped NewKey. A second write to
+// such a key could replace a blob that a record names, so Put refuses it
+// before the store sees it.
 func TestItemKeyBlobsPutRefusesAKeyWithNoAttempt(t *testing.T) {
 	t.Parallel()
 
 	b, store, rec := newItemKeyBlobs(t)
 	id := secret.NewItemKeyID()
 
-	for _, version := range []int{1, 2} {
-		key, err := b.Key(nsA, id, version, "")
-		if err != nil {
-			t.Fatalf("key: %v", err)
-		}
+	for _, version := range []string{"v1", "v2", "v1-"} {
+		key := blob.Key("namespaces/" + string(nsA) + "/item-keys/" + string(id) + "/" + version)
 
 		if putErr := b.Put(t.Context(), nsA, key, []byte("wrapped")); !errors.Is(putErr, secret.ErrInvalidItemRef) {
-			t.Errorf("put of v%d with no attempt part err = %v, want ErrInvalidItemRef", version, putErr)
+			t.Errorf("put of %s err = %v, want ErrInvalidItemRef", key, putErr)
+		}
+
+		if _, keyErr := b.Key(nsA, id, 1, ""); !errors.Is(keyErr, secret.ErrInvalidItemRef) {
+			t.Errorf("key with no attempt part err = %v, want ErrInvalidItemRef", keyErr)
 		}
 	}
 
@@ -111,40 +112,6 @@ func TestItemKeyBlobsPutRefusesAKeyWithNoAttempt(t *testing.T) {
 
 	if n := len(rec.refusals()); n != 0 {
 		t.Errorf("a key of the namespace is not a scope refusal, recorder called %d times", n)
-	}
-}
-
-// TestItemKeyBlobsGetReadsTheFirstLayout shows that a record of the first key
-// layout, which has no attempt part, stays readable.
-func TestItemKeyBlobsGetReadsTheFirstLayout(t *testing.T) {
-	t.Parallel()
-
-	b, store, _ := newItemKeyBlobs(t)
-	id := secret.NewItemKeyID()
-	wrapped := []byte("wrapped by an earlier build")
-
-	key, err := b.Key(nsA, id, 1, "")
-	if err != nil {
-		t.Fatalf("key: %v", err)
-	}
-
-	if putErr := store.Put(t.Context(), key, bytes.NewReader(wrapped)); putErr != nil {
-		t.Fatalf("seed: %v", putErr)
-	}
-
-	info := infoOf(t, key, wrapped)
-	if info.Attempt != "" {
-		t.Fatalf("info of the first layout has the attempt part %q", info.Attempt)
-	}
-
-	got, err := b.Get(t.Context(), nsA, key, info)
-	if err != nil || !bytes.Equal(got, wrapped) {
-		t.Fatalf("get of the first layout = %q, %v, want %q", got, err, wrapped)
-	}
-
-	versions, err := b.Versions(t.Context(), nsA, id)
-	if err != nil || !slices.Equal(versions, []blob.Key{key}) {
-		t.Errorf("versions = %v, %v, want [%s]", versions, err, key)
 	}
 }
 
@@ -503,37 +470,5 @@ func TestItemKeyBlobsGarbageSkipsForeignKeys(t *testing.T) {
 	got, err := b.Garbage(t.Context(), nsA, namerOf(), garbageNow())
 	if err != nil || len(got) != 0 {
 		t.Errorf("garbage = %v, %v, want none", got, err)
-	}
-}
-
-// TestItemKeyBlobsGarbageOfTheFirstLayout shows that the reaper rule reads
-// the keys of the first layout too.
-func TestItemKeyBlobsGarbageOfTheFirstLayout(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)
-	b, store, _ := newItemKeyBlobs(t)
-	named, orphan := secret.NewItemKeyID(), secret.NewItemKeyID()
-
-	keys := make([]blob.Key, 0, 2)
-
-	for _, id := range []secret.ItemKeyID{named, orphan} {
-		key, err := b.Key(nsA, id, 1, "")
-		if err != nil {
-			t.Fatalf("key: %v", err)
-		}
-
-		if putErr := store.Put(t.Context(), key, strings.NewReader("x")); putErr != nil {
-			t.Fatalf("seed: %v", putErr)
-		}
-
-		store.setModified(key, now.Add(-2*secret.ItemKeyBlobGracePeriod))
-
-		keys = append(keys, key)
-	}
-
-	got, err := b.Garbage(t.Context(), nsA, namerOf(keys[0]), now)
-	if err != nil || !slices.Equal(got, keys[1:]) {
-		t.Errorf("garbage = %v, %v, want %v", got, err, keys[1:])
 	}
 }

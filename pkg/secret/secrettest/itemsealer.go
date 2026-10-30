@@ -989,8 +989,8 @@ func testSealerRecordVersion(t *testing.T, r *SealerRig) {
 	sealed := sealItem(t, r, a, sealerBinding(), []byte("content of pln-1"))
 
 	// Other blobs of the item key of pln-1 that the record does not name: a
-	// later version, another attempt of the same version, and the key of the
-	// first layout. Each holds the wrapped key of pln-2, then bytes that are
+	// later version, another attempt of the same version, and a key with no
+	// attempt part. Each holds the wrapped key of pln-2, then bytes that are
 	// not a wrapped key.
 	named := blobOf(t, r, r.Acme.ID, ka).String()
 	dir := named[:strings.LastIndex(named, "/")+1]

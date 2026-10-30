@@ -47,10 +47,6 @@ func ItemKeyFamily() scopeaudit.Family {
 // *blob.Scoped for each call, from the namespace ID that the caller took from
 // the row that it resolved and authorized, never from a request field. Each
 // blob key is namespaces/<namespace ID>/item-keys/<item key ID>/v<version>-<attempt>.
-// A record of the first key layout names
-// namespaces/<namespace ID>/item-keys/<item key ID>/v<version>, with no
-// attempt part. ItemKeyBlobs reads both layouts and writes only the layout
-// with an attempt part.
 //
 // A call with a key of another namespace returns blob.ErrOutOfScope before any
 // call to the store, and writes one refusal to the scopeaudit.Recorder. A read
@@ -83,8 +79,7 @@ func NewItemKeyBlobs(
 }
 
 // itemKeyRel returns the key of version of id with the attempt part attempt,
-// relative to the scope of a namespace. An empty attempt gives the key of the
-// first layout, which has no attempt part. It returns ErrInvalidItemRef for an
+// relative to the scope of a namespace. It returns ErrInvalidItemRef for an
 // invalid ID, a version that is not in 1 to MaxItemKeyVersion, or an attempt
 // part that is not valid.
 func itemKeyRel(id ItemKeyID, version int, attempt string) (string, error) {
@@ -96,17 +91,11 @@ func itemKeyRel(id ItemKeyID, version int, attempt string) (string, error) {
 		return "", fmt.Errorf("%w: item key version %d", ErrInvalidItemRef, version)
 	}
 
-	segment := "v" + strconv.Itoa(version)
-
-	if attempt != "" {
-		if !validAttempt(attempt) {
-			return "", fmt.Errorf("%w: attempt part of an item key blob key", ErrInvalidItemRef)
-		}
-
-		segment += "-" + attempt
+	if !validAttempt(attempt) {
+		return "", fmt.Errorf("%w: attempt part of an item key blob key", ErrInvalidItemRef)
 	}
 
-	return itemKeyDir + string(id) + "/" + segment, nil
+	return itemKeyDir + string(id) + "/v" + strconv.Itoa(version) + "-" + attempt, nil
 }
 
 // ValidItemKeyAttempt reports whether s is the attempt part of an item key
@@ -132,8 +121,7 @@ func validAttempt(s string) bool {
 	return true
 }
 
-// ItemKeyBlob names the parts of one item key blob key. Attempt is empty for
-// a key of the first layout.
+// ItemKeyBlob names the parts of one item key blob key.
 type ItemKeyBlob struct {
 	Namespace namespace.ID
 	ID        ItemKeyID
@@ -142,9 +130,8 @@ type ItemKeyBlob struct {
 }
 
 // ParseItemKeyBlobKey splits a blob key of the form
-// namespaces/<namespace ID>/item-keys/<item key ID>/v<version>-<attempt>, or
-// of the first layout namespaces/<namespace ID>/item-keys/<item key ID>/v<version>,
-// into its parts. A backup check, a sweep and the purge ledger use it to name
+// namespaces/<namespace ID>/item-keys/<item key ID>/v<version>-<attempt> into
+// its parts. A backup check, a sweep and the purge ledger use it to name
 // the item key that a blob holds. It returns ErrInvalidItemRef for any other
 // key.
 func ParseItemKeyBlobKey(key blob.Key) (ItemKeyBlob, error) {
@@ -171,10 +158,9 @@ func ParseItemKeyBlobKey(key blob.Key) (ItemKeyBlob, error) {
 	return ItemKeyBlob{Namespace: ns, ID: id, Version: version, Attempt: attempt}, nil
 }
 
-// parseItemKeyVersion parses "v<version>-<attempt>", or "v<version>" of the
-// first layout: a version in 1 to MaxItemKeyVersion in its plain decimal form,
-// with no sign and no leading zero, and a valid attempt part. The attempt is
-// empty for the first layout.
+// parseItemKeyVersion parses "v<version>-<attempt>": a version in 1 to
+// MaxItemKeyVersion in its plain decimal form, with no sign and no leading
+// zero, and a valid attempt part.
 func parseItemKeyVersion(s string) (int, string, bool) {
 	rest, ok := strings.CutPrefix(s, "v")
 	if !ok {
@@ -182,7 +168,7 @@ func parseItemKeyVersion(s string) (int, string, bool) {
 	}
 
 	digits, attempt, hasAttempt := strings.Cut(rest, "-")
-	if hasAttempt && !validAttempt(attempt) {
+	if !hasAttempt || !validAttempt(attempt) {
 		return 0, "", false
 	}
 
@@ -196,10 +182,8 @@ func parseItemKeyVersion(s string) (int, string, bool) {
 
 // Key returns the blob key of version of the item key id with the attempt
 // part attempt, in the namespace ns:
-// namespaces/<ns>/item-keys/<id>/v<version>-<attempt>. An empty attempt gives
-// the key of the first layout, namespaces/<ns>/item-keys/<id>/v<version>, so
-// that a record of that layout stays readable. A reader takes version and
-// attempt from the record. A writer takes a new key from NewKey. A backup
+// namespaces/<ns>/item-keys/<id>/v<version>-<attempt>. A reader takes version
+// and attempt from the record. A writer takes a new key from NewKey. A backup
 // copies the blob like every other blob, and every backup in one target shares
 // the copy, so one delete in the target reaches all of them. It returns
 // ErrInvalidItemRef for an invalid ID, version or attempt part, and
@@ -243,8 +227,9 @@ func (b *ItemKeyBlobs) NewKey(ns namespace.ID, id ItemKeyID, version int) (blob.
 // have an attempt part, as NewKey gives it. It returns ErrTooLarge for more
 // than MaxWrappedItemKeyBytes, blob.ErrOutOfScope when key is outside the
 // namespace ns or outside its item-keys directory, ErrInvalidItemRef for a
-// key with no attempt part, and blob.ErrExists when the store refuses a key
-// that already holds a blob.
+// key that is not an item key blob key, for example a key with no attempt
+// part, and blob.ErrExists when the store refuses a key that already holds a
+// blob.
 func (b *ItemKeyBlobs) Put(ctx context.Context, ns namespace.ID, key blob.Key, wrapped []byte) error {
 	if len(wrapped) > MaxWrappedItemKeyBytes {
 		return fmt.Errorf(
@@ -258,14 +243,6 @@ func (b *ItemKeyBlobs) Put(ctx context.Context, ns namespace.ID, key blob.Key, w
 	v, err := b.scopedKey(ctx, ns, key, "put")
 	if err != nil {
 		return err
-	}
-
-	// A key of the first layout has no attempt part, so a second write to it
-	// could replace a blob that a record names, on a store that does not
-	// refuse a second write. No writer makes such a key, and this check
-	// refuses one before the store sees it.
-	if parsed, parseErr := ParseItemKeyBlobKey(key); parseErr != nil || parsed.Attempt == "" {
-		return fmt.Errorf("%w: a write of an item key blob needs a key with an attempt part", ErrInvalidItemRef)
 	}
 
 	if err := v.Put(ctx, key, bytes.NewReader(wrapped)); err != nil {
@@ -537,7 +514,7 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 }
 
 // validItemKeyRest reports whether rest, the part of a key after the item-keys
-// directory, is <item key ID>/v<version>-<attempt> or <item key ID>/v<version>.
+// directory, is <item key ID>/v<version>-<attempt>.
 func validItemKeyRest(rest string) bool {
 	id, ver, ok := strings.Cut(rest, "/")
 	if !ok {

@@ -286,10 +286,10 @@ func refusedItemKeys(other secret.ItemRef, acme namespace.Fence) []refusedItemKe
 	}
 }
 
-// TestItemKeyRowsOfBothLayouts proves that a row of the first key layout, with
-// no attempt part, stays readable and passes the restore check, and that the
-// backup names the blob key of each row in its own layout.
-func TestItemKeyRowsOfBothLayouts(t *testing.T) {
+// TestItemKeyBackupNamesTheAttemptKey proves that the backup names the blob
+// key of a record with its attempt part, so a backup copies the blob that the
+// record names and no other attempt.
+func TestItemKeyBackupNamesTheAttemptKey(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -298,12 +298,12 @@ func TestItemKeyRowsOfBothLayouts(t *testing.T) {
 		suffix func(k secret.ItemKey) string
 	}{
 		{
-			name: "a row with an attempt part", update: "",
+			name: "a record of the first version", update: "",
 			suffix: func(k secret.ItemKey) string { return "/v1-" + k.Blob.Attempt },
 		},
 		{
-			name: "a row of the first layout", update: `UPDATE item_keys SET blob_attempt = ''`,
-			suffix: func(secret.ItemKey) string { return "/v1" },
+			name: "a record of a rewrap", update: `UPDATE item_keys SET blob_version = 3`,
+			suffix: func(k secret.ItemKey) string { return "/v3-" + k.Blob.Attempt },
 		},
 	}
 
@@ -366,12 +366,13 @@ func countKeySuffix(refs []backup.BlobRef, suffix string) int {
 }
 
 // TestItemKeyAttemptColumnRefusesABadLength proves the check of the column:
-// the database refuses an attempt part that is not empty and not 20
-// characters, also when a write skips every check of the store.
+// the database refuses an attempt part that is not 20 characters, also an
+// empty one, when a write skips every check of the store.
 func TestItemKeyAttemptColumnRefusesABadLength(t *testing.T) {
 	t.Parallel()
 
 	for _, update := range []string{
+		`UPDATE item_keys SET blob_attempt = ''`,
 		`UPDATE item_keys SET blob_attempt = 'abc'`,
 		`UPDATE item_keys SET blob_attempt = 'abcdefghij01234567890'`,
 	} {

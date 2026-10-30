@@ -130,9 +130,7 @@ func ParseItemKeyID(s string) (ItemKeyID, error) {
 // Attempt is the attempt part of the blob key. Each write of a wrapped key
 // makes a new attempt part, so two writes never share a key, and a store that
 // replaces an object on a second write never replaces a key that a record
-// names. Attempt is empty for a record of the first key layout, which has no
-// attempt part. A reader accepts both layouts. A writer always writes an
-// attempt part.
+// names.
 type ItemKeyBlobInfo struct {
 	Attempt string
 	MD5     [16]byte

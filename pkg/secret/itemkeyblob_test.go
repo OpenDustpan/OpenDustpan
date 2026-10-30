@@ -268,8 +268,8 @@ func TestItemKeyBlobsKey(t *testing.T) {
 			want: "namespaces/" + string(nsB) + "/item-keys/ik-abc/v12-" + testAttempt,
 		},
 		{
-			name: "the first layout, with no attempt part", ns: nsA, id: "ik-abc", version: 1, attempt: "",
-			wantErr: nil, want: "namespaces/" + string(nsA) + "/item-keys/ik-abc/v1",
+			name: "no attempt part", ns: nsA, id: "ik-abc", version: 1, attempt: "",
+			want: "", wantErr: secret.ErrInvalidItemRef,
 		},
 		{
 			name: "a short attempt part", ns: nsA, id: "ik-abc", version: 1, attempt: "abc", want: "",
@@ -342,7 +342,7 @@ func TestItemKeyBlobsKey(t *testing.T) {
 			name:    "an empty namespace ID",
 			ns:      "",
 			id:      "ik-abc",
-			attempt: "",
+			attempt: testAttempt,
 			version: 1,
 			want:    "",
 			wantErr: blob.ErrInvalidKey,
@@ -351,7 +351,7 @@ func TestItemKeyBlobsKey(t *testing.T) {
 			name:    "a namespace ID with a slash",
 			ns:      "ns-a/../ns-b",
 			id:      "ik-abc",
-			attempt: "",
+			attempt: testAttempt,
 			version: 1,
 			want:    "",
 			wantErr: blob.ErrInvalidKey,
@@ -360,7 +360,7 @@ func TestItemKeyBlobsKey(t *testing.T) {
 			name:    "a namespace ID with upper case",
 			ns:      "ns-AAAA",
 			id:      "ik-abc",
-			attempt: "",
+			attempt: testAttempt,
 			version: 1,
 			want:    "",
 			wantErr: blob.ErrInvalidKey,
@@ -501,6 +501,7 @@ func TestItemKeyBlobsVersionsRefuseABadListing(t *testing.T) {
 		"a short attempt part":            dir + "v1-abc",
 		"an empty attempt part":           dir + "v1-",
 		"an attempt part with no version": dir + "v-" + testAttempt,
+		"no attempt part":                 dir + "v1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -727,6 +728,7 @@ func TestItemKeyBlobsRefuseAMalformedKeyOfTheNamespace(t *testing.T) {
 
 	cases := map[string]string{
 		"no version":               prefix + "ik-abc",
+		"no attempt part":          prefix + "ik-abc/v1",
 		"a version of zero":        prefix + "ik-abc/v0",
 		"a version with a +":       prefix + "ik-abc/v+1",
 		"a padded version":         prefix + "ik-abc/v01",
@@ -766,7 +768,7 @@ func TestItemKeyBlobsRefuseABadNamespaceID(t *testing.T) {
 	t.Parallel()
 
 	b, store, _ := newItemKeyBlobs(t)
-	key := blob.Key("namespaces/" + string(nsA) + "/item-keys/ik-abc/v1")
+	key := blob.Key("namespaces/" + string(nsA) + "/item-keys/ik-abc/v1-" + testAttempt)
 
 	for _, ns := range []namespace.ID{"", "ns-", "ns-A", "ns-a/b", "ns-a b"} {
 		if _, err := b.Get(t.Context(), ns, key, infoOf(t, key, []byte("x"))); !errors.Is(err, blob.ErrInvalidKey) {
@@ -790,10 +792,6 @@ func TestItemKeyBlobsRefuseABadNamespaceID(t *testing.T) {
 func TestParseItemKeyBlobKey(t *testing.T) {
 	t.Parallel()
 
-	good := func(ns namespace.ID, id secret.ItemKeyID, v int) *secret.ItemKeyBlob {
-		return &secret.ItemKeyBlob{Namespace: ns, ID: id, Version: v, Attempt: ""}
-	}
-
 	attempt := func(ns namespace.ID, id secret.ItemKeyID, v int) *secret.ItemKeyBlob {
 		return &secret.ItemKeyBlob{Namespace: ns, ID: id, Version: v, Attempt: testAttempt}
 	}
@@ -803,8 +801,7 @@ func TestParseItemKeyBlobKey(t *testing.T) {
 		name string
 		key  string
 	}{
-		{name: "version one", key: "namespaces/ns-abc/item-keys/ik-1/v1", want: good("ns-abc", "ik-1", 1)},
-		{name: "version 40", key: "namespaces/ns-abc/item-keys/ik-1/v40", want: good("ns-abc", "ik-1", 40)},
+		{name: "no attempt part", key: "namespaces/ns-abc/item-keys/ik-1/v1", want: nil},
 		{
 			name: "an attempt part", key: "namespaces/ns-abc/item-keys/ik-1/v1-" + testAttempt,
 			want: attempt("ns-abc", "ik-1", 1),
@@ -879,7 +876,7 @@ func TestItemKeyBlobsAuditEndToEnd(t *testing.T) {
 		t.Fatalf("blobs: %v", err)
 	}
 
-	key := blob.Key("namespaces/" + string(nsB) + "/item-keys/ik-abc/v1")
+	key := blob.Key("namespaces/" + string(nsB) + "/item-keys/ik-abc/v1-" + testAttempt)
 
 	if _, getErr := b.Get(t.Context(), nsA, key, infoOf(t, key, []byte("x"))); !errors.Is(getErr, blob.ErrOutOfScope) {
 		t.Fatalf("get err = %v, want ErrOutOfScope", getErr)
