@@ -1,0 +1,564 @@
+---
+rfc: 112
+title: Rules that hold by themselves, with code gates, nested agent files, project skills and a size budget
+status: discussing
+created: 2026-10-30
+---
+
+# RFC 112. Rules that hold by themselves, with code gates, nested agent files, project skills and a size budget
+
+Status: discussing. Design only. The owner approved the goal on 2026-10-30.
+This RFC holds the options, a recommendation for each question, and the plan
+of the follow-up pull requests. It changes no code.
+
+## Problem
+
+Many agents work on this repository at the same time. They make the same
+mistakes again, because a rule that only text holds does not hold. The root
+`CLAUDE.md` has 365 lines. An agent reads it once, at the start, and then
+works in one package for hours.
+
+The goal, in this order of preference:
+
+1. Code gates: Make targets, lint rules and tests that fail.
+2. Short nested `CLAUDE.md` files, also read as `AGENTS.md`, in the packages
+   that have their own conventions.
+3. A small number of project skills for workflows that span several files.
+
+Also bring the size of files and packages under control.
+
+### The repeated failures of the last 48 hours
+
+Each line gives the failure, what exists on `main` today, and why that did
+not stop it.
+
+| # | Failure | What exists on `main` (`2583f66`) | Why it did not stop it |
+| --- | --- | --- | --- |
+| F1 | Agents ran golangci-lint v2.14.0. CI runs v2.15.0. An `errcheck` finding in `load/main.go` reached `main` (fix #2113). | The Makefile names v2.15.0 in a comment only. CI pins `version: v2.15.0` in two steps of `ci.yml`. | `make lint` runs whatever `golangci-lint` is on the `PATH`. Nothing compares the versions. |
+| F2 | `make e2e` and `internal/servertest` ran on SQLite only when `DUSTPAN_TEST_POSTGRES_URL` was not set. Three merges had SQLite-only e2e. | 61 `t.Skip` calls in 47 files say "set DUSTPAN_TEST_POSTGRES_URL". The e2e summary writes a "not run" report for each skipped store. | A skip is a pass for `go test`. The notice is one line among thousands of lines of output. |
+| F3 | Open pull requests clash on `DocumentVersion` and on migration numbers. The merge session must renumber. | `TestVersionFollowsTheDescription` pins the version and the SHA-256 of `openapi.json` in `openapi.pin`. `TestFrozenMigrations` pins each migration file. | Each branch passes alone. The clash shows only on the merged head, and the fix is manual. |
+| F4 | A `git push` together with other commands in one shell line was refused by the permission classifier. | `.claude/settings.json` allows exactly `git push -u https://github.com/OpenDustpan/OpenDustpan.git HEAD:*`. | A compound command does not match the allow rule. No text near the work says so. |
+| F5 | Credential-shaped literals in tests reached history twice. Such a literal is a URL with a user name and a password before the host. Each one needs an owner-approved TruffleHog exclusion for good. | `make trufflehog` scans all history. `make semgrep` runs `p/secrets`. `.trufflehog-exclude-paths.txt` has 14 lines. Draft #2117 adds two more. | `p/secrets` does not match a URL with a user and a password. TruffleHog runs after the commit, when the literal is already in history. 21 such literals are in Go source today, in 19 files. |
+| F6 | `TestRoundTripsOfBackup` has fixed ceilings that each new backup table breaks. | Issue #2115 has a session of its own. | This RFC does not redo it. It only references it. |
+| F7 | A store port change merged without the `internal/store` and `storefault` gates. `storefault.Store` did not forward `CountBlobPurges`, and `TestTransparency` failed on `main` (fix #2103). | `var _ Inner = (*Store)(nil)` checks the methods of `Inner` at compile time. `TestTransparency` runs the store suite through the wrapper. | The new method was on a port that `Inner` did not embed, so the compiler saw nothing. `TestTransparency` ran only after the merge. |
+| F8 | An `openapi.json` change merged without a version change, and `main` went red (fix #2110). | The pin test of F3. | The test ran on the branch, not on the merged head. |
+| F9 | Benchmark models drifted from the code that they model. | `cmd/s3bench/measure.go` has functions such as `hotPath`, `unitImport` and `listThenPut`. Their comments say "models the checkpoint ... writes", in prose. | No model names the code that it follows, so no test can find the drift. |
+| F10 | Containers restart and PostgreSQL stops. Gate scripts assume that it runs. | `scripts/checks-agent.sh` starts a container when the URL is not set. The lead workflow tells each worker to run `service postgresql start`. | When the URL is set but the server is down, each suite fails late, with a connection error. |
+| F11 | The checklist of a new endpoint is long and easy to miss. | Gates exist for most items: the route test, the error code gate, the pin test, `make clients-check`, and the route coverage check of `make e2e`. | The steps and their gates are in five places. No one place lists them in order. |
+| F12 | Each new backup table needs the table list, the staged-row checks, both dialects and the restore round trip. | `pkg/backup/coverage.go` fails an export when a column list and the schema differ. | The steps are in several packages. An agent finds each gate only when it fails. |
+
+Of the last 50 commits on `main`, 4 are `fix-main` commits: #2058, #2103,
+#2110 and #2113. F1, F7 and F8 caused three of them. The lead workflow
+records that pull requests that each passed alone broke `main` together about
+10 times from 2026-10-11 to 2026-10-17.
+
+### Size facts
+
+Measured on `main` at `2583f66` with `git ls-files '*.go'`. A file is
+generated when its first 2,000 bytes hold "Code generated" and "DO NOT EDIT".
+
+- 3,034 Go files with 923,634 lines. 424,171 lines (46%) are in `_test.go`
+  files.
+- 8 generated files with 40,261 lines: the sqlc code in
+  `pkg/store/*/internal/db`.
+- Hand-written files over a limit:
+
+  | Limit | Files over it | Of them `_test.go` | Lines over the limit, in total |
+  | --- | --- | --- | --- |
+  | 800 | 194 | 87 | 111,221 |
+  | 1,000 | 120 | 55 | 80,685 |
+  | 1,500 | 38 | 22 | 43,872 |
+  | 2,000 | 17 | 10 | 29,401 |
+  | 3,000 | 8 | 4 | 18,110 |
+
+- The largest hand-written files:
+
+  | File | Lines |
+  | --- | --- |
+  | `e2e/e2e_test.go` | 15,207 |
+  | `pkg/workspace/workspace_test.go` | 5,410 |
+  | `pkg/store/storetest/workspaces.go` | 4,337 |
+  | `pkg/dustpan/dustpan.go` | 4,226 |
+  | `internal/api/pulumi/updates_test.go` | 3,455 |
+  | `pkg/store/storetest/updates.go` | 3,274 |
+  | `e2e/coverage.go` | 3,181 |
+  | `pkg/store/storetest/backup_test.go` | 3,020 |
+  | `pkg/workspace/service.go` | 2,906 |
+  | `e2e/harness.go` | 2,758 |
+
+- The widest packages, in Go files: `pkg/store/postgres` 187,
+  `pkg/store/sqlite` 182, `pkg/dustpan` 146, `e2e` 133,
+  `internal/api/server` 102. 11 packages have more than 60 files.
+
+Repowise on the indexed commit `56611cf`:
+
+- `get_health`: average health 7.59, hotspot health 6.31. The worst
+  production file is `pkg/store/storetest/workspaces.go` (score 1). The worst
+  test file is `e2e/e2e_test.go` (score 1). 1,793 open production findings and
+  2,617 test findings.
+- `get_risk`: `pkg/dustpan/dustpan.go` had 151 commits in 90 days, in the
+  99.9th churn percentile. Its strongest co-change partners are
+  `e2e/coverage.go` (80 shared commits) and `cmd/opendustpan/main.go` (52).
+  `e2e/e2e_test.go` had 121 commits in 90 days, in the 99.9th percentile.
+  `internal/api/apidesc/document.go` had 26 commits, and `openapi.pin`
+  changes with it in 100% of its commits. `storefault.go` had 29 commits, and
+  it changes with the `queries.sql` of each dialect.
+- `get_dead_code`: 64 findings, 1,262 lines, all in the medium tier
+  (confidence 0.4), 0 marked safe to remove. 20 of them (772 lines) are in
+  `internal/clientgen`. Most of these are TypeScript runtime files that the
+  generator copies into the client, so they are false positives.
+
+`pkg/dustpan/dustpan.go` has 166 functions. `mountAPI` alone has 105 lines.
+`e2e/e2e_test.go` has 466 functions and 12 `Test` functions. Its scenarios are
+already named functions, for example `pulumiScenario` (233 lines) and
+`tofuLockScenario` (196 lines).
+
+## Questions and options
+
+Each question has options, a recommendation and the reason. Section
+"Plan of the follow-up pull requests" turns the recommendations into pull
+requests.
+
+### Q1. A code gate for each mechanical failure
+
+#### Q1a. The golangci-lint version (F1)
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Do nothing | None | F1 comes back with each new version. |
+| `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0` in `make lint` | A slow first build, and the golangci-lint project advises against a source build. | The exact version on each machine. |
+| `make lint` reads `golangci-lint version`, compares it with `GOLANGCI_LINT_VERSION` in the Makefile, and fails when they differ | About 10 lines of Make. | A fail with the one command that helps. |
+
+**Recommendation:** the version check. Put each tool version in one
+Makefile variable (`GOLANGCI_LINT_VERSION`, `SQLC_VERSION`,
+`SEMGREP_VERSION`, `TRIVY_VERSION`, `TRUFFLEHOG_VERSION`). Add a small
+standard-library Python check, run by `make lint`, that fails when a version
+in `.github/workflows/*.yml` differs from the Makefile variable. **Reason:**
+it fails closed, it costs no download, and it also stops the drift of the
+other four pinned tools. The error text names the install page and the
+version.
+
+#### Q1b. PostgreSQL is required, and it must run (F2, F10)
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Do nothing | None | SQLite-only runs continue to pass in silence. |
+| A loud notice at the end of `make e2e` | Small. | Better, but an agent that reads only the exit code still misses it. |
+| `make test`, `make e2e`, `make e2e-ha` and `make merge-gates` fail without `DUSTPAN_TEST_POSTGRES_URL`, unless `DUSTPAN_TEST_SQLITE_ONLY=1` is set | Small. A person who wants a fast local loop sets one variable. | The skip becomes a choice that is visible in the command line. |
+| The Go tests fail instead of skip | Large. `go test ./...` with no database stops working for every contributor. | Too strict for a first checkout. |
+
+**Recommendation:** the third option, plus a readiness step. A new target
+`pg-ready` runs `psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc 'select 1'` with a
+timeout of 5 seconds. When the server refuses, it prints the one command that
+helps, `service postgresql start`, and fails. The targets in the list above
+depend on `pg-ready`. The e2e summary also ends with one line that counts the
+stores that did not run. **Reason:** the Make targets are the entry points of
+agents and of CI. A plain `go test ./...` stays usable on a laptop. The
+readiness check fails in 5 seconds with a clear cause, not after 20 minutes
+with a connection error. A target that starts PostgreSQL by itself is a
+possible later step (open question 2).
+
+#### Q1c. Version and migration number clashes between open pull requests (F3, F8)
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Do nothing | The merge session renumbers by hand. | Red `main` when it forgets (F8). |
+| A version derived from the bytes of the description | It changes the version scheme of the API description, which an ADR decided. | No clash, but no meaning in the number. |
+| Timestamps for migration numbers | It changes the frozen and collapse rules of the migrations. | No clash, but the order of files no longer reads as a sequence. |
+| Keep the numbers. Run the gates on the merged head (Q1f). Add one command for each mechanical fix. | Two small Make targets. | The clash fails before the merge, and the fix is one command. |
+
+**Recommendation:** the last option. `make api-version-bump` raises the minor
+part of `DocumentVersion` and rewrites `openapi.pin` with the update flag of
+the pin test. `make migration-renumber FROM=<n> TO=<m>` renames the file
+pair of both dialects and updates the pinned hashes of the frozen-migration
+test. A test fails when one dialect has two files with one number. **Reason:**
+the existing pins already detect the clash. The cost was that the detection
+ran on the wrong head and that the fix was manual. Both problems have a
+small mechanical fix, and no ADR changes.
+
+#### Q1d. The `git push` command (F4)
+
+A shell command of an agent cannot be gated by `make`. Two layers are
+possible.
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Text in the root `CLAUDE.md` and in the merge skill | Small. | It helps only when the agent reads it. |
+| A `PreToolUse` hook in `.claude/settings.json` that refuses a Bash command that holds `git push` and also `&&`, `;`, `\|` or a line break | A short standard-library Python script. The file already has one `PreToolUse` hook. | A refusal with the exact allowed form, before the classifier sees the command. |
+
+**Recommendation:** both. The hook message gives the allowed form:
+`git push -u https://github.com/OpenDustpan/OpenDustpan.git HEAD:<branch>`,
+alone. **Reason:** the hook is a code gate for agents that use Claude Code.
+The text covers the other tools. Changes to `.claude/` are process changes,
+so the owner merges that pull request.
+
+#### Q1e. Credential-shaped literals (F5)
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Do nothing | Each new literal needs an owner-approved exclusion for good. | The exclusion list only grows. |
+| A local Semgrep rule file, `.semgrep/credential-url.yml`, added to `make semgrep` with `--config .semgrep/` | No new tool. One rule with a regular expression for a string literal that holds a URL with a user name and a password before the host. | `make check` fails before the commit is pushed. |
+| A Git pre-commit hook | Each clone must install it. Agents in fresh containers do not. | Earlier, but not reliable. |
+
+**Recommendation:** the Semgrep rule, with a known list of today's 21
+literals in the `paths.exclude` of the rule, and a test helper
+`credurl.Fake(scheme, host)` that builds such a URL at run time with
+`url.UserPassword`. A follow-up moves each literal to the helper and removes
+its path from the known list. The list only shrinks. **Reason:** Semgrep is
+already a gate of `make check`. A URL built at run time does not match the
+TruffleHog detectors, so a test can still send a hostile URL. The rule stops a
+new literal before it reaches history. Draft #2117 handles two old commits.
+This rule stops the next ones.
+
+#### Q1f. One target that runs exactly what a merge needs (F3, F7, F8)
+
+`scripts/checks-agent.sh` (`make checks-agent`) already syncs with `main`,
+starts PostgreSQL when the URL is not set, and runs `make generate`,
+`make check`, `make e2e` and a TruffleHog scan of the branch commits.
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| A new `make merge-gates` script | A second script that drifts from the first. | A clean start. |
+| `make merge-gates` as a fixed mode of `checks-agent.sh` | Small changes to one script. | One script. The merge mode refuses `SKIP`, requires PostgreSQL through `pg-ready`, runs on the head as it is (`SYNC=none`), and fails when `make generate` leaves a diff. |
+| A Git pre-push hook | Not installed in fresh containers. | Not reliable. |
+
+**Recommendation:** the second option. `make merge-gates` runs on the merged
+head and prints a summary block with the head SHA and the result of each
+step. The agent pastes that block into the pull request, as `CONTRIBUTING.md`
+asks. **Reason:** F3, F7 and F8 all passed on the branch and failed on the
+merged head. One target, with no way to skip a step, closes that gap. It uses
+the script that already exists.
+
+#### Q1g. The forward completeness of `storefault` (F7)
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Rely on `TestTransparency` | None. | It fails only when the new method has a case in the suite and the test runs. |
+| A test that compares method sets with `reflect` | One test file. | A fast fail for each exported method of `*sqlite.Store` or `*postgres.Store` that `*storefault.Store` does not have. A short known list holds methods that the wrapper must not forward, each with a reason. |
+
+**Recommendation:** the `reflect` test in `internal/store/storefault`, and the
+same test in `internal/blob/blobfault` for the blob adapters. **Reason:** the
+fault in #2103 was a method on a port that `Inner` did not embed. Only a check
+of the method sets of the real adapters finds that, and it runs in less than
+a second.
+
+#### Q1h. Benchmark models name the code that they follow (F9)
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Review only | None. | The drift continues. |
+| A `Follows:` line in the comment of each model names a Go package path and a symbol. A test parses that package with `go/parser`. It fails when the symbol is not there. | One test file, and one line for each model. | A model can no longer point at a symbol that was renamed or removed. |
+
+**Recommendation:** the `Follows:` line and its test, in `cmd/s3bench` and in
+`load`. The nested agent file of each of these directories says: a change to
+a followed symbol checks the model in the same pull request. `get_risk` with
+`changed_files` shows the co-change. **Reason:** a test cannot prove that a
+model is still true. It can prove that the model names live code, and that
+gives a reviewer a place to look. A path and a symbol are not internal project
+references, so this follows ADR 66.
+
+#### Q1i. The endpoint checklist and the backup table checklist (F11, F12)
+
+Most steps already have a gate. What is missing is one ordered list of the
+steps, with the gate of each step.
+
+**Recommendation:** no new gate in this RFC. The skills of Q5 hold each list.
+Each step names the command that fails when the step is missing. The skill
+pull request first checks each gate on `main` and lists each step that has no
+gate as an open item. For backup tables, the ceilings of
+`TestRoundTripsOfBackup` stay with issue #2115. **Reason:** the gates exist.
+The cost was finding them, and a skill fixes that.
+
+### Q2. A size budget for hand-written files
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Do nothing | The largest files grow by each feature. | More merge conflicts and harder reads. |
+| The `file-length-limit` rule of revive, with path exclusions for today's large files | Configuration only. | An exclusion cannot hold a ceiling for each file, so an excluded file can grow without a limit. |
+| A standard-library Python script with a known list | About 100 lines, and a list file. | A ceiling for each listed file, and a list that only shrinks. |
+| A Go test | Same as the script. | It needs a package with no other purpose. |
+
+**Recommendation:**
+
+- A limit of **1,500 lines** for each hand-written `.go` file, test files
+  included. 38 files are over it today. Generated files are exempt by their
+  header. `testdata/` is exempt.
+- `scripts/size-budget.py`, run by `make lint`. The known list
+  `scripts/size-budget.txt` holds one line for each file over the limit:
+  the path and its ceiling, the current line count. A first line
+  `limit <n>` holds the number of entries, as in the known lists of the error
+  catalog.
+- The script fails for a file over 1,500 lines that is not on the list, for a
+  listed file over its ceiling, for a listed file that is now at or below
+  1,500 lines, and for a list whose length is not its `limit`. So a new entry
+  is a higher `limit` in the diff, which a review sees.
+- The ceiling of a listed file does not go down by itself. A pull request
+  that splits a file lowers or removes its line. **Reason:** a strict
+  ceiling, equal to the current count, would make each small edit of a hot
+  file change the list too. That is a new conflict point.
+- A package width signal: the script prints, but does not fail on, each
+  package with more than 60 non-test files. The two store adapters are wide
+  by design, with one file for each port area. A gate on width adds no value
+  now.
+
+**Reason for 1,500:** at 1,500 the known list has 38 lines and is a real
+work list. At 1,000 it has 120 lines and is noise. The limit can go down
+later, when the list is short.
+
+### Q3. Split plans for `e2e/e2e_test.go` and `pkg/dustpan/dustpan.go`
+
+These two files conflict with most open pull requests. Of the last 50
+commits, 6 changed `e2e_test.go` and 9 changed `dustpan.go`.
+
+#### The method for both
+
+- A deterministic split script, `scripts/split-go-file.go`, moves top-level
+  declarations by name from one file to new files of the same package. It
+  uses `go/ast` and `go/format` only. It takes a plan file with lines of the
+  form `<new file> <declaration name>`. A declaration that the plan does not
+  name stays in the old file.
+- The script checks that the set of declarations of the package is the same
+  before and after, and that each moved declaration has the same bytes.
+- The pull request holds the plan file, the script and the result, in one
+  commit with no other change. No behavior change. A reviewer runs the script
+  on the base SHA and compares.
+- An open pull request takes in the split in two steps. First it runs the
+  same script with the same plan on its own branch, so its own edits move
+  with their functions. Then it merges `main`. The conflicts are then only in
+  the functions that both sides changed. This uses `git merge`, not a rebase.
+- Timing: the split lands as the first merge of a merge session, right after
+  the session merges the other ready pull requests. That is when the fewest
+  open pull requests touch the file. The PM announces it to the open
+  sessions with the plan file and the two steps above.
+- The script stays in `scripts/` until no open pull request needs it, and
+  then a small pull request removes it.
+
+#### `e2e/e2e_test.go` by scenario
+
+The 466 functions are already named scenarios and their checks. The plan
+keeps `TestCLIs`, the matrix, `runOnStore` and the report hooks in
+`e2e_test.go`, and moves the scenarios into files by area. The final plan
+comes from the call graph of each scenario. The first draft:
+
+| New file | Scenarios and their checks |
+| --- | --- |
+| `pulumi_scenario_test.go` | `pulumiScenario` and its steps |
+| `pulumi_import_test.go` | `TestPulumiFileImport`, `TestPulumiServiceImport` and their scenarios |
+| `pulumi_secrets_test.go` | the secrets provider scenarios |
+| `tofu_scenario_test.go` | `tofuScenario` and its steps |
+| `tofu_lock_test.go` | `tofuLockScenario`, `tofuForceUnlockFenceScenario` |
+| `tofu_state_test.go` | `tofuStatePushScenario`, `tofuStateVersionListScenario`, `tofuStateWriteGateScenario`, `tofuSealedStateScenario` |
+| `tofu_import_test.go` | `TestTofuPairHosts`, `TestTofuImportReplay` |
+| `backup_restore_test.go` | `TestBackups`, `TestBackupRestore`, `TestBackupCheck`, `tofuRestoreScenario` |
+| `maintenance_test.go` | `TestMaintenance`, `tofuMaintenanceScenario` |
+| `binary_test.go` | `TestBinaryRunAndRestart`, `TestUpgradeCheck` |
+| `inventory_scenario_test.go` | `inventorySchemeScenario`, `collectionsScenario`, `manualLockRoutesScenario`, the context scenarios |
+| `login_test.go` | `TestPairTwoLogins` |
+
+Each new file stays under 1,500 lines. A scenario of more than 1,500 lines
+has its own file. After the split, the rule for new work is one file for each
+new scenario. The nested `e2e/CLAUDE.md` says so.
+
+#### `pkg/dustpan/dustpan.go` by area
+
+| New file | Declarations |
+| --- | --- |
+| `options.go` | the 43 `With...` options and `ipAllowlistConfig` |
+| `settings.go` | `defaultSettings`, `defaultDenialLimiter`, the `check...` functions |
+| `services.go` | `newServices` and the `new...Service` and `wire...` functions |
+| `handlers.go` | `newAdapters` and the `new...Handler` functions |
+| `mux.go` | `rootMux`, `newRootMux`, `Handle`, `HandleFunc`, `ServeHTTP`, `mountAPI`, `buildMux`, `routes`, `debugRoute` |
+| `run.go` | `Run`, `newHTTPServer`, `listen`, `serveUntilDone`, `drain`, `shutdownServer`, `startUp`, `startBackground`, the sweep functions |
+| `requestlog.go` | `withRequestLog`, `logRoute`, `RequestID`, `newRequestID`, the status writer |
+| `backupwiring.go` | `newBackupService`, `backupOperations`, `newRestoreService`, `restoreLiveError`, `afterRestore`, `startBackupWorker` |
+| `dustpan.go` | `Server`, `NewServer`, `assemble` and the types |
+
+A second pull request, with a behavior check but no behavior change, splits
+`mountAPI` (105 lines) into one mount function for each area, in the file of
+that area. `mountAPI` then only calls them in order. A new feature then adds
+one line to `mountAPI` and its own function in its own file, as `drift.go`
+and `jobs.go` do today. **Reason:** this removes the cause of the repeated
+`funlen` findings and of most conflicts, and not only the line count.
+
+#### Later splits
+
+`pkg/workspace/workspace_test.go`, `pkg/store/storetest/workspaces.go`,
+`internal/api/pulumi/updates_test.go`, `pkg/store/storetest/updates.go` and
+`e2e/coverage.go` use the same script and the same timing. One pull request
+for each file, in the order of the size budget list.
+
+### Q4. Nested `CLAUDE.md` files
+
+Claude Code reads a `CLAUDE.md` in a subdirectory when it reads files there.
+`.claude/rules/*.md` with `paths:` front matter is a second way, which
+`gopls.md` uses today. That way works only for Claude Code. Other agents read
+`AGENTS.md`.
+
+**Recommendation:**
+
+- Nested files only where a package has its own conventions. The first set:
+
+  | File | Holds | ADRs that it follows |
+  | --- | --- | --- |
+  | `pkg/store/CLAUDE.md` | Both dialects for each change. Fixed queries in `queries.sql` with sqlc, never an edit of `internal/db`. New numbered migration files, the frozen and collapse rules, `make migration-renumber`. The fence in the same transaction. Unix milliseconds in `BIGINT`. A port method gets conformance tests first. `storefault` and `blobfault` forward each method, and the method set test checks it. | 40, 73, 274 |
+  | `pkg/blob/CLAUDE.md` | The `blobtest` suite for each adapter. A key for each write attempt. A blob removal waits for a running backup or restore. | 221, 281 |
+  | `internal/api/CLAUDE.md` | The endpoint checklist in short, with a pointer to the skill. Each route declares its actions. Each error path has a code of the catalog. The description version and `make api-version-bump`. `make clients-check`. The e2e step first. | 17, 264, 272, 276 |
+  | `e2e/CLAUDE.md` | PostgreSQL is required, and `pg-ready`. One file for each scenario. Route coverage and the contract file of each CLI version. The build tags. | 12 |
+  | `pkg/backup/CLAUDE.md` | The table list, the control tables, the staged-row checks, both dialects, the restore round trip, a pointer to the skill and to issue #2115. | 30, 38, 42 |
+  | `pkg/dustpan/CLAUDE.md` | One file for each area. A new feature adds its own mount function. No new code in `dustpan.go`. | 35, 272 |
+  | `cmd/s3bench/CLAUDE.md` and `load/CLAUDE.md` | Each model has a `Follows:` line. A change to a followed symbol checks the model. | none |
+
+  The ADR numbers in this table are the first draft. The pull request that
+  writes each file checks them against `docs/adr/`.
+- Each nested file: 40 lines or fewer. A first line that names the package.
+  A last line `ADRs: <numbers>`. Rules only, in strict ASD-STE100, because
+  they are instructions for agents (ADR 14). No copy of a global rule. The
+  root `CLAUDE.md` stays the only place for global rules.
+- `AGENTS.md` next to each nested file is a symbolic link to it. The root
+  `AGENTS.md` is today a second copy of the root `CLAUDE.md`, a regular file,
+  with no check that the two are equal. It becomes a link too.
+- A check, `scripts/agent-files-check.py`, run by `make docs-lint`:
+  - Each nested `CLAUDE.md` has 40 lines or fewer and an `ADRs:` line.
+  - Each ADR that it names exists in `docs/adr/`.
+  - Each `AGENTS.md` is a link to the `CLAUDE.md` in the same directory.
+  - When an ADR says that it supersedes ADR N, each nested file that names
+    N must also name the new ADR. This is how the files stay current
+    without a person who remembers them.
+- `make docs-lint` also runs the STE linter on the nested files.
+- Who updates them: the author of a change to a convention of the package,
+  in the same pull request. The author of an ADR that changes a convention
+  of the package, in the ADR pull request. The check above fails when a
+  superseded ADR is named alone. A reviewer checks the nested file of each
+  package that the diff touches.
+
+**Reason:** a short file next to the code is read when the agent works there,
+which is the moment the rule matters. The 40-line limit keeps it a list of
+rules, not a second manual. The superseded-ADR check makes staleness a fail,
+not a memory task.
+
+ADR 66 lists `CLAUDE.md` among the files that may hold internal references.
+This RFC reads that as each `CLAUDE.md`, also a nested one (open question 4).
+
+### Q5. Project skills
+
+Four skills, each a workflow that spans several files:
+
+| Skill | Steps, each with its gate |
+| --- | --- |
+| `od-add-endpoint` | The e2e step first. The route and its authorization actions (the route test). The description and `make api-version-bump` (the pin test). `make clients-generate` (`make clients-check`). The error codes of the catalog (the error code gate). The user documentation page (ADR 214). `make merge-gates`. |
+| `od-add-store-method` | The port method and its documented errors. The conformance tests first. Both dialects, with sqlc for fixed queries. The fence. The `storefault` forward (the method set test). `make generate`, then `make merge-gates`. |
+| `od-add-backup-table` | The migration in both dialects. The table list or the control table list with its reason. The column list (`ErrCoverage`). The staged-row checks. The restore round trip. `make merge-gates`. |
+| `od-merge-pr` | For the merge session. Run `git fetch` with the full URL. Merge `main` with `git merge`. On a version or a migration clash, the bump and renumber targets. `make merge-gates` on the merged head. Paste the summary. Push alone, in the allowed form. Never amend, rebase, force-push, stash or reset. |
+
+| Option for the location | Cost | Gives |
+| --- | --- | --- |
+| `.agents/skills/<name>`, next to the upstream skills | The root rule says: never edit files under `.agents/skills/` by hand. `npx skills` can change that directory. | Confusion between managed and own skills. Six Repowise skills are there today with no entry in `skills-lock.json`, so the confusion exists already. |
+| `.agents/project-skills/<name>/SKILL.md`, with a link in `.claude/skills/<name>` | One new directory. | A clear line: `npx skills` manages `.agents/skills/`, we write `.agents/project-skills/`. |
+| `docs/agents/skills/` | `docs/agents/` holds the lead workflow, which is a different audience. | Mixed content. |
+
+**Recommendation:** `.agents/project-skills/`. Each skill name starts with
+`od-`, and its front matter has `metadata: {owner: OpenDustpan}`. A check in
+`scripts/agent-files-check.py` fails when a directory under `.agents/skills/`
+has no entry in `skills-lock.json`, and when a directory under
+`.agents/project-skills/` has no link in `.claude/skills/`. The six Repowise
+skills move to `.agents/project-skills/` in the same pull request.
+`make docs-lint` runs the STE linter in strict mode on each project
+`SKILL.md`. The skill pull request checks that OpenCode finds the skills
+through `.claude/skills/`, and adds a second link if it does not.
+
+**Reason:** the prefix and the directory show at a glance which skills we
+own. The lock check keeps the two sets apart by code, not by memory.
+
+### Q6. A sweep of dead code and duplicate helpers
+
+Sources of candidates:
+
+| Source | What it finds | Limits |
+| --- | --- | --- |
+| golangci `unused` | Unused unexported code. | Enabled today. It finds nothing new. |
+| golangci `dupl` | Duplicate blocks of 120 tokens or more. | Enabled, but tests and the conformance suites are excluded, and that is where helpers repeat. |
+| `deadcode` from `golang.org/x/tools` | Functions that no `main` and no test reaches, across packages. | A new tool. It would run with `go run ...@<version>`, as `nilaway` and `govulncheck` do, so `go.mod` does not change. This RFC asks for it explicitly. |
+| Repowise `get_dead_code` | Unused exports and unreachable files. | 64 findings, all at confidence 0.4. Most of the 20 in `internal/clientgen` are false positives. |
+
+**Recommendation:**
+
+- A report target `make deadcode-report`, not part of `make check`. It runs
+  `deadcode -test` with all build tags of the repository (`e2e`, `upgrade`,
+  `soak`, `faults`, `journalrecording`), and `dupl` with a threshold of 80
+  tokens on test files only. It writes a list. It never fails.
+- Exported symbols of `pkg/` are the public SDK (ADR 272). They are not dead
+  because no code in this repository calls them. The sweep leaves them out,
+  unless the SDK surface check also agrees.
+- Each removal is one pull request for one package, with 300 removed lines or
+  fewer. For each symbol, the pull request shows: `rg` finds no other use,
+  including Go templates, reflection by name and the e2e build tags, and
+  `make merge-gates` passes.
+- A duplicate helper moves to the `*test` package of its domain, or to
+  `internal/testutil/<area>` when there is no such package. One helper for
+  each pull request.
+- The sweep has the lowest priority in the plan. It starts after the gates
+  and the splits.
+
+**Reason:** the tools give candidates, not proof. Small removals of one
+package are easy to review and easy to revert. A report that never fails does
+not block other work.
+
+## Plan of the follow-up pull requests
+
+Each pull request is small and has one concern. "Owner" means that the owner
+merges it, because it changes the process or the agent rules. The conflict
+column names the shared files and the open drafts that touch the same area.
+
+| # | Pull request | Files | Gate that it adds | Conflicts | Depends on |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Tool version variables and the version check | `Makefile`, `scripts/tool-pins-check.py` | `make lint` fails on a golangci-lint version that is not the pin, and on a CI pin that differs from the Makefile | `Makefile`, low | none |
+| 2 | PostgreSQL is required, and `pg-ready` | `Makefile`, `scripts/pg-ready.sh`, the e2e summary in `e2e/report.go` | `make test`, `make e2e`, `make e2e-ha` fail without the URL, unless `DUSTPAN_TEST_SQLITE_ONLY=1`. `pg-ready` fails in 5 seconds. | `Makefile`. CI jobs without PostgreSQL set the opt-out explicitly. | none |
+| 3 | `make merge-gates` | `Makefile`, `scripts/checks-agent.sh` | A merge mode with no skip, PostgreSQL required, a clean `make generate`, and a summary block | `scripts/checks-agent.sh`, low | 1, 2 |
+| 4 | Version bump and migration renumber targets | `Makefile`, `scripts/migration-renumber.sh`, a test in `pkg/store/internal/migrate` | A test fails on two migration files with one number in one dialect | Migration test files, low | none |
+| 5 | Method set tests of the fault wrappers | `internal/store/storefault/methods_test.go`, `internal/blob/blobfault/methods_test.go` | A fail for an adapter method that the wrapper does not forward | Draft #2114 changes the blob `Store` port. Land after it, or add its method to the test. | none |
+| 6 | The credential URL rule | `.semgrep/credential-url.yml`, `Makefile`, a test helper package | `make semgrep` fails on a new credential-shaped literal | Draft #2117. Land after it. | none |
+| 7 | The push hook (owner) | `.claude/settings.json`, `.claude/hooks/push-alone.py` | A refused compound `git push`, with the allowed form | `.claude/settings.json`, low | none |
+| 8 | `Follows:` lines of the benchmark models | `cmd/s3bench/*.go`, `load/*.go`, one test in each | A fail for a model that names no live symbol | Draft #2045 changes `cmd/s3bench`. Land after it. | none |
+| 9 | The size budget | `scripts/size-budget.py`, `scripts/size-budget.txt`, `Makefile` | A fail for a new file over 1,500 lines, and for a listed file over its ceiling | `Makefile`, low | none |
+| 10 | Nested agent files and their check (owner) | the eight `CLAUDE.md` files of Q4, their `AGENTS.md` links, the root `AGENTS.md` link, `scripts/agent-files-check.py`, `Makefile` | Line limit, ADR names, links, superseded ADRs, STE lint | None in code | 2, 3, 4, 5 (the files name their targets) |
+| 11 | Project skills (owner) | `.agents/project-skills/od-*/SKILL.md`, the six Repowise skills moved, `.claude/skills/` links, the check of PR 10 | Lock and link checks, STE lint in strict mode | `.claude/skills/` | 3, 4, 10 |
+| 12 | The split script and the split of `e2e/e2e_test.go` | `scripts/split-go-file.go`, `scripts/split-plans/e2e.txt`, `e2e/*_test.go` | The size budget line of the file goes down | Most open pull requests that add an e2e step. First merge of a merge session. | 9 |
+| 13 | The split of `pkg/dustpan/dustpan.go` | `scripts/split-plans/dustpan.txt`, `pkg/dustpan/*.go` | Same | Most open pull requests that add a route. First merge of a merge session, not the same session as 12. | 12 |
+| 14 | `mountAPI` by area | `pkg/dustpan/mux.go` and the area files | `funlen` passes with no exception for `mountAPI` | Same as 13 | 13 |
+| 15 | Later splits, one file each | the five files of Q3 | Same | Each with its own window | 12 |
+| 16 | `make deadcode-report` | `Makefile` | None. A report. | Low | 3 |
+| 17 | Removals, one package each | the package | None new | Low | 16 |
+
+Pull requests 1, 2, 4, 5, 6, 8 and 9 can run in parallel. They touch the
+`Makefile` in different targets. Each of them must run `make merge-gates`
+once 3 lands.
+
+## Open questions
+
+1. Q1b: should CI jobs that today run without PostgreSQL set
+   `DUSTPAN_TEST_SQLITE_ONLY=1`, or should each such job have a PostgreSQL
+   service?
+2. Q1b: should `pg-ready` try `service postgresql start` once when the URL
+   points to `localhost`, or only print the command? Starting a service from
+   a gate is a side effect.
+3. Q2: is 1,500 the right first limit, or does the owner want 1,000 with a
+   list of 120 files?
+4. Q4: does ADR 66 decision 3 cover nested `CLAUDE.md` files? This RFC reads
+   it so. If not, the nested files cite no ADR numbers, and the
+   superseded-ADR check of PR 10 goes away.
+5. Q5: `od-` as the prefix of project skills, or another prefix?
+6. Q6: is `deadcode` from `golang.org/x/tools`, run with `go run` and a
+   pinned version, an accepted new tool?
+7. Q3: who announces the split windows to the open sessions, and how long
+   after the announcement does the split merge?
+
+## Checklist
+
+- [x] Tolerates asynchronous replication between installations: each
+  namespace writes only its own half, under its own fence, and no write
+  waits for another installation (ADR 248 decisions 3, 6 and 9). This RFC
+  changes no data path.
+
+## Outcome
+
+Empty until the RFC is accepted or dropped.
