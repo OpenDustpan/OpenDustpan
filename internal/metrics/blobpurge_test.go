@@ -17,10 +17,10 @@ func testNow() time.Time {
 	return time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)
 }
 
-// readFailure is the error of a failed store read in the table.
-type readFailure struct{}
+// readFailureError is the error of a failed store read in the table.
+type readFailureError struct{}
 
-func (readFailure) Error() string {
+func (readFailureError) Error() string {
 	return "read failed"
 }
 
@@ -61,7 +61,7 @@ func TestBlobPurgeBacklogGauges(t *testing.T) {
 		{name: "no record", pending: 0, oldestAge: 0, readErr: nil, wantPending: 0, wantAge: 0},
 		{name: "one record", pending: 1, oldestAge: 90 * time.Second, readErr: nil, wantPending: 1, wantAge: 90},
 		{name: "three records", pending: 3, oldestAge: time.Hour, readErr: nil, wantPending: 3, wantAge: 3600},
-		{name: "failed read exports zero", pending: 3, oldestAge: time.Hour, readErr: readFailure{}, wantPending: 0, wantAge: 0},
+		{name: "failed read", pending: 3, oldestAge: time.Hour, readErr: readFailureError{}, wantPending: 0, wantAge: 0},
 	}
 
 	for _, tt := range tests {
@@ -78,7 +78,7 @@ func TestBlobPurgeBacklogGauges(t *testing.T) {
 			}
 
 			reg := metrics.NewRegistry()
-			metrics.RegisterBlobPurgeBacklog(reg, read, func() time.Time { return testNow() })
+			metrics.RegisterBlobPurgeBacklog(reg, read, testNow)
 
 			var buf bytes.Buffer
 			if err := reg.Write(&buf); err != nil {
@@ -109,7 +109,7 @@ func TestBlobPurgeBacklogGaugesShareOneRead(t *testing.T) {
 	}
 
 	reg := metrics.NewRegistry()
-	metrics.RegisterBlobPurgeBacklog(reg, read, func() time.Time { return testNow() })
+	metrics.RegisterBlobPurgeBacklog(reg, read, testNow)
 
 	var buf bytes.Buffer
 	if err := reg.Write(&buf); err != nil {
