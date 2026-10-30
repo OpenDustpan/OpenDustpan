@@ -1,17 +1,16 @@
 ---
 rfc: 35
 title: Packaging and installation
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 283
 ---
 
 # RFC 35. Packaging and installation
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
-
-The TLS, binary and container image part is accepted as ADR 27. The Helm
-chart is accepted as ADR 246. The rest stays a draft.
+Status: accepted. The TLS, binary and container image part is accepted as
+ADR 27. The Helm chart is accepted as ADR 246. The scope for `v0.1.0` is
+accepted as [ADR 283](../adr/0283-packaging-for-v0-1-0.md).
 
 ## Problem
 
@@ -46,5 +45,10 @@ decides nothing. An ADR records a decision (ADR 15).
 
 The TLS, binary and container image part is accepted as ADR 27 on
 2026-10-11. The Helm chart is accepted as ADR 246 on 2026-10-19, after the
-owner decided on 2026-10-17 to start it with an external PostgreSQL. The
-rest has no outcome yet.
+owner decided on 2026-10-17 to start it with an external PostgreSQL.
+
+Accepted on 2026-10-30 as
+[ADR 283](../adr/0283-packaging-for-v0-1-0.md), a decision of the project
+owner. For `v0.1.0`: TLS from files and a documented reverse proxy, no ACME,
+no OS packages, signing and an SBOM later, and multi-arch images with
+`docker/setup-buildx-action` and `docker/setup-qemu-action` pinned by SHA.
