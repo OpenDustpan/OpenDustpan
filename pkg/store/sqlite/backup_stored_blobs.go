@@ -67,7 +67,7 @@ ORDER BY p.id`)
 // its log version row. The item key of a shredded log version has no blob.
 func addChunkBlobRefs(ctx context.Context, conn *sql.DB, c *blobrefs.Collector) error {
 	rows, err := conn.QueryContext(ctx, `SELECT c.namespace_id, l.job_id, c.log_id, c.seq, c.confirmed = 1,
-COALESCE(k.shredded_at_ms, 0) > 0, c.stored_size, c.stored_md5
+COALESCE(k.shredded_at_ms, 0) > 0, c.stored_size, c.stored_md5, c.blob_key
 FROM job_log_chunks AS c
 LEFT JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id
 LEFT JOIN item_keys AS k ON k.namespace_id = c.namespace_id AND k.kind = 'job-log' AND k.item = c.log_id
@@ -90,7 +90,7 @@ ORDER BY c.log_id, c.seq`)
 
 		scanErr := rows.Scan(
 			&row.NamespaceID, &jobID, &row.LogID, &row.Seq, &row.Confirmed, &row.Shredded, &row.StoredSize,
-			&row.StoredMD5,
+			&row.StoredMD5, &row.BlobKey,
 		)
 		if scanErr != nil {
 			return fmt.Errorf("read backup chunk blob references: %w", scanErr)

@@ -2,10 +2,14 @@ package catalogtest_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -587,6 +591,14 @@ func (m *memDB) ObserveStateVersion(_ context.Context, v job.StateVersion, fence
 func (m *memDB) PutDraft(_ context.Context, b catalog.Blueprint, version int64, fence namespace.Fence,
 	e []audit.Entry,
 ) (int64, error) {
+	if !catalog.ValidName(b.Name) || version < 0 {
+		return 0, fmt.Errorf("%w: draft %q at %d", catalog.ErrInvalid, b.Name, version)
+	}
+
+	if err := checkEntries(fence, e); err != nil {
+		return 0, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -595,6 +607,11 @@ func (m *memDB) PutDraft(_ context.Context, b catalog.Blueprint, version int64, 
 	}
 
 	ref := catalog.BlueprintRef{Namespace: fence.Namespace, Name: b.Name}
+
+	if _, ok := m.drafts[ref]; !ok && version == 0 && m.blueprintsIn(fence.Namespace) >= catalog.MaxBlueprints {
+		return 0, fmt.Errorf("%w: %s has %d blueprints", catalog.ErrLimit, fence.Namespace, catalog.MaxBlueprints)
+	}
+
 	if m.drafts[ref].version != version {
 		return 0, fmt.Errorf("%w: draft %s at %d", catalog.ErrConflict, ref, m.drafts[ref].version)
 	}
@@ -603,6 +620,71 @@ func (m *memDB) PutDraft(_ context.Context, b catalog.Blueprint, version int64, 
 	m.audit[fence.Namespace] = append(m.audit[fence.Namespace], e...)
 
 	return version + 1, nil
+}
+
+// checkEntries refuses an audit entry that fails its checks or names another
+// namespace than the fence.
+func checkEntries(fence namespace.Fence, e []audit.Entry) error {
+	for i := range e {
+		if err := e[i].Validate(); err != nil {
+			return fmt.Errorf("audit entry: %w", err)
+		}
+
+		if e[i].Namespace != fence.Namespace {
+			return fmt.Errorf(
+				"%w: entry names %q, fence names %q",
+				audit.ErrInvalidEntry,
+				e[i].Namespace,
+				fence.Namespace,
+			)
+		}
+	}
+
+	return nil
+}
+
+// checkRef checks the reference of a write of a version and its entries
+// against the fence.
+func checkRef(ref catalog.BlueprintRef, n int, fence namespace.Fence, e []audit.Entry) error {
+	if ref.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: blueprint %s, fence names %q", namespace.ErrFenced, ref, fence.Namespace)
+	}
+
+	if n < 1 {
+		return fmt.Errorf("%w: %s version %d", catalog.ErrNotFound, ref, n)
+	}
+
+	return checkEntries(fence, e)
+}
+
+// documentHash returns the hash of the document of b without its Expr
+// version, the form in which a publish compares a blueprint with its draft.
+func documentHash(b catalog.Blueprint) (string, error) {
+	b.ExprVersion = ""
+
+	data, err := json.Marshal(b)
+	if err != nil {
+		return "", fmt.Errorf("encode blueprint: %w", err)
+	}
+
+	sum := sha256.Sum256(data)
+
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// validExprVersion reports whether v has the form of an Expr version.
+func validExprVersion(v string) bool {
+	if v == "" || len(v) > 64 {
+		return false
+	}
+
+	for _, c := range v {
+		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-+_", c) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Draft implements catalog.BlueprintStore.
@@ -618,10 +700,34 @@ func (m *memDB) Draft(_ context.Context, ref catalog.BlueprintRef) (catalog.Blue
 	return d.blueprint, d.version, nil
 }
 
+// checkPublication runs the checks of a publish that need no stored row.
+func checkPublication(p *catalog.Publication, fence namespace.Fence, e []audit.Entry) error {
+	switch {
+	case p.Ref.Namespace != fence.Namespace:
+		return fmt.Errorf("%w: blueprint %s, fence names %q", namespace.ErrFenced, p.Ref, fence.Namespace)
+	case p.Ref.Name != p.Blueprint.Name:
+		return fmt.Errorf("%w: reference %s, blueprint %q", catalog.ErrInvalid, p.Ref, p.Blueprint.Name)
+	case p.DraftVersion < 1:
+		return fmt.Errorf("%w: draft %s at %d", catalog.ErrConflict, p.Ref, p.DraftVersion)
+	case p.Blueprint.ExprVersion != "" && !validExprVersion(p.Blueprint.ExprVersion):
+		return fmt.Errorf("%w: Expr version %q", catalog.ErrInvalid, p.Blueprint.ExprVersion)
+	}
+
+	if err := p.Blueprint.Validate(); err != nil {
+		return fmt.Errorf("publish %s: %w", p.Ref, err)
+	}
+
+	return checkEntries(fence, e)
+}
+
 // Publish implements catalog.BlueprintStore.
 func (m *memDB) Publish(_ context.Context, p catalog.Publication, fence namespace.Fence,
 	e []audit.Entry,
 ) (catalog.Version, error) {
+	if err := checkPublication(&p, fence, e); err != nil {
+		return catalog.Version{}, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -629,13 +735,17 @@ func (m *memDB) Publish(_ context.Context, p catalog.Publication, fence namespac
 		return catalog.Version{}, err
 	}
 
-	if m.drafts[p.Ref].version != p.DraftVersion {
-		return catalog.Version{}, fmt.Errorf("%w: draft %s", catalog.ErrConflict, p.Ref)
+	if err := m.checkDraft(&p); err != nil {
+		return catalog.Version{}, err
+	}
+
+	if len(m.versions[p.Ref]) >= catalog.MaxVersions {
+		return catalog.Version{}, fmt.Errorf("%w: %s has %d versions", catalog.ErrLimit, p.Ref, catalog.MaxVersions)
 	}
 
 	v := catalog.Version{
 		PublishedAt: p.At, Blueprint: p.Blueprint, Namespace: p.Ref.Namespace, PublishedBy: p.By,
-		Number: len(m.versions[p.Ref]) + 1, Retired: false,
+		Number: len(m.versions[p.Ref]) + 1, DraftVersion: p.DraftVersion, Retired: false,
 	}
 	m.versions[p.Ref] = append(m.versions[p.Ref], v)
 	m.audit[fence.Namespace] = append(m.audit[fence.Namespace], e...)
@@ -684,10 +794,64 @@ func (m *memDB) Retire(_ context.Context, ref catalog.BlueprintRef, n int, fence
 }
 
 // SetExprVersion implements catalog.BlueprintStore.
-func (m *memDB) SetExprVersion(_ context.Context, ref catalog.BlueprintRef, n int, expr string,
-	fence namespace.Fence,
+func (m *memDB) SetExprVersion(_ context.Context, c catalog.ExprVersionChange, fence namespace.Fence,
+	e []audit.Entry,
 ) error {
-	return m.changeVersion(ref, n, fence, nil, func(v *catalog.Version) { v.Blueprint.ExprVersion = expr })
+	if !validExprVersion(c.Expr) {
+		return fmt.Errorf("%w: Expr version %q", catalog.ErrInvalid, c.Expr)
+	}
+
+	return m.changeVersion(c.Ref, c.Number, fence, e, func(v *catalog.Version) { v.Blueprint.ExprVersion = c.Expr })
+}
+
+// checkDraft checks that p publishes the stored draft, once. The caller holds
+// the mutex.
+func (m *memDB) checkDraft(p *catalog.Publication) error {
+	d, ok := m.drafts[p.Ref]
+	if !ok || d.version != p.DraftVersion {
+		return fmt.Errorf("%w: draft %s", catalog.ErrConflict, p.Ref)
+	}
+
+	want, err := documentHash(d.blueprint)
+	if err != nil {
+		return err
+	}
+
+	got, err := documentHash(p.Blueprint)
+	if err != nil {
+		return err
+	}
+
+	if got != want {
+		return fmt.Errorf("%w: the document is not the stored draft %s", catalog.ErrInvalid, p.Ref)
+	}
+
+	for i := range m.versions[p.Ref] {
+		if v := &m.versions[p.Ref][i]; v.DraftVersion == p.DraftVersion {
+			return fmt.Errorf(
+				"%w: %s draft %d is version %d",
+				catalog.ErrAlreadyPublished,
+				p.Ref,
+				p.DraftVersion,
+				v.Number,
+			)
+		}
+	}
+
+	return nil
+}
+
+// blueprintsIn counts the blueprints of ns. The caller holds the mutex.
+func (m *memDB) blueprintsIn(ns namespace.Name) int {
+	n := 0
+
+	for ref := range m.drafts {
+		if ref.Namespace == ns {
+			n++
+		}
+	}
+
+	return n
 }
 
 // rowsOf checks s against the stored rows and returns the rows to write.
@@ -793,6 +957,10 @@ func (m *memDB) commit(rows *submitRows, units map[string]ownedUnit, q quotaStat
 func (m *memDB) changeVersion(ref catalog.BlueprintRef, n int, fence namespace.Fence, e []audit.Entry,
 	f func(v *catalog.Version),
 ) error {
+	if err := checkRef(ref, n, fence, e); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

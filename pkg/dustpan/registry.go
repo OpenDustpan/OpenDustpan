@@ -20,7 +20,8 @@ import (
 // trusted signing keys. With them, and with a blob store, the server serves the
 // registry API under /api/dustpan/v1/namespaces/{namespace}/registry. With a
 // public URL too, it serves the provider registry protocol of OpenTofu under
-// /v1/providers/ and advertises it as providers.v1 in service discovery.
+// /v1/providers/ and the module registry protocol under /v1/modules/, and
+// advertises them as providers.v1 and modules.v1 in service discovery.
 // Without them the server serves no registry route.
 func WithRegistry(releases registry.Store, keys registry.KeyStore) Option {
 	return func(o *settings) {
@@ -67,8 +68,16 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 	verifier := pgpverify.Verifier{Now: nil}
 
 	svc, err := service.New(service.Config{
-		Store: cfg.registry.releases, Keys: cfg.registry.keys, Verifier: verifier, Inspector: verifier,
-		Blobs: cfg.blobStore, Namespaces: cfg.namespaceStore, Now: cfg.now, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
+		Store:                 cfg.registry.releases,
+		Keys:                  cfg.registry.keys,
+		Verifier:              verifier,
+		Inspector:             verifier,
+		Blobs:                 cfg.blobStore,
+		Namespaces:            cfg.namespaceStore,
+		Now:                   cfg.now,
+		MaxArchiveBytes:       0,
+		MaxReleaseBytes:       0,
+		MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("registry service: %w", err)

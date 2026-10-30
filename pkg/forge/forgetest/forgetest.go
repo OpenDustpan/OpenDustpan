@@ -9,9 +9,8 @@
 //
 // The cases come before the first adapter. A case with no body skips with
 // "not implemented", and gets its body before an adapter implements the
-// methods that it covers. The cases of the group "The connection" have
-// bodies, except "a missing repository is not found on each method", which
-// waits for the methods that read a repository. CaseNamesWithBody lists the
+// methods that it covers. The cases of the groups "The connection" and
+// "Files" have bodies. CaseNamesWithBody lists the
 // cases that have a body. A case whose capability the forge does not list
 // skips for that forge, and the case "an operation outside the
 // capabilities is unsupported" checks that such a method returns
@@ -65,6 +64,8 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	// Protect turns on branch protection for branch, so that a commit
 	// through the port is refused.
 	Protect(ctx context.Context, branch string) error
+	// Tag makes the tag name at the commit with the ID commitID.
+	Tag(ctx context.Context, name, commitID string) error
 	// Merge merges the review request id, as a person does in the forge.
 	Merge(ctx context.Context, id string) error
 	// Event returns a request of kind as the forge sends it, signed with
@@ -118,20 +119,25 @@ func cases() []testCase {
 		{"check of a token with no expiry says so", "", caseCheckNoExpiry},
 		{"open refuses another kind, a missing parameter and a bad secret, and makes no call", "", caseOpenRefuses},
 		{"a refused credential is ErrAuth on each method", "", caseRefusedIsAuth},
-		{"a missing repository is not found on each method", "", nil},
+		{"a missing repository is not found on each method", "", caseMissingRepo},
 		{"an operation outside the capabilities is unsupported", "", caseUnsupported},
 		{"no error and no event holds a part of the secret", "", caseNoSecretInErrors},
 		{"a forge that does not answer is ErrUnavailable", "", caseUnavailable},
 		{"a rate limit is ErrUnavailable with the wait time", "", caseRateLimit},
 
 		// Files.
-		{"head of a branch answers its commit", forge.CapFiles, nil},
-		{"head of a tag answers its commit", forge.CapFiles, nil},
-		{"head of a missing ref is not found", forge.CapFiles, nil},
-		{"read a file at a commit answers its content and blob ID", forge.CapFiles, nil},
-		{"read a missing file is not found", forge.CapFiles, nil},
-		{"read a file at a missing commit is not found", forge.CapFiles, nil},
-		{"read a file above the limit is too large", forge.CapFiles, nil},
+		{"head of a branch answers its commit", forge.CapFiles, caseHeadBranch},
+		{"head of a tag answers its commit", forge.CapFiles, caseHeadTag},
+		{"head of a missing ref is not found", forge.CapFiles, caseHeadMissing},
+		{"read a file at a commit answers its content and blob ID", forge.CapFiles, caseReadFile},
+		{"read a missing file is not found", forge.CapFiles, caseReadMissingFile},
+		{"read a file at a missing commit is not found", forge.CapFiles, caseReadMissingCommit},
+		{"read a file above the limit is too large", forge.CapFiles, caseReadTooLarge},
+		{
+			"read a file with a path that leaves the repository is invalid and makes no call",
+			forge.CapFiles,
+			caseReadBadPath,
+		},
 		{"compare lists each changed file and the ancestry", forge.CapCompare, nil},
 		{"compare of a rename has the old path", forge.CapCompare, nil},
 		{"compare of a base that is not an ancestor says so", forge.CapCompare, nil},

@@ -119,6 +119,10 @@ const (
 	// RemovedTempAdmins counts temp_admins rows, matched by the principal ID
 	// of a removed principal and by a subject with the reserved prefix.
 	RemovedTempAdmins DevRemovalClass = "temp-admins"
+	// RemovedTrustRules counts the trust rules whose principal is a removed
+	// principal. A rule lets a workload act as its principal, so it goes
+	// with the principal.
+	RemovedTrustRules DevRemovalClass = "trust-rules"
 	// RemovedApprovers counts dev subjects removed from Approvers.Users of
 	// approval rules, approval defaults and ownership rules. The rule stays.
 	// A rule that loses its last approver gets Users with the value
@@ -126,8 +130,8 @@ const (
 	// that it covers. The report names each such object in
 	// DevStripReport.Approvers.
 	RemovedApprovers DevRemovalClass = "approvers"
-	// RemovedDangling counts grants, group memberships, sessions and tokens
-	// that name a principal that does not exist, or a subject with the
+	// RemovedDangling counts grants, group memberships, sessions, tokens and
+	// trust rules that name a principal that does not exist, or a subject with the
 	// reserved prefix and no principal row. Data that was already wrong
 	// before the restore is in this class.
 	RemovedDangling DevRemovalClass = "dangling"
@@ -148,8 +152,8 @@ type DevRemoval struct {
 	SubjectCut bool `json:"subjectCut"`
 	// Counts holds the count of removed rows for each class that a principal
 	// owns: RemovedGrants, RemovedGroupMembers, RemovedSessions,
-	// RemovedAccessTokens, RemovedPreferences and RemovedTempAdmins. The other
-	// classes are not in it.
+	// RemovedAccessTokens, RemovedPreferences, RemovedTempAdmins and
+	// RemovedTrustRules. The other classes are not in it.
 	Counts map[DevRemovalClass]int64 `json:"counts"`
 }
 

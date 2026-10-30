@@ -367,7 +367,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 // adapter.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	catch := &notFoundWriter{
-		ResponseWriter: w, notFound: false, registry: strings.HasPrefix(r.URL.Path, registryPrefix),
+		ResponseWriter: w,
+		notFound:       false,
+		registry:       strings.HasPrefix(r.URL.Path, registryPrefix) || strings.HasPrefix(r.URL.Path, modulesPrefix),
 	}
 
 	h.mux.ServeHTTP(catch, r)
@@ -436,7 +438,8 @@ func (c *notFoundWriter) Write(p []byte) (int, error) {
 }
 
 // discovery serves GET /.well-known/terraform.json. It advertises tfe.v2
-// and tfe.v2.1 at /api/v2/ and nothing else: the cloud block reads tfe.v2,
+// and tfe.v2.1 at /api/v2/, and providers.v1 and modules.v1 when the server
+// serves the registry protocols, and nothing else: the cloud block reads tfe.v2,
 // the remote backend reads tfe.v2.1, and there is no login.v1 service.
 // OpenTofu requires the application/json media type.
 func (h *Handler) discovery(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
@@ -446,6 +449,7 @@ func (h *Handler) discovery(w http.ResponseWriter, r *http.Request, _ identity.P
 	doc := map[string]string{"tfe.v2": "/api/v2/", "tfe.v2.1": "/api/v2/"}
 	if h.registry != nil {
 		doc["providers.v1"] = registryPrefix
+		doc["modules.v1"] = modulesPrefix
 	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {

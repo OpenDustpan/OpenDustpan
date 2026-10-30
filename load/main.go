@@ -759,7 +759,10 @@ func runInstance(
 		stop()
 
 		select {
-		case <-done:
+		case runErr := <-done:
+			if runErr != nil {
+				logger.ErrorContext(stopCtx, "stop instance", slog.String("error", runErr.Error()))
+			}
 		case <-time.After(runStopTimeout):
 			logger.ErrorContext(stopCtx, "stop instance", slog.String("error", errRunStopped.Error()))
 		}
