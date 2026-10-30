@@ -1,0 +1,51 @@
+# Not active here: the owner copies this file to .github/workflows/bench-s3.yml.
+# The S3 latency benchmark (make bench-s3): MinIO, Garage, PostgreSQL 18 and
+# Toxiproxy in containers pinned by digest, so a run here and a run on a
+# laptop use the same stores and the same proxy. Each Monday it runs the
+# quick plan on all five profiles. A maintainer can start a full run by hand
+# with other arguments, for example "-limits". The results go to the job
+# summary. The numbers of a shared runner vary from run to run; compare runs
+# of one runner type only.
+name: bench-s3
+
+on:
+  # A minute that is not 0, so that the load at the start of the hour does not
+  # delay the run.
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Arguments for cmd/s3bench, for example -quick, or -limits for a full run with the limit sweep"
+        required: false
+        default: "-quick"
+
+permissions:
+  contents: read
+
+jobs:
+  bench-s3:
+    # A scheduled run uses the default branch. A run by hand must use it too.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    # The same value as the jobs of ci.yml. The runner must have Docker.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    # A full run with the limit sweep takes about five hours.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: S3 latency benchmark
+        env:
+          # The input goes through the environment, never into the script text.
+          BENCH_S3_ARGS: ${{ github.event.inputs.args || '-quick' }}
+          BENCH_S3_OUT: bench-s3-out
+        run: make bench-s3
+      - name: Show the results
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f bench-s3-out/results.md ]; then
+            cat bench-s3-out/results.md >> "$GITHUB_STEP_SUMMARY"
+          fi
