@@ -768,3 +768,80 @@ func TestItemKeyBlobsGarbageFailsWithoutAProbe(t *testing.T) {
 		t.Errorf("garbage with no probe = %v, %v, want no key and the error of the put", got, err)
 	}
 }
+
+// probeHidingBlobs accepts every write, and lists without the probe of a
+// reaper run, as a listing that lags a write does.
+type probeHidingBlobs struct {
+	*memBlobs
+}
+
+func (p probeHidingBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	objects, err := p.memBlobs.List(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	return slices.DeleteFunc(objects, func(o blob.Object) bool {
+		return strings.Contains(o.Key.String(), "/item-keys/clock-probe-")
+	}), nil
+}
+
+// failingDeleteBlobs refuses every delete.
+type failingDeleteBlobs struct {
+	*memBlobs
+}
+
+func (failingDeleteBlobs) Delete(context.Context, blob.Key) error {
+	return errAuditDown
+}
+
+// TestItemKeyBlobsGarbageNeedsItsProbe shows that a run fails closed when the
+// listing does not hold its probe, so it cannot know the store clock, and when
+// it cannot delete its probe. In both cases an old blob that no record names,
+// stamped by a store clock 40 minutes behind, is not garbage.
+func TestItemKeyBlobsGarbageNeedsItsProbe(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		wrap    func(*memBlobs) blob.Store
+		wantErr error
+		name    string
+	}{
+		{
+			name:    "a listing without the probe",
+			wrap:    func(m *memBlobs) blob.Store { return probeHidingBlobs{memBlobs: m} },
+			wantErr: secret.ErrItemKeyBlobClockSkew,
+		},
+		{
+			name:    "a probe that does not delete",
+			wrap:    func(m *memBlobs) blob.Store { return failingDeleteBlobs{memBlobs: m} },
+			wantErr: errAuditDown,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			mem, rec := newMemBlobs(), newFakeRecorder(nil)
+			mem.setClock(garbageNow().Add(-40 * time.Minute))
+
+			b, err := secret.NewItemKeyBlobs(tc.wrap(mem), rec, rec)
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+
+			key := mustKey(t, b, nsA, secret.NewItemKeyID(), 1)
+			if putErr := b.Put(t.Context(), nsA, key, []byte("wrapped")); putErr != nil {
+				t.Fatalf("put: %v", putErr)
+			}
+
+			mem.setModified(key, garbageNow().Add(-2*secret.ItemKeyBlobGracePeriod))
+
+			got, err := b.Garbage(t.Context(), nsA, namerOf(), garbageNow())
+			if !errors.Is(err, tc.wantErr) || got != nil {
+				t.Errorf("garbage = %v, %v, want no key and %v", got, err, tc.wantErr)
+			}
+		})
+	}
+}
