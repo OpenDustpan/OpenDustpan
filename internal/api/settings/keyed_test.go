@@ -207,15 +207,15 @@ func bulkBody(settings string) string {
 	return `{"units":[{"id":"` + netID + `","version":0},{"id":"` + appID + `","version":0}],"settings":` + settings + `}`
 }
 
-// wantItems fails the test unless every item of the answer is ok at version.
-func wantItems(t *testing.T, rec *httptest.ResponseRecorder, version int64) {
+// wantItems fails the test unless every item of the answer is ok at version 1.
+func wantItems(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 
 	wantStatus(t, rec, http.StatusOK, "")
 
 	for _, item := range decodeBulk(t, rec).Results {
-		if item.Status != "ok" || item.Version != version {
-			t.Fatalf("item %s = %+v, want ok at version %d", item.ID, item, version)
+		if item.Status != "ok" || item.Version != 1 {
+			t.Fatalf("item %s = %+v, want ok at version 1", item.ID, item)
 		}
 	}
 }
@@ -238,7 +238,7 @@ func TestKeyedBulkCallDoesFailedItemsAgain(t *testing.T) {
 
 	// The retry does both items, because neither stored an answer.
 	r.store.failWith = nil
-	wantItems(t, r.call(t, http.MethodPost, bulkPath, body, header), 1)
+	wantItems(t, r.call(t, http.MethodPost, bulkPath, body, header))
 
 	if n := r.store.written(); n != 2 {
 		t.Fatalf("the store wrote %d times, want 2", n)
@@ -252,10 +252,10 @@ func TestKeyedBulkCallAnswersStoredItems(t *testing.T) {
 	header := map[string]string{"Idempotency-Key": "bulk-4"}
 	body := bulkBody(validBody)
 
-	wantItems(t, r.call(t, http.MethodPost, bulkPath, body, header), 1)
+	wantItems(t, r.call(t, http.MethodPost, bulkPath, body, header))
 
 	again := r.call(t, http.MethodPost, bulkPath, body, header)
-	wantItems(t, again, 1)
+	wantItems(t, again)
 
 	if again.Header().Get(replayedHeader) != "true" {
 		t.Errorf("replay header of the bulk call = %q, want true", again.Header().Get(replayedHeader))
@@ -337,7 +337,10 @@ func TestKeyOnAServerWithNoReplayRecordsIsRefused(t *testing.T) {
 	}
 }
 
-func TestKeyOnARouteThatTakesNoKeyIsRefused(t *testing.T) {
+// TestPostToAReadOnlyRouteWithAKeyAnswersMethodNotAllowed shows what the mux
+// does with a write to a route that only reads: the pattern names the method,
+// so the request never reaches the route wrapper.
+func TestPostToAReadOnlyRouteWithAKeyAnswersMethodNotAllowed(t *testing.T) {
 	t.Parallel()
 
 	r := newRig(t, fullAccess()...)

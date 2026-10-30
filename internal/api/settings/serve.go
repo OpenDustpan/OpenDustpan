@@ -147,6 +147,12 @@ func (h *Handler) replace(
 
 	// The version check comes first: the caller can read the unit, and a stale
 	// version is the answer that makes it read again.
+	//
+	// Defense in depth: the store compares the version again in the
+	// transaction of the write, and the fenced transaction serializes the
+	// writers. This check stays so that a stale version never reaches the
+	// checks of the actions or the write, and it relies on neither the store
+	// nor the lock of the namespace row.
 	if cur.Settings.Version != expected {
 		return unitsettingssvc.View{}, unitsettings.ErrConflict
 	}
@@ -244,6 +250,10 @@ func (h *Handler) resetSettings(
 		return
 	}
 
+	// Defense in depth: the store compares the version again in the
+	// transaction of the delete. The second case stays so that a stale version
+	// never reaches the store, and it relies on neither the store nor the lock
+	// of the namespace row.
 	switch {
 	case cur.Settings.Version == 0:
 		h.writeError(ctx, w, errNoRecord)

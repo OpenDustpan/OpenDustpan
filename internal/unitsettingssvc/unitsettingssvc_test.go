@@ -21,6 +21,8 @@ const (
 	poolJobs = "rp-jobs"
 	poolSwp  = "rp-sweeps"
 	poolFar  = "rp-other"
+	// connFar is a connection of the namespace beta.
+	connFar = "gitconn-00000000000000000000000000000003"
 )
 
 type rig struct {
@@ -34,15 +36,24 @@ func newRig(t *testing.T, withDefaultConn bool) *rig {
 
 	ns := namespace.Name("acme")
 
+	return newRigWith(t, []forge.ConnectionRecord{
+		connection(ns, connRW, true, withDefaultConn),
+		connection(ns, connRO, false, false),
+		connection("beta", connFar, true, false),
+	})
+}
+
+// newRigWith builds the rig over the connections records.
+func newRigWith(t *testing.T, records []forge.ConnectionRecord) *rig {
+	t.Helper()
+
+	ns := namespace.Name("acme")
+
 	unit, err := identity.UnitObject("pulumi", ns, "web/prod")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	conns := memConnections{records: []forge.ConnectionRecord{
-		connection(ns, connRW, true, withDefaultConn),
-		connection(ns, connRO, false, false),
-	}}
 	pools := memPools{pools: []runner.Pool{
 		pool(poolJobs, ns, runner.PurposeJobs),
 		pool(poolSwp, ns, runner.PurposeSweeps),
@@ -51,7 +62,8 @@ func newRig(t *testing.T, withDefaultConn bool) *rig {
 	store := newMemStore()
 
 	svc, err := unitsettingssvc.New(unitsettingssvc.Config{
-		Store: store, Fences: fixedFences{}, Connections: conns, Pools: pools, Now: fixedNow,
+		Store: store, Fences: fixedFences{}, Connections: memConnections{records: records}, Pools: pools,
+		Now: fixedNow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +187,11 @@ func TestPutRefusesWhatThePlannerCouldNotUse(t *testing.T) {
 			s.CodeLocation.Connection = connRO
 			s.Executor = job.ExecutorWriteBack
 		}, unitsettingssvc.ErrConnectionLacksCapability},
+		{
+			"connection of another namespace",
+			func(s *unitsettings.Settings) { s.CodeLocation.Connection = connFar },
+			unitsettingssvc.ErrConnectionUnknown,
+		},
 		{"unknown pool", func(s *unitsettings.Settings) { s.Pool = "rp-nope" }, unitsettingssvc.ErrPoolUnknown},
 		{"pool for sweeps", func(s *unitsettings.Settings) { s.Pool = poolSwp }, unitsettingssvc.ErrPoolUnknown},
 		{
@@ -219,6 +236,52 @@ func TestPutAcceptsAReadWriteConnectionForWriteBack(t *testing.T) {
 
 	if _, err := r.svc.Put(t.Context(), &s, 0, entry()); err != nil {
 		t.Fatalf("Put: %v", err)
+	}
+}
+
+// TestPutChecksTheDefaultConnectionWhenTheBodyNamesNone shows that settings that
+// name no connection are checked against the default connection of the
+// namespace, because a job uses it.
+func TestPutChecksTheDefaultConnectionWhenTheBodyNamesNone(t *testing.T) {
+	t.Parallel()
+
+	ns := namespace.Name("acme")
+
+	for _, tc := range []struct {
+		name    string
+		records []forge.ConnectionRecord
+		want    error
+	}{
+		{
+			name: "default without push access",
+			records: []forge.ConnectionRecord{
+				connection(ns, connRO, false, true), connection(ns, connRW, true, false),
+			},
+			want: unitsettingssvc.ErrConnectionLacksCapability,
+		},
+		{
+			name:    "default with push access",
+			records: []forge.ConnectionRecord{connection(ns, connRW, true, true)},
+			want:    nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRigWith(t, tc.records)
+			s := settingsFor(r.unit)
+			s.Executor = job.ExecutorWriteBack
+			s.ReviewRequests.Enabled = true
+
+			_, err := r.svc.Put(t.Context(), &s, 0, entry())
+			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("Put = %v, want %v", err, tc.want)
+			}
+
+			if tc.want != nil && len(r.store.entries) != 0 {
+				t.Fatalf("a refused write wrote %d entries", len(r.store.entries))
+			}
+		})
 	}
 }
 

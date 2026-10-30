@@ -67,10 +67,14 @@ func (m *memStore) Put(
 		return zeroSettings(), err
 	}
 
+	if err := checkEntry(fence, e); err != nil {
+		return zeroSettings(), err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sp, err := m.space(s.Unit.Namespace(), fence, e)
+	sp, err := m.space(s.Unit.Namespace(), fence)
 	if err != nil {
 		return zeroSettings(), err
 	}
@@ -116,10 +120,14 @@ func (m *memStore) Put(
 func (m *memStore) Delete(
 	ctx context.Context, unit identity.Object, expected int64, fence namespace.Fence, e audit.Entry,
 ) error {
+	if err := checkEntry(fence, e); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sp, err := m.space(unit.Namespace(), fence, e)
+	sp, err := m.space(unit.Namespace(), fence)
 	if err != nil {
 		return err
 	}
@@ -171,10 +179,14 @@ func (m *memStore) SetDefaults(
 		return emptyDefaults(), err
 	}
 
+	if err := checkEntry(fence, e); err != nil {
+		return emptyDefaults(), err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sp, err := m.space(d.Namespace, fence, e)
+	sp, err := m.space(d.Namespace, fence)
 	if err != nil {
 		return emptyDefaults(), err
 	}
@@ -306,17 +318,31 @@ func (m *memStore) finish(ctx context.Context, result any) error {
 }
 
 // space returns the namespace ns after it checked the fence.
-func (m *memStore) space(ns namespace.Name, fence namespace.Fence, e audit.Entry) (*memSpace, error) {
+func (m *memStore) space(ns namespace.Name, fence namespace.Fence) (*memSpace, error) {
 	sp, ok := m.spaces[ns]
 	if !ok {
 		return nil, namespace.ErrNotFound
 	}
 
-	if fence.Namespace != ns || e.Namespace != ns || fence.FailoverVersion != memFence {
+	if fence.Namespace != ns || fence.FailoverVersion != memFence {
 		return nil, namespace.ErrFenced
 	}
 
 	return sp, nil
+}
+
+// checkEntry refuses an audit entry that fails validation or that names another
+// namespace than the fence.
+func checkEntry(fence namespace.Fence, e audit.Entry) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("%w: audit entry: %w", unitsettings.ErrInvalid, err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q: %w", unitsettings.ErrInvalid, e.Namespace, audit.ErrInvalidEntry)
+	}
+
+	return nil
 }
 
 func zeroSettings() unitsettings.Settings {

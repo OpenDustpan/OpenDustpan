@@ -68,6 +68,16 @@ ASCII characters. The server keeps the record of a key for 24 hours.
   needs `namespace:use-git-host-connection` for each connection that the body
   names, and `unit:define-steps` when the body sets steps. A replay cannot
   compare the body with the record that the first request changed.
+- This rule has a cost. A caller who holds `unit:manage` but not
+  `namespace:use-git-host-connection` cannot send a `PUT` with a key that names
+  a connection, also when the record already names that connection. The same
+  caller can send the `PUT` without a key, because that path needs the action
+  only when the connection changes. A workflow engine that retries calls sends
+  a key, so its identity needs the action.
+- The server compares a request with the first request by the body, the query
+  and the `If-Match` header. The same key and the same body with another
+  `If-Match` version is another request: it fails with 422 and the code
+  `request.idempotency-key-reused`.
 - The same key with another request fails with 422 and the code
   `request.idempotency-key-reused`.
 - A request with a key whose first request has not ended fails with 409 and the

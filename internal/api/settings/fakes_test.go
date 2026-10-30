@@ -133,13 +133,16 @@ type memStore struct {
 	entries  []audit.Entry
 	writes   int
 	failWith error
+	// hold, when set, runs at the start of every Put, before the store takes its
+	// lock. A test uses it to keep a write in flight.
+	hold func()
 }
 
 func newMemStore(records idempotency.Store) *memStore {
 	return &memStore{
 		replays: records,
 		mu:      sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: noDefaults(),
-		entries: nil, writes: 0, failWith: nil,
+		entries: nil, writes: 0, failWith: nil, hold: nil,
 	}
 }
 
@@ -158,6 +161,10 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 func (m *memStore) Put(
 	ctx context.Context, s *unitsettings.Settings, expected int64, _ namespace.Fence, e audit.Entry,
 ) (unitsettings.Settings, error) {
+	if m.hold != nil {
+		m.hold()
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

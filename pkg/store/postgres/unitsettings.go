@@ -211,6 +211,12 @@ func (t settingsTx) Update(ctx context.Context, r settingsstore.Row, expected in
 		return false, fmt.Errorf("update unit settings: %w", err)
 	}
 
+	// Defense in depth: the query matches the version and the fenced
+	// transaction serializes the writers. This check stays so that a statement
+	// that matches no row, or more than one, never reads as a success, and it
+	// relies on neither the version compare of the store nor the lock of the
+	// namespace row.
+
 	return n == 1, nil
 }
 
@@ -222,6 +228,12 @@ func (t settingsTx) Delete(ctx context.Context, ns namespace.Name, unitID string
 	if err != nil {
 		return false, fmt.Errorf("delete unit settings: %w", err)
 	}
+
+	// Defense in depth: the query matches the version and the fenced
+	// transaction serializes the writers. This check stays so that a statement
+	// that matches no row, or more than one, never reads as a success, and it
+	// relies on neither the version compare of the store nor the lock of the
+	// namespace row.
 
 	return n == 1, nil
 }
@@ -264,6 +276,12 @@ func (t settingsTx) UpdateDefaults(ctx context.Context, r settingsstore.Defaults
 	if err != nil {
 		return false, fmt.Errorf("update unit defaults: %w", err)
 	}
+
+	// Defense in depth: the query matches the version and the fenced
+	// transaction serializes the writers. This check stays so that a statement
+	// that matches no row, or more than one, never reads as a success, and it
+	// relies on neither the version compare of the store nor the lock of the
+	// namespace row.
 
 	return n == 1, nil
 }

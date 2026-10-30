@@ -201,6 +201,12 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 
 		// A route that does not take the key answers 400: the server never
 		// ignores the key without an error.
+		//
+		// Defense in depth: the route table gives a row without the key to GET
+		// only, and the pattern of a row names its method, so a write never
+		// reaches this check today. It stays so that a new row for a write that
+		// forgets the key still refuses the header, and it relies on neither the
+		// route table nor the method of the mux pattern.
 		if !route.Keyed && r.Method != http.MethodGet && idempotent.Present(r) {
 			h.writeError(ctx, w, errKeyUnsupported)
 

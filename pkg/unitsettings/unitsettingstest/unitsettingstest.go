@@ -69,6 +69,7 @@ func cases() []suiteCase {
 	out = append(out, writeCases()...)
 	out = append(out, deleteCases()...)
 	out = append(out, defaultsCases()...)
+	out = append(out, entryCases()...)
 	out = append(out, idempotencyCases()...)
 
 	return out

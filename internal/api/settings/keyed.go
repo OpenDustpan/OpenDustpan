@@ -334,6 +334,11 @@ func (h *Handler) bulkItemKeyed(r *http.Request, p identity.Principal, ns *targe
 	case idempotency.Replayed:
 		return h.replayedItem(r, item.ID, &res.Answer)
 	case idempotency.Reused:
+		// Defense in depth: the record of the whole call refuses a changed
+		// body first, so a changed item does not reach this case today. It
+		// stays so that an item never answers the stored result of another
+		// request, and it relies on neither the record of the call nor the
+		// fingerprint of the call body.
 		return h.bulkFailure(r, item.ID, keyRefusal(http.StatusUnprocessableEntity,
 			errcode.RequestIdempotencyKeyReused, "this Idempotency-Key was used with another request"))
 	case idempotency.InProgress:
