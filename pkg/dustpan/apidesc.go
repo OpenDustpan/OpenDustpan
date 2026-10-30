@@ -40,6 +40,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"drift", a.drift},
 		{"registry", a.registry},
 		{"sourcefilter", a.sourceFilter},
+		{"trustrules", a.trustRules},
 		{"pulumi", a.pulumi},
 		{"tfe", a.tfe},
 		{"tofuhttp", a.tofuHTTP},
