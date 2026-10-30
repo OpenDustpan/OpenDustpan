@@ -92,26 +92,50 @@ type BlueprintStore interface {
 	PutDraft(ctx context.Context, b Blueprint, version int64, fence namespace.Fence, e []audit.Entry) (int64, error)
 	// Draft returns the draft of ref and its version, or ErrNotFound.
 	Draft(ctx context.Context, ref BlueprintRef) (Blueprint, int64, error)
-	// Publish stores b, the draft of ref at version as the caller checked
-	// it, as the next published version, from 1. It returns ErrConflict when
-	// the draft is no longer at version, and ErrLimit above the published
-	// versions of a blueprint.
+	// Publish stores the draft of p.Ref at p.DraftVersion as the next
+	// published version, from 1. p.Blueprint must be that stored draft, with
+	// only ExprVersion set: the store compares the two by a hash of their
+	// documents, and refuses a document that differs with ErrInvalid. One
+	// draft version gives one version: a second publish of a draft version
+	// that has a version returns ErrAlreadyPublished. It also returns
+	// ErrConflict when the draft is not at p.DraftVersion or does not exist,
+	// ErrInvalid for a blueprint that fails Blueprint.Validate or whose name
+	// is not the name of p.Ref, an error that wraps namespace.ErrFenced for a
+	// p.Ref in another namespace than the fence, and ErrLimit above the
+	// published versions of a blueprint.
 	Publish(ctx context.Context, p Publication, fence namespace.Fence, e []audit.Entry) (Version, error)
 	// Version returns the published version n of ref, or ErrNotFound.
 	Version(ctx context.Context, ref BlueprintRef, n int) (Version, error)
 	// ListBlueprints returns the newest published version of each blueprint
 	// of ns, by name. A blueprint with no published version is not in it.
 	ListBlueprints(ctx context.Context, ns namespace.Name) ([]Version, error)
-	// Retire marks the version n of ref retired. A retire of a retired
-	// version changes nothing. It returns ErrNotFound.
+	// Retire marks the version n of ref retired. A retire is for one version:
+	// the other versions stay as they are, and a publish after a retire is
+	// allowed, as a package registry deprecates one version and still takes
+	// the next. A retire of a retired version changes nothing, and still
+	// appends e. It returns ErrNotFound for a version that does not exist,
+	// also for n below 1, and an error that wraps namespace.ErrFenced for a
+	// ref in another namespace than the fence.
 	Retire(ctx context.Context, ref BlueprintRef, n int, fence namespace.Fence, e []audit.Entry) error
-	// SetExprVersion records that the version n of ref compiles with the
-	// Expr version expr. It returns ErrNotFound.
-	SetExprVersion(ctx context.Context, ref BlueprintRef, n int, expr string, fence namespace.Fence) error
+	// SetExprVersion records that the version c.Number of c.Ref compiles with
+	// the Expr version c.Expr, and appends e in the same transaction. It returns
+	// ErrNotFound as Retire does, ErrInvalid for an Expr version that is
+	// empty or not a version, and an error that wraps namespace.ErrFenced for
+	// a ref in another namespace than the fence.
+	SetExprVersion(ctx context.Context, c ExprVersionChange, fence namespace.Fence, e []audit.Entry) error
+}
+
+// ExprVersionChange is one change of the Expr version of a published version:
+// the version Number of Ref compiles with the Expr version Expr.
+type ExprVersionChange struct {
+	Ref    BlueprintRef
+	Expr   string
+	Number int
 }
 
 // Publication is one publish: the draft of Ref at DraftVersion, as the
 // caller checked and compiled it, with the Expr version that compiled it.
+// Blueprint is the stored draft and nothing else.
 type Publication struct {
 	At           time.Time
 	Ref          BlueprintRef

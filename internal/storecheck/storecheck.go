@@ -60,48 +60,53 @@ const (
 // Case is the result of one conformance case of a check.
 type Case struct {
 	// Name is the name of the case, the same as in the blobtest suite.
-	Name string
+	Name string `json:"name"`
 	// Message tells what failed. It is empty when the case passed. It holds
 	// no credential and no endpoint, also when the adapter error holds one.
-	Message string
+	Message string `json:"message,omitempty"`
 	// Passed is true when the case passed.
-	Passed bool
+	Passed bool `json:"passed"`
 }
 
 // Latency holds the measured latency of one kind of request.
 type Latency struct {
-	P50 time.Duration
-	P99 time.Duration
+	P50 time.Duration `json:"p50"`
+	P99 time.Duration `json:"p99"`
 }
 
 // Report is the result of one check. Each figure is a measured value on the
-// store of the operator, at the time of the check.
+// store of the operator, at the time of the check. It holds no endpoint, no
+// bucket name and no credential: the text of a failed case is fixed text of
+// this package, never the text of an adapter error.
 type Report struct {
-	StartedAt  time.Time
-	FinishedAt time.Time
+	StartedAt  time.Time `json:"startedAt"`
+	FinishedAt time.Time `json:"finishedAt"`
 	// Target is the store that the check read.
-	Target Target
+	Target Target `json:"target"`
 	// Prefix is the throwaway prefix that the check wrote under.
-	Prefix blob.Key
+	Prefix blob.Key `json:"prefix"`
+	// Passed is true when every case passed.
+	Passed bool `json:"passed"`
 	// ConditionalWrites is what the store did with a second conditional write.
-	ConditionalWrites ConditionalWrites
+	ConditionalWrites ConditionalWrites `json:"conditionalWrites"`
 	// Cases holds one result for each conformance case, in the order of the
 	// suite.
-	Cases []Case
+	Cases []Case `json:"cases"`
 	// PutLatency, GetLatency and DeleteLatency are the measured latencies.
-	PutLatency    Latency
-	GetLatency    Latency
-	DeleteLatency Latency
+	PutLatency    Latency `json:"putLatency"`
+	GetLatency    Latency `json:"getLatency"`
+	DeleteLatency Latency `json:"deleteLatency"`
 	// PutBytesPerSecond and GetBytesPerSecond are the measured throughput.
-	PutBytesPerSecond int64
-	GetBytesPerSecond int64
+	PutBytesPerSecond int64 `json:"putBytesPerSecond"`
+	GetBytesPerSecond int64 `json:"getBytesPerSecond"`
 	// DeletesPerSecond is the measured rate of the one delete path.
-	DeletesPerSecond int64
-	// ThrottlingSeen is true when the store answered with a throttling
-	// answer, for example SlowDown, during the check.
-	ThrottlingSeen bool
+	DeletesPerSecond int64 `json:"deletesPerSecond"`
+	// ThrottlingSeen is true when a request failed with a throttling answer
+	// that the retries of the adapter did not get through, for example
+	// SlowDown, during the check.
+	ThrottlingSeen bool `json:"throttlingSeen"`
 	// PrefixDeleted is false when the store refused the delete of the
-	// prefix, for example a target with object lock. The delete case then
-	// does not pass.
-	PrefixDeleted bool
+	// prefix, for example a target with object lock, or when an object stayed
+	// in the listing after the delete. The delete case then does not pass.
+	PrefixDeleted bool `json:"prefixDeleted"`
 }

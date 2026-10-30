@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // StateGuard checks a write of state against the access limits of its action
@@ -56,6 +57,20 @@ func (h *Handler) guardStateWrite(
 	// stays refused, and the answer is the same 503 with Retry-After as on
 	// every other route.
 	if errors.Is(err, namespace.ErrUnavailable) {
+		h.writeError(ctx, w, err)
+
+		return false
+	}
+
+	// This binary is below the minimum binary version of the schema. That is
+	// not a decision of a gate, and the write may go to another instance. The
+	// answer is the 503 of every other write path, with the text that names
+	// both versions. The check reads the chain of the error, so it also finds
+	// the cause inside a refusal that says the decision record could not be
+	// written. A lost store answers the 503 of namespace.unavailable above.
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		h.logger.WarnContext(ctx, "state write not decided: this binary is below the minimum of the schema",
+			slog.String("object", obj.String()), slog.Any("error", err))
 		h.writeError(ctx, w, err)
 
 		return false

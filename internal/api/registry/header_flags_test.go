@@ -89,6 +89,59 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 			return probe(t, f, http.MethodGet, versionTarget, nil)
 		},
+		"publishModuleRelease": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			f := newFixture(t)
+			upload := f.stage(t, plainModule(t))
+
+			return probe(
+				t,
+				f,
+				http.MethodPut,
+				moduleBase+"/vpc/aws/versions/1.0.0",
+				js(t, map[string]string{"upload": upload}),
+			)
+		},
+		"listRegistryModules": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			f := newFixture(t)
+			wantCode(
+				t,
+				"publish",
+				f.publishModule(t, "admin", "vpc", "aws", plainModule(t)),
+				http.StatusOK,
+			)
+
+			return probe(t, f, http.MethodGet, moduleBase, nil)
+		},
+		"listModuleReleases": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			f := newFixture(t)
+			wantCode(
+				t,
+				"publish",
+				f.publishModule(t, "admin", "vpc", "aws", plainModule(t)),
+				http.StatusOK,
+			)
+
+			return probe(t, f, http.MethodGet, moduleBase+"/vpc/aws/versions", nil)
+		},
+		"getModuleRelease": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			f := newFixture(t)
+			wantCode(
+				t,
+				"publish",
+				f.publishModule(t, "admin", "vpc", "aws", plainModule(t)),
+				http.StatusOK,
+			)
+
+			return probe(t, f, http.MethodGet, moduleBase+"/vpc/aws/versions/1.0.0", nil)
+		},
 		"addRegistryKey": func(t *testing.T) headertest.Probe {
 			t.Helper()
 

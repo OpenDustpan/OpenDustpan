@@ -563,7 +563,12 @@ func decodeStrict(w http.ResponseWriter, r *http.Request, dst any, bad error) er
 // readBody reads the body of r under the limit of a request body. It
 // answers errBodyTooLarge over the limit, and bad when the read fails.
 func readBody(w http.ResponseWriter, r *http.Request, bad error) ([]byte, error) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPrincipalBodyBytes))
+	return readBodyUpTo(w, r, maxPrincipalBodyBytes, bad)
+}
+
+// readBodyUpTo is readBody with the limit of the route.
+func readBodyUpTo(w http.ResponseWriter, r *http.Request, limit int64, bad error) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if tooLarge, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && tooLarge.Limit > 0 {
 		return nil, errBodyTooLarge
 	}

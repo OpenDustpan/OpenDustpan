@@ -47,6 +47,8 @@ var devColumnDecisions = map[string]devDecision{
 	"access_tokens.principal_id":      {strip: true, reason: "token of a removed principal"},
 	"temp_admins.principal_id":        {strip: true, reason: "temporary administrator that is a removed principal"},
 	"temp_admins.subject":             {strip: true, reason: "temporary administrator with the dev prefix"},
+	"trust_rules.principal_id":        {strip: true, reason: "trust rule that acts as a removed principal"},
+	"trust_rules.created_by":          {strip: false, reason: "history text of who made the trust rule"},
 	"grants.subject_kind":             {strip: false, reason: "a kind word, not a subject"},
 	"grants.created_by":               {strip: false, reason: "history text of who made the grant"},
 	"grants.revoked_by":               {strip: false, reason: "history text of who revoked the grant"},
@@ -82,8 +84,14 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "label of a principal that the strip removes with its row",
 	},
-	"profile_revisions.author": {strip: false, reason: "history text of who wrote the revision"},
-	"profiles.created_by":      {strip: false, reason: "history text of who made the profile"},
+	"profile_revisions.author":   {strip: false, reason: "history text of who wrote the revision"},
+	"profiles.created_by":        {strip: false, reason: "history text of who made the profile"},
+	"issuer_settings.updated_by": {strip: false, reason: "history text of who changed the settings"},
+	"issuer_settings.subject_template": {
+		strip: false, reason: "a list of subject key names, such as namespace and unit; it names no principal",
+	},
+	"issuer_settings.allow_block_subjects": {strip: false, reason: "a flag; it names no principal"},
+	"issuer_settings.include_actor_name":   {strip: false, reason: "a flag; it names no principal"},
 	"saved_views.owner": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: a view of a missing principal matches no reader",
@@ -96,6 +104,10 @@ var devColumnDecisions = map[string]devDecision{
 	"registry_keys.added_by": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who registered the key",
+	},
+	"catalog_blueprint_versions.published_by": {
+		strip:  false,
+		reason: "history text of who published the version; a published version never changes",
 	},
 	"registry_releases.published_by": {
 		strip:  false,

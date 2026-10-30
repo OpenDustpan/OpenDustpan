@@ -205,6 +205,12 @@ var Settings = []*Setting{
 		referenceNone,
 	).WithFile("public-url").WithURL(),
 	stringSetting(
+		"issuer-base-url", "DUSTPAN_ISSUER_BASE_URL", "",
+		"host of the OIDC issuer URL of each namespace, for example https://issuer.example.com; "+
+			"empty means --public-url (DUSTPAN_ISSUER_BASE_URL)",
+		"(none: the issuer uses `--public-url`. With neither setting, the issuer is off)",
+	).WithFile("issuer-base-url").WithURL(),
+	stringSetting(
 		"trusted-proxies", "DUSTPAN_TRUSTED_PROXIES", "",
 		"comma-separated CIDRs of trusted proxies, "+
 			"empty means none (DUSTPAN_TRUSTED_PROXIES)",
@@ -455,6 +461,12 @@ var Settings = []*Setting{
 	stringSetting(
 		"backup", "", "",
 		"backup ID to check or restore, for example bkp-aaa",
+		referenceNone,
+	),
+	stringSetting(
+		"target", "", "",
+		"store to check: blobs for the live blob store, backup for the backup target. The server reads its own "+
+			"store; the command never takes an address",
 		referenceNone,
 	),
 	boolSetting(

@@ -124,7 +124,7 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 
 	row := codec.ToBackupRow(r)
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
 			ID:          row.ID,
 			State:       string(backup.StateRunning),
@@ -1186,7 +1186,7 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the registry, the Git host connections,
-// the notification sinks and the triggers.
+// the notification sinks, the triggers, the catalog blueprints and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
 		return err
@@ -1204,5 +1204,13 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 
-	return checkStagedTriggers(ctx, conn)
+	if err := checkStagedTriggers(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedCatalogBlueprints(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedTrustRules(ctx, conn)
 }

@@ -39,6 +39,7 @@ const (
 	commandNamespace       = "namespace"
 	commandRestore         = "restore"
 	commandServe           = "serve"
+	commandStore           = "store"
 	commandUpgrade         = "upgrade"
 )
 

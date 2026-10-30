@@ -27,6 +27,7 @@ func commandTable() cli.Table {
 			return client.UpgradeCheck(ctx, args, stdout, stderr, version)
 		}),
 		cli.BackupCheckCommand(client.BackupCheck),
+		cli.StoreCheckCommand(client.StoreCheck),
 		cli.ServeCommand(func(ctx context.Context, args []string, _, stderr io.Writer) error {
 			return serve(ctx, args, stderr)
 		}),

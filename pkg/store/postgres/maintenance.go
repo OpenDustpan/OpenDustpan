@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 var _ maintenance.Store = (*Store)(nil)
@@ -60,7 +61,7 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 
 	var changed int64
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		if err := lockWritesExclusive(ctx, q, s.stateLockWait, lockTimeoutError(state)); err != nil {
 			return err
 		}
@@ -142,11 +143,12 @@ func lockTimeoutError(next maintenance.State) error {
 	return maintenance.ErrUnavailable
 }
 
-// unavailable keeps err when it already wraps maintenance.ErrBusy or
-// maintenance.ErrUnavailable, and otherwise reports maintenance.ErrUnavailable
-// without driver text.
+// unavailable keeps err when it already wraps maintenance.ErrBusy,
+// maintenance.ErrUnavailable or schema.ErrBinaryBelowMinimum, and otherwise
+// reports maintenance.ErrUnavailable without driver text.
 func unavailable(err error) error {
-	if errors.Is(err, maintenance.ErrBusy) || errors.Is(err, maintenance.ErrUnavailable) {
+	if errors.Is(err, maintenance.ErrBusy) || errors.Is(err, maintenance.ErrUnavailable) ||
+		errors.Is(err, schema.ErrBinaryBelowMinimum) {
 		return err
 	}
 
@@ -204,7 +206,7 @@ func (s *Store) setStateIfWithin(
 
 	errChanged := fmt.Errorf("installation state is not %q: %w", expected, maintenance.ErrStateChanged)
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		n, txErr := s.setStateIn(ctx, q, expected, next, within)
 		if txErr != nil {
 			return txErr
