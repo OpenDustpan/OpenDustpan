@@ -153,6 +153,7 @@ linters:
             - "**/pkg/trigger/**"
             - "**/pkg/outputshare/**"
             - "**/pkg/savedview/**"
+            - "**/pkg/unitsettings/**"
             - "**/pkg/preferences/**"
             - "**/internal/stepup/**"
             - "**/pkg/registry/**"
