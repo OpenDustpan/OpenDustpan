@@ -698,6 +698,10 @@ func (m *memStore) writeEntry(
 // returns ErrNotFound for the ID of a stored delivery of another scope,
 // and ErrInvalid for the ID of a stored delivery of the scope or of add.
 func (m *memStore) check(d notify.Delivery, add map[string]notify.Delivery) (bool, error) {
+	if err := m.checkReferences(d); err != nil {
+		return false, err
+	}
+
 	same := func(o notify.Delivery) bool {
 		return o.Scope == d.Scope && o.Notification == d.Notification && o.Subscription == d.Subscription &&
 			o.Contact == d.Contact
@@ -782,4 +786,27 @@ func (m *memStore) skipPending(sub notify.Subscription) {
 		d.Version++
 		m.deliveries[did] = d
 	}
+}
+
+// checkReferences returns ErrInvalid for a delivery that names a sink, a
+// subscription or a notification of another scope. A row that the store does
+// not hold is allowed.
+func (m *memStore) checkReferences(d notify.Delivery) error {
+	if s, ok := m.sinks[d.Sink]; ok && s.Scope != d.Scope {
+		return fmt.Errorf("enqueue %s: %w: the sink is not in the scope of the delivery", d.ID, notify.ErrInvalid)
+	}
+
+	if s, ok := m.subs[d.Subscription]; ok && s.Scope != d.Scope {
+		return fmt.Errorf("enqueue %s: %w: the subscription is not in the scope of the delivery", d.ID,
+			notify.ErrInvalid)
+	}
+
+	for i := range m.notifications {
+		if n := m.notifications[i]; n.ID == d.Notification && n.Scope != d.Scope {
+			return fmt.Errorf("enqueue %s: %w: the notification is not in the scope of the delivery", d.ID,
+				notify.ErrInvalid)
+		}
+	}
+
+	return nil
 }

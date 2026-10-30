@@ -4364,6 +4364,9 @@ SELECT id FROM notifications WHERE scope = sqlc.arg(scope) AND dedupe_key = sqlc
 -- name: CountNotificationsByID :one
 SELECT COUNT(*) FROM notifications WHERE id = sqlc.arg(id);
 
+-- name: GetNotificationScopeByID :one
+SELECT scope FROM notifications WHERE id = sqlc.arg(id);
+
 -- name: InsertNotification :exec
 INSERT INTO notifications (
     scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links, attributes, recipients,

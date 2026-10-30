@@ -5901,6 +5901,17 @@ func (q *Queries) GetNotificationIDByDedupe(ctx context.Context, arg GetNotifica
 	return id, err
 }
 
+const getNotificationScopeByID = `-- name: GetNotificationScopeByID :one
+SELECT scope FROM notifications WHERE id = ?1
+`
+
+func (q *Queries) GetNotificationScopeByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationScopeByID, id)
+	var scope string
+	err := row.Scan(&scope)
+	return scope, err
+}
+
 const getNotificationSequence = `-- name: GetNotificationSequence :one
 SELECT last_sequence FROM notification_sequences WHERE scope = ?1
 `

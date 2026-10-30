@@ -45,6 +45,31 @@ func checkStagedNotifications(ctx context.Context, pool *pgxpool.Pool, staging s
 	}{
 		{scopeQuery, "a scope that names no namespace of the backup"},
 		{sequenceQuery, "a notification above the last sequence of its scope"},
+		{
+			"SELECT c.name FROM " + t("notification_cursors") + " AS c LEFT JOIN " + t("notification_sequences") +
+				" AS s ON s.scope = c.scope WHERE c.sequence > COALESCE(s.last_sequence, 0) LIMIT 1",
+			"a cursor above the last sequence of its scope",
+		},
+		{
+			"SELECT s.id FROM " + t("notification_subscriptions") + " AS s LEFT JOIN " + t("notification_sinks") +
+				" AS k ON k.id = s.sink_id WHERE k.id IS NULL OR k.scope <> s.scope LIMIT 1",
+			"a subscription whose sink is missing or in another scope",
+		},
+		{
+			"SELECT d.id FROM " + t("notification_deliveries") + " AS d JOIN " + t("notification_sinks") +
+				" AS k ON k.id = d.sink_id WHERE k.scope <> d.scope LIMIT 1",
+			"a delivery that names a sink of another scope",
+		},
+		{
+			"SELECT d.id FROM " + t("notification_deliveries") + " AS d JOIN " + t("notification_subscriptions") +
+				" AS s ON s.id = d.subscription_id WHERE s.scope <> d.scope LIMIT 1",
+			"a delivery that names a subscription of another scope",
+		},
+		{
+			"SELECT d.id FROM " + t("notification_deliveries") + " AS d JOIN " + t("notifications") +
+				" AS n ON n.id = d.notification_id WHERE n.scope <> d.scope LIMIT 1",
+			"a delivery that names a notification of another scope",
+		},
 	} {
 		var scope string
 

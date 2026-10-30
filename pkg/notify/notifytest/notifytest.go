@@ -88,6 +88,9 @@ func Run(t *testing.T, newHarness Factory) {
 		{"concurrent appends make one gap-free sequence", testConcurrentAppend},
 		{"concurrent moves of one cursor have one winner", testConcurrentCursor},
 		{"concurrent claims never take one delivery twice", testConcurrentClaim},
+		{"enqueue refuses a delivery that names a row of another scope", testEnqueueReferences},
+		{"a new subscription with a version above 0 is ErrConflict", testSubscriptionNewVersion},
+		{"a put over a subscription of another scope is ErrNotFound", testSubscriptionOtherScope},
 	}
 
 	for _, tc := range cases {

@@ -32,6 +32,36 @@ LEFT JOIN notification_sequences AS s ON s.scope = n.scope
 WHERE s.last_sequence IS NULL OR n.sequence > s.last_sequence
 LIMIT 1`
 
+// stagedCursorQuery finds a cursor of a staged backup above the last sequence
+// of its scope. A dispatcher would then skip the notifications up to it.
+const stagedCursorQuery = `SELECT c.name FROM notification_cursors AS c
+LEFT JOIN notification_sequences AS s ON s.scope = c.scope
+WHERE c.sequence > COALESCE(s.last_sequence, 0)
+LIMIT 1`
+
+// The queries below find a reference from one row to a row of another scope in
+// a staged backup. A subscription needs a sink of its own scope. A delivery may
+// name a sink, a subscription or a notification that the store no longer holds,
+// but never one that another scope owns.
+const (
+	stagedSubscriptionSinkQuery = `SELECT s.id FROM notification_subscriptions AS s
+LEFT JOIN notification_sinks AS k ON k.id = s.sink_id
+WHERE k.id IS NULL OR k.scope <> s.scope
+LIMIT 1`
+	stagedDeliverySinkQuery = `SELECT d.id FROM notification_deliveries AS d
+JOIN notification_sinks AS k ON k.id = d.sink_id
+WHERE k.scope <> d.scope
+LIMIT 1`
+	stagedDeliverySubscriptionQuery = `SELECT d.id FROM notification_deliveries AS d
+JOIN notification_subscriptions AS s ON s.id = d.subscription_id
+WHERE s.scope <> d.scope
+LIMIT 1`
+	stagedDeliveryNotificationQuery = `SELECT d.id FROM notification_deliveries AS d
+JOIN notifications AS n ON n.id = d.notification_id
+WHERE n.scope <> d.scope
+LIMIT 1`
+)
+
 // checkStagedNotifications checks the notification tables of a staged backup
 // with the rules of a stored row: every scope is a namespace of the backup or
 // the server scope, the counter of each scope covers its notifications, and
@@ -48,6 +78,11 @@ func checkStagedNotifications(ctx context.Context, conn *sql.DB) error {
 	}{
 		{stagedScopeQuery, "a scope that names no namespace of the backup"},
 		{stagedSequenceQuery, "a notification above the last sequence of its scope"},
+		{stagedCursorQuery, "a cursor above the last sequence of its scope"},
+		{stagedSubscriptionSinkQuery, "a subscription whose sink is missing or in another scope"},
+		{stagedDeliverySinkQuery, "a delivery that names a sink of another scope"},
+		{stagedDeliverySubscriptionQuery, "a delivery that names a subscription of another scope"},
+		{stagedDeliveryNotificationQuery, "a delivery that names a notification of another scope"},
 	} {
 		var scope string
 

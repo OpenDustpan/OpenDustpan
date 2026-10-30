@@ -39,18 +39,6 @@ var (
 	_ notify.SinkStore     = NotificationStore{s: nil}
 )
 
-// SinkSecrets implements notify.Subscriptions.
-func (k NotificationStore) SinkSecrets(
-	ctx context.Context, scope namespace.Name, id string,
-) ([]notify.SealedSecret, error) {
-	return sinks(k).SinkSecrets(ctx, scope, id)
-}
-
-// Sinks implements notify.Subscriptions.
-func (k NotificationStore) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, error) {
-	return sinks(k).Sinks(ctx, scope)
-}
-
 // scopedWrite names the row of a write: how to find its scope, and the error
 // for a fence that belongs to another scope. e is the audit entry that the
 // write appends, or nil.
@@ -830,6 +818,10 @@ func enqueueDeliveries(ctx context.Context, q *db.Queries, ds []notify.Delivery)
 		d := ds[i]
 		key := strings.Join([]string{d.Notification, d.Subscription, d.Contact}, "\x00")
 
+		if refErr := checkDeliveryReferences(ctx, q, &d); refErr != nil {
+			return refErr
+		}
+
 		count, err := q.CountNotificationDeliveryRoute(ctx, db.CountNotificationDeliveryRouteParams{
 			Scope: d.Scope.String(), NotificationID: d.Notification, SubscriptionID: d.Subscription, Contact: d.Contact,
 		})
@@ -863,6 +855,60 @@ func enqueueDeliveries(ctx context.Context, q *db.Queries, ds []notify.Delivery)
 		}
 
 		routes[key], ids[d.ID] = true, true
+	}
+
+	return nil
+}
+
+// checkDeliveryReferences returns notify.ErrInvalid when d names a sink, a
+// subscription or a notification that a stored row of another scope has. A
+// reference to a row that the store does not hold is allowed: a retention job
+// deletes old notifications, and a person deletes subscriptions, while their
+// deliveries stay as history. The message never names the other scope.
+//
+// Defense in depth: the dispatcher builds a delivery from the rows of one scope.
+// This check stays so that a delivery of one scope never points at a sink, a
+// subscription or a notification of another scope, whatever the caller does.
+func checkDeliveryReferences(ctx context.Context, q *db.Queries, d *notify.Delivery) error {
+	scope := d.Scope.String()
+
+	if d.Sink != "" {
+		row, err := q.GetNotificationSink(ctx, d.Sink)
+
+		switch {
+		case err == nil && row.Namespace != scope:
+			return fmt.Errorf("enqueue %s: %w: the sink is not in the scope of the delivery", d.ID, notify.ErrInvalid)
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("select sink: %w", err)
+		default:
+			// The sink is in the scope, or the store does not hold it.
+		}
+	}
+
+	if d.Subscription != "" {
+		row, err := q.GetNotificationSubscription(ctx, d.Subscription)
+
+		switch {
+		case err == nil && row.Scope != scope:
+			return fmt.Errorf("enqueue %s: %w: the subscription is not in the scope of the delivery", d.ID,
+				notify.ErrInvalid)
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("select subscription: %w", err)
+		default:
+			// The subscription is in the scope, or the store does not hold it.
+		}
+	}
+
+	owner, err := q.GetNotificationScopeByID(ctx, d.Notification)
+
+	switch {
+	case err == nil && owner != scope:
+		return fmt.Errorf("enqueue %s: %w: the notification is not in the scope of the delivery", d.ID,
+			notify.ErrInvalid)
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("select notification: %w", err)
+	default:
+		// The notification is in the scope, or the store does not hold it.
 	}
 
 	return nil
