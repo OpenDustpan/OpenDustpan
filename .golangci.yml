@@ -118,6 +118,18 @@ linters:
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
             - pkg: github.com/jackc/pgx
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
+        githubfake:
+          # The fake GitHub host is test infrastructure. No file of the binary
+          # (cmd/, pkg/ and internal/) imports it, except a test file, so the
+          # binary never links it.
+          files:
+            - "**/cmd/**"
+            - "**/pkg/**"
+            - "**/internal/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/e2e/githubfake
+              desc: The fake GitHub host is for tests; the binary never links it.
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package
