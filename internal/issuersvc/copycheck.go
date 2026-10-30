@@ -39,10 +39,12 @@ func (s *Service) runCheck(
 	ctx context.Context, set *profile.IssuerSettings, keys []profile.Key, want checkWant,
 ) profile.CopyCheck {
 	// A check that cannot read the copy says nothing about the keys that an
-	// earlier check found: the active key keeps signing, as the days of its
-	// life allow. Only a JWKS that was read replaces the list.
-	check := profile.CopyCheck{At: s.now().UTC(), Steps: nil, Verified: nil, OK: false}
-	if set.CopyCheck != nil {
+	// earlier check found at the same address: the active key keeps signing,
+	// as the days of its life allow. Only a JWKS that was read replaces the
+	// list. A check of another address says nothing about this one, so the
+	// list starts empty.
+	check := profile.CopyCheck{At: s.now().UTC(), URL: set.IssuerURL, Steps: nil, Verified: nil, OK: false}
+	if set.CopyCheck != nil && set.CopyCheck.URL == set.IssuerURL {
 		check.Verified = slices.Clone(set.CopyCheck.Verified)
 	}
 
@@ -57,9 +59,11 @@ func (s *Service) runCheck(
 		return check
 	}
 
-	found := map[profile.KeyID]bool{}
-	for i := range jwks.Keys {
-		found[profile.KeyID(jwks.Keys[i].Kid)] = true
+	found, err := heldKeys(keys, &jwks)
+	if err != nil {
+		check.AddStep(stepJWKS, "the server cannot build the JWK of its own key", false)
+
+		return check
 	}
 
 	check.Verified = nil
@@ -83,6 +87,38 @@ func (s *Service) runCheck(
 	check.OK = !slices.ContainsFunc(check.Steps, func(st profile.CopyStep) bool { return !st.OK })
 
 	return check
+}
+
+// heldKeys says which published keys the copied JWKS holds: the copy has
+// exactly one entry with the kid of the key, and that entry has the kty, use,
+// alg, n and e of the JWK that the server publishes for the key. A copy with
+// the right kid and a stale or wrong key passes nothing, because no cloud
+// could verify a token against it.
+func heldKeys(keys []profile.Key, copied *profile.JWKS) (map[profile.KeyID]bool, error) {
+	want, err := profile.BuildJWKS(keys)
+	if err != nil {
+		return nil, fmt.Errorf("build the JWKS of the namespace: %w", err)
+	}
+
+	held := map[profile.KeyID]bool{}
+
+	for _, w := range want.Keys {
+		copies := 0
+		equal := false
+
+		for _, c := range copied.Keys {
+			if c.Kid != w.Kid {
+				continue
+			}
+
+			copies++
+			equal = c == w
+		}
+
+		held[profile.KeyID(w.Kid)] = copies == 1 && equal
+	}
+
+	return held, nil
 }
 
 // checkDiscovery reads the discovery document at base and checks that it names

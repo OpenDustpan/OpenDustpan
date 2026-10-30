@@ -49,6 +49,8 @@ func RunIssuer(t *testing.T, newStore IssuerFactory) {
 		{"settings on a stale version are a conflict", testIssuerSettingsStale},
 		{"a stale fence refuses settings and a copy check", testIssuerSettingsFenced},
 		{"a copy check keeps the version and only the listed keys", testIssuerCopyCheck},
+		{"a change of issuerURL clears the copy check", testIssuerCopyCheckResets},
+		{"a copy check of another URL or of no URL is refused", testIssuerCopyCheckURL},
 		{"a namespace is found by its ID", testIssuerResolve},
 	}
 
@@ -620,7 +622,7 @@ func testIssuerSettingsFenced(t *testing.T, s IssuerStore) {
 	_, err := s.Issuer.PutIssuerSettings(t.Context(), issuerSettings(ns.Name), 0, stale, issuerEntries(ns.Name))
 	wantErr(t, "PutIssuerSettings", err, namespace.ErrFenced)
 
-	staleCheck := profile.CopyCheck{At: epoch(), OK: true, Steps: nil, Verified: nil}
+	staleCheck := profile.CopyCheck{At: epoch(), URL: issuerSettings(ns.Name).IssuerURL, OK: true, Steps: nil, Verified: nil}
 	err = s.Issuer.RecordCopyCheck(t.Context(), ns.Name, staleCheck, stale, issuerEntries(ns.Name))
 	wantErr(t, "RecordCopyCheck", err, namespace.ErrFenced)
 
@@ -649,8 +651,9 @@ func testIssuerCopyCheck(t *testing.T, s IssuerStore) {
 	}
 
 	check := profile.CopyCheck{
-		At: epoch().Add(time.Hour),
-		OK: true,
+		At:  epoch().Add(time.Hour),
+		URL: issuerSettings(ns.Name).IssuerURL,
+		OK:  true,
 		Steps: []profile.CopyStep{
 			{Name: "discovery", OK: true, Detail: "read"},
 			{Name: "jwks", OK: true, Detail: "read"},
@@ -667,9 +670,113 @@ func testIssuerCopyCheck(t *testing.T, s IssuerStore) {
 		t.Fatalf("settings after a copy check = %+v, %v", got, err)
 	}
 
-	if !got.CopyCheck.Holds(active.ID) || !got.CopyCheck.Holds(next.ID) || len(got.CopyCheck.Verified) != 2 {
+	if !got.CopyCheck.Holds(got.IssuerURL, active.ID) || !got.CopyCheck.Holds(got.IssuerURL, next.ID) || len(got.CopyCheck.Verified) != 2 {
 		t.Errorf("verified keys = %v, want the two keys of the namespace", got.CopyCheck.Verified)
 	}
+}
+
+func testIssuerCopyCheckResets(t *testing.T, s IssuerStore) {
+	t.Helper()
+
+	ns := issuerNamespace(t, s, "acme")
+	pair := firstKeys(t, s, ns)
+	set := issuerSettings(ns.Name)
+
+	put, err := s.Issuer.PutIssuerSettings(t.Context(), set, 0, ns.Fence(), issuerEntries(ns.Name))
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	check := profile.CopyCheck{
+		At: epoch(), URL: set.IssuerURL, OK: true, Steps: nil, Verified: []profile.KeyID{pair.active.ID},
+	}
+	if err = s.Issuer.RecordCopyCheck(t.Context(), ns.Name, check, ns.Fence(), issuerEntries(ns.Name)); err != nil {
+		t.Fatalf("RecordCopyCheck: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		url      string
+		wantKept bool
+	}{
+		{"the same URL keeps the check", set.IssuerURL, true},
+		{"another URL clears the check", "https://other.example.com/acme", false},
+		{"no URL clears the check", "", false},
+	}
+
+	version := put.Version
+
+	for _, tc := range cases {
+		next := put
+		next.IssuerURL = tc.url
+
+		put, err = s.Issuer.PutIssuerSettings(t.Context(), next, version, ns.Fence(), issuerEntries(ns.Name))
+		if err != nil {
+			t.Fatalf("%s: put: %v", tc.name, err)
+		}
+
+		version = put.Version
+
+		got, getErr := s.Issuer.GetIssuerSettings(t.Context(), ns.Name)
+		if getErr != nil {
+			t.Fatalf("%s: get: %v", tc.name, getErr)
+		}
+
+		if kept := got.CopyCheck != nil; kept != tc.wantKept {
+			t.Errorf("%s: copy check kept = %v, want %v", tc.name, kept, tc.wantKept)
+		}
+
+		if tc.wantKept && !got.CopyCheck.Holds(tc.url, pair.active.ID) {
+			t.Errorf("%s: the kept check does not hold the active key", tc.name)
+		}
+
+		// The check that was cleared must not come back for the old URL.
+		if got.CopyCheck != nil && got.CopyCheck.Holds("https://other.example.com/acme", pair.active.ID) {
+			t.Errorf("%s: a check of the first URL holds for another URL", tc.name)
+		}
+	}
+}
+
+func testIssuerCopyCheckURL(t *testing.T, s IssuerStore) {
+	t.Helper()
+
+	ns := issuerNamespace(t, s, "acme")
+	pair := firstKeys(t, s, ns)
+	set := issuerSettings(ns.Name)
+
+	if _, err := s.Issuer.PutIssuerSettings(t.Context(), set, 0, ns.Fence(), issuerEntries(ns.Name)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	cases := []struct {
+		want error
+		name string
+		url  string
+	}{
+		{profile.ErrConflict, "a check of another URL than the stored one", "https://other.example.com/acme"},
+		{profile.ErrInvalid, "a check with no URL", ""},
+	}
+
+	for _, tc := range cases {
+		check := profile.CopyCheck{
+			At: epoch(), URL: tc.url, OK: true, Steps: nil, Verified: []profile.KeyID{pair.active.ID},
+		}
+
+		err := s.Issuer.RecordCopyCheck(t.Context(), ns.Name, check, ns.Fence(), issuerEntries(ns.Name))
+		wantErr(t, tc.name, err, tc.want)
+	}
+
+	// Nothing was stored.
+	got, err := s.Issuer.GetIssuerSettings(t.Context(), ns.Name)
+	if err != nil || got.CopyCheck != nil {
+		t.Errorf("settings after the refused checks = %+v, %v; want no copy check", got, err)
+	}
+
+	// A namespace with no settings has no URL that a check could name.
+	other := issuerNamespace(t, s, "globex")
+	check := profile.CopyCheck{At: epoch(), URL: set.IssuerURL, OK: true, Steps: nil, Verified: nil}
+	err = s.Issuer.RecordCopyCheck(t.Context(), other.Name, check, other.Fence(), issuerEntries(other.Name))
+	wantErr(t, "a namespace with no settings", err, profile.ErrConflict)
 }
 
 func testIssuerResolve(t *testing.T, s IssuerStore) {

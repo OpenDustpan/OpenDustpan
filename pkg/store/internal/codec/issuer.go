@@ -61,6 +61,7 @@ func ToIssuerKeyRow(k profile.Key) IssuerKeyRow {
 }
 
 type copyCheckJSON struct {
+	URL      string         `json:"url"`
 	Steps    []copyStepJSON `json:"steps"`
 	Verified []string       `json:"verified"`
 	AtMs     int64          `json:"atMs"`
@@ -82,7 +83,7 @@ func EncodeCopyCheck(c *profile.CopyCheck) (string, error) {
 
 	j := copyCheckJSON{
 		Steps: make([]copyStepJSON, 0, len(c.Steps)), Verified: make([]string, 0, len(c.Verified)),
-		AtMs: IssuerMillis(c.At), OK: c.OK,
+		URL: c.URL, AtMs: IssuerMillis(c.At), OK: c.OK,
 	}
 
 	for _, s := range c.Steps {
@@ -112,7 +113,7 @@ func DecodeCopyCheck(raw string) (*profile.CopyCheck, error) {
 		return nil, fmt.Errorf("decode copy check: %w", err)
 	}
 
-	c := &profile.CopyCheck{At: FromIssuerMillis(j.AtMs), OK: j.OK, Steps: nil, Verified: nil}
+	c := &profile.CopyCheck{At: FromIssuerMillis(j.AtMs), URL: j.URL, OK: j.OK, Steps: nil, Verified: nil}
 
 	for _, s := range j.Steps {
 		c.Steps = append(c.Steps, profile.CopyStep{Name: s.Name, Detail: s.Detail, OK: s.OK})

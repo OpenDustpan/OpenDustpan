@@ -216,7 +216,7 @@ func (s *Service) checkCopied(ns namespace.Name, set *profile.IssuerSettings, ac
 			profile.ErrIssuerKeyExpired, exportRoute(ns), checkCopyRoute(ns))
 	}
 
-	if !set.CopyCheck.Holds(active.ID) {
+	if !set.CopyCheck.Holds(set.IssuerURL, active.ID) {
 		return fmt.Errorf("%w: key %s is in no copied JWKS: copy the files from GET %s, then call POST %s",
 			profile.ErrIssuerKeyMissing, active.ID, exportRoute(ns), checkCopyRoute(ns))
 	}

@@ -17993,6 +17993,28 @@ func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLo
 	return err
 }
 
+const updateIssuerCopyCheck = `-- name: UpdateIssuerCopyCheck :execrows
+UPDATE issuer_settings SET copy_check = $1
+WHERE namespace_id = $2 AND issuer_url = $3
+`
+
+type UpdateIssuerCopyCheckParams struct {
+	CopyCheck   string
+	NamespaceID string
+	IssuerUrl   string
+}
+
+// Stores the last copy check when the issuer URL that it checked is the stored
+// one. It keeps the version, so a copy check never changes the entity tag of
+// the settings. No row, or another URL, writes nothing.
+func (q *Queries) UpdateIssuerCopyCheck(ctx context.Context, arg UpdateIssuerCopyCheckParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateIssuerCopyCheck, arg.CopyCheck, arg.NamespaceID, arg.IssuerUrl)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateIssuerKey = `-- name: UpdateIssuerKey :execrows
 UPDATE issuer_keys
 SET state = $1, sealed = $2, activated_at_ms = $3,
@@ -18398,29 +18420,6 @@ func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams
 	return err
 }
 
-const upsertIssuerCopyCheck = `-- name: UpsertIssuerCopyCheck :exec
-INSERT INTO issuer_settings (
-    namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
-    updated_by, copy_check
-) VALUES (
-    $1, '', $2, true, false, 0, 0, '', $3
-)
-ON CONFLICT (namespace_id) DO UPDATE SET copy_check = excluded.copy_check
-`
-
-type UpsertIssuerCopyCheckParams struct {
-	NamespaceID     string
-	DefaultTemplate string
-	CopyCheck       string
-}
-
-// Stores the last copy check. It keeps the version, so a copy check never
-// changes the entity tag of the settings.
-func (q *Queries) UpsertIssuerCopyCheck(ctx context.Context, arg UpsertIssuerCopyCheckParams) error {
-	_, err := q.db.Exec(ctx, upsertIssuerCopyCheck, arg.NamespaceID, arg.DefaultTemplate, arg.CopyCheck)
-	return err
-}
-
 const upsertIssuerSettings = `-- name: UpsertIssuerSettings :execrows
 INSERT INTO issuer_settings (
     namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
@@ -18432,7 +18431,8 @@ INSERT INTO issuer_settings (
 ON CONFLICT (namespace_id) DO UPDATE SET
     issuer_url = excluded.issuer_url, subject_template = excluded.subject_template,
     allow_block_subjects = excluded.allow_block_subjects, include_actor_name = excluded.include_actor_name,
-    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by
+    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by,
+    copy_check = CASE WHEN issuer_settings.issuer_url = excluded.issuer_url THEN issuer_settings.copy_check ELSE '' END
 WHERE issuer_settings.version = excluded.version - 1
 `
 
@@ -18449,7 +18449,8 @@ type UpsertIssuerSettingsParams struct {
 
 // Stores the settings at the version new_version when the stored version is
 // the one before it. A namespace with no row has version 0. It keeps the
-// stored copy check.
+// stored copy check when the issuer URL stays, and clears it when the URL
+// changes: a check of one address says nothing about another.
 func (q *Queries) UpsertIssuerSettings(ctx context.Context, arg UpsertIssuerSettingsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, upsertIssuerSettings,
 		arg.NamespaceID,

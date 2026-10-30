@@ -171,6 +171,11 @@ func (m *memIssuer) PutIssuerSettings(
 
 	s.Version = ifVersion + 1
 	s.CopyCheck = cur.CopyCheck
+
+	if cur.IssuerURL != s.IssuerURL {
+		s.CopyCheck = nil
+	}
+
 	m.settings[s.Namespace] = s
 
 	return s, nil
@@ -182,13 +187,17 @@ func (m *memIssuer) RecordCopyCheck(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if c.URL == "" {
+		return profile.ErrInvalid
+	}
+
 	if err := m.begin(f, es); err != nil {
 		return err
 	}
 
 	cur, ok := m.settings[ns]
-	if !ok {
-		cur = profile.DefaultIssuerSettings(ns)
+	if !ok || cur.IssuerURL != c.URL {
+		return profile.ErrConflict
 	}
 
 	c.Verified = slices.DeleteFunc(slices.Clone(c.Verified), func(id profile.KeyID) bool {

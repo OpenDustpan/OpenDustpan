@@ -93,7 +93,7 @@ func seedBackupIssuer(t *testing.T, s BackupStore, acme namespace.Namespace) *se
 	}
 
 	check := profile.CopyCheck{
-		At: at, OK: true, Steps: []profile.CopyStep{{Name: "jwks", OK: true, Detail: "read"}},
+		At: at, URL: set.IssuerURL, OK: true, Steps: []profile.CopyStep{{Name: "jwks", OK: true, Detail: "read"}},
 		Verified: []profile.KeyID{keys[0].ID},
 	}
 	if err = store.RecordCopyCheck(ctx, acme.Name, check, acme.Fence(), []audit.Entry{entry}); err != nil {
@@ -155,7 +155,7 @@ const templateKeys = 3
 func sameSettings(set *profile.IssuerSettings, seeded *seededIssuer) bool {
 	return set.Version == seeded.settings.Version && set.IssuerURL == seeded.settings.IssuerURL &&
 		set.IncludeActorName && len(set.SubjectTemplate) == templateKeys && set.CopyCheck != nil &&
-		set.CopyCheck.Holds(seeded.keys[0].ID)
+		set.CopyCheck.Holds(set.IssuerURL, seeded.keys[0].ID)
 }
 
 // checkRestoredKey checks that live holds the key want byte for byte.

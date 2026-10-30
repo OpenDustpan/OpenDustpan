@@ -35,11 +35,13 @@ type CopyStep struct {
 }
 
 // CopyCheck is the outcome of the last copy check of a namespace with an
-// issuerURL. Verified holds each key ID that a check found in the copied
-// JWKS and that the namespace still has: the server signs only with such a
-// key.
+// issuerURL. URL is the issuerURL that the check read: a check says nothing
+// about another address. Verified holds each key ID that a check found in the
+// copied JWKS and that the namespace still has: the server signs only with
+// such a key.
 type CopyCheck struct {
 	At       time.Time
+	URL      string
 	Steps    []CopyStep
 	Verified []KeyID
 	OK       bool
@@ -50,9 +52,10 @@ func (c *CopyCheck) AddStep(name, detail string, ok bool) {
 	c.Steps = append(c.Steps, CopyStep{Name: name, Detail: detail, OK: ok})
 }
 
-// Holds reports whether a check found the key id in the copy.
-func (c *CopyCheck) Holds(id KeyID) bool {
-	return c != nil && slices.Contains(c.Verified, id)
+// Holds reports whether a check of the address issuerURL found the key id in
+// the copy. A check of another address holds nothing.
+func (c *CopyCheck) Holds(issuerURL string, id KeyID) bool {
+	return c != nil && issuerURL != "" && c.URL == issuerURL && slices.Contains(c.Verified, id)
 }
 
 // IssuerSettings are the settings of the issuer of one namespace. Version 0
@@ -248,12 +251,15 @@ type IssuerSettingsStore interface {
 	GetIssuerSettings(ctx context.Context, ns namespace.Name) (IssuerSettings, error)
 	// PutIssuerSettings stores s when the stored Version is ifVersion, and
 	// returns the settings with the next Version. It keeps the stored copy
-	// check. ErrConflict for a stale version, ErrInvalid for settings that
-	// fail the rules.
+	// check when IssuerURL stays, and clears it in the same transaction when
+	// IssuerURL changes. ErrConflict for a stale version, ErrInvalid for
+	// settings that fail the rules.
 	PutIssuerSettings(
 		ctx context.Context, s IssuerSettings, ifVersion int64, f namespace.Fence, e []audit.Entry,
 	) (IssuerSettings, error)
 	// RecordCopyCheck stores the outcome of a copy check. It does not change
-	// Version. Verified keeps only IDs that the check lists.
+	// Version. Verified keeps only IDs that the check lists. ErrConflict when
+	// c.URL is not the stored issuerURL, also when a PATCH changed it after
+	// the check started. ErrInvalid when c.URL is empty.
 	RecordCopyCheck(ctx context.Context, ns namespace.Name, c CopyCheck, f namespace.Fence, e []audit.Entry) error
 }

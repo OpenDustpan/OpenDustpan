@@ -200,7 +200,7 @@ func (s *Service) copyBefore(
 
 	// Only this check counts: the list of an earlier check says that a key was
 	// once in a copy, and the promotion needs the key in the copy now.
-	return check.OK && check.Holds(next.ID), nil
+	return check.OK && check.Holds(set.IssuerURL, next.ID), nil
 }
 
 // recordCheck stores the outcome of a copy check with an audit entry. actor is

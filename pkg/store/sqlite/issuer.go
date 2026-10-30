@@ -287,9 +287,8 @@ func (i *Issuer) RecordCopyCheck(
 		return fmt.Errorf("%w: the fence names %q, the copy check names %q", profile.ErrInvalid, fence.Namespace, ns)
 	}
 
-	template, err := codec.EncodeSubjectTemplate(profile.DefaultSubjectTemplate())
-	if err != nil {
-		return err
+	if c.URL == "" {
+		return fmt.Errorf("%w: a copy check names the issuerURL that it read", profile.ErrInvalid)
 	}
 
 	i.store.mu.RLock()
@@ -318,11 +317,17 @@ func (i *Issuer) RecordCopyCheck(
 			return encErr
 		}
 
-		upErr := q.UpsertIssuerCopyCheck(ctx, db.UpsertIssuerCopyCheckParams{
-			NamespaceID: nsID, DefaultTemplate: template, CopyCheck: raw,
+		// The write names the URL that the check read: a PATCH of issuerURL
+		// that came between the read and this write leaves no check behind.
+		n, upErr := q.UpdateIssuerCopyCheck(ctx, db.UpdateIssuerCopyCheckParams{
+			NamespaceID: nsID, IssuerUrl: c.URL, CopyCheck: raw,
 		})
 		if upErr != nil {
 			return fmt.Errorf("store copy check: %w", upErr)
+		}
+
+		if n == 0 {
+			return fmt.Errorf("%w: the issuerURL is not %q", profile.ErrConflict, c.URL)
 		}
 
 		return nil

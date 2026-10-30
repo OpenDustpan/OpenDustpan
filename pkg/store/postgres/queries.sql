@@ -4595,7 +4595,8 @@ WHERE namespace_id = sqlc.arg(namespace_id);
 -- name: UpsertIssuerSettings :execrows
 -- Stores the settings at the version new_version when the stored version is
 -- the one before it. A namespace with no row has version 0. It keeps the
--- stored copy check.
+-- stored copy check when the issuer URL stays, and clears it when the URL
+-- changes: a check of one address says nothing about another.
 INSERT INTO issuer_settings (
     namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
     updated_by, copy_check
@@ -4606,19 +4607,17 @@ INSERT INTO issuer_settings (
 ON CONFLICT (namespace_id) DO UPDATE SET
     issuer_url = excluded.issuer_url, subject_template = excluded.subject_template,
     allow_block_subjects = excluded.allow_block_subjects, include_actor_name = excluded.include_actor_name,
-    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by
+    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by,
+    copy_check = CASE WHEN issuer_settings.issuer_url = excluded.issuer_url THEN issuer_settings.copy_check ELSE '' END
 WHERE issuer_settings.version = excluded.version - 1;
 
--- name: UpsertIssuerCopyCheck :exec
--- Stores the last copy check. It keeps the version, so a copy check never
--- changes the entity tag of the settings.
-INSERT INTO issuer_settings (
-    namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
-    updated_by, copy_check
-) VALUES (
-    sqlc.arg(namespace_id), '', sqlc.arg(default_template), true, false, 0, 0, '', sqlc.arg(copy_check)
-)
-ON CONFLICT (namespace_id) DO UPDATE SET copy_check = excluded.copy_check;
+-- name: UpdateIssuerCopyCheck :execrows
+-- Stores the last copy check when the issuer URL that it checked is the stored
+-- one. It keeps the version, so a copy check never changes the entity tag of
+-- the settings. No row, or another URL, writes nothing.
+UPDATE issuer_settings SET copy_check = sqlc.arg(copy_check)
+WHERE namespace_id = sqlc.arg(namespace_id) AND issuer_url = sqlc.arg(issuer_url);
+
 -- name: InsertTrustRule :execrows
 -- The caller checks the fence and the principal in the same transaction. A
 -- rule with a taken ID, or with a name that the namespace has, is not written.
