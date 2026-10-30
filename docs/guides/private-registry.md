@@ -1,11 +1,13 @@
-# Publish a provider to the private registry
+# Publish a provider or a module to the private registry
 
-This guide shows how a platform team publishes an OpenTofu provider to
-OpenDustpan, and how `tofu init` installs it. The registry holds the providers
-that a team builds itself. It does not copy providers from a public registry.
+This guide shows how a platform team publishes an OpenTofu provider or an
+OpenTofu module to OpenDustpan, and how `tofu init` installs it. The registry
+holds the providers and the modules that a team builds itself. It does not
+copy them from a public registry.
 
 Each version of a provider is signed. The server checks the signature when you
-publish, and OpenTofu checks it again when it installs the provider.
+publish, and OpenTofu checks it again when it installs the provider. A module
+has no signature: see [Publish a module](#publish-a-module).
 
 The paths of the API in this guide are under `/api/dustpan/v1`. See
 `docs/reference/registry-api.md` for the list of paths, the actions and the
@@ -203,6 +205,107 @@ the namespace, so remove it at once.
 A publish of a release that only a removed key signed is refused with 422,
 also when you published the same files before the removal.
 
+## Publish a module
+
+A module is one archive. The registry stores the archive as you send it, and
+`tofu init` downloads it from OpenDustpan and unpacks it.
+
+You need a token with the action `registry:publish`. A module has no
+signature and no signing key, so the namespace needs no key. OpenTofu has no
+signature for a module, and the server cannot see who built the archive. The
+check of the publisher is the token. The audit entry of the publish names the
+token and the SHA-256 of the archive.
+
+The archive is a zip file or a tar.gz file. The server reads the first bytes
+of the file to find the format, and not the name. Put the files of the module
+at the root of the archive, as they are in the module directory.
+
+The name of the module uses lowercase letters, digits and single dashes. The
+system is the target system, for example `aws`. It uses lowercase letters and
+digits only. The name of a namespace follows the rule for a provider.
+
+First upload the archive. This is the same route as for a provider:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @vpc.tar.gz \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/uploads
+```
+
+Then name the upload and the version. Send an `Idempotency-Key` header, so
+that a retry after a timeout is safe:
+
+```sh
+curl -X PUT -H "Authorization: token $DUSTPAN_TOKEN" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"upload": "<token>"}' \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/modules/vpc/aws/versions/1.0.0
+```
+
+The server makes the file name of the stored archive from the name, the
+system, the version and the format, for example `vpc-aws-1.0.0.tar.gz`. It
+does not take a name from the request.
+
+The server reads every entry of the archive before it stores the archive. It
+refuses the publish with 422 and the code `registry.module-archive-refused`
+when:
+
+- an entry has an absolute path or a segment `..`
+- a path has a character outside the allowed set. A path may hold ASCII
+  letters, digits and the symbols `-`, `_`, `.`, `+`, `@`, `=` and `,`. The
+  server refuses a space, a colon, a backslash, a control character and every
+  byte above 0x7f, so a name with a letter such as `é` is refused in all its
+  forms
+- a segment of a path ends with a dot, is longer than 255 bytes, or has the
+  name of a Windows device (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and
+  `LPT1` to `LPT9`, in any case and with any extension)
+- two entries have one path, with the case of the letters ignored
+- a symbolic link has an absolute target or points outside the archive
+- the target of a symbolic link passes through another symbolic link or ends at
+  one. This covers chains and loops of links
+- an entry is below a symbolic link
+- the archive holds a hard link, a device or another special file
+- the archive holds more than 20,000 entries. For a zip file the server reads
+  the count from the end of the file and refuses before it reads the directory
+- the entries are more than 1 GiB when unpacked. The server counts the bytes
+  that it reads, and it does not use the sizes in the headers.
+- the file is not a zip file and not a tar.gz file
+
+A tar.gz file from `git archive` has a pax global header. The server accepts
+it as metadata, and it does not use any path or link in it.
+
+The archive file is at most 64 MiB. A refused publish leaves nothing that
+OpenTofu can read, and the server removes the uploaded file.
+
+A published version never changes. Publish the same archive again and the
+answer is the same, with no second audit entry. Publish another archive for
+the same version and the server answers 409. Fix a mistake with a new version.
+
+To use the module, write its address with the host of the server and the
+namespace, and run `tofu init`:
+
+```hcl
+module "vpc" {
+  source  = "dustpan.example.com/acme/vpc/aws"
+  version = "~> 1.0"
+}
+```
+
+OpenTofu asks for the versions of the module, selects the highest version that
+fits, and downloads the archive from a signed address. The address is valid for
+15 minutes. The token for `tofu init` needs the action `registry:read`, as for
+a provider.
+
+List the modules of a namespace, and the versions of one module:
+
+```sh
+curl -H "Authorization: token $DUSTPAN_TOKEN" \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/modules
+curl -H "Authorization: token $DUSTPAN_TOKEN" \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/modules/vpc/aws/versions
+```
+
 ## What the registry refuses
 
 The server answers a request for a host other than the host of `--public-url`
@@ -213,13 +316,17 @@ compares the host exactly. It does not use a forwarded header. Without
 Every refusal of an authorization check writes an audit entry, as the other
 routes do. A publish and a key change write one entry each. The entry of a
 publish names the provider, the version, the fingerprint of the key and the
-hashes of the checksums file and the signature file.
+hashes of the checksums file and the signature file. The entry of a module
+publish names the module, the version and the hash of the archive.
 
 ## Limits
 
 | Limit | Value |
 | --- | --- |
 | One file | 512 MiB |
+| One module archive | 64 MiB |
+| One module archive when unpacked | 1 GiB |
+| Entries in one module archive | 20,000 |
 | All files of one release | 2 GiB |
 | Archives for one version | 64 |
 | Trusted keys for one namespace | 16 |
@@ -227,7 +334,8 @@ hashes of the checksums file and the signature file.
 
 ## Known limits of this release
 
-- The registry serves providers. It does not serve modules yet.
+- The registry serves modules that you upload. It does not read modules from
+  git tags yet.
 - A backup holds the records of the releases and the keys. It does not copy
   the files of the releases yet. Copy the blob store with your own tools until
   a backup does.

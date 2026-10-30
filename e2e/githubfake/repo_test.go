@@ -226,3 +226,53 @@ func TestMissingBlobIsNotFound(t *testing.T) {
 
 	wantStatus(t, a, http.StatusNotFound)
 }
+
+func TestContentsAboveTheLimitAnswerTooLarge(t *testing.T) {
+	t.Parallel()
+
+	f := githubfake.New(t, githubfake.Config{
+		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
+		User: githubfake.Account{ID: 0, Login: ""}, UserToken: userValue, ClassicToken: false,
+		Permissions: nil, ContentsLimit: 10, Key: nil, Now: nil, WebhookClient: nil,
+	})
+
+	files := map[string][]byte{"small": []byte("12345"), "large": []byte("12345678901")}
+	if _, err := f.AddRepo("acme/infra", files); err != nil {
+		t.Fatal(err)
+	}
+
+	c := newClient(t, f)
+
+	wantStatus(t, c.do(http.MethodGet, "/repos/acme/infra/contents/small?ref=main", f.UserToken(), ""), http.StatusOK)
+
+	a := c.do(http.MethodGet, "/repos/acme/infra/contents/large?ref=main", f.UserToken(), "")
+	wantStatus(t, a, http.StatusForbidden)
+
+	if !strings.Contains(string(a.body), `"code":"too_large"`) {
+		t.Fatalf("body = %s", a.body)
+	}
+}
+
+func TestRenamedRepositoryRedirects(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newFake(t)
+	c := newClient(t, f)
+
+	if err := f.RenameRepo("acme/infra", "acme/platform"); err != nil {
+		t.Fatal(err)
+	}
+
+	a := c.do(http.MethodGet, "/repos/acme/infra/contents/README.md?ref=main", f.UserToken(), "")
+	wantStatus(t, a, http.StatusMovedPermanently)
+
+	if got := a.header.Get("Location"); got != "/repos/acme/platform" {
+		t.Fatalf("Location = %q", got)
+	}
+
+	wantStatus(
+		t,
+		c.do(http.MethodGet, "/repos/acme/platform/contents/README.md?ref=main", f.UserToken(), ""),
+		http.StatusOK,
+	)
+}

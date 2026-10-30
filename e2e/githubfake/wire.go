@@ -82,3 +82,12 @@ type wireGQLResponse struct {
 	Data   *wireGQLData   `json:"data,omitempty"`
 	Errors []wireGQLError `json:"errors,omitempty"`
 }
+
+type wireErrorCode struct {
+	Code string `json:"code"`
+}
+
+type wireTooLarge struct {
+	Message string          `json:"message"`
+	Errors  []wireErrorCode `json:"errors"`
+}

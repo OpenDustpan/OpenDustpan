@@ -110,7 +110,7 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
-	return specs
+	return append(specs, s.issuerRotateSchedule()...)
 }
 
 // jobKinds returns the runner kinds of the jobs that s runs. Each step runs
@@ -142,7 +142,7 @@ func (s *Server) jobKinds() []durable.KindSpec {
 		kinds = append(kinds, s.reconcileKind())
 	}
 
-	return kinds
+	return append(kinds, s.issuerRotateKindSpec()...)
 }
 
 // reconcileKind returns the runner kind of the reconcile schedule. Its step

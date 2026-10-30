@@ -4319,16 +4319,26 @@ VALUES (
 ON CONFLICT (log_id, seq) DO NOTHING;
 
 -- name: GetJobLogChunk :one
-SELECT c.sha256, c.size, c.confirmed
+SELECT c.sha256, c.size, c.confirmed, c.blob_key
 FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.seq = sqlc.arg(seq);
 
 -- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
-SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5)
+SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5),
+    blob_key = sqlc.arg(blob_key)
 WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
   AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListJobLogChunkKeys :many
+-- The blob key of each confirmed chunk of one log version, in the order of the
+-- chunk numbers.
+SELECT c.seq, c.blob_key
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.confirmed = 1
+ORDER BY c.seq;
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is
@@ -4349,3 +4359,242 @@ WHERE id = sqlc.arg(id);
 SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
+
+-- name: CreateStoreCheck :execrows
+INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
+VALUES (?, ?, 'running', ?, ?, 0, '', '')
+ON CONFLICT DO NOTHING;
+
+-- name: GetStoreCheck :one
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+WHERE id = ?;
+
+-- name: ListStoreChecks :many
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishStoreCheck :execrows
+-- Moves one running check to its end state. A finished check matches no
+-- row, so a retry reports no change.
+UPDATE store_checks
+SET state = ?, error = ?, report = ?, ended_at_ms = ?
+WHERE id = ? AND state = 'running';
+
+-- name: CountStoreChecksEndedSince :one
+-- The checks of one target that ended after the given time. A running check
+-- has no end time (0) and is not counted.
+SELECT count(*)
+FROM store_checks
+WHERE target = ? AND state <> 'running' AND ended_at_ms > ?;
+
+-- name: FailEndedStoreChecks :execrows
+-- Marks failed each running check whose operation ended failed or canceled
+-- without a finish write. The error text is a fixed text of the caller: the
+-- last error of the operation never reaches the row.
+UPDATE store_checks
+SET state = 'failed',
+    error = sqlc.arg('error'),
+    ended_at_ms = sqlc.arg('ended_at_ms')
+WHERE state = 'running'
+  AND EXISTS (
+      SELECT 1 FROM durable_operations AS o
+      WHERE o.start_key = sqlc.arg('prefix') || store_checks.id
+        AND o.kind = sqlc.arg('kind')
+        AND o.state IN ('failed', 'canceled'));
+
+-- name: InsertCatalogBlueprint :execrows
+-- The caller checks the fence in the same transaction. A blueprint of the same
+-- name in the namespace is not written.
+INSERT INTO catalog_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), 1, sqlc.arg(draft_json), sqlc.arg(draft_updated_at_ms)
+)
+ON CONFLICT (namespace_id, name) DO NOTHING;
+
+-- name: UpdateCatalogBlueprintDraft :execrows
+-- The draft changes only at the version that the caller read.
+UPDATE catalog_blueprints
+SET draft_version = draft_version + 1, draft_json = sqlc.arg(draft_json), draft_updated_at_ms = sqlc.arg(draft_updated_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprints.name = sqlc.arg(name) AND draft_version = sqlc.arg(draft_version);
+
+-- name: CountCatalogBlueprints :one
+SELECT COUNT(*) FROM catalog_blueprints
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetCatalogBlueprintDraft :one
+SELECT b.draft_version, b.draft_json
+FROM catalog_blueprints AS b
+JOIN namespaces AS n ON n.id = b.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND b.name = sqlc.arg(name);
+
+-- name: GetCatalogBlueprintVersionOfDraft :one
+-- The number of the version that published a draft version. No row means the
+-- draft version has no version.
+SELECT v.number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.draft_version = sqlc.arg(draft_version);
+
+-- name: LastCatalogBlueprintVersion :one
+-- The last published number of a blueprint, 0 for none. The caller holds the
+-- write lock of the namespace, so the next number is exact.
+SELECT CAST(COALESCE(MAX(v.number), 0) AS BIGINT) AS number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name);
+
+-- name: InsertCatalogBlueprintVersion :exec
+INSERT INTO catalog_blueprint_versions (
+    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), sqlc.arg(number), sqlc.arg(draft_version), sqlc.arg(document_json), sqlc.arg(expr_version),
+    sqlc.arg(published_by), sqlc.arg(published_at_ms), 0
+);
+
+-- name: GetCatalogBlueprintVersion :one
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.number = sqlc.arg(number);
+
+-- name: ListCatalogBlueprintLatest :many
+-- The newest published version of each blueprint of a namespace, by name.
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+  AND v.number = (
+      SELECT MAX(w.number) FROM catalog_blueprint_versions AS w
+      WHERE w.namespace_id = v.namespace_id AND w.name = v.name
+  )
+ORDER BY v.name;
+
+-- name: RetireCatalogBlueprintVersion :execrows
+-- A retire of a retired version matches the row and changes nothing.
+UPDATE catalog_blueprint_versions
+SET retired = 1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: SetCatalogBlueprintExprVersion :execrows
+UPDATE catalog_blueprint_versions
+SET expr_version = sqlc.arg(expr_version)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: GetNamespaceByID :one
+-- The namespace with the stable ID id.
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+FROM namespaces
+WHERE id = sqlc.arg(id);
+
+-- name: ListIssuerKeys :many
+-- Every key of the issuer of a namespace, also the deleted keys, oldest first.
+SELECT id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+FROM issuer_keys
+WHERE namespace_id = sqlc.arg(namespace_id)
+ORDER BY created_at_ms, id;
+
+-- name: InsertIssuerKey :exec
+INSERT INTO issuer_keys (
+    namespace_id, id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(state), sqlc.arg(public_key), sqlc.arg(sealed),
+    sqlc.arg(created_at_ms), sqlc.arg(activated_at_ms), sqlc.arg(retired_at_ms), sqlc.arg(deleted_at_ms)
+);
+
+-- name: UpdateIssuerKey :execrows
+-- The new state, times and sealed key of one key. The caller checked the move.
+UPDATE issuer_keys
+SET state = sqlc.arg(state), sealed = sqlc.arg(sealed), activated_at_ms = sqlc.arg(activated_at_ms),
+    retired_at_ms = sqlc.arg(retired_at_ms), deleted_at_ms = sqlc.arg(deleted_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND state = sqlc.arg(from_state);
+
+-- name: GetIssuerSettings :one
+SELECT issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms, updated_by,
+    copy_check
+FROM issuer_settings
+WHERE namespace_id = sqlc.arg(namespace_id);
+
+-- name: UpsertIssuerSettings :execrows
+-- Stores the settings at the version new_version when the stored version is
+-- the one before it. A namespace with no row has version 0. It keeps the
+-- stored copy check when the issuer URL stays, and clears it when the URL
+-- changes: a check of one address says nothing about another.
+INSERT INTO issuer_settings (
+    namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
+    updated_by, copy_check
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(issuer_url), sqlc.arg(subject_template), sqlc.arg(allow_block_subjects),
+    sqlc.arg(include_actor_name), sqlc.arg(new_version), sqlc.arg(updated_at_ms), sqlc.arg(updated_by), ''
+)
+ON CONFLICT (namespace_id) DO UPDATE SET
+    issuer_url = excluded.issuer_url, subject_template = excluded.subject_template,
+    allow_block_subjects = excluded.allow_block_subjects, include_actor_name = excluded.include_actor_name,
+    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by,
+    copy_check = CASE WHEN issuer_settings.issuer_url = excluded.issuer_url THEN issuer_settings.copy_check ELSE '' END
+WHERE issuer_settings.version = excluded.version - 1;
+
+-- name: ListIssuerURLs :many
+-- Every issuer URL that a namespace sets, ordered. The server compares them
+-- with the issuer of a trust rule.
+SELECT DISTINCT issuer_url FROM issuer_settings WHERE issuer_url <> '' ORDER BY issuer_url;
+
+-- name: UpdateIssuerCopyCheck :execrows
+-- Stores the last copy check when the issuer URL that it checked is the stored
+-- one. It keeps the version, so a copy check never changes the entity tag of
+-- the settings. No row, or another URL, writes nothing.
+UPDATE issuer_settings SET copy_check = sqlc.arg(copy_check)
+WHERE namespace_id = sqlc.arg(namespace_id) AND issuer_url = sqlc.arg(issuer_url);
+
+-- name: InsertTrustRule :execrows
+-- The caller checks the fence and the principal in the same transaction. A
+-- rule with a taken ID, or with a name that the namespace has, is not written.
+INSERT INTO trust_rules (
+    id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+)
+VALUES (
+    sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(name), sqlc.arg(issuer), sqlc.arg(audience),
+    sqlc.arg(key_source), sqlc.arg(static_keys), sqlc.arg(conditions_json), sqlc.arg(principal_id),
+    sqlc.arg(created_by), sqlc.arg(created_at_ms)
+)
+ON CONFLICT DO NOTHING;
+
+-- name: CountTrustRulesInNamespace :one
+SELECT COUNT(*) FROM trust_rules WHERE namespace = sqlc.arg(namespace);
+
+-- name: GetTrustRulePrincipal :one
+-- Reads the principal of a new rule in the transaction of the create, so a
+-- delete of the principal cannot pass between the check and the insert.
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms
+FROM principals
+WHERE id = sqlc.arg(id);
+
+-- name: GetTrustRule :one
+-- The namespace is part of the key: a rule of another namespace reads as no
+-- row.
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+-- name: ListTrustRulesOfNamespace :many
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace)
+ORDER BY name, id;
+
+-- name: DeleteTrustRule :execrows
+DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+

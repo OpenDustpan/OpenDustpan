@@ -90,6 +90,9 @@ type Store struct {
 	// logger records the warnings of the store. It defaults to a discard
 	// handler; pass WithLogger to record them.
 	logger *slog.Logger
+	// tracer, when set, sees every statement, batch, prepare and copy of the
+	// pool. Nil in production.
+	tracer pgx.QueryTracer
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -129,6 +132,16 @@ func WithInstallationKind(kind installation.Kind) Option {
 // the server stays the one process that changes the schema.
 func WithoutMigrate() Option {
 	return func(s *Store) { s.noMigrate = true }
+}
+
+// WithQueryTracer makes the pool report each statement, batch, prepare and
+// copy to tracer. The tracer may also implement pgx.BatchTracer,
+// pgx.PrepareTracer and pgx.CopyFromTracer, and then it sees those too. A
+// benchmark of database round trips uses it. Without it, the pool has no
+// tracer. The pool pings an idle connection with the protocol layer, which the
+// tracer does not see.
+func WithQueryTracer(tracer pgx.QueryTracer) Option {
+	return func(s *Store) { s.tracer = tracer }
 }
 
 var (
@@ -173,6 +186,22 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		return nil
 	}
 
+	s := &Store{
+		pool: nil, queries: nil, stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
+		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
+		beforeLockDelete: nil, stateLockWait: 0,
+		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
+		tracer: nil,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	if s.tracer != nil {
+		cfg.ConnConfig.Tracer = s.tracer
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
@@ -184,17 +213,9 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
 	}
 
-	s := &Store{
-		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
-		beforeLockDelete: nil, stateLockWait: 0,
-		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
-	}
+	s.pool = pool
+	s.queries = db.New(pool)
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
-
-	for _, opt := range opts {
-		opt(s)
-	}
 
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
