@@ -293,6 +293,21 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "placement_rules",
+			OrderBy: []string{portColNamespace, "position", "id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "position", Kind: KindInteger},
+				{Name: portColTool, Kind: KindText},
+				{Name: "project", Kind: KindText},
+				{Name: "stack", Kind: KindText},
+				{Name: "collection_key", Kind: KindText},
+				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
 			Table: "object_context",
 			OrderBy: []string{
 				portColNamespaceID,

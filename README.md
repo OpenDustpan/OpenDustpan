@@ -355,6 +355,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Placement rules API](docs/reference/placement-rules-api.md): the rules that
+  choose the collection of a new stack, their patterns and their routes.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the

@@ -2005,6 +2005,40 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 	return result.RowsAffected(), nil
 }
 
+const createPlacementRule = `-- name: CreatePlacementRule :exec
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type CreatePlacementRuleParams struct {
+	ID            string
+	Namespace     string
+	Position      int32
+	Tool          string
+	Project       string
+	Stack         string
+	CollectionKey string
+	CreatedBy     string
+	CreatedAtMs   int64
+}
+
+// The caller checks the fence in the same transaction and renumbers the list
+// after the insert.
+func (q *Queries) CreatePlacementRule(ctx context.Context, arg CreatePlacementRuleParams) error {
+	_, err := q.db.Exec(ctx, createPlacementRule,
+		arg.ID,
+		arg.Namespace,
+		arg.Position,
+		arg.Tool,
+		arg.Project,
+		arg.Stack,
+		arg.CollectionKey,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
 const createPrincipal = `-- name: CreatePrincipal :execrows
 INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -3109,6 +3143,39 @@ DELETE FROM person_preferences WHERE principal_id = $1
 
 func (q *Queries) DeletePersonPreferences(ctx context.Context, principalID string) error {
 	_, err := q.db.Exec(ctx, deletePersonPreferences, principalID)
+	return err
+}
+
+const deletePlacementRule = `-- name: DeletePlacementRule :execrows
+DELETE FROM placement_rules
+WHERE namespace = $1 AND id = $2
+`
+
+type DeletePlacementRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) DeletePlacementRule(ctx context.Context, arg DeletePlacementRuleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePlacementRule, arg.Namespace, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deletePlacementRulesOfCollection = `-- name: DeletePlacementRulesOfCollection :exec
+DELETE FROM placement_rules
+WHERE namespace = $1 AND collection_key = $2
+`
+
+type DeletePlacementRulesOfCollectionParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+func (q *Queries) DeletePlacementRulesOfCollection(ctx context.Context, arg DeletePlacementRulesOfCollectionParams) error {
+	_, err := q.db.Exec(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
 	return err
 }
 
@@ -6298,6 +6365,47 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	row := q.db.QueryRow(ctx, getPersonPreferences, id)
 	var i GetPersonPreferencesRow
 	err := row.Scan(&i.ID, &i.Document, &i.UpdatedAtMs)
+	return i, err
+}
+
+const getPlacementRule = `-- name: GetPlacementRule :one
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = $1 AND r.id = $2
+`
+
+type GetPlacementRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetPlacementRuleRow struct {
+	ID             string
+	Namespace      string
+	Position       int32
+	Tool           string
+	Project        string
+	Stack          string
+	CollectionName string
+	CreatedBy      string
+	CreatedAtMs    int64
+}
+
+func (q *Queries) GetPlacementRule(ctx context.Context, arg GetPlacementRuleParams) (GetPlacementRuleRow, error) {
+	row := q.db.QueryRow(ctx, getPlacementRule, arg.Namespace, arg.ID)
+	var i GetPlacementRuleRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Position,
+		&i.Tool,
+		&i.Project,
+		&i.Stack,
+		&i.CollectionName,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+	)
 	return i, err
 }
 
@@ -12605,6 +12713,129 @@ func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int32) ([]ListOrph
 	return items, nil
 }
 
+const listPlacementRuleIDs = `-- name: ListPlacementRuleIDs :many
+SELECT id
+FROM placement_rules
+WHERE namespace = $1
+ORDER BY position, id
+`
+
+// The IDs of the rules of a namespace in list order.
+func (q *Queries) ListPlacementRuleIDs(ctx context.Context, namespace string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listPlacementRuleIDs, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlacementRules = `-- name: ListPlacementRules :many
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = $1
+ORDER BY r.position, r.id
+`
+
+type ListPlacementRulesRow struct {
+	ID             string
+	Namespace      string
+	Position       int32
+	Tool           string
+	Project        string
+	Stack          string
+	CollectionName string
+	CreatedBy      string
+	CreatedAtMs    int64
+}
+
+func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]ListPlacementRulesRow, error) {
+	rows, err := q.db.Query(ctx, listPlacementRules, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPlacementRulesRow
+	for rows.Next() {
+		var i ListPlacementRulesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Position,
+			&i.Tool,
+			&i.Project,
+			&i.Stack,
+			&i.CollectionName,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlacementRulesOfCollection = `-- name: ListPlacementRulesOfCollection :many
+SELECT id, tool, project, stack
+FROM placement_rules
+WHERE namespace = $1 AND collection_key = $2
+ORDER BY position, id
+`
+
+type ListPlacementRulesOfCollectionParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+type ListPlacementRulesOfCollectionRow struct {
+	ID      string
+	Tool    string
+	Project string
+	Stack   string
+}
+
+// The rules that name one collection, for the audit entry of its delete.
+func (q *Queries) ListPlacementRulesOfCollection(ctx context.Context, arg ListPlacementRulesOfCollectionParams) ([]ListPlacementRulesOfCollectionRow, error) {
+	rows, err := q.db.Query(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPlacementRulesOfCollectionRow
+	for rows.Next() {
+		var i ListPlacementRulesOfCollectionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Tool,
+			&i.Project,
+			&i.Stack,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -16785,6 +17016,23 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 	return result.RowsAffected(), nil
 }
 
+const setPlacementRulePosition = `-- name: SetPlacementRulePosition :exec
+UPDATE placement_rules
+SET position = $1
+WHERE namespace = $2 AND id = $3
+`
+
+type SetPlacementRulePositionParams struct {
+	Position  int32
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) SetPlacementRulePosition(ctx context.Context, arg SetPlacementRulePositionParams) error {
+	_, err := q.db.Exec(ctx, setPlacementRulePosition, arg.Position, arg.Namespace, arg.ID)
+	return err
+}
+
 const setRestoreAuditEvents = `-- name: SetRestoreAuditEvents :execrows
 UPDATE restores
 SET audit_events = $1
@@ -17738,6 +17986,36 @@ func (q *Queries) UpdateNotificationSink(ctx context.Context, arg UpdateNotifica
 		arg.ID,
 		arg.Version,
 		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updatePlacementRuleContent = `-- name: UpdatePlacementRuleContent :execrows
+UPDATE placement_rules
+SET tool = $1, project = $2, stack = $3, collection_key = $4
+WHERE namespace = $5 AND id = $6
+`
+
+type UpdatePlacementRuleContentParams struct {
+	Tool          string
+	Project       string
+	Stack         string
+	CollectionKey string
+	Namespace     string
+	ID            string
+}
+
+func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlacementRuleContentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePlacementRuleContent,
+		arg.Tool,
+		arg.Project,
+		arg.Stack,
+		arg.CollectionKey,
+		arg.Namespace,
+		arg.ID,
 	)
 	if err != nil {
 		return 0, err

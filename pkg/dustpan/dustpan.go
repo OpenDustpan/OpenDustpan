@@ -724,6 +724,9 @@ type services struct {
 	// collections is the collection service (ADR 51), or nil when the store
 	// holds no collections. NewServer sets it after newServices.
 	collections *collection.Service
+	// placements is the placement rule service, or nil when the store holds
+	// no placement rules. NewServer sets it after newServices.
+	placements *collection.PlacementService
 	// gates checks the writes of state against the access limits and the
 	// gates of state.write, or is nil when the store keeps no gates.
 	gates *gateService
@@ -867,6 +870,15 @@ func NewServer(opts ...Option) (*Server, error) {
 	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
 	if err != nil {
 		return nil, err
+	}
+
+	// A custom store without placement rules gets no service, so its placement
+	// routes are not served and the rest of the API works as before.
+	if store, ok := cfg.namespaceStore.(collection.PlacementStore); ok {
+		svc.placements, err = newPlacementService(cfg, store)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	backups, err := newBackupService(cfg, svc)
@@ -2771,6 +2783,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Collections:   svc.collections,
+		Placements:    svc.placements,
 		Locks:         svc.manualLocks,
 		Moves:         moves,
 		Authenticator: cfg.authenticator,
@@ -3162,6 +3175,21 @@ func newCollectionService(cfg *settings) (*collection.Service, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("collection service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// newPlacementService builds the placement rule service on the namespace store
+// and its placement port.
+func newPlacementService(cfg *settings, store collection.PlacementStore) (*collection.PlacementService, error) {
+	svc, err := collection.NewPlacementService(collection.PlacementConfig{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("placement service: %w", err)
 	}
 
 	return svc, nil
