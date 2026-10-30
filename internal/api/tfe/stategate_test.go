@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -339,6 +340,78 @@ func TestStateGuardThatCannotDecideRefuses(t *testing.T) {
 				t.Fatalf("body %q shows the internal error text", rec.Body)
 			}
 		})
+	}
+}
+
+// storeFaultCase is a guard error that the store causes, the status that the
+// route answers and the text that the body holds.
+type storeFaultCase struct {
+	name   string
+	err    error
+	status int
+	want   []string
+}
+
+// storeFaultCases returns the guard errors that the store causes. The guard
+// wraps a failed decision record in a refusal, so each cause comes in both
+// forms.
+func storeFaultCases() []storeFaultCase {
+	const unavailable = http.StatusServiceUnavailable
+
+	below := &schema.MinimumError{SchemaMinimum: "v1.1.0", BinaryVersion: "v1.0.0"}
+	belowText := []string{"v1.0.0", "v1.1.0", "schema.binary-below-minimum"}
+	lostText := []string{"database unavailable"}
+	wrapped := func(cause error) error {
+		return &gate.RefusalError{
+			Err:      fmt.Errorf("%w: write the decision record: %w", gate.ErrUnavailable, cause),
+			Record:   "gdr-1",
+			Messages: []string{"The decision record could not be written, so the write is refused."},
+		}
+	}
+
+	return []storeFaultCase{
+		{"minimum error", below, unavailable, belowText},
+		{"minimum error in a refusal", wrapped(below), unavailable, belowText},
+		{"store lost", namespace.ErrUnavailable, unavailable, lostText},
+		{"store lost in a refusal", wrapped(namespace.ErrUnavailable), unavailable, lostText},
+		{"other failure in a refusal", wrapped(errGuardDown), http.StatusForbidden, []string{"gate.unavailable"}},
+	}
+}
+
+// checkStoreFault runs one case on one route and checks the status, the text
+// and that no write reached the workspace port.
+func checkStoreFault(t *testing.T, tt storeFaultCase, rt guardRoute) {
+	t.Helper()
+
+	ws := newWriteCounter()
+
+	rec := serveGuarded(t, newGuardedHandler(t, ws, newFakeGuard(tt.err)), rt)
+	if rec.Code != tt.status || ws.count() != 0 {
+		t.Fatalf("%s answers %d with %d writes, want %d and none: %s",
+			rt.name, rec.Code, ws.count(), tt.status, rec.Body)
+	}
+
+	for _, want := range tt.want {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("body lacks %q: %s", want, rec.Body)
+		}
+	}
+
+	if strings.Contains(rec.Body.String(), errGuardDown.Error()) {
+		t.Errorf("body %q shows the internal error text", rec.Body)
+	}
+}
+
+func TestStateGuardStoreFaultAnswers503(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range storeFaultCases() {
+		for _, rt := range guardRoutes() {
+			t.Run(tt.name+" on "+rt.name, func(t *testing.T) {
+				t.Parallel()
+				checkStoreFault(t, tt, rt)
+			})
+		}
 	}
 }
 
