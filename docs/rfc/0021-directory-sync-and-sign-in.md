@@ -1134,6 +1134,66 @@ Each question has a yes or no answer. "Yes" accepts the recommendation.
 | O11 | Can the project add `github.com/russellhaering/gosaml2`, `goxmldsig` (Apache-2.0) and `github.com/beevik/etree` (BSD-2-Clause) for SAML? | Yes |
 | O12 | Does a bootstrap admin token stay outside "require MFA" (P7)? | Yes |
 
+**Precedent and the cost of the alternative, for each question.** The
+subsection of each item gives the full text. "No" means that the owner refuses
+the recommendation.
+
+- **O1, passkey only.** Precedent: GitLab and Keycloak have local passwords
+  (not fetched). AWS accepts passkeys as a factor (fetched). No product has a
+  passkey as the only local sign-in. Cost of "no": a password store, a reset
+  flow, a hash function and password rules (PCI DSS 8.3.6, 12 characters, not
+  fetched) come into milestone 4.
+- **O2, a built-in factor for a fresh step after plain OAuth 2.0 or a trusted
+  header.** Precedent: GitHub sudo mode accepts a passkey, a security key or
+  TOTP for a sensitive action (fetched). OAuth 2.0 and the signed IAP header
+  carry no authentication time (fetched). Cost of "no": in an installation
+  with these methods, no person can create a token, reveal a secret, approve
+  a destroy or change a weaker setting.
+- **O3, TLS for LDAP and SMTP.** Precedent: GitLab offers STARTTLS and
+  implicit TLS for SMTP (fetched), and it also accepts a relay with no TLS
+  (not fetched). Cost of "no": the LDAP passwords of persons and the SMTP
+  password cross the network in clear, for an operator who picks that mode.
+- **O4, SP-started SAML only.** Precedent: GitLab and Keycloak accept a
+  sign-in that the identity provider starts (not fetched). Cost of "no": a
+  second sign-in path with no `InResponseTo` binding, which an attacker can
+  use for a login CSRF. The portal tile works with a bookmark URL in both
+  cases.
+- **O5, IP lists on every credential.** Precedent: GitHub covers personal,
+  OAuth and app tokens and SSH keys (fetched). GitLab covers the UI, the API,
+  access tokens, service accounts and deploy tokens (fetched). Cost of "no":
+  a stolen session cookie, SCIM token or runner token works from any address.
+- **O6, the installation IP list on break-glass accounts.** Precedent: GitLab
+  and HCP Terraform exempt their top role (administrators, organization
+  owners) from IP lists (fetched). No precedent exempts an emergency account.
+  Cost of "no": the account with the most rights has no network limit. Cost
+  of "yes": a break-glass person outside the list uses the host recovery.
+- **O7, SSH signatures for mode 2.** Precedent: Vault uses a one-time pad or a
+  PGP key for `generate-root` (fetched). No product signs a recovery request.
+  Cost of "no": raw Ed25519 needs a new signing tool and excludes hardware
+  keys, and minisign adds `golang.org/x/crypto/blake2b`.
+- **O8, a mode change after the first boot.** Precedent: Keycloak makes a new
+  bootstrap administrator from the host at any time (fetched). Vault rekeys
+  only with a quorum of the old keys (not fetched). Cost of "no": a lost or
+  leaked operator key forces a new installation or a restore.
+- **O9, go-webauthn.** Precedent: no product writes its own WebAuthn verifier
+  in the sources that the research read. Cost of "no": the project writes
+  CBOR, COSE and attestation parsing itself, with no outside review. Passkeys,
+  WebAuthn MFA and the break-glass accounts wait for that code.
+- **O10, go-ldap.** Precedent: the module is the LDAP client of the Go
+  ecosystem in the research (fetched: MIT, v3.4.15, no OSV entry). Cost of
+  "no": the project writes the LDAP protocol (ASN.1 BER) itself, or LDAP
+  waits.
+- **O11, gosaml2.** Precedent: both Go SAML libraries had signature bypass
+  bugs (OSV, fetched). gosaml2 had releases in 2026, and crewjam/saml had none
+  since April 2025. Cost of "no": crewjam/saml with older releases, or the
+  project writes XML signature checks itself, which is the part with the
+  most bypass bugs.
+- **O12, no MFA for the bootstrap token.** Precedent: Vault puts no MFA on a
+  root token (fetched). AWS requires MFA for the root user of a console
+  within 14 days (fetched). Cost of "no": a bearer token from the
+  environment needs a second factor that the token cannot carry, so the
+  first sign-in of a new installation needs a new flow.
+
 The PM decisions of this proposal, each with its precedent: the LDAP check at
 sign-in and the hourly sync (P2), the CAS design (P4), the OAuth 2.0 groups
 claim (P5), the two trusted-header modes and the groups header (P6), the
