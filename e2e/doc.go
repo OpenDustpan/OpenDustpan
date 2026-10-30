@@ -49,6 +49,15 @@
 // TestHighAvailability uses it (make e2e-ha). A test that stops the server to
 // write to the database stops and starts every instance.
 //
+// The directory contract holds one file for each tested CLI version: the routes
+// that the CLI used, the statuses it got and the fields that every answer had.
+// The suite fails when a version with a file loses one of them. It also writes
+// contract.md to the report directory, which lists what a version with no file
+// (for example a new "latest") reads that the newest file of the tool does not
+// have. To write the files of the versions that ran, run the whole suite with
+// E2E_CONTRACT_UPDATE=1 and commit the result. A file shows what the server
+// sent when the CLI worked. It does not show which fields the CLI reads.
+//
 // Environment variables:
 //
 //	E2E_PULUMI_VERSIONS  comma-separated versions, or "latest" (default: see Pulumi)
@@ -57,6 +66,8 @@
 //	                     plus postgres when DUSTPAN_TEST_POSTGRES_URL is set)
 //	DUSTPAN_TEST_POSTGRES_URL  PostgreSQL URL for the postgres store; each run gets its own
 //	                           schema (default: postgres runs are skipped)
+//	E2E_CONTRACT_UPDATE  1 writes the files in contract for the versions that ran,
+//	                     instead of checking them (run the whole suite)
 //	E2E_BLOBS            live blob store of every run: fs (default, a directory) or
 //	                     s3 (an S3-compatible bucket with a unique prefix per run)
 //	DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY,

@@ -1,0 +1,277 @@
+{
+  "tool": "pulumi",
+  "version": "3.200.0",
+  "routes": [
+    {
+      "route": "DELETE /api/stacks/{namespace}/{project}/{stack}",
+      "statuses": [
+        204,
+        400
+      ]
+    },
+    {
+      "route": "GET /api/capabilities",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "capabilities",
+        "capabilities.[].capability"
+      ]
+    },
+    {
+      "route": "GET /api/stacks/{namespace}/{project}/{stack}",
+      "statuses": [
+        200,
+        404
+      ],
+      "responseKeys": [
+        "activeUpdate",
+        "id",
+        "orgName",
+        "projectName",
+        "stackName",
+        "tags",
+        "tags.pulumi:project",
+        "tags.pulumi:runtime",
+        "version"
+      ]
+    },
+    {
+      "route": "GET /api/stacks/{namespace}/{project}/{stack}/export",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "deployment",
+        "version"
+      ]
+    },
+    {
+      "route": "GET /api/stacks/{namespace}/{project}/{stack}/export/{version}",
+      "statuses": [
+        200,
+        404
+      ]
+    },
+    {
+      "route": "GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "events",
+        "status"
+      ]
+    },
+    {
+      "route": "GET /api/stacks/{namespace}/{project}/{stack}/updates",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "updates"
+      ]
+    },
+    {
+      "route": "GET /api/user",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "expiresAt",
+        "githubLogin",
+        "name",
+        "organizations",
+        "organizations.[].avatarUrl",
+        "organizations.[].githubLogin",
+        "organizations.[].name",
+        "temporaryAdministrator"
+      ]
+    },
+    {
+      "route": "GET /api/user/organizations/default",
+      "statuses": [
+        200,
+        404
+      ],
+      "responseKeys": [
+        "GitHubLogin",
+        "Messages"
+      ]
+    },
+    {
+      "route": "GET /api/user/stacks",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "continuationToken",
+        "stacks"
+      ]
+    },
+    {
+      "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/tags",
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint",
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointdelta",
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim",
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}",
+      "statuses": [
+        200,
+        404
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/batch-decrypt",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "plaintexts"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/batch-encrypt",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "ciphertexts"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/decrypt",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "plaintext"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/decrypt/log-batch-decryption",
+      "statuses": [
+        204
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/decrypt/log-decryption",
+      "statuses": [
+        204
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/destroy",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "updateID"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/encrypt",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "ciphertext"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/import",
+      "statuses": [
+        200,
+        409
+      ],
+      "responseKeys": [
+        "updateId"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/preview",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "updateID"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/refresh",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "updateID"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/rename",
+      "statuses": [
+        200,
+        409
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/update",
+      "statuses": [
+        200
+      ],
+      "responseKeys": [
+        "updateID"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}",
+      "statuses": [
+        200,
+        409
+      ],
+      "responseKeys": [
+        "journalVersion",
+        "token",
+        "tokenExpiration",
+        "version"
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/cancel",
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
+      "statuses": [
+        200
+      ]
+    }
+  ]
+}
