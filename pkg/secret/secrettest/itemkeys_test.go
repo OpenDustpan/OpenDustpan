@@ -88,7 +88,7 @@ func (t memItemKeyTx) CreateItemKey(_ context.Context, k secret.ItemKey) (secret
 	}
 
 	if b := k.Blob; b.Version < 1 || b.Version > secret.MaxItemKeyVersion || b.Size < 1 ||
-		b.Size > secret.MaxWrappedItemKeyBytes {
+		b.Size > secret.MaxWrappedItemKeyBytes || !secret.ValidItemKeyAttempt(b.Attempt) {
 		return secret.ItemKey{}, secret.ErrInvalidItemRef
 	}
 

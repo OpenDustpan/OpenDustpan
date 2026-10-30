@@ -2,12 +2,12 @@ package secret
 
 import (
 	"context"
-	"crypto/md5" //nolint:gosec // Integrity checksum of the manifest, not security: the AEAD tag authenticates the blob.
 	"errors"
 	"fmt"
 	"io"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -164,8 +164,11 @@ func (s *ItemKeySealer) OpenContent(
 
 // openItemKey returns the raw item key of ref. The caller clears it. It reads
 // the record first and returns ErrShredded for a shredded record and
-// ErrKeyNotFound for no record or no blob. It reads only the blob version that
-// the record names. A key that does not unwrap for ref gives ErrDecrypt.
+// ErrKeyNotFound for no record or no blob. It reads only the blob key that the
+// record names, with its version and its attempt part, and it compares the
+// size and the MD5 of the blob with the record before it unwraps the key. A
+// blob that does not match gives ErrItemKeyBlobMismatch. A key that does not
+// unwrap for ref gives ErrDecrypt.
 func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, error) {
 	if err := checkRef(ref); err != nil {
 		return nil, err
@@ -199,14 +202,17 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, e
 		return nil, fmt.Errorf("item key of %s: %w", ref, err)
 	}
 
-	// The record names the blob version. A blob of another version, for
-	// example a stray or planted later version, is never read.
-	blobKey, err := s.blobs.Key(ns.ID, rec.ID, rec.Blob.Version)
+	// The record names the blob version and the attempt part. A blob of
+	// another version or another attempt, for example a stray or planted
+	// blob, is never read.
+	blobKey, err := s.blobs.Key(ns.ID, rec.ID, rec.Blob.Version, rec.Blob.Attempt)
 	if err != nil {
 		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
 
-	wrapped, err := s.blobs.Get(ctx, ns.ID, blobKey)
+	// Get compares the size and the MD5 of the blob with the record before it
+	// returns the bytes, so a replaced blob never reaches the unwrap.
+	wrapped, err := s.blobs.Get(ctx, ns.ID, blobKey, rec.Blob)
 	if err != nil {
 		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
@@ -235,7 +241,10 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 
 	id := NewItemKeyID()
 
-	blobKey, err := s.blobs.Key(ns.ID, id, itemKeyBlobVersion)
+	// Each write has its own attempt part, so this write never replaces a
+	// blob of another write, also on a store that does not refuse a second
+	// write to a key. The record names the attempt part.
+	blobKey, attempt, err := s.blobs.NewKey(ns.ID, id, itemKeyBlobVersion)
 	if err != nil {
 		return ItemKey{}, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
@@ -243,6 +252,8 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 	if err = s.blobs.Put(ctx, ns.ID, blobKey, wrapped); err != nil {
 		return ItemKey{}, fmt.Errorf("store item key blob of %s: %w", ref, err)
 	}
+
+	digest := blob.DigestBytes(wrapped)
 
 	stored, err := tx.CreateItemKey(ctx, ItemKey{
 		CreatedAt:  s.now().UTC(),
@@ -252,14 +263,17 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 		WrapperID:  s.wrapper.ID(),
 		Blob: ItemKeyBlobInfo{
 			Version: itemKeyBlobVersion,
-			Size:    int64(len(wrapped)),
-			MD5:     md5.Sum(wrapped), //nolint:gosec // Manifest checksum only; the AEAD tag authenticates the blob.
+			Attempt: attempt,
+			Size:    digest.Size,
+			MD5:     digest.MD5,
 		},
 	})
-	if err != nil || stored.ID != id {
+	if err != nil || stored.ID != id || stored.Blob.Attempt != attempt {
 		// The record was not stored, or another writer's record won. The
-		// blob of this call is an orphan. The orphan cleanup also deletes it
-		// after a grace period, so a failed delete is not an error.
+		// blob of this call is an orphan. Its key is unique to this call, so
+		// the delete never removes a blob that a record names. The orphan
+		// cleanup also deletes it after a grace period, so a failed delete is
+		// not an error.
 		_ = s.blobs.Delete(context.WithoutCancel(ctx), ns.ID, blobKey) //nolint:errcheck // See above.
 	}
 

@@ -6,6 +6,9 @@ const (
 	// SecretConsoleSession is a console session on a route that encrypts or
 	// decrypts the secrets of a stack.
 	SecretConsoleSession = "secret.console-session"
+	// SecretItemKeyBlobMismatch is a wrapped item key blob whose size or MD5
+	// is not the size or the MD5 that its record names.
+	SecretItemKeyBlobMismatch = "secret.item-key-blob-mismatch"
 	// SecretKeyNotConfigured is a request that needs the encryption key of the
 	// installation when the operator has not configured one.
 	SecretKeyNotConfigured = "secret.key-not-configured"
@@ -22,6 +25,12 @@ func secretSpecs() []Spec {
 			Code:    SecretConsoleSession,
 			Meaning: "a console session cannot encrypt or decrypt secrets: the request needs an access token",
 			Args:    nil,
+		},
+		{
+			Code: SecretItemKeyBlobMismatch,
+			Meaning: "the stored key of an item does not match its record: the blob store replaced or " +
+				"changed the object, so the server does not use the key",
+			Args: nil,
 		},
 		{
 			Code:    SecretKeyNotConfigured,

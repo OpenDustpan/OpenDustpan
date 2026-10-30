@@ -21,6 +21,11 @@ var (
 	ErrShredded = errors.New("item key is shredded")
 	// ErrInvalidItemRef reports an item reference that fails validation.
 	ErrInvalidItemRef = errors.New("invalid item reference")
+	// ErrItemKeyBlobMismatch reports a wrapped item key blob whose size or
+	// MD5 is not the size or the MD5 that its record names. The store
+	// replaced the object, or someone changed it. The server does not unwrap
+	// such a blob.
+	ErrItemKeyBlobMismatch = errors.New("item key blob does not match its record")
 )
 
 // ItemKind names what one item key seals. The kinds are the same for
@@ -116,11 +121,20 @@ func ParseItemKeyID(s string) (ItemKeyID, error) {
 	return ItemKeyID(s), nil
 }
 
-// ItemKeyBlobInfo describes the wrapped key blob that a record names: its version,
-// and the size and MD5 of its bytes, so that a backup copies and checks it
-// like every other blob. The MD5 is a checksum for integrity only. The AEAD
-// tag of the wrapped key authenticates the bytes.
+// ItemKeyBlobInfo describes the wrapped key blob that a record names: its
+// version, the attempt part of its key, and the size and MD5 of its bytes, so
+// that a backup copies and checks it like every other blob, and a read checks
+// the bytes before it unwraps them. The MD5 is a checksum for integrity only.
+// The AEAD tag of the wrapped key authenticates the bytes.
+//
+// Attempt is the attempt part of the blob key. Each write of a wrapped key
+// makes a new attempt part, so two writes never share a key, and a store that
+// replaces an object on a second write never replaces a key that a record
+// names. Attempt is empty for a record of the first key layout, which has no
+// attempt part. A reader accepts both layouts. A writer always writes an
+// attempt part.
 type ItemKeyBlobInfo struct {
+	Attempt string
 	MD5     [16]byte
 	Size    int64
 	Version int
@@ -128,7 +142,7 @@ type ItemKeyBlobInfo struct {
 
 // ItemKey is the record of one item key, as SQL keeps it. The wrapped
 // key itself is not part of the record: it is the blob that ItemKeyBlobs.Key
-// names with Blob.Version. ShreddedAt is the zero time while the key exists.
+// names with Blob.Version and Blob.Attempt. ShreddedAt is the zero time while the key exists.
 type ItemKey struct {
 	CreatedAt  time.Time
 	ShreddedAt time.Time

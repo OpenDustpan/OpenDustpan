@@ -10,7 +10,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -25,6 +27,17 @@ const MaxWrappedItemKeyBytes = 4096
 // new blob, so a real value stays small.
 const MaxItemKeyVersion = 1 << 20
 
+// ItemKeyBlobGracePeriod is how long after its write a wrapped item key blob
+// that no committed record names stays before it is garbage. A writer puts the
+// blob before it commits the record, so a blob without a record can belong to
+// a write that still commits. The period covers the attempt deadline of a
+// write, the lease of an instance and a margin.
+const ItemKeyBlobGracePeriod = time.Hour
+
+// attemptLen is the length of the attempt part of a blob key: the length of
+// an ID of ident.NewID with no prefix.
+const attemptLen = 20
+
 // ItemKeyFamily is the family of the item key blobs.
 func ItemKeyFamily() scopeaudit.Family {
 	return scopeaudit.Family{Blobs: "item key blob", Dir: strings.TrimSuffix(itemKeyDir, "/")}
@@ -33,18 +46,27 @@ func ItemKeyFamily() scopeaudit.Family {
 // ItemKeyBlobs reads and writes the wrapped item key blobs. It builds a
 // *blob.Scoped for each call, from the namespace ID that the caller took from
 // the row that it resolved and authorized, never from a request field. Each
-// blob key is namespaces/<namespace ID>/item-keys/<item key ID>/v<version>.
+// blob key is namespaces/<namespace ID>/item-keys/<item key ID>/v<version>-<attempt>.
+// A record of the first key layout names
+// namespaces/<namespace ID>/item-keys/<item key ID>/v<version>, with no
+// attempt part. ItemKeyBlobs reads both layouts and writes only the layout
+// with an attempt part.
 //
 // A call with a key of another namespace returns blob.ErrOutOfScope before any
-// call to the store, and writes one refusal to the scopeaudit.Recorder.
+// call to the store, and writes one refusal to the scopeaudit.Recorder. A read
+// of a blob that does not match its record returns ErrItemKeyBlobMismatch and
+// writes one refusal to the scopeaudit.IntegrityRecorder.
 type ItemKeyBlobs struct {
-	store    blob.Store
-	refusals scopeaudit.Recorder
+	store      blob.Store
+	refusals   scopeaudit.Recorder
+	mismatches scopeaudit.IntegrityRecorder
 }
 
-// NewItemKeyBlobs returns ItemKeyBlobs over store. Both arguments are
+// NewItemKeyBlobs returns ItemKeyBlobs over store. All arguments are
 // required.
-func NewItemKeyBlobs(store blob.Store, refusals scopeaudit.Recorder) (*ItemKeyBlobs, error) {
+func NewItemKeyBlobs(
+	store blob.Store, refusals scopeaudit.Recorder, mismatches scopeaudit.IntegrityRecorder,
+) (*ItemKeyBlobs, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	}
@@ -53,13 +75,19 @@ func NewItemKeyBlobs(store blob.Store, refusals scopeaudit.Recorder) (*ItemKeyBl
 		return nil, fmt.Errorf("%w: out-of-scope recorder", ErrMissingDependency)
 	}
 
-	return &ItemKeyBlobs{store: store, refusals: refusals}, nil
+	if mismatches == nil {
+		return nil, fmt.Errorf("%w: mismatch recorder", ErrMissingDependency)
+	}
+
+	return &ItemKeyBlobs{store: store, refusals: refusals, mismatches: mismatches}, nil
 }
 
-// itemKeyRel returns the key of version of id, relative to the scope of a
-// namespace. It returns ErrInvalidItemRef for an invalid ID or a version that
-// is not in 1 to MaxItemKeyVersion.
-func itemKeyRel(id ItemKeyID, version int) (string, error) {
+// itemKeyRel returns the key of version of id with the attempt part attempt,
+// relative to the scope of a namespace. An empty attempt gives the key of the
+// first layout, which has no attempt part. It returns ErrInvalidItemRef for an
+// invalid ID, a version that is not in 1 to MaxItemKeyVersion, or an attempt
+// part that is not valid.
+func itemKeyRel(id ItemKeyID, version int, attempt string) (string, error) {
 	if _, err := ParseItemKeyID(string(id)); err != nil {
 		return "", err
 	}
@@ -68,20 +96,57 @@ func itemKeyRel(id ItemKeyID, version int) (string, error) {
 		return "", fmt.Errorf("%w: item key version %d", ErrInvalidItemRef, version)
 	}
 
-	return itemKeyDir + string(id) + "/v" + strconv.Itoa(version), nil
+	segment := "v" + strconv.Itoa(version)
+
+	if attempt != "" {
+		if !validAttempt(attempt) {
+			return "", fmt.Errorf("%w: attempt part of an item key blob key", ErrInvalidItemRef)
+		}
+
+		segment += "-" + attempt
+	}
+
+	return itemKeyDir + string(id) + "/" + segment, nil
 }
 
-// ItemKeyBlob names the parts of one item key blob key.
+// ValidItemKeyAttempt reports whether s is the attempt part of an item key
+// blob key, as NewKey makes it. A store adapter checks the attempt part of a
+// record with it.
+func ValidItemKeyAttempt(s string) bool {
+	return validAttempt(s)
+}
+
+// validAttempt reports whether s is an attempt part: attemptLen lowercase
+// ASCII letters and digits, the form of ident.NewID with no prefix.
+func validAttempt(s string) bool {
+	if len(s) != attemptLen {
+		return false
+	}
+
+	for _, c := range []byte(s) {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+
+	return true
+}
+
+// ItemKeyBlob names the parts of one item key blob key. Attempt is empty for
+// a key of the first layout.
 type ItemKeyBlob struct {
 	Namespace namespace.ID
 	ID        ItemKeyID
+	Attempt   string
 	Version   int
 }
 
 // ParseItemKeyBlobKey splits a blob key of the form
-// namespaces/<namespace ID>/item-keys/<item key ID>/v<version> into its
-// parts. A backup check, a sweep and the purge ledger use it to name the item
-// key that a blob holds. It returns ErrInvalidItemRef for any other key.
+// namespaces/<namespace ID>/item-keys/<item key ID>/v<version>-<attempt>, or
+// of the first layout namespaces/<namespace ID>/item-keys/<item key ID>/v<version>,
+// into its parts. A backup check, a sweep and the purge ledger use it to name
+// the item key that a blob holds. It returns ErrInvalidItemRef for any other
+// key.
 func ParseItemKeyBlobKey(key blob.Key) (ItemKeyBlob, error) {
 	parts := strings.Split(key.String(), "/")
 	if len(parts) != 5 || parts[0] != "namespaces" || parts[2] != strings.TrimSuffix(itemKeyDir, "/") {
@@ -98,38 +163,49 @@ func ParseItemKeyBlobKey(key blob.Key) (ItemKeyBlob, error) {
 		return ItemKeyBlob{}, err
 	}
 
-	version, ok := parseItemKeyVersion(parts[4])
+	version, attempt, ok := parseItemKeyVersion(parts[4])
 	if !ok {
 		return ItemKeyBlob{}, fmt.Errorf("%w: item key version", ErrInvalidItemRef)
 	}
 
-	return ItemKeyBlob{Namespace: ns, ID: id, Version: version}, nil
+	return ItemKeyBlob{Namespace: ns, ID: id, Version: version, Attempt: attempt}, nil
 }
 
-// parseItemKeyVersion parses "v<version>": a version in 1 to MaxItemKeyVersion
-// in its plain decimal form, with no sign and no leading zero.
-func parseItemKeyVersion(s string) (int, bool) {
-	digits, ok := strings.CutPrefix(s, "v")
+// parseItemKeyVersion parses "v<version>-<attempt>", or "v<version>" of the
+// first layout: a version in 1 to MaxItemKeyVersion in its plain decimal form,
+// with no sign and no leading zero, and a valid attempt part. The attempt is
+// empty for the first layout.
+func parseItemKeyVersion(s string) (int, string, bool) {
+	rest, ok := strings.CutPrefix(s, "v")
 	if !ok {
-		return 0, false
+		return 0, "", false
+	}
+
+	digits, attempt, hasAttempt := strings.Cut(rest, "-")
+	if hasAttempt && !validAttempt(attempt) {
+		return 0, "", false
 	}
 
 	n, err := strconv.Atoi(digits)
 	if err != nil || digits != strconv.Itoa(n) {
-		return 0, false
+		return 0, "", false
 	}
 
-	return n, n >= 1 && n <= MaxItemKeyVersion
+	return n, attempt, n >= 1 && n <= MaxItemKeyVersion
 }
 
-// Key returns the blob key of version of the item key id in the namespace ns:
-// namespaces/<ns>/item-keys/<id>/v<version>. The server writes each version
-// one time. A backup copies it like every other blob, and every backup in one
-// target shares the copy, so one delete in the target reaches all of them. It
-// returns ErrInvalidItemRef for an invalid ID or version, and blob.ErrInvalidKey
-// for an invalid namespace ID.
-func (b *ItemKeyBlobs) Key(ns namespace.ID, id ItemKeyID, version int) (blob.Key, error) {
-	rel, err := itemKeyRel(id, version)
+// Key returns the blob key of version of the item key id with the attempt
+// part attempt, in the namespace ns:
+// namespaces/<ns>/item-keys/<id>/v<version>-<attempt>. An empty attempt gives
+// the key of the first layout, namespaces/<ns>/item-keys/<id>/v<version>, so
+// that a record of that layout stays readable. A reader takes version and
+// attempt from the record. A writer takes a new key from NewKey. A backup
+// copies the blob like every other blob, and every backup in one target shares
+// the copy, so one delete in the target reaches all of them. It returns
+// ErrInvalidItemRef for an invalid ID, version or attempt part, and
+// blob.ErrInvalidKey for an invalid namespace ID.
+func (b *ItemKeyBlobs) Key(ns namespace.ID, id ItemKeyID, version int, attempt string) (blob.Key, error) {
+	rel, err := itemKeyRel(id, version, attempt)
 	if err != nil {
 		return "", err
 	}
@@ -147,10 +223,28 @@ func (b *ItemKeyBlobs) Key(ns namespace.ID, id ItemKeyID, version int) (blob.Key
 	return key, nil
 }
 
-// Put stores the wrapped item key under key, in the namespace ns. It returns
-// ErrTooLarge for more than MaxWrappedItemKeyBytes, blob.ErrOutOfScope when
-// key is outside the namespace ns or outside its item-keys directory, and
-// blob.ErrExists when the key already holds a blob.
+// NewKey returns a new blob key for one write of version of the item key id,
+// in the namespace ns, and its attempt part. Each call makes a new random
+// attempt part, so two writes never share a key: the first write of an item
+// key, each retry, and each rewrap to a new version. The record of the write
+// names the attempt part. It returns the errors of Key.
+func (b *ItemKeyBlobs) NewKey(ns namespace.ID, id ItemKeyID, version int) (blob.Key, string, error) {
+	attempt := ident.NewID("")
+
+	key, err := b.Key(ns, id, version, attempt)
+	if err != nil {
+		return "", "", err
+	}
+
+	return key, attempt, nil
+}
+
+// Put stores the wrapped item key under key, in the namespace ns. key must
+// have an attempt part, as NewKey gives it. It returns ErrTooLarge for more
+// than MaxWrappedItemKeyBytes, blob.ErrOutOfScope when key is outside the
+// namespace ns or outside its item-keys directory, ErrInvalidItemRef for a
+// key with no attempt part, and blob.ErrExists when the store refuses a key
+// that already holds a blob.
 func (b *ItemKeyBlobs) Put(ctx context.Context, ns namespace.ID, key blob.Key, wrapped []byte) error {
 	if len(wrapped) > MaxWrappedItemKeyBytes {
 		return fmt.Errorf(
@@ -166,6 +260,14 @@ func (b *ItemKeyBlobs) Put(ctx context.Context, ns namespace.ID, key blob.Key, w
 		return err
 	}
 
+	// A key of the first layout has no attempt part, so a second write to it
+	// could replace a blob that a record names, on a store that does not
+	// refuse a second write. No writer makes such a key, and this check
+	// refuses one before the store sees it.
+	if parsed, parseErr := ParseItemKeyBlobKey(key); parseErr != nil || parsed.Attempt == "" {
+		return fmt.Errorf("%w: a write of an item key blob needs a key with an attempt part", ErrInvalidItemRef)
+	}
+
 	if err := v.Put(ctx, key, bytes.NewReader(wrapped)); err != nil {
 		return b.refuse(ctx, ns, "put", fmt.Errorf("put item key blob: %w", err), scopeaudit.OutsideNamespace)
 	}
@@ -173,14 +275,27 @@ func (b *ItemKeyBlobs) Put(ctx context.Context, ns namespace.ID, key blob.Key, w
 	return nil
 }
 
-// Get returns the wrapped item key under key, in the namespace ns. It returns
-// blob.ErrOutOfScope when key is outside the namespace ns or outside its
-// item-keys directory, ErrKeyNotFound when the blob is missing, and ErrTooLarge
-// for a blob over MaxWrappedItemKeyBytes.
-func (b *ItemKeyBlobs) Get(ctx context.Context, ns namespace.ID, key blob.Key) ([]byte, error) {
+// Get returns the wrapped item key under key, in the namespace ns, after it
+// compares its size and its MD5 with want, the blob info of the record that
+// names key. The caller unwraps the bytes only after Get returns them. It
+// returns blob.ErrOutOfScope when key is outside the namespace ns or outside
+// its item-keys directory, ErrKeyNotFound when the blob is missing,
+// ErrTooLarge for a blob over MaxWrappedItemKeyBytes, ErrInvalidItemRef when
+// want does not name key, and ErrItemKeyBlobMismatch when the bytes do not
+// match want. A mismatch writes one refusal to the IntegrityRecorder.
+func (b *ItemKeyBlobs) Get(ctx context.Context, ns namespace.ID, key blob.Key, want ItemKeyBlobInfo) ([]byte, error) {
 	v, err := b.scopedKey(ctx, ns, key, "get")
 	if err != nil {
 		return nil, err
+	}
+
+	// The record must name the key that the call reads, so that the size and
+	// the MD5 of one blob never check the bytes of another blob. A size out of
+	// range is a record that no writer made, so the read fails closed.
+	parsed, err := ParseItemKeyBlobKey(key)
+	if err != nil || parsed.Version != want.Version || parsed.Attempt != want.Attempt ||
+		want.Size < 1 || want.Size > MaxWrappedItemKeyBytes {
+		return nil, fmt.Errorf("%w: the blob info does not name the item key blob key", ErrInvalidItemRef)
 	}
 
 	rc, err := v.Get(ctx, key)
@@ -188,7 +303,16 @@ func (b *ItemKeyBlobs) Get(ctx context.Context, ns namespace.ID, key blob.Key) (
 		return nil, b.refuse(ctx, ns, "get", mapItemKeyBlobError(err), scopeaudit.OutsideNamespace)
 	}
 
-	return readWrappedKey(rc)
+	wrapped, err := readWrappedKey(rc)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := b.checkDigest(ctx, ns, wrapped, want); err != nil {
+		return nil, err
+	}
+
+	return wrapped, nil
 }
 
 // readWrappedKey reads at most MaxWrappedItemKeyBytes from rc and closes it.
@@ -227,9 +351,10 @@ func (b *ItemKeyBlobs) Delete(ctx context.Context, ns namespace.ID, key blob.Key
 }
 
 // Versions returns the blob keys of every version of the item key id in the
-// namespace ns, in the order of the version number, for a purge or a sweep. It
-// returns ErrInvalidItemRef when the listing holds a key that is not a version
-// of the item key id.
+// namespace ns, in the order of the version number and then of the attempt
+// part, for a purge or a sweep. It returns every attempt of each version,
+// also the attempts that no record names. It returns ErrInvalidItemRef when
+// the listing holds a key that is not a version of the item key id.
 func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKeyID) ([]blob.Key, error) {
 	if _, err := ParseItemKeyID(string(id)); err != nil {
 		return nil, err
@@ -265,12 +390,14 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 
 	// The order is the order of the version number: v2 comes before v10, which
 	// the order of the key text does not give.
-	slices.SortFunc(parsed, func(a, b ItemKeyBlob) int { return cmp.Compare(a.Version, b.Version) })
+	slices.SortFunc(parsed, func(a, b ItemKeyBlob) int {
+		return cmp.Or(cmp.Compare(a.Version, b.Version), cmp.Compare(a.Attempt, b.Attempt))
+	})
 
 	keys := make([]blob.Key, 0, len(parsed))
 
 	for _, part := range parsed {
-		key, keyErr := b.Key(ns, part.ID, part.Version)
+		key, keyErr := b.Key(ns, part.ID, part.Version, part.Attempt)
 		if keyErr != nil {
 			return nil, keyErr
 		}
@@ -279,6 +406,98 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 	}
 
 	return keys, nil
+}
+
+// ItemKeyBlobNamer reports whether a committed record names the item key blob
+// b. A reaper gives it, from the item key records of its store. It returns an
+// error when it cannot read the records.
+type ItemKeyBlobNamer func(ctx context.Context, b ItemKeyBlob) (bool, error)
+
+// Garbage returns the item key blobs of the namespace ns that a reaper can
+// delete at the time now: the blobs that no committed record names, and that
+// are older than ItemKeyBlobGracePeriod. A writer puts a blob before it
+// commits the record that names it, so a younger blob can belong to a write
+// that still commits, and Garbage never returns it. Garbage deletes nothing.
+// The caller deletes the keys after it checks that no backup runs.
+//
+// Garbage fails closed: a blob with a time of zero or a time after now, and a
+// key that is not an item key blob key of ns, are never garbage, and an error
+// of named or of the listing returns the error and no key.
+func (b *ItemKeyBlobs) Garbage(
+	ctx context.Context, ns namespace.ID, named ItemKeyBlobNamer, now time.Time,
+) ([]blob.Key, error) {
+	if named == nil {
+		return nil, fmt.Errorf("%w: item key blob namer", ErrMissingDependency)
+	}
+
+	if now.IsZero() {
+		return nil, fmt.Errorf("%w: a reaper needs the time", ErrInvalidItemRef)
+	}
+
+	v, err := b.view(ns)
+	if err != nil {
+		return nil, err
+	}
+
+	objects, err := v.List(ctx, v.Prefix()+itemKeyDir)
+	if err != nil {
+		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), scopeaudit.OutsideNamespace)
+	}
+
+	var garbage []blob.Key
+
+	for i := range objects {
+		obj := objects[i]
+
+		// The grace period comes first: a blob of a write that still commits
+		// is never a candidate, whatever the records say now.
+		if obj.ModifiedAt.IsZero() || now.Sub(obj.ModifiedAt) < ItemKeyBlobGracePeriod {
+			continue
+		}
+
+		// Defense in depth: the view lists only under the item-keys directory
+		// of ns. Each key is checked again, so a listing fault of an adapter
+		// never gives the reaper a key of another namespace or another family.
+		part, parseErr := ParseItemKeyBlobKey(obj.Key)
+		if parseErr != nil || part.Namespace != ns {
+			continue
+		}
+
+		isNamed, namedErr := named(ctx, part)
+		if namedErr != nil {
+			return nil, fmt.Errorf("read the records of item key blobs: %w", namedErr)
+		}
+
+		if !isNamed {
+			garbage = append(garbage, obj.Key)
+		}
+	}
+
+	return garbage, nil
+}
+
+// checkDigest compares the size and the MD5 of wrapped with want. On a
+// mismatch it writes one refusal to the IntegrityRecorder and returns
+// ErrItemKeyBlobMismatch, joined with the error of the recorder when the
+// record fails, so the caller still sees the refusal.
+//
+// Defense in depth: the AEAD tag of the wrapped key refuses changed bytes and
+// a key of another item too. This check stays so that a blob that a store
+// replaced, for example with a wrapped key of the same item from another
+// write, is refused before any unwrap, and so that the refusal is recorded.
+func (b *ItemKeyBlobs) checkDigest(ctx context.Context, ns namespace.ID, wrapped []byte, want ItemKeyBlobInfo) error {
+	got := blob.DigestBytes(wrapped)
+	if got.Size == want.Size && got.MD5 == want.MD5 {
+		return nil
+	}
+
+	// The record must survive a canceled request: the refusal shows a fault
+	// of the store or an attack.
+	if recErr := b.mismatches.RecordMismatch(context.WithoutCancel(ctx), ns, "get"); recErr != nil {
+		return errors.Join(ErrItemKeyBlobMismatch, fmt.Errorf("record the mismatch: %w", recErr))
+	}
+
+	return ErrItemKeyBlobMismatch
 }
 
 // view returns the view of the store for the namespace ns.
@@ -318,7 +537,7 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 }
 
 // validItemKeyRest reports whether rest, the part of a key after the item-keys
-// directory, is <item key ID>/v<version>.
+// directory, is <item key ID>/v<version>-<attempt> or <item key ID>/v<version>.
 func validItemKeyRest(rest string) bool {
 	id, ver, ok := strings.Cut(rest, "/")
 	if !ok {
@@ -329,7 +548,7 @@ func validItemKeyRest(rest string) bool {
 		return false
 	}
 
-	_, ok = parseItemKeyVersion(ver)
+	_, _, ok = parseItemKeyVersion(ver)
 
 	return ok
 }

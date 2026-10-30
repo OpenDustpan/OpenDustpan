@@ -49,7 +49,7 @@ func (t itemKeyTx) CreateItemKey(ctx context.Context, k secret.ItemKey) (secret.
 	_, err := t.q.InsertItemKey(ctx, db.InsertItemKeyParams{
 		ID: row.ID, Namespace: row.Namespace, ScopeID: row.ScopeID, Kind: row.Kind, Item: row.Item,
 		WrapperID: row.WrapperID, CreatedAtMs: row.CreatedAtMs, BlobVersion: row.BlobVersion,
-		BlobSize: row.BlobSize, BlobMd5: row.BlobMd5,
+		BlobSize: row.BlobSize, BlobMd5: row.BlobMd5, BlobAttempt: row.BlobAttempt,
 	})
 	if err != nil {
 		return secret.ItemKey{}, fmt.Errorf("insert item key: %w", err)

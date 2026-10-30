@@ -230,6 +230,21 @@ func TestGaps(t *testing.T) {
 		{name: "a content blob of a redaction", key: "pulumi/stk-two/upd-1/checkpoint-1", want: true},
 		{name: "the key blob of a redaction", key: itemKeyBlob(t, nsID, r.ItemKey, 1), want: true},
 		{name: "a later version of the key blob of a redaction", key: itemKeyBlob(t, nsID, r.ItemKey, 7), want: true},
+		{
+			name: "an attempt of the key blob of a redaction",
+			key:  blob.Key(itemKeyBlob(t, nsID, r.ItemKey, 1).String() + "-abcdefghij0123456789"),
+			want: true,
+		},
+		{
+			name: "an attempt of a key blob of a purged unit",
+			key:  blob.Key(itemKeyBlob(t, nsID, tb.ItemKeys[0], 3).String() + "-abcdefghij0123456789"),
+			want: true,
+		},
+		{
+			name: "an attempt of another key blob",
+			key:  blob.Key(itemKeyBlob(t, nsID, secret.NewItemKeyID(), 1).String() + "-abcdefghij0123456789"),
+			want: false,
+		},
 		{name: "a key blob of a purged unit", key: itemKeyBlob(t, nsID, tb.ItemKeys[0], 1), want: true},
 		{
 			name: "a key blob of a purged unit in another namespace ID",

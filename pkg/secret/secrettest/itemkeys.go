@@ -109,6 +109,9 @@ func itemRef(t *testing.T, scopeID string, kind secret.ItemKind, item string) se
 	return ref
 }
 
+// validAttempt is a valid attempt part of a blob key of the suite.
+const validAttempt = "abcdefghij0123456789"
+
 // newItemKey returns a record of ref that is not stored yet.
 func newItemKey(ref secret.ItemRef, wrapperID string) secret.ItemKey {
 	return secret.ItemKey{
@@ -117,7 +120,12 @@ func newItemKey(ref secret.ItemRef, wrapperID string) secret.ItemKey {
 		Ref:        ref,
 		ID:         secret.NewItemKeyID(),
 		WrapperID:  wrapperID,
-		Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+		Blob: secret.ItemKeyBlobInfo{
+			Version: 1,
+			Size:    60,
+			MD5:     [16]byte{1, 2, 3},
+			Attempt: "abcdefghij0123456789",
+		},
 	}
 }
 
@@ -472,10 +480,16 @@ func testItemKeyBadBlobInfo(t *testing.T, s ItemKeyStore) {
 	fence := itemKeyNamespace(t, s)
 
 	for name, info := range map[string]secret.ItemKeyBlobInfo{
-		"no version":   {Version: 0, Size: 60, MD5: [16]byte{1}},
-		"huge version": {Version: secret.MaxItemKeyVersion + 1, Size: 60, MD5: [16]byte{1}},
-		"no size":      {Version: 1, Size: 0, MD5: [16]byte{1}},
-		"huge size":    {Version: 1, Size: secret.MaxWrappedItemKeyBytes + 1, MD5: [16]byte{1}},
+		"no version":   {Version: 0, Size: 60, MD5: [16]byte{1}, Attempt: validAttempt},
+		"huge version": {Version: secret.MaxItemKeyVersion + 1, Size: 60, MD5: [16]byte{1}, Attempt: validAttempt},
+		"no size":      {Version: 1, Size: 0, MD5: [16]byte{1}, Attempt: validAttempt},
+		"huge size":    {Version: 1, Size: secret.MaxWrappedItemKeyBytes + 1, MD5: [16]byte{1}, Attempt: validAttempt},
+		// A new record always names a key with an attempt part.
+		"no attempt part":            {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: ""},
+		"a short attempt part":       {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "abc"},
+		"an attempt in upper case":   {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "ABCDEFGHIJ0123456789"},
+		"an attempt with a slash":    {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "abcdefghij/123456789"},
+		"an attempt with a line end": {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "abcdefghij\n123456789"},
 	} {
 		ref := itemRef(t, "stk-one", secret.ItemKindState, "upd-"+strings.ReplaceAll(name, " ", "-"))
 		k := newItemKey(ref, "builtin-1")

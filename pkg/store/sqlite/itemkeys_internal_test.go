@@ -42,7 +42,7 @@ func seedItemKey(t *testing.T, s *Store) secret.ItemRef {
 	k := secret.ItemKey{
 		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ShreddedAt: time.Time{}, Ref: ref,
 		ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
-		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}, Attempt: "abcdefghij0123456789"},
 	}
 	if _, err = s.CreateItemKey(t.Context(), k, ns.Fence()); err != nil {
 		t.Fatalf("create item key: %v", err)
@@ -64,6 +64,8 @@ func tamperedItemKeyRows() []struct{ name, update string } {
 		{"an item with a slash", `UPDATE item_keys SET item = 'a/b'`},
 		{"an item with a parent segment", `UPDATE item_keys SET item = '..'`},
 		{"an empty wrapper ID", `UPDATE item_keys SET wrapper_id = ''`},
+		{"an attempt part in upper case", `UPDATE item_keys SET blob_attempt = 'ABCDEFGHIJ0123456789'`},
+		{"an attempt part with a slash", `UPDATE item_keys SET blob_attempt = 'abcdefghij/123456789'`},
 	}
 }
 
@@ -281,5 +283,103 @@ func refusedItemKeys(other secret.ItemRef, acme namespace.Fence) []refusedItemKe
 			"a record of an unknown kind", change(func(k *secret.ItemKey) { k.Ref.Kind = "other" }), acme,
 			secret.ErrInvalidItemRef,
 		},
+	}
+}
+
+// TestItemKeyRowsOfBothLayouts proves that a row of the first key layout, with
+// no attempt part, stays readable and passes the restore check, and that the
+// backup names the blob key of each row in its own layout.
+func TestItemKeyRowsOfBothLayouts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		update string
+		suffix func(k secret.ItemKey) string
+	}{
+		{
+			name: "a row with an attempt part", update: "",
+			suffix: func(k secret.ItemKey) string { return "/v1-" + k.Blob.Attempt },
+		},
+		{
+			name: "a row of the first layout", update: `UPDATE item_keys SET blob_attempt = ''`,
+			suffix: func(secret.ItemKey) string { return "/v1" },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openInternalTemplated(t)
+			k := seedRowOfLayout(t, s, tc.update)
+
+			if err := checkStagedItemKeys(t.Context(), s.conn); err != nil {
+				t.Fatalf("check = %v, want nil", err)
+			}
+
+			refs, _, err := blobRefs(t.Context(), s.conn)
+			if err != nil {
+				t.Fatalf("blob refs: %v", err)
+			}
+
+			want := "/item-keys/" + string(k.ID) + tc.suffix(k)
+			if hits := countKeySuffix(refs, want); hits != 1 {
+				t.Errorf("blob key %q: %d references, want 1", want, hits)
+			}
+		})
+	}
+}
+
+// seedRowOfLayout seeds one item key, runs update on its row, and returns
+// the record that the store reads back.
+func seedRowOfLayout(t *testing.T, s *Store, update string) secret.ItemKey {
+	t.Helper()
+
+	ref := seedItemKey(t, s)
+
+	if update != "" {
+		if _, err := s.conn.ExecContext(t.Context(), update); err != nil {
+			t.Fatalf("change the row: %v", err)
+		}
+	}
+
+	k, err := s.GetItemKey(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	return k
+}
+
+// countKeySuffix counts the references whose key ends with suffix.
+func countKeySuffix(refs []backup.BlobRef, suffix string) int {
+	n := 0
+
+	for i := range refs {
+		if strings.HasSuffix(refs[i].Key, suffix) {
+			n++
+		}
+	}
+
+	return n
+}
+
+// TestItemKeyAttemptColumnRefusesABadLength proves the check of the column:
+// the database refuses an attempt part that is not empty and not 20
+// characters, also when a write skips every check of the store.
+func TestItemKeyAttemptColumnRefusesABadLength(t *testing.T) {
+	t.Parallel()
+
+	for _, update := range []string{
+		`UPDATE item_keys SET blob_attempt = 'abc'`,
+		`UPDATE item_keys SET blob_attempt = 'abcdefghij01234567890'`,
+	} {
+		s := openInternalTemplated(t)
+		seedItemKey(t, s)
+
+		if _, err := s.conn.ExecContext(t.Context(), update); err == nil {
+			t.Errorf("%s succeeded, want a refusal of the column check", update)
+		}
 	}
 }

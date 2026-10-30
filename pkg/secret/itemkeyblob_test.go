@@ -27,13 +27,14 @@ const (
 
 // memBlobs is a blob.Store in memory that counts the calls that reach it.
 type memBlobs struct {
-	objects map[blob.Key][]byte
-	calls   int
-	mu      sync.Mutex
+	objects  map[blob.Key][]byte
+	modified map[blob.Key]time.Time
+	calls    int
+	mu       sync.Mutex
 }
 
 func newMemBlobs() *memBlobs {
-	return &memBlobs{objects: map[blob.Key][]byte{}, calls: 0, mu: sync.Mutex{}}
+	return &memBlobs{objects: map[blob.Key][]byte{}, modified: map[blob.Key]time.Time{}, calls: 0, mu: sync.Mutex{}}
 }
 
 func (m *memBlobs) Put(_ context.Context, key blob.Key, r io.Reader) error {
@@ -92,7 +93,7 @@ func (m *memBlobs) List(_ context.Context, prefix string) ([]blob.Object, error)
 
 	for k := range m.objects {
 		if strings.HasPrefix(k.String(), prefix) {
-			out = append(out, blob.Object{Key: k, ModifiedAt: time.Time{}})
+			out = append(out, blob.Object{Key: k, ModifiedAt: m.modified[k]})
 		}
 	}
 
@@ -102,6 +103,23 @@ func (m *memBlobs) List(_ context.Context, prefix string) ([]blob.Object, error)
 }
 
 func (m *memBlobs) Ping(context.Context) error { return nil }
+
+// setModified sets the time that List gives for key.
+func (m *memBlobs) setModified(key blob.Key, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.modified[key] = at
+}
+
+// replace overwrites the object under key, as a store that ignores a
+// conditional write does.
+func (m *memBlobs) replace(key blob.Key, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.objects[key] = bytes.Clone(data)
+}
 
 func (m *memBlobs) callCount() int {
 	m.mu.Lock()
@@ -119,11 +137,13 @@ type refusal struct {
 	ns    namespace.ID
 }
 
-// fakeRecorder is an OutOfScopeRecorder that keeps its calls.
+// fakeRecorder is a scopeaudit.Recorder and a scopeaudit.IntegrityRecorder
+// that keeps its calls.
 type fakeRecorder struct {
-	err   error
-	calls []refusal
-	mu    sync.Mutex
+	err        error
+	calls      []refusal
+	mismatches []refusal
+	mu         sync.Mutex
 }
 
 func (f *fakeRecorder) RecordOutOfScope(
@@ -137,6 +157,15 @@ func (f *fakeRecorder) RecordOutOfScope(
 	return f.err
 }
 
+func (f *fakeRecorder) RecordMismatch(_ context.Context, ns namespace.ID, op string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.mismatches = append(f.mismatches, refusal{ns: ns, op: op, where: ""})
+
+	return f.err
+}
+
 func (f *fakeRecorder) refusals() []refusal {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -144,8 +173,15 @@ func (f *fakeRecorder) refusals() []refusal {
 	return slices.Clone(f.calls)
 }
 
+func (f *fakeRecorder) mismatchCalls() []refusal {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.mismatches)
+}
+
 func newFakeRecorder(err error) *fakeRecorder {
-	return &fakeRecorder{err: err, calls: nil, mu: sync.Mutex{}}
+	return &fakeRecorder{err: err, calls: nil, mismatches: nil, mu: sync.Mutex{}}
 }
 
 func newItemKeyBlobs(t *testing.T) (*secret.ItemKeyBlobs, *memBlobs, *fakeRecorder) {
@@ -153,7 +189,7 @@ func newItemKeyBlobs(t *testing.T) (*secret.ItemKeyBlobs, *memBlobs, *fakeRecord
 
 	store, rec := newMemBlobs(), newFakeRecorder(nil)
 
-	b, err := secret.NewItemKeyBlobs(store, rec)
+	b, err := secret.NewItemKeyBlobs(store, rec, rec)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -161,11 +197,12 @@ func newItemKeyBlobs(t *testing.T) (*secret.ItemKeyBlobs, *memBlobs, *fakeRecord
 	return b, store, rec
 }
 
-// mustKey returns the blob key of version of id in ns.
+// mustKey returns a new blob key for a write of version of id in ns, with a
+// new attempt part.
 func mustKey(t *testing.T, b *secret.ItemKeyBlobs, ns namespace.ID, id secret.ItemKeyID, version int) blob.Key {
 	t.Helper()
 
-	key, err := b.Key(ns, id, version)
+	key, _, err := b.NewKey(ns, id, version)
 	if err != nil {
 		t.Fatalf("key v%d: %v", version, err)
 	}
@@ -173,15 +210,38 @@ func mustKey(t *testing.T, b *secret.ItemKeyBlobs, ns namespace.ID, id secret.It
 	return key
 }
 
+// infoOf returns the blob info that a record of key with the bytes data holds.
+func infoOf(t *testing.T, key blob.Key, data []byte) secret.ItemKeyBlobInfo {
+	t.Helper()
+
+	parsed, err := secret.ParseItemKeyBlobKey(key)
+	if err != nil {
+		t.Fatalf("parse %s: %v", key, err)
+	}
+
+	d := blob.DigestBytes(data)
+
+	return secret.ItemKeyBlobInfo{Version: parsed.Version, Attempt: parsed.Attempt, Size: d.Size, MD5: d.MD5}
+}
+
+// testAttempt is a valid attempt part of the tests.
+const testAttempt = "abcdefghij0123456789"
+
 func TestNewItemKeyBlobsNeedsItsPorts(t *testing.T) {
 	t.Parallel()
 
-	if _, err := secret.NewItemKeyBlobs(nil, newFakeRecorder(nil)); !errors.Is(err, secret.ErrMissingDependency) {
+	rec := newFakeRecorder(nil)
+
+	if _, err := secret.NewItemKeyBlobs(nil, rec, rec); !errors.Is(err, secret.ErrMissingDependency) {
 		t.Errorf("nil store err = %v, want ErrMissingDependency", err)
 	}
 
-	if _, err := secret.NewItemKeyBlobs(newMemBlobs(), nil); !errors.Is(err, secret.ErrMissingDependency) {
+	if _, err := secret.NewItemKeyBlobs(newMemBlobs(), nil, rec); !errors.Is(err, secret.ErrMissingDependency) {
 		t.Errorf("nil recorder err = %v, want ErrMissingDependency", err)
+	}
+
+	if _, err := secret.NewItemKeyBlobs(newMemBlobs(), rec, nil); !errors.Is(err, secret.ErrMissingDependency) {
+		t.Errorf("nil mismatch recorder err = %v, want ErrMissingDependency", err)
 	}
 }
 
@@ -195,35 +255,103 @@ func TestItemKeyBlobsKey(t *testing.T) {
 		name    string
 		ns      namespace.ID
 		id      secret.ItemKeyID
+		attempt string
 		want    string
 		version int
 	}{
 		{
-			name: "version one", ns: nsA, id: "ik-abc", version: 1, wantErr: nil,
-			want: "namespaces/" + string(nsA) + "/item-keys/ik-abc/v1",
+			name: "version one", ns: nsA, id: "ik-abc", version: 1, attempt: testAttempt, wantErr: nil,
+			want: "namespaces/" + string(nsA) + "/item-keys/ik-abc/v1-" + testAttempt,
 		},
 		{
-			name: "a later version", ns: nsB, id: "ik-abc", version: 12, wantErr: nil,
-			want: "namespaces/" + string(nsB) + "/item-keys/ik-abc/v12",
+			name: "a later version", ns: nsB, id: "ik-abc", version: 12, attempt: testAttempt, wantErr: nil,
+			want: "namespaces/" + string(nsB) + "/item-keys/ik-abc/v12-" + testAttempt,
 		},
-		{name: "version zero", ns: nsA, id: "ik-abc", version: 0, want: "", wantErr: secret.ErrInvalidItemRef},
-		{name: "a negative version", ns: nsA, id: "ik-abc", version: -1, want: "", wantErr: secret.ErrInvalidItemRef},
-		{name: "a huge version", ns: nsA, id: "ik-abc", version: 1 << 40, want: "", wantErr: secret.ErrInvalidItemRef},
+		{
+			name: "the first layout, with no attempt part", ns: nsA, id: "ik-abc", version: 1, attempt: "",
+			wantErr: nil, want: "namespaces/" + string(nsA) + "/item-keys/ik-abc/v1",
+		},
+		{
+			name: "a short attempt part", ns: nsA, id: "ik-abc", version: 1, attempt: "abc", want: "",
+			wantErr: secret.ErrInvalidItemRef,
+		},
+		{
+			name:    "an attempt part in upper case",
+			ns:      nsA,
+			id:      "ik-abc",
+			version: 1,
+			attempt: strings.ToUpper(testAttempt),
+			want:    "",
+			wantErr: secret.ErrInvalidItemRef,
+		},
+		{
+			name: "an attempt part with a slash", ns: nsA, id: "ik-abc", version: 1, attempt: "abcdefghij/123456789",
+			want: "", wantErr: secret.ErrInvalidItemRef,
+		},
+		{
+			name: "an attempt part with a hyphen", ns: nsA, id: "ik-abc", version: 1, attempt: "abcdefghij-123456789",
+			want: "", wantErr: secret.ErrInvalidItemRef,
+		},
+		{
+			name:    "version zero",
+			ns:      nsA,
+			id:      "ik-abc",
+			attempt: "",
+			version: 0,
+			want:    "",
+			wantErr: secret.ErrInvalidItemRef,
+		},
+		{
+			name:    "a negative version",
+			ns:      nsA,
+			id:      "ik-abc",
+			attempt: "",
+			version: -1,
+			want:    "",
+			wantErr: secret.ErrInvalidItemRef,
+		},
+		{
+			name:    "a huge version",
+			ns:      nsA,
+			id:      "ik-abc",
+			attempt: "",
+			version: 1 << 40,
+			want:    "",
+			wantErr: secret.ErrInvalidItemRef,
+		},
 		{
 			name:    "an ID without the prefix",
 			ns:      nsA,
 			id:      "key-1",
+			attempt: "",
 			version: 1,
 			want:    "",
 			wantErr: secret.ErrInvalidItemRef,
 		},
-		{name: "an ID with a slash", ns: nsA, id: "ik-a/b", version: 1, want: "", wantErr: secret.ErrInvalidItemRef},
-		{name: "an empty ID", ns: nsA, id: "", version: 1, want: "", wantErr: secret.ErrInvalidItemRef},
-		{name: "an empty namespace ID", ns: "", id: "ik-abc", version: 1, want: "", wantErr: blob.ErrInvalidKey},
+		{
+			name:    "an ID with a slash",
+			ns:      nsA,
+			id:      "ik-a/b",
+			attempt: "",
+			version: 1,
+			want:    "",
+			wantErr: secret.ErrInvalidItemRef,
+		},
+		{name: "an empty ID", ns: nsA, id: "", attempt: "", version: 1, want: "", wantErr: secret.ErrInvalidItemRef},
+		{
+			name:    "an empty namespace ID",
+			ns:      "",
+			id:      "ik-abc",
+			attempt: "",
+			version: 1,
+			want:    "",
+			wantErr: blob.ErrInvalidKey,
+		},
 		{
 			name:    "a namespace ID with a slash",
 			ns:      "ns-a/../ns-b",
 			id:      "ik-abc",
+			attempt: "",
 			version: 1,
 			want:    "",
 			wantErr: blob.ErrInvalidKey,
@@ -232,6 +360,7 @@ func TestItemKeyBlobsKey(t *testing.T) {
 			name:    "a namespace ID with upper case",
 			ns:      "ns-AAAA",
 			id:      "ik-abc",
+			attempt: "",
 			version: 1,
 			want:    "",
 			wantErr: blob.ErrInvalidKey,
@@ -242,7 +371,7 @@ func TestItemKeyBlobsKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			key, err := b.Key(tc.ns, tc.id, tc.version)
+			key, err := b.Key(tc.ns, tc.id, tc.version, tc.attempt)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Key err = %v, want %v", err, tc.wantErr)
 			}
@@ -265,8 +394,9 @@ func TestItemKeyBlobsPutGetDelete(t *testing.T) {
 	id := secret.NewItemKeyID()
 	keyV1 := mustKey(t, b, nsA, id, 1)
 	wrapped := []byte("wrapped-key-bytes")
+	info := infoOf(t, keyV1, wrapped)
 
-	if _, err := b.Get(t.Context(), nsA, keyV1); !errors.Is(err, secret.ErrKeyNotFound) {
+	if _, err := b.Get(t.Context(), nsA, keyV1, info); !errors.Is(err, secret.ErrKeyNotFound) {
 		t.Fatalf("get before put err = %v, want ErrKeyNotFound", err)
 	}
 
@@ -278,7 +408,7 @@ func TestItemKeyBlobsPutGetDelete(t *testing.T) {
 		t.Errorf("second put err = %v, want ErrExists", err)
 	}
 
-	if got, err := b.Get(t.Context(), nsA, keyV1); err != nil || !bytes.Equal(got, wrapped) {
+	if got, err := b.Get(t.Context(), nsA, keyV1, info); err != nil || !bytes.Equal(got, wrapped) {
 		t.Fatalf("get = %q, %v, want %q", got, err, wrapped)
 	}
 
@@ -290,7 +420,7 @@ func TestItemKeyBlobsPutGetDelete(t *testing.T) {
 		t.Errorf("second delete: %v", err)
 	}
 
-	if _, err := b.Get(t.Context(), nsA, keyV1); !errors.Is(err, secret.ErrKeyNotFound) {
+	if _, err := b.Get(t.Context(), nsA, keyV1, info); !errors.Is(err, secret.ErrKeyNotFound) {
 		t.Errorf("get after delete err = %v, want ErrKeyNotFound", err)
 	}
 
@@ -363,11 +493,14 @@ func TestItemKeyBlobsVersionsRefuseABadListing(t *testing.T) {
 	dir := "namespaces/" + string(nsA) + "/item-keys/" + string(id) + "/"
 
 	for name, bad := range map[string]string{
-		"a version with a leading zero": dir + "v01",
-		"a version with no number":      dir + "v",
-		"a name that is not a version":  dir + "notes",
-		"a deeper key":                  dir + "v1/extra",
-		"version zero":                  dir + "v0",
+		"a version with a leading zero":   dir + "v01",
+		"a version with no number":        dir + "v",
+		"a name that is not a version":    dir + "notes",
+		"a deeper key":                    dir + "v1/extra",
+		"version zero":                    dir + "v0",
+		"a short attempt part":            dir + "v1-abc",
+		"an empty attempt part":           dir + "v1-",
+		"an attempt part with no version": dir + "v-" + testAttempt,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -421,7 +554,7 @@ func TestItemKeyBlobsSizeLimits(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if _, err := b.Get(t.Context(), nsA, key2); !errors.Is(err, secret.ErrTooLarge) {
+	if _, err := b.Get(t.Context(), nsA, key2, infoOf(t, key2, big[:1])); !errors.Is(err, secret.ErrTooLarge) {
 		t.Errorf("get of a large blob err = %v, want ErrTooLarge", err)
 	}
 }
@@ -466,7 +599,7 @@ func foreignKeys(id secret.ItemKeyID) map[string]foreignKey {
 func itemKeyOps() map[string]func(ctx context.Context, b *secret.ItemKeyBlobs, key blob.Key) error {
 	return map[string]func(ctx context.Context, b *secret.ItemKeyBlobs, key blob.Key) error{
 		"get": func(ctx context.Context, b *secret.ItemKeyBlobs, key blob.Key) error {
-			_, err := b.Get(ctx, nsA, key)
+			_, err := b.Get(ctx, nsA, key, secret.ItemKeyBlobInfo{Version: 1, Attempt: "", Size: 1, MD5: [16]byte{}})
 
 			return err
 		},
@@ -538,6 +671,7 @@ func TestItemKeyBlobsOtherNamespaceKeyLeavesTheBlobAlone(t *testing.T) {
 
 	b, store, rec := newItemKeyBlobs(t)
 	other := mustKey(t, b, nsB, secret.NewItemKeyID(), 1)
+	otherInfo := infoOf(t, other, []byte("b-secret"))
 
 	if err := b.Put(t.Context(), nsB, other, []byte("b-secret")); err != nil {
 		t.Fatalf("put in B: %v", err)
@@ -559,7 +693,7 @@ func TestItemKeyBlobsOtherNamespaceKeyLeavesTheBlobAlone(t *testing.T) {
 		t.Errorf("refusals = %d, want %d", n, len(itemKeyOps()))
 	}
 
-	if got, err := b.Get(t.Context(), nsB, other); err != nil || string(got) != "b-secret" {
+	if got, err := b.Get(t.Context(), nsB, other, otherInfo); err != nil || string(got) != "b-secret" {
 		t.Errorf("blob of B = %q, %v", got, err)
 	}
 }
@@ -569,14 +703,14 @@ func TestItemKeyBlobsRefuseWhenTheRecorderFails(t *testing.T) {
 
 	store, rec := newMemBlobs(), newFakeRecorder(errAuditDown)
 
-	b, err := secret.NewItemKeyBlobs(store, rec)
+	b, err := secret.NewItemKeyBlobs(store, rec, rec)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
 	key := mustKey(t, b, nsB, secret.NewItemKeyID(), 1)
 
-	_, getErr := b.Get(t.Context(), nsA, key)
+	_, getErr := b.Get(t.Context(), nsA, key, infoOf(t, key, []byte("x")))
 	if !errors.Is(getErr, blob.ErrOutOfScope) || !errors.Is(getErr, errAuditDown) {
 		t.Errorf("get err = %v, want ErrOutOfScope and the recorder error", getErr)
 	}
@@ -592,14 +726,17 @@ func TestItemKeyBlobsRefuseAMalformedKeyOfTheNamespace(t *testing.T) {
 	prefix := "namespaces/" + string(nsA) + "/item-keys/"
 
 	cases := map[string]string{
-		"no version":           prefix + "ik-abc",
-		"a version of zero":    prefix + "ik-abc/v0",
-		"a version with a +":   prefix + "ik-abc/v+1",
-		"a padded version":     prefix + "ik-abc/v01",
-		"no v in the version":  prefix + "ik-abc/1",
-		"a deep key":           prefix + "ik-abc/v1/x",
-		"an ID without prefix": prefix + "key-1/v1",
-		"a huge version":       prefix + "ik-abc/v" + strconv.Itoa(1<<30),
+		"no version":               prefix + "ik-abc",
+		"a version of zero":        prefix + "ik-abc/v0",
+		"a version with a +":       prefix + "ik-abc/v+1",
+		"a padded version":         prefix + "ik-abc/v01",
+		"no v in the version":      prefix + "ik-abc/1",
+		"a deep key":               prefix + "ik-abc/v1/x",
+		"an ID without prefix":     prefix + "key-1/v1",
+		"a huge version":           prefix + "ik-abc/v" + strconv.Itoa(1<<30),
+		"a short attempt part":     prefix + "ik-abc/v1-abc",
+		"an attempt in upper case": prefix + "ik-abc/v1-" + strings.ToUpper(testAttempt),
+		"two attempt parts":        prefix + "ik-abc/v1-" + testAttempt + "-" + testAttempt,
 	}
 
 	for name, key := range cases {
@@ -632,7 +769,7 @@ func TestItemKeyBlobsRefuseABadNamespaceID(t *testing.T) {
 	key := blob.Key("namespaces/" + string(nsA) + "/item-keys/ik-abc/v1")
 
 	for _, ns := range []namespace.ID{"", "ns-", "ns-A", "ns-a/b", "ns-a b"} {
-		if _, err := b.Get(t.Context(), ns, key); !errors.Is(err, blob.ErrInvalidKey) {
+		if _, err := b.Get(t.Context(), ns, key, infoOf(t, key, []byte("x"))); !errors.Is(err, blob.ErrInvalidKey) {
 			t.Errorf("get with namespace %q err = %v, want ErrInvalidKey", ns, err)
 		}
 
@@ -654,7 +791,11 @@ func TestParseItemKeyBlobKey(t *testing.T) {
 	t.Parallel()
 
 	good := func(ns namespace.ID, id secret.ItemKeyID, v int) *secret.ItemKeyBlob {
-		return &secret.ItemKeyBlob{Namespace: ns, ID: id, Version: v}
+		return &secret.ItemKeyBlob{Namespace: ns, ID: id, Version: v, Attempt: ""}
+	}
+
+	attempt := func(ns namespace.ID, id secret.ItemKeyID, v int) *secret.ItemKeyBlob {
+		return &secret.ItemKeyBlob{Namespace: ns, ID: id, Version: v, Attempt: testAttempt}
 	}
 
 	cases := []struct {
@@ -664,6 +805,17 @@ func TestParseItemKeyBlobKey(t *testing.T) {
 	}{
 		{name: "version one", key: "namespaces/ns-abc/item-keys/ik-1/v1", want: good("ns-abc", "ik-1", 1)},
 		{name: "version 40", key: "namespaces/ns-abc/item-keys/ik-1/v40", want: good("ns-abc", "ik-1", 40)},
+		{
+			name: "an attempt part", key: "namespaces/ns-abc/item-keys/ik-1/v1-" + testAttempt,
+			want: attempt("ns-abc", "ik-1", 1),
+		},
+		{
+			name: "a rewrap with an attempt part", key: "namespaces/ns-abc/item-keys/ik-1/v7-" + testAttempt,
+			want: attempt("ns-abc", "ik-1", 7),
+		},
+		{name: "a short attempt part", key: "namespaces/ns-abc/item-keys/ik-1/v1-abc", want: nil},
+		{name: "an empty attempt part", key: "namespaces/ns-abc/item-keys/ik-1/v1-", want: nil},
+		{name: "no version before the attempt", key: "namespaces/ns-abc/item-keys/ik-1/v-" + testAttempt, want: nil},
 		{name: "the old layout", key: "item-keys/ik-1", want: nil},
 		{name: "no version", key: "namespaces/ns-abc/item-keys/ik-1", want: nil},
 		{name: "version zero", key: "namespaces/ns-abc/item-keys/ik-1/v0", want: nil},
@@ -722,14 +874,14 @@ func TestItemKeyBlobsAuditEndToEnd(t *testing.T) {
 		t.Fatalf("recorder: %v", err)
 	}
 
-	b, err := secret.NewItemKeyBlobs(newMemBlobs(), rec)
+	b, err := secret.NewItemKeyBlobs(newMemBlobs(), rec, rec)
 	if err != nil {
 		t.Fatalf("blobs: %v", err)
 	}
 
 	key := blob.Key("namespaces/" + string(nsB) + "/item-keys/ik-abc/v1")
 
-	if _, getErr := b.Get(t.Context(), nsA, key); !errors.Is(getErr, blob.ErrOutOfScope) {
+	if _, getErr := b.Get(t.Context(), nsA, key, infoOf(t, key, []byte("x"))); !errors.Is(getErr, blob.ErrOutOfScope) {
 		t.Fatalf("get err = %v, want ErrOutOfScope", getErr)
 	}
 
