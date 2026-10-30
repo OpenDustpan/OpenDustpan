@@ -111,6 +111,8 @@ func checkAuditExport(ctx context.Context, t *testing.T, env *e2e.Env, org strin
 		t.Fatalf("the range holds another entry at sequence %d", from)
 	}
 
+	checkAuditExportCEF(ctx, t, env, base, len(part))
+
 	// The first export wrote one audit-read entry, which the second export
 	// reads. The entry names the scope.
 	found := false
@@ -124,6 +126,31 @@ func checkAuditExport(ctx context.Context, t *testing.T, env *e2e.Env, org strin
 
 	if !found {
 		t.Fatal("the second export holds no audit-read entry of the first export")
+	}
+}
+
+// checkAuditExportCEF proves that the CEF export of the same range holds
+// one CEF line for each JSON line, each with the sequence and the hash.
+func checkAuditExportCEF(ctx context.Context, t *testing.T, env *e2e.Env, base string, jsonLines int) {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, base+"&format=cef", "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("CEF export answers %d %v (%s)", status, err, body)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+	// The CEF export started later, so it also holds the entry of the JSON
+	// exports before it.
+	if len(lines) < jsonLines {
+		t.Fatalf("CEF export holds %d lines, want at least %d", len(lines), jsonLines)
+	}
+
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "CEF:0|OpenDustpan|OpenDustpan|1|") ||
+			!strings.Contains(line, " cs5Label=hash") {
+			t.Fatalf("CEF line = %q", line)
+		}
 	}
 }
 

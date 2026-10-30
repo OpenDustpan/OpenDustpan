@@ -135,7 +135,7 @@ func TestExportRangeAndErrors(t *testing.T) {
 		{"from sequence", "&fromSequence=2", http.StatusOK, 2},
 		{"window includes", "&from=" + ms(changeTime()) + "&to=" + ms(changeTime()), http.StatusOK, 3},
 		{"window excludes", "&to=" + ms(changeTime().Add(-time.Second)), http.StatusOK, 0},
-		{"bad format", "&format=cef", http.StatusBadRequest, 0},
+		{"bad format", "&format=xml", http.StatusBadRequest, 0},
 		{"bad from", "&from=yesterday", http.StatusBadRequest, 0},
 		{"negative to", "&to=-1", http.StatusBadRequest, 0},
 		{"reversed range", "&from=10&to=5", http.StatusBadRequest, 0},
