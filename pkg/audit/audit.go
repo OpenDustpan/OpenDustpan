@@ -333,7 +333,8 @@ func (e Entry) validatePrincipal() error {
 // knownKind reports whether k is one of the kinds of this package.
 func knownKind(k Kind) bool {
 	switch k {
-	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity, KindAccess, KindAuditRead:
+	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity, KindAccess,
+		KindAuditRead:
 		return true
 	default:
 		return false
