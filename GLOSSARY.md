@@ -1208,6 +1208,10 @@ _Avoid_: Identity provider (an identity provider signs in people), OIDC provider
 A JWT that the issuer of a namespace signs, with the claims of ADR 205. Its `purpose` is `login` or `adapter`. It lives at most 60 minutes.
 _Avoid_: ID token, access token (an access token authenticates to OpenDustpan)
 
+**Copy check**:
+The check of the two files at the `issuerURL` of a namespace. The discovery document must name the issuer and the JWKS address. The JWKS must hold the key ID of the active key, and of the next key before a promotion (ADR 204 decision 3). The server signs only with a key that a copy check found.
+_Avoid_: Sync check, key check
+
 **Subject template**:
 The list of keys that make the `sub` of an issued token, for example `namespace`, `collection`, `tool`, `unit` and `access` (ADR 205 decision 6).
 _Avoid_: Subject attributes, sub format
