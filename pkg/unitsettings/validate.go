@@ -124,6 +124,13 @@ func (w WriteBack) validate(dir string) error {
 			job.DeliveryDirectPush)
 	}
 
+	// The directory is a path of a write-back too, also when no file is set:
+	// the default file of the tool lives in it. job.ValidateEdits refuses a
+	// directory in CI configuration.
+	if err := checkWriteBackPath(dir, defaultProbeFile); err != nil {
+		return fmt.Errorf("%w: the directory is not a path that a write-back can edit", ErrInvalid)
+	}
+
 	if len(w.Files) > MaxFiles {
 		return fmt.Errorf("%w: at most %d write-back files, got %d", ErrInvalid, MaxFiles, len(w.Files))
 	}
@@ -141,11 +148,7 @@ func (w WriteBack) validate(dir string) error {
 
 		seen[f] = true
 
-		// job.ValidateEdits is the one rule of a path that a write-back may
-		// edit. The probe key makes the edit complete. Every path passes the
-		// editable rule here: the step planner of the tool applies its own.
-		probe := job.FileEdit{Path: f, Keys: map[string][]byte{"probe": []byte("1")}}
-		if err := job.ValidateEdits(dir, []job.FileEdit{probe}, func(string) bool { return true }); err != nil {
+		if err := checkWriteBackPath(dir, f); err != nil {
 			return fmt.Errorf("%w: write-back file %d: not a path that a write-back can edit", ErrInvalid, i)
 		}
 	}
@@ -185,4 +188,17 @@ func orDefault(v, def string) string {
 	}
 
 	return v
+}
+
+// defaultProbeFile stands in for the default file of the tool when the check
+// has only the directory.
+const defaultProbeFile = "unit.json"
+
+// checkWriteBackPath uses job.ValidateEdits, the one rule of a path that a
+// write-back may edit. The probe key makes the edit complete. Every path
+// passes the editable rule here: the step planner of the tool applies its own.
+func checkWriteBackPath(dir, file string) error {
+	probe := job.FileEdit{Path: file, Keys: map[string][]byte{"probe": []byte("1")}}
+
+	return job.ValidateEdits(dir, []job.FileEdit{probe}, func(string) bool { return true })
 }

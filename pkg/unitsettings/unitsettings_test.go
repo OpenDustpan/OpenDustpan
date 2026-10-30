@@ -87,6 +87,9 @@ func hostileCases() []hostileCase {
 		{"absolute directory", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "/etc" }},
 		{"root spelled as one period", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "." }},
 		{"directory in CI configuration", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "a/.github/b" }},
+		{"directory in CI configuration with no file", func(s *unitsettings.Settings) {
+			s.CodeLocation.Directory, s.WriteBack.Files = "a/.github/b", nil
+		}},
 		{"directory with a control character", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "a\nb" }},
 		{"ref with a leading dash", func(s *unitsettings.Settings) { s.CodeLocation.Ref = "--upload-pack=x" }},
 		{"ref with a control character", func(s *unitsettings.Settings) { s.CodeLocation.Ref = "main\x00" }},
