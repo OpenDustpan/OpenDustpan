@@ -22,6 +22,8 @@
 #   BENCH_S3_PROTOCOL_PROFILES
 #                   profiles of the protocol run, split by spaces
 #                   (default "same-az cross-az eu-metro")
+#   BENCH_S3_MINIO_TMPFS
+#                   size of the tmpfs that holds the MinIO data (default 8g)
 #   BENCH_S3_PORT   first host port; the run uses this port (Toxiproxy API)
 #                   and the next three (MinIO, Garage, PostgreSQL)
 #                   (default 18474)
@@ -124,7 +126,10 @@ docker run -d --name "$NAME-postgres" --network "$NET" --network-alias postgres 
 # MinIO moves a deleted object to a trash directory and empties it every
 # 5 minutes by default. A protocol run writes and deletes gigabytes in that
 # time, so MinIO runs out of disk and answers 507. A cleanup every 5 seconds
-# frees the space between two runs.
+# frees the space between two runs. The data directory is a tmpfs: on a
+# host whose disk is a share of a larger file system, MinIO can read the
+# free space wrong and answer 507 while space is free. A tmpfs reports its
+# own size, so MinIO sees the real free space.
 echo "bench-s3: start MinIO"
 docker run -d --name "$NAME-minio" --network "$NET" --network-alias minio \
 	-v "$SECRETS/minio-access:/run/secrets/minio-access:ro" \
@@ -132,6 +137,7 @@ docker run -d --name "$NAME-minio" --network "$NET" --network-alias minio \
 	-e MINIO_ROOT_USER_FILE=/run/secrets/minio-access \
 	-e MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-secret \
 	-e MINIO_API_DELETE_CLEANUP_INTERVAL=5s \
+	--tmpfs "/tmp/data:rw,size=${BENCH_S3_MINIO_TMPFS:-8g}" \
 	"$MINIO_IMAGE" server /tmp/data >/dev/null
 
 echo "bench-s3: start Garage"
