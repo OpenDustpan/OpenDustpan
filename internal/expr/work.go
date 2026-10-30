@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -40,6 +41,7 @@ var (
 	errAlive      = errors.New("the run has ended")
 	errNotString  = errors.New("a string function got another type")
 	errEnvTooBig  = errors.New("the environment is above the limit")
+	errEnvType    = errors.New("the environment holds a value of another type than JSON")
 	errBusy       = errors.New("too many runs have not ended")
 	errBadPattern = errors.New("the pattern is not a valid regular expression")
 )
@@ -242,22 +244,35 @@ func isMetered(name string) bool {
 	}, name)
 }
 
-// envSize counts the bytes of the strings and the items of an environment.
-type envSize struct{ left int }
+// envSize counts the bytes of the strings and the items of an environment, and
+// refuses a value that is not a JSON value.
+type envSize struct {
+	left int
+	err  error
+}
 
 func (s *envSize) take(n int) bool {
 	s.left -= n
 
-	return s.left >= 0
+	if s.left < 0 && s.err == nil {
+		s.err = fmt.Errorf("%w: the limit is %d bytes", errEnvTooBig, MaxEnvBytes)
+	}
+
+	return s.err == nil
 }
 
-// value counts one JSON value, as encoding/json decodes it.
+// value counts one JSON value, as encoding/json decodes it: nil, a boolean, a
+// number (float64 or json.Number), a string, a list or an object. A value of
+// another type is refused, because its size is not known: the size of a
+// []string of 1 MiB must not count as one item.
 func (s *envSize) value(v any) bool {
 	if !s.take(1) {
 		return false
 	}
 
 	switch x := v.(type) {
+	case nil, bool, float64, json.Number:
+		return true
 	case string:
 		return s.take(len(x))
 	case []any:
@@ -265,7 +280,11 @@ func (s *envSize) value(v any) bool {
 	case map[string]any:
 		return s.object(x)
 	default:
-		return true
+		if s.err == nil {
+			s.err = fmt.Errorf("%w: %T is not a JSON value", errEnvType, v)
+		}
+
+		return false
 	}
 }
 
@@ -290,9 +309,9 @@ func (s *envSize) object(fields map[string]any) bool {
 }
 
 // checkEnvSize refuses an environment with more than MaxEnvBytes bytes of
-// strings and items.
+// strings and items, and a value that is not a JSON value.
 func checkEnvSize(env *catalog.Env) error {
-	s := &envSize{left: MaxEnvBytes}
+	s := &envSize{left: MaxEnvBytes, err: nil}
 	req := &env.Request
 
 	ok := s.value(env.Value) && s.value(env.Input) && s.object(env.Inputs) &&
@@ -307,10 +326,38 @@ func checkEnvSize(env *catalog.Env) error {
 	}
 
 	if !ok {
-		return fmt.Errorf("%w: the limit is %d bytes", errEnvTooBig, MaxEnvBytes)
+		return s.err
 	}
 
 	return nil
+}
+
+// MaxErrorBytes bounds the text of the error of a failed run. The library
+// quotes values of the environment in its messages, and a value can be large.
+const MaxErrorBytes = 256
+
+// clipped is an error with a message of at most MaxErrorBytes bytes. It
+// unwraps to the error that it clips, so errors.Is still finds the cause.
+type clipped struct {
+	msg string
+	err error
+}
+
+func (c *clipped) Error() string { return c.msg }
+
+func (c *clipped) Unwrap() error { return c.err }
+
+// clip returns err with a message of at most MaxErrorBytes bytes, cut at a
+// character boundary. An error with a short message is returned as it is.
+func clip(err error) error {
+	msg := err.Error()
+	if len(msg) <= MaxErrorBytes {
+		return err
+	}
+
+	msg = strings.ToValidUTF8(msg[:MaxErrorBytes], "")
+
+	return &clipped{msg: msg + "...", err: err}
 }
 
 // prepare compiles the pattern of a matches into r.regexps. It returns false
