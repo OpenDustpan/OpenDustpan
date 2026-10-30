@@ -323,6 +323,8 @@ How-to guides:
   of an OpenTofu workspace and read its latest drift result.
 - [Run triggers](docs/guides/run-triggers.md): save a trigger on a stack or a
   workspace, fire it by hand, and see what the server checks.
+- [The planner role](docs/guides/planner-role.md): what a planner can do, what
+  it cannot do, and the limit of the role on a workstation.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.

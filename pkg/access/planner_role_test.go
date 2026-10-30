@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
@@ -60,6 +61,27 @@ func TestPlannerRole(t *testing.T) {
 				t.Errorf("planner holds %s = %t, want %t", tc.action, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestPlannerActionSet pins the actions of planner as a set: exactly the
+// actions of viewer, unit:run-plan and job:read-plans. A new action in the
+// role, or a viewer action that leaves it, fails this test.
+func TestPlannerActionSet(t *testing.T) {
+	t.Parallel()
+
+	viewer, _ := access.BuiltInRole(access.RoleViewer)
+	planner, _ := access.BuiltInRole(access.RolePlanner)
+
+	want := slices.Clone(viewer.Actions)
+	want = append(want, identity.ActionUnitRunPlan, identity.ActionJobReadPlans)
+	slices.Sort(want)
+
+	got := slices.Clone(planner.Actions)
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("planner actions = %v, want the viewer actions, unit:run-plan and job:read-plans: %v", got, want)
 	}
 }
 

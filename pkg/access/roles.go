@@ -19,9 +19,9 @@ const (
 	// RoleSecretViewer reads like a viewer, and reveals secret values
 	// (ADR 41, decision 4).
 	RoleSecretViewer = "secret-viewer"
-	// RolePlanner reads like a viewer, starts a
-	// runner job that only plans, and reads the masked plans. It cannot
-	// apply, destroy, approve or read a secret value.
+	// RolePlanner reads like a viewer, starts a runner job that only plans,
+	// and reads the masked plans. It cannot apply, destroy, approve or read
+	// a secret value.
 	RolePlanner = "planner"
 	// RoleWriter reads, and runs updates and applies: it reads state with
 	// plain secret values and writes it, sets the context of units, and

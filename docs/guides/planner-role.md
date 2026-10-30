@@ -24,6 +24,13 @@ The role does not hold these actions:
   stays masked.
 - `unit:write`, `unit:encrypt`, `unit:decrypt` and `unit:set-context`.
 
+## Pulumi jobs
+
+A Pulumi job has no stored plan. Its preview is in the step log, and
+`job:read-logs` reads the step log. The role `planner` holds `job:read-plans`
+and does not hold `job:read-logs`, so a planner reads a Pulumi preview only
+when another grant gives `job:read-logs`.
+
 ## Secrets in a plan job
 
 A plan job that a planner starts gets the secrets of the unit only when its
