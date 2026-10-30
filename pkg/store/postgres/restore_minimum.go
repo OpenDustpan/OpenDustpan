@@ -18,6 +18,14 @@ import (
 // between the check and the swap. It is a control-path check: the exemption
 // for maintenance mode stays, because it reads no installation state.
 func (s *Store) checkSwapMinimum(ctx context.Context, tx pgx.Tx) error {
+	return s.checkTxMinimum(ctx, tx)
+}
+
+// checkTxMinimum reads the minimum binary versions of the live schema in tx
+// and returns a *schema.MinimumError when the binary of this store is below
+// the highest one. It fails closed with maintenance.ErrUnavailable when the
+// read fails.
+func (s *Store) checkTxMinimum(ctx context.Context, tx pgx.Tx) error {
 	var minimums []string
 
 	if err := tx.QueryRow(ctx, `SELECT `+minimumsSQL).Scan(&minimums); err != nil {

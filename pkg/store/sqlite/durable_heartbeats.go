@@ -29,7 +29,7 @@ func (o *DurableOperations) Beat(ctx context.Context, owner string, lease time.D
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		now, err := storeNow(ctx, q)
 		if err != nil {
 			return err
