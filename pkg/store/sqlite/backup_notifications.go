@@ -44,7 +44,7 @@ LIMIT 1`
 // name a sink, a subscription or a notification that the store no longer holds,
 // but never one that another scope owns.
 const (
-	stagedSecretSinkQuery = `SELECT s.ref FROM notification_sink_secrets AS s
+	stagedItemSinkQuery = `SELECT s.ref FROM notification_sink_secrets AS s
 LEFT JOIN notification_sinks AS k ON k.id = s.sink_id
 WHERE k.id IS NULL OR k.scope <> s.scope
 LIMIT 1`
@@ -83,7 +83,7 @@ func checkStagedNotifications(ctx context.Context, conn *sql.DB) error {
 		{stagedScopeQuery, "a scope that names no namespace of the backup"},
 		{stagedSequenceQuery, "a notification above the last sequence of its scope"},
 		{stagedCursorQuery, "a cursor above the last sequence of its scope"},
-		{stagedSecretSinkQuery, "a sink secret whose sink is missing or in another scope"},
+		{stagedItemSinkQuery, "a sink secret whose sink is missing or in another scope"},
 		{stagedSubscriptionSinkQuery, "a subscription whose sink is missing or in another scope"},
 		{stagedDeliverySinkQuery, "a delivery that names a sink of another scope"},
 		{stagedDeliverySubscriptionQuery, "a delivery that names a subscription of another scope"},

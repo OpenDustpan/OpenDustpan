@@ -145,20 +145,22 @@ func testNotFoundIsUniform(t *testing.T, h Harness) {
 	}
 
 	otherSink := sink("snk-o", other)
-	if putErr := h.Subscriptions.PutSink(t.Context(), otherSink, fresh(t.Context(), otherSink), otherFence,
-		entry(other)); putErr != nil {
+	putErr := h.Subscriptions.PutSink(t.Context(), otherSink, fresh(t.Context(), otherSink), otherFence,
+		entry(other))
+	if putErr != nil {
 		t.Fatalf("PutSink in other: %v", putErr)
 	}
 
 	otherSub := subscriptionIn(other, "snk-o")
 	otherSub.ID = "sub-o"
 
-	if putErr := h.Subscriptions.PutSubscription(t.Context(), otherSub, otherFence, entry(other)); putErr != nil {
-		t.Fatalf("PutSubscription in other: %v", putErr)
+	if subErr := h.Subscriptions.PutSubscription(t.Context(), otherSub, otherFence, entry(other)); subErr != nil {
+		t.Fatalf("PutSubscription in other: %v", subErr)
 	}
 
-	if enqErr := h.Deliveries.Enqueue(t.Context(), otherFence,
-		[]notify.Delivery{deliveryIn(other, "dlv-o", "ntf-o", now())}); enqErr != nil {
+	enqErr := h.Deliveries.Enqueue(t.Context(), otherFence,
+		[]notify.Delivery{deliveryIn(other, "dlv-o", "ntf-o", now())})
+	if enqErr != nil {
 		t.Fatalf("Enqueue in other: %v", enqErr)
 	}
 
