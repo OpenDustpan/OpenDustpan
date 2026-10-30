@@ -40,34 +40,6 @@
       }
     },
     "schemas": {
-      "AcceptGitHostLinkRequest": {
-        "properties": {
-          "previousPrincipal": {
-            "type": "string"
-          },
-          "token": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "token"
-        ],
-        "type": "object"
-      },
-      "AcceptGitHostLinkResponse": {
-        "properties": {
-          "link": {
-            "$ref": "#/components/schemas/GitHostLink"
-          },
-          "replacedPrincipal": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "link"
-        ],
-        "type": "object"
-      },
       "AddRegistryKeyRequest": {
         "properties": {
           "armoredPublicKey": {
@@ -787,26 +759,6 @@
           "target",
           "urlSet",
           "version"
-        ],
-        "type": "object"
-      },
-      "CurrentGitHostLink": {
-        "properties": {
-          "displayName": {
-            "type": "string"
-          },
-          "linkedAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "principal": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "displayName",
-          "linkedAt",
-          "principal"
         ],
         "type": "object"
       },
@@ -1630,44 +1582,6 @@
           "id",
           "kind",
           "login"
-        ],
-        "type": "object"
-      },
-      "GitHostLinkRequest": {
-        "properties": {
-          "account": {
-            "$ref": "#/components/schemas/GitHostLinkAccount"
-          },
-          "createdAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "currentLink": {
-            "$ref": "#/components/schemas/CurrentGitHostLink"
-          },
-          "expiresAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "proved": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "createdAt",
-          "expiresAt",
-          "proved"
-        ],
-        "type": "object"
-      },
-      "GitHostLinkTokenRequest": {
-        "properties": {
-          "token": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "token"
         ],
         "type": "object"
       },
@@ -3639,27 +3553,6 @@
         },
         "type": "object"
       },
-      "StartGitHostLinkResponse": {
-        "properties": {
-          "createdAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "expiresAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "token": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "createdAt",
-          "expiresAt",
-          "token"
-        ],
-        "type": "object"
-      },
       "StartJobRequest": {
         "properties": {
           "location": {
@@ -4853,88 +4746,6 @@
         ]
       }
     },
-    "/api/dustpan/v1/me/linked-account-requests": {
-      "post": {
-        "operationId": "startGitHostLinkRequest",
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StartGitHostLinkResponse"
-                }
-              }
-            },
-            "description": "The request succeeded."
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorAnswer"
-                }
-              }
-            },
-            "description": "The request failed."
-          }
-        },
-        "tags": [
-          "git-host-links"
-        ],
-        "x-dustpan-actions": [
-          {
-            "action": "caller:manage-git-host-links",
-            "object": "caller"
-          }
-        ]
-      }
-    },
-    "/api/dustpan/v1/me/linked-account-requests/show": {
-      "post": {
-        "operationId": "showGitHostLinkRequest",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GitHostLinkTokenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GitHostLinkRequest"
-                }
-              }
-            },
-            "description": "The request succeeded."
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorAnswer"
-                }
-              }
-            },
-            "description": "The request failed."
-          }
-        },
-        "tags": [
-          "git-host-links"
-        ],
-        "x-dustpan-actions": [
-          {
-            "action": "caller:manage-git-host-links",
-            "object": "caller"
-          }
-        ]
-      }
-    },
     "/api/dustpan/v1/me/linked-accounts": {
       "get": {
         "operationId": "listGitHostLinks",
@@ -4966,50 +4777,6 @@
         "x-dustpan-actions": [
           {
             "action": "caller:read",
-            "object": "caller"
-          }
-        ]
-      },
-      "post": {
-        "operationId": "acceptGitHostLink",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AcceptGitHostLinkRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AcceptGitHostLinkResponse"
-                }
-              }
-            },
-            "description": "The request succeeded."
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorAnswer"
-                }
-              }
-            },
-            "description": "The request failed."
-          }
-        },
-        "tags": [
-          "git-host-links"
-        ],
-        "x-dustpan-actions": [
-          {
-            "action": "caller:manage-git-host-links",
             "object": "caller"
           }
         ]

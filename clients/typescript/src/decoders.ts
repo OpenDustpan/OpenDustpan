@@ -20,8 +20,6 @@ import {
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
 import type {
-  AcceptGitHostLinkRequest,
-  AcceptGitHostLinkResponse,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
@@ -52,7 +50,6 @@ import type {
   CreateProfileRevisionRequest,
   CreateViewRequest,
   CreatedNotificationSink,
-  CurrentGitHostLink,
   DeletedUnit,
   DriftCheck,
   DriftCheckLocation,
@@ -74,8 +71,6 @@ import type {
   GitHostInstallation,
   GitHostLink,
   GitHostLinkAccount,
-  GitHostLinkRequest,
-  GitHostLinkTokenRequest,
   Job,
   JobApproval,
   JobBreakGlass,
@@ -155,7 +150,6 @@ import type {
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
   StartDriftCheckRequest,
-  StartGitHostLinkResponse,
   StartJobRequest,
   StateVersionRevealPathTooLongError,
   StateVersionRevealPathTooLongErrorArgs,
@@ -198,18 +192,6 @@ import {
   TriggerFrequencyPresetValues,
   TriggerKindValues,
 } from "./types.js";
-
-/** The validator of AcceptGitHostLinkRequest. */
-export const decodeAcceptGitHostLinkRequest: Decoder<AcceptGitHostLinkRequest> = object<AcceptGitHostLinkRequest>("AcceptGitHostLinkRequest", {
-  previousPrincipal: optional(string),
-  token: string,
-});
-
-/** The validator of AcceptGitHostLinkResponse. */
-export const decodeAcceptGitHostLinkResponse: Decoder<AcceptGitHostLinkResponse> = object<AcceptGitHostLinkResponse>("AcceptGitHostLinkResponse", {
-  link: ref(() => decodeGitHostLink),
-  replacedPrincipal: optional(string),
-});
 
 /** The validator of AddRegistryKeyRequest. */
 export const decodeAddRegistryKeyRequest: Decoder<AddRegistryKeyRequest> = object<AddRegistryKeyRequest>("AddRegistryKeyRequest", {
@@ -425,13 +407,6 @@ export const decodeCreatedNotificationSink: Decoder<CreatedNotificationSink> = o
   version: int64,
 });
 
-/** The validator of CurrentGitHostLink. */
-export const decodeCurrentGitHostLink: Decoder<CurrentGitHostLink> = object<CurrentGitHostLink>("CurrentGitHostLink", {
-  displayName: string,
-  linkedAt: dateTime,
-  principal: string,
-});
-
 /** The validator of DeletedUnit. */
 export const decodeDeletedUnit: Decoder<DeletedUnit> = object<DeletedUnit>("DeletedUnit", {
   deletedAt: string,
@@ -608,20 +583,6 @@ export const decodeGitHostLinkAccount: Decoder<GitHostLinkAccount> = object<GitH
   id: string,
   kind: string,
   login: string,
-});
-
-/** The validator of GitHostLinkRequest. */
-export const decodeGitHostLinkRequest: Decoder<GitHostLinkRequest> = object<GitHostLinkRequest>("GitHostLinkRequest", {
-  account: optional(ref(() => decodeGitHostLinkAccount)),
-  createdAt: dateTime,
-  currentLink: optional(ref(() => decodeCurrentGitHostLink)),
-  expiresAt: dateTime,
-  proved: boolean,
-});
-
-/** The validator of GitHostLinkTokenRequest. */
-export const decodeGitHostLinkTokenRequest: Decoder<GitHostLinkTokenRequest> = object<GitHostLinkTokenRequest>("GitHostLinkTokenRequest", {
-  token: string,
 });
 
 /** The validator of Job. */
@@ -1240,13 +1201,6 @@ export const decodeStartDriftCheckRequest: Decoder<StartDriftCheckRequest> = obj
   location: optional(ref(() => decodeDriftCheckLocation)),
   pool: optional(string),
   reason: optional(string),
-});
-
-/** The validator of StartGitHostLinkResponse. */
-export const decodeStartGitHostLinkResponse: Decoder<StartGitHostLinkResponse> = object<StartGitHostLinkResponse>("StartGitHostLinkResponse", {
-  createdAt: dateTime,
-  expiresAt: dateTime,
-  token: string,
 });
 
 /** The validator of StartJobRequest. */

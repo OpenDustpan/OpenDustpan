@@ -4,7 +4,6 @@ import { execute } from "./execute.js";
 import type { Answer } from "./execute.js";
 import { operations } from "./operations.js";
 import type {
-  AcceptGitHostLinkInput,
   AddRegistryKeyInput,
   CheckGitHostConnectionInput,
   CreateCollectionInput,
@@ -84,10 +83,8 @@ import type {
   SetApprovalRuleInput,
   SetOutputSharingInput,
   SetSourceFilterInput,
-  ShowGitHostLinkRequestInput,
   StageRegistryUploadInput,
   StartDriftCheckInput,
-  StartGitHostLinkRequestInput,
   StartJobInput,
   TestNotificationSinkInput,
   UnlockCollectionInput,
@@ -98,8 +95,6 @@ import type {
 } from "./operations.js";
 import type { ApiTransport } from "./transport.js";
 import type {
-  AcceptGitHostLinkRequest,
-  AcceptGitHostLinkResponse,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
@@ -130,7 +125,6 @@ import type {
   CreateProfileRevisionRequest,
   CreateViewRequest,
   CreatedNotificationSink,
-  CurrentGitHostLink,
   DeletedUnit,
   DriftCheck,
   DriftCheckLocation,
@@ -152,8 +146,6 @@ import type {
   GitHostInstallation,
   GitHostLink,
   GitHostLinkAccount,
-  GitHostLinkRequest,
-  GitHostLinkTokenRequest,
   Job,
   JobApproval,
   JobBreakGlass,
@@ -233,7 +225,6 @@ import type {
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
   StartDriftCheckRequest,
-  StartGitHostLinkResponse,
   StartJobRequest,
   StateVersionRevealPathTooLongError,
   StateVersionRevealPathTooLongErrorArgs,
@@ -272,10 +263,6 @@ export class Client {
 
   constructor(transport: ApiTransport) {
     this.transport = transport;
-  }
-
-  acceptGitHostLink(input: AcceptGitHostLinkInput): Promise<Answer<AcceptGitHostLinkResponse>> {
-    return execute(this.transport, operations.acceptGitHostLink, input);
   }
 
   addRegistryKey(input: AddRegistryKeyInput): Promise<Answer<RegistryKey>> {
@@ -594,20 +581,12 @@ export class Client {
     return execute(this.transport, operations.setSourceFilter, input);
   }
 
-  showGitHostLinkRequest(input: ShowGitHostLinkRequestInput): Promise<Answer<GitHostLinkRequest>> {
-    return execute(this.transport, operations.showGitHostLinkRequest, input);
-  }
-
   stageRegistryUpload(input: StageRegistryUploadInput): Promise<Answer<StagedUpload>> {
     return execute(this.transport, operations.stageRegistryUpload, input);
   }
 
   startDriftCheck(input: StartDriftCheckInput): Promise<Answer<DriftCheck>> {
     return execute(this.transport, operations.startDriftCheck, input);
-  }
-
-  startGitHostLinkRequest(input: StartGitHostLinkRequestInput = {}): Promise<Answer<StartGitHostLinkResponse>> {
-    return execute(this.transport, operations.startGitHostLinkRequest, input);
   }
 
   startJob(input: StartJobInput): Promise<Answer<Job>> {

@@ -2,8 +2,6 @@
 
 import { anyValue, array, boolean, dateTime, int64, nullable, number, record, ref, string } from "./decode.js";
 import {
-  decodeAcceptGitHostLinkRequest,
-  decodeAcceptGitHostLinkResponse,
   decodeAddRegistryKeyRequest,
   decodeApiDescription,
   decodeApprovalDefault,
@@ -34,7 +32,6 @@ import {
   decodeCreateProfileRevisionRequest,
   decodeCreateViewRequest,
   decodeCreatedNotificationSink,
-  decodeCurrentGitHostLink,
   decodeDeletedUnit,
   decodeDriftCheck,
   decodeDriftCheckLocation,
@@ -56,8 +53,6 @@ import {
   decodeGitHostInstallation,
   decodeGitHostLink,
   decodeGitHostLinkAccount,
-  decodeGitHostLinkRequest,
-  decodeGitHostLinkTokenRequest,
   decodeJob,
   decodeJobApproval,
   decodeJobBreakGlass,
@@ -137,7 +132,6 @@ import {
   decodeStackRevealPathTooLongErrorArgs,
   decodeStagedUpload,
   decodeStartDriftCheckRequest,
-  decodeStartGitHostLinkResponse,
   decodeStartJobRequest,
   decodeStateVersionRevealPathTooLongError,
   decodeStateVersionRevealPathTooLongErrorArgs,
@@ -171,8 +165,6 @@ import {
 } from "./decoders.js";
 import { operation } from "./execute.js";
 import type {
-  AcceptGitHostLinkRequest,
-  AcceptGitHostLinkResponse,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
@@ -203,7 +195,6 @@ import type {
   CreateProfileRevisionRequest,
   CreateViewRequest,
   CreatedNotificationSink,
-  CurrentGitHostLink,
   DeletedUnit,
   DriftCheck,
   DriftCheckLocation,
@@ -225,8 +216,6 @@ import type {
   GitHostInstallation,
   GitHostLink,
   GitHostLinkAccount,
-  GitHostLinkRequest,
-  GitHostLinkTokenRequest,
   Job,
   JobApproval,
   JobBreakGlass,
@@ -306,7 +295,6 @@ import type {
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
   StartDriftCheckRequest,
-  StartGitHostLinkResponse,
   StartJobRequest,
   StateVersionRevealPathTooLongError,
   StateVersionRevealPathTooLongErrorArgs,
@@ -338,12 +326,6 @@ import type {
   WorkspaceNoStateAtError,
   WorkspaceNoStateAtErrorArgs,
 } from "./types.js";
-
-/** The input of the operation acceptGitHostLink. */
-export interface AcceptGitHostLinkInput {
-  readonly body: AcceptGitHostLinkRequest;
-  readonly signal?: AbortSignal;
-}
 
 /** The input of the operation addRegistryKey. */
 export interface AddRegistryKeyInput {
@@ -1166,12 +1148,6 @@ export interface SetSourceFilterInput {
   readonly signal?: AbortSignal;
 }
 
-/** The input of the operation showGitHostLinkRequest. */
-export interface ShowGitHostLinkRequestInput {
-  readonly body: GitHostLinkTokenRequest;
-  readonly signal?: AbortSignal;
-}
-
 /** The input of the operation stageRegistryUpload. */
 export interface StageRegistryUploadInput {
   readonly path: {
@@ -1187,11 +1163,6 @@ export interface StartDriftCheckInput {
     readonly unit_id: string;
   };
   readonly body: StartDriftCheckRequest;
-  readonly signal?: AbortSignal;
-}
-
-/** The input of the operation startGitHostLinkRequest. */
-export interface StartGitHostLinkRequestInput {
   readonly signal?: AbortSignal;
 }
 
@@ -1263,23 +1234,6 @@ export interface UpdateUnitContextInput {
 
 /** The operations of the API description, by operationId. */
 export const operations = {
-  acceptGitHostLink: operation<AcceptGitHostLinkResponse>(
-    {
-      id: "acceptGitHostLink",
-      method: "POST",
-      path: "/api/dustpan/v1/me/linked-accounts",
-      pathParameters: [],
-      queryParameters: [],
-      security: "caller",
-      idempotencyKey: "none",
-      ifMatch: "none",
-      requiredQueryParameters: [],
-      requestBody: "application/json",
-      requestBodyRequired: true,
-      statuses: [201],
-    },
-    ref(() => decodeAcceptGitHostLinkResponse),
-  ),
   addRegistryKey: operation<RegistryKey>(
     {
       id: "addRegistryKey",
@@ -2623,23 +2577,6 @@ export const operations = {
     },
     ref(() => decodeSourceFilter),
   ),
-  showGitHostLinkRequest: operation<GitHostLinkRequest>(
-    {
-      id: "showGitHostLinkRequest",
-      method: "POST",
-      path: "/api/dustpan/v1/me/linked-account-requests/show",
-      pathParameters: [],
-      queryParameters: [],
-      security: "caller",
-      idempotencyKey: "none",
-      ifMatch: "none",
-      requiredQueryParameters: [],
-      requestBody: "application/json",
-      requestBodyRequired: true,
-      statuses: [200],
-    },
-    ref(() => decodeGitHostLinkRequest),
-  ),
   stageRegistryUpload: operation<StagedUpload>(
     {
       id: "stageRegistryUpload",
@@ -2673,23 +2610,6 @@ export const operations = {
       statuses: [202],
     },
     ref(() => decodeDriftCheck),
-  ),
-  startGitHostLinkRequest: operation<StartGitHostLinkResponse>(
-    {
-      id: "startGitHostLinkRequest",
-      method: "POST",
-      path: "/api/dustpan/v1/me/linked-account-requests",
-      pathParameters: [],
-      queryParameters: [],
-      security: "caller",
-      idempotencyKey: "none",
-      ifMatch: "none",
-      requiredQueryParameters: [],
-      requestBody: undefined,
-      requestBodyRequired: false,
-      statuses: [201],
-    },
-    ref(() => decodeStartGitHostLinkResponse),
   ),
   startJob: operation<Job>(
     {
