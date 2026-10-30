@@ -223,6 +223,8 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		ManualLocks: nil,
+		// The updates service never deletes a blob here, so it has no guard.
+		BlobGuard: nil,
 		// The store never serves a request: only ActiveUpdate runs, and it
 		// answers not found. The embedded stores stay nil on purpose.
 		Updates:            coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},

@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -279,7 +280,12 @@ type Config struct {
 	Sealer Sealer
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger
-	Now    func() time.Time
+	// BlobGuard tells whether a backup or a restore runs. The delete of the
+	// state blobs of a purged workspace asks it after the commit of the purge
+	// and runs only when nothing runs. Nil is a guard that never lets a
+	// delete run: the blobs stay for the retention sweep.
+	BlobGuard blobguard.Watch
+	Now       func() time.Time
 	// MaxStateBytes bounds one state version; zero means DefaultMaxStateBytes.
 	MaxStateBytes int64
 	// MaxPendingVersions bounds the pending state versions of one
@@ -335,6 +341,7 @@ type Service struct {
 	namespaces *namespace.Service
 	sealer     Sealer
 	logger     *slog.Logger
+	guard      blobguard.Watch
 	now        func() time.Time
 	maxState   int64
 	maxPending int
@@ -384,6 +391,7 @@ func NewService(cfg Config) (*Service, error) {
 		namespaces: cfg.Namespaces,
 		sealer:     cfg.Sealer,
 		logger:     cfg.Logger,
+		guard:      cfg.BlobGuard,
 		now:        cfg.Now,
 		maxState:   cfg.MaxStateBytes,
 		maxPending: cfg.MaxPendingVersions,
@@ -595,11 +603,23 @@ func (s *Service) PurgeExpired(
 // never from a request field. The purge runs it after the rows are gone, so no
 // upload can still commit a row that names these blobs. It returns an error
 // when a blob may remain, so the caller keeps the blob purge record for the
-// sweep. No log line and no error names a blob key.
+// sweep. A running backup or restore keeps every blob and returns an error that matches
+// blobguard.ErrWait. No log line and no error names a blob key.
 func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID) error {
 	listed, err := s.blobs.list(ctx, ns, id)
 	if err != nil {
 		return fmt.Errorf("list state blobs of workspace %s: %w", id, err)
+	}
+
+	if len(listed) == 0 {
+		return nil
+	}
+
+	// The guard comes after the commit of the purge and after the listing. A
+	// backup or a restore that runs, or a failed read, keeps every blob: the
+	// error keeps the blob purge record, and the retention sweep tries again.
+	if err := blobguard.Hold(ctx, s.guard); err != nil {
+		return fmt.Errorf("delete state blobs of workspace %s: %w", id, err)
 	}
 
 	failed := 0

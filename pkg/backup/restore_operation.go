@@ -138,12 +138,13 @@ package backup
 //     data names exists, and copies a missing one again from the pinned
 //     backup, before leave-maintenance.
 //
-// No blob deleter waits for a running restore yet: the guard port of the
-// blob deletes does not exist. So the after-apply check is the only
-// protection, and a deleter that runs at any time during the restore, and
-// deletes a key after that check, can delete a blob that the restored data
-// names. The guard must count a restore row that is checking or applying as
-// running.
+// A restore that is checking or applying counts as running work for the guard
+// of the blob deletes (blobguard.Watch): the store answers it from the
+// restores row, in the same read that finds a running backup. So the deleters
+// of the blobs that a backup or restored data can name wait while the restore
+// runs. A deleter that read the guard before the restore started, and stalls
+// until after the check of after-apply, can still delete a blob that the
+// restored data names. The check of after-apply cannot close that window.
 //
 // # Failure, cancel and the end of the operation
 //

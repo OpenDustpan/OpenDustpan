@@ -71,6 +71,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -171,7 +172,10 @@ type settings struct {
 	devRefusal *devRefusalState
 	// stackRefusals records the refusals of the stack blob scope. newServices
 	// builds it once.
-	stackRefusals   scopeaudit.Recorder
+	stackRefusals scopeaudit.Recorder
+	// blobGuard tells the blob deleters whether a backup or a restore runs.
+	// newUpdateService attaches it.
+	blobGuard       blobguard.Watch
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -748,6 +752,7 @@ func defaultSettings() *settings {
 		denialLimiter:           defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
+		blobGuard:               nil,
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -1684,6 +1689,7 @@ func newWorkspaceService(
 		MaxPendingVersions: 0,
 		Retention:          cfg.softDeleteRetention,
 		ManualLocks:        locks,
+		BlobGuard:          cfg.blobGuard,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace service: %w", err)
@@ -1720,6 +1726,8 @@ func newUpdateService(
 		locks = manual
 	}
 
+	attachBlobGuard(cfg)
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
@@ -1735,6 +1743,7 @@ func newUpdateService(
 		Journal:            journal,
 		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 		ManualLocks:        locks,
+		BlobGuard:          cfg.blobGuard,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)

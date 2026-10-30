@@ -15,6 +15,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -385,6 +387,20 @@ func newBuildFixtureWith(
 ) *buildFixture {
 	t.Helper()
 
+	return newBuildFixtureGuarded(t, clk, replayer, wrap, blobguardtest.None{})
+}
+
+// newBuildFixtureGuarded is newBuildFixtureWith with guard as the guard of
+// the blob deletes.
+func newBuildFixtureGuarded(
+	t *testing.T,
+	clk *clock,
+	replayer stack.JournalReplayer,
+	wrap func(*journalMemStore) stack.CheckpointStore,
+	guard blobguard.Watch,
+) *buildFixture {
+	t.Helper()
+
 	store := newJournalMemStore()
 
 	var checkpoints stack.CheckpointStore = store
@@ -419,6 +435,7 @@ func newBuildFixtureWith(
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,
 		Checkpoints:        checkpoints,

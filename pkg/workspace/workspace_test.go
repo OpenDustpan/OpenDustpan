@@ -23,6 +23,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -1109,6 +1111,14 @@ func openFixtureBlobs(t *testing.T) *fs.Store {
 func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	t.Helper()
 
+	return newFixtureGuarded(t, blobs, blobguardtest.None{})
+}
+
+// newFixtureGuarded is newFixtureWithBlobs with guard as the guard of the
+// blob deletes.
+func newFixtureGuarded(t *testing.T, blobs blob.Store, guard blobguard.Watch) fixture {
+	t.Helper()
+
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
@@ -1133,6 +1143,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	refusals := workspacetest.NewRefusals()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -1176,6 +1187,7 @@ func TestDeleteRecordsRetention(t *testing.T) {
 	f := newFixture(t)
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
@@ -1289,6 +1301,7 @@ func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
 	}
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             goneStates{StateStore: f.store},
@@ -1399,6 +1412,7 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 	var svc *workspace.Service
 
 	svc, err = workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -1572,6 +1586,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
@@ -3204,6 +3219,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         gated,
 		States:             gated,
@@ -3389,6 +3405,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 	t.Helper()
 
 	second, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
@@ -4266,6 +4283,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 	}
 
 	fenced, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         fencedWorkspaces{memStore: f.store},
 		States:             fencedStates{memStore: f.store},
@@ -4428,6 +4446,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 	}
 
 	raced, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         &raceWorkspaces{memStore: f.store, raced: false},
 		States:             f.store,
@@ -4609,6 +4628,7 @@ func newSealedFixture(t *testing.T) fixture {
 	refusals := workspacetest.NewRefusals()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -4685,6 +4705,7 @@ func TestNewServiceWithoutSealerFails(t *testing.T) {
 	}
 
 	_, err = workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,

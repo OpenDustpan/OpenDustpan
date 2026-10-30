@@ -14,11 +14,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -177,6 +179,12 @@ type UpdatesConfig struct {
 	// ManualLocks refuses the start of a mutating update on a stack that a
 	// manual lock covers. Nil turns the check off.
 	ManualLocks ManualLocks
+	// BlobGuard tells whether a backup or a restore runs. Every delete of a
+	// blob that a backup snapshot or restored data can name asks it after the
+	// commit that removed the last row that names the blob, and runs only
+	// when nothing runs. Nil is a guard that never lets a delete run: the
+	// blobs stay for a later sweep.
+	BlobGuard blobguard.Watch
 }
 
 // ManualLocks is the read side of the manual locks of the shared core. The
@@ -214,6 +222,9 @@ type Updates struct {
 	journal        *JournalEntries
 	replayer       JournalReplayer
 	manual         ManualLocks
+	guard          blobguard.Watch
+	skipMu         sync.Mutex
+	skipLogged     string
 	stateAt        StateAtReader
 	names          inventory.HistoryReader
 }
@@ -260,6 +271,9 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		journal:        cfg.Journal,
 		replayer:       cfg.Replayer,
 		manual:         cfg.ManualLocks,
+		guard:          cfg.BlobGuard,
+		skipMu:         sync.Mutex{},
+		skipLogged:     "",
 		stateAt:        nil,
 		names:          nil,
 	}
@@ -548,6 +562,17 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 	listed, err := bl.List(ctx, bl.stackPrefix(stackID))
 	if err != nil {
 		return fmt.Errorf("list checkpoint blobs of stack %s: %w", stackID, err)
+	}
+
+	if len(listed) == 0 {
+		return nil
+	}
+
+	// The guard comes after the commit of the purge and after the listing. A
+	// backup or a restore that runs, or a failed read, keeps every blob: the
+	// error keeps the blob purge record, and the retention sweep tries again.
+	if err := blobguard.Hold(ctx, s.guard); err != nil {
+		return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, err)
 	}
 
 	failed := 0
@@ -1107,7 +1132,10 @@ func (s *Updates) commitCheckpointRow(
 // failure never fails the save, and the rows stay for the next sweep. No log
 // line names a blob key.
 func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) {
-	if save.prev != nil && save.prev.BlobKey != save.key {
+	// The guard comes after the commit of the new row. A running backup or
+	// restore keeps the previous blob. It is then an orphan of the update, and
+	// the next sweep deletes it when nothing runs.
+	if save.prev != nil && save.prev.BlobKey != save.key && !s.deletesHeld(ctx, "checkpoint replace", save.ref) {
 		// The key comes from a row. It must name a save of this update in this
 		// stack, so the access is narrowed to the directory of the update.
 		own := save.blobs.narrow(save.blobs.updatePrefix(save.stackID, save.id))
@@ -1201,6 +1229,55 @@ func (s *Updates) deleteBlobRetried(ctx context.Context, bl *scopedBlobs, key bl
 	return nil
 }
 
+// sweepDeleter names the sweep for a log line: the update sweep when id names
+// an update, else the stack sweep.
+func sweepDeleter(id UpdateID) string {
+	if id != "" {
+		return "update sweep"
+	}
+
+	return "stack sweep"
+}
+
+// deletesHeld reports whether a blob delete of deleter must not run now. It is
+// true when a backup or a restore runs, and when the guard fails or is not
+// set: every case but "nothing runs" fails closed. The blobs stay, and a later
+// sweep deletes them. The first skip for each running backup or restore logs
+// at INFO and the next ones at DEBUG, because a checkpoint save asks on each
+// save. No log line names a blob key.
+func (s *Updates) deletesHeld(ctx context.Context, deleter string, ref Ref) bool {
+	err := blobguard.Hold(ctx, s.guard)
+	if err == nil {
+		return false
+	}
+
+	wait, isWait := errors.AsType[*blobguard.WaitError](err)
+	if !isWait {
+		s.logger.WarnContext(ctx, "blob delete skipped: the guard failed",
+			slog.String("deleter", deleter), slog.String("stack", ref.String()),
+			slog.String("error_kind", inventory.ErrorKind(err)))
+
+		return true
+	}
+
+	level := slog.LevelDebug
+
+	s.skipMu.Lock()
+
+	if s.skipLogged != wait.Work.String() {
+		s.skipLogged = wait.Work.String()
+		level = slog.LevelInfo
+	}
+
+	s.skipMu.Unlock()
+
+	s.logger.Log(ctx, level, "blob delete skipped: a backup or restore runs",
+		slog.String("deleter", deleter), slog.String("stack", ref.String()),
+		slog.String("running", wait.Work.String()))
+
+	return true
+}
+
 // sweepUpdateBlobs deletes the blobs of one update that no row names and that
 // are older than the grace period: saves whose SQL commit never landed,
 // previous saves whose delete never ran, and journal batches of a closed
@@ -1228,22 +1305,10 @@ type sweepTarget struct {
 	update  UpdateID
 }
 
-// sweepOrphans deletes the objects of listed that are older than the grace
-// period and that no row names. The keep set is ReferencedBlobKeys: a
-// checkpoint blob and a journal batch blob of a running journaled update both
-// stay, whatever prefix holds them. The sweep reads the keys only when old
-// candidates remain, so a start with only fresh blobs pays for one listing
-// and no row read. A read failure deletes nothing, also when the stack row is
-// gone. The keep set is read by the stack ID that the listing used, so a
-// rename between the two reads cannot empty it. The update ID is empty for a
-// sweep over the whole stack.
-func (s *Updates) sweepOrphans(
-	ctx context.Context, bl *scopedBlobs, target sweepTarget, listed []blob.Object,
-) {
-	ref, stackID, id := target.ref, target.stackID, target.update
-
+// graceCandidates returns the objects of listed that are older than the grace
+// period.
+func (s *Updates) graceCandidates(listed []blob.Object) []blob.Object {
 	now := s.clock()
-
 	candidates := make([]blob.Object, 0, len(listed))
 
 	for _, obj := range listed {
@@ -1252,15 +1317,17 @@ func (s *Updates) sweepOrphans(
 		}
 	}
 
-	if len(candidates) == 0 {
-		return
-	}
+	return candidates
+}
 
-	refs, err := s.checkpoints.ReferencedBlobKeys(ctx, stackID)
+// unnamed returns the objects of candidates that no row names, read by the
+// stack ID of the target. It returns false, and logs, when the read fails.
+func (s *Updates) unnamed(ctx context.Context, target sweepTarget, candidates []blob.Object) ([]blob.Object, bool) {
+	refs, err := s.checkpoints.ReferencedBlobKeys(ctx, target.stackID)
 	if err != nil {
-		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
+		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", target.ref.String()))
 
-		return
+		return nil, false
 	}
 
 	named := make(map[blob.Key]struct{}, len(refs))
@@ -1269,13 +1336,54 @@ func (s *Updates) sweepOrphans(
 		named[key] = struct{}{}
 	}
 
-	failed := 0
+	doomed := make([]blob.Object, 0, len(candidates))
 
 	for _, obj := range candidates {
-		if _, ok := named[obj.Key]; ok {
-			continue
+		if _, ok := named[obj.Key]; !ok {
+			doomed = append(doomed, obj)
 		}
+	}
 
+	return doomed, true
+}
+
+// sweepOrphans deletes the objects of listed that are older than the grace
+// period and that no row names. The keep set is ReferencedBlobKeys: a
+// checkpoint blob and a journal batch blob of a running journaled update both
+// stay, whatever prefix holds them. The sweep reads the keys only when old
+// candidates remain, so a start with only fresh blobs pays for one listing
+// and no row read. A read failure deletes nothing, also when the stack row is
+// gone. The keep set is read by the stack ID that the listing used, so a
+// rename between the two reads cannot empty it. A running backup or restore
+// keeps every blob: the guard is read after the listing and after the keys,
+// and before the first delete. The update ID is empty for a sweep over the
+// whole stack.
+func (s *Updates) sweepOrphans(
+	ctx context.Context, bl *scopedBlobs, target sweepTarget, listed []blob.Object,
+) {
+	ref, id := target.ref, target.update
+
+	candidates := s.graceCandidates(listed)
+	if len(candidates) == 0 {
+		return
+	}
+
+	doomed, ok := s.unnamed(ctx, target, candidates)
+	if !ok || len(doomed) == 0 {
+		return
+	}
+
+	// The guard comes after the listing and after the read of the named keys.
+	// A blob that is unnamed here lost its last name in a commit before that
+	// read, so a backup or a restore that the guard does not see cannot name
+	// it. A running one keeps every blob for the next sweep.
+	if s.deletesHeld(ctx, sweepDeleter(id), ref) {
+		return
+	}
+
+	failed := 0
+
+	for _, obj := range doomed {
 		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
 			failed++
 		}

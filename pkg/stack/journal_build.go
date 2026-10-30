@@ -367,7 +367,9 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	if len(keys) > 0 && s.journal != nil {
+	// The guard comes after the commit that removed the journal rows. A running
+	// backup or restore keeps the batch blobs, and the next sweep deletes them.
+	if len(keys) > 0 && s.journal != nil && !s.deletesHeld(ctx, "journal build", save.ref) {
 		if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, keys); err != nil {
 			s.logger.WarnContext(
 				ctx,

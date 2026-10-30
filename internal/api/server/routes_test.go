@@ -1795,6 +1795,7 @@ func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, e
 	return inventory.SweepResult{
 		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
 		FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}, nil
 }
 

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -614,6 +616,16 @@ func newUpdates(t *testing.T) updatesFixture {
 func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
 	t.Helper()
 
+	return newUpdatesGuarded(t, clk, blobs, logger, blobguardtest.None{})
+}
+
+// newUpdatesGuarded is newUpdatesWith with guard as the guard of the blob
+// deletes.
+func newUpdatesGuarded(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, guard blobguard.Watch,
+) updatesFixture {
+	t.Helper()
+
 	ns := namespace.Namespace{
 		ID:                  namespace.NewID(),
 		CreatedAt:           clk.now,
@@ -640,6 +652,7 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
@@ -2077,6 +2090,27 @@ func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Upda
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:   blobguardtest.None{},
+		ManualLocks: nil, Updates: f.store, Tokens: nil,
+		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
+		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
+		Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
+		Journal: nil, Replayer: nil, Refusals: f.refusals,
+	})
+	if err != nil {
+		t.Fatalf("new updates: %v", err)
+	}
+
+	return svc
+}
+
+// withKeepSetHookAndGuard is withKeepSetHook with guard as the guard of the
+// blob deletes.
+func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Watch, before func()) *stack.Updates {
+	t.Helper()
+
+	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:   guard,
 		ManualLocks: nil, Updates: f.store, Tokens: nil,
 		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
 		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -150,6 +151,7 @@ func seedSealedState(
 
 	sealed, err := workspace.NewService(workspace.Config{
 		ManualLocks:        nil,
+		BlobGuard:          blobguardtest.None{},
 		Workspaces:         st,
 		States:             st,
 		Blobs:              blobs,
