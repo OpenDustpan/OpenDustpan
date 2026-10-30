@@ -348,7 +348,10 @@ type Deliveries interface {
 	// scope); namespace.ErrFenced and namespace.ErrNotFound. A reference
 	// to a row that the store does not hold is allowed, because old
 	// notifications and deleted subscriptions leave their deliveries as
-	// history. A refused call changes nothing.
+	// history. So an unknown reference succeeds and a reference to a row of
+	// another scope fails. Only the dispatcher calls Enqueue, never a route
+	// that a caller outside the server can reach, so this difference tells a
+	// caller nothing. A refused call changes nothing.
 	Enqueue(ctx context.Context, fence namespace.Fence, ds []Delivery) error
 	// DueScopes returns the scopes that hold a delivery that Claim can
 	// take at now, ordered by name.
