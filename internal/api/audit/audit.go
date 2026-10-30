@@ -445,7 +445,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // log. The shared module answers the rest.
 func requestErrors(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage), errors.Is(err, errInvalidFormat),
+		errors.Is(err, errInvalidTime), errors.Is(err, errInvalidRange), errors.Is(err, errInvalidFromSequence):
 		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, errInvalidSequence):
 		return problem.New(http.StatusBadRequest, errcode.RequestInvalidPath, err.Error()), true
@@ -457,6 +458,8 @@ func requestErrors(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusNotFound, errcode.NamespaceNotFound, err.Error()), true
 	case errors.Is(err, audit.ErrEntryNotFound):
 		return problem.New(http.StatusNotFound, errcode.AuditEntryNotFound, err.Error()), true
+	case errors.Is(err, errExportNotRecorded):
+		return problem.New(http.StatusInternalServerError, errcode.AuditExportNotRecorded, err.Error()), true
 	case errors.Is(err, errNoEntryReader):
 		return problem.New(http.StatusNotImplemented, errcode.AuditEntryReadUnavailable, err.Error()), true
 	default:

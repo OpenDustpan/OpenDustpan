@@ -13,6 +13,11 @@ var (
 	ErrInvalidPage         = errInvalidPage
 	ErrInvalidSequence     = errInvalidSequence
 	ErrNoEntryReader       = errNoEntryReader
+	ErrInvalidFormat       = errInvalidFormat
+	ErrInvalidTime         = errInvalidTime
+	ErrInvalidRange        = errInvalidRange
+	ErrInvalidFromSequence = errInvalidFromSequence
+	ErrExportNotRecorded   = errExportNotRecorded
 )
 
 // ServeRoute returns the enforcement wrapper of route.
