@@ -1635,7 +1635,40 @@ func CoverageAllowlist() []AllowEntry {
 		sinkAllowEntries(),
 		sourceFilterAllowEntries(),
 		apiDescriptionAllowEntries(),
+		issuerAllowEntries(),
 	)
+}
+
+// issuerAllowEntries covers the routes of the OIDC issuer. No CLI calls them:
+// a relying party reads the two protocol routes, and the console and the
+// client of the API call the management routes. The steps of TestIssuerAPI
+// make the keys, read the documents with no credential, rotate, check the
+// copy, change the settings and export, against the real server.
+func issuerAllowEntries() []AllowEntry {
+	const (
+		base   = "/api/dustpan/v1/namespaces/{namespace}/issuer"
+		reason = "Client route: no CLI calls the issuer. The steps of TestIssuerAPI call it against the real server."
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, base},
+		{http.MethodPatch, base},
+		{http.MethodGet, base + "/export"},
+		{http.MethodPost, base + "/keys"},
+		{http.MethodPost, base + "/keys/rotate"},
+		{http.MethodPost, base + "/keys/check-copy"},
+		{http.MethodGet, "/oidc/{nsid}/.well-known/openid-configuration"},
+		{http.MethodGet, "/oidc/{nsid}/jwks"},
+	}
+
+	entries := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		entries = append(entries, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestIssuerAPI", Reason: reason,
+		})
+	}
+
+	return entries
 }
 
 // apiDescriptionAllowEntries covers the route of the description of the API.
