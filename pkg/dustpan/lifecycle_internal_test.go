@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -145,7 +148,7 @@ func TestDeletedReadScope(t *testing.T) {
 		{name: "no grant", subject: "nobody", ns: "acme", wantIDs: []string{}, wantAll: false},
 	}
 
-	scope := deletedReadScope{authz: f.authz}
+	scope := deletedReadScope{authz: f.authz, members: nil}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,7 +183,7 @@ func TestDeletedReadScope(t *testing.T) {
 func TestDeletedReadScopeFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	scope := deletedReadScope{authz: identity.AdminOnly{}}
+	scope := deletedReadScope{authz: identity.AdminOnly{}, members: nil}
 
 	for _, admin := range []bool{true, false} {
 		p := identity.Principal{
@@ -238,3 +241,105 @@ func TestBlobPurgerOutlivesTheRequest(t *testing.T) {
 
 // errNoDeadline reports a blob context without a deadline.
 var errNoDeadline = errors.New("blob context has no deadline")
+
+// TestDeletedReadScopeCollections proves that a grant of unit:read on a
+// collection covers each deleted unit that is still in the collection, and
+// no other deleted unit, and that a scope with no collection reader covers
+// none.
+func TestDeletedReadScopeCollections(t *testing.T) {
+	t.Parallel()
+
+	f := newScopeFixture(t)
+	ctx := t.Context()
+
+	cols, err := collection.NewService(collection.Config{Store: f.store, Namespaces: f.store, Now: nil})
+	if err != nil {
+		t.Fatalf("collection service: %v", err)
+	}
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: f.store, Callers: f.store, Collections: cols, Units: f.store, Principals: f.store,
+	})
+	if err != nil {
+		t.Fatalf("authorizer: %v", err)
+	}
+
+	entry := func(action string) audit.Entry {
+		return audit.Entry{
+			At: scopeAt(), Namespace: "acme", Subject: "admin", IDPSubject: "", TokenID: "",
+			Action: action, Object: "acme/web", Version: "", ValuePath: "", ValueCount: nil,
+			SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+			Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+			Changes: nil, ObjectID: "", FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		}
+	}
+
+	payments, err := cols.Create(ctx, collection.Ref{Namespace: "acme", Name: "payments"}, entry("collection:create"))
+	if err != nil {
+		t.Fatalf("create payments: %v", err)
+	}
+
+	empty, err := cols.Create(ctx, collection.Ref{Namespace: "acme", Name: "empty"}, entry("collection:create"))
+	if err != nil {
+		t.Fatalf("create empty: %v", err)
+	}
+
+	move := collection.Move{
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
+		From: "", To: payments.Ref, ToID: payments.ID, EndsLock: false,
+	}
+	if moveErr := cols.SetUnit(ctx, move, entry("unit:move")); moveErr != nil {
+		t.Fatalf("move into payments: %v", moveErr)
+	}
+
+	// The membership stays with the deleted stack.
+	rec, err := f.store.GetNamespace(ctx, "acme")
+	if err != nil {
+		t.Fatalf("namespace: %v", err)
+	}
+
+	ref := stack.Ref{Namespace: "acme", Project: "web", Stack: "prod"}
+	gone := entry("unit:manage")
+	d := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
+
+	if delErr := f.store.DeleteStack(ctx, ref, rec.Fence(), stack.EmptyGuard(), d); delErr != nil {
+		t.Fatalf("delete stack: %v", delErr)
+	}
+
+	f.seed(t, "cora", identity.CollectionObject("acme", "payments").WithCollectionID(payments.ID))
+	f.seed(t, "emma", identity.CollectionObject("acme", "empty").WithCollectionID(empty.ID))
+
+	cases := []struct {
+		name    string
+		scope   deletedReadScope
+		subject string
+		ns      namespace.Name
+		wantIDs []string
+	}{
+		{"collection grant", deletedReadScope{authz: authz, members: f.store}, "cora", "acme", []string{"stk-scope"}},
+		{"collection grant elsewhere", deletedReadScope{authz: authz, members: f.store}, "cora", "other", []string{}},
+		{"grant on another collection", deletedReadScope{authz: authz, members: f.store}, "emma", "acme", []string{}},
+		{"no collection reader", deletedReadScope{authz: authz, members: nil}, "cora", "acme", []string{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := identity.Principal{
+				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: tc.subject,
+				DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "",
+				Credential: "", JobID: "",
+			}
+
+			all, ids, err := tc.scope.ReadableUnits(t.Context(), p, tc.ns)
+			if err != nil {
+				t.Fatalf("readable units: %v", err)
+			}
+
+			if all || !slices.Equal(ids, tc.wantIDs) {
+				t.Fatalf("readable units = %v %v, want false %v", all, ids, tc.wantIDs)
+			}
+		})
+	}
+}

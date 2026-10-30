@@ -113,7 +113,7 @@ func everyRow(scope access.ReviewScope) access.ReviewQuery {
 // allScope is the scope of every grant.
 func allScope() access.ReviewScope {
 	return access.ReviewScope{
-		Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		Object: identity.Object{}, CollectionID: "", Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: true,
 	}
 }
@@ -154,12 +154,14 @@ func testReviewScopes(t *testing.T, s access.Store) {
 	review(t, rs, "every grant", everyRow(allScope()), "grt-1", "grt-2", "grt-3", "grt-4", "grt-5", "grt-6")
 
 	review(t, rs, "namespace acme", everyRow(access.ReviewScope{
-		Namespace: "acme", Object: identity.Object{}, Containers: []string{"@server"},
+		CollectionID: "",
+		Namespace:    "acme", Object: identity.Object{}, Containers: []string{"@server"},
 		ContainerRoles: []string{access.RoleAccountAdministrator}, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: false,
 	}), "grt-2", "grt-3", "grt-4", "grt-5")
 
 	review(t, rs, "collection acme/payments", everyRow(access.ReviewScope{
+		CollectionID:   "",
 		Namespace:      "",
 		Object:         identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
 		Containers:     []string{"@server", "acme"},
@@ -169,7 +171,8 @@ func testReviewScopes(t *testing.T, s access.Store) {
 
 	// A container grant with a role outside ContainerRoles stays out.
 	review(t, rs, "namespace beta", everyRow(access.ReviewScope{
-		Namespace: "beta", Object: identity.Object{}, Containers: []string{"@server"},
+		CollectionID: "",
+		Namespace:    "beta", Object: identity.Object{}, Containers: []string{"@server"},
 		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}), "grt-6")
 }
@@ -195,7 +198,8 @@ func testReviewTokenNamespace(t *testing.T, s access.Store) {
 		identity.ServerObject()))
 
 	scope := access.ReviewScope{
-		Object: bot, Namespace: "", Containers: []string{"@server"},
+		CollectionID: "",
+		Object:       bot, Namespace: "", Containers: []string{"@server"},
 		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "acme",
 		TokenNamespaceRoles: []string{access.RoleAdmin}, All: false,
 	}
@@ -415,7 +419,8 @@ func testReviewUnit(t *testing.T, s access.Store) {
 
 	scope := func(obj identity.Object) access.ReviewScope {
 		return access.ReviewScope{
-			Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+			CollectionID: "",
+			Object:       obj, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 			TokenNamespaceRoles: nil, All: false,
 		}
 	}

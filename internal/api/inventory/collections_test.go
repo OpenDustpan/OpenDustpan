@@ -134,6 +134,10 @@ func (m *memCollections) UnitCollection(_ context.Context, unit collection.UnitR
 	return collection.Ref{Namespace: unit.Namespace, Name: name}, nil
 }
 
+func (m *memCollections) ListCollectionUnits(context.Context, collection.Ref) ([]string, error) {
+	return nil, nil
+}
+
 // testCollectionService returns a collection service over an in-memory store.
 // It serves the collection routes of a handler under test.
 func testCollectionService(t *testing.T, ns namespace.Store) *collection.Service {

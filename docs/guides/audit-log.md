@@ -70,8 +70,8 @@ Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
 asOf=<time>`, or `history <from>-<to>`, in Unix milliseconds, followed by
-the subject filter and `expand=members` when the request has them. The export of a namespace or
-a unit writes its entry in that namespace, and the export of the
+the subject filter and `expand=members` when the request has them. The export of a namespace, a
+collection or a unit writes its entry in that namespace, and the export of the
 installation in `@server`. A failed append answers 500 with no rows.
 
 An entry holds these fields:

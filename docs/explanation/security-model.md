@@ -101,6 +101,20 @@ persons and services.
   review names it: `principal:<id>` for one service principal, the name of
   a namespace for the service principals of that namespace, and `@server`
   for every service principal.
+- **The export of a collection lists who can access its units.**
+  `GET /api/server/namespaces/{namespace}/collections/{collection}/access-review`
+  needs `collection:read-access` on the collection. It lists the grants on the
+  collection, the grants on each unit that is in the collection now, and the
+  grants with a data action or an access-management action on its namespace
+  and on the installation. A deleted unit that is still in the collection
+  stays in the list, with the object state `deleted`. A row of a group gives
+  the member through `via`, and a row of a principal gives `lastAccessAtMs`,
+  as in the export of a namespace. A collection that does not exist answers
+  404.
+- **A grant of `unit:read` on a collection covers the deleted units in it.**
+  The list of deleted units of a namespace shows a deleted unit to a
+  principal that holds the grant on the collection that the unit was in when
+  it was deleted. The deleted unit keeps its collection until it is purged.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
   until they expire. After such a revoke, rotate or revoke the tokens of

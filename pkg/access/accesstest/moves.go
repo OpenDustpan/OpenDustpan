@@ -10,9 +10,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // namedCollections gives every collection the stable ID col-<name>.
@@ -63,6 +65,7 @@ func moveCases() []struct {
 		{name: "a move keeps the escalation check of the target's grants", test: testMoveEscalation},
 		{name: "a collection grant with an old stable ID gives nothing", test: testRenamedCollectionGrants},
 		{name: "deleting a collection revokes its grants", test: testCollectionDeleteRevokes},
+		{name: "review of a collection reads the grants on its units", test: testReviewCollectionUnits},
 	}
 }
 
@@ -305,4 +308,146 @@ func testCollectionDeleteRevokes(t *testing.T, s access.Store) {
 	}
 
 	t.Fatalf("no audit entry names the revoked grant %s", grant.ID)
+}
+
+// testReviewCollectionUnits runs the export of a collection: it holds the
+// grants on the collection, on the units that are in it now (a deleted unit
+// included), and on its containers with a role in ContainerRoles. It holds no
+// grant on a unit of another collection or on no collection.
+func testReviewCollectionUnits(t *testing.T, s access.Store) {
+	t.Helper()
+
+	cs, ok := s.(collection.Store)
+	if !ok {
+		t.Skip("the store keeps no collections")
+	}
+
+	ws, ok := s.(workspace.Store)
+	if !ok {
+		t.Skip("the store keeps no workspaces")
+	}
+
+	ms, ok := s.(moveStore)
+	if !ok {
+		t.Skip("the store keeps no principals, roles and namespaces")
+	}
+
+	rs := reviewStore(t, s)
+	ns := newNamespace("acme")
+
+	if err := ms.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	payments := collection.Collection{
+		CreatedAt: at(0), ID: "col-payments", Ref: collection.Ref{Namespace: "acme", Name: "payments"},
+	}
+	platform := collection.Collection{
+		CreatedAt: at(0), ID: "col-platform", Ref: collection.Ref{Namespace: "acme", Name: "platform"},
+	}
+
+	for _, c := range []collection.Collection{payments, platform} {
+		if err := cs.CreateCollection(t.Context(), c, ns.Fence(), scoped(entry(), "acme")); err != nil {
+			t.Fatalf("create collection %v: %v", c.Ref, err)
+		}
+	}
+
+	units := map[string]workspace.ID{}
+
+	for _, name := range []string{"web", "api", "data", "loose"} {
+		units[name] = reviewWorkspace(t, ws, ns, name)
+	}
+
+	for name, to := range map[string]collection.Collection{"web": payments, "api": payments, "data": platform} {
+		move := collection.Move{
+			Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: name},
+			To:   to.Ref, ToID: to.ID, EndsLock: false,
+		}
+		if err := cs.SetUnitCollection(t.Context(), move, ns.Fence(), scoped(entry(), "acme")); err != nil {
+			t.Fatalf("move %s: %v", name, err)
+		}
+	}
+
+	// The membership stays with the deleted unit, so its grant is in the export.
+	gone := scoped(entry(), "acme")
+	gone.Action, gone.Object = "unit:manage", "opentofu:acme/api"
+	ref := workspace.Ref{Namespace: "acme", Name: "api"}
+
+	deletion := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
+	if err := ws.DeleteWorkspace(t.Context(), ref, ns.Fence(), deletion); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	unitObj := func(name string) identity.Object {
+		return mustWorkspaceObject(t, name).WithUnitID(string(units[name]))
+	}
+
+	for i, g := range []struct {
+		id   string
+		role string
+		obj  identity.Object
+	}{
+		{"grt-col", access.RoleAuditor, identity.CollectionObject("acme", "payments").WithCollectionID(payments.ID)},
+		{"grt-web", access.RoleWriter, unitObj("web")},
+		{"grt-api", access.RoleViewer, unitObj("api")},
+		{"grt-data", access.RoleViewer, unitObj("data")},
+		{"grt-loose", access.RoleViewer, unitObj("loose")},
+		{"grt-other", access.RoleAuditor, identity.CollectionObject("acme", "platform").WithCollectionID(platform.ID)},
+		{"grt-ns", access.RoleWriter, identity.NamespaceObject("acme")},
+		{"grt-ns-viewer", access.RoleViewer, identity.NamespaceObject("acme")},
+	} {
+		mustCreateGrant(t, s, grantAt(i+1, g.id, principalSubject("prn-a"), g.role, g.obj))
+	}
+
+	scope := access.ReviewScope{
+		CollectionID: payments.ID, Namespace: "",
+		Object:         identity.CollectionObject("acme", "payments").WithCollectionID(payments.ID),
+		Containers:     []string{"acme", "@server"},
+		ContainerRoles: []string{access.RoleWriter},
+		TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
+	}
+
+	review(t, rs, "collection payments", everyRow(scope), "grt-col", "grt-web", "grt-api", "grt-ns")
+
+	// With no collection ID, the export holds no grant on a unit.
+	scope.CollectionID = ""
+
+	review(t, rs, "collection payments with no members", everyRow(scope), "grt-col", "grt-ns")
+}
+
+// reviewWorkspace makes the workspace name in ns and returns its stable ID.
+func reviewWorkspace(t *testing.T, ws workspace.Store, ns namespace.Namespace, name string) workspace.ID {
+	t.Helper()
+
+	wsName, err := workspace.ParseName(name)
+	if err != nil {
+		t.Fatalf("workspace name %q: %v", name, err)
+	}
+
+	w := workspace.Workspace{
+		NamespaceID: "", CreatedAt: at(0), UpdatedAt: at(0),
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:        workspace.ID("ws-" + name),
+		Ref:       workspace.Ref{Namespace: ns.Name, Name: wsName},
+		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := ws.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
+		t.Fatalf("create workspace %q: %v", name, err)
+	}
+
+	return w.ID
+}
+
+// mustWorkspaceObject returns the object of the workspace name in acme.
+func mustWorkspaceObject(t *testing.T, name string) identity.Object {
+	t.Helper()
+
+	obj, err := identity.UnitObject("opentofu", "acme", name)
+	if err != nil {
+		t.Fatalf("unit object %q: %v", name, err)
+	}
+
+	return obj
 }

@@ -10,7 +10,6 @@ Handler.writeEnterError: enterRefusedResponse{}
 Handler.writeError: errorResponse{}
 classifyAccess: access.ErrAlreadyExists
 classifyAccess: access.ErrBuiltIn
-classifyAccess: access.ErrCollectionReview
 classifyAccess: access.ErrEscalation
 classifyAccess: access.ErrInUse
 classifyAccess: access.ErrInvalid

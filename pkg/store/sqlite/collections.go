@@ -390,3 +390,40 @@ func checkLeaveLockedCollection(ctx context.Context, q *db.Queries, m collection
 
 	return collection.ErrMoveOutOfLockedCollection
 }
+
+// ListCollectionUnits implements collection.Store. The collection and its
+// members are read in one transaction, so the answer is one snapshot.
+func (s *Store) ListCollectionUnits(ctx context.Context, ref collection.Ref) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var ids []string
+
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
+		if _, getErr := q.GetCollection(ctx, db.GetCollectionParams{
+			Namespace: ref.Namespace.String(), NameKey: ref.Name.Key(),
+		}); getErr != nil {
+			if errors.Is(getErr, sql.ErrNoRows) {
+				return collection.ErrNotFound
+			}
+
+			return fmt.Errorf("select collection: %w", getErr)
+		}
+
+		rows, listErr := q.ListCollectionMemberIDs(ctx, db.ListCollectionMemberIDsParams{
+			Namespace: ref.Namespace.String(), CollectionKey: ref.Name.Key(),
+		})
+		if listErr != nil {
+			return fmt.Errorf("select collection members: %w", listErr)
+		}
+
+		ids = append(make([]string, 0, len(rows)), rows...)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return ids, nil
+}

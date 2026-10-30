@@ -1134,6 +1134,10 @@ func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.Un
 	return collection.Ref{Namespace: "", Name: ""}, nil
 }
 
+func (coverageCollectionStore) ListCollectionUnits(_ context.Context, _ collection.Ref) ([]string, error) {
+	return nil, nil
+}
+
 // coverageLockStore holds no manual lock. It exists only so that the inventory
 // handler serves its lock routes in the route table; no request is ever served.
 type coverageLockStore struct{}

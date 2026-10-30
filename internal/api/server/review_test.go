@@ -123,8 +123,26 @@ func TestReviewScopesAndActions(t *testing.T) {
 		t.Fatalf("export of the installation = %+v, want the 3 seeded grants and the bootstrap admin", all)
 	}
 
+	var col reviewDoc
 	f.as(t, "ann", apiCall{
-		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusNotImplemented,
+		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusOK,
+	}, &col)
+
+	// The export of a collection holds the grants on the objects above it,
+	// as the export of a namespace does: the grant of alice on acme, the
+	// installation grant of ann and the bootstrap admin token.
+	if col.Total == nil || *col.Total != 3 || col.AsOfMs == nil {
+		t.Fatalf("export of acme/payments = %+v, want the 3 grants above it", col)
+	}
+
+	f.as(t, "ann", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/missing/access-review", "", http.StatusNotFound,
+	}, nil)
+	f.as(t, "alice", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusOK,
+	}, nil)
+	f.as(t, "bob", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusForbidden,
 	}, nil)
 	f.as(t, "ann", apiCall{
 		http.MethodGet, "/api/server/access-review?expand=everyone", "", http.StatusBadRequest,

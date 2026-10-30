@@ -193,4 +193,10 @@ type Store interface {
 	// the unit has none, or ErrUnitNotFound when the inventory holds no such
 	// unit.
 	UnitCollection(ctx context.Context, unit UnitRef) (Ref, error)
+	// ListCollectionUnits returns the stable IDs of the units that are in the
+	// collection ref now, ordered by ID. It holds a soft-deleted unit until
+	// its purge or until the collection is deleted, because the membership
+	// stays with the deleted unit. It returns ErrNotFound when the collection
+	// does not exist, and an empty list for a collection with no unit.
+	ListCollectionUnits(ctx context.Context, ref Ref) ([]string, error)
 }

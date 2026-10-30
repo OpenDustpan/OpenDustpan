@@ -47,7 +47,7 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 
 		total, listErr = q.CountReviewGrants(ctx, db.CountReviewGrantsParams{
 			Principal: p.Principal, Expand: p.Expand, History: p.History, ToMs: p.ToMs, FromMs: p.FromMs,
-			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target,
+			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target, CollectionID: p.CollectionID,
 			Containers: p.Containers, ContainerRoles: p.ContainerRoles, TokenNamespace: p.TokenNamespace,
 			TokenNamespaceRoles: p.TokenNamespaceRoles, Subject: p.Subject,
 		})
@@ -91,6 +91,7 @@ func reviewParams(rq access.ReviewQuery) (db.ReviewGrantsParams, error) {
 		AllGrants:           rq.Scope.All,
 		Namespace:           rq.Scope.Namespace,
 		Target:              scopeTarget(rq.Scope.Object),
+		CollectionID:        rq.Scope.CollectionID,
 		Containers:          containers,
 		ContainerRoles:      roles,
 		TokenNamespace:      rq.Scope.TokenNamespace,

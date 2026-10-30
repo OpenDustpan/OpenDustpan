@@ -14,6 +14,8 @@ import (
 //   - its object is in the namespace Namespace (the namespace itself, its
 //     collections and its units), or
 //   - its object is Object (a unit matches by its stable ID), or
+//   - its object is a unit that is in the collection with the stable ID
+//     CollectionID now (empty means none), or
 //   - its object is one of Containers and its role is one of
 //     ContainerRoles, or, in a history, any custom role (a deleted one
 //     included): the actions of a role at the time of a grant are not
@@ -28,6 +30,7 @@ import (
 // namespace there. Empty means none.
 type ReviewScope struct {
 	Object              identity.Object
+	CollectionID        string
 	Namespace           string
 	Containers          []string
 	ContainerRoles      []string

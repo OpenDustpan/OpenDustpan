@@ -1430,13 +1430,17 @@ LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject
 WHERE ($7::boolean
     OR ($8::text <> '' AND g.namespace = $8::text AND g.object_kind <> 'installation')
     OR g.target = $9::text
-    OR (g.target = ANY($10::text[])
-      AND (g.role = ANY($11::text[])
+    OR ($10::text <> '' AND g.target IN (
+      SELECT 'unit:' || m.unit_id FROM collection_members m
+      JOIN collections c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+      WHERE c.id = $10::text))
+    OR (g.target = ANY($11::text[])
+      AND (g.role = ANY($12::text[])
         OR ($3::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
-    OR ($12::text <> '' AND g.target = $12::text
-      AND (g.role = ANY($13::text[])
+    OR ($13::text <> '' AND g.target = $13::text
+      AND (g.role = ANY($14::text[])
         OR ($3::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND ($14::text = '' OR g.subject = $14::text
+  AND ($15::text = '' OR g.subject = $15::text
     OR ($1::text <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN $3::boolean THEN
     g.created_at_ms < $4::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $5::bigint
@@ -1453,6 +1457,7 @@ type CountReviewGrantsParams struct {
 	AllGrants           bool
 	Namespace           string
 	Target              string
+	CollectionID        string
 	Containers          []string
 	ContainerRoles      []string
 	TokenNamespace      string
@@ -1471,6 +1476,7 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 		arg.AllGrants,
 		arg.Namespace,
 		arg.Target,
+		arg.CollectionID,
 		arg.Containers,
 		arg.ContainerRoles,
 		arg.TokenNamespace,
@@ -10310,6 +10316,40 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 	return items, nil
 }
 
+const listCollectionMemberIDs = `-- name: ListCollectionMemberIDs :many
+SELECT unit_id
+FROM collection_members
+WHERE namespace = $1 AND collection_key = $2
+ORDER BY unit_id
+`
+
+type ListCollectionMemberIDsParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+// The stable IDs of the units in a collection, a soft-deleted unit included:
+// the membership stays with the deleted unit.
+func (q *Queries) ListCollectionMemberIDs(ctx context.Context, arg ListCollectionMemberIDsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listCollectionMemberIDs, arg.Namespace, arg.CollectionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var unit_id string
+		if err := rows.Scan(&unit_id); err != nil {
+			return nil, err
+		}
+		items = append(items, unit_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCollections = `-- name: ListCollections :many
 SELECT id, namespace, name, created_at_ms
 FROM collections
@@ -15750,26 +15790,30 @@ LEFT JOIN principals mp ON mp.id = m.principal_id
 WHERE ($7::boolean
     OR ($8::text <> '' AND g.namespace = $8::text AND g.object_kind <> 'installation')
     OR g.target = $9::text
-    OR (g.target = ANY($10::text[])
-      AND (g.role = ANY($11::text[])
+    OR ($10::text <> '' AND g.target IN (
+      SELECT 'unit:' || m.unit_id FROM collection_members m
+      JOIN collections c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+      WHERE c.id = $10::text))
+    OR (g.target = ANY($11::text[])
+      AND (g.role = ANY($12::text[])
         OR ($4::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
-    OR ($12::text <> '' AND g.target = $12::text
-      AND (g.role = ANY($13::text[])
+    OR ($13::text <> '' AND g.target = $13::text
+      AND (g.role = ANY($14::text[])
         OR ($4::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND ($14::text = '' OR g.subject = $14::text
+  AND ($15::text = '' OR g.subject = $15::text
     OR ($2::text <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN $4::boolean THEN
     g.created_at_ms < $5::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $6::bigint
   ELSE g.created_at_ms <= $1::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $1::bigint END
-  AND (g.created_at_ms > $15::bigint
-    OR (g.created_at_ms = $15::bigint
-      AND (g.id COLLATE "C" > $16::text
-        OR (g.id = $16::text
-          AND (COALESCE(m.added_at_ms, 0) > $17::bigint
-            OR (COALESCE(m.added_at_ms, 0) = $17::bigint
-              AND COALESCE(m.principal_id, '') COLLATE "C" > $18::text))))))
+  AND (g.created_at_ms > $16::bigint
+    OR (g.created_at_ms = $16::bigint
+      AND (g.id COLLATE "C" > $17::text
+        OR (g.id = $17::text
+          AND (COALESCE(m.added_at_ms, 0) > $18::bigint
+            OR (COALESCE(m.added_at_ms, 0) = $18::bigint
+              AND COALESCE(m.principal_id, '') COLLATE "C" > $19::text))))))
 ORDER BY g.created_at_ms, g.id COLLATE "C", member_added_at_ms, COALESCE(m.principal_id, '') COLLATE "C"
-LIMIT $19::bigint
+LIMIT $20::bigint
 `
 
 type ReviewGrantsParams struct {
@@ -15782,6 +15826,7 @@ type ReviewGrantsParams struct {
 	AllGrants           bool
 	Namespace           string
 	Target              string
+	CollectionID        string
 	Containers          []string
 	ContainerRoles      []string
 	TokenNamespace      string
@@ -15833,6 +15878,7 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 		arg.AllGrants,
 		arg.Namespace,
 		arg.Target,
+		arg.CollectionID,
 		arg.Containers,
 		arg.ContainerRoles,
 		arg.TokenNamespace,

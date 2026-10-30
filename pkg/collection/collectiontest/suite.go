@@ -13,6 +13,7 @@ package collectiontest
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a move to a collection that was re-created is refused", test: testMoveRecreatedTarget},
 		{name: "a Pulumi stack keeps its collection through a rename", test: testStackRename},
 		{name: "a soft-deleted unit does not keep its collection", test: testDeletedUnitMembership},
+		{name: "ListCollectionUnits holds the units of one collection, a deleted unit included", test: testListCollectionUnits},
 		{name: "CollectionOf names the collection, and false when there is none", test: testCollectionOf},
 	}
 
@@ -795,7 +797,18 @@ const testNowMs = 1_700_000_000_000
 func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRef {
 	t.Helper()
 
-	name := unitName
+	ref, _ := createNamedUnit(t, s, ns, unitName)
+
+	return ref
+}
+
+// createNamedUnit makes a workspace named name in ns and returns its
+// inventory reference and its stable ID.
+func createNamedUnit(
+	t *testing.T, s Store, ns namespace.Namespace, name string,
+) (collection.UnitRef, string) {
+	t.Helper()
+
 	ref := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, name)}
 	w := workspace.Workspace{
 		NamespaceID: "",
@@ -812,7 +825,7 @@ func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRe
 		t.Fatalf("create workspace %q: %v", name, err)
 	}
 
-	return collection.UnitRef{Namespace: ns.Name, Tool: "opentofu", Name: name}
+	return collection.UnitRef{Namespace: ns.Name, Tool: "opentofu", Name: name}, string(w.ID)
 }
 
 func mustName(t *testing.T, s string) collection.Name {
@@ -839,4 +852,86 @@ func mustWorkspaceName(t *testing.T, s string) workspace.Name {
 
 func now() time.Time {
 	return time.UnixMilli(testNowMs).UTC()
+}
+
+func testListCollectionUnits(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	other := newNamespace(t, s, "globex")
+	payments := newCollection(t, ns.Name, "payments")
+	platform := newCollection(t, ns.Name, "platform")
+	elsewhere := newCollection(t, other.Name, "payments")
+
+	for _, c := range []collection.Collection{payments, platform} {
+		if err := createColl(t, s, c, ns.Fence()); err != nil {
+			t.Fatalf("create %v: %v", c.Ref, err)
+		}
+	}
+
+	if err := createColl(t, s, elsewhere, other.Fence()); err != nil {
+		t.Fatalf("create %v: %v", elsewhere.Ref, err)
+	}
+
+	assertUnits(t, s, payments.Ref, nil)
+
+	web, webID := createNamedUnit(t, s, ns, "web")
+	api, apiID := createNamedUnit(t, s, ns, "api")
+	data, _ := createNamedUnit(t, s, ns, "data")
+	far, _ := createNamedUnit(t, s, other, "far")
+
+	for _, m := range []*struct {
+		unit collection.UnitRef
+		to   collection.Collection
+		f    namespace.Fence
+	}{
+		{web, payments, ns.Fence()}, {api, payments, ns.Fence()}, {data, platform, ns.Fence()},
+		{far, elsewhere, other.Fence()},
+	} {
+		if _, err := setUnit(t, s, m.unit, m.to.Ref, m.f); err != nil {
+			t.Fatalf("SetUnitCollection %v: %v", m.unit, err)
+		}
+	}
+
+	assertUnits(t, s, payments.Ref, []string{webID, apiID})
+
+	// The membership stays with a soft-deleted unit.
+	ref := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "web")}
+	d := auditFor(ns.Fence())
+
+	if err := s.DeleteWorkspace(t.Context(), ref, ns.Fence(), inventory.Deletion{
+		Entry: d, PurgeAfter: d.At.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("DeleteWorkspace: %v", err)
+	}
+
+	assertUnits(t, s, payments.Ref, []string{webID, apiID})
+
+	// A unit that moved to another collection is not in the first one.
+	if _, err := setUnit(t, s, api, platform.Ref, ns.Fence()); err != nil {
+		t.Fatalf("move api: %v", err)
+	}
+
+	assertUnits(t, s, payments.Ref, []string{webID})
+
+	missing := collection.Ref{Namespace: ns.Name, Name: mustName(t, "missing")}
+	if _, err := s.ListCollectionUnits(t.Context(), missing); !errors.Is(err, collection.ErrNotFound) {
+		t.Errorf("ListCollectionUnits of a missing collection = %v, want ErrNotFound", err)
+	}
+}
+
+// assertUnits checks that the collection ref holds exactly the units with the
+// stable IDs want, in the order of the IDs.
+func assertUnits(t *testing.T, s Store, ref collection.Ref, want []string) {
+	t.Helper()
+
+	got, err := s.ListCollectionUnits(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("ListCollectionUnits %v: %v", ref, err)
+	}
+
+	want = slices.Sorted(slices.Values(want))
+	if !slices.Equal(got, want) && (len(got) != 0 || len(want) != 0) {
+		t.Errorf("ListCollectionUnits %v = %v, want %v", ref, got, want)
+	}
 }

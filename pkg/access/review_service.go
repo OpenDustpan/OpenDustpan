@@ -21,12 +21,6 @@ import (
 // ErrNoReview reports a Service whose store reads no access review.
 var ErrNoReview = errors.New("the store reads no access review")
 
-// ErrCollectionReview reports an export of a collection. The export of a
-// collection must hold the grants on the units inside it, and the core
-// cannot read them until the collections are wired (#478), so the export
-// is refused instead of an incomplete answer.
-var ErrCollectionReview = errors.New("the export of a collection is not available until collections are wired")
-
 // BootstrapHolder is the holder of a row of an export that a bootstrap
 // admin token gives: it holds every action and has no grant (ADR 6).
 const BootstrapHolder = "bootstrap admin token"
@@ -111,8 +105,10 @@ type ReviewPage struct {
 // one row for each bootstrap admin token, inside the limit of its pages,
 // unless the request names a subject.
 //
-// A namespace of obj must exist (ErrNotFound). The export of a collection
-// returns ErrCollectionReview until collections are wired. A bad request
+// A namespace of obj must exist, and so must a collection or a unit
+// (ErrNotFound). The export of a collection holds the grants on the
+// collection, the grants on the units that are in it now, and the grants on
+// its namespace and the installation with the roles above. A bad request
 // returns ErrInvalid, and a store that reads no review ErrNoReview.
 //
 // Review reads only. The caller writes the audit entry of the export (ADR
@@ -426,7 +422,7 @@ func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
 // manage access.
 func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewScope, map[string]bool, error) {
 	scope := ReviewScope{
-		Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		Object: identity.Object{}, CollectionID: "", Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: false,
 	}
 
@@ -446,10 +442,6 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 		return scope, grantAccess, nil
 	}
 
-	if kind == ObjectCollection {
-		return scope, nil, fmt.Errorf("export of %q: %w", obj.String(), ErrCollectionReview)
-	}
-
 	if kind == ObjectPrincipal {
 		scope, err = s.principalReviewScope(ctx, obj)
 
@@ -464,11 +456,14 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 		scope.Namespace = obj.Namespace().String()
 	} else {
 		// A unit export follows the stable ID of the unit, as its grants do.
-		if obj, err = s.existingUnit(ctx, obj); err != nil {
+		// A collection export follows the stable ID of the collection, and
+		// also reads the grants on the units that are in it.
+		if obj, err = s.existingReviewObject(ctx, obj); err != nil {
 			return scope, nil, err
 		}
 
 		scope.Object = obj
+		scope.CollectionID = obj.CollectionID()
 	}
 
 	chain, err := s.authz.chain(ctx, obj)
@@ -486,6 +481,26 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 	return scope, grantAccess, nil
 }
 
+// existingReviewObject returns obj with its stable ID when it is a unit or a
+// collection, and ErrNotFound when it does not exist. Any other object is
+// returned as it is.
+func (s *Service) existingReviewObject(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if !obj.IsCollection() {
+		return s.existingUnit(ctx, obj)
+	}
+
+	chain, err := s.authz.chain(ctx, obj)
+	if err != nil {
+		return obj, err
+	}
+
+	if len(chain) == 0 || chain[0].CollectionID() == "" {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	return chain[0], nil
+}
+
 // principalReviewScope returns the scope of the export of obj, a service
 // principal: the grants on the principal, the grants on the installation
 // with a role that holds principal:manage-tokens, and, for a principal of
@@ -496,7 +511,7 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 // principal.
 func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object) (ReviewScope, error) {
 	scope := ReviewScope{
-		Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		Object: obj, CollectionID: "", Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: false,
 	}
 
@@ -609,7 +624,7 @@ func inheritedFrom(scope ReviewScope, obj identity.Object) *identity.Object {
 func reviewQuery(req ReviewRequest, obj identity.Object, now time.Time) (ReviewQuery, int, error) {
 	q := ReviewQuery{
 		Scope: ReviewScope{
-			Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+			Object: identity.Object{}, CollectionID: "", Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 			TokenNamespaceRoles: nil, All: false,
 		},
 		Subject:   "",

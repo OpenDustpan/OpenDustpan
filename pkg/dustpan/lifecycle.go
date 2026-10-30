@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -213,17 +215,38 @@ func lifecycleError(err, notFound, taken error) error {
 // deletedReadScope implements inventoryapi.DeletedReadScope with the scope
 // of unit:read that the authorizer lists.
 type deletedReadScope struct {
-	authz identity.Authorizer
+	authz   identity.Authorizer
+	members collectionMembers
 }
 
-var _ inventoryapi.DeletedReadScope = deletedReadScope{authz: nil}
+var _ inventoryapi.DeletedReadScope = deletedReadScope{authz: nil, members: nil}
+
+// collectionMembers lists the stable IDs of the units in a collection, the
+// soft-deleted units included. The collection store implements it.
+type collectionMembers interface {
+	ListCollectionUnits(ctx context.Context, ref collection.Ref) ([]string, error)
+}
+
+// newDeletedReadScope returns the scope of the deleted-unit reads for authz.
+// It reads the collection members from store when store holds collections.
+// Without them, a grant on a collection covers no deleted unit.
+func newDeletedReadScope(authz identity.Authorizer, store any) deletedReadScope {
+	scope := deletedReadScope{authz: authz, members: nil}
+
+	if m, ok := store.(collectionMembers); ok {
+		scope.members = m
+	}
+
+	return scope
+}
 
 // ReadableUnits implements inventoryapi.DeletedReadScope. A grant of
 // unit:read on the installation or on ns covers every deleted unit of ns. A
 // grant on a unit covers that unit while it exists, so it gives nothing on a
 // deleted unit here: ListObjects leaves out the units that do not exist.
-// Collections (#478) are not wired yet, so a grant on a collection covers
-// no deleted unit.
+// A grant on a collection covers each deleted unit that is still in the
+// collection, because the membership stays with the deleted unit. Without a
+// collection reader, a grant on a collection covers none.
 func (s deletedReadScope) ReadableUnits(
 	ctx context.Context, p identity.Principal, ns namespace.Name,
 ) (bool, []string, error) {
@@ -252,5 +275,51 @@ func (s deletedReadScope) ReadableUnits(
 		}
 	}
 
+	members, err := s.collectionUnits(ctx, scope.Collections, ns)
+	if err != nil {
+		return false, nil, err
+	}
+
+	for _, id := range members {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+
 	return false, ids, nil
+}
+
+// collectionUnits returns the stable IDs of the units in the collections of
+// ns among cols, the deleted units included. A collection that no longer
+// exists adds none.
+func (s deletedReadScope) collectionUnits(
+	ctx context.Context, cols []identity.Object, ns namespace.Name,
+) ([]string, error) {
+	if s.members == nil {
+		return nil, nil
+	}
+
+	var ids []string
+
+	for i := range cols {
+		obj := cols[i]
+		if obj.Namespace() != ns {
+			continue
+		}
+
+		got, err := s.members.ListCollectionUnits(ctx, collection.Ref{
+			Namespace: ns, Name: collection.Name(obj.CollectionName()),
+		})
+		if errors.Is(err, collection.ErrNotFound) {
+			continue
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("list units of collection %q: %w", obj.CollectionName(), err)
+		}
+
+		ids = append(ids, got...)
+	}
+
+	return ids, nil
 }

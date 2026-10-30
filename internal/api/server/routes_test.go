@@ -1221,12 +1221,6 @@ func wantOtherSuccessStatus(route apiserver.Route) int {
 		return http.StatusAccepted
 	}
 
-	if route.Method == http.MethodGet &&
-		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/access-review" {
-		// The export of a collection waits for the units inside it (ADR 52).
-		return http.StatusNotImplemented
-	}
-
 	if route.Method == http.MethodPost && createsRecord(route.Path) {
 		return http.StatusCreated
 	}

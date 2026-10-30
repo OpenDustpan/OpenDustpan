@@ -27,11 +27,13 @@ package server
 // bootstrap admin token, inside the limit. A cursor holds a binding of its
 // export (object, mode, window, subject and expand), and a cursor of
 // another export answers 400.
-// The export of a collection answers 501 until collections are wired.
+// The export of a collection holds the grants on the collection and on the
+// units in it now, and the grants on the objects that contain it.
 //
 // Each export request writes one audit entry of the kind read-access (ADR
-// 52, decision 13): in the namespace of a namespace or unit export, in
-// @server for the installation. A failed append answers 500 with no rows.
+// 52, decision 13): in the namespace of a namespace, collection or unit
+// export, in @server for the installation. A failed append answers 500 with
+// no rows.
 //
 // GET /api/server/caller/access answers the access of the caller: on one
 // object (?object=), or the objects of one kind where it can do an action

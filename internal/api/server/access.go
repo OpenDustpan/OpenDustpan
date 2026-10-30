@@ -810,8 +810,7 @@ func classifyAccess(err error) (failure, bool) {
 	case errors.Is(err, access.ErrAlreadyExists), errors.Is(err, access.ErrBuiltIn), errors.Is(err, access.ErrInUse),
 		errors.Is(err, access.ErrUnitMoved), errors.Is(err, access.ErrLastSiteAdministrator):
 		return fail(http.StatusConflict, err.Error()), true
-	case errors.Is(err, errNoAccessStore), errors.Is(err, access.ErrNoReview),
-		errors.Is(err, access.ErrCollectionReview):
+	case errors.Is(err, errNoAccessStore), errors.Is(err, access.ErrNoReview):
 		return fail(http.StatusNotImplemented, err.Error()), true
 	default:
 		return fail(0, ""), false

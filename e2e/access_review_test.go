@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,6 +166,7 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReviewRefusals(ctx, t, env)
 	checkCallerAccess(ctx, t, env)
 	checkCallerAccessRoles(ctx, t, env)
+	checkCollectionReview(ctx, t, env, f)
 }
 
 // seedReview makes a principal in a group, a namespace and five grants:
@@ -383,13 +385,6 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 
 		checkReviewRow(t, f, &rows[i])
 	}
-
-	// The export of a collection must hold the grants on its units, which
-	// the server cannot read until collections are wired (#478).
-	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, "/api/server/namespaces/review/collections/payments/access-review", "",
-		http.StatusNotImplemented,
-	}, nil)
 }
 
 // checkReviewRow checks the fields of one current row of the seed.
@@ -817,6 +812,85 @@ func checkDeletedUnitInHistory(ctx context.Context, t *testing.T, env *e2e.Env, 
 		r := &rows[i]
 		if r.GrantID == f.unitGrant.ID && (r.ObjectState != "deleted" || r.Object != "pulumi:review/web/prod") {
 			t.Fatalf("grant on the deleted stack = %+v, want pulumi:review/web/prod, deleted", r)
+		}
+	}
+}
+
+// checkCollectionReview makes a collection with one unit in a new namespace
+// and reads its export. The export holds the grants on the collection, on the
+// unit in it, and with data access on the namespace and the installation. A
+// row of a group carries the member that it gives access to (via), and a row
+// of a principal says that its last access is tracked. It runs last, so the
+// grants of the new namespace do not change the counts of the checks before.
+func checkCollectionReview(ctx context.Context, t *testing.T, env *e2e.Env, f reviewFixture) {
+	t.Helper()
+
+	const (
+		base = "/api/dustpan/v1/namespaces/colreview/collections"
+		path = "/api/server/namespaces/colreview/collections/payments"
+	)
+
+	// The history check took carol out of the group: she joins it again.
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/groups/" + f.reviewers.ID + "/members",
+		`{"principalID":"` + f.carol.ID + `"}`, http.StatusCreated,
+	}, nil)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces", `{"name":"colreview"}`, http.StatusCreated,
+	}, nil)
+	createStack(ctx, t, env, "colreview/web/prod")
+
+	// A collection that does not exist has no export.
+	principalCall(ctx, t, env, principalStep{http.MethodGet, path + "/access-review", "", http.StatusNotFound}, nil)
+
+	principalCall(ctx, t, env, principalStep{http.MethodPost, base, `{"name":"payments"}`, http.StatusCreated}, nil)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPut, "/api/inventory/unit-collection?unit=pulumi%3Acolreview%2Fweb%2Fprod",
+		`{"collection":"payments"}`, http.StatusOK,
+	}, nil)
+
+	for _, g := range []struct{ path, subject, role string }{
+		{"/api/server/namespaces/colreview/grants", f.groupRef, "writer"},
+		{path + "/grants", f.carolRef, "viewer"},
+		{"/api/server/namespaces/colreview/unit-grants?tool=pulumi&unit=web%2Fprod", f.carolRef, "maintainer"},
+	} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, g.path, `{"subject":"` + g.subject + `","role":"` + g.role + `"}`, http.StatusCreated,
+		}, nil)
+	}
+
+	rows := reviewOf(ctx, t, env, path+"/access-review", url.Values{"expand": {"members"}})
+	rows = slices.DeleteFunc(rows, func(r e2eReviewRow) bool { return strings.HasPrefix(r.GrantID, "grt-e2e-fresh") })
+
+	got := reviewRoles(rows)
+	want := sorted(
+		"account-administrator@@server<@server",
+		"writer@colreview<colreview", "viewer@colreview/payments<", "maintainer@pulumi:colreview/web/prod<",
+	)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("collection export rows = %q, want %q", got, want)
+	}
+
+	checkCollectionReviewRows(t, f, rows)
+}
+
+// checkCollectionReviewRows checks the via and the last access of the rows of
+// the export of a collection.
+func checkCollectionReviewRows(t *testing.T, f reviewFixture, rows []e2eReviewRow) {
+	t.Helper()
+
+	for i := range rows {
+		r := &rows[i]
+
+		isGroup := strings.HasPrefix(r.Subject, "group:")
+		if isGroup && (r.Via == nil || r.Via.Member != f.carolRef) {
+			t.Fatalf("row of a group = %+v, want carol through the group", r)
+		}
+
+		isCarol := r.Subject == f.carolRef
+		if isCarol && (r.LastAccessTracked == nil || !*r.LastAccessTracked || r.Via != nil) {
+			t.Fatalf("row of carol = %+v, want a tracked last access and no via", r)
 		}
 	}
 }
