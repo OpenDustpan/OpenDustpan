@@ -160,20 +160,46 @@ Spacelift keeps the stack.
      writes: no path. The server cannot run that tool. At its destroy time
      the unit goes on a destroy hold (decision 6a).
 6a. **The destroy hold.** A hold is a fixed control, as a manual lock is
-    (ADR 213). It stops every change except a destroy, and it acts before
-    any change, never at the upload of a state:
+    (ADR 213). It refuses each lock and each state write of the unit that
+    is not part of a destroy. It acts on every route through which a tool
+    takes a lock or writes state:
     - **Pulumi CLI.** The server refuses the create of an update of each
       kind except `destroy` and `preview`, with 409 and the text "the
-      lifetime of this stack ended at <time>: run `pulumi destroy`".
-    - **OpenTofu.** The server cannot tell a destroy from an apply at the
-      lock of a workspace. So it refuses each lock with 409 and the text
-      "the lifetime of this workspace ended at <time>: open a destroy window,
-      then run `tofu destroy`", except during a **destroy window**. A
-      principal with `unit:run-destroy` opens a window with
+      lifetime of this stack ended at <time>: run `pulumi destroy`". It also
+      refuses a checkpoint import (`pulumi stack import`).
+    - **OpenTofu, the lock.** The server cannot tell a destroy from an apply
+      at the lock of a workspace. So it refuses each lock, except during a
+      **destroy window**, with 409 and the text "the lifetime of this
+      workspace ended at <time>: open a destroy window, then run `tofu
+      destroy`". This holds on both lock routes: the lock of the
+      TFE-compatible API, and `LOCK` of the OpenTofu HTTP backend (ADR 49).
+      A principal with `unit:run-destroy` opens a window with
       `POST .../units/{unit_id}/destroy-window`, a reason and a fresh
       authentication, for at most 1 hour, with an audit entry. During the
-      window the lock works.
-    - The server never refuses a state upload for a hold. A refused upload
+      window the lock works on both routes.
+    - **OpenTofu, writes without the lock.** ADR 44 already refuses a write
+      without the lock (409), unless the principal holds
+      `unit:write-unlocked` and both override switches are on. ADR 49
+      decision 6 applies the same rule to a `POST` of the HTTP backend
+      without `?ID=`. Under a hold, outside a window, the server refuses a
+      write without the lock and a forced write also for such a principal,
+      with the hold text. So `tofu apply -lock=false` cannot write state
+      under a hold.
+    - **What the hold cannot stop.** The server sees locks and state writes,
+      never the calls of a tool to a cloud. A run with `-lock=false` changes
+      resources first and writes state after. Under a hold, its state write
+      is refused, and OpenTofu writes `errored.tfstate`, as ADR 44 already
+      gives for any write without the lock that the server refuses. So for
+      OpenTofu the hold is complete for each lock and each write, and it is
+      cooperative for the resources, as the lock itself is (ADR 44). The
+      docs page and the read of the unit say this in these words.
+    - **What a hold also stops.** Each lock is refused, so a hold also
+      stops `tofu plan` (it takes the lock by default), `tofu refresh`,
+      `tofu import` and the state commands that take the lock. The update
+      create is refused, so it also stops `pulumi refresh` and `pulumi
+      import`. `tofu plan -lock=false` and `pulumi preview` still read
+      state. The docs page of E6 lists each command.
+    - The server refuses no state write inside a window. A refused upload
       after a change of resources would lose the record of those resources.
     - When a final state version holds no resources, the hold ends, the
       unit is `destroyed`, and decision 11 applies. A window that ends with
@@ -181,14 +207,17 @@ Spacelift keeps the stack.
       `unit.destroy-overdue`.
     - While the hold lasts, the server sends `unit.destroy-overdue` once a
       day to the owners of the unit.
-    - The read of the unit shows the state `hold`. The inventory list takes
-      the filter `lifetime=hold`. The fact group `lifetime` (`state`,
-      `destroyAt`) of `change.propose` gives the state to gates.
+    - The read of the unit shows the state `hold`, and the line "The hold
+      refuses locks and state writes. It cannot see changes that a tool
+      makes with no state write." The inventory list takes the filter
+      `lifetime=hold`. The fact group `lifetime` (`state`, `destroyAt`,
+      `cooperative`) of `change.propose` gives the state to gates.
+      `cooperative` is true for an OpenTofu unit.
 
-    The refusals are new answers of a route of the Pulumi Cloud-compatible
-    API and of the TFE-compatible API. The e2e suite checks the text that
-    each real CLI shows (step 9). A hold does not change the success path
-    of either API.
+    The refusals are new answers of routes of the Pulumi Cloud-compatible
+    API, of the TFE-compatible API and of the OpenTofu HTTP backend. The
+    e2e suite checks the text that each real CLI shows (step 9). A hold does
+    not change the success path of any of these APIs.
 7. **Who the destroy runs as.** As ADR 267 decision 14 does for a trigger,
    the destroy runs as the **setter**: the principal that last set the
    destroy time, or the requester of the create for a lifetime of a
@@ -268,6 +297,21 @@ Spacelift keeps the stack.
      [fetched]. The name is free at once, and a restore still brings the
      unit back for the retention period. Cost: a team that wants to apply
      the same unit again must restore it or make it again.
+- **D11. A lifetime limit and teams that use only the CLI.** In short: a
+  namespace limit can stop the daily CLI work of a team that runs no
+  runner. Its stacks and workspaces go on a destroy hold at their destroy
+  time, and then each `pulumi up`, `tofu plan` and `tofu apply` is refused
+  until a person destroys the unit. Options:
+  1. The limit holds for every unit, with the hold (recommended, and what
+     the PM asked for). Cost: a team with no runner must destroy by hand,
+     and a forgotten unit blocks its CLI work. The warnings of decision 10
+     go out 72 hours, 24 hours and 1 hour before.
+  2. A limit holds only for units with a destroy path. Cost: a hidden
+     exception: the namespace says "30 days", and some units live for
+     ever.
+  3. A limit on a unit with no destroy path only warns, each day, and
+     blocks nothing. Cost: the limit is advice for these units, and the
+     API must say so for each one.
 - **D9. Does a lifetime limit hold for administrators?** In short: when a
   namespace says "nothing lives longer than 30 days", can an administrator
   keep one stack longer without a change of the limit? Options:
@@ -321,9 +365,14 @@ schedules step of milestone 7 does):
    the answer names both with "destroy hold", and an older unit with a
    destroy path with the destroy time now plus 72 hours. Set the limit and
    check the explicit destroy times and one audit entry for each unit.
-   After the time: `pulumi up` fails with the hold text, and `pulumi
-   destroy` works. `tofu apply` fails at the lock with the hold text. Open
-   a destroy window, run `tofu destroy`, and check that the hold ends.
+   After the time: `pulumi up` and `pulumi refresh` fail with the hold
+   text, and `pulumi destroy` works. `tofu apply` fails at the lock with
+   the hold text, on the TFE-compatible API and on a second workspace of
+   the HTTP backend. With the unlocked-write switches on and a principal
+   with `unit:write-unlocked`, `tofu apply -lock=false` fails at the state
+   write with the hold text, and the test checks that `errored.tfstate`
+   exists. Open a destroy window, run `tofu destroy` on both workspaces,
+   and check that each hold ends.
 
 ### Security tests (ADR 250)
 
@@ -364,7 +413,7 @@ Sizes and conflict groups as in RFC 111.
 | E6 | The e2e steps above, and the docs page "Destroy a stack or a workspace at a set time" | M | `e2e`, `docs` | E4, E5, E7, E8, E9 |
 | E7 | `inactiveFor`: the move of the destroy time in the transaction of each final state version, for both tools | M | `lifetime`, `state-write` | E3 |
 | E8 | The rules of a limit: the check route, and the explicit destroy times of existing units with the grace. The rule of a move. The default of `afterDestroy` (after D8 and D9) | M | `lifetime`, `store-migrations` | E4 |
-| E9 | The destroy hold: the refusal of the Pulumi update create and of the OpenTofu lock, the destroy window, `unit.destroy-overdue`, the end of a hold | M | `lifetime`, `api-pulumi`, `api-tfe`, `store-migrations` | E8 |
+| E9 | The destroy hold. It refuses the Pulumi update create and the checkpoint import. It refuses the lock of the TFE-compatible API, `LOCK` of the HTTP backend, writes without the lock and forced writes. The destroy window, `unit.destroy-overdue`, the end of a hold | M | `lifetime`, `api-pulumi`, `api-tfe`, `store-migrations` | E8 |
 
 Order: E1, E2, E3, then E4, E5 and E7 in parallel, then E8, then E9,
 then E6. E2 holds the columns of `inactiveFor` and `afterDestroy` in its
