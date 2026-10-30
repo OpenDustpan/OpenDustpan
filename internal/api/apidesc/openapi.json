@@ -1011,6 +1011,7 @@
           "access.no-action",
           "audit.entry-not-found",
           "audit.entry-read-unavailable",
+          "audit.export-not-recorded",
           "audit.reason-invalid",
           "auth.rate-limited",
           "auth.unauthenticated",

@@ -43,7 +43,9 @@ func (e memEngine) Decide(ctx context.Context, in policy.Input) (policy.Decision
 		return denyBlueprint(d, in)
 	case policytest.PolicyApproveDBA:
 		d.Effect = policy.EffectApprove
-		d.Approvals = &policy.Approvals{Groups: []string{policytest.DBAGroup}, Count: policytest.DBAApprovals}
+		d.Approvals = &policy.Approvals{
+			Rule: policytest.DBARule, Groups: []string{policytest.DBAGroup}, Count: policytest.DBAApprovals,
+		}
 
 		return d, nil
 	case policytest.PolicySlow:
@@ -103,7 +105,9 @@ func failingDeny(d policy.Decision, in policy.Input) (policy.Decision, error) {
 	}
 
 	d.Effect = policy.EffectApprove
-	d.Approvals = &policy.Approvals{Groups: []string{policytest.DBAGroup}, Count: policytest.DBAApprovals}
+	d.Approvals = &policy.Approvals{
+		Rule: policytest.DBARule, Groups: []string{policytest.DBAGroup}, Count: policytest.DBAApprovals,
+	}
 
 	return d, nil
 }
