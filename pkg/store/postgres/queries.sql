@@ -4265,34 +4265,31 @@ DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
 
 -- name: GetNotificationSink :one
--- The caller compares the namespace of the row with the scope of the request.
-SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
-FROM notification_sinks AS k
-JOIN namespaces AS n ON n.id = k.namespace_id
-WHERE k.id = sqlc.arg(id);
+-- The caller compares the scope of the row with the scope of the request.
+SELECT id, scope AS namespace, kind, name, platform, target, created_by, version
+FROM notification_sinks
+WHERE id = sqlc.arg(id);
 
 -- name: ListNotificationSinks :many
-SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
-FROM notification_sinks AS k
-JOIN namespaces AS n ON n.id = k.namespace_id
-WHERE n.name = sqlc.arg(namespace)
-ORDER BY k.id COLLATE "C";
+SELECT id, scope AS namespace, kind, name, platform, target, created_by, version
+FROM notification_sinks
+WHERE scope = sqlc.arg(namespace)
+ORDER BY id COLLATE "C";
 
 -- name: ListNotificationSinkRefs :many
--- The secret refs of every sink of a namespace, in the order of each sink.
-SELECT s.sink_id, s.ref
-FROM notification_sink_secrets AS s
-JOIN namespaces AS n ON n.id = s.namespace_id
-WHERE n.name = sqlc.arg(namespace)
-ORDER BY s.sink_id COLLATE "C", s.position;
+-- The secret refs of every sink of a scope, in the order of each sink.
+SELECT sink_id, ref
+FROM notification_sink_secrets
+WHERE scope = sqlc.arg(namespace)
+ORDER BY sink_id COLLATE "C", position;
 
 -- name: InsertNotificationSink :execrows
 -- The caller checks the fence in the same transaction. A sink with the same
 -- ID is not written.
-INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+INSERT INTO notification_sinks (id, scope, kind, name, platform, target, created_by, version)
 VALUES (
-    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(kind), sqlc.arg(name), sqlc.arg(platform), sqlc.arg(target), sqlc.arg(created_by), 1
+    sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(platform), sqlc.arg(target),
+    sqlc.arg(created_by), 1
 )
 ON CONFLICT (id) DO NOTHING;
 
@@ -4302,48 +4299,228 @@ ON CONFLICT (id) DO NOTHING;
 UPDATE notification_sinks
 SET name = sqlc.arg(name), target = sqlc.arg(target), version = notification_sinks.version + 1
 WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.version = sqlc.arg(version)
-  AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+  AND notification_sinks.scope = sqlc.arg(namespace);
 
 -- name: DeleteNotificationSink :execrows
 DELETE FROM notification_sinks
-WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.scope = sqlc.arg(namespace);
 
 -- name: ClaimNotificationSinkRef :execrows
--- Records that the namespace holds the ref. It writes nothing, and the caller
--- refuses the new value, when the namespace held the ref before.
-INSERT INTO notification_sink_refs (namespace_id, ref)
-VALUES ((SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref))
-ON CONFLICT (namespace_id, ref) DO NOTHING;
+-- Records that the scope holds the ref. It writes nothing, and the caller
+-- refuses the new value, when the scope held the ref before.
+INSERT INTO notification_sink_refs (scope, ref)
+VALUES (sqlc.arg(namespace), sqlc.arg(ref))
+ON CONFLICT (scope, ref) DO NOTHING;
 
 -- name: InsertNotificationSinkSecret :exec
-INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
-VALUES (
-    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref), sqlc.arg(sink_id),
-    sqlc.arg(position), sqlc.arg(ciphertext)
-);
+INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+VALUES (sqlc.arg(namespace), sqlc.arg(ref), sqlc.arg(sink_id), sqlc.arg(position), sqlc.arg(ciphertext));
 
 -- name: ListNotificationSinkSecrets :many
-SELECT s.ref, s.ciphertext
-FROM notification_sink_secrets AS s
-JOIN namespaces AS n ON n.id = s.namespace_id
-WHERE n.name = sqlc.arg(namespace) AND s.sink_id = sqlc.arg(sink_id)
-ORDER BY s.position;
+SELECT ref, ciphertext
+FROM notification_sink_secrets
+WHERE scope = sqlc.arg(namespace) AND sink_id = sqlc.arg(sink_id)
+ORDER BY position;
 
 -- name: MoveNotificationSinkSecret :exec
 UPDATE notification_sink_secrets
 SET position = sqlc.arg(position)
 WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+  AND notification_sink_secrets.scope = sqlc.arg(namespace);
 
 -- name: DeleteNotificationSinkSecret :exec
 DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+  AND notification_sink_secrets.scope = sqlc.arg(namespace);
 
 -- name: DeleteNotificationSinkSecrets :exec
 DELETE FROM notification_sink_secrets
-WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id) AND notification_sink_secrets.scope = sqlc.arg(namespace);
+
+-- name: EnsureNotificationSequence :exec
+-- Makes the counter row of a scope. A PostgreSQL adapter locks this row to
+-- order the appends of the scope.
+INSERT INTO notification_sequences (scope, last_sequence)
+VALUES (sqlc.arg(scope), 0)
+ON CONFLICT (scope) DO NOTHING;
+
+-- name: GetNotificationSequence :one
+-- Locks the counter row until the commit, so the appends of a scope wait for
+-- each other and a later sequence never becomes visible before an earlier one.
+SELECT last_sequence FROM notification_sequences WHERE scope = sqlc.arg(scope) FOR UPDATE;
+
+-- name: SetNotificationSequence :exec
+UPDATE notification_sequences SET last_sequence = sqlc.arg(last_sequence) WHERE scope = sqlc.arg(scope);
+
+-- name: GetNotificationIDByDedupe :one
+SELECT id FROM notifications WHERE scope = sqlc.arg(scope) AND dedupe_key = sqlc.arg(dedupe_key);
+
+-- name: CountNotificationsByID :one
+SELECT COUNT(*) FROM notifications WHERE id = sqlc.arg(id);
+
+-- name: InsertNotification :exec
+INSERT INTO notifications (
+    scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links, attributes, recipients,
+    dedupe_key, at_ms
+) VALUES (
+    sqlc.arg(scope), sqlc.arg(sequence), sqlc.arg(id), sqlc.arg(type), sqlc.arg(object), sqlc.arg(object_id),
+    sqlc.arg(subject), sqlc.arg(agent), sqlc.arg(severity), sqlc.arg(summary), sqlc.arg(links),
+    sqlc.arg(attributes), sqlc.arg(recipients), sqlc.arg(dedupe_key), sqlc.arg(at_ms)
+);
+
+-- name: ListNotificationsAfter :many
+SELECT scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links, attributes,
+       recipients, dedupe_key, at_ms
+FROM notifications
+WHERE scope = sqlc.arg(scope) AND sequence > sqlc.arg(after)
+ORDER BY sequence
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListNotificationScopesAbove :many
+-- The scopes that hold a notification above the cursor of the dispatcher.
+SELECT s.scope
+FROM notification_sequences AS s
+LEFT JOIN notification_cursors AS c ON c.scope = s.scope AND c.name = sqlc.arg(name)
+WHERE EXISTS (
+    SELECT 1 FROM notifications AS n WHERE n.scope = s.scope AND n.sequence > COALESCE(c.sequence, 0)
+)
+ORDER BY s.scope COLLATE "C";
+
+-- name: GetNotificationCursor :one
+SELECT sequence FROM notification_cursors WHERE name = sqlc.arg(name) AND scope = sqlc.arg(scope);
+
+-- name: EnsureNotificationCursor :exec
+INSERT INTO notification_cursors (name, scope, sequence)
+VALUES (sqlc.arg(name), sqlc.arg(scope), 0)
+ON CONFLICT (name, scope) DO NOTHING;
+
+-- name: MoveNotificationCursor :execrows
+UPDATE notification_cursors
+SET sequence = sqlc.arg(to_sequence)
+WHERE name = sqlc.arg(name) AND scope = sqlc.arg(scope) AND sequence = sqlc.arg(from_sequence);
+
+-- name: GetNotificationSubscription :one
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE id = sqlc.arg(id);
+
+-- name: ListNotificationSubscriptions :many
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE scope = sqlc.arg(scope)
+ORDER BY id COLLATE "C";
+
+-- name: ListNotificationSubscriptionsOfSink :many
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE scope = sqlc.arg(scope) AND sink_id = sqlc.arg(sink_id)
+ORDER BY id COLLATE "C";
+
+-- name: InsertNotificationSubscription :execrows
+-- A subscription with the same ID is not written.
+INSERT INTO notification_subscriptions (
+    id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+) VALUES (
+    sqlc.arg(id), sqlc.arg(scope), sqlc.arg(sink_id), sqlc.arg(types), sqlc.arg(objects), sqlc.arg(min_severity),
+    sqlc.arg(state), sqlc.arg(reason), sqlc.arg(created_by), 1
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: UpdateNotificationSubscription :execrows
+-- The sink, the creator and the filter of a replace are the new values. The
+-- version guards the replace.
+UPDATE notification_subscriptions
+SET sink_id = sqlc.arg(sink_id), types = sqlc.arg(types), objects = sqlc.arg(objects),
+    min_severity = sqlc.arg(min_severity), state = sqlc.arg(state), reason = sqlc.arg(reason),
+    created_by = sqlc.arg(created_by), version = notification_subscriptions.version + 1
+WHERE notification_subscriptions.id = sqlc.arg(id) AND notification_subscriptions.scope = sqlc.arg(scope)
+  AND notification_subscriptions.version = sqlc.arg(version);
+
+-- name: SuspendNotificationSubscription :exec
+UPDATE notification_subscriptions
+SET state = 'suspended', reason = sqlc.arg(reason), version = notification_subscriptions.version + 1
+WHERE notification_subscriptions.id = sqlc.arg(id) AND notification_subscriptions.scope = sqlc.arg(scope);
+
+-- name: DeleteNotificationSubscription :execrows
+DELETE FROM notification_subscriptions
+WHERE notification_subscriptions.id = sqlc.arg(id) AND notification_subscriptions.scope = sqlc.arg(scope);
+
+-- name: DeletePendingNotificationDeliveriesOfSubscription :exec
+DELETE FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
+
+-- name: SkipPendingNotificationDeliveriesOfSubscription :exec
+UPDATE notification_deliveries
+SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
+
+-- name: GetNotificationDelivery :one
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE id = sqlc.arg(id);
+
+-- name: CountNotificationDeliveryRoute :one
+SELECT COUNT(*) FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
+  AND subscription_id = sqlc.arg(subscription_id) AND contact = sqlc.arg(contact);
+
+-- name: InsertNotificationDelivery :exec
+INSERT INTO notification_deliveries (
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    last_error, delivered_at_ms, owner, lease_until_ms, version
+) VALUES (
+    sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+);
+
+-- name: ListDueNotificationDeliveryScopes :many
+SELECT DISTINCT scope
+FROM notification_deliveries
+WHERE state = 'pending' AND next_at_ms <= sqlc.arg(now_ms) AND lease_until_ms <= sqlc.arg(now_ms)
+ORDER BY scope COLLATE "C";
+
+-- name: ClaimNotificationDeliveries :many
+-- Takes at most max_rows pending deliveries of the scope that are due and that
+-- no live claim holds, oldest first. The caller runs it in a write transaction.
+UPDATE notification_deliveries
+SET owner = sqlc.arg(owner), lease_until_ms = sqlc.arg(lease_until_ms), version = notification_deliveries.version + 1
+WHERE notification_deliveries.id IN (
+    SELECT d.id FROM notification_deliveries AS d
+    WHERE d.scope = sqlc.arg(scope) AND d.state = 'pending' AND d.next_at_ms <= sqlc.arg(now_ms)
+      AND d.lease_until_ms <= sqlc.arg(now_ms)
+    ORDER BY d.next_at_ms, d.id COLLATE "C"
+    LIMIT sqlc.arg(max_rows)
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+          last_error, delivered_at_ms, owner, lease_until_ms, version;
+
+-- name: RecordNotificationAttempt :execrows
+-- Stores the result for the live claim only: the owner and the version of the
+-- stored claim, and a lease that has not passed at now_ms.
+UPDATE notification_deliveries
+SET state = sqlc.arg(state), attempts = sqlc.arg(attempts), next_at_ms = sqlc.arg(next_at_ms),
+    last_error = sqlc.arg(last_error), delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '',
+    lease_until_ms = 0, version = notification_deliveries.version + 1
+WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
+  AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
+  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
+
+-- name: ListNotificationDeliveriesOfSubscription :many
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg(max_rows);
+
+-- name: RedeliverNotificationDelivery :execrows
+UPDATE notification_deliveries
+SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
+WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
+  AND notification_deliveries.state <> 'pending';
 
 -- name: UpsertTrigger :execrows
 -- The caller checks the fence in the same transaction. A row that exists keeps

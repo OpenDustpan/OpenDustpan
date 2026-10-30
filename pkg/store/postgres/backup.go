@@ -1808,5 +1808,9 @@ func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging str
 		return err
 	}
 
+	if err := checkStagedNotifications(ctx, pool, staging); err != nil {
+		return err
+	}
+
 	return checkStagedTriggers(ctx, pool, staging)
 }

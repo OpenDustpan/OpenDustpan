@@ -547,28 +547,88 @@ type Namespace struct {
 	SourceFilter         string
 }
 
+type Notification struct {
+	Scope      string
+	Sequence   int64
+	ID         string
+	Type       string
+	Object     string
+	ObjectID   string
+	Subject    string
+	Agent      string
+	Severity   int64
+	Summary    string
+	Links      string
+	Attributes string
+	Recipients string
+	DedupeKey  string
+	AtMs       int64
+}
+
+type NotificationCursor struct {
+	Name     string
+	Scope    string
+	Sequence int64
+}
+
+type NotificationDelivery struct {
+	ID             string
+	Scope          string
+	NotificationID string
+	SubscriptionID string
+	SinkID         string
+	Contact        string
+	Principal      string
+	State          string
+	Attempts       int64
+	NextAtMs       int64
+	LastError      string
+	DeliveredAtMs  int64
+	Owner          string
+	LeaseUntilMs   int64
+	Version        int64
+}
+
+type NotificationSequence struct {
+	Scope        string
+	LastSequence int64
+}
+
 type NotificationSink struct {
-	ID          string
-	NamespaceID string
-	Kind        string
-	Name        string
-	Platform    string
-	Target      string
-	CreatedBy   string
-	Version     int64
+	ID        string
+	Scope     string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+	Version   int64
 }
 
 type NotificationSinkRef struct {
-	NamespaceID string
-	Ref         string
+	Scope string
+	Ref   string
 }
 
 type NotificationSinkSecret struct {
-	NamespaceID string
-	Ref         string
+	Scope      string
+	Ref        string
+	SinkID     string
+	Position   int64
+	Ciphertext []byte
+}
+
+type NotificationSubscription struct {
+	ID          string
+	Scope       string
 	SinkID      string
-	Position    int64
-	Ciphertext  []byte
+	Types       string
+	Objects     string
+	MinSeverity int64
+	State       string
+	Reason      string
+	CreatedBy   string
+	Version     int64
 }
 
 type ObjectContext struct {

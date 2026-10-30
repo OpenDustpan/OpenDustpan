@@ -990,18 +990,7 @@ func (k NotificationStore) History(
 		return nil, fmt.Errorf("select deliveries: %w", err)
 	}
 
-	out := make([]notify.Delivery, 0, len(rows))
-
-	for _, r := range rows {
-		d, convErr := notifystore.Delivery(deliveryRow(db.NotificationDelivery(r)))
-		if convErr != nil {
-			return nil, fmt.Errorf("delivery %s: %w", r.ID, convErr)
-		}
-
-		out = append(out, d)
-	}
-
-	return out, nil
+	return deliveriesOf(rows)
 }
 
 // Redeliver implements notify.Deliveries.
