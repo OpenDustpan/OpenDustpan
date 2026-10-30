@@ -34,11 +34,14 @@ type OIDCIssuerFake struct {
 	requests atomic.Int64
 }
 
+// issuerKeyBits is the size of the signing key of the fake issuer.
+const issuerKeyBits = 2048
+
 // NewOIDCIssuerFake starts the fake. It stops when the test ends.
 func NewOIDCIssuerFake(tb testing.TB) *OIDCIssuerFake {
 	tb.Helper()
 
-	key, err := rsa.GenerateKey(rand.Reader, rsaBits)
+	key, err := rsa.GenerateKey(rand.Reader, issuerKeyBits)
 	if err != nil {
 		tb.Fatalf("generate the key of the fake issuer: %v", err)
 	}
@@ -105,10 +108,10 @@ func (f *OIDCIssuerFake) serve(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case "/.well-known/openid-configuration":
-		writeBody(w, fmt.Sprintf(`{"issuer":%q,"jwks_uri":%q,"id_token_signing_alg_values_supported":["RS256"]}`,
+		writeIssuerBody(w, fmt.Sprintf(`{"issuer":%q,"jwks_uri":%q,"id_token_signing_alg_values_supported":["RS256"]}`,
 			f.server.URL, f.server.URL+"/jwks"))
 	case "/jwks":
-		writeBody(w, f.JWKS())
+		writeIssuerBody(w, f.JWKS())
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -133,4 +136,12 @@ func (e *Env) TofuDirWithToken(tb testing.TB, token string) string {
 // error.
 func (e *Env) RunTofuIn(ctx context.Context, tofu Install, dir string, args ...string) (Result, error) {
 	return e.RunAs(ctx, tofu, dir, []string{"TF_CLI_CONFIG_FILE=" + filepath.Join(dir, "tofurc")}, args...)
+}
+
+// writeIssuerBody writes body as the answer. A failed write is the failure
+// of the client, so the fake ignores it, and the client reports it.
+func writeIssuerBody(w http.ResponseWriter, body string) {
+	if _, err := w.Write([]byte(body)); err != nil {
+		return
+	}
 }
