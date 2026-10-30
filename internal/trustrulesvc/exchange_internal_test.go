@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
@@ -135,5 +136,35 @@ func TestCleanMakesAValidReason(t *testing.T) {
 		if err := audit.ValidateReason(out); err != nil || out == "" {
 			t.Errorf("%s: clean = %q, %v; want a valid reason", name, out, err)
 		}
+	}
+}
+
+// TestFlushRefusesACountThatNamesNoNamespace runs the namespace check of
+// flush alone: a held-back count of an aggregate whose limiter principal
+// does not name a valid namespace gives an error and reads no namespace.
+// The exchanger has no namespace port, so a read would panic.
+func TestFlushRefusesACountThatNamesNoNamespace(t *testing.T) {
+	t.Parallel()
+
+	for _, p := range []string{refusedSubject + ":Not A Namespace", refusedSubject + "-signed:../acme"} {
+		pending := []denylimit.Pending{{
+			Key: denylimit.Key{
+				Principal: p, Action: denylimit.AggregateMark, Kind: denylimit.AggregateMark,
+				Scope: denylimit.AggregateMark,
+			},
+			Suppressed: 3, Overflow: false,
+		}}
+
+		if err := bareExchanger().flush(t.Context(), emptyInternalEntry(), pending); err == nil {
+			t.Errorf("flush of the aggregate of %q = nil, want an error", p)
+		}
+	}
+
+	if got := namespaceOfLimiterPrincipal(refusedSubject + "-signed:acme"); got != "acme" {
+		t.Errorf("namespace of the signed principal = %q, want acme", got)
+	}
+
+	if got := namespaceOfLimiterPrincipal("bo"); got != "" {
+		t.Errorf("namespace of another principal = %q, want none", got)
 	}
 }

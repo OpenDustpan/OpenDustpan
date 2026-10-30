@@ -67,7 +67,7 @@ for a token that names an unknown key.
 | Trust rules of one namespace | at most 100 |
 | Refusal entries in the audit log, for tokens that no rule verified | one for each namespace in each minute, with the count of the others |
 | Refusal entries in the audit log, for tokens that the keys of a rule verified | one for each rule and `sub` in each minute, with the count of the others |
-| Pairs of rule and `sub` with entries of their own | at most 64 in each namespace. The other pairs share one entry in each minute. |
+| Pairs of rule and `sub` with entries of their own | at most 64 in each namespace. The other pairs share one entry in each minute, with the count of the others. |
 
 ## Set it up
 

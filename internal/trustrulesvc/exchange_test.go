@@ -7,11 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -728,5 +730,90 @@ func TestExchangeFailsClosedAndKeepsTheWindow(t *testing.T) {
 	entries := f.audit.all()
 	if len(entries) != 1 || !strings.HasPrefix(entries[0].Reason, "1 refused exchanges") {
 		t.Fatalf("refusal entries = %+v, want one entry that counts the refusal of the failed write", entries)
+	}
+}
+
+// TestExchangeCountsTheRefusalsBeyondTheKeysOfANamespace checks a flood of
+// signed tokens with more subjects than the limiter keeps keys for one
+// namespace: the refusals after the flood go to the aggregate of the
+// namespace, and the next window writes their count in its audit log.
+func TestExchangeCountsTheRefusalsBeyondTheKeysOfANamespace(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu  sync.Mutex
+		now = exchangeNow()
+	)
+
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return now
+	}
+
+	f := newExchangeFixtureAt(t, clock)
+
+	refuse := func(sub string) {
+		t.Helper()
+
+		tok := f.issuer.token(t, func(c map[string]any) { c["sub"] = sub })
+		if _, err := f.exchange(t, tok); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+			t.Fatalf("subject %s: Exchange = %v, want ErrNoMatch", sub, err)
+		}
+	}
+
+	for i := range denylimit.DefaultMaxKeysPerPrincipal + 1 {
+		refuse(fmt.Sprintf("repo:evil/fork:ref:refs/heads/b%d", i))
+	}
+
+	flood := len(f.audit.all())
+
+	for i := range 5 {
+		refuse(fmt.Sprintf("repo:victim-probe/p%d:ref:refs/heads/main", i))
+	}
+
+	if got := len(f.audit.all()); got != flood {
+		t.Fatalf("entries after the probes = %d, want %d: the probes are held back in the window", got, flood)
+	}
+
+	mu.Lock()
+	now = now.Add(2 * time.Minute)
+	mu.Unlock()
+
+	refuse("repo:evil/fork:ref:refs/heads/next")
+
+	counted := false
+
+	for _, e := range f.audit.all()[flood:] {
+		if e.Namespace == "acme" && strings.HasPrefix(e.Reason, "5 refused exchanges") {
+			counted = true
+		}
+	}
+
+	if !counted {
+		t.Fatalf("entries after the window = %+v, want the count of the 5 held-back refusals", f.audit.all()[flood:])
+	}
+}
+
+// TestExchangeGivesEachSubjectOfARuleItsOwnEntry checks the subject in the
+// limiter key of a signed refusal: two subjects of one rule each write an
+// entry in one window.
+func TestExchangeGivesEachSubjectOfARuleItsOwnEntry(t *testing.T) {
+	t.Parallel()
+
+	f := newExchangeFixture(t)
+
+	for _, sub := range []string{"repo:evil/fork:ref:refs/heads/a", "repo:other/fork:ref:refs/heads/b"} {
+		tok := f.issuer.token(t, func(c map[string]any) { c["sub"] = sub })
+		if _, err := f.exchange(t, tok); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+			t.Fatalf("subject %s: Exchange = %v, want ErrNoMatch", sub, err)
+		}
+	}
+
+	entries := f.audit.all()
+	if len(entries) != 2 || !strings.Contains(entries[0].Reason, "evil/fork") ||
+		!strings.Contains(entries[1].Reason, "other/fork") {
+		t.Fatalf("refusal entries = %+v, want one entry for each subject", entries)
 	}
 }

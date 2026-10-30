@@ -515,20 +515,39 @@ func signedKey(ns namespace.Name, s *signedBy) denylimit.Key {
 }
 
 // flush writes one entry for each count of refusals that the limiter held
-// back in an earlier window, in the namespace of the count. A count of the
-// aggregate of the limiter names no namespace, so it has no audit log to go
-// to: the next entry of a namespace carries the counts of that namespace.
+// back in an earlier window, in the namespace of the count. The aggregate of
+// a limiter principal goes to the namespace that the principal names. The
+// overflow of the whole limiter (more than denylimit.DefaultMaxKeys keys)
+// names no namespace, so it has no audit log to go to, and flush drops its
+// count.
 func (x *Exchanger) flush(ctx context.Context, request audit.Entry, pending []denylimit.Pending) error {
 	var errs []error
 
 	for _, p := range pending {
-		if p.Overflow || p.Key.Scope == "" || p.Key.Scope == denylimit.AggregateMark || p.Suppressed == 0 {
+		scope := p.Key.Scope
+		if scope == denylimit.AggregateMark {
+			// The aggregate of a limiter principal has no scope of its own,
+			// but each limiter principal of the exchange names one namespace.
+			scope = namespaceOfLimiterPrincipal(p.Key.Principal)
+		}
+
+		if p.Overflow || scope == "" || p.Suppressed == 0 {
 			continue
 		}
 
-		ns, err := x.cfg.Namespaces.Get(ctx, namespace.Name(p.Key.Scope))
+		// Defense in depth: the keys of the exchange hold only names of
+		// namespaces that exist. This check stays so that a key of another
+		// form never reaches the read of a namespace.
+		name, err := namespace.ParseName(scope)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("read namespace %s: %w", p.Key.Scope, err))
+			errs = append(errs, fmt.Errorf("the count of refused exchanges names no namespace: %w", err))
+
+			continue
+		}
+
+		ns, err := x.cfg.Namespaces.Get(ctx, name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read namespace %s: %w", name, err))
 
 			continue
 		}
@@ -553,6 +572,18 @@ func (x *Exchanger) flush(ctx context.Context, request audit.Entry, pending []de
 	}
 
 	return errors.Join(errs...)
+}
+
+// namespaceOfLimiterPrincipal returns the namespace of a limiter principal
+// of unsignedKey or signedKey, or the empty string for another principal.
+func namespaceOfLimiterPrincipal(p string) string {
+	for _, prefix := range []string{refusedSubject + "-signed:", refusedSubject + ":"} {
+		if ns, ok := strings.CutPrefix(p, prefix); ok {
+			return ns
+		}
+	}
+
+	return ""
 }
 
 // refusedSubject is the subject of the audit entry of a refused exchange: no
