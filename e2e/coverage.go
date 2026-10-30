@@ -2937,6 +2937,24 @@ func (coverageRegistryService) OpenFile(
 	return 0, nil, registry.ErrNotFound
 }
 
+func (coverageRegistryService) ModuleReleases(
+	context.Context, registry.Address,
+) ([]registry.Release, error) {
+	return nil, registry.ErrNotFound
+}
+
+func (coverageRegistryService) ModuleRelease(
+	context.Context, namespace.Name, string, string, string,
+) (registry.Release, error) {
+	return registry.Release{}, registry.ErrNotFound
+}
+
+func (coverageRegistryService) OpenModuleFile(
+	context.Context, registry.Address, string, string,
+) (int64, io.ReadCloser, error) {
+	return 0, nil, registry.ErrNotFound
+}
+
 // coverageRegistryRoutes returns the route table of the registry API. The
 // service is an empty shell: it exists only to build a Handler.
 func coverageRegistryRoutes(tb testing.TB) []RouteRef {
@@ -2952,6 +2970,7 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 	svc, err := registryservice.New(registryservice.Config{
 		Store: store, Keys: keys, Verifier: verifier, Inspector: verifier, Blobs: struct{ blob.Store }{nil},
 		Namespaces: coverageRegistryNamespaces{}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
+		MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		tb.Fatalf("registry service: %v", err)
@@ -3000,6 +3019,12 @@ func registryAllowEntries() []AllowEntry {
 		test = "TestRegistryTofuInit"
 		why  = "Client route: no CLI calls it. The steps of TestRegistryTofuInit call it, and OpenTofu installs what it published."
 
+		moduleTest = "TestRegistryModuleTofuInit"
+		moduleWhy  = "Client route: no CLI calls it. The steps of TestRegistryModuleTofuInit call it, and OpenTofu downloads what it published."
+
+		moduleProtocol    = "/v1/modules/{namespace}/{name}/{system}"
+		moduleProtocolWhy = "OpenTofu calls it on init, but only on the registry host. The steps of TestRegistryModuleTofuInit run the real CLI against it."
+
 		protocol    = "/v1/providers/{namespace}/{type}"
 		protocolWhy = "OpenTofu calls it on init, but only on the registry host. The steps of TestRegistryTofuInit run the real CLI against it."
 	)
@@ -3010,6 +3035,25 @@ func registryAllowEntries() []AllowEntry {
 		{Method: http.MethodGet, Path: base + "/providers", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
+		{
+			Method:       http.MethodPut,
+			Path:         base + "/modules/{name}/{system}/versions/{version}",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
+		{Method: http.MethodGet, Path: base + "/modules", CoveringTest: moduleTest, Reason: moduleWhy},
+		{
+			Method:       http.MethodGet,
+			Path:         base + "/modules/{name}/{system}/versions",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         base + "/modules/{name}/{system}/versions/{version}",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
 		{Method: http.MethodPost, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: base + "/keys/{fingerprint}", CoveringTest: test, Reason: why},
@@ -3021,5 +3065,23 @@ func registryAllowEntries() []AllowEntry {
 			Reason:       protocolWhy,
 		},
 		{Method: http.MethodGet, Path: protocol + "/{version}/files/{sha256}", CoveringTest: test, Reason: protocolWhy},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/versions",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/{version}/download",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/{version}/files/{sha256}",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
 	}
 }
