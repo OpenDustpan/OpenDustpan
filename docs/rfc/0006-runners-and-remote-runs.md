@@ -196,7 +196,7 @@ entries for Job and the _Avoid_ entry "executor".
 
 Accepted on 2026-10-30 as
 [ADR 282](../adr/0282-runners-and-remote-runs-accept-rfc-6.md). The project
-manager decided it for the project owner. ADR 139 stays proposed. The open
+owner decided it. ADR 139 stays proposed. The open
 gaps of the competitor review move to
 [RFC 107](0107-run-limits-and-the-run-queue.md),
 [RFC 108](0108-run-options-re-runs-and-run-variables.md),

@@ -1,6 +1,6 @@
 # 282. Runners and remote runs: the project accepts RFC 6
 
-Status: accepted · 2026-10-30. Decided by the project manager for the project owner on 30 October 2026. Accepts [RFC 6](../rfc/0006-runners-and-remote-runs.md). Moves the open gaps of RFC 6 to RFCs 107 to 110
+Status: accepted · 2026-10-30. Decided by the project owner on 30 October 2026. Accepts [RFC 6](../rfc/0006-runners-and-remote-runs.md). Moves the open gaps of RFC 6 to RFCs 107 to 110
 
 ## Context
 
@@ -33,9 +33,9 @@ ADR 213 decision 10 makes a manual lock stop new jobs of a unit, a
 collection or a namespace. ADR 254 gives speculative remote plans for
 OpenTofu. ADR 267 gives the run triggers.
 
-The project owner has no context on RFC 6. On 30 October 2026 the project
-manager decided to accept it, under the direction of the owner for this
-work.
+On 30 October 2026 the project owner read RFC 6 and accepted it: "RFC6
+lgtm". The owner gave the scope of this ADR: accept the parts that ADRs
+100 to 103 and 130 to 139 decide, and move the open gaps to new draft RFCs.
 
 The section "Gaps from the competitor review" of RFC 6 lists items that no
 ADR decides. They need a design before they can be decided.
