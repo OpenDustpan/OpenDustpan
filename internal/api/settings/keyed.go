@@ -65,11 +65,11 @@ func jsonAnswer(body any, version int64) (idempotency.Answer, error) {
 
 // writeAnswer sends a, or answers the error of the step that made it.
 func (h *Handler) writeAnswer(ctx context.Context, w http.ResponseWriter, a *idempotency.Answer, err error) {
-	if err == nil && a == nil {
-		err = errNoAnswer
-	}
+	if err != nil || a == nil {
+		if err == nil {
+			err = errNoAnswer
+		}
 
-	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
