@@ -200,6 +200,63 @@ A database failover that is longer than these times makes running CLI commands f
 
 Run the same command again after the database answers. The next `pulumi preview` and `tofu plan` show no changes.
 
+## Database settings for a failover
+
+After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. Settings in the `DUSTPAN_DATABASE` URL help the pool to leave such a connection:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `target_session_attrs=read-write` | (none) | A new connection must reach a server that accepts writes. The driver closes a connection to a read-only server and does not give it to the pool. Without it, a new connection can reach a read-only server. |
+| `pool_max_conn_lifetime=<duration>` | `1h` | The pool closes a connection when it is older than this time, and opens a new one. A short time limits how long a connection to an old primary can live. |
+| `pool_health_check_period=<duration>` | `1m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
+
+A duration is a number with a unit, for example `5m` or `30s`. The server passes the three settings to the driver as the URL gives them. A value that is not valid stops the start of the server. Example:
+
+```
+DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&target_session_attrs=read-write&pool_max_conn_lifetime=5m&pool_health_check_period=10s'
+```
+
+The values `5m` and `10s` are examples. Nobody measured them against a managed database.
+
+The driver checks `target_session_attrs` only when it opens a connection. A connection that turns read-only after it opened stays in the pool until it reaches `pool_max_conn_lifetime`, which is 1 hour by default. Writes on that connection fail with 503 until then. Set `pool_max_conn_lifetime` lower, for example `5m`, for a faster recovery.
+
+### What was tested
+
+The tests ran on 2026-10-30 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
+
+- The settings above reach the pool as the URL gives them. A value that is not valid is refused.
+- The server answers 503 with `Retry-After: 5` and the error code `namespace.unavailable` for each write while a proxy cuts all its database connections. After the proxy lets the connections through again, the same server accepts writes. Nobody restarted it.
+- A session that the database ended (`pg_terminate_backend`) gives the same 503 answer.
+- A database with `default_transaction_read_only = on` gives the SQLSTATE code 25006 to each write on a new session. A write then gets the same 503 answer. A read still works.
+- With `target_session_attrs=read-write`, the server does not open against that read-only database. It opens against the same database when the database accepts writes.
+
+### What should work, and was not tested
+
+No test ran on these systems:
+
+- A managed database service.
+- A real promotion of a standby.
+- A proxy that pools connections.
+- A URL with more than one host.
+
+The notes below follow from how the services are documented to work. They are not results. Read the documentation of your service for the failover time, and test a failover before you rely on it.
+
+A URL can name more than one host, separated by commas. With `target_session_attrs=read-write`, the driver should try the hosts in order and use the first one that accepts writes. This is how the driver documents it. Nobody tested it here. Use this form only when the database service does not give one address that always names the primary.
+
+| Service | Address to use | What the vendor page says | Vendor page |
+| --- | --- | --- | --- |
+| Amazon RDS Multi-AZ | The endpoint name of the DB instance | The failover changes the DNS record of the DB instance to point to the standby. You must open the existing connections again. | [Failover process for Multi-AZ DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html) |
+| Google Cloud SQL, high availability | The IP address or the connection string of the instance | The standby shares the static IP address of the primary. The failover closes the existing connections. | [High availability](https://docs.cloud.google.com/sql/docs/postgres/high-availability) |
+| Azure Database for PostgreSQL flexible server, zone-redundant high availability | The server host name | Clients connect to the host name of the primary server. The failover updates the DNS record of that name to the IP address of the standby. | [High availability](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/concepts-high-availability) |
+| Patroni | The address of a proxy or a load balancer that sends traffic only to the leader. Use `GET /primary` of the Patroni REST API as its health check. | `GET /primary` answers 200 only on the node that runs as the primary with the leader lock. The page does not say what happens to open connections. | [REST API](https://patroni.readthedocs.io/en/latest/rest_api.html) |
+| CloudNativePG | The `rw` service of the cluster. Its name is `<cluster name>-rw`. | The `rw` service points to the primary instance. The `ro` service points to the replicas. The `r` service points to any instance of the cluster, the primary included. Use `rw`. Not checked against the vendor page on the documentation site: the check read the source file of the documentation in the project repository. | [Service management (source file)](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/docs/src/service_management.md) |
+
+The "What the vendor page says" column is a summary of the page on 2026-10-30. It is not a test result. Do not use the address of one node or a read-only service.
+
+For each service, set `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
+
+During the failover, the instances answer 503 on the readiness probe. They also answer 503 on each request that needs the database. Section "When the database does not answer" describes this. This guide makes no claim about the failover time or about data loss. Both depend on the service and on its settings for synchronous replication.
+
 ## Settings that stay on one host
 
 Some targets write to the disk of the host that runs the instance. Each instance then holds a part of the data.

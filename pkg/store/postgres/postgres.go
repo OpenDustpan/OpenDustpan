@@ -165,8 +165,12 @@ func liveSchemaName(searchPath string) string {
 	return "public"
 }
 
-// Open connects to the database at url and migrates it.
-func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
+// poolConfig parses the database URL into the pool configuration. It reads
+// the pool and failover settings of the URL (target_session_attrs,
+// pool_max_conn_lifetime, pool_health_check_period and the other pgxpool
+// settings) and keeps them as they are. It sets only the search path of each
+// new connection.
+func poolConfig(url string) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
@@ -188,6 +192,18 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 		return nil
 	}
+
+	return cfg, nil
+}
+
+// Open connects to the database at url and migrates it.
+func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
+	cfg, err := poolConfig(url)
+	if err != nil {
+		return nil, err
+	}
+
+	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
 
 	s := &Store{
 		pool:                nil,
