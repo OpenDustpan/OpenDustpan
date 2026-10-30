@@ -228,16 +228,22 @@ type collectionMembers interface {
 }
 
 // newDeletedReadScope returns the scope of the deleted-unit reads for authz.
-// It reads the collection members from store when store holds collections.
-// Without them, a grant on a collection covers no deleted unit.
-func newDeletedReadScope(authz identity.Authorizer, store any) deletedReadScope {
-	scope := deletedReadScope{authz: authz, members: nil}
+// members reads the units of a collection. It is nil when the store holds no
+// collections: then a grant on a collection covers no deleted unit.
+func newDeletedReadScope(authz identity.Authorizer, members collectionMembers) deletedReadScope {
+	return deletedReadScope{authz: authz, members: members}
+}
 
-	if m, ok := store.(collectionMembers); ok {
-		scope.members = m
+// deletedReadScopeOf returns the scope of the deleted-unit reads for authz,
+// with the collection members of store when store holds collections. A store
+// that does not hold them gives a scope in which a grant on a collection
+// covers no deleted unit.
+func deletedReadScopeOf(authz identity.Authorizer, store any) deletedReadScope {
+	if members, ok := store.(collectionMembers); ok {
+		return newDeletedReadScope(authz, members)
 	}
 
-	return scope
+	return newDeletedReadScope(authz, nil)
 }
 
 // ReadableUnits implements inventoryapi.DeletedReadScope. A grant of

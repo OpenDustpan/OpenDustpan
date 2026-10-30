@@ -242,6 +242,71 @@ func TestBlobPurgerOutlivesTheRequest(t *testing.T) {
 // errNoDeadline reports a blob context without a deadline.
 var errNoDeadline = errors.New("blob context has no deadline")
 
+// scopeEntry returns a valid audit entry of action in ns.
+func scopeEntry(ns namespace.Name, action string) audit.Entry {
+	return audit.Entry{
+		At: scopeAt(), Namespace: ns, Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: action, Object: string(ns) + "/web", Version: "", ValuePath: "", ValueCount: nil,
+		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+		Changes: nil, ObjectID: "", FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+	}
+}
+
+// deletedMember makes the collection name in ns, moves the stack web/prod of
+// ns into it, and deletes the stack: the membership stays with the deleted
+// stack. When stackID is not empty, it makes the stack first with that ID.
+func (f scopeFixture) deletedMember(
+	t *testing.T, cols *collection.Service, ns namespace.Name, name, stackID string,
+) collection.Collection {
+	t.Helper()
+
+	ctx := t.Context()
+
+	rec, err := f.store.GetNamespace(ctx, ns)
+	if err != nil {
+		t.Fatalf("namespace %s: %v", ns, err)
+	}
+
+	ref := stack.Ref{Namespace: ns, Project: "web", Stack: "prod"}
+
+	if stackID != "" {
+		s := stack.Stack{
+			NamespaceID: "", CreatedAt: scopeAt(), UpdatedAt: scopeAt(), Tags: map[string]string{}, Ref: ref,
+			ID: stack.ID(stackID), Version: 0,
+		}
+		if createErr := f.store.CreateStack(ctx, s, rec.Fence()); createErr != nil {
+			t.Fatalf("create stack in %s: %v", ns, createErr)
+		}
+	}
+
+	col, err := cols.Create(
+		ctx,
+		collection.Ref{Namespace: ns, Name: collection.Name(name)},
+		scopeEntry(ns, "collection:create"),
+	)
+	if err != nil {
+		t.Fatalf("create collection %s/%s: %v", ns, name, err)
+	}
+
+	move := collection.Move{
+		Unit: collection.UnitRef{Namespace: ns, Tool: "pulumi", Name: "web/prod"},
+		From: "", To: col.Ref, ToID: col.ID, EndsLock: false,
+	}
+	if moveErr := cols.SetUnit(ctx, move, scopeEntry(ns, "unit:move")); moveErr != nil {
+		t.Fatalf("move into %s/%s: %v", ns, name, moveErr)
+	}
+
+	gone := scopeEntry(ns, "unit:manage")
+	deletion := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
+
+	if delErr := f.store.DeleteStack(ctx, ref, rec.Fence(), stack.EmptyGuard(), deletion); delErr != nil {
+		t.Fatalf("delete stack in %s: %v", ns, delErr)
+	}
+
+	return col
+}
+
 // TestDeletedReadScopeCollections proves that a grant of unit:read on a
 // collection covers each deleted unit that is still in the collection, and
 // no other deleted unit, and that a scope with no collection reader covers
@@ -264,48 +329,19 @@ func TestDeletedReadScopeCollections(t *testing.T) {
 		t.Fatalf("authorizer: %v", err)
 	}
 
-	entry := func(action string) audit.Entry {
-		return audit.Entry{
-			At: scopeAt(), Namespace: "acme", Subject: "admin", IDPSubject: "", TokenID: "",
-			Action: action, Object: "acme/web", Version: "", ValuePath: "", ValueCount: nil,
-			SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-			Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
-			Changes: nil, ObjectID: "", FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
-		}
-	}
+	payments := f.deletedMember(t, cols, "acme", "payments", "")
+	otherPayments := f.deletedMember(t, cols, "other", "payments", "stk-other")
 
-	payments, err := cols.Create(ctx, collection.Ref{Namespace: "acme", Name: "payments"}, entry("collection:create"))
-	if err != nil {
-		t.Fatalf("create payments: %v", err)
-	}
-
-	empty, err := cols.Create(ctx, collection.Ref{Namespace: "acme", Name: "empty"}, entry("collection:create"))
+	empty, err := cols.Create(
+		ctx,
+		collection.Ref{Namespace: "acme", Name: "empty"},
+		scopeEntry("acme", "collection:create"),
+	)
 	if err != nil {
 		t.Fatalf("create empty: %v", err)
 	}
 
-	move := collection.Move{
-		Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
-		From: "", To: payments.Ref, ToID: payments.ID, EndsLock: false,
-	}
-	if moveErr := cols.SetUnit(ctx, move, entry("unit:move")); moveErr != nil {
-		t.Fatalf("move into payments: %v", moveErr)
-	}
-
-	// The membership stays with the deleted stack.
-	rec, err := f.store.GetNamespace(ctx, "acme")
-	if err != nil {
-		t.Fatalf("namespace: %v", err)
-	}
-
-	ref := stack.Ref{Namespace: "acme", Project: "web", Stack: "prod"}
-	gone := entry("unit:manage")
-	d := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
-
-	if delErr := f.store.DeleteStack(ctx, ref, rec.Fence(), stack.EmptyGuard(), d); delErr != nil {
-		t.Fatalf("delete stack: %v", delErr)
-	}
-
+	f.seed(t, "dora", identity.CollectionObject("other", "payments").WithCollectionID(otherPayments.ID))
 	f.seed(t, "cora", identity.CollectionObject("acme", "payments").WithCollectionID(payments.ID))
 	f.seed(t, "emma", identity.CollectionObject("acme", "empty").WithCollectionID(empty.ID))
 
@@ -318,6 +354,20 @@ func TestDeletedReadScopeCollections(t *testing.T) {
 	}{
 		{"collection grant", deletedReadScope{authz: authz, members: f.store}, "cora", "acme", []string{"stk-scope"}},
 		{"collection grant elsewhere", deletedReadScope{authz: authz, members: f.store}, "cora", "other", []string{}},
+		{
+			"same collection name in another namespace",
+			deletedReadScope{authz: authz, members: f.store},
+			"dora",
+			"acme",
+			[]string{},
+		},
+		{
+			"grant on the collection of that namespace",
+			deletedReadScope{authz: authz, members: f.store},
+			"dora",
+			"other",
+			[]string{"stk-other"},
+		},
 		{"grant on another collection", deletedReadScope{authz: authz, members: f.store}, "emma", "acme", []string{}},
 		{"no collection reader", deletedReadScope{authz: authz, members: nil}, "cora", "acme", []string{}},
 	}

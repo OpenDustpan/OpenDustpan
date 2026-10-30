@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -123,27 +124,7 @@ func TestReviewScopesAndActions(t *testing.T) {
 		t.Fatalf("export of the installation = %+v, want the 3 seeded grants and the bootstrap admin", all)
 	}
 
-	var col reviewDoc
-	f.as(t, "ann", apiCall{
-		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusOK,
-	}, &col)
-
-	// The export of a collection holds the grants on the objects above it,
-	// as the export of a namespace does: the grant of alice on acme, the
-	// installation grant of ann and the bootstrap admin token.
-	if col.Total == nil || *col.Total != 3 || col.AsOfMs == nil {
-		t.Fatalf("export of acme/payments = %+v, want the 3 grants above it", col)
-	}
-
-	f.as(t, "ann", apiCall{
-		http.MethodGet, "/api/server/namespaces/acme/collections/missing/access-review", "", http.StatusNotFound,
-	}, nil)
-	f.as(t, "alice", apiCall{
-		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusOK,
-	}, nil)
-	f.as(t, "bob", apiCall{
-		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusForbidden,
-	}, nil)
+	checkCollectionExport(t, f)
 	f.as(t, "ann", apiCall{
 		http.MethodGet, "/api/server/access-review?expand=everyone", "", http.StatusBadRequest,
 	}, nil)
@@ -944,5 +925,52 @@ func TestReviewFailsClosedWithoutItsEntry(t *testing.T) {
 		if _, ok := answer["grants"]; ok {
 			t.Fatalf("%s with a failed audit entry = %v, want no rows", path, answer)
 		}
+	}
+}
+
+// checkCollectionExport reads the export of a collection as callers with and
+// without access. The caller with no access learns nothing about whether the
+// collection exists: the answer for a missing collection is the one for an
+// existing collection.
+func checkCollectionExport(t *testing.T, f accessFixture) {
+	t.Helper()
+
+	var col reviewDoc
+	f.as(t, "ann", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusOK,
+	}, &col)
+
+	// The export of a collection holds the grants on the objects above it,
+	// as the export of a namespace does: the grant of alice on acme, the
+	// installation grant of ann and the bootstrap admin token.
+	if col.Total == nil || *col.Total != 3 || col.AsOfMs == nil {
+		t.Fatalf("export of acme/payments = %+v, want the 3 grants above it", col)
+	}
+
+	f.as(t, "ann", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/missing/access-review", "", http.StatusNotFound,
+	}, nil)
+	f.as(t, "alice", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusOK,
+	}, nil)
+
+	// A caller with no access learns nothing about whether a collection
+	// exists: the answer for a missing collection is the one for an
+	// existing collection.
+	var existing, missing json.RawMessage
+
+	f.as(t, "bob", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/payments/access-review", "", http.StatusForbidden,
+	}, &existing)
+	f.as(t, "bob", apiCall{
+		http.MethodGet, "/api/server/namespaces/acme/collections/missing/access-review", "", http.StatusForbidden,
+	}, &missing)
+
+	if string(existing) != string(missing) {
+		t.Fatalf(
+			"denied answer for a missing collection = %s, want the answer for an existing one: %s",
+			missing,
+			existing,
+		)
 	}
 }
