@@ -5575,6 +5575,40 @@ func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitPara
 	return unit_id, err
 }
 
+const getIssuerSettings = `-- name: GetIssuerSettings :one
+SELECT issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms, updated_by,
+    copy_check
+FROM issuer_settings
+WHERE namespace_id = $1
+`
+
+type GetIssuerSettingsRow struct {
+	IssuerUrl          string
+	SubjectTemplate    string
+	AllowBlockSubjects bool
+	IncludeActorName   bool
+	Version            int64
+	UpdatedAtMs        int64
+	UpdatedBy          string
+	CopyCheck          string
+}
+
+func (q *Queries) GetIssuerSettings(ctx context.Context, namespaceID string) (GetIssuerSettingsRow, error) {
+	row := q.db.QueryRow(ctx, getIssuerSettings, namespaceID)
+	var i GetIssuerSettingsRow
+	err := row.Scan(
+		&i.IssuerUrl,
+		&i.SubjectTemplate,
+		&i.AllowBlockSubjects,
+		&i.IncludeActorName,
+		&i.Version,
+		&i.UpdatedAtMs,
+		&i.UpdatedBy,
+		&i.CopyCheck,
+	)
+	return i, err
+}
+
 const getItemKey = `-- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
        k.blob_version, k.blob_size, k.blob_md5
@@ -6133,6 +6167,38 @@ type GetNamespaceRow struct {
 func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRow, error) {
 	row := q.db.QueryRow(ctx, getNamespace, name)
 	var i GetNamespaceRow
+	err := row.Scan(
+		&i.Name,
+		&i.PrimaryInstallation,
+		&i.FailoverVersion,
+		&i.CreatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
+		&i.ID,
+	)
+	return i, err
+}
+
+const getNamespaceByID = `-- name: GetNamespaceByID :one
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+FROM namespaces
+WHERE id = $1
+`
+
+type GetNamespaceByIDRow struct {
+	Name                string
+	PrimaryInstallation string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+	ID                  string
+}
+
+// The namespace with the stable ID id.
+func (q *Queries) GetNamespaceByID(ctx context.Context, id string) (GetNamespaceByIDRow, error) {
+	row := q.db.QueryRow(ctx, getNamespaceByID, id)
+	var i GetNamespaceByIDRow
 	err := row.Scan(
 		&i.Name,
 		&i.PrimaryInstallation,
@@ -8708,6 +8774,42 @@ func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventory
 		arg.Collection,
 		arg.Kind,
 		arg.ResourceCount,
+	)
+	return err
+}
+
+const insertIssuerKey = `-- name: InsertIssuerKey :exec
+INSERT INTO issuer_keys (
+    namespace_id, id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9
+)
+`
+
+type InsertIssuerKeyParams struct {
+	NamespaceID   string
+	ID            string
+	State         string
+	PublicKey     []byte
+	Sealed        []byte
+	CreatedAtMs   int64
+	ActivatedAtMs int64
+	RetiredAtMs   int64
+	DeletedAtMs   int64
+}
+
+func (q *Queries) InsertIssuerKey(ctx context.Context, arg InsertIssuerKeyParams) error {
+	_, err := q.db.Exec(ctx, insertIssuerKey,
+		arg.NamespaceID,
+		arg.ID,
+		arg.State,
+		arg.PublicKey,
+		arg.Sealed,
+		arg.CreatedAtMs,
+		arg.ActivatedAtMs,
+		arg.RetiredAtMs,
+		arg.DeletedAtMs,
 	)
 	return err
 }
@@ -11930,6 +12032,54 @@ func (q *Queries) ListInventoryUnitLabels(ctx context.Context, unitID string) ([
 	for rows.Next() {
 		var i ListInventoryUnitLabelsRow
 		if err := rows.Scan(&i.LabelKey, &i.LabelValue); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssuerKeys = `-- name: ListIssuerKeys :many
+SELECT id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+FROM issuer_keys
+WHERE namespace_id = $1
+ORDER BY created_at_ms, id
+`
+
+type ListIssuerKeysRow struct {
+	ID            string
+	State         string
+	PublicKey     []byte
+	Sealed        []byte
+	CreatedAtMs   int64
+	ActivatedAtMs int64
+	RetiredAtMs   int64
+	DeletedAtMs   int64
+}
+
+// Every key of the issuer of a namespace, also the deleted keys, oldest first.
+func (q *Queries) ListIssuerKeys(ctx context.Context, namespaceID string) ([]ListIssuerKeysRow, error) {
+	rows, err := q.db.Query(ctx, listIssuerKeys, namespaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIssuerKeysRow
+	for rows.Next() {
+		var i ListIssuerKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.State,
+			&i.PublicKey,
+			&i.Sealed,
+			&i.CreatedAtMs,
+			&i.ActivatedAtMs,
+			&i.RetiredAtMs,
+			&i.DeletedAtMs,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -17652,6 +17802,42 @@ func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLo
 	return err
 }
 
+const updateIssuerKey = `-- name: UpdateIssuerKey :execrows
+UPDATE issuer_keys
+SET state = $1, sealed = $2, activated_at_ms = $3,
+    retired_at_ms = $4, deleted_at_ms = $5
+WHERE namespace_id = $6 AND id = $7 AND state = $8
+`
+
+type UpdateIssuerKeyParams struct {
+	State         string
+	Sealed        []byte
+	ActivatedAtMs int64
+	RetiredAtMs   int64
+	DeletedAtMs   int64
+	NamespaceID   string
+	ID            string
+	FromState     string
+}
+
+// The new state, times and sealed key of one key. The caller checked the move.
+func (q *Queries) UpdateIssuerKey(ctx context.Context, arg UpdateIssuerKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateIssuerKey,
+		arg.State,
+		arg.Sealed,
+		arg.ActivatedAtMs,
+		arg.RetiredAtMs,
+		arg.DeletedAtMs,
+		arg.NamespaceID,
+		arg.ID,
+		arg.FromState,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateJob = `-- name: UpdateJob :execrows
 UPDATE jobs
 SET state = $1, wait = $2, current_phase = $3,
@@ -18019,6 +18205,75 @@ func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams
 		arg.ResourceCount,
 	)
 	return err
+}
+
+const upsertIssuerCopyCheck = `-- name: UpsertIssuerCopyCheck :exec
+INSERT INTO issuer_settings (
+    namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
+    updated_by, copy_check
+) VALUES (
+    $1, '', $2, true, false, 0, 0, '', $3
+)
+ON CONFLICT (namespace_id) DO UPDATE SET copy_check = excluded.copy_check
+`
+
+type UpsertIssuerCopyCheckParams struct {
+	NamespaceID     string
+	DefaultTemplate string
+	CopyCheck       string
+}
+
+// Stores the last copy check. It keeps the version, so a copy check never
+// changes the entity tag of the settings.
+func (q *Queries) UpsertIssuerCopyCheck(ctx context.Context, arg UpsertIssuerCopyCheckParams) error {
+	_, err := q.db.Exec(ctx, upsertIssuerCopyCheck, arg.NamespaceID, arg.DefaultTemplate, arg.CopyCheck)
+	return err
+}
+
+const upsertIssuerSettings = `-- name: UpsertIssuerSettings :execrows
+INSERT INTO issuer_settings (
+    namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
+    updated_by, copy_check
+) VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7, $8, ''
+)
+ON CONFLICT (namespace_id) DO UPDATE SET
+    issuer_url = excluded.issuer_url, subject_template = excluded.subject_template,
+    allow_block_subjects = excluded.allow_block_subjects, include_actor_name = excluded.include_actor_name,
+    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by
+WHERE issuer_settings.version = excluded.version - 1
+`
+
+type UpsertIssuerSettingsParams struct {
+	NamespaceID        string
+	IssuerUrl          string
+	SubjectTemplate    string
+	AllowBlockSubjects bool
+	IncludeActorName   bool
+	NewVersion         int64
+	UpdatedAtMs        int64
+	UpdatedBy          string
+}
+
+// Stores the settings at the version new_version when the stored version is
+// the one before it. A namespace with no row has version 0. It keeps the
+// stored copy check.
+func (q *Queries) UpsertIssuerSettings(ctx context.Context, arg UpsertIssuerSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertIssuerSettings,
+		arg.NamespaceID,
+		arg.IssuerUrl,
+		arg.SubjectTemplate,
+		arg.AllowBlockSubjects,
+		arg.IncludeActorName,
+		arg.NewVersion,
+		arg.UpdatedAtMs,
+		arg.UpdatedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertObjectContext = `-- name: UpsertObjectContext :exec
