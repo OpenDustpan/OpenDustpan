@@ -34,14 +34,12 @@ var ErrUsage = errors.New(
 		"  opendustpan host create-temp-admin <person>\n" +
 		"  opendustpan audit-chain status\n" +
 		"  opendustpan audit-chain approve\n" +
+		"  opendustpan store check\n" +
 		"\n" +
 		"Back up:\n" +
 		"  opendustpan backup\n" +
 		"  opendustpan backup check\n" +
 		"  opendustpan restore\n" +
-		"\n" +
-		"Check the store:\n" +
-		"  opendustpan store check\n" +
 		"\n" +
 		"Upgrade:\n" +
 		"  opendustpan upgrade check\n" +
