@@ -179,6 +179,12 @@ func (f *Fake) permitted(r *http.Request, fullName, name, level string) bool {
 		return true
 	}
 
+	// An installation token reaches the repositories of the account of the
+	// installation only.
+	if owner, _, _ := strings.Cut(fullName, "/"); !strings.EqualFold(owner, f.cfg.Owner.Login) {
+		return false
+	}
+
 	if t.repos != nil && !slices.Contains(t.repos, shortName(fullName)) {
 		return false
 	}
@@ -213,4 +219,33 @@ func levelRank(level string) int {
 	default:
 		return 0
 	}
+}
+
+// hasRepoNamed reports whether a repository has the short name name. The
+// caller holds the lock.
+func (f *Fake) hasRepoNamed(name string) bool {
+	for full := range f.repos {
+		if shortName(full) == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// IssuedTokens returns the value of each installation token that the fake
+// made, in order, so that a test can look for a token in a text where it
+// must not be.
+func (f *Fake) IssuedTokens() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]string, 0, len(f.tokens))
+	for _, t := range f.tokens {
+		out = append(out, t.value)
+	}
+
+	slices.Sort(out)
+
+	return out
 }

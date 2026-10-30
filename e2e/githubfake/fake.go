@@ -60,6 +60,7 @@ const (
 	rsaBits               = 2048
 	defaultOwnerID        = 99
 	defaultUserID         = 777
+	defaultContentsLimit  = 100 << 20
 )
 
 // Account is an account of the fake: the owner of the installation, or the
@@ -93,6 +94,10 @@ type Config struct {
 	// metadata read). A test that commits through an installation token
 	// gives contents write.
 	Permissions map[string]string
+	// ContentsLimit is the largest file that the contents call answers. For a
+	// larger file, GitHub answers 403 with the error code too_large
+	// (100 MiB).
+	ContentsLimit int
 	// Key is the private key of the app. Nil makes a new key of 2048 bits.
 	Key *rsa.PrivateKey
 	// Now returns the time. Nil means a clock that starts at Epoch() and moves
@@ -111,6 +116,7 @@ type Fake struct {
 
 	mu         sync.Mutex
 	repos      map[string]*repo
+	moved      map[string]string
 	tokens     map[string]*installationToken
 	requests   []Request
 	deliveries []Sent
@@ -137,6 +143,7 @@ func New(tb testing.TB, cfg Config) *Fake {
 	f := new(Fake)
 	f.key, f.cfg = cfg.Key, cfg
 	f.repos, f.tokens = map[string]*repo{}, map[string]*installationToken{}
+	f.moved = map[string]string{}
 
 	f.srv = httptest.NewUnstartedServer(f.handler())
 	f.srv.Config.ErrorLog = log.New(io.Discard, "", 0) // A client that closes its connection is no news.
@@ -163,6 +170,10 @@ func withDefaults(cfg Config) Config {
 
 	if cfg.User.Login == "" {
 		cfg.User = Account{ID: defaultUserID, Login: "acme"}
+	}
+
+	if cfg.ContentsLimit == 0 {
+		cfg.ContentsLimit = defaultContentsLimit
 	}
 
 	if cfg.Permissions == nil {
