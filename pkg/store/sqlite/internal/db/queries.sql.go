@@ -1469,6 +1469,26 @@ func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (i
 	return count, err
 }
 
+const countStoreChecksEndedSince = `-- name: CountStoreChecksEndedSince :one
+SELECT count(*)
+FROM store_checks
+WHERE target = ? AND state <> 'running' AND ended_at_ms > ?
+`
+
+type CountStoreChecksEndedSinceParams struct {
+	Target    string
+	EndedAtMs int64
+}
+
+// The checks of one target that ended after the given time. A running check
+// has no end time (0) and is not counted.
+func (q *Queries) CountStoreChecksEndedSince(ctx context.Context, arg CountStoreChecksEndedSinceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countStoreChecksEndedSince, arg.Target, arg.EndedAtMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countTrustRulesInNamespace = `-- name: CountTrustRulesInNamespace :one
 SELECT COUNT(*) FROM trust_rules WHERE namespace = ?1
 `
@@ -2134,6 +2154,32 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.UnlockedWrite,
 	)
 	return err
+}
+
+const createStoreCheck = `-- name: CreateStoreCheck :execrows
+INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
+VALUES (?, ?, 'running', ?, ?, 0, '', '')
+ON CONFLICT DO NOTHING
+`
+
+type CreateStoreCheckParams struct {
+	ID          string
+	Target      string
+	RequestedBy string
+	StartedAtMs int64
+}
+
+func (q *Queries) CreateStoreCheck(ctx context.Context, arg CreateStoreCheckParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createStoreCheck,
+		arg.ID,
+		arg.Target,
+		arg.RequestedBy,
+		arg.StartedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const createTempAdmin = `-- name: CreateTempAdmin :execrows
@@ -3690,6 +3736,42 @@ func (q *Queries) FailEndedBackups(ctx context.Context, arg FailEndedBackupsPara
 	return result.RowsAffected()
 }
 
+const failEndedStoreChecks = `-- name: FailEndedStoreChecks :execrows
+UPDATE store_checks
+SET state = 'failed',
+    error = ?1,
+    ended_at_ms = ?2
+WHERE state = 'running'
+  AND EXISTS (
+      SELECT 1 FROM durable_operations AS o
+      WHERE o.start_key = ?3 || store_checks.id
+        AND o.kind = ?4
+        AND o.state IN ('failed', 'canceled'))
+`
+
+type FailEndedStoreChecksParams struct {
+	Error     string
+	EndedAtMs int64
+	Prefix    string
+	Kind      string
+}
+
+// Marks failed each running check whose operation ended failed or canceled
+// without a finish write. The error text is a fixed text of the caller: the
+// last error of the operation never reaches the row.
+func (q *Queries) FailEndedStoreChecks(ctx context.Context, arg FailEndedStoreChecksParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failEndedStoreChecks,
+		arg.Error,
+		arg.EndedAtMs,
+		arg.Prefix,
+		arg.Kind,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
 SET serial = ?1, lineage = ?2, md5 = ?3, outputs = ?4, status = ?5, finalized_at_ms = ?6, size = ?7
@@ -3781,6 +3863,36 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int
 	result, err := q.db.ExecContext(ctx, finishBackup,
 		arg.State,
 		arg.Error,
+		arg.EndedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finishStoreCheck = `-- name: FinishStoreCheck :execrows
+UPDATE store_checks
+SET state = ?, error = ?, report = ?, ended_at_ms = ?
+WHERE id = ? AND state = 'running'
+`
+
+type FinishStoreCheckParams struct {
+	State     string
+	Error     string
+	Report    string
+	EndedAtMs int64
+	ID        string
+}
+
+// Moves one running check to its end state. A finished check matches no
+// row, so a retry reports no change.
+func (q *Queries) FinishStoreCheck(ctx context.Context, arg FinishStoreCheckParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finishStoreCheck,
+		arg.State,
+		arg.Error,
+		arg.Report,
 		arg.EndedAtMs,
 		arg.ID,
 	)
@@ -6906,6 +7018,28 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.SensitiveMarks,
 		&i.FencedBy,
 		&i.UnlockedWrite,
+	)
+	return i, err
+}
+
+const getStoreCheck = `-- name: GetStoreCheck :one
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+WHERE id = ?
+`
+
+func (q *Queries) GetStoreCheck(ctx context.Context, id string) (StoreCheck, error) {
+	row := q.db.QueryRowContext(ctx, getStoreCheck, id)
+	var i StoreCheck
+	err := row.Scan(
+		&i.ID,
+		&i.Target,
+		&i.State,
+		&i.RequestedBy,
+		&i.StartedAtMs,
+		&i.EndedAtMs,
+		&i.Error,
+		&i.Report,
 	)
 	return i, err
 }
@@ -13877,6 +14011,44 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.SensitiveMarks,
 			&i.FencedBy,
 			&i.UnlockedWrite,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreChecks = `-- name: ListStoreChecks :many
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+ORDER BY started_at_ms DESC, id ASC
+`
+
+func (q *Queries) ListStoreChecks(ctx context.Context) ([]StoreCheck, error) {
+	rows, err := q.db.QueryContext(ctx, listStoreChecks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StoreCheck
+	for rows.Next() {
+		var i StoreCheck
+		if err := rows.Scan(
+			&i.ID,
+			&i.Target,
+			&i.State,
+			&i.RequestedBy,
+			&i.StartedAtMs,
+			&i.EndedAtMs,
+			&i.Error,
+			&i.Report,
 		); err != nil {
 			return nil, err
 		}

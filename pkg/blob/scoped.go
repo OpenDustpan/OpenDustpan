@@ -22,9 +22,11 @@ var ErrNilStore = errors.New("scoped blob view needs a store")
 // namespacesDir starts the prefix of every namespace.
 const namespacesDir = "namespaces/"
 
-// Scoped is a view of a Store for one namespace. It refuses each key outside
-// the prefix "namespaces/<namespace ID>/" with ErrOutOfScope, before any call
-// to the store. It implements Store, so a domain service of a namespace takes
+// Scoped is a view of a Store for one directory of keys, for example the
+// directory of one namespace. It refuses each key outside the prefix
+// "namespaces/<namespace ID>/" of the namespace, or outside the prefix that
+// NewScopedPrefix got, with ErrOutOfScope, before any call to the store. It implements Store, so a domain service of a
+// namespace takes
 // the view where it took the store.
 type Scoped struct {
 	store Store
@@ -52,6 +54,28 @@ func NewScoped(s Store, id namespace.ID) (*Scoped, error) {
 
 	if _, err := ParseKey(prefix + "x"); err != nil {
 		return nil, fmt.Errorf("%w: the namespace ID cannot be part of a key", ErrInvalidKey)
+	}
+
+	return &Scoped{store: s, prefix: prefix}, nil
+}
+
+// NewScopedPrefix returns the view of s for the directory prefix, which ends
+// with a slash, for example "store-checks/<check ID>/". It returns
+// ErrNilStore when s is nil, and ErrInvalidKey when prefix has no trailing
+// slash or is not a valid directory of keys. The view refuses each key
+// outside prefix with ErrOutOfScope, as the view of a namespace does.
+func NewScopedPrefix(s Store, prefix string) (*Scoped, error) {
+	if s == nil {
+		return nil, ErrNilStore
+	}
+
+	dir, ok := strings.CutSuffix(prefix, "/")
+	if !ok || dir == "" {
+		return nil, fmt.Errorf("%w: the scope prefix needs a trailing slash", ErrInvalidKey)
+	}
+
+	if _, err := ParseKey(dir); err != nil {
+		return nil, fmt.Errorf("%w: the scope prefix is not a valid directory", ErrInvalidKey)
 	}
 
 	return &Scoped{store: s, prefix: prefix}, nil
