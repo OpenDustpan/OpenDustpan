@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/jobgate"
@@ -310,7 +311,7 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 		return job.Spec{}, err
 	}
 
-	steps, err := stepsOf(unit.Tool(), req.Purpose)
+	steps, err := stepsOf(unit, req.Purpose)
 	if err != nil {
 		return job.Spec{}, err
 	}
@@ -354,13 +355,13 @@ func checkPlanRequest(req *job.StartRequest) error {
 	}
 }
 
-// stepsOf returns the fixed steps for the tool and the purpose.
-func stepsOf(tool string, purpose job.Purpose) ([]job.Step, error) {
+// stepsOf returns the fixed steps for the unit and the purpose.
+func stepsOf(unit identity.Object, purpose job.Purpose) ([]job.Step, error) {
 	if purpose != job.PurposeDriftCheck {
-		return planSteps(tool)
+		return planSteps(unit)
 	}
 
-	return driftSteps(tool)
+	return driftSteps(unit.Tool())
 }
 
 // checkLocation checks the code location of a start in the namespace ns.
@@ -452,10 +453,29 @@ const (
 	tofuAutomation = "TF_IN_AUTOMATION"
 )
 
-// planSteps returns the default steps of a plan for the tool. Only the tools
-// with a plan step list here start a job.
-func planSteps(tool string) ([]job.Step, error) {
-	switch tool {
+// pulumiProgram is the program of the plan steps of a Pulumi stack. The runner
+// finds it on its PATH.
+const pulumiProgram = "pulumi"
+
+// The words of the Pulumi steps that this server starts.
+const (
+	pulumiPreview        = "preview"
+	pulumiNonInteractive = "--non-interactive"
+	pulumiStackFlag      = "--stack="
+	pulumiSkipUpdate     = "PULUMI_SKIP_UPDATE_CHECK"
+)
+
+// planSteps returns the default steps of a plan for the tool of the unit. Only
+// the tools with a plan step list here start a job.
+func planSteps(unit identity.Object) ([]job.Step, error) {
+	switch tool := unit.Tool(); tool {
+	case pulumiTool:
+		step, err := pulumiPreviewStep(unit)
+		if err != nil {
+			return nil, err
+		}
+
+		return []job.Step{step}, nil
 	case opentofuTool:
 		initStep := tofuStep(tofuInit, tofuInit, tofuNoInput)
 		planStep := tofuStep(tofuPlan, tofuPlan, tofuNoInput, "-out=tfplan")
@@ -492,4 +512,33 @@ func tofuStep(name string, args ...string) job.Step {
 		Env: map[string]string{tofuAutomation: "1"}, Dir: "", Timeout: 0, AllowFailure: false,
 		ChangesResources: false, Outputs: nil,
 	}
+}
+
+// pulumiPreviewStep returns the plan-phase step that previews the stack of
+// unit. The stack goes in one argument with its flag (--stack=value), so a
+// name never reads as a flag of its own, and in its full form (namespace,
+// project, stack), so the Pulumi CLI never picks a stack from the checkout.
+// The step changes no resource and leaves no output: the log of the step
+// holds the preview.
+func pulumiPreviewStep(unit identity.Object) (job.Step, error) {
+	project, name, ok := strings.Cut(unit.UnitName(), "/")
+
+	// Defense in depth: the unit object comes from a checked route and a
+	// stored stack, and the Pulumi CLI refuses a bad name too. This check
+	// stays so that a name that is not "project/stack" never reaches an
+	// argument list.
+	if !ok || project == "" || name == "" || strings.ContainsAny(name, "/\x00\r\n ") ||
+		strings.ContainsAny(project, "\x00\r\n ") {
+		return job.Step{}, fmt.Errorf("%w: the Pulumi stack name %q is not of the form project/stack", job.ErrInvalid,
+			unit.UnitName())
+	}
+
+	stack := pulumiStackFlag + string(unit.Namespace()) + "/" + project + "/" + name
+
+	return job.Step{
+		Name: pulumiPreview, Role: job.RoleTool, Phase: job.PhasePlan,
+		Args: []string{pulumiProgram, pulumiPreview, pulumiNonInteractive, stack},
+		Env:  map[string]string{pulumiSkipUpdate: "true"}, Dir: "", Timeout: 0, AllowFailure: false,
+		ChangesResources: false, Outputs: nil,
+	}, nil
 }

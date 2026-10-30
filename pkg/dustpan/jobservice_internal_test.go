@@ -412,7 +412,7 @@ func TestJobPlannerRequest(t *testing.T) {
 func TestPlanSteps(t *testing.T) {
 	t.Parallel()
 
-	steps, err := planSteps("opentofu")
+	steps, err := planSteps(testUnit(t, "opentofu", "network"))
 	if err != nil || len(steps) != 2 {
 		t.Fatalf("planSteps(opentofu) = %d steps, %v; want 2", len(steps), err)
 	}
@@ -423,7 +423,7 @@ func TestPlanSteps(t *testing.T) {
 	steps[1].Args[0] = "sh"
 	steps[1].Env["TF_IN_AUTOMATION"] = "0"
 
-	again, err := planSteps("opentofu")
+	again, err := planSteps(testUnit(t, "opentofu", "network"))
 	if err != nil || again[1].Args[0] != "tofu" || again[1].Env["TF_IN_AUTOMATION"] != "1" {
 		t.Fatalf("planSteps after a change = %+v, %v; want fresh steps", again, err)
 	}
@@ -461,10 +461,128 @@ func checkStepNames(t *testing.T, steps []job.Step) {
 func TestPlanStepsRefuseOtherTools(t *testing.T) {
 	t.Parallel()
 
-	for _, tool := range []string{"pulumi", "", "terraform", "OpenTofu", "opentofu "} {
-		if _, err := planSteps(tool); !errors.Is(err, job.ErrUnsupported) {
+	for _, tool := range []string{"terraform", "Pulumi", "OpenTofu", "opentofu-x"} {
+		if _, err := planSteps(testUnit(t, tool, "network")); !errors.Is(err, job.ErrUnsupported) {
 			t.Errorf("planSteps(%q) = %v, want ErrUnsupported", tool, err)
 		}
+	}
+
+	if _, err := planSteps(identity.Object{}); !errors.Is(err, job.ErrUnsupported) {
+		t.Errorf("planSteps(no unit) = %v, want ErrUnsupported", err)
+	}
+}
+
+// testUnit returns the unit object of the tool in the namespace acme.
+func testUnit(t *testing.T, tool, name string) identity.Object {
+	t.Helper()
+
+	obj, err := identity.UnitObject(tool, "acme", name)
+	if err != nil {
+		t.Fatalf("UnitObject(%q, %q) = %v", tool, name, err)
+	}
+
+	return obj
+}
+
+func TestPlanStepsPulumi(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		unit     string
+		wantArgs []string
+		wantErr  error
+	}{
+		{
+			"project and stack", "web/prod",
+			[]string{"pulumi", "preview", "--non-interactive", "--stack=acme/web/prod"},
+			nil,
+		},
+		{
+			"a name with shell words stays one argument", "web/prod;rm -rf",
+			nil, job.ErrInvalid,
+		},
+		{
+			"a name that starts like a flag stays inside --stack=", "-x/--y",
+			[]string{"pulumi", "preview", "--non-interactive", "--stack=acme/-x/--y"},
+			nil,
+		},
+		{"no project", "prod", nil, job.ErrInvalid},
+		{"empty stack", "web/", nil, job.ErrInvalid},
+		{"empty project", "/prod", nil, job.ErrInvalid},
+		{"more than two parts", "a/b/c", nil, job.ErrInvalid},
+		{"newline in the stack", "web/pr\nod", nil, job.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			unit, err := identity.UnitObject("pulumi", "acme", tt.unit)
+			if err != nil {
+				// The object itself refuses the name: the second layer is not reached.
+				if tt.wantErr == nil {
+					t.Fatalf("UnitObject(%q) = %v", tt.unit, err)
+				}
+
+				return
+			}
+
+			steps, err := planSteps(unit)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("planSteps(%q) error = %v, want %v", tt.unit, err, tt.wantErr)
+			}
+
+			if tt.wantErr != nil {
+				return
+			}
+
+			checkPulumiSteps(t, steps, tt.wantArgs)
+		})
+	}
+}
+
+func checkPulumiSteps(t *testing.T, steps []job.Step, wantArgs []string) {
+	t.Helper()
+
+	if len(steps) != 1 {
+		t.Fatalf("planSteps(pulumi) = %d steps, want 1", len(steps))
+	}
+
+	s := &steps[0]
+	if s.Name != "preview" || !slices.Equal(s.Args, wantArgs) || s.Role != job.RoleTool ||
+		s.Phase != job.PhasePlan || s.ChangesResources || s.AllowFailure || len(s.Outputs) != 0 ||
+		s.Env["PULUMI_SKIP_UPDATE_CHECK"] != "true" {
+		t.Errorf("step = %+v, want a plan-phase tool step named preview with args %v that changes no resource",
+			*s, wantArgs)
+	}
+
+	err := job.ValidateSteps(steps)
+	if err != nil {
+		t.Errorf("ValidateSteps = %v, want nil", err)
+	}
+
+	// A caller that changes one result must not change the next one.
+	steps[0].Args[0] = "sh"
+	steps[0].Env["PULUMI_SKIP_UPDATE_CHECK"] = "0"
+}
+
+func TestPlanStepsPulumiFresh(t *testing.T) {
+	t.Parallel()
+
+	unit := testUnit(t, "pulumi", "web/prod")
+
+	first, err := planSteps(unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first[0].Args[0] = "sh"
+	first[0].Env["PULUMI_SKIP_UPDATE_CHECK"] = "0"
+
+	again, err := planSteps(unit)
+	if err != nil || again[0].Args[0] != "pulumi" || again[0].Env["PULUMI_SKIP_UPDATE_CHECK"] != "true" {
+		t.Fatalf("planSteps after a change = %+v, %v; want fresh steps", again, err)
 	}
 }
 

@@ -4,7 +4,7 @@ A job is work that the server asks an executor to do on one stack or workspace: 
 apply, a destroy or a refresh. The jobs API lets a person or a client start a
 plan job, read a job, its phases and the records of its phases.
 
-This version starts plan jobs of OpenTofu workspaces on runners. No route
+This version starts plan jobs of OpenTofu workspaces and Pulumi stacks on runners. No route
 cancels, approves or lists jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.
 The job document has the field `purpose` for such a job.
@@ -81,8 +81,10 @@ API can set them.
 
 The server does not decide the steps from the request. For an OpenTofu
 workspace, the plan steps are `tofu init -input=false` and
-`tofu plan -input=false -out=tfplan`. A job starts with no profile, so a
-runner gives it no secrets of a profile.
+`tofu plan -input=false -out=tfplan`. For a Pulumi stack, the plan step is
+`pulumi preview --non-interactive --stack=<namespace>/<project>/<stack>`. It
+changes no resource. The log of the step holds the preview. A job starts with
+no profile, so a runner gives it no secrets of a profile.
 
 ### Retry a start
 
