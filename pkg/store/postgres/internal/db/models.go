@@ -114,6 +114,26 @@ type BlobPurge struct {
 	NamespaceID string
 }
 
+type CatalogBlueprint struct {
+	NamespaceID      string
+	Name             string
+	DraftVersion     int64
+	DraftJson        string
+	DraftUpdatedAtMs int64
+}
+
+type CatalogBlueprintVersion struct {
+	NamespaceID   string
+	Name          string
+	Number        int64
+	DraftVersion  int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
+}
+
 type Checkpoint struct {
 	UpdateID      string
 	LeaseDigest   []byte
