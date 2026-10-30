@@ -223,8 +223,14 @@ func (m *memStore) makeUnit(t *testing.T, nsName, tool, name string) identity.Ob
 	id := "unit-" + tool + "-" + name
 
 	m.mu.Lock()
-	m.spaces[ns].units[id] = ref.String()
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+
+	sp, ok := m.spaces[ns]
+	if !ok {
+		t.Fatalf("namespace %s does not exist", nsName)
+	}
+
+	sp.units[id] = ref.String()
 
 	return ref.WithUnitID(id)
 }
@@ -240,7 +246,12 @@ func (m *memStore) entries(t *testing.T, nsName string) []audit.Entry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return append([]audit.Entry(nil), m.spaces[ns].audit...)
+	sp, ok := m.spaces[ns]
+	if !ok {
+		t.Fatalf("namespace %s does not exist", nsName)
+	}
+
+	return append([]audit.Entry(nil), sp.audit...)
 }
 
 // space returns the namespace ns after it checked the fence.
