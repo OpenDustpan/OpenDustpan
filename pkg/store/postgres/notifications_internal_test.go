@@ -77,6 +77,15 @@ func TestCheckStagedNotificationsRefusesBadRows(t *testing.T) {
 			"names no namespace",
 		},
 		{
+			"a sink secret whose sink is in another scope", true,
+			[]string{
+				`INSERT INTO notification_sink_refs (scope, ref) VALUES ('@server', 'itm-zzzzzzzz')`,
+				`INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+					VALUES ('@server', 'itm-zzzzzzzz', 'snk-aaaaaaaa', 0, '\x00'::bytea)`,
+			},
+			"a sink secret whose sink",
+		},
+		{
 			"a subscription whose sink is missing", false,
 			[]string{`INSERT INTO notification_subscriptions ` + subscriptionColumns + `
 					VALUES ('sub-1', '@server', 'snk-none', '[]', '[]', 0, 'active', '', 'alice', 1)`},

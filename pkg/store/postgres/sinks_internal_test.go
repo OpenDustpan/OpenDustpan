@@ -311,3 +311,27 @@ func TestSinkSecretIsSealedInTheDatabase(t *testing.T) {
 		t.Fatalf("Open = %q, %v; want the plaintext back", values, err)
 	}
 }
+
+// TestCheckStagedSinksRefusesASecretOfAnotherScope proves that a secret item in
+// one scope that names a sink of another scope is corrupt, so a restore never
+// brings in a value that the sink of another scope would open.
+func TestCheckStagedSinksRefusesASecretOfAnotherScope(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedSink(t, s)
+
+	for _, stmt := range []string{
+		`INSERT INTO notification_sink_refs (scope, ref) VALUES ('@server', 'itm-zzzzzzzz')`,
+		`INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+			VALUES ('@server', 'itm-zzzzzzzz', 'snk-aaaaaaaa', 0, '\x00'::bytea)`,
+	} {
+		if _, err := s.pool.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("plant the row: %v", err)
+		}
+	}
+
+	if err := checkStagedSinks(t.Context(), s.pool, currentSchema(t, s)); !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
+	}
+}

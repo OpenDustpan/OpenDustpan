@@ -84,6 +84,11 @@ func stagedNotificationChecks(staging string) []stagedCheck {
 			"a cursor above the last sequence of its scope",
 		},
 		{
+			"SELECT s.ref FROM " + t("notification_sink_secrets") + " AS s LEFT JOIN " + t("notification_sinks") +
+				" AS k ON k.id = s.sink_id WHERE k.id IS NULL OR k.scope <> s.scope LIMIT 1",
+			"a sink secret whose sink is missing or in another scope",
+		},
+		{
 			"SELECT s.id FROM " + t("notification_subscriptions") + " AS s LEFT JOIN " + t("notification_sinks") +
 				" AS k ON k.id = s.sink_id WHERE k.id IS NULL OR k.scope <> s.scope LIMIT 1",
 			"a subscription whose sink is missing or in another scope",

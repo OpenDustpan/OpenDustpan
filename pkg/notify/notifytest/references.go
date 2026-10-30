@@ -2,7 +2,9 @@ package notifytest
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -10,7 +12,7 @@ import (
 
 // testEnqueueReferences enqueues deliveries of the scope shop that name a sink,
 // a subscription or a notification of another scope. Each call fails with
-// ErrInvalid and stores nothing, so a delivery never points at a row that
+// ErrNotFound and stores nothing, so a delivery never points at a row that
 // another scope owns.
 func testEnqueueReferences(t *testing.T, h Harness) {
 	t.Helper()
@@ -64,8 +66,8 @@ func testEnqueueReferences(t *testing.T, h Harness) {
 		tc.change(&d)
 
 		if enqErr := h.Deliveries.Enqueue(t.Context(), fence, []notify.Delivery{d}); !errors.Is(enqErr,
-			notify.ErrInvalid) {
-			t.Fatalf("Enqueue naming %s: err = %v, want ErrInvalid", tc.name, enqErr)
+			notify.ErrNotFound) {
+			t.Fatalf("Enqueue naming %s: err = %v, want ErrNotFound", tc.name, enqErr)
 		}
 	}
 
@@ -125,5 +127,81 @@ func testSubscriptionOtherScope(t *testing.T, h Harness) {
 
 	if got := subscriptionOf(t, h, "sub-1"); got.Version != 1 || got.Sink != "snk-1" {
 		t.Fatalf("stored subscription = %+v, want it unchanged", got)
+	}
+}
+
+// testNotFoundIsUniform names a stored row of another scope by its ID, with
+// the fence of the scope shop, and names an unknown row the same way. Both
+// answer ErrNotFound with the same text, apart from the ID, so a caller cannot
+// tell a row of another scope from a row that does not exist.
+func testNotFoundIsUniform(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	otherFence, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	otherSink := sink("snk-o", other)
+	if putErr := h.Subscriptions.PutSink(t.Context(), otherSink, fresh(t.Context(), otherSink), otherFence,
+		entry(other)); putErr != nil {
+		t.Fatalf("PutSink in other: %v", putErr)
+	}
+
+	otherSub := subscriptionIn(other, "snk-o")
+	otherSub.ID = "sub-o"
+
+	if putErr := h.Subscriptions.PutSubscription(t.Context(), otherSub, otherFence, entry(other)); putErr != nil {
+		t.Fatalf("PutSubscription in other: %v", putErr)
+	}
+
+	if enqErr := h.Deliveries.Enqueue(t.Context(), otherFence,
+		[]notify.Delivery{deliveryIn(other, "dlv-o", "ntf-o", now())}); enqErr != nil {
+		t.Fatalf("Enqueue in other: %v", enqErr)
+	}
+
+	attemptOf := func(id string) notify.Attempt {
+		return notify.Attempt{
+			ID: id, Owner: owner, Version: 1, Now: now(), State: notify.DeliveryDone, Attempts: 1,
+			NextAt: time.Time{}, LastError: "", DeliveredAt: now(),
+		}
+	}
+
+	ops := []struct {
+		name  string
+		other string
+		run   func(id string) error
+	}{
+		{"DeleteSink", "snk-o", func(id string) error {
+			return h.Subscriptions.DeleteSink(t.Context(), id, fence, manage())
+		}},
+		{"DeleteSubscription", "sub-o", func(id string) error {
+			return h.Subscriptions.DeleteSubscription(t.Context(), id, fence, manage())
+		}},
+		{"Redeliver", "dlv-o", func(id string) error {
+			return h.Deliveries.Redeliver(t.Context(), id, fence, manage())
+		}},
+		{"Record", "dlv-o", func(id string) error {
+			return h.Deliveries.Record(t.Context(), fence, attemptOf(id))
+		}},
+	}
+
+	for _, op := range ops {
+		unknown := op.other[:len(op.other)-1] + "u"
+
+		gotOther, gotUnknown := op.run(op.other), op.run(unknown)
+
+		if !errors.Is(gotOther, notify.ErrNotFound) || !errors.Is(gotUnknown, notify.ErrNotFound) {
+			t.Fatalf("%s: errors = %v and %v, want ErrNotFound for both", op.name, gotOther, gotUnknown)
+		}
+
+		a := strings.ReplaceAll(gotOther.Error(), op.other, "<id>")
+		b := strings.ReplaceAll(gotUnknown.Error(), unknown, "<id>")
+
+		if a != b {
+			t.Fatalf("%s: a row of another scope answers %q, an unknown row %q, want the same text", op.name, a, b)
+		}
 	}
 }

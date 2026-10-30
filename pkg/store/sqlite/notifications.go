@@ -44,7 +44,11 @@ var (
 type scopedWrite struct {
 	scope    func(ctx context.Context, q *db.Queries) (namespace.Name, error)
 	mismatch error
-	entry    *audit.Entry
+	// label names a stored row for the text of notify.ErrNotFound. A fence of
+	// another scope answers with the same text as an unknown row, so a caller
+	// learns nothing of the rows of another scope.
+	label string
+	entry *audit.Entry
 }
 
 // known returns the scope function of a row whose scope the caller gives.
@@ -77,7 +81,7 @@ func (s *Store) inScopedTx(
 			return err
 		}
 
-		if checkErr := checkNotifyFence(ctx, q, fence, scope, w.mismatch); checkErr != nil {
+		if checkErr := checkNotifyFence(ctx, q, fence, scope, w); checkErr != nil {
 			return checkErr
 		}
 
@@ -111,18 +115,18 @@ func appendScopedEntry(ctx context.Context, q *db.Queries, e *audit.Entry) error
 // namespace.ErrNotFound for an unknown namespace, and namespace.ErrFenced for
 // a stale fence.
 func checkNotifyFence(
-	ctx context.Context, q *db.Queries, fence namespace.Fence, scope namespace.Name, mismatch error,
+	ctx context.Context, q *db.Queries, fence namespace.Fence, scope namespace.Name, w scopedWrite,
 ) error {
 	if scope == audit.ServerScope {
 		if fence.Namespace != "" || fence.FailoverVersion != 0 {
-			return fmt.Errorf("%w: a row of the server scope takes the zero fence", mismatch)
+			return fenceMismatch(w)
 		}
 
 		return nil
 	}
 
 	if fence.Namespace == "" || fence.Namespace != scope {
-		return fmt.Errorf("%w: the fence does not belong to the scope %q", mismatch, scope)
+		return fenceMismatch(w)
 	}
 
 	version, err := q.GetFailoverVersion(ctx, fence.Namespace.String())
@@ -139,6 +143,17 @@ func checkNotifyFence(
 	}
 
 	return nil
+}
+
+// fenceMismatch returns the error of a fence that does not belong to the scope
+// of the row. For a stored row that the caller names by its ID it is the error
+// of an unknown row, with the same text, and it never names the scope.
+func fenceMismatch(w scopedWrite) error {
+	if errors.Is(w.mismatch, notify.ErrNotFound) {
+		return fmt.Errorf("%s: %w", w.label, notify.ErrNotFound)
+	}
+
+	return fmt.Errorf("%w: the fence does not belong to the scope of the row", w.mismatch)
 }
 
 // commonScope returns the scope that all of scopes have, and notify.ErrInvalid
@@ -177,8 +192,12 @@ func (k NotificationStore) Append(ctx context.Context, fence namespace.Fence, ns
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	return k.s.inScopedTx(ctx, fence, scopedWrite{scope: known(scope), mismatch: notify.ErrInvalid, entry: nil},
-		func(q *db.Queries, scope namespace.Name) error { return appendNotifications(ctx, q, scope, ns) })
+	return k.s.inScopedTx(
+		ctx,
+		fence,
+		scopedWrite{scope: known(scope), mismatch: notify.ErrInvalid, label: "", entry: nil},
+		func(q *db.Queries, scope namespace.Name) error { return appendNotifications(ctx, q, scope, ns) },
+	)
 }
 
 // appendNotifications appends ns to the outbox of scope, each with the next
@@ -376,7 +395,10 @@ func (k NotificationStore) MoveCursor(ctx context.Context, fence namespace.Fence
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	return k.s.inScopedTx(ctx, fence, scopedWrite{scope: known(m.Scope), mismatch: notify.ErrInvalid, entry: nil},
+	return k.s.inScopedTx(
+		ctx,
+		fence,
+		scopedWrite{scope: known(m.Scope), mismatch: notify.ErrInvalid, label: "", entry: nil},
 		func(q *db.Queries, _ namespace.Name) error {
 			err := q.EnsureNotificationCursor(ctx, db.EnsureNotificationCursorParams{
 				Name: m.Name, Scope: m.Scope.String(),
@@ -397,7 +419,8 @@ func (k NotificationStore) MoveCursor(ctx context.Context, fence namespace.Fence
 			}
 
 			return nil
-		})
+		},
+	)
 }
 
 // sinkScope returns the scope function of the stored sink id. An unknown sink
@@ -432,7 +455,7 @@ func (k NotificationStore) PutSink(
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	w := scopedWrite{scope: known(s.Scope), mismatch: notify.ErrInvalid, entry: &e}
+	w := scopedWrite{scope: known(s.Scope), mismatch: notify.ErrInvalid, label: "", entry: &e}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, _ namespace.Name) error {
 		changed, err := sinkDestinationChanged(ctx, q, s)
@@ -588,7 +611,7 @@ func (k NotificationStore) DeleteSink(ctx context.Context, id string, fence name
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	w := scopedWrite{scope: sinkScope(id, "sink"), mismatch: notify.ErrNotFound, entry: &e}
+	w := scopedWrite{scope: sinkScope(id, "sink"), mismatch: notify.ErrNotFound, label: "sink " + id, entry: &e}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, scope namespace.Name) error {
 		users, err := q.ListNotificationSubscriptionsOfSink(ctx, db.ListNotificationSubscriptionsOfSinkParams{
@@ -625,7 +648,10 @@ func (k NotificationStore) RecordSinkTest(ctx context.Context, id string, fence 
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	w := scopedWrite{scope: sinkScope(id, "record test of sink"), mismatch: notify.ErrNotFound, entry: &e}
+	w := scopedWrite{
+		scope: sinkScope(id, "record test of sink"), mismatch: notify.ErrNotFound, label: "record test of sink " + id,
+		entry: &e,
+	}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, _ namespace.Name) error {
 		return finishCompletion(ctx, q, id)
@@ -652,7 +678,7 @@ func (k NotificationStore) PutSubscription(
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	w := scopedWrite{scope: known(s.Scope), mismatch: notify.ErrInvalid, entry: &e}
+	w := scopedWrite{scope: known(s.Scope), mismatch: notify.ErrInvalid, label: "", entry: &e}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, _ namespace.Name) error {
 		exists, checkErr := checkSubscriptionWrite(ctx, q, s)
@@ -775,7 +801,7 @@ func (k NotificationStore) DeleteSubscription(
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	w := scopedWrite{scope: scope, mismatch: notify.ErrNotFound, entry: &e}
+	w := scopedWrite{scope: scope, mismatch: notify.ErrNotFound, label: "subscription " + id, entry: &e}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, scope namespace.Name) error {
 		err := q.DeletePendingNotificationDeliveriesOfSubscription(
@@ -837,8 +863,12 @@ func (k NotificationStore) Enqueue(ctx context.Context, fence namespace.Fence, d
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	return k.s.inScopedTx(ctx, fence, scopedWrite{scope: known(scope), mismatch: notify.ErrInvalid, entry: nil},
-		func(q *db.Queries, _ namespace.Name) error { return enqueueDeliveries(ctx, q, ds) })
+	return k.s.inScopedTx(
+		ctx,
+		fence,
+		scopedWrite{scope: known(scope), mismatch: notify.ErrInvalid, label: "", entry: nil},
+		func(q *db.Queries, _ namespace.Name) error { return enqueueDeliveries(ctx, q, ds) },
+	)
 }
 
 // enqueueDeliveries stores ds as pending. A delivery for the route of a stored
@@ -916,7 +946,7 @@ func checkDeliveryID(ctx context.Context, q *db.Queries, d *notify.Delivery, ids
 	}
 }
 
-// checkDeliveryReferences returns notify.ErrInvalid when d names a sink, a
+// checkDeliveryReferences returns notify.ErrNotFound when d names a sink, a
 // subscription or a notification that a stored row of another scope has. A
 // reference to a row that the store does not hold is allowed: a retention job
 // deletes old notifications, and a person deletes subscriptions, while their
@@ -946,7 +976,7 @@ func checkSinkReference(ctx context.Context, q *db.Queries, d *notify.Delivery) 
 
 	switch {
 	case err == nil && row.Namespace != d.Scope.String():
-		return fmt.Errorf("enqueue %s: %w: the sink is not in the scope of the delivery", d.ID, notify.ErrInvalid)
+		return fmt.Errorf("enqueue %s: sink %s: %w", d.ID, d.Sink, notify.ErrNotFound)
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("select sink: %w", err)
 	default:
@@ -964,8 +994,7 @@ func checkSubscriptionReference(ctx context.Context, q *db.Queries, d *notify.De
 
 	switch {
 	case err == nil && row.Scope != d.Scope.String():
-		return fmt.Errorf("enqueue %s: %w: the subscription is not in the scope of the delivery", d.ID,
-			notify.ErrInvalid)
+		return fmt.Errorf("enqueue %s: subscription %s: %w", d.ID, d.Subscription, notify.ErrNotFound)
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("select subscription: %w", err)
 	default:
@@ -979,8 +1008,7 @@ func checkNotificationReference(ctx context.Context, q *db.Queries, d *notify.De
 
 	switch {
 	case err == nil && owner != d.Scope.String():
-		return fmt.Errorf("enqueue %s: %w: the notification is not in the scope of the delivery", d.ID,
-			notify.ErrInvalid)
+		return fmt.Errorf("enqueue %s: notification %s: %w", d.ID, d.Notification, notify.ErrNotFound)
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("select notification: %w", err)
 	default:
@@ -1020,7 +1048,10 @@ func (k NotificationStore) Claim(
 
 	var out []notify.Delivery
 
-	err := k.s.inScopedTx(ctx, fence, scopedWrite{scope: known(req.Scope), mismatch: notify.ErrInvalid, entry: nil},
+	err := k.s.inScopedTx(
+		ctx,
+		fence,
+		scopedWrite{scope: known(req.Scope), mismatch: notify.ErrInvalid, label: "", entry: nil},
 		func(q *db.Queries, _ namespace.Name) error {
 			rows, err := q.ClaimNotificationDeliveries(ctx, db.ClaimNotificationDeliveriesParams{
 				Owner: req.Owner, LeaseUntilMs: req.Now.Add(req.Lease).UnixMilli(), Scope: req.Scope.String(),
@@ -1033,7 +1064,8 @@ func (k NotificationStore) Claim(
 			out, err = deliveriesOf(rows)
 
 			return err
-		})
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1102,7 +1134,7 @@ func (k NotificationStore) Record(ctx context.Context, fence namespace.Fence, a 
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	w := scopedWrite{scope: deliveryScope(a.ID), mismatch: notify.ErrNotFound, entry: nil}
+	w := scopedWrite{scope: deliveryScope(a.ID), mismatch: notify.ErrNotFound, label: "delivery " + a.ID, entry: nil}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, scope namespace.Name) error {
 		n, err := q.RecordNotificationAttempt(ctx, db.RecordNotificationAttemptParams{
@@ -1160,7 +1192,7 @@ func (k NotificationStore) Redeliver(ctx context.Context, id string, fence names
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
-	w := scopedWrite{scope: deliveryScope(id), mismatch: notify.ErrNotFound, entry: &e}
+	w := scopedWrite{scope: deliveryScope(id), mismatch: notify.ErrNotFound, label: "delivery " + id, entry: &e}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, scope namespace.Name) error {
 		row, err := q.GetNotificationDelivery(ctx, id)
