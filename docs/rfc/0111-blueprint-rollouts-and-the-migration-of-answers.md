@@ -143,13 +143,26 @@ recommendation is option 2.
 1. **The rollout call.** `POST /api/dustpan/v1/namespaces/{namespace}/blueprints/{blueprint}/rollouts`
    takes `{"version": N, "requests": ["<name>", ...], "reason": "..."}`.
    An empty `requests` list means each request of the blueprint that pins a
-   version lower than N. The call needs the new action `blueprint:roll-out`
+   version lower than N.
+   **One limit for a call.** A call holds at most 100 requests in total,
+   of both homes together. The server finds the requests, then runs each
+   limit check before it changes anything: the 100 requests of a call
+   (`catalog.MaxRolloutRequests`), the change order limit of ADR 190
+   decision 3, and the open offers of a namespace (RFC 56 decision 10).
+   When one check fails, the call fails with `catalog.ErrLimit`, which
+   names the limit and the count, and changes nothing in either home. So
+   no call leaves one home done and the other not started. A caller with
+   more requests names them in more calls, for example with the filter
+   `blueprintVersion` of the request list (RFC 56 decision 11). The call needs the new action `blueprint:roll-out`
    on the blueprint. It is not in a built-in role except the administrator
    of the namespace (ADR 117 decision 3).
 2. **What the call does.** For each named request, in one call:
    - It skips a request with a revision in flight, a request that pins N or
      higher, and a request with `ensure: absent`. Each skip has a reason in
-     the answer. A rollout never cancels a revision in flight.
+     the answer. A rollout never cancels a revision in flight, with one
+     exception: an upgrade offer in git of a lower version that a rollout
+     made and the forge did not merge (RFC 56 decision 7). The rollout
+     cancels that revision and makes the new offer.
    - It builds the upgrade document: the last applied document, with
      `blueprint.version` set to N and the answers migrated (question 2).
      A request with no upgrade path is skipped with the reason
@@ -159,9 +172,8 @@ recommendation is option 2.
    - For the requests in the home `git`, it starts one upgrade review
      request each (RFC 56).
    - For the requests in the home `opendustpan`, it makes one change order
-     with 1 to 100 units (ADR 190 decision 3). More than 100 requests give
-     more than one change order, each with at most 100 units, in the order
-     of the request names. The answer lists each change order.
+     with 1 to 100 units (ADR 190 decision 3). The limit of a call keeps it
+     to one change order.
 3. **The revisions.** Each upgrade revision has the origin `rollout`, the
    rollout ID (prefix `rol-`) and the principal that started the rollout.
    It is a normal revision of its request. One revision in flight still
@@ -209,8 +221,24 @@ recommendation is option 2.
 - ADR 110, change 1 of the job model: a job can carry both a Catalog origin
   and a change order origin. The job model already refuses either origin
   from the REST API (ADR 190 decision 15).
-- ADR 117 decision 2: the action `blueprint:roll-out`.
+- ADR 117 decision 2: the action `blueprint:roll-out`, and a change of the
+  requirement map. Today an upgrade needs `unit:edit-inputs` on the unit.
+  A revision with the origin `rollout` needs `blueprint:roll-out` on the
+  blueprint instead, and no action on the unit. The consent of the
+  consumer then comes from the approval of decision 4 (in OpenDustpan) or
+  from the merge of the offer (in git, RFC 56 decision 3).
+- ADR 110 decision 5: a write-back job of a revision with the origin
+  `rollout` always delivers a review request, also when the request names
+  `direct-push` (RFC 56 decision 3).
 - ADR 225 decision 1: the reserved rule ID `blueprint-rollout`.
+
+**If the owner refuses option 2.** The offers in git (RFC 56) need no
+change order and no amendment of ADR 190, so they stay. For a request in
+the home `opendustpan`, the rollout call then makes one upgrade revision,
+with its own job, for each request, as a submit does. The built-in rule
+`blueprint-rollout` gives the gate of each job an approval by the owners of
+its unit. There is one review for each unit and none for the whole rollout.
+Work items B3 and B7 drop out.
 
 ### Ports for question 1
 
@@ -350,14 +378,15 @@ stored documents, so each step has its own test with the other steps
 skipped:
 
 1. **Boundary.** The rollout body: an unknown field, a version that is not
-   published, more than 10,000 request names, a duplicate name. The
+   published, 101 request names, an empty list that matches 101 requests,
+   a duplicate name. The
    `upgrade` field: each publish refusal of decision 2.
 2. **Contain.** A migrated answer is data only: the render writes it with a
    JSON encoder (ADR 110 decision 8). A test migrates an answer that holds
    HCL and Pulumi YAML syntax and checks the rendered program text.
 3. **Limit.** A path of 33 steps, an expression over the limits of ADR 112
-   decision 12, and a rollout of 101 requests that must split into two
-   change orders.
+   decision 12, and a call whose offers in git pass the open offers of the
+   namespace: the call changes nothing in either home.
 4. **Authorize at use.** A rollout by a principal with
    `blueprint:publish` and no `blueprint:roll-out`. An approval by an owner
    of one unit counts for that unit only. A unit with no owner is skipped.
@@ -377,13 +406,15 @@ routes of ADR 117.
 | --- | --- | --- | --- | --- |
 | B1 | The field `upgrade`: parse, publish checks, `catalog.Migrate`, `catalog.UpgradePath`, table tests | M | `catalog-core` | M6-1 |
 | B2 | The check route takes `upgradeTo` | S | `api-catalog` | B1, Catalog routes |
-| B3 | A change order unit plan that names a Catalog revision. The attach, and the plan job and the apply job on the rendered snapshot. The cause diff of the documents | M | `changeorder` | the ADR of owner decision D7 |
-| B4 | `catalog.RolloutStore`, its suite, and the SQLite and PostgreSQL adapters with one migration each | M | `catalog-store` | M6-2 |
-| B5 | The rollout service, `catalog.PlanRollout`, the route, the action `blueprint:roll-out`, the built-in rule `blueprint-rollout` | M | `catalog-core`, `identity-actions` | B1, B3, B4, U2 of RFC 56 |
-| B6 | The e2e steps above, and the user documentation page "Roll out a blueprint version" | M | `e2e`, `docs` | B5 |
+| B3 | A change order unit plan that names a Catalog revision. The attach, and the plan job and the apply job on the rendered snapshot. The cause diff of the documents | M | `changeorder`, `store-migrations` | the ADR of owner decision D7 |
+| B4 | `catalog.RolloutStore`, its suite, and the SQLite and PostgreSQL adapters with one migration each | M | `catalog-store`, `store-migrations` | M6-2 |
+| B5 | The rollout service core: the call, `catalog.PlanRollout`, the skip rules, the limit checks, the route, the action `blueprint:roll-out`, the built-in rule `blueprint-rollout`. With no change order: a request in OpenDustpan is skipped with `waiting-for-change-orders` until B7 lands | M | `catalog-core`, `identity-actions` | B1, B4 |
+| B6 | The e2e steps above, and the user documentation page "Roll out a blueprint version" | M | `e2e`, `docs` | B7 and U2 |
+| B7 | The change order half of the rollout: the attach of the revisions, the requirements, the rechecks, the state map (decisions 4 to 7). If the owner refuses D7: one job for each revision with the built-in rule on its gate | M | `catalog-core` | B5, B3 (only with D7) |
 
-Order: B1, then B2 and B4 (parallel, after M6-2), then B3 (after the ADR),
-then B5, then B6.
+Order: B1, then B2 and B4 (B4 after M6-2), then B5. Then U2 of RFC 56 (the
+offers in git) and B3 (after the ADR of D7) in parallel, then B7, then B6.
+U2 does not wait for B3: offers in git need no change order.
 
 ## Proposed glossary lines
 
@@ -404,7 +435,9 @@ _Avoid_: Migration plan, conversion
 
 - Question 1 is owner decision D7 (it amends ADRs 190, 191 and 116).
 - Does a rollout also accept a retired target version? The proposal says no,
-  as ADR 112 decision 2 says for an upgrade.
+  as ADR 112 decision 2 says for an upgrade. This follows an accepted ADR,
+  so it is a decision for the product manager under the owner's
+  delegation, not an owner decision.
 
 ## Outcome
 

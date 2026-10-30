@@ -115,7 +115,9 @@ of an upgrade revision.
 3. **Always a review request.** The delivery of an offer is
    `review-request`, also when the request names `direct-push`. The platform
    team does not own the repository of the consumer. The merge in the forge
-   is the consent of the consumer.
+   is the consent of the consumer. This amends ADR 110 decision 5 for the
+   origin `rollout`: the delivery of the request applies to every other
+   origin. The same amendment is listed in RFC 111.
 4. **OpenDustpan gates still apply.** The gates of the blueprint and of the
    namespace apply to the write-back job before its commit, as for any
    submit (ADR 110 decision 9). The built-in rule `blueprint-rollout` of
@@ -132,7 +134,9 @@ of an upgrade revision.
 6. **No duplicates.** One revision in flight for each request (ADR 116
    decision 3) already gives at most one open offer for each request. A
    rollout skips a request with a revision in flight, with the reason
-   `in-flight`.
+   `in-flight`. The one exception is decision 7: an unmerged offer of a
+   lower version that a rollout made is replaced, not skipped. RFC 111
+   decision 2 holds the same rule.
 7. **A newer offer replaces an older one.** When a rollout of version N+1
    finds an open offer of version N for the same request, which a rollout
    made and the forge did not merge, the server cancels that revision
@@ -150,10 +154,13 @@ of an upgrade revision.
    at the commit makes the revision `applied`. An offer that nobody merges
    ends `expired` at the deadline of its revision (ADR 116 decision 13),
    and the executor closes the review request.
-10. **Limits.** A rollout makes at most 100 offers in one call. A namespace
-    has at most 500 open offers. The write-back queue of the job model
-    paces the calls to the forge (ADR 100 decision 16). A call over a limit
-    fails with `catalog.ErrLimit`, which names the limit, and makes no offer.
+10. **Limits.** One rollout call holds at most 100 requests of both homes
+    together (RFC 111 decision 1). A namespace has at most 500 open offers.
+    The server runs each limit check before it changes anything. When one
+    check fails, the call fails with `catalog.ErrLimit`, which names the
+    limit and the count, and it makes no offer and no change order. The
+    write-back queue of the job model paces the calls to the forge (ADR 100
+    decision 16).
 11. **Which requests pin which version.** The list of Catalog requests takes
     the filter `blueprintVersion` (with `lt:`, for example `lt:4`), and each
     item shows its home and the state of its last revision. The console
@@ -213,12 +220,14 @@ Sizes, conflict groups and the IDs M6-1 and M6-2 as in RFC 111.
 
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
-| U1 | `job.ReviewRequest` (fixed branch, title, body) in the write-back executor, refused by the job REST API, with `jobtest` cases | M | `job-writeback` | the write-back executor |
-| U2 | Offers in the rollout service: the forced delivery, the replace rule, the `declined` skip, the limits | M | `catalog-core` | B1, B4, U1 |
+| U1 | `job.ReviewRequest` (fixed branch, title, body) in the write-back executor, refused by the job REST API, with `jobtest` cases | M | `job-writeback`, `store-migrations` (only if the job store needs a column) | the write-back executor |
+| U2 | Offers in the rollout service: the forced delivery, the replace rule, the `declined` skip, the open-offer limit | M | `catalog-core` | B5, U1 |
 | U3 | The `blueprintVersion` filter of the request list | S | `api-catalog` | Catalog routes, M6-2 |
 | U4 | The e2e steps above, the review request routes of the fake GitHub API, and the docs page "Upgrade offers in git" | M | `e2e`, `docs` | U2 |
 
-Order: U1 and U3 in parallel, then U2 (after B1 and B4), then U4.
+Order: U1 and U3 in parallel, then U2 (after B5 of RFC 111), then U4. U2
+does not wait for B3 or B7: an offer in git needs no change order, so it
+stays when the owner refuses D7.
 
 ### Proposed glossary line
 

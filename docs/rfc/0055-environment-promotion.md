@@ -9,7 +9,8 @@ created: 2026-10-10
 
 Status: discussing. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". The section "Proposal (2026-10-30)" is ready to
-accept. The words of the feature are owner decision D6.
+accept, with two owner decisions: D6 (the words) and D10 (a preview rule
+applies).
 
 ## Problem
 
@@ -74,7 +75,10 @@ Each fact has a tag: **[fetched]** means that the page was read on
   <https://docs.massdriver.cloud/api/graphql/operations/queries/compare-environments>
   [fetched],
   <https://pkg.go.dev/github.com/massdriver-cloud/massdriver-sdk-go/massdriver/platform/environments>
-  [fetched]
+  [fetched]. `mass environment preview` forks a base environment for a
+  preview and deploys it.
+  <https://docs.massdriver.cloud/cli/commands/mass_environment_preview>
+  [not fetched]
 - **Spacelift.** Stack dependencies are a stored graph with no loops. Outputs
   move from one stack to the next. A failure cancels the runs after it.
   <https://docs.spacelift.io/concepts/stack/stack-dependencies> [fetched]
@@ -183,6 +187,59 @@ the objects of the API.
    grouping of units. A comparison takes any two units. A lane is its own
    small object, because a collection belongs to a team and holds the
    units of all its stages (ADR 51).
+8. **A fork.** `POST .../namespaces/{namespace}/catalog-requests/{blueprint}/{name}/forks`
+   takes `{"name": "...", "inputs": {...}, "destroyTime": {...}, "reason":
+   "..."}`. It submits a create of a new Catalog request of the same
+   blueprint and version, with the answers of the source request and the
+   answers of the body over them. It is a normal create: it needs
+   `catalog:request` on the blueprint and `catalog:read` on the source, and
+   every check of `submit` runs. The new request records `forkOf`, and the
+   comparison shows it. A fork copies no secret, because no answer is
+   secret (ADR 111 decision 3), and the profile comes from the blueprint.
+   Massdriver forks an environment the same way, and copies secrets only on
+   request [fetched, link above]. A unit with no Catalog request cannot be
+   forked, because its config lives in the code of the team. The answer
+   names that reason.
+9. **Preview rules.** A **preview rule** (ID prefix `pvr-`) of a namespace
+   makes one fork for each open review request of one repository, and
+   destroys it when the review request closes. It holds:
+   - the source request to fork, and the forge connection and repository
+     whose review requests it follows,
+   - `inputs`: a map from an input of the blueprint to one variable of the
+     review request: `reviewRequest.number`, `reviewRequest.branch` or
+     `reviewRequest.commit`. The render writes each value as data (ADR 110
+     decision 8),
+   - a destroy time for each fork (RFC 43), 7 days of `inactiveFor` by
+     default, as a safety net,
+   - at most 20 open forks. A review request over the limit receives no fork,
+     and the server records the reason and sends `preview.skipped`.
+
+   The events: a review request that opens or gets a push submits a create
+   or an update of the fork `<source name>-rr<number>`, in the home
+   `opendustpan`. A review request that closes or merges submits
+   `ensure: absent`. The server reads the events from the forge webhook of
+   ADR 267 decision 19. Each submit runs as the last saver of the rule, as
+   a trigger does (ADR 267 decision 14): the server checks the current
+   grants of the saver (`catalog:request` on the blueprint,
+   `unit:edit-inputs` and `unit:request-destroy` on the fork) at each
+   event, and fails closed. Every gate of the fork applies, with
+   `source.kind == "forge"`. The action `namespace:manage-preview-rules`
+   saves a rule, with an audit entry. A namespace has at most 50 rules.
+
+   Whether a preview rule may apply with no person is owner decision D10.
+
+### Owner decision D10. A preview rule applies
+
+ADR 267 decision 9 says that a trigger starts a plan and nothing else. A
+preview rule that only plans gives no preview. Options:
+
+1. **The submit of a preview rule applies (recommended).** The fork is a new
+   unit that only the rule writes. Each gate still applies, so a team that
+   wants a person to approve each preview saves a gate. The audit entry of
+   each submit names the rule and its saver. Cost: a second kind of change
+   that no person starts at the time, next to the destroy of RFC 43.
+2. **The rule only plans.** A person applies each fork. Cost: no automatic
+   preview, which is the reason for the feature.
 
 ### Ports
 
@@ -214,6 +271,12 @@ the objects of the API.
 6. Make a `code` lane of two OpenTofu units on one repository. Apply a new
    commit on the first, advance, and check that the second applied that
    commit.
+7. Fork the `dev` request of each tool with one changed answer, and check
+   the new unit, its answers and its `forkOf`.
+8. Save a preview rule on the repository of the fake GitHub host. Open a
+   review request: a fork `dev-rr1` applies with `imageTag` set to the
+   commit. Push a commit: the fork updates. Close it: the fork destroys,
+   with `tofu destroy` and `pulumi destroy` in the runner jobs.
 
 ### Security tests (ADR 250)
 
@@ -227,8 +290,13 @@ the objects of the API.
    10,000 outputs each, which the server cuts with a mark.
 4. **Authorize at use.** An advance with `unit:edit-inputs` on the target and
    no read on the source. A comparison where the caller can read one unit
-   only: the answer is a 404 for the other, never a partial answer. Output
-   values with `unit:read-outputs` on one side only: both are `hidden`.
+   only: the answer is a 404, never a partial answer. The 404 is for a
+   whole unit that the caller cannot read. The mark `hidden` of decision 1
+   is for a part of a unit that the caller can read, for example the
+   output values: with `unit:read-outputs` on one side only, both sides
+   are `hidden`.
+   A preview rule whose saver lost `catalog:request` makes no fork. A fork
+   that names a source request that the caller cannot read is a 404.
 5. **Fail closed.** A source with no applied revision, or under its `soak`,
    refuses the advance with the reason. A fact producer that fails gives
    `advance.available == false`, and a gate that reads it denies.
@@ -244,9 +312,11 @@ Sizes and conflict groups as in RFC 111.
 | P3 | SQLite and PostgreSQL adapters of `lane.Store`, one migration each, the backup table list | M | `store-migrations` | P2 |
 | P4 | The input field `advance` of a blueprint, and the advance of a `catalog` lane | M | `catalog-core` | P3, B1 |
 | P5 | The advance of a `code` lane, the routes, the action `namespace:manage-lanes`, and the fact group `advance` | M | `gate-facts`, `identity-actions` | P3, the job model start of a runner apply |
-| P6 | The e2e steps above, and the docs page "Compare and advance stacks and workspaces" | M | `e2e`, `docs` | P1, P4, P5 |
+| P6 | The e2e steps above, and the docs page "Compare, fork and advance stacks and workspaces" | M | `e2e`, `docs` | P1, P4, P5, P7, P8 |
+| P7 | The fork route and `forkOf` | S | `catalog-core`, `store-migrations` | M6-2, Catalog routes |
+| P8 | Preview rules: the store, its suite and adapters, the events of the forge webhook, the saver check, the limits, `preview.skipped`, the action (after D10) | L | `preview`, `store-migrations`, `identity-actions` | P7, E3 of RFC 43, the review-request webhook of ADR 267 |
 
-Order: P1 and P2 in parallel, then P3, then P4 and P5, then P6.
+Order: P1, P2 and P7 in parallel, then P3, then P4, P5 and P8, then P6.
 
 ### Proposed glossary lines (if the owner takes the words of D6)
 
@@ -256,6 +326,12 @@ moves, for example from a test stack to a production stack (RFC 55). A unit
 is in at most one lane.
 _Avoid_: Environment (that is a profile of the Pulumi CLI), pipeline, stage,
 promotion path (a promotion is of an installation)
+
+**Preview rule**:
+A rule of a namespace that makes a fork of one Catalog request for each
+open review request of one repository, and destroys the fork when the
+review request closes.
+_Avoid_: Preview environment, ephemeral environment, PR environment
 
 **Advance**:
 The change that copies the blueprint version and the marked answers, or the

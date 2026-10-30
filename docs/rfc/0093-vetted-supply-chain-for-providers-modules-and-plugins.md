@@ -1127,8 +1127,8 @@ step:
 
 This section answers the open questions above, so that the RFC is ready to
 accept. RFC 10 holds the work items of the whole registry theme
-(Milestone 6), with this RFC as its curation part. Three answers are owner
-decisions: they amend accepted ADRs or add a dependency.
+(Milestone 6), with this RFC as its curation part. One answer is an owner
+decision (D1), because it amends accepted ADRs.
 
 ### New facts (2026-10-30)
 
@@ -1190,7 +1190,7 @@ was read on 2026-10-30, **[not fetched]** means a search snippet only.
 | 1 | The names | Keep vetted package, package admission and package mirror. They do not clash with the glossary, and RFC 10 uses them too. |
 | 2 | `package.admit` as a seventh decision point | **Owner decision D1** (it amends ADRs 224, 225, 226 and 229). Recommended: option C.1, with the final installation gate that fails closed. |
 | 3 | Installation admissions that namespaces inherit | Yes. A namespace can revoke an inherited package for itself. It cannot admit a package that the installation revoked. |
-| 4 | OpenPGP | **Owner decision D2**, one question with RFC 101 question 6. Recommended: add `github.com/ProtonMail/go-crypto` (BSD-3-Clause) now, at a release at least two weeks old, behind the port `registry.SignatureVerifier` only. ADR 269 decision 2 already says that the signature is checked at upload, and that check needs the library. The mirror then sets the signature result `verified` or `failed`, not `not-checked`. |
+| 4 | OpenPGP | Decided. The owner approved `github.com/ProtonMail/go-crypto` on 2026-10-20 (issue 1293, which also asks for an ADR that records it), and `pkg/registry/pgpverify` uses it. So slice 1 checks the upstream signature with that adapter, and the signature result is `verified`, `unsigned`, `unknown-key` or `failed`, never `not-checked`. An earlier version of this proposal asked the owner again (D2). That question is withdrawn. |
 | 5 | Who fetches | The server, through `pkg/egress` with its own allowlist of upstream hosts, off until set (G.1). The upload of a person for an air gap (G.3) in the same milestone. A runner job only for git module sources (G.2, answer 7). |
 | 6 | Layer 4 | A failure before the plan, in the slice after slice 1. A warning teaches teams to ignore it. |
 | 7 | Modules | Both. Modules from an upstream module registry and `https` archives in the server fetch. Modules from git at a full commit through a runner job of the kind `package-fetch`, in a sandbox, after the server fetch works. Most public modules use git sources, so without it the feature serves few modules. |

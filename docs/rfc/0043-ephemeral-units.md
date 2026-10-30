@@ -86,16 +86,27 @@ Spacelift keeps the stack.
    time at which the server starts the destroy of the unit. It is a setting
    of the unit, stored in OpenDustpan, in each tool. It is not a value of
    the tool's config, so it is never in a request file in git and it has
-   one home (RFC 12).
+   one home (RFC 12). A destroy time has one of two forms, or both:
+   - `at`: a fixed time.
+   - `inactiveFor`: a duration. The destroy time is then the time of the
+     last final state version of the unit plus that duration. Each final
+     state version moves it, in the transaction of the state write, through
+     the tool-neutral report `job.StateVersion` (ADR 100 decision 15). This
+     is the second mode of HCP Terraform and Pulumi Cloud.
+
+   With both, the earlier time wins. The API always answers the computed
+   time.
 2. **Who sets it.** A person or a principal with the new action
    `unit:set-destroy-time` on the unit sets, moves or clears it, with a
    reason: `PUT` and `DELETE /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/destroy-time`.
    The built-in role that writes a unit holds the action (ADR 117 decision
    3). Each change writes an audit entry with the old and the new time.
 3. **A blueprint gives a lifetime.** A blueprint document takes the optional
-   field `lifetime`: `{"default": "P3D", "max": "P30D"}`, as ISO 8601
+   field `lifetime`: `{"default": "P3D", "inactiveFor": "P2D", "max":
+   "P30D"}` (each part optional), as ISO 8601
    durations of days and hours. The first state version of a unit of the
-   blueprint sets its destroy time to that time plus `default`. The set is
+   blueprint sets its destroy time: `at` is that time plus `default`, and
+   `inactiveFor` is copied. The set is
    an automatic action, so its audit entry names the blueprint version and
    the requester of the create as the setter. Schema version 1 of the
    blueprint document takes the field, because no tag shipped it (ADR 73).
@@ -105,11 +116,35 @@ Spacelift keeps the stack.
    a unit wins. The limit counts from the creation of the unit, as env zero
    and Pulumi Cloud do, so a person cannot extend for ever. A set or a move
    after the limit fails with `lifetime.ErrLimit`, which names the limit and
-   its scope. A unit under a limit cannot clear its destroy time. Unlike
-   env zero, the limit holds for administrators too: an administrator raises
-   the limit, and that change has its own audit entry. The action
+   its scope. A unit under a limit cannot clear its destroy time. Whether
+   the limit also holds for administrators is owner decision D9. The action
    `namespace:manage-lifetime-limits` sets a limit on a namespace or a
    collection.
+
+   A limit never holds in silence. These rules say what it does to each
+   unit:
+   - **A new unit** under a limit, with a destroy path, receives the destroy
+     time `at` = its creation plus the limit, unless a shorter one is set.
+     The setter is the principal that set the limit.
+   - **An existing unit** with a destroy path and no destroy time, or with
+     a later one: the set of the limit is a two-step call. `POST
+     .../lifetime-limit/checks` with the new limit answers each unit that
+     it changes, with its new destroy time, and stores nothing. The `PUT`
+     then stores the limit and an explicit destroy time for each of those
+     units, in one transaction, with one audit entry for each unit. The
+     setter of each is the principal that set the limit. A unit older than
+     the limit gets the destroy time now plus a grace of 72 hours, so each
+     warning of decision 10 goes out first. The grace is a constant,
+     `lifetime.LimitGrace`, that the API shows.
+   - **A unit with no destroy path** (decision 6) cannot be destroyed by the
+     server, so the limit cannot hold for it. The answer of the check, the
+     answer of the `PUT`, and the read of the unit mark it `not-covered`,
+     with the reason `no-destroy-path`. The inventory list takes the filter
+     `lifetime=not-covered`, and the console shows the count on the limit.
+     The fact group `lifetime` (`covered`, `destroyAt`) of `change.propose`
+     lets a gate deny a change of a unit that a limit does not cover.
+   - **A unit that moves** into a collection with a limit follows the rule
+     of an existing unit, and the move answer lists its new destroy time.
 5. **No magic.** `GET .../units/{unit_id}/destroy-time` answers the time,
    the setter, the reason, the effective limit with its scope, the destroy
    path (decision 6), the warnings sent, and the state: `scheduled`,
@@ -118,7 +153,7 @@ Spacelift keeps the stack.
 6. **The destroy path.** The server picks one path, and a save refuses a
    destroy time on a unit with no path, with `lifetime.ErrNoDestroyPath`:
    - A unit of a Catalog request: a revision with `ensure: absent` and the
-     origin `expiry`. In the home `opendustpan`, a runner job destroys. In
+     origin `destroy-time`. In the home `opendustpan`, a runner job destroys. In
      the home `git`, a write-back job commits `ensure: absent` with the
      delivery of the request, and the team's CI destroys.
    - A unit with runner settings (a pool and a code location): a runner job
@@ -137,7 +172,7 @@ Spacelift keeps the stack.
    time.
 8. **Gates and approvals apply.** The destroy is a normal change. The gates
    of `change.propose`, `change.planned` and `change.apply` apply, with the
-   new value `expiry` of the fact `source.kind` (a minor version of the fact
+   new value `destroy-time` of the fact `source.kind` (a minor version of the fact
    schemas of ADR 226). So a gate can ask for an approval of each automatic
    destroy, or of the destroy of a unit with a label. A destroy that waits
    for an approval past the timeout of its gate ends `expired`, and the
@@ -155,12 +190,13 @@ Spacelift keeps the stack.
     the owners of the unit in its context. A move of the destroy time sends
     the warnings again from the new time. These are four new types in the
     catalog of ADR 145 decision 5.
-11. **After a destroy that succeeds.** The server soft deletes the unit (ADR
-    47), unless the unit sets `afterDestroy: keep`. The default is `delete`.
-    The soft delete frees the name and keeps the history for the retention
-    period. A Catalog request keeps its last revision, `absent`. With
-    `keep`, the unit stays with an empty state, and the destroy time is
-    cleared, as in HCP Terraform.
+11. **After a destroy that succeeds.** A unit setting `afterDestroy` has two
+    values. With `delete`, the server soft deletes the unit (ADR 47). The
+    soft delete frees the name and keeps the history for the retention
+    period. With `keep`, the unit stays with an empty state, and the destroy
+    time is cleared, as in HCP Terraform. A Catalog request keeps its last
+    revision, `absent`, with both values. The default is owner decision D8.
+    The API shows the effective value and where it comes from.
 12. **After a destroy that fails.** The server does not try again: a destroy
     that failed halfway needs a person. The state is `failed`, the unit
     stays, and the server sends `unit.destroy-failed` with the job. A person
@@ -171,11 +207,31 @@ Spacelift keeps the stack.
     past and whose state is `scheduled` or `waiting`, with the start key
     `<unit ID>/<destroy time>`. So two instances never start two destroys.
     After an outage it starts each missed destroy once.
-14. **Not in this proposal.** A destroy after a time with no state change
-    (the second mode of HCP Terraform). A unit for each review request,
-    destroyed when the review request closes: the team's CI does this
-    today through the Catalog API, with the destroy time as a safety net.
-    A forge event that does it is a trigger kind of RFC 24.
+14. **A unit for each review request.** RFC 55 (proposal of 2026-10-30,
+    preview rules) makes a unit for each review request and destroys it
+    when the review request closes. Its units also get a destroy time, as
+    a safety net.
+
+### Owner decisions
+
+- **D8. The default of `afterDestroy`.** Options:
+  1. `keep` (recommended). HCP Terraform keeps the workspace and Pulumi
+     Cloud keeps the stack by default [fetched, links above]. Nothing is
+     lost, and a person can delete the empty unit later. Cost: the names
+     stay taken, and empty units stay in the lists until a person deletes
+     them.
+  2. `delete`. Spacelift deletes the stack after a destroy that succeeds
+     [fetched]. The name is free at once, and a restore still brings the
+     unit back for the retention period. Cost: a team that wants to apply
+     the same unit again must restore it or make it again.
+- **D9. Does a lifetime limit hold for administrators?** Options:
+  1. Yes (recommended). An administrator who needs a longer life raises the
+     limit, with its own audit entry. Every destroy time in the namespace
+     then follows one rule that the API can explain. Cost: one more step for
+     an administrator.
+  2. No, as env zero does [fetched]. Cost: a hidden exception: two units of
+     one collection can have different limits, and the read of a unit must
+     say that its setter was an administrator.
 
 ### Ports
 
@@ -211,10 +267,19 @@ schedules step of milestone 7 does):
    the lock, and check the destroy.
 7. Revoke `unit:request-destroy` from the setter of a fourth unit, and
    check the state `blocked` and no job.
+8. Set `inactiveFor: PT2M` on a fifth unit. Run `tofu apply` (or
+   `pulumi up`) twice, one minute apart, and check that each final state
+   version moves the destroy time.
+9. Make a unit that only the CLI of the suite writes, with no runner
+   settings. Check a namespace limit with the check route: the answer lists
+   that unit as `not-covered`, and an older unit with a destroy path with
+   the destroy time now plus 72 hours. Set the limit and check the explicit
+   destroy times and one audit entry for each unit.
 
 ### Security tests (ADR 250)
 
-1. **Boundary.** A destroy time in the past, more than 10 years ahead, a
+1. **Boundary.** An `inactiveFor` under 1 hour (test settings aside) or over
+   10 years. A destroy time in the past, more than 10 years ahead, a
    duration with months or seconds, a reason over 500 characters, and a
    blueprint `lifetime` whose `default` is longer than its `max`.
 2. **Contain.** The reason is text only in the notification and the audit
@@ -225,7 +290,11 @@ schedules step of milestone 7 does):
    action, a disabled setter, and a deleted setter: each gives `blocked`
    and no job. A test sets a destroy time with a principal of another
    namespace and sees the refusal.
-5. **Fail closed.** A store error at the tick starts nothing. An unknown
+5. **Fail closed.** A state write whose move of the destroy time fails
+   rolls back with the state write, so a destroy time never stays behind
+   an applied change. A limit set whose list of units changed between the
+   check and the `PUT` fails with `lifetime.ErrConflict`. A store error at
+   the tick starts nothing. An unknown
    destroy path refuses the save. A destroy job that fails is never started
    again by the server.
 
@@ -238,11 +307,16 @@ Sizes and conflict groups as in RFC 111.
 | E1 | `pkg/lifetime`: model, errors, `lifetime.Store`, the suite `lifetimetest` | M | `lifetime` | none |
 | E2 | SQLite and PostgreSQL adapters of `lifetime.Store`, one migration each, the backup table list | M | `store-migrations` | E1 |
 | E3 | `internal/lifetimesvc`: the tick, the destroy path, the setter check, the states, the four notification types | L | `lifetime`, `notify-catalog` | E2, the job model start of a runner destroy |
-| E4 | The routes, the actions `unit:set-destroy-time` and `namespace:manage-lifetime-limits`, the fact value `source.kind == "expiry"` | M | `identity-actions`, `gate-facts` | E3 |
+| E4 | The routes, the actions `unit:set-destroy-time` and `namespace:manage-lifetime-limits`, the fact value `source.kind == "destroy-time"`, the fact group `lifetime` | M | `identity-actions`, `gate-facts` | E3 |
 | E5 | The blueprint field `lifetime`, and its use at the first state version | S | `catalog-core` | M6-2, E3 |
-| E6 | The e2e steps above, and the docs page "Destroy a stack or a workspace at a set time" | M | `e2e`, `docs` | E4, E5 |
+| E6 | The e2e steps above, and the docs page "Destroy a stack or a workspace at a set time" | M | `e2e`, `docs` | E4, E5, E7, E8 |
+| E7 | `inactiveFor`: the move of the destroy time in the transaction of each final state version, for both tools | M | `lifetime`, `state-write` | E3 |
+| E8 | The rules of a limit: the check route, and the explicit destroy times of existing units with the grace. The mark `not-covered` and the rule of a move. The default of `afterDestroy` (after D8 and D9) | M | `lifetime`, `store-migrations` | E4 |
 
-Order: E1, E2, E3, then E4 and E5 in parallel, then E6.
+Order: E1, E2, E3, then E4, E5 and E7 in parallel, then E8, then E6. E2
+holds the columns of `inactiveFor` and `afterDestroy` in its one
+migration, so E7 and E8 add no migration unless E8 needs a column for the
+`not-covered` mark.
 
 ### Proposed glossary lines
 

@@ -563,7 +563,7 @@ The RFC recommends the points below. It does not decide them.
 This section turns the recommendation of the spike into a design that is
 ready to accept. It does not change the decisions of the owner of
 2026-10-18 (the spike first, and the three names). Two points are owner
-decisions (D4 and D5 at the end of this section). The job proxy
+decisions (D4 and D5, after decision 17). The job proxy
 is security code (ADR 250), and SSRF through a rule host is in scope.
 
 ### Facts from other proxies
@@ -581,9 +581,11 @@ Each fact has a tag: **[fetched]** means that the page was read on
   <https://wiki.squid-cache.org/SquidFaq/SquidAcl> [fetched].
   SQUID-2004:1: the `%xx` decoder could insert a NUL and pass a `url_regex`
   rule. <https://www.squid-cache.org/Advisories/SQUID-2004_1.txt> [fetched].
-  Squid is under the GPL 2.0 license, which `make trivy` refuses for a
-  component that we ship [not fetched: the license file was not read for
-  this RFC].
+  Squid is under the GNU General Public License, version 2
+  (<https://github.com/squid-cache/squid/blob/master/COPYING>, and the
+  sentence "licensed under the GNU GPL" on <https://www.squid-cache.org/>)
+  [fetched]. `make trivy` refuses a GPL license for a dependency, so we
+  would not ship Squid.
 - **Envoy.** The credential injector filter injects a fixed credential or an
   OAuth2 client-credentials token. Its docs say: "This extension is
   functional but has not had substantial production burn time", and "has
@@ -629,8 +631,8 @@ is not canonical, and a credential that the job never holds.
 | Who reads the CA key | Nobody but the job proxy. One CA for each claim, in memory, with a name constraint and the lifetime of the claim (decision 6). |
 | Encodings in the response scan | Yes: the plain value, base64 (standard and URL, with and without padding), the JSON escape form and the percent form (decision 7). |
 | The credential of the upstream proxy | From the runner pool, never from the profile of a unit (decision 8). |
-| Client certificates and SPIFFE | A client certificate is a new export of a profile (decision 5). SPIFFE is part of owner decision D5. The SPIRE registration decides a SPIFFE ID, never OpenDustpan. |
-| Body formats and size | Part of owner decision D5. When it comes: JSON by JSON pointer first, then form fields, with a buffer of at most 1 MiB. |
+| Client certificates and SPIFFE | A client certificate is a new export of a profile (decision 5). A SPIFFE identity comes from files that a SPIFFE helper of the team writes (decision 15). The SPIRE registration decides a SPIFFE ID, never OpenDustpan. |
+| Body formats and size | JSON by JSON pointer, form fields, and protobuf by field number, with a buffer of at most 1 MiB (decision 14). |
 
 ### Decisions
 
@@ -648,17 +650,24 @@ is not canonical, and a credential that the job never holds.
      coordinator drops every other packet of the sandbox, DNS included. The
      tool needs no DNS: it sends the name in the CONNECT.
    - `kubernetes` (ADR 136): the coordinator creates, for each such claim,
-     a proxy pod from `opendustpan/launcher:<release>`, and a
-     NetworkPolicy for that claim: the job pod may reach only the proxy pod,
-     and the proxy pod accepts only the job pod. A NetworkPolicy works only
-     with a network plugin that enforces it. So the coordinator runs a probe
-     at start and every hour: a pod with the job labels tries to open a
-     connection that the policy denies. If the connection opens, the
-     coordinator refuses each claim of a unit with proxy rules, with the
-     reason `network-policy-not-enforced`. This amends ADR 136 decision 4:
-     the service account of the coordinator gets `create` and `delete` on
-     NetworkPolicies of its own Kubernetes namespace (**owner decision D5**,
-     part b).
+     a second Kubernetes Job, the proxy Job, from
+     `opendustpan/launcher:<release>`, and a NetworkPolicy for that claim:
+     the job pod may reach only the proxy pod, and the proxy pod accepts
+     only the job pod. The coordinator already has the permissions on Jobs
+     (ADR 136 decision 4). The proxy pod runs as a service account with no
+     role, from the Helm values. The proxy sends its pod address through
+     its proxy session, and the launcher reads it through its own session.
+     The RBAC change is owner decision D5.
+   - A NetworkPolicy works only with a network plugin that enforces it, and
+     a drop rule of the machine coordinator can be wrong. So the launcher
+     probes the isolation **at each claim**, before the first step: it
+     tries to open a TCP connection to the address of the OpenDustpan
+     server directly, not through the job proxy, with a time limit of 2
+     seconds. If the connection opens, the launcher runs no step, reports
+     the phase failed with the reason `network-not-isolated`, and ends with
+     the new exit code 72. A probe at each claim leaves no window in which a
+     change of the network plugin passes unseen. It costs at most 2 seconds
+     for each claim.
    - `process`: no kernel boundary (ADR 137 decision 2). A unit with proxy
      rules never runs on it. The start of such a job on a pool that allows
      only `process` fails with `runner.ErrIsolation`, which names the
@@ -774,20 +783,123 @@ is not canonical, and a credential that the job never holds.
     and `GET .../jobs/{id}/proxy-records`. The runner protocol gets the
     proxy session paths under `/runner/v1`.
 
+13. **The rule tester.** `POST .../units/{unit_id}/proxy-rules/tests`
+    takes a changed rule set and a list of past jobs of the unit (at most
+    50), replays the stored records of those jobs against it, and answers
+    for each record: `allowed`, `denied` or `changed` (another rule
+    matches). It reads stored records only and sends no request. It needs
+    `unit:manage-proxy-rules`. The records hold no query value and no
+    body, so the tester matches the method, the host and the path only, and
+    marks a rule with a body condition as `not-testable` for each record.
+14. **Body matching.** A rule of the mode `inspect` can add `body`
+    conditions. Each condition names one field and the value that it must
+    equal: a template value fills one whole field value, as for a path
+    segment.
+    - Formats: `json` (a field by JSON pointer, compared in the canonical
+      form of RFC 8785, which `internal/catalog` already writes),
+      `form` (an `application/x-www-form-urlencoded` field), and `protobuf`
+      (a field by its number path, for example `1.3`, read from the wire
+      format by a small reader in `pkg/jobproxy`, with no descriptor and no
+      new dependency).
+    - The job proxy buffers at most 1 MiB of a body. A larger body, a body
+      that does not parse, a duplicate JSON key, a field that is missing or
+      appears twice, and a streaming gRPC call each deny the request.
+    - The record holds the names or numbers of the fields that matched,
+      never their values.
+    - The `Content-Type` of the request picks the format. A request whose
+      type differs from the format of the rule is denied.
+15. **SPIFFE identities.** A rule can name `spiffe` in place of
+    `clientCertificate`: the job proxy presents an X.509 SVID to the
+    endpoint. The proxy reads the SVID, its key and the trust bundle from a
+    directory that a SPIFFE helper of the team writes (for example
+    `spiffe-helper` of the SPIRE project), and reads them again when the
+    files change. So the proxy needs no Workload API client and no new
+    dependency. The machine coordinator mounts the directory into the
+    proxy process only, and the Kubernetes coordinator into the proxy pod
+    only: the job pod never sees it. The SPIRE registration decides the
+    SPIFFE ID. The docs give the form
+    `spiffe://<trust domain>/opendustpan/<tool>/<namespace>/<unit>` as an
+    example only. `serverTrust` can name `spiffe:<ID>`: the proxy then
+    checks the URI SAN of the endpoint certificate against that ID with
+    `crypto/x509`, and checks the chain against the trust bundle.
+16. **Learn mode.** A person with `unit:manage-proxy-rules`, with a fresh
+    authentication, turns on learn mode for a unit for at most 7 days.
+    - In learn mode, a job of the operations `plan` and `refresh` only goes
+      through the job proxy with a built-in `tunnel` rule for each host
+      that the job asks for. The proxy still applies the outbound guard
+      and records each CONNECT. It gives no credential in learn mode: the
+      job start opens no `exports.proxy`. A job of `apply` or `destroy` on
+      a unit in learn mode fails at start with `jobproxy.ErrLearnMode`.
+    - For a host that already has an `inspect` rule, the proxy keeps the
+      TLS end (the CA keeps its name constraint) and records each method
+      and path.
+    - `POST .../units/{unit_id}/proxy-rules/proposals` turns the records
+      of the learn jobs into a proposed rule set, grouped by host and by
+      path prefix. A proposal is never saved by itself. A person reads it
+      and saves it through the normal route.
+    - The fact `proxy.learnMode` is true for such a job, so a gate can
+      deny learn mode on a unit with a label.
+17. **A shared gateway.** A team that needs fixed egress addresses can run
+    the job proxy as a **shared gateway**: one process of the mode
+    `proxy --gateway` for a runner pool, as a service that the team runs.
+    - Each claim still gets its own proxy session, its own CA, its own
+      rendered rules and its own credentials inside the gateway. No two
+      claims share a CA, a rule set or a credential.
+    - The gateway gives each claim its own listening port. The coordinator
+      allows the job pod or the sandbox to reach only that port (a
+      NetworkPolicy port, or a drop rule of the machine coordinator).
+    - The gateway also checks the source address of each connection
+      against the address that the coordinator reported for the claim. A
+      connection from another address is refused. So the port and the
+      source address are two layers that each stop a job from using the
+      claim of another job.
+    - The gateway holds the credentials of many units at one time. The docs
+      say this, and the pool shows "shared gateway" as a warning, as for the
+      isolation `process`.
+    - The per-job proxy stays the default.
+
+### Amendments that this proposal makes
+
+- ADR 134 decision 2: a fifth mode of the launcher, `proxy`, with the
+  option `--gateway`.
+- ADR 134 decision 10: the exit code 72, `network-not-isolated`, with the
+  disposition "lets the claim expire".
+- ADR 134 decision 6: the variables `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`
+  and the CA bundle variables for the steps of the role `tool` of a unit
+  with proxy rules.
+- ADR 201 decision 9: the export key `proxy` in the table of exports, with
+  the consumer `job-proxy` only.
+- ADR 203 decision 6: the delivery to a runner never gives `exports.proxy`
+  to the consumer `launcher`.
+- ADR 136 decision 4: the RBAC change of owner decision D5.
+- ADR 137 decision 6: for a unit with proxy rules, the egress of the
+  sandbox is the job proxy only, and not the network of the host.
+- ADR 132: a new assignment version for the proxy fields, and the proxy
+  session paths of the runner protocol.
+- ADR 226 decision 2: the fact group `proxy` (a minor version).
+
 ### Owner decisions
 
 - **D4. The name of a rule.** Recommended: "proxy rule" and "proxy rule
   set".
-- **D5. The scope in Milestone 6.** (a) This RFC calls body matching,
-  SPIFFE, learn mode, the rule tester and a shared gateway "a later step,
-  each only when someone needs it". Recommended for Milestone 6: decisions
-  1 to 12 above, with the endpoint mode, the client certificate and the
-  response scan. Then the rule tester (a replay of the records of past jobs
-  against a changed rule set), because it reads stored records only and
-  adds no new attack surface. Body matching, SPIFFE, learn mode and the
-  shared gateway after Milestone 6, each with its own section here first.
-  (b) The service account of the Kubernetes coordinator gets `create` and
-  `delete` on NetworkPolicies (decision 2), which amends ADR 136 decision 4.
+- **D5. The RBAC of the Kubernetes coordinator.** ADR 136 decision 4 gives
+  the coordinator create, get, list, watch and delete on Jobs, get on pods,
+  get on its Secret and create on `tokenreviews`, and "no other
+  permission". The full change: add `create`, `get`, `list`, `watch` and
+  `delete` on `networkpolicies` (API group `networking.k8s.io`), in the
+  namespace of the coordinator only. Nothing else: the proxy runs as a
+  Job, which the coordinator can already create, and the isolation probe
+  runs in the launcher, so no probe pod exists. Options: (1) this change
+  (recommended). (2) The team creates one NetworkPolicy for the label
+  `dustpan-role=job` by hand, and the coordinator gets no new permission.
+  Option 2 cannot limit a job pod to the proxy pod of its own claim, so
+  one job could reach the proxy of another job. The isolation probe of
+  decision 2 then is the only layer that tests the network.
+
+Earlier versions of this proposal recommended moving body matching, SPIFFE,
+learn mode and a shared gateway after Milestone 6. That was a cut of the
+"all" scope of the roadmap. Decisions 13 to 17 now put each of them in
+Milestone 6, with work items X12 to X16.
 
 ### Ports
 
@@ -829,6 +941,19 @@ the Pulumi CLI:
    credential".
 7. Run the plan again on a pool with only `process` isolation. The start
    fails with `runner.ErrIsolation`.
+8. Add a body rule on a `POST` with a JSON field `team`. A request with the
+   field of another team is denied, and the record names the field, not
+   its value.
+9. Test a changed rule set with the rule tester against the jobs of steps 2
+   to 4, and check the `denied` and `changed` marks.
+10. Turn on learn mode, run a plan, and read the proposed rule set. Check
+    that an apply in learn mode fails at start.
+11. Write a test SVID and bundle to the SPIFFE directory, and run a plan
+    against an endpoint that asks for a client certificate with that ID.
+12. Run steps 2 and 3 through a shared gateway, and check that a second
+    sandbox on the port of the first claim is refused.
+13. Delete the drop rule of the sandbox with a test hook, and check that the
+    launcher ends with the exit code 72 before the first step.
 
 ### Security tests (ADR 250)
 
@@ -878,8 +1003,16 @@ Each test sends hostile input to one layer, with the other layers skipped.
    - Each denial writes a record with a fixed reason.
    - An error of the upstream proxy holds no URL and no credential in any
      record or log.
-   - On Kubernetes, the coordinator refuses claims when the policy probe
-     connects.
+   - The launcher runs no step when its isolation probe connects.
+   - A body that does not parse, a body over 1 MiB, a duplicate JSON key
+     and a protobuf field that appears twice each deny the request.
+   - A learn-mode job of `apply` fails at start, and a learn-mode job gets
+     no credential.
+   - A shared gateway refuses a connection from an address that is not the
+     address of the claim of the port, and a connection to a port of a
+     claim that ended.
+   - A SPIFFE file that is missing, expired or not signed by the bundle
+     makes the proxy deny each request of that rule.
 
 ### Work items
 
@@ -893,15 +1026,24 @@ Sizes and conflict groups as in RFC 111.
 | X4 | The proxy core in the launcher module. CONNECT, the CA of a claim and the name binding. The modes `inspect`, `tunnel` and `endpoint`. Injection, and HTTP/2 through the TLS end. The outbound guard dial, the upstream proxy and the response scan | L | `jobproxy-core` | X1 |
 | X5 | The runner protocol: the proxy handoff token, the proxy session, the assignment, the CA and record uploads, the pool settings (allowed ranges, upstream proxy) | M | `runner-protocol` | X3, X4 |
 | X6 | The machine coordinator: the job proxy outside the sandbox, the routes and the drop rules for `gvisor` and `firecracker`, the refusal of `process` | M | `runner-machine` | X5 |
-| X7 | The Kubernetes coordinator: the proxy pod, the NetworkPolicy of a claim, the policy probe (after owner decision D5 b) | L | `runner-k8s` | X5 |
-| X8 | The launcher: the CA bundle, the proxy variables, the placeholders, the denial line in the step log | S | `launcher` | X5 |
+| X7 | The Kubernetes coordinator: the proxy Job, the NetworkPolicy of a claim (after owner decision D5) | L | `runner-k8s` | X5 |
+| X8 | The launcher: the CA bundle, the proxy variables, the placeholders, the denial line in the step log, the isolation probe and the exit code 72 | M | `launcher` | X5 |
 | X9 | The job start: the render of the rules, the digest in the spec, the credential check, the fact group `proxy` | M | `job-start`, `gate-facts` | X2, X3 |
-| X10 | The records as a job log kind, their retention, the audit summary and the read route | M | `job-logs` | X5 |
+| X10 | The records as a job log kind, their retention, the audit summary and the read route | M | `job-logs`, `store-migrations` | X5 |
 | X11 | The e2e steps above, `runsc` in the e2e image, and the docs page "Narrow an admin key with the job proxy" | L | `e2e`, `docs` | X6, X8, X9, X10 |
-| X12 | The rule tester (if owner decision D5 a takes it) | M | `jobproxy` | X10 |
+| X12 | The rule tester (decision 13) | M | `jobproxy` | X10 |
+| X13 | Body matching: `json`, `form` and the protobuf wire reader, the 1 MiB buffer, fuzz tests of each reader (decision 14) | M | `jobproxy-core` | X4 |
+| X14 | SPIFFE: the SVID files, the reload, the mount into the proxy only for each coordinator, the check of a SPIFFE ID (decision 15) | M | `jobproxy-core`, `runner-machine`, `runner-k8s` | X6, X7 |
+| X15 | Learn mode: the switch with its limit of 7 days, the built-in tunnel rules, the start refusal for `apply`, the proposals route, `proxy.learnMode` (decision 16) | M | `jobproxy`, `job-start`, `store-migrations` | X9, X10 |
+| X16 | The shared gateway: `proxy --gateway`, one session and one port for each claim, the source address check, the pool warning (decision 17) | L | `jobproxy-core`, `runner-protocol` | X6, X7 |
 
 Order: X1 and X3 in parallel, then X2 and X4, then X5, then X6, X8, X9
-and X10 in parallel, then X7 and X11, then X12.
+and X10 in parallel, then X7, X12 and X13, then X14, X15 and X16, then X11.
+X11 covers each step below, also the steps of decisions 13 to 17.
+
+The cost of decisions 13 to 17, in work items: about 5 sessions (X12 to
+X16), and no new dependency. The shared gateway (X16) is the largest, and it
+adds the risk of one process that holds the credentials of many units.
 
 ## Open questions
 
