@@ -16,6 +16,7 @@ import (
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	issuerapi "opendustpan.org/opendustpan/internal/api/issuer"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
@@ -30,6 +31,7 @@ import (
 	trustrulesapi "opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/storecheck"
@@ -106,6 +108,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
+	issuerRoutes := coverageIssuerRoutes(tb)
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
@@ -116,8 +119,22 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
-		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, trustRuleRoutes, server,
+		pulumi,
+		tfe,
+		tofuHTTP,
+		inventory,
+		auditRoutes,
+		contextRoutes,
+		profileRoutes,
+		issuerRoutes,
+		sinkRoutes,
+		jobRoutes,
+		driftRoutes,
+		triggerRoutes,
+		registryRoutes,
+		sourceFilterRoutes,
+		trustRuleRoutes,
+		server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -919,7 +936,7 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
 		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
-		InstallationURLs: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
 	})
 	if err != nil {
 		tb.Fatalf("trust rule service: %v", err)
@@ -1012,6 +1029,53 @@ func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 	})
 	if err != nil {
 		tb.Fatalf("drift handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageIssuerRoutes returns the routes of the issuer. The stores are empty
+// shells: they exist only to build a Handler for its route table.
+func coverageIssuerRoutes(tb testing.TB) []RouteRef {
+	tb.Helper()
+
+	svc, err := issuersvc.NewService(issuersvc.Config{
+		Store:         struct{ profile.IssuerStore }{nil},
+		Namespaces:    coverageNamespaceStore{},
+		Sealer:        struct{ profile.Sealer }{nil},
+		Authorizer:    coverageAuthorizer{},
+		Notifier:      nil,
+		Fetcher:       nil,
+		IssuerBaseURL: "",
+		PublicURL:     "",
+		Now:           nil,
+		Log:           nil,
+	})
+	if err != nil {
+		tb.Fatalf("issuer service: %v", err)
+	}
+
+	handler, err := issuerapi.NewHandler(issuerapi.Config{
+		Issuer:         svc,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("issuer handler: %v", err)
 	}
 
 	routes := handler.Routes()
@@ -1679,7 +1743,40 @@ func CoverageAllowlist() []AllowEntry {
 		sourceFilterAllowEntries(),
 		trustRuleAllowEntries(),
 		apiDescriptionAllowEntries(),
+		issuerAllowEntries(),
 	)
+}
+
+// issuerAllowEntries covers the routes of the OIDC issuer. No CLI calls them:
+// a relying party reads the two protocol routes, and the console and the
+// client of the API call the management routes. The steps of TestIssuerAPI
+// make the keys, read the documents with no credential, rotate, check the
+// copy, change the settings and export, against the real server.
+func issuerAllowEntries() []AllowEntry {
+	const (
+		base   = "/api/dustpan/v1/namespaces/{namespace}/issuer"
+		reason = "Client route: no CLI calls the issuer. The steps of TestIssuerAPI call it against the real server."
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, base},
+		{http.MethodPatch, base},
+		{http.MethodGet, base + "/export"},
+		{http.MethodPost, base + "/keys"},
+		{http.MethodPost, base + "/keys/rotate"},
+		{http.MethodPost, base + "/keys/check-copy"},
+		{http.MethodGet, "/oidc/{nsid}/.well-known/openid-configuration"},
+		{http.MethodGet, "/oidc/{nsid}/jwks"},
+	}
+
+	entries := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		entries = append(entries, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestIssuerAPI", Reason: reason,
+		})
+	}
+
+	return entries
 }
 
 // apiDescriptionAllowEntries covers the route of the description of the API.

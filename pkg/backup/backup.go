@@ -161,6 +161,8 @@ var Tables = []string{
 	"job_log_chunks",
 	"profiles",
 	"profile_revisions",
+	"issuer_keys",
+	"issuer_settings",
 	"manual_locks",
 	TablePersonPreferences,
 	"saved_views",
