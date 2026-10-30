@@ -20,6 +20,7 @@ import (
 type ImportPorts struct {
 	Store      unitimport.Store
 	Units      unitimport.UnitStore
+	Uploads    unitimport.UploadStore
 	SeedLedger func(ctx context.Context, ns namespace.Name, row unitimport.LedgerRow) error
 	SetTarget  func(ctx context.Context, ns namespace.Name, key unitimport.UnitKey, target history.Unit) error
 }
@@ -34,7 +35,7 @@ type ImportSeeder interface {
 
 // importTables returns the tables of the import tool in backup.Tables.
 func importTables() []string {
-	return []string{"imports", "imports_purged", "import_units", "import_ledger"}
+	return []string{"imports", "imports_purged", "import_units", "import_ledger", "import_upload_commits"}
 }
 
 // seededImports names what seedBackupImports wrote.
@@ -108,6 +109,14 @@ func seedOneImport(t *testing.T, ports ImportPorts, acme namespace.Namespace, id
 		t.Fatalf("set counts of %s: %v", id, err)
 	}
 
+	commit := unitimport.UploadCommit{
+		ImportID: id, UnitDir: "0123456789abcdef0123456789abcdef", Sequence: 1,
+		Facts: "0000000001-a1b2c3.json", CommittedAt: now(),
+	}
+	if err := ports.Uploads.CommitUploadVersion(ctx, fence, commit); err != nil {
+		t.Fatalf("commit upload of %s: %v", id, err)
+	}
+
 	for n, version := range []string{"v1", "v2"} {
 		row := backupLedgerRow(acme.Name, id, unit.ID, version, now().Add(time.Duration(n)*time.Second))
 		if err := ports.SeedLedger(ctx, acme.Name, row); err != nil {
@@ -169,7 +178,13 @@ func checkImportRowCounts(t *testing.T, s BackupStore, sum backup.Summary) {
 		return
 	}
 
-	want := map[string]int64{"imports": 2, "imports_purged": 1, "import_units": 2, "import_ledger": 6}
+	want := map[string]int64{
+		"imports":               2,
+		"imports_purged":        1,
+		"import_units":          2,
+		"import_ledger":         6,
+		"import_upload_commits": 2,
+	}
 	for _, table := range importTables() {
 		if got := sum.RowCounts[table]; got != want[table] {
 			t.Errorf("exported rows of %q = %d, want %d", table, got, want[table])
@@ -191,6 +206,7 @@ func checkRestoredImports(t *testing.T, dst RestoreStore, acme namespace.Namespa
 	checkRestoredImportRecords(t, ports, acme.Name, ids)
 
 	checkRestoredImportUnits(t, ports, acme.Name, ids)
+	checkRestoredUploadCommits(t, ports, acme.Name, ids)
 
 	// The ledger of each import, the purged one too, stays.
 	for _, id := range []string{ids.open, ids.ended, ids.gone} {
@@ -220,6 +236,20 @@ func checkRestoredImportRecords(t *testing.T, ports ImportPorts, ns namespace.Na
 
 	if _, err = ports.Store.Get(ctx, ns, ids.gone); !errors.Is(err, unitimport.ErrPurged) {
 		t.Fatalf("restored purged import: error = %v, want ErrPurged", err)
+	}
+}
+
+// checkRestoredUploadCommits checks that the commit row of an upload version
+// survived the restore.
+func checkRestoredUploadCommits(t *testing.T, ports ImportPorts, ns namespace.Name, ids *seededImports) {
+	t.Helper()
+
+	for _, id := range []string{ids.open, ids.ended} {
+		rows, err := ports.Uploads.UploadCommits(t.Context(), ns, id, "0123456789abcdef0123456789abcdef")
+		if err != nil || len(rows) != 1 || rows[0].Sequence != 1 || rows[0].Facts != "0000000001-a1b2c3.json" ||
+			!rows[0].CommittedAt.Equal(now()) {
+			t.Fatalf("restored upload commits of %s = %+v, %v, want the one seeded row", id, rows, err)
+		}
 	}
 }
 

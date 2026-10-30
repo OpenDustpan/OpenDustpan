@@ -2811,6 +2811,21 @@ func (q *Queries) DeleteImportUnits(ctx context.Context, arg DeleteImportUnitsPa
 	return err
 }
 
+const deleteImportUploadCommits = `-- name: DeleteImportUploadCommits :exec
+DELETE FROM import_upload_commits
+WHERE namespace_id = $1 AND import_id = $2
+`
+
+type DeleteImportUploadCommitsParams struct {
+	NamespaceID string
+	ImportID    string
+}
+
+func (q *Queries) DeleteImportUploadCommits(ctx context.Context, arg DeleteImportUploadCommitsParams) error {
+	_, err := q.db.Exec(ctx, deleteImportUploadCommits, arg.NamespaceID, arg.ImportID)
+	return err
+}
+
 const deleteInstanceVersion = `-- name: DeleteInstanceVersion :execrows
 DELETE FROM instance_versions
 WHERE id = $1
@@ -8674,6 +8689,45 @@ func (q *Queries) InsertImportUnit(ctx context.Context, arg InsertImportUnitPara
 	return err
 }
 
+const insertImportUploadCommit = `-- name: InsertImportUploadCommit :execrows
+INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
+SELECT n.id, i.id, $1::text, $2::bigint, $3::text, $4::bigint
+FROM namespaces n
+JOIN imports i ON i.namespace_id = n.id
+WHERE n.name = $5 AND n.failover_version = $6
+  AND i.id = $7 AND i.state NOT IN ('released', 'canceled')
+`
+
+type InsertImportUploadCommitParams struct {
+	UnitDir         string
+	Sequence        int64
+	Facts           string
+	CommittedAtMs   int64
+	Namespace       string
+	FailoverVersion int64
+	ImportID        string
+}
+
+// The commit row of one upload version, in one statement: the namespace must
+// hold the failover version of the caller, and the import must not have
+// ended. It inserts no row when either check fails, and the primary key
+// refuses a second row for the version.
+func (q *Queries) InsertImportUploadCommit(ctx context.Context, arg InsertImportUploadCommitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertImportUploadCommit,
+		arg.UnitDir,
+		arg.Sequence,
+		arg.Facts,
+		arg.CommittedAtMs,
+		arg.Namespace,
+		arg.FailoverVersion,
+		arg.ImportID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertInventoryChange = `-- name: InsertInventoryChange :exec
 INSERT INTO inventory_changes (
     namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
@@ -11443,6 +11497,49 @@ func (q *Queries) ListImportUnits(ctx context.Context, arg ListImportUnitsParams
 			&i.Bytes,
 			&i.Encryption,
 			&i.Findings,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImportUploadCommits = `-- name: ListImportUploadCommits :many
+SELECT namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms
+FROM import_upload_commits
+WHERE namespace_id = $1 AND import_id = $2
+  AND unit_dir = $3
+ORDER BY sequence
+`
+
+type ListImportUploadCommitsParams struct {
+	NamespaceID string
+	ImportID    string
+	UnitDir     string
+}
+
+// The commit rows of one unit directory of an import, in the order of the
+// sequences.
+func (q *Queries) ListImportUploadCommits(ctx context.Context, arg ListImportUploadCommitsParams) ([]ImportUploadCommit, error) {
+	rows, err := q.db.Query(ctx, listImportUploadCommits, arg.NamespaceID, arg.ImportID, arg.UnitDir)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ImportUploadCommit
+	for rows.Next() {
+		var i ImportUploadCommit
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ImportID,
+			&i.UnitDir,
+			&i.Sequence,
+			&i.Facts,
+			&i.CommittedAtMs,
 		); err != nil {
 			return nil, err
 		}

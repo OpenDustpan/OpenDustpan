@@ -21,8 +21,9 @@ func importHarness(s *sqlite.Store) unitimporttest.Harness {
 	imports := s.Imports()
 
 	return unitimporttest.Harness{
-		Store: imports,
-		Units: imports,
+		Store:   imports,
+		Units:   imports,
+		Uploads: imports,
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 
@@ -86,6 +87,7 @@ func (s *backupStore) ImportPorts() storetest.ImportPorts {
 	return storetest.ImportPorts{
 		Store:      imports,
 		Units:      imports,
+		Uploads:    imports,
 		SeedLedger: imports.SeedLedgerRow,
 		SetTarget: func(ctx context.Context, _ namespace.Name, key unitimport.UnitKey, target history.Unit) error {
 			return imports.SeedTarget(ctx, key, target)

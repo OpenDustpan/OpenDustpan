@@ -29,6 +29,7 @@ import (
 type Harness struct {
 	Store      unitimport.Store
 	Units      unitimport.UnitStore
+	Uploads    unitimport.UploadStore
 	Namespace  func(t *testing.T, name string) namespace.Fence
 	SeedLedger func(ctx context.Context, ns namespace.Name, row unitimport.LedgerRow) error
 	SetTarget  func(ctx context.Context, ns namespace.Name, key unitimport.UnitKey, target history.Unit) error

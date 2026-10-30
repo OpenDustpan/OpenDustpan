@@ -3,9 +3,14 @@ package upload_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/unitimport/upload"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // clock() is the fixed time of every case.
@@ -30,7 +36,77 @@ const (
 	prefix   = "upload/ns-1/imp-1"
 )
 
+// errReset is the error of a store that loses the response of a write.
+var errReset = errors.New("connection reset")
+
+// memCommits is a reference adapter of unitimport.UploadStore. The key of a
+// row is its primary key in the SQL adapters.
+type memCommits struct {
+	rows map[string]unitimport.UploadCommit
+	// lose, when set, stores the row and then answers its error, as a store
+	// does when it loses the response.
+	lose error
+	mu   sync.Mutex
+}
+
+func newCommits() *memCommits {
+	return &memCommits{rows: map[string]unitimport.UploadCommit{}, lose: nil, mu: sync.Mutex{}}
+}
+
+func (m *memCommits) CommitUploadVersion(_ context.Context, _ namespace.Fence, c unitimport.UploadCommit) error {
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("upload commit: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k := fmt.Sprintf("%s/%d", c.UnitDir, c.Sequence)
+	if _, ok := m.rows[k]; ok {
+		return fmt.Errorf("%w: version %d", unitimport.ErrUploadExists, c.Sequence)
+	}
+
+	m.rows[k] = c
+
+	return m.lose
+}
+
+func (m *memCommits) UploadCommits(
+	_ context.Context,
+	_ namespace.Name,
+	_, dir string,
+) ([]unitimport.UploadCommit, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []unitimport.UploadCommit
+
+	for _, c := range m.rows {
+		if c.UnitDir == dir {
+			out = append(out, c)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b unitimport.UploadCommit) int { return a.Sequence - b.Sequence })
+
+	return out, nil
+}
+
+// commitsOf returns the commit store of s: the tests keep it beside the
+// source.
+func commitsFor(c unitimport.UploadStore) upload.Commits {
+	return upload.Commits{Store: c, Fence: namespace.Fence{Namespace: "acme", FailoverVersion: 1}, ImportID: "imp-1"}
+}
+
 func newSource(t *testing.T) (*upload.Source, *blobfs.Store) {
+	t.Helper()
+
+	s, store, _ := newSourceWith(t)
+
+	return s, store
+}
+
+func newSourceWith(t *testing.T) (*upload.Source, *blobfs.Store, *memCommits) {
 	t.Helper()
 
 	store, err := blobfs.Open(t.TempDir())
@@ -38,12 +114,14 @@ func newSource(t *testing.T) (*upload.Source, *blobfs.Store) {
 		t.Fatalf("open blob store: %v", err)
 	}
 
-	s, err := upload.New(store, prefix, maxBytes, clock)
+	commits := newCommits()
+
+	s, err := upload.New(store, commitsFor(commits), prefix, maxBytes, clock)
 	if err != nil {
 		t.Fatalf("new source: %v", err)
 	}
 
-	return s, store
+	return s, store, commits
 }
 
 func claims(seq int) upload.Version {
@@ -365,9 +443,15 @@ func TestNewRefuses(t *testing.T) {
 		prefix string
 		max    int64
 	}{"empty prefix": {"", 1}, "bad prefix": {"Upload/X", 1}, "no limit": {"upload/a", 0}} {
-		if _, err = upload.New(store, tc.prefix, tc.max, time.Now); err == nil {
+		if _, err = upload.New(store, commitsFor(newCommits()), tc.prefix, tc.max, time.Now); err == nil {
 			t.Errorf("%s: New succeeded, want an error", name)
 		}
+	}
+
+	none := upload.Commits{Store: nil, Fence: namespace.Fence{Namespace: "", FailoverVersion: 0}, ImportID: ""}
+
+	if _, err = upload.New(store, none, "upload/a", 1, time.Now); err == nil {
+		t.Error("New with no commit store succeeded, want an error")
 	}
 }
 
@@ -384,42 +468,52 @@ func TestSourceIgnoresTheCredential(t *testing.T) {
 	}
 }
 
-// lostResponseStore stores the facts key and then reports ErrExists, as a
-// store does when it retries a write after it lost the response.
-type lostResponseStore struct {
-	blob.Store
-}
-
-func (l lostResponseStore) Put(ctx context.Context, k blob.Key, r io.Reader) error {
-	if err := l.Store.Put(ctx, k, r); err != nil {
-		return err
-	}
-
-	if strings.HasSuffix(k.String(), "1.json") {
-		return blob.ErrExists
-	}
-
-	return nil
-}
-
 func TestPutAfterALostResponseKeepsTheBody(t *testing.T) {
 	t.Parallel()
 
-	inner, err := blobfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open blob store: %v", err)
-	}
-
-	s, err := upload.New(lostResponseStore{Store: inner}, prefix, maxBytes, clock)
-	if err != nil {
-		t.Fatalf("new source: %v", err)
-	}
+	s, _, commits := newSourceWith(t)
+	commits.lose = errReset
 
 	v := put(t, s, unit(), 1, []byte("kept"))
 
 	if got := readBody(t, s, v.ID); got != "kept" {
 		t.Errorf("body = %q, want kept", got)
 	}
+}
+
+func TestPutAfterAnUnknownCommitErrorKeepsTheFiles(t *testing.T) {
+	t.Parallel()
+
+	_, store, commits := newSourceWith(t)
+
+	// A store that fails and keeps no row: the commit may still land, so the
+	// two files of the attempt stay for the cancel or the release.
+	failing := &failingCommits{memCommits: commits}
+
+	s2, err := upload.New(store, commitsFor(failing), prefix, maxBytes, clock)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	_, err = s2.Put(t.Context(), unit(), 1, claims(1), strings.NewReader("kept"))
+	if !errors.Is(err, unitimport.ErrSourceUnreachable) {
+		t.Fatalf("put error = %v, want ErrSourceUnreachable", err)
+	}
+
+	objs, listErr := store.List(t.Context(), prefix)
+	if listErr != nil || len(objs) != 3 {
+		t.Errorf("objects = %d, %v, want unit.json, the body and the facts file", len(objs), listErr)
+	}
+}
+
+// failingCommits fails every commit with an error that does not say whether
+// the row exists, and it stores nothing.
+type failingCommits struct {
+	*memCommits
+}
+
+func (*failingCommits) CommitUploadVersion(context.Context, namespace.Fence, unitimport.UploadCommit) error {
+	return errReset
 }
 
 func TestDeleteRemovesEachObject(t *testing.T) {
@@ -444,5 +538,342 @@ func TestDeleteRemovesEachObject(t *testing.T) {
 	objs, err := store.List(t.Context(), prefix)
 	if err != nil || len(objs) != 0 {
 		t.Fatalf("list after delete = %v, %v, want none", objs, err)
+	}
+}
+
+// replacingStore is a blob store that ignores a create-only write: a Put on a
+// key that holds an object replaces the object with no error. A hold, when
+// set, stops each Put of a facts file until n Puts of facts files wait, so
+// that the uploads of one sequence write their facts before any commits.
+type replacingStore struct {
+	blob.Store
+
+	mu      sync.Mutex
+	waiting int
+	open    chan struct{}
+	n       int
+}
+
+func newReplacingStore(inner blob.Store, hold int) *replacingStore {
+	return &replacingStore{Store: inner, mu: sync.Mutex{}, waiting: 0, open: make(chan struct{}), n: hold}
+}
+
+func (r *replacingStore) Put(ctx context.Context, k blob.Key, body io.Reader) error {
+	if err := r.Delete(ctx, k); err != nil {
+		return fmt.Errorf("replace: %w", err)
+	}
+
+	if err := r.Store.Put(ctx, k, body); err != nil {
+		return fmt.Errorf("put: %w", err)
+	}
+
+	name := k.String()[strings.LastIndex(k.String(), "/")+1:]
+	if r.n == 0 || name == "unit.json" || !strings.HasSuffix(name, ".json") {
+		return nil
+	}
+
+	r.mu.Lock()
+	r.waiting++
+
+	if r.waiting == r.n {
+		close(r.open)
+	}
+
+	r.mu.Unlock()
+
+	select {
+	case <-r.open:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("hold: %w", ctx.Err())
+	}
+}
+
+// racePuts puts each body as version 1 of unit() at the same time. It checks
+// that exactly one put commits and that each other put gets a conflict error
+// that names the stored sequence, and it returns the index of the winner.
+func racePuts(t *testing.T, s *upload.Source, bodies []string) int {
+	t.Helper()
+
+	errs := make([]error, len(bodies))
+
+	var wg sync.WaitGroup
+
+	for n := range bodies {
+		wg.Go(func() {
+			_, errs[n] = s.Put(t.Context(), unit(), 1, claims(1), strings.NewReader(bodies[n]))
+		})
+	}
+
+	wg.Wait()
+
+	winner, losers := -1, 0
+
+	for n, putErr := range errs {
+		switch {
+		case putErr == nil:
+			winner = n
+		case errors.Is(putErr, unitimport.ErrSourceInvalid) && errors.Is(putErr, unitimport.ErrUploadExists) &&
+			strings.Contains(putErr.Error(), "sequence 1 is stored"):
+			losers++
+		default:
+			t.Errorf("put %d error = %v, want nil or a conflict that names the stored sequence", n, putErr)
+		}
+	}
+
+	if winner < 0 || losers != len(bodies)-1 {
+		t.Fatalf("winner = %d, losers = %d, want exactly one commit and a conflict for each other put", winner, losers)
+	}
+
+	return winner
+}
+
+func TestTwoConcurrentPutsOnAStoreThatReplacesObjects(t *testing.T) {
+	t.Parallel()
+
+	inner, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	store := newReplacingStore(inner, 2)
+
+	s, err := upload.New(store, commitsFor(newCommits()), prefix, maxBytes, clock)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	bodies := []string{"first body", "second body"}
+	winner := racePuts(t, s, bodies)
+
+	versions, err := s.Versions(t.Context(), unitimport.Credential{}, unit(), "", 10)
+	if err != nil || len(versions) != 1 || versions[0].Size != int64(len(bodies[winner])) {
+		t.Fatalf("versions = %+v, %v, want the one version of the winner", versions, err)
+	}
+
+	if got := readBody(t, s, versions[0].ID); got != bodies[winner] {
+		t.Errorf("committed body = %q, want %q", got, bodies[winner])
+	}
+
+	// The loser deleted its own two files and nothing else.
+	objs, err := inner.List(t.Context(), prefix)
+	if err != nil || len(objs) != 3 {
+		t.Errorf("objects = %d, %v, want unit.json, the body and the facts file of the winner", len(objs), err)
+	}
+}
+
+// legacyUnit writes the files of the older layout for the unit u: the unit
+// file, and for each body a body file and a facts file named <sequence>.json.
+func legacyUnit(t *testing.T, store blob.Store, u unitimport.SourceUnit, bodies []string) {
+	t.Helper()
+
+	sum := sha256.Sum256([]byte(u.Tool + "\x00" + u.Name))
+	dir := prefix + "/" + hex.EncodeToString(sum[:16])
+
+	write := func(name, content string) {
+		k, err := blob.ParseKey(dir + "/" + name)
+		if err != nil {
+			t.Fatalf("parse key: %v", err)
+		}
+
+		if err = store.Put(t.Context(), k, strings.NewReader(content)); err != nil {
+			t.Fatalf("put %s: %v", name, err)
+		}
+	}
+
+	write(
+		"unit.json",
+		fmt.Sprintf(`{"tool":%q,"name":%q,"sequence":0,"atMs":0,"actor":"","size":0,"sha256":""}`, u.Tool, u.Name),
+	)
+
+	for n, body := range bodies {
+		seq := n + 1
+		bodyName := fmt.Sprintf("%010d.old%d.bin", seq, seq)
+		digest := sha256.Sum256([]byte(body))
+
+		write(bodyName, body)
+		write(fmt.Sprintf("%010d.json", seq), fmt.Sprintf(
+			`{"tool":%q,"name":%q,"sequence":%d,"body":%q,"atMs":%d,"actor":"ada","size":%d,"sha256":%q}`,
+			u.Tool, u.Name, seq, bodyName, clock().UnixMilli(), len(body), hex.EncodeToString(digest[:]),
+		))
+	}
+}
+
+func TestReaderOfTheOlderLayout(t *testing.T) {
+	t.Parallel()
+
+	s, store, _ := newSourceWith(t)
+	legacyUnit(t, store, unit(), []string{"old one", "old two"})
+
+	cred := unitimport.Credential{}
+
+	units, err := s.Units(t.Context(), cred, unitimport.Selection{Names: nil})
+	if err != nil || len(units) != 1 || units[0] != unit() {
+		t.Fatalf("units = %+v, %v, want the unit of the older layout", units, err)
+	}
+
+	versions, err := s.Versions(t.Context(), cred, unit(), "", 10)
+	if err != nil || len(versions) != 2 || versions[0].ID != "0000000001" || versions[1].ID != "0000000002" {
+		t.Fatalf("versions = %+v, %v, want the two versions of the older layout", versions, err)
+	}
+
+	if got := readBody(t, s, "0000000002"); got != "old two" {
+		t.Errorf("body = %q, want old two", got)
+	}
+
+	if head, headErr := s.Head(t.Context(), cred, unit()); headErr != nil || head != "0000000002" {
+		t.Errorf("head = %q, %v, want 0000000002", head, headErr)
+	}
+}
+
+func TestNewLayoutContinuesTheOlderLayout(t *testing.T) {
+	t.Parallel()
+
+	s, store, commits := newSourceWith(t)
+	legacyUnit(t, store, unit(), []string{"old one", "old two"})
+
+	cred := unitimport.Credential{}
+
+	// The new layout continues the sequence of the older one, and the reader
+	// serves both in order.
+	put(t, s, unit(), 3, []byte("new three"))
+
+	_, putErr := s.Put(t.Context(), unit(), 3, claims(3), strings.NewReader("again"))
+	if !errors.Is(putErr, unitimport.ErrSourceInvalid) {
+		t.Errorf("put of a stored sequence: error = %v, want ErrSourceInvalid", putErr)
+	}
+
+	versions, err := s.Versions(t.Context(), cred, unit(), "0000000001", 10)
+	if err != nil || len(versions) != 2 || versions[1].ID != "0000000003" {
+		t.Fatalf("versions after the first = %+v, %v, want versions 2 and 3", versions, err)
+	}
+
+	if got := readBody(t, s, "0000000003"); got != "new three" {
+		t.Errorf("body = %q, want new three", got)
+	}
+
+	if len(commits.rows) != 1 {
+		t.Errorf("commit rows = %d, want the one row of the new version", len(commits.rows))
+	}
+}
+
+func TestACommitRowWinsOverAFileOfTheOlderLayout(t *testing.T) {
+	t.Parallel()
+
+	s, store, commits := newSourceWith(t)
+	legacyUnit(t, store, unit(), []string{"legacy"})
+
+	row := unitimport.UploadCommit{
+		ImportID: "imp-1", UnitDir: dirName(unit()), Sequence: 1, Facts: "0000000001-aaa.json", CommittedAt: clock(),
+	}
+	commits.rows[dirName(unit())+"/1"] = row
+
+	writeKey(t, store, unit(), row.Facts, fmt.Sprintf(
+		`{"tool":"pulumi","name":"acme/web/prod","sequence":1,"body":"0000000001.aaa.bin","atMs":%d,"actor":"","size":3,"sha256":%q}`,
+		clock().UnixMilli(),
+		strings.Repeat("0", 64),
+	))
+	writeKey(t, store, unit(), "0000000001.aaa.bin", "new")
+
+	if got := readBody(t, s, "0000000001"); got != "new" {
+		t.Errorf("body = %q, want the body that the row names", got)
+	}
+}
+
+func TestAFactsFileWithNoRowIsNotAVersion(t *testing.T) {
+	t.Parallel()
+
+	s, store := newSource(t)
+	put(t, s, unit(), 1, []byte("one"))
+
+	// The facts file of an attempt that lost, or that a crash left behind.
+	writeKey(t, store, unit(), "0000000002-zzz.json", fmt.Sprintf(
+		`{"tool":"pulumi","name":"acme/web/prod","sequence":2,"body":"0000000002.zzz.bin","atMs":%d,"actor":"","size":3,"sha256":%q}`,
+		clock().UnixMilli(),
+		strings.Repeat("0", 64),
+	))
+
+	versions, err := s.Versions(t.Context(), unitimport.Credential{}, unit(), "", 10)
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("versions = %+v, %v, want the one committed version", versions, err)
+	}
+
+	_, err = s.Open(t.Context(), unitimport.Credential{}, unit(), "0000000002")
+	if !errors.Is(err, unitimport.ErrSourceNotFound) {
+		t.Errorf("open of an uncommitted sequence: error = %v, want ErrSourceNotFound", err)
+	}
+
+	put(t, s, unit(), 2, []byte("two"))
+}
+
+func TestReaderRefusesAHostileCommitRow(t *testing.T) {
+	t.Parallel()
+
+	hostile := []string{"../0000000001-aaa.json", "x/0000000001-aaa.json", "0000000001-aaa.bin", "unit.json", ""}
+
+	for _, name := range hostile {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s, _, commits := newSourceWith(t)
+			put(t, s, unit(), 1, []byte("one"))
+
+			commits.rows[dirName(unit())+"/1"] = unitimport.UploadCommit{
+				ImportID: "imp-1", UnitDir: dirName(unit()), Sequence: 1, Facts: name, CommittedAt: clock(),
+			}
+
+			_, err := s.Versions(t.Context(), unitimport.Credential{}, unit(), "", 10)
+			if !errors.Is(err, unitimport.ErrSourceInvalid) {
+				t.Errorf("versions with the row name %q: error = %v, want ErrSourceInvalid", name, err)
+			}
+		})
+	}
+}
+
+func TestReaderRefusesAFactsFileOfAnotherSequence(t *testing.T) {
+	t.Parallel()
+
+	s, store, commits := newSourceWith(t)
+	put(t, s, unit(), 1, []byte("one"))
+
+	row := commits.rows[dirName(unit())+"/1"]
+
+	writeKey(
+		t,
+		store,
+		unit(),
+		row.Facts,
+		`{"tool":"pulumi","name":"acme/web/prod","sequence":7,"body":"x.bin","size":1,"sha256":"","atMs":0,"actor":""}`,
+	)
+
+	_, err := s.Versions(t.Context(), unitimport.Credential{}, unit(), "", 10)
+	if !errors.Is(err, unitimport.ErrSourceInvalid) {
+		t.Errorf("versions: error = %v, want ErrSourceInvalid", err)
+	}
+}
+
+// dirName returns the unit directory name that the commit rows hold.
+func dirName(u unitimport.SourceUnit) string {
+	sum := sha256.Sum256([]byte(u.Tool + "\x00" + u.Name))
+
+	return hex.EncodeToString(sum[:16])
+}
+
+// writeKey writes the object name in the directory of u.
+func writeKey(t *testing.T, store blob.Store, u unitimport.SourceUnit, name, content string) {
+	t.Helper()
+
+	k, err := blob.ParseKey(prefix + "/" + dirName(u) + "/" + name)
+	if err != nil {
+		t.Fatalf("parse key: %v", err)
+	}
+
+	// The test replaces the object, so that it can set up a bad file.
+	if err = store.Delete(t.Context(), k); err != nil {
+		t.Fatalf("delete %s: %v", name, err)
+	}
+
+	if err = store.Put(t.Context(), k, strings.NewReader(content)); err != nil {
+		t.Fatalf("put %s: %v", name, err)
 	}
 }

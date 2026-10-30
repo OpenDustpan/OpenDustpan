@@ -142,6 +142,7 @@ var Tables = []string{
 	"imports_purged",
 	"import_units",
 	"import_ledger",
+	"import_upload_commits",
 	"workspace_blame_cursors",
 	"workspace_blame_items",
 	"workspace_resource_changes",

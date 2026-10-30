@@ -25,13 +25,15 @@ type memStore struct {
 	purged  map[string]bool
 	units   map[string][]unitimport.ImportUnit
 	ledger  map[string][]unitimport.LedgerRow
+	uploads map[string]unitimport.UploadCommit
 	audited []audit.Entry
 	mu      sync.Mutex
 }
 
 var (
-	_ unitimport.Store     = (*memStore)(nil)
-	_ unitimport.UnitStore = (*memStore)(nil)
+	_ unitimport.Store       = (*memStore)(nil)
+	_ unitimport.UnitStore   = (*memStore)(nil)
+	_ unitimport.UploadStore = (*memStore)(nil)
 )
 
 func newMem() *memStore {
@@ -41,6 +43,7 @@ func newMem() *memStore {
 		purged:  map[string]bool{},
 		units:   map[string][]unitimport.ImportUnit{},
 		ledger:  map[string][]unitimport.LedgerRow{},
+		uploads: map[string]unitimport.UploadCommit{},
 		audited: nil,
 		mu:      sync.Mutex{},
 	}
@@ -310,6 +313,68 @@ func (m *memStore) Ledger(_ context.Context, ns namespace.Name, id, unitID strin
 	return rows, nil
 }
 
+// CommitUploadVersion implements unitimport.UploadStore. The map key is the
+// primary key of the SQL adapters.
+func (m *memStore) CommitUploadVersion(_ context.Context, fence namespace.Fence, c unitimport.UploadCommit) error {
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("upload commit: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	version, ok := m.fences[fence.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if version != fence.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	imp, err := m.find(fence.Namespace, c.ImportID)
+	if err != nil {
+		return err
+	}
+
+	if imp.State.Ended() {
+		return fmt.Errorf("%w: import is %q", unitimport.ErrTransition, imp.State)
+	}
+
+	k := fmt.Sprintf("%s\x00%s\x00%d", key(fence.Namespace, c.ImportID), c.UnitDir, c.Sequence)
+	if _, exists := m.uploads[k]; exists {
+		return fmt.Errorf("%w: version %d of unit %q", unitimport.ErrUploadExists, c.Sequence, c.UnitDir)
+	}
+
+	m.uploads[k] = c
+
+	return nil
+}
+
+// UploadCommits implements unitimport.UploadStore.
+func (m *memStore) UploadCommits(
+	_ context.Context, ns namespace.Name, importID, unitDir string,
+) ([]unitimport.UploadCommit, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, err := m.find(ns, importID); err != nil {
+		return nil, err
+	}
+
+	rows := []unitimport.UploadCommit{}
+
+	for _, c := range m.uploads {
+		if c.ImportID == importID && c.UnitDir == unitDir {
+			rows = append(rows, c)
+		}
+	}
+
+	slices.SortFunc(rows, func(a, b unitimport.UploadCommit) int { return a.Sequence - b.Sequence })
+
+	return rows, nil
+}
+
 // write runs fn under the lock after the checks of a fenced, audited write,
 // and appends e when fn succeeds.
 func (m *memStore) write(fence namespace.Fence, e audit.Entry, fn func() error) error {
@@ -427,8 +492,9 @@ func (m *memStore) setTarget(
 
 func memHarness(m *memStore) unitimporttest.Harness {
 	return unitimporttest.Harness{
-		Store: m,
-		Units: m,
+		Store:   m,
+		Units:   m,
+		Uploads: m,
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 
