@@ -11,10 +11,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -159,7 +157,7 @@ type UpdatesConfig struct {
 	// blob keys.
 	Stacks CheckpointStacks
 	// Blobs holds checkpoint content under
-	// "namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>",
+	// "namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>",
 	// gzipped. The service reads and writes it through a scoped view of the
 	// namespace of each call.
 	Blobs blob.Store
@@ -473,7 +471,7 @@ type checkpointSave struct {
 // do not save state.
 //
 // The content goes to the blob store first, gzipped, under
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>; then the fenced SQL row names it.
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>; then the fenced SQL row names it.
 // A row never names a missing blob: a crash between the blob write and the
 // commit leaves only an unreferenced blob, which the sweep below collects.
 // After the commit, the blob of the previous save of the same update is
@@ -526,7 +524,7 @@ func (s *Updates) SaveCheckpoint(
 		return nil
 	}
 
-	key, err := checkpointBlobKey(bl, st.ID, id, in.Sequence, prev)
+	key, err := checkpointBlobKey(bl, st.ID, id, in.Sequence)
 	if err != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", id, err)
 	}
@@ -995,99 +993,45 @@ func (s *Updates) leaseGet(ctx context.Context, ref Ref, id UpdateID) (Update, e
 	return u, nil
 }
 
-// storeNewCheckpoint writes the blob of save, then its row. A blob that is
-// already there belongs to a first attempt whose commit never landed: the
-// retry adopts it when it holds the same bytes, and checkpointCollision
-// answers any other blob.
+// storeNewCheckpoint writes the blob of save under the key of its attempt,
+// then its row. The row decides: a save that repeats the sequence and digest
+// of the row, or that conflicts with it, deletes its own blob.
 func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) error {
 	return s.writeCheckpoint(ctx, checkpointWrite{
-		op: "save checkpoint", id: save.id, blobs: save.blobs, key: save.key, deployment: save.in.Deployment,
-		other: func(ctx context.Context, _ []byte, _ int64, _ [md5.Size]byte) error {
-			// Anything but a retry of a committed save is a concurrent save
-			// of the same update, which fails without touching SQL, so no
-			// row can name a blob with other content.
-			return s.checkpointCollision(ctx, save)
-		},
-		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) error {
+		op: "save checkpoint", ref: save.ref, id: save.id, blobs: save.blobs, stackID: save.stackID,
+		key: save.key, deployment: save.in.Deployment,
+		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) (bool, error) {
 			return s.commitCheckpoint(ctx, save, size, sum)
 		},
 	})
 }
 
-// checkpointCollision answers a blob that holds other content than save: a
-// row that already matches the sequence and digest means the first attempt
-// committed and this is its retry, which succeeds without writing. A save
-// without a sequence number mints the next key of its update, leaving the
-// orphan for the sweep. Anything else is a concurrent save of the same
-// update, which fails without touching SQL.
-func (s *Updates) checkpointCollision(ctx context.Context, save checkpointSave) error {
-	current, err := s.previousCheckpoint(ctx, save.ref, save.id)
+// commitCheckpoint commits the row of save, then cleans up after the save.
+// known is true when the row already holds the sequence and digest of save:
+// the first write keeps its blob, nothing else changes and no cleanup runs. A
+// failed commit leaves the blob without a row that names it; the sweep
+// collects it once it is older than the grace period.
+func (s *Updates) commitCheckpoint(
+	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
+) (bool, error) {
+	known, err := s.commitCheckpointRow(ctx, save, size, sum)
 	if err != nil {
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
-	}
-
-	known, err := checkpointKnown(current, save.in.Sequence, save.digest)
-	if err != nil {
-		return err
+		return false, fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
 	}
 
 	if known {
-		return nil
-	}
-
-	if save.in.Sequence == 0 {
-		return s.storeMintedKey(ctx, save)
-	}
-
-	return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrConcurrentModification)
-}
-
-// storeMintedKey writes save under the next key of its update, for a save
-// without a sequence number whose derived key holds other content. The
-// orphan keeps its key for the sweep.
-func (s *Updates) storeMintedKey(ctx context.Context, save checkpointSave) error {
-	prefix := save.blobs.updatePrefix(save.stackID, save.id)
-
-	next, err := nextBlobKey(prefix, save.key)
-	if err != nil {
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrConcurrentModification)
-	}
-
-	size, sum, err := s.putCheckpointBlob(ctx, save.blobs, next, save.in.Deployment)
-	if err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("save checkpoint of update %s: %w", save.id, cerr)
-		}
-
-		if errors.Is(err, blob.ErrExists) {
-			return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrConcurrentModification)
-		}
-
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrCheckpointUnavailable)
-	}
-
-	save.key = next
-
-	return s.commitCheckpoint(ctx, save, size, sum)
-}
-
-// commitCheckpoint commits the row of save, then cleans up after the save.
-// A failed commit leaves the blob without a row that names it; the sweep
-// collects it once it is older than the grace period.
-func (s *Updates) commitCheckpoint(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
-	if err := s.commitCheckpointRow(ctx, save, size, sum); err != nil {
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
+		return true, nil
 	}
 
 	s.afterCheckpointSave(ctx, save)
 
-	return nil
+	return false, nil
 }
 
 // commitCheckpointRow writes the fenced SQL row of save naming its blob.
 func (s *Updates) commitCheckpointRow(
 	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
-) error {
+) (bool, error) {
 	cp := Checkpoint{
 		NamespaceID: "", StackID: "",
 		SavedAt:       s.clock(),
@@ -1105,9 +1049,7 @@ func (s *Updates) commitCheckpointRow(
 		BlobMD5:       sum,
 	}
 
-	_, err := s.checkpoints.PutCheckpoint(ctx, cp, save.fence)
-
-	return err
+	return s.checkpoints.PutCheckpoint(ctx, cp, save.fence)
 }
 
 // afterCheckpointSave deletes the blob of the previous save of the same
@@ -1322,8 +1264,8 @@ func (s *Updates) sweepStackOnStart(ctx context.Context, ns namespace.ID, ref Re
 
 // sweepStackBlobs deletes the blobs of one stack that no row names and that
 // are older than the grace period: orphans of an update that never saves
-// again, such as a crash between the blob write and the SQL commit, a
-// minted-key loser, or a delete race loser. The next update that starts on the
+// again, such as a crash between the blob write and the SQL commit, the blob
+// of a save that the row refused, or a delete race loser. The next update that starts on the
 // stack collects them. Blobs younger than the grace period stay, so a save
 // that still commits is never collected: every new blob is fresh, and the row
 // names it only after the bytes land. A blob that a row names stays at any
@@ -1591,46 +1533,23 @@ func checkpointKnown(prev *Checkpoint, seq int64, digest [sha256.Size]byte) (boo
 }
 
 // checkpointBlobKey returns the blob key of one save in the scope of bl:
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>. A save without a sequence number
-// mints the next key of its update after the previous one, so every save
-// writes a new key while the row keeps sequence 0. No error text names a key.
-func checkpointBlobKey(bl *scopedBlobs, stackID ID, id UpdateID, seq int64, prev *Checkpoint) (blob.Key, error) {
-	prefix := bl.updatePrefix(stackID, id)
-
-	if seq > 0 || prev == nil {
-		key, err := blob.ParseKey(prefix + strconv.FormatInt(seq, 10))
-		if err != nil {
-			return "", ErrCheckpointMismatch
-		}
-
-		return key, nil
-	}
-
-	return nextBlobKey(prefix, prev.BlobKey)
-}
-
-// nextBlobKey mints the key after raw in prefix: the same prefix with the
-// trailing sequence number plus one. The number may carry an attempt ID, which
-// the next key drops. A key outside prefix, or one without a
-// trailing number, is a corrupt record, which fails with ErrCheckpointMismatch
-// and never names the key.
-func nextBlobKey(prefix string, raw blob.Key) (blob.Key, error) {
-	rest, ok := strings.CutPrefix(raw.String(), prefix)
-	if !ok {
-		return "", ErrCheckpointMismatch
-	}
-
-	name, ok := parseCheckpointName(rest)
-	if !ok || name.number >= math.MaxInt32 {
-		return "", ErrCheckpointMismatch
-	}
-
-	key, err := blob.ParseKey(prefix + strconv.FormatUint(name.number+1, 10))
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>.
+// The attempt ID is new for each write attempt, so no two writes of the
+// same update share a key, also not two saves without a sequence number. No
+// error text names a key.
+func checkpointBlobKey(bl *scopedBlobs, stackID ID, id UpdateID, seq int64) (blob.Key, error) {
+	key, err := blob.ParseKey(bl.updatePrefix(stackID, id) + strconv.FormatInt(seq, 10) + "-" + newAttemptID())
 	if err != nil {
 		return "", ErrCheckpointMismatch
 	}
 
 	return key, nil
+}
+
+// newAttemptID returns the attempt ID of one blob write: 20 random lowercase
+// letters and digits that the writer makes before the write.
+func newAttemptID() string {
+	return ident.NewID("")
 }
 
 // storedAttrs returns the size and MD5 of stored gzip bytes, for backups.

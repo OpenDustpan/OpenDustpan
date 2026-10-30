@@ -105,7 +105,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "a checkpoint replay under another key keeps the first key", test: testCheckpointReplayOtherKey},
 		{name: "a checkpoint conflict under another key keeps the first key", test: testCheckpointConflictOtherKey},
-		{name: "a checkpoint without a sequence number replaces the row and its key", test: testCheckpointUnsequencedKeys},
+		{name: "an unsequenced checkpoint replaces the row and its key", test: testCheckpointUnsequencedKeys},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
 		{name: "latest checkpoint is the highest version", test: testCheckpointLatestIsHighest},
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
@@ -1292,7 +1292,8 @@ type keyStore interface {
 }
 
 // checkpointKey returns the blob key of a save of u with seq, for the stack of
-// u: namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>.
+// u: namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>, the
+// layout of the first releases. attemptKey adds the attempt ID.
 func checkpointKey(t *testing.T, s keyStore, u stack.Update, seq int64) blob.Key {
 	t.Helper()
 
@@ -1333,7 +1334,9 @@ func (f fixture) attemptKey(t *testing.T, u stack.Update, seq int64, attempt str
 
 // attemptCheckpoint returns a checkpoint of u under the key of one write
 // attempt, as f.checkpoint does for the key without an attempt ID.
-func (f fixture) attemptCheckpoint(t *testing.T, u stack.Update, seq int64, deployment, attempt string) stack.Checkpoint {
+func (f fixture) attemptCheckpoint(
+	t *testing.T, u stack.Update, seq int64, deployment, attempt string,
+) stack.Checkpoint {
 	t.Helper()
 
 	cp := newCheckpoint(u, seq, deployment)
@@ -1741,7 +1744,9 @@ func testReferencedBlobKeys(t *testing.T, f fixture) {
 	second := f.run(t, f.ref, "u2", mutating())
 	secondKey := f.blobKey(t, second, 0)
 
-	if _, err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(second, secondKey, 0, `{"v":2}`), f.fence); err != nil {
+	row := newBlobCheckpoint(second, secondKey, 0, `{"v":2}`)
+
+	if _, err := f.s.PutCheckpoint(t.Context(), row, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
 	}
 
@@ -3332,7 +3337,7 @@ func testCheckpointReplayOtherKey(t *testing.T, f fixture) {
 	}
 
 	if got.BlobKey != first.BlobKey {
-		t.Fatalf("the row names another key after a replay: want the key of the first write")
+		t.Fatal("the row names another key after a replay: want the key of the first write")
 	}
 
 	// The same attempt again also answers known, and the row keeps its key.
@@ -3362,11 +3367,16 @@ func testCheckpointConflictOtherKey(t *testing.T, f fixture) {
 		cp   stack.Checkpoint
 		want error
 	}{
-		{"same sequence, other digest", f.attemptCheckpoint(t, u, 2, `{"n":"other"}`, "attempt0002"), stack.ErrCheckpointConflict},
+		{
+			"same sequence, other digest",
+			f.attemptCheckpoint(t, u, 2, `{"n":"other"}`, "attempt0002"), stack.ErrCheckpointConflict,
+		},
 		{"earlier sequence", f.attemptCheckpoint(t, u, 1, `{"n":1}`, "attempt0003"), stack.ErrStaleCheckpoint},
 	}
 
-	for _, tc := range tests {
+	for i := range tests {
+		tc := &tests[i]
+
 		known, err := f.s.PutCheckpoint(t.Context(), tc.cp, f.fence)
 		if !errors.Is(err, tc.want) || known {
 			t.Errorf("%s: known = %v, err = %v, want false, %v", tc.name, known, err, tc.want)

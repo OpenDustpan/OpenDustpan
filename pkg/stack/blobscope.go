@@ -15,7 +15,7 @@ import (
 
 // pulumiDir is the directory of the stack blobs inside the blob scope of a
 // namespace: checkpoints and journal batches. The full keys are
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence> and
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID> and
 // namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
 // sequence ID>.
 const pulumiDir = "pulumi/"
@@ -347,7 +347,7 @@ func parseCheckpointName(name string) (checkpointName, bool) {
 
 	number, err := strconv.ParseUint(numPart, 10, 63)
 	if err != nil || strconv.FormatUint(number, 10) != numPart {
-		return checkpointName{}, false
+		return checkpointName{number: 0, attempt: ""}, false
 	}
 
 	if !hasAttempt {
@@ -355,12 +355,12 @@ func parseCheckpointName(name string) (checkpointName, bool) {
 	}
 
 	if len(attempt) < minAttemptIDLength || len(attempt) > maxAttemptIDLength {
-		return checkpointName{}, false
+		return checkpointName{number: 0, attempt: ""}, false
 	}
 
 	for _, r := range attempt {
 		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
-			return checkpointName{}, false
+			return checkpointName{number: 0, attempt: ""}, false
 		}
 	}
 

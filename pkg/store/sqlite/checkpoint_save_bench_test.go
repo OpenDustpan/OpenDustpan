@@ -271,7 +271,8 @@ func benchFullSave(b *testing.B, managed int) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		if _, err := f.store.PutCheckpoint(ctx, f.benchCheckpoint(running, 0, deployment, digest), f.fence); err != nil {
+		first := f.benchCheckpoint(running, 0, deployment, digest)
+		if _, err := f.store.PutCheckpoint(ctx, first, f.fence); err != nil {
 			b.Fatalf("save checkpoint: %v", err)
 		}
 	}

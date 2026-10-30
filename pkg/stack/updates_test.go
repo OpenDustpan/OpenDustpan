@@ -614,6 +614,16 @@ func newUpdates(t *testing.T) updatesFixture {
 func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
 	t.Helper()
 
+	return newUpdatesWrapped(t, clk, blobs, logger, nil)
+}
+
+// newUpdatesWrapped is newUpdatesWith with a wrap of the checkpoint store: a
+// nil wrap uses the in-memory store itself.
+func newUpdatesWrapped(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, wrap func(*memUpdates) stack.CheckpointStore,
+) updatesFixture {
+	t.Helper()
+
 	ns := namespace.Namespace{
 		ID:                  namespace.NewID(),
 		CreatedAt:           clk.now,
@@ -639,11 +649,16 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 		blobs = newMemBlob(clk)
 	}
 
+	var checkpoints stack.CheckpointStore = store
+	if wrap != nil {
+		checkpoints = wrap(store)
+	}
+
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
-		Checkpoints:        store,
+		Checkpoints:        checkpoints,
 		Events:             store,
 		Namespaces:         namespaces,
 		Stacks:             store,
