@@ -73,7 +73,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 		"newIssuerService":    "api",
 		"newRunnerHandler":    "api",
 		"newSignIn":           "api",
-		"newTrustRuleHandler": "api",
+		"newTrustRuleService": "api",
 		"storedSignInReady":   "api",
 	},
 	"issuerBaseURL": {"checkSettings": "api", "newIssuerService": "api"},
