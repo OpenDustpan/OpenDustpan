@@ -20,6 +20,10 @@ and writes no entry. The server never changes a value to make it valid.
 The route needs the action `namespace:read-audit` on the namespace, or
 `server:read-audit` on `@server`.
 
+One export runs at most 30 minutes. If it takes longer, the server ends the
+transfer with an error. Start a new export with `fromSequence` set to the
+first sequence that you did not get.
+
 The server reads from `fromSequence` to the last sequence that the log holds
 when the export starts. An entry that a person appends later is not in the
 export. A time range reads each entry from `fromSequence` and keeps the
@@ -85,6 +89,12 @@ The entry is not in the export that wrote it. If the server cannot write it,
 the answer is 500 with the code `audit.export-not-recorded` and no line.
 
 ## Check a range with no help from the server
+
+This check needs an export with no `from` and no `to`. A time range is a
+filter, not a range that you can check: it skips entries and keeps their
+sequences, so the sequences of the lines have gaps and the links between
+lines break. To check a time range, find the first and last sequence that you
+need, and export that range with `fromSequence`.
 
 1. Read the lines in order.
 2. Check that each `sequence` is one more than the sequence before it.

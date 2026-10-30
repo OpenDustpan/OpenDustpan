@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -67,6 +68,8 @@ type Handler struct {
 	logger     *slog.Logger
 	mux        *route.Mux
 	routes     []Route
+	// exportLimit bounds the run time of one export.
+	exportLimit time.Duration
 }
 
 // NewHandler returns a Handler. Every Config field but EntryReader and
@@ -91,16 +94,17 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		namespaces: cfg.Namespaces,
-		entries:    cfg.Entries,
-		reader:     cfg.EntryReader,
-		authn:      cfg.Authenticator,
-		sessions:   cfg.Sessions,
-		authz:      cfg.Authorizer,
-		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("audit"),
-		logger:     cfg.Logger,
-		mux:        route.NewMux(),
-		routes:     nil,
+		namespaces:  cfg.Namespaces,
+		entries:     cfg.Entries,
+		reader:      cfg.EntryReader,
+		authn:       cfg.Authenticator,
+		sessions:    cfg.Sessions,
+		authz:       cfg.Authorizer,
+		guard:       recorder.WithLimiter(cfg.DenialLimiter).WithSurface("audit"),
+		logger:      cfg.Logger,
+		mux:         route.NewMux(),
+		routes:      nil,
+		exportLimit: exportTimeLimit,
 	}
 
 	h.routes = h.buildRoutes()

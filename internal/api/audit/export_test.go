@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 // The refusals of the adapter, so the external tests check their codes
@@ -32,3 +33,7 @@ func WriteError(ctx context.Context, w http.ResponseWriter, err error) {
 	h.logger = slog.New(slog.DiscardHandler)
 	h.writeError(ctx, w, err)
 }
+
+// SetExportLimit sets the time limit of one export, so a test does not wait
+// for the real limit. Call it before the handler serves a request.
+func (h *Handler) SetExportLimit(limit time.Duration) { h.exportLimit = limit }

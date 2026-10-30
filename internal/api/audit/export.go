@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -22,6 +24,11 @@ import (
 // channelHeader is the request header that declares where a request comes
 // from.
 const channelHeader = "Dustpan-Channel"
+
+// exportTimeLimit bounds the run time of one export. The scan reads one entry
+// for each sequence, so a request for a large log ends by itself and a client
+// restarts it with fromSequence at the first sequence it has not got.
+const exportTimeLimit = 30 * time.Minute
 
 // exportFlushEvery is the count of lines after which the export sends its
 // buffer to the client. The export holds one entry at a time, so its memory
@@ -218,7 +225,10 @@ func (h *Handler) exportEntries(
 		return
 	}
 
-	if err := h.streamExport(w, r, ns, req, last.Sequence); err != nil {
+	scanCtx, cancel := context.WithTimeout(ctx, h.exportLimit)
+	defer cancel()
+
+	if err := h.streamExport(scanCtx, w, ns, req, last.Sequence); err != nil {
 		h.logger.ErrorContext(ctx, "audit export aborted",
 			slog.String("scope", ns.String()), slog.String("error", err.Error()))
 
@@ -231,16 +241,16 @@ func (h *Handler) exportEntries(
 // streamExport writes the lines of the export for the sequences from
 // req.fromSequence to lastSeq.
 func (h *Handler) streamExport(
-	w http.ResponseWriter, r *http.Request, ns namespace.Name, req exportRequest, lastSeq int64,
+	ctx context.Context, w http.ResponseWriter, ns namespace.Name, req exportRequest, lastSeq int64,
 ) error {
 	out := &exportWriter{format: req.format, buf: bufio.NewWriter(w), ctl: http.NewResponseController(w), written: 0}
 
 	for seq := req.fromSequence; seq <= lastSeq; seq++ {
-		if err := r.Context().Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("export canceled: %w", err)
 		}
 
-		e, err := h.reader.EntryAt(r.Context(), ns, seq)
+		e, err := h.reader.EntryAt(ctx, ns, seq)
 		if err != nil {
 			return fmt.Errorf("read sequence %d: %w", seq, err)
 		}
@@ -355,7 +365,7 @@ func (h *Handler) recordExport(r *http.Request, p identity.Principal, ns namespa
 		}
 
 		if _, err := server.AppendServer(ctx, entry); err != nil {
-			return fmt.Errorf("%w: %w", errExportNotRecorded, err)
+			return notRecorded(err)
 		}
 
 		return nil
@@ -363,12 +373,25 @@ func (h *Handler) recordExport(r *http.Request, p identity.Principal, ns namespa
 
 	target, err := h.namespaces.Get(ctx, ns)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errExportNotRecorded, err)
+		return notRecorded(err)
 	}
 
 	if _, err := h.entries.Append(ctx, target.Fence(), entry); err != nil {
-		return fmt.Errorf("%w: %w", errExportNotRecorded, err)
+		return notRecorded(err)
 	}
 
 	return nil
+}
+
+// notRecorded returns the error of an export whose entry the server could not
+// write. A cause that the shared module answers in its own words (a fenced
+// namespace, a namespace that is not at home, maintenance mode) stays as it
+// is, so the client gets 409, 421 or 503 and not a 500. Any other cause is
+// the error errExportNotRecorded.
+func notRecorded(cause error) error {
+	if _, known := problem.Shared(cause); known {
+		return cause
+	}
+
+	return fmt.Errorf("%w: %w", errExportNotRecorded, cause)
 }
