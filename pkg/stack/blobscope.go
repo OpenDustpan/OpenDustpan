@@ -17,7 +17,7 @@ import (
 // namespace: checkpoints and journal batches. The full keys are
 // namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID> and
 // namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
-// sequence ID>.
+// sequence ID>-<attempt ID>.
 const pulumiDir = "pulumi/"
 
 // BlobFamily is the family of the Pulumi checkpoint and journal blobs in

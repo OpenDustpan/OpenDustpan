@@ -399,6 +399,7 @@ func checkRefusedJournalOp(t *testing.T, op journalBlobOp, tc journalForeignKey)
 	refusals := stacktest.NewRefusals()
 	rows := newFakeRows()
 	rows.keys = []blob.Key{tc.key}
+	rows.rows = []stack.JournalRow{rowNaming(tc.key, [sha256.Size]byte{}, 0)}
 
 	entries, err := stack.NewJournalEntries(blobs, rows, allowAll{}, 0, refusals)
 	if err != nil {
@@ -460,8 +461,8 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 		ns   namespace.ID
 		want string
 	}{
-		{"the namespace of the tests", journalNS, "namespaces/ns-journal-test/pulumi/stack-1/upd-1/journal/1"},
-		{"another namespace", "ns-second", "namespaces/ns-second/pulumi/stack-1/upd-1/journal/1"},
+		{"the namespace of the tests", journalNS, "namespaces/ns-journal-test/pulumi/stack-1/upd-1/journal/1-"},
+		{"another namespace", "ns-second", "namespaces/ns-second/pulumi/stack-1/upd-1/journal/1-"},
 	}
 
 	for _, tc := range tests {
@@ -478,12 +479,12 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 				t.Fatalf("append: %v", err)
 			}
 
-			if len(rows.rows) != 1 || rows.rows[0].BlobKey.String() != tc.want {
-				t.Fatalf("rows = %+v, want one row with the key %q", rows.rows, tc.want)
+			if len(rows.rows) != 1 || !hasAttemptKey(rows.rows[0].BlobKey, tc.want) {
+				t.Fatalf("rows = %+v, want one row with a key that starts with %q", rows.rows, tc.want)
 			}
 
-			if _, ok := blobs.objects[blob.Key(tc.want)]; !ok {
-				t.Fatalf("blob store holds %v, want the key %q", blobs.objects, tc.want)
+			if _, ok := blobs.objects[rows.rows[0].BlobKey]; !ok {
+				t.Fatalf("blob store holds %v, want the key of the row", blobs.objects)
 			}
 		})
 	}
