@@ -298,7 +298,8 @@ func (g Gaps) Expected(key blob.Key) bool {
 	// namespaces/<namespace ID>/item-keys/<ID>/v<version>-<attempt>. The
 	// ledger names the item key, not the namespace ID, a version or an
 	// attempt, and each rewrap adds a version, so every version and every
-	// attempt of a named item key is a gap. The ID is random, so no other namespace holds it.
+	// attempt of a named item key is a gap. The ID is random, so no other
+	// namespace holds it.
 	if parsed, err := secret.ParseItemKeyBlobKey(key); err == nil {
 		if _, ok := g.itemKeys[parsed.ID]; ok {
 			return true

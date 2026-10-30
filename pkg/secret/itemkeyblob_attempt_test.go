@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -470,5 +472,126 @@ func TestItemKeyBlobsGarbageSkipsForeignKeys(t *testing.T) {
 	got, err := b.Garbage(t.Context(), nsA, namerOf(), garbageNow())
 	if err != nil || len(got) != 0 {
 		t.Errorf("garbage = %v, %v, want none", got, err)
+	}
+}
+
+// cancelOnGetBlobs cancels the context of the request when a read returns,
+// as a client that disconnects just after the read does.
+type cancelOnGetBlobs struct {
+	*memBlobs
+
+	cancel context.CancelFunc
+}
+
+func (c cancelOnGetBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	rc, err := c.memBlobs.Get(ctx, key)
+	c.cancel()
+
+	return rc, err
+}
+
+// liveContextRecorder is a recorder that refuses to record with a context
+// that has ended, as an audit store does.
+type liveContextRecorder struct {
+	*fakeRecorder
+}
+
+func (l liveContextRecorder) RecordMismatch(ctx context.Context, ns namespace.ID, op string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("record with an ended context: %w", err)
+	}
+
+	return l.fakeRecorder.RecordMismatch(ctx, ns, op)
+}
+
+// TestItemKeyBlobsMismatchIsRecordedAfterACancel shows that a client that
+// cancels its request just after the read does not suppress the record of a
+// mismatch.
+func TestItemKeyBlobsMismatchIsRecordedAfterACancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	mem, rec := newMemBlobs(), newFakeRecorder(nil)
+	live := liveContextRecorder{fakeRecorder: rec}
+
+	b, err := secret.NewItemKeyBlobs(cancelOnGetBlobs{memBlobs: mem, cancel: cancel}, rec, live)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	key := mustKey(t, b, nsA, secret.NewItemKeyID(), 1)
+	info := infoOf(t, key, []byte("original"))
+
+	if putErr := b.Put(t.Context(), nsA, key, []byte("original")); putErr != nil {
+		t.Fatalf("put: %v", putErr)
+	}
+
+	mem.replace(key, []byte("replaced"))
+
+	got, err := b.Get(ctx, nsA, key, info)
+	checkMismatch(t, got, err, key)
+
+	if ctx.Err() == nil {
+		t.Fatal("the store did not cancel the request")
+	}
+
+	if calls := rec.mismatchCalls(); len(calls) != 1 {
+		t.Errorf("mismatch records after a cancel = %d, want 1 (err %v)", len(calls), err)
+	}
+}
+
+// TestAttemptDeadline shows the deadline of an item key transaction: the
+// fixed attempt deadline, or an earlier deadline of the context, and a check
+// that refuses a commit at or after it.
+func TestAttemptDeadline(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, time.October, 30, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		want     time.Time
+		name     string
+		ctxAfter time.Duration
+	}{
+		{name: "no deadline of the context", ctxAfter: 0, want: start.Add(secret.ItemKeyAttemptDeadline)},
+		{name: "an earlier deadline of the context", ctxAfter: time.Minute, want: start.Add(time.Minute)},
+		{
+			name: "a later deadline of the context", ctxAfter: 2 * secret.ItemKeyAttemptDeadline,
+			want: start.Add(secret.ItemKeyAttemptDeadline),
+		},
+	}
+
+	for _, tc := range cases {
+		ctx := t.Context()
+
+		if tc.ctxAfter > 0 {
+			var cancel context.CancelFunc
+
+			ctx, cancel = context.WithDeadline(ctx, start.Add(tc.ctxAfter))
+			t.Cleanup(cancel)
+		}
+
+		if got := secret.AttemptDeadline(ctx, start); !got.Equal(tc.want) {
+			t.Errorf("%s: deadline = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	deadline := start.Add(secret.ItemKeyAttemptDeadline)
+
+	if err := secret.CheckAttemptDeadline(deadline, deadline.Add(-time.Millisecond)); err != nil {
+		t.Errorf("a commit before the deadline err = %v, want nil", err)
+	}
+
+	for _, at := range []time.Time{deadline, deadline.Add(time.Hour)} {
+		if err := secret.CheckAttemptDeadline(deadline, at); !errors.Is(err, secret.ErrItemKeyAttemptExpired) {
+			t.Errorf("a commit at %v err = %v, want ErrItemKeyAttemptExpired", at, err)
+		}
+	}
+
+	if secret.ItemKeyAttemptDeadline >= secret.ItemKeyBlobGracePeriod {
+		t.Errorf("attempt deadline %v is not shorter than the grace period %v",
+			secret.ItemKeyAttemptDeadline, secret.ItemKeyBlobGracePeriod)
 	}
 }

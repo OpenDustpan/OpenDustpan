@@ -30,8 +30,10 @@ const MaxItemKeyVersion = 1 << 20
 // ItemKeyBlobGracePeriod is how long after its write a wrapped item key blob
 // that no committed record names stays before it is garbage. A writer puts the
 // blob before it commits the record, so a blob without a record can belong to
-// a write that still commits. The period covers the attempt deadline of a
-// write, the lease of an instance and a margin.
+// a write that still commits. The store ends each item key transaction at
+// ItemKeyAttemptDeadline, so no write commits later than that after its put.
+// The period is the deadline, plus the lease of an instance, plus a margin for
+// a clock difference between the server and the blob store.
 const ItemKeyBlobGracePeriod = time.Hour
 
 // attemptLen is the length of the attempt part of a blob key: the length of
@@ -421,6 +423,15 @@ func (b *ItemKeyBlobs) Garbage(
 		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), scopeaudit.OutsideNamespace)
 	}
 
+	return filterGarbage(ctx, ns, objects, named, now)
+}
+
+// filterGarbage returns the keys of objects that are garbage in the
+// namespace ns at the time now, with the rule of Garbage. It is the one place
+// of that rule, and it does not rely on the view that listed objects.
+func filterGarbage(
+	ctx context.Context, ns namespace.ID, objects []blob.Object, named ItemKeyBlobNamer, now time.Time,
+) ([]blob.Key, error) {
 	var garbage []blob.Key
 
 	for i := range objects {

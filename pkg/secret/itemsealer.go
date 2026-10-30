@@ -268,7 +268,7 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 			MD5:     digest.MD5,
 		},
 	})
-	if err != nil || stored.ID != id || stored.Blob.Attempt != attempt {
+	if err != nil || stored.ID != id {
 		// The record was not stored, or another writer's record won. The
 		// blob of this call is an orphan. Its key is unique to this call, so
 		// the delete never removes a blob that a record names. The orphan

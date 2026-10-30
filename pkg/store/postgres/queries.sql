@@ -4447,6 +4447,11 @@ VALUES (
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING;
 
+-- name: SetTransactionTimeout :exec
+-- The attempt deadline of an item key transaction, on the clock of the
+-- database. The setting ends with the transaction. The value is milliseconds.
+SELECT set_config('transaction_timeout', sqlc.arg(timeout_ms)::text, true);
+
 -- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
        k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt

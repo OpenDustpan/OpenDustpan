@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -26,11 +27,36 @@ type itemKeyTx struct {
 var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}}
 
 // InItemKeyTx implements secret.ItemKeyStore. The transaction checks fence
-// first, and fn writes the item row and the record in it.
+// first, and fn writes the item row and the record in it. The transaction ends
+// at its attempt deadline: the database ends it with transaction_timeout, on
+// its own clock, and a check before the commit refuses a late commit.
 func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+	deadline := secret.AttemptDeadline(ctx, time.Now())
+
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return fn(itemKeyTx{q: q, fence: fence})
+		if err := q.SetTransactionTimeout(ctx, transactionTimeoutMs(deadline, time.Now())); err != nil {
+			return fmt.Errorf("set the attempt deadline: %w", err)
+		}
+
+		if err := fn(itemKeyTx{q: q, fence: fence}); err != nil {
+			return err
+		}
+
+		// Defense in depth: the database ends the transaction at the
+		// deadline too. This check stays so that a late commit fails on the
+		// clock of the server as well, whatever the setting of the database.
+		return secret.CheckAttemptDeadline(deadline, time.Now())
 	})
+}
+
+// transactionTimeoutMs returns the time from now to deadline, in whole
+// milliseconds, as the value of transaction_timeout. It is at least 1, because
+// 0 turns the timeout off.
+func transactionTimeoutMs(deadline, now time.Time) string {
+	return strconv.FormatInt(max(deadline.Sub(now).Milliseconds(), 1), 10)
 }
 
 // CreateItemKey implements secret.ItemKeyTx. It stores k unless a record for

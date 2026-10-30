@@ -64,8 +64,6 @@ func tamperedItemKeyRows() []struct{ name, update string } {
 		{"an item with a slash", `UPDATE item_keys SET item = 'a/b'`},
 		{"an item with a parent segment", `UPDATE item_keys SET item = '..'`},
 		{"an empty wrapper ID", `UPDATE item_keys SET wrapper_id = ''`},
-		{"an attempt part in upper case", `UPDATE item_keys SET blob_attempt = 'ABCDEFGHIJ0123456789'`},
-		{"an attempt part with a slash", `UPDATE item_keys SET blob_attempt = 'abcdefghij/123456789'`},
 	}
 }
 
@@ -366,8 +364,9 @@ func countKeySuffix(refs []backup.BlobRef, suffix string) int {
 }
 
 // TestItemKeyAttemptColumnRefusesABadLength proves the check of the column:
-// the database refuses an attempt part that is not 20 characters, also an
-// empty one, when a write skips every check of the store.
+// the database refuses an attempt part that is not 20 lowercase ASCII letters
+// and digits, also an empty one and one that names another path, when a write
+// skips every check of the store.
 func TestItemKeyAttemptColumnRefusesABadLength(t *testing.T) {
 	t.Parallel()
 
@@ -375,6 +374,9 @@ func TestItemKeyAttemptColumnRefusesABadLength(t *testing.T) {
 		`UPDATE item_keys SET blob_attempt = ''`,
 		`UPDATE item_keys SET blob_attempt = 'abc'`,
 		`UPDATE item_keys SET blob_attempt = 'abcdefghij01234567890'`,
+		`UPDATE item_keys SET blob_attempt = 'ABCDEFGHIJ0123456789'`,
+		`UPDATE item_keys SET blob_attempt = 'aaaaaaaaaaaaaaaaa/x1'`,
+		`UPDATE item_keys SET blob_attempt = 'aaaaaaaaaaaaaaaaa..1'`,
 	} {
 		s := openInternalTemplated(t)
 		seedItemKey(t, s)

@@ -16939,6 +16939,17 @@ func (q *Queries) SetStackVersion(ctx context.Context, arg SetStackVersionParams
 	return err
 }
 
+const setTransactionTimeout = `-- name: SetTransactionTimeout :exec
+SELECT set_config('transaction_timeout', $1::text, true)
+`
+
+// The attempt deadline of an item key transaction, on the clock of the
+// database. The setting ends with the transaction. The value is milliseconds.
+func (q *Queries) SetTransactionTimeout(ctx context.Context, timeoutMs string) error {
+	_, err := q.db.Exec(ctx, setTransactionTimeout, timeoutMs)
+	return err
+}
+
 const setWorkspaceCurrent = `-- name: SetWorkspaceCurrent :exec
 UPDATE workspaces
 SET current_state_version_id = $1, updated_at_ms = $2

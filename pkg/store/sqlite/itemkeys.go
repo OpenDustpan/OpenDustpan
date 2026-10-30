@@ -25,13 +25,29 @@ type itemKeyTx struct {
 var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}}
 
 // InItemKeyTx implements secret.ItemKeyStore. The transaction checks fence
-// first, and fn writes the item row and the record in it.
+// first, and fn writes the item row and the record in it. The transaction ends
+// at its attempt deadline. SQLite runs on the host of the server, so the clock
+// of the server is the clock of the database.
 func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	deadline := secret.AttemptDeadline(ctx, time.Now())
+
+	// The deadline of ctx ends the transaction, and database/sql rolls it
+	// back.
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return fn(itemKeyTx{q: q, fence: fence})
+		if err := fn(itemKeyTx{q: q, fence: fence}); err != nil {
+			return err
+		}
+
+		// Defense in depth: the deadline of ctx ends the transaction too. This
+		// check stays so that a late commit fails with its own error, and does
+		// not rely on the driver to see the deadline.
+		return secret.CheckAttemptDeadline(deadline, time.Now())
 	})
 }
 

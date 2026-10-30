@@ -6,6 +6,9 @@ const (
 	// SecretConsoleSession is a console session on a route that encrypts or
 	// decrypts the secrets of a stack.
 	SecretConsoleSession = "secret.console-session"
+	// SecretItemKeyAttemptExpired is a write of an item key that did not
+	// commit before its attempt deadline.
+	SecretItemKeyAttemptExpired = "secret.item-key-attempt-expired"
 	// SecretItemKeyBlobMismatch is a wrapped item key blob whose size or MD5
 	// is not the size or the MD5 that its record names.
 	SecretItemKeyBlobMismatch = "secret.item-key-blob-mismatch"
@@ -24,6 +27,11 @@ func secretSpecs() []Spec {
 		{
 			Code:    SecretConsoleSession,
 			Meaning: "a console session cannot encrypt or decrypt secrets: the request needs an access token",
+			Args:    nil,
+		},
+		{
+			Code:    SecretItemKeyAttemptExpired,
+			Meaning: "the write of the key of an item did not commit before its attempt deadline, so it rolled back",
 			Args:    nil,
 		},
 		{
