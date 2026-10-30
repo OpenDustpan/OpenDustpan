@@ -702,7 +702,7 @@ The port in `pkg/audit` that keeps the audit entries of each namespace and of th
 _Avoid_: Audit trail, activity log
 
 **Audit checkpoint**:
-An Ed25519 signature over the hash at one sequence of one audit scope. It holds the scope, the sequence, the time and the key ID. The server keeps it in the blob store under `audit-checkpoints/`. It is opt-in and needs the chain on. It is not a **Checkpoint** of the Pulumi CLI: in code and docs outside the audit log, always write "audit checkpoint".
+An Ed25519 signature over the hash at one sequence of one audit scope. It holds the scope, the sequence, the time and the key ID. The server keeps it in the blob store under `audit-checkpoints/`. Each write attempt stores a new copy under a key with a random attempt part, and the check reads every copy of a sequence. The database never decides which copy counts, and no sweep deletes a copy. It is opt-in and needs the chain on. It is not a **Checkpoint** of the Pulumi CLI: in code and docs outside the audit log, always write "audit checkpoint".
 _Avoid_: Signed head, anchor, checkpoint (alone, outside the audit log)
 
 **Log sink**:
