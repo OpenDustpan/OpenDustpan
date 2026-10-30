@@ -1532,7 +1532,7 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
 	}
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
 			ID:          r.ID.String(),
 			State:       string(backup.StateRunning),
@@ -1581,7 +1581,7 @@ func (s *Store) FinishBackup(
 
 	var out backup.Record
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		// The fence comes first: a stale claim changes nothing and learns
 		// nothing about the row.
 		if err := recordStep(ctx, q, f, nil); err != nil {

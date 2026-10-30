@@ -161,6 +161,7 @@ var notMoved = map[string]string{
 	"GET /api/audit/entries":                                                         "/api/dustpan/v1/audit/entries",
 	"GET /api/audit/entries/{sequence}":                                              "/api/dustpan/v1/audit/entries/{sequence}",
 	"GET /api/audit/check":                                                           "/api/dustpan/v1/audit/check",
+	"GET /api/audit/export":                                                          "/api/dustpan/v1/audit/export",
 	"GET /api/runners/{namespace}/pools":                                             "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
 	"POST /api/runners/{namespace}/pools":                                            "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
 	"GET /api/runners/{namespace}/pools/{pool}":                                      "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
