@@ -106,6 +106,7 @@ type Inner interface {
 	inventory.DeletedReader
 	inventory.ExpiredDeleted
 	inventory.BlobPurges
+	inventory.BlobPurgeCounter
 	inventory.SweepLocker
 	maintenance.Store
 
@@ -919,6 +920,16 @@ func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error 
 	}
 
 	return s.inner.FinishBlobPurge(ctx, tool, unitID)
+}
+
+// CountBlobPurges returns the size of the blob purge backlog, unless a fault
+// fires first.
+func (s *Store) CountBlobPurges(ctx context.Context) (inventory.BlobPurgeBacklog, error) {
+	if err := s.before(ctx, "CountBlobPurges"); err != nil {
+		return inventory.BlobPurgeBacklog{}, err
+	}
+
+	return s.inner.CountBlobPurges(ctx)
 }
 
 // TryLockSweep takes the sweep lock of the inner store without a wait, unless
