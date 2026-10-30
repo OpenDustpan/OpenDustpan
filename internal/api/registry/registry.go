@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/registry/modulecheck"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -156,6 +157,7 @@ var registryProblems = []registryProblem{
 	{registry.ErrBadSignature, errcode.RegistrySignatureInvalid, http.StatusUnprocessableEntity},
 	{registry.ErrUntrustedKey, errcode.RegistrySignatureUntrustedKey, http.StatusUnprocessableEntity},
 	{releasecheck.ErrRefused, errcode.RegistryArchiveSetRefused, http.StatusUnprocessableEntity},
+	{modulecheck.ErrRefused, errcode.RegistryModuleArchiveRefused, http.StatusUnprocessableEntity},
 	{service.ErrNoKeys, errcode.RegistryNoKeys, http.StatusUnprocessableEntity},
 	{registry.ErrKeyLimit, errcode.RegistryKeyLimit, http.StatusUnprocessableEntity},
 	{registry.ErrBadKey, errcode.RegistryKeyInvalid, http.StatusBadRequest},

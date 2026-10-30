@@ -150,6 +150,16 @@ func (a Address) Validate() error {
 	return nil
 }
 
+// Label returns the label of an address for a record or a message:
+// "module/<name>/<system>". For a provider it returns "provider/<name>".
+func (a Address) Label() string {
+	if a.Kind == KindModule {
+		return "module/" + a.Name + "/" + a.System
+	}
+
+	return "provider/" + a.Name
+}
+
 // validSlug reports whether s is in the registry-safe subset.
 func validSlug(s string) bool {
 	return len(s) <= MaxNameLength && slugRE.MatchString(s)
