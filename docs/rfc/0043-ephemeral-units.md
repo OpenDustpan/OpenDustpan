@@ -185,6 +185,22 @@ Spacelift keeps the stack.
       write without the lock and a forced write also for such a principal,
       with the hold text. So `tofu apply -lock=false` cannot write state
       under a hold.
+    - **The code has this path already, for a manual lock.** The workspace
+      service asks its port `workspace.ManualLocks` (`pkg/workspace/service.go`)
+      at each lock request and at each write without the lock. The tests
+      `TestUnlockedWriteMeetsTheManualLock` and
+      `TestStreamedUnlockedWriteMeetsTheManualLock`
+      (`pkg/workspace/manual_lock_test.go`) and
+      `TestStateWriteRefusedByAManualLock`
+      (`internal/api/tofuhttp/manual_lock_test.go`) prove that a write
+      without the lock meets the manual lock, also with both switches on.
+      The e2e step `runTofuHTTPUnlockedPushUnderManualLock`
+      (`e2e/tofu_http_test.go`) proves it with the real CLI: `tofu state
+      push -lock=false` on the HTTP backend, with both switches on, is
+      refused. E9 adds the hold as a second source behind the same check,
+      so each lock and each write without the lock that meets a manual lock
+      also meets the hold, on both routes. The same tests get a case for
+      the hold.
     - **What the hold cannot stop.** The server sees locks and state writes,
       never the calls of a tool to a cloud. A run with `-lock=false` changes
       resources first and writes state after. Under a hold, its state write
@@ -371,7 +387,8 @@ schedules step of milestone 7 does):
    the HTTP backend. With the unlocked-write switches on and a principal
    with `unit:write-unlocked`, `tofu apply -lock=false` fails at the state
    write with the hold text, and the test checks that `errored.tfstate`
-   exists. Open a destroy window, run `tofu destroy` on both workspaces,
+   exists. `tofu state push -lock=false` on the HTTP backend fails the same
+   way, as in `runTofuHTTPUnlockedPushUnderManualLock`. Open a destroy window, run `tofu destroy` on both workspaces,
    and check that each hold ends.
 
 ### Security tests (ADR 250)
@@ -413,7 +430,7 @@ Sizes and conflict groups as in RFC 111.
 | E6 | The e2e steps above, and the docs page "Destroy a stack or a workspace at a set time" | M | `e2e`, `docs` | E4, E5, E7, E8, E9 |
 | E7 | `inactiveFor`: the move of the destroy time in the transaction of each final state version, for both tools | M | `lifetime`, `state-write` | E3 |
 | E8 | The rules of a limit: the check route, and the explicit destroy times of existing units with the grace. The rule of a move. The default of `afterDestroy` (after D8 and D9) | M | `lifetime`, `store-migrations` | E4 |
-| E9 | The destroy hold. It refuses the Pulumi update create and the checkpoint import. It refuses the lock of the TFE-compatible API, `LOCK` of the HTTP backend, writes without the lock and forced writes. The destroy window, `unit.destroy-overdue`, the end of a hold | M | `lifetime`, `api-pulumi`, `api-tfe`, `store-migrations` | E8 |
+| E9 | The destroy hold. It refuses the Pulumi update create and the checkpoint import. It refuses the lock of the TFE-compatible API, `LOCK` of the HTTP backend, writes without the lock and forced writes. It uses the check of `workspace.ManualLocks`, with a hold case in each manual lock test named in decision 6a. The destroy window, `unit.destroy-overdue`, the end of a hold | M | `lifetime`, `api-pulumi`, `api-tfe`, `store-migrations` | E8 |
 
 Order: E1, E2, E3, then E4, E5 and E7 in parallel, then E8, then E9,
 then E6. E2 holds the columns of `inactiveFor` and `afterDestroy` in its
