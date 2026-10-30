@@ -1953,6 +1953,7 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 		stageBlock: nil,
 		applyGate:  nil,
 		stageCalls: 0,
+		staged:     nil,
 		applied:    0,
 		kept:       0,
 		bumped:     0,

@@ -411,12 +411,8 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 		return nil, fmt.Errorf("stage backup %s for restore %s: %w", in.BackupID, in.ID, err)
 	}
 
-	// The data decides, not the flag alone: the event names a drop that removed
-	// rows. The stage checked the row counts of the manifest against the data.
-	if stage.DropIssuerKeys && !in.CheckOnly && stage.Want.RowCounts[issuerKeysTable] > 0 {
-		if recErr := s.recordKeysDropped(ctx, sc, in); recErr != nil {
-			return nil, recErr
-		}
+	if noteErr := s.noteDroppedKeys(ctx, sc, in, stage); noteErr != nil {
+		return nil, noteErr
 	}
 
 	if stage.Strip {
@@ -444,6 +440,20 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 	}
 
 	return out, nil
+}
+
+// noteDroppedKeys records the drop of the issuer keys of another
+// installation. The data decides, not the flag alone: the event names a drop
+// that removed rows. The stage checked the row counts of the manifest against
+// the data.
+func (s *RestoreService) noteDroppedKeys(
+	ctx context.Context, sc durable.StepContext, in restoreInput, stage RestoreStageInput,
+) error {
+	if !stage.DropIssuerKeys || in.CheckOnly || stage.Want.RowCounts[issuerKeysTable] == 0 {
+		return nil
+	}
+
+	return s.recordKeysDropped(ctx, sc, in)
 }
 
 // stageInput verifies the SQL part of the backup, and returns the staging

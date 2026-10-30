@@ -88,6 +88,7 @@ func applyAdds(ns namespace.Name, keys, add []Key) ([]Key, error) {
 func moveKey(k Key, m KeyMove) Key {
 	k.State = m.To
 
+	// A key that moves to next keeps its times: only the other states stamp one.
 	switch m.To {
 	case KeyActive:
 		k.ActivatedAt = m.At
@@ -96,6 +97,8 @@ func moveKey(k Key, m KeyMove) Key {
 	case KeyDeleted:
 		k.DeletedAt = m.At
 	case KeyNext:
+		return k
+	default:
 	}
 
 	if !m.To.HoldsPrivate() {

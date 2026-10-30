@@ -1074,10 +1074,6 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
-	if svc.issuer, err = newIssuerService(svc, cfg); err != nil {
-		return nil, err
-	}
-
 	mount, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
@@ -1146,7 +1142,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 }
 
 // prepareBackground builds the metrics, the worker watch, the sweeper of
-// deleted units and the audit shipper, and sets them in cfg and svc. One
+// deleted units and the audit shipper, and sets them in cfg and svc, and builds the issuer. One
 // registry holds every metric family: the request, runtime and build families,
 // and the readiness failure counter of the probe.
 func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *audit.Shipper, error) {
@@ -1172,6 +1168,10 @@ func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *a
 	}
 
 	cfg.auditShipper = shipper
+
+	if svc.issuer, err = newIssuerService(*svc, cfg); err != nil {
+		return nil, nil, err
+	}
 
 	return observed, shipper, nil
 }
@@ -1334,17 +1334,8 @@ func newNeutralHandlers(
 	if err != nil {
 		return neutralHandlers{}, err
 	}
-	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
-	if err != nil {
-		return neutralHandlers{}, err
-	}
 
-	issuer, err := newIssuerHandler(svc, cfg, onFailure, policies)
-	if err != nil {
-		return neutralHandlers{}, err
-	}
-
-	sinks, err := newSinksHandler(svc, cfg, onFailure)
+	profileAPI, err := newProfileAPIs(svc, cfg, onFailure, policies)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1378,9 +1369,9 @@ func newNeutralHandlers(
 		audit:     entries,
 		context:   contexts,
 		runners:   runners,
-		profiles:  profiles,
-		issuer:    issuer,
-		sinks:     sinks,
+		profiles:  profileAPI.profiles,
+		issuer:    profileAPI.issuer,
+		sinks:     profileAPI.sinks,
 		jobs:      jobAPIs.jobs,
 		triggers:  triggers,
 		drift:     jobAPIs.drift,
@@ -1388,6 +1379,35 @@ func newNeutralHandlers(
 
 		sourceFilter: sourceFilter,
 	}, nil
+}
+
+// profileAPIs holds the profiles API, the issuer API and the sinks API.
+type profileAPIs struct {
+	profiles http.Handler
+	issuer   http.Handler
+	sinks    http.Handler
+}
+
+// newProfileAPIs builds the profiles API, the issuer API and the sinks API.
+func newProfileAPIs(
+	svc services, cfg *settings, onFailure func(), policies *session.Policies,
+) (profileAPIs, error) {
+	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	issuer, err := newIssuerHandler(svc, cfg, onFailure, policies)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	sinks, err := newSinksHandler(svc, cfg, onFailure)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	return profileAPIs{profiles: profiles, issuer: issuer, sinks: sinks}, nil
 }
 
 // jobAPIs holds the jobs API and the drift API, which share one job service.
@@ -1646,11 +1666,17 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	if _, issuerErr := baseurl.Parse(cfg.issuerBaseURL); issuerErr != nil {
-		return baseurl.Resolver{}, fmt.Errorf("issuer base URL: %w", issuerErr)
+	return base, errors.Join(checkIssuerBaseURL(cfg.issuerBaseURL), checkRetention(cfg.softDeleteRetention))
+}
+
+// checkIssuerBaseURL refuses an issuer base URL that does not parse. An empty
+// value is valid: the issuer then uses the public URL.
+func checkIssuerBaseURL(raw string) error {
+	if _, err := baseurl.Parse(raw); err != nil {
+		return fmt.Errorf("issuer base URL: %w", err)
 	}
 
-	return base, checkRetention(cfg.softDeleteRetention)
+	return nil
 }
 
 // checkStoreOptions refuses a missing state store, blob store or inventory
@@ -1879,6 +1905,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		access:      nil,
 		collections: nil,
 		gates:       nil,
+		issuer:      nil,
 	}, nil
 }
 
