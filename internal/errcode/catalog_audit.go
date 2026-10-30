@@ -9,6 +9,9 @@ const (
 	// AuditEntryReadUnavailable is a read of one audit entry on a server whose
 	// store cannot read one entry.
 	AuditEntryReadUnavailable = "audit.entry-read-unavailable"
+	// AuditExportNotRecorded is an export of the audit log that the server
+	// refused because it could not write the audit entry of the export.
+	AuditExportNotRecorded = "audit.export-not-recorded"
 	// AuditReasonInvalid is a reason for an audited action that is empty, too
 	// long or not plain text.
 	AuditReasonInvalid = "audit.reason-invalid"
@@ -21,6 +24,11 @@ func auditSpecs() []Spec {
 		{
 			Code:    AuditEntryReadUnavailable,
 			Meaning: "the store of the server cannot read one audit entry",
+			Args:    nil,
+		},
+		{
+			Code:    AuditExportNotRecorded,
+			Meaning: "the server could not write the audit entry of the export, so it sent no entries",
 			Args:    nil,
 		},
 		{Code: AuditReasonInvalid, Meaning: "the reason of the audited action is not valid", Args: nil},
