@@ -16,10 +16,9 @@ import (
 // checks it in the transaction of the write, as every other store does. A
 // write appends its audit entry in that transaction (fail closed).
 //
-// The store keeps no schedule clock. A schedule trigger gets its ticks from
-// a claim of due slots, with an atomic claim for each slot, so that two
-// instances fire one slot once. The schedule-trigger slice adds the port
-// method ClaimDue for it, with conformance cases first.
+// The store keeps the next slot of each enabled schedule trigger, and no clock.
+// A schedule trigger gets its ticks from a claim of due slots (ClaimDue), with
+// an atomic claim for each slot, so that two instances fire one slot once.
 type Store interface {
 	// Put creates the trigger t, or replaces the trigger of the same ID. A
 	// replace cannot change the unit or the kind. In one transaction it checks
@@ -79,6 +78,47 @@ type Store interface {
 	// it for each trigger of the unit, and for each trigger that follows the
 	// unit.
 	Delete(ctx context.Context, ns namespace.Name, id ID, fence namespace.Fence, e audit.Entry) error
+	// NextSlot returns the next slot of the schedule trigger id of the
+	// namespace ns: the first slot that a claim can still take. Put sets it to
+	// the first slot after the time of its audit entry (NextSlot of the
+	// package) when the trigger is an enabled schedule trigger and is new, was
+	// off, or has another frequency. A replace that keeps an enabled schedule
+	// trigger and its frequency keeps the slot. ClaimDue moves it. It returns
+	// the zero time for a trigger that has no slot: a trigger of another kind,
+	// a trigger that is off, and a schedule trigger that was stored before the
+	// store kept slots. It returns ErrNotFound for an unknown trigger and
+	// ErrInvalid for an ID or a namespace that fails validation. NextSlot does
+	// not check access.
+	NextSlot(ctx context.Context, ns namespace.Name, id ID) (time.Time, error)
+	// ClaimDue takes the slot c.Slot of a schedule trigger for the instance that
+	// calls. The claim and the move of the next slot to the slot after c.Slot
+	// are one step in one transaction, so of many instances that claim one slot
+	// exactly one succeeds. In that transaction it checks the fence, reads the
+	// trigger, applies CheckClaim, moves the next slot, and appends the audit
+	// entry e. The caller stamps the time and the actor on e.
+	//
+	// A claim can name a slot after the next slot: the slots between them are
+	// skipped. So after an outage one claim for the latest missed slot starts
+	// one run, and never one run for each missed slot. A schedule trigger with
+	// no recorded slot accepts any slot that the schedule gives and that is not
+	// after c.Now.
+	//
+	// It returns:
+	//   - nil for the one claim that took the slot,
+	//   - ErrNotDue when c.Slot is before the next slot,
+	//   - ErrDisabled for a trigger that is off,
+	//   - ErrNotFound for an unknown trigger,
+	//   - ErrInvalid when c fails Validate, when the trigger is not a valid
+	//     schedule trigger, and when c.Slot is not a time that its schedule gives,
+	//   - namespace.ErrFenced when the fence is stale or belongs to another
+	//     namespace than c.Namespace,
+	//   - audit.ErrInvalidEntry for an entry that fails Validate or names
+	//     another namespace.
+	//
+	// On every error the store changes nothing and appends nothing. A claim
+	// starts no job: the caller then starts the plan with Dispatcher.Scheduled,
+	// whose idempotency key is ScheduleKey. ClaimDue does not check access.
+	ClaimDue(ctx context.Context, c Claim, fence namespace.Fence, e audit.Entry) error
 }
 
 // PlanRequest is what the dispatcher gives to a Starter.

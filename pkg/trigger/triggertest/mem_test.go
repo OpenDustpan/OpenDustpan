@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
@@ -27,6 +28,7 @@ type key struct {
 type mem struct {
 	fences   map[namespace.Name]int64
 	triggers map[key]trigger.Trigger
+	next     map[key]time.Time
 	audited  map[namespace.Name]int
 	mu       sync.Mutex
 }
@@ -35,6 +37,7 @@ func newMem() *mem {
 	return &mem{
 		fences:   map[namespace.Name]int64{},
 		triggers: map[key]trigger.Trigger{},
+		next:     map[key]time.Time{},
 		audited:  map[namespace.Name]int{},
 		mu:       sync.Mutex{},
 	}
@@ -82,7 +85,19 @@ func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, e
 		return fmt.Errorf("put: %w", err)
 	}
 
+	var prev *trigger.Trigger
+
+	if old, found := m.triggers[k]; found {
+		prev = &old
+	}
+
+	slot, err := trigger.PutSlot(t, e.At, prev, m.next[k])
+	if err != nil {
+		return fmt.Errorf("put: %w", err)
+	}
+
 	m.triggers[k] = t
+	m.next[k] = slot
 	m.audited[k.ns]++
 
 	return nil
@@ -202,7 +217,64 @@ func (m *mem) Delete(_ context.Context, ns namespace.Name, id trigger.ID, fence 
 	}
 
 	delete(m.triggers, k)
+	delete(m.next, k)
 	m.audited[ns]++
+
+	return nil
+}
+
+// NextSlot implements trigger.Store.
+func (m *mem) NextSlot(_ context.Context, ns namespace.Name, id trigger.ID) (time.Time, error) {
+	if err := id.Validate(); err != nil {
+		return time.Time{}, fmt.Errorf("next slot: %w", err)
+	}
+
+	if _, err := namespace.ParseName(string(ns)); err != nil {
+		return time.Time{}, fmt.Errorf("next slot: %w: %w", trigger.ErrInvalid, err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k := key{ns: ns, id: id}
+	if _, ok := m.triggers[k]; !ok {
+		return time.Time{}, trigger.ErrNotFound
+	}
+
+	return m.next[k], nil
+}
+
+// ClaimDue implements trigger.Store.
+func (m *mem) ClaimDue(_ context.Context, c trigger.Claim, fence namespace.Fence, e audit.Entry) error {
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+
+	if err := checkEntry(e, c.Namespace); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence, c.Namespace); err != nil {
+		return err
+	}
+
+	k := key{ns: c.Namespace, id: c.Trigger}
+
+	t, ok := m.triggers[k]
+	if !ok {
+		return trigger.ErrNotFound
+	}
+
+	next, err := trigger.CheckClaim(c, t, m.next[k])
+	if err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+
+	m.next[k] = next
+	m.audited[c.Namespace]++
 
 	return nil
 }

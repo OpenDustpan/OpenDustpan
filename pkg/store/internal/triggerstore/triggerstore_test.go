@@ -363,10 +363,13 @@ type memTx struct {
 	rows    map[string]triggerstore.Row
 	upserts int
 	removes int
+	moves   int
+	// stale makes MoveNextSlot see a stored slot other than the one it is given.
+	stale bool
 }
 
 func newMemTx(triggers ...trigger.Trigger) *memTx {
-	m := &memTx{rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0}
+	m := &memTx{rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0, moves: 0, stale: false}
 	for i := range triggers {
 		m.rows[string(triggers[i].ID)] = triggerstore.RowOf(triggers[i], 1)
 	}
@@ -405,6 +408,188 @@ func (m *memTx) Remove(_ context.Context, _ namespace.Name, id trigger.ID) (bool
 	m.removes++
 
 	return ok, nil
+}
+
+func (m *memTx) MoveNextSlot(_ context.Context, _ namespace.Name, id trigger.ID, old, next int64) (bool, error) {
+	r, ok := m.rows[string(id)]
+	if !ok || m.stale || r.NextSlotMs != old {
+		return false, nil
+	}
+
+	r.NextSlotMs = next
+	m.rows[string(id)] = r
+	m.moves++
+
+	return true, nil
+}
+
+func hourly() trigger.Trigger {
+	return schedule("s1", unitA(), trigger.Frequency{Preset: "", Cron: "0 * * * *"})
+}
+
+func claimAt(slot time.Time) trigger.Claim {
+	return trigger.Claim{Namespace: "acme", Trigger: "s1", Slot: slot, Now: slot}
+}
+
+func TestApplyPutRecordsTheNextSlot(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 10, 30, 10, 20, 0, 0, time.UTC)
+	first := time.Date(2026, 10, 30, 11, 0, 0, 0, time.UTC)
+
+	tx := newMemTx()
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), at, nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	if got := triggerstore.NextSlot(tx.rows["s1"]); !got.Equal(first) {
+		t.Fatalf("next slot = %v, want %v", got, first)
+	}
+
+	// A claim moves it, and a replace with the same frequency keeps the move.
+	if _, err := triggerstore.ApplyClaim(t.Context(), tx, claimAt(first)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), at.Add(time.Minute), nil); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	if got, want := triggerstore.NextSlot(tx.rows["s1"]), first.Add(time.Hour); !got.Equal(want) {
+		t.Fatalf("next slot after a replace = %v, want %v", got, want)
+	}
+
+	off := hourly()
+	off.Enabled = false
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, off, at, nil); err != nil {
+		t.Fatalf("put off: %v", err)
+	}
+
+	if got := triggerstore.NextSlot(tx.rows["s1"]); !got.IsZero() {
+		t.Fatalf("next slot of a trigger that is off = %v, want none", got)
+	}
+}
+
+func claimSlot() time.Time { return time.Date(2026, 10, 30, 11, 0, 0, 0, time.UTC) }
+
+func TestApplyClaimMovesTheSlotOnce(t *testing.T) {
+	t.Parallel()
+
+	slot := claimSlot()
+
+	tx := newMemTx()
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), slot.Add(-time.Minute), nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	unitID, err := triggerstore.ApplyClaim(t.Context(), tx, claimAt(slot))
+	if err != nil || unitID != "a" || tx.moves != 1 {
+		t.Fatalf("claim = %q, %v, moves %d", unitID, err, tx.moves)
+	}
+
+	_, err = triggerstore.ApplyClaim(t.Context(), tx, claimAt(slot))
+	if !errors.Is(err, trigger.ErrNotDue) {
+		t.Fatalf("second claim = %v, want ErrNotDue", err)
+	}
+}
+
+func TestApplyClaimMoveThatChangesNoRow(t *testing.T) {
+	t.Parallel()
+
+	slot := claimSlot()
+
+	tx := newMemTx()
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), slot.Add(-time.Minute), nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	tx.stale = true
+
+	_, err := triggerstore.ApplyClaim(t.Context(), tx, claimAt(slot))
+	if !errors.Is(err, trigger.ErrNotDue) {
+		t.Fatalf("claim = %v, want ErrNotDue", err)
+	}
+}
+
+func TestApplyClaimUnknownTrigger(t *testing.T) {
+	t.Parallel()
+
+	_, err := triggerstore.ApplyClaim(t.Context(), newMemTx(), claimAt(claimSlot()))
+	if !errors.Is(err, trigger.ErrNotFound) {
+		t.Fatalf("claim = %v, want ErrNotFound", err)
+	}
+}
+
+func TestApplyClaimRefusesARowThatFailsItsChecks(t *testing.T) {
+	t.Parallel()
+
+	bad := schedule("s1", unitA(), trigger.Frequency{Preset: "", Cron: "* * * * *"})
+	negative := newMemTx(hourly())
+	row := negative.rows["s1"]
+	row.NextSlotMs = -5
+	negative.rows["s1"] = row
+
+	tests := []struct {
+		name string
+		tx   *memTx
+		want error
+	}{
+		{"a cron expression that is too frequent", newMemTx(bad), trigger.ErrInvalid},
+		{"a negative slot", negative, triggerstore.ErrCorrupt},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := triggerstore.ApplyClaim(t.Context(), tc.tx, claimAt(claimSlot()))
+			if !errors.Is(err, triggerstore.ErrCorrupt) || !errors.Is(err, tc.want) || tc.tx.moves != 0 {
+				t.Fatalf("claim = %v, moves %d, want ErrCorrupt and %v", err, tc.tx.moves, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckClaim(t *testing.T) {
+	t.Parallel()
+
+	fence := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	otherFence := namespace.Fence{Namespace: "other", FailoverVersion: 1}
+	bad := entryOf("acme")
+	bad.Action = ""
+
+	tests := []struct {
+		name  string
+		claim trigger.Claim
+		fence namespace.Fence
+		entry audit.Entry
+		want  error
+	}{
+		{
+			"empty claim",
+			trigger.Claim{Namespace: "", Trigger: "", Slot: time.Time{}, Now: time.Time{}},
+			fence,
+			entryOf("acme"), trigger.ErrInvalid,
+		},
+		{"fence of another namespace", claimAt(claimSlot()), otherFence, entryOf("acme"), namespace.ErrFenced},
+		{"entry of another namespace", claimAt(claimSlot()), fence, entryOf("other"), audit.ErrInvalidEntry},
+		{"invalid entry", claimAt(claimSlot()), fence, bad, audit.ErrInvalidEntry},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := triggerstore.CheckClaim(tc.claim, tc.fence, tc.entry); !errors.Is(err, tc.want) {
+				t.Errorf("CheckClaim = %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	if err := triggerstore.CheckClaim(claimAt(claimSlot()), fence, entryOf("acme")); err != nil {
+		t.Errorf("a valid claim = %v, want nil", err)
+	}
 }
 
 func TestApplyPut(t *testing.T) {

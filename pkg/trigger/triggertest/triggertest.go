@@ -3,8 +3,8 @@
 //
 // The cases run on the memory reference in this package's tests. The cases
 // for the audit entry run when the harness gives the hook that reads them.
-// The cases for the schedule clock and for the review-request-push kind wait
-// for the slices that add those ports.
+// The cases for the review-request-push kind wait for the slice that adds that
+// port.
 package triggertest
 
 import (
@@ -55,7 +55,7 @@ type suiteCase struct {
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := slices.Concat(storeCases(), dispatcherCases())
+	cases := slices.Concat(storeCases(), claimCases(), dispatcherCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -7390,7 +7390,8 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 
 const getTrigger = `-- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.id = $2
@@ -7417,6 +7418,7 @@ type GetTriggerRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTriggerRow, error) {
@@ -7438,6 +7440,7 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 		&i.LastSaverID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.NextSlotMs,
 	)
 	return i, err
 }
@@ -10476,7 +10479,8 @@ func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]Durable
 
 const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -10499,6 +10503,7 @@ type ListEnabledFollowTriggersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace string) ([]ListEnabledFollowTriggersRow, error) {
@@ -10526,6 +10531,7 @@ func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace strin
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -13879,7 +13885,8 @@ func (q *Queries) ListTempAdminsAwaitingReview(ctx context.Context) ([]TempAdmin
 
 const listTriggerFollowers = `-- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -13911,6 +13918,7 @@ type ListTriggerFollowersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollowersParams) ([]ListTriggerFollowersRow, error) {
@@ -13943,6 +13951,7 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -13956,7 +13965,8 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 
 const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.unit_tool = $2 AND t.unit_id = $3
@@ -13985,6 +13995,7 @@ type ListTriggersOfUnitRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnitParams) ([]ListTriggersOfUnitRow, error) {
@@ -14012,6 +14023,7 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -14793,6 +14805,39 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 		arg.NamespaceID,
 		arg.ID,
 		arg.Base,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const moveTriggerNextSlot = `-- name: MoveTriggerNextSlot :execrows
+UPDATE triggers
+SET next_slot_ms = $1::bigint
+WHERE triggers.id = $2
+  AND triggers.kind = 'schedule' AND triggers.enabled = 1
+  AND triggers.next_slot_ms = $3::bigint
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $4)
+`
+
+type MoveTriggerNextSlotParams struct {
+	NextSlotMs    int64
+	ID            string
+	OldNextSlotMs int64
+	Namespace     string
+}
+
+// Moves the next slot of a schedule trigger from the value that the caller read
+// to the value after the claim. The compare on the old value is a layer of its
+// own: the transaction of the caller already serializes the writes of the
+// namespace, and this statement still changes no row when the slot moved.
+func (q *Queries) MoveTriggerNextSlot(ctx context.Context, arg MoveTriggerNextSlotParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveTriggerNextSlot,
+		arg.NextSlotMs,
+		arg.ID,
+		arg.OldNextSlotMs,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err
@@ -18092,19 +18137,20 @@ func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonP
 const upsertTrigger = `-- name: UpsertTrigger :execrows
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 )
 SELECT
     n.id, $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10::bigint,
-    $11, $12, $13::bigint, $14::bigint
+    $11, $12, $13::bigint, $14::bigint,
+    $15::bigint
 FROM namespaces AS n
-WHERE n.name = $15
+WHERE n.name = $16
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
     last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
-    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms)
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms), next_slot_ms = excluded.next_slot_ms
 `
 
 type UpsertTriggerParams struct {
@@ -18122,6 +18168,7 @@ type UpsertTriggerParams struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 	Namespace        string
 }
 
@@ -18143,6 +18190,7 @@ func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (i
 		arg.LastSaverID,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.NextSlotMs,
 		arg.Namespace,
 	)
 	if err != nil {
