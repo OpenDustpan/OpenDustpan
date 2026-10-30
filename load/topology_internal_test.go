@@ -39,7 +39,14 @@ func TestInstancesShareStorage(t *testing.T) {
 	ctx := t.Context()
 	ns := "load-topology"
 
-	served, cleanup, err := openServers(ctx, slog.New(slog.DiscardHandler), t.TempDir(), ns)
+	settings, err := newBlobSettings(blobsFS, false, t.TempDir())
+	if err != nil {
+		t.Fatalf("blob settings: %v", err)
+	}
+
+	setup := serverSetup{blobs: settings, oneInstance: false, backup: false}
+
+	served, cleanup, err := openServers(ctx, slog.New(slog.DiscardHandler), ns, setup)
 	if err != nil {
 		t.Fatalf("open servers: %v", err)
 	}
