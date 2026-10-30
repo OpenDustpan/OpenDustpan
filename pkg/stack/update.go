@@ -424,8 +424,7 @@ type Checkpoint struct {
 	Invalid bool
 	// BlobKey names the gzip content in the blob store:
 	// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>.
-	// A row that an earlier release wrote can end in the sequence alone. The
-	// store refuses a write without it, and a write with another key.
+	// The store refuses a write without it, and a write with another key.
 	BlobKey blob.Key
 	// BlobSize is the size of the stored gzip bytes.
 	BlobSize int64

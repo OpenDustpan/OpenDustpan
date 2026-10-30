@@ -313,7 +313,7 @@ func CheckCheckpointBlobKey(ns namespace.ID, stackID ID, update UpdateID, key bl
 	}
 
 	if _, ok := parseCheckpointName(num); !ok {
-		return fmt.Errorf("%w: key does not end in a number or a number with an attempt ID", ErrCheckpointKey)
+		return fmt.Errorf("%w: key does not end in a number and an attempt ID", ErrCheckpointKey)
 	}
 
 	if _, err := blob.ParseKey(key.String()); err != nil {
@@ -323,17 +323,14 @@ func CheckCheckpointBlobKey(ns namespace.ID, stackID ID, update UpdateID, key bl
 	return nil
 }
 
-// Attempt ID bounds of a checkpoint key name. The writer makes 20 characters;
-// a reader accepts this range so that a longer ID of a later release stays
-// readable.
+// Attempt ID bounds of a checkpoint key name.
 const (
 	minAttemptIDLength = 8
 	maxAttemptIDLength = 64
 )
 
-// checkpointName is the last part of a checkpoint blob key: a sequence number
-// with an optional attempt ID, "<n>" (the layout of the first releases) or
-// "<n>-<attempt ID>".
+// checkpointName is the last part of a checkpoint blob key:
+// "<n>-<attempt ID>", a sequence number and the ID of the write attempt.
 type checkpointName struct {
 	number  uint64
 	attempt string
@@ -341,26 +338,25 @@ type checkpointName struct {
 
 // parseCheckpointName splits the last part of a checkpoint blob key. It
 // accepts only decimal digits for the number and lowercase letters and
-// digits for the attempt ID, and it reports false for any other text.
+// digits for the attempt ID, and it reports false for any other text,
+// also for a name without an attempt ID.
 func parseCheckpointName(name string) (checkpointName, bool) {
+	none := checkpointName{number: 0, attempt: ""}
+
 	numPart, attempt, hasAttempt := strings.Cut(name, "-")
 
 	number, err := strconv.ParseUint(numPart, 10, 63)
-	if err != nil || strconv.FormatUint(number, 10) != numPart {
-		return checkpointName{number: 0, attempt: ""}, false
-	}
-
-	if !hasAttempt {
-		return checkpointName{number: number, attempt: ""}, true
+	if err != nil || strconv.FormatUint(number, 10) != numPart || !hasAttempt {
+		return none, false
 	}
 
 	if len(attempt) < minAttemptIDLength || len(attempt) > maxAttemptIDLength {
-		return checkpointName{number: 0, attempt: ""}, false
+		return none, false
 	}
 
 	for _, r := range attempt {
 		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
-			return checkpointName{number: 0, attempt: ""}, false
+			return none, false
 		}
 	}
 

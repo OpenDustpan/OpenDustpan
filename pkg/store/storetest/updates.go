@@ -439,7 +439,7 @@ func (f historyFixture) putCheckpoint(t *testing.T, u stack.Update, body string)
 	t.Helper()
 
 	cp := newCheckpoint(u, 0, body)
-	cp.BlobKey = checkpointKey(t, f.s, u, 0)
+	cp.BlobKey = checkpointKey(t, f.s, u, 0, defaultAttempt)
 
 	if _, err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
 		t.Fatalf("put checkpoint of %s: %v", u.ID, err)
@@ -1291,10 +1291,13 @@ type keyStore interface {
 	GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error)
 }
 
-// checkpointKey returns the blob key of a save of u with seq, for the stack of
-// u: namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>, the
-// layout of the first releases. attemptKey adds the attempt ID.
-func checkpointKey(t *testing.T, s keyStore, u stack.Update, seq int64) blob.Key {
+// defaultAttempt is the attempt ID that fixture.blobKey puts in a key.
+const defaultAttempt = "attempt0000"
+
+// checkpointKey returns the blob key of a save of u with seq and the attempt
+// ID, for the stack of u:
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>.
+func checkpointKey(t *testing.T, s keyStore, u stack.Update, seq int64, attempt string) blob.Key {
 	t.Helper()
 
 	st, err := s.GetStack(t.Context(), u.Ref)
@@ -1304,7 +1307,9 @@ func checkpointKey(t *testing.T, s keyStore, u stack.Update, seq int64) blob.Key
 
 	prefix := stackBlobPrefix(t, s, u.Ref.Namespace)
 
-	key, err := blob.ParseKey(prefix + st.ID.String() + "/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10))
+	key, err := blob.ParseKey(
+		prefix + st.ID.String() + "/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10) + "-" + attempt,
+	)
 	if err != nil {
 		t.Fatalf("parse blob key: %v", err)
 	}
@@ -1316,20 +1321,15 @@ func checkpointKey(t *testing.T, s keyStore, u stack.Update, seq int64) blob.Key
 func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
 	t.Helper()
 
-	return checkpointKey(t, f.s, u, seq)
+	return checkpointKey(t, f.s, u, seq, defaultAttempt)
 }
 
 // attemptKey returns the blob key of the save of u with seq that the attempt
-// wrote: the key of f.blobKey with the attempt ID after the number.
+// wrote.
 func (f fixture) attemptKey(t *testing.T, u stack.Update, seq int64, attempt string) blob.Key {
 	t.Helper()
 
-	key, err := blob.ParseKey(f.blobKey(t, u, seq).String() + "-" + attempt)
-	if err != nil {
-		t.Fatalf("parse blob key: %v", err)
-	}
-
-	return key
+	return checkpointKey(t, f.s, u, seq, attempt)
 }
 
 // attemptCheckpoint returns a checkpoint of u under the key of one write
@@ -3276,15 +3276,16 @@ func testCheckpointKeyBelongsToUpdate(t *testing.T, f fixture) {
 	update := u.ID.String()
 
 	keys := map[string]string{
-		"another namespace":             "namespaces/ns-other/pulumi/" + st.ID.String() + "/" + update + "/1",
-		"no namespace directory":        "pulumi/" + st.ID.String() + "/" + update + "/1",
-		"a directory of the namespace":  nsDir + "tofu/" + st.ID.String() + "/" + update + "/1",
-		"same namespace, another stack": prefix + "other-stack/" + update + "/1",
-		"same stack, another update":    prefix + st.ID.String() + "/" + other.ID.String() + "/1",
+		"another namespace":             "namespaces/ns-other/pulumi/" + st.ID.String() + "/" + update + "/1-attempt0000",
+		"no namespace directory":        "pulumi/" + st.ID.String() + "/" + update + "/1-attempt0000",
+		"a directory of the namespace":  nsDir + "tofu/" + st.ID.String() + "/" + update + "/1-attempt0000",
+		"same namespace, another stack": prefix + "other-stack/" + update + "/1-attempt0000",
+		"same stack, another update":    prefix + st.ID.String() + "/" + other.ID.String() + "/1-attempt0000",
 		"a journal batch":               prefix + st.ID.String() + "/" + update + "/journal/1",
-		"a nested key":                  prefix + st.ID.String() + "/" + update + "/1/2",
-		"no number":                     prefix + st.ID.String() + "/" + update + "/x",
+		"a nested key":                  prefix + st.ID.String() + "/" + update + "/1-attempt0000/2",
+		"no number":                     prefix + st.ID.String() + "/" + update + "/x-attempt0000",
 		"the placeholder":               string(placeholderKey(u, 1)),
+		"no attempt ID":                 prefix + st.ID.String() + "/" + update + "/1",
 	}
 
 	for name, key := range keys {
