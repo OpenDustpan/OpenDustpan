@@ -334,6 +334,10 @@ type Tx interface {
 	// to next, in Unix milliseconds, only when it is old now. It reports whether
 	// it changed a row.
 	MoveNextSlot(ctx context.Context, ns namespace.Name, id trigger.ID, old, next int64) (bool, error)
+	// Now returns the time of the clock of the store, read in the transaction.
+	// PostgreSQL gives the clock of the database, so every instance agrees on it.
+	// SQLite has one process, and gives its clock.
+	Now(ctx context.Context) (time.Time, error)
 }
 
 // ApplyPut writes t in tx, stamped with at. It refuses a replace that changes
@@ -373,7 +377,15 @@ func ApplyPut(ctx context.Context, tx Tx, t trigger.Trigger, at time.Time, onSki
 		prev = &stored
 	}
 
-	slot, slotErr := trigger.PutSlot(t, at, prev, fromMs(old.NextSlotMs))
+	// The first slot comes from the clock of the store, and not from the time of
+	// the audit entry that the caller stamped: one instance with a wrong clock
+	// must not choose the slot of a schedule.
+	clock, err := tx.Now(ctx)
+	if err != nil {
+		return err
+	}
+
+	slot, slotErr := trigger.PutSlot(t, clock, prev, fromMs(old.NextSlotMs))
 	if slotErr != nil {
 		return fmt.Errorf("put trigger: %w", slotErr)
 	}
@@ -446,7 +458,12 @@ func ApplyClaim(ctx context.Context, tx Tx, c trigger.Claim) (string, error) {
 		return "", fmt.Errorf("claim trigger: %w", err)
 	}
 
-	next, err := trigger.CheckClaim(c, t, NextSlot(row))
+	clock, err := tx.Now(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	next, err := trigger.CheckClaim(c, t, NextSlot(row), clock)
 	if err != nil {
 		return "", fmt.Errorf("claim trigger: %w", err)
 	}

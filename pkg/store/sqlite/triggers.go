@@ -285,6 +285,12 @@ func (x triggerTx) Upsert(ctx context.Context, r triggerstore.Row) error {
 	return nil
 }
 
+// Now implements triggerstore.Tx. A SQLite store has one process, so the clock of
+// the process is the clock of the database.
+func (triggerTx) Now(_ context.Context) (time.Time, error) {
+	return time.Now().UTC(), nil
+}
+
 // Remove implements triggerstore.Tx.
 func (x triggerTx) Remove(ctx context.Context, ns namespace.Name, id trigger.ID) (bool, error) {
 	n, err := x.q.DeleteTrigger(ctx, db.DeleteTriggerParams{Namespace: ns.String(), ID: string(id)})

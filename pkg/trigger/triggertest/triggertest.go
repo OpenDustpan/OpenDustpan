@@ -32,7 +32,7 @@ import (
 // number of audit entries of the namespace. StoreRaw is another optional hook:
 // it writes tr into the store without Validate and without the cycle check, as
 // a row of another version or a restore would. A case that needs it skips when
-// it is nil.
+// it is nil. SetNextSlot is required by the claim cases.
 type Harness struct {
 	Store      trigger.Store
 	Dispatcher trigger.Dispatcher
@@ -40,6 +40,11 @@ type Harness struct {
 	Namespace  func(t *testing.T, name string) namespace.Fence
 	Audited    func(t *testing.T, ns string) int
 	StoreRaw   func(t *testing.T, tr trigger.Trigger)
+	// SetNextSlot writes the next slot of the enabled schedule trigger id of ns
+	// without any check, as if the time since its save had passed. The claim cases
+	// use it: the store reads its own clock, which a case cannot move, so a case
+	// moves the stored slot into the past instead. It must be set.
+	SetNextSlot func(t *testing.T, ns namespace.Name, id trigger.ID, slot time.Time)
 }
 
 // Factory returns a fresh harness for one subtest. The dispatcher of the

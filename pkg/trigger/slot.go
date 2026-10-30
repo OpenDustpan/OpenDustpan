@@ -133,22 +133,26 @@ func scanSlots(t Trigger, start, now time.Time) (time.Time, bool, error) {
 	return latest, !latest.IsZero(), nil
 }
 
-// Claim names one slot of a schedule trigger that an instance takes.
+// MaxClaimSkew is how far after the clock of the store a claim may name a slot.
+// It is the room that two clocks need to agree. A slot later than the clock of
+// the store plus MaxClaimSkew is not due, so one instance with a clock that runs
+// ahead cannot move the next slot into the future and stop the schedule.
+const MaxClaimSkew = 2 * time.Minute
+
+// Claim names one slot of a schedule trigger that an instance takes. The store
+// decides from its own clock whether the slot is due: the caller gives no time.
 type Claim struct {
 	// Namespace is the namespace of the trigger.
 	Namespace namespace.Name
 	// Trigger is the ID of the schedule trigger.
 	Trigger ID
-	// Slot is the slot to take. It is a time that the schedule gives
-	// (IsSlot), and it is not after Now.
+	// Slot is the slot to take. It is a time that the schedule gives (IsSlot).
 	Slot time.Time
-	// Now is the time of the claim. The instance that claims sets it.
-	Now time.Time
 }
 
 // Validate returns an error that wraps ErrInvalid when c is not valid. The
-// store checks that Slot is a time that the schedule of the stored trigger
-// gives.
+// store checks that Slot is a time that the schedule of the stored trigger gives
+// and that it is not later than its clock plus MaxClaimSkew.
 func (c Claim) Validate() error {
 	if _, err := namespace.ParseName(string(c.Namespace)); err != nil {
 		return fmt.Errorf("%w: namespace: %w", ErrInvalid, err)
@@ -159,24 +163,23 @@ func (c Claim) Validate() error {
 	}
 
 	switch {
-	case c.Slot.IsZero() || c.Now.IsZero():
-		return fmt.Errorf("%w: a claim names a slot and the time of the claim", ErrInvalid)
+	case c.Slot.IsZero():
+		return fmt.Errorf("%w: a claim names a slot", ErrInvalid)
 	case !c.Slot.Equal(c.Slot.UTC().Truncate(time.Minute)):
 		return fmt.Errorf("%w: a slot is a whole minute", ErrInvalid)
-	case c.Slot.After(c.Now):
-		return fmt.Errorf("%w: a slot is not after the time of the claim", ErrInvalid)
 	default:
 		return nil
 	}
 }
 
 // CheckClaim applies the rules of a claim to the stored trigger t, whose next
-// slot is next. It returns the slot that follows c.Slot, which becomes the next
-// slot. It returns:
+// slot is next, at the time now of the clock of the store. It returns the slot
+// that follows c.Slot, which becomes the next slot. It returns:
 //   - ErrInvalid when c fails Validate, when t is not a valid schedule trigger,
 //     when next is the zero time (an enabled schedule trigger always has a
 //     slot), and when c.Slot is not a time that the schedule gives,
 //   - ErrDisabled when t is off,
+//   - ErrInvalid when c.Slot is later than now plus MaxClaimSkew,
 //   - ErrNotDue when c.Slot is before next: a claim took that slot or a later
 //     slot already.
 //
@@ -184,7 +187,7 @@ func (c Claim) Validate() error {
 // that it reads in that transaction, so all adapters apply one rule. It is a
 // layer of its own: the dispatcher checks the slot again before it starts a
 // plan, and the idempotency key of the start is a third layer.
-func CheckClaim(c Claim, t Trigger, next time.Time) (time.Time, error) {
+func CheckClaim(c Claim, t Trigger, next, now time.Time) (time.Time, error) {
 	if err := c.Validate(); err != nil {
 		return time.Time{}, err
 	}
@@ -214,6 +217,13 @@ func CheckClaim(c Claim, t Trigger, next time.Time) (time.Time, error) {
 
 	if !IsSlot(t, c.Slot) {
 		return time.Time{}, fmt.Errorf("%w: the time is not a slot of the schedule", ErrInvalid)
+	}
+
+	// Defense in depth: the clock is the one of the store, in the transaction of
+	// the claim. A slot far in the future would move the next slot there and stop
+	// the schedule, so the claim fails closed, whatever the caller says.
+	if c.Slot.After(now.Add(MaxClaimSkew)) {
+		return time.Time{}, fmt.Errorf("%w: the slot is later than the clock of the store", ErrInvalid)
 	}
 
 	if c.Slot.Before(next) {

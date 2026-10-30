@@ -97,6 +97,13 @@ type Store interface {
 	// trigger, applies CheckClaim, moves the next slot, and appends the audit
 	// entry e. The caller stamps the time and the actor on e.
 	//
+	// The store decides from its own clock whether a slot is due: it refuses a
+	// slot later than that clock plus MaxClaimSkew with ErrInvalid. PostgreSQL
+	// reads the clock of the database in the transaction of the claim, so an
+	// instance with a wrong clock cannot move the next slot into the future. Put
+	// takes the first slot after the same clock, and not after the time of its
+	// audit entry.
+	//
 	// A claim can name a slot after the next slot: the slots between them are
 	// skipped. So after an outage one claim for the latest missed slot starts
 	// one run, and never one run for each missed slot.

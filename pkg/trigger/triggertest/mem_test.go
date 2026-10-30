@@ -91,7 +91,7 @@ func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, e
 		prev = &old
 	}
 
-	slot, err := trigger.PutSlot(t, e.At, prev, m.next[k])
+	slot, err := trigger.PutSlot(t, time.Now().UTC(), prev, m.next[k])
 	if err != nil {
 		return fmt.Errorf("put: %w", err)
 	}
@@ -268,7 +268,7 @@ func (m *mem) ClaimDue(_ context.Context, c trigger.Claim, fence namespace.Fence
 		return trigger.ErrNotFound
 	}
 
-	next, err := trigger.CheckClaim(c, t, m.next[k])
+	next, err := trigger.CheckClaim(c, t, m.next[k], time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("claim: %w", err)
 	}
@@ -347,6 +347,14 @@ func TestConformance(t *testing.T) {
 				return namespace.Fence{Namespace: namespace.Name(name), FailoverVersion: 1}
 			},
 			StoreRaw: func(_ *testing.T, tr trigger.Trigger) { m.storeRaw(tr) },
+			SetNextSlot: func(t *testing.T, ns namespace.Name, id trigger.ID, slot time.Time) {
+				t.Helper()
+
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				m.next[key{ns: ns, id: id}] = slot
+			},
 			Audited: func(_ *testing.T, ns string) int {
 				m.mu.Lock()
 				defer m.mu.Unlock()

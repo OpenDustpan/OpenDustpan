@@ -268,6 +268,16 @@ func (x triggerTx) Upsert(ctx context.Context, r triggerstore.Row) error {
 	return nil
 }
 
+// Now implements triggerstore.Tx. It reads the clock of the database.
+func (x triggerTx) Now(ctx context.Context) (time.Time, error) {
+	ms, err := storeNow(ctx, x.q)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return time.UnixMilli(ms).UTC(), nil
+}
+
 // Remove implements triggerstore.Tx.
 func (x triggerTx) Remove(ctx context.Context, ns namespace.Name, id trigger.ID) (bool, error) {
 	n, err := x.q.DeleteTrigger(ctx, db.DeleteTriggerParams{Namespace: ns.String(), ID: string(id)})

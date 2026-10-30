@@ -179,8 +179,8 @@ func TestLatestSlot(t *testing.T) {
 	}
 }
 
-func claim(slot, now time.Time) trigger.Claim {
-	return trigger.Claim{Namespace: "acme", Trigger: "s1", Slot: slot, Now: now}
+func claim(slot time.Time) trigger.Claim {
+	return trigger.Claim{Namespace: "acme", Trigger: "s1", Slot: slot}
 }
 
 func TestClaimValidate(t *testing.T) {
@@ -193,14 +193,11 @@ func TestClaimValidate(t *testing.T) {
 		c    trigger.Claim
 		ok   bool
 	}{
-		{"valid", claim(slot, slot), true},
-		{"now later than the slot", claim(slot, slot.Add(time.Hour)), true},
-		{"slot after now", claim(slot.Add(time.Minute), slot), false},
-		{"zero slot", claim(time.Time{}, slot), false},
-		{"zero now", claim(slot, time.Time{}), false},
-		{"not a whole minute", claim(slot.Add(time.Second), slot.Add(time.Hour)), false},
-		{"bad ID", trigger.Claim{Namespace: "acme", Trigger: "No Way", Slot: slot, Now: slot}, false},
-		{"bad namespace", trigger.Claim{Namespace: "No Way", Trigger: "s1", Slot: slot, Now: slot}, false},
+		{"valid", claim(slot), true},
+		{"zero slot", claim(time.Time{}), false},
+		{"not a whole minute", claim(slot.Add(time.Second)), false},
+		{"bad ID", trigger.Claim{Namespace: "acme", Trigger: "No Way", Slot: slot}, false},
+		{"bad namespace", trigger.Claim{Namespace: "No Way", Trigger: "s1", Slot: slot}, false},
 	}
 
 	for _, tc := range tests {
@@ -228,38 +225,48 @@ func TestCheckClaim(t *testing.T) {
 	slot := utc(2026, 10, 30, 10, 0)
 	next := slot.Add(time.Hour)
 	later := slot.Add(5 * time.Hour)
+	far := utc(2100, 1, 1, 0, 0)
 
 	tests := []struct {
 		name    string
 		c       trigger.Claim
 		tr      trigger.Trigger
 		stored  time.Time
+		now     time.Time
 		want    time.Time
 		wantErr error
 	}{
-		{"due", claim(slot, slot), hourly, slot, next, nil},
-		{"a later slot skips", claim(later, later), hourly, slot, later.Add(time.Hour), nil},
-		{"no stored slot", claim(slot, slot), hourly, time.Time{}, time.Time{}, trigger.ErrInvalid},
-		{"taken", claim(slot, next), hourly, next, time.Time{}, trigger.ErrNotDue},
-		{"off", claim(slot, slot), off, slot, time.Time{}, trigger.ErrDisabled},
+		{"due", claim(slot), hourly, slot, slot, next, nil},
+		{"due inside the skew", claim(slot), hourly, slot, slot.Add(-trigger.MaxClaimSkew), next, nil},
+		{"a later slot skips", claim(later), hourly, slot, later, later.Add(time.Hour), nil},
+		{"no stored slot", claim(slot), hourly, time.Time{}, slot, time.Time{}, trigger.ErrInvalid},
+		{"taken", claim(slot), hourly, next, next, time.Time{}, trigger.ErrNotDue},
+		{"off", claim(slot), off, slot, slot, time.Time{}, trigger.ErrDisabled},
 		{
 			"not a slot",
-			claim(slot.Add(time.Minute), slot.Add(time.Minute)),
+			claim(slot.Add(time.Minute)),
 			hourly,
 			slot,
+			slot.Add(time.Hour),
 			time.Time{},
 			trigger.ErrInvalid,
 		},
-		{"other trigger", claim(slot, slot), other, slot, time.Time{}, trigger.ErrInvalid},
-		{"follows", claim(slot, slot), follows("s1", "a", "b"), slot, time.Time{}, trigger.ErrInvalid},
-		{"future slot", claim(next, slot), hourly, slot, time.Time{}, trigger.ErrInvalid},
+		{"other trigger", claim(slot), other, slot, slot, time.Time{}, trigger.ErrInvalid},
+		{"follows", claim(slot), follows("s1", "a", "b"), slot, slot, time.Time{}, trigger.ErrInvalid},
+		{"slot after the clock of the store", claim(next), hourly, slot, slot, time.Time{}, trigger.ErrInvalid},
+		{"a slot in 2100 with an old store clock", claim(far), hourly, slot, slot, time.Time{}, trigger.ErrInvalid},
+		{
+			"just past the skew", claim(slot), hourly, slot, slot.Add(-trigger.MaxClaimSkew - time.Minute),
+			time.Time{},
+			trigger.ErrInvalid,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := trigger.CheckClaim(tc.c, tc.tr, tc.stored)
+			got, err := trigger.CheckClaim(tc.c, tc.tr, tc.stored, tc.now)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) || !got.IsZero() {
 					t.Errorf("CheckClaim = %v, %v, want %v", got, err, tc.wantErr)

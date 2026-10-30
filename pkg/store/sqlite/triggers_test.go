@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -35,6 +36,9 @@ const insertTriggerSQL = `INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
     last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 ) SELECT n.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM namespaces AS n WHERE n.name = ?`
+
+// setSlotSQL moves the next slot of a trigger, as the time since its save would.
+const setSlotSQL = `UPDATE triggers SET next_slot_ms = ? WHERE id = ? AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?)`
 
 // plantedSlot returns the next slot of a planted row: an enabled schedule trigger
 // needs one, and the table refuses a row without it.
@@ -85,6 +89,13 @@ func triggerHarness(t *testing.T, starter trigger.Starter) triggertest.Harness {
 			t.Helper()
 
 			return len(allAuditEntries(t, s, namespace.Name(ns)))
+		},
+		SetNextSlot: func(t *testing.T, ns namespace.Name, id trigger.ID, slot time.Time) {
+			t.Helper()
+
+			if err := s.ExecForTest(t.Context(), setSlotSQL, slot.UnixMilli(), string(id), ns.String()); err != nil {
+				t.Fatalf("set the next slot of %s: %v", id, err)
+			}
 		},
 		StoreRaw: func(t *testing.T, tr trigger.Trigger) {
 			t.Helper()
