@@ -43,6 +43,9 @@ type RecorderHarness struct {
 	// Retention is the retention that the recorder applies to new plans and
 	// log versions.
 	Retention history.RetentionSettings
+	// Sealer is the item sealer under the recorder. The cases of the chunk keys
+	// use its item key function to reserve a log version.
+	Sealer secret.ItemSealer
 }
 
 // RecorderParts are the stores of one database that NewRecorderHarness builds
@@ -128,7 +131,7 @@ func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	return RecorderHarness{
 		Harness: parts.Harness, Recorder: rec, Reader: reader, Records: parts.Records, Blobs: parts.Blobs,
 		ItemKeys:  parts.ItemKeys,
-		Retention: retention,
+		Retention: retention, Sealer: sealer,
 	}
 }
 
@@ -155,7 +158,7 @@ func RunRecorder(t *testing.T, newHarness RecorderFactory) {
 	t.Helper()
 
 	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planReadCases(),
-		deliveryCases(), keyTxCases())
+		deliveryCases(), keyTxCases(), chunkKeyCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -68,7 +68,8 @@ func (m *memStore) Publish(_ context.Context, r registry.Release, _ namespace.Fe
 	defer m.mu.Unlock()
 
 	// The contract of the port: the key is trusted at the time of the write.
-	if !slices.ContainsFunc(m.keys[r.Address.Namespace], func(k registry.KeyRecord) bool {
+	// A module has no signature and no key.
+	if r.KeyFingerprint != "" && !slices.ContainsFunc(m.keys[r.Address.Namespace], func(k registry.KeyRecord) bool {
 		return k.Key.Fingerprint == r.KeyFingerprint
 	}) {
 		return registry.ErrKeyNotFound
@@ -284,8 +285,16 @@ func config(store *memStore, blobs blob.Store, ns nsStub, at time.Time) service.
 	v := pgpverify.Verifier{Now: func() time.Time { return at }}
 
 	return service.Config{
-		Store: store, Keys: store, Verifier: v, Inspector: v, Blobs: blobs, Namespaces: ns,
-		Now: func() time.Time { return at }, MaxArchiveBytes: 1 << 20, MaxReleaseBytes: 3 << 20,
+		Store:                 store,
+		Keys:                  store,
+		Verifier:              v,
+		Inspector:             v,
+		Blobs:                 blobs,
+		Namespaces:            ns,
+		Now:                   func() time.Time { return at },
+		MaxArchiveBytes:       1 << 20,
+		MaxReleaseBytes:       3 << 20,
+		MaxModuleArchiveBytes: 0,
 	}
 }
 

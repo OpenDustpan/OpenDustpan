@@ -389,3 +389,61 @@ func TestScopedWorksWithDeleteRetried(t *testing.T) {
 		t.Fatalf("delete retried: %v", err)
 	}
 }
+
+// TestNewScopedPrefixRefusesAPrefixThatIsNotADirectory proves that the
+// constructor fails closed on a prefix that is empty, has no trailing slash or
+// holds a segment that is not valid.
+func TestNewScopedPrefixRefusesAPrefixThatIsNotADirectory(t *testing.T) {
+	t.Parallel()
+
+	for _, prefix := range []string{"", "/", "store-checks", "store-checks/../", "store-checks//", "Store-Checks/x/", "a b/"} {
+		t.Run(prefix, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := blob.NewScopedPrefix(newMemStore(), prefix); !errors.Is(err, blob.ErrInvalidKey) {
+				t.Fatalf("NewScopedPrefix(%q) err = %v, want ErrInvalidKey", prefix, err)
+			}
+		})
+	}
+
+	if _, err := blob.NewScopedPrefix(nil, "store-checks/chk-x/"); !errors.Is(err, blob.ErrNilStore) {
+		t.Fatalf("NewScopedPrefix(nil) err = %v, want ErrNilStore", err)
+	}
+}
+
+// TestScopedPrefixStopsAKeyOutsideThePrefix proves that a view of one
+// directory refuses a key of a sibling directory, also when the sibling name
+// starts with the same characters.
+func TestScopedPrefixStopsAKeyOutsideThePrefix(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+
+	v, err := blob.NewScopedPrefix(store, "store-checks/chk-a/")
+	if err != nil {
+		t.Fatalf("new scoped: %v", err)
+	}
+
+	for _, key := range []blob.Key{"store-checks/chk-a", "store-checks/chk-ab/x", "store-checks/chk-b/x", "namespaces/ns-x/x", "x"} {
+		if putErr := v.Put(t.Context(), key, strings.NewReader("x")); !errors.Is(putErr, blob.ErrOutOfScope) {
+			t.Errorf("Put(%q) err = %v, want ErrOutOfScope", key, putErr)
+		}
+
+		if delErr := v.Delete(t.Context(), key); !errors.Is(delErr, blob.ErrOutOfScope) {
+			t.Errorf("Delete(%q) err = %v, want ErrOutOfScope", key, delErr)
+		}
+	}
+
+	if len(store.objects) != 0 {
+		t.Fatalf("store holds %d objects, want none", len(store.objects))
+	}
+
+	inside, err := v.Key("x")
+	if err != nil || inside != "store-checks/chk-a/x" {
+		t.Fatalf("Key(x) = %q, %v", inside, err)
+	}
+
+	if err := v.Put(t.Context(), inside, strings.NewReader("x")); err != nil {
+		t.Fatalf("put inside: %v", err)
+	}
+}

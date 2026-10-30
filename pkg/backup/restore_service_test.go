@@ -97,6 +97,12 @@ type restoreServiceLive struct {
 	// applyErr is the error of ApplyStaging, to test a refusal by the swap.
 	applyErr error
 	dev      devLiveState
+	// staged holds the input of each StageRestore call.
+	staged []backup.RestoreStageInput
+	// keeps holds the installation that each DropStagedIssuerKeys call was
+	// given, and dropReport is what the fake answers to it.
+	keeps      []string
+	dropReport []backup.IssuerKeysDropped
 	// ops is the store of durable operations of the restores, maint the
 	// installation state that the fenced writes change, entered the
 	// maintenance flag of each restore, and areas the staging areas.
@@ -1951,6 +1957,9 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 		stageBlock: nil,
 		applyGate:  nil,
 		stageCalls: 0,
+		staged:     nil,
+		keeps:      nil,
+		dropReport: nil,
 		applied:    0,
 		kept:       0,
 		bumped:     0,

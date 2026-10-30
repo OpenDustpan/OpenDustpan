@@ -99,6 +99,11 @@ func (s *backupStore) ImportPorts() storetest.ImportPorts {
 	}
 }
 
+// IssuerPorts implements storetest.IssuerSeeder.
+func (s *backupStore) IssuerPorts() storetest.IssuerPorts {
+	return storetest.IssuerPorts{Store: s.Issuer()}
+}
+
 // ProfileStore implements storetest.ProfileSeeder.
 //
 //nolint:ireturn // The method implements storetest.ProfileSeeder, which returns the port.

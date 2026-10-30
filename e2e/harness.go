@@ -650,11 +650,13 @@ func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Optio
 	case *sqlite.Store:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	case *postgres.Store:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	default:
@@ -681,7 +683,7 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 // stores of st and the public URL.
 func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
 	return slices.Concat(
-		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
+		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st), trustRuleStoreOptions(st),
 		registryStoreOptions(st), sinkStoreOptions(st), publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
 	)

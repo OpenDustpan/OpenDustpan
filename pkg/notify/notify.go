@@ -108,6 +108,15 @@ const (
 	IncidentResolved      Type = "incident.resolved"
 	LockHeldLong          Type = "lock.held-long"
 	SubscriptionSuspended Type = "subscription.suspended"
+	// IssuerKeyNext reports a new next key of the OIDC issuer of a
+	// namespace, with the time when it becomes active.
+	IssuerKeyNext Type = "issuer.key-next"
+	// IssuerKeyRevoked reports an emergency rotation of the signing keys of
+	// the issuer of a namespace.
+	IssuerKeyRevoked Type = "issuer.key-revoked"
+	// IssuerKeyCopyMissing reports a copy check at the issuerURL of a
+	// namespace that failed.
+	IssuerKeyCopyMissing Type = "issuer.key-copy-missing"
 	// SinkTest is the fixed message of the test route of a sink. A person
 	// sends it to check a sink. It reports no event.
 	SinkTest Type = "sink.test"
@@ -121,6 +130,7 @@ func Types() []Type {
 		BreakGlassUsed, BreakGlassNotice, BreakGlassReviewed,
 		OnCallHandoff, OnCallSyncFailed, CostEstimated, BudgetThreshold,
 		IncidentOpened, IncidentChanged, IncidentResolved, LockHeldLong, SubscriptionSuspended,
+		IssuerKeyNext, IssuerKeyRevoked, IssuerKeyCopyMissing,
 		SinkTest,
 	}
 }

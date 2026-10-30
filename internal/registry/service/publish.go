@@ -591,6 +591,19 @@ func (v *verifying) Read(p []byte) (int, error) {
 // hashes.
 func (s *Service) releaseEntry(c *Caller, rel registry.Release) audit.Entry {
 	e := s.entry(c, rel.Address.Namespace, identity.ActionRegistryPublish, rel.Address.Namespace.String())
+
+	if rel.Address.Kind == registry.KindModule {
+		e.Changes = []audit.Change{
+			{
+				Key: "registry.release", Old: nil, New: rel.Address.Label() + "@" + rel.Version,
+				Layer: "", TakesEffect: "",
+			},
+			{Key: "registry.archiveSha256", Old: nil, New: rel.Archives[0].SHA256, Layer: "", TakesEffect: ""},
+		}
+
+		return e
+	}
+
 	e.Changes = []audit.Change{
 		{
 			Key:         "registry.release",

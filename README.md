@@ -228,8 +228,8 @@ Restore a Pulumi checkpoint with
 The restore answers 400 when the stored checkpoint of that version is not a deployment that the Pulumi CLI can read. It writes no new version.
 
 `opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
-`opendustpan upgrade check` and `opendustpan namespace create` are API
-clients. Each takes `--server` and `--ca-file`, and reads the token from
+`opendustpan upgrade check`, `opendustpan store check` and
+`opendustpan namespace create` are API clients. Each takes `--server` and `--ca-file`, and reads the token from
 `DUSTPAN_ADMIN_TOKEN`. `opendustpan restore` runs through the API in
 maintenance mode, with `--backup`, `--check-only` and `--force`. The
 [backup guide](docs/guides/backup-restore-upgrade.md) shows each command
@@ -323,6 +323,8 @@ How-to guides:
   of an OpenTofu workspace and read its latest drift result.
 - [Run triggers](docs/guides/run-triggers.md): save a trigger on a stack or a
   workspace, fire it by hand, and see what the server checks.
+- [The planner role](docs/guides/planner-role.md): what a planner can do, what
+  it cannot do, and the limit of the role on a workstation.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.

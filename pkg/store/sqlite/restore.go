@@ -484,6 +484,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.runner_nonces`,
 	`DELETE FROM main.maintenance_revocations`,
 	`DELETE FROM main.instance_versions`,
+	`DELETE FROM main.store_checks`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
@@ -513,6 +514,8 @@ var keepControlStatements = []string{
 		`SELECT ` + revocationColumns + ` FROM live.maintenance_revocations`,
 	`INSERT INTO main.instance_versions (id, binary_version, started_at_ms) ` +
 		`SELECT id, binary_version, started_at_ms FROM live.instance_versions`,
+	`INSERT INTO main.store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report) ` +
+		`SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report FROM live.store_checks`,
 }
 
 // The columns of the control tables of the runner protocol, for the copy of
