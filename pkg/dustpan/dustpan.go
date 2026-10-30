@@ -1138,6 +1138,8 @@ func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *a
 
 	cfg.watch = newWorkerWatch(cfg)
 
+	registerBlobPurgeMetrics(observed.Registry(), cfg)
+
 	deleted, err := newDeletedSweeper(*svc, cfg, observed)
 	if err != nil {
 		return nil, nil, err

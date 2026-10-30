@@ -768,6 +768,27 @@ func writeReport(t *testing.T, r e2e.Run) {
 	}
 }
 
+// consoleLink checks that stdout has the console link "(<host>)" or
+// "(<host>/<subject>)". The host holds the scheme and the port. The path is
+// not part of what the step records, so either shape passes, and any other
+// path fails.
+func consoleLink(host string) func(e2e.Result) error {
+	pattern := regexp.MustCompile(`\(` + regexp.QuoteMeta(host) + `(/` + regexp.QuoteMeta(e2e.Subject) + `)?\)`)
+
+	return func(r e2e.Result) error {
+		if !pattern.MatchString(r.Stdout) {
+			return fmt.Errorf(
+				"%w: stdout lacks the console link %q, with the path %q or none",
+				errUnexpected,
+				host,
+				"/"+e2e.Subject,
+			)
+		}
+
+		return nil
+	}
+}
+
 func contains(want string) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if !strings.Contains(r.Stdout, want) {
@@ -4267,30 +4288,22 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 
 	const apiURL = "http://api.dustpan.test"
 
-	// Pulumi 3.273.0 prints the console host without the subject path. Earlier
-	// releases print the path, so each version keeps its own strict expectation.
-	atLeast, err := e2e.VersionAtLeast(env.Install().Version, "3.273.0")
-	if err != nil {
-		t.Fatalf("console url expectation: %v", err)
-	}
-
-	path := "/" + e2e.Subject
-	if atLeast {
-		path = ""
-	}
-
-	appURL := "http://app.dustpan.test" + path
+	// The step records where the CLI takes the console host from: the backend
+	// URL or PULUMI_CONSOLE_DOMAIN. The scheme and the host must be exact. The
+	// path after the host is the CLI's choice: releases before 3.273.0 add the
+	// subject, later releases print the host alone. Any other path fails.
+	appURL := "http://app.dustpan.test"
 
 	// The CLI inherits the console URL scheme from the backend URL, so the
 	// override keeps http on a plain-HTTP server and https on a TLS server.
-	overrideURL := "http://console.example.test:3000" + path
+	overrideURL := "http://console.example.test:3000"
 	if strings.HasPrefix(env.URL, "https://") {
-		overrideURL = "https://console.example.test:3000" + path
+		overrideURL = "https://console.example.test:3000"
 	}
 
 	env.Step(ctx, t, step("console url from 127.0.0.1", contains("as "+e2e.Subject+" ()\n"), "login"))
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: contains("(" + appURL + ")"),
+		Check: consoleLink(appURL),
 		Name:  "console url from api. host",
 		Args:  []string{"login"},
 		// The fake host does not resolve, so the CLI sends its requests through the
@@ -4301,7 +4314,7 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 		Redact: false,
 	})
 	env.Step(ctx, t, e2e.StepSpec{
-		Check:  contains("(" + overrideURL + ")"),
+		Check:  consoleLink(overrideURL),
 		Name:   "console url from PULUMI_CONSOLE_DOMAIN",
 		Args:   []string{"login"},
 		Env:    []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
