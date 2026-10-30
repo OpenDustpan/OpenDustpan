@@ -140,6 +140,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		drainPeriod:      0,
 		tempAdmins:       nil,
 		reconciler:       nil,
+		issuer:           nil,
 		handler:          nil,
 		started:          nil,
 		ungated:          nil,

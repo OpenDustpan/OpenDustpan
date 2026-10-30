@@ -88,6 +88,7 @@ func areas() []func() []Spec {
 		gitHostSpecs,
 		grantSpecs,
 		instanceSpecs,
+		issuerSpecs,
 		jobSpecs,
 		journalSpecs,
 		lockSpecs,
