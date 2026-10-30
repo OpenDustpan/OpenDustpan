@@ -457,6 +457,12 @@ var Settings = []*Setting{
 		"backup ID to check or restore, for example bkp-aaa",
 		referenceNone,
 	),
+	stringSetting(
+		"target", "", "",
+		"store to check: blobs for the live blob store, backup for the backup target. The server reads its own "+
+			"store; the command never takes an address",
+		referenceNone,
+	),
 	boolSetting(
 		unsafeAllowDevBackupsFlag, "",
 		"let a production installation restore a backup of a dev installation; the restore deletes the dev "+

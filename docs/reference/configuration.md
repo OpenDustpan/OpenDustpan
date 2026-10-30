@@ -216,6 +216,7 @@ Each client command takes only the flags in its row:
 | `opendustpan backup` | `--server`, `--ca-file` |
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
+| `opendustpan store check --target <blobs|backup>` | `--server`, `--ca-file`, `--target` |
 | `opendustpan upgrade check` | `--server`, `--ca-file` |
 | `opendustpan audit-chain status` | `--server`, `--ca-file` |
 | `opendustpan audit-chain approve` | (none) |

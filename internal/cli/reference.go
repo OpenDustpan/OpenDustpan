@@ -315,6 +315,7 @@ func clientRows() []clientRow {
 		{"opendustpan backup", BackupCommand(nil)},
 		{"opendustpan backup check --backup <id>", BackupCheckCommand(nil)},
 		{"opendustpan restore --backup <id>", RestoreCommand(nil)},
+		{"opendustpan store check --target <blobs|backup>", StoreCheckCommand(nil)},
 		{"opendustpan upgrade check", UpgradeCheckCommand(nil)},
 		{"opendustpan audit-chain status", AuditChainStatusCommand(nil)},
 		{"opendustpan audit-chain approve", AuditChainApproveCommand(nil)},
