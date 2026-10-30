@@ -21,8 +21,8 @@ works in one package for hours.
 The goal, in this order of preference:
 
 1. Code gates: Make targets, lint rules and tests that fail.
-2. Short nested `CLAUDE.md` files, also read as `AGENTS.md`, in the packages
-   that have their own conventions.
+2. Short nested agent files (`AGENTS.md`, which `CLAUDE.md` imports) in
+   the packages that have their own conventions.
 3. A small number of project skills for workflows that span several files.
 
 Also bring the size of files and packages under control.
@@ -248,6 +248,14 @@ gate of the steward pull request and the gate of one branch are one command.
 head. One target, with no way to skip a step, closes that gap. It uses the
 script that already exists.
 
+Research supports the gate on the combined head. A study of pull requests by
+agents found a textual conflict in 19.8% of the pairs of pull requests by one
+agent, and in 41.7% of the pairs by two different agents (arXiv 2607.04697,
+grade A). Uber's SubmitQueue answers the same problem with a queue that tests
+each change on the head that it will merge into. The GitHub merge queue does
+this too. It is a later option, for when the CI machines have the capacity to
+test each queued head (open question 9).
+
 #### Q1g. The forward completeness of `storefault` (F7)
 
 | Option | Cost | Gives |
@@ -287,6 +295,23 @@ pull request first checks each gate on `main` and lists each step that has no
 gate as an open item. For backup tables, the ceilings of
 `TestRoundTripsOfBackup` stay with issue #2115. **Reason:** the gates exist.
 The cost was finding them, and a skill fixes that.
+
+#### Q1j. Verifiers before a pull request opens
+
+Spotify runs verifiers in a Claude Code `Stop` hook: when the agent stops,
+the hook runs fast checks, and the agent continues when one fails (grade B).
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| Do nothing | None. | The gates run when the agent remembers them, or in CI. |
+| A `Stop` hook that runs `make merge-gates` | It takes more than 20 minutes. Each stop of each session pays it. | Too slow for a hook. |
+| A `Stop` hook that runs only the fast gates on the changed files. These are `gofmt`, the size budget, the credential URL rule, the agent file check, and `go vet` of the changed packages. | One short script. It must finish in about 60 seconds. | The agent sees a mechanical failure before it opens a pull request, not after CI. |
+
+**Recommendation:** the fast `Stop` hook, as a later pull request (owner),
+after the gates that it calls exist. `make merge-gates` stays the full gate.
+**Reason:** the cheap gates catch the most frequent failures of F1 and F5 in
+seconds. A hook runs without the agent having to remember it. Like Q1d, it
+covers Claude Code only.
 
 ### Q2. A size budget for hand-written files
 
@@ -376,7 +401,7 @@ comes from the call graph of each scenario. The first draft:
 
 Each new file stays under 1,500 lines. A scenario of more than 1,500 lines
 has its own file. After the split, the rule for new work is one file for each
-new scenario. The nested `e2e/CLAUDE.md` says so.
+new scenario. The brief `e2e/AGENTS.md` says so.
 
 #### `pkg/dustpan/dustpan.go` by area
 
@@ -406,48 +431,78 @@ and `jobs.go` do today. **Reason:** this removes the cause of the repeated
 `e2e/coverage.go` use the same script and the same timing. One pull request
 for each file, in the order of the size budget list.
 
-### Q4. Nested `CLAUDE.md` files as area briefs
+### Q4. Area briefs: nested agent files that hold rules only
 
 The owner rejected standing lead sessions for each area as overhead. The
-context of an area lives in files instead. A nested `CLAUDE.md` is the
-one-page brief of its area. An area label on issues and the briefs of the PM
-point at it.
+context of an area lives in files instead. A nested agent file is the brief of
+its area. An area label on issues and the briefs of the PM point at it.
 
-Claude Code reads a `CLAUDE.md` in a subdirectory when it reads files there.
-`.claude/rules/*.md` with `paths:` front matter is a second way, which
-`gopls.md` uses today. That way works only for Claude Code. Other agents read
-`AGENTS.md`.
+#### What the research says
 
-**Recommendation:**
+The community research session of 2026-10-30 reported these findings. The
+grades are those of that session. The author of this RFC did not read the
+sources again.
 
-- Nested files only where a package has its own conventions. The first set:
+- Developer-written `AGENTS.md` and `CLAUDE.md` files did not improve task
+  success on average, and they added more than 20% to the cost. Overviews of
+  the repository did not help. Agents did follow explicit instructions
+  (ETH Zurich and LogicStar, arXiv 2602.11988, grade A).
+- Each model that was tested got worse as its input grew ("context rot",
+  Chroma, grade A).
 
-  | File | Holds | ADRs that it follows |
+So an area brief holds rules, not a description. It has no overview and no
+layout. The same applies to the root file: its "Layout" section has 92 of its
+365 lines, and it describes, it does not instruct.
+
+#### The file format
+
+| Option | Cost | Gives |
+| --- | --- | --- |
+| `CLAUDE.md` is the source, and `AGENTS.md` is a symbolic link to it | The Edit tool of Claude Code refuses to write through a symbolic link, as the research session reports. Agents then edit the wrong file or fail. | One content, but a trap for each edit. |
+| `AGENTS.md` is the source. `CLAUDE.md` next to it is a short file: `@AGENTS.md`, then only the lines that apply to Claude Code alone | Two files in each directory, one of them one or two lines long. | `AGENTS.md` is the format that several tools read. Claude Code reads the import (`@path`, up to 4 levels deep). No link. |
+| `AGENTS.md` only | Claude Code reads `AGENTS.md` natively since version 2.1.277, as the research session reports, but only when no `CLAUDE.md` is in the directory or above it. The root has a `CLAUDE.md`, so a nested `AGENTS.md` alone may not load. | Fewest files, but it depends on the root. |
+| `.claude/rules/*.md` with `paths:` front matter | `gopls.md` uses this today. | It works for Claude Code only. |
+
+**Recommendation:** `AGENTS.md` is the source in each directory, and
+`CLAUDE.md` imports it. This also applies to the root. Today the root
+`AGENTS.md` and `CLAUDE.md` are two separate regular files. On `2583f66` they
+are byte for byte equal, but no check keeps them equal, and an edit of one
+does not reach the other. The root `CLAUDE.md` becomes `@AGENTS.md` plus the
+Claude-only lines, for example the Repowise tool names. **Reason:**
+`AGENTS.md` is the standard across tools. The import keeps one source without
+a link that the Edit tool refuses. This is owner question 8.
+
+#### The briefs
+
+- Briefs only where a package has its own rules. The first set:
+
+  | Brief | Rules that it holds | ADRs that it follows |
   | --- | --- | --- |
-  | `pkg/store/CLAUDE.md` | Both dialects for each change. Fixed queries in `queries.sql` with sqlc, never an edit of `internal/db`. New numbered migration files, the frozen and collapse rules, `make migration-renumber`. The fence in the same transaction. Unix milliseconds in `BIGINT`. A port method gets conformance tests first. `storefault` and `blobfault` forward each method, and the method set test checks it. | 40, 73, 274 |
-  | `pkg/blob/CLAUDE.md` | The `blobtest` suite for each adapter. A key for each write attempt. A blob removal waits for a running backup or restore. | 221, 281 |
-  | `internal/api/CLAUDE.md` | The endpoint checklist in short, with a pointer to the skill. Each route declares its actions. Each error path has a code of the catalog. The description version and `make api-version-bump`. `make clients-check`. The e2e step first. | 17, 264, 272, 276 |
-  | `e2e/CLAUDE.md` | PostgreSQL is required, and `pg-ready`. One file for each scenario. Route coverage and the contract file of each CLI version. The build tags. | 12 |
-  | `pkg/backup/CLAUDE.md` | The table list, the control tables, the staged-row checks, both dialects, the restore round trip, a pointer to the skill and to issue #2115. | 30, 38, 42 |
-  | `pkg/dustpan/CLAUDE.md` | One file for each area. A new feature adds its own mount function. No new code in `dustpan.go`. | 35, 272 |
-  | `cmd/s3bench/CLAUDE.md` and `load/CLAUDE.md` | Each model has a `Follows:` line. A change to a followed symbol checks the model. | none |
+  | `pkg/store/AGENTS.md` | Both dialects for each change. Fixed queries in `queries.sql` with sqlc, never an edit of `internal/db`. New numbered migration files, the frozen and collapse rules, `make migration-renumber`. The fence in the same transaction. Unix milliseconds in `BIGINT`. A port method gets conformance tests first. `storefault` and `blobfault` forward each method, and the method set test checks it. | 40, 73, 274 |
+  | `pkg/blob/AGENTS.md` | The `blobtest` suite for each adapter. A key for each write attempt. A blob removal waits for a running backup or restore. | 221, 281 |
+  | `internal/api/AGENTS.md` | The endpoint checklist in short, with a pointer to the skill. Each route declares its actions. Each error path has a code of the catalog. The description version and `make api-version-bump`. `make clients-check`. The e2e step first. | 17, 264, 272, 276 |
+  | `e2e/AGENTS.md` | PostgreSQL is required, and `pg-ready`. One file for each scenario. Route coverage and the contract file of each CLI version. The build tags. | 12 |
+  | `pkg/backup/AGENTS.md` | The table list, the control tables, the staged-row checks, both dialects, the restore round trip, a pointer to the skill and to issue #2115. | 30, 38, 42 |
+  | `pkg/dustpan/AGENTS.md` | One file for each area. A new feature adds its own mount function. No new code in `dustpan.go`. | 35, 272 |
+  | `cmd/s3bench/AGENTS.md` and `load/AGENTS.md` | Each model has a `Follows:` line. A change to a followed symbol checks the model. | none |
 
-  The ADR numbers in this table are the first draft. The pull request that
-  writes each file checks them against `docs/adr/`.
-- Each nested file is an area brief of 40 lines or fewer, with five fixed
-  sections in this order:
-  - **Owns:** what the area owns, in two or three lines: its packages, its
-    ports, its tables or its routes.
+  Each has a `CLAUDE.md` next to it that imports it. The ADR numbers in this
+  table are the first draft. The pull request that writes each brief checks
+  them against `docs/adr/`.
+- Each brief has 40 lines or fewer, in three fixed sections and one last
+  line, in this order:
   - **Invariants:** the rules that each change of the area keeps.
   - **Pitfalls:** the mistakes that review or a `fix-main` pull request
     found in this area, one line each, with the rule that prevents them.
   - **Gates:** the commands that fail when a rule of the area breaks, for
     example `make merge-gates` or one named test.
-  - **ADRs:** the numbers of the ADRs that the area follows.
+  - A last line `ADRs: <numbers>`.
 
-  It is in strict ASD-STE100, because it is an instruction for agents
-  (ADR 14). It holds no copy of a global rule. The root `CLAUDE.md` stays
-  the only place for global rules.
+  No overview, no layout and no description of the code. A line that does
+  not tell the agent to do or not to do something does not go in a brief. It
+  is in strict ASD-STE100, because it is an instruction for agents (ADR 14).
+  It holds no copy of a global rule. The root file stays the only place for
+  global rules.
 - Each area brief has an issue label of the form `area:<name>`, for example
   `area:store`, `area:api`, `area:e2e`, `area:backup` and `area:dustpan`.
   `docs/agents/issue-tracker.md` lists each label with the path of its
@@ -461,34 +516,44 @@ Claude Code reads a `CLAUDE.md` in a subdirectory when it reads files there.
   line that later gets a gate moves to **Gates**. The 40-line limit forces
   this: a long pitfall list is a sign that a gate is missing. For example,
   #2103 would have added the method set test of Q1g to **Gates** of
-  `pkg/store/CLAUDE.md`, not a line of text.
-- `AGENTS.md` next to each nested file is a symbolic link to it. The root
-  `AGENTS.md` is today a second copy of the root `CLAUDE.md`, a regular file,
-  with no check that the two are equal. It becomes a link too.
+  `pkg/store/AGENTS.md`, not a line of text. Stripe and Spotify report the
+  same approach: lessons go into mechanical checks, not into prose (grade B).
 - A check, `scripts/agent-files-check.py`, run by `make docs-lint`:
-  - Each nested `CLAUDE.md` has 40 lines or fewer and the five sections in
-    their order.
+  - Each nested `AGENTS.md` has 40 lines or fewer and the three sections and
+    the `ADRs:` line in their order.
   - Each ADR that it names exists in `docs/adr/`.
-  - Each `AGENTS.md` is a link to the `CLAUDE.md` in the same directory.
-  - When an ADR says that it supersedes ADR N, each nested file that names
-    N must also name the new ADR. This is how the files stay current
-    without a person who remembers them.
-- `make docs-lint` also runs the STE linter on the nested files.
-- Who updates them: the author of a change to a convention of the package,
-  in the same pull request. The author of an ADR that changes a convention
-  of the package, in the ADR pull request. The check above fails when a
-  superseded ADR is named alone. A reviewer checks the nested file of each
-  package that the diff touches.
+  - Each `CLAUDE.md` in a directory with an `AGENTS.md` starts with the line
+    `@AGENTS.md`. No agent file is a symbolic link.
+  - When an ADR says that it supersedes ADR N, each brief that names N must
+    also name the new ADR. This is how the briefs stay current without a
+    person who remembers them.
+- `make docs-lint` also runs the STE linter on the briefs.
+- Who updates them: the author of a change to a rule of the area, in the same
+  pull request. The author of an ADR that changes a rule of the area, in the
+  ADR pull request. The check above fails when a superseded ADR is named
+  alone. A reviewer checks the brief of each area that the diff touches.
 
-**Reason:** a short file next to the code is read when the agent works there,
-which is the moment the rule matters. It costs no session that waits for
-work. The area label and the PM brief lead a worker to it before the first
-edit. The 40-line limit keeps it a brief, not a second manual, and pushes
-each pitfall towards a gate. The superseded-ADR check makes staleness a fail,
-not a memory task.
+#### The root file
+
+**Recommendation:** a separate pull request (owner) cuts the overview parts of
+the root file and keeps its rules. The "Layout" section (92 lines) goes. A
+rule in it that an agent needs, for example "the web console lives in its own
+repository", moves to the section where it applies. The first paragraphs keep
+the naming rules about other projects, and lose the product description.
+**Reason:** the research found that overviews add cost and do not help, and
+that each added line of input makes the result worse. An agent finds the
+layout with `ls`, Repowise or the briefs.
+
+**Reason for the whole of Q4:** a short file of rules next to the code is read
+when the agent works there, which is the moment the rule matters. It costs no
+session that waits for work. The area label and the PM brief lead a worker to
+it before the first edit. The 40-line limit keeps it a brief, not a second
+manual, and pushes each pitfall towards a gate. The superseded-ADR check makes
+staleness a fail, not a memory task.
 
 ADR 66 lists `CLAUDE.md` among the files that may hold internal references.
-This RFC reads that as each `CLAUDE.md`, also a nested one (open question 4).
+This RFC reads that as each agent file, also a nested `AGENTS.md` (open
+question 4).
 
 ### Q5. Project skills
 
@@ -507,7 +572,10 @@ Four skills, each a workflow that spans several files:
 | `.agents/project-skills/<name>/SKILL.md`, with a link in `.claude/skills/<name>` | One new directory. | A clear line: `npx skills` manages `.agents/skills/`, we write `.agents/project-skills/`. |
 | `docs/agents/skills/` | `docs/agents/` holds the lead workflow, which is a different audience. | Mixed content. |
 
-**Recommendation:** `.agents/project-skills/`. Each skill name starts with
+**Recommendation:** `.agents/project-skills/`. The link in `.claude/skills/`
+is for reading only. An agent edits a skill at its path in
+`.agents/project-skills/`, because the Edit tool refuses to write through a
+link (Q4). Each skill name starts with
 `od-`, and its front matter has `metadata: {owner: OpenDustpan}`. A check in
 `scripts/agent-files-check.py` fails when a directory under `.agents/skills/`
 has no entry in `skills-lock.json`, and when a directory under
@@ -554,6 +622,21 @@ Sources of candidates:
 package are easy to review and easy to revert. A report that never fails does
 not block other work.
 
+### Q7. A metric for review precision
+
+Review by a model finds real defects, but many of its findings are not
+defects. On SWR-Bench, the precision of review by a model was about 17%.
+Five combined review passes raised F1 by 23% to 44% (grade A).
+
+**Recommendation:** measure the precision of each reviewer model in this
+repository. Precision is the share of review findings that the author fixes.
+Each review session numbers its findings. The author answers each number
+with "fixed" or "not a defect", with a reason. The PM log counts both for
+each model, each week. This changes only `docs/agents/` (owner). **Reason:**
+without a number, the project cannot tell a useful reviewer from a noisy
+one. The count also shows whether several passes pay for their cost here,
+before the project adds them.
+
 ## Work that this RFC builds on
 
 The ways-of-working steward session has the PM's go-ahead for one pull
@@ -589,7 +672,7 @@ column names the shared files and the open drafts that touch the same area.
 | 7 | The push hook (owner) | `.claude/settings.json`, `.claude/hooks/push-alone.py` | A refused compound `git push`, with the allowed form | `.claude/settings.json`, low | none |
 | 8 | `Follows:` lines of the benchmark models | `cmd/s3bench/*.go`, `load/*.go`, one test in each | A fail for a model that names no live symbol | Draft #2045 changes `cmd/s3bench`. Land after it. | none |
 | 9 | The size budget | `scripts/size-budget.py`, `scripts/size-budget.txt`, `Makefile` | A fail for a new file over 1,500 lines, and for a listed file over its ceiling | `Makefile`, low | none |
-| 10 | Area briefs and their check (owner) | the eight `CLAUDE.md` files of Q4, their `AGENTS.md` links, the root `AGENTS.md` link, `scripts/agent-files-check.py`, `Makefile`, the `area:` labels in `docs/agents/issue-tracker.md` | Line limit, the five sections, ADR names, links, superseded ADRs, STE lint | `docs/agents/` with the steward pull request. Lands after it. | 2, 3, 4, 5 (the briefs name their gates), the steward pull request |
+| 10 | Area briefs and their check (owner) | the eight `AGENTS.md` briefs of Q4, a `CLAUDE.md` with `@AGENTS.md` next to each, the root `CLAUDE.md` as an import of the root `AGENTS.md`, `scripts/agent-files-check.py`, `Makefile`, the `area:` labels in `docs/agents/issue-tracker.md` | Line limit, the three sections and the ADR line, ADR names, the import line, no symbolic links, superseded ADRs, STE lint | `docs/agents/` with the steward pull request. Lands after it. | 2, 3, 4, 5 (the briefs name their gates), the steward pull request |
 | 11 | Project skills (owner) | `.agents/project-skills/od-*/SKILL.md`, the six Repowise skills moved, `.claude/skills/` links, the check of PR 10 | Lock and link checks, STE lint in strict mode | `.claude/skills/` | 3, 4, 10 |
 | 12 | The split script and the split of `e2e/e2e_test.go` | `scripts/split-go-file.go`, `scripts/split-plans/e2e.txt`, `e2e/*_test.go` | The size budget line of the file goes down | Most open pull requests that add an e2e step. First merge of a merge session. | 9 |
 | 13 | The split of `pkg/dustpan/dustpan.go` | `scripts/split-plans/dustpan.txt`, `pkg/dustpan/*.go` | Same | Most open pull requests that add a route. First merge of a merge session, not the same session as 12. | 12 |
@@ -597,6 +680,9 @@ column names the shared files and the open drafts that touch the same area.
 | 15 | Later splits, one file each | the five files of Q3 | Same | Each with its own window | 12 |
 | 16 | `make deadcode-report` | `Makefile` | None. A report. | Low | 3 |
 | 17 | Removals, one package each | the package | None new | Low | 16 |
+| 18 | The root agent file keeps its rules only (owner) | `AGENTS.md`, `CLAUDE.md` at the root | The agent file check of PR 10 also runs on the root | Each pull request that edits the root file. Lands in a quiet window. | 10 |
+| 19 | The fast `Stop` hook (owner) | `.claude/settings.json`, `.claude/hooks/stop-verify.py` | Fast gates on the changed files before the agent stops | `.claude/settings.json`, with PR 7 | 1, 6, 9, 10 |
+| 20 | Review precision in the review and merge docs (owner) | `docs/agents/` | None. A metric. | `docs/agents/`, with the steward pull request | the steward pull request |
 
 Pull requests 1, 2, 4, 5, 6, 8 and 9 can run in parallel. They touch the
 `Makefile` in different targets. Each of them must run `make merge-gates`
@@ -621,6 +707,29 @@ once 3 lands.
    pinned version, an accepted new tool?
 7. Q3: who announces the split windows to the open sessions, and how long
    after the announcement does the split merge?
+8. Q4: is `AGENTS.md` the source in each directory, with a `CLAUDE.md` that
+   imports it, also at the root? The other choices are in Q4.
+9. Q1f: when the CI machines have the capacity, should merges move to the
+   GitHub merge queue?
+
+## Sources
+
+The community research session of 2026-10-30 collected these sources and
+graded them. A is a peer-reviewed or replicated study, B is an engineering
+report of a company. The author of this RFC did not read them again.
+
+- ETH Zurich and LogicStar, a study of agent context files, arXiv 2602.11988
+  (A).
+- Chroma, "context rot": the quality of each tested model goes down as its
+  input grows (A).
+- A study of conflicts between pull requests by agents, arXiv 2607.04697 (A).
+- Uber, SubmitQueue, a queue that tests each change on its merge head.
+- Stripe and Spotify, engineering reports on lessons as mechanical checks and
+  on verifiers in a `Stop` hook (B).
+- SWR-Bench, a benchmark of code review by models (A).
+- The research session's report on the `AGENTS.md` support of Claude Code
+  (version 2.1.277), its `@path` imports and its Edit tool with symbolic
+  links.
 
 ## Checklist
 
