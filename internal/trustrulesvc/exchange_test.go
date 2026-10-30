@@ -213,9 +213,11 @@ func newExchangeFixtureAt(t *testing.T, now func() time.Time) *exchangeFixture {
 		keys:   &fakeKeys{keys: ks, err: nil, reads: 0},
 		issuer: k,
 		people: fakePrincipals{
-			"prn-worker": principalOf("prn-worker", principal.KindService, "acme"),
-			"prn-other":  principalOf("prn-other", principal.KindService, "acme"),
-			"prn-person": principalOf("prn-person", principal.KindPerson, "acme"),
+			"prn-worker":   principalOf("prn-worker", principal.KindService, "acme"),
+			"prn-other":    principalOf("prn-other", principal.KindService, "acme"),
+			"prn-person":   principalOf("prn-person", principal.KindPerson, "acme"),
+			"prn-workload": principalOf("prn-workload", principal.KindWorkload, "acme"),
+			"prn-robot":    principalOf("prn-robot", principal.Kind("robot"), "acme"),
 		},
 		x: nil,
 	}
@@ -401,6 +403,35 @@ func TestExchangeRechecksThePrincipalAndTheIssuer(t *testing.T) {
 
 			if len(f.rules.exchanges) != 0 {
 				t.Fatal("the refused exchange issued a token")
+			}
+		})
+	}
+}
+
+// TestExchangeNeedsAServicePrincipal checks the kind check alone: each
+// principal is of the namespace and not disabled, so only its kind refuses
+// the exchange. The reason of the refusal entry names the check.
+func TestExchangeNeedsAServicePrincipal(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{"prn-person", "prn-workload", "prn-robot"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			f := newExchangeFixture(t)
+			f.rules.rules[0].PrincipalID = id
+
+			if _, err := f.exchange(t, f.issuer.token(t, nil)); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+				t.Fatalf("Exchange = %v, want ErrNoMatch", err)
+			}
+
+			if len(f.rules.exchanges) != 0 {
+				t.Fatal("the refused exchange issued a token")
+			}
+
+			entries := f.audit.all()
+			if len(entries) != 1 || !strings.Contains(entries[0].Reason, "not a service principal") {
+				t.Fatalf("refusal entries = %+v, want the reason of the kind check", entries)
 			}
 		})
 	}

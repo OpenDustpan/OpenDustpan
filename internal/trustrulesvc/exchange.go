@@ -356,8 +356,9 @@ func (x *Exchanger) checkGrant(ctx context.Context, r *trustrule.Rule) (principa
 	}
 
 	switch {
-	case p.Kind == principal.KindPerson:
-		return none, fmt.Errorf("%w: principal %q is a person", trustrule.ErrPrincipal, p.ID)
+	case p.Kind != principal.KindService:
+		return none, fmt.Errorf("%w: principal %q is a %s, not a service principal", trustrule.ErrPrincipal,
+			p.ID, p.Kind)
 	case p.Namespace != r.Namespace:
 		return none, fmt.Errorf("%w: principal %q is not a principal of the namespace", trustrule.ErrPrincipal, p.ID)
 	case !p.DisabledAt.IsZero():
