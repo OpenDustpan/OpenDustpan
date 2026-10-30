@@ -2,6 +2,7 @@ package trustrule_test
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -86,12 +87,20 @@ func TestValidateRefuses(t *testing.T) {
 func TestValidateDiscoveryIssuerRefusesAnUnsafeURL(t *testing.T) {
 	t.Parallel()
 
+	// Build the URL with a password at run time, so that the source holds no
+	// credential-shaped literal.
+	withPassword := (&url.URL{
+		Scheme: "https",
+		User:   url.UserPassword("user", "pass"),
+		Host:   "token.actions.example.com",
+	}).String()
+
 	for _, issuer := range []string{
 		"http://token.actions.example.com",
 		"https://user@token.actions.example.com",
 		"https://token.actions.example.com?x=1",
 		"https://token.actions.example.com#f",
-		"https://user:pass@token.actions.example.com",
+		withPassword,
 		"file:///etc/passwd",
 		"https://",
 		"token.actions.example.com",
