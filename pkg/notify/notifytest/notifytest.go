@@ -85,6 +85,9 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a sink change appends one notice for each subscription it suspends", testSinkChangeNotices},
 		{"a ref of a sink names one value for good", testSinkSecretRefs},
 		{"the store keeps only values sealed for the sink", testSinkSecretsSealed},
+		{"concurrent appends make one gap-free sequence", testConcurrentAppend},
+		{"concurrent moves of one cursor have one winner", testConcurrentCursor},
+		{"concurrent claims never take one delivery twice", testConcurrentClaim},
 	}
 
 	for _, tc := range cases {
