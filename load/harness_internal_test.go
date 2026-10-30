@@ -42,10 +42,25 @@ const smokeCheckpointBytes = 8192
 func openSmokeServer(t *testing.T, ns string) servers {
 	t.Helper()
 
+	return openSmokeSetup(t, ns, false)
+}
+
+// openSmokeSetup starts one SQLite instance on directory blobs, with a
+// directory backup target when backup is set.
+func openSmokeSetup(t *testing.T, ns string, backup bool) servers {
+	t.Helper()
+
 	ctx := t.Context()
 	logger := slog.New(slog.DiscardHandler)
 
-	served, cleanup, err := openServers(ctx, logger, t.TempDir(), ns)
+	settings, err := newBlobSettings(blobsFS, false, t.TempDir())
+	if err != nil {
+		t.Fatalf("blob settings: %v", err)
+	}
+
+	setup := serverSetup{blobs: settings, oneInstance: backup, backup: backup}
+
+	served, cleanup, err := openServers(ctx, logger, ns, setup)
 	if err != nil {
 		t.Fatalf("open servers: %v", err)
 	}
@@ -276,6 +291,43 @@ func TestJournalEntriesValid(t *testing.T) {
 	for _, bad := range [][]int{{0}, {1}, {3}, {-2}, {2, 5}} {
 		if err := journalEntriesValid(bad); !errors.Is(err, errBadJournalEntries) {
 			t.Fatalf("journalEntriesValid(%v) = %v, want errBadJournalEntries", bad, err)
+		}
+	}
+}
+
+func TestBlobFlowsSmoke(t *testing.T) {
+	t.Parallel()
+
+	served := openSmokeSetup(t, "load-blobs", true)
+
+	cfg := DefaultBlobFlowConfig()
+	cfg.Namespace = "load-blobs"
+	cfg.Token = harnessToken()
+	cfg.Reps = 2
+	cfg.StateBytes = smokeCheckpointBytes
+	cfg.CheckpointBytes = smokeCheckpointBytes
+	cfg.DatasetUnits = 2
+	cfg.DatasetStateBytes = smokeCheckpointBytes
+	cfg.DatasetCheckpointBytes = smokeCheckpointBytes
+
+	report, err := ExecuteBlobFlows(t.Context(), cfg, served)
+	if err != nil {
+		t.Fatalf("blob flows: %v", err)
+	}
+
+	if report.Backup.Error != "" || report.Restore.Error != "" {
+		t.Fatalf("backup %q, restore %q, want no error", report.Backup.Error, report.Restore.Error)
+	}
+
+	for name, stats := range map[string]FlowStats{
+		"state upload":    report.StateUpload,
+		"state cycle":     report.StateCycle,
+		"checkpoint save": report.CheckpointSave,
+		"update cycle":    report.UpdateCycle,
+	} {
+		if stats.Errors != 0 || stats.Samples != cfg.Reps {
+			t.Fatalf("%s: %d samples, %d errors (%s), want %d samples", name, stats.Samples, stats.Errors,
+				stats.FirstError, cfg.Reps)
 		}
 	}
 }
