@@ -82,16 +82,16 @@ func compareContract(t *testing.T, got e2e.Contract) string {
 		return ""
 	}
 
+	if len(files) == 0 {
+		return ""
+	}
+
 	index := slices.IndexFunc(files, func(c e2e.Contract) bool { return c.Version == got.Version })
 	if index >= 0 {
 		for _, line := range files[index].Missing(got) {
 			t.Errorf("%s %s: the contract file wants %s", got.Tool, got.Version, line)
 		}
 
-		return ""
-	}
-
-	if len(files) == 0 {
 		return ""
 	}
 
