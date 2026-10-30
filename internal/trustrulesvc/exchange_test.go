@@ -142,6 +142,9 @@ type memAudit struct {
 	server []audit.Entry
 	// fail is the number of the next appends that fail.
 	fail int
+	// failServer is the number of the next appends of the installation
+	// that fail.
+	failServer int
 }
 
 func (m *memAudit) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
@@ -181,6 +184,12 @@ func (m *memAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.failServer > 0 {
+		m.failServer--
+
+		return audit.Entry{}, errAuditDown
+	}
 
 	m.server = append(m.server, e)
 
@@ -259,7 +268,7 @@ func newExchangeFixtureWith(t *testing.T, now func() time.Time, refusals *denyli
 			rules:     []trustrule.Rule{staticRule(k.jwks, "deploy", "prn-worker")},
 			exchanges: nil, entries: nil, err: nil,
 		},
-		audit:  &memAudit{Store: nil, mu: sync.Mutex{}, entries: nil, server: nil, fail: 0},
+		audit:  &memAudit{Store: nil, mu: sync.Mutex{}, entries: nil, server: nil, fail: 0, failServer: 0},
 		keys:   &fakeKeys{keys: ks, err: nil, reads: 0},
 		issuer: k,
 		people: fakePrincipals{
@@ -622,7 +631,18 @@ func TestExchangeRefusesWhenTheStoreRefuses(t *testing.T) {
 func TestNewExchangerNeedsItsPorts(t *testing.T) {
 	t.Parallel()
 
+	// Each port alone: a config with every port but the installation log.
+	f := newExchangeFixture(t)
+
 	_, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
+		Rules: f.rules, Exchanges: f.rules, Namespaces: fakeNamespaces{}, Principals: f.people, Tokens: fakeTokens{},
+		Audit: f.audit, ServerAudit: nil, Refusals: nil, Keys: f.keys, InstallationURLs: nil, Now: nil,
+	})
+	if !errors.Is(err, trustrule.ErrMissingDependency) {
+		t.Fatalf("NewExchanger with no installation log = %v, want ErrMissingDependency", err)
+	}
+
+	_, err = trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: nil, Exchanges: nil, Namespaces: nil, Principals: nil, Tokens: nil, Audit: nil, ServerAudit: nil,
 		Refusals: nil, Keys: nil, InstallationURLs: nil, Now: nil,
 	})
@@ -975,5 +995,50 @@ func TestExchangeKeepsTheOverflowCountOutOfTheNamespace(t *testing.T) {
 		if strings.Contains(e.Reason, "refused exchanges") {
 			t.Fatalf("namespace entry %+v carries a count of the overflow", e)
 		}
+	}
+}
+
+// TestExchangeFailsClosedWhenTheInstallationLogFails checks a failed write
+// of the overflow entry in the log of the installation: the error reaches
+// the answer, the limiter keeps the window, and the next refusal writes the
+// entry with the count of the failed one.
+func TestExchangeFailsClosedWhenTheInstallationLogFails(t *testing.T) {
+	t.Parallel()
+
+	limiter := denylimit.New(denylimit.Config{
+		Window: time.Minute, MaxKeys: 2, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: exchangeNow,
+	})
+	f := newExchangeFixtureWith(t, exchangeNow, limiter)
+
+	exchange := func(sub string) error {
+		t.Helper()
+
+		tok := f.issuer.token(t, func(c map[string]any) { c["sub"] = "repo:evil/fork:ref:refs/heads/" + sub })
+		_, err := f.exchange(t, tok)
+
+		return err
+	}
+
+	for _, sub := range []string{"a", "b"} {
+		if err := exchange(sub); !errors.Is(err, trustrulesvc.ErrNoMatch) || errors.Is(err, errAuditDown) {
+			t.Fatalf("subject %s: Exchange = %v, want ErrNoMatch", sub, err)
+		}
+	}
+
+	f.audit.mu.Lock()
+	f.audit.failServer = 1
+	f.audit.mu.Unlock()
+
+	if err := exchange("c"); !errors.Is(err, trustrulesvc.ErrNoMatch) || !errors.Is(err, errAuditDown) {
+		t.Fatalf("overflow with a failed installation log: Exchange = %v, want ErrNoMatch and the error", err)
+	}
+
+	if err := exchange("d"); !errors.Is(err, trustrulesvc.ErrNoMatch) || errors.Is(err, errAuditDown) {
+		t.Fatalf("overflow after the failure: Exchange = %v, want ErrNoMatch", err)
+	}
+
+	server := f.audit.serverEntries()
+	if len(server) != 1 || !strings.Contains(server[0].Reason, "1 refused exchanges of any namespace") {
+		t.Fatalf("entries of the installation = %+v, want one entry that carries the failed refusal", server)
 	}
 }
