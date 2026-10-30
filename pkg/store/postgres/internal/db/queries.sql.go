@@ -10771,9 +10771,10 @@ func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([
 }
 
 const listDueNotificationDeliveryScopes = `-- name: ListDueNotificationDeliveryScopes :many
-SELECT DISTINCT scope
+SELECT scope
 FROM notification_deliveries
 WHERE state = 'pending' AND next_at_ms <= $1 AND lease_until_ms <= $1
+GROUP BY scope
 ORDER BY scope COLLATE "C"
 `
 

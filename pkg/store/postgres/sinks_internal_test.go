@@ -178,9 +178,9 @@ func legacyHostSinks() []sinkTampering {
 		{
 			"webhook host with an underscore",
 			`UPDATE notification_sinks SET kind = 'webhook', platform = '', target = 'hk_1.example.com';
-				INSERT INTO notification_sink_refs (namespace_id, ref) SELECT namespace_id, 'itm-bbbbbbbb' FROM notification_sinks;
-				INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
-					SELECT namespace_id, 'itm-bbbbbbbb', id, 1, '\x00'::bytea FROM notification_sinks`,
+				INSERT INTO notification_sink_refs (scope, ref) SELECT scope, 'itm-bbbbbbbb' FROM notification_sinks;
+				INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+					SELECT scope, 'itm-bbbbbbbb', id, 1, '\x00'::bytea FROM notification_sinks`,
 			true,
 		},
 	}
@@ -239,8 +239,8 @@ func checkServedAndNotWritten(t *testing.T, s *Store) {
 }
 
 // TestCheckStagedSinksRefusesAMissingNamespace proves that a sink, a secret
-// item and a held ref whose namespace the backup does not hold are corrupt. An
-// inner join would skip such a row, and the restore would bring it in.
+// item and a held ref whose scope names no namespace of the backup are
+// corrupt, so the restore never brings in a row that no namespace owns.
 func TestCheckStagedSinksRefusesAMissingNamespace(t *testing.T) {
 	t.Parallel()
 
@@ -251,18 +251,12 @@ func TestCheckStagedSinksRefusesAMissingNamespace(t *testing.T) {
 			s := openForSavedViews(t)
 			seedSink(t, s)
 
-			// The foreign key refuses this change, so the test drops the key in its
-			// own schema first.
-			for _, stmt := range []string{
-				`ALTER TABLE ` + table + ` DROP CONSTRAINT ` + table + `_namespace_id_fkey`,
-				`UPDATE ` + table + ` SET namespace_id = 'ns-gone'`,
-			} {
-				if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
-					t.Fatalf("%s: %v", stmt, execErr)
-				}
+			stmt := `UPDATE ` + table + ` SET scope = 'gone'`
+			if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
+				t.Fatalf("%s: %v", stmt, execErr)
 			}
 
-			if err := checkStagedSinks(t.Context(), s.pool, currentSchema(t, s)); !errors.Is(err, backup.ErrCorrupt) {
+			if err := checkStagedNotifications(t.Context(), s.pool, currentSchema(t, s)); !errors.Is(err, backup.ErrCorrupt) {
 				t.Fatalf("check = %v, want ErrCorrupt", err)
 			}
 		})

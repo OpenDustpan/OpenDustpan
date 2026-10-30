@@ -4475,9 +4475,10 @@ INSERT INTO notification_deliveries (
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
-SELECT DISTINCT scope
+SELECT scope
 FROM notification_deliveries
 WHERE state = 'pending' AND next_at_ms <= sqlc.arg(now_ms) AND lease_until_ms <= sqlc.arg(now_ms)
+GROUP BY scope
 ORDER BY scope COLLATE "C";
 
 -- name: ClaimNotificationDeliveries :many
