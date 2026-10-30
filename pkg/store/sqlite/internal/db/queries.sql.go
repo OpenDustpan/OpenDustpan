@@ -4129,27 +4129,8 @@ func (q *Queries) GetCatalogBlueprintDraft(ctx context.Context, arg GetCatalogBl
 	return i, err
 }
 
-const getCatalogBlueprintDraftVersion = `-- name: GetCatalogBlueprintDraftVersion :one
-SELECT b.draft_version
-FROM catalog_blueprints AS b
-JOIN namespaces AS n ON n.id = b.namespace_id
-WHERE n.name = ?1 AND b.name = ?2
-`
-
-type GetCatalogBlueprintDraftVersionParams struct {
-	Namespace string
-	Name      string
-}
-
-func (q *Queries) GetCatalogBlueprintDraftVersion(ctx context.Context, arg GetCatalogBlueprintDraftVersionParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getCatalogBlueprintDraftVersion, arg.Namespace, arg.Name)
-	var draft_version int64
-	err := row.Scan(&draft_version)
-	return draft_version, err
-}
-
 const getCatalogBlueprintVersion = `-- name: GetCatalogBlueprintVersion :one
-SELECT n.name AS namespace, v.name, v.number, v.document_json, v.expr_version, v.published_by,
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
        v.published_at_ms, v.retired
 FROM catalog_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
@@ -4166,6 +4147,7 @@ type GetCatalogBlueprintVersionRow struct {
 	Namespace     string
 	Name          string
 	Number        int64
+	DraftVersion  int64
 	DocumentJson  string
 	ExprVersion   string
 	PublishedBy   string
@@ -4180,6 +4162,7 @@ func (q *Queries) GetCatalogBlueprintVersion(ctx context.Context, arg GetCatalog
 		&i.Namespace,
 		&i.Name,
 		&i.Number,
+		&i.DraftVersion,
 		&i.DocumentJson,
 		&i.ExprVersion,
 		&i.PublishedBy,
@@ -4187,6 +4170,28 @@ func (q *Queries) GetCatalogBlueprintVersion(ctx context.Context, arg GetCatalog
 		&i.Retired,
 	)
 	return i, err
+}
+
+const getCatalogBlueprintVersionOfDraft = `-- name: GetCatalogBlueprintVersionOfDraft :one
+SELECT v.number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = ?1 AND v.name = ?2 AND v.draft_version = ?3
+`
+
+type GetCatalogBlueprintVersionOfDraftParams struct {
+	Namespace    string
+	Name         string
+	DraftVersion int64
+}
+
+// The number of the version that published a draft version. No row means the
+// draft version has no version.
+func (q *Queries) GetCatalogBlueprintVersionOfDraft(ctx context.Context, arg GetCatalogBlueprintVersionOfDraftParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getCatalogBlueprintVersionOfDraft, arg.Namespace, arg.Name, arg.DraftVersion)
+	var number int64
+	err := row.Scan(&number)
+	return number, err
 }
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
@@ -7719,12 +7724,12 @@ func (q *Queries) InsertCatalogBlueprint(ctx context.Context, arg InsertCatalogB
 
 const insertCatalogBlueprintVersion = `-- name: InsertCatalogBlueprintVersion :exec
 INSERT INTO catalog_blueprint_versions (
-    namespace_id, name, number, document_json, expr_version, published_by, published_at_ms, retired
+    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
 )
 VALUES (
     (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
-    ?2, ?3, ?4, ?5,
-    ?6, ?7, 0
+    ?2, ?3, ?4, ?5, ?6,
+    ?7, ?8, 0
 )
 `
 
@@ -7732,6 +7737,7 @@ type InsertCatalogBlueprintVersionParams struct {
 	Namespace     string
 	Name          string
 	Number        int64
+	DraftVersion  int64
 	DocumentJson  string
 	ExprVersion   string
 	PublishedBy   string
@@ -7743,6 +7749,7 @@ func (q *Queries) InsertCatalogBlueprintVersion(ctx context.Context, arg InsertC
 		arg.Namespace,
 		arg.Name,
 		arg.Number,
+		arg.DraftVersion,
 		arg.DocumentJson,
 		arg.ExprVersion,
 		arg.PublishedBy,
@@ -9978,7 +9985,7 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 }
 
 const listCatalogBlueprintLatest = `-- name: ListCatalogBlueprintLatest :many
-SELECT n.name AS namespace, v.name, v.number, v.document_json, v.expr_version, v.published_by,
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
        v.published_at_ms, v.retired
 FROM catalog_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
@@ -9994,6 +10001,7 @@ type ListCatalogBlueprintLatestRow struct {
 	Namespace     string
 	Name          string
 	Number        int64
+	DraftVersion  int64
 	DocumentJson  string
 	ExprVersion   string
 	PublishedBy   string
@@ -10015,6 +10023,7 @@ func (q *Queries) ListCatalogBlueprintLatest(ctx context.Context, namespace stri
 			&i.Namespace,
 			&i.Name,
 			&i.Number,
+			&i.DraftVersion,
 			&i.DocumentJson,
 			&i.ExprVersion,
 			&i.PublishedBy,

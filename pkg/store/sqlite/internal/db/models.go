@@ -126,6 +126,7 @@ type CatalogBlueprintVersion struct {
 	NamespaceID   string
 	Name          string
 	Number        int64
+	DraftVersion  int64
 	DocumentJson  string
 	ExprVersion   string
 	PublishedBy   string

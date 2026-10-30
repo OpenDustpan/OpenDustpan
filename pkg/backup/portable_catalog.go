@@ -31,6 +31,7 @@ func portableCatalogTables() []PortableTable {
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: portColNumber, Kind: KindInteger},
+				{Name: "draft_version", Kind: KindInteger},
 				{Name: "document_json", Kind: KindText},
 				{Name: portColExprVersion, Kind: KindText},
 				{Name: "published_by", Kind: KindText},

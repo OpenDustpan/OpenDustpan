@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,7 +179,13 @@ func testRetire(t *testing.T, h BlueprintHarness, f fixture) {
 		t.Fatalf("Retire(unknown) = %v, want ErrNotFound", err)
 	}
 
-	if err := h.Blueprints.SetExprVersion(t.Context(), bref("postgres"), 1, "v1.18.0", f.fence); err != nil {
+	err = h.Blueprints.SetExprVersion(
+		t.Context(),
+		catalog.ExprVersionChange{Ref: bref("postgres"), Number: 1, Expr: "v1.18.0"},
+		f.fence,
+		blueprintEntries(),
+	)
+	if err != nil {
 		t.Fatalf("SetExprVersion() = %v", err)
 	}
 
@@ -271,6 +278,30 @@ func testBlueprintAudit(t *testing.T, h BlueprintHarness, f fixture) {
 	}
 
 	count(3)
+
+	setErr := h.Blueprints.SetExprVersion(
+		t.Context(),
+		catalog.ExprVersionChange{Ref: bref("postgres"), Number: 1, Expr: "v1.18.0"},
+		f.fence,
+		blueprintEntries(),
+	)
+	if setErr != nil {
+		t.Fatalf("SetExprVersion() = %v", setErr)
+	}
+
+	count(4)
+
+	err = h.Blueprints.SetExprVersion(
+		t.Context(),
+		catalog.ExprVersionChange{Ref: bref("postgres"), Number: 2, Expr: "v1.18.0"},
+		f.fence,
+		blueprintEntries(),
+	)
+	if !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("SetExprVersion(unknown) = %v, want ErrNotFound", err)
+	}
+
+	count(4)
 }
 
 func testPublishNoDraft(t *testing.T, h BlueprintHarness, f fixture) {
@@ -408,24 +439,496 @@ func testBlueprintLimit(t *testing.T, h BlueprintHarness, f fixture) {
 func testVersionLimit(t *testing.T, h BlueprintHarness, f fixture) {
 	t.Helper()
 
-	putDraft(t, h, f, blueprint("postgres", "T"), 0)
-
-	b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
-	if err != nil {
-		t.Fatalf("Draft() = %v", err)
-	}
-
-	p := catalog.Publication{At: time.Now().UTC(), Ref: bref("postgres"), By: "platform", Blueprint: b, DraftVersion: 1}
-
 	for i := range catalog.MaxVersions {
+		var at int64
+		if i > 0 {
+			at = int64(i)
+		}
+
+		if _, err := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "T"), at, f.fence, nil); err != nil {
+			t.Fatalf("PutDraft(at %d) = %v", at, err)
+		}
+
+		b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+		if err != nil {
+			t.Fatalf("Draft() = %v", err)
+		}
+
+		p := catalog.Publication{
+			At: time.Now().UTC(), Ref: bref("postgres"), By: "platform", Blueprint: b, DraftVersion: at + 1,
+		}
+
 		v, pubErr := h.Blueprints.Publish(t.Context(), p, f.fence, nil)
 		if pubErr != nil || v.Number != i+1 {
 			t.Fatalf("Publish() = %d, %v, want %d", v.Number, pubErr, i+1)
 		}
 	}
 
+	at := int64(catalog.MaxVersions)
+	if _, err := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "T"), at, f.fence, nil); err != nil {
+		t.Fatalf("PutDraft(at %d) = %v", at, err)
+	}
+
+	b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+	if err != nil {
+		t.Fatalf("Draft() = %v", err)
+	}
+
+	p := catalog.Publication{
+		At: time.Now().UTC(), Ref: bref("postgres"), By: "platform", Blueprint: b, DraftVersion: at + 1,
+	}
+
 	_, err = h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
 	if !errors.Is(err, catalog.ErrLimit) {
 		t.Fatalf("Publish(over the limit) = %v, want ErrLimit", err)
+	}
+}
+
+// otherNamespace makes the namespace billing with a published postgres
+// blueprint, and returns its fence and the entries of its writes.
+func otherNamespace(t *testing.T, h BlueprintHarness) (namespace.Fence, []audit.Entry) {
+	t.Helper()
+
+	const other = namespace.Name("billing")
+
+	fence, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace(%s) = %v", other, err)
+	}
+
+	e := entry(catalog.ActionBlueprintPublish, "billing/postgres")
+	e.Namespace = other
+	entries := []audit.Entry{e}
+
+	_, putErr := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "Billing"), 0, fence, entries)
+	if putErr != nil {
+		t.Fatalf("PutDraft(%s) = %v", other, putErr)
+	}
+
+	b, _, err := h.Blueprints.Draft(t.Context(), catalog.BlueprintRef{Namespace: other, Name: "postgres"})
+	if err != nil {
+		t.Fatalf("Draft(%s) = %v", other, err)
+	}
+
+	b.ExprVersion = "v1.17.8"
+	p := catalog.Publication{
+		At: time.Now().UTC(), Ref: catalog.BlueprintRef{Namespace: other, Name: "postgres"}, By: "platform",
+		Blueprint: b, DraftVersion: 1,
+	}
+
+	if _, pubErr := h.Blueprints.Publish(t.Context(), p, fence, entries); pubErr != nil {
+		t.Fatalf("Publish(%s) = %v", other, pubErr)
+	}
+
+	return fence, entries
+}
+
+// testRefOfAnotherNamespace proves that a reference of one namespace never
+// writes under the fence of another: Publish, Retire and SetExprVersion each
+// refuse it with ErrFenced, and the other namespace keeps its rows and its
+// audit entries.
+func testRefOfAnotherNamespace(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	otherFence, _ := otherNamespace(t, h)
+	other := catalog.BlueprintRef{Namespace: otherFence.Namespace, Name: "postgres"}
+
+	before, err := h.Domain.AuditEntries(t.Context(), otherFence.Namespace)
+	if err != nil {
+		t.Fatalf("AuditEntries() = %v", err)
+	}
+
+	putDraft(t, h, f, blueprint("postgres", "Payments"), 0)
+
+	b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+	if err != nil {
+		t.Fatalf("Draft() = %v", err)
+	}
+
+	b.ExprVersion = "v1.17.8"
+	// The fence is the one of payments, the reference names billing.
+	p := catalog.Publication{At: time.Now().UTC(), Ref: other, By: "platform", Blueprint: b, DraftVersion: 1}
+
+	_, pubErr := h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
+	retireErr := h.Blueprints.Retire(t.Context(), other, 1, f.fence, blueprintEntries())
+	exprErr := h.Blueprints.SetExprVersion(
+		t.Context(),
+		catalog.ExprVersionChange{Ref: other, Number: 1, Expr: "v9.9.9"},
+		f.fence,
+		blueprintEntries(),
+	)
+
+	for name, got := range map[string]error{"Publish": pubErr, "Retire": retireErr, "SetExprVersion": exprErr} {
+		if !errors.Is(got, namespace.ErrFenced) {
+			t.Errorf("%s(ref of another namespace) = %v, want ErrFenced", name, got)
+		}
+	}
+
+	v, err := h.Blueprints.Version(t.Context(), other, 1)
+	if err != nil || v.Retired || v.Blueprint.ExprVersion != "v1.17.8" {
+		t.Fatalf(
+			"Version(billing, 1) = retired %v, Expr %q, %v, want it unchanged",
+			v.Retired,
+			v.Blueprint.ExprVersion,
+			err,
+		)
+	}
+
+	if _, verErr := h.Blueprints.Version(t.Context(), bref("postgres"), 1); !errors.Is(verErr, catalog.ErrNotFound) {
+		t.Fatalf("Version(payments, 1) = %v, want ErrNotFound: the publish wrote under the fence", verErr)
+	}
+
+	after, err := h.Domain.AuditEntries(t.Context(), otherFence.Namespace)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("AuditEntries(billing) = %d entries, %v, want %d", len(after), err, len(before))
+	}
+}
+
+// testPublishRefusals proves the checks of a publish that run before any row
+// is read: the document, its name, its Expr version and the draft version.
+// Each refusal leaves no version and no audit entry.
+func testPublishRefusals(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	putDraft(t, h, f, blueprint("postgres", "First"), 0)
+
+	good := blueprint("postgres", "First")
+	good.ExprVersion = "v1.17.8"
+
+	noTitle := good
+	noTitle.Title = ""
+
+	renamed := good
+	renamed.Name = "redis"
+
+	badExpr := good
+	badExpr.ExprVersion = "v1.17\n8"
+
+	tests := []struct {
+		name string
+		b    catalog.Blueprint
+		want error
+		at   int64
+	}{
+		{"a document that fails Validate", noTitle, catalog.ErrInvalid, 1},
+		{"a name that is not the name of the reference", renamed, catalog.ErrInvalid, 1},
+		{"an Expr version that is not a version", badExpr, catalog.ErrInvalid, 1},
+		{"draft version 0", good, catalog.ErrConflict, 0},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		p := catalog.Publication{
+			At: time.Now().UTC(), Ref: bref("postgres"), By: "platform", Blueprint: tc.b, DraftVersion: tc.at,
+		}
+
+		if _, err := h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries()); !errors.Is(err, tc.want) {
+			t.Errorf("Publish(%s) = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+
+	if _, err := h.Blueprints.Version(t.Context(), bref("postgres"), 1); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("Version(1) = %v, want ErrNotFound", err)
+	}
+
+	if got, err := h.Domain.AuditEntries(t.Context(), ns); err != nil || len(got) != 1 {
+		t.Fatalf("AuditEntries() = %d entries, %v, want only the one of the draft", len(got), err)
+	}
+}
+
+// testBadEntries proves that each write refuses an audit entry that fails
+// its checks and changes nothing.
+func testBadEntries(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	putDraft(t, h, f, blueprint("postgres", "First"), 0)
+	publish(t, h, f, "postgres", 1)
+
+	bad := []audit.Entry{entry(catalog.ActionBlueprintPublish, "payments/postgres")}
+	bad[0].Subject = ""
+
+	b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+	if err != nil {
+		t.Fatalf("Draft() = %v", err)
+	}
+
+	b.ExprVersion = "v1.17.8"
+	next := catalog.Publication{
+		At:           time.Now().UTC(),
+		Ref:          bref("postgres"),
+		By:           "platform",
+		Blueprint:    b,
+		DraftVersion: 2,
+	}
+
+	_, putErr := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "x"), 1, f.fence, bad)
+	_, pubErr := h.Blueprints.Publish(t.Context(), next, f.fence, bad)
+	retireErr := h.Blueprints.Retire(t.Context(), bref("postgres"), 1, f.fence, bad)
+	exprErr := h.Blueprints.SetExprVersion(
+		t.Context(),
+		catalog.ExprVersionChange{Ref: bref("postgres"), Number: 1, Expr: "v1.18.0"},
+		f.fence,
+		bad,
+	)
+
+	for name, got := range map[string]error{
+		"PutDraft": putErr, "Publish": pubErr, "Retire": retireErr, "SetExprVersion": exprErr,
+	} {
+		if !errors.Is(got, audit.ErrInvalidEntry) {
+			t.Errorf("%s(invalid entry) = %v, want ErrInvalidEntry", name, got)
+		}
+	}
+
+	read, err := h.Blueprints.Version(t.Context(), bref("postgres"), 1)
+	if err != nil || read.Retired || read.Blueprint.ExprVersion != "v1.17.8" {
+		t.Fatalf(
+			"Version(1) = retired %v, Expr %q, %v, want it unchanged",
+			read.Retired,
+			read.Blueprint.ExprVersion,
+			err,
+		)
+	}
+
+	if _, _, err := h.Blueprints.Draft(t.Context(), bref("postgres")); err != nil {
+		t.Fatalf("Draft() = %v", err)
+	}
+
+	if entries, err := h.Domain.AuditEntries(t.Context(), ns); err != nil || len(entries) != 2 {
+		t.Fatalf("AuditEntries() = %d entries, %v, want the 2 of the draft and the publish", len(entries), err)
+	}
+}
+
+// testBadVersionInput proves that Retire and SetExprVersion refuse a version
+// number below 1 with ErrNotFound, and SetExprVersion refuses an Expr version
+// that is not a version with ErrInvalid.
+func testBadVersionInput(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	putDraft(t, h, f, blueprint("postgres", "First"), 0)
+	publish(t, h, f, "postgres", 1)
+
+	for _, n := range []int{0, -1} {
+		retireErr := h.Blueprints.Retire(t.Context(), bref("postgres"), n, f.fence, blueprintEntries())
+		if !errors.Is(retireErr, catalog.ErrNotFound) {
+			t.Errorf("Retire(version %d) = %v, want ErrNotFound", n, retireErr)
+		}
+
+		exprErr := h.Blueprints.SetExprVersion(
+			t.Context(),
+			catalog.ExprVersionChange{Ref: bref("postgres"), Number: n, Expr: "v1.18.0"},
+			f.fence,
+			blueprintEntries(),
+		)
+		if !errors.Is(exprErr, catalog.ErrNotFound) {
+			t.Errorf("SetExprVersion(version %d) = %v, want ErrNotFound", n, exprErr)
+		}
+	}
+
+	for _, expr := range []string{"", "v1 8", "v1.8\n"} {
+		err := h.Blueprints.SetExprVersion(
+			t.Context(),
+			catalog.ExprVersionChange{Ref: bref("postgres"), Number: 1, Expr: expr},
+			f.fence,
+			blueprintEntries(),
+		)
+		if !errors.Is(err, catalog.ErrInvalid) {
+			t.Errorf("SetExprVersion(%q) = %v, want ErrInvalid", expr, err)
+		}
+	}
+
+	got, err := h.Blueprints.Version(t.Context(), bref("postgres"), 1)
+	if err != nil || got.Retired || got.Blueprint.ExprVersion != "v1.17.8" {
+		t.Fatalf("Version(1) = retired %v, Expr %q, %v, want it unchanged", got.Retired, got.Blueprint.ExprVersion, err)
+	}
+
+	if entries, auditErr := h.Domain.AuditEntries(t.Context(), ns); auditErr != nil || len(entries) != 2 {
+		t.Fatalf("AuditEntries() = %d entries, %v, want the 2 of the draft and the publish", len(entries), auditErr)
+	}
+}
+
+// testPublishStoredDraft proves that a publish records the stored draft and
+// that one draft version gives one version. A retire is for one version, so
+// a publish after a retire is allowed.
+func testPublishStoredDraft(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	putDraft(t, h, f, blueprint("postgres", "First"), 0)
+
+	changed := blueprint("postgres", "Not the draft")
+	changed.ExprVersion = "v1.17.8"
+	p := catalog.Publication{
+		At: time.Now().UTC(), Ref: bref("postgres"), By: "platform", Blueprint: changed, DraftVersion: 1,
+	}
+
+	_, err := h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
+	if !errors.Is(err, catalog.ErrInvalid) {
+		t.Fatalf("Publish(a document that is not the draft) = %v, want ErrInvalid", err)
+	}
+
+	v := publish(t, h, f, "postgres", 1)
+	if v.DraftVersion != 1 {
+		t.Fatalf("Publish() = draft version %d, want 1", v.DraftVersion)
+	}
+
+	b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+	if err != nil {
+		t.Fatalf("Draft() = %v", err)
+	}
+
+	b.ExprVersion = "v1.17.8"
+	again := catalog.Publication{
+		At:           time.Now().UTC(),
+		Ref:          bref("postgres"),
+		By:           "platform",
+		Blueprint:    b,
+		DraftVersion: 1,
+	}
+
+	_, pubErr := h.Blueprints.Publish(t.Context(), again, f.fence, blueprintEntries())
+	if !errors.Is(pubErr, catalog.ErrAlreadyPublished) {
+		t.Fatalf("Publish(the same draft again) = %v, want ErrAlreadyPublished", pubErr)
+	}
+
+	retireErr := h.Blueprints.Retire(t.Context(), bref("postgres"), 1, f.fence, blueprintEntries())
+	if retireErr != nil {
+		t.Fatalf("Retire() = %v", retireErr)
+	}
+
+	putDraft(t, h, f, blueprint("postgres", "Second"), 1)
+
+	if v2 := publish(t, h, f, "postgres", 2); v2.Number != 2 || v2.DraftVersion != 2 || v2.Retired {
+		t.Fatalf("Publish(after a retire) = %+v, want version 2 of draft 2, not retired", v2)
+	}
+
+	if got, err := h.Blueprints.Version(t.Context(), bref("postgres"), 1); err != nil || !got.Retired {
+		t.Fatalf("Version(1) = retired %v, %v, want retired", got.Retired, err)
+	}
+}
+
+// race runs fn in n goroutines at the same time and returns the number of
+// calls that gave no error and the errors of the others.
+func race(n int, fn func() error) (int, []error) {
+	results := make(chan error, n)
+
+	var wg sync.WaitGroup
+
+	for range n {
+		wg.Go(func() { results <- fn() })
+	}
+
+	wg.Wait()
+	close(results)
+
+	winners := 0
+
+	var others []error
+
+	for err := range results {
+		if err == nil {
+			winners++
+		} else {
+			others = append(others, err)
+		}
+	}
+
+	return winners, others
+}
+
+// wantOneWinner fails the test unless winners is 1 and each other error
+// matches want.
+func wantOneWinner(t *testing.T, what string, winners int, others []error, want error) {
+	t.Helper()
+
+	if winners != 1 {
+		t.Fatalf("%s: %d won, want 1 (others: %v)", what, winners, others)
+	}
+
+	for _, err := range others {
+		if !errors.Is(err, want) {
+			t.Fatalf("%s: a call that lost = %v, want %v", what, err, want)
+		}
+	}
+}
+
+const racers = 12
+
+// testPublishRace proves that concurrent publishes of one draft version give
+// one winner, in each of 12 rounds, so the versions are 1 to 12 with one
+// audit entry each.
+func testPublishRace(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	var at int64
+
+	for round := 1; round <= racers; round++ {
+		next, err := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "T"), at, f.fence, nil)
+		if err != nil {
+			t.Fatalf("PutDraft(at %d) = %v", at, err)
+		}
+
+		at = next
+
+		b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+		if err != nil {
+			t.Fatalf("Draft() = %v", err)
+		}
+
+		b.ExprVersion = "v1.17.8"
+		p := catalog.Publication{
+			At:           time.Now().UTC(),
+			Ref:          bref("postgres"),
+			By:           "platform",
+			Blueprint:    b,
+			DraftVersion: at,
+		}
+
+		winners, others := race(racers, func() error {
+			_, pubErr := h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
+
+			return pubErr
+		})
+		wantOneWinner(t, "publish of round "+strconv.Itoa(round), winners, others, catalog.ErrAlreadyPublished)
+	}
+
+	for n := 1; n <= racers; n++ {
+		if v, err := h.Blueprints.Version(t.Context(), bref("postgres"), n); err != nil || v.DraftVersion != int64(n) {
+			t.Fatalf("Version(%d) = draft %d, %v, want draft %d", n, v.DraftVersion, err, n)
+		}
+	}
+
+	if _, err := h.Blueprints.Version(t.Context(), bref("postgres"), racers+1); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("Version(%d) = %v, want ErrNotFound", racers+1, err)
+	}
+
+	if entries, err := h.Domain.AuditEntries(t.Context(), ns); err != nil || len(entries) != racers {
+		t.Fatalf("AuditEntries() = %d entries, %v, want %d, one for each publish", len(entries), err, racers)
+	}
+}
+
+// testDraftRace proves that concurrent writes of the draft at one version,
+// and of a new blueprint, give one winner each.
+func testDraftRace(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	winners, others := race(racers, func() error {
+		_, err := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "New"), 0, f.fence, blueprintEntries())
+
+		return err
+	})
+	wantOneWinner(t, "write of a new blueprint", winners, others, catalog.ErrConflict)
+
+	winners, others = race(racers, func() error {
+		_, err := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "Race"), 1, f.fence, blueprintEntries())
+
+		return err
+	})
+	wantOneWinner(t, "write of the draft at one version", winners, others, catalog.ErrConflict)
+
+	if got, v, err := h.Blueprints.Draft(t.Context(), bref("postgres")); err != nil || v != 2 || got.Title != "Race" {
+		t.Fatalf("Draft() = %q at %d, %v, want Race at 2", got.Title, v, err)
+	}
+
+	if entries, err := h.Domain.AuditEntries(t.Context(), ns); err != nil || len(entries) != 2 {
+		t.Fatalf("AuditEntries() = %d entries, %v, want 2, one for each winner", len(entries), err)
 	}
 }

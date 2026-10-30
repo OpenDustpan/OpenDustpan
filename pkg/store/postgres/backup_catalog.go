@@ -27,8 +27,15 @@ func pgCopyCatalogTables() []pgCopyTable {
 		{
 			table: "catalog_blueprint_versions",
 			columns: []string{
-				pgColNamespaceID, pgColName, pgColNumber, "document_json", "expr_version", "published_by",
-				"published_at_ms", "retired",
+				pgColNamespaceID,
+				pgColName,
+				pgColNumber,
+				"draft_version",
+				"document_json",
+				"expr_version",
+				"published_by",
+				"published_at_ms",
+				"retired",
 			},
 			orderBy: []string{pgColNamespaceID, pgColName, pgColNumber},
 		},
@@ -92,7 +99,7 @@ func checkStagedCatalogDrafts(ctx context.Context, pool *pgxpool.Pool, staging s
 }
 
 func checkStagedCatalogVersions(ctx context.Context, pool *pgxpool.Pool, staging string) error {
-	query := "SELECT n.name, v.name, v.number, v.document_json, v.expr_version, v.published_by, " +
+	query := "SELECT n.name, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by, " +
 		"v.published_at_ms, v.retired FROM " + stagingTable(staging, "catalog_blueprint_versions") +
 		" AS v LEFT JOIN " + stagingTable(staging, "namespaces") + " AS n ON n.id = v.namespace_id"
 
@@ -109,8 +116,17 @@ func checkStagedCatalogVersions(ctx context.Context, pool *pgxpool.Pool, staging
 			row catalogstore.VersionRow
 		)
 
-		scanErr := rows.Scan(&ns, &row.Name, &row.Number, &row.DocumentJSON, &row.ExprVersion, &row.PublishedBy,
-			&row.PublishedAtMs, &row.Retired)
+		scanErr := rows.Scan(
+			&ns,
+			&row.Name,
+			&row.Number,
+			&row.DraftVersion,
+			&row.DocumentJSON,
+			&row.ExprVersion,
+			&row.PublishedBy,
+			&row.PublishedAtMs,
+			&row.Retired,
+		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged blueprint versions: %w", backup.ErrExportRead)
 		}

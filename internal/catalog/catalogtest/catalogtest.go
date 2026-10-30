@@ -155,6 +155,13 @@ func RunBlueprints(t *testing.T, newHarness BlueprintFactory) {
 		{"a document keeps every field through a draft and a publish", testBlueprintRoundTrip},
 		{"a draft above the blueprint limit is ErrLimit", testBlueprintLimit},
 		{"a publish above the version limit is ErrLimit", testVersionLimit},
+		{"a reference of another namespace writes nothing under the fence", testRefOfAnotherNamespace},
+		{"a publish refuses a document that fails its checks", testPublishRefusals},
+		{"a write refuses an audit entry that fails its checks", testBadEntries},
+		{"a version below 1 and a bad Expr version are refused", testBadVersionInput},
+		{"a publish records the stored draft once, and a retire is for one version", testPublishStoredDraft},
+		{"concurrent publishes of one draft give one winner, and versions 1 to 12", testPublishRace},
+		{"concurrent writes of one draft version give one winner", testDraftRace},
 	}
 
 	for _, tc := range cases {

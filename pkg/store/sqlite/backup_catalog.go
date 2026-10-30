@@ -24,8 +24,15 @@ func sqliteCatalogBackupTables() []sqliteBackupTable {
 		{
 			table: "catalog_blueprint_versions",
 			columns: []string{
-				backupColNamespaceID, backupColName, "number", "document_json", "expr_version", "published_by",
-				"published_at_ms", "retired",
+				backupColNamespaceID,
+				backupColName,
+				"number",
+				"draft_version",
+				"document_json",
+				"expr_version",
+				"published_by",
+				"published_at_ms",
+				"retired",
 			},
 		},
 	}
@@ -92,7 +99,7 @@ FROM catalog_blueprints AS b LEFT JOIN namespaces AS n ON n.id = b.namespace_id`
 }
 
 func checkStagedCatalogVersions(ctx context.Context, conn *sql.DB) error {
-	const query = `SELECT n.name, v.name, v.number, v.document_json, v.expr_version, v.published_by,
+	const query = `SELECT n.name, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
 v.published_at_ms, v.retired
 FROM catalog_blueprint_versions AS v LEFT JOIN namespaces AS n ON n.id = v.namespace_id`
 
@@ -113,8 +120,17 @@ FROM catalog_blueprint_versions AS v LEFT JOIN namespaces AS n ON n.id = v.names
 			row catalogstore.VersionRow
 		)
 
-		scanErr := rows.Scan(&ns, &row.Name, &row.Number, &row.DocumentJSON, &row.ExprVersion, &row.PublishedBy,
-			&row.PublishedAtMs, &row.Retired)
+		scanErr := rows.Scan(
+			&ns,
+			&row.Name,
+			&row.Number,
+			&row.DraftVersion,
+			&row.DocumentJSON,
+			&row.ExprVersion,
+			&row.PublishedBy,
+			&row.PublishedAtMs,
+			&row.Retired,
+		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged blueprint versions: %w", backup.ErrExportRead)
 		}

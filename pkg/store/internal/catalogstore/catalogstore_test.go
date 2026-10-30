@@ -55,7 +55,7 @@ func versionRow(t *testing.T, mutate func(r *catalogstore.VersionRow)) catalogst
 
 	row := catalogstore.VersionRow{
 		Namespace: ns.String(), Name: "postgres", DocumentJSON: doc, ExprVersion: "v1.17.8", PublishedBy: "platform",
-		PublishedAtMs: 1_700_000_000_000, Number: 1, Retired: 0,
+		PublishedAtMs: 1_700_000_000_000, Number: 1, DraftVersion: 1, Retired: 0,
 	}
 	mutate(&row)
 
@@ -92,6 +92,7 @@ func TestVersionRefusesHostileRows(t *testing.T) {
 		{func(r *catalogstore.VersionRow) { r.Name = "other" }, "a name that is not the name of the document"},
 		{func(r *catalogstore.VersionRow) { r.Number = 0 }, "number 0"},
 		{func(r *catalogstore.VersionRow) { r.Number = catalog.MaxVersions + 1 }, "a number above the limit"},
+		{func(r *catalogstore.VersionRow) { r.DraftVersion = 0 }, "draft version 0"},
 		{func(r *catalogstore.VersionRow) { r.Retired = 2 }, "a retired flag of 2"},
 		{func(r *catalogstore.VersionRow) { r.Retired = -1 }, "a retired flag of -1"},
 		{func(r *catalogstore.VersionRow) {
@@ -298,5 +299,35 @@ func TestCheckRefAndExprVersion(t *testing.T) {
 
 	if err := catalogstore.CheckExprVersion("v1.17.8-rc_1+b2"); err != nil {
 		t.Errorf("CheckExprVersion(valid) = %v", err)
+	}
+}
+
+func TestCheckStoredDraft(t *testing.T) {
+	t.Parallel()
+
+	ref := catalog.BlueprintRef{Namespace: ns, Name: "postgres"}
+	stored := blueprint("postgres")
+
+	doc, err := catalogstore.EncodeDraft(&stored)
+	if err != nil {
+		t.Fatalf("EncodeDraft() = %v", err)
+	}
+
+	same := blueprint("postgres")
+	same.ExprVersion = "v1.17.8"
+
+	if checkErr := catalogstore.CheckStoredDraft(ref, doc, &same); checkErr != nil {
+		t.Fatalf("CheckStoredDraft(the draft with an Expr version) = %v, want nil", checkErr)
+	}
+
+	changed := blueprint("postgres")
+	changed.Title = "Not the draft"
+
+	if checkErr := catalogstore.CheckStoredDraft(ref, doc, &changed); !errors.Is(checkErr, catalog.ErrInvalid) {
+		t.Fatalf("CheckStoredDraft(another document) = %v, want ErrInvalid", checkErr)
+	}
+
+	if checkErr := catalogstore.CheckStoredDraft(ref, "{", &same); !errors.Is(checkErr, catalogstore.ErrCorrupt) {
+		t.Fatalf("CheckStoredDraft(a stored draft that is not JSON) = %v, want ErrCorrupt", checkErr)
 	}
 }

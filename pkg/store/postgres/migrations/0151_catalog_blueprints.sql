@@ -17,7 +17,8 @@ CREATE TABLE catalog_blueprints (
 -- last one, from 1. document_json, published_by and published_at_ms never
 -- change after the insert. Only retired and expr_version change: a retire
 -- sets retired to 1, and a compile with a new Expr version sets expr_version.
--- expr_version holds the Expr version of the blueprint version, and
+-- draft_version is the version of the draft that the version published, and
+-- one draft version gives one version. expr_version holds the Expr version of the blueprint version, and
 -- document_json holds the document with no Expr version. The flag retired is
 -- 0 or 1. A version outlives no blueprint: the foreign key names the blueprint
 -- row, which a user never deletes.
@@ -25,6 +26,7 @@ CREATE TABLE catalog_blueprint_versions (
     namespace_id    text    NOT NULL,
     name            text    NOT NULL,
     number          bigint  NOT NULL CHECK (number >= 1),
+    draft_version   bigint  NOT NULL CHECK (draft_version >= 1),
     document_json   text    NOT NULL,
     expr_version    text    NOT NULL,
     published_by    text    NOT NULL,
@@ -33,3 +35,5 @@ CREATE TABLE catalog_blueprint_versions (
     PRIMARY KEY (namespace_id, name, number),
     FOREIGN KEY (namespace_id, name) REFERENCES catalog_blueprints (namespace_id, name)
 );
+
+CREATE UNIQUE INDEX catalog_blueprint_versions_draft ON catalog_blueprint_versions (namespace_id, name, draft_version);

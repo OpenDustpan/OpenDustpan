@@ -4194,11 +4194,13 @@ FROM catalog_blueprints AS b
 JOIN namespaces AS n ON n.id = b.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND b.name = sqlc.arg(name);
 
--- name: GetCatalogBlueprintDraftVersion :one
-SELECT b.draft_version
-FROM catalog_blueprints AS b
-JOIN namespaces AS n ON n.id = b.namespace_id
-WHERE n.name = sqlc.arg(namespace) AND b.name = sqlc.arg(name);
+-- name: GetCatalogBlueprintVersionOfDraft :one
+-- The number of the version that published a draft version. No row means the
+-- draft version has no version.
+SELECT v.number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.draft_version = sqlc.arg(draft_version);
 
 -- name: LastCatalogBlueprintVersion :one
 -- The last published number of a blueprint, 0 for none. The caller holds the
@@ -4210,16 +4212,16 @@ WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name);
 
 -- name: InsertCatalogBlueprintVersion :exec
 INSERT INTO catalog_blueprint_versions (
-    namespace_id, name, number, document_json, expr_version, published_by, published_at_ms, retired
+    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
 )
 VALUES (
     (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(name), sqlc.arg(number), sqlc.arg(document_json), sqlc.arg(expr_version),
+    sqlc.arg(name), sqlc.arg(number), sqlc.arg(draft_version), sqlc.arg(document_json), sqlc.arg(expr_version),
     sqlc.arg(published_by), sqlc.arg(published_at_ms), 0
 );
 
 -- name: GetCatalogBlueprintVersion :one
-SELECT n.name AS namespace, v.name, v.number, v.document_json, v.expr_version, v.published_by,
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
        v.published_at_ms, v.retired
 FROM catalog_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
@@ -4227,7 +4229,7 @@ WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.number = sq
 
 -- name: ListCatalogBlueprintLatest :many
 -- The newest published version of each blueprint of a namespace, by name.
-SELECT n.name AS namespace, v.name, v.number, v.document_json, v.expr_version, v.published_by,
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
        v.published_at_ms, v.retired
 FROM catalog_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id

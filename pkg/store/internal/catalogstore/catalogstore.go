@@ -8,6 +8,7 @@ package catalogstore
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ type VersionRow struct {
 	PublishedBy   string
 	PublishedAtMs int64
 	Number        int64
+	DraftVersion  int64
 	Retired       int64
 }
 
@@ -199,6 +201,9 @@ func Version(r VersionRow) (catalog.Version, error) {
 			ErrCorrupt, ref, r.Number)
 	case r.Number < 1 || r.Number > catalog.MaxVersions:
 		return catalog.Version{}, fmt.Errorf("%w: %s version %d", ErrCorrupt, ref, r.Number)
+	case r.DraftVersion < 1:
+		return catalog.Version{}, fmt.Errorf("%w: %s version %d has draft version %d",
+			ErrCorrupt, ref, r.Number, r.DraftVersion)
 	case r.Retired != 0 && r.Retired != 1:
 		return catalog.Version{}, fmt.Errorf("%w: %s version %d has retired %d", ErrCorrupt, ref, r.Number, r.Retired)
 	}
@@ -206,13 +211,58 @@ func Version(r VersionRow) (catalog.Version, error) {
 	b.ExprVersion = r.ExprVersion
 
 	return catalog.Version{
-		PublishedAt: codec.FromMillis(r.PublishedAtMs),
-		Blueprint:   b,
-		Namespace:   namespace.Name(r.Namespace),
-		PublishedBy: r.PublishedBy,
-		Number:      int(r.Number),
-		Retired:     r.Retired == 1,
+		PublishedAt:  codec.FromMillis(r.PublishedAtMs),
+		Blueprint:    b,
+		Namespace:    namespace.Name(r.Namespace),
+		PublishedBy:  r.PublishedBy,
+		Number:       int(r.Number),
+		DraftVersion: r.DraftVersion,
+		Retired:      r.Retired == 1,
 	}, nil
+}
+
+// CheckStoredDraft checks that the document of a publish is the stored draft
+// of ref: both documents, without their Expr version, have the same SHA-256.
+// It returns catalog.ErrInvalid for a document that differs, and ErrCorrupt
+// for a stored draft that fails its checks.
+//
+// Defense in depth: the service reads the draft and publishes what it read.
+// This check stays so that a caller cannot record a document that nobody
+// wrote as a draft, and so that a version always has a draft behind it.
+func CheckStoredDraft(ref catalog.BlueprintRef, stored string, b *catalog.Blueprint) error {
+	draft, err := Draft(ref, stored)
+	if err != nil {
+		return err
+	}
+
+	want, err := documentHash(&draft)
+	if err != nil {
+		return err
+	}
+
+	got, err := documentHash(b)
+	if err != nil {
+		return err
+	}
+
+	if got != want {
+		return fmt.Errorf("%w: the document is not the stored draft %s", catalog.ErrInvalid, ref)
+	}
+
+	return nil
+}
+
+// documentHash returns the SHA-256 of the JSON of b without its Expr version.
+func documentHash(b *catalog.Blueprint) ([32]byte, error) {
+	doc := *b
+	doc.ExprVersion = ""
+
+	data, err := json.Marshal(&doc)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("%w: encode blueprint: %w", catalog.ErrInvalid, err)
+	}
+
+	return sha256.Sum256(data), nil
 }
 
 // maxExprVersionBytes is the longest Expr version that a store keeps.

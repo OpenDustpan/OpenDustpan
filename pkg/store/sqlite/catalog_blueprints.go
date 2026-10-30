@@ -191,52 +191,88 @@ func (c CatalogBlueprintStore) Publish(
 	ns := fence.Namespace.String()
 	row := catalogstore.VersionRow{
 		Namespace: ns, Name: p.Ref.Name, DocumentJSON: doc, ExprVersion: p.Blueprint.ExprVersion,
-		PublishedBy: p.By, PublishedAtMs: codec.Millis(p.At), Number: 0, Retired: 0,
+		PublishedBy: p.By, PublishedAtMs: codec.Millis(p.At), Number: 0, DraftVersion: p.DraftVersion, Retired: 0,
 	}
 
 	c.s.mu.RLock()
 	defer c.s.mu.RUnlock()
 
 	err = c.s.inFencedEntriesTx(ctx, fence, e, func(q *db.Queries) error {
-		at, atErr := q.GetCatalogBlueprintDraftVersion(
-			ctx, db.GetCatalogBlueprintDraftVersionParams{Namespace: ns, Name: p.Ref.Name},
-		)
-		if errors.Is(atErr, sql.ErrNoRows) || (atErr == nil && at != p.DraftVersion) {
-			return fmt.Errorf("%w: draft %s is not at version %d", catalog.ErrConflict, p.Ref, p.DraftVersion)
-		}
-
-		if atErr != nil {
-			return fmt.Errorf("select draft version: %w", atErr)
-		}
-
-		last, lastErr := q.LastCatalogBlueprintVersion(
-			ctx, db.LastCatalogBlueprintVersionParams{Namespace: ns, Name: p.Ref.Name},
-		)
-		if lastErr != nil {
-			return fmt.Errorf("select last blueprint version: %w", lastErr)
-		}
-
-		if last >= catalog.MaxVersions {
-			return fmt.Errorf("%w: %s has %d versions", catalog.ErrLimit, p.Ref, catalog.MaxVersions)
-		}
-
-		row.Number = last + 1
-
-		insErr := q.InsertCatalogBlueprintVersion(ctx, db.InsertCatalogBlueprintVersionParams{
-			Namespace: ns, Name: p.Ref.Name, Number: row.Number, DocumentJson: doc, ExprVersion: row.ExprVersion,
-			PublishedBy: p.By, PublishedAtMs: row.PublishedAtMs,
-		})
-		if insErr != nil {
-			return fmt.Errorf("insert blueprint version: %w", insErr)
-		}
-
-		return nil
+		return publishNext(ctx, q, &p, &row)
 	})
 	if err != nil {
 		return catalog.Version{}, err
 	}
 
 	return catalogstore.Version(row)
+}
+
+// publishNext inserts the next version for p in the open transaction. It
+// checks, in this order: the draft is at p.DraftVersion, p holds the stored
+// draft, the draft version has no version, and the blueprint is below its
+// limit of versions. It sets row.Number.
+func publishNext(ctx context.Context, q *db.Queries, p *catalog.Publication, row *catalogstore.VersionRow) error {
+	if err := checkDraftOfPublication(ctx, q, p); err != nil {
+		return err
+	}
+
+	ns := p.Ref.Namespace.String()
+
+	last, err := q.LastCatalogBlueprintVersion(
+		ctx, db.LastCatalogBlueprintVersionParams{Namespace: ns, Name: p.Ref.Name},
+	)
+	if err != nil {
+		return fmt.Errorf("select last blueprint version: %w", err)
+	}
+
+	if last >= catalog.MaxVersions {
+		return fmt.Errorf("%w: %s has %d versions", catalog.ErrLimit, p.Ref, catalog.MaxVersions)
+	}
+
+	row.Number = last + 1
+
+	err = q.InsertCatalogBlueprintVersion(ctx, db.InsertCatalogBlueprintVersionParams{
+		Namespace: ns, Name: p.Ref.Name, Number: row.Number, DraftVersion: row.DraftVersion,
+		DocumentJson: row.DocumentJSON, ExprVersion: row.ExprVersion, PublishedBy: row.PublishedBy,
+		PublishedAtMs: row.PublishedAtMs,
+	})
+	if err != nil {
+		return fmt.Errorf("insert blueprint version: %w", err)
+	}
+
+	return nil
+}
+
+// checkDraftOfPublication checks that p publishes the stored draft, once.
+func checkDraftOfPublication(ctx context.Context, q *db.Queries, p *catalog.Publication) error {
+	ns := p.Ref.Namespace.String()
+
+	stored, err := q.GetCatalogBlueprintDraft(ctx, db.GetCatalogBlueprintDraftParams{Namespace: ns, Name: p.Ref.Name})
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && stored.DraftVersion != p.DraftVersion) {
+		return fmt.Errorf("%w: draft %s is not at version %d", catalog.ErrConflict, p.Ref, p.DraftVersion)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select draft: %w", err)
+	}
+
+	if checkErr := catalogstore.CheckStoredDraft(p.Ref, stored.DraftJson, &p.Blueprint); checkErr != nil {
+		return checkErr
+	}
+
+	number, err := q.GetCatalogBlueprintVersionOfDraft(
+		ctx,
+		db.GetCatalogBlueprintVersionOfDraftParams{Namespace: ns, Name: p.Ref.Name, DraftVersion: p.DraftVersion},
+	)
+	if err == nil {
+		return fmt.Errorf("%w: %s draft %d is version %d", catalog.ErrAlreadyPublished, p.Ref, p.DraftVersion, number)
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("select version of draft: %w", err)
+	}
+
+	return nil
 }
 
 // Version implements catalog.BlueprintStore.
@@ -257,7 +293,8 @@ func (c CatalogBlueprintStore) Version(ctx context.Context, ref catalog.Blueprin
 
 	v, err := catalogstore.Version(catalogstore.VersionRow{
 		Namespace: row.Namespace, Name: row.Name, DocumentJSON: row.DocumentJson, ExprVersion: row.ExprVersion,
-		PublishedBy: row.PublishedBy, PublishedAtMs: row.PublishedAtMs, Number: row.Number, Retired: row.Retired,
+		PublishedBy: row.PublishedBy, PublishedAtMs: row.PublishedAtMs, Number: row.Number,
+		DraftVersion: row.DraftVersion, Retired: row.Retired,
 	})
 	if err != nil {
 		return catalog.Version{}, err
@@ -290,7 +327,8 @@ func (c CatalogBlueprintStore) ListBlueprints(ctx context.Context, ns namespace.
 	for _, row := range rows {
 		v, vErr := catalogstore.Version(catalogstore.VersionRow{
 			Namespace: row.Namespace, Name: row.Name, DocumentJSON: row.DocumentJson, ExprVersion: row.ExprVersion,
-			PublishedBy: row.PublishedBy, PublishedAtMs: row.PublishedAtMs, Number: row.Number, Retired: row.Retired,
+			PublishedBy: row.PublishedBy, PublishedAtMs: row.PublishedAtMs, Number: row.Number,
+			DraftVersion: row.DraftVersion, Retired: row.Retired,
 		})
 		if vErr != nil {
 			return nil, vErr
@@ -337,29 +375,29 @@ func (c CatalogBlueprintStore) Retire(
 
 // SetExprVersion implements catalog.BlueprintStore.
 func (c CatalogBlueprintStore) SetExprVersion(
-	ctx context.Context, ref catalog.BlueprintRef, n int, expr string, fence namespace.Fence,
+	ctx context.Context, ch catalog.ExprVersionChange, fence namespace.Fence, e []audit.Entry,
 ) error {
-	if err := catalogstore.CheckRef(ref, n, fence, nil); err != nil {
+	if err := catalogstore.CheckRef(ch.Ref, ch.Number, fence, e); err != nil {
 		return err
 	}
 
-	if err := catalogstore.CheckExprVersion(expr); err != nil {
+	if err := catalogstore.CheckExprVersion(ch.Expr); err != nil {
 		return err
 	}
 
 	c.s.mu.RLock()
 	defer c.s.mu.RUnlock()
 
-	return c.s.inFencedEntriesTx(ctx, fence, nil, func(q *db.Queries) error {
+	return c.s.inFencedEntriesTx(ctx, fence, e, func(q *db.Queries) error {
 		rows, err := q.SetCatalogBlueprintExprVersion(ctx, db.SetCatalogBlueprintExprVersionParams{
-			ExprVersion: expr, Namespace: ref.Namespace.String(), Name: ref.Name, Number: int64(n),
+			ExprVersion: ch.Expr, Namespace: ch.Ref.Namespace.String(), Name: ch.Ref.Name, Number: int64(ch.Number),
 		})
 		if err != nil {
 			return fmt.Errorf("set blueprint Expr version: %w", err)
 		}
 
 		if rows == 0 {
-			return fmt.Errorf("%w: %s version %d", catalog.ErrNotFound, ref, n)
+			return fmt.Errorf("%w: %s version %d", catalog.ErrNotFound, ch.Ref, ch.Number)
 		}
 
 		return nil
