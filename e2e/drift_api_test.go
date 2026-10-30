@@ -154,6 +154,18 @@ func driftScenario(t *testing.T, env *e2e.Env) {
 	refusesBadChecks(ctx, t, env, &routes)
 	unknownUnitsAnswerNotFound(ctx, t, env)
 	memberReadsNothing(ctx, t, env, &routes)
+
+	memberReadsNoDriftSection(ctx, t, env, &driftContextCase{unitID: unitID, jobID: started, base: base})
+
+	// No API route records a drift result yet, so the last step writes it through
+	// the store of the in-process server. The server binary holds its database
+	// open, so the step cannot run there. Every step above runs against both.
+	if e2e.UseBinaryServer() {
+		t.Log("skip: the drift section of a drifted unit; it records the result through the in-process store")
+
+		return
+	}
+
 	contextReadsDrift(ctx, t, env, &driftContextCase{unitID: unitID, jobID: started, base: base})
 }
 
@@ -244,6 +256,15 @@ func contextReadsDrift(ctx context.Context, t *testing.T, env *e2e.Env, c *drift
 		Path: c.base + "/context?include=drift,health", Body: "", Want: http.StatusOK, Scheme: "token",
 		Check: checkContextDrift("ok", "drifted", c.jobID, addresses),
 	})
+
+	// Again with a result recorded: the 404 must hide the addresses.
+	memberReadsNoDriftSection(ctx, t, env, c)
+}
+
+// memberReadsNoDriftSection proves that a member who cannot read the unit gets
+// the 404 of an unknown unit from the context route, with no drift address.
+func memberReadsNoDriftSection(ctx context.Context, t *testing.T, env *e2e.Env, c *driftContextCase) {
+	t.Helper()
 
 	token, ok := env.MemberToken()
 	if !ok {
