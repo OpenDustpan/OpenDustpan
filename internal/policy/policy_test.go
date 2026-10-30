@@ -558,3 +558,103 @@ func TestParseWebhookAnswerRefusesBadGroups(t *testing.T) {
 		t.Fatalf("ParseWebhookAnswer() = %v, want ErrInvalidDecision", err)
 	}
 }
+
+// TestVerifyErrorsHoldNoHeaderText puts a marker in each part of a header that
+// Verify reads, and checks that no error holds the marker.
+func TestVerifyErrorsHoldNoHeaderText(t *testing.T) {
+	t.Parallel()
+
+	const marker = "MARKER-7f3a"
+
+	secret := []byte(strings.Repeat("s", policy.MinSecretBytes))
+	body := []byte("{}")
+	at := time.Unix(1_790_000_000, 0)
+
+	good, err := policy.Sign(body, at, secret)
+	if err != nil {
+		t.Fatalf("Sign() = %v", err)
+	}
+
+	cases := map[string]string{
+		"a part with no '='":          good + "," + marker,
+		"a key with no value":         good + "," + marker + "=",
+		"a v1 that is not hex":        "t=1790000000,v1=" + marker,
+		"a t that is not a number":    "t=" + marker + ",v1=00",
+		"a t with the marker inside":  "t=1790000000" + marker + ",v1=00",
+		"a v1 with the marker, 2nd":   good + ",v1=" + marker,
+		"an unknown key with marker":  marker + "=" + marker + "," + good,
+		"a repeated t with a marker":  good + ",t=" + marker,
+		"the marker as the only part": marker,
+	}
+
+	for name, header := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy.Verify(header, body, secret, at)
+			if err == nil {
+				// An unknown key does not count, so the header may pass.
+				return
+			}
+
+			if strings.Contains(err.Error(), marker) {
+				t.Fatalf("Verify() = %q, the error holds the marker", err)
+			}
+		})
+	}
+}
+
+func TestVerifyHugeTime(t *testing.T) {
+	t.Parallel()
+
+	secret := []byte(strings.Repeat("s", policy.MinSecretBytes))
+	at := time.Unix(1_790_000_000, 0)
+
+	cases := []struct {
+		name   string
+		header string
+		want   error
+	}{
+		{"the largest time", "t=9223372036854775807,v1=00", policy.ErrSignatureTime},
+		{"the smallest time", "t=-9223372036854775808,v1=00", policy.ErrSignatureTime},
+		{"a time above 64 bits", "t=99999999999999999999,v1=00", policy.ErrSignature},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := policy.Verify(tc.header, []byte("{}"), secret, at); !errors.Is(err, tc.want) {
+				t.Fatalf("Verify() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestCombineGroupsStayBounded checks that the groups of a requirement never
+// pass the limit of one decision, also for many decisions.
+func TestCombineGroupsStayBounded(t *testing.T) {
+	t.Parallel()
+
+	ds := make([]policy.Decision, 0, 200)
+
+	for i := range 200 {
+		groups := make([]string, policy.MaxApprovalGroups)
+		for j := range groups {
+			groups[j] = "g" + strings.Repeat("a", (i+j)%7) + string(rune('a'+j%26))
+		}
+
+		ds = append(ds, approve(1, groups...))
+	}
+
+	got, err := policy.Combine(ds)
+	if err != nil {
+		t.Fatalf("Combine() = %v", err)
+	}
+
+	for _, a := range got.Approvals {
+		if len(a.Groups) > policy.MaxApprovalGroups {
+			t.Fatalf("a requirement has %d groups, the limit is %d", len(a.Groups), policy.MaxApprovalGroups)
+		}
+	}
+}
