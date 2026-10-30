@@ -13,6 +13,7 @@ import (
 	"io"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/trustrule"
@@ -190,4 +191,53 @@ func CheckPrincipal(p PrincipalRow, ns namespace.Name) error {
 	default:
 		return nil
 	}
+}
+
+// CheckExchange checks an exchange before the transaction: the rule ID, the
+// kind of the token, its principal and its times.
+func CheckExchange(x *trustrule.Exchange) error {
+	if err := x.Rule.Validate(); err != nil {
+		return err
+	}
+
+	// Defense in depth: the service makes only tokens of the kind trust for
+	// an exchange. This check stays so that no caller of the store makes a
+	// personal or a service token through the path of an exchange.
+	if x.Token.Kind != accesstoken.KindTrust {
+		return fmt.Errorf("%w: an exchange stores only a token of the kind %q, not %q", trustrule.ErrInvalid,
+			accesstoken.KindTrust, x.Token.Kind)
+	}
+
+	if x.Token.PrincipalID == "" || !x.Token.ExpiresAt.After(x.Token.CreatedAt) {
+		return fmt.Errorf("%w: the token of the exchange has no principal or no lifetime", trustrule.ErrInvalid)
+	}
+
+	return nil
+}
+
+// CheckExchangeRule returns trustrule.ErrNotFound when the stored rule row of
+// an exchange does not name the principal of the token, or fails the checks
+// of a rule.
+func CheckExchangeRule(row Row, principalID string) error {
+	r, err := Rule(row)
+	if err != nil || r.PrincipalID != principalID {
+		return fmt.Errorf("%w: the rule does not name the principal of the token", trustrule.ErrNotFound)
+	}
+
+	return nil
+}
+
+// CheckExchangePrincipal is CheckPrincipal for an exchange: a disabled
+// principal fails too. disabledAtMs is zero for a principal that is not
+// disabled.
+func CheckExchangePrincipal(p PrincipalRow, disabledAtMs int64, ns namespace.Name) error {
+	if err := CheckPrincipal(p, ns); err != nil {
+		return err
+	}
+
+	if disabledAtMs != 0 {
+		return fmt.Errorf("%w: the principal is disabled", trustrule.ErrPrincipal)
+	}
+
+	return nil
 }

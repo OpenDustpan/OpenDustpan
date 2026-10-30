@@ -107,6 +107,34 @@ $ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
     https://dustpan.example.com/api/dustpan/v1/namespaces/acme/trust-rules
 ```
 
+## Token exchange
+
+`POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange` needs no
+sign-in: the token of the workload is the credential. The body is:
+
+```json
+{"token": "<the JWT of the workload>", "rule": "<optional rule ID>"}
+```
+
+The server checks the token against the rules of the namespace, as
+[the guide](../guides/workload-identity.md) says, and answers 201 with
+`Cache-Control: no-store`:
+
+```json
+{"token": "odp_...", "id": "tok-...", "expiresAt": "2026-10-30T13:00:00Z",
+ "principal": "prn-...", "rule": "trr-..."}
+```
+
+`token` is the secret of the access token: the server shows it once. `id` is
+the ID of the access token. The token lives the exchange lifetime of the token
+policy, one hour by default.
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.body-invalid` | The body is not one JSON object with `token`. |
+| 401 | `trust-rule.no-match` | No rule of the namespace accepts the token, or the namespace does not exist. The answer never names the failed check: the audit log of the namespace does. |
+| 409 | `trust-rule.ambiguous` | More than one rule accepts the token. Name the rule in `rule`. |
+
 ## Errors
 
 Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.

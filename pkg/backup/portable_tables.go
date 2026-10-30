@@ -690,6 +690,7 @@ func portableSpec() []PortableTable {
 				{Name: "disable_accounts", Kind: KindBool},
 				{Name: "disable_break_glass", Kind: KindBool},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: "exchange_lifetime_ms", Kind: KindInteger},
 			},
 		},
 		{

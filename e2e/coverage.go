@@ -921,7 +921,18 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("trust rule service: %v", err)
 	}
 
+	exchanger, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
+		Rules: struct{ trustrule.Store }{nil}, Exchanges: struct{ trustrule.ExchangeStore }{nil},
+		Namespaces: namespaces, Principals: struct{ trustrulesvc.Principals }{nil},
+		Tokens: struct{ trustrulesvc.TokenIssuer }{nil}, Audit: coverageAuditStore{}, Refusals: nil, Keys: nil,
+		InstallationURLs: nil, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("token exchange: %v", err)
+	}
+
 	handler, err := trustrulesapi.NewHandler(trustrulesapi.Config{
+		Exchanger:      exchanger,
 		Namespaces:     namespaces,
 		Rules:          rules,
 		Authenticator:  coverageAuthenticator{},
@@ -2795,6 +2806,11 @@ func trustRuleAllowEntries() []AllowEntry {
 		{Method: http.MethodPost, Path: rules, CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: rule, CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: rule, CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodPost, Path: rules + "/exchange", CoveringTest: "TestWorkloadTokenExchange",
+			Reason: "Workload route: a CI job calls it with the token of its platform. The steps of " +
+				"TestWorkloadTokenExchange call it with tokens of a fake issuer.",
+		},
 	}
 }
 

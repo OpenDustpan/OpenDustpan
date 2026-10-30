@@ -594,7 +594,7 @@ func pgCopyGrantTables() []pgCopyTable {
 			table: "access_token_policy",
 			columns: []string{
 				"id", "max_lifetime_ms", "inactivity_ms", "disable_tokens", "disable_accounts",
-				"disable_break_glass", pgColUpdatedAtMs,
+				"disable_break_glass", pgColUpdatedAtMs, "exchange_lifetime_ms",
 			},
 			orderBy: []string{"id"},
 		},

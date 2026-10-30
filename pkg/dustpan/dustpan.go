@@ -97,7 +97,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/trigger"
-	"opendustpan.org/opendustpan/pkg/trustrule"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -286,7 +285,7 @@ type settings struct {
 	sourceFilters source.Filters
 	// trustRules keeps the workload trust rules of each namespace, or nil
 	// without them. See WithTrustRules.
-	trustRules trustrule.Store
+	trustRules trustRuleSettings
 	// jobClaimer claims the phases of runner jobs for the runners of the
 	// protocol, or is nil. See WithJobClaimer.
 	jobClaimer job.Claimer
@@ -819,7 +818,7 @@ func defaultSettings() *settings {
 		durableStore:            nil,
 		runners:                 nil,
 		sourceFilters:           nil,
-		trustRules:              nil,
+		trustRules:              trustRuleSettings{store: nil, cas: nil, loopback: false},
 		jobClaimer:              nil,
 		components:              AllComponents(),
 		operationLease:          0,
@@ -1382,7 +1381,7 @@ func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) 
 		}
 	}
 
-	if cfg.trustRules != nil {
+	if cfg.trustRules.store != nil {
 		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure)
 		if err != nil {
 			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil}, err

@@ -85,6 +85,11 @@ persons and services.
   service token. An access token cannot create a rule: only a person after
   a sign-in can. A rule never names a principal of another namespace, a
   person or a disabled principal, and never names an issuer of this server.
+- **A token exchange issues a short-lived token of the principal of a
+  rule.** A workload with a token that a trust rule accepts gets an access
+  token of the kind `trust` for the principal of the rule. It lives one hour
+  by default, no rotation renews it, and it never creates a rule or another
+  token. A refused exchange answers the same 401 for each failed check.
 - **An account administrator can act as any service principal.** The
   built-in roles `account-administrator` and `site-administrator` hold
   `principal:manage-tokens` on the installation, which holds every

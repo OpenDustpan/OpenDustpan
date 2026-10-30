@@ -233,6 +233,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // the unknown namespace, a fenced write and the maintenance mode.
 func classify(err error) (problem.Problem, bool) {
 	switch {
+	case errors.Is(err, trustrulesvc.ErrNoMatch):
+		return problem.New(http.StatusUnauthorized, errcode.TrustRuleNoMatch, trustrulesvc.ErrNoMatch.Error()), true
+	case errors.Is(err, trustrulesvc.ErrAmbiguous):
+		return problem.New(http.StatusConflict, errcode.TrustRuleAmbiguous, trustrulesvc.ErrAmbiguous.Error()), true
 	case errors.Is(err, trustrulesvc.ErrSignInRequired):
 		return problem.New(http.StatusForbidden, errcode.TrustRuleSignInRequired,
 			trustrulesvc.ErrSignInRequired.Error()), true
