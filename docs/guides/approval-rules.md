@@ -154,7 +154,7 @@ A namespace holds at most 64 approval rules. The 65th answers 422.
 
 | Step | Action | Object | Roles |
 | --- | --- | --- | --- |
-| Read a default or a rule | `namespace:read-gates` | The namespace | `viewer`, `secret-viewer`, `auditor`, `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
+| Read a default or a rule | `namespace:read-gates` | The namespace | `viewer`, `secret-viewer`, `auditor`, `planner`, `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
 | Set or remove a default or a rule | `namespace:manage-gates` | The namespace | `admin`, `account-administrator`, `site-administrator` |
 
 Only the `admin` role among the namespace roles can set or remove. A person
