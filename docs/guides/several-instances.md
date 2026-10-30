@@ -218,7 +218,7 @@ DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslm
 
 The values `5m` and `10s` are examples. Nobody measured them against a managed database.
 
-The URL can name more than one host, separated by commas. With `target_session_attrs=read-write`, the driver tries the hosts in order and uses the first one that accepts writes. Use this form only when the database service does not give one address that always names the primary.
+The driver checks `target_session_attrs` only when it opens a connection. A connection that turns read-only after it opened stays in the pool until it reaches `pool_max_conn_lifetime`, which is 1 hour by default. Writes on that connection fail with 503 until then. Set `pool_max_conn_lifetime` lower, for example `5m`, for a faster recovery.
 
 ### What was tested
 
@@ -232,15 +232,26 @@ The tests ran on 2026-10-30 against PostgreSQL 18.6 on one host, with pgx 5.11.0
 
 ### What should work, and was not tested
 
-No test ran on a managed database service, on a real promotion of a standby, or on a proxy that pools connections. The notes below follow from how the services are documented to work. They are not results. Read the documentation of your service for the failover time, and test a failover before you rely on it.
+No test ran on these systems:
 
-| Service | Address to use | Notes |
-| --- | --- | --- |
-| Amazon RDS Multi-AZ | The endpoint name of the DB instance or of the cluster | The endpoint name moves to the new primary. The pool must open new connections to find it, so keep `pool_max_conn_lifetime` short. |
-| Google Cloud SQL, high availability | The IP address or the connection name of the instance | The instance keeps its address when it fails over to the standby. A connection through a Cloud SQL connector or proxy ends and opens again. |
-| Azure Database for PostgreSQL Flexible Server, zone-redundant high availability | The server name | The server name stays the same. The connections end during the failover. |
-| Patroni | The address of a proxy or a load balancer that sends traffic only to the leader (for example, a health check on the Patroni `/primary` route) | Do not use the address of one node. |
-| CloudNativePG | The read-write service of the cluster (`<cluster>-rw`) | Do not use the read (`-r`) or read-only (`-ro`) services. |
+- A managed database service.
+- A real promotion of a standby.
+- A proxy that pools connections.
+- A URL with more than one host.
+
+The notes below follow from how the services are documented to work. They are not results. Read the documentation of your service for the failover time, and test a failover before you rely on it.
+
+A URL can name more than one host, separated by commas. With `target_session_attrs=read-write`, the driver should try the hosts in order and use the first one that accepts writes. This is how the driver documents it. Nobody tested it here. Use this form only when the database service does not give one address that always names the primary.
+
+| Service | Address to use | What the vendor page says | Vendor page |
+| --- | --- | --- | --- |
+| Amazon RDS Multi-AZ | The endpoint name of the DB instance | The failover changes the DNS record of the DB instance to point to the standby. You must open the existing connections again. | [Failover process for Multi-AZ DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html) |
+| Google Cloud SQL, high availability | The IP address or the connection string of the instance | The standby shares the static IP address of the primary. The failover closes the existing connections. | [High availability](https://docs.cloud.google.com/sql/docs/postgres/high-availability) |
+| Azure Database for PostgreSQL flexible server, zone-redundant high availability | The server host name | Clients connect to the host name of the primary server. The failover updates the DNS record of that name to the IP address of the standby. | [High availability](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/concepts-high-availability) |
+| Patroni | The address of a proxy or a load balancer that sends traffic only to the leader. Use `GET /primary` of the Patroni REST API as its health check. | `GET /primary` answers 200 only on the node that runs as the primary with the leader lock. The page does not say what happens to open connections. | [REST API](https://patroni.readthedocs.io/en/latest/rest_api.html) |
+| CloudNativePG | The `rw` service of the cluster. Its name is `<cluster name>-rw`. | The `rw` service points to the primary instance. The `ro` and `r` services point to replicas. Not checked against the vendor page on the documentation site: the check read the source file of the documentation in the project repository. | [Service management (source file)](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/docs/src/service_management.md) |
+
+The "What the vendor page says" column is a summary of the page on 2026-10-30. It is not a test result. Do not use the address of one node or a read-only service.
 
 For each service, set `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
 
