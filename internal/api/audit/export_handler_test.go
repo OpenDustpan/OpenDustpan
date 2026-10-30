@@ -171,7 +171,7 @@ func TestExportFailsClosedWhenTheEntryIsNotWritten(t *testing.T) {
 	_, store := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
 	seedEntry(t, store, "acme", "alice")
 
-	handler := newHandlerWithAppendFailing(t, store)
+	handler := newHandlerWithAppendFailing(t, store, errAppendDiskFull)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, authedRequest(t, "/api/audit/export?organization=acme"))
@@ -184,18 +184,23 @@ func TestExportFailsClosedWhenTheEntryIsNotWritten(t *testing.T) {
 // errAppendDiskFull is the failure of the append in the fail-closed test.
 var errAppendDiskFull = errors.New("disk full")
 
-// appendFailingStore reads from the store it wraps and fails every append.
+// appendFailingStore reads from the store it wraps and fails every append
+// with err.
 type appendFailingStore struct {
 	*memAuditStore
+
+	err error
 }
 
-func (appendFailingStore) Append(_ context.Context, _ namespace.Fence, _ audit.Entry) (audit.Entry, error) {
-	return audit.Entry{}, errAppendDiskFull
+func (s appendFailingStore) Append(_ context.Context, _ namespace.Fence, _ audit.Entry) (audit.Entry, error) {
+	return audit.Entry{}, s.err
 }
 
-// newHandlerWithAppendFailing builds an enforcing handler that reads store
-// and cannot append.
-func newHandlerWithAppendFailing(t *testing.T, store *memAuditStore) *apitaudit.Handler {
+// newExportHandler builds an enforcing handler over entries and reader with
+// the time limit of one export.
+func newExportHandler(
+	t *testing.T, entries audit.Store, reader audit.EntryReader, limit time.Duration,
+) *apitaudit.Handler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -208,8 +213,8 @@ func newHandlerWithAppendFailing(t *testing.T, store *memAuditStore) *apitaudit.
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		OnAuditFailure: nil,
 		Namespaces:     namespaces,
-		Entries:        appendFailingStore{store},
-		EntryReader:    store,
+		Entries:        entries,
+		EntryReader:    reader,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     &recordingAuthorizer{calls: nil},
 		Sessions:       nil,
@@ -220,7 +225,17 @@ func newHandlerWithAppendFailing(t *testing.T, store *memAuditStore) *apitaudit.
 		t.Fatalf("handler: %v", err)
 	}
 
+	handler.SetExportLimit(limit)
+
 	return handler
+}
+
+// newHandlerWithAppendFailing builds an enforcing handler that reads store
+// and fails every append with err.
+func newHandlerWithAppendFailing(t *testing.T, store *memAuditStore, err error) *apitaudit.Handler {
+	t.Helper()
+
+	return newExportHandler(t, appendFailingStore{memAuditStore: store, err: err}, store, time.Minute)
 }
 
 // TestExportErrorsHaveCodes proves the codes of the export refusals.
