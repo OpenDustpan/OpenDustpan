@@ -26,7 +26,7 @@ the read of outputs by a person.
 
 | Action | What it allows | Built-in roles that hold it |
 | --- | --- | --- |
-| `unit:read-outputs` | Read the root outputs of the latest state of a stack or a workspace, and nothing else. The value of a secret output of a workspace also needs `unit:read-secrets`. | Each role that holds `unit:read`: `viewer`, `auditor`, `secret-viewer`, `writer`, `maintainer`, `admin`, and the account and site administrators |
+| `unit:read-outputs` | Read the root outputs of the latest state of a stack or a workspace, and nothing else. The value of a secret output of a workspace also needs `unit:read-secrets`. | Each role that holds `unit:read`: `viewer`, `auditor`, `secret-viewer`, `planner`, `writer`, `maintainer`, `admin`, and the account and site administrators |
 | `unit:manage-sharing` | Save and remove sharing rules, and change the output sharing setting of a namespace | `admin`, and the account and site administrators |
 
 `unit:read` does not include `unit:read-outputs`. A custom role that holds
