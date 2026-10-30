@@ -41,12 +41,15 @@ type BlobDeleteStore interface {
 	inventory.ExpiredDeleted
 	inventory.BlobPurges
 	inventory.SweepLocker
-	// ClaimKind claims the installation kind, which a backup records.
-	ClaimKind(ctx context.Context, kind installation.Kind) (installation.Kind, error)
 	// StartRestore stores a checking restore row and starts its operation.
 	StartRestore(ctx context.Context, r backup.RestoreRecord, start durable.StartRequest) error
 	// MarkRestoreApplying moves the checking restore to applying.
 	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID) error
+}
+
+// kindClaimer claims the installation kind, which a backup records.
+type kindClaimer interface {
+	ClaimKind(ctx context.Context, kind installation.Kind) (installation.Kind, error)
 }
 
 // BlobDeleteFactory returns a fresh, empty store for one case.
@@ -138,7 +141,12 @@ func newBlobDeleteRig(t *testing.T, store BlobDeleteStore) *blobDeleteRig {
 
 	ctx := t.Context()
 
-	if _, err := store.ClaimKind(ctx, installation.KindProduction); err != nil {
+	claimer, ok := store.(kindClaimer)
+	if !ok {
+		t.Fatalf("store %T does not claim the installation kind", store)
+	}
+
+	if _, err := claimer.ClaimKind(ctx, installation.KindProduction); err != nil {
 		t.Fatalf("claim the installation kind: %v", err)
 	}
 

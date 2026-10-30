@@ -130,7 +130,7 @@ func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
 		t.Fatalf("parse extra key: %v", err)
 	}
 
-	if err := f.blobs.Put(t.Context(), extra, strings.NewReader("extra")); err != nil {
+	if err = f.blobs.Put(t.Context(), extra, strings.NewReader("extra")); err != nil {
 		t.Fatalf("write extra blob: %v", err)
 	}
 
