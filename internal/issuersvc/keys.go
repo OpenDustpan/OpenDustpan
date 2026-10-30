@@ -180,5 +180,15 @@ func findState(keys []profile.Key, st profile.KeyState) (profile.Key, bool) {
 		}
 	}
 
-	return profile.Key{}, false
+	return profile.Key{
+		CreatedAt:   time.Time{},
+		ActivatedAt: time.Time{},
+		RetiredAt:   time.Time{},
+		DeletedAt:   time.Time{},
+		ID:          "",
+		Namespace:   "",
+		State:       "",
+		Public:      nil,
+		Sealed:      nil,
+	}, false
 }

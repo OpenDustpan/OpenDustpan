@@ -298,8 +298,8 @@ func (s *Service) CheckCopy(ctx context.Context, a *Actor, ns namespace.Name) (p
 	_, hasNext := findState(keys, profile.KeyNext)
 	check := s.runCheck(ctx, &set, keys, checkWant{Next: hasNext})
 
-	if err = s.recordCheck(ctx, &n, &check, a); err != nil {
-		return profile.CopyCheck{}, err
+	if recErr := s.recordCheck(ctx, &n, &check, a); recErr != nil {
+		return profile.CopyCheck{}, recErr
 	}
 
 	return check, nil

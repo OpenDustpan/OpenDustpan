@@ -202,6 +202,12 @@ func issuerURLFault(raw string) string {
 		return "use an absolute https URL with a host"
 	}
 
+	return issuerURLPartFault(u, raw)
+}
+
+// issuerURLPartFault returns why the parts of the parsed URL u are not those of
+// an issuerURL, or the empty text.
+func issuerURLPartFault(u *url.URL, raw string) string {
 	switch {
 	case u.User != nil:
 		return "it holds user information"

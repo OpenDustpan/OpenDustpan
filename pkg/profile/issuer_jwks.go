@@ -95,7 +95,7 @@ func stateRank(s KeyState) int {
 	case KeyRetired, KeyDeleted:
 		return MaxPublishedKeys
 	default:
-		return MaxPublishedKeys
+		return MaxPublishedKeys + 1
 	}
 }
 
@@ -122,6 +122,18 @@ const (
 	memberScopes        = "scopes_supported"
 	memberClaims        = "claims_supported"
 )
+
+// NewDiscovery returns the discovery document for the issuer URL issuer. The
+// jwks_uri is the issuer URL and "/jwks", for the default URL and for an
+// issuerURL of a namespace.
+func NewDiscovery(issuer string) Discovery {
+	return Discovery{
+		Issuer: issuer, JWKSURI: strings.TrimSuffix(issuer, "/") + "/jwks",
+		ResponseTypesSupported: []string{"id_token"}, SubjectTypesSupported: []string{"public"},
+		IDTokenSigningAlgValuesSupported: []string{KeyAlgorithm}, ScopesSupported: []string{"openid"},
+		ClaimsSupported: ClaimsSupported(),
+	}
+}
 
 // MarshalJSON implements json.Marshaler.
 func (d Discovery) MarshalJSON() ([]byte, error) {
@@ -165,18 +177,6 @@ func (d *Discovery) UnmarshalJSON(raw []byte) error {
 	*d = out
 
 	return nil
-}
-
-// NewDiscovery returns the discovery document for the issuer URL issuer. The
-// jwks_uri is the issuer URL and "/jwks", for the default URL and for an
-// issuerURL of a namespace.
-func NewDiscovery(issuer string) Discovery {
-	return Discovery{
-		Issuer: issuer, JWKSURI: strings.TrimSuffix(issuer, "/") + "/jwks",
-		ResponseTypesSupported: []string{"id_token"}, SubjectTypesSupported: []string{"public"},
-		IDTokenSigningAlgValuesSupported: []string{KeyAlgorithm}, ScopesSupported: []string{"openid"},
-		ClaimsSupported: ClaimsSupported(),
-	}
 }
 
 // awsTagsClaim is the one claim name that is not snake_case.

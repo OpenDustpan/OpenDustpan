@@ -115,7 +115,7 @@ func (s *Service) sign(ctx context.Context, o profile.OpenContext, r signRequest
 	}
 
 	tok := profile.Token{
-		IssuedAt: now, ExpiresAt: now.Add(r.lifetime), Entry: audit.Entry{}, Value: value, ID: jti,
+		IssuedAt: now, ExpiresAt: now.Add(r.lifetime), Entry: o.By, Value: value, ID: jti,
 		Issuer: iss, Subject: o.Subject, Audience: r.aud, KeyID: active.ID, Warnings: s.warnings(&set, &active, now),
 	}
 	tok.Entry = tokenEntry(o, r, &tok)

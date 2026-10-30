@@ -121,14 +121,14 @@ func (s *Service) checkJWKS(ctx context.Context, c *profile.CopyCheck, uri strin
 	if err != nil {
 		c.AddStep(stepJWKS, err.Error(), false)
 
-		return profile.JWKS{}, false
+		return profile.JWKS{Keys: nil}, false
 	}
 
-	var set profile.JWKS
+	set := profile.JWKS{Keys: nil}
 	if jsonErr := decodeStrict(raw, &set); jsonErr != nil {
 		c.AddStep(stepJWKS, "the document is not a JWKS", false)
 
-		return profile.JWKS{}, false
+		return profile.JWKS{Keys: nil}, false
 	}
 
 	c.AddStep(stepJWKS, "read", true)
@@ -181,7 +181,7 @@ func (s *Service) fetch(ctx context.Context, url string) ([]byte, error) {
 // checkName names a document of the copy check for an error text: the part of
 // the URL after the issuerURL is the same for each namespace.
 func checkName(url string) string {
-	if i := strings.LastIndex(url, "/.well-known/"); i >= 0 {
+	if strings.Contains(url, "/.well-known/") {
 		return "the discovery document"
 	}
 

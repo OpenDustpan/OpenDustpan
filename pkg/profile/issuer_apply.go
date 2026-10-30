@@ -39,8 +39,8 @@ func ApplyKeys(ns namespace.Name, current []Key, ch KeyChange) ([]Key, error) {
 	}
 
 	live := slices.DeleteFunc(slices.Clone(out), func(k Key) bool { return k.State == KeyDeleted })
-	if err = CheckKeySet(live); err != nil {
-		return nil, err
+	if setErr := CheckKeySet(live); setErr != nil {
+		return nil, setErr
 	}
 
 	return out, nil
@@ -96,7 +96,6 @@ func moveKey(k Key, m KeyMove) Key {
 	case KeyDeleted:
 		k.DeletedAt = m.At
 	case KeyNext:
-	default:
 	}
 
 	if !m.To.HoldsPrivate() {
