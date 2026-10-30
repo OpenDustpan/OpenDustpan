@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 )
 
 // storeTrust makes a token of the kind trust for the service principal of
@@ -172,4 +173,25 @@ func TestTrustTokenRevokesAndNeverRotates(t *testing.T) {
 	if !errors.Is(err, identity.ErrUnauthenticated) {
 		t.Fatalf("AuthenticateToken after the revoke = %v, want ErrUnauthenticated", err)
 	}
+}
+
+// TestTrustTokenAuthenticatorConformance runs the conformance suite of the
+// Authenticator port on the Service with a token of a token exchange: the
+// Service is the Authenticator that checks the credential of an exchange on
+// each request.
+func TestTrustTokenAuthenticatorConformance(t *testing.T) {
+	t.Parallel()
+
+	identitytest.RunAuthenticator(t, func(t *testing.T) (identity.Authenticator, string) {
+		t.Helper()
+
+		f := newFixture(t, nil)
+
+		issued, err := storeTrust(t, &f)
+		if err != nil {
+			t.Fatalf("NewTrustToken = %v", err)
+		}
+
+		return f.svc, issued.Secret.Reveal()
+	})
 }
