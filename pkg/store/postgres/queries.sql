@@ -608,27 +608,36 @@ FROM inventory_labels
 WHERE namespace = $1
 ORDER BY unit_id, label_key;
 
--- name: NextInventoryChangeSeq :one
--- Takes the next number of the change log of one namespace. The statement runs
--- last in the transaction of the write, after every other row lock, so the
--- order of the numbers is the order of the commits of the namespace.
-INSERT INTO inventory_change_heads (namespace_id, last_seq)
-VALUES ($1, 1)
-ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
-RETURNING last_seq;
-
--- name: InsertInventoryChange :exec
+-- name: AppendInventoryChange :one
+-- Appends one row to the change log of the namespace that has the name now, in
+-- one statement: it resolves the namespace, takes the next number of the log,
+-- and writes the row with the name of the collection that holds the unit. No
+-- row comes back when the namespace does not exist. The statement runs last in
+-- the transaction of the write, after every other row lock, so the order of the
+-- numbers is the order of the commits of the namespace.
+WITH ns AS (
+    SELECT id FROM namespaces WHERE namespaces.name = sqlc.arg(namespace_name)
+), head AS (
+    INSERT INTO inventory_change_heads (namespace_id, last_seq)
+    SELECT id, 1 FROM ns
+    ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+    RETURNING namespace_id, last_seq
+)
 INSERT INTO inventory_changes (
     namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
-
--- name: GetUnitCollectionName :one
--- The name of the collection that holds the unit, for a change log row.
-SELECT c.name
-FROM collection_members AS m
-JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
-WHERE m.unit_id = $1;
+SELECT
+    head.namespace_id, head.last_seq, sqlc.arg(at_ms)::bigint, sqlc.arg(tool)::text, sqlc.arg(unit_id)::text,
+    sqlc.arg(unit_name)::text, sqlc.arg(display_name)::text, sqlc.arg(status)::text,
+    COALESCE((
+        SELECT c.name
+        FROM collection_members AS m
+        JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+        WHERE m.unit_id = sqlc.arg(unit_id)::text
+    ), '')::text,
+    sqlc.arg(kind)::text, NULL
+FROM head
+RETURNING seq;
 
 -- name: ListInventoryChanges :many
 -- One page of the change log of a namespace in the order of the sequence.
