@@ -80,7 +80,7 @@ These are the project owner's own instructions. They hold until the owner change
 ## Merging
 
 - Why: CI is often a bottleneck because of the volume of code we generate while we bootstrap the project.
-- A merge session merges a batch of at most 8 pull requests with a CLEAN review. It follows
+- A merge session merges a batch of at most 6 pull requests with a CLEAN review. It follows
   `docs/agents/merge-session.md`: it builds the combined tip of the batch on current main, runs the full
   `make checks-agent` once on that tip, drops the last pull request of a red tip, and squash-merges in the batch order.
   A package subset is never a merge gate. Why: pull requests that each passed alone broke main together, and merge
@@ -88,7 +88,9 @@ These are the project owner's own instructions. They hold until the owner change
 - Authors merge main only for a real conflict or when the PM asks. After a CLEAN review, an author does not change the
   branch. Only the merge session renumbers API versions and migrations.
 - At most 2 open pull requests change the same store port or the same table set. The PM keeps this limit.
-- A reviewer starts only after the author posts a `make checks-agent` summary with exit 0 on the current head sha.
+- Reviews follow `docs/agents/review-protocol.md`. A reviewer starts only after the author posts a `make checks-agent`
+  summary with exit 0 on the current head sha. Each reviewer brief holds the session ID of the author. The reviewer
+  sends must-fix items straight to the author. I hear only CLEAN, the end of round 3, or a blocker.
 - Merge without waiting for CI when the merge session reports the full `make checks-agent` on the combined tip, and
   the review of each pull request in the batch is done.
 - Main health (owner, approved 2026-10-17): after each server merge, one worker runs make check (with PostgreSQL) and

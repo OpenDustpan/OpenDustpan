@@ -9,6 +9,7 @@ task.
 | --- | --- |
 | `<ROLE>` | `author`, `reviewer`, `merge session` or `fix-main`. |
 | `<PM_SESSION>` | The ID of the PM session. |
+| `<AUTHOR_SESSION>` | For a reviewer only: the ID of the author session of the pull request. |
 | `<TASK>` | The task: the issue or pull request number, the files, the tests, a migration number or "no migration", and "e2e: yes" or "e2e: no". |
 
 ## Routing
@@ -18,16 +19,17 @@ The PM selects the model of the session from the task type:
 | Task type | Model |
 | --- | --- |
 | Mechanical work: a rename, a regenerated file, a docs fix, a known one-line fix | Haiku |
-| A bug with a known cause, a normal feature, a reviewer of a normal feature | Sonnet |
-| Design, an RFC, security code, a security review, a merge session | Opus |
+| A bug with a known cause, a normal feature, a fix-main or an e2e drift with a known cause | Sonnet |
+| Round 1 of a review of a normal feature, every re-check (rounds 2 and 3) that has no security item | Sonnet |
+| The reviewer of a fix-main or of an e2e drift: a re-run of the failing check | Sonnet |
+| Design, an RFC, security code, round 1 of a security review, a re-check of a security item, a merge session | Opus |
 
 ## Roles
 
 - An `author` writes the change and opens a draft pull request.
-- A `reviewer` is a new session. It reviews one pull request, for at most 3
-  rounds. It starts only after the author posts a `make checks-agent`
-  summary with exit 0 on the current head sha. If that summary is not on the
-  pull request, the reviewer tells the PM and stops.
+- A `reviewer` is a new session. It follows `docs/agents/review-protocol.md`.
+  It sends must-fix items straight to the author. The PM hears only CLEAN,
+  the end of round 3, or a blocker.
 - A `merge session` follows `docs/agents/merge-session.md`.
 - A `fix-main` session fixes a red `main`. It first reproduces the failure on
   `main`, then shows the same check passing.
@@ -44,9 +46,11 @@ project owner. Do not ask the project owner anything.
 ## Start
 
 1. Read `CLAUDE.md` and `GLOSSARY.md`.
-2. Run `make agent-preflight`. Fix each `FAIL` line with the command that the
+2. Search the open pull requests for the same work. If an open pull request
+   already does it, send the PM its number and stop.
+3. Run `make agent-preflight`. Fix each `FAIL` line with the command that the
    line names. Every line must show `PASS` before you build or test.
-3. After a container restart, run `make agent-preflight` again. A restart
+4. After a container restart, run `make agent-preflight` again. A restart
    stops PostgreSQL and background runs.
 
 ## Rules
@@ -71,7 +75,8 @@ project owner. Do not ask the project owner anything.
     renumbers API versions and migrations.
 11. Run `make nilaway` alone, after `go clean -cache`, with no other build or
     test at the same time.
-12. Pull requests are drafts.
+12. Pull requests are drafts. A pull request that waits for a decision of
+    the owner has the label `needs-owner`.
 13. End every GitHub post with this footer:
 
     ```
@@ -88,7 +93,10 @@ Before you ask for a review, and before you report "ready":
    7200000 ms. Write its output to a file in your scratchpad.
 3. Paste the summary lines of the output into the pull request body. The
    summary names the head sha.
-4. A store port change needs the full store suites on SQLite and PostgreSQL.
+4. Write the mutation self-check in the pull request body. List each defense
+   layer of the change and the test that fails without it. Remove each layer
+   one at a time, run its test, and see it fail. Then put the layer back.
+5. A store port change needs the full store suites on SQLite and PostgreSQL.
    `make checks-agent` runs them. Do not replace it with a package subset.
 
 ## Reports

@@ -1,7 +1,7 @@
 # Merge session
 
 A merge session merges one batch of pull requests into `main`. The PM gives
-the batch: at most 8 pull requests, each with a CLEAN review on its current
+the batch: at most 6 pull requests, each with a CLEAN review on its current
 head. Do the steps below in order. The steps need no answer from the PM. Send
 the PM one report at the end, or one report when you stop.
 
@@ -21,8 +21,10 @@ the PM one report at the end, or one report when you stop.
 1. Run `make agent-preflight`. Fix each `FAIL` line with the command that the
    line names. Then run the preflight again. Every line must show `PASS`.
 2. Write the batch order. Put the pull requests in the order that the PM
-   gave. If the PM gave no order, put them in the order of their numbers,
-   lowest first.
+   gave. If the PM gave no order, put the pull requests that change a store
+   port last, and the largest pull requests just before them. Put the other
+   pull requests first, in the order of their numbers, lowest first. Then a
+   red tip drops the pull request with the highest risk first.
 
 ## 2. Build the combined tip
 
