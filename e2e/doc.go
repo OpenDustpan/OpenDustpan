@@ -49,6 +49,32 @@
 // TestHighAvailability uses it (make e2e-ha). A test that stops the server to
 // write to the database stops and starts every instance.
 //
+// The directory contract holds one file for each tested CLI version. It comes
+// from the scenario of TestCLIs only, from the requests that carry the User-Agent
+// of the CLI. For each route it holds each status that every tested store saw,
+// and for each status the fields and the response headers that every answer
+// had. An error answer counts like any other. A path has dots and "[]" stands for
+// an array element: a path below it is in every element.
+//
+// The suite fails when a version with a file loses a route, a status, a field or
+// a header. It also writes contract.md to the report directory, which lists what
+// a version with no file (for example a new "latest") has that the newest file of
+// the tool does not have. To write the files of the versions that ran, run the
+// whole TestCLIs with E2E_CONTRACT_UPDATE=1 and commit the result. Each version
+// keeps its own file even when two files are equal: the check of an old version
+// must fail when the server stops answering what that version got.
+//
+// A file shows what the server sent when the CLI worked. It does not show which
+// fields the CLI reads. It also does not hold:
+//
+//   - the type or the value of a field (a string that becomes an object stays);
+//   - the request: the headers, the query and the body that the CLI sent;
+//   - a header value, except the media type of Content-Type;
+//   - the fields of an answer that is longer than the recorder keeps (4096
+//     bytes): the answer sets "cut" and its fields are not checked;
+//   - a request to a path that no route holds, and a 5xx answer;
+//   - the order or the timing of the requests.
+//
 // Environment variables:
 //
 //	E2E_PULUMI_VERSIONS  comma-separated versions, or "latest" (default: see Pulumi)
@@ -57,6 +83,8 @@
 //	                     plus postgres when DUSTPAN_TEST_POSTGRES_URL is set)
 //	DUSTPAN_TEST_POSTGRES_URL  PostgreSQL URL for the postgres store; each run gets its own
 //	                           schema (default: postgres runs are skipped)
+//	E2E_CONTRACT_UPDATE  1 writes the files in contract for the versions that ran,
+//	                     instead of checking them (run the whole suite)
 //	E2E_BLOBS            live blob store of every run: fs (default, a directory) or
 //	                     s3 (an S3-compatible bucket with a unique prefix per run)
 //	DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY,
