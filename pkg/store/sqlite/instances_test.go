@@ -21,3 +21,15 @@ func TestInstanceConformance(t *testing.T) {
 		return open(t)
 	})
 }
+
+func TestStoreCheckConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStoreChecks(t, func(t *testing.T) storetest.StoreCheckStore {
+		t.Helper()
+
+		st := open(t)
+
+		return storetest.StoreCheckStore{Records: st, Ops: st.DurableOperationsPort()}
+	})
+}

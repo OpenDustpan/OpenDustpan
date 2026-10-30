@@ -66,6 +66,7 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
 		identity.ActionServerRestore,
+		identity.ActionInstallationStoreCheck,
 		identity.ActionServerRestoreAccess,
 		identity.ActionServerReadPrincipals,
 		identity.ActionServerManagePrincipals,
@@ -400,6 +401,10 @@ func TestServerActionsProveWireForms(t *testing.T) {
 
 	if identity.ActionServerRestore != "server:restore" {
 		t.Fatalf("restore action = %q, want %q", identity.ActionServerRestore, "server:restore")
+	}
+
+	if identity.ActionInstallationStoreCheck != "installation:store-check" {
+		t.Fatalf("store check action = %q, want %q", identity.ActionInstallationStoreCheck, "installation:store-check")
 	}
 
 	if identity.ActionServerRestoreAccess != "server:restore-access" {

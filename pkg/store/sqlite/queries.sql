@@ -4142,16 +4142,26 @@ VALUES (
 ON CONFLICT (log_id, seq) DO NOTHING;
 
 -- name: GetJobLogChunk :one
-SELECT c.sha256, c.size, c.confirmed
+SELECT c.sha256, c.size, c.confirmed, c.blob_key
 FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.seq = sqlc.arg(seq);
 
 -- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
-SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5)
+SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5),
+    blob_key = sqlc.arg(blob_key)
 WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
   AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListJobLogChunkKeys :many
+-- The blob key of each confirmed chunk of one log version, in the order of the
+-- chunk numbers.
+SELECT c.seq, c.blob_key
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.confirmed = 1
+ORDER BY c.seq;
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is
@@ -4172,6 +4182,136 @@ WHERE id = sqlc.arg(id);
 SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
+
+-- name: CreateStoreCheck :execrows
+INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
+VALUES (?, ?, 'running', ?, ?, 0, '', '')
+ON CONFLICT DO NOTHING;
+
+-- name: GetStoreCheck :one
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+WHERE id = ?;
+
+-- name: ListStoreChecks :many
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishStoreCheck :execrows
+-- Moves one running check to its end state. A finished check matches no
+-- row, so a retry reports no change.
+UPDATE store_checks
+SET state = ?, error = ?, report = ?, ended_at_ms = ?
+WHERE id = ? AND state = 'running';
+
+-- name: CountStoreChecksEndedSince :one
+-- The checks of one target that ended after the given time. A running check
+-- has no end time (0) and is not counted.
+SELECT count(*)
+FROM store_checks
+WHERE target = ? AND state <> 'running' AND ended_at_ms > ?;
+
+-- name: FailEndedStoreChecks :execrows
+-- Marks failed each running check whose operation ended failed or canceled
+-- without a finish write. The error text is a fixed text of the caller: the
+-- last error of the operation never reaches the row.
+UPDATE store_checks
+SET state = 'failed',
+    error = sqlc.arg('error'),
+    ended_at_ms = sqlc.arg('ended_at_ms')
+WHERE state = 'running'
+  AND EXISTS (
+      SELECT 1 FROM durable_operations AS o
+      WHERE o.start_key = sqlc.arg('prefix') || store_checks.id
+        AND o.kind = sqlc.arg('kind')
+        AND o.state IN ('failed', 'canceled'));
+
+-- name: InsertCatalogBlueprint :execrows
+-- The caller checks the fence in the same transaction. A blueprint of the same
+-- name in the namespace is not written.
+INSERT INTO catalog_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), 1, sqlc.arg(draft_json), sqlc.arg(draft_updated_at_ms)
+)
+ON CONFLICT (namespace_id, name) DO NOTHING;
+
+-- name: UpdateCatalogBlueprintDraft :execrows
+-- The draft changes only at the version that the caller read.
+UPDATE catalog_blueprints
+SET draft_version = draft_version + 1, draft_json = sqlc.arg(draft_json), draft_updated_at_ms = sqlc.arg(draft_updated_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprints.name = sqlc.arg(name) AND draft_version = sqlc.arg(draft_version);
+
+-- name: CountCatalogBlueprints :one
+SELECT COUNT(*) FROM catalog_blueprints
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetCatalogBlueprintDraft :one
+SELECT b.draft_version, b.draft_json
+FROM catalog_blueprints AS b
+JOIN namespaces AS n ON n.id = b.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND b.name = sqlc.arg(name);
+
+-- name: GetCatalogBlueprintVersionOfDraft :one
+-- The number of the version that published a draft version. No row means the
+-- draft version has no version.
+SELECT v.number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.draft_version = sqlc.arg(draft_version);
+
+-- name: LastCatalogBlueprintVersion :one
+-- The last published number of a blueprint, 0 for none. The caller holds the
+-- write lock of the namespace, so the next number is exact.
+SELECT CAST(COALESCE(MAX(v.number), 0) AS BIGINT) AS number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name);
+
+-- name: InsertCatalogBlueprintVersion :exec
+INSERT INTO catalog_blueprint_versions (
+    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), sqlc.arg(number), sqlc.arg(draft_version), sqlc.arg(document_json), sqlc.arg(expr_version),
+    sqlc.arg(published_by), sqlc.arg(published_at_ms), 0
+);
+
+-- name: GetCatalogBlueprintVersion :one
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.number = sqlc.arg(number);
+
+-- name: ListCatalogBlueprintLatest :many
+-- The newest published version of each blueprint of a namespace, by name.
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+  AND v.number = (
+      SELECT MAX(w.number) FROM catalog_blueprint_versions AS w
+      WHERE w.namespace_id = v.namespace_id AND w.name = v.name
+  )
+ORDER BY v.name;
+
+-- name: RetireCatalogBlueprintVersion :execrows
+-- A retire of a retired version matches the row and changes nothing.
+UPDATE catalog_blueprint_versions
+SET retired = 1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: SetCatalogBlueprintExprVersion :execrows
+UPDATE catalog_blueprint_versions
+SET expr_version = sqlc.arg(expr_version)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
 
 -- name: GetNamespaceByID :one
 -- The namespace with the stable ID id.
@@ -4279,3 +4419,5 @@ ORDER BY name, id;
 
 -- name: DeleteTrustRule :execrows
 DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+

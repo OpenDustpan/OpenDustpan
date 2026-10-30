@@ -155,6 +155,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		workspaces:       nil,
 		backups:          nil,
 		restores:         nil,
+		storeChecks:      nil,
 		now:              nil,
 		registry:         nil,
 		tlsCertFile:      "",

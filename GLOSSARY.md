@@ -273,6 +273,10 @@ _Avoid_: Export format, dump format
 The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28). It is also not the restore of a deleted unit (ADR 47).
 _Avoid_: Recovery, load, import
 
+**Store check**:
+The user-run deep check of a blob store (ADR 281). The server writes throwaway objects under `store-checks/<check ID>/` of the live blob store or of the backup target. It runs the blob conformance cases on them. It measures the latency, the throughput and the delete rate, reports the store capabilities, and deletes the objects. It is a durable operation with a fixed budget. The report says what one run measured on one store. It is not a service level.
+_Avoid_: Benchmark, probe, health check
+
 **Control table**:
 A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
 
@@ -871,7 +875,7 @@ The first of the two writes that store a plan (`job.RecordStore.ReservePlan`). I
 _Avoid_: Draft plan, pending plan
 
 **Chunk reserve and `confirm`**:
-The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Another hash for a reserved sequence number is a conflict.
+The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Each write attempt stores its blob under a key of its own, `<sequence number>-<attempt ID>`, and the second write records that key in the row. The attempt whose second write commits first wins. An attempt that loses deletes only its own blob. Another hash for a reserved sequence number is a conflict.
 _Avoid_: Two-phase commit (the blob store is not part of a transaction), staging
 
 **Step key**:

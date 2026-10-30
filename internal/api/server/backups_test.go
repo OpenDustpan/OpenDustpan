@@ -221,6 +221,7 @@ func newBackupFixtureWorkers(
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -649,6 +650,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

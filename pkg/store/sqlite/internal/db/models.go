@@ -114,6 +114,26 @@ type BlobPurge struct {
 	NamespaceID string
 }
 
+type CatalogBlueprint struct {
+	NamespaceID      string
+	Name             string
+	DraftVersion     int64
+	DraftJson        string
+	DraftUpdatedAtMs int64
+}
+
+type CatalogBlueprintVersion struct {
+	NamespaceID   string
+	Name          string
+	Number        int64
+	DraftVersion  int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
+}
+
 type Checkpoint struct {
 	StackID       string
 	UpdateID      string
@@ -529,6 +549,7 @@ type JobLogChunk struct {
 	Confirmed   int64
 	StoredSize  int64
 	StoredMd5   []byte
+	BlobKey     string
 }
 
 type JobPlan struct {
@@ -939,6 +960,17 @@ type StateVersion struct {
 	SensitiveMarks    []byte
 	FencedBy          string
 	UnlockedWrite     bool
+}
+
+type StoreCheck struct {
+	ID          string
+	Target      string
+	State       string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   int64
+	Error       string
+	Report      string
 }
 
 type TempAdmin struct {

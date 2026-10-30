@@ -228,6 +228,10 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionInstallationStoreCheck allows starting and reading the store checks
+	// of the installation: the deep check of a blob store, which writes
+	// throwaway objects under a prefix of its own. Its object is ServerObject.
+	ActionInstallationStoreCheck Action = "installation:store-check"
 	// ActionServerManageSettings allows changing the installation settings
 	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
 	// settings name it: the start entry and the entry of a reload of the

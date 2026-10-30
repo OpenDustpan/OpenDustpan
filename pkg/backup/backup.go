@@ -79,6 +79,10 @@ const (
 	// process. The rows describe the processes that run now, so a restore
 	// keeps the live rows.
 	TableInstanceVersions = "instance_versions"
+	// TableStoreChecks holds the rows of the store checks of the installation.
+	// A check describes the store of this installation at the time of the
+	// check, so a restore keeps the live rows and a backup leaves them out.
+	TableStoreChecks = "store_checks"
 )
 
 // Tables lists every table that an export covers, in foreign-key order, so an
@@ -173,6 +177,8 @@ var Tables = []string{
 	"notification_sink_refs",
 	"triggers",
 	"item_keys",
+	"catalog_blueprints",
+	"catalog_blueprint_versions",
 	TableTrustRules,
 }
 

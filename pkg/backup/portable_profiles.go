@@ -21,11 +21,11 @@ func portableProfileTables() []PortableTable {
 		},
 		{
 			Table:   "profile_revisions",
-			OrderBy: []string{portColNamespaceID, "profile_id", "number"},
+			OrderBy: []string{portColNamespaceID, "profile_id", portColNumber},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "profile_id", Kind: KindText},
-				{Name: "number", Kind: KindInteger},
+				{Name: portColNumber, Kind: KindInteger},
 				{Name: "document", Kind: KindText},
 				{Name: "document_sha256", Kind: KindText},
 				{Name: "author", Kind: KindText},

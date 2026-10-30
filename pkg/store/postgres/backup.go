@@ -44,12 +44,14 @@ const (
 	pgColCreatedBy   = "created_by"
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
+	pgColError       = "error"
 	pgColName        = "name"
 	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
 	pgColReason      = "reason"
 	pgColSeq         = "seq"
+	pgColBlobKey     = "blob_key"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
@@ -123,6 +125,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopySinkTables()...)
 	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
+	tables = append(tables, pgCopyCatalogTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
 
 	return tables
@@ -169,7 +172,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
 				pgColDigest, "invalid", "features", "saved_at_ms",
-				"blob_key", pgColSize, "blob_size", "blob_md5",
+				pgColBlobKey, pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
@@ -181,7 +184,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "update_journal",
 			columns: []string{
-				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", pgColSHA256, "md5", pgColSize,
+				pgColStackID, pgColUpdateID, pgColArrival, pgColBlobKey, pgColSHA256, "md5", pgColSize,
 				"lowest_sequence", "sequence_ids", "operation_ids",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
@@ -430,7 +433,21 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgRunnerControlTables())
+	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables())
+}
+
+// pgStoreCheckControlTables lists the column list of the store check rows,
+// which live in the control schema.
+func pgStoreCheckControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableStoreChecks,
+			columns: []string{
+				"id", pgColTarget, pgColState, "requested_by", pgColStartedAtMs, pgColEndedAtMs, pgColError, "report",
+			},
+			orderBy: []string{"id"},
+		},
+	}
 }
 
 // pgEmptiedTables lists the column list of every table of
@@ -1792,7 +1809,7 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the registry, the Git host connections,
-// the notification sinks, the triggers and the trust rules.
+// the notification sinks, the triggers, the catalog blueprints and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -1811,6 +1828,10 @@ func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging str
 	}
 
 	if err := checkStagedTriggers(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedCatalogBlueprints(ctx, pool, staging); err != nil {
 		return err
 	}
 

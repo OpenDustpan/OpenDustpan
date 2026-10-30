@@ -21,10 +21,16 @@ func pgCopyProfileTables() []pgCopyTable {
 		{
 			table: "profile_revisions",
 			columns: []string{
-				pgColNamespaceID, "profile_id", "number", "document", pgColDocumentSha256, "author", pgColCreatedAtMs,
+				pgColNamespaceID,
+				"profile_id",
+				pgColNumber,
+				"document",
+				pgColDocumentSha256,
+				"author",
+				pgColCreatedAtMs,
 				pgColReason,
 			},
-			orderBy: []string{pgColNamespaceID, "profile_id", "number"},
+			orderBy: []string{pgColNamespaceID, "profile_id", pgColNumber},
 		},
 		{
 			table: "issuer_keys",

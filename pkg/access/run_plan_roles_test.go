@@ -20,6 +20,7 @@ func TestUnitRunPlanBuiltInRoles(t *testing.T) {
 		{role: access.RoleViewer, want: false},
 		{role: access.RoleAuditor, want: false},
 		{role: access.RoleSecretViewer, want: false},
+		{role: access.RolePlanner, want: true},
 		{role: access.RoleWriter, want: false},
 		{role: access.RoleMaintainer, want: false},
 		{role: access.RoleAdmin, want: true},

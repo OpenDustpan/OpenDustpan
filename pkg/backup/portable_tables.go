@@ -48,6 +48,7 @@ const (
 	portColAtMs          = "at_ms"
 	portColScopeKey      = "scope_key"
 	portColSeq           = "seq"
+	portColBlobKey       = "blob_key"
 	portColSHA256Text    = "sha256"
 	portColOwner         = "owner"
 	portColJobID         = "job_id"
@@ -141,7 +142,7 @@ func portableSpec() []PortableTable {
 				{Name: "invalid", Kind: KindBool},
 				{Name: "features", Kind: KindJSON},
 				{Name: "saved_at_ms", Kind: KindTime},
-				{Name: "blob_key", Kind: KindText},
+				{Name: portColBlobKey, Kind: KindText},
 				{Name: portColSize, Kind: KindInteger},
 				{Name: "blob_size", Kind: KindInteger},
 				{Name: "blob_md5", Kind: KindBytes},
@@ -165,7 +166,7 @@ func portableSpec() []PortableTable {
 				{Name: portColStackID, Kind: KindText},
 				{Name: portColUpdateID, Kind: KindText},
 				{Name: portColArrival, Kind: KindInteger},
-				{Name: "blob_key", Kind: KindText},
+				{Name: portColBlobKey, Kind: KindText},
 				{Name: portColSHA256, Kind: KindBytes},
 				{Name: "md5", Kind: KindBytes},
 				{Name: portColSize, Kind: KindInteger},
@@ -722,6 +723,7 @@ func portableSpec() []PortableTable {
 		portableSinkTables(),
 		portableTriggerTables(),
 		portableItemKeyTables(),
+		portableCatalogTables(),
 		portableTrustRuleTables(),
 	)
 }

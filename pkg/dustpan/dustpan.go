@@ -68,6 +68,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -659,6 +660,7 @@ type Server struct {
 	workspaces    *workspace.Service
 	backups       *backup.Service
 	restores      *backup.RestoreService
+	storeChecks   *storecheck.Service
 	now           func() time.Time
 	registry      *metrics.Registry
 	tlsCertFile   string
@@ -1115,6 +1117,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		workspaces:    svc.workspaces,
 		backups:       backups,
 		restores:      mount.restores,
+		storeChecks:   mount.storeChecks,
 		now:           cfg.now,
 		registry:      observed.Registry(),
 		tlsCertFile:   cfg.tlsCertFile,
@@ -1194,6 +1197,7 @@ type adapters struct {
 	ready       *readiness
 	maintenance *maintenance.Watcher
 	restores    *backup.RestoreService
+	storeChecks *storecheck.Service
 	chain       *auditChain
 	// signIn is the console sign-in, or nil with no provider.
 	signIn *serverapi.SignIn
@@ -1256,7 +1260,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	serverAPI, restores, err := newInstallationAPI(cfg, installationDeps{
+	parts, err := newInstallationAPI(cfg, installationDeps{
 		services: svc, backups: backups, maint: maint, observed: observed, chain: chain, policies: sessionPolicies,
 		signIn: signIn,
 	})
@@ -1269,10 +1273,11 @@ func newAdapters(
 		pulumi:          api,
 		tfe:             tfeAPI,
 		tofuHTTP:        tofuHTTPAPI,
-		server:          serverAPI,
+		server:          parts.handler,
 		ready:           newReadiness(cfg, observed, chain),
 		maintenance:     watcher,
-		restores:        restores,
+		restores:        parts.restores,
+		storeChecks:     parts.storeChecks,
 		chain:           chain,
 		signIn:          signIn,
 	}
@@ -2124,20 +2129,26 @@ func (s *Server) newHTTPServer(ln net.Listener, tlsCfg *tls.Config) *http.Server
 	}
 }
 
-// startBackupWorker claims and runs backup and restore operations until ctx
-// is done. The returned function waits until the workers stopped. Without a
+// startBackupWorker claims and runs backup, restore and store check operations
+// until ctx is done. The returned function waits until the workers stopped. Without a
 // backup service there is nothing to run.
 func (s *Server) startBackupWorker(ctx context.Context) func() {
-	if s.backups == nil {
+	if s.backups == nil && s.storeChecks == nil {
 		return func() {}
 	}
 
 	var wg sync.WaitGroup
 
-	wg.Go(func() { s.backups.Work(ctx) })
+	if s.backups != nil {
+		wg.Go(func() { s.backups.Work(ctx) })
+	}
 
 	if s.restores != nil {
 		wg.Go(func() { s.restores.Work(ctx) })
+	}
+
+	if s.storeChecks != nil {
+		wg.Go(func() { s.storeChecks.Work(ctx) })
 	}
 
 	return wg.Wait
@@ -2928,22 +2939,33 @@ type installationDeps struct {
 
 // newInstallationAPI builds the restore service and the tool-neutral
 // installation API from the backup service and the maintenance service.
-func newInstallationAPI(
-	cfg *settings, deps installationDeps,
-) (http.Handler, *backup.RestoreService, error) {
+func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts, error) {
 	restores, err := newRestoreService(cfg, deps, deps.maint)
 	if err != nil {
-		return nil, nil, err
+		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
 	}
 
 	bindAuditChain(deps.chain, deps.maint, restores, cfg)
 
-	serverAPI, err := newServerHandler(cfg, deps, restores)
+	checks, _, err := newStoreCheckService(cfg, deps.maint)
 	if err != nil {
-		return nil, nil, err
+		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
 	}
 
-	return serverAPI, restores, nil
+	serverAPI, err := newServerHandler(cfg, deps, restores, checks)
+	if err != nil {
+		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+	}
+
+	return installationParts{handler: serverAPI, restores: restores, storeChecks: checks}, nil
+}
+
+// installationParts holds what newInstallationAPI builds: the installation API
+// and the services that the server runs in its worker.
+type installationParts struct {
+	handler     http.Handler
+	restores    *backup.RestoreService
+	storeChecks *storecheck.Service
 }
 
 // newServerHandler builds the tool-neutral installation API. It carries the
@@ -2954,7 +2976,7 @@ func newInstallationAPI(
 // the upgrade check reads, and the principal service when the store keeps
 // principals (ADR 52).
 func newServerHandler(
-	cfg *settings, deps installationDeps, restores *backup.RestoreService,
+	cfg *settings, deps installationDeps, restores *backup.RestoreService, checks *storecheck.Service,
 ) (http.Handler, error) {
 	grants := deps.services.access
 
@@ -3017,7 +3039,7 @@ func newServerHandler(
 		Preferences:      newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
-		Instances:        cfg.instanceStore,
+		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
