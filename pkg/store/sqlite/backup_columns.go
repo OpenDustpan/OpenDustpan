@@ -18,6 +18,7 @@ const (
 	backupColPrincipalID = "principal_id"
 	backupColEndedAtMs   = "ended_at_ms"
 	backupColName        = "name"
+	backupColIssuer      = "issuer"
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
 	backupColNamespaceID = "namespace_id"
@@ -418,6 +419,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteSinkBackupTables(),
 		sqliteTriggerBackupTables(),
 		sqliteItemKeyBackupTables(),
+		sqliteTrustRuleBackupTables(),
 	)
 }
 
@@ -575,7 +577,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "oidc_providers",
-			columns: []string{backupColProviderID, "issuer", backupColCreatedAtMs},
+			columns: []string{backupColProviderID, backupColIssuer, backupColCreatedAtMs},
 		},
 		{
 			table:   "installation_secret_keys",

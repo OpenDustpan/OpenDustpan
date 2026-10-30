@@ -27,11 +27,13 @@ import (
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
+	trustrulesapi "opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -60,6 +62,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/trustrule"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -105,11 +108,12 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	sourceFilterRoutes := coverageSourceFilterRoutes(tb, namespaces)
+	trustRuleRoutes := coverageTrustRuleRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
 		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, server,
+		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, trustRuleRoutes, server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -904,6 +908,45 @@ func coverageSourceFilterRoutes(tb testing.TB, namespaces *namespace.Service) []
 	return out
 }
 
+// coverageTrustRuleRoutes returns the trust rule adapter's route table.
+func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
+		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
+		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
+		InstallationURLs: nil, CheckURL: nil, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("trust rule service: %v", err)
+	}
+
+	handler, err := trustrulesapi.NewHandler(trustrulesapi.Config{
+		Namespaces:     namespaces,
+		Rules:          rules,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		Now:            nil,
+	})
+	if err != nil {
+		tb.Fatalf("trust rule handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // coverageTriggerRoutes returns the trigger adapter's route table.
 func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
@@ -1571,6 +1614,7 @@ func CoverageAllowlist() []AllowEntry {
 		savedViewAllowEntries(),
 		sinkAllowEntries(),
 		sourceFilterAllowEntries(),
+		trustRuleAllowEntries(),
 		apiDescriptionAllowEntries(),
 	)
 }
@@ -2102,6 +2146,14 @@ func auditReadAllowEntries() []AllowEntry {
 			Reason: "Console-only: no CLI checks the audit chain. The " +
 				"harness step checks it after a CLI command that calls the " +
 				"decrypt audit route.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/export",
+			CoveringTest: "TestCLIs (checkAuditExport)",
+			Reason: "Console-only and for auditors: no CLI exports the audit " +
+				"log. The harness step exports the log after a CLI command " +
+				"that calls the decrypt audit route and checks the hashes " +
+				"of the lines with no help from the server.",
 		},
 	}
 }
@@ -2734,6 +2786,26 @@ func sourceFilterAllowEntries() []AllowEntry {
 	}
 }
 
+// trustRuleAllowEntries covers the routes of the workload trust rules of a
+// namespace. No CLI calls them: the console and the clients of the API do.
+// The steps of TestTrustRuleAPI call each of them with the token of an
+// administrator.
+func trustRuleAllowEntries() []AllowEntry {
+	const (
+		rules = "/api/dustpan/v1/namespaces/{namespace}/trust-rules"
+		rule  = rules + "/{rule_id}"
+		test  = "TestTrustRuleAPI"
+		why   = "Console and client route: no CLI calls it. The steps of TestTrustRuleAPI call it through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: rules, CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: rules, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: rule, CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: rule, CoveringTest: test, Reason: why},
+	}
+}
+
 // savedViewAllowEntries covers the routes of the saved views. No CLI calls
 // them: the console and the clients of the API do. The steps of
 // TestSavedViewsAPI call each of them with the personal token of a person.
@@ -2865,6 +2937,24 @@ func (coverageRegistryService) OpenFile(
 	return 0, nil, registry.ErrNotFound
 }
 
+func (coverageRegistryService) ModuleReleases(
+	context.Context, registry.Address,
+) ([]registry.Release, error) {
+	return nil, registry.ErrNotFound
+}
+
+func (coverageRegistryService) ModuleRelease(
+	context.Context, namespace.Name, string, string, string,
+) (registry.Release, error) {
+	return registry.Release{}, registry.ErrNotFound
+}
+
+func (coverageRegistryService) OpenModuleFile(
+	context.Context, registry.Address, string, string,
+) (int64, io.ReadCloser, error) {
+	return 0, nil, registry.ErrNotFound
+}
+
 // coverageRegistryRoutes returns the route table of the registry API. The
 // service is an empty shell: it exists only to build a Handler.
 func coverageRegistryRoutes(tb testing.TB) []RouteRef {
@@ -2880,6 +2970,7 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 	svc, err := registryservice.New(registryservice.Config{
 		Store: store, Keys: keys, Verifier: verifier, Inspector: verifier, Blobs: struct{ blob.Store }{nil},
 		Namespaces: coverageRegistryNamespaces{}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
+		MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		tb.Fatalf("registry service: %v", err)
@@ -2928,6 +3019,12 @@ func registryAllowEntries() []AllowEntry {
 		test = "TestRegistryTofuInit"
 		why  = "Client route: no CLI calls it. The steps of TestRegistryTofuInit call it, and OpenTofu installs what it published."
 
+		moduleTest = "TestRegistryModuleTofuInit"
+		moduleWhy  = "Client route: no CLI calls it. The steps of TestRegistryModuleTofuInit call it, and OpenTofu downloads what it published."
+
+		moduleProtocol    = "/v1/modules/{namespace}/{name}/{system}"
+		moduleProtocolWhy = "OpenTofu calls it on init, but only on the registry host. The steps of TestRegistryModuleTofuInit run the real CLI against it."
+
 		protocol    = "/v1/providers/{namespace}/{type}"
 		protocolWhy = "OpenTofu calls it on init, but only on the registry host. The steps of TestRegistryTofuInit run the real CLI against it."
 	)
@@ -2938,6 +3035,25 @@ func registryAllowEntries() []AllowEntry {
 		{Method: http.MethodGet, Path: base + "/providers", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
+		{
+			Method:       http.MethodPut,
+			Path:         base + "/modules/{name}/{system}/versions/{version}",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
+		{Method: http.MethodGet, Path: base + "/modules", CoveringTest: moduleTest, Reason: moduleWhy},
+		{
+			Method:       http.MethodGet,
+			Path:         base + "/modules/{name}/{system}/versions",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         base + "/modules/{name}/{system}/versions/{version}",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
 		{Method: http.MethodPost, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: base + "/keys/{fingerprint}", CoveringTest: test, Reason: why},
@@ -2949,5 +3065,23 @@ func registryAllowEntries() []AllowEntry {
 			Reason:       protocolWhy,
 		},
 		{Method: http.MethodGet, Path: protocol + "/{version}/files/{sha256}", CoveringTest: test, Reason: protocolWhy},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/versions",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/{version}/download",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/{version}/files/{sha256}",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
 	}
 }

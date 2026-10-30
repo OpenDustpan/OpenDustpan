@@ -134,6 +134,7 @@ internal/              code that is not part of the SDK
 clients/typescript/    the generated TypeScript client package; make clients-check fails when it is not what a fresh run gives
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
+  githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)

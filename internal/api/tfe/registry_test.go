@@ -81,6 +81,50 @@ func (f *fakeRegistry) Release(_ context.Context, ns namespace.Name, name, versi
 	return fixtureRelease(), nil
 }
 
+// moduleHash is the SHA-256 of the archive of the module acme/vpc/aws 1.0.0.
+const moduleHash = "8888888888888888888888888888888888888888888888888888888888888888"
+
+// fixtureModule is the one release of the module acme/vpc/aws.
+func fixtureModule() registry.Release {
+	return registry.Release{
+		PublishedAt: time.Unix(1_800_000_000, 0).UTC(),
+		Address:     registry.Address{Namespace: "acme", Kind: registry.KindModule, Name: "vpc", System: "aws"},
+		Version:     "1.0.0", SumsFile: "", SumsSHA256: "", SignatureFile: "", SignatureSHA256: "",
+		KeyFingerprint: "", PublishedBy: "ada", Protocols: nil, Files: nil,
+		Archives: []registry.Archive{{Platform: "", FileName: "vpc-aws-1.0.0.tar.gz", SHA256: moduleHash, Size: 4}},
+	}
+}
+
+func (f *fakeRegistry) ModuleReleases(_ context.Context, addr registry.Address) ([]registry.Release, error) {
+	if addr != fixtureModule().Address {
+		return nil, registry.ErrNotFound
+	}
+
+	return []registry.Release{fixtureModule()}, nil
+}
+
+func (f *fakeRegistry) ModuleRelease(
+	_ context.Context, ns namespace.Name, name, system, version string,
+) (registry.Release, error) {
+	if ns != "acme" || name != "vpc" || system != "aws" || version != "1.0.0" {
+		return registry.Release{}, registry.ErrNotFound
+	}
+
+	return fixtureModule(), nil
+}
+
+func (f *fakeRegistry) OpenModuleFile(
+	_ context.Context, addr registry.Address, version, sum string,
+) (int64, io.ReadCloser, error) {
+	if addr != fixtureModule().Address || version != "1.0.0" || sum != moduleHash {
+		return 0, nil, registry.ErrNotFound
+	}
+
+	data := f.files[moduleHash]
+
+	return int64(len(data)), io.NopCloser(bytes.NewReader(data)), nil
+}
+
 func (f *fakeRegistry) SigningKey(_ context.Context, rel registry.Release) (registry.TrustedKey, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -123,7 +167,9 @@ type registryFixture struct {
 func newFakeRegistry() *fakeRegistry {
 	return &fakeRegistry{
 		mu: sync.Mutex{}, keyGone: false,
-		files: map[string][]byte{zipHash: []byte("zip"), sumsHash: []byte("sums"), sigHash: []byte("sig")},
+		files: map[string][]byte{
+			zipHash: []byte("zip"), sumsHash: []byte("sums"), sigHash: []byte("sig"), moduleHash: []byte("tgz!"),
+		},
 	}
 }
 
@@ -281,7 +327,8 @@ func TestRegistryDiscovery(t *testing.T) {
 	var doc map[string]string
 
 	err := json.Unmarshal(rec.Body.Bytes(), &doc)
-	if err != nil || doc["providers.v1"] != "/v1/providers/" || doc["tfe.v2"] == "" {
+	if err != nil || doc["providers.v1"] != "/v1/providers/" || doc["modules.v1"] != "/v1/modules/" ||
+		doc["tfe.v2"] == "" {
 		t.Fatalf("discovery = %q, %v", rec.Body.String(), err)
 	}
 
@@ -293,8 +340,8 @@ func TestRegistryDiscovery(t *testing.T) {
 		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/.well-known/terraform.json", http.NoBody),
 	)
 
-	if strings.Contains(rec2.Body.String(), "providers.v1") {
-		t.Fatalf("discovery advertises providers.v1 with no registry: %s", rec2.Body.String())
+	if strings.Contains(rec2.Body.String(), "providers.v1") || strings.Contains(rec2.Body.String(), "modules.v1") {
+		t.Fatalf("discovery advertises a registry protocol with no registry: %s", rec2.Body.String())
 	}
 }
 
@@ -623,7 +670,7 @@ func registryRoutesOf(t *testing.T, h *tfe.Handler) map[string]tfe.Scope {
 	seen := map[string]tfe.Scope{}
 
 	for _, route := range h.Routes() {
-		if !strings.HasPrefix(route.Path, "/v1/providers/") {
+		if !strings.HasPrefix(route.Path, "/v1/providers/") && !strings.HasPrefix(route.Path, "/v1/modules/") {
 			continue
 		}
 
@@ -644,9 +691,12 @@ func TestRegistryRoutesDeclareScopes(t *testing.T) {
 	seen := registryRoutesOf(t, f.handler)
 
 	want := map[string]tfe.Scope{
-		"GET /v1/providers/{namespace}/{type}/versions":                       tfe.ScopeRegistry,
-		"GET /v1/providers/{namespace}/{type}/{version}/download/{os}/{arch}": tfe.ScopeRegistry,
-		"GET /v1/providers/{namespace}/{type}/{version}/files/{sha256}":       tfe.ScopeSigned,
+		"GET /v1/providers/{namespace}/{type}/versions":                        tfe.ScopeRegistry,
+		"GET /v1/providers/{namespace}/{type}/{version}/download/{os}/{arch}":  tfe.ScopeRegistry,
+		"GET /v1/providers/{namespace}/{type}/{version}/files/{sha256}":        tfe.ScopeSigned,
+		"GET /v1/modules/{namespace}/{name}/{system}/versions":                 tfe.ScopeRegistry,
+		"GET /v1/modules/{namespace}/{name}/{system}/{version}/download":       tfe.ScopeRegistry,
+		"GET /v1/modules/{namespace}/{name}/{system}/{version}/files/{sha256}": tfe.ScopeSigned,
 	}
 
 	if !maps.Equal(seen, want) {
@@ -655,7 +705,8 @@ func TestRegistryRoutesDeclareScopes(t *testing.T) {
 
 	// Every served pattern has a row.
 	for _, pattern := range f.handler.RegisteredPatterns() {
-		if _, ok := want[pattern]; strings.Contains(pattern, "/v1/providers/") && !ok {
+		if _, ok := want[pattern]; (strings.Contains(pattern, "/v1/providers/") || strings.Contains(pattern, "/v1/modules/")) &&
+			!ok {
 			t.Errorf("served route %q has no row", pattern)
 		}
 	}

@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -186,9 +187,17 @@ func (s *hostScenario) check(t *testing.T, id string) {
 
 	const consumers = 6
 
-	if check.Account.Login != "acme-org" || check.Account.ID != "99" || len(check.Account.Scopes) != 2 ||
-		len(check.Missing) != consumers {
+	// The scopes are the exact permissions of the installation, in order.
+	wantScopes := []string{"contents:read", "metadata:read"}
+
+	if check.Account.Login != "acme-org" || check.Account.ID != "99" ||
+		!slices.Equal(check.Account.Scopes, wantScopes) || len(check.Missing) != consumers {
 		t.Fatalf("check = %+v", check)
+	}
+
+	// The connection reads files, so the Catalog misses nothing.
+	if catalog, found := check.Missing["catalog"]; !found || len(catalog) != 0 {
+		t.Fatalf("missing for the catalog = %v, %v; want an empty list", catalog, found)
 	}
 
 	if s.fake.Calls() < 2 {

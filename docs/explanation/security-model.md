@@ -77,6 +77,14 @@ persons and services.
   principal has now or gets later. A token acts with the grants of its
   principal at the time of each request. The design wants this: the grant of
   `principal:manage-tokens` is the decision.
+- **A workload trust rule needs `principal:manage-tokens` on its
+  principal.** A trust rule lets a workload with a matching token from its
+  issuer act as a service principal of the namespace of the rule. So a
+  create of a rule needs `namespace:manage-trust-rules` on the namespace
+  and `principal:manage-tokens` on the principal, the same right as a
+  service token. An access token cannot create a rule: only a person after
+  a sign-in can. A rule never names a principal of another namespace, a
+  person or a disabled principal, and never names an issuer of this server.
 - **An account administrator can act as any service principal.** The
   built-in roles `account-administrator` and `site-administrator` hold
   `principal:manage-tokens` on the installation, which holds every

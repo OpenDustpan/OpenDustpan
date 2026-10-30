@@ -247,6 +247,65 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 	return err
 }
 
+const appendInventoryChange = `-- name: AppendInventoryChange :one
+WITH ns AS (
+    SELECT id FROM namespaces WHERE namespaces.name = $8
+), head AS (
+    INSERT INTO inventory_change_heads (namespace_id, last_seq)
+    SELECT id, 1 FROM ns
+    ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+    RETURNING namespace_id, last_seq
+)
+INSERT INTO inventory_changes (
+    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+)
+SELECT
+    head.namespace_id, head.last_seq, $1::bigint, $2::text, $3::text,
+    $4::text, $5::text, $6::text,
+    COALESCE((
+        SELECT c.name
+        FROM collection_members AS m
+        JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+        WHERE m.unit_id = $3::text
+    ), '')::text,
+    $7::text, NULL
+FROM head
+RETURNING seq
+`
+
+type AppendInventoryChangeParams struct {
+	AtMs          int64
+	Tool          string
+	UnitID        string
+	UnitName      string
+	DisplayName   string
+	Status        string
+	Kind          string
+	NamespaceName string
+}
+
+// Appends one row to the change log of the namespace that has the name now, in
+// one statement: it resolves the namespace, takes the next number of the log,
+// and writes the row with the name of the collection that holds the unit. No
+// row comes back when the namespace does not exist. The statement runs last in
+// the transaction of the write, after every other row lock, so the order of the
+// numbers is the order of the commits of the namespace.
+func (q *Queries) AppendInventoryChange(ctx context.Context, arg AppendInventoryChangeParams) (int64, error) {
+	row := q.db.QueryRow(ctx, appendInventoryChange,
+		arg.AtMs,
+		arg.Tool,
+		arg.UnitID,
+		arg.UnitName,
+		arg.DisplayName,
+		arg.Status,
+		arg.Kind,
+		arg.NamespaceName,
+	)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
+}
+
 const backupBlobs = `-- name: BackupBlobs :many
 SELECT content_key, size, md5, sealed
 FROM state_versions
@@ -970,6 +1029,25 @@ func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int6
 	return count, err
 }
 
+const countBlobPurges = `-- name: CountBlobPurges :one
+SELECT COUNT(*) AS pending, COALESCE(MIN(purged_at_ms), 0)::BIGINT AS oldest_ms
+FROM blob_purges
+`
+
+type CountBlobPurgesRow struct {
+	Pending  int64
+	OldestMs int64
+}
+
+// The number of blob purge records and the purge time of the oldest one. The
+// time is 0 when no record exists.
+func (q *Queries) CountBlobPurges(ctx context.Context) (CountBlobPurgesRow, error) {
+	row := q.db.QueryRow(ctx, countBlobPurges)
+	var i CountBlobPurgesRow
+	err := row.Scan(&i.Pending, &i.OldestMs)
+	return i, err
+}
+
 const countCallerGrants = `-- name: CountCallerGrants :one
 WITH holders (kind, id) AS (
   SELECT 'principal'::text, $1::text
@@ -1679,6 +1757,17 @@ WHERE workspace_id = $1 AND status = 'finalized'
 
 func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countStateVersions, workspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTrustRulesInNamespace = `-- name: CountTrustRulesInNamespace :one
+SELECT COUNT(*) FROM trust_rules WHERE namespace = $1
+`
+
+func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, countTrustRulesInNamespace, namespace)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -3355,6 +3444,23 @@ type DeleteTriggerParams struct {
 
 func (q *Queries) DeleteTrigger(ctx context.Context, arg DeleteTriggerParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteTrigger, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteTrustRule = `-- name: DeleteTrustRule :execrows
+DELETE FROM trust_rules WHERE namespace = $1 AND id = $2
+`
+
+type DeleteTrustRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) DeleteTrustRule(ctx context.Context, arg DeleteTrustRuleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTrustRule, arg.Namespace, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -7451,6 +7557,61 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 	return i, err
 }
 
+const getTrustRule = `-- name: GetTrustRule :one
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = $1 AND id = $2
+`
+
+type GetTrustRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+// The namespace is part of the key: a rule of another namespace reads as no
+// row.
+func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (TrustRule, error) {
+	row := q.db.QueryRow(ctx, getTrustRule, arg.Namespace, arg.ID)
+	var i TrustRule
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Name,
+		&i.Issuer,
+		&i.Audience,
+		&i.KeySource,
+		&i.StaticKeys,
+		&i.ConditionsJson,
+		&i.PrincipalID,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getTrustRulePrincipal = `-- name: GetTrustRulePrincipal :one
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms
+FROM principals
+WHERE id = $1
+FOR SHARE
+`
+
+type GetTrustRulePrincipalRow struct {
+	Kind        string
+	Namespace   string
+	DeletedAtMs int64
+}
+
+// Reads the principal of a new rule in the transaction of the create, so a
+// delete of the principal cannot pass between the check and the insert.
+func (q *Queries) GetTrustRulePrincipal(ctx context.Context, id string) (GetTrustRulePrincipalRow, error) {
+	row := q.db.QueryRow(ctx, getTrustRulePrincipal, id)
+	var i GetTrustRulePrincipalRow
+	err := row.Scan(&i.Kind, &i.Namespace, &i.DeletedAtMs)
+	return i, err
+}
+
 const getUnitCollection = `-- name: GetUnitCollection :one
 SELECT c.name
 FROM collection_members AS m
@@ -7461,21 +7622,6 @@ WHERE m.unit_id = $1
 // The collection of one unit by its ID, as written.
 func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string, error) {
 	row := q.db.QueryRow(ctx, getUnitCollection, unitID)
-	var name string
-	err := row.Scan(&name)
-	return name, err
-}
-
-const getUnitCollectionName = `-- name: GetUnitCollectionName :one
-SELECT c.name
-FROM collection_members AS m
-JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
-WHERE m.unit_id = $1
-`
-
-// The name of the collection that holds the unit, for a change log row.
-func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (string, error) {
-	row := q.db.QueryRow(ctx, getUnitCollectionName, unitID)
 	var name string
 	err := row.Scan(&name)
 	return name, err
@@ -8683,44 +8829,6 @@ func (q *Queries) InsertImportUnit(ctx context.Context, arg InsertImportUnitPara
 	return err
 }
 
-const insertInventoryChange = `-- name: InsertInventoryChange :exec
-INSERT INTO inventory_changes (
-    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-`
-
-type InsertInventoryChangeParams struct {
-	NamespaceID   string
-	Seq           int64
-	AtMs          int64
-	Tool          string
-	UnitID        string
-	Name          string
-	DisplayName   string
-	Status        string
-	Collection    string
-	Kind          string
-	ResourceCount pgtype.Int8
-}
-
-func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventoryChangeParams) error {
-	_, err := q.db.Exec(ctx, insertInventoryChange,
-		arg.NamespaceID,
-		arg.Seq,
-		arg.AtMs,
-		arg.Tool,
-		arg.UnitID,
-		arg.Name,
-		arg.DisplayName,
-		arg.Status,
-		arg.Collection,
-		arg.Kind,
-		arg.ResourceCount,
-	)
-	return err
-}
-
 const insertItemKey = `-- name: InsertItemKey :execrows
 INSERT INTO item_keys (
     id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
@@ -9599,6 +9707,55 @@ func (q *Queries) InsertSavedView(ctx context.Context, arg InsertSavedViewParams
 		arg.Owner,
 		arg.Name,
 		arg.QueryJson,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertTrustRule = `-- name: InsertTrustRule :execrows
+INSERT INTO trust_rules (
+    id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9,
+    $10, $11
+)
+ON CONFLICT DO NOTHING
+`
+
+type InsertTrustRuleParams struct {
+	ID             string
+	Namespace      string
+	Name           string
+	Issuer         string
+	Audience       string
+	KeySource      string
+	StaticKeys     string
+	ConditionsJson string
+	PrincipalID    string
+	CreatedBy      string
+	CreatedAtMs    int64
+}
+
+// The caller checks the fence and the principal in the same transaction. A
+// rule with a taken ID, or with a name that the namespace has, is not written.
+func (q *Queries) InsertTrustRule(ctx context.Context, arg InsertTrustRuleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertTrustRule,
+		arg.ID,
+		arg.Namespace,
+		arg.Name,
+		arg.Issuer,
+		arg.Audience,
+		arg.KeySource,
+		arg.StaticKeys,
+		arg.ConditionsJson,
+		arg.PrincipalID,
+		arg.CreatedBy,
 		arg.CreatedAtMs,
 	)
 	if err != nil {
@@ -14072,6 +14229,46 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 	return items, nil
 }
 
+const listTrustRulesOfNamespace = `-- name: ListTrustRulesOfNamespace :many
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = $1
+ORDER BY name COLLATE "C", id COLLATE "C"
+`
+
+func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]TrustRule, error) {
+	rows, err := q.db.Query(ctx, listTrustRulesOfNamespace, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TrustRule
+	for rows.Next() {
+		var i TrustRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Name,
+			&i.Issuer,
+			&i.Audience,
+			&i.KeySource,
+			&i.StaticKeys,
+			&i.ConditionsJson,
+			&i.PrincipalID,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnitGateObjectKeys = `-- name: ListUnitGateObjectKeys :many
 SELECT kind, id, scope_key
 FROM gate_objects
@@ -14847,23 +15044,6 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const nextInventoryChangeSeq = `-- name: NextInventoryChangeSeq :one
-INSERT INTO inventory_change_heads (namespace_id, last_seq)
-VALUES ($1, 1)
-ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
-RETURNING last_seq
-`
-
-// Takes the next number of the change log of one namespace. The statement runs
-// last in the transaction of the write, after every other row lock, so the
-// order of the numbers is the order of the commits of the namespace.
-func (q *Queries) NextInventoryChangeSeq(ctx context.Context, namespaceID string) (int64, error) {
-	row := q.db.QueryRow(ctx, nextInventoryChangeSeq, namespaceID)
-	var last_seq int64
-	err := row.Scan(&last_seq)
-	return last_seq, err
 }
 
 const nextJobSeq = `-- name: NextJobSeq :one
