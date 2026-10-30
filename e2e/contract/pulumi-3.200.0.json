@@ -4,273 +4,592 @@
   "routes": [
     {
       "route": "DELETE /api/stacks/{namespace}/{project}/{stack}",
-      "statuses": [
-        204,
-        400
+      "answers": [
+        {
+          "status": 204,
+          "headers": [
+            "Vary",
+            "X-Request-Id"
+          ]
+        },
+        {
+          "status": 400,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/capabilities",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "capabilities",
-        "capabilities.[].capability"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "capabilities",
+            "capabilities.[]",
+            "capabilities.[].capability"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/stacks/{namespace}/{project}/{stack}",
-      "statuses": [
-        200,
-        404
-      ],
-      "responseKeys": [
-        "activeUpdate",
-        "id",
-        "orgName",
-        "projectName",
-        "stackName",
-        "tags",
-        "tags.pulumi:project",
-        "tags.pulumi:runtime",
-        "version"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "activeUpdate",
+            "id",
+            "orgName",
+            "projectName",
+            "stackName",
+            "tags",
+            "tags.pulumi:project",
+            "tags.pulumi:runtime",
+            "version"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        },
+        {
+          "status": 404,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/stacks/{namespace}/{project}/{stack}/export",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "deployment",
-        "version"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "deployment",
+            "version"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ],
+          "cut": true
+        }
       ]
     },
     {
       "route": "GET /api/stacks/{namespace}/{project}/{stack}/export/{version}",
-      "statuses": [
-        200,
-        404
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ],
+          "cut": true
+        },
+        {
+          "status": 404,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "events",
-        "status"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "events",
+            "events.[]",
+            "status"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/stacks/{namespace}/{project}/{stack}/updates",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "updates"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "updates",
+            "updates.[]"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/user",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "expiresAt",
-        "githubLogin",
-        "name",
-        "organizations",
-        "organizations.[].avatarUrl",
-        "organizations.[].githubLogin",
-        "organizations.[].name",
-        "temporaryAdministrator"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "expiresAt",
+            "githubLogin",
+            "name",
+            "organizations",
+            "organizations.[]",
+            "organizations.[].avatarUrl",
+            "organizations.[].githubLogin",
+            "organizations.[].name",
+            "temporaryAdministrator"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/user/organizations/default",
-      "statuses": [
-        200,
-        404
-      ],
-      "responseKeys": [
-        "GitHubLogin",
-        "Messages"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "GitHubLogin",
+            "Messages",
+            "Messages.[]"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        },
+        {
+          "status": 404,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "GET /api/user/stacks",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "continuationToken",
-        "stacks"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "continuationToken",
+            "stacks",
+            "stacks.[]"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/tags",
-      "statuses": [
-        200
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint",
-      "statuses": [
-        200
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointdelta",
-      "statuses": [
-        200
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim",
-      "statuses": [
-        200
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}",
-      "statuses": [
-        200,
-        404
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        },
+        {
+          "status": 404,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/batch-decrypt",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "plaintexts"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "plaintexts"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/batch-encrypt",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "ciphertexts"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "ciphertexts",
+            "ciphertexts.[]"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/decrypt",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "plaintext"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "plaintext"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/decrypt/log-batch-decryption",
-      "statuses": [
-        204
+      "answers": [
+        {
+          "status": 204,
+          "headers": [
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/decrypt/log-decryption",
-      "statuses": [
-        204
+      "answers": [
+        {
+          "status": 204,
+          "headers": [
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/destroy",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "updateID"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "updateID"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/encrypt",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "ciphertext"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "ciphertext"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/import",
-      "statuses": [
-        200,
-        409
-      ],
-      "responseKeys": [
-        "updateId"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "updateId"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        },
+        {
+          "status": 409,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/preview",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "updateID"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "updateID"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/refresh",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "updateID"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "updateID"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/rename",
-      "statuses": [
-        200,
-        409
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        },
+        {
+          "status": 409,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/update",
-      "statuses": [
-        200
-      ],
-      "responseKeys": [
-        "updateID"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "updateID"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}",
-      "statuses": [
-        200,
-        409
-      ],
-      "responseKeys": [
-        "journalVersion",
-        "token",
-        "tokenExpiration",
-        "version"
+      "answers": [
+        {
+          "status": 200,
+          "responseKeys": [
+            "journalVersion",
+            "token",
+            "tokenExpiration",
+            "version"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        },
+        {
+          "status": 409,
+          "responseKeys": [
+            "code",
+            "errorCode",
+            "message"
+          ],
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/cancel",
-      "statuses": [
-        200
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
-      "statuses": [
-        200
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     },
     {
       "route": "POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
-      "statuses": [
-        200
+      "answers": [
+        {
+          "status": 200,
+          "headers": [
+            "Content-Type: application/json",
+            "Vary",
+            "X-Request-Id"
+          ]
+        }
       ]
     }
   ]
