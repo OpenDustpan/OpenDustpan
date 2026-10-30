@@ -22,7 +22,7 @@ export interface Metadata {
 export const metadata: Metadata = {
   clientVersion: "0.19.0",
   descriptionVersion: "0.19.0",
-  descriptionSha256: "d3298f572ebd9ae93b8865c18b9ebc94f9d209cbe94ae920b9e9da563dcddacd",
+  descriptionSha256: "3dd2e3e3da51c6594cb208f0d6b18ee3bbde6a19f8ec228e0b4b99b67a38ecfb",
   serverRelease: "development",
   serverCommit: "development",
   generatorVersion: "0.1.0",

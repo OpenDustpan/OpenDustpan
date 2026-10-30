@@ -2104,6 +2104,14 @@ func auditReadAllowEntries() []AllowEntry {
 				"harness step checks it after a CLI command that calls the " +
 				"decrypt audit route.",
 		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/export",
+			CoveringTest: "TestCLIs (checkAuditExport)",
+			Reason: "Console-only and for auditors: no CLI exports the audit " +
+				"log. The harness step exports the log after a CLI command " +
+				"that calls the decrypt audit route and checks the hashes " +
+				"of the lines with no help from the server.",
+		},
 	}
 }
 

@@ -92,7 +92,7 @@ func (o *DurableOperations) Start(ctx context.Context, req durable.StartRequest)
 		created bool
 	)
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		var startErr error
 
 		op, created, startErr = startDurable(ctx, q, req)
@@ -379,7 +379,7 @@ func (o *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 	var extended durable.Claim
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		row, now, err := liveDurable(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err
@@ -422,23 +422,27 @@ func (o *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence,
 
 // Complete implements durable.Store.
 func (o *DurableOperations) Complete(ctx context.Context, c durable.Claim) error {
-	return o.store.endAttempt(ctx, c, completeEnd)
+	return o.store.endAttempt(ctx, c, completeEnd, o.store.inMinimumTx)
 }
 
 // Fail implements durable.Store.
 func (o *DurableOperations) Fail(ctx context.Context, c durable.Claim, f durable.Failure) error {
-	return o.store.endAttempt(ctx, c, failEnd(f))
+	return o.store.endAttempt(ctx, c, failEnd(f), o.store.inMinimumTx)
 }
 
 // Release implements durable.Store.
 func (o *DurableOperations) Release(ctx context.Context, c durable.Claim) error {
-	return o.store.endAttempt(ctx, c, releaseEnd)
+	return o.store.endAttempt(ctx, c, releaseEnd, o.store.inControlTx)
 }
 
 // GiveBack implements durable.Store.
 func (o *DurableOperations) GiveBack(ctx context.Context, c durable.Claim) error {
-	return o.store.endAttempt(ctx, c, giveBackEnd)
+	return o.store.endAttempt(ctx, c, giveBackEnd, o.store.inControlTx)
 }
+
+// txRunner is a transaction of the store that runs fn with the queries of the
+// transaction.
+type txRunner func(ctx context.Context, fn func(q *db.Queries) error) error
 
 // endRule returns the row of the end of a claim at now, or the error that
 // stops the end.
@@ -504,7 +508,7 @@ func (o *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		return cancelDurable(ctx, q, id)
 	})
 }
@@ -522,7 +526,7 @@ func (o *DurableOperations) CancelBefore(ctx context.Context, id durable.ID, ste
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		row, err := q.GetDurableOperation(ctx, string(id))
 		if errors.Is(err, sql.ErrNoRows) {
 			return durable.ErrNotFound
@@ -597,11 +601,15 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 
 // endAttempt runs the checks that Complete, Fail, Release and GiveBack share,
 // then writes the row that end returns. An error from end changes nothing.
-func (s *Store) endAttempt(ctx context.Context, c durable.Claim, end endRule) error {
+// run is the transaction: Complete and Fail pass the one that refuses a binary
+// below the minimum, because they record a result. Release and GiveBack pass
+// the one that does not, because an old binary must be able to hand its claims
+// back when it stops.
+func (s *Store) endAttempt(ctx context.Context, c durable.Claim, end endRule, run txRunner) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return run(ctx, func(q *db.Queries) error {
 		return endClaim(ctx, q, c, end)
 	})
 }
@@ -645,13 +653,22 @@ func (s *Store) inStepTx(
 
 // inWriteTx runs fn in an IMMEDIATE transaction (the _txlock of the store),
 // with the transaction for the hand-written queries of fn.
+// It refuses a binary below the minimum binary version of the schema before
+// fn runs, in the same transaction: its callers claim operations and record
+// steps.
 func (s *Store) inWriteTx(ctx context.Context, fn func(tx *sql.Tx, q *db.Queries) error) error {
 	tx, err := s.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 
-	if err := fn(tx, s.queries.WithTx(tx)); err != nil {
+	q := s.queries.WithTx(tx)
+
+	if err := s.checkMinimum(ctx, q); err != nil {
+		return errors.Join(err, rollback(tx))
+	}
+
+	if err := fn(tx, q); err != nil {
 		return errors.Join(err, rollback(tx))
 	}
 

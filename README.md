@@ -355,6 +355,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the
+  keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
 - [Git host account links API](docs/reference/git-host-links-api.md): the routes that

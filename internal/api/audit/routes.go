@@ -49,6 +49,7 @@ func (h *Handler) buildRoutes() []Route {
 		readRoute("/api/audit/entries", h.listEntries),
 		readRoute("/api/audit/entries/{sequence}", h.getEntry),
 		readRoute("/api/audit/check", h.checkChain),
+		readRoute("/api/audit/export", h.exportEntries),
 	}
 }
 
