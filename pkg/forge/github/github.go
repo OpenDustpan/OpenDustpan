@@ -3,8 +3,9 @@
 // kinds app (a GitHub App installation) and token (a fine-grained
 // personal access token).
 //
-// The adapter does Check now. Each other method returns forge.ErrUnsupported,
-// and Capabilities does not list it, until the method lands. Every request
+// The adapter does Check, Head and ReadFile now. Each other method returns
+// forge.ErrUnsupported, and Capabilities does not list it, until the method
+// lands. Every request
 // goes through the egress rules: the address of the API passes the URL
 // check when a connection opens and the address check when the network
 // connection opens, and the adapter follows no redirect.
@@ -21,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
@@ -102,7 +104,10 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 		return nil, err
 	}
 
-	f := &gitHub{o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil}
+	f := &gitHub{
+		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
+		mu: sync.Mutex{}, readTokens: map[string]readToken{},
+	}
 
 	switch c.Auth {
 	case forge.AuthApp:
@@ -153,30 +158,26 @@ type gitHub struct {
 	installationID string
 	token          string
 	push           bool
+
+	// mu guards readTokens, the installation tokens of an app connection for
+	// reads. A token reads one repository, and the adapter keeps it in memory
+	// only.
+	mu         sync.Mutex
+	readTokens map[string]readToken
 }
 
 // Capabilities lists what the adapter does for this connection, with no
-// call to GitHub. It lists no capability yet: each other method returns
+// call to GitHub. It lists forge.CapFiles: each other method returns
 // forge.ErrUnsupported until it lands. A method that lands adds its
 // capability here, and a connection with no push access gets neither
 // forge.CapCommit nor forge.CapReview.
 func (f *gitHub) Capabilities() forge.Capabilities {
-	return forge.Capabilities{}
+	return forge.Capabilities{forge.CapFiles}
 }
 
 // unsupported returns the error of a method that the adapter does not have.
 func unsupported(method string) error {
 	return fmt.Errorf("%w: GitHub %s is not available yet", forge.ErrUnsupported, method)
-}
-
-// Head returns forge.ErrUnsupported.
-func (*gitHub) Head(context.Context, string, string) (forge.Commit, error) {
-	return forge.Commit{}, unsupported("Head")
-}
-
-// ReadFile returns forge.ErrUnsupported.
-func (*gitHub) ReadFile(context.Context, string, string, string, int64) (forge.File, error) {
-	return forge.File{}, unsupported("ReadFile")
 }
 
 // Compare returns forge.ErrUnsupported.

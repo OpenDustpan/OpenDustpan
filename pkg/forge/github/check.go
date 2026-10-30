@@ -219,27 +219,47 @@ func decode(body []byte, v any) error {
 	return nil
 }
 
+// call describes one request to GitHub.
+type call struct {
+	method string
+	path   string
+	// bearer is the credential. It is never put in an error.
+	bearer string
+	body   []byte
+	// status maps a status that is not a success to an error. Nil means
+	// statusError.
+	status func(response) error
+	// oversize is the error for an answer above the body limit. Nil means a
+	// GitHub that gave an answer that cannot be read.
+	oversize error
+}
+
 // do sends one request to GitHub with the bearer credential bearer and
 // returns the answer, or an error that wraps a sentinel of the port. The
 // text of an error holds no part of the credential or of the answer.
 func (f *gitHub) do(ctx context.Context, method, path, bearer string, body []byte) (response, error) {
-	target := f.base + path
+	return f.send(ctx, call{method: method, path: path, bearer: bearer, body: body, status: nil, oversize: nil})
+}
+
+// send sends c, as do does.
+func (f *gitHub) send(ctx context.Context, c call) (response, error) {
+	target := f.base + c.path
 
 	var reader io.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
+	if c.body != nil {
+		reader = bytes.NewReader(c.body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, target, reader)
+	req, err := http.NewRequestWithContext(ctx, c.method, target, reader)
 	if err != nil {
 		return response{}, fmt.Errorf("%w: the GitHub request does not build", forge.ErrInvalid)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Authorization", "Bearer "+c.bearer)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-Github-Api-Version", "2022-11-28")
 
-	if body != nil {
+	if c.body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
@@ -248,18 +268,28 @@ func (f *gitHub) do(ctx context.Context, method, path, bearer string, body []byt
 		return response{}, networkError(err)
 	}
 
-	defer func() {
-		_ = resp.Body.Close() //nolint:errcheck // The body is read to its end below, or the answer fails.
-	}()
+	data, readErr := egresshttp.ReadBody(resp)
+	closeErr := resp.Body.Close()
 
-	data, err := egresshttp.ReadBody(resp)
-	if err != nil {
+	if readErr != nil {
+		if c.oversize != nil && errors.Is(readErr, egresshttp.ErrTooLarge) {
+			return response{}, c.oversize
+		}
+
+		return response{}, forge.Unavailable(0, "GitHub gave an answer that cannot be read")
+	}
+
+	if closeErr != nil {
 		return response{}, forge.Unavailable(0, "GitHub gave an answer that cannot be read")
 	}
 
 	out := response{status: resp.StatusCode, header: resp.Header, body: data}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if c.status != nil {
+			return response{}, c.status(out)
+		}
+
 		return response{}, f.statusError(out)
 	}
 

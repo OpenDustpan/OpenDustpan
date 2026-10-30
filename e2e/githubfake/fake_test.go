@@ -109,3 +109,31 @@ func TestUserExpiryHeader(t *testing.T) {
 		t.Fatalf("expiry header = %q", got)
 	}
 }
+
+func TestInstallationTokenOfMissingRepositoryIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newFake(t)
+	a := newClient(t, f).do(http.MethodPost, "/app/installations/9001/access_tokens",
+		jwt(t, f.PrivateKey(), f.AppID(), 9*time.Minute), `{"repositories":["none"]}`)
+
+	wantStatus(t, a, http.StatusUnprocessableEntity)
+
+	if got := f.IssuedTokens(); len(got) != 0 {
+		t.Fatalf("the fake made tokens: %v", got)
+	}
+}
+
+func TestInstallationTokenAlwaysReadsMetadata(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newFake(t)
+	c := newClient(t, f)
+	token := installationToken(t, c, `{"repositories":["infra"],"permissions":{"contents":"read"}}`)
+
+	wantStatus(t, c.do(http.MethodGet, "/repos/acme/infra/commits/main", token, ""), http.StatusOK)
+
+	if got := f.IssuedTokens(); len(got) != 1 || got[0] != token {
+		t.Fatalf("issued tokens = %v, want the one token", got)
+	}
+}

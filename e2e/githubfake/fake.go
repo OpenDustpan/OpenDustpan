@@ -161,7 +161,7 @@ func withDefaults(cfg Config) Config {
 	}
 
 	if cfg.Permissions == nil {
-		cfg.Permissions = map[string]string{"contents": "write", "metadata": "read"}
+		cfg.Permissions = map[string]string{"contents": levelNameWrite, "metadata": levelNameRead}
 	}
 
 	return cfg

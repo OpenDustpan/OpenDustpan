@@ -191,6 +191,11 @@ func (s *hostScenario) check(t *testing.T, id string) {
 		t.Fatalf("check = %+v", check)
 	}
 
+	// The connection reads files, so the Catalog misses nothing.
+	if catalog, found := check.Missing["catalog"]; !found || len(catalog) != 0 {
+		t.Fatalf("missing for the catalog = %v, %v; want an empty list", catalog, found)
+	}
+
 	if s.fake.Calls() < 2 {
 		t.Fatalf("the fake answered %d calls, want the read and the token", s.fake.Calls())
 	}

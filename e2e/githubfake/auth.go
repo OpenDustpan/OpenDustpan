@@ -192,7 +192,12 @@ func shortName(fullName string) string {
 	return name
 }
 
-// The ranks of the permission levels.
+// The permission levels and their ranks.
+const (
+	levelNameRead  = "read"
+	levelNameWrite = "write"
+)
+
 const (
 	levelRead  = 1
 	levelWrite = 2
@@ -201,11 +206,40 @@ const (
 // levelRank orders the permission levels. An unknown level is zero.
 func levelRank(level string) int {
 	switch level {
-	case "read":
+	case levelNameRead:
 		return levelRead
-	case "write":
+	case levelNameWrite:
 		return levelWrite
 	default:
 		return 0
 	}
+}
+
+// hasRepoNamed reports whether a repository has the short name name. The
+// caller holds the lock.
+func (f *Fake) hasRepoNamed(name string) bool {
+	for full := range f.repos {
+		if shortName(full) == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// IssuedTokens returns the value of each installation token that the fake
+// made, in order, so that a test can look for a token in a text where it
+// must not be.
+func (f *Fake) IssuedTokens() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]string, 0, len(f.tokens))
+	for _, t := range f.tokens {
+		out = append(out, t.value)
+	}
+
+	slices.Sort(out)
+
+	return out
 }

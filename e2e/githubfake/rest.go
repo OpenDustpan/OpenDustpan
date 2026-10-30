@@ -113,21 +113,11 @@ func (f *Fake) createInstallationToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	perms := f.cfg.Permissions
-	if req.Permissions != nil {
-		perms = req.Permissions
+	perms, problem := f.grantable(req)
+	if problem != "" {
+		f.message(w, http.StatusUnprocessableEntity, problem)
 
-		for name, level := range perms {
-			if levelRank(level) == 0 || levelRank(level) > levelRank(f.cfg.Permissions[name]) {
-				f.message(
-					w,
-					http.StatusUnprocessableEntity,
-					"The permissions requested are not granted to this installation.",
-				)
-
-				return
-			}
-		}
+		return
 	}
 
 	t := f.newToken(perms, req.Repositories)
@@ -138,6 +128,38 @@ func (f *Fake) createInstallationToken(w http.ResponseWriter, r *http.Request) {
 		"permissions":          t.permissions,
 		"repository_selection": selection(req.Repositories),
 	})
+}
+
+// grantable returns the permissions of the token that req asks for, or the
+// text of the problem. The caller holds the lock.
+func (f *Fake) grantable(req tokenRequest) (map[string]string, string) {
+	perms := f.cfg.Permissions
+
+	if req.Permissions != nil {
+		perms = req.Permissions
+
+		for name, level := range perms {
+			if levelRank(level) == 0 || levelRank(level) > levelRank(f.cfg.Permissions[name]) {
+				return nil, "The permissions requested are not granted to this installation."
+			}
+		}
+	}
+
+	for _, name := range req.Repositories {
+		if !f.hasRepoNamed(name) {
+			return nil, "There is at least one repository that does not exist or is not accessible to the " +
+				"parent installation."
+		}
+	}
+
+	// GitHub gives every installation token the permission to read the
+	// metadata, also when the request does not name it.
+	perms = maps.Clone(perms)
+	if perms["metadata"] == "" {
+		perms["metadata"] = levelNameRead
+	}
+
+	return perms, ""
 }
 
 func selection(repos []string) string {
@@ -185,7 +207,7 @@ func (f *Fake) repoOf(w http.ResponseWriter, r *http.Request, perm, level string
 	full := r.PathValue("owner") + "/" + r.PathValue("repo")
 
 	rp, found := f.repos[full]
-	if !found || !f.permitted(r, full, "metadata", "read") {
+	if !found || !f.permitted(r, full, "metadata", levelNameRead) {
 		f.message(w, http.StatusNotFound, "Not Found")
 
 		return nil, false
@@ -206,7 +228,7 @@ func person(at time.Time) wirePerson {
 }
 
 func (f *Fake) getCommit(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", "read")
+	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
 	if !ok {
 		return
 	}
@@ -234,7 +256,7 @@ func (f *Fake) getCommit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Fake) getContents(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", "read")
+	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
 	if !ok {
 		return
 	}
@@ -350,7 +372,7 @@ func dirEntries(rp *repo, c *commit, dir string) []wireEntry {
 }
 
 func (f *Fake) getBlob(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", "read")
+	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
 	if !ok {
 		return
 	}
