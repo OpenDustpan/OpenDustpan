@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
@@ -63,7 +64,7 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 	}
 	defer unlock()
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		if err := clearJournalOnEnter(ctx, q, state); err != nil {
 			return err
 		}
@@ -74,6 +75,10 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 
 		return err
 	})
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		return err
+	}
+
 	if err != nil {
 		return fmt.Errorf("store installation state sqlite database: %w", maintenance.ErrUnavailable)
 	}
@@ -143,7 +148,7 @@ func (s *Store) setStateIfWithin(
 	}
 	defer unlock()
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		n, txErr := setStateIn(ctx, q, expected, next, within)
 		if txErr != nil {
 			return txErr
@@ -163,7 +168,7 @@ func (s *Store) setStateIfWithin(
 		return inner.err
 	case errors.Is(err, maintenance.ErrStateChanged):
 		return errChanged
-	case errors.Is(err, maintenance.ErrUnavailable):
+	case errors.Is(err, maintenance.ErrUnavailable), errors.Is(err, schema.ErrBinaryBelowMinimum):
 		return err
 	case err != nil:
 		return fmt.Errorf("store installation state sqlite database: %w", maintenance.ErrUnavailable)
