@@ -1371,7 +1371,7 @@ func newNeutralHandlers(
 		runners:   runners,
 		profiles:  profileAPI.profiles,
 		issuer:    profileAPI.issuer,
-		sinks:     profileAPI.sinks,
+		sinks:     profileAPI.sinkAPI,
 		jobs:      jobAPIs.jobs,
 		triggers:  triggers,
 		drift:     jobAPIs.drift,
@@ -1385,7 +1385,7 @@ func newNeutralHandlers(
 type profileAPIs struct {
 	profiles http.Handler
 	issuer   http.Handler
-	sinks    http.Handler
+	sinkAPI  http.Handler
 }
 
 // newProfileAPIs builds the profiles API, the issuer API and the sinks API.
@@ -1407,7 +1407,7 @@ func newProfileAPIs(
 		return profileAPIs{}, err
 	}
 
-	return profileAPIs{profiles: profiles, issuer: issuer, sinks: sinks}, nil
+	return profileAPIs{profiles: profiles, issuer: issuer, sinkAPI: sinks}, nil
 }
 
 // jobAPIs holds the jobs API and the drift API, which share one job service.
