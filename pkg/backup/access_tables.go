@@ -44,6 +44,12 @@ const (
 	// principals table: a restore that kept the principals and took the
 	// preferences of the backup would leave rows with no person.
 	TablePersonPreferences = "person_preferences"
+	// TableTrustRules holds the workload trust rules of each namespace. A
+	// rule names a principal by a foreign key and lets a workload act as
+	// that principal, so the table moves with the principals table: a
+	// restore without server:restore-access never brings in a rule that
+	// gives a new way to act as a principal.
+	TableTrustRules = "trust_rules"
 )
 
 // AccessTables lists the tables that a restore replaces only when the
@@ -66,6 +72,7 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	TablePersonPreferences,
+	TableTrustRules,
 }
 
 // ErrRestoreAccessMismatch reports that the backup names access data that

@@ -45,6 +45,7 @@ func newModuleServer(t *testing.T, extra ...dustpan.Option) *dustpan.Server {
 		dustpan.WithTriggerStore(p.st.Triggers()),
 		dustpan.WithRunners(p.st.Runners()),
 		dustpan.WithSourceFilters(p.st.SourceFilters()),
+		dustpan.WithTrustRules(p.st.TrustRules()),
 		dustpan.WithSavedViewStore(p.st.SavedViews()),
 		dustpan.WithProfileStore(p.st.Profiles()),
 		dustpan.WithIssuerStore(p.st.Issuer()),

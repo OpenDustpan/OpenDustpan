@@ -970,6 +970,20 @@ type Trigger struct {
 	UpdatedAtMs      int64
 }
 
+type TrustRule struct {
+	ID             string
+	Namespace      string
+	Name           string
+	Issuer         string
+	Audience       string
+	KeySource      string
+	StaticKeys     string
+	ConditionsJson string
+	PrincipalID    string
+	CreatedBy      string
+	CreatedAtMs    int64
+}
+
 type UnitFinalVersion struct {
 	UnitID      string
 	NamespaceID string

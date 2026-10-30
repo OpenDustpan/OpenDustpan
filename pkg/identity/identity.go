@@ -297,6 +297,12 @@ const (
 	// namespace. Its object is a namespace. It reaches only the principals
 	// of that namespace, through principal:manage-tokens on each of them.
 	ActionNamespaceManagePrincipalTokens Action = "namespace:manage-principal-tokens"
+	// ActionNamespaceManageTrustRules allows creating and deleting the
+	// workload trust rules of a namespace. Its object is a namespace. A rule
+	// lets a workload act as a principal of the namespace, so a create also
+	// needs principal:manage-tokens on that principal. Reading the rules
+	// needs ActionNamespaceReadAccess.
+	ActionNamespaceManageTrustRules Action = "namespace:manage-trust-rules"
 	// ActionNamespaceReadAccess allows reading the access-review export of a
 	// namespace, and its principals. Its object is a namespace.
 	ActionNamespaceReadAccess Action = "namespace:read-access"

@@ -6,6 +6,7 @@ import "slices"
 // constant.
 const (
 	portColName          = "name"
+	portColIssuer        = "issuer"
 	portColNameKey       = "name_key"
 	portColCreatedAtMs   = "created_at_ms"
 	portColDisplayName   = "display_name"
@@ -586,7 +587,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColProviderID},
 			Columns: []Column{
 				{Name: portColProviderID, Kind: KindText},
-				{Name: "issuer", Kind: KindText},
+				{Name: portColIssuer, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
 		},
@@ -605,7 +606,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColProviderID},
 			Columns: []Column{
 				{Name: portColProviderID, Kind: KindText},
-				{Name: "issuer", Kind: KindText},
+				{Name: portColIssuer, Kind: KindText},
 				{Name: portColDisplayName, Kind: KindText},
 				{Name: "client_id", Kind: KindText},
 				{Name: "client_secret", Kind: KindBytes},
@@ -721,5 +722,6 @@ func portableSpec() []PortableTable {
 		portableSinkTables(),
 		portableTriggerTables(),
 		portableItemKeyTables(),
+		portableTrustRuleTables(),
 	)
 }
