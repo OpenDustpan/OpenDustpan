@@ -568,16 +568,18 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 		return nil
 	}
 
-	// The guard comes after the commit of the purge and after the listing. A
-	// backup or a restore that runs, or a failed read, keeps every blob: the
-	// error keeps the blob purge record, and the retention sweep tries again.
-	if err := blobguard.Hold(ctx, s.guard); err != nil {
-		return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, err)
-	}
-
 	failed := 0
 
 	for _, obj := range listed {
+		// The guard comes after the commit of the purge and after the listing,
+		// and again before each delete: a restore that starts during the loop
+		// keeps the blobs that are left. A backup or a restore that runs, or a
+		// failed read, stops the loop. The error keeps the blob purge record,
+		// and the retention sweep tries again.
+		if err := blobguard.Hold(ctx, s.guard); err != nil {
+			return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, err)
+		}
+
 		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
 			failed++
 		}
@@ -1356,7 +1358,7 @@ func (s *Updates) unnamed(ctx context.Context, target sweepTarget, candidates []
 // gone. The keep set is read by the stack ID that the listing used, so a
 // rename between the two reads cannot empty it. A running backup or restore
 // keeps every blob: the guard is read after the listing and after the keys,
-// and before the first delete. The update ID is empty for a sweep over the
+// and before each delete. The update ID is empty for a sweep over the
 // whole stack.
 func (s *Updates) sweepOrphans(
 	ctx context.Context, bl *scopedBlobs, target sweepTarget, listed []blob.Object,
@@ -1373,17 +1375,19 @@ func (s *Updates) sweepOrphans(
 		return
 	}
 
-	// The guard comes after the listing and after the read of the named keys.
-	// A blob that is unnamed here lost its last name in a commit before that
-	// read, so a backup or a restore that the guard does not see cannot name
-	// it. A running one keeps every blob for the next sweep.
-	if s.deletesHeld(ctx, sweepDeleter(id), ref) {
-		return
-	}
-
 	failed := 0
 
 	for _, obj := range doomed {
+		// The guard comes after the listing and after the read of the named
+		// keys. A blob that is unnamed here lost its last name in a commit
+		// before that read, so a backup that the guard does not see cannot name
+		// it. The guard is read again before each delete, so a restore that
+		// starts during the loop keeps the blobs that are left. A running
+		// backup or restore keeps them for the next sweep.
+		if s.deletesHeld(ctx, sweepDeleter(id), ref) {
+			return
+		}
+
 		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
 			failed++
 		}

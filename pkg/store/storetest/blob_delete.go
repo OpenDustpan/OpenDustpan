@@ -45,6 +45,8 @@ type BlobDeleteStore interface {
 	ClaimKind(ctx context.Context, kind installation.Kind) (installation.Kind, error)
 	// StartRestore stores a checking restore row and starts its operation.
 	StartRestore(ctx context.Context, r backup.RestoreRecord, start durable.StartRequest) error
+	// MarkRestoreApplying moves the checking restore to applying.
+	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID) error
 }
 
 // BlobDeleteFactory returns a fresh, empty store for one case.
@@ -841,7 +843,8 @@ func testBlobDeleteRetention(t *testing.T, r *blobDeleteRig) {
 }
 
 // testBlobDeleteRestore starts a restore row and runs the purge of a stack and
-// of a workspace. Both deletes of blobs wait for the restore.
+// of a workspace. Both deletes of blobs wait for the restore, while it is
+// checking and while it is applying.
 func testBlobDeleteRestore(t *testing.T, r *blobDeleteRig) {
 	t.Helper()
 
@@ -855,14 +858,31 @@ func testBlobDeleteRestore(t *testing.T, r *blobDeleteRig) {
 	}
 
 	p := r.purge(t, c, keys)
-
-	err := r.updates.DeleteStackBlobs(ctx, p.nsID, p.id)
-	requireWaits(t, err, blobguard.Restore, "delete of the blobs of a purged stack during the restore")
-
 	nsID := r.purgeWorkspace(t, w)
 
-	err = r.workspaces.DeletePurgedBlobs(ctx, nsID, w.ID)
-	requireWaits(t, err, blobguard.Restore, "delete of the state blobs of a purged workspace during the restore")
+	for _, state := range []string{"checking", "applying"} {
+		err := r.updates.DeleteStackBlobs(ctx, p.nsID, p.id)
+		requireWaits(t, err, blobguard.Restore, "delete of the blobs of a purged stack while the restore is "+state)
 
-	r.requireStored(t, append(keys, stateKeys...), "after the purges during the restore")
+		err = r.workspaces.DeletePurgedBlobs(ctx, nsID, w.ID)
+		requireWaits(
+			t,
+			err,
+			blobguard.Restore,
+			"delete of the state blobs of a purged workspace while the restore is "+state,
+		)
+
+		r.requireStored(t, append(slices.Clone(keys), stateKeys...), "while the restore is "+state)
+
+		if state == "checking" {
+			claimed := mustClaimRestoreOp(t, r.store.DurableOperationsPort(), "instance-a")
+
+			err = r.store.MarkRestoreApplying(
+				ctx, claimed.Claim.Step(backup.RestoreStepPreBackup), id, backup.ID(ident.NewID("bkp-")),
+			)
+			if err != nil {
+				t.Fatalf("mark restore applying: %v", err)
+			}
+		}
+	}
 }

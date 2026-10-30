@@ -544,3 +544,86 @@ func (f *buildFixture) requireGone(t *testing.T, keys []blob.Key, when string) {
 		}
 	}
 }
+
+// restoreAtSecondRead makes the guard report a running restore from its second
+// read on: the first read, before the first delete, finds nothing running.
+func restoreAtSecondRead(guard *blobguardtest.Guard) {
+	guard.OnRead(func() {
+		if guard.Calls() == 2 {
+			guard.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+		}
+	})
+}
+
+// TestPurgeLoopReadsTheGuardBeforeEachDelete proves that a restore which starts
+// between two deletes of one purge keeps the blob that is left: the guard is
+// read again before each delete.
+func TestPurgeLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
+	t.Parallel()
+
+	guard := blobguardtest.NewGuard()
+	restoreAtSecondRead(guard)
+
+	f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+	orphan := f.orphanOfNewUpdate(t)
+
+	err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test")
+	if !errors.Is(err, blobguard.ErrWait) {
+		t.Fatalf("delete with a restore that starts in the loop: err = %v, want a wait", err)
+	}
+
+	// The update directory holds the checkpoint and the orphan: the first
+	// delete ran, the second did not.
+	if got := updateBlobs(t, f, orphan.update.Update.ID); len(got) != 1 {
+		t.Fatalf("blobs left after the restore started = %d, want exactly one", len(got))
+	}
+}
+
+// TestSweepLoopReadsTheGuardBeforeEachDelete proves the same for the sweep:
+// two orphans are due, a restore starts after the first delete, and the second
+// orphan stays.
+func TestSweepLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
+	t.Parallel()
+
+	guard := blobguardtest.NewGuard()
+	f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+	orphan := f.orphanOfNewUpdate(t)
+
+	second, err := blob.ParseKey(f.prefix + "stk-test/" + orphan.update.Update.ID.String() + "/98")
+	if err != nil {
+		t.Fatalf("parse second orphan key: %v", err)
+	}
+
+	if err := f.blobs.Put(t.Context(), second, strings.NewReader("orphan")); err != nil {
+		t.Fatalf("write second orphan: %v", err)
+	}
+
+	aged, ok := f.blobs.(interface{ ageAll(d time.Duration) })
+	if !ok {
+		t.Fatalf("fixture blobs = %T, want a store that ages its objects", f.blobs)
+	}
+
+	aged.ageAll(2 * time.Hour)
+
+	// The save reads the guard once for the replace of its previous checkpoint,
+	// then once before each delete of the sweep. The restore starts at the
+	// third read, so the first orphan goes and the second stays.
+	guard.OnRead(func() {
+		if guard.Calls() == 3 {
+			guard.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+		}
+	})
+	f.saveSeq(t, orphan.update, 2, `{"a":2}`)
+
+	left := 0
+
+	for _, key := range []blob.Key{orphan.key, second} {
+		if _, err := f.blobs.Get(t.Context(), key); err == nil {
+			left++
+		}
+	}
+
+	if left != 1 {
+		t.Fatalf("orphans left after a restore started in the loop = %d, want exactly one", left)
+	}
+}

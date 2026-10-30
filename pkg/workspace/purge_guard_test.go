@@ -2,10 +2,12 @@ package workspace_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -110,5 +112,40 @@ func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 				t.Fatalf("state blobs with %s = %d, %v, want them kept", tc.name, len(listed), listErr)
 			}
 		})
+	}
+}
+
+// TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete proves that a restore
+// which starts between two deletes of one purge keeps the blob that is left:
+// the guard is read again before each delete.
+func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
+	t.Parallel()
+
+	guard := blobguardtest.NewGuard()
+	f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
+	prefix := purgedWorkspace(t, f)
+
+	extra, err := blob.ParseKey(prefix + "extra")
+	if err != nil {
+		t.Fatalf("parse extra key: %v", err)
+	}
+
+	if err := f.blobs.Put(t.Context(), extra, strings.NewReader("extra")); err != nil {
+		t.Fatalf("write extra blob: %v", err)
+	}
+
+	guard.OnRead(func() {
+		if guard.Calls() == 2 {
+			guard.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+		}
+	})
+
+	err = f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
+	if !errors.Is(err, blobguard.ErrWait) {
+		t.Fatalf("delete with a restore that starts in the loop: err = %v, want a wait", err)
+	}
+
+	if left := stateBlobCount(t, f, prefix); left != 1 {
+		t.Fatalf("state blobs left after the restore started = %d, want exactly one", left)
 	}
 }

@@ -615,16 +615,18 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 		return nil
 	}
 
-	// The guard comes after the commit of the purge and after the listing. A
-	// backup or a restore that runs, or a failed read, keeps every blob: the
-	// error keeps the blob purge record, and the retention sweep tries again.
-	if err := blobguard.Hold(ctx, s.guard); err != nil {
-		return fmt.Errorf("delete state blobs of workspace %s: %w", id, err)
-	}
-
 	failed := 0
 
 	for _, obj := range listed {
+		// The guard comes after the commit of the purge and after the listing,
+		// and again before each delete: a restore that starts during the loop
+		// keeps the blobs that are left. A backup or a restore that runs, or a
+		// failed read, stops the loop. The error keeps the blob purge record,
+		// and the retention sweep tries again.
+		if err := blobguard.Hold(ctx, s.guard); err != nil {
+			return fmt.Errorf("delete state blobs of workspace %s: %w", id, err)
+		}
+
 		if deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key); deleteErr != nil {
 			failed++
 		}
