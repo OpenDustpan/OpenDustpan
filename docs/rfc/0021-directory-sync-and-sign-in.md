@@ -216,17 +216,52 @@ back:
 Plain OAuth 2.0 and trusted header cannot prove a recent authentication. So
 ADR 227 gives no fresh authentication to their sessions, and each write that
 needs one fails. Question O2 asks the owner to let a built-in factor (P7)
-give the fresh authentication for these two methods. That amends ADR 46
-decision 2 for these two methods only. RFC 102 asks a related amendment for
-the CLI step-up. The owner can decide both together.
+give the fresh authentication for these two methods. That amends two accepted
+decisions, for these two methods only:
 
-**Sign-in failures.** A password method and a passkey sign-in count failures
-in `internal/authgate`. 10 failures in a row lock the user name for 30
-minutes, or until an administrator unlocks it (PM decision). Precedent: PCI
-DSS v4.0.1 requirement 8.3.4, as widely quoted: a lockout after not more than
-10 attempts, for at least 30 minutes or until a person checks the identity (not
-fetched). The answer is the same for an unknown user name and a wrong
-password, so the answer does not tell that a user exists.
+- ADR 46 decision 2: with an SSO identity provider, OpenDustpan adds no MFA
+  step of its own.
+- ADR 55 decision 10: with SAML, CAS or OAuth, MFA is the job of the provider.
+
+The amendment covers the fresh step only. The sign-in itself stays the job of
+the provider, and built-in MFA at sign-in stays off for these methods. RFC 102
+asks a related amendment for the CLI step-up. The owner can decide both
+together.
+
+A person with no factor: the step fails with `mfa.fresh-step-required`, and
+the error names the factor page of the console. The person can enroll a first
+factor in a session whose sign-in at OpenDustpan is younger than the window of
+ADR 227. The server cannot see whether the provider asked for a password at
+that sign-in, so this is the weakest point of the amendment, and the guide
+says so. The enrollment writes an audit entry. A second factor needs the
+first factor. An administrator can also enroll the first factor of a person
+(RFC 102 D6 has the same shape for a step-up key).
+
+**Sign-in failures (PM decision).** The counters live in `internal/authgate`:
+
+- A password method (LDAP) counts the failures of each user name. 10
+  failures in a row lock the user name for 30 minutes, or until an
+  administrator unlocks it. Precedent: PCI DSS v4.0.1 requirement 8.3.4, as
+  widely quoted: a lockout after not more than 10 attempts, for at least 30
+  minutes or until a person checks the identity (not fetched).
+- A built-in factor after a password (TOTP, a recovery code) counts on the
+  pending sign-in and on the person, with the same limit.
+- A passkey sign-in with a discoverable credential sends no user name. A
+  failed assertion names a credential ID that the client chooses, so the
+  server does not count it for a person: a count by credential ID would let
+  anyone who knows the ID lock the person out. It counts the failures of each
+  client address instead: 20 in 15 minutes refuse that address for 15
+  minutes. A passkey cannot be guessed, so the limit stops load, not guesses.
+- A break-glass account never has a lockout by name. It signs in with a
+  passkey or a hardware key only (ADR 70 decision 23), so the user-name
+  counter does not apply to it, and ADR 70 decision 25 says that no
+  automatic step disables it. The compensating controls are the limit by
+  client address above, and an alert to each site administrator at each 10
+  failed assertions for a credential of a break-glass account. So no
+  "blocked" state exists that the guard of ADR 70 decision 24 must count.
+
+The answer is the same for an unknown user name and a wrong password, so the
+answer does not tell that a user exists.
 
 ### P2. LDAP
 
@@ -485,10 +520,18 @@ cannot finish without two break-glass accounts with passkeys or hardware
 keys, unless a self-hosted operator turns break-glass off. No WebAuthn code
 exists. So WebAuthn is the first work item of this proposal (W3).
 
-**Open question 1: does a local user also have a password?** ADR 46 names "a
-local user name and password" as an example of an install with no identity
-provider. ADR 55 lists "passkeys for local users" and no local password. No
-code stores a password today.
+**Open question 1: does a local user also have a password?** The owner
+direction of 2026-10-11 names "username+password" as an example of an install
+with no identity provider: "installs that have no identity provider (e.g.
+username+password, ldap, etc)". ADR 46 records it as "local users". ADR 55
+lists "passkeys for local users" and no local password. No code stores a
+password today.
+
+The consequence of option A, stated plainly: in an installation with no SSO
+provider, no LDAP and no trusted header, a person with no device that can
+hold a passkey cannot sign in at all. Only the bootstrap token and the host
+recovery remain. The owner decides whether A is a scope cut of the owner
+direction above.
 
 | Option | Gives | Costs |
 | --- | --- | --- |
@@ -499,8 +542,10 @@ Precedent: GitLab and Keycloak have local passwords (not fetched). AWS
 supports passkeys as an MFA factor for root and IAM users (fetched). No
 precedent has a passkey as the only local sign-in. **Recommendation: A
 (owner decision O1).** The milestone 4 list names passkeys, not passwords, and
-A keeps a password store out of the product. B is a later RFC if a persona
-needs it.
+A keeps a password store out of the product. If the owner reads the direction
+of 2026-10-11 as a promise of local passwords in milestone 4, the answer is
+"no", and B becomes a work item of its own (a password store with a
+memory-hard hash, the reset flow and the rules of PCI DSS 8.3.6).
 
 **Open question 2: does "require MFA" apply to the bootstrap admin token?**
 Lead proposal: no.
@@ -543,7 +588,10 @@ it (`--ip-allowlists-include-bootstrap`).
 - A ceremony has a challenge of 32 random bytes, stored for 300 seconds, used
   once.
 
-**TOTP (PM decision).** Follow RFC 102 question 5, option B: one factor, on
+**TOTP (owner decision O13).** RFC 102 is still `discussing`, so this
+proposal cannot rest on it. O13 asks the owner to accept RFC 102 question 5,
+option B, for built-in MFA here, independent of the rest of RFC 102. With
+"no", W5 waits for the ADR of RFC 102. The option: one factor, on
 the standard library (`crypto/hmac`), HMAC-SHA-1, 6 digits, 30 seconds, the
 current step and one step before, sealed with the secret package, one use of
 each step (NIST SP 800-63B-4: "SHALL accept a given OTP only once while it is
@@ -668,9 +716,28 @@ Microsoft Entra provisioning has an "accidental deletions" threshold that an
 administrator sets (not fetched).
 
 **Limits.** A body of at most 1 MiB, at most 1000 members in one `PATCH`, at
-most 100 results in one page. A SCIM token has its own rate limit. The SCIM
-routes are on the route test with the action `scim:write` on the connection,
-which only a SCIM token holds.
+most 100 results in one page. A SCIM token has its own rate limit.
+
+**Authorization is a stored grant (PM decision).** No code rule says who
+writes through SCIM:
+
+- Each connection has one service principal of its home, made in the same
+  transaction as the connection. A SCIM token is an access token of that
+  principal, of the kind `scim`, and it works only on the SCIM routes of its
+  connection.
+- A built-in role `scim-provisioner` holds the action `scim:write`. Its
+  object is a SCIM connection.
+- The create of a connection writes a grant of `scim-provisioner` on the
+  connection to its principal. The holder is the principal, the creator is
+  the administrator who made the connection (`installation:manage-sign-in`,
+  or `namespace:manage-sign-in` for a namespace home), and the grant has a
+  time. The access review lists it. An administrator can revoke it, and then
+  the SCIM routes of the connection answer 403.
+- Each SCIM route declares `scim:write` (or `scim:read` for a read, in the
+  same role) on its connection in the route test.
+- The reach rules of ADR 70 still apply to each change that SCIM makes. The
+  grant gives the right to call the routes. It never lets SCIM add a member
+  to a protected group.
 
 ### P9. IP allowlists for the installation and for tokens
 
@@ -717,7 +784,9 @@ Precedent: GitHub applies its list to personal tokens, OAuth and GitHub App
 tokens and SSH keys (fetched). GitLab applies its group list to the UI, the
 API, group and project tokens, service accounts and deploy tokens (fetched).
 HCP Terraform has separate lists for agent pools (fetched). **Recommendation:
-B (owner decision O5).** Inbound webhooks of a forge carry no credential of a
+B (owner decision O5).** Option B amends ADR 55 decision 8, which says that a
+list applies "to console sign-in and to requests with an access token". It is
+not only an answer to an open question. Inbound webhooks of a forge carry no credential of a
 principal and keep their signature checks (ADR 271). The guide lists the
 address ranges that a SCIM client of a cloud identity provider uses.
 
@@ -734,9 +803,17 @@ Precedent: GitLab lets administrators reach each project through a group
 restriction (fetched). HCP Terraform lets organization owners reach the
 platform always (fetched). Both exempt the top role. **Recommendation: A
 (owner decision O6),** because the host recovery path is the fallback for a
-lockout and the precedents exempt a role, not an emergency account. The guard
-of ADR 70 decision 24 then does not count an IP list as a block, and the guide
-tells the operator to keep the break-glass locations inside the list.
+lockout and the precedents exempt a role, not an emergency account.
+
+Option A amends ADR 70 decision 24. The guard counts only an account that is
+"not blocked by a policy". With A, the guard does not count an IP list as a
+block. The consequence: an installation can pass the guard of two working
+paths while neither break-glass account can reach the server from an address
+outside the list. Then a lockout outside the list needs the host recovery of
+ADR 245, or a break-glass person inside the list. The guide says so, and the
+admin access report (ADR 70 decision 29) shows each break-glass account
+together with the installation list. With "no" (option B), ADR 70 decision 24
+stays as written, and the break-glass accounts have no network limit.
 
 **Design (PM decisions).**
 
@@ -777,8 +854,14 @@ token for a tool that cannot send a certificate?** Lead proposal: yes. The
 Pulumi CLI and OpenTofu send a bearer token to the tool-compatible APIs, and
 the e2e suite must show which can send a certificate (RFC 20). **Recommendation:
 yes (PM decision).** The exchange endpoint takes a client certificate as well
-as a JWT, and answers the same token. A direct mTLS request to an API, with no
-token, is also accepted when a trust rule matches.
+as a JWT, and answers the same token.
+
+A direct mTLS request with no token (ADR 54 decision 4 allows it) works in
+milestone 4 on the tool-neutral API under `/api/dustpan/v1` only. The
+Pulumi Cloud-compatible API, the TFE-compatible API and the OpenTofu HTTP
+backend are contracts with the real CLIs. They accept a certificate with no
+token only for a CLI that the e2e suite shows to send one, and each such
+route has an e2e step first.
 
 **Open question 2: a proxy that ends TLS.** Lead proposal: the proxy sends the
 checked certificate in a header, accepted only from named proxies.
@@ -820,8 +903,8 @@ AWS, and it does not depend on the proxy.
   certificate that lives more than 397 days, and a chain of more than 5
   certificates.
 - RFC 8705 binds a token to a certificate (`cnf` with `x5t#S256`, fetched).
-  Not in milestone 4: the tool CLIs cannot send a certificate, so a bound
-  token would not work for them. The exchanged token lives 1 hour (ADR 69).
+  Not in milestone 4: the e2e suite has not yet shown that a tool CLI sends a
+  certificate, so a bound token might not work for them. The exchanged token lives 1 hour (ADR 69).
 - No new module: `crypto/tls` and `crypto/x509` of the standard library.
 
 ### P11. The token expiry email
@@ -854,7 +937,8 @@ setting for the certificate check (fetched).
 **Recommendation: B (owner decision O3, with the LDAP question).** The server
 refuses `smtp.tls: none` for any address that is not a loopback address. The
 `net/smtp` client refuses the PLAIN authentication without TLS, except to
-localhost (not fetched).
+localhost (fetched: `plainAuth.Start` in the Go standard library source
+returns "unencrypted connection").
 
 **Open question 3: who receives the email of a service token?** A service
 principal has no email. Recommendation (PM decision): the persons who hold
@@ -901,7 +985,7 @@ nonce and an expiry.
 
 | Option | Gives | Costs |
 | --- | --- | --- |
-| A. SSH signatures (`ssh-keygen -Y sign`, the `sshsig` format), Ed25519 and `sk-ssh-ed25519` keys | Operators have `ssh-keygen`. The key can live on a FIDO2 hardware key. About 50 lines of wire parsing on `crypto/ed25519` and `crypto/sha512` (fetched: the format, and that `golang.org/x/crypto` v0.58.0 has no `sshsig` code). The same verifier serves the SSH factor of RFC 102. | The project writes the parser, with fuzz tests. |
+| A. SSH signatures (`ssh-keygen -Y sign`, the `sshsig` format), Ed25519 and `sk-ssh-ed25519` keys | Operators have `ssh-keygen`. The key can live on a FIDO2 hardware key. About 50 lines of wire parsing on `crypto/ed25519` and `crypto/sha512` (fetched: the format, and that `golang.org/x/crypto` v0.58.0 has no `sshsig` code). The same verifier can later serve the SSH factor of RFC 102. | The project writes the parser, with fuzz tests. |
 | B. Raw Ed25519 with a format of the project (as signify) | The standard library only. | A new tool to make keys and to sign. No hardware key. |
 | C. minisign | A known tool. | Needs `golang.org/x/crypto/blake2b`. No hardware key. |
 | D. OpenPGP | A module that the registry already links. | A complex format for a small document. |
@@ -911,7 +995,8 @@ with a one-time pad or encrypted to a PGP key (fetched). No precedent signs a
 recovery request.
 
 **Recommendation: A (owner decision O7).** It needs no new module, it lets the
-key live on a hardware key, and it shares the verifier with RFC 102.
+key live on a hardware key. A benefit, not a dependency: the same verifier
+can later serve the SSH factor of RFC 102.
 
 **Design (PM decisions).**
 
@@ -946,13 +1031,52 @@ key live on a hardware key, and it shares the verifier with RFC 102.
   secret, and that the nonce is new. It stores the nonce until `not-after`.
 - The secret makes a copied document useless: a person who reads the signed
   document in a ticket or a chat cannot use it without the secret.
-- The route then calls the service of `host create-temp-admin` (ADR 245): one
-  temporary administrator for the named person, with the reason, 24 hours,
-  the break-glass controls and the review after use. The answer holds the
-  token one time.
+- The route then makes the record of ADR 245: one temporary administrator
+  for the named person, with the reason, 24 hours, the break-glass controls
+  and the review after use. The answer holds the token one time.
+- Grants: the route acts as no principal before its checks pass, and it is
+  on the public list of the route test. The temporary administrator receives its
+  grant of `site-administrator` on the installation as a stored grant, as
+  ADR 245 decision 7 makes it. Its creator is `@recovery`, and the audit entry
+  names the person, the reason and the SHA-256 fingerprint of the operator key.
 - The route has a rate limit of 5 requests each 15 minutes for each client
   address, applies the installation IP list (P9), and writes an audit entry
   for each refusal, with the reason code and no document text.
+
+**The amendment of ADR 245 (PM proposes, the ADR names it).** ADR 245
+decision 12 says that a test fails when a package other than
+`cmd/opendustpan` names the host issuer, and when a package other than
+`pkg/accesstoken` and its suite calls `CreateHostRecovery`. Decision 1 rests
+the host path on the fact that "shell access to the host already controls the
+key-encryption key and the database". The mode 2 route is a network path, so
+neither statement covers it. The ADR that accepts this proposal amends
+decision 12:
+
+- A new package `internal/recovery` holds the mode 2 service. The test
+  allows two packages to name the host issuer: `cmd/opendustpan` and
+  `internal/recovery`. The HTTP handler of the route calls
+  `internal/recovery` and never names the issuer.
+- The rule for `CreateHostRecovery` does not change: only `pkg/accesstoken`
+  and its suite call it, and `internal/recovery` reaches it through the same
+  service as the host command.
+- The test also fails when a package other than `cmd/opendustpan` and the
+  package of the mode 2 handler imports `internal/recovery`.
+
+The threat argument that takes the place of decision 1 for the network path:
+
+- The authority comes from the offline operator key, not from the network.
+  The operator registered the key at the first boot, or through the change
+  of question 2 below. A caller without the key receives nothing.
+- A copy of a signed request is not enough. It also needs the secret of
+  `proof-sha256`, which only the CLI that wrote the request keeps. Each
+  request is bound to the installation, used once, and lives 1 hour at most.
+- The route is off unless the stored mode is `signed-request`.
+- The result is the same bounded administrator as the host path: one named
+  person, 24 hours, the end of all access at the expiry, an alert to each
+  site administrator and each break-glass account, and the review after use.
+- The risk that stays: a theft of the key and a theft of the secret together
+  give the same power as a shell on the host. The guide recommends a
+  hardware key (`sk-ssh-ed25519`), so that the key cannot be copied.
 
 **Open question 2: can an operator change the mode after the first boot?**
 Lead proposal: yes, through the API by an administrator, with an audit entry.
@@ -967,10 +1091,18 @@ ADR 245 says that a stored choice wins over the setting.
 Precedent: Vault rekeys its unseal and recovery keys only with a quorum of the
 old keys (not fetched). Keycloak makes a new bootstrap administrator from the
 host at any time (fetched). **Recommendation: B (owner decision O8),** with
-these limits: a change to mode 3 or a new key is a weaker setting (ADR 212
-decision 3) and needs the fresh step, the change waits 24 hours before it
-applies and sends the alert to each site administrator and each break-glass
-account at once, and a site administrator can cancel it in that time.
+these limits:
+
+- Each change of the mode or the key needs a fresh authentication and a
+  reason, in both directions. A change to a stricter mode (for example mode 3
+  to mode 1) needs it too, because a change of the recovery path in either
+  direction can be a step of an attack: to mode 3 it removes the recovery,
+  and to mode 2 with a new key it adds a path for the attacker.
+- Each change waits 24 hours before it applies, also a stricter one, and
+  sends the alert to each site administrator and each break-glass account at
+  once. A site administrator can cancel it in that time.
+- A change of the key or to a weaker mode is also a weaker setting (ADR 212
+  decision 3).
 
 **Mode 1, "works once" (from "Open questions").** Accepted ADRs answer it.
 ADR 70 decision 32 changes ADR 57 decision 4: the recovery token makes a
@@ -1067,32 +1199,37 @@ page (ADR 214) and its e2e step.
 | W1 | The settings resource of ADR 212 decision 7, with "reduces security" in each declaration (accepted design, a prerequisite) | L | settings | none |
 | W2 | `session.Assertion`, the three method ports and their suites. `principal.ApplyGroupClaims` with ADR 70 decisions 13 to 22 | M | signin | none |
 | W3 | WebAuthn: factor store migrations (both dialects), the adapter on go-webauthn, enrollment routes (O9) | M | store | none |
-| W4 | Passkey sign-in for local users and for break-glass accounts (ADR 70 decision 23) | M | signin | W3 |
-| W5 | TOTP store adapter of `internal/stepup` (RFC 102 question 5), shared by MFA | M | store | none |
+| W4 | Passkey sign-in for local users and for break-glass accounts (ADR 70 decision 23), the limit by client address and the break-glass alert | M | signin | W2, W3 |
+| W5 | TOTP store adapter of `internal/stepup` (RFC 102 question 5), shared by MFA (O13) | M | store | O13 "yes", or the ADR of RFC 102 |
 | W6 | Recovery codes | S | store | W3 |
-| W7 | Built-in MFA at sign-in: pending sign-in, require for all, grace days, lockout, fresh time | M | signin | W1, W3, W5, W6 |
-| W8 | MFA admin: reset route, secret reveal setting, settings | S | settings | W7 |
+| W7 | Built-in MFA at sign-in: pending sign-in, require for all, grace days, lockout, fresh time (adds tables) | M | store | W1, W2, W3, W5, W6 |
+| W8 | MFA admin: reset route, secret reveal setting, settings, and the rename of `server:manage-sign-in` in `pkg/identity` to the name of ADR 210 if no earlier change did it | S | settings | W7 |
 | W9 | LDAP adapter and sign-in (O3, O10) | M | signin | W2 |
-| W10 | LDAP sync job and removals | M | store | W9 |
-| W11 | SAML adapter, SP metadata, replay store (O4, O11) | L | signin | W2 |
-| W12 | CAS adapter | M | signin | W2 |
+| W10 | LDAP sync job and removals, with the mass-suspension alert | M | store | W9, W16 |
+| W11 | SAML adapter, SP metadata, replay store (adds a table) (O4, O11) | L | store | W2 |
+| W12 | CAS adapter, with the store of used tickets (adds a table) | M | store | W2 |
 | W13 | OAuth 2.0 groups claim and egress check | S | signin | W2 |
-| W14 | Trusted header, both modes | M | signin | W2 |
+| W14 | Trusted header, both modes, with the shared-secret proof of the proxy. The proxy certificate proof follows in W22 | M | signin | W2 |
 | W15 | SCIM connections, tokens and `/Users` | M | store | W2 |
 | W16 | SCIM `/Groups`, `PATCH`, pairing, mass-suspension alert | M | store | W15 |
-| W17 | Installation and token IP allowlists, the combine rule, the self-lockout check (O5, O6) | M | authz | W1 |
+| W17 | Installation and token IP allowlists, the combine rule, the self-lockout check, `allowedCidrs` on tokens (adds a column) (O5, O6) | M | store | W1 |
 | W18 | SMTP email sender (`notify.Sender`) and the settings (O3) | S | notify | W1 |
 | W19 | Token expiry email job | S | notify | W18 |
 | W20 | Token exchange and trust rules of ADR 54 (accepted design, a prerequisite of mTLS) | L | store | none |
-| W21 | mTLS: direct mode, trust bundles, exchange with a certificate | M | authz | W20 |
-| W22 | mTLS forwarded-header mode | S | authz | W21, W14 |
+| W21 | mTLS: direct mode, trust bundles and CRLs (adds tables), exchange with a certificate | M | store | W20 |
+| W22 | mTLS forwarded-header mode, and the proxy certificate proof of P6 and P10 | S | authz | W21, W14 |
 | W23 | `sshsig` verifier with fuzz tests, shared with RFC 102 (O7) | S | none | none |
-| W24 | Mode 2: stored mode and key, the route, the CLI commands, the mode change (O8) | M | store | W23 |
+| W24 | Mode 2: stored mode and key, `internal/recovery`, the route, the CLI commands, the mode change, the amendment of the ADR 245 test (O8) | M | store | W17, W23 |
 | W25 | `make e2e-identity` with the container tier | M | e2e | W9, W11, W12, W14, W18 |
 
-Order: W1, W2, W3, W5, W20 and W23 can start at once, because they are in
-different conflict groups. The `store` group holds each item that adds a
-migration, because migration numbers must not collide.
+Order: W1, W2, W3, W20 and W23 can start at once, because they are in
+different conflict groups or need no other item. W5 starts after O13. The
+`store` group holds each item that adds a migration, because migration
+numbers must not collide. That group now holds 14 items. To run some of them
+at the same time, the PM can give each `store` item its migration number when
+the item starts. This needs a check that the migration runner accepts a gap
+in the numbers while an item is open. The work item that first does it
+checks that.
 
 ### Proposed terms
 
@@ -1121,30 +1258,32 @@ Each question has a yes or no answer. "Yes" accepts the recommendation.
 
 | ID | Question | Recommendation |
 | --- | --- | --- |
-| O1 | Is a passkey the only sign-in of a local user in milestone 4, with no local password (P7)? | Yes |
-| O2 | Plain OAuth 2.0 and trusted-header sign-in cannot prove a recent authentication. For these two methods, does a built-in factor (WebAuthn or TOTP) give the fresh authentication of ADR 227? This amends ADR 46 decision 2 for them only (P1). | Yes |
+| O1 | Is a passkey the only sign-in of a local user in milestone 4, with no local password (P7)? Your direction of 2026-10-11 names "username+password" as an install with no identity provider. With "yes", a person with no SSO, no LDAP and no device that can hold a passkey cannot sign in. | Yes |
+| O2 | Plain OAuth 2.0 and trusted-header sign-in cannot prove a recent authentication. For these two methods, does a built-in factor (WebAuthn or TOTP) give the fresh authentication of ADR 227? This amends ADR 46 decision 2 and ADR 55 decision 10, for these two methods only. A person with no factor enrolls one in the window after the sign-in (P1). | Yes |
 | O3 | Does the server refuse an LDAP or SMTP connection with no TLS, except to a loopback address (P2, P11)? | Yes |
 | O4 | Does SAML accept only a sign-in that OpenDustpan starts, and refuse a sign-in that the identity provider starts (P3)? | Yes |
-| O5 | Do IP allowlists apply to every credential of a principal: sessions, access tokens, exchanged tokens, SCIM tokens, job tokens and runner tokens (P9)? | Yes |
-| O6 | Does the installation IP allowlist apply to break-glass accounts, with the host recovery as the fallback (P9)? | Yes |
+| O5 | Do IP allowlists apply to every credential of a principal: sessions, access tokens, exchanged tokens, SCIM tokens, job tokens and runner tokens (P9)? This amends ADR 55 decision 8, which names console sign-in and access tokens only. | Yes |
+| O6 | Does the installation IP allowlist apply to break-glass accounts, with the host recovery as the fallback (P9)? This amends ADR 70 decision 24: the guard does not count an IP list as a block. So the guard can pass while no break-glass account can reach the server from outside the list. | Yes |
 | O7 | Does break-glass mode 2 use SSH signatures (`ssh-keygen -Y sign`) with Ed25519 keys, on the standard library (P12)? | Yes |
 | O8 | After the first boot, can a site administrator change the recovery mode or the operator key through the API? The change needs a fresh authentication and a reason, waits 24 hours, and sends an alert (P12). | Yes |
 | O9 | Can the project add `github.com/go-webauthn/webauthn` (BSD-3-Clause) and its transitive modules? | Yes |
 | O10 | Can the project add `github.com/go-ldap/ldap/v3` (MIT) and its transitive modules? | Yes |
 | O11 | Can the project add `github.com/russellhaering/gosaml2`, `goxmldsig` (Apache-2.0) and `github.com/beevik/etree` (BSD-2-Clause) for SAML? | Yes |
 | O12 | Does a bootstrap admin token stay outside "require MFA" (P7)? | Yes |
+| O13 | RFC 102 is still `discussing`. Does built-in MFA use its TOTP design now, independent of the rest of RFC 102 (P7)? The design is question 5, option B: one shared factor, RFC 6238 on the standard library, and separate failure counters. | Yes |
 
 **Precedent and the cost of the alternative, for each question.** The
 subsection of each item gives the full text. "No" means that the owner refuses
 the recommendation.
 
-- **O1, passkey only.** Precedent: GitLab and Keycloak have local passwords
+- **O1, passkey only.** Your direction of 2026-10-11 names "username+password"
+  as an example. Precedent: GitLab and Keycloak have local passwords
   (not fetched). AWS accepts passkeys as a factor (fetched). No product has a
   passkey as the only local sign-in. Cost of "no": a password store, a reset
   flow, a hash function and password rules (PCI DSS 8.3.6, 12 characters, not
   fetched) come into milestone 4.
 - **O2, a built-in factor for a fresh step after plain OAuth 2.0 or a trusted
-  header.** Precedent: GitHub sudo mode accepts a passkey, a security key or
+  header (amends ADR 46 decision 2 and ADR 55 decision 10).** Precedent: GitHub sudo mode accepts a passkey, a security key or
   TOTP for a sensitive action (fetched). OAuth 2.0 and the signed IAP header
   carry no authentication time (fetched). Cost of "no": in an installation
   with these methods, no person can create a token, reveal a secret, approve
@@ -1158,11 +1297,12 @@ the recommendation.
   second sign-in path with no `InResponseTo` binding, which an attacker can
   use for a login CSRF. The portal tile works with a bookmark URL in both
   cases.
-- **O5, IP lists on every credential.** Precedent: GitHub covers personal,
+- **O5, IP lists on every credential (amends ADR 55 decision 8).** Precedent: GitHub covers personal,
   OAuth and app tokens and SSH keys (fetched). GitLab covers the UI, the API,
   access tokens, service accounts and deploy tokens (fetched). Cost of "no":
   a stolen session cookie, SCIM token or runner token works from any address.
-- **O6, the installation IP list on break-glass accounts.** Precedent: GitLab
+- **O6, the installation IP list on break-glass accounts (amends ADR 70
+  decision 24).** Precedent: GitLab
   and HCP Terraform exempt their top role (administrators, organization
   owners) from IP lists (fetched). No precedent exempts an emergency account.
   Cost of "no": the account with the most rights has no network limit. Cost
@@ -1193,11 +1333,15 @@ the recommendation.
   within 14 days (fetched). Cost of "no": a bearer token from the
   environment needs a second factor that the token cannot carry, so the
   first sign-in of a new installation needs a new flow.
+- **O13, the TOTP design of RFC 102 now.** Precedent: RFC 6238 and NIST SP
+  800-63B-4 (one use of each code, fetched). GitHub sudo mode accepts TOTP
+  (fetched). Cost of "no": TOTP for built-in MFA waits for the ADR of RFC
+  102, so W5 and W7 wait. Passkeys (W3, W4) do not wait.
 
 The PM decisions of this proposal, each with its precedent: the LDAP check at
 sign-in and the hourly sync (P2), the CAS design (P4), the OAuth 2.0 groups
 claim (P5), the two trusted-header modes and the groups header (P6), the
-WebAuthn, TOTP, recovery code and enforcement defaults (P7), the SCIM subset,
+WebAuthn, recovery code and enforcement defaults (P7), the SCIM subset,
 connections, pairing and alert limits (P8), the intersection of IP lists and
 the token list at create (P9), the mTLS exchange, the forwarded header and no
 CRL download (P10), the SMTP names and the recipients of a service token email
