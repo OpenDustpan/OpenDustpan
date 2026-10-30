@@ -1063,6 +1063,97 @@ func testBlobPurgePages(t *testing.T, s Store) {
 	checkBlobPurgePages(t, purges, all)
 }
 
+// testBlobPurgeBacklog counts the blob purge records of an empty store, then
+// after one purge and after three purges. Each count must equal the number of
+// records that ListBlobPurges returns, and the oldest purge time must equal
+// the earliest record.
+func testBlobPurgeBacklog(t *testing.T, s Store) {
+	t.Helper()
+
+	counter, ok := storeAs[inventory.BlobPurgeCounter](s)
+	if !ok {
+		t.Fatal("store does not implement inventory.BlobPurgeCounter, which the blob purge gauges need")
+	}
+
+	purges, ok := storeAs[inventory.BlobPurges](s)
+	if !ok {
+		t.Fatal("store does not implement inventory.BlobPurges, which the retention sweep needs")
+	}
+
+	ns := newNamespace(t, s, "acme")
+
+	checkBlobPurgeBacklog(t, counter, purges, 0)
+
+	for i := range 3 {
+		st := newStack(ns.Name, "web", fmt.Sprintf("b%d", i))
+		if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+			t.Fatalf("create stack %s: %v", st.Ref, err)
+		}
+
+		d := inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()}
+		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
+			t.Fatalf("delete stack %s: %v", st.Ref, err)
+		}
+
+		purgeErr := s.PurgeStack(
+			t.Context(),
+			st.ID,
+			ns.Fence(),
+			time.Time{},
+			lifecycleEntry(ns.Name, "unit:purge"),
+		)
+		if purgeErr != nil {
+			t.Fatalf("purge stack %s: %v", st.Ref, purgeErr)
+		}
+
+		checkBlobPurgeBacklog(t, counter, purges, int64(i+1))
+	}
+}
+
+// checkBlobPurgeBacklog checks that the backlog holds want records, that the
+// records ListBlobPurges returns are that many, and that the oldest purge time
+// equals the earliest of them. It checks a zero time when no record exists.
+func checkBlobPurgeBacklog(t *testing.T, counter inventory.BlobPurgeCounter, purges inventory.BlobPurges, want int64) {
+	t.Helper()
+
+	backlog, err := counter.CountBlobPurges(t.Context())
+	if err != nil {
+		t.Fatalf("count blob purges: %v", err)
+	}
+
+	if backlog.Pending != want {
+		t.Fatalf("blob purge backlog pending = %d, want %d", backlog.Pending, want)
+	}
+
+	listed, err := purges.ListBlobPurges(t.Context(), nil, 100)
+	if err != nil {
+		t.Fatalf("list blob purges: %v", err)
+	}
+
+	if int64(len(listed)) != want {
+		t.Fatalf("listed blob purges = %d, want %d", len(listed), want)
+	}
+
+	if want == 0 {
+		if !backlog.OldestPurgedAt.IsZero() {
+			t.Fatalf("oldest purge of an empty backlog = %v, want zero", backlog.OldestPurgedAt)
+		}
+
+		return
+	}
+
+	oldest := listed[0].PurgedAt
+	for _, p := range listed {
+		if p.PurgedAt.Before(oldest) {
+			oldest = p.PurgedAt
+		}
+	}
+
+	if !backlog.OldestPurgedAt.Equal(oldest) {
+		t.Fatalf("oldest purge = %v, want %v", backlog.OldestPurgedAt, oldest)
+	}
+}
+
 // namespacePurger is the test hook that deletes a namespace row and keeps the
 // rows that name it, as a purge of a namespace does.
 type namespacePurger interface {
