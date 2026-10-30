@@ -4116,17 +4116,12 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// The paths of the inventory and the context API under /api/dustpan/v1/
 	// reach their own handlers by exact path, so another area can take the
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
-	mountV1(mux, a.inventory, wrapV1)
-	mountV1(mux, a.context, wrapV1)
-	mountV1(mux, a.profiles, wrapV1)
-	mountV1(mux, a.issuer, wrapV1)
-	mountV1(mux, a.sinks, wrapV1)
-	mountV1(mux, a.registry, wrapV1)
-	mountV1(mux, a.jobs, wrapV1)
-	mountV1(mux, a.triggers, wrapV1)
-	mountV1(mux, a.drift, wrapV1)
-	mountV1(mux, a.sourceFilter, wrapV1)
-	mountV1(mux, a.trustRules, wrapV1)
+	for _, h := range []http.Handler{
+		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.drift,
+		a.sourceFilter, a.trustRules,
+	} {
+		mountV1(mux, h, wrapV1)
+	}
 	// The capabilities document and the dev sign-in belong to the
 	// installation API, so they stay available in maintenance mode like the
 	// rest of it.
