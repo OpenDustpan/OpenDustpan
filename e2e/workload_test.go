@@ -52,12 +52,17 @@ func TestWorkloadTokenExchange(t *testing.T) {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	pulumi, err := fetcher.Install(installCtx, e2e.Pulumi(), e2e.Pulumi().Versions()[0])
+	pulumiVersions, tofuVersions := e2e.Pulumi().Versions(), e2e.OpenTofu().Versions()
+	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+		t.Fatal("each tool needs at least one version in its matrix")
+	}
+
+	pulumi, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
 	if err != nil {
 		t.Fatalf("install the Pulumi CLI: %v", err)
 	}
 
-	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), e2e.OpenTofu().Versions()[0])
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
 	if err != nil {
 		t.Fatalf("install OpenTofu: %v", err)
 	}

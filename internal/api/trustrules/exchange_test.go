@@ -171,10 +171,21 @@ func checkExchanged(t *testing.T, e *env, got *exchangeAnswer) {
 		t.Fatalf("the exchanged token authenticates as %+v, %v; want a trust token", p, err)
 	}
 
+	checkLastExchangeEntry(t, e, got.TokenID)
+}
+
+// checkLastExchangeEntry fails the test unless the last trust rule entry of
+// acme is the exchange that issued the token tokenID.
+func checkLastExchangeEntry(t *testing.T, e *env, tokenID string) {
+	t.Helper()
+
 	entries := e.ruleEntries()
+	if len(entries) == 0 {
+		t.Fatal("no audit entry of a trust rule")
+	}
 
 	last := entries[len(entries)-1]
-	if last.Action != "trust-rule:exchange" || last.TokenID != got.TokenID || last.Outcome != audit.OutcomeSuccess {
+	if last.Action != "trust-rule:exchange" || last.TokenID != tokenID || last.Outcome != audit.OutcomeSuccess {
 		t.Fatalf("last entry = %+v, want the exchange", last)
 	}
 }
