@@ -29,14 +29,14 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 	acme := createChainNamespace(t, st)
 	appendChainEntry(t, st, acme, "req-1")
 
-	key, err := audit.CheckpointKey(0, acme.Name, 1)
+	key, err := audit.FirstLayoutCheckpointKey(0, acme.Name, 1)
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
 
 	first := runCheckpointServer(t, st, blobs,
 		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(newTestSigner(t, 1)))
-	waitForBlob(t, blobs, key)
+	waitForCopy(t, blobs, key)
 	first.stop()
 
 	other := runCheckpointServer(t, st, blobs,
@@ -193,28 +193,30 @@ func runCheckpointServer(
 	return c
 }
 
-// waitForBlob waits until blobs holds an object under key.
-func waitForBlob(t *testing.T, blobs blob.Store, key blob.Key) {
+// waitForCopy waits until the blob store holds a copy of the checkpoint
+// that first names in the first layout: first itself, or a key with the same
+// sequence and an attempt part.
+func waitForCopy(t *testing.T, blobs blob.Store, first blob.Key) {
 	t.Helper()
 
+	dir := first.String()[:strings.LastIndexByte(first.String(), '/')+1]
+	name := strings.TrimSuffix(first.String()[len(dir):], ".json")
 	deadline := time.Now().Add(chainWait)
 
 	for {
-		body, err := blobs.Get(t.Context(), key)
-		if err == nil {
-			if closeErr := body.Close(); closeErr != nil {
-				t.Fatalf("close %s: %v", key, closeErr)
-			}
-
-			return
+		objects, err := blobs.List(t.Context(), dir)
+		if err != nil {
+			t.Fatalf("list %s: %v", dir, err)
 		}
 
-		if !errors.Is(err, blob.ErrNotFound) {
-			t.Fatalf("get %s: %v", key, err)
+		for _, obj := range objects {
+			if strings.HasPrefix(strings.TrimPrefix(obj.Key.String(), dir), name) {
+				return
+			}
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("no checkpoint %s after %s", key, chainWait)
+			t.Fatalf("no copy of checkpoint %s after %s", first, chainWait)
 		}
 
 		pauseChain(t)

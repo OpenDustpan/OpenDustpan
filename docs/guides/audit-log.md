@@ -522,13 +522,20 @@ At each check, the server does these steps for each namespace and for the instal
    It always reads the newest checkpoint of the namespace or the installation.
    When the log ends before that checkpoint, the check fails.
    The next check finds a cut at the end of the log.
-   For each checkpoint, it checks the key ID, the signature, the epoch, and the hash of the entry at its sequence.
+   It reads every copy of each sequence that it checks.
+   For each copy, it checks the key, the key ID, the signature and the epoch.
    The epoch in the checkpoint must match the epoch of its directory.
-2. If all of them match, it signs the hash of the last entry of the namespace or the installation.
+   Two copies of one sequence that sign different hashes make the check fail, before the server reads the database.
+   Then it checks the hash of the entry at the sequence.
+2. If all of them match, it lists the copies of the sequence of the last entry and checks each one.
+   When it finds a copy, it signs nothing more.
+   Otherwise, it signs the hash of the last entry of the namespace or the installation.
    The checkpoint holds the namespace (`@server` for the installation), the sequence, the epoch, the hash, the time, the key ID and the signature.
    The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
-3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<namespace in hexadecimal>/<sequence>.json`.
-   A key holds one checkpoint and the server never writes it again, so two server processes write it once.
+3. It writes the checkpoint to the blob store as a new copy, under a key that holds a random attempt part.
+   [The layout of the audit checkpoint keys](../reference/audit-checkpoint-layout.md) gives the keys.
+   No write replaces a stored copy, also on a store that ignores conditional writes.
+   Two server processes that sign the same sequence at the same time store two copies, and the check finds no mismatch.
 
 A namespace or the installation with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs its name and the sequence.
 The server never signs for a namespace or the installation whose chain or checkpoints do not match.
@@ -541,7 +548,9 @@ The mark stays across a restart of any server process, and only a new epoch ends
 When a server process cannot read the mark, it signs nothing, counts that namespace or the installation as invalid and logs the error.
 When a server process cannot store a mark, it keeps the mark in memory and signs nothing for that namespace or the installation.
 It stores the mark at its next check.
-When a stored checkpoint holds another hash, the write fails and that namespace or the installation stays invalid.
+When a stored copy holds another hash, the write fails and that namespace or the installation stays invalid.
+The stored copy stays, so a later check also finds the mismatch.
+The database never decides which copy counts.
 The server lists the stored checkpoints of a namespace or the installation first, and then reads the last entry of the namespace or the installation.
 The log only grows.
 So a stored checkpoint above the last entry shows a cut log.
@@ -562,11 +571,13 @@ A server process forgets this at a restart, so without object lock only later ch
 
 An epoch is one history of the log.
 The check reads only the checkpoints of the current epoch.
-The server keeps the current epoch in the blob store under `audit-checkpoints/epochs/`.
+The server keeps the epochs in the blob store under `audit-checkpoints/epochs/`.
+Each start of an epoch writes a new copy of the epoch object.
+The current epoch is the highest epoch whose copies all have a valid signature.
 Each epoch object holds the epoch number, the time, the key ID and a signature.
 The server signs each epoch object with the same key as the checkpoints.
 The signed message holds a fixed context line, the epoch, the time in Unix milliseconds and the key ID.
-The check reads every epoch object and verifies each one.
+The check reads every copy of every epoch object and verifies each one.
 It checks the signature, the key ID, and the body number against the key number.
 An unsigned or badly signed epoch object makes the check fail and stops new signatures.
 A bad epoch object counts that namespace or the installation in `dustpan_audit_chain_invalid`.
@@ -577,6 +588,7 @@ A restore starts a new epoch, because a restore of an older backup deletes entri
 The restore writes a change entry in the installation log (`@server`) with the value path `/audit/checkpoints/epoch/<number>`.
 The checkpoints of older epochs stay in the blob store.
 The server does not check them again.
+No sweep of the server deletes a key under `audit-checkpoints/`: each copy is evidence.
 
 ### Change the signing key
 

@@ -152,11 +152,54 @@ func (f checkpointFixture) replace(t *testing.T, key blob.Key, raw []byte) {
 	}
 }
 
-// key returns the checkpoint key of acme at seq in epoch.
-func key(t *testing.T, epoch, seq int64) blob.Key {
+// key returns the key of the one stored copy of the checkpoint of acme at
+// seq in epoch.
+func (f checkpointFixture) key(t *testing.T, epoch, seq int64) blob.Key {
 	t.Helper()
 
-	k, err := audit.CheckpointKey(epoch, "acme", seq)
+	keys := storedCopies(t, f.blobs, epoch, seq)
+	if len(keys) != 1 {
+		t.Fatalf("copies of acme %d in epoch %d: got %d, want 1", seq, epoch, len(keys))
+	}
+
+	return keys[0]
+}
+
+// storedCopies lists the keys of the stored copies of the checkpoint of
+// acme at seq in epoch.
+func storedCopies(t *testing.T, blobs blob.Store, epoch, seq int64) []blob.Key {
+	t.Helper()
+
+	first, err := audit.FirstLayoutCheckpointKey(epoch, "acme", seq)
+	if err != nil {
+		t.Fatalf("checkpoint key: %v", err)
+	}
+
+	dir := first.String()[:strings.LastIndexByte(first.String(), '/')+1]
+	name := strings.TrimSuffix(first.String()[len(dir):], ".json")
+
+	objects, err := blobs.List(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("list %s: %v", dir, err)
+	}
+
+	var out []blob.Key
+
+	for _, obj := range objects {
+		if rest := strings.TrimPrefix(obj.Key.String(), dir); strings.HasPrefix(rest, name) {
+			out = append(out, obj.Key)
+		}
+	}
+
+	return out
+}
+
+// firstLayoutKey returns the key of the checkpoint of acme at seq in epoch in
+// the first layout.
+func firstLayoutKey(t *testing.T, epoch, seq int64) blob.Key {
+	t.Helper()
+
+	k, err := audit.FirstLayoutCheckpointKey(epoch, "acme", seq)
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
@@ -257,7 +300,7 @@ func TestCheckpointsFindAChangedCheckpoint(t *testing.T) {
 			f := newCheckpointFixture(t, 3)
 			f.write(t)
 
-			k := key(t, 0, 3)
+			k := f.key(t, 0, 3)
 			cp := readCheckpoint(t, f.blobs, k)
 
 			raw, err := audit.MarshalCheckpoint(tc.change(cp))
@@ -400,7 +443,7 @@ func TestCheckpointsFindADeletedNewestCheckpoint(t *testing.T) {
 		t.Fatalf("verify before the deletion: got %+v, want valid", got)
 	}
 
-	if err := f.blobs.Delete(t.Context(), key(t, 0, 3)); err != nil {
+	if err := f.blobs.Delete(t.Context(), f.key(t, 0, 3)); err != nil {
 		t.Fatalf("delete newest checkpoint: %v", err)
 	}
 
@@ -431,7 +474,7 @@ func TestCheckpointsFindDeletedCheckpoints(t *testing.T) {
 	}
 
 	for seq := 1; seq <= total; seq++ {
-		if err := f.blobs.Delete(t.Context(), key(t, 0, int64(seq))); err != nil {
+		if err := f.blobs.Delete(t.Context(), f.key(t, 0, int64(seq))); err != nil {
 			t.Fatalf("delete checkpoint %d: %v", seq, err)
 		}
 	}
@@ -618,7 +661,7 @@ func TestCheckpointsEpochs(t *testing.T) {
 		t.Fatal("write in the new epoch: no checkpoint written")
 	}
 
-	if _, err := f.blobs.Get(t.Context(), key(t, 1, 2)); err != nil {
+	if _, err := f.blobs.Get(t.Context(), f.key(t, 1, 2)); err != nil {
 		t.Fatalf("checkpoint in epoch 1: %v", err)
 	}
 }
@@ -626,17 +669,132 @@ func TestCheckpointsEpochs(t *testing.T) {
 func TestCheckpointKey(t *testing.T) {
 	t.Parallel()
 
-	k, err := audit.CheckpointKey(3, audit.ServerScope, 42)
-	if err != nil {
-		t.Fatalf("key: %v", err)
+	attempt := strings.Repeat("0a", 16)
+
+	cases := []struct {
+		key  func() (blob.Key, error)
+		name string
+		want string
+	}{
+		{
+			name: "a copy",
+			key:  func() (blob.Key, error) { return audit.CheckpointKey(3, audit.ServerScope, 42, attempt) },
+			want: "audit-checkpoints/00000003/40736572766572/00000000000000000042-" + attempt + ".json",
+		},
+		{
+			name: "the first layout",
+			key:  func() (blob.Key, error) { return audit.FirstLayoutCheckpointKey(3, audit.ServerScope, 42) },
+			want: "audit-checkpoints/00000003/40736572766572/00000000000000000042.json",
+		},
+		{
+			name: "an epoch copy",
+			key:  func() (blob.Key, error) { return audit.EpochKey(4, attempt) },
+			want: "audit-checkpoints/epochs/00000004-" + attempt + ".json",
+		},
+		{
+			name: "an epoch of the first layout",
+			key:  func() (blob.Key, error) { return audit.FirstLayoutEpochKey(4) },
+			want: "audit-checkpoints/epochs/00000004.json",
+		},
+		{
+			name: "a scope with capital letters",
+			key:  func() (blob.Key, error) { return audit.CheckpointKey(0, "Acme_Corp", 1, attempt) },
+			want: "audit-checkpoints/00000000/41636d655f436f7270/00000000000000000001-" + attempt + ".json",
+		},
 	}
 
-	if want := "audit-checkpoints/00000003/40736572766572/00000000000000000042.json"; k.String() != want {
-		t.Fatalf("key: got %q, want %q", k, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			k, err := tc.key()
+			if err != nil || k.String() != tc.want {
+				t.Fatalf("key: got %q, %v, want %q", k, err, tc.want)
+			}
+
+			if !audit.IsCheckpointKey(k) {
+				t.Fatalf("IsCheckpointKey(%q): got false, want true", k)
+			}
+		})
+	}
+}
+
+func TestCheckpointKeyRefusesABadAttempt(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		attempt string
+	}{
+		{name: "empty", attempt: ""},
+		{name: "short", attempt: strings.Repeat("a", 31)},
+		{name: "long", attempt: strings.Repeat("a", 33)},
+		{name: "capital letters", attempt: strings.Repeat("A", 32)},
+		{name: "not hexadecimal", attempt: strings.Repeat("g", 32)},
+		{name: "a path", attempt: "../" + strings.Repeat("a", 29)},
 	}
 
-	if _, err := audit.CheckpointKey(0, "Acme_Corp", 1); err != nil {
-		t.Fatalf("key of a scope with capital letters: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if k, err := audit.CheckpointKey(0, "acme", 1, tc.attempt); !errors.Is(err, blob.ErrInvalidKey) {
+				t.Fatalf("checkpoint key: got %q, %v, want ErrInvalidKey", k, err)
+			}
+
+			if k, err := audit.EpochKey(1, tc.attempt); !errors.Is(err, blob.ErrInvalidKey) {
+				t.Fatalf("epoch key: got %q, %v, want ErrInvalidKey", k, err)
+			}
+		})
+	}
+}
+
+func TestNewAttempt(t *testing.T) {
+	t.Parallel()
+
+	seen := map[string]bool{}
+
+	for range 64 {
+		attempt, err := audit.NewAttempt()
+		if err != nil {
+			t.Fatalf("new attempt: %v", err)
+		}
+
+		if _, err := audit.CheckpointKey(0, "acme", 1, attempt); err != nil {
+			t.Fatalf("key of attempt %q: %v", attempt, err)
+		}
+
+		if seen[attempt] {
+			t.Fatalf("new attempt: %q came twice", attempt)
+		}
+
+		seen[attempt] = true
+	}
+}
+
+func TestIsCheckpointKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		key  blob.Key
+		want bool
+	}{
+		{key: "audit-checkpoints/epochs/00000001.json", want: true},
+		{key: "audit-checkpoints/x", want: true},
+		{key: "audit-checkpoints", want: true},
+		{key: "audit-checkpointsx/a", want: false},
+		{key: "namespaces/audit-checkpoints/a", want: false},
+		{key: "restore-tmp/a", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key.String(), func(t *testing.T) {
+			t.Parallel()
+
+			if got := audit.IsCheckpointKey(tc.key); got != tc.want {
+				t.Fatalf("IsCheckpointKey(%q): got %v, want %v", tc.key, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -703,11 +861,11 @@ func TestSigner(t *testing.T) {
 	}
 }
 
-// epochKey returns the epoch key of epoch.
+// epochKey returns the epoch key of epoch in the first layout.
 func epochKey(t *testing.T, epoch int64) blob.Key {
 	t.Helper()
 
-	k, err := audit.EpochKey(epoch)
+	k, err := audit.FirstLayoutEpochKey(epoch)
 	if err != nil {
 		t.Fatalf("epoch key: %v", err)
 	}
@@ -868,7 +1026,7 @@ func TestCheckpointsFindACopiedCheckpoint(t *testing.T) {
 		t.Fatalf("new epoch: got %d, %v, want 1", epoch, err)
 	}
 
-	body, err := f.blobs.Get(t.Context(), key(t, 0, 3))
+	body, err := f.blobs.Get(t.Context(), f.key(t, 0, 3))
 	if err != nil {
 		t.Fatalf("get checkpoint: %v", err)
 	}
@@ -882,7 +1040,7 @@ func TestCheckpointsFindACopiedCheckpoint(t *testing.T) {
 		t.Fatalf("read checkpoint: %v", err)
 	}
 
-	if err := f.blobs.Put(t.Context(), key(t, 1, 3), bytes.NewReader(raw)); err != nil {
+	if err := f.blobs.Put(t.Context(), firstLayoutKey(t, 1, 3), bytes.NewReader(raw)); err != nil {
 		t.Fatalf("copy checkpoint to epoch 1: %v", err)
 	}
 
@@ -905,7 +1063,7 @@ func TestCheckpointsFindARehashedCheckpoint(t *testing.T) {
 	e.Hash = audit.ComputeHash(e, e.PrevHash)
 	f.entries.entries[2] = e
 
-	k := key(t, 0, 3)
+	k := f.key(t, 0, 3)
 	cp := readCheckpoint(t, f.blobs, k)
 	cp.Hash = e.Hash
 
@@ -1063,7 +1221,7 @@ func (s *epochSwapBlobs) List(ctx context.Context, prefix string) ([]blob.Object
 		return out, marshalErr
 	}
 
-	key, keyErr := audit.EpochKey(1)
+	key, keyErr := audit.EpochKey(1, strings.Repeat("e", 32))
 	if keyErr != nil {
 		return out, keyErr
 	}
