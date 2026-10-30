@@ -165,7 +165,8 @@ func (e *env) serve(authz identity.Authorizer) {
 
 	exchanger, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: e.store.TrustRules(), Exchanges: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store,
-		Tokens: tokens, Audit: e.store, Refusals: nil, Keys: nil, InstallationURLs: []string{publicURL}, Now: nil,
+		Tokens: tokens, Audit: e.store, ServerAudit: e.store, Refusals: nil, Keys: nil,
+		InstallationURLs: []string{publicURL}, Now: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("exchanger: %v", err)
