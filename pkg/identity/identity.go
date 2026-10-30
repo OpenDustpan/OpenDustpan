@@ -588,6 +588,10 @@ const (
 	// namespace that holds the registry. No built-in role below the
 	// administrator holds it.
 	ActionRegistryPublish Action = "registry:publish"
+	// ActionNamespaceManageIssuer allows making, rotating and checking the
+	// signing keys of the OIDC issuer of a namespace, changing its settings
+	// and exporting its two files. Its object is a namespace.
+	ActionNamespaceManageIssuer Action = "namespace:manage-issuer"
 	// ActionRegistryManageKeys allows registering and removing the trusted
 	// signing keys of a namespace, and listing them. Its object is the
 	// namespace that holds the registry.

@@ -464,6 +464,30 @@ type InventoryLabel struct {
 	LabelValue string
 }
 
+type IssuerKey struct {
+	NamespaceID   string
+	ID            string
+	State         string
+	PublicKey     []byte
+	Sealed        []byte
+	CreatedAtMs   int64
+	ActivatedAtMs int64
+	RetiredAtMs   int64
+	DeletedAtMs   int64
+}
+
+type IssuerSetting struct {
+	NamespaceID        string
+	IssuerUrl          string
+	SubjectTemplate    string
+	AllowBlockSubjects bool
+	IncludeActorName   bool
+	Version            int64
+	UpdatedAtMs        int64
+	UpdatedBy          string
+	CopyCheck          string
+}
+
 type ItemKey struct {
 	ID           string
 	NamespaceID  string
