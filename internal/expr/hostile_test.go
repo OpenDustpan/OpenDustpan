@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/catalog"
 	"opendustpan.org/opendustpan/internal/expr"
@@ -300,6 +302,110 @@ func TestFromLoopsWithinTheLimits(t *testing.T) {
 		got, err := expr.New().Bool(t.Context(), source, env)
 		if err != nil || !got {
 			t.Fatalf("Bool(%q) = %v, %v, want true", source, got, err)
+		}
+	}
+}
+
+// reviewerBig is the string of the expressions that a review found: a
+// regular expression, read once for each group.
+func reviewerEnv() *catalog.Env {
+	env := hostileEnv()
+	env.Inputs["big"] = strings.Repeat("ab", 8<<10)
+	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups)
+
+	return env
+}
+
+// TestWorkLayerReviewerExpressions checks that an expression that reads a
+// long string in each turn of a loop over the groups ends at the work budget
+// and not after seconds. The first expression ran for 5.4 s before the budget.
+func TestWorkLayerReviewerExpressions(t *testing.T) {
+	t.Parallel()
+
+	const clause = "none(request.requester.groups, {inputs.big matches '^(a|b|ab|ba)*c$'})"
+
+	tests := []struct{ name, source string }{
+		{"one clause", clause},
+		{"nine clauses", strings.TrimSuffix(strings.Repeat(clause+" && ", 9), " && ")},
+		{"contains in a loop", "none(request.requester.groups, inputs.big contains 'c')"},
+		{"starts with in a loop", "none(request.requester.groups, inputs.big startsWith 'c')"},
+		{"ends with in a loop", "none(request.requester.groups, inputs.big endsWith 'c')"},
+		{"lower in a loop", "all(request.requester.groups, lower(inputs.big) != '')"},
+		{"index of in a loop", "all(request.requester.groups, indexOf(inputs.big, 'c') < 0)"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			start := time.Now()
+
+			got, err := expr.New().Bool(t.Context(), tc.source, reviewerEnv())
+			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
+			}
+
+			// The bound is the time limit and the work of the calls that the
+			// budget allows, with room for a slow machine and the race detector.
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("Bool() took %v, want less than 1s", elapsed)
+			}
+		})
+	}
+}
+
+// TestEnvLayer sends an environment above the limit straight to the run.
+func TestEnvLayer(t *testing.T) {
+	t.Parallel()
+
+	many := make([]any, 0, 200_000)
+	for range 200_000 {
+		many = append(many, "x")
+	}
+
+	tests := []struct {
+		name string
+		edit func(env *catalog.Env)
+	}{
+		{"a long string", func(env *catalog.Env) { env.Inputs["big"] = strings.Repeat("a", 1<<20) }},
+		{"many items", func(env *catalog.Env) { env.Inputs["many"] = many }},
+		{"a long value", func(env *catalog.Env) { env.Value = strings.Repeat("a", 1<<20) }},
+		{"a long input", func(env *catalog.Env) { env.Input = map[string]any{"k": strings.Repeat("a", 1<<20)} }},
+		{"a long name", func(env *catalog.Env) { env.Request.Name = strings.Repeat("a", 1<<20) }},
+		{"long group names", func(env *catalog.Env) {
+			env.Request.Requester.Groups = slices.Repeat([]string{strings.Repeat("g", 1<<10)}, catalog.MaxEnvGroups)
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := hostileEnv()
+			tc.edit(env)
+
+			if got, err := expr.New().Bool(t.Context(), "true", env); got || !errors.Is(err, catalog.ErrRuleFailed) {
+				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
+			}
+		})
+	}
+}
+
+// TestOperatorNamesCannotBeWritten checks that no expression can call the
+// functions that replace the operators, with a pattern of its own.
+func TestOperatorNamesCannotBeWritten(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		"concat('a', 'b') == 'ab'",
+		"dustpan matches(request.name, inputs.s)",
+		`"dustpan matches"(request.name, inputs.s)`,
+		"`dustpan matches`(request.name, inputs.s)",
+		"matches(request.name, inputs.s)",
+		"request.name matches '('",
+	} {
+		if err := expr.New().Compile(source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
+			t.Fatalf("Compile(%q) = %v, want ErrInvalid", source, err)
 		}
 	}
 }
