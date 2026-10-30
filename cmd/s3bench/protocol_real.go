@@ -150,7 +150,7 @@ func unitImportUpload() family {
 
 	return family{
 		Name: "unit import upload (upload code)", Bytes: checkpointBytes, Read: false,
-		OpBytes: checkpointBytes + unitFileBytes + factsFileBytes,
+		OpBytes: checkpointBytes + unitFileBytes + factsFileBytes, Candidate: false,
 		OldPath: "PUT body + PUT unit file + PUT facts, all with If-None-Match and fixed keys + audited fenced tx",
 		NewPath: "PUT body + PUT unit file + PUT facts, attempt keys + audited fenced tx",
 		pause:   0,
@@ -203,16 +203,17 @@ func restoreCopyAbsent() family {
 	}
 
 	return family{
-		Name:    "restore copy, key absent (copyBlob)",
-		Bytes:   checkpointBytes,
-		Read:    false,
-		OpBytes: 0,
-		OldPath: "GET live (absent) + DELETE tmp + GET backup + PUT tmp + GET tmp + PUT live, with If-None-Match + DELETE tmp",
-		NewPath: "the same, without the header, with a fence check before the PUT of the live key",
-		pause:   0,
-		seed:    seedObjects(protoSeedCount),
-		old:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },
-		new:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeNew) },
+		Name:      "restore copy, key absent (copyBlob)",
+		Bytes:     checkpointBytes,
+		Read:      false,
+		OpBytes:   0,
+		Candidate: false,
+		OldPath:   "GET live (absent) + DELETE tmp + GET backup + PUT tmp + GET tmp + PUT live, with If-None-Match + DELETE tmp",
+		NewPath:   "the same, without the header, with a fence check before the PUT of the live key",
+		pause:     0,
+		seed:      seedObjects(protoSeedCount),
+		old:       func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },
+		new:       func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeNew) },
 	}
 }
 
@@ -226,13 +227,14 @@ func restoreCopyPresent() family {
 
 	return family{
 		Name: "restore copy, key present (copyBlob)", Bytes: checkpointBytes, Read: true,
-		OpBytes: 0,
-		OldPath: "GET live + compare size and hash",
-		NewPath: "GET live + compare size and hash",
-		pause:   0,
-		seed:    seedObjects(protoSeedCount),
-		old:     op,
-		new:     op,
+		OpBytes:   0,
+		Candidate: false,
+		OldPath:   "GET live + compare size and hash",
+		NewPath:   "GET live + compare size and hash",
+		pause:     0,
+		seed:      seedObjects(protoSeedCount),
+		old:       op,
+		new:       op,
 	}
 }
 
@@ -268,8 +270,9 @@ func seedObjects(n int) func(ctx context.Context, r *protoRun) error {
 }
 
 // seedScope writes the epoch object and the checkpoint copies of one scope in
-// both layouts: one key for each sequence (the old path), and one key for
-// each copy under its sequence (the new path).
+// each layout: one key for each sequence (the old path), one key for each
+// copy under its sequence (the new path of the code), and one key for each
+// copy beside the others (the flat candidate).
 func seedScope(ctx context.Context, r *protoRun) error {
 	if err := r.putPlain(ctx, r.readPrefix+"/epoch/"+padded(1)); err != nil {
 		return err
@@ -280,18 +283,57 @@ func seedScope(ctx context.Context, r *protoRun) error {
 
 		return errors.Join(
 			r.putPlain(ctx, r.readPrefix+"/old/"+seq),
-			r.putPlain(ctx, r.readPrefix+"/new/"+seq+"/"+r.attempt),
+			r.putPlain(ctx, r.copyKey(layoutNested, seq)),
+			r.putPlain(ctx, r.copyKey(layoutFlat, seq)),
 		)
 	})
 }
 
-// scopeDir answers the checkpoint directory of a path.
-func (r *protoRun) scopeDir(mode string) string {
+// Layouts of the checkpoint copies of the new path.
+const (
+	// layoutNested is the layout of the code: <sequence>/<attempt>.
+	layoutNested = "nested"
+	// layoutFlat is the candidate layout: <sequence>-<attempt>.
+	layoutFlat = "flat"
+)
+
+// copyKey answers the key of the one copy of seq in layout.
+func (r *protoRun) copyKey(layout, seq string) string {
+	if layout == layoutFlat {
+		return r.readPrefix + "/flat/" + seq + "-" + r.attempt
+	}
+
+	return r.readPrefix + "/new/" + seq + "/" + r.attempt
+}
+
+// copyDir answers the scope directory of the new path in layout.
+func (r *protoRun) copyDir(layout string) string {
+	if layout == layoutFlat {
+		return r.readPrefix + "/flat"
+	}
+
+	return r.readPrefix + "/new"
+}
+
+// scopeDir answers the scope directory of a path: the old layout on the old
+// path, layout on the new path.
+func (r *protoRun) scopeDir(mode, layout string) string {
 	if mode == modeOld {
 		return r.readPrefix + "/old"
 	}
 
-	return r.readPrefix + "/new"
+	return r.copyDir(layout)
+}
+
+// writeVariant is one model of the audit checkpoint write: the layout of the
+// copies, whether the new path lists the scope a second time before the PUT,
+// and whether the model is a candidate rather than code.
+type writeVariant struct {
+	name       string
+	newPath    string
+	layout     string
+	listsTwice bool
+	candidate  bool
 }
 
 // auditWrite follows Checkpoints.Write and storeNew in
@@ -302,25 +344,59 @@ func (r *protoRun) scopeDir(mode string) string {
 // with an attempt part. The model writes the checkpoint outside the seeded
 // directory, so the directory keeps its size during a run.
 func auditWrite() family {
+	return auditWriteModel(writeVariant{
+		name:    "audit checkpoint write (Write)",
+		newPath: "the same with a second LIST of the scope, and the PUT under an attempt key",
+		layout:  layoutNested, listsTwice: true, candidate: false,
+	})
+}
+
+// auditWriteFlat is a candidate, not code: the write of auditWrite with the
+// copies in the flat layout.
+func auditWriteFlat() family {
+	return auditWriteModel(writeVariant{
+		name:    "audit checkpoint write, flat layout (candidate)",
+		newPath: "as the code, with the copies as <sequence>-<attempt> in one directory",
+		layout:  layoutFlat, listsTwice: true, candidate: true,
+	})
+}
+
+// auditWriteOneList is a candidate, not code: the write of auditWrite
+// without the second LIST of the scope in storeNew.
+func auditWriteOneList() family {
+	return auditWriteModel(writeVariant{
+		name:    "audit checkpoint write, one LIST (candidate)",
+		newPath: "as the code, without the second LIST of the scope before the PUT",
+		layout:  layoutNested, listsTwice: false, candidate: true,
+	})
+}
+
+// auditWriteModel answers the write model of v.
+func auditWriteModel(v writeVariant) family {
 	op := func(ctx context.Context, r *protoRun, i int, mode string) error {
 		key := r.fixedKey(i)
 		if mode == modeNew {
 			key = r.attemptKey(i)
 		}
 
+		dir := r.scopeDir(mode, v.layout)
+		listDir := func(d string) func() error {
+			return func() error { _, err := r.list(ctx, d); return err }
+		}
+
 		steps := []func() error{
-			func() error { _, err := r.list(ctx, r.readPrefix+"/epoch"); return err },
+			listDir(r.readPrefix + "/epoch"),
 			func() error { return r.db.readAuditChain(ctx) },
-			func() error { _, err := r.list(ctx, r.scopeDir(mode)); return err },
+			listDir(dir),
 			func() error { return r.db.readAuditChain(ctx) },
 		}
 
-		if mode == modeNew {
-			steps = append(steps, func() error { _, err := r.list(ctx, r.scopeDir(mode)); return err })
+		if mode == modeNew && v.listsTwice {
+			steps = append(steps, listDir(dir))
 		}
 
 		steps = append(steps,
-			func() error { _, err := r.list(ctx, r.readPrefix+"/epoch"); return err },
+			listDir(r.readPrefix+"/epoch"),
 			func() error { return r.target.putOnce(ctx, modeOf(mode), key, r.body) },
 		)
 
@@ -328,10 +404,10 @@ func auditWrite() family {
 	}
 
 	return family{
-		Name: "audit checkpoint write (Write)", Bytes: auditCheckpointBytes, Read: false,
-		OpBytes: 0,
+		Name: v.name, Bytes: auditCheckpointBytes, Read: false,
+		OpBytes: 0, Candidate: v.candidate,
 		OldPath: "LIST epoch + read marks + LIST scope + read last entry + LIST epoch + PUT If-None-Match",
-		NewPath: "the same with a second LIST of the scope, and the PUT under an attempt key",
+		NewPath: v.newPath,
 		pause:   0,
 		seed:    seedScope,
 		old:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },
@@ -346,8 +422,25 @@ func auditWrite() family {
 // one key for each sequence, so the two paths send the same count of
 // requests.
 func auditVerify() family {
+	return auditVerifyModel("audit checkpoint check (Verify)",
+		"LIST scope + GET the copies of 10 planned checkpoints (1 each) + read last entry", layoutNested)
+}
+
+// auditVerifyFlat is a candidate, not code: the check of auditVerify with
+// the copies in the flat layout.
+func auditVerifyFlat() family {
+	f := auditVerifyModel("audit checkpoint check, flat layout (candidate)",
+		"as the code, with the copies as <sequence>-<attempt> in one directory", layoutFlat)
+	f.Candidate = true
+
+	return f
+}
+
+// auditVerifyModel answers the check model with the copies of the new path
+// in layout.
+func auditVerifyModel(name, newPath, layout string) family {
 	op := func(ctx context.Context, r *protoRun, i int, mode string) error {
-		n, err := r.list(ctx, r.scopeDir(mode))
+		n, err := r.list(ctx, r.scopeDir(mode, layout))
 		if err != nil {
 			return err
 		}
@@ -361,7 +454,7 @@ func auditVerify() family {
 
 			key := r.readPrefix + "/old/" + seq
 			if mode == modeNew {
-				key = r.readPrefix + "/new/" + seq + "/" + r.attempt
+				key = r.copyKey(layout, seq)
 			}
 
 			if err := r.get(ctx, key); err != nil {
@@ -373,10 +466,10 @@ func auditVerify() family {
 	}
 
 	return family{
-		Name: "audit checkpoint check (Verify)", Bytes: auditCheckpointBytes, Read: true,
-		OpBytes: planned * auditCheckpointBytes,
+		Name: name, Bytes: auditCheckpointBytes, Read: true,
+		OpBytes: planned * auditCheckpointBytes, Candidate: false,
 		OldPath: "LIST scope + GET 10 planned checkpoints + read last entry",
-		NewPath: "LIST scope + GET the copies of 10 planned checkpoints (1 each) + read last entry",
+		NewPath: newPath,
 		pause:   0,
 		seed:    seedScope,
 		old:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },

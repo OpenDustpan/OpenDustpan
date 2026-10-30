@@ -51,11 +51,12 @@ var errProtocolPlan = errors.New("-ops, -runs and -concurrency must be 1 or more
 
 // familyInfo describes one family in the protocol file.
 type familyInfo struct {
-	Name    string `json:"name"`
-	Bytes   int    `json:"bytes"`
-	Read    bool   `json:"read"`
-	OldPath string `json:"oldPath"`
-	NewPath string `json:"newPath"`
+	Name      string `json:"name"`
+	Bytes     int    `json:"bytes"`
+	Read      bool   `json:"read"`
+	Candidate bool   `json:"candidate"`
+	OldPath   string `json:"oldPath"`
+	NewPath   string `json:"newPath"`
 }
 
 // protocolFile is the content of protocol.json: the plan, the families and
@@ -260,7 +261,10 @@ func familyInfos() []familyInfo {
 	for _, f := range fams {
 		out = append(
 			out,
-			familyInfo{Name: f.Name, Bytes: f.Bytes, Read: f.Read, OldPath: f.OldPath, NewPath: f.NewPath},
+			familyInfo{
+				Name: f.Name, Bytes: f.Bytes, Read: f.Read, Candidate: f.Candidate,
+				OldPath: f.OldPath, NewPath: f.NewPath,
+			},
 		)
 	}
 
@@ -374,8 +378,14 @@ func renderProtocol(pf *protocolFile) string {
 		newS := summarize(filterResults(pf.Results, key, modeNew))
 
 		oldLabel, result := modeOld, verdict(oldS, newS)
-		if !pf.Enforced[key.store] {
+
+		switch {
+		case !pf.Enforced[key.store]:
 			oldLabel, result = modeOld+", not enforced", "no verdict: the store does not enforce If-None-Match"
+		case isCandidate(pf.Families, key.family):
+			result = "no verdict: a candidate, not code"
+		default:
+			// A code path: the verdict stands.
 		}
 
 		writePathRow(&b, key, oldLabel, oldS)
@@ -519,6 +529,17 @@ func (o options) selectsFamily(name string) bool {
 	for part := range strings.SplitSeq(o.families, ",") {
 		if strings.TrimSpace(part) == slugOf(name) {
 			return true
+		}
+	}
+
+	return false
+}
+
+// isCandidate reports whether families marks the family name as a candidate.
+func isCandidate(families []familyInfo, name string) bool {
+	for i := range families {
+		if families[i].Name == name {
+			return families[i].Candidate
 		}
 	}
 

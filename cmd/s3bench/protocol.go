@@ -59,9 +59,12 @@ type family struct {
 	Read  bool   `json:"read"`
 	// OpBytes is the count of bytes that one operation moves, when it is not
 	// Bytes, the size of the object of the family.
-	OpBytes int    `json:"opBytes"`
-	OldPath string `json:"oldPath"`
-	NewPath string `json:"newPath"`
+	OpBytes int `json:"opBytes"`
+	// Candidate marks a model of a design that no code has. The record
+	// keeps it apart and gives it no verdict.
+	Candidate bool   `json:"candidate"`
+	OldPath   string `json:"oldPath"`
+	NewPath   string `json:"newPath"`
 	// seed writes the objects that a read family reads, before its runs.
 	seed func(ctx context.Context, r *protoRun) error
 	// pause is the wait after each run, outside the timing. See restorePresent.
@@ -150,11 +153,12 @@ func (r *protoRun) get(ctx context.Context, key string) error {
 func writeThenCommit(name string, size int) family {
 	return family{
 		Name: name, Bytes: size, Read: false,
-		OpBytes: 0,
-		OldPath: seqConditionalTx,
-		NewPath: "PUT under an attempt key + fenced tx",
-		pause:   0,
-		seed:    nil,
+		OpBytes:   0,
+		Candidate: false,
+		OldPath:   seqConditionalTx,
+		NewPath:   "PUT under an attempt key + fenced tx",
+		pause:     0,
+		seed:      nil,
 		old: func(ctx context.Context, r *protoRun, i int) error {
 			key := r.fixedKey(i)
 			if err := r.putConditional(ctx, key); err != nil {
@@ -179,11 +183,12 @@ func writeThenCommit(name string, size int) family {
 func putOnly(name string, size int) family {
 	return family{
 		Name: name, Bytes: size, Read: false,
-		OpBytes: 0,
-		OldPath: seqConditional,
-		NewPath: "PUT under an attempt key",
-		pause:   0,
-		seed:    nil,
+		OpBytes:   0,
+		Candidate: false,
+		OldPath:   seqConditional,
+		NewPath:   "PUT under an attempt key",
+		pause:     0,
+		seed:      nil,
 		old: func(ctx context.Context, r *protoRun, i int) error {
 			return r.putConditional(ctx, r.fixedKey(i))
 		},
@@ -221,11 +226,12 @@ func unitImport() family {
 func restoreWrite() family {
 	return family{
 		Name: "restore write (key absent)", Bytes: checkpointBytes, Read: false,
-		OpBytes: 0,
-		OldPath: seqConditional,
-		NewPath: "GET live key (absent) + fence check + PUT",
-		pause:   0,
-		seed:    nil,
+		OpBytes:   0,
+		Candidate: false,
+		OldPath:   seqConditional,
+		NewPath:   "GET live key (absent) + fence check + PUT",
+		pause:     0,
+		seed:      nil,
 		old: func(ctx context.Context, r *protoRun, i int) error {
 			return r.putConditional(ctx, r.fixedKey(i))
 		},
@@ -266,10 +272,11 @@ func restorePresent() family {
 
 	return family{
 		Name: "restore write (key present)", Bytes: checkpointBytes, Read: true,
-		OpBytes: 0,
-		OldPath: seqConditional + " (refused: present)",
-		NewPath: "GET live key + compare size and hash (skip)",
-		pause:   restorePresentPause,
+		OpBytes:   0,
+		Candidate: false,
+		OldPath:   seqConditional + " (refused: present)",
+		NewPath:   "GET live key + compare size and hash (skip)",
+		pause:     restorePresentPause,
 		seed: func(ctx context.Context, r *protoRun) error {
 			return parallel(protoSeedCount, func(i int) error {
 				return r.putPlain(ctx, r.readPrefix+"/"+strconv.Itoa(i))
@@ -305,10 +312,11 @@ func restorePresent() family {
 func auditCheck() family {
 	return family{
 		Name: "audit checkpoint check (read)", Bytes: auditCheckpointBytes, Read: true,
-		OpBytes: 0,
-		OldPath: "GET the copy",
-		NewPath: "LIST the position prefix + GET each copy (1)",
-		pause:   0,
+		OpBytes:   0,
+		Candidate: false,
+		OldPath:   "GET the copy",
+		NewPath:   "LIST the position prefix + GET each copy (1)",
+		pause:     0,
 		seed: func(ctx context.Context, r *protoRun) error {
 			return parallel(protoSeedCount, func(i int) error {
 				base := r.readPrefix + "/" + strconv.Itoa(i)
@@ -357,6 +365,9 @@ func protocolFamilies() []family {
 		restoreCopyPresent(),
 		auditWrite(),
 		auditVerify(),
+		auditWriteFlat(),
+		auditWriteOneList(),
+		auditVerifyFlat(),
 	}
 }
 

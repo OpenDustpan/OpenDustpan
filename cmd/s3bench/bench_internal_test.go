@@ -384,3 +384,21 @@ func TestPaddedSortsInOrder(t *testing.T) {
 		t.Fatal("padded keys do not sort in the order of their numbers")
 	}
 }
+
+func TestRenderNoVerdictForCandidates(t *testing.T) {
+	t.Parallel()
+
+	oldRun, newRun := resultOf(10, 20, 100, 1, 0), resultOf(10, 20, 100, 1, 0)
+	newRun.Mode = modeNew
+
+	pf := &protocolFile{
+		Plan: protocolPlan{Ops: 10000, Runs: 5, Concurrency: 16}, Host: readHost(),
+		Families: []familyInfo{{Name: "f", Bytes: 1, Read: false, Candidate: true, OldPath: "", NewPath: ""}},
+		Enforced: map[string]bool{"s": true}, Results: []protoResult{oldRun, newRun}, Replaced: nil,
+	}
+
+	out := renderProtocol(pf)
+	if !strings.Contains(out, "no verdict: a candidate, not code") || strings.Contains(out, "| meets |") {
+		t.Fatalf("render of a candidate:\n%s", out)
+	}
+}
