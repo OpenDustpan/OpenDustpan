@@ -58,6 +58,7 @@ Do not report work as finished if any of these fail. Say what fails instead.
 cmd/opendustpan/       the binary: flags, env, built-in adapters. Only place that may exit.
 cmd/clientgen/         the client generator: reads openapi.json and writes a client (make clients-generate)
 cmd/subtestcheck/      the check for a parallel subtest (make subtestcheck); its logic is in internal/subtestcheck
+cmd/s3bench/           the S3 latency benchmark: blob writes behind Toxiproxy on MinIO and Garage (make bench-s3)
 pkg/                   the public SDK: dustpan, the port packages and the conformance suites (ADR 35, ADR 272)
   dustpan/             the SDK entry point: NewServer + options, routes, probes
   namespace/           domain: namespaces, primary installation, failover-version fencing
