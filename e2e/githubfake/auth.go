@@ -179,6 +179,12 @@ func (f *Fake) permitted(r *http.Request, fullName, name, level string) bool {
 		return true
 	}
 
+	// An installation token reaches the repositories of the account of the
+	// installation only.
+	if owner, _, _ := strings.Cut(fullName, "/"); !strings.EqualFold(owner, f.cfg.Owner.Login) {
+		return false
+	}
+
 	if t.repos != nil && !slices.Contains(t.repos, shortName(fullName)) {
 		return false
 	}

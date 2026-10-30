@@ -72,7 +72,40 @@ func NewOpener(cfg Config) (*Opener, error) {
 		egresshttp.Options{RootCAs: cfg.RootCAs, Resolver: nil},
 	)
 
+	keepRedirectStatus(client)
+
 	return &Opener{rules: cfg.Rules, client: client, now: now}, nil
+}
+
+// redirectError is the error of a redirect that the rules refuse. It keeps
+// the status of the redirect, so that a read can tell a repository that has
+// a new name from any other redirect. The adapter still follows none.
+type redirectError struct {
+	status int
+	err    error
+}
+
+func (e *redirectError) Error() string { return e.err.Error() }
+
+func (e *redirectError) Unwrap() error { return e.err }
+
+// keepRedirectStatus wraps the redirect check of client, which refuses every
+// redirect, so that its error carries the status of the redirect.
+func keepRedirectStatus(client *http.Client) {
+	inner := client.CheckRedirect
+
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		var err error
+		if inner != nil {
+			err = inner(req, via)
+		}
+
+		if err != nil && req.Response != nil {
+			return &redirectError{status: req.Response.StatusCode, err: err}
+		}
+
+		return err
+	}
 }
 
 // CloseIdleConnections closes the idle network connections of the adapter.
@@ -106,7 +139,7 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 
 	f := &gitHub{
 		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
-		mu: sync.Mutex{}, readTokens: map[string]readToken{},
+		mu: sync.Mutex{}, readTokens: map[string]readToken{}, owner: "", contents: contentsUnknown,
 	}
 
 	switch c.Auth {
@@ -159,19 +192,46 @@ type gitHub struct {
 	token          string
 	push           bool
 
-	// mu guards readTokens, the installation tokens of an app connection for
-	// reads. A token reads one repository, and the adapter keeps it in memory
-	// only.
+	// mu guards the fields below. readTokens holds the installation tokens
+	// of an app connection for reads: a token reads one repository, and the
+	// adapter keeps it in memory only. owner is the login of the account of
+	// the installation, and contents says whether the installation has the
+	// permission to read the contents. Check and the first read set them.
 	mu         sync.Mutex
 	readTokens map[string]readToken
+	owner      string
+	contents   contentsAccess
 }
 
+// contentsAccess says whether an installation has the permission to read
+// the contents of its repositories.
+type contentsAccess int
+
+const (
+	// contentsUnknown is the state before any call has shown the permissions.
+	contentsUnknown contentsAccess = iota
+	contentsGranted
+	contentsMissing
+)
+
 // Capabilities lists what the adapter does for this connection, with no
-// call to GitHub. It lists forge.CapFiles: each other method returns
-// forge.ErrUnsupported until it lands. A method that lands adds its
-// capability here, and a connection with no push access gets neither
+// call to GitHub. Each method that is not in the adapter returns
+// forge.ErrUnsupported and has no capability here. A method that lands adds
+// its capability here, and a connection with no push access gets neither
 // forge.CapCommit nor forge.CapReview.
+//
+// It lists forge.CapFiles unless the last Check showed an installation
+// without the permission to read the contents. Before a Check, the
+// permissions are not known, and the capability is listed. A token connection
+// always lists it, because a token shows no permissions.
 func (f *gitHub) Capabilities() forge.Capabilities {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.auth == forge.AuthApp && f.contents == contentsMissing {
+		return forge.Capabilities{}
+	}
+
 	return forge.Capabilities{forge.CapFiles}
 }
 

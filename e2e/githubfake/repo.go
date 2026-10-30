@@ -271,3 +271,26 @@ func isHex(s string) bool {
 
 	return s != ""
 }
+
+// RenameRepo renames the repository from to to. A request for the old name
+// answers a redirect (301) to the new one, as GitHub does.
+func (f *Fake) RenameRepo(from, to string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	r, found := f.repos[from]
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNoRepo, from)
+	}
+
+	if _, found := f.repos[to]; found {
+		return fmt.Errorf("%w: %s", ErrExists, to)
+	}
+
+	delete(f.repos, from)
+	r.name = to
+	f.repos[to] = r
+	f.moved[from] = to
+
+	return nil
+}

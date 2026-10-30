@@ -1,6 +1,7 @@
 package githubfake_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -222,5 +223,48 @@ func TestInstallationWithWriteCanCommit(t *testing.T) {
 	out := decode[gqlOut](t, c.do(http.MethodPost, "/graphql", token, mutation(t, "main", first.ID, "x", "x")).body)
 	if out.Data.Create == nil {
 		t.Fatalf("a commit with contents write: %+v", out)
+	}
+}
+
+func TestInstallationTokenReachesTheOwnerOfTheInstallationOnly(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newFake(t)
+	c := newClient(t, f)
+
+	if _, err := f.AddRepo("stranger/infra", map[string][]byte{"a": []byte("a")}); err != nil {
+		t.Fatal(err)
+	}
+
+	token := installationToken(t, c, "")
+
+	wantStatus(t, c.do(http.MethodGet, "/repos/acme/infra/commits/main", token, ""), http.StatusOK)
+	wantStatus(t, c.do(http.MethodGet, "/repos/stranger/infra/commits/main", token, ""), http.StatusNotFound)
+	// The user token is not bound to an installation.
+	wantStatus(t, c.do(http.MethodGet, "/repos/stranger/infra/commits/main", f.UserToken(), ""), http.StatusOK)
+}
+
+func TestTokenAnswerNamesTheSelectedRepositories(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newFake(t)
+	c := newClient(t, f)
+	app := jwt(t, f.PrivateKey(), f.AppID(), 9*time.Minute)
+
+	a := c.do(http.MethodPost, "/app/installations/9001/access_tokens", app, `{"repositories":["infra"]}`)
+	fields := decode[map[string]json.RawMessage](t, a.body)
+
+	if string(fields["repository_selection"]) != `"selected"` {
+		t.Fatalf("repository_selection = %s", fields["repository_selection"])
+	}
+
+	repos := decode[[]map[string]string](t, fields["repositories"])
+	if len(repos) != 1 || repos[0]["name"] != "infra" || repos[0]["full_name"] != "acme/infra" {
+		t.Fatalf("repositories = %v", repos)
+	}
+
+	b := c.do(http.MethodPost, "/app/installations/9001/access_tokens", app, "")
+	if string(decode[map[string]json.RawMessage](t, b.body)["repository_selection"]) != `"all"` {
+		t.Fatalf("repository_selection of a token for all = %s", b.body)
 	}
 }

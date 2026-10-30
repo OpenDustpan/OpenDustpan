@@ -86,11 +86,21 @@ const conformanceRepo = "acme/infra"
 func newHost(t *testing.T) *githubfake.Fake {
 	t.Helper()
 
-	host := githubfake.New(t, githubfake.Config{
-		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
+	return newHostWith(t, func(*githubfake.Config) {})
+}
+
+// newHostWith is newHost with a change of the settings of the host.
+func newHostWith(t *testing.T, change func(*githubfake.Config)) *githubfake.Fake {
+	t.Helper()
+
+	cfg := githubfake.Config{
+		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 99, Login: "acme"},
 		User: githubfake.Account{ID: 0, Login: ""}, UserToken: "github_pat_" + randomHex(t, 24), ClassicToken: false,
-		Permissions: nil, Key: testKey(), Now: nil, WebhookClient: nil,
-	})
+		Permissions: nil, ContentsLimit: 0, Key: testKey(), Now: nil, WebhookClient: nil,
+	}
+	change(&cfg)
+
+	host := githubfake.New(t, cfg)
 
 	if _, err := host.AddRepo(conformanceRepo, map[string][]byte{"README.md": []byte("hello\n")}); err != nil {
 		t.Fatal(err)
@@ -160,7 +170,7 @@ func conformanceHarness(auth forge.AuthKind) forgetest.Factory {
 
 		account := forge.Account{ID: "777", Login: "acme", ExpiresAt: time.Time{}, NoExpiry: false, Scopes: nil}
 		if auth == forge.AuthApp {
-			account.ID, account.Login = "99", "acme-org"
+			account.ID, account.Login = "99", "acme"
 		}
 
 		return forgetest.Harness{

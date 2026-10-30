@@ -55,6 +55,28 @@ func (f *gitHub) Check(ctx context.Context) (forge.Account, error) {
 	return f.checkToken(ctx)
 }
 
+// learn keeps the login of the account of the installation and whether the
+// installation can read the contents, for the reads and for Capabilities.
+func (f *gitHub) learn(login string, permissions map[string]string) {
+	access := contentsMissing
+	if level := permissions[permContents]; level == levelRead || level == levelWrite {
+		access = contentsGranted
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.owner, f.contents = login, access
+}
+
+// The names of the permission and of its levels that the adapter reads.
+const (
+	permContents = "contents"
+	permMetadata = "metadata"
+	levelRead    = "read"
+	levelWrite   = "write"
+)
+
 // installation is the part of the installation answer that Check reads.
 type installation struct {
 	Account     account           `json:"account"`
@@ -95,6 +117,7 @@ func (f *gitHub) checkApp(ctx context.Context) (forge.Account, error) {
 	}
 
 	acct.Scopes = scopesOf(inst.Permissions)
+	f.learn(acct.Login, inst.Permissions)
 
 	return acct, nil
 }
@@ -265,9 +288,27 @@ func (f *gitHub) send(ctx context.Context, c call) (response, error) {
 
 	resp, err := f.o.client.Do(req)
 	if err != nil {
-		return response{}, networkError(err)
+		return response{}, c.clientError(err)
 	}
 
+	return f.answer(c, resp)
+}
+
+// clientError maps an error of the HTTP client. A read maps the status of a
+// redirect that was refused, for example a repository that has a new name.
+// The adapter did not follow the redirect.
+func (c call) clientError(err error) error {
+	var redirect *redirectError
+	if c.status != nil && errors.As(err, &redirect) {
+		return c.status(response{status: redirect.status, header: nil, body: nil})
+	}
+
+	return networkError(err)
+}
+
+// answer reads the body of resp and maps a status that is not a success. It
+// closes the body.
+func (f *gitHub) answer(c call, resp *http.Response) (response, error) {
 	data, readErr := egresshttp.ReadBody(resp)
 	closeErr := resp.Body.Close()
 

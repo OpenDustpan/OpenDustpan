@@ -49,6 +49,7 @@ func NewGitHostFake(tb testing.TB) *GitHostFake {
 		UserToken:     "",
 		ClassicToken:  false,
 		Permissions:   nil,
+		ContentsLimit: 0,
 		Key:           nil,
 		Now:           nil,
 		WebhookClient: nil,

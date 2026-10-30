@@ -267,17 +267,74 @@ func decodeBase64(s string) ([]byte, error) {
 // notFound maps the status of a read. A repository, a ref or a file that is
 // not there answers 404, and a ref that no commit has answers 422. GitHub
 // answers 404 also for a repository that the credential cannot see, so the
-// port does too.
+// port does too. A file that the contents call does not serve answers 403
+// with the error code too_large, and a repository that has a new name answers
+// a redirect, which the adapter does not follow.
 func (f *gitHub) notFound(r response) error {
-	if r.status == http.StatusNotFound || r.status == http.StatusUnprocessableEntity {
+	switch {
+	case r.status == http.StatusNotFound || r.status == http.StatusUnprocessableEntity:
 		return fmt.Errorf("%w: GitHub has no such repository, ref or file", forge.ErrNotFound)
+	case r.status == http.StatusForbidden && hasErrorCode(r.body, "too_large"):
+		return fmt.Errorf("%w: GitHub does not serve a file of this size through the API", forge.ErrTooLarge)
+	case r.status == http.StatusMovedPermanently || r.status == http.StatusTemporaryRedirect ||
+		r.status == http.StatusPermanentRedirect:
+		return fmt.Errorf("%w: the repository moved or has a new name; use its new path", forge.ErrNotFound)
 	}
 
 	return f.statusError(r)
 }
 
-// readBearer returns the credential for a read of owner/name: the token of a
-// token connection, or an installation token that reads that repository only.
+// errorBody is the form of the errors in an answer of GitHub.
+type errorBody struct {
+	Message string      `json:"message"`
+	Errors  []errorCode `json:"errors"`
+}
+
+type errorCode struct {
+	Code string `json:"code"`
+}
+
+// hasErrorCode reports whether the answer lists the error code.
+func hasErrorCode(body []byte, code string) bool {
+	var e errorBody
+	if decode(body, &e) != nil {
+		return false
+	}
+
+	for _, c := range e.Errors {
+		if c.Code == code {
+			return true
+		}
+	}
+
+	return false
+}
+
+// mintStatus maps the status of the request for an installation token. GitHub
+// answers 422 for a repository that the installation cannot see, and also for
+// a permission that the installation does not have: the first is a missing
+// repository, and the second is a credential that cannot do what was asked.
+func (f *gitHub) mintStatus(r response) error {
+	if r.status != http.StatusUnprocessableEntity {
+		return f.notFound(r)
+	}
+
+	var e errorBody
+	if decode(r.body, &e) == nil && strings.Contains(e.Message, "permissions requested") {
+		return fmt.Errorf("%w: the installation does not have the permission to read the contents", forge.ErrAuth)
+	}
+
+	return fmt.Errorf("%w: the installation cannot see the repository", forge.ErrNotFound)
+}
+
+// MaxReadTokens is the most installation tokens that an app connection keeps
+// for reads, one for each repository. When the adapter needs another, it
+// drops the tokens that expired, and then the token that expires first.
+const MaxReadTokens = 64
+
+// readBearer returns the credential for a read of the repository r: the token
+// of a token connection, or an installation token that reads that repository
+// only.
 func (f *gitHub) readBearer(ctx context.Context, r repoName) (string, error) {
 	if f.auth != forge.AuthApp {
 		return f.token, nil
@@ -293,20 +350,97 @@ func (f *gitHub) readBearer(ctx context.Context, r repoName) (string, error) {
 		return t.value, nil
 	}
 
-	t, err := f.mintReadToken(ctx, r.name)
+	// Defense in depth: the token request names the repository, and GitHub
+	// refuses a repository that the installation cannot see. This check stays
+	// so that a connection never asks for a repository of another account,
+	// also when the app of the connection is installed there.
+	owner, err := f.installationOwner(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	if !strings.EqualFold(owner, r.owner) {
+		return "", fmt.Errorf("%w: the repository is not in the account of the installation", forge.ErrNotFound)
+	}
+
+	t, err = f.mintReadToken(ctx, r.name)
 	if err != nil {
 		return "", err
 	}
 
 	f.mu.Lock()
-	f.readTokens[key] = t
+	f.keepReadToken(key, t)
 	f.mu.Unlock()
 
 	return t.value, nil
 }
 
+// keepReadToken stores t under key and keeps the number of tokens at
+// MaxReadTokens or less. The caller holds the lock.
+func (f *gitHub) keepReadToken(key string, t readToken) {
+	if _, found := f.readTokens[key]; !found {
+		for len(f.readTokens) >= MaxReadTokens {
+			f.dropReadToken()
+		}
+	}
+
+	f.readTokens[key] = t
+}
+
+// dropReadToken drops a token that expired, or else the token that expires
+// first. The caller holds the lock.
+func (f *gitHub) dropReadToken() {
+	var oldest string
+
+	for key, t := range f.readTokens {
+		if oldest == "" || t.expires.Before(f.readTokens[oldest].expires) {
+			oldest = key
+		}
+	}
+
+	delete(f.readTokens, oldest)
+}
+
+// installationOwner returns the login of the account of the installation. It
+// reads the installation once, unless Check read it.
+func (f *gitHub) installationOwner(ctx context.Context) (string, error) {
+	f.mu.Lock()
+	owner := f.owner
+	f.mu.Unlock()
+
+	if owner != "" {
+		return owner, nil
+	}
+
+	jwt, err := signJWT(f.key, f.appID, f.o.now())
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := f.do(ctx, http.MethodGet, "/app/installations/"+f.installationID, jwt, nil)
+	if err != nil {
+		return "", err
+	}
+
+	var inst installation
+	if decodeErr := decode(resp.body, &inst); decodeErr != nil {
+		return "", decodeErr
+	}
+
+	acct, err := accountOf(inst.Account)
+	if err != nil {
+		return "", err
+	}
+
+	f.learn(acct.Login, inst.Permissions)
+
+	return acct.Login, nil
+}
+
 // mintReadToken asks for an installation token with the permission to read
-// the contents of the repository name, and nothing else.
+// the contents of the repository name, and nothing else. It refuses a token
+// that GitHub makes with more permission, or for more repositories, than it
+// asked for.
 func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, error) {
 	jwt, err := signJWT(f.key, f.appID, f.o.now())
 	if err != nil {
@@ -314,7 +448,7 @@ func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, err
 	}
 
 	body, err := json.Marshal(readTokenRequest{
-		Repositories: []string{name}, Permissions: map[string]string{"contents": "read"},
+		Repositories: []string{name}, Permissions: map[string]string{permContents: levelRead},
 	})
 	if err != nil {
 		return readToken{}, fmt.Errorf("%w: the GitHub token request does not encode", forge.ErrInvalid)
@@ -322,7 +456,7 @@ func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, err
 
 	resp, err := f.send(ctx, call{
 		method: http.MethodPost, path: "/app/installations/" + f.installationID + "/access_tokens", bearer: jwt,
-		body: body, status: f.notFound, oversize: nil,
+		body: body, status: f.mintStatus, oversize: nil,
 	})
 	if err != nil {
 		return readToken{}, err
@@ -338,6 +472,10 @@ func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, err
 		return readToken{}, forge.Unavailable(0, "GitHub gave an answer with no token")
 	}
 
+	if grantErr := checkGranted(fields, name); grantErr != nil {
+		return readToken{}, grantErr
+	}
+
 	expires := f.o.now().Add(readTokenFallback)
 
 	var at time.Time
@@ -346,6 +484,52 @@ func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, err
 	}
 
 	return readToken{value: value, expires: expires}, nil
+}
+
+// Fields of the answer to a token request.
+const (
+	keyPermissions  = "permissions"
+	keySelection    = "repository_selection"
+	keyRepositories = "repositories"
+	selectionChosen = "selected"
+)
+
+// checkGranted refuses an answer whose token is wider than the request: a
+// permission other than the read of the contents (GitHub adds the read of the
+// metadata), a level above read, or a repository other than name.
+//
+// Defense in depth: GitHub applies the request and the installation applies
+// its limits. This check stays so that an answer that is wider than the
+// request never becomes a token that the adapter uses.
+func checkGranted(fields map[string]json.RawMessage, name string) error {
+	wide := forge.Unavailable(0, "GitHub gave a token that is wider than the request")
+
+	var perms map[string]string
+	if err := json.Unmarshal(fields[keyPermissions], &perms); err != nil {
+		return wide
+	}
+
+	for perm, level := range perms {
+		if (perm != permContents && perm != permMetadata) || level != levelRead {
+			return wide
+		}
+	}
+
+	var selection string
+	if err := json.Unmarshal(fields[keySelection], &selection); err != nil || selection != selectionChosen {
+		return wide
+	}
+
+	var repos []repositoryRef
+	if err := json.Unmarshal(fields[keyRepositories], &repos); err != nil || len(repos) != 1 || repos[0].Name != name {
+		return wide
+	}
+
+	return nil
+}
+
+type repositoryRef struct {
+	Name string `json:"name"`
 }
 
 // forget drops the installation token of owner/name after GitHub refused it,

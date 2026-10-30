@@ -391,6 +391,7 @@ func TestReadsRefuseARedirect(t *testing.T) {
 			AppID:          "",
 			InstallationID: "",
 			Owner:          githubfake.Account{ID: 0, Login: ""},
+			ContentsLimit:  0,
 			User: githubfake.Account{
 				ID:    0,
 				Login: "",
@@ -444,30 +445,47 @@ func TestAppReadsUseAScopedToken(t *testing.T) {
 		}
 	}
 
-	var mints, reads int
+	if n := countReads(t, host.Requests()); n != (readCounts{mints: 1, owners: 1, reads: 3}) {
+		t.Fatalf("%+v, want 1 token request, 1 installation read and 3 reads", n)
+	}
+}
 
-	for _, r := range host.Requests() {
+// countReads counts the token requests, the installation reads and the reads
+// of the requests, and checks the credential of each.
+func countReads(t *testing.T, reqs []githubfake.Request) readCounts {
+	t.Helper()
+
+	var mints, owners, reads int
+
+	for _, r := range reqs {
+		want := githubfake.BearerInstallation
+
 		switch {
 		case strings.HasSuffix(r.URI, "/access_tokens"):
 			mints++
+			want = githubfake.BearerApp
 
-			if string(r.Body) != `{"repositories":["infra"],"permissions":{"contents":"read"}}` ||
-				r.Bearer != githubfake.BearerApp {
-				t.Errorf("token request = %s with %s", r.Body, r.Bearer)
+			if string(r.Body) != `{"repositories":["infra"],"permissions":{"contents":"read"}}` {
+				t.Errorf("token request = %s", r.Body)
 			}
+		case strings.HasPrefix(r.URI, "/app/installations/"):
+			// The account of the installation, read once, with the key of the app.
+			owners++
+			want = githubfake.BearerApp
 		default:
 			reads++
+		}
 
-			if r.Bearer != githubfake.BearerInstallation {
-				t.Errorf("read %s used the credential %s", r.URI, r.Bearer)
-			}
+		if r.Bearer != want {
+			t.Errorf("%s used the credential %s, want %s", r.URI, r.Bearer, want)
 		}
 	}
 
-	if mints != 1 || reads != 3 {
-		t.Fatalf("%d token requests and %d reads, want 1 and 3", mints, reads)
-	}
+	return readCounts{mints: mints, owners: owners, reads: reads}
 }
+
+// readCounts are the counts of countReads.
+type readCounts struct{ mints, owners, reads int }
 
 // TestTokenReadsUseTheToken checks that a token connection reads with its
 // token.
