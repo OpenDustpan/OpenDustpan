@@ -6,7 +6,8 @@
 // a hostile expression alone, and each has its own test:
 //
 //   - Size: Compile refuses source above catalog.MaxExprBytes before the
-//     parser reads it, and a tree above catalog.MaxExprNodes.
+//     parser reads it, and a tree above catalog.MaxExprNodes. A run refuses an
+//     environment above MaxEnvBytes.
 //   - Names: the environment is catalog.Env, a type with no method, and the
 //     compiler checks every name against it. The builtins are exactly
 //     catalog.ExprBuiltins. No function of Go, no reflection and no
@@ -15,8 +16,19 @@
 //     closure and a matches pattern that is not a string literal.
 //   - Memory: the virtual machine has the budget catalog.ExprMemoryBudget,
 //     and the operator + refuses a string above catalog.MaxConcatBytes.
+//   - Work: each string function and each operator that reads a string
+//     counts the bytes that it reads, with the budget MaxWorkUnits for one
+//     run. This bounds a loop over the groups that reads a long string in
+//     each turn, and it ends a run at its next call after the time limit.
 //   - Time: a run that passes catalog.ExprTimeoutMillis, or whose context
-//     ends, fails with catalog.ErrRuleFailed.
+//     ends, returns catalog.ErrRuleFailed to the caller at that time. The
+//     virtual machine of Expr cannot be stopped from outside, so the
+//     goroutine of such a run ends at its next counted call. An operation
+//     that no counter covers, for example the compare of two strings, runs
+//     to its end; the environment limit and the node limit bound it.
+//   - Runs: at most MaxConcurrentRuns runs of one Evaluator have not ended,
+//     and a run that finds no room fails with catalog.ErrRuleFailed. A run
+//     that passed its time limit counts until its goroutine ends.
 //   - Result: a run that gives another type than the expression compiled to,
 //     or that fails in any way, never gives true.
 package expr
@@ -49,8 +61,8 @@ const (
 
 	library = "github.com/expr-lang/expr"
 	// concatName is the name of the function that replaces the operator +.
-	// An expression can call it too: it does the same as +.
-	concatName = "concat"
+	// It holds a space, so no expression can write the name.
+	concatName = "dustpan +"
 )
 
 // Evaluator is the catalog.Evaluator of the built-in Expr engine. It has no
@@ -59,13 +71,18 @@ type Evaluator struct {
 	// timeout is the time limit of one run. New sets it to
 	// catalog.ExprTimeoutMillis.
 	timeout time.Duration
+	// slots holds one item for each run that has not ended.
+	slots chan struct{}
 }
 
 var _ catalog.Evaluator = (*Evaluator)(nil)
 
 // New returns the Evaluator.
 func New() *Evaluator {
-	return &Evaluator{timeout: catalog.ExprTimeoutMillis * time.Millisecond}
+	return &Evaluator{
+		timeout: catalog.ExprTimeoutMillis * time.Millisecond,
+		slots:   make(chan struct{}, MaxConcurrentRuns),
+	}
 }
 
 // Version returns the version of the Expr library in the build, for example
@@ -93,7 +110,7 @@ func (*Evaluator) Version() string {
 
 // Compile implements catalog.Evaluator.
 func (*Evaluator) Compile(source string, kind catalog.ResultKind) error {
-	_, err := compile(source, kind, true)
+	_, err := compile(source, kind, true, newMeter(func() error { return nil }))
 
 	return err
 }
@@ -149,25 +166,39 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, err)
 	}
 
-	// The run compiles with no result type. The compiler casts a nil to false
-	// for a boolean, and a rule that gives no value must fail, not pass or
-	// deny. run checks the type of the result.
-	program, err := compile(source, kind, false)
-	if err != nil {
-		// An expression that does not compile cannot run. The caller never
-		// counts this as a pass.
+	if err := checkEnvSize(env); err != nil {
 		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 
-	// The virtual machine of Expr has no way to stop a run. The channel has
-	// room for the result, so the goroutine always ends. The size limits
-	// above bound how long it can run after the time limit.
+	// The run compiles with no result type. The compiler casts a nil to false
+	// for a boolean, and a rule that gives no value must fail, not pass or
+	// deny. run checks the type of the result.
+	program, err := compile(source, kind, false, newMeter(ctx.Err))
+	if err != nil {
+		// An expression that does not compile cannot run. The caller never
+		// counts this as a pass.
+		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, err)
+	}
+
+	select {
+	case e.slots <- struct{}{}:
+	default:
+		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, errBusy)
+	}
+
+	// The virtual machine of Expr has no way to stop a run from outside. The
+	// channel has room for the result, so the goroutine always ends: at the
+	// end of the program, or at its next counted call after the time limit
+	// (see the package comment). It gives its slot back when it ends, not
+	// when the caller stops waiting.
 	done := make(chan runResult, 1)
 
 	go func() {
+		defer func() { <-e.slots }()
+
 		machine := vm.VM{Stack: nil, Scopes: nil, Variables: nil, MemoryBudget: catalog.ExprMemoryBudget}
 		out, err := machine.Run(program, *env)
 		done <- runResult{out: out, err: err}
@@ -187,7 +218,7 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 
 // compile checks the limits and the syntax, and compiles source. With typed it
 // also checks that source gives kind.
-func compile(source string, kind catalog.ResultKind, typed bool) (*vm.Program, error) {
+func compile(source string, kind catalog.ResultKind, typed bool, m *meter) (*vm.Program, error) {
 	if source == "" || len(source) > catalog.MaxExprBytes {
 		return nil, fmt.Errorf("%w: an expression has 1 to %d bytes, this one has %d",
 			catalog.ErrLimit, catalog.MaxExprBytes, len(source))
@@ -201,8 +232,13 @@ func compile(source string, kind catalog.ResultKind, typed bool) (*vm.Program, e
 		exprlang.Operator("+", concatName),
 	}
 
+	options = append(options, m.stringFunctions()...)
+
 	for _, name := range catalog.ExprBuiltins() {
-		options = append(options, exprlang.EnableBuiltin(name))
+		// The meter gives these as functions that count their work.
+		if !isMetered(name) {
+			options = append(options, exprlang.EnableBuiltin(name))
+		}
 	}
 
 	switch {
@@ -217,12 +253,13 @@ func compile(source string, kind catalog.ResultKind, typed bool) (*vm.Program, e
 	}
 
 	refused := &refusals{found: nil}
-	options = append(options, exprlang.Patch(refused))
+	rewrite := &rewriter{regexps: m.regexps, failed: nil}
+	options = append(options, exprlang.Patch(refused), exprlang.Patch(rewrite))
 
 	prog, err := safeCompile(source, options)
 
-	if len(refused.found) > 0 {
-		return nil, fmt.Errorf("%w: %s", catalog.ErrInvalid, refused.found[0])
+	if found := slices.Concat(refused.found, rewrite.failed); len(found) > 0 {
+		return nil, fmt.Errorf("%w: %s", catalog.ErrInvalid, found[0])
 	}
 
 	if err != nil {
@@ -358,7 +395,7 @@ func (r *refusals) visitBinary(n *ast.BinaryNode) {
 	switch n.Operator {
 	case "..":
 		r.add("the range operator .. is not allowed")
-	case "matches":
+	case opMatches:
 		// A pattern from the environment would compile at each run, and a
 		// requester writes the environment.
 		if _, ok := n.Right.(*ast.StringNode); !ok {
