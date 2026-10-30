@@ -643,8 +643,14 @@ func (h *Handler) finish(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 
-	if sp.sweep || h.claimer == nil {
+	if sp.sweep {
 		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: a sweep has no finish", runner.ErrInvalid))
+
+		return
+	}
+
+	if h.claimer == nil {
+		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: this server cannot finish a phase", runner.ErrNotFound))
 
 		return
 	}

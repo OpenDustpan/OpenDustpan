@@ -337,7 +337,15 @@ func TestReplicasClaimOnePhase(t *testing.T) {
 	_, replica, _ := serve(
 		t,
 		second,
-		serveOptions{now: nil, authz: identity.AdminOnly{}, claimer: nil, recorder: nil, jobs: nil, logger: nil},
+		serveOptions{
+			now:      nil,
+			authz:    identity.AdminOnly{},
+			claimer:  nil,
+			recorder: nil,
+			jobs:     nil,
+			logger:   nil,
+			mutate:   nil,
+		},
 	)
 
 	pool := e.createPool()

@@ -806,7 +806,13 @@ func TestLogChunkHashIsChecked(t *testing.T) {
 			path := logPath(0)
 			now := s.clock.now()
 			sg := signing{
-				subject: l.id, key: l.priv, at: now, nonce: newNonce(t), release: "0.4.0", contentHash: "not-a-hash",
+				subject:     l.id,
+				key:         l.priv,
+				at:          now,
+				nonce:       newNonce(t),
+				release:     "0.4.0",
+				contentHash: "not-a-hash",
+				server:      "",
 			}
 
 			status, body = s.sendSigned(http.MethodPut, path, []byte("x"), sum([]byte("x")), sg)

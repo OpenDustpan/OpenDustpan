@@ -316,8 +316,16 @@ func (s *sessionEnv) newExchange(token string) exchange {
 	}
 }
 
-// send sends the exchange and returns the status and the body.
+// sendExchange sends the exchange and returns the status and the body.
 func (s *sessionEnv) sendExchange(x exchange) (int, []byte) {
+	s.t.Helper()
+
+	return s.exchangeAt("", x)
+}
+
+// exchangeAt is sendExchange to the server at url, or to the server of the
+// environment for an empty url.
+func (s *sessionEnv) exchangeAt(url string, x exchange) (int, []byte) {
 	s.t.Helper()
 
 	challengeToken := x.token
@@ -342,7 +350,7 @@ func (s *sessionEnv) sendExchange(x exchange) (int, []byte) {
 	}
 
 	return s.sendSigned(http.MethodPost, protocol.PathSession, raw, sum(raw), signing{
-		subject: subject, key: x.signer, at: x.at, nonce: x.nonce, release: x.release, contentHash: "",
+		subject: subject, key: x.signer, at: x.at, nonce: x.nonce, release: x.release, contentHash: "", server: url,
 	})
 }
 
@@ -355,6 +363,8 @@ type signing struct {
 	release string
 	// contentHash, when set, is sent in the header Dustpan-Content-SHA256.
 	contentHash string
+	// server, when set, is the URL of the server that gets the request.
+	server string
 }
 
 func sum(raw []byte) []byte {
@@ -373,7 +383,12 @@ func (s *sessionEnv) sendSigned(method, path string, raw, signed []byte, sg sign
 		Method: method, PathQuery: path, BodySHA256: signed,
 	}))
 
-	req, err := http.NewRequestWithContext(s.t.Context(), method, s.server.URL+path, bytes.NewReader(raw))
+	base := s.server.URL
+	if sg.server != "" {
+		base = sg.server
+	}
+
+	req, err := http.NewRequestWithContext(s.t.Context(), method, base+path, bytes.NewReader(raw))
 	if err != nil {
 		s.t.Fatalf("request: %v", err)
 	}
@@ -427,13 +442,15 @@ type lcall struct {
 	release string
 	// signedBody, when set, replaces the body that the proof signs.
 	signedBody []byte
+	// server, when set, is the URL of the server that gets the call.
+	server string
 }
 
 // post returns a POST call of the path with a JSON body.
 func (l *launcher) post(path string, body any) lcall {
 	return lcall{
 		method: http.MethodPost, path: path, body: encodeBody(l.e.t, body), content: nil, key: l.priv, subject: l.id,
-		at: l.e.clock.now(), release: "0.4.0", signedBody: nil,
+		at: l.e.clock.now(), release: "0.4.0", signedBody: nil, server: "",
 	}
 }
 
@@ -441,7 +458,7 @@ func (l *launcher) post(path string, body any) lcall {
 func (l *launcher) upload(path string, chunk []byte) lcall {
 	return lcall{
 		method: http.MethodPut, path: path, body: chunk, content: chunk, key: l.priv, subject: l.id,
-		at: l.e.clock.now(), release: "0.4.0", signedBody: nil,
+		at: l.e.clock.now(), release: "0.4.0", signedBody: nil, server: "",
 	}
 }
 
@@ -468,6 +485,7 @@ func (l *launcher) do(c lcall) (int, []byte) {
 
 	return l.e.sendSigned(c.method, c.path, c.body, signed, signing{
 		subject: c.subject, key: c.key, at: c.at, nonce: newNonce(l.e.t), release: release, contentHash: contentHash,
+		server: c.server,
 	})
 }
 

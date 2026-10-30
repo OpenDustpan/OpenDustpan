@@ -1083,12 +1083,31 @@ func testSessionRenewStaleFence(t *testing.T, h Harness) {
 		t.Fatalf("BumpFence: %v", err)
 	}
 
-	_, err = h.Sessions.SessionRenew(t.Context(), s.ID, l.f.fence, runner.DefaultLease)
-	wantErr(t, "SessionRenew with a stale fence", err, namespace.ErrFenced)
-
 	if _, err = h.Sessions.SessionRenew(t.Context(), s.ID, newer, runner.DefaultLease); err != nil {
 		t.Fatalf("SessionRenew with the new fence: %v", err)
 	}
+
+	// Shorten the lease, and then renew with the stale fence. A refused
+	// renewal changes nothing, so the claim still ends at the short expiry.
+	shorter, err := h.Domain.Shorten(t.Context(), l.c, shortLease)
+	if err != nil {
+		t.Fatalf("Shorten: %v", err)
+	}
+
+	_, err = h.Sessions.SessionRenew(t.Context(), s.ID, l.f.fence, runner.DefaultLease)
+	wantErr(t, "SessionRenew with a stale fence", err, namespace.ErrFenced)
+
+	timer := time.NewTimer(time.Until(shorter.ExpiresAt) + leaseMargin)
+	defer timer.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatal("the case ended before the lease passed")
+	case <-timer.C:
+	}
+
+	_, err = h.Sessions.Session(t.Context(), s.ID)
+	wantErr(t, "Session after a refused renewal and the end of the short lease", err, runner.ErrClaimLost)
 }
 
 func testSessionNearWaitLimit(t *testing.T, h Harness) {

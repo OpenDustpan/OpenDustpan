@@ -457,7 +457,15 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 	_, srv, _ := serve(
 		t,
 		e.store,
-		serveOptions{now: nil, authz: onlyIn{ns: "acme"}, claimer: nil, recorder: nil, jobs: nil, logger: nil},
+		serveOptions{
+			now:      nil,
+			authz:    onlyIn{ns: "acme"},
+			claimer:  nil,
+			recorder: nil,
+			jobs:     nil,
+			logger:   nil,
+			mutate:   nil,
+		},
 	)
 	acme := &env{t: t, store: e.store, server: srv, handler: nil, claimer: nil, fence: e.fence, clock: nil}
 	acmePool := acme.createPool()

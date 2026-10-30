@@ -253,6 +253,7 @@ func newEnvServing(t *testing.T, open func(t *testing.T) stores, set func(s stor
 		recorder: nil,
 		jobs:     nil,
 		logger:   nil,
+		mutate:   nil,
 	}
 
 	if set != nil {
@@ -323,6 +324,9 @@ type serveOptions struct {
 	jobs     runnerapi.JobReader
 	// logger replaces the logger that discards.
 	logger *slog.Logger
+	// mutate changes the Config before the handler is built, for a test that
+	// leaves out a dependency or wraps one.
+	mutate func(cfg *runnerapi.Config)
 }
 
 // serve returns a handler over s on a test server. Two calls with the stores
@@ -344,7 +348,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		phases = opts.claimer
 	}
 
-	h, err := runnerapi.NewHandler(runnerapi.Config{
+	cfg := runnerapi.Config{
 		Audit:          newTestAudit(),
 		OnAuditFailure: nil,
 		Namespaces:     service,
@@ -365,7 +369,13 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		Now:            opts.now,
 		PollInterval:   20 * time.Millisecond,
 		DenialLimiter:  nil,
-	})
+	}
+
+	if opts.mutate != nil {
+		opts.mutate(&cfg)
+	}
+
+	h, err := runnerapi.NewHandler(cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
