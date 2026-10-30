@@ -375,7 +375,9 @@ type memTx struct {
 }
 
 func newMemTx(triggers ...trigger.Trigger) *memTx {
-	m := &memTx{rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0, moves: 0, stale: false}
+	m := &memTx{
+		rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0, moves: 0, clock: time.Time{}, stale: false,
+	}
 	for i := range triggers {
 		m.rows[string(triggers[i].ID)] = triggerstore.RowOf(triggers[i], 1)
 	}

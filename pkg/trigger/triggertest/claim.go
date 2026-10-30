@@ -24,6 +24,8 @@ const (
 	// beyondSkew is a distance after the clock of the store that no clock skew
 	// covers.
 	beyondSkew = 2 * time.Hour
+	// thirdSlotOffset is the distance of the third slot of a case from its first.
+	thirdSlotOffset = 2 * time.Hour
 )
 
 func claimCases() []suiteCase {
@@ -82,7 +84,7 @@ func nextSlot(t *testing.T, h Harness, id trigger.ID) time.Time {
 // wantSlotAfterNow fails the case unless got is the first slot of tr after the
 // clock of the store at some time between before and after. The store reads its
 // own clock, so the case cannot know the exact time.
-func wantSlotAfterNow(t *testing.T, what string, tr trigger.Trigger, got, before, after time.Time) {
+func wantSlotAfterNow(t *testing.T, tr trigger.Trigger, got, before, after time.Time) {
 	t.Helper()
 
 	first, err := trigger.NextSlot(tr, before)
@@ -92,7 +94,7 @@ func wantSlotAfterNow(t *testing.T, what string, tr trigger.Trigger, got, before
 	must(t, "slot after the end", err)
 
 	if !got.Equal(first) && !got.Equal(last) {
-		t.Errorf("%s = %v, want %v or %v: the first slot after the clock of the store", what, got, first, last)
+		t.Errorf("slot of %s = %v, want %v or %v: the first slot after the clock of the store", tr.ID, got, first, last)
 	}
 }
 
@@ -108,7 +110,7 @@ func pastSlots(t *testing.T, h Harness, fence namespace.Fence) (trigger.Trigger,
 	first := time.Now().UTC().Truncate(time.Hour).Add(-pastHours * time.Hour)
 	h.SetNextSlot(t, acme, "h1", first)
 
-	return tr, [3]time.Time{first, first.Add(time.Hour), first.Add(2 * time.Hour)}
+	return tr, [3]time.Time{first, first.Add(time.Hour), first.Add(thirdSlotOffset)}
 }
 
 func caseNextSlotPut(t *testing.T, h Harness, _ *Recorder) {
@@ -127,7 +129,7 @@ func caseNextSlotPut(t *testing.T, h Harness, _ *Recorder) {
 
 	after := time.Now().UTC()
 
-	wantSlotAfterNow(t, "next slot of an enabled schedule trigger", scheduleTrigger("s1", a),
+	wantSlotAfterNow(t, scheduleTrigger("s1", a),
 		nextSlot(t, h, "s1"), before, after)
 
 	for _, id := range []trigger.ID{"s2", "r1", "f1"} {
@@ -156,7 +158,7 @@ func caseNextSlotReplace(t *testing.T, h Harness, _ *Recorder) {
 	tr.Frequency = cronOf("30 * * * *")
 	before := time.Now().UTC()
 	must(t, "new frequency", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
-	wantSlotAfterNow(t, "next slot after a new frequency", tr, nextSlot(t, h, "h1"), before, time.Now().UTC())
+	wantSlotAfterNow(t, tr, nextSlot(t, h, "h1"), before, time.Now().UTC())
 
 	// Off gives no slot. On again starts from the clock of the store: the time
 	// that the trigger was off gives no catch-up.
@@ -170,7 +172,7 @@ func caseNextSlotReplace(t *testing.T, h Harness, _ *Recorder) {
 	tr.Enabled = true
 	before = time.Now().UTC()
 	must(t, "on", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
-	wantSlotAfterNow(t, "next slot after switch-on", tr, nextSlot(t, h, "h1"), before, time.Now().UTC())
+	wantSlotAfterNow(t, tr, nextSlot(t, h, "h1"), before, time.Now().UTC())
 }
 
 func caseNextSlotRefusals(t *testing.T, h Harness, _ *Recorder) {
@@ -254,10 +256,10 @@ func caseClaimCatchUp(t *testing.T, h Harness, _ *Recorder) {
 	latest, ok, err := trigger.LatestSlot(tr, nextSlot(t, h, "h1"), time.Now().UTC())
 	must(t, "latest slot", err)
 
-	if want := time.Now().
-		UTC().
-		Truncate(time.Hour); !ok ||
-		(!latest.Equal(want) && !latest.Equal(want.Add(-time.Hour))) {
+	hour := time.Now().UTC().Truncate(time.Hour)
+	current := latest.Equal(hour) || latest.Equal(hour.Add(-time.Hour))
+
+	if !ok || !current {
 		t.Fatalf("latest slot = %v (%v), want the current hour or the one before", latest, ok)
 	}
 

@@ -366,8 +366,8 @@ func ApplyPut(ctx context.Context, tx Tx, t trigger.Trigger, at time.Time, onSki
 
 	existing := Usable(rows, onSkip)
 
-	if err := trigger.CheckCycle(existing, t); err != nil {
-		return fmt.Errorf("put trigger: %w", err)
+	if cycleErr := trigger.CheckCycle(existing, t); cycleErr != nil {
+		return fmt.Errorf("put trigger: %w", cycleErr)
 	}
 
 	var prev *trigger.Trigger
