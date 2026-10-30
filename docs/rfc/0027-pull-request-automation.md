@@ -40,6 +40,20 @@ teams work today.
   alone?
 - How does comment noise stay low in a monorepo with many units?
 
+## Owner direction (2026-10-30)
+
+The project owner gave this direction on 2026-10-30, through the project
+manager. This section decides nothing. An ADR records a decision (ADR 15).
+
+- The first slice for a pull request is a plan, one commit status and one
+  summary comment.
+- An apply runs after the merge, from the default branch, by default.
+- A pre-merge apply, from the branch of the pull request, is also an
+  option. It is not the default, and the docs say that the project does not
+  recommend it.
+- Runners run both tools. The gates and approvals of ADRs 222 to 230 are
+  the policy checks.
+
 ## Proposal for Milestone 5 (2026-10-30)
 
 This section is ready to accept. Facts about other products are in the
@@ -127,22 +141,46 @@ the rest of RFC 27.
    the resource changes. (a) needs an addition to ADR 191: an apply job of
    a change order can run on a commit other than the commit of its plan
    when the root trees are equal, and the job records both commits.
+
+   A second check binds the code inside the plan. An OpenTofu plan file
+   holds a snapshot of the configuration that it planned. Before the apply
+   step, the launcher compares that snapshot with the files of the checkout
+   of the commit, and fails the phase when one differs. So a plan file that
+   changed on the runner after `tofu plan` cannot apply other code, also
+   when its hash was recorded after the change. The e2e step of PR-6
+   checks the format of the plan file of each OpenTofu version before the
+   check lands. The Pulumi CLI has no such snapshot in its plan. Its apply
+   runs the program of the checkout with `--plan`, which stops a change
+   that the plan does not hold (ADR 102 decision 7).
 4. **Who asks for the apply after the merge.** ADR 190 decision 10 says
-   that apply is a request of a person.
-   - (a) The merge is the request, when the account that merged is linked
-     to a principal that holds `unit:run-apply` (or `unit:run-destroy`) on
-     each unit. Else the change order waits in `approved`, the summary
-     comment says who can apply, and a person asks through the API, the
-     console or the comment command `dustpan apply` on the merged review
-     request.
-   - (b) A person always asks after the merge.
+   that apply is a request of a person, and that the store checks that the
+   request names the digest of the current revision. The digest is the
+   proof that the person asked for the plans that people approved. A merge
+   on GitHub names no digest.
+   - (a) A **direct merge** is the request, when the account that merged is
+     linked to a principal that holds `unit:run-apply` (or
+     `unit:run-destroy`) on each unit. The server supplies the digest of
+     the approved revision, and only when the tree check of question 3 (a)
+     passes. A direct merge means: the server reads the timeline of the
+     pull request through the API, and finds no auto-merge event and no
+     merge queue event. With auto-merge, `merged_by` is the person who
+     turned it on. With a merge queue, the merge happens after later pushes
+     or a move of the base. In both, that person may not see the
+     revision that applies, so neither counts. A timeline that the server
+     cannot read does not count. In each case that does not count, the
+     change order waits in `approved`, the summary comment says who can
+     apply, and a person asks through the API, the console or the comment
+     command `dustpan apply` on the merged review request.
+   - (b) A person always asks after the merge, with the digest, as ADR 190
+     decision 10 says today.
    - (c) The namespace service principal applies on its own.
 
-   *Recommendation: (a).* A merge is the act of a person, so ADR 190
-   decision 10 stays true. (c) is an apply that no person asked for, which
-   ADR 267 decision 9 refuses for triggers. A field
-   `reviewRequests.applyOnMerge` of the unit settings (RFC 12) turns (a)
-   off, so that each apply needs a request after the merge.
+   *Owner decision.* Recommendation: (a). It changes ADR 190 decision 10:
+   for a direct merge, the server supplies the digest. (b) needs no change
+   of an ADR, and costs one more request after each merge. (c) is an apply
+   that no person asked for, which ADR 267 decision 9 refuses for triggers.
+   A field `reviewRequests.applyOnMerge` of the unit settings (RFC 12)
+   turns (a) off, so that each apply needs a request after the merge.
 5. **The approval state at the merge.** A merge that happens before the
    change order is `approved` does not apply. The change order keeps
    waiting for its approvals. When it becomes `approved`, the apply needs a
@@ -188,10 +226,13 @@ the rest of RFC 27.
      review requests still plan, and their summary says that the unit is
      held. The merge releases the hold.
    - **The merge after the apply.** When each unit applied, the server
-     merges through the API with the method of `reviewRequests.mergeMethod`
-     (RFC 12 question 8) and the head commit that it applied, so GitHub
-     refuses a merge of another head. A failed merge keeps the hold and
-     writes the notification `review-request.apply-blocked`.
+     reads the test merge commit again. When its root tree is not the tree
+     that the revision planned (the base moved after the apply), the server
+     does not merge, keeps the hold, and writes the notification
+     `review-request.apply-blocked`. Else it merges through the API with
+     the method of `reviewRequests.mergeMethod` (RFC 12 question 8) and the
+     head commit that it applied, so GitHub refuses a merge of another
+     head. A failed merge keeps the hold and writes the same notification.
    - **A partial apply** (one unit failed) does not merge. The hold stays.
      The summary comment shows each unit.
 
@@ -224,7 +265,9 @@ the rest of RFC 27.
      comment only, never on an edit or a delete. It reads the comment
      through the API by its ID and acts only when the body, the author ID
      and the review request are the values of the event, and the comment
-     shows no edit. Spacelift also ignores edited comments.
+     shows no edit. The REST API of GitHub has no edit flag on an issue
+     comment, so the check is `updated_at` equal to `created_at`. Spacelift
+     also ignores edited comments.
    - **The account.** A link maps the numeric user ID of the Git host to a
      principal, through a link request as in ADR 146 decision 3. A login
      name is never the key, because a person can rename it. A bot account
@@ -251,11 +294,57 @@ the rest of RFC 27.
      the API, and a comment never approves.
 9. **A third command, `dustpan plan`.** *Owner decision*, because ADR 271
    decision 7 names two commands. It plans the current head again, for
-   example after an outage of a runner, through the same path as a push.
-   Atlantis, Digger and env zero have a plan command. Recommendation: add
-   it. A plan of a branch that is not protected gets no secrets (ADR 213
-   decision 2), and a fork starts nothing.
-10. **The summary comment and the status after the first slice.**
+   example after an outage of a runner. Atlantis, Digger and env zero have
+   a plan command. Recommendation: add it, with the rule below.
+
+   A push starts its plan as the namespace service principal (ADR 267
+   decision 14), and that plan of a branch that is not protected gets no
+   decrypt (ADR 213 decision 2). A comment command runs as the linked
+   principal (ADR 271 decision 7). When that principal holds
+   `unit:read-secrets`, the first bullet of ADR 213 decision 2 would give
+   the plan the secrets of the unit, while it runs code of a branch that
+   nobody reviewed.
+   - (a) `dustpan plan` starts the job as the namespace service principal,
+     as a push does. This changes "runs as that principal" of ADR 271
+     decision 7 for this command.
+   - (b) A plan with the source kind `forge` never passes the first bullet
+     of ADR 213 decision 2, whoever starts it. Only the second bullet (a
+     commit of a branch in `protectedBranches`) can give it secrets.
+
+   Recommendation: (b). It holds for each start of the source kind `forge`,
+   also one that a later feature adds, and the job and the audit entry
+   still name the person who asked. It narrows ADR 213 decision 2.
+10. **Profile credentials in a plan of a review request.** *Owner
+    decision.* RFC 5 opens each profile of the spec with the access `read`
+    for a plan phase. The read role of a cloud is enough to copy data out,
+    and the code of a branch that is not protected runs in the plan.
+    - (a) A plan with the source kind `forge` of a branch that is not
+      protected opens no profile. A plan that needs a credential fails with
+      `job.ErrSecretsWithheld`, and the error names the setting of (c).
+    - (b) It opens each profile with the access `read`, as any plan does.
+    - (c) A namespace setting `reviewRequestPlans.profiles`: `none` (the
+      default, which is (a)) or `read` (which is (b)). A change to `read`
+      needs `namespace:manage`, a fresh authentication (ADR 227) and writes
+      an audit entry. The fact document of `profile.open` holds the source
+      kind and the protection of the branch, so a gate can narrow `read`
+      to some profiles.
+
+    Precedent: GitHub Actions gives secrets to a `pull_request` workflow of
+    a branch in the same repository, and none to a fork. HCP Terraform runs
+    no speculative plan for a fork, "to avoid executing malicious code or
+    exposing sensitive information", and plans a branch of the same
+    repository with the variables of the workspace. Atlantis plans with the
+    credentials of its server, and its docs say that approvals of an apply
+    do not protect a plan.
+
+    Recommendation: (c), with the default `none`. This keeps the rule of
+    ADR 213 decision 2 (no secrets for code that nobody reviewed) for the
+    credentials of a profile too. The cost: with the default, a plan of a
+    pull request of a unit that needs cloud credentials fails until a
+    person sets `read` for the namespace. A team that sets `read` gets what
+    GitHub Actions and HCP Terraform give to a branch of the same
+    repository.
+11. **The summary comment and the status after the first slice.**
     - One comment for each review request, edited in place, with a table of
       the units: the tool word ("plan" or "preview"), the counts of add,
       change and destroy, the state, and a link to the console. Units with
@@ -273,23 +362,39 @@ the rest of RFC 27.
     Precedent: env zero edits one comment on each commit. Spacelift and HCP
     Terraform offer one aggregated status.
     *Recommendation:* this design.
-11. **A stale plan.** The summary marks a unit stale when the base branch
+12. **A stale plan.** The summary marks a unit stale when the base branch
     moved and changed the test merge tree, or when another run wrote a final
     state version of the unit. The server does not plan again on a push to
     the base. The next push to the review request, a `dustpan plan`, or an
     apply request plans again. *Recommendation:* this rule. A push to a busy
     default branch would else start a plan of each open review request.
-12. **Which parts need a runner.** Only plans and applies. Statuses,
+13. **Which parts need a runner.** Only plans and applies. Statuses,
     comments, holds, commands, merges and stale marks run in the server from
     webhooks and API reads.
-13. **A temporary unit for each review request** (Pulumi review stacks).
+14. **A temporary unit for each review request** (Pulumi review stacks).
     *Owner decision.* It depends on ephemeral units (RFC 43), which the
     roadmap does not put in Milestone 5. Recommendation: after Milestone 5,
     with RFC 43.
-14. **A switch that stops applies.** *Recommendation:* no new switch. A
-    freeze (ADR 103 decision 4) stops each apply that OpenDustpan starts, a
-    manual lock on a namespace stops each job, and the level `forbidden` of
-    question 6 stops pre-merge applies.
+15. **A switch that stops applies.** A freeze (ADR 103 decision 4) and a
+    manual lock on a namespace (ADR 213 decision 10) stop the jobs of one
+    namespace. ADR 282 decision 7 leaves a switch for the whole
+    installation with this RFC.
+    - (a) A manual lock with the scope `installation`. An operator with a
+      new action `installation:lock` puts it with a reason. While it holds,
+      no phase that changes dispatches in any namespace, and no pre-merge
+      apply starts. Plans still run. It blocks the lock of a tool from a
+      workstation as each manual lock does. Each lock and each removal
+      writes an audit entry of the installation and notifies the
+      administrators of each namespace.
+    - (b) No switch. An operator locks each namespace.
+
+    Precedent: Atlantis has a global apply lock in its UI, which fails
+    closed when its lock store cannot answer. GitLab has deploy freeze
+    periods for a project.
+    *Owner decision.* Recommendation: (a). An incident across namespaces
+    then needs one request, not one for each namespace. It extends ADR 213
+    decision 10 with the scope `installation`. The level `forbidden` of
+    question 6 stays the switch for pre-merge applies only.
 
 ### Ports
 
@@ -341,6 +446,16 @@ The steps use `e2e/githubfake` (RFC 12), a test runner and the real CLIs.
    `dustpan unlock` releases it.
 9. Steps 1, 3 and 6 for a Pulumi stack with the real Pulumi CLI. The hold
    refuses `pulumi up` from a workstation.
+10. A merge through auto-merge, and a merge through the merge queue of the
+    fake, by a linked account: neither applies, and the change order waits
+    for a request.
+11. `dustpan plan` by a linked person who holds `unit:read-secrets`, on a
+    branch that is not protected: the plan gets no decrypt and opens no
+    profile with the default of question 10. A plan that reads a secret
+    fails with `job.ErrSecretsWithheld`.
+12. An operator puts the installation lock: an approved apply in two
+    namespaces waits with the reason `locked`, a plan still runs, and the
+    removal lets both dispatch.
 
 ### Security tests (ADR 250)
 
@@ -349,23 +464,31 @@ The steps use `e2e/githubfake` (RFC 12), a test runner and the real CLIs.
 | Check at the boundary | The parser gets 64 KiB, Unicode spaces, look-alike letters, `dustpan  apply`, `dustpan apply --target x`, a command on line 2 and a NUL byte. Only the two exact commands parse. An event with a bad signature or an unknown hook ID changes nothing. |
 | Contain | A branch name, a title and a comment author with Markdown, HTML and `@` mentions reach the summary comment escaped. No value of the event reaches a step argument, a log line unescaped or a SQL text. |
 | Limit | One command in flight for each review request. A delivery ID seen in the last 24 hours is dropped. The summary stays under 60,000 characters with 100 units. |
-| Authorization at the point of use | The fake answers the comment through the API with another body, another author or an edit: refused. The event names one repository ID and the API another: refused. The linked principal lost `unit:run-apply` between the comment and the dispatch: refused at the dispatch. A fork whose head repository has the same name as the base (the advisory GHSA-6mjf-4m52-m5cq of Atlantis): refused by the numeric ID. |
+| Authorization at the point of use | `dustpan plan` by a principal with `unit:read-secrets` on a branch that is not protected. The job token gets no `unit:decrypt` and no unmasked state read. No profile opens with the default `none`. A start of the source kind `forge` with a forged starter that holds every action: the same. A merge with an auto-merge or a merge-queue event in the timeline, and a timeline read that fails: no apply request. The fake answers the comment through the API with another body, another author or an edit: refused. The event names one repository ID and the API another: refused. The linked principal lost `unit:run-apply` between the comment and the dispatch: refused at the dispatch. A fork whose head repository has the same name as the base (the advisory GHSA-6mjf-4m52-m5cq of Atlantis): refused by the numeric ID. |
 | Fail closed | `mergeable_state` `unknown`, an API timeout, and a tree read that fails each refuse the apply, keep the hold, and write the audit entry and a notification. |
 
 ### Work items
 
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
+
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
-| PR-1 | GitHub adapter: `ReadReview` fields, `SetStatus`, `forge.Comments`, `Tree`, `ParseEvent` for the three events, forgetest cases (first slice) | L | forge-github | WB-5 |
-| PR-2 | The webhook route `POST /webhooks/{hook ID}`, the dedupe of delivery IDs, the durable effect operations (first slice) | M | forge-events | PR-1, WB-8 |
-| PR-3 | `review-request-push` triggers (RFC 24 slice 4): plan jobs, one status, one summary comment, e2e step 1, docs page "Pull request automation" (first slice) | L | trigger-dispatch | PR-2, M5-1 |
+| PR-1 | GitHub adapter: `ReadReview` fields, `SetStatus`, `forge.Comments`, `Tree`, `ParseEvent` for the three events, forgetest cases (first slice) | L | forge-github | WB-7 |
+| PR-2 | The webhook route `POST /webhooks/{hook ID}`, the dedupe of delivery IDs, the durable effect operations (first slice). This item owns the route. WB-10 adds the merge and close effects to it. | M | forge-events | PR-1, WB-8 |
+| PR-3 | `review-request-push` triggers (RFC 24 slice 4): plan jobs, one status, one summary comment. The rule of question 9 (b) for each start of the source kind `forge`. No profile open for a branch that is not protected (question 10 (a), until the owner answers). E2e steps 1 and 11, docs page "Pull request automation" (first slice) | L | trigger-dispatch | PR-2, M5-1 |
 | PR-4 | `pkg/reviewrequest`: model, store, conformance, SQL in both dialects | M | store-migrations | PR-3 |
 | PR-5 | The change order of a review request, revisions for each push, the test merge commit, stale marks, the full summary, e2e step 2 | L | changeorder-wiring | PR-4 |
-| PR-6 | The apply after the merge: the tree check, the request by the merger, a new revision when the trees differ, e2e steps 3 and 4 | L | changeorder-wiring | PR-5, owner answers 3 and 4 |
-| PR-7 | Links of Git host accounts to principals (ADR 146 link requests) | M | identity-links | none |
-| PR-8 | Comment commands: parser, intake, the reread through the API, `dustpan apply` on a merged review request, `dustpan unlock`, `dustpan plan` if the owner says yes, e2e step 5 | M | forge-events | PR-6, PR-7 |
+| PR-6 | The apply after the merge: the tree check and the check of the plan file snapshot. The request by a direct merge. A new revision when the trees differ. E2e steps 3, 4 and 10 | L | changeorder-wiring | PR-5, owner answers 3 and 4 |
+| PR-7 | Links of Git host accounts to principals (ADR 146 link requests), with its migration | M | store-migrations | none |
+| PR-8 | Comment commands: parser, intake, the reread through the API, `dustpan apply` on a merged review request, `dustpan unlock`, `dustpan plan` if the owner says yes, e2e step 5 | M | forge-events | PR-6, PR-7, WB-10 |
 | PR-9 | Pre-merge apply: the setting, its levels, the fresh authentication, `CheckApply`, the hold and the merge. E2e steps 6 to 8. Docs page "Apply before merge" with the warning | L | changeorder-wiring | PR-8, WB-7 |
 | PR-10 | The Pulumi steps of e2e step 9 | M | e2e-steps | PR-9 |
+| PR-11 | The setting `reviewRequestPlans.profiles` (question 10), if the owner picks (c) | S | profile-providers | PR-3, PF-6 |
+| PR-12 | The installation lock (question 15), with its migration, e2e step 12 | M | store-migrations | none |
 
 ## Outcome
 

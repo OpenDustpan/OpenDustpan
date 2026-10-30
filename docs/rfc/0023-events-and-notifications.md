@@ -105,7 +105,10 @@ other products are in the research note
    `trigger.start-refused` (a start that the job service refused, with the
    error class), `trigger.saver-lost-access` (ADR 267 decision 14),
    `review-request.plan-ready`, `review-request.apply-blocked` and
-   `review-request.hold-left-open` (RFC 27). *Recommendation:* add them
+   `review-request.hold-left-open` (RFC 27), and `access-token.expiring`
+   (7 days before the expiry, with the dedupe key
+   `<token ID>/expiring`) and `access-token.expired`, which ADR 53 decision
+   12 puts in Milestone 5. *Recommendation:* add them
    with the slice that writes them.
 5. **The webhook APIs of the tools (open question of ADR 145).** HCP
    Terraform serves `notification-configurations`, and the `tfe` provider
@@ -153,6 +156,8 @@ other products are in the research note
    that unit is `skipped` for the subscription of that person.
 4. `GET /jobs/{job_id}/events` lists `queued`, `dispatched`, `running` and
    `succeeded` in order, with the actor of each.
+5. An access token that expires in 7 days gives `access-token.expiring`
+   once, also when the schedule runs twice.
 
 ### Security tests (ADR 250)
 
@@ -166,14 +171,21 @@ other products are in the research note
 
 ### Work items
 
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
+
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
 | EV-1 | SQL `Outbox`, `Subscriptions`, `Deliveries` in both dialects, migrations, backup tables | L | store-migrations | none |
 | EV-2 | Subscription and delivery routes, redeliver, audit entries, docs page "Notifications" | M | api-notifications | EV-1 |
 | EV-3 | `notify.Dispatcher`, the `notify.dispatch` operation and schedule, the delivery operation with retries and `BeforeAttempt` | L | notify-dispatch | EV-1 |
-| EV-4 | Job notifications and job events in `job.Store`, the timeline route, `jobtest` cases | M | job-store | EV-1, M5-1 |
+| EV-4 | Job notifications and job events in `job.Store` (with the migration of the job event table), the timeline route, `jobtest` cases | M | store-migrations | EV-1, M5-1 |
 | EV-5 | Personal notices of question 2 through `notify.Contacts` | M | notify-dispatch | EV-3, EV-4 |
-| EV-6 | e2e steps 1 to 4 | M | e2e-steps | EV-2, EV-3, EV-4 |
+| EV-6 | e2e steps 1 to 5 | M | e2e-steps | EV-2, EV-3, EV-4, EV-7 |
+| EV-7 | The notifications of an access token that expires (question 4), from a durable schedule | M | notify-dispatch | EV-3 |
 
 ## Outcome
 

@@ -161,8 +161,15 @@ matrix before its route lands.
      an HMAC of the job, the phase, the principal and the expiry under a
      key of the installation. The server makes it when it answers
      `GET /plans/:id` or `GET /applies/:id`, only for a caller with
-     `job:read-logs`, with an expiry of 1 hour. At each read, it checks the
-     MAC, the expiry, and that the principal still holds `job:read-logs`.
+     `job:read-logs`. The CLI reads the plan or the apply once, takes one
+     `log-read-url`, and reads it in a loop until the phase ends (go-tfe
+     `logreader.go`). So the URL is valid while its phase is not terminal,
+     plus 15 minutes, and never longer than the timeout of the job (the sum
+     of the step timeouts and grace periods, ADR 134 decision 9). The
+     expiry in the URL is that cap. At each read, the server checks the
+     MAC, the cap, the state of the phase, and that the principal still
+     holds `job:read-logs`. That last check bounds each read, so a person
+     who loses the action stops reading at the next chunk.
    - (b) A URL with no check. Anyone with the URL reads the log.
 
    *Recommendation: (a).* This changes ADR 254 decision 6, so the ADR of
@@ -225,11 +232,17 @@ with `execution-mode: agent` and a test runner.
 | --- | --- |
 | Check at the boundary | `target-addrs` with `;`, a newline, `-chdir=x`, a quote and 10,000 entries: refused. A run ID with another prefix, and the ID of a job of another namespace: 404. |
 | Contain | Each address reaches the launcher as one argument. Run variables never reach a log, an answer or an audit entry (ADR 254 decision 5). |
-| Limit | The log URL expires after 1 hour. A URL with a changed job, phase, expiry or MAC is refused. An archive above the limit of the pool is refused (ADR 254 decision 3). |
+| Limit | A log URL of a phase that ended more than 15 minutes ago, and a URL past its cap, are refused. A unit test streams one log for 3 hours on a test clock and reads each chunk. A URL with a changed job, phase, expiry or MAC is refused. An archive above the limit of the pool is refused (ADR 254 decision 3). |
 | Authorization at the point of use | `actions/apply` without `unit:run-apply`, `actions/discard` without `unit:run-apply`, and a log URL of a principal who lost `job:read-logs`: refused. |
 | Fail closed | An unknown job state maps to the run status `errored`, never to `applied`. An error of the gate engine keeps the run in `confirmed` and writes the record (ADR 224 decision 13). |
 
 ### Work items
+
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
 
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |

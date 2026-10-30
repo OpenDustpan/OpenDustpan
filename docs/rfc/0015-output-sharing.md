@@ -205,6 +205,15 @@ ADR 273 left open. Facts about other products are in the research note
    can print, and a stack config is part of the stored plan. The docs page
    shows the profile block as the way for a job.
 
+   The exit test of Milestone 5 (step 13) also has an OpenTofu job read an
+   output of a Pulumi stack. OpenTofu has no built-in way to read a Pulumi
+   stack (ADR 273 decision 8). The same profile block serves it: the job
+   opens `outputs/opendustpan` for the stack, and the launcher writes the
+   values in the variables file of `exports.opentofu` (ADR 203 decision 6).
+   A secret output reaches OpenTofu as a variable value, so the docs say to
+   declare that variable `sensitive`. The checks of ADR 273 decision 5
+   apply, with the attachment authority as the principal of check 2.
+
 ### Ports
 
 The ports exist (`outputshare.Checker`, `Attachments`, `States`,
@@ -232,7 +241,9 @@ with the real CLI:
    another workspace. The state file that the job gets holds no resource.
 3. The step of question 2 for `tfe_outputs`.
 4. The step of question 3: a Pulumi program reads an OpenTofu output
-   through the profile block.
+   through the profile block, and an OpenTofu job reads a plain and a
+   secret output of a Pulumi stack through the same block. With no rule,
+   both reads fail with 403.
 5. The edge with the evidence `job` shows in the graph of the consumer.
 
 ### Security tests (ADR 250)
@@ -246,6 +257,12 @@ with the real CLI:
 | Fail closed | An error of `JobReader`, of `States` or of the identity store denies and writes the audit entry in the producer namespace. |
 
 ### Work items
+
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
 
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |

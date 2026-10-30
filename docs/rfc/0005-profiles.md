@@ -513,9 +513,15 @@ at the issuer of the test server.
 
 ### Work items
 
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
+
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
-| PF-1 | The issuer: keys, rotation schedule, discovery and JWKS routes, settings, audit, conformance | L | profile-issuer | none |
+| PF-1 | The issuer: keys, rotation schedule, discovery and JWKS routes, settings, audit, conformance, with the migration of the key tables | L | store-migrations | none |
 | PF-2 | The claim set of ADR 205 and the claims preview route | M | profile-issuer | PF-1 |
 | PF-3 | `profile.Provider` runtime and conformance suite, `login/oidc` | M | profile-providers | PF-1 |
 | PF-4 | `login/aws` in both modes, MinIO STS in the e2e harness, e2e steps 1 and 2 | L | profile-providers | PF-3, PF-6 |

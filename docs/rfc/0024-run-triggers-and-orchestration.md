@@ -362,13 +362,19 @@ These questions are details that ADR 267 leaves to the slices.
 
 ### Work items
 
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
+
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
-| TR-1 | `ClaimDue`, `SetNextSlot`, skip record: conformance cases, SQL in both dialects | M | trigger-store | none |
+| TR-1 | `ClaimDue`, `SetNextSlot`, skip record: conformance cases, SQL in both dialects | M | store-migrations | none |
 | TR-2 | The `trigger.schedule` tick and the spread, `servertest` with two instances, e2e step 2, docs page section | M | trigger-dispatch | TR-1, M5-1 |
 | TR-3 | The `trigger.upstream` operation from the final state versions of both tools, the declared edge, e2e step 1, docs page section | M | trigger-dispatch | M5-1 |
 | TR-4 | The depth guard and the supersede rule of question 2, e2e step 3 | S | trigger-dispatch | TR-3 |
-| TR-5 | `OutputDigest` in both tool packages, `when: outputs-changed`, e2e step 4 | M | tool-state | TR-3 |
+| TR-5 | `OutputDigest` in both tool packages, `when: outputs-changed`, e2e step 4 | M | store-migrations | TR-3 |
 
 ## Outcome
 

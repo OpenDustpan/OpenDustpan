@@ -531,7 +531,7 @@ calls against recorded answers.
 
 Size: S is under 400 changed lines, M under 1,000, L under 2,000. A
 conflict group names the files that two items must not change at the same
-time.
+time. M5-1 is the work item that builds the runner launcher routes, in progress on 2026-10-30. An item that depends on M5-1 waits until it merges. Each item that adds a migration is in the conflict group `store-migrations`. So no two of them collide on the migration number or on the hashes of `TestFrozenMigrations`.
 
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
@@ -544,7 +544,7 @@ time.
 | WB-7 | GitHub adapter: `OpenReview`, `ReadReview`, `CloseReview`, `DeleteBranch` | M | forge-github | WB-6 |
 | WB-8 | `e2e/githubfake` with REST, GraphQL, git storage and signed webhooks | L | e2e-harness | none |
 | WB-9 | Write-back executor: read, edit (YAML and JSON), commit, deliver, lookup on takeover | L | job-writeback | WB-4, WB-6, WB-7 |
-| WB-10 | Review watcher: webhook intake of merge and close, the `job.review-watch` poll | M | forge-events | WB-7, WB-8 |
+| WB-10 | Review watcher: the merge and close effects on the webhook route of PR-2 (RFC 27), the `job.review-watch` poll | M | forge-events | WB-7, PR-2 |
 | WB-11 | e2e steps 2 to 5, docs page "Edit config through the API" | M | e2e-steps | WB-8, WB-9, WB-10 |
 
 ## Outcome
