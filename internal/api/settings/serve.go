@@ -342,12 +342,13 @@ func (h *Handler) bulkWrite(
 func (h *Handler) bulkFailure(r *http.Request, id string, err error) bulkResult {
 	pr := h.writer().Problem(err)
 
-	failure := bulkError{Code: pr.Status, ErrorCode: pr.Code, ErrorArgs: nil, Message: pr.Message}
+	// The code is the internal error code until the code of the problem is
+	// proved to be a code of the catalog with its arguments.
+	failure := bulkError{Code: pr.Status, ErrorCode: errcode.ServerInternal, ErrorArgs: nil, Message: pr.Message}
 
 	if made, mErr := errcode.New(pr.Code, pr.Values...); mErr == nil {
+		failure.ErrorCode = pr.Code
 		failure.ErrorArgs = made.Args()
-	} else {
-		failure.ErrorCode = errcode.ServerInternal
 	}
 
 	if pr.Status >= http.StatusInternalServerError {
