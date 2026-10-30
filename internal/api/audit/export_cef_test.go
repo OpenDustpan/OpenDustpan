@@ -189,11 +189,20 @@ func TestExportCEFKeepsKeysApart(t *testing.T) {
 				t.Fatalf("line lacks %q:\n%s", tt.want, lines[0])
 			}
 
-			for _, r := range lines[0] {
-				if r < 0x20 || (r >= 0x7F && r <= 0x9F) || r == '\u2028' || r == '\u2029' {
-					t.Fatalf("line holds the raw control character %U:\n%q", r, lines[0])
-				}
+			if r, raw := rawControl(lines[0]); raw {
+				t.Fatalf("line holds the raw control character %U:\n%q", r, lines[0])
 			}
 		})
 	}
+}
+
+// rawControl returns the first control character that the line holds.
+func rawControl(line string) (rune, bool) {
+	for _, r := range line {
+		if r < 0x20 || (r >= 0x7F && r <= 0x9F) || r == '\u2028' || r == '\u2029' {
+			return r, true
+		}
+	}
+
+	return 0, false
 }
