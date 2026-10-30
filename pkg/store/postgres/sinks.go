@@ -215,7 +215,11 @@ func writeSinkSecret(ctx context.Context, q *db.Queries, p secretPlace) error {
 }
 
 // SinkSecrets implements notify.SinkStore.
-func (k NotificationStore) SinkSecrets(ctx context.Context, scope namespace.Name, id string) ([]notify.SealedSecret, error) {
+func (k NotificationStore) SinkSecrets(
+	ctx context.Context,
+	scope namespace.Name,
+	id string,
+) ([]notify.SealedSecret, error) {
 	var rows []db.ListNotificationSinkSecretsRow
 
 	// One snapshot, so the sink and its secrets come from one state.
@@ -304,4 +308,3 @@ func (k NotificationStore) Sinks(ctx context.Context, scope namespace.Name) ([]n
 
 	return out, nil
 }
-

@@ -188,22 +188,14 @@ func checkNoPlainURL(t *testing.T, schemaURL string) {
 		}
 	}()
 
-	for _, table := range []string{"notification_sinks", "notification_sink_secrets", "notification_sink_refs"} {
-		var count int
+	var count int
 
-		err = conn.QueryRow(ctx, scopedCountStatement(table)).Scan(&count)
-		if err != nil || count != 0 {
-			t.Fatalf("rows of %s after the migration = %d (%v), want 0", table, count, err)
-		}
+	err = conn.QueryRow(ctx, countSinkRows).Scan(&count)
+	if err != nil || count != 0 {
+		t.Fatalf("rows of the sink tables after the migration = %d (%v), want 0", count, err)
 	}
 }
 
-// scopedCountStatement returns the statement that counts the rows of a sink
-// table.
-func scopedCountStatement(table string) string {
-	return map[string]string{
-		"notification_sinks":        `SELECT count(*) FROM notification_sinks`,
-		"notification_sink_secrets": `SELECT count(*) FROM notification_sink_secrets`,
-		"notification_sink_refs":    `SELECT count(*) FROM notification_sink_refs`,
-	}[table]
-}
+// countSinkRows counts the rows of the three sink tables.
+const countSinkRows = `SELECT (SELECT count(*) FROM notification_sinks) + (SELECT count(*) FROM notification_sink_secrets) +
+	(SELECT count(*) FROM notification_sink_refs)`

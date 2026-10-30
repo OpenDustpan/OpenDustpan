@@ -190,8 +190,9 @@ func TestAppendNotificationsRefusesAnotherScope(t *testing.T) {
 	seedSink(t, s)
 
 	n := notify.Notification{
-		ID: "ntf-1", Type: notify.JobFailed, Scope: "@server", Object: "o", Subject: "", Agent: "",
-		Severity: notify.SeverityWarning, Summary: "x", DedupeKey: "k", At: time.UnixMilli(1).UTC(),
+		ID: "ntf-1", Type: notify.JobFailed, Scope: "@server", Object: "o", ObjectID: "", Subject: "", Agent: "",
+		Severity: notify.SeverityWarning, Summary: "x", Links: nil, Attributes: nil, Recipients: nil,
+		DedupeKey: "k", At: time.UnixMilli(1).UTC(), Sequence: 0,
 	}
 
 	err := s.inTx(t.Context(), func(q *db.Queries) error {

@@ -22,6 +22,42 @@ import (
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedNotifications(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	for _, check := range stagedNotificationChecks(staging) {
+		var scope string
+
+		err := pool.QueryRow(ctx, check.query).Scan(&scope)
+
+		switch {
+		case err == nil:
+			return fmt.Errorf("staged notifications: %s (%q): %w", check.what, scope, backup.ErrCorrupt)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("read staged notifications: %w", backup.ErrExportRead)
+		default:
+			// No row breaks this rule.
+		}
+	}
+
+	if err := checkStagedNotificationRows(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedSubscriptionRows(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedDeliveryRows(ctx, pool, staging)
+}
+
+// stagedCheck is a query on a staged backup that finds the first row which
+// breaks a rule of the notification tables, and the name of that rule.
+type stagedCheck struct {
+	query string
+	what  string
+}
+
+// stagedNotificationChecks returns the checks on the notification tables of
+// the staged backup in the schema staging.
+func stagedNotificationChecks(staging string) []stagedCheck {
 	t := func(name string) string { return stagingTable(staging, name) }
 
 	scopeQuery := "SELECT DISTINCT x.scope FROM (" +
@@ -39,10 +75,7 @@ func checkStagedNotifications(ctx context.Context, pool *pgxpool.Pool, staging s
 	sequenceQuery := "SELECT n.scope FROM " + t("notifications") + " AS n LEFT JOIN " + t("notification_sequences") +
 		" AS s ON s.scope = n.scope WHERE s.last_sequence IS NULL OR n.sequence > s.last_sequence LIMIT 1"
 
-	for _, check := range []struct {
-		query string
-		what  string
-	}{
+	return []stagedCheck{
 		{scopeQuery, "a scope that names no namespace of the backup"},
 		{sequenceQuery, "a notification above the last sequence of its scope"},
 		{
@@ -70,30 +103,7 @@ func checkStagedNotifications(ctx context.Context, pool *pgxpool.Pool, staging s
 				" AS n ON n.id = d.notification_id WHERE n.scope <> d.scope LIMIT 1",
 			"a delivery that names a notification of another scope",
 		},
-	} {
-		var scope string
-
-		err := pool.QueryRow(ctx, check.query).Scan(&scope)
-
-		switch {
-		case err == nil:
-			return fmt.Errorf("staged notifications: %s (%q): %w", check.what, scope, backup.ErrCorrupt)
-		case !errors.Is(err, pgx.ErrNoRows):
-			return fmt.Errorf("read staged notifications: %w", backup.ErrExportRead)
-		default:
-			// No row breaks this rule.
-		}
 	}
-
-	if err := checkStagedNotificationRows(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedSubscriptionRows(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	return checkStagedDeliveryRows(ctx, pool, staging)
 }
 
 func checkStagedNotificationRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {

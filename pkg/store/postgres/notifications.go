@@ -811,53 +811,74 @@ func (k NotificationStore) Enqueue(ctx context.Context, fence namespace.Fence, d
 // scope is notify.ErrInvalid, and an ID that exists in another scope is
 // notify.ErrNotFound, so it never replaces a delivery.
 func enqueueDeliveries(ctx context.Context, q *db.Queries, ds []notify.Delivery) error {
-	routes := map[string]bool{}
-	ids := map[string]bool{}
+	seen := enqueued{routes: map[string]bool{}, ids: map[string]bool{}}
 
 	for i := range ds {
-		d := ds[i]
-		key := strings.Join([]string{d.Notification, d.Subscription, d.Contact}, "\x00")
-
-		if refErr := checkDeliveryReferences(ctx, q, &d); refErr != nil {
-			return refErr
+		if err := enqueueDelivery(ctx, q, &ds[i], seen); err != nil {
+			return err
 		}
-
-		count, err := q.CountNotificationDeliveryRoute(ctx, db.CountNotificationDeliveryRouteParams{
-			Scope: d.Scope.String(), NotificationID: d.Notification, SubscriptionID: d.Subscription, Contact: d.Contact,
-		})
-		if err != nil {
-			return fmt.Errorf("count delivery route: %w", err)
-		}
-
-		if count > 0 || routes[key] {
-			continue
-		}
-
-		old, oldErr := q.GetNotificationDelivery(ctx, d.ID)
-
-		switch {
-		case oldErr == nil && old.Scope != d.Scope.String():
-			return fmt.Errorf("enqueue %s: %w", d.ID, notify.ErrNotFound)
-		case oldErr == nil || ids[d.ID]:
-			return fmt.Errorf("enqueue %s: %w: the ID exists", d.ID, notify.ErrInvalid)
-		case !errors.Is(oldErr, pgx.ErrNoRows):
-			return fmt.Errorf("select delivery: %w", oldErr)
-		default:
-			// The ID is new.
-		}
-
-		insErr := q.InsertNotificationDelivery(ctx, db.InsertNotificationDeliveryParams{
-			ID: d.ID, Scope: d.Scope.String(), NotificationID: d.Notification, SubscriptionID: d.Subscription,
-			SinkID: d.Sink, Contact: d.Contact, Principal: d.Principal, NextAtMs: notifystore.Millis(d.NextAt),
-		})
-		if insErr != nil {
-			return fmt.Errorf("insert delivery: %w", insErr)
-		}
-
-		routes[key], ids[d.ID] = true, true
 	}
 
 	return nil
+}
+
+// enqueued holds the routes and the IDs that a call of Enqueue stored so far.
+type enqueued struct {
+	routes map[string]bool
+	ids    map[string]bool
+}
+
+// enqueueDelivery stores d as pending, or skips it when its route exists.
+func enqueueDelivery(ctx context.Context, q *db.Queries, d *notify.Delivery, seen enqueued) error {
+	if err := checkDeliveryReferences(ctx, q, d); err != nil {
+		return err
+	}
+
+	count, err := q.CountNotificationDeliveryRoute(ctx, db.CountNotificationDeliveryRouteParams{
+		Scope: d.Scope.String(), NotificationID: d.Notification, SubscriptionID: d.Subscription, Contact: d.Contact,
+	})
+	if err != nil {
+		return fmt.Errorf("count delivery route: %w", err)
+	}
+
+	key := strings.Join([]string{d.Notification, d.Subscription, d.Contact}, "\x00")
+	if count > 0 || seen.routes[key] {
+		return nil
+	}
+
+	if idErr := checkDeliveryID(ctx, q, d, seen.ids); idErr != nil {
+		return idErr
+	}
+
+	insErr := q.InsertNotificationDelivery(ctx, db.InsertNotificationDeliveryParams{
+		ID: d.ID, Scope: d.Scope.String(), NotificationID: d.Notification, SubscriptionID: d.Subscription,
+		SinkID: d.Sink, Contact: d.Contact, Principal: d.Principal, NextAtMs: notifystore.Millis(d.NextAt),
+	})
+	if insErr != nil {
+		return fmt.Errorf("insert delivery: %w", insErr)
+	}
+
+	seen.routes[key], seen.ids[d.ID] = true, true
+
+	return nil
+}
+
+// checkDeliveryID returns notify.ErrInvalid for the ID of a stored delivery of
+// the scope of d, or of an earlier delivery of the call, and notify.ErrNotFound
+// for the ID of a stored delivery of another scope.
+func checkDeliveryID(ctx context.Context, q *db.Queries, d *notify.Delivery, ids map[string]bool) error {
+	old, err := q.GetNotificationDelivery(ctx, d.ID)
+
+	switch {
+	case err == nil && old.Scope != d.Scope.String():
+		return fmt.Errorf("enqueue %s: %w", d.ID, notify.ErrNotFound)
+	case err == nil || ids[d.ID]:
+		return fmt.Errorf("enqueue %s: %w: the ID exists", d.ID, notify.ErrInvalid)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("select delivery: %w", err)
+	default:
+		return nil
+	}
 }
 
 // checkDeliveryReferences returns notify.ErrInvalid when d names a sink, a
@@ -870,48 +891,67 @@ func enqueueDeliveries(ctx context.Context, q *db.Queries, ds []notify.Delivery)
 // This check stays so that a delivery of one scope never points at a sink, a
 // subscription or a notification of another scope, whatever the caller does.
 func checkDeliveryReferences(ctx context.Context, q *db.Queries, d *notify.Delivery) error {
-	scope := d.Scope.String()
-
-	if d.Sink != "" {
-		row, err := q.GetNotificationSink(ctx, d.Sink)
-
-		switch {
-		case err == nil && row.Namespace != scope:
-			return fmt.Errorf("enqueue %s: %w: the sink is not in the scope of the delivery", d.ID, notify.ErrInvalid)
-		case err != nil && !errors.Is(err, pgx.ErrNoRows):
-			return fmt.Errorf("select sink: %w", err)
-		default:
-			// The sink is in the scope, or the store does not hold it.
-		}
+	if err := checkSinkReference(ctx, q, d); err != nil {
+		return err
 	}
 
-	if d.Subscription != "" {
-		row, err := q.GetNotificationSubscription(ctx, d.Subscription)
-
-		switch {
-		case err == nil && row.Scope != scope:
-			return fmt.Errorf("enqueue %s: %w: the subscription is not in the scope of the delivery", d.ID,
-				notify.ErrInvalid)
-		case err != nil && !errors.Is(err, pgx.ErrNoRows):
-			return fmt.Errorf("select subscription: %w", err)
-		default:
-			// The subscription is in the scope, or the store does not hold it.
-		}
+	if err := checkSubscriptionReference(ctx, q, d); err != nil {
+		return err
 	}
 
+	return checkNotificationReference(ctx, q, d)
+}
+
+func checkSinkReference(ctx context.Context, q *db.Queries, d *notify.Delivery) error {
+	if d.Sink == "" {
+		return nil
+	}
+
+	row, err := q.GetNotificationSink(ctx, d.Sink)
+
+	switch {
+	case err == nil && row.Namespace != d.Scope.String():
+		return fmt.Errorf("enqueue %s: %w: the sink is not in the scope of the delivery", d.ID, notify.ErrInvalid)
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("select sink: %w", err)
+	default:
+		// The sink is in the scope, or the store does not hold it.
+		return nil
+	}
+}
+
+func checkSubscriptionReference(ctx context.Context, q *db.Queries, d *notify.Delivery) error {
+	if d.Subscription == "" {
+		return nil
+	}
+
+	row, err := q.GetNotificationSubscription(ctx, d.Subscription)
+
+	switch {
+	case err == nil && row.Scope != d.Scope.String():
+		return fmt.Errorf("enqueue %s: %w: the subscription is not in the scope of the delivery", d.ID,
+			notify.ErrInvalid)
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("select subscription: %w", err)
+	default:
+		// The subscription is in the scope, or the store does not hold it.
+		return nil
+	}
+}
+
+func checkNotificationReference(ctx context.Context, q *db.Queries, d *notify.Delivery) error {
 	owner, err := q.GetNotificationScopeByID(ctx, d.Notification)
 
 	switch {
-	case err == nil && owner != scope:
+	case err == nil && owner != d.Scope.String():
 		return fmt.Errorf("enqueue %s: %w: the notification is not in the scope of the delivery", d.ID,
 			notify.ErrInvalid)
 	case err != nil && !errors.Is(err, pgx.ErrNoRows):
 		return fmt.Errorf("select notification: %w", err)
 	default:
 		// The notification is in the scope, or the store does not hold it.
+		return nil
 	}
-
-	return nil
 }
 
 // DueScopes implements notify.Deliveries.

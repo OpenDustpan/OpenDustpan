@@ -23,14 +23,16 @@ func testEnqueueReferences(t *testing.T, h Harness) {
 	}
 
 	otherSink := sink("snk-o", other)
-	if putErr := h.Subscriptions.PutSink(t.Context(), otherSink, fresh(t.Context(), otherSink), otherFence,
-		entry(other)); putErr != nil {
+	putErr := h.Subscriptions.PutSink(t.Context(), otherSink, fresh(t.Context(), otherSink), otherFence,
+		entry(other))
+	if putErr != nil {
 		t.Fatalf("PutSink in other: %v", putErr)
 	}
 
 	serverSink := sink("snk-s", audit.ServerScope)
-	if putErr := h.Subscriptions.PutSink(t.Context(), serverSink, fresh(t.Context(), serverSink), zeroFence(),
-		entry(audit.ServerScope)); putErr != nil {
+	putErr = h.Subscriptions.PutSink(t.Context(), serverSink, fresh(t.Context(), serverSink), zeroFence(),
+		entry(audit.ServerScope))
+	if putErr != nil {
 		t.Fatalf("PutSink in the server scope: %v", putErr)
 	}
 
@@ -41,8 +43,9 @@ func testEnqueueReferences(t *testing.T, h Harness) {
 		t.Fatalf("PutSubscription in other: %v", putErr)
 	}
 
-	if appendErr := h.Outbox.Append(t.Context(), otherFence,
-		[]notify.Notification{sample("ntf-o", other)}); appendErr != nil {
+	appendErr := h.Outbox.Append(t.Context(), otherFence,
+		[]notify.Notification{sample("ntf-o", other)})
+	if appendErr != nil {
 		t.Fatalf("Append in other: %v", appendErr)
 	}
 
@@ -106,8 +109,9 @@ func testSubscriptionOtherScope(t *testing.T, h Harness) {
 	}
 
 	otherSink := sink("snk-o", other)
-	if putErr := h.Subscriptions.PutSink(t.Context(), otherSink, fresh(t.Context(), otherSink), otherFence,
-		entry(other)); putErr != nil {
+	putErr := h.Subscriptions.PutSink(t.Context(), otherSink, fresh(t.Context(), otherSink), otherFence,
+		entry(other))
+	if putErr != nil {
 		t.Fatalf("PutSink in other: %v", putErr)
 	}
 
