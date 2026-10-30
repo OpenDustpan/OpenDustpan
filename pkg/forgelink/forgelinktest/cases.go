@@ -707,8 +707,8 @@ func caseReplaceEntry(t *testing.T, h Harness) {
 	// finds exactly one of them under its own object.
 	under := 0
 
-	for _, e := range got[before:] {
-		if e.Object == principal.Ref(ana) {
+	for i := before; i < len(got); i++ {
+		if got[i].Object == principal.Ref(ana) {
 			under++
 		}
 	}
