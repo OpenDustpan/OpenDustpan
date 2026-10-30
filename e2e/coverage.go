@@ -23,6 +23,7 @@ import (
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	registryapi "opendustpan.org/opendustpan/internal/api/registry"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	settingsapi "opendustpan.org/opendustpan/internal/api/settings"
 	sourcefilterapi "opendustpan.org/opendustpan/internal/api/sourcefilter"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
@@ -32,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/internal/unitsettingssvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -52,6 +54,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/registry"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -60,6 +63,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/unitsettings"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -103,13 +107,14 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
 	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
+	settingsRoutes := coverageSettingsRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	sourceFilterRoutes := coverageSourceFilterRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
 		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, server,
+		driftRoutes, triggerRoutes, settingsRoutes, registryRoutes, sourceFilterRoutes, server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -945,6 +950,56 @@ func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 	return out
 }
 
+// coverageNoPools is the runner pool port of a handler that the coverage check
+// builds only to list its routes.
+type coverageNoPools struct{}
+
+func (coverageNoPools) Pool(context.Context, string) (runner.Pool, error) {
+	return runner.Pool{}, runner.ErrNotFound
+}
+
+func (coverageNoPools) Pools(context.Context, namespace.Name) ([]runner.Pool, error) { return nil, nil }
+
+// coverageSettingsRoutes returns the unit settings adapter's route table.
+func coverageSettingsRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	service, err := unitsettingssvc.New(unitsettingssvc.Config{
+		Store: struct{ unitsettings.Store }{nil}, Fences: struct{ unitsettingssvc.Fences }{nil},
+		Connections: struct{ unitsettingssvc.Connections }{nil}, Pools: coverageNoPools{},
+		Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("unit settings service: %v", err)
+	}
+
+	handler, err := settingsapi.NewHandler(settingsapi.Config{
+		Namespaces:     namespaces,
+		Units:          coverageReader{},
+		Service:        service,
+		Suggestions:    nil,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("unit settings handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // coverageDriftRoutes returns the drift adapter's route table.
 func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
@@ -1563,6 +1618,7 @@ func CoverageAllowlist() []AllowEntry {
 		jobAllowEntries(),
 		driftAllowEntries(),
 		triggerAllowEntries(),
+		unitSettingsAllowEntries(),
 		outputSharingAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
@@ -2656,6 +2712,29 @@ func triggerAllowEntries() []AllowEntry {
 		RouteRef{Method: http.MethodPut, Path: one},
 		RouteRef{Method: http.MethodDelete, Path: one},
 		RouteRef{Method: http.MethodPost, Path: one + "/fire"},
+	)
+}
+
+// unitSettingsAllowEntries covers the routes of the settings of a unit. No CLI
+// calls them: the console and the clients of the API do. The steps of
+// TestUnitSettingsAPI call each of them with the token of a person, on a unit
+// that the real OpenTofu CLI made.
+func unitSettingsAllowEntries() []AllowEntry {
+	const (
+		unit      = "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings"
+		namespace = "/api/dustpan/v1/namespaces/{namespace}"
+	)
+
+	return allowRoutes(
+		"TestUnitSettingsAPI",
+		"Console and client route: no CLI calls it. The steps of TestUnitSettingsAPI call it with the token of a person.",
+		RouteRef{Method: http.MethodGet, Path: unit},
+		RouteRef{Method: http.MethodPut, Path: unit},
+		RouteRef{Method: http.MethodDelete, Path: unit},
+		RouteRef{Method: http.MethodGet, Path: unit + "/suggestions"},
+		RouteRef{Method: http.MethodGet, Path: namespace + "/settings/unit-defaults"},
+		RouteRef{Method: http.MethodPut, Path: namespace + "/settings/unit-defaults"},
+		RouteRef{Method: http.MethodPost, Path: namespace + "/unit-settings/bulk-put"},
 	)
 }
 

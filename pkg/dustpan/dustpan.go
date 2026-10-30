@@ -97,6 +97,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/unitsettings"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -192,6 +193,7 @@ type settings struct {
 	sinks                sinkSettings
 	jobStore             job.Store
 	triggerStore         trigger.Store
+	unitSettingsStore    unitsettings.Store
 	driftStore           drift.Store
 	savedViewStore       savedview.Store
 	gitHost              gitHostSettings
@@ -766,6 +768,7 @@ func defaultSettings() *settings {
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		triggerStore:            nil,
+		unitSettingsStore:       nil,
 		driftStore:              nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
@@ -1275,6 +1278,9 @@ type neutralHandlers struct {
 	// triggers is nil when no trigger store is set, or the server lacks the
 	// job service that a trigger starts a plan through.
 	triggers http.Handler
+	// unitSettings is nil when no store of unit settings is set, or the server
+	// lacks the Git host store or the runner stores that the settings check.
+	unitSettings http.Handler
 	// drift is nil when no drift store is set.
 	drift http.Handler
 	// registry is nil when no registry store is set.
@@ -1334,6 +1340,14 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
+	var unitSettings http.Handler
+
+	if handler, ok, usErr := newUnitSettingsHandler(svc, cfg, onFailure); usErr != nil {
+		return neutralHandlers{}, usErr
+	} else if ok {
+		unitSettings = handler
+	}
+
 	var sourceFilter http.Handler
 
 	if cfg.sourceFilters != nil {
@@ -1345,10 +1359,11 @@ func newNeutralHandlers(
 
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
-		jobs:     jobAPIs.jobs,
-		triggers: triggers,
-		drift:    jobAPIs.drift,
-		registry: registries,
+		jobs:         jobAPIs.jobs,
+		triggers:     triggers,
+		unitSettings: unitSettings,
+		drift:        jobAPIs.drift,
+		registry:     registries,
 
 		sourceFilter: sourceFilter,
 	}, nil
@@ -4020,6 +4035,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	mountV1(mux, a.registry, wrapV1)
 	mountV1(mux, a.jobs, wrapV1)
 	mountV1(mux, a.triggers, wrapV1)
+	mountV1(mux, a.unitSettings, wrapV1)
 	mountV1(mux, a.drift, wrapV1)
 	mountV1(mux, a.sourceFilter, wrapV1)
 	// The capabilities document and the dev sign-in belong to the

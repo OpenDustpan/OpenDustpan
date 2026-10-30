@@ -1129,6 +1129,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, sourceFilterStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, triggerStoreOption(st)...)
+	opts = append(opts, unitSettingsStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
 	opts = append(opts, driftStoreOption(st)...)
 	opts = append(opts, gitHostStoreOption(st)...)
@@ -1244,6 +1245,19 @@ func triggerStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
+	default:
+		return nil
+	}
+}
+
+// unitSettingsStoreOption returns the option of the unit settings store for
+// st, or nil when st keeps no unit settings.
+func unitSettingsStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
 	default:
 		return nil
 	}

@@ -3409,6 +3409,44 @@ func (q *Queries) DeleteUnitOutputContext(ctx context.Context, arg DeleteUnitOut
 	return err
 }
 
+const deleteUnitSettings = `-- name: DeleteUnitSettings :execrows
+DELETE FROM unit_settings
+WHERE unit_id = $1 AND version = $2::bigint
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+`
+
+type DeleteUnitSettingsParams struct {
+	UnitID    string
+	Expected  int64
+	Namespace string
+}
+
+// Deletes the row that the caller read, and no other row.
+func (q *Queries) DeleteUnitSettings(ctx context.Context, arg DeleteUnitSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnitSettings, arg.UnitID, arg.Expected, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteUnitSettingsOfUnit = `-- name: DeleteUnitSettingsOfUnit :exec
+DELETE FROM unit_settings
+WHERE unit_id = $1
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+`
+
+type DeleteUnitSettingsOfUnitParams struct {
+	UnitID    string
+	Namespace string
+}
+
+// Removes the settings of a purged unit, in the same transaction as the purge.
+func (q *Queries) DeleteUnitSettingsOfUnit(ctx context.Context, arg DeleteUnitSettingsOfUnitParams) error {
+	_, err := q.db.Exec(ctx, deleteUnitSettingsOfUnit, arg.UnitID, arg.Namespace)
+	return err
+}
+
 const deleteUpdatesOfStack = `-- name: DeleteUpdatesOfStack :exec
 DELETE FROM updates
 WHERE stack_id = $1
@@ -7472,6 +7510,32 @@ func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (str
 	return name, err
 }
 
+const getUnitDefaults = `-- name: GetUnitDefaults :one
+SELECT n.name AS namespace, d.pool, d.version, d.updated_at_ms
+FROM unit_defaults AS d
+JOIN namespaces AS n ON n.id = d.namespace_id
+WHERE n.name = $1
+`
+
+type GetUnitDefaultsRow struct {
+	Namespace   string
+	Pool        string
+	Version     int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) GetUnitDefaults(ctx context.Context, namespace string) (GetUnitDefaultsRow, error) {
+	row := q.db.QueryRow(ctx, getUnitDefaults, namespace)
+	var i GetUnitDefaultsRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Pool,
+		&i.Version,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getUnitFinalVersion = `-- name: GetUnitFinalVersion :one
 SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
@@ -7520,6 +7584,41 @@ func (q *Queries) GetUnitOutputSeq(ctx context.Context, arg GetUnitOutputSeqPara
 	var item_seq int64
 	err := row.Scan(&item_seq)
 	return item_seq, err
+}
+
+const getUnitSettings = `-- name: GetUnitSettings :one
+SELECT s.unit_id, n.name AS namespace, s.version, s.body, s.updated_at_ms
+FROM unit_settings AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1 AND s.unit_id = $2
+`
+
+type GetUnitSettingsParams struct {
+	Namespace string
+	UnitID    string
+}
+
+type GetUnitSettingsRow struct {
+	UnitID      string
+	Namespace   string
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
+}
+
+// The namespace is part of the key: a row of the same unit ID in another
+// namespace reads as no row.
+func (q *Queries) GetUnitSettings(ctx context.Context, arg GetUnitSettingsParams) (GetUnitSettingsRow, error) {
+	row := q.db.QueryRow(ctx, getUnitSettings, arg.Namespace, arg.UnitID)
+	var i GetUnitSettingsRow
+	err := row.Scan(
+		&i.UnitID,
+		&i.Namespace,
+		&i.Version,
+		&i.Body,
+		&i.UpdatedAtMs,
+	)
+	return i, err
 }
 
 const getUnitStateVersion = `-- name: GetUnitStateVersion :one
@@ -9591,6 +9690,62 @@ func (q *Queries) InsertSavedView(ctx context.Context, arg InsertSavedViewParams
 		arg.Name,
 		arg.QueryJson,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertUnitDefaults = `-- name: InsertUnitDefaults :execrows
+INSERT INTO unit_defaults (namespace_id, pool, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1), $2, 1,
+    $3
+)
+ON CONFLICT (namespace_id) DO NOTHING
+`
+
+type InsertUnitDefaultsParams struct {
+	Namespace   string
+	Pool        string
+	UpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A row that exists is
+// not written: the count is 0.
+func (q *Queries) InsertUnitDefaults(ctx context.Context, arg InsertUnitDefaultsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnitDefaults, arg.Namespace, arg.Pool, arg.UpdatedAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertUnitSettings = `-- name: InsertUnitSettings :execrows
+INSERT INTO unit_settings (unit_id, namespace_id, version, body, updated_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), 1,
+    $3, $4
+)
+ON CONFLICT (unit_id) DO NOTHING
+`
+
+type InsertUnitSettingsParams struct {
+	UnitID      string
+	Namespace   string
+	Body        string
+	UpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A row that exists for
+// the unit is not written: the count is 0.
+func (q *Queries) InsertUnitSettings(ctx context.Context, arg InsertUnitSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnitSettings,
+		arg.UnitID,
+		arg.Namespace,
+		arg.Body,
+		arg.UpdatedAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -17889,6 +18044,66 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateUnitDefaults = `-- name: UpdateUnitDefaults :execrows
+UPDATE unit_defaults
+SET pool = $1, version = $2::bigint + 1, updated_at_ms = $3
+WHERE version = $2::bigint
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $4)
+`
+
+type UpdateUnitDefaultsParams struct {
+	Pool        string
+	Expected    int64
+	UpdatedAtMs int64
+	Namespace   string
+}
+
+// Replaces the row that the caller read: the version must be the one that the
+// caller read. It sets the version one above.
+func (q *Queries) UpdateUnitDefaults(ctx context.Context, arg UpdateUnitDefaultsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUnitDefaults,
+		arg.Pool,
+		arg.Expected,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateUnitSettings = `-- name: UpdateUnitSettings :execrows
+UPDATE unit_settings
+SET body = $1, version = $2::bigint + 1, updated_at_ms = $3
+WHERE unit_id = $4 AND version = $2::bigint
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $5)
+`
+
+type UpdateUnitSettingsParams struct {
+	Body        string
+	Expected    int64
+	UpdatedAtMs int64
+	UnitID      string
+	Namespace   string
+}
+
+// Replaces the row that the caller read: the version must be the one that the
+// caller read, and the namespace must match. It sets the version one above.
+func (q *Queries) UpdateUnitSettings(ctx context.Context, arg UpdateUnitSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUnitSettings,
+		arg.Body,
+		arg.Expected,
+		arg.UpdatedAtMs,
+		arg.UnitID,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err

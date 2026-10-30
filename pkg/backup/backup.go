@@ -161,6 +161,8 @@ var Tables = []string{
 	TablePersonPreferences,
 	"saved_views",
 	"drift_results",
+	"unit_settings",
+	"unit_defaults",
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	"git_host_connections",

@@ -4166,3 +4166,65 @@ WHERE id = sqlc.arg(id);
 SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
+
+-- name: GetUnitSettings :one
+-- The namespace is part of the key: a row of the same unit ID in another
+-- namespace reads as no row.
+SELECT s.unit_id, n.name AS namespace, s.version, s.body, s.updated_at_ms
+FROM unit_settings AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND s.unit_id = sqlc.arg(unit_id);
+
+-- name: InsertUnitSettings :execrows
+-- The caller checks the fence in the same transaction. A row that exists for
+-- the unit is not written: the count is 0.
+INSERT INTO unit_settings (unit_id, namespace_id, version, body, updated_at_ms)
+VALUES (
+    sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), 1,
+    sqlc.arg(body), sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (unit_id) DO NOTHING;
+
+-- name: UpdateUnitSettings :execrows
+-- Replaces the row that the caller read: the version must be the one that the
+-- caller read, and the namespace must match. It sets the version one above.
+UPDATE unit_settings
+SET body = sqlc.arg(body), version = CAST(sqlc.arg(expected) AS INTEGER) + 1, updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE unit_id = sqlc.arg(unit_id) AND version = CAST(sqlc.arg(expected) AS INTEGER)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteUnitSettings :execrows
+-- Deletes the row that the caller read, and no other row.
+DELETE FROM unit_settings
+WHERE unit_id = sqlc.arg(unit_id) AND version = CAST(sqlc.arg(expected) AS INTEGER)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteUnitSettingsOfUnit :exec
+-- Removes the settings of a purged unit, in the same transaction as the purge.
+DELETE FROM unit_settings
+WHERE unit_id = sqlc.arg(unit_id)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetUnitDefaults :one
+SELECT n.name AS namespace, d.pool, d.version, d.updated_at_ms
+FROM unit_defaults AS d
+JOIN namespaces AS n ON n.id = d.namespace_id
+WHERE n.name = sqlc.arg(namespace);
+
+-- name: InsertUnitDefaults :execrows
+-- The caller checks the fence in the same transaction. A row that exists is
+-- not written: the count is 0.
+INSERT INTO unit_defaults (namespace_id, pool, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(pool), 1,
+    sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (namespace_id) DO NOTHING;
+
+-- name: UpdateUnitDefaults :execrows
+-- Replaces the row that the caller read: the version must be the one that the
+-- caller read. It sets the version one above.
+UPDATE unit_defaults
+SET pool = sqlc.arg(pool), version = CAST(sqlc.arg(expected) AS INTEGER) + 1, updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE version = CAST(sqlc.arg(expected) AS INTEGER)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
