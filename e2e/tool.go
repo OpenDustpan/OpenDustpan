@@ -123,8 +123,14 @@ func OpenTofu() Tool {
 	}
 }
 
+// Pinned is the version label that stands for every pinned version of the
+// default matrix, which is the default matrix without Latest. The nightly run
+// uses it to run the pinned versions and Latest as two separate jobs.
+const Pinned = "pinned"
+
 // Versions returns the matrix from the tool's environment variable
-// (E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS), or its defaults.
+// (E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS), or its defaults. The label
+// Pinned in the variable stands for the pinned versions of the defaults.
 func (t Tool) Versions() []string {
 	raw := os.Getenv(t.versionsEnv)
 	if raw == "" {
@@ -134,7 +140,15 @@ func (t Tool) Versions() []string {
 	var versions []string
 
 	for part := range strings.SplitSeq(raw, ",") {
-		if v := strings.TrimSpace(part); v != "" {
+		switch v := strings.TrimSpace(part); v {
+		case "":
+		case Pinned:
+			for _, label := range t.defaults {
+				if label != Latest {
+					versions = append(versions, label)
+				}
+			}
+		default:
 			versions = append(versions, v)
 		}
 	}
@@ -181,6 +195,23 @@ func (t Tool) IsMatrixEnd(label string) bool {
 	}
 
 	return newest || oldest
+}
+
+// VersionAtLeast reports whether version is the same as or newer than minimum.
+// Both are x.y.z releases. A value that is not an x.y.z release is an error,
+// so a caller never takes a branch for a version it cannot place.
+func VersionAtLeast(version, minimum string) (bool, error) {
+	own := semver(version)
+	if own == nil {
+		return false, fmt.Errorf("%w: %q is not an x.y.z release", ErrBadVersion, version)
+	}
+
+	least := semver(minimum)
+	if least == nil {
+		return false, fmt.Errorf("%w: %q is not an x.y.z release", ErrBadVersion, minimum)
+	}
+
+	return slices.Compare(own, least) >= 0, nil
 }
 
 // ArchiveName returns the release archive of version for this machine.

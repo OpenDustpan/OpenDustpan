@@ -67,9 +67,9 @@ func (s *Store) AdvanceSinkCursor(
 	sink string,
 	seq int64,
 ) error {
-	inTx := func(fn func(q *db.Queries) error) error { return s.inControlFencedUpdateTx(ctx, fence, fn) }
+	inTx := func(fn func(q *db.Queries) error) error { return s.inMinimumFencedUpdateTx(ctx, fence, fn) }
 	if fence.Namespace == audit.ServerScope {
-		inTx = func(fn func(q *db.Queries) error) error { return s.inControlTx(ctx, fn) }
+		inTx = func(fn func(q *db.Queries) error) error { return s.inMinimumTx(ctx, fn) }
 	}
 
 	return inTx(func(q *db.Queries) error {
