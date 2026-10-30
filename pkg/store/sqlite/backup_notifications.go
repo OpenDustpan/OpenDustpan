@@ -79,43 +79,32 @@ func checkStagedNotificationRows(ctx context.Context, conn *sql.DB) error {
 		what: "notifications",
 		sql: `SELECT scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links,
 attributes, recipients, dedupe_key, at_ms FROM notifications`,
-	}, func(rows *sql.Rows) error {
-		var r notifystore.NotificationRow
-
-		err := rows.Scan(&r.Scope, &r.Sequence, &r.ID, &r.Type, &r.Object, &r.ObjectID, &r.Subject, &r.Agent,
-			&r.Severity, &r.Summary, &r.Links, &r.Attributes, &r.Recipients, &r.DedupeKey, &r.AtMs)
-		if err != nil {
-			return fmt.Errorf("read staged notifications: %w", backup.ErrExportRead)
+	}, stagedRow("notification", func(r *notifystore.NotificationRow) []any {
+		return []any{
+			&r.Scope, &r.Sequence, &r.ID, &r.Type, &r.Object, &r.ObjectID, &r.Subject, &r.Agent,
+			&r.Severity, &r.Summary, &r.Links, &r.Attributes, &r.Recipients, &r.DedupeKey, &r.AtMs,
 		}
+	}, func(r notifystore.NotificationRow) (string, error) {
+		_, err := notifystore.Notification(r)
 
-		if _, err := notifystore.Notification(r); err != nil {
-			return fmt.Errorf("staged notification %q: %w: %w", r.ID, err, backup.ErrCorrupt)
-		}
-
-		return nil
-	})
+		return r.ID, err
+	}))
 }
 
 func checkStagedSubscriptionRows(ctx context.Context, conn *sql.DB) error {
 	return eachStaged(ctx, conn, stagedQuery{
 		what: "subscriptions",
-		sql: `SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
-FROM notification_subscriptions`,
-	}, func(rows *sql.Rows) error {
-		var r notifystore.SubscriptionRow
-
-		err := rows.Scan(&r.ID, &r.Scope, &r.SinkID, &r.Types, &r.Objects, &r.MinSeverity, &r.State,
-			&r.Reason, &r.CreatedBy, &r.Version)
-		if err != nil {
-			return fmt.Errorf("read staged subscriptions: %w", backup.ErrExportRead)
+		sql:  `SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version FROM notification_subscriptions`,
+	}, stagedRow("subscription", func(r *notifystore.SubscriptionRow) []any {
+		return []any{
+			&r.ID, &r.Scope, &r.SinkID, &r.Types, &r.Objects, &r.MinSeverity, &r.State, &r.Reason,
+			&r.CreatedBy, &r.Version,
 		}
+	}, func(r notifystore.SubscriptionRow) (string, error) {
+		_, err := notifystore.Subscription(r)
 
-		if _, err := notifystore.Subscription(r); err != nil {
-			return fmt.Errorf("staged subscription %q: %w: %w", r.ID, err, backup.ErrCorrupt)
-		}
-
-		return nil
-	})
+		return r.ID, err
+	}))
 }
 
 func checkStagedDeliveryRows(ctx context.Context, conn *sql.DB) error {
@@ -123,22 +112,39 @@ func checkStagedDeliveryRows(ctx context.Context, conn *sql.DB) error {
 		what: "deliveries",
 		sql: `SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts,
 next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version FROM notification_deliveries`,
-	}, func(rows *sql.Rows) error {
-		var r notifystore.DeliveryRow
+	}, stagedRow("delivery", func(r *notifystore.DeliveryRow) []any {
+		return []any{
+			&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact, &r.Principal,
+			&r.State, &r.Attempts, &r.NextAtMs, &r.LastError, &r.DeliveredAtMs, &r.Owner, &r.LeaseUntilMs,
+			&r.Version,
+		}
+	}, func(r notifystore.DeliveryRow) (string, error) {
+		_, err := notifystore.Delivery(r)
 
-		err := rows.Scan(&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact,
-			&r.Principal, &r.State, &r.Attempts, &r.NextAtMs, &r.LastError, &r.DeliveredAtMs, &r.Owner,
-			&r.LeaseUntilMs, &r.Version)
-		if err != nil {
-			return fmt.Errorf("read staged deliveries: %w", backup.ErrExportRead)
+		return r.ID, err
+	}))
+}
+
+// stagedRow returns the check of one staged row of the type R: it reads the
+// columns that dest names, and calls convert, which applies the rules of a
+// stored row and returns the ID of the row. A row that fails makes the backup
+// corrupt.
+func stagedRow[R any](
+	what string, dest func(*R) []any, convert func(R) (string, error),
+) func(rows *sql.Rows) error {
+	return func(rows *sql.Rows) error {
+		var r R
+
+		if err := rows.Scan(dest(&r)...); err != nil {
+			return fmt.Errorf("read staged %s: %w", what, backup.ErrExportRead)
 		}
 
-		if _, err := notifystore.Delivery(r); err != nil {
-			return fmt.Errorf("staged delivery %q: %w: %w", r.ID, err, backup.ErrCorrupt)
+		if id, err := convert(r); err != nil {
+			return fmt.Errorf("staged %s %q: %w: %w", what, id, err, backup.ErrCorrupt)
 		}
 
 		return nil
-	})
+	}
 }
 
 // stagedQuery names a query of a staged table and what it reads, for the text
