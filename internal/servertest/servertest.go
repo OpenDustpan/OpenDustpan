@@ -76,6 +76,7 @@ type Cluster struct {
 	client    *http.Client
 	transport *http.Transport
 	opts      []dustpan.Option
+	storeOpts []postgres.Option
 	sets      []dustpan.Components
 	schemaURL string
 	blobDir   string
@@ -103,7 +104,15 @@ type instance struct {
 func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 	t.Helper()
 
-	return startCluster(t, make([]dustpan.Components, n), opts)
+	return startCluster(t, make([]dustpan.Components, n), nil, opts)
+}
+
+// StartWithStore is Start with options for the store of every server. A test
+// of database round trips uses it to give the store a query tracer.
+func StartWithStore(t *testing.T, n int, storeOpts []postgres.Option, opts ...dustpan.Option) *Cluster {
+	t.Helper()
+
+	return startCluster(t, make([]dustpan.Components, n), storeOpts, opts)
 }
 
 // StartSplit runs one server for each entry of sets, on one fresh schema,
@@ -113,12 +122,14 @@ func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 func StartSplit(t *testing.T, sets []dustpan.Components, opts ...dustpan.Option) *Cluster {
 	t.Helper()
 
-	return startCluster(t, sets, opts)
+	return startCluster(t, sets, nil, opts)
 }
 
 // startCluster starts one server for each entry of sets. A zero entry runs
 // every component.
-func startCluster(t *testing.T, sets []dustpan.Components, opts []dustpan.Option) *Cluster {
+func startCluster(
+	t *testing.T, sets []dustpan.Components, storeOpts []postgres.Option, opts []dustpan.Option,
+) *Cluster {
 	t.Helper()
 
 	n := len(sets)
@@ -134,6 +145,7 @@ func startCluster(t *testing.T, sets []dustpan.Components, opts []dustpan.Option
 		client:    &http.Client{Transport: transport, Timeout: waitLimit},
 		transport: transport,
 		opts:      opts,
+		storeOpts: storeOpts,
 		sets:      sets,
 		schemaURL: "",
 		blobDir:   filepath.Join(t.TempDir(), "blobs"),
@@ -382,7 +394,7 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 
 	db := startProxy(t, c.schemaURL)
 
-	store, err := postgres.Open(t.Context(), db.url)
+	store, err := postgres.Open(t.Context(), db.url, c.storeOpts...)
 	if err != nil {
 		db.close()
 		t.Fatalf("open store of server %d: %v", i, err)
