@@ -388,8 +388,18 @@ func TestReadsRefuseARedirect(t *testing.T) {
 		o := openHost(t, auth)
 		host, fg := o.host, o.fg
 		other := githubfake.New(t, githubfake.Config{
-			AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
-			User: githubfake.Account{ID: 0, Login: ""}, UserToken: "", Permissions: nil, Key: nil, Now: nil,
+			AppID:          "",
+			InstallationID: "",
+			Owner:          githubfake.Account{ID: 0, Login: ""},
+			User: githubfake.Account{
+				ID:    0,
+				Login: "",
+			},
+			UserToken:     "",
+			ClassicToken:  false,
+			Permissions:   nil,
+			Key:           nil,
+			Now:           nil,
 			WebhookClient: nil,
 		})
 		c := headOf(t, host)

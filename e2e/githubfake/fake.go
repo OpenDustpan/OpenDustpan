@@ -85,8 +85,13 @@ type Config struct {
 	// UserToken is the one token of a user that the fake accepts. Empty
 	// means the fake accepts no user token.
 	UserToken string
-	// Permissions are the permissions of the installation (contents write,
-	// metadata read).
+	// ClassicToken makes UserToken a classic personal access token: the call
+	// for the user answers the header X-OAuth-Scopes. A fine-grained token
+	// has no scopes, so by default the fake sends no such header.
+	ClassicToken bool
+	// Permissions are the permissions of the installation (contents read,
+	// metadata read). A test that commits through an installation token
+	// gives contents write.
 	Permissions map[string]string
 	// Key is the private key of the app. Nil makes a new key of 2048 bits.
 	Key *rsa.PrivateKey
@@ -161,7 +166,7 @@ func withDefaults(cfg Config) Config {
 	}
 
 	if cfg.Permissions == nil {
-		cfg.Permissions = map[string]string{"contents": levelNameWrite, "metadata": levelNameRead}
+		cfg.Permissions = map[string]string{"contents": levelNameRead, "metadata": levelNameRead}
 	}
 
 	return cfg

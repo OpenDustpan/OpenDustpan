@@ -137,3 +137,90 @@ func TestInstallationTokenAlwaysReadsMetadata(t *testing.T) {
 		t.Fatalf("issued tokens = %v, want the one token", got)
 	}
 }
+
+func TestUnknownPathAndWrongMethodAreJSONNotFound(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newFake(t)
+	c := newClient(t, f)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"an unknown path", http.MethodGet, "/nothing/here"},
+		{"the root", http.MethodGet, "/"},
+		{"a wrong method on the user", http.MethodPost, "/user"},
+		{"a wrong method on the installation", http.MethodDelete, "/app/installations/9001"},
+		{"a wrong method on the contents", http.MethodPut, "/repos/acme/infra/contents/README.md"},
+		{"a wrong method on the graphql path", http.MethodGet, "/graphql"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := c.do(tc.method, tc.path, f.UserToken(), "")
+			wantStatus(t, a, http.StatusNotFound)
+
+			if got := decode[map[string]string](t, a.body)["message"]; got != "Not Found" {
+				t.Fatalf("message = %q, body %s", got, a.body)
+			}
+
+			if !strings.HasPrefix(a.header.Get("Content-Type"), "application/json") {
+				t.Fatalf("Content-Type = %q", a.header.Get("Content-Type"))
+			}
+		})
+	}
+}
+
+func TestScopesHeaderOnlyForAClassicToken(t *testing.T) {
+	t.Parallel()
+
+	for _, classic := range []bool{false, true} {
+		f, _ := newFakeWith(t, nil, classic)
+		got := newClient(t, f).do(http.MethodGet, "/user", f.UserToken(), "").header.Get("X-Oauth-Scopes")
+
+		if (got != "") != classic {
+			t.Errorf("classic %v: X-OAuth-Scopes = %q", classic, got)
+		}
+	}
+}
+
+func TestInstallationPermissionsAreReadOnlyByDefault(t *testing.T) {
+	t.Parallel()
+
+	f, first := newFake(t)
+	c := newClient(t, f)
+	token := installationToken(t, c, "")
+
+	out := decode[gqlOut](t, c.do(http.MethodPost, "/graphql", token, mutation(t, "main", first.ID, "x", "x")).body)
+	if len(out.Errors) != 1 || out.Errors[0].Type != "FORBIDDEN" {
+		t.Fatalf("a commit with the default permissions: %+v", out)
+	}
+
+	a := c.do(http.MethodGet, "/app/installations/9001", jwt(t, f.PrivateKey(), f.AppID(), 9*time.Minute), "")
+	got := decode[installationAnswer](t, a.body).Permissions
+
+	if len(got) != 2 || got["contents"] != "read" || got["metadata"] != "read" {
+		t.Fatalf("permissions = %v, want contents read and metadata read", got)
+	}
+}
+
+type installationAnswer struct {
+	Permissions map[string]string `json:"permissions"`
+}
+
+func TestInstallationWithWriteCanCommit(t *testing.T) {
+	t.Parallel()
+
+	f, first := newFakeWith(t, map[string]string{"contents": "write", "metadata": "read"}, false)
+	c := newClient(t, f)
+	token := installationToken(t, c, "")
+
+	out := decode[gqlOut](t, c.do(http.MethodPost, "/graphql", token, mutation(t, "main", first.ID, "x", "x")).body)
+	if out.Data.Create == nil {
+		t.Fatalf("a commit with contents write: %+v", out)
+	}
+}

@@ -39,8 +39,18 @@ func NewGitHostFake(tb testing.TB) *GitHostFake {
 	tb.Helper()
 
 	return &GitHostFake{fake: githubfake.New(tb, githubfake.Config{
-		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
-		User: githubfake.Account{ID: 0, Login: ""}, UserToken: "", Permissions: nil, Key: nil, Now: nil,
+		AppID:          "",
+		InstallationID: "",
+		Owner:          githubfake.Account{ID: 0, Login: ""},
+		User: githubfake.Account{
+			ID:    0,
+			Login: "",
+		},
+		UserToken:     "",
+		ClassicToken:  false,
+		Permissions:   nil,
+		Key:           nil,
+		Now:           nil,
 		WebhookClient: nil,
 	})}
 }

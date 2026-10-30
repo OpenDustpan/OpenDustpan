@@ -88,7 +88,7 @@ func newHost(t *testing.T) *githubfake.Fake {
 
 	host := githubfake.New(t, githubfake.Config{
 		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
-		User: githubfake.Account{ID: 0, Login: ""}, UserToken: "github_pat_" + randomHex(t, 24),
+		User: githubfake.Account{ID: 0, Login: ""}, UserToken: "github_pat_" + randomHex(t, 24), ClassicToken: false,
 		Permissions: nil, Key: testKey(), Now: nil, WebhookClient: nil,
 	})
 
