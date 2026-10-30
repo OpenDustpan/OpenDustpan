@@ -108,6 +108,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "a checkpoint replay under another key keeps the first key", test: testCheckpointReplayOtherKey},
 		{name: "a checkpoint conflict under another key keeps the first key", test: testCheckpointConflictOtherKey},
 		{name: "an unsequenced checkpoint replaces the row and its key", test: testCheckpointUnsequencedKeys},
+		{name: "concurrent checkpoints of one sequence: one winner", test: testCheckpointConcurrentWinner},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
 		{name: "latest checkpoint is the highest version", test: testCheckpointLatestIsHighest},
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
@@ -3407,4 +3408,101 @@ func testCheckpointUnsequencedKeys(t *testing.T, f fixture) {
 
 		assertCheckpoint(t, f, f.ref, cp)
 	}
+}
+
+// checkpointRounds is the number of rounds of the concurrent checkpoint case.
+// A race that the row must decide is rare in one round, so the case repeats it.
+const checkpointRounds = 12
+
+// checkpointWriters is the number of writers in one round.
+const checkpointWriters = 6
+
+// testCheckpointConcurrentWinner shows that the row decides which of several
+// writes of one sequence wins, each under the key of its own attempt. With
+// different content, exactly one write lands and each other write fails with
+// ErrCheckpointConflict. With the same content, exactly one write lands and
+// each other write is known. The row names the key of the winner in both
+// cases.
+func testCheckpointConcurrentWinner(t *testing.T, f fixture) {
+	t.Helper()
+
+	for round := range checkpointRounds {
+		for _, same := range []bool{false, true} {
+			u := f.run(t, f.ref, "u"+strconv.Itoa(round)+strconv.FormatBool(same), mutating())
+			cps := make([]stack.Checkpoint, checkpointWriters)
+
+			for i := range cps {
+				body := `{"n":"same"}`
+				if !same {
+					body = `{"n":` + strconv.Itoa(i) + `}`
+				}
+
+				cps[i] = f.attemptCheckpoint(t, u, 2, body, "attempt"+strconv.Itoa(1000+i))
+			}
+
+			known, errs := putCheckpointsAtOnce(t, f, cps)
+
+			winner := wantOneCheckpointWinner(t, cps, known, errs, same)
+
+			got, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID)
+			if err != nil || got.BlobKey != cps[winner].BlobKey {
+				t.Fatalf("round %d: the row names %v, %v; want the key of the winner", round, got.BlobKey, err)
+			}
+
+			f.end(t, u, stack.StatusSucceeded)
+		}
+	}
+}
+
+// putCheckpointsAtOnce sends each checkpoint to the store from its own
+// goroutine, all at once, and returns the known flag and the error of each
+// call, in the order of cps.
+func putCheckpointsAtOnce(t *testing.T, f fixture, cps []stack.Checkpoint) ([]bool, []error) {
+	t.Helper()
+
+	known := make([]bool, len(cps))
+	errs := make([]error, len(cps))
+
+	var wg sync.WaitGroup
+
+	start := make(chan struct{})
+
+	for i := range cps {
+		wg.Go(func() {
+			<-start
+			known[i], errs[i] = f.s.PutCheckpoint(t.Context(), cps[i], f.fence)
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	return known, errs
+}
+
+// wantOneCheckpointWinner fails the test unless exactly one write landed and
+// the others got the answer of their content. It returns the index of the
+// winner.
+func wantOneCheckpointWinner(t *testing.T, cps []stack.Checkpoint, known []bool, errs []error, same bool) int {
+	t.Helper()
+
+	winner, won := -1, 0
+
+	for i := range cps {
+		switch {
+		case errs[i] == nil && !known[i]:
+			winner = i
+			won++
+		case same && errs[i] == nil && known[i]:
+		case !same && errors.Is(errs[i], stack.ErrCheckpointConflict) && !known[i]:
+		default:
+			t.Fatalf("write %d: known = %v, err = %v, same content = %v", i, known[i], errs[i], same)
+		}
+	}
+
+	if won != 1 {
+		t.Fatalf("%d writes landed, want exactly one (same content = %v)", won, same)
+	}
+
+	return winner
 }

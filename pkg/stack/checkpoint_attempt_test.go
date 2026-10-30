@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -242,4 +243,78 @@ func TestCheckpointSavesWriteEachKeyOnce(t *testing.T) {
 
 func distinctBody(i int) string {
 	return strings.Repeat("x", i+1)
+}
+
+// knownStore writes the row as the in-memory store does, then answers known
+// although the row names the blob of this very write, as a faulty store
+// would.
+type knownStore struct {
+	*memUpdates
+}
+
+func (k *knownStore) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
+	if _, err := k.memUpdates.PutCheckpoint(ctx, cp, fence); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// TestCheckpointKnownForOwnKeyKeepsTheBlob checks that a store that answers
+// known for the key of this very attempt cannot make the save delete the blob
+// that the committed row names: the save reads the row and keeps the blob.
+func TestCheckpointKnownForOwnKeyKeepsTheBlob(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	blobs := newReplacingBlob(clk)
+	f := newUpdatesWrapped(t, clk, blobs, nil, func(m *memUpdates) stack.CheckpointStore {
+		return &knownStore{memUpdates: m}
+	})
+	s := f.started(t, stack.KindUpdate)
+
+	in := checkpoint(1, envelope(`{"n":1}`))
+	if err := f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, in); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if got := blobKeysOf(t, blobs); len(got) != 1 {
+		t.Fatalf("blob keys = %v, want the blob that the row names", got)
+	}
+
+	cp, err := f.svc.Export(t.Context(), f.ref)
+	if err != nil || !bytes.Equal(cp.Deployment, []byte(`{"n":1}`)) {
+		t.Fatalf("export = %s, %v; want the saved state", cp.Deployment, err)
+	}
+}
+
+// TestCheckpointReadRefusesAKeyOfAnotherSequence checks that a row whose key
+// ends in another sequence number than the row itself is a corrupt record:
+// the read fails with ErrCheckpointMismatch and serves no state.
+func TestCheckpointReadRefusesAKeyOfAnotherSequence(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	s := f.started(t, stack.KindUpdate)
+
+	in := checkpoint(1, envelope(`{"n":1}`))
+	if err := f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, in); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	row, err := f.store.CheckpointByUpdate(t.Context(), f.ref, s.Update.ID)
+	if err != nil {
+		t.Fatalf("row: %v", err)
+	}
+
+	row.Sequence = 2
+	row.Lease = s.Update.Lease.Digest
+
+	if _, err = f.store.PutCheckpoint(t.Context(), row, fence()); err != nil {
+		t.Fatalf("rewrite the row: %v", err)
+	}
+
+	if _, err = f.svc.Export(t.Context(), f.ref); !errors.Is(err, stack.ErrCheckpointMismatch) {
+		t.Fatalf("export: err = %v, want ErrCheckpointMismatch", err)
+	}
 }
