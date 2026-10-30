@@ -76,7 +76,9 @@ and 10 for any other outcome.
 
 A field with no value writes no key. The server escapes the backslash, the
 line ends and (in the header) the pipe, and (in the extension) the equals
-sign, as the CEF format requires. The CEF line does not hold every field that
+sign, as the CEF format requires. Every other control character (below
+U+0020, U+007F to U+009F, U+2028 and U+2029) leaves as `\u` and four hex
+digits, so a value never ends a line. The CEF line does not hold every field that
 the hash covers (for example `tokenID`, `version` and `changes`), so the
 offline check needs the `json` format.
 

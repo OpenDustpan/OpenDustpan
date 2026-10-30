@@ -1,8 +1,10 @@
 package audit
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 )
@@ -15,12 +17,16 @@ const (
 	cefVersion = "1"
 )
 
-// cefEscape escapes s for a CEF field. The backslash and the line ends are
-// escaped in both places. The pipe ends a header field, and the equals sign
-// ends the key of an extension value, so each is escaped where it matters:
-// extension is true for a value of the extension, false for the header. A
-// line feed or a carriage return would end the line, so they leave as the
-// two characters "\n" and "\r".
+// cefEscape escapes s for a CEF field. The backslash is escaped in both
+// places. The pipe ends a header field, and the equals sign ends the key of
+// an extension value, so each is escaped where it matters: extension is true
+// for a value of the extension, false for the header. A line feed and a
+// carriage return leave as the two characters "\n" and "\r". Every other
+// control character (below U+0020, U+007F to U+009F, and the line and
+// paragraph separators U+2028 and U+2029) leaves as "\u" and four hex digits,
+// so no value can end a line or hide in a log viewer. The escape of the
+// backslash makes the text of a value that holds "\u0001" differ from the
+// escape of a control character.
 func cefEscape(s string, extension bool) string {
 	var sb strings.Builder
 
@@ -36,12 +42,20 @@ func cefEscape(s string, extension bool) string {
 			sb.WriteString(`\|`)
 		case r == '=' && extension:
 			sb.WriteString(`\=`)
+		case isCEFControl(r):
+			sb.WriteString(`\u` + fmt.Sprintf("%04X", r))
 		default:
 			sb.WriteRune(r)
 		}
 	}
 
 	return sb.String()
+}
+
+// isCEFControl reports whether r is a control character that cefEscape writes
+// as a hex escape.
+func isCEFControl(r rune) bool {
+	return r < 0x20 || (r >= 0x7F && r <= 0x9F) || r == 0x2028 || r == 0x2029 || r == utf8.RuneError
 }
 
 // cefSeverity maps the outcome of an entry to the severity of its line:
@@ -101,14 +115,20 @@ func cefLine(e audit.Entry) string {
 		sb.WriteByte('|')
 	}
 
+	// The separator goes before every pair but the first. A flag decides it,
+	// never the last byte of the line: a value may end in a pipe.
+	wroteKey := false
+
 	for _, p := range pairs {
 		if p.value == "" {
 			continue
 		}
 
-		if sb.String()[sb.Len()-1] != '|' {
+		if wroteKey {
 			sb.WriteByte(' ')
 		}
+
+		wroteKey = true
 
 		sb.WriteString(p.key + "=" + cefEscape(p.value, true))
 

@@ -148,3 +148,52 @@ func TestExportCEFSeverity(t *testing.T) {
 		})
 	}
 }
+
+// TestExportCEFKeepsKeysApart proves that the end of a value never swallows
+// the next key and that no control character leaves raw, in the extension and
+// in the header.
+func TestExportCEFKeepsKeysApart(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		userAgent string
+		want      string
+	}{
+		{"ends in pipe", "curl|", "requestClientApplication=curl| cn1=1 cn1Label=sequence"},
+		{"ends in backslash", `curl\`, `requestClientApplication=curl\\ cn1=1 cn1Label=sequence`},
+		{"ends in equals", "curl=", `requestClientApplication=curl\= cn1=1 cn1Label=sequence`},
+		{"null", "curl\x00x", `requestClientApplication=curl\u0000x cn1=1`},
+		{"tab", "curl\tx", `requestClientApplication=curl\u0009x cn1=1`},
+		{"delete", "curl\x7fx", `requestClientApplication=curl\u007Fx cn1=1`},
+		{"line separator", "curl\u2028x", `requestClientApplication=curl\u2028x cn1=1`},
+		{"paragraph separator", "curl\u2029x", `requestClientApplication=curl\u2029x cn1=1`},
+		{"literal escape text", `curl\u0000`, `requestClientApplication=curl\\u0000 cn1=1`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, store := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
+			seedEntry(t, store, "acme", "alice")
+			store.entries["acme"][0].UserAgent = tt.userAgent
+			store.entries["acme"][0].Action = "unit:" + tt.userAgent
+
+			_, lines := cefExport(t, handler)
+			if len(lines) != 1 {
+				t.Fatalf("got %d lines, want 1: %q", len(lines), lines)
+			}
+
+			if !strings.Contains(lines[0], tt.want) {
+				t.Fatalf("line lacks %q:\n%s", tt.want, lines[0])
+			}
+
+			for _, r := range lines[0] {
+				if r < 0x20 || (r >= 0x7F && r <= 0x9F) || r == '\u2028' || r == '\u2029' {
+					t.Fatalf("line holds the raw control character %U:\n%q", r, lines[0])
+				}
+			}
+		})
+	}
+}
