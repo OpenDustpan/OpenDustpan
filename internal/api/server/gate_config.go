@@ -624,19 +624,23 @@ func (h *Handler) existingVersion(r *http.Request, stored func() (int64, error))
 func classifyGateConfig(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, gate.ErrNotFound):
-		return fail(http.StatusNotFound, gateConfigNotFoundMsg), true
+		return failCoded(http.StatusNotFound, gateConfigNotFoundMsg, errcode.GateNotFound), true
 	case errors.Is(err, gate.ErrConflict):
-		return fail(http.StatusConflict, "the stored version changed: read it again and retry"), true
+		return failCoded(http.StatusConflict, "the stored version changed: read it again and retry",
+			errcode.GateVersionConflict), true
 	case errors.Is(err, gate.ErrFinal):
-		return fail(http.StatusConflict, err.Error()), true
+		return failCoded(http.StatusConflict, err.Error(), errcode.GateFinal), true
 	case errors.Is(err, errApproversUnmet):
 		return failCoded(http.StatusUnprocessableEntity, errApproversUnmet.Error(), errcode.GateApproversUnmet), true
 	case errors.Is(err, gate.ErrApprovers):
 		return classifyApprovers(err)
-	case errors.Is(err, gate.ErrInvalid), errors.Is(err, gate.ErrLimit):
-		return fail(http.StatusUnprocessableEntity, err.Error()), true
+	case errors.Is(err, gate.ErrLimit):
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateLimit), true
+	case errors.Is(err, gate.ErrInvalid):
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateInvalid), true
 	case errors.Is(err, gate.ErrUnavailable):
-		return fail(http.StatusServiceUnavailable, "the gate configuration is not available"), true
+		return failCoded(http.StatusServiceUnavailable, "the gate configuration is not available",
+			errcode.GateUnavailable), true
 	default:
 		return fail(0, ""), false
 	}

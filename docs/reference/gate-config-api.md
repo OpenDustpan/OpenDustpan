@@ -130,11 +130,18 @@ mode, as the change `gate/<id>.mode`.
 
 ## Errors
 
-| Status | Cause |
-| --- | --- |
-| 400 | The body is not one JSON object, has a field that is not in the list, or names an `id`. The collection name, the tool or the unit name in the path is not valid. The `If-Match` header is not one version in quotes. |
-| 403 | The caller lacks the action, or the change has no recent sign-in. |
-| 404 | The object does not exist. |
-| 409 | The stored version is not the version of `If-Match`. A final gate forbids the change, or the change needs a reason. |
-| 422 | A field is not valid, an object is over a limit, or the engine refuses the policy. The message names the first problem. |
-| 503 | The server has no policy engine, or the engine does not answer. The server stores nothing. |
+Each answer holds the field `errorCode`.
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.body-invalid` | The body is not one JSON object, has a field that is not in the list, or names an `id` |
+| 400 | `request.invalid-object` | The collection name, the tool or the unit name in the path is not valid |
+| 400 | `request.if-match-invalid` | The `If-Match` header is not one version in quotes |
+| 403 | `access.denied` | The caller lacks the action |
+| 403 | `mfa.fresh-step-required` | The change has no recent sign-in, or the caller uses an access token |
+| 404 | `gate.not-found` | The object does not exist at the scope |
+| 409 | `gate.version-conflict` | The stored version is not the version of `If-Match` |
+| 409 | `gate.final` | A final gate forbids the change, or the change needs a reason |
+| 422 | `gate.invalid` | A field is not valid, an ID is not valid, or the engine refuses the policy. The message names the first problem. |
+| 422 | `gate.limit` | A condition, an `unless` clause or a policy is over 4 KiB, or the scope holds the most objects of the kind |
+| 503 | `gate.unavailable` | The server has no policy engine, or the engine does not answer. The server stores nothing. |

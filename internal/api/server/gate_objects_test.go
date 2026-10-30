@@ -514,3 +514,233 @@ func TestGateRoutesNotMountedWithoutStore(t *testing.T) {
 		}
 	}
 }
+
+// gateCodeCase is one request of TestGateRoutesAnswerCodes. setup lists the
+// objects to make first, as "path" or "path:final".
+type gateCodeCase struct {
+	name   string
+	setup  []string
+	method string
+	suffix string
+	body   string
+	ifm    string
+	status int
+	code   string
+}
+
+// TestGateRoutesAnswerCodes proves that each answer of the gate and access
+// limit routes names a code of the catalog, at each scope level.
+func TestGateRoutesAnswerCodes(t *testing.T) {
+	t.Parallel()
+
+	tooLong := strings.Replace(freezeGateDoc, `context.operation.kind == \"write\"`, strings.Repeat("a", 5000), 1)
+	weaker := strings.Replace(freezeGateDoc, "enforce", "evaluate", 1)
+	tests := []gateCodeCase{
+		{"gate not found", nil, http.MethodGet, "/gates/x", "", "", http.StatusNotFound, "gate.not-found"},
+		{"limit not found", nil, http.MethodGet, "/access-limits/x", "", "", http.StatusNotFound, "gate.not-found"},
+		{
+			"delete of a gate that is not there",
+			nil,
+			http.MethodDelete,
+			"/gates/x",
+			"",
+			"",
+			http.StatusNotFound,
+			"gate.not-found",
+		},
+		{
+			"invalid gate",
+			nil,
+			http.MethodPut,
+			"/gates/x",
+			strings.Replace(freezeGateDoc, "deny", "allow", 1),
+			"",
+			http.StatusUnprocessableEntity,
+			"gate.invalid",
+		},
+		{
+			"gate the engine refuses",
+			nil,
+			http.MethodPut,
+			"/gates/x",
+			strings.Replace(freezeGateDoc, "kind", "nothing", 1),
+			"",
+			http.StatusUnprocessableEntity,
+			"gate.invalid",
+		},
+		{
+			"permit limit",
+			nil,
+			http.MethodPut,
+			"/access-limits/x",
+			`{"policy":"permit (principal, action, resource);"}`,
+			"",
+			http.StatusUnprocessableEntity,
+			"gate.invalid",
+		},
+		{
+			"bad id",
+			nil,
+			http.MethodPut,
+			"/gates/BAD",
+			freezeGateDoc,
+			"",
+			http.StatusUnprocessableEntity,
+			"gate.invalid",
+		},
+		{
+			"condition over the limit",
+			nil,
+			http.MethodPut,
+			"/gates/x",
+			tooLong,
+			"",
+			http.StatusUnprocessableEntity,
+			"gate.limit",
+		},
+		{
+			"stale gate",
+			[]string{"/gates/x"},
+			http.MethodPut,
+			"/gates/x",
+			freezeGateDoc,
+			`"9"`,
+			http.StatusConflict,
+			"gate.version-conflict",
+		},
+		{
+			"stale limit",
+			[]string{"/access-limits/x"},
+			http.MethodDelete,
+			"/access-limits/x",
+			"",
+			`"9"`,
+			http.StatusConflict,
+			"gate.version-conflict",
+		},
+		{
+			"weaker final gate",
+			[]string{"/gates/x:final"},
+			http.MethodPut,
+			"/gates/x",
+			weaker,
+			"",
+			http.StatusConflict,
+			"gate.final",
+		},
+		{
+			"delete of a final gate",
+			[]string{"/gates/x:final"},
+			http.MethodDelete,
+			"/gates/x",
+			"",
+			"",
+			http.StatusConflict,
+			"gate.final",
+		},
+		{
+			"body that is not valid",
+			nil,
+			http.MethodPut,
+			"/gates/x",
+			"{",
+			"",
+			http.StatusBadRequest,
+			"request.body-invalid",
+		},
+		{
+			"If-Match that is not a version",
+			nil,
+			http.MethodPut,
+			"/gates/x",
+			freezeGateDoc,
+			"abc",
+			http.StatusBadRequest,
+			"request.if-match-invalid",
+		},
+		{
+			"collection name with a slash",
+			nil,
+			http.MethodGet,
+			"/gates/x",
+			"",
+			"",
+			http.StatusBadRequest,
+			"request.invalid-object",
+		},
+	}
+
+	for level, base := range gateScopeURLs() {
+		for _, tt := range tests {
+			t.Run(level+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				runGateCodeCase(t, base, tt)
+			})
+		}
+	}
+}
+
+// runGateCodeCase makes the objects of tt.setup, sends the request and checks
+// the status and the code of the answer.
+func runGateCodeCase(t *testing.T, base string, tt gateCodeCase) {
+	t.Helper()
+
+	final := strings.Replace(freezeGateDoc, `"mode":"enforce"`, `"mode":"enforce","final":true`, 1)
+	target := base
+
+	if tt.name == "collection name with a slash" {
+		target = gateBase + "acme/collections/bad%2Fname"
+	}
+
+	_, h := newGateHandler(t, adminGates())
+
+	for _, s := range tt.setup {
+		path, doc, _ := strings.Cut(s, ":")
+		body := freezeGateDoc
+
+		if strings.Contains(path, "access-limits") {
+			body = noWritesDoc
+		}
+
+		if doc == "final" {
+			body = final
+		}
+
+		wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, base + path, body, ""}), http.StatusOK)
+	}
+
+	rec := serveGate(t, h, gateCall{tt.method, target + tt.suffix, tt.body, tt.ifm})
+	wantStatus(t, rec, tt.status)
+
+	if !strings.Contains(rec.Body.String(), `"errorCode":"`+tt.code+`"`) {
+		t.Errorf("body = %s, want the code %s", rec.Body.String(), tt.code)
+	}
+}
+
+// TestGateRoutesUnavailableWithoutEngine proves that a server without a policy
+// engine stores no gate and no access limit, and answers 503 with the code
+// gate.unavailable.
+func TestGateRoutesUnavailableWithoutEngine(t *testing.T) {
+	t.Parallel()
+
+	for level, base := range gateScopeURLs() {
+		for _, res := range []struct{ segment, doc string }{{"gates", freezeGateDoc}, {"access-limits", noWritesDoc}} {
+			t.Run(level+"/"+res.segment, func(t *testing.T) {
+				t.Parallel()
+
+				g := newGateEnvWith(t, adminGates(), true)
+				item := base + "/" + res.segment + "/x"
+
+				rec := serveGate(t, g, gateCall{http.MethodPut, item, res.doc, ""})
+				wantStatus(t, rec, http.StatusServiceUnavailable)
+
+				if !strings.Contains(rec.Body.String(), `"errorCode":"gate.unavailable"`) {
+					t.Errorf("body = %s, want the code gate.unavailable", rec.Body.String())
+				}
+
+				wantStatus(t, serveGate(t, g, gateCall{http.MethodGet, item, "", ""}), http.StatusNotFound)
+			})
+		}
+	}
+}

@@ -87,8 +87,16 @@ func (g gateEnv) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newGateEnv(t *testing.T, authz identity.Authorizer) gateEnv {
 	t.Helper()
 
+	return newGateEnvWith(t, authz, false)
+}
+
+// newGateEnvWith builds a gateEnv that authorizes with authz. With noEngine, the
+// gate config service has no policy engine.
+func newGateEnvWith(t *testing.T, authz identity.Authorizer, noEngine bool) gateEnv {
+	t.Helper()
+
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: false, stored: nil, authz: authz,
+		autoCreate: true, noPolicyRoutes: false, noGateEngine: noEngine, stored: nil, authz: authz,
 		namespaces: []namespace.Name{"acme", "beta"},
 	})
 	sess := e.freshSignIn(t)
