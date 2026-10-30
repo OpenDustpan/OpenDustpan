@@ -237,7 +237,7 @@ func TestStoreCheckReportsTheRefusalOfTheServer(t *testing.T) {
 		&stdout,
 		&stderr,
 	)
-	if !errors.Is(err, ErrStoreCheckStart) || !strings.Contains(err.Error(), "a store check is running") {
+	if err == nil || !errors.Is(err, ErrStoreCheckStart) || !strings.Contains(err.Error(), "a store check is running") {
 		t.Fatalf("err = %v, want ErrStoreCheckStart with the message of the server", err)
 	}
 
