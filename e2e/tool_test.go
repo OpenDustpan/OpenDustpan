@@ -58,3 +58,38 @@ func TestVersionsPinnedLeavesOutLatest(t *testing.T) {
 		})
 	}
 }
+
+func TestVersionAtLeast(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		version string
+		minimum string
+		want    bool
+		wantErr bool
+	}{
+		{name: "older minor", version: "3.272.0", minimum: "3.273.0", want: false, wantErr: false},
+		{name: "same version", version: "3.273.0", minimum: "3.273.0", want: true, wantErr: false},
+		{name: "newer minor", version: "3.274.0", minimum: "3.273.0", want: true, wantErr: false},
+		{name: "newer major", version: "4.0.0", minimum: "3.273.0", want: true, wantErr: false},
+		{name: "numeric not lexical", version: "3.1000.0", minimum: "3.273.0", want: true, wantErr: false},
+		{name: "not x.y.z", version: "dev", minimum: "3.273.0", want: false, wantErr: true},
+		{name: "bad minimum", version: "3.273.0", minimum: "latest", want: false, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := e2e.VersionAtLeast(tc.version, tc.minimum)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("VersionAtLeast(%q, %q) error = %v, want error %t", tc.version, tc.minimum, err, tc.wantErr)
+			}
+
+			if got != tc.want {
+				t.Fatalf("VersionAtLeast(%q, %q) = %t, want %t", tc.version, tc.minimum, got, tc.want)
+			}
+		})
+	}
+}

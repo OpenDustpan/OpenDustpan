@@ -197,6 +197,23 @@ func (t Tool) IsMatrixEnd(label string) bool {
 	return newest || oldest
 }
 
+// VersionAtLeast reports whether version is the same as or newer than minimum.
+// Both are x.y.z releases. A value that is not an x.y.z release is an error,
+// so a caller never takes a branch for a version it cannot place.
+func VersionAtLeast(version, minimum string) (bool, error) {
+	own := semver(version)
+	if own == nil {
+		return false, fmt.Errorf("%w: %q is not an x.y.z release", ErrBadVersion, version)
+	}
+
+	least := semver(minimum)
+	if least == nil {
+		return false, fmt.Errorf("%w: %q is not an x.y.z release", ErrBadVersion, minimum)
+	}
+
+	return slices.Compare(own, least) >= 0, nil
+}
+
 // ArchiveName returns the release archive of version for this machine.
 func (t Tool) ArchiveName(version string) (string, error) {
 	switch {
