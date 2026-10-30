@@ -32,7 +32,14 @@ const (
 func (s *Service) runCheck(
 	ctx context.Context, set profile.IssuerSettings, keys []profile.Key, needNext bool,
 ) profile.CopyCheck {
+	// A check that cannot read the copy says nothing about the keys that an
+	// earlier check found: the active key keeps signing, as the days of its
+	// life allow. Only a JWKS that was read replaces the list.
 	check := profile.CopyCheck{At: s.now().UTC(), Steps: nil, Verified: nil, OK: false}
+	if set.CopyCheck != nil {
+		check.Verified = slices.Clone(set.CopyCheck.Verified)
+	}
+
 	add := func(name, detail string, ok bool) {
 		check.Steps = append(check.Steps, profile.CopyStep{Name: name, Detail: detail, OK: ok})
 	}
@@ -78,6 +85,7 @@ func (s *Service) runCheck(
 
 	add(stepJWKS, "read", true)
 
+	check.Verified = nil
 	found := map[profile.KeyID]bool{}
 	for _, k := range set2.Keys {
 		found[profile.KeyID(k.Kid)] = true

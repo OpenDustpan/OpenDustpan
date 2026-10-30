@@ -489,7 +489,9 @@ func (s *Service) copyBefore(
 		return true, nil
 	}
 
-	return check.Holds(next.ID), nil
+	// Only this check counts: the list of an earlier check says that a key was
+	// once in a copy, and the promotion needs the key in the copy now.
+	return check.OK && check.Holds(next.ID), nil
 }
 
 func (s *Service) recordCheck(ctx context.Context, n namespace.Namespace, c profile.CopyCheck, r rotation) error {
@@ -728,7 +730,7 @@ func (s *Service) notifyRotation(
 		s.notice(ctx, n, notify.IssuerKeyNext, notify.SeverityInfo,
 			"The issuer of namespace "+n.Name.String()+" has a new next key. It becomes active at "+becomes.Format(time.RFC3339)+".",
 			"issuer.key-next:"+string(k.ID),
-			map[string]string{"namespace": n.Name.String(), "kid": string(k.ID), "activeAt": becomes.Format(time.RFC3339)})
+			map[string]string{"namespace": n.Name.String(), "kid": string(k.ID), "active-at": becomes.Format(time.RFC3339)})
 	}
 }
 
