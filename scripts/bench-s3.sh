@@ -121,12 +121,17 @@ docker run -d --name "$NAME-postgres" --network "$NET" --network-alias postgres 
 	-e POSTGRES_PASSWORD_FILE=/run/secrets/pg-password \
 	"$POSTGRES_IMAGE" >/dev/null
 
+# MinIO moves a deleted object to a trash directory and empties it every
+# 5 minutes by default. A protocol run writes and deletes gigabytes in that
+# time, so MinIO runs out of disk and answers 507. A cleanup every 5 seconds
+# frees the space between two runs.
 echo "bench-s3: start MinIO"
 docker run -d --name "$NAME-minio" --network "$NET" --network-alias minio \
 	-v "$SECRETS/minio-access:/run/secrets/minio-access:ro" \
 	-v "$SECRETS/minio-secret:/run/secrets/minio-secret:ro" \
 	-e MINIO_ROOT_USER_FILE=/run/secrets/minio-access \
 	-e MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-secret \
+	-e MINIO_API_DELETE_CLEANUP_INTERVAL=5s \
 	"$MINIO_IMAGE" server /tmp/data >/dev/null
 
 echo "bench-s3: start Garage"
