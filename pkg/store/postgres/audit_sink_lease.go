@@ -35,7 +35,7 @@ func (s *Store) AcquireSinkLease(
 
 	var claim durable.Claim
 
-	err = s.inControlTx(ctx, func(q *db.Queries) error {
+	err = s.inMinimumTx(ctx, func(q *db.Queries) error {
 		op, _, startErr := startOperation(ctx, q, durable.StartRequest{
 			Key:     audit.SinkLeaseKey(sink),
 			Kind:    audit.SinkLeaseKind,
