@@ -627,3 +627,46 @@ func TestSweepLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 		t.Fatalf("orphans left after a restore started in the loop = %d, want exactly one", left)
 	}
 }
+
+// TestJournalBuildReadsTheGuardBeforeEachBatchDelete proves that a restore
+// which starts between the deletes of two batch blobs keeps the second one:
+// the build reads the guard before each delete.
+func TestJournalBuildReadsTheGuardBeforeEachBatchDelete(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	guard := blobguardtest.NewGuard()
+	f := newBuildFixtureGuarded(t, clk, pulumijournal.NewReplayer(clk.Now, ""), nil, guard)
+	s := f.startJournaled(t)
+	keys := f.journalKeys(t, s.Update.ID)
+
+	if len(keys) != 2 {
+		t.Fatalf("journal keys = %d, want two batches", len(keys))
+	}
+
+	// The first read of the build comes before the first batch delete. The
+	// restore starts at the second read, before the second batch delete.
+	first := guard.Calls()
+
+	guard.OnRead(func() {
+		if guard.Calls() == first+2 {
+			guard.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+		}
+	})
+
+	if _, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete journaled update: %v", err)
+	}
+
+	kept := 0
+
+	for _, key := range keys {
+		if _, err := f.blobs.Get(t.Context(), key); err == nil {
+			kept++
+		}
+	}
+
+	if kept != 1 {
+		t.Fatalf("batch blobs left after a restore started between two deletes = %d, want exactly one", kept)
+	}
+}
