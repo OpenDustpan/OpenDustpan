@@ -49,11 +49,25 @@ func WithIssuerOutbox(ob notify.Outbox) Option {
 	return func(o *settings) { o.issuerOutbox = ob }
 }
 
+// issuerHost holds the settings that give the issuer host.
+type issuerHost struct {
+	base   string
+	public string
+}
+
 // newIssuerService builds the issuer, or returns nil when no issuer store is
 // set.
 func newIssuerService(svc services, cfg *settings) (*issuersvc.Service, error) {
 	if cfg.issuerStore == nil {
 		return nil, nil //nolint:nilnil // No issuer: no issuer store is set.
+	}
+
+	// Only the api component signs and answers the discovery routes, so only it
+	// needs the issuer host. The worker component rotates keys and checks
+	// copies, and reads neither setting.
+	var host issuerHost
+	if cfg.components.Has(ComponentAPI) {
+		host = issuerHost{base: cfg.issuerBaseURL, public: cfg.publicURL}
 	}
 
 	var notifier issuersvc.Notifier
@@ -68,8 +82,8 @@ func newIssuerService(svc services, cfg *settings) (*issuersvc.Service, error) {
 		Authorizer:    cfg.authorizer,
 		Notifier:      notifier,
 		Fetcher:       issuerfetch.New(egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly)),
-		IssuerBaseURL: cfg.issuerBaseURL,
-		PublicURL:     cfg.publicURL,
+		IssuerBaseURL: host.base,
+		PublicURL:     host.public,
 		Now:           cfg.now,
 		Log:           cfg.logger,
 	})
