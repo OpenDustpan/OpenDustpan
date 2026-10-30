@@ -31,7 +31,7 @@ func hostileEnv() *catalog.Env {
 func TestVersion(t *testing.T) {
 	t.Parallel()
 
-	if got := expr.New().Version(); !regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(got) {
+	if got := newEvaluator(t).Version(); !regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(got) {
 		t.Fatalf("Version() = %q, want a release such as v1.17.8", got)
 	}
 }
@@ -59,11 +59,11 @@ func TestSizeLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := expr.New().Compile(tc.source, catalog.ResultBool); !errors.Is(err, tc.want) {
+			if err := newEvaluator(t).Compile(tc.source, catalog.ResultBool); !errors.Is(err, tc.want) {
 				t.Fatalf("Compile() = %v, want %v", err, tc.want)
 			}
 
-			got, err := expr.New().Bool(t.Context(), tc.source, hostileEnv())
+			got, err := newEvaluator(t).Bool(t.Context(), tc.source, hostileEnv())
 			if got || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
@@ -110,11 +110,11 @@ func TestNameLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := expr.New().Compile(tc.source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
+			if err := newEvaluator(t).Compile(tc.source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
 				t.Fatalf("Compile() = %v, want ErrInvalid", err)
 			}
 
-			got, err := expr.New().Bool(t.Context(), tc.source, hostileEnv())
+			got, err := newEvaluator(t).Bool(t.Context(), tc.source, hostileEnv())
 			if got || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
@@ -128,7 +128,7 @@ func TestNameLayerRunsNoMethod(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{"inputs.Len() > 0", "inputs.s.Len() > 0", "inputs.tags.Len() > 0"} {
-		got, err := expr.New().Bool(t.Context(), source, hostileEnv())
+		got, err := newEvaluator(t).Bool(t.Context(), source, hostileEnv())
 		if got || !errors.Is(err, catalog.ErrRuleFailed) {
 			t.Fatalf("Bool(%q) = %v, %v, want false, ErrRuleFailed", source, got, err)
 		}
@@ -149,7 +149,7 @@ func TestNameLayerGivesNoEnvironment(t *testing.T) {
 		"inputs['OPENDUSTPAN_EXPR_TEST'] == 'secret-value'",
 		"OPENDUSTPAN_EXPR_TEST == 'secret-value'",
 	} {
-		got, err := expr.New().Bool(t.Context(), source, hostileEnv())
+		got, err := newEvaluator(t).Bool(t.Context(), source, hostileEnv())
 		if got {
 			t.Fatalf("Bool(%q) = true, want false: the expression read the process environment", source)
 		}
@@ -179,11 +179,11 @@ func TestSyntaxLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := expr.New().Compile(tc.source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
+			if err := newEvaluator(t).Compile(tc.source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
 				t.Fatalf("Compile() = %v, want ErrInvalid", err)
 			}
 
-			got, err := expr.New().Bool(t.Context(), tc.source, hostileEnv())
+			got, err := newEvaluator(t).Bool(t.Context(), tc.source, hostileEnv())
 			if got || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
@@ -210,7 +210,7 @@ func TestMemoryLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := expr.New().Bool(t.Context(), tc.source, env)
+			got, err := newEvaluator(t).Bool(t.Context(), tc.source, env)
 			if got || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
@@ -237,7 +237,7 @@ func TestConcatLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := expr.New().String(t.Context(), tc.source, env)
+			got, err := newEvaluator(t).String(t.Context(), tc.source, env)
 			if got != "" || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("String() = %d bytes, %v, want empty, ErrRuleFailed", len(got), err)
 			}
@@ -264,7 +264,7 @@ func TestResultLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := expr.New().Bool(t.Context(), tc.source, env)
+			got, err := newEvaluator(t).Bool(t.Context(), tc.source, env)
 			if got || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
@@ -280,7 +280,7 @@ func TestGroupsLayer(t *testing.T) {
 	env := hostileEnv()
 	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups+1)
 
-	got, err := expr.New().Bool(t.Context(), "true", env)
+	got, err := newEvaluator(t).Bool(t.Context(), "true", env)
 	if got || !errors.Is(err, catalog.ErrRuleFailed) {
 		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 	}
@@ -300,7 +300,7 @@ func TestFromLoopsWithinTheLimits(t *testing.T) {
 		"count(request.requester.groups, # == '') == 999",
 		"inputs.long matches '^(a|aa)+$'",
 	} {
-		got, err := expr.New().Bool(t.Context(), source, env)
+		got, err := newEvaluator(t).Bool(t.Context(), source, env)
 		if err != nil || !got {
 			t.Fatalf("Bool(%q) = %v, %v, want true", source, got, err)
 		}
@@ -341,7 +341,7 @@ func TestWorkLayerReviewerExpressions(t *testing.T) {
 
 			start := time.Now()
 
-			got, err := expr.New().Bool(t.Context(), tc.source, reviewerEnv())
+			got, err := newEvaluator(t).Bool(t.Context(), tc.source, reviewerEnv())
 			if got || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
@@ -385,7 +385,8 @@ func TestEnvLayer(t *testing.T) {
 			env := hostileEnv()
 			tc.edit(env)
 
-			if got, err := expr.New().Bool(t.Context(), "true", env); got || !errors.Is(err, catalog.ErrRuleFailed) {
+			got, err := newEvaluator(t).Bool(t.Context(), "true", env)
+			if got || !errors.Is(err, catalog.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 		})
@@ -405,7 +406,7 @@ func TestOperatorNamesCannotBeWritten(t *testing.T) {
 		"matches(request.name, inputs.s)",
 		"request.name matches '('",
 	} {
-		if err := expr.New().Compile(source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
+		if err := newEvaluator(t).Compile(source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
 			t.Fatalf("Compile(%q) = %v, want ErrInvalid", source, err)
 		}
 	}
@@ -445,7 +446,7 @@ func TestEnvTypeLayer(t *testing.T) {
 				env := hostileEnv()
 				edit(env)
 
-				got, err := expr.New().Bool(t.Context(), "true", env)
+				got, err := newEvaluator(t).Bool(t.Context(), "true", env)
 				if got || !errors.Is(err, catalog.ErrRuleFailed) {
 					t.Fatalf("%s: Bool() = %v, %v, want false, ErrRuleFailed", place, got, err)
 				}
@@ -463,7 +464,7 @@ func TestEnvTypesAreAccepted(t *testing.T) {
 	env.Input = map[string]any{"n": json.Number("5"), "f": float64(1.5), "b": true, "z": nil, "l": []any{"a", 1.0}}
 	env.Inputs["list"] = []any{map[string]any{"k": "v"}}
 
-	if got, err := expr.New().Bool(t.Context(), "input.b && len(inputs.list) == 1", env); err != nil || !got {
+	if got, err := newEvaluator(t).Bool(t.Context(), "input.b && len(inputs.list) == 1", env); err != nil || !got {
 		t.Fatalf("Bool() = %v, %v, want true", got, err)
 	}
 }
@@ -476,7 +477,7 @@ func TestRunErrorIsShort(t *testing.T) {
 	env := hostileEnv()
 	env.Inputs["s"] = strings.Repeat("Z", 100_000)
 
-	got, err := expr.New().Bool(t.Context(), "int(inputs.s) > 0", env)
+	got, err := newEvaluator(t).Bool(t.Context(), "int(inputs.s) > 0", env)
 	if got || !errors.Is(err, catalog.ErrRuleFailed) {
 		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 	}
@@ -484,4 +485,17 @@ func TestRunErrorIsShort(t *testing.T) {
 	if n := len(err.Error()); n > 300 || strings.Contains(err.Error(), strings.Repeat("Z", 300)) {
 		t.Fatalf("Bool() error has %d bytes, want at most 300 and no long part of the value", n)
 	}
+}
+
+// newEvaluator returns an Evaluator with a Limiter of its own, so that parallel
+// tests do not share a budget.
+func newEvaluator(t *testing.T) *expr.Evaluator {
+	t.Helper()
+
+	e, err := expr.New(expr.NewLimiter())
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+
+	return e
 }
