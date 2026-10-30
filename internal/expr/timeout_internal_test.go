@@ -17,7 +17,7 @@ import (
 func TestTimeLayer(t *testing.T) {
 	t.Parallel()
 
-	e := New()
+	e := mustNew(t, NewLimiter())
 	e.timeout = time.Microsecond
 
 	env := &catalog.Env{
@@ -43,7 +43,7 @@ func TestTimeLayer(t *testing.T) {
 func TestNewTimeLimit(t *testing.T) {
 	t.Parallel()
 
-	if got, want := New().timeout, catalog.ExprTimeoutMillis*time.Millisecond; got != want {
+	if got, want := mustNew(t, NewLimiter()).timeout, catalog.ExprTimeoutMillis*time.Millisecond; got != want {
 		t.Fatalf("timeout = %v, want %v", got, want)
 	}
 }
@@ -53,7 +53,7 @@ func TestNewTimeLimit(t *testing.T) {
 func TestWorkLayer(t *testing.T) {
 	t.Parallel()
 
-	e := New()
+	e := mustNew(t, NewLimiter())
 	e.timeout = time.Minute
 
 	env := &catalog.Env{
@@ -103,7 +103,7 @@ func TestWorkBudgetCounts(t *testing.T) {
 func TestRunEndsAfterTheLimit(t *testing.T) {
 	t.Parallel()
 
-	e := New()
+	e := mustNew(t, NewLimiter())
 	e.timeout = time.Nanosecond
 
 	env := &catalog.Env{
@@ -125,10 +125,10 @@ func TestRunEndsAfterTheLimit(t *testing.T) {
 
 	defer tick.Stop()
 
-	for len(e.slots) > 0 {
+	for len(e.limiter.slots) > 0 {
 		select {
 		case <-timeout:
-			t.Fatalf("%d runs have not ended 5s after the limit", len(e.slots))
+			t.Fatalf("%d runs have not ended 5s after the limit", len(e.limiter.slots))
 		case <-tick.C:
 		}
 	}
@@ -139,13 +139,13 @@ func TestRunEndsAfterTheLimit(t *testing.T) {
 func TestRunCap(t *testing.T) {
 	t.Parallel()
 
-	e := New()
+	e := mustNew(t, NewLimiter())
 	env := &catalog.Env{
 		Value: nil, Inputs: nil, Usage: nil, Input: nil, Request: schema().Request,
 	}
 
 	for range MaxConcurrentRuns {
-		e.slots <- struct{}{}
+		e.limiter.slots <- struct{}{}
 	}
 
 	got, err := e.Bool(t.Context(), "true", env)
@@ -153,7 +153,7 @@ func TestRunCap(t *testing.T) {
 		t.Fatalf("Bool() on a full evaluator = %v, %v, want false, ErrRuleFailed", got, err)
 	}
 
-	<-e.slots
+	<-e.limiter.slots
 
 	if got, err = e.Bool(t.Context(), "true", env); err != nil || !got {
 		t.Fatalf("Bool() with a free slot = %v, %v, want true", got, err)
@@ -179,5 +179,61 @@ func TestClip(t *testing.T) {
 
 	if !errors.Is(got, cause) {
 		t.Fatalf("clip(long) = %v, want an error that wraps the cause", got)
+	}
+}
+
+func mustNew(t *testing.T, l *Limiter) *Evaluator {
+	t.Helper()
+
+	e, err := New(l)
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+
+	return e
+}
+
+// TestNewNeedsALimiter checks that no Evaluator is made with a private limiter.
+func TestNewNeedsALimiter(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(nil)
+	if !errors.Is(err, ErrNoLimiter) || e != nil {
+		t.Fatalf("New(nil) = %v, %v, want nil, ErrNoLimiter", e, err)
+	}
+}
+
+// TestEvaluatorsShareTheLimiter checks that the Evaluators of one Limiter share
+// its cap: when the runs of the first fill it, the second fails closed.
+func TestEvaluatorsShareTheLimiter(t *testing.T) {
+	t.Parallel()
+
+	limiter := limiterOf(2)
+	first, second := mustNew(t, limiter), mustNew(t, limiter)
+	other := mustNew(t, limiterOf(2))
+
+	env := &catalog.Env{Value: nil, Inputs: nil, Usage: nil, Input: nil, Request: schema().Request}
+
+	// Two runs of the first Evaluator that have not ended.
+	limiter.slots <- struct{}{}
+
+	limiter.slots <- struct{}{}
+
+	for name, e := range map[string]*Evaluator{"first": first, "second": second} {
+		got, err := e.Bool(t.Context(), "true", env)
+		if got || !errors.Is(err, catalog.ErrRuleFailed) || !errors.Is(err, errBusy) {
+			t.Fatalf("%s: Bool() on a full limiter = %v, %v, want false, ErrRuleFailed", name, got, err)
+		}
+	}
+
+	// An Evaluator of another Limiter is not affected.
+	if got, err := other.Bool(t.Context(), "true", env); err != nil || !got {
+		t.Fatalf("other: Bool() = %v, %v, want true", got, err)
+	}
+
+	<-limiter.slots
+
+	if got, err := second.Bool(t.Context(), "true", env); err != nil || !got {
+		t.Fatalf("second: Bool() with a free slot = %v, %v, want true", got, err)
 	}
 }

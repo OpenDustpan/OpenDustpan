@@ -71,18 +71,25 @@ type Evaluator struct {
 	// timeout is the time limit of one run. New sets it to
 	// catalog.ExprTimeoutMillis.
 	timeout time.Duration
-	// slots holds one item for each run that has not ended.
-	slots chan struct{}
+	// limiter holds one slot for each run that has not ended.
+	limiter *Limiter
 }
 
 var _ catalog.Evaluator = (*Evaluator)(nil)
 
-// New returns the Evaluator.
-func New() *Evaluator {
-	return &Evaluator{
-		timeout: catalog.ExprTimeoutMillis * time.Millisecond,
-		slots:   make(chan struct{}, MaxConcurrentRuns),
+// ErrNoLimiter reports a call of New with no Limiter.
+var ErrNoLimiter = errors.New("an Evaluator needs a Limiter")
+
+// New returns the Evaluator that takes its slots for runs from limiter. It
+// returns ErrNoLimiter for a nil limiter: an Evaluator never makes a private
+// limiter, because a caller that makes an Evaluator for each request would
+// then have no limit. Pass the one Limiter of the process to every Evaluator.
+func New(limiter *Limiter) (*Evaluator, error) {
+	if limiter == nil {
+		return nil, ErrNoLimiter
 	}
+
+	return &Evaluator{timeout: catalog.ExprTimeoutMillis * time.Millisecond, limiter: limiter}, nil
 }
 
 // Version returns the version of the Expr library in the build, for example
@@ -184,7 +191,7 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 	}
 
 	select {
-	case e.slots <- struct{}{}:
+	case e.limiter.slots <- struct{}{}:
 	default:
 		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, errBusy)
 	}
@@ -197,7 +204,7 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 	done := make(chan runResult, 1)
 
 	go func() {
-		defer func() { <-e.slots }()
+		defer func() { <-e.limiter.slots }()
 
 		machine := vm.VM{Stack: nil, Scopes: nil, Variables: nil, MemoryBudget: catalog.ExprMemoryBudget}
 		out, err := machine.Run(program, *env)

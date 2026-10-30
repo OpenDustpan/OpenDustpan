@@ -30,7 +30,7 @@ const (
 	// MaxEnvBytes bounds the bytes of the strings in the environment of one
 	// run, and the count of its items.
 	MaxEnvBytes = 256 << 10
-	// MaxConcurrentRuns bounds the runs of one Evaluator that have not ended.
+	// MaxConcurrentRuns bounds the runs of one Limiter that have not ended.
 	// A run that passed its time limit counts until its goroutine ends, so
 	// hostile expressions cannot pile up goroutines.
 	MaxConcurrentRuns = 64
@@ -55,6 +55,25 @@ const (
 	startsWithName = "dustpan startsWith"
 	endsWithName   = "dustpan endsWith"
 )
+
+// Limiter is the cap on the runs that have not ended, shared by the
+// Evaluators that use it. One process must make one Limiter and pass it to each
+// Evaluator that it makes: the server wiring creates it at start. A run counts
+// until its goroutine ends, also after the caller got its error, so hostile
+// expressions cannot pile up goroutines. A Limiter is safe for use by many
+// goroutines.
+type Limiter struct {
+	slots chan struct{}
+}
+
+// NewLimiter returns a Limiter with MaxConcurrentRuns slots.
+func NewLimiter() *Limiter {
+	return limiterOf(MaxConcurrentRuns)
+}
+
+func limiterOf(n int) *Limiter {
+	return &Limiter{slots: make(chan struct{}, n)}
+}
 
 // meter counts the work of one run. Only the goroutine of the virtual
 // machine calls it. alive returns an error when the run must end, for example
