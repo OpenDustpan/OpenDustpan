@@ -64,7 +64,7 @@ func (d *DurableOperations) Start(ctx context.Context, req durable.StartRequest)
 		created bool
 	)
 
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		var startErr error
 
 		op, created, startErr = startOperation(ctx, q, req)
@@ -201,7 +201,7 @@ func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 
 	// No work is not an error of the transaction: the end of the canceled
 	// operations commits also when no operation can run.
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		if !req.TakeCanceled {
 			ended := db.EndExpiredCanceledDurableOperationsParams{Kinds: kinds, MaxVersions: maxVersions}
 			if err := q.EndExpiredCanceledDurableOperations(ctx, ended); err != nil {
@@ -264,7 +264,7 @@ func (d *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 	var out durable.Claim
 
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		row, now, err := lockLive(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err
@@ -295,7 +295,7 @@ func (d *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 // RecordStep implements durable.Store.
 func (d *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence, result []byte) error {
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		return recordStep(ctx, q, f, result)
 	})
 	if err != nil {
@@ -372,7 +372,7 @@ func insertStep(ctx context.Context, q *db.Queries, at stepAt, f durable.StepFen
 
 // Complete implements durable.Store.
 func (d *DurableOperations) Complete(ctx context.Context, c durable.Claim) error {
-	err := d.end(ctx, c, completeEnd)
+	err := d.end(ctx, c, completeEnd, d.store.inMinimumTx)
 	if err != nil {
 		return fmt.Errorf("complete durable operation %s: %w", c.Operation, err)
 	}
@@ -382,7 +382,7 @@ func (d *DurableOperations) Complete(ctx context.Context, c durable.Claim) error
 
 // Fail implements durable.Store.
 func (d *DurableOperations) Fail(ctx context.Context, c durable.Claim, f durable.Failure) error {
-	err := d.end(ctx, c, failEnd(f))
+	err := d.end(ctx, c, failEnd(f), d.store.inMinimumTx)
 	if err != nil {
 		return fmt.Errorf("fail durable operation %s: %w", c.Operation, err)
 	}
@@ -392,7 +392,7 @@ func (d *DurableOperations) Fail(ctx context.Context, c durable.Claim, f durable
 
 // Release implements durable.Store.
 func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error {
-	err := d.end(ctx, c, releaseEnd)
+	err := d.end(ctx, c, releaseEnd, d.store.inControlTx)
 	if err != nil {
 		return fmt.Errorf("release durable operation %s: %w", c.Operation, err)
 	}
@@ -402,7 +402,7 @@ func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 
 // GiveBack implements durable.Store.
 func (d *DurableOperations) GiveBack(ctx context.Context, c durable.Claim) error {
-	err := d.end(ctx, c, giveBackEnd)
+	err := d.end(ctx, c, giveBackEnd, d.store.inControlTx)
 	if err != nil {
 		return fmt.Errorf("give back durable operation %s: %w", c.Operation, err)
 	}
@@ -412,7 +412,7 @@ func (d *DurableOperations) GiveBack(ctx context.Context, c durable.Claim) error
 
 // Cancel implements durable.Store.
 func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		return cancelDurable(ctx, q, id)
 	})
 	if err != nil {
@@ -430,7 +430,7 @@ func (d *DurableOperations) CancelBefore(ctx context.Context, id durable.ID, ste
 		return fmt.Errorf("cancel durable operation %s before a step with no name: %w", id, durable.ErrInvalid)
 	}
 
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		row, err := q.LockDurableOperation(ctx, string(id))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return durable.ErrNotFound
@@ -506,12 +506,19 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 
 // end checks that c is the live claim of its operation and ends the claim
 // with the params that next returns. When next returns an error, end
-// changes nothing.
-func (d *DurableOperations) end(ctx context.Context, c durable.Claim, next endRule) error {
-	return d.store.inControlTx(ctx, func(q *db.Queries) error {
+// changes nothing. run is the transaction: Complete and Fail pass the one that
+// refuses a binary below the minimum, because they record a result. Release
+// and GiveBack pass the one that does not, because an old binary must be able
+// to hand its claims back when it stops.
+func (d *DurableOperations) end(ctx context.Context, c durable.Claim, next endRule, run txRunner) error {
+	return run(ctx, func(q *db.Queries) error {
 		return endClaim(ctx, q, c, next)
 	})
 }
+
+// txRunner is a transaction of the store that runs fn with the queries of the
+// transaction.
+type txRunner func(ctx context.Context, fn func(q *db.Queries) error) error
 
 // endRule returns the end of the claim of row at now, or the error that
 // stops the end.

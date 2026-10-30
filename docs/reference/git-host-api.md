@@ -72,13 +72,14 @@ A check:
 {
   "account": {"id": "99", "login": "acme-org", "expiresAt": null, "noExpiry": false,
               "scopes": ["contents:read", "metadata:read"]},
-  "capabilities": [],
-  "missing": {"write-back": ["files", "compare", "commit"], "catalog": ["files"]}
+  "capabilities": ["files"],
+  "missing": {"write-back": ["compare", "commit"], "catalog": []}
 }
 ```
 
 `missing` has one list for each of the features `write-back`,
-`write-back-review`, `fetch`, `runner-git`, `catalog` and `cause-diff`.
+`write-back-review`, `fetch`, `runner-git`, `catalog` and `cause-diff`. The list
+of a feature that the connection can serve is empty.
 
 ## Errors
 
