@@ -635,6 +635,27 @@ func blobPurgeOf(tool, unitID, nsID string, purgedAtMs int64) inventory.BlobPurg
 	}
 }
 
+// CountBlobPurges implements inventory.BlobPurgeCounter.
+func (s *Store) CountBlobPurges(ctx context.Context) (inventory.BlobPurgeBacklog, error) {
+	row, err := s.queries.CountBlobPurges(ctx)
+	if err != nil {
+		return inventory.BlobPurgeBacklog{}, fmt.Errorf("count blob purges: %w", err)
+	}
+
+	return blobPurgeBacklogOf(row.Pending, row.OldestMs), nil
+}
+
+// blobPurgeBacklogOf builds the backlog from the count and the purge time of
+// the oldest record in milliseconds. The time stays zero when no record exists.
+func blobPurgeBacklogOf(pending, oldestMs int64) inventory.BlobPurgeBacklog {
+	out := inventory.BlobPurgeBacklog{Pending: pending, OldestPurgedAt: time.Time{}}
+	if pending > 0 {
+		out.OldestPurgedAt = codec.FromMillis(oldestMs)
+	}
+
+	return out
+}
+
 // FinishBlobPurge implements inventory.BlobPurges.
 func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error {
 	err := s.inTx(ctx, func(q *db.Queries) error {
