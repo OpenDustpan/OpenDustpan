@@ -121,13 +121,14 @@ Spacelift keeps the stack.
    `namespace:manage-lifetime-limits` sets a limit on a namespace or a
    collection.
 
-   A limit never holds in silence. These rules say what it does to each
-   unit:
-   - **A new unit** under a limit, with a destroy path, receives the destroy
-     time `at` = its creation plus the limit, unless a shorter one is set.
-     The setter is the principal that set the limit.
-   - **An existing unit** with a destroy path and no destroy time, or with
-     a later one: the set of the limit is a two-step call. `POST
+   A limit holds for every unit under it, with no exception, and never in
+   silence. These rules say what it does to each unit:
+   - **A new unit** under a limit receives the destroy time `at` = its
+     creation plus the limit, unless a shorter one is set. The setter is
+     the principal that set the limit. This holds also for a unit with no
+     destroy path, and also for a unit that the CLI of a tool makes.
+   - **An existing unit** with no destroy time, or with a later one: the set
+     of the limit is a two-step call. `POST
      .../lifetime-limit/checks` with the new limit answers each unit that
      it changes, with its new destroy time, and stores nothing. The `PUT`
      then stores the limit and an explicit destroy time for each of those
@@ -136,13 +137,11 @@ Spacelift keeps the stack.
      the limit gets the destroy time now plus a grace of 72 hours, so each
      warning of decision 10 goes out first. The grace is a constant,
      `lifetime.LimitGrace`, that the API shows.
-   - **A unit with no destroy path** (decision 6) cannot be destroyed by the
-     server, so the limit cannot hold for it. The answer of the check, the
-     answer of the `PUT`, and the read of the unit mark it `not-covered`,
-     with the reason `no-destroy-path`. The inventory list takes the filter
-     `lifetime=not-covered`, and the console shows the count on the limit.
-     The fact group `lifetime` (`covered`, `destroyAt`) of `change.propose`
-     lets a gate deny a change of a unit that a limit does not cover.
+   - **A unit with no destroy path** (decision 6) also receives its destroy
+     time. The server cannot run its tool, so at that time the unit goes on
+     a **destroy hold** (decision 6a) until a person destroys it with the
+     CLI. The answer of the check and of the `PUT` names each such unit and
+     says "destroy hold at <time>".
    - **A unit that moves** into a collection with a limit follows the rule
      of an existing unit, and the move answer lists its new destroy time.
 5. **No magic.** `GET .../units/{unit_id}/destroy-time` answers the time,
@@ -150,8 +149,7 @@ Spacelift keeps the stack.
    path (decision 6), the warnings sent, and the state: `scheduled`,
    `waiting` (with the reason), `destroying`, `destroyed`, `failed` or
    `blocked`. The inventory list takes the filter `destroyBefore`.
-6. **The destroy path.** The server picks one path, and a save refuses a
-   destroy time on a unit with no path, with `lifetime.ErrNoDestroyPath`:
+6. **The destroy path.** The server picks one path:
    - A unit of a Catalog request: a revision with `ensure: absent` and the
      origin `destroy-time`. In the home `opendustpan`, a runner job destroys. In
      the home `git`, a write-back job commits `ensure: absent` with the
@@ -159,7 +157,38 @@ Spacelift keeps the stack.
    - A unit with runner settings (a pool and a code location): a runner job
      with the operation `destroy`, through `job.Service.Start`.
    - Any other unit, for example a unit that only a person's own CLI
-     writes: no path. The server cannot run that tool.
+     writes: no path. The server cannot run that tool. At its destroy time
+     the unit goes on a destroy hold (decision 6a).
+6a. **The destroy hold.** A hold is a fixed control, as a manual lock is
+    (ADR 213). It stops every change except a destroy, and it acts before
+    any change, never at the upload of a state:
+    - **Pulumi CLI.** The server refuses the create of an update of each
+      kind except `destroy` and `preview`, with 409 and the text "the
+      lifetime of this stack ended at <time>: run `pulumi destroy`".
+    - **OpenTofu.** The server cannot tell a destroy from an apply at the
+      lock of a workspace. So it refuses each lock with 409 and the text
+      "the lifetime of this workspace ended at <time>: open a destroy window,
+      then run `tofu destroy`", except during a **destroy window**. A
+      principal with `unit:run-destroy` opens a window with
+      `POST .../units/{unit_id}/destroy-window`, a reason and a fresh
+      authentication, for at most 1 hour, with an audit entry. During the
+      window the lock works.
+    - The server never refuses a state upload for a hold. A refused upload
+      after a change of resources would lose the record of those resources.
+    - When a final state version holds no resources, the hold ends, the
+      unit is `destroyed`, and decision 11 applies. A window that ends with
+      resources left puts the hold back, and the server sends
+      `unit.destroy-overdue`.
+    - While the hold lasts, the server sends `unit.destroy-overdue` once a
+      day to the owners of the unit.
+    - The read of the unit shows the state `hold`. The inventory list takes
+      the filter `lifetime=hold`. The fact group `lifetime` (`state`,
+      `destroyAt`) of `change.propose` gives the state to gates.
+
+    The refusals are new answers of a route of the Pulumi Cloud-compatible
+    API and of the TFE-compatible API. The e2e suite checks the text that
+    each real CLI shows (step 9). A hold does not change the success path
+    of either API.
 7. **Who the destroy runs as.** As ADR 267 decision 14 does for a trigger,
    the destroy runs as the **setter**: the principal that last set the
    destroy time, or the requester of the create for a lifetime of a
@@ -212,9 +241,24 @@ Spacelift keeps the stack.
     when the review request closes. Its units also get a destroy time, as
     a safety net.
 
+### Amendments that this proposal makes
+
+- ADR 226 decision 2: the value `destroy-time` of the fact `source.kind`,
+  and the fact group `lifetime` (a minor version).
+- ADR 145 decision 5: the types `unit.destroy-due`, `unit.destroy-started`,
+  `unit.destroy-failed`, `unit.destroyed`, `unit.destroy-blocked` and
+  `unit.destroy-overdue`.
+- ADR 112 decision 3: the field `lifetime` of the blueprint document.
+- ADR 213 (manual locks): the destroy hold is a second fixed control of the
+  same kind, with its own refusal text on the lock route of the
+  TFE-compatible API and on the update create route of the Pulumi
+  Cloud-compatible API.
+
 ### Owner decisions
 
-- **D8. The default of `afterDestroy`.** Options:
+- **D8. The default of `afterDestroy`.** In short: after the server
+  destroys a stack or a workspace at its destroy time, does the empty record
+  stay, or does the server delete it? Options:
   1. `keep` (recommended). HCP Terraform keeps the workspace and Pulumi
      Cloud keeps the stack by default [fetched, links above]. Nothing is
      lost, and a person can delete the empty unit later. Cost: the names
@@ -224,7 +268,9 @@ Spacelift keeps the stack.
      [fetched]. The name is free at once, and a restore still brings the
      unit back for the retention period. Cost: a team that wants to apply
      the same unit again must restore it or make it again.
-- **D9. Does a lifetime limit hold for administrators?** Options:
+- **D9. Does a lifetime limit hold for administrators?** In short: when a
+  namespace says "nothing lives longer than 30 days", can an administrator
+  keep one stack longer without a change of the limit? Options:
   1. Yes (recommended). An administrator who needs a longer life raises the
      limit, with its own audit entry. Every destroy time in the namespace
      then follows one rule that the API can explain. Cost: one more step for
@@ -236,7 +282,7 @@ Spacelift keeps the stack.
 ### Ports
 
 - `pkg/lifetime`: the model (`DestroyTime`, `Limit`, `State`), the errors
-  (`ErrLimit`, `ErrNoDestroyPath`, `ErrInvalid`, `ErrNotFound`,
+  (`ErrLimit`, `ErrHold`, `ErrInvalid`, `ErrNotFound`,
   `ErrConflict`), and the port `lifetime.Store`: `Set`, `Clear`, `Get`,
   `ClaimDue(now, n)`, `Change(state)`, `SetLimit`, `Limits`. Each write
   checks the fence and appends its audit entry in its transaction. The
@@ -270,11 +316,14 @@ schedules step of milestone 7 does):
 8. Set `inactiveFor: PT2M` on a fifth unit. Run `tofu apply` (or
    `pulumi up`) twice, one minute apart, and check that each final state
    version moves the destroy time.
-9. Make a unit that only the CLI of the suite writes, with no runner
-   settings. Check a namespace limit with the check route: the answer lists
-   that unit as `not-covered`, and an older unit with a destroy path with
-   the destroy time now plus 72 hours. Set the limit and check the explicit
-   destroy times and one audit entry for each unit.
+9. Make one stack and one workspace that only the CLIs of the suite write,
+   with no runner settings. Check a namespace limit with the check route:
+   the answer names both with "destroy hold", and an older unit with a
+   destroy path with the destroy time now plus 72 hours. Set the limit and
+   check the explicit destroy times and one audit entry for each unit.
+   After the time: `pulumi up` fails with the hold text, and `pulumi
+   destroy` works. `tofu apply` fails at the lock with the hold text. Open
+   a destroy window, run `tofu destroy`, and check that the hold ends.
 
 ### Security tests (ADR 250)
 
@@ -286,16 +335,19 @@ schedules step of milestone 7 does):
    entry: CR and LF removed, escaped for each chat platform.
 3. **Limit.** The tick claims at most 100 units in one run. A namespace has
    at most 10,000 destroy times.
-4. **Authorize at use.** At the start, a setter that lost the destroy
-   action, a disabled setter, and a deleted setter: each gives `blocked`
+4. **Authorize at use.** A lock of a workspace on hold with no window, a
+   Pulumi update of the kind `update` or `refresh` on a stack on hold, and
+   a destroy window opened by a principal with no `unit:run-destroy`, or
+   longer than 1 hour: each refused, each with an audit entry. At the
+   start, a setter that lost the destroy action, a disabled setter, and a deleted setter: each gives `blocked`
    and no job. A test sets a destroy time with a principal of another
    namespace and sees the refusal.
 5. **Fail closed.** A state write whose move of the destroy time fails
    rolls back with the state write, so a destroy time never stays behind
    an applied change. A limit set whose list of units changed between the
    check and the `PUT` fails with `lifetime.ErrConflict`. A store error at
-   the tick starts nothing. An unknown
-   destroy path refuses the save. A destroy job that fails is never started
+   the tick starts nothing. An error in the read of a hold refuses the lock
+   or the update create, never lets it pass. A destroy job that fails is never started
    again by the server.
 
 ### Work items
@@ -309,14 +361,15 @@ Sizes and conflict groups as in RFC 111.
 | E3 | `internal/lifetimesvc`: the tick, the destroy path, the setter check, the states, the four notification types | L | `lifetime`, `notify-catalog` | E2, the job model start of a runner destroy |
 | E4 | The routes, the actions `unit:set-destroy-time` and `namespace:manage-lifetime-limits`, the fact value `source.kind == "destroy-time"`, the fact group `lifetime` | M | `identity-actions`, `gate-facts` | E3 |
 | E5 | The blueprint field `lifetime`, and its use at the first state version | S | `catalog-core` | M6-2, E3 |
-| E6 | The e2e steps above, and the docs page "Destroy a stack or a workspace at a set time" | M | `e2e`, `docs` | E4, E5, E7, E8 |
+| E6 | The e2e steps above, and the docs page "Destroy a stack or a workspace at a set time" | M | `e2e`, `docs` | E4, E5, E7, E8, E9 |
 | E7 | `inactiveFor`: the move of the destroy time in the transaction of each final state version, for both tools | M | `lifetime`, `state-write` | E3 |
-| E8 | The rules of a limit: the check route, and the explicit destroy times of existing units with the grace. The mark `not-covered` and the rule of a move. The default of `afterDestroy` (after D8 and D9) | M | `lifetime`, `store-migrations` | E4 |
+| E8 | The rules of a limit: the check route, and the explicit destroy times of existing units with the grace. The rule of a move. The default of `afterDestroy` (after D8 and D9) | M | `lifetime`, `store-migrations` | E4 |
+| E9 | The destroy hold: the refusal of the Pulumi update create and of the OpenTofu lock, the destroy window, `unit.destroy-overdue`, the end of a hold | M | `lifetime`, `api-pulumi`, `api-tfe`, `store-migrations` | E8 |
 
-Order: E1, E2, E3, then E4, E5 and E7 in parallel, then E8, then E6. E2
-holds the columns of `inactiveFor` and `afterDestroy` in its one
-migration, so E7 and E8 add no migration unless E8 needs a column for the
-`not-covered` mark.
+Order: E1, E2, E3, then E4, E5 and E7 in parallel, then E8, then E9,
+then E6. E2 holds the columns of `inactiveFor` and `afterDestroy` in its
+one migration. E8 and E9 are in `store-migrations` in case they need a
+column for the grace or the window.
 
 ### Proposed glossary lines
 
