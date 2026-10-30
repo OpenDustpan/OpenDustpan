@@ -703,9 +703,18 @@ func caseReplaceEntry(t *testing.T, h Harness) {
 		t.Fatalf("audit entries = %d, want %d: the link and the loss of the old holder", len(got), before+twoLinks)
 	}
 
-	if got[before].Object == principal.Ref(ana) || got[before+1].Object != principal.Ref(ana) {
-		t.Errorf("objects = %q, %q, want the entry of the loss under %q", got[before].Object, got[before+1].Object,
-			principal.Ref(ana))
+	// The order of the two entries is not part of the contract: the old holder
+	// finds exactly one of them under its own object.
+	under := 0
+
+	for _, e := range got[before:] {
+		if e.Object == principal.Ref(ana) {
+			under++
+		}
+	}
+
+	if under != 1 {
+		t.Errorf("%d of the new entries are under %q, want the entry of the loss only", under, principal.Ref(ana))
 	}
 }
 
