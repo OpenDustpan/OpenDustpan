@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // StateGuard checks a write of state against the access limits of its action
@@ -49,6 +50,15 @@ func (h *Handler) guardStateWrite(
 	})
 	if err == nil {
 		return true
+	}
+
+	// A database that does not answer is not a decision of a gate. The call
+	// stays refused, and the answer is the same 503 with Retry-After as on
+	// every other route.
+	if errors.Is(err, namespace.ErrUnavailable) {
+		h.writeError(ctx, w, err)
+
+		return false
 	}
 
 	refusal, ok := errors.AsType[*gate.RefusalError](err)

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
@@ -15,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // errGuardDown is the error of a guard that cannot decide.
@@ -248,5 +251,43 @@ func TestStateGuardThatCannotDecideRefuses(t *testing.T) {
 				t.Fatalf("body %q shows the internal error text", rec.Body)
 			}
 		})
+	}
+}
+
+// TestStateGuardOnALostStoreAnswers503WithRetryAfter proves that a guard that
+// fails because the database does not answer gives 503 with Retry-After 5 and
+// the code namespace.unavailable, not the gate refusal, on each guarded route.
+func TestStateGuardOnALostStoreAnswers503WithRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	causes := []struct {
+		name string
+		err  error
+	}{
+		{"sentinel", namespace.ErrUnavailable},
+		{"wrapped sentinel", fmt.Errorf("read fence: %w", namespace.ErrUnavailable)},
+		{"connection failed", fmt.Errorf("%w: connection failed: %w", namespace.ErrUnavailable, syscall.ECONNREFUSED)},
+		{"busy", fmt.Errorf("%w: database is busy", namespace.ErrUnavailable)},
+		{"in a refusal", &gate.RefusalError{
+			Err: fmt.Errorf("%w: %w", gate.ErrUnavailable, namespace.ErrUnavailable), Record: "", Messages: nil,
+		}},
+	}
+
+	for _, rt := range guardRoutes() {
+		for _, tc := range causes {
+			t.Run(rt.name+" "+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				f := guardedFixture(t, newRecordingGuard(tc.err))
+
+				rec := serveRoute(t, f, rt)
+				if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" ||
+					len(f.pulumi.calls) != 0 || !strings.Contains(rec.Body.String(), errcode.NamespaceUnavailable) {
+					t.Fatalf("%s answers %d with Retry-After %q and %d calls, want 503, 5 and none with %s: %s",
+						rt.name, rec.Code, rec.Header().Get("Retry-After"), len(f.pulumi.calls),
+						errcode.NamespaceUnavailable, rec.Body)
+				}
+			})
+		}
 	}
 }
