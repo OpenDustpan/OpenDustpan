@@ -10,6 +10,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Files of the protocol run in the output directory.
@@ -28,6 +29,23 @@ const (
 	protocolPercentScale = 100.0
 )
 
+// errPlanMismatch reports a resume with a plan that differs from the plan
+// of the results that protocol.json holds.
+var errPlanMismatch = errors.New("the plan differs from the plan of the stored results; " +
+	"use the same -ops, -runs and -concurrency, or another BENCH_S3_OUT")
+
+// checkResumePlan refuses a requested plan that differs from the stored plan
+// when the file holds results.
+func checkResumePlan(stored, requested protocolPlan, results int) error {
+	if results > 0 && stored != requested {
+		return fmt.Errorf("%w: stored ops %d, runs %d, concurrency %d; requested ops %d, runs %d, concurrency %d",
+			errPlanMismatch, stored.Ops, stored.Runs, stored.Concurrency,
+			requested.Ops, requested.Runs, requested.Concurrency)
+	}
+
+	return nil
+}
+
 // errProtocolPlan reports a protocol plan with no operation.
 var errProtocolPlan = errors.New("-ops, -runs and -concurrency must be 1 or more")
 
@@ -44,10 +62,14 @@ type familyInfo struct {
 // every result so far. A resumed run reads it and skips the results it
 // holds.
 type protocolFile struct {
-	Plan     protocolPlan  `json:"plan"`
-	Host     hostInfo      `json:"host"`
-	Families []familyInfo  `json:"families"`
-	Results  []protoResult `json:"results"`
+	Plan     protocolPlan `json:"plan"`
+	Host     hostInfo     `json:"host"`
+	Families []familyInfo `json:"families"`
+	// Enforced says for each store whether it refused a second write with
+	// If-None-Match. A store that does not enforce it gives no verdict: its
+	// old path does not run as intended.
+	Enforced map[string]bool `json:"enforced"`
+	Results  []protoResult   `json:"results"`
 }
 
 // readProtocol reads protocol.json of dir, or answers an empty file.
@@ -58,6 +80,7 @@ func readProtocol(dir string) (*protocolFile, error) {
 			Plan:     protocolPlan{Ops: 0, Runs: 0, Concurrency: 0},
 			Host:     readHost(),
 			Families: nil,
+			Enforced: map[string]bool{},
 			Results:  nil,
 		}, nil
 	}
@@ -70,6 +93,17 @@ func readProtocol(dir string) (*protocolFile, error) {
 
 	if err := json.Unmarshal(data, &pf); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", protocolFileName, err)
+	}
+
+	if pf.Enforced == nil {
+		pf.Enforced = map[string]bool{}
+	}
+
+	// A file of an earlier version keeps the run count in its plan only.
+	for i := range pf.Results {
+		if pf.Results[i].Runs == 0 {
+			pf.Results[i].Runs = pf.Plan.Runs
+		}
 	}
 
 	return &pf, nil
@@ -120,8 +154,17 @@ func runProtocol(ctx context.Context, logger *slog.Logger, o options) error {
 		return err
 	}
 
-	pf.Plan = protocolPlan{Ops: o.protoOps, Runs: o.protoRuns, Concurrency: o.protoConc}
+	requested := protocolPlan{Ops: o.protoOps, Runs: o.protoRuns, Concurrency: o.protoConc}
+	if planErr := checkResumePlan(pf.Plan, requested, len(pf.Results)); planErr != nil {
+		return planErr
+	}
+
+	pf.Plan = requested
 	pf.Families = familyInfos()
+
+	for store, check := range res.Conditional {
+		pf.Enforced[store] = check.Enforced
+	}
 
 	db, err := openPGModel(ctx, o.pgURL(creds))
 	if err != nil {
@@ -297,7 +340,12 @@ func renderProtocol(pf *protocolFile) string {
 		oldS := summarize(filterResults(pf.Results, key, modeOld))
 		newS := summarize(filterResults(pf.Results, key, modeNew))
 
-		writePathRow(&b, key, modeOld, oldS)
+		oldLabel, result := modeOld, verdict(oldS, newS)
+		if !pf.Enforced[key.store] {
+			oldLabel, result = modeOld+", not enforced", "no verdict: the store does not enforce If-None-Match"
+		}
+
+		writePathRow(&b, key, oldLabel, oldS)
 		writePathRow(&b, key, modeNew, newS)
 		fmt.Fprintf(
 			&b,
@@ -312,9 +360,11 @@ func renderProtocol(pf *protocolFile) string {
 				newS.OpsPerSec.Median,
 			),
 			deltaPct(oldS.MBPerSec.Median, newS.MBPerSec.Median),
-			verdict(oldS, newS),
+			result,
 		)
 	}
+
+	writeGapNotes(&b, pf.Results)
 
 	return b.String()
 }
@@ -369,4 +419,54 @@ func filterResults(results []protoResult, key groupKey, mode string) []protoResu
 	}
 
 	return out
+}
+
+// longGap is the gap between two runs of one family above which the report
+// names it: a resumed run can split the runs of a family over hours.
+const longGap = 30 * time.Minute
+
+// writeGapNotes names each family whose runs have a gap above longGap
+// between two runs that follow each other.
+func writeGapNotes(b *strings.Builder, results []protoResult) {
+	var notes []string
+
+	for _, key := range groupKeys(results) {
+		if gap := largestGap(results, key); gap > longGap {
+			notes = append(notes, fmt.Sprintf("- %s, %s, %s: a gap of %s between two runs. "+
+				"The run stopped and resumed there.", key.profile, key.store, key.family, gap.Round(time.Minute)))
+		}
+	}
+
+	if len(notes) == 0 {
+		return
+	}
+
+	b.WriteString("\nResumed families:\n\n" + strings.Join(notes, "\n") + "\n")
+}
+
+// largestGap answers the largest gap between the start times of two runs of
+// key that follow each other. A time that does not parse counts as no gap.
+func largestGap(results []protoResult, key groupKey) time.Duration {
+	var times []time.Time
+
+	for i := range results {
+		r := &results[i]
+		if r.Profile != key.profile || r.Store != key.store || r.Family != key.family {
+			continue
+		}
+
+		if t, err := time.Parse(time.RFC3339, r.Time); err == nil {
+			times = append(times, t)
+		}
+	}
+
+	slices.SortFunc(times, func(a, c time.Time) int { return a.Compare(c) })
+
+	var largest time.Duration
+
+	for i := 1; i < len(times); i++ {
+		largest = max(largest, times[i].Sub(times[i-1]))
+	}
+
+	return largest
 }

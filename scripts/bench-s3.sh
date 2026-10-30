@@ -192,6 +192,14 @@ echo "bench-s3: build the benchmark and the load harness"
 go build -o "$WORK/s3bench" ./cmd/s3bench
 go build -o "$WORK/load" ./load
 
+# The record names each store and its version, so a missing MinIO version
+# stops the run.
+MINIO_VERSION="$(docker exec "$NAME-minio" minio --version 2>/dev/null | head -1 || true)"
+if [ -z "$MINIO_VERSION" ]; then
+	echo "bench-s3: cannot read the MinIO version; run docker logs $NAME-minio" >&2
+	exit 1
+fi
+
 mkdir -p "$OUT_DIR/load"
 {
 	echo "minio=$MINIO_IMAGE"
@@ -199,7 +207,7 @@ mkdir -p "$OUT_DIR/load"
 	echo "postgres=$POSTGRES_IMAGE"
 	echo "toxiproxy=$TOXIPROXY_IMAGE"
 	docker version --format 'docker={{.Server.Version}}'
-	echo "minio-version=$(docker exec "$NAME-minio" minio --version 2>/dev/null | head -1)"
+	echo "minio-version=$MINIO_VERSION"
 	echo "garage-version=$(docker exec "$NAME-garage" /garage --version 2>/dev/null | head -1)"
 	echo "postgres-version=$(docker exec "$NAME-postgres" postgres --version 2>/dev/null | head -1)"
 } >"$OUT_DIR/images.txt"

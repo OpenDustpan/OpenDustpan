@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -44,8 +47,9 @@ const (
 	auditCheckpointBytes = 1 << 10
 )
 
-// errGetBody reports a GET that did not answer the whole object.
-var errGetBody = errors.New("GET answered a short body")
+// errGetBody reports a GET that did not answer the whole object with its
+// hash.
+var errGetBody = errors.New("GET answered a body of another size or hash")
 
 // family is one blob family of the protocol: its object size and the two
 // paths.
@@ -119,12 +123,14 @@ func (r *protoRun) get(ctx context.Context, key string) error {
 		return fmt.Errorf("get: %w", err)
 	}
 
-	n, readErr := io.Copy(io.Discard, rc)
+	h := sha256.New()
+
+	n, readErr := io.Copy(h, rc)
 	if err := errors.Join(readErr, rc.Close()); err != nil {
 		return fmt.Errorf("read body: %w", err)
 	}
 
-	if int(n) != len(r.body.body) {
+	if int(n) != len(r.body.body) || hex.EncodeToString(h.Sum(nil)) != r.body.hash {
 		return fmt.Errorf("%w: %d of %d bytes", errGetBody, n, len(r.body.body))
 	}
 
@@ -229,6 +235,49 @@ func restoreWrite() family {
 	}
 }
 
+// errKeyPresentStatus reports a conditional PUT on a present key that
+// answered neither a refusal nor a success.
+var errKeyPresentStatus = errors.New("conditional PUT on a present key answered an unexpected status")
+
+// restorePresent models the write of one blob by a restore into a live store
+// that holds it already. The old path sends the conditional PUT and takes
+// the refusal (412 or 409) as "present". A store that ignores the header
+// answers 200 and writes the same bytes again. The new path reads the live
+// key, compares its size and hash with the manifest, and skips the write.
+func restorePresent() family {
+	return family{
+		Name: "restore write (key present)", Bytes: checkpointBytes, Read: true,
+		OldPath: seqConditional + " (refused: present)",
+		NewPath: "GET live key + compare size and hash (skip)",
+		seed: func(ctx context.Context, r *protoRun) error {
+			return parallel(protoSeedCount, func(i int) error {
+				return r.putPlain(ctx, r.readPrefix+"/"+strconv.Itoa(i))
+			})
+		},
+		old: func(ctx context.Context, r *protoRun, i int) error {
+			status, err := r.target.rawPut(
+				ctx,
+				r.readPrefix+"/"+strconv.Itoa(i%protoSeedCount),
+				r.body,
+				conditionalHeader(),
+			)
+			if err != nil {
+				return err
+			}
+
+			switch status {
+			case http.StatusPreconditionFailed, http.StatusConflict, http.StatusOK:
+				return nil
+			default:
+				return fmt.Errorf("%w: %d", errKeyPresentStatus, status)
+			}
+		},
+		new: func(ctx context.Context, r *protoRun, i int) error {
+			return r.get(ctx, r.readPrefix+"/"+strconv.Itoa(i%protoSeedCount))
+		},
+	}
+}
+
 // auditCheck models the read of one audit checkpoint by the check. The old
 // path reads the one copy at its fixed key. The new path lists the prefix
 // of the position, then reads each copy (one copy here).
@@ -277,6 +326,7 @@ func protocolFamilies() []family {
 		unitImport(),
 		putOnly("backup target copy", checkpointBytes),
 		restoreWrite(),
+		restorePresent(),
 		putOnly("audit checkpoint write", auditCheckpointBytes),
 		auditCheck(),
 	}
@@ -290,6 +340,7 @@ type protoResult struct {
 	Mode        string  `json:"mode"`
 	Run         int     `json:"run"`
 	Ops         int     `json:"ops"`
+	Runs        int     `json:"runs"`
 	Concurrency int     `json:"concurrency"`
 	Errors      int     `json:"errors"`
 	FirstError  string  `json:"firstError,omitempty"`
@@ -301,9 +352,12 @@ type protoResult struct {
 	Time        string  `json:"time"`
 }
 
-// id answers the identity of the result, so a resumed run skips it.
+// id answers the identity of the result, so a resumed run skips it. The
+// plan is part of it, so a result of one plan never stands for a result of
+// another plan.
 func (p protoResult) id() string {
-	return p.Profile + "|" + p.Store + "|" + p.Family + "|" + p.Mode + "|" + strconv.Itoa(p.Run)
+	return p.Profile + "|" + p.Store + "|" + p.Family + "|" + p.Mode + "|" + strconv.Itoa(p.Run) +
+		"|ops=" + strconv.Itoa(p.Ops) + "|runs=" + strconv.Itoa(p.Runs) + "|conc=" + strconv.Itoa(p.Concurrency)
 }
 
 // series runs ops operations of op with conc workers and answers the
@@ -437,7 +491,7 @@ func (p protocolRunner) oneRun(ctx context.Context, spec runSpec, done map[strin
 	f, seed, mode, run := spec.family, spec.seed, spec.mode, spec.run
 	res := protoResult{
 		Profile: p.profile, Store: p.target.name, Family: f.Name, Mode: mode, Run: run,
-		Ops: p.plan.Ops, Concurrency: p.plan.Concurrency, Errors: 0, FirstError: "",
+		Ops: p.plan.Ops, Runs: p.plan.Runs, Concurrency: p.plan.Concurrency, Errors: 0, FirstError: "",
 		P50Ms: 0, P99Ms: 0, WallMs: 0, OpsPerSec: 0, BytesPerSec: 0, Time: time.Now().UTC().Format(time.RFC3339),
 	}
 

@@ -5,7 +5,9 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestLinkSplit(t *testing.T) {
@@ -215,8 +217,100 @@ func noRuns() pathSummary {
 // resultOf answers a protocol result with the timing fields set.
 func resultOf(p50, p99, ops, bytesPerSec float64, errs int) protoResult {
 	return protoResult{
-		Profile: "p", Store: "s", Family: "f", Mode: modeOld, Run: 1, Ops: 1, Concurrency: 1,
+		Profile: "p", Store: "s", Family: "f", Mode: modeOld, Run: 1, Ops: 1, Runs: 1, Concurrency: 1,
 		Errors: errs, FirstError: "", P50Ms: p50, P99Ms: p99, WallMs: 1, OpsPerSec: ops, BytesPerSec: bytesPerSec,
 		Time: "",
+	}
+}
+
+func TestCheckResumePlan(t *testing.T) {
+	t.Parallel()
+
+	full := protocolPlan{Ops: 10000, Runs: 5, Concurrency: 16}
+	smoke := protocolPlan{Ops: 200, Runs: 1, Concurrency: 16}
+
+	if err := checkResumePlan(full, full, 3); err != nil {
+		t.Fatalf("same plan: %v, want no error", err)
+	}
+
+	if err := checkResumePlan(smoke, full, 0); err != nil {
+		t.Fatalf("a file with no results: %v, want no error", err)
+	}
+
+	for _, requested := range []protocolPlan{
+		smoke,
+		{Ops: 10000, Runs: 6, Concurrency: 16},
+		{Ops: 10000, Runs: 5, Concurrency: 8},
+	} {
+		if err := checkResumePlan(full, requested, 1); !errors.Is(err, errPlanMismatch) {
+			t.Fatalf("checkResumePlan(%+v) = %v, want errPlanMismatch", requested, err)
+		}
+	}
+}
+
+func TestResultIDHoldsThePlan(t *testing.T) {
+	t.Parallel()
+
+	a := resultOf(1, 2, 3, 4, 0)
+	b := a
+	b.Ops = 200
+
+	c := a
+	c.Concurrency = 8
+
+	d := a
+	d.Runs = 9
+
+	if a.id() == b.id() || a.id() == c.id() || a.id() == d.id() {
+		t.Fatalf("ids of different plans are equal: %q", a.id())
+	}
+}
+
+func TestLargestGap(t *testing.T) {
+	t.Parallel()
+
+	at := func(clock string) protoResult {
+		r := resultOf(1, 2, 3, 4, 0)
+		r.Time = "2026-10-30T" + clock + "Z"
+
+		return r
+	}
+
+	results := []protoResult{at("01:00:00"), at("01:02:00"), at("03:02:00"), at("03:04:00")}
+	key := groupKey{profile: "p", store: "s", family: "f"}
+
+	if got := largestGap(results, key); got != 2*time.Hour {
+		t.Fatalf("largestGap = %v, want 2h", got)
+	}
+
+	var b strings.Builder
+
+	writeGapNotes(&b, results)
+
+	if !strings.Contains(b.String(), "a gap of 2h0m0s") {
+		t.Fatalf("gap notes = %q", b.String())
+	}
+}
+
+func TestRenderNoVerdictWithoutEnforcement(t *testing.T) {
+	t.Parallel()
+
+	oldRun, newRun := resultOf(10, 20, 100, 1, 0), resultOf(30, 60, 30, 1, 0)
+	newRun.Mode = modeNew
+
+	pf := &protocolFile{
+		Plan: protocolPlan{Ops: 10000, Runs: 5, Concurrency: 16}, Host: readHost(), Families: nil,
+		Enforced: map[string]bool{"s": false}, Results: []protoResult{oldRun, newRun},
+	}
+
+	out := renderProtocol(pf)
+	if !strings.Contains(out, "old, not enforced") || !strings.Contains(out, "no verdict") ||
+		strings.Contains(out, "does not meet") {
+		t.Fatalf("render of a store that does not enforce:\n%s", out)
+	}
+
+	pf.Enforced["s"] = true
+	if out := renderProtocol(pf); !strings.Contains(out, "does not meet") {
+		t.Fatalf("render of a store that enforces:\n%s", out)
 	}
 }
