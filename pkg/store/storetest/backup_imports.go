@@ -111,9 +111,9 @@ func seedOneImport(t *testing.T, ports ImportPorts, acme namespace.Namespace, id
 
 	commit := unitimport.UploadCommit{
 		ImportID: id, UnitDir: "0123456789abcdef0123456789abcdef", Sequence: 1,
-		Facts: "0000000001-a1b2c3.json", CommittedAt: now(),
+		Facts: "0000000001-a1b2c3.json", CommittedAt: now(), AttemptStartedAt: time.Now(),
 	}
-	if err := ports.Uploads.CommitUploadVersion(ctx, fence, commit); err != nil {
+	if err := ports.Uploads.CommitUploadVersion(ctx, fence, commit, e); err != nil {
 		t.Fatalf("commit upload of %s: %v", id, err)
 	}
 

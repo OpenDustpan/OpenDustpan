@@ -11,12 +11,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/internal/unitimport/unitimporttest"
 	"opendustpan.org/opendustpan/internal/unitimport/upload"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -43,6 +45,8 @@ var errReset = errors.New("connection reset")
 // row is its primary key in the SQL adapters.
 type memCommits struct {
 	rows map[string]unitimport.UploadCommit
+	// entries are the audit entries that the fake got with the rows.
+	entries []audit.Entry
 	// lose, when set, stores the row and then answers its error, as a store
 	// does when it loses the response.
 	lose error
@@ -50,10 +54,12 @@ type memCommits struct {
 }
 
 func newCommits() *memCommits {
-	return &memCommits{rows: map[string]unitimport.UploadCommit{}, lose: nil, mu: sync.Mutex{}}
+	return &memCommits{rows: map[string]unitimport.UploadCommit{}, entries: nil, lose: nil, mu: sync.Mutex{}}
 }
 
-func (m *memCommits) CommitUploadVersion(_ context.Context, _ namespace.Fence, c unitimport.UploadCommit) error {
+func (m *memCommits) CommitUploadVersion(
+	_ context.Context, _ namespace.Fence, c unitimport.UploadCommit, e audit.Entry,
+) error {
 	if err := c.Validate(); err != nil {
 		return fmt.Errorf("upload commit: %w", err)
 	}
@@ -61,12 +67,18 @@ func (m *memCommits) CommitUploadVersion(_ context.Context, _ namespace.Fence, c
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// The fake has no clock of its own: the time of the commit is the clock.
+	if c.CommittedAt.Sub(c.AttemptStartedAt) > unitimport.UploadAttemptDeadline {
+		return fmt.Errorf("%w: version %d", unitimport.ErrAttemptExpired, c.Sequence)
+	}
+
 	k := fmt.Sprintf("%s/%d", c.UnitDir, c.Sequence)
 	if _, ok := m.rows[k]; ok {
 		return fmt.Errorf("%w: version %d", unitimport.ErrUploadExists, c.Sequence)
 	}
 
 	m.rows[k] = c
+	m.entries = append(m.entries, e)
 
 	return m.lose
 }
@@ -95,7 +107,9 @@ func (m *memCommits) UploadCommits(
 // commitsOf returns the commit store of s: the tests keep it beside the
 // source.
 func commitsFor(c unitimport.UploadStore) upload.Commits {
-	return upload.Commits{Store: c, Fence: namespace.Fence{Namespace: "acme", FailoverVersion: 1}, ImportID: "imp-1"}
+	return upload.Commits{
+		Store: c, Fence: namespace.Fence{Namespace: "acme", FailoverVersion: 1}, ImportID: "imp-1", Entry: testEntry,
+	}
 }
 
 func newSource(t *testing.T) (*upload.Source, *blobfs.Store) {
@@ -448,10 +462,19 @@ func TestNewRefuses(t *testing.T) {
 		}
 	}
 
-	none := upload.Commits{Store: nil, Fence: namespace.Fence{Namespace: "", FailoverVersion: 0}, ImportID: ""}
+	none := upload.Commits{
+		Store: nil, Fence: namespace.Fence{Namespace: "", FailoverVersion: 0}, ImportID: "", Entry: nil,
+	}
 
 	if _, err = upload.New(store, none, "upload/a", 1, time.Now); err == nil {
 		t.Error("New with no commit store succeeded, want an error")
+	}
+
+	noEntry := commitsFor(newCommits())
+	noEntry.Entry = nil
+
+	if _, err = upload.New(store, noEntry, "upload/a", 1, time.Now); err == nil {
+		t.Error("New with no audit entry succeeded, want an error")
 	}
 }
 
@@ -512,7 +535,9 @@ type failingCommits struct {
 	*memCommits
 }
 
-func (*failingCommits) CommitUploadVersion(context.Context, namespace.Fence, unitimport.UploadCommit) error {
+func (*failingCommits) CommitUploadVersion(
+	context.Context, namespace.Fence, unitimport.UploadCommit, audit.Entry,
+) error {
 	return errReset
 }
 
@@ -702,6 +727,7 @@ func TestReaderRefusesAHostileCommitRow(t *testing.T) {
 
 			commits.rows[dirName(unit())+"/1"] = unitimport.UploadCommit{
 				ImportID: "imp-1", UnitDir: dirName(unit()), Sequence: 1, Facts: name, CommittedAt: clock(),
+				AttemptStartedAt: time.Time{},
 			}
 
 			_, err := s.Versions(t.Context(), unitimport.Credential{}, unit(), "", 10)
@@ -757,5 +783,134 @@ func writeKey(t *testing.T, store blob.Store, u unitimport.SourceUnit, name, con
 
 	if err = store.Put(t.Context(), k, strings.NewReader(content)); err != nil {
 		t.Fatalf("put %s: %v", name, err)
+	}
+}
+
+// testEntry is the audit entry that the tests give for a commit row.
+func testEntry(c unitimport.UploadCommit) audit.Entry {
+	var e audit.Entry
+
+	e.At, e.Namespace, e.Subject, e.Action, e.Object = c.CommittedAt, "acme", "user:ada", "import:upload-commit", "acme"
+	e.Channel, e.Kind, e.Outcome = audit.ChannelAPI, audit.KindChange, audit.OutcomeSuccess
+	e.Reason = fmt.Sprintf("version %d of unit %s", c.Sequence, c.UnitDir)
+
+	return e
+}
+
+// steppedClock gives base on its first call, the start of an attempt, and
+// base+elapsed on each later call.
+func steppedClock(elapsed time.Duration) func() time.Time {
+	var calls atomic.Int32
+
+	return func() time.Time {
+		if calls.Add(1) == 1 {
+			return clock()
+		}
+
+		return clock().Add(elapsed)
+	}
+}
+
+func TestAttemptDeadline(t *testing.T) {
+	t.Parallel()
+
+	deadline := unitimport.UploadAttemptDeadline
+
+	cases := []struct {
+		name    string
+		elapsed time.Duration
+		expired bool
+	}{
+		{"just inside the deadline", deadline - time.Millisecond, false},
+		{"at the deadline", deadline, false},
+		{"just past the deadline", deadline + time.Millisecond, true},
+		{"long past the deadline", 24 * time.Hour, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := putAfter(t, tc.elapsed)
+			if tc.expired {
+				got.checkExpired(t)
+			} else {
+				got.checkCommitted(t)
+			}
+		})
+	}
+}
+
+// afterPut is what a put leaves: its error, the commit fake and the number of
+// objects in the blob store.
+type afterPut struct {
+	err     error
+	commits *memCommits
+	objects int
+}
+
+func (a afterPut) checkCommitted(t *testing.T) {
+	t.Helper()
+
+	if a.err != nil || len(a.commits.rows) != 1 || len(a.commits.entries) != 1 {
+		t.Fatalf(
+			"put = %v, rows = %d, entries = %d, want one commit",
+			a.err,
+			len(a.commits.rows),
+			len(a.commits.entries),
+		)
+	}
+}
+
+func (a afterPut) checkExpired(t *testing.T) {
+	t.Helper()
+
+	if !errors.Is(a.err, unitimport.ErrAttemptExpired) || !errors.Is(a.err, unitimport.ErrSourceInvalid) {
+		t.Fatalf("put error = %v, want ErrAttemptExpired in ErrSourceInvalid", a.err)
+	}
+
+	// The attempt left no row, and its body and facts file are gone.
+	if len(a.commits.rows) != 0 || len(a.commits.entries) != 0 || a.objects != 1 {
+		t.Errorf("rows = %d, entries = %d, objects = %d, want 0, 0 and the unit file only",
+			len(a.commits.rows), len(a.commits.entries), a.objects)
+	}
+}
+
+// putAfter puts version 1 with a clock that shows elapsed at the commit. It
+// returns what the put left.
+func putAfter(t *testing.T, elapsed time.Duration) afterPut {
+	t.Helper()
+
+	store, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	commits := newCommits()
+
+	s, err := upload.New(store, commitsFor(commits), prefix, maxBytes, steppedClock(elapsed))
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	_, putErr := s.Put(t.Context(), unit(), 1, claims(1), strings.NewReader("late"))
+
+	objs, err := store.List(t.Context(), prefix)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	return afterPut{err: putErr, commits: commits, objects: len(objs)}
+}
+
+func TestCommitAppendsOneAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	s, _, commits := newSourceWith(t)
+	put(t, s, unit(), 1, []byte("one"))
+
+	if len(commits.entries) != 1 || commits.entries[0].Action != "import:upload-commit" ||
+		!commits.entries[0].At.Equal(clock()) {
+		t.Errorf("entries = %+v, want one import:upload-commit entry at the commit time", commits.entries)
 	}
 }

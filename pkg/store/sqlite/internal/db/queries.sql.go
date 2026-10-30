@@ -8168,6 +8168,7 @@ FROM namespaces n
 JOIN imports i ON i.namespace_id = n.id
 WHERE n.name = ?5 AND n.failover_version = ?6
   AND i.id = ?7 AND i.state NOT IN ('released', 'canceled')
+  AND ?8 + ?9 >= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
 `
 
 type InsertImportUploadCommitParams struct {
@@ -8178,11 +8179,14 @@ type InsertImportUploadCommitParams struct {
 	Namespace       string
 	FailoverVersion int64
 	ImportID        string
+	StartedAtMs     interface{}
+	DeadlineMs      interface{}
 }
 
 // The commit row of one upload version, in one statement: the namespace must
-// hold the failover version of the caller, and the import must not have
-// ended. It inserts no row when either check fails, and the primary key
+// hold the failover version of the caller, the import must not have
+// ended, and the attempt must have started no more than deadline_ms before
+// the clock of the database. It inserts no row when a check fails, and the primary key
 // refuses a second row for the version.
 func (q *Queries) InsertImportUploadCommit(ctx context.Context, arg InsertImportUploadCommitParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertImportUploadCommit,
@@ -8193,6 +8197,8 @@ func (q *Queries) InsertImportUploadCommit(ctx context.Context, arg InsertImport
 		arg.Namespace,
 		arg.FailoverVersion,
 		arg.ImportID,
+		arg.StartedAtMs,
+		arg.DeadlineMs,
 	)
 	if err != nil {
 		return 0, err

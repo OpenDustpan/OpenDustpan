@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -14,6 +15,17 @@ import (
 // the unit directory and the sequence already have a commit row. The first
 // commit stays.
 var ErrUploadExists = errors.New("upload version already committed")
+
+// ErrAttemptExpired reports a commit of an attempt that started more than
+// UploadAttemptDeadline before the commit, by the clock of the database. The
+// attempt does not count: the reaper may delete its files.
+var ErrAttemptExpired = errors.New("upload attempt passed its deadline")
+
+// UploadAttemptDeadline is the time that one attempt to store a version has
+// for the write of its files and the commit of its row. The grace period of
+// the blob reaper is longer than this deadline, so the reaper never deletes
+// the files of an attempt that can still commit.
+const UploadAttemptDeadline = 30 * time.Minute
 
 // MaxUploadSequence is the largest sequence of an upload version.
 const MaxUploadSequence = 9_999_999_999
@@ -35,6 +47,10 @@ type UploadCommit struct {
 	Sequence    int
 	Facts       string
 	CommittedAt time.Time
+	// AttemptStartedAt is the time at which the attempt started, by the clock
+	// of the writer. The store checks it against its own clock. The store
+	// does not keep it.
+	AttemptStartedAt time.Time
 }
 
 // Validate returns ErrInvalid when c has a value that no commit row can hold.
@@ -53,6 +69,8 @@ func (c UploadCommit) Validate() error {
 		return fmt.Errorf("%w: the upload facts file name %q is not <sequence>-<attempt>.json", ErrInvalid, c.Facts)
 	case c.CommittedAt.IsZero():
 		return fmt.Errorf("%w: the upload commit has no time", ErrInvalid)
+	case c.AttemptStartedAt.IsZero():
+		return fmt.Errorf("%w: the upload commit has no attempt start time", ErrInvalid)
 	}
 
 	return nil
@@ -62,14 +80,16 @@ func (c UploadCommit) Validate() error {
 // CommitUploadVersion takes the fence of the namespace and checks it in the
 // same statement that inserts the row. It wraps ErrInvalid for a bad commit,
 // ErrNotFound and ErrPurged for an import that does not exist, ErrTransition
-// for an import that ended, and ErrUploadExists for a version that has its
-// row already; the first row stays. It writes no audit entry: the upload
-// request that calls it is audited by its caller, and the row holds the time.
+// for an import that ended, ErrAttemptExpired for an attempt that started
+// more than UploadAttemptDeadline ago by the clock of the database, and
+// ErrUploadExists for a version that has its row already; the first row
+// stays. The entry e is appended in the same transaction as the row, and it
+// names the namespace of the fence; a refused commit appends nothing.
 // UploadCommits returns the rows of one unit directory of an import, in the
 // order of the sequences, and an empty list when the import holds none.
 type UploadStore interface {
 	// CommitUploadVersion inserts the commit row of one version.
-	CommitUploadVersion(ctx context.Context, fence namespace.Fence, c UploadCommit) error
+	CommitUploadVersion(ctx context.Context, fence namespace.Fence, c UploadCommit, e audit.Entry) error
 	// UploadCommits returns the commit rows of one unit directory.
 	UploadCommits(ctx context.Context, ns namespace.Name, importID, unitDir string) ([]UploadCommit, error)
 }

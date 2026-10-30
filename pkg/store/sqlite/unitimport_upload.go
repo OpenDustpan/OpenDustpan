@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/unitimport"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -13,9 +14,12 @@ import (
 var _ unitimport.UploadStore = (*Imports)(nil)
 
 // CommitUploadVersion implements unitimport.UploadStore. The fence and the
-// state of the import are in the WHERE clause of the one INSERT, as a second
-// layer next to the fence check of the transaction.
-func (i *Imports) CommitUploadVersion(ctx context.Context, fence namespace.Fence, c unitimport.UploadCommit) error {
+// state of the import, and the attempt deadline by the clock of the database,
+// are in the WHERE clause of the one INSERT, as a second layer next to the
+// fence check of the transaction.
+func (i *Imports) CommitUploadVersion(
+	ctx context.Context, fence namespace.Fence, c unitimport.UploadCommit, e audit.Entry,
+) error {
 	if err := c.Validate(); err != nil {
 		return fmt.Errorf("upload commit: %w", err)
 	}
@@ -23,10 +27,11 @@ func (i *Imports) CommitUploadVersion(ctx context.Context, fence namespace.Fence
 	i.store.mu.RLock()
 	defer i.store.mu.RUnlock()
 
-	return i.store.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return i.store.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		n, err := q.InsertImportUploadCommit(ctx, db.InsertImportUploadCommitParams{
 			UnitDir: c.UnitDir, Sequence: int64(c.Sequence), Facts: c.Facts, CommittedAtMs: c.CommittedAt.UnixMilli(),
 			Namespace: fence.Namespace.String(), FailoverVersion: fence.FailoverVersion, ImportID: c.ImportID,
+			StartedAtMs: c.AttemptStartedAt.UnixMilli(), DeadlineMs: unitimport.UploadAttemptDeadline.Milliseconds(),
 		})
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -41,7 +46,8 @@ func (i *Imports) CommitUploadVersion(ctx context.Context, fence namespace.Fence
 		}
 
 		// No row went in. Find out why, for the error. The transaction has
-		// checked the fence already, so the import is missing or ended.
+		// checked the fence already, so the import is missing, it ended, or
+		// the attempt passed its deadline by the clock of the database.
 		nsID, err := importNamespaceID(ctx, q, fence.Namespace)
 		if err != nil {
 			return err
@@ -60,7 +66,8 @@ func (i *Imports) CommitUploadVersion(ctx context.Context, fence namespace.Fence
 			)
 		}
 
-		return namespace.ErrFenced
+		return fmt.Errorf("%w: the attempt for version %d of unit %q started at %s",
+			unitimport.ErrAttemptExpired, c.Sequence, c.UnitDir, c.AttemptStartedAt.UTC().Format(time.RFC3339))
 	})
 }
 
@@ -88,6 +95,7 @@ func (i *Imports) UploadCommits(
 		out = append(out, unitimport.UploadCommit{
 			ImportID: rows[n].ImportID, UnitDir: rows[n].UnitDir, Sequence: int(rows[n].Sequence),
 			Facts: rows[n].Facts, CommittedAt: time.UnixMilli(rows[n].CommittedAtMs).UTC(),
+			AttemptStartedAt: time.Time{},
 		})
 	}
 

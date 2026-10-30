@@ -315,40 +315,14 @@ func (m *memStore) Ledger(_ context.Context, ns namespace.Name, id, unitID strin
 
 // CommitUploadVersion implements unitimport.UploadStore. The map key is the
 // primary key of the SQL adapters.
-func (m *memStore) CommitUploadVersion(_ context.Context, fence namespace.Fence, c unitimport.UploadCommit) error {
+func (m *memStore) CommitUploadVersion(
+	_ context.Context, fence namespace.Fence, c unitimport.UploadCommit, e audit.Entry,
+) error {
 	if err := c.Validate(); err != nil {
 		return fmt.Errorf("upload commit: %w", err)
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	version, ok := m.fences[fence.Namespace]
-	if !ok {
-		return namespace.ErrNotFound
-	}
-
-	if version != fence.FailoverVersion {
-		return namespace.ErrFenced
-	}
-
-	imp, err := m.find(fence.Namespace, c.ImportID)
-	if err != nil {
-		return err
-	}
-
-	if imp.State.Ended() {
-		return fmt.Errorf("%w: import is %q", unitimport.ErrTransition, imp.State)
-	}
-
-	k := fmt.Sprintf("%s\x00%s\x00%d", key(fence.Namespace, c.ImportID), c.UnitDir, c.Sequence)
-	if _, exists := m.uploads[k]; exists {
-		return fmt.Errorf("%w: version %d of unit %q", unitimport.ErrUploadExists, c.Sequence, c.UnitDir)
-	}
-
-	m.uploads[k] = c
-
-	return nil
+	return m.write(fence, e, func() error { return m.commitUpload(fence, c) })
 }
 
 // UploadCommits implements unitimport.UploadStore.
@@ -373,6 +347,33 @@ func (m *memStore) UploadCommits(
 	slices.SortFunc(rows, func(a, b unitimport.UploadCommit) int { return a.Sequence - b.Sequence })
 
 	return rows, nil
+}
+
+// commitUpload inserts the row under the lock of write, which has checked the
+// fence.
+func (m *memStore) commitUpload(fence namespace.Fence, c unitimport.UploadCommit) error {
+	imp, err := m.find(fence.Namespace, c.ImportID)
+	if err != nil {
+		return err
+	}
+
+	if imp.State.Ended() {
+		return fmt.Errorf("%w: import is %q", unitimport.ErrTransition, imp.State)
+	}
+
+	if time.Since(c.AttemptStartedAt) > unitimport.UploadAttemptDeadline {
+		return fmt.Errorf("%w: version %d of unit %q", unitimport.ErrAttemptExpired, c.Sequence, c.UnitDir)
+	}
+
+	k := fmt.Sprintf("%s\x00%s\x00%d", key(fence.Namespace, c.ImportID), c.UnitDir, c.Sequence)
+	if _, exists := m.uploads[k]; exists {
+		return fmt.Errorf("%w: version %d of unit %q", unitimport.ErrUploadExists, c.Sequence, c.UnitDir)
+	}
+
+	c.AttemptStartedAt = time.Time{}
+	m.uploads[k] = c
+
+	return nil
 }
 
 // write runs fn under the lock after the checks of a fenced, audited write,

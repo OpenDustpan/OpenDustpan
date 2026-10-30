@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/unitimport"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -60,11 +61,15 @@ const sequenceDigits = 10
 const sha256Hex = 64
 
 // Commits is the commit store of one import: the store, the fence of the
-// namespace of the import, and the ID of the import.
+// namespace of the import, and the ID of the import. Entry gives the audit
+// entry that the store appends in the transaction of a commit row. The caller
+// sets the principal, the channel and the request in it; the source does not
+// know them.
 type Commits struct {
 	Store    unitimport.UploadStore
 	Fence    namespace.Fence
 	ImportID string
+	Entry    func(c unitimport.UploadCommit) audit.Entry
 }
 
 // Source is the upload source of one import.
@@ -90,8 +95,10 @@ func New(
 		return nil, fmt.Errorf("upload prefix: %w", err)
 	}
 
-	if commits.Store == nil || commits.ImportID == "" {
-		return nil, fmt.Errorf("%w: the upload source needs a commit store and an import ID", unitimport.ErrInvalid)
+	if commits.Store == nil || commits.ImportID == "" || commits.Entry == nil {
+		return nil, fmt.Errorf(
+			"%w: the upload source needs a commit store, an import ID and an audit entry", unitimport.ErrInvalid,
+		)
 	}
 
 	if maxBytes < 1 {
@@ -338,6 +345,7 @@ type attempt struct {
 	facts    facts
 	unitFile []byte
 	id       string
+	started  time.Time
 }
 
 // prepare checks a Put before it writes and returns the new attempt.
@@ -361,6 +369,7 @@ func (s *Source) prepare(
 		at = s.now()
 	}
 
+	started := s.now().UTC()
 	id := newAttempt()
 
 	f := facts{
@@ -380,7 +389,7 @@ func (s *Source) prepare(
 		return attempt{}, err
 	}
 
-	return attempt{facts: f, unitFile: unitFile, id: id}, nil
+	return attempt{facts: f, unitFile: unitFile, id: id, started: started}, nil
 }
 
 // commit makes the unit file, writes the facts file of the attempt, and
@@ -418,15 +427,20 @@ func (s *Source) commit(
 
 	row := unitimport.UploadCommit{
 		ImportID: s.commits.ImportID, UnitDir: s.unitDirName(u), Sequence: f.Sequence, Facts: name,
-		CommittedAt: s.now().UTC(),
+		CommittedAt: s.now().UTC(), AttemptStartedAt: at.started,
 	}
 
-	switch err = s.commits.Store.CommitUploadVersion(ctx, s.commits.Fence, row); {
+	switch err = s.commits.Store.CommitUploadVersion(ctx, s.commits.Fence, row, s.commits.Entry(row)); {
 	case err == nil:
 		return f.version(), nil
 	case errors.Is(err, unitimport.ErrUploadExists):
 		return unitimport.SourceVersion{}, s.discard(ctx, fmt.Errorf(
 			"%w: sequence %d is stored: %w", unitimport.ErrSourceInvalid, f.Sequence, err,
+		), bk, fk)
+	case errors.Is(err, unitimport.ErrAttemptExpired):
+		return unitimport.SourceVersion{}, s.discard(ctx, fmt.Errorf(
+			"%w: the attempt for sequence %d passed its deadline of %s: %w",
+			unitimport.ErrSourceInvalid, f.Sequence, unitimport.UploadAttemptDeadline, err,
 		), bk, fk)
 	case errors.Is(err, unitimport.ErrInvalid), errors.Is(err, unitimport.ErrNotFound),
 		errors.Is(err, unitimport.ErrPurged), errors.Is(err, unitimport.ErrTransition),

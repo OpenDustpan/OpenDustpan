@@ -2711,15 +2711,17 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
 
 -- name: InsertImportUploadCommit :execrows
 -- The commit row of one upload version, in one statement: the namespace must
--- hold the failover version of the caller, and the import must not have
--- ended. It inserts no row when either check fails, and the primary key
+-- hold the failover version of the caller, the import must not have
+-- ended, and the attempt must have started no more than deadline_ms before
+-- the clock of the database. It inserts no row when a check fails, and the primary key
 -- refuses a second row for the version.
 INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
 SELECT n.id, i.id, sqlc.arg(unit_dir), sqlc.arg(sequence), sqlc.arg(facts), sqlc.arg(committed_at_ms)
 FROM namespaces n
 JOIN imports i ON i.namespace_id = n.id
 WHERE n.name = sqlc.arg(namespace) AND n.failover_version = sqlc.arg(failover_version)
-  AND i.id = sqlc.arg(import_id) AND i.state NOT IN ('released', 'canceled');
+  AND i.id = sqlc.arg(import_id) AND i.state NOT IN ('released', 'canceled')
+  AND sqlc.arg(started_at_ms) + sqlc.arg(deadline_ms) >= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER);
 
 -- name: ListImportUploadCommits :many
 -- The commit rows of one unit directory of an import, in the order of the
