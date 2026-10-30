@@ -97,6 +97,8 @@ type restoreServiceLive struct {
 	// applyErr is the error of ApplyStaging, to test a refusal by the swap.
 	applyErr error
 	dev      devLiveState
+	// staged holds the input of each StageRestore call.
+	staged []backup.RestoreStageInput
 	// ops is the store of durable operations of the restores, maint the
 	// installation state that the fenced writes change, entered the
 	// maintenance flag of each restore, and areas the staging areas.

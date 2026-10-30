@@ -411,6 +411,12 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 		return nil, fmt.Errorf("stage backup %s for restore %s: %w", in.BackupID, in.ID, err)
 	}
 
+	if stage.DropIssuerKeys && !in.CheckOnly {
+		if recErr := s.recordKeysDropped(ctx, sc, in); recErr != nil {
+			return nil, recErr
+		}
+	}
+
 	if stage.Strip {
 		dev.report = report
 	}
@@ -472,6 +478,7 @@ func (s *RestoreService) stageInput(
 		Open: portableOpener(ctx, s.target, in.BackupID), Want: restoreWant(manifest, wantBlobs),
 		Files: manifest.SQLFiles, Options: StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
 		Strip: dev.production(), StripMode: DevStripDetect,
+		DropIssuerKeys: s.foreignInstallation(manifest),
 	}
 
 	if dev.production() && s.allowDev && !in.CheckOnly {
@@ -479,6 +486,29 @@ func (s *RestoreService) stageInput(
 	}
 
 	return area, stage, nil
+}
+
+// foreignInstallation reports whether the backup comes from another
+// installation than this server. It fails closed: a server with no
+// installation name cannot say that the backup is its own.
+func (s *RestoreService) foreignInstallation(manifest Manifest) bool {
+	return s.installation == "" || !slices.Contains(manifest.PrimaryInstallations, s.installation)
+}
+
+// recordKeysDropped records, as an audit event of the restore and in the log,
+// that the restore did not restore the signing keys of the issuers.
+func (s *RestoreService) recordKeysDropped(ctx context.Context, sc durable.StepContext, in restoreInput) error {
+	object := "restore " + in.ID.String() + " did not restore the signing keys of the OIDC issuers: backup " +
+		in.BackupID.String() + " comes from another installation, so each namespace gets new keys"
+
+	if err := s.live.RecordRestoreEvent(ctx, sc.Fence, in.ID, object); err != nil {
+		return fmt.Errorf("record the drop of the issuer keys for restore %s: %w", in.ID, err)
+	}
+
+	s.logger.WarnContext(ctx, "the restore does not restore the signing keys of the OIDC issuers",
+		slog.String("restore_id", in.ID.String()), slog.String("backup_id", in.BackupID.String()))
+
+	return nil
 }
 
 // stepCheck checks the key and the blobs of the backup against the pinned

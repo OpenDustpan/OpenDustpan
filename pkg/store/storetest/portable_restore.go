@@ -423,6 +423,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	checkImportRowCounts(t, ps.src, sum)
 	checkBlameRowCounts(t, ps.src, sum)
 	checkProfileRowCounts(t, ps.src, sum)
+	checkIssuerRowCounts(t, ps.src, sum)
 	checkRunnerRowCounts(t, ps.src, sum)
 	requireSeededGate(t, ps.src, sum)
 
@@ -440,6 +441,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 		ns: seed.acme, w: seed.net, first: seed.current.ID.String(), second: seed.pending.ID.String(),
 	})
 	checkRestoredProfiles(t, ps.dst, seed.acme, seed.profiles)
+	checkRestoredIssuer(t, ps.dst, seed.acme, seed.issuer)
 	checkRestoredRunners(t, ps.dst, seed.acme.Name, seed.runners)
 	checkRunnerControlRowsAbsent(t, ps.dst)
 

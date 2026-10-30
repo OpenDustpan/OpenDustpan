@@ -510,6 +510,11 @@ type RestoreStageInput struct {
 	// StageRestore returns. A restore into a production installation sets it.
 	Strip     bool
 	StripMode DevStripMode
+	// DropIssuerKeys removes the signing keys of the OIDC issuers from the
+	// staged data, and the record of the last copy check of each issuer. A
+	// restore from the backup of another installation sets it, so two
+	// installations never sign with one key.
+	DropIssuerKeys bool
 }
 
 // RestoreStaging is the staging port of a restore that runs as a durable

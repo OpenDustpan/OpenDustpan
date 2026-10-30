@@ -351,6 +351,10 @@ func (l *restoreServiceLive) StageRestore(
 		return backup.Summary{}, none, err
 	}
 
+	l.mu.Lock()
+	l.staged = append(l.staged, in)
+	l.mu.Unlock()
+
 	sum, err := l.StagePortable(ctx, in.Open, in.Want, in.Files, in.Options)
 	if err != nil {
 		return backup.Summary{}, none, err

@@ -734,6 +734,12 @@ func (s *Store) StageRestore(
 		return backup.Summary{}, none, err
 	}
 
+	if in.DropIssuerKeys {
+		if dropErr := dropStagedIssuerKeys(ctx, path); dropErr != nil {
+			return backup.Summary{}, none, errors.Join(dropErr, removeSnapshotErr(path))
+		}
+	}
+
 	if !in.Strip {
 		return sum, none, nil
 	}

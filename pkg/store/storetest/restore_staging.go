@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/profile"
 )
 
 // restoreStagingCases are the cases of backup.RestoreStaging.
@@ -20,6 +21,7 @@ func restoreStagingCases() []restoreCase {
 		{name: "the swap of a staging area checks the fence in its transaction", test: testRestoreAreaSwapFenced},
 		{name: "a cancel before the swap and the swap have one winner", test: testRestoreAreaSwapCanceled},
 		{name: "cleanup drops the areas of its restore and of ended restores", test: testRestoreAreaCleanup},
+		{name: "a stage from another installation restores no issuer key", test: testRestoreAreaDropsIssuerKeys},
 	}
 }
 
@@ -363,5 +365,70 @@ func (r *stagedRestore) finishAndCleanNext(t *testing.T, foreign backup.StagingA
 
 	if got := r.areas(t); len(got) != 1 || got[0] != foreign {
 		t.Fatalf("staging areas after the next cleanup = %+v, want only %s", got, foreign)
+	}
+}
+
+// testRestoreAreaDropsIssuerKeys stages the backup of a store that keeps issuer
+// keys twice: with the keys, and as the backup of another installation. After
+// the swap the first destination holds the keys, and the second holds none and
+// no record of a copy check, while it keeps the settings.
+func testRestoreAreaDropsIssuerKeys(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	for _, drop := range []bool{false, true} {
+		r := newStagedRestore(t, newStore)
+
+		seeder, ok := r.dst.(IssuerSeeder)
+		if !ok {
+			t.Skip("the store keeps no issuer keys")
+		}
+
+		in := r.input(t)
+		in.DropIssuerKeys = drop
+
+		area, err := backup.NewStagingArea(r.id, r.held.Claim.Token)
+		if err != nil {
+			t.Fatalf("staging area: %v", err)
+		}
+
+		if _, _, err = r.staging.StageRestore(t.Context(), area, in); err != nil {
+			t.Fatalf("stage (drop %v): %v", drop, err)
+		}
+
+		if err = r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+			t.Fatalf("enter maintenance mode: %v", err)
+		}
+
+		swap := r.held.Claim.Step(backup.RestoreStepSwap)
+		if _, err = r.staging.ApplyRestoreArea(t.Context(), swap, area, false); err != nil {
+			t.Fatalf("swap (drop %v): %v", drop, err)
+		}
+
+		checkIssuerAfterStage(t, seeder.IssuerPorts().Store, drop)
+	}
+}
+
+// checkIssuerAfterStage checks the issuer tables of the store after a restore
+// that dropped the keys, or kept them.
+func checkIssuerAfterStage(t *testing.T, store profile.IssuerStore, dropped bool) {
+	t.Helper()
+
+	live, err := store.Live(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("Live: %v", err)
+	}
+
+	set, err := store.GetIssuerSettings(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("GetIssuerSettings: %v", err)
+	}
+
+	switch {
+	case dropped && (len(live) != 0 || set.CopyCheck != nil):
+		t.Errorf("a restore from another installation kept %d issuer keys and the copy check %v", len(live), set.CopyCheck)
+	case dropped && set.IssuerURL == "":
+		t.Error("a restore from another installation dropped the settings of the issuer")
+	case !dropped && (len(live) != 3 || set.CopyCheck == nil):
+		t.Errorf("a restore from the same installation holds %d issuer keys and the copy check %v", len(live), set.CopyCheck)
 	}
 }
