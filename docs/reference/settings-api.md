@@ -177,6 +177,7 @@ namespace for a namespace. One `PATCH` writes one entry, with one change for
 each key. A change holds the key, the effective value before and after, the
 layer of the new value, and `takesEffect` when the new value needs a restart.
 A secret shows only `not set`.
+A `null` for a locked key changes no effective value. Its change shows the database value that goes away, `not set` as the new value, and the layer `database`.
 
 A request that the server refuses because of its content writes one entry with
 the outcome `failure`. A stale revision changes nothing and writes no entry.

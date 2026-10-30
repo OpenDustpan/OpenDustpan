@@ -190,25 +190,26 @@ func (st SettingStore) Update(
 
 	var result setting.Result
 
-	run := func(q *db.Queries) error {
-		// Every audited write takes the lock of the server audit scope first,
-		// so the lock order is the same everywhere.
+	// The lock order is the one of every audited write that must be ordered
+	// with the writes of the installation: the advisory lock of the server
+	// audit scope first, then the namespace row. No transaction takes the
+	// scope lock after a namespace row, so two writes cannot deadlock.
+	err = st.s.inTx(ctx, func(q *db.Queries) error {
 		if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
 			return fmt.Errorf("lock server audit scope: %w", lockErr)
+		}
+
+		if !scope.IsInstallation() {
+			if fenceErr := checkFenceForUpdate(ctx, q, fence); fenceErr != nil {
+				return fenceErr
+			}
 		}
 
 		res, changeErr := setting.Change(ctx, settingTx{q: q, entryScope: entryScope}, scope, in)
 		result = res
 
 		return changeErr
-	}
-
-	if scope.IsInstallation() {
-		err = st.s.inTx(ctx, run)
-	} else {
-		err = st.s.inFencedUpdateTx(ctx, fence, run)
-	}
-
+	})
 	if err != nil {
 		return none, err
 	}

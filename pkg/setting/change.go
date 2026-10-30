@@ -270,16 +270,23 @@ func changeEntry(in ChangeInput, scope Scope, values entryValues, changed []Edit
 			reduces = true
 		}
 
-		oldText, newText := old.Value, next.Value
+		oldText, newText, layer := old.Value, next.Value, next.Source
 		if decl.Secret {
 			oldText, newText = "not set", "not set"
+		}
+
+		// A delete of a database value that the static layer hides changes no
+		// effective value. The entry records the change that happened: the
+		// database value goes away, in the database layer.
+		if old.Shadowed {
+			oldText, newText, layer = old.DatabaseValue, "not set", SourceDatabase
 		}
 
 		entry.Changes = append(entry.Changes, audit.Change{
 			Key:         edit.Key,
 			Old:         &oldText,
 			New:         newText,
-			Layer:       string(next.Source),
+			Layer:       string(layer),
 			TakesEffect: takesEffect(decl.Apply),
 		})
 	}

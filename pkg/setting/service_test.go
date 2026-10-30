@@ -154,3 +154,27 @@ func TestNewServiceDefaults(t *testing.T) {
 		t.Fatalf("Get = %+v, %v", res, err)
 	}
 }
+
+func TestChangeRefusesAKeyTwiceInOnePatch(t *testing.T) {
+	t.Parallel()
+
+	m := newMemStore()
+	svc := setting.NewService(m, settingtest.Registry(), nil, nil, nil)
+
+	// A patch from ParsePatch never holds a key twice. This one is built by
+	// hand, so only the check of Change stops it.
+	patch := setting.Patch{
+		{Key: settingtest.KeyLabel, Value: "first", Delete: false},
+		{Key: settingtest.KeyLabel, Value: "second", Delete: false},
+	}
+
+	_, err := svc.Patch(t.Context(), setting.InstallationScope(), patch, request("@server"))
+	if !errors.Is(err, setting.ErrInvalidPatch) {
+		t.Fatalf("Patch = %v, want ErrInvalidPatch", err)
+	}
+
+	stored, loadErr := m.Load(t.Context(), setting.InstallationScope())
+	if loadErr != nil || stored.Revision != 0 || len(stored.Values) != 0 {
+		t.Fatalf("stored = %+v, %v; want nothing written", stored, loadErr)
+	}
+}

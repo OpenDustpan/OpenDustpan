@@ -460,6 +460,15 @@ func testShadowed(t *testing.T, h Harness) {
 		t.Fatalf("item = %+v", limit)
 	}
 
+	// The entry records the change that happened: the database value goes away.
+	entries := h.Audit(t, audit.ServerScope)
+	last := entries[len(entries)-1]
+
+	if len(last.Changes) != 1 || last.Changes[0].Old == nil || *last.Changes[0].Old != "42" ||
+		last.Changes[0].New != "not set" || last.Changes[0].Layer != "database" {
+		t.Fatalf("entry changes = %+v, want the database value 42 deleted in the layer database", last.Changes)
+	}
+
 	unchanged(t, h, revision2, map[string]string{}, entries2)
 }
 
