@@ -72,8 +72,11 @@ or OKP (Ed25519). The server refuses a key with private material, a symmetric
 key, and an `alg` of `none` or of an HMAC algorithm. A set of more than one key
 needs a `kid` on each key.
 
-The server refuses an issuer at or under its own public URL, so a token that
-the server signs never becomes an access token of the server.
+The server refuses an issuer at or under its own public URL, and each issuer
+URL of its own OIDC issuer: the issuer base URL and the `issuerURL` of each
+namespace. So a token that the server signs never becomes an access token of
+the server. The server checks this at the create and again at each exchange,
+because a namespace can set its `issuerURL` after a rule exists.
 
 ### Conditions
 
@@ -143,7 +146,7 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | --- | --- | --- |
 | 400 | `request.body-invalid` | The body is not one JSON object. It has an unknown field, a missing field, or data after the object. |
 | 400 | `trust-rule.invalid` | A field fails its rules. The message names the field. |
-| 400 | `trust-rule.issuer-refused` | The issuer is at or under the public URL of the server. |
+| 400 | `trust-rule.issuer-refused` | The issuer is at or under the public URL of the server, or is an issuer URL of the OIDC issuer of the server. |
 | 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is not a service principal, or is not a principal of the namespace. |
 | 401 | | The request has no valid credential. |
 | 403 | | The caller lacks the action of the route, or `principal:manage-tokens` on the principal. |

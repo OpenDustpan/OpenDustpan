@@ -946,7 +946,8 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Rules: struct{ trustrule.Store }{nil}, Exchanges: struct{ trustrule.ExchangeStore }{nil},
 		Namespaces: namespaces, Principals: struct{ trustrulesvc.Principals }{nil},
 		Tokens: struct{ trustrulesvc.TokenIssuer }{nil}, Audit: coverageAuditStore{},
-		ServerAudit: struct{ audit.ServerStore }{nil}, Refusals: nil, Keys: nil, InstallationURLs: nil, Now: nil,
+		ServerAudit: struct{ audit.ServerStore }{nil}, Refusals: nil, Keys: nil, InstallationURLs: nil,
+		OwnIssuer: nil, Now: nil,
 	})
 	if err != nil {
 		tb.Fatalf("token exchange: %v", err)

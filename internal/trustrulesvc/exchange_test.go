@@ -255,6 +255,16 @@ func newExchangeFixtureAt(t *testing.T, now func() time.Time) *exchangeFixture {
 func newExchangeFixtureWith(t *testing.T, now func() time.Time, refusals *denylimit.Limiter) *exchangeFixture {
 	t.Helper()
 
+	return newExchangeFixtureOwn(t, now, refusals, nil)
+}
+
+// newExchangeFixtureOwn is newExchangeFixtureWith with the check own of the
+// issuers of this installation. Nil means no issuer.
+func newExchangeFixtureOwn(
+	t *testing.T, now func() time.Time, refusals *denylimit.Limiter, own trustrulesvc.OwnIssuer,
+) *exchangeFixture {
+	t.Helper()
+
 	k := newIssuerKey(t)
 
 	ks, err := trustrule.ParseKeySet([]byte(k.jwks))
@@ -284,8 +294,8 @@ func newExchangeFixtureWith(t *testing.T, now func() time.Time, refusals *denyli
 	f.x, err = trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: f.rules, Exchanges: f.rules, Namespaces: fakeNamespaces{}, Principals: f.people, Tokens: fakeTokens{},
 		Audit: f.audit, ServerAudit: f.audit, Refusals: refusals, Keys: f.keys,
-		InstallationURLs: []string{"https://dustpan.example.com"},
-		Now:              now,
+		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own,
+		Now: now,
 	})
 	if err != nil {
 		t.Fatalf("exchanger: %v", err)
@@ -636,7 +646,8 @@ func TestNewExchangerNeedsItsPorts(t *testing.T) {
 
 	_, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: f.rules, Exchanges: f.rules, Namespaces: fakeNamespaces{}, Principals: f.people, Tokens: fakeTokens{},
-		Audit: f.audit, ServerAudit: nil, Refusals: nil, Keys: f.keys, InstallationURLs: nil, Now: nil,
+		Audit: f.audit, ServerAudit: nil, Refusals: nil, Keys: f.keys, InstallationURLs: nil, OwnIssuer: nil,
+		Now: nil,
 	})
 	if !errors.Is(err, trustrule.ErrMissingDependency) {
 		t.Fatalf("NewExchanger with no installation log = %v, want ErrMissingDependency", err)
@@ -644,7 +655,7 @@ func TestNewExchangerNeedsItsPorts(t *testing.T) {
 
 	_, err = trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: nil, Exchanges: nil, Namespaces: nil, Principals: nil, Tokens: nil, Audit: nil, ServerAudit: nil,
-		Refusals: nil, Keys: nil, InstallationURLs: nil, Now: nil,
+		Refusals: nil, Keys: nil, InstallationURLs: nil, OwnIssuer: nil, Now: nil,
 	})
 	if !errors.Is(err, trustrule.ErrMissingDependency) {
 		t.Fatalf("NewExchanger = %v, want ErrMissingDependency", err)
@@ -1040,5 +1051,59 @@ func TestExchangeFailsClosedWhenTheInstallationLogFails(t *testing.T) {
 	server := f.audit.serverEntries()
 	if len(server) != 1 || !strings.Contains(server[0].Reason, "1 refused exchanges of any namespace") {
 		t.Fatalf("entries of the installation = %+v, want one entry that carries the failed refusal", server)
+	}
+}
+
+// errIssuerDown is the error of an issuer service that cannot answer.
+var errIssuerDown = errors.New("the issuer store is down")
+
+// fakeOwnIssuer answers whether an issuer is an issuer of this installation.
+type fakeOwnIssuer struct {
+	owns map[string]bool
+	err  error
+}
+
+func (f fakeOwnIssuer) OwnsIssuer(_ context.Context, issuer string) (bool, error) {
+	return f.owns[issuer], f.err
+}
+
+// TestExchangeAsksTheIssuerOfThisInstallation runs the check of the issuers
+// of this installation at the exchange alone: the issuer of the rule is not
+// under an installation URL, so only the issuer service of the server can
+// refuse it. A namespace can set its issuerURL after the rule exists, so the
+// exchange asks again. When the service cannot answer, the exchange refuses.
+func TestExchangeAsksTheIssuerOfThisInstallation(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]fakeOwnIssuer{
+		"an issuer that this installation signs for": {owns: map[string]bool{staticIssuer: true}, err: nil},
+		"a service that cannot answer":               {owns: nil, err: errIssuerDown},
+	}
+
+	for name, own := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newExchangeFixtureOwn(t, exchangeNow, nil, own)
+
+			if _, err := f.exchange(t, f.issuer.token(t, nil)); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+				t.Fatalf("Exchange = %v, want ErrNoMatch", err)
+			}
+
+			if len(f.rules.exchanges) != 0 {
+				t.Fatal("the refused exchange issued a token")
+			}
+
+			entries := f.audit.all()
+			if len(entries) != 1 || !strings.Contains(entries[0].Reason, "issuer") {
+				t.Fatalf("refusal entries = %+v, want the refusal of the issuer", entries)
+			}
+		})
+	}
+
+	// The same rule exchanges when the service does not sign for the issuer.
+	f := newExchangeFixtureOwn(t, exchangeNow, nil, fakeOwnIssuer{owns: map[string]bool{}, err: nil})
+	if _, err := f.exchange(t, f.issuer.token(t, nil)); err != nil {
+		t.Fatalf("Exchange with an issuer of another party = %v, want a token", err)
 	}
 }

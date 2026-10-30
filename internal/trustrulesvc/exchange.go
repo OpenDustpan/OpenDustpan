@@ -69,6 +69,10 @@ type ExchangeConfig struct {
 	// InstallationURLs are the base URLs of the issuers of this
 	// installation.
 	InstallationURLs []string
+	// OwnIssuer is the check of the issuers that this installation signs
+	// for itself. Nil means that the installation has no issuer, and only
+	// InstallationURLs apply.
+	OwnIssuer OwnIssuer
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -98,7 +102,7 @@ func NewExchanger(cfg ExchangeConfig) (*Exchanger, error) {
 
 	own, err := NewService(Config{
 		Store: cfg.Rules, Namespaces: cfg.Namespaces, Principals: cfg.Principals, Authorizer: denyAll{},
-		InstallationURLs: cfg.InstallationURLs, CheckURL: nil, Now: now,
+		InstallationURLs: cfg.InstallationURLs, OwnIssuer: cfg.OwnIssuer, CheckURL: nil, Now: now,
 	})
 	if err != nil {
 		return nil, err
@@ -383,10 +387,11 @@ func (x *Exchanger) checkGrant(ctx context.Context, r *trustrule.Rule) (principa
 	var none principal.Principal
 
 	// Defense in depth: the create of the rule refused an issuer of this
-	// installation. This check stays so that a rule of a restore or of an
-	// earlier setting of the public URL never turns a token of this
+	// installation. This check stays so that a rule of a restore, of an
+	// earlier setting of the public URL, or of a namespace that set its
+	// issuerURL after the rule existed never turns a token of this
 	// installation into an access token.
-	if err := x.own.CheckIssuer(r.Issuer); err != nil {
+	if err := x.own.CheckOwnIssuer(ctx, r.Issuer); err != nil {
 		return none, err
 	}
 

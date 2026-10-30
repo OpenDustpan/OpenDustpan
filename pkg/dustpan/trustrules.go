@@ -128,7 +128,8 @@ func newTrustRuleHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 
 // newExchanger builds the token exchange over the exchange store exchanges.
 // The keys of a discovery rule come through the egress rules of the trust
-// rules.
+// rules. The exchange asks the issuer of the server, when it has one,
+// whether the issuer of a rule is an issuer of this installation.
 func newExchanger(svc services, cfg *settings, exchanges trustrule.ExchangeStore) (*trustrulesvc.Exchanger, error) {
 	principals, ok := cfg.namespaceStore.(trustrulesvc.Principals)
 	if !ok {
@@ -145,11 +146,18 @@ func newExchanger(svc services, cfg *settings, exchanges trustrule.ExchangeStore
 		return nil, err
 	}
 
+	// A nil *issuersvc.Service must not become a non-nil interface.
+	var own trustrulesvc.OwnIssuer
+	if svc.issuer != nil {
+		own = svc.issuer
+	}
+
+	keys := trustkeys.New(trustkeys.Config{Rules: trustRuleEgress(cfg), RootCAs: cfg.trustRules.cas, Now: cfg.now})
+
 	x, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: cfg.trustRules.store, Exchanges: exchanges, Namespaces: svc.namespaces, Principals: principals,
-		Tokens: svc.tokens, Audit: neutralAudit, ServerAudit: serverAudit, Refusals: nil,
-		Keys: trustkeys.New(trustkeys.Config{Rules: trustRuleEgress(cfg), RootCAs: cfg.trustRules.cas, Now: cfg.now}),
-		InstallationURLs: []string{cfg.publicURL}, Now: cfg.now,
+		Tokens: svc.tokens, Audit: neutralAudit, ServerAudit: serverAudit, Refusals: nil, Keys: keys,
+		InstallationURLs: []string{cfg.publicURL}, OwnIssuer: own, Now: cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("token exchange: %w", err)

@@ -63,7 +63,7 @@ func bareExchanger() *Exchanger {
 	return &Exchanger{
 		cfg: ExchangeConfig{
 			Rules: nil, Exchanges: nil, Namespaces: nil, Principals: nil, Tokens: nil, Audit: nil, ServerAudit: nil,
-			Refusals: nil, Keys: nil, InstallationURLs: nil, Now: nil,
+			Refusals: nil, Keys: nil, InstallationURLs: nil, OwnIssuer: nil, Now: nil,
 		},
 		own: nil, refusals: nil, now: internalNow,
 	}

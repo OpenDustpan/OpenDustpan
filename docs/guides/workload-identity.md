@@ -33,7 +33,8 @@ claim of the token. For each such rule, it checks, in this order:
 Exactly one rule must accept the token. When two rules accept it, the request
 names the rule with `"rule"`. The server then checks that the principal of the
 rule exists, is a service principal of the namespace and is not disabled, and
-that the issuer is not the public URL of this server.
+that the issuer is not an issuer of this server: not at or under its public
+URL, and not an issuer URL of its own OIDC issuer.
 
 A refused exchange answers 401 with `trust-rule.no-match`, and never says
 which check failed. The audit log of the namespace holds an entry with the
