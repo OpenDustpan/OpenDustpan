@@ -152,9 +152,19 @@ VALUES ('jlv-1', 0, 'ns-gone', 'x', 1, 0)`,
 func TestCheckStagedLogChunks(t *testing.T) {
 	t.Parallel()
 
+	// chunkWith inserts a confirmed chunk of the log of job-1 with the blob key
+	// key.
+	chunkWith := func(logID, ns string, seq, size int64, sha, key string) string {
+		return fmt.Sprintf(`INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed, blob_key)
+VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1, '%s')`, logID, seq, ns, sha, size, key)
+	}
+
+	attempt := func(logID string, seq int64) string {
+		return fmt.Sprintf("job/job-1/log/%s/%08d-jla-x", logID, seq)
+	}
+
 	chunk := func(logID, ns string, seq, size int64, sha string) string {
-		return fmt.Sprintf(`INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed)
-VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1)`, logID, seq, ns, sha, size)
+		return chunkWith(logID, ns, seq, size, sha, attempt(logID, seq))
 	}
 
 	cases := []struct {
@@ -179,6 +189,19 @@ VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1)`, 
 		},
 		{name: "a log version that does not exist", insert: chunk("jlv-gone", "acme", 0, 1, artifactHash), ok: false},
 		{name: "a log version of another namespace", insert: chunk("jlv-1", "other", 0, 1, artifactHash), ok: false},
+		{name: "a confirmed chunk with no blob key", insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, ""), ok: false},
+		{
+			name:   "a blob key of another chunk",
+			insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, attempt("jlv-1", 1)), ok: false,
+		},
+		{
+			name:   "a blob key of another log version",
+			insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, attempt("jlv-2", 0)), ok: false,
+		},
+		{
+			name:   "a blob key that leaves the log",
+			insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, "job/job-1/log/jlv-1/../x/00000000-jla-x"), ok: false,
+		},
 	}
 
 	for _, tc := range cases {
