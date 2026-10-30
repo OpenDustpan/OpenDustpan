@@ -103,6 +103,23 @@ func (m *journalMemStore) JournalKeys(
 	return out, nil
 }
 
+// JournalBatches implements stack.JournalStore.
+func (m *journalMemStore) JournalBatches(
+	_ context.Context, _ stack.ID, update stack.UpdateID,
+) ([]stack.JournalBatchRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rows := m.journal[update]
+	out := make([]stack.JournalBatchRef, 0, len(rows))
+
+	for i := range rows {
+		out = append(out, stack.JournalBatchRef{Key: rows[i].BlobKey, SHA256: rows[i].SHA256, Size: rows[i].Size})
+	}
+
+	return out, nil
+}
+
 // JournalSweepable implements stack.JournalStore.
 func (m *journalMemStore) JournalSweepable(
 	_ context.Context, _ stack.ID, update stack.UpdateID,

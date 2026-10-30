@@ -79,6 +79,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 			name: "a restore or purge whose audit append fails changes nothing",
 			test: testRestoreFailedAppendChangesNothing,
 		},
+		{name: "a journal batch replay under another key keeps the first key", test: testJournalReplayOtherKey},
+		{name: "journal batches give the key, the SHA-256 and the size", test: testJournalBatches},
 		{name: "journal version round trip", test: testJournalVersionRoundTrip},
 		{name: "journal version of a new update is zero", test: testJournalVersionDefaultsToZero},
 		{name: "count of running journaled updates", test: testCountRunningJournaledUpdates},

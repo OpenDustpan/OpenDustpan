@@ -23,7 +23,9 @@ func (m *memUpdateStore) PutJournalRow(_ context.Context, row stack.JournalRow, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.journal[row.Update] = append(m.journal[row.Update], row.BlobKey)
+	m.journal[row.Update] = append(
+		m.journal[row.Update], stack.JournalBatchRef{Key: row.BlobKey, SHA256: row.SHA256, Size: row.Size},
+	)
 	m.seqs[row.Update] = append(m.seqs[row.Update], row.SequenceIDs...)
 
 	return false, nil
@@ -37,7 +39,25 @@ func (m *memUpdateStore) JournalKeys(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return append([]blob.Key(nil), m.journal[update]...), nil
+	refs := m.journal[update]
+	keys := make([]blob.Key, 0, len(refs))
+
+	for i := range refs {
+		keys = append(keys, refs[i].Key)
+	}
+
+	return keys, nil
+}
+
+// JournalBatches returns the references of the stored rows of the update, in
+// arrival order.
+func (m *memUpdateStore) JournalBatches(
+	_ context.Context, _ stack.ID, update stack.UpdateID,
+) ([]stack.JournalBatchRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return append([]stack.JournalBatchRef(nil), m.journal[update]...), nil
 }
 
 // JournalSweepable reports that no journal is sweepable.

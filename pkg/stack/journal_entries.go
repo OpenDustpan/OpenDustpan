@@ -132,6 +132,32 @@ type JournalRow struct {
 	Verify func(known []int64, recordsChanged bool) (changed bool, err error)
 }
 
+// JournalBatchRef names the blob of one stored batch with the SHA-256 and the
+// size of its bytes, as the row recorded them.
+type JournalBatchRef struct {
+	Key    blob.Key
+	SHA256 [sha256.Size]byte
+	Size   int64
+}
+
+// NewJournalBatchRef builds the reference of a stored batch from the columns of
+// its row. A SHA-256 of another length, or a negative size, is a corrupt row,
+// which fails with ErrCheckpointMismatch and never names the key. The row
+// stores call it, so the check does not depend on the dialect.
+func NewJournalBatchRef(key string, sum []byte, size int64) (JournalBatchRef, error) {
+	var ref JournalBatchRef
+
+	if len(sum) != sha256.Size || size < 0 {
+		return ref, ErrCheckpointMismatch
+	}
+
+	ref.Key = blob.Key(key)
+	ref.Size = size
+	copy(ref.SHA256[:], sum)
+
+	return ref, nil
+}
+
 // JournalStore persists the rows of journal batches.
 type JournalStore interface {
 	// PutJournalRow stores the row of one batch in the same transaction as
@@ -139,7 +165,9 @@ type JournalStore interface {
 	// returns ErrWrongUpdateState. It also checks the fence. The arrival number is
 	// the next number of the update, given in that transaction. When every
 	// sequence ID of the row is stored with the same SHA-256, the batch is a retry:
-	// it returns retried true and writes nothing. A sequence ID stored with a
+	// it returns retried true and writes nothing, whatever blob key the row names,
+	// so the rows keep the key of the first write and the caller may delete the blob
+	// of its own attempt. A sequence ID stored with a
 	// different SHA-256, or a batch that is only partly stored, returns
 	// ErrJournalConflict. The blob must already be in the blob store. A row with
 	// no sequence ID, with a sequence ID that is 0 or less, or with a sequence ID
@@ -156,6 +184,11 @@ type JournalStore interface {
 	// order. It is keyed by the stack ID, as the blob keys are. A missing update
 	// yields an empty list. The sweep compares this set with the stored blobs.
 	JournalKeys(ctx context.Context, stackID ID, update UpdateID) ([]blob.Key, error)
+	// JournalBatches returns the blob key, the SHA-256 and the size of each batch
+	// of the update, in arrival order, as the rows recorded them. It is keyed by
+	// the stack ID, as the blob keys are. A missing update yields an empty list.
+	// A reader of a batch compares the bytes with the SHA-256 and the size.
+	JournalBatches(ctx context.Context, stackID ID, update UpdateID) ([]JournalBatchRef, error)
 	// JournalSweepable reports whether the sweep may delete the journal blobs of the
 	// update: its journal is closed, or the update no longer runs. Then no batch can
 	// be added while the sweep runs. It returns ErrUpdateNotFound for a missing update,

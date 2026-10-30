@@ -442,6 +442,17 @@ func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.
 	return s.inner.JournalKeys(ctx, stackID, update)
 }
 
+// JournalBatches returns the references of the update's batches, unless a fault fires first.
+func (s *Store) JournalBatches(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalBatchRef, error) {
+	if err := s.before(ctx, "JournalBatches"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalBatches(ctx, stackID, update)
+}
+
 // JournalSweepable reports whether the journal may be swept, unless a fault fires first.
 func (s *Store) JournalSweepable(ctx context.Context, stackID stack.ID, update stack.UpdateID) (bool, error) {
 	if err := s.before(ctx, "JournalSweepable"); err != nil {

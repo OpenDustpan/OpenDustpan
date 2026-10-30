@@ -140,6 +140,18 @@ func (f *fakeRows) JournalKeys(context.Context, stack.ID, stack.UpdateID) ([]blo
 	return f.keys, nil
 }
 
+// JournalBatches implements stack.JournalStore. The fake derives the batches
+// from the rows it kept, in order.
+func (f *fakeRows) JournalBatches(context.Context, stack.ID, stack.UpdateID) ([]stack.JournalBatchRef, error) {
+	out := make([]stack.JournalBatchRef, 0, len(f.rows))
+
+	for i := range f.rows {
+		out = append(out, stack.JournalBatchRef{Key: f.rows[i].BlobKey, SHA256: f.rows[i].SHA256, Size: f.rows[i].Size})
+	}
+
+	return out, nil
+}
+
 // JournalSweepable implements stack.JournalStore. The fake is sweepable unless sweepable
 // is false, as the store reports for a running update with an open journal.
 func (f *fakeRows) JournalSweepable(context.Context, stack.ID, stack.UpdateID) (bool, error) {

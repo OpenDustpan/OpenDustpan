@@ -918,6 +918,11 @@ func (s *fakeBackupStore) ReferencedBlobKeys(
 	return out, nil
 }
 
+// JournalBatches implements stack.JournalStore. The backup fake keeps no journal rows.
+func (s *fakeBackupStore) JournalBatches(context.Context, stack.ID, stack.UpdateID) ([]stack.JournalBatchRef, error) {
+	return nil, nil
+}
+
 // JournalKeys implements stack.JournalStore. The backup fake keeps no journal rows.
 func (s *fakeBackupStore) JournalKeys(context.Context, stack.ID, stack.UpdateID) ([]blob.Key, error) {
 	return nil, nil

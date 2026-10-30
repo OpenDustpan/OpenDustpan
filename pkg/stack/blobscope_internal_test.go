@@ -421,7 +421,10 @@ func TestBlobAccessRefusesBadInput(t *testing.T) {
 func TestCheckJournalBlobKey(t *testing.T) {
 	t.Parallel()
 
-	const good = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/3"
+	const (
+		stem = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/"
+		good = stem + "3-k3j9x0a1b2c3d4e5f6g7"
+	)
 
 	tests := []struct {
 		name string
@@ -430,15 +433,17 @@ func TestCheckJournalBlobKey(t *testing.T) {
 		ok   bool
 	}{
 		{"a batch of the update", scopeNS, good, true},
+		{"a batch without an attempt ID", scopeNS, stem + "3", false},
+		{"a bad attempt ID", scopeNS, stem + "3-ABCDEFGH", false},
 		{"another namespace", scopeOther2, good, false},
-		{"another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/journal/3", false},
-		{"another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/journal/3", false},
-		{"old layout", scopeNS, "pulumi/stk-1/upd-1/journal/3", false},
+		{"another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/journal/3-abcdefgh", false},
+		{"another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/journal/3-abcdefgh", false},
+		{"old layout", scopeNS, "pulumi/stk-1/upd-1/journal/3-abcdefgh", false},
 		{"a checkpoint key", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3", false},
 		{"no sequence", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/", false},
-		{"nested", scopeNS, good + "/4", false},
-		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/journal/3", false},
-		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/../3", false},
+		{"nested", scopeNS, good + "/4-abcdefgh", false},
+		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/journal/3-abcdefgh", false},
+		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/../3-abcdefgh", false},
 		{"empty key", scopeNS, "", false},
 		{"invalid namespace ID", "acme", good, false},
 		{"empty namespace ID", "", good, false},
