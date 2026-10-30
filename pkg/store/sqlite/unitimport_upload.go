@@ -14,7 +14,7 @@ import (
 var _ unitimport.UploadStore = (*Imports)(nil)
 
 // CommitUploadVersion implements unitimport.UploadStore. The fence and the
-// state of the import, and the attempt deadline by the clock of the database,
+// state of the import, and the attempt window by the clock of the database,
 // are in the WHERE clause of the one INSERT, as a second layer next to the
 // fence check of the transaction.
 func (i *Imports) CommitUploadVersion(
@@ -29,9 +29,10 @@ func (i *Imports) CommitUploadVersion(
 
 	return i.store.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		n, err := q.InsertImportUploadCommit(ctx, db.InsertImportUploadCommitParams{
-			UnitDir: c.UnitDir, Sequence: int64(c.Sequence), Facts: c.Facts, CommittedAtMs: c.CommittedAt.UnixMilli(),
+			UnitDir: c.UnitDir, Sequence: int64(c.Sequence), Facts: c.Facts,
 			Namespace: fence.Namespace.String(), FailoverVersion: fence.FailoverVersion, ImportID: c.ImportID,
 			StartedAtMs: c.AttemptStartedAt.UnixMilli(), DeadlineMs: unitimport.UploadAttemptDeadline.Milliseconds(),
+			SkewMs: unitimport.UploadAttemptSkew.Milliseconds(),
 		})
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -47,7 +48,7 @@ func (i *Imports) CommitUploadVersion(
 
 		// No row went in. Find out why, for the error. The transaction has
 		// checked the fence already, so the import is missing, it ended, or
-		// the attempt passed its deadline by the clock of the database.
+		// the attempt is outside its window by the clock of the database.
 		nsID, err := importNamespaceID(ctx, q, fence.Namespace)
 		if err != nil {
 			return err

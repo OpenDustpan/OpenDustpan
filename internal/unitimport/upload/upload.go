@@ -439,7 +439,7 @@ func (s *Source) commit(
 		), bk, fk)
 	case errors.Is(err, unitimport.ErrAttemptExpired):
 		return unitimport.SourceVersion{}, s.discard(ctx, fmt.Errorf(
-			"%w: the attempt for sequence %d passed its deadline of %s: %w",
+			"%w: the attempt for sequence %d is outside its time window (at most %s old): %w",
 			unitimport.ErrSourceInvalid, f.Sequence, unitimport.UploadAttemptDeadline, err,
 		), bk, fk)
 	case errors.Is(err, unitimport.ErrInvalid), errors.Is(err, unitimport.ErrNotFound),

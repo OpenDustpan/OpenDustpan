@@ -8710,42 +8710,44 @@ func (q *Queries) InsertImportUnit(ctx context.Context, arg InsertImportUnitPara
 
 const insertImportUploadCommit = `-- name: InsertImportUploadCommit :execrows
 INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
-SELECT n.id, i.id, $1::text, $2::bigint, $3::text, $4::bigint
+SELECT n.id, i.id, $1::text, $2::bigint, $3::text, (extract(epoch FROM clock_timestamp()) * 1000)::bigint
 FROM namespaces n
 JOIN imports i ON i.namespace_id = n.id
-WHERE n.name = $5 AND n.failover_version = $6
-  AND i.id = $7 AND i.state NOT IN ('released', 'canceled')
-  AND $8::bigint + $9::bigint >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+WHERE n.name = $4 AND n.failover_version = $5
+  AND i.id = $6 AND i.state NOT IN ('released', 'canceled')
+  AND $7::bigint + $8::bigint >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+  AND $7::bigint <= (extract(epoch FROM clock_timestamp()) * 1000)::bigint + $9::bigint
 `
 
 type InsertImportUploadCommitParams struct {
 	UnitDir         string
 	Sequence        int64
 	Facts           string
-	CommittedAtMs   int64
 	Namespace       string
 	FailoverVersion int64
 	ImportID        string
 	StartedAtMs     int64
 	DeadlineMs      int64
+	SkewMs          int64
 }
 
 // The commit row of one upload version, in one statement: the namespace must
 // hold the failover version of the caller, the import must not have
 // ended, and the attempt must have started no more than deadline_ms before
-// the clock of the database. It inserts no row when a check fails, and the primary key
+// the clock of the database, and no more than skew_ms ahead of it. The time of
+// the row is the clock of the database. It inserts no row when a check fails, and the primary key
 // refuses a second row for the version.
 func (q *Queries) InsertImportUploadCommit(ctx context.Context, arg InsertImportUploadCommitParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertImportUploadCommit,
 		arg.UnitDir,
 		arg.Sequence,
 		arg.Facts,
-		arg.CommittedAtMs,
 		arg.Namespace,
 		arg.FailoverVersion,
 		arg.ImportID,
 		arg.StartedAtMs,
 		arg.DeadlineMs,
+		arg.SkewMs,
 	)
 	if err != nil {
 		return 0, err

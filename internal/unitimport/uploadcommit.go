@@ -16,16 +16,23 @@ import (
 // commit stays.
 var ErrUploadExists = errors.New("upload version already committed")
 
-// ErrAttemptExpired reports a commit of an attempt that started more than
-// UploadAttemptDeadline before the commit, by the clock of the database. The
-// attempt does not count: the reaper may delete its files.
-var ErrAttemptExpired = errors.New("upload attempt passed its deadline")
+// ErrAttemptExpired reports a commit of an attempt whose start time is outside
+// the allowed window, by the clock of the database: the attempt started more
+// than UploadAttemptDeadline before the commit, or more than UploadAttemptSkew
+// after it. The attempt does not count, and its files are garbage.
+var ErrAttemptExpired = errors.New("upload attempt is outside its time window")
 
 // UploadAttemptDeadline is the time that one attempt to store a version has
-// for the write of its files and the commit of its row. The grace period of
-// the blob reaper is longer than this deadline, so the reaper never deletes
-// the files of an attempt that can still commit.
+// for the write of its files and the commit of its row. A reaper of the blob
+// files of an attempt that no row names must wait longer than this deadline
+// (and the skew below) before it deletes a file. It must read "now" from the
+// database, not from the clock of an instance, as the commit does.
 const UploadAttemptDeadline = 30 * time.Minute
+
+// UploadAttemptSkew is how far the start time of an attempt may be ahead of
+// the clock of the database. A writer with a clock that is further ahead
+// could commit later than the deadline allows, so its commit is refused.
+const UploadAttemptSkew = 2 * time.Minute
 
 // MaxUploadSequence is the largest sequence of an upload version.
 const MaxUploadSequence = 9_999_999_999
@@ -42,10 +49,14 @@ var uploadFactsPattern = regexp.MustCompile(`^\d{10}-[0-9a-z]{1,64}\.json$`)
 // point of the version: the version exists when the row exists. Facts names
 // the facts file of the attempt that won, relative to the unit directory.
 type UploadCommit struct {
-	ImportID    string
-	UnitDir     string
-	Sequence    int
-	Facts       string
+	ImportID string
+	UnitDir  string
+	Sequence int
+	Facts    string
+	// CommittedAt is the time of the commit by the clock of the database. The
+	// store sets it, ignores the value of a commit that it gets, and gives it
+	// back with the row. A caller may set it to the time that it wants in the
+	// audit entry.
 	CommittedAt time.Time
 	// AttemptStartedAt is the time at which the attempt started, by the clock
 	// of the writer. The store checks it against its own clock. The store
@@ -67,8 +78,6 @@ func (c UploadCommit) Validate() error {
 		return fmt.Errorf("%w: the upload sequence %d is not from 1 to %d", ErrInvalid, c.Sequence, MaxUploadSequence)
 	case !uploadFactsPattern.MatchString(c.Facts):
 		return fmt.Errorf("%w: the upload facts file name %q is not <sequence>-<attempt>.json", ErrInvalid, c.Facts)
-	case c.CommittedAt.IsZero():
-		return fmt.Errorf("%w: the upload commit has no time", ErrInvalid)
 	case c.AttemptStartedAt.IsZero():
 		return fmt.Errorf("%w: the upload commit has no attempt start time", ErrInvalid)
 	}
@@ -80,8 +89,9 @@ func (c UploadCommit) Validate() error {
 // CommitUploadVersion takes the fence of the namespace and checks it in the
 // same statement that inserts the row. It wraps ErrInvalid for a bad commit,
 // ErrNotFound and ErrPurged for an import that does not exist, ErrTransition
-// for an import that ended, ErrAttemptExpired for an attempt that started
-// more than UploadAttemptDeadline ago by the clock of the database, and
+// for an import that ended, ErrAttemptExpired for an attempt whose start time is
+// more than UploadAttemptDeadline before the clock of the database or more
+// than UploadAttemptSkew after it, and
 // ErrUploadExists for a version that has its row already; the first row
 // stays. The entry e is appended in the same transaction as the row, and it
 // names the namespace of the fence; a refused commit appends nothing.

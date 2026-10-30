@@ -361,7 +361,8 @@ func (m *memStore) commitUpload(fence namespace.Fence, c unitimport.UploadCommit
 		return fmt.Errorf("%w: import is %q", unitimport.ErrTransition, imp.State)
 	}
 
-	if time.Since(c.AttemptStartedAt) > unitimport.UploadAttemptDeadline {
+	age := time.Since(c.AttemptStartedAt)
+	if age > unitimport.UploadAttemptDeadline || -age > unitimport.UploadAttemptSkew {
 		return fmt.Errorf("%w: version %d of unit %q", unitimport.ErrAttemptExpired, c.Sequence, c.UnitDir)
 	}
 
@@ -370,7 +371,7 @@ func (m *memStore) commitUpload(fence namespace.Fence, c unitimport.UploadCommit
 		return fmt.Errorf("%w: version %d of unit %q", unitimport.ErrUploadExists, c.Sequence, c.UnitDir)
 	}
 
-	c.AttemptStartedAt = time.Time{}
+	c.AttemptStartedAt, c.CommittedAt = time.Time{}, time.Now().UTC()
 	m.uploads[k] = c
 
 	return nil

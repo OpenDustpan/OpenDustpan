@@ -29,11 +29,21 @@ func uploadEntry() audit.Entry {
 }
 
 // kept returns c as a store gives it back: the store does not keep the start
-// time of the attempt.
+// time of the attempt, and it sets the time of the commit from its own clock.
+// sameUploadRow compares a row with the commit c that made it.
 func kept(c unitimport.UploadCommit) unitimport.UploadCommit {
-	c.AttemptStartedAt = time.Time{}
+	c.AttemptStartedAt, c.CommittedAt = time.Time{}, time.Time{}
 
 	return c
+}
+
+// sameUploadRow reports whether row is the row of the commit c, with a time of the
+// commit that is near the clock of the test.
+func sameUploadRow(row, c unitimport.UploadCommit) bool {
+	near := time.Since(row.CommittedAt).Abs() < time.Minute
+	row.CommittedAt = time.Time{}
+
+	return near && row == kept(c)
 }
 
 func mustCommit(t *testing.T, h Harness, fence namespace.Fence, c unitimport.UploadCommit) {
@@ -68,8 +78,8 @@ func testUploadCommit(t *testing.T, h Harness) {
 	mustCommit(t, h, fence, uploadCommit(uploadDir, 1, "aaa"))
 
 	rows := mustUploadCommits(t, h, "imp-1", uploadDir)
-	if len(rows) != 2 || rows[0] != kept(uploadCommit(uploadDir, 1, "aaa")) ||
-		rows[1] != kept(uploadCommit(uploadDir, 2, "bbb")) {
+	if len(rows) != 2 || !sameUploadRow(rows[0], uploadCommit(uploadDir, 1, "aaa")) ||
+		!sameUploadRow(rows[1], uploadCommit(uploadDir, 2, "bbb")) {
 		t.Fatalf("upload commits = %+v, want the two rows in the order of the sequences", rows)
 	}
 }
@@ -258,7 +268,6 @@ func testUploadCommitInvalid(t *testing.T, h Harness) {
 		"old facts name":       changedCommit(func(c *unitimport.UploadCommit) { c.Facts = "0000000001.json" }),
 		"facts of a body":      changedCommit(func(c *unitimport.UploadCommit) { c.Facts = "0000000001-aaa.bin" }),
 	}
-	cases["no time"] = changedCommit(func(c *unitimport.UploadCommit) { *c = zeroTime(*c) })
 
 	for name, c := range cases {
 		mustIs(t, name, h.Uploads.CommitUploadVersion(t.Context(), fence, c, uploadEntry()), unitimport.ErrInvalid)
@@ -272,14 +281,6 @@ func testUploadCommitInvalid(t *testing.T, h Harness) {
 func changedCommit(fn func(c *unitimport.UploadCommit)) unitimport.UploadCommit {
 	c := uploadCommit(uploadDir, 1, "aaa")
 	fn(&c)
-
-	return c
-}
-
-func zeroTime(c unitimport.UploadCommit) unitimport.UploadCommit {
-	var none unitimport.UploadCommit
-
-	c.CommittedAt = none.CommittedAt
 
 	return c
 }
@@ -382,7 +383,13 @@ func testUploadCommitDeadline(t *testing.T, h Harness) {
 		{"just inside the deadline", time.Now().Add(-deadline + margin), nil},
 		{"just past the deadline", time.Now().Add(-deadline - margin), unitimport.ErrAttemptExpired},
 		{"long past the deadline", time.Now().Add(-24 * time.Hour), unitimport.ErrAttemptExpired},
-		{"a start time ahead of the clock", time.Now().Add(time.Hour), nil},
+		{"a start time within the allowed skew", time.Now().Add(unitimport.UploadAttemptSkew - margin), nil},
+		{
+			"a start time beyond the allowed skew",
+			time.Now().Add(unitimport.UploadAttemptSkew + margin),
+			unitimport.ErrAttemptExpired,
+		},
+		{"a start time an hour ahead", time.Now().Add(time.Hour), unitimport.ErrAttemptExpired},
 	}
 
 	for n, tc := range cases {
