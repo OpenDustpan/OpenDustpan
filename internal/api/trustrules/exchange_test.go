@@ -257,3 +257,29 @@ func TestExchangeOfTwoMatchingRulesAnswers409(t *testing.T) {
 		t.Fatalf("exchange = %d %s, want 409 trust-rule.ambiguous", res.status, res.body)
 	}
 }
+
+// TestExchangeRefusesARuleFieldThatIsNotARuleID checks the check of the
+// handler: a rule field that is not a rule ID answers 400 before the
+// exchange runs, so it writes no audit entry.
+func TestExchangeRefusesARuleFieldThatIsNotARuleID(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, allActions())
+	k := newCIKey(t)
+	e.mustCreateStatic("ci", k)
+
+	before := len(e.ruleEntries())
+
+	for _, rule := range []string{"trr-x\n", "trr-", "deploy", "trr-" + strings.Repeat("a", 300)} {
+		body := `{"token":` + quote(k.token(t, mainSubject)) + `,"rule":` + quote(rule) + `}`
+
+		res := e.exchangeRaw(exchangeURL, body)
+		if res.status != http.StatusBadRequest || errorCode(t, res.body) != "request.body-invalid" {
+			t.Errorf("rule %q: exchange = %d %s, want 400 request.body-invalid", rule, res.status, res.body)
+		}
+	}
+
+	if got := len(e.ruleEntries()); got != before {
+		t.Fatalf("audit entries of trust rules = %d, want %d", got, before)
+	}
+}

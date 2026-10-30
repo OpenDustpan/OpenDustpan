@@ -2,12 +2,14 @@ package trustrulesvc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -151,14 +153,26 @@ func (x *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (ExchangeRes
 		return ExchangeResult{}, fmt.Errorf("%w: namespace: %w", ErrNoMatch, err)
 	}
 
-	rule, tok, err := x.match(ctx, in)
-	if err != nil {
-		return ExchangeResult{}, x.refuse(ctx, ns, in, err)
+	// Defense in depth: the handler refuses a rule field that is not a rule
+	// ID. This check stays so that no other caller puts request text in the
+	// audit log or in a query.
+	if in.Rule != "" {
+		if ruleErr := in.Rule.Validate(); ruleErr != nil {
+			return ExchangeResult{}, x.refuse(ctx, ns, in, nil, fmt.Errorf("%w: the rule field: %w",
+				trustrule.ErrToken, ruleErr))
+		}
 	}
+
+	m, err := x.match(ctx, in)
+	if err != nil {
+		return ExchangeResult{}, x.refuse(ctx, ns, in, m.signed, err)
+	}
+
+	rule, tok, signed := m.rule, m.tok, m.signed
 
 	owner, err := x.checkGrant(ctx, &rule)
 	if err != nil {
-		return ExchangeResult{}, x.refuse(ctx, ns, in, err)
+		return ExchangeResult{}, x.refuse(ctx, ns, in, signed, err)
 	}
 
 	at := x.now().UTC().Truncate(time.Millisecond)
@@ -176,7 +190,7 @@ func (x *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (ExchangeRes
 	xch := trustrule.Exchange{Rule: rule.ID, Token: issued.Token, Digest: issued.Digest}
 	if err := x.cfg.Exchanges.RecordExchange(ctx, xch, ns.Fence(), entry); err != nil {
 		if errors.Is(err, trustrule.ErrNotFound) || errors.Is(err, trustrule.ErrPrincipal) {
-			return ExchangeResult{}, x.refuse(ctx, ns, in, err)
+			return ExchangeResult{}, x.refuse(ctx, ns, in, signed, err)
 		}
 
 		return ExchangeResult{}, fmt.Errorf("record the exchange: %w", err)
@@ -185,33 +199,54 @@ func (x *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (ExchangeRes
 	return ExchangeResult{Token: issued.Token, Secret: issued.Secret, Rule: rule}, nil
 }
 
-// match returns the one rule that accepts the token of in, with the checked
-// token.
-func (x *Exchanger) match(ctx context.Context, in ExchangeInput) (trustrule.Rule, trustrule.Token, error) {
+// signedBy names a token whose signature the keys of a rule verified: the
+// rule and the subject of the token. Only the holder of a key of the issuer
+// can make such a token, so its refusal has its own limiter key, and junk
+// tokens cannot hide it. Nil means that no rule verified the signature.
+type signedBy struct {
+	rule    trustrule.ID
+	subject string
+}
+
+// matched is the outcome of match: the one rule that accepts a token, with
+// the checked token. signed is set when a rule verified the signature of the
+// token, also when match returns an error.
+type matched struct {
+	signed *signedBy
+	tok    trustrule.Token
+	rule   trustrule.Rule
+}
+
+// match returns the one rule that accepts the token of in.
+func (x *Exchanger) match(ctx context.Context, in ExchangeInput) (matched, error) {
+	var none matched
+
 	issuer, err := trustrule.UnverifiedIssuer(in.Token)
 	if err != nil {
-		return trustrule.Rule{}, trustrule.Token{}, err
+		return none, err
 	}
 
 	h, err := trustrule.Parse(in.Token)
 	if err != nil {
-		return trustrule.Rule{}, trustrule.Token{}, err
+		return none, err
 	}
 
 	rules, err := x.cfg.Rules.List(ctx, in.Namespace)
 	if err != nil {
-		return trustrule.Rule{}, trustrule.Token{}, fmt.Errorf("list trust rules: %w", err)
+		return none, fmt.Errorf("list trust rules: %w", err)
 	}
 
 	return pick(x.candidates(ctx, rules, in, issuer, h.Kid))
 }
 
 // candidate is a rule of the issuer of a token, with the outcome of its
-// checks.
+// checks. verified is true when the keys of the rule verified the signature
+// of the token; tok is then set, also when a later check failed.
 type candidate struct {
-	err  error
-	tok  trustrule.Token
-	rule trustrule.Rule
+	err      error
+	tok      trustrule.Token
+	rule     trustrule.Rule
+	verified bool
 }
 
 // candidates runs the checks of each rule of rules whose issuer is issuer,
@@ -227,8 +262,8 @@ func (x *Exchanger) candidates(
 			continue
 		}
 
-		tok, err := x.check(ctx, r, in.Token, kid)
-		out = append(out, candidate{err: err, tok: tok, rule: *r})
+		tok, verified, err := x.check(ctx, r, in.Token, kid)
+		out = append(out, candidate{err: err, tok: tok, rule: *r, verified: verified})
 	}
 
 	return out
@@ -236,14 +271,20 @@ func (x *Exchanger) candidates(
 
 // pick returns the one candidate that passed its checks. No candidate gives
 // trustrule.ErrToken with the reason of each rule, and more than one gives
-// ErrAmbiguous.
-func pick(cs []candidate) (trustrule.Rule, trustrule.Token, error) {
+// ErrAmbiguous. signed names the first candidate whose keys verified the
+// signature, also with an error.
+func pick(cs []candidate) (matched, error) {
 	var (
 		passed  []candidate
 		reasons []string
+		signed  *signedBy
 	)
 
 	for i := range cs {
+		if cs[i].verified && signed == nil {
+			signed = &signedBy{rule: cs[i].rule.ID, subject: cs[i].tok.Subject()}
+		}
+
 		if cs[i].err != nil {
 			reasons = append(reasons, string(cs[i].rule.ID)+": "+cs[i].err.Error())
 
@@ -253,51 +294,53 @@ func pick(cs []candidate) (trustrule.Rule, trustrule.Token, error) {
 		passed = append(passed, cs[i])
 	}
 
+	var failed matched
+
+	failed.signed = signed
+
 	switch {
 	case len(passed) == 1:
-		return passed[0].rule, passed[0].tok, nil
+		return matched{signed: signed, tok: passed[0].tok, rule: passed[0].rule}, nil
 	case len(passed) > 1:
-		return trustrule.Rule{}, trustrule.Token{}, ErrAmbiguous
+		return failed, ErrAmbiguous
 	case len(reasons) == 0:
-		return trustrule.Rule{}, trustrule.Token{}, fmt.Errorf("%w: no rule of the issuer", trustrule.ErrToken)
+		return failed, fmt.Errorf("%w: no rule of the issuer", trustrule.ErrToken)
 	default:
-		return trustrule.Rule{}, trustrule.Token{}, fmt.Errorf(
-			"%w: %s",
-			trustrule.ErrToken,
-			strings.Join(reasons, "; "),
-		)
+		return failed, fmt.Errorf("%w: %s", trustrule.ErrToken, strings.Join(reasons, "; "))
 	}
 }
 
-// check runs the checks of the rule r on the token raw.
-func (x *Exchanger) check(ctx context.Context, r *trustrule.Rule, raw, kid string) (trustrule.Token, error) {
+// check runs the checks of the rule r on the token raw. verified is true
+// when the keys of r verified the signature; tok is then set, also with an
+// error of a later check.
+func (x *Exchanger) check(ctx context.Context, r *trustrule.Rule, raw, kid string) (trustrule.Token, bool, error) {
 	keys, err := x.keysOf(ctx, r, kid)
 	if err != nil {
-		return trustrule.Token{}, err
+		return trustrule.Token{}, false, err
 	}
 
 	tok, err := trustrule.Verify(raw, keys)
 	if err != nil {
-		return trustrule.Token{}, err
+		return trustrule.Token{}, false, err
 	}
 
 	if err := tok.CheckIssuer(r.Issuer); err != nil {
-		return trustrule.Token{}, err
+		return tok, true, err
 	}
 
 	if err := tok.CheckAudience(r.Audience); err != nil {
-		return trustrule.Token{}, err
+		return tok, true, err
 	}
 
 	if err := tok.CheckTime(x.now()); err != nil {
-		return trustrule.Token{}, err
+		return tok, true, err
 	}
 
 	if !r.Matches(&tok) {
-		return trustrule.Token{}, fmt.Errorf("%w: a condition of the rule does not match", trustrule.ErrToken)
+		return tok, true, fmt.Errorf("%w: a condition of the rule does not match", trustrule.ErrToken)
 	}
 
-	return tok, nil
+	return tok, true, nil
 }
 
 // keysOf returns the keys of r: the JWKS of a static rule, or the keys that
@@ -372,21 +415,36 @@ func (x *Exchanger) checkGrant(ctx context.Context, r *trustrule.Rule) (principa
 // for the caller: ErrAmbiguous as it is, and ErrNoMatch for each other
 // refusal. The limiter of the refusals decides whether this refusal writes
 // an entry: the first of a window does, with the count of the refusals that
-// the window before it held back. A failed write of the entry is joined to
-// the answer, so the caller fails closed.
-func (x *Exchanger) refuse(ctx context.Context, ns namespace.Namespace, in ExchangeInput, cause error) error {
+// the window before it held back.
+//
+// The refusals of a token that no rule verified share one limiter key for
+// each namespace. A refusal of a token whose signature a rule verified
+// (signed is not nil) has a key of its own for each rule and subject, so
+// junk tokens never hide it. A failed write of the entry gives the window
+// back to the limiter and is joined to the answer, so the caller fails
+// closed.
+func (x *Exchanger) refuse(
+	ctx context.Context, ns namespace.Namespace, in ExchangeInput, signed *signedBy, cause error,
+) error {
 	answer := ErrNoMatch
 	if errors.Is(cause, ErrAmbiguous) {
 		answer = ErrAmbiguous
 	}
 
-	// The key names the namespace twice: as the principal, so the bound of
-	// keys of one principal never joins two namespaces, and as the scope,
-	// which a flush reads.
-	d := x.refusals.Allow(denylimit.Key{
-		Principal: refusedSubject + ":" + ns.Name.String(), Action: ActionExchange, Kind: "trustrules:exchange",
-		Scope: ns.Name.String(),
-	})
+	key, objectID, reason := unsignedKey(ns.Name), in.Rule, cause.Error()
+	if signed != nil {
+		key, objectID = signedKey(ns.Name, signed), signed.rule
+		reason = "a token signed for the subject " + strconv.Quote(signed.subject) + ": " + reason
+	}
+
+	// Defense in depth: the handler and Exchange refuse a rule field that is
+	// not a rule ID, and a signed refusal names a stored rule. This check
+	// stays so that no request text reaches the object of an entry.
+	if objectID.Validate() != nil {
+		objectID = ""
+	}
+
+	d := x.refusals.Allow(key)
 
 	flushErr := x.flush(ctx, in.Request, d.Flush)
 
@@ -405,19 +463,21 @@ func (x *Exchanger) refuse(ctx context.Context, ns namespace.Namespace, in Excha
 	e.TokenID = ""
 	e.Action = ActionExchange
 	e.Object = identity.NamespaceObject(ns.Name).String()
-	e.ObjectID = string(in.Rule)
+	e.ObjectID = string(objectID)
 	e.Kind = audit.KindSecurity
 	e.Outcome = audit.OutcomeDenied
 	e.PrincipalKind = ""
 	e.Changes = nil
-	e.Reason = clean(cause.Error(), maxReasonBytes)
+	e.Reason = clean(reason, audit.MaxReasonLen)
 
 	if d.Suppressed > 0 {
 		e.Reason = clean(fmt.Sprintf("%d refused exchanges before this one wrote no entry; %s", d.Suppressed,
-			cause.Error()), maxReasonBytes)
+			reason), audit.MaxReasonLen)
 	}
 
 	if _, err := x.cfg.Audit.Append(ctx, ns.Fence(), e); err != nil {
+		x.refusals.Release(key, d)
+
 		return errors.Join(answer, flushErr, fmt.Errorf("write the audit entry of a refused exchange: %w", err))
 	}
 
@@ -426,6 +486,32 @@ func (x *Exchanger) refuse(ctx context.Context, ns namespace.Namespace, in Excha
 	}
 
 	return answer
+}
+
+// unsignedKey is the limiter key of the refusals in ns of tokens that no rule
+// verified. The key names the namespace twice: as the principal, so the bound
+// of keys of one principal never joins two namespaces, and as the scope,
+// which a flush reads.
+func unsignedKey(ns namespace.Name) denylimit.Key {
+	return denylimit.Key{
+		Principal: refusedSubject + ":" + ns.String(), Action: ActionExchange, Kind: "trustrules:exchange",
+		Scope: ns.String(),
+	}
+}
+
+// signedKey is the limiter key of the refusals in ns of tokens that the rule
+// of s verified, for the subject of s. Its principal is not the principal of
+// unsignedKey, so the bound of keys of each principal of the limiter keeps
+// the two apart. The subject goes in as a digest, so the key has a fixed
+// length.
+func signedKey(ns namespace.Name, s *signedBy) denylimit.Key {
+	sum := sha256.Sum256([]byte(s.subject))
+
+	return denylimit.Key{
+		Principal: refusedSubject + "-signed:" + ns.String(), Action: ActionExchange,
+		Kind:  "trustrules:exchange:" + string(s.rule) + ":" + hex.EncodeToString(sum[:16]),
+		Scope: ns.String(),
+	}
 }
 
 // flush writes one entry for each count of refusals that the limiter held
@@ -473,11 +559,9 @@ func (x *Exchanger) flush(ctx context.Context, request audit.Entry, pending []de
 // principal acted. It starts with '@', which no subject of a principal holds.
 const refusedSubject = "@workload"
 
-// Bounds of the text of a token in an audit entry.
-const (
-	maxReasonBytes = 1024
-	maxClaimBytes  = 256
-)
+// maxClaimRunes bounds the text of one claim in an audit entry, in
+// characters. A reason is bounded by audit.MaxReasonLen.
+const maxClaimRunes = 256
 
 // exchangeEntry returns the audit entry of the exchange of tok through r,
 // which issued t. It names the claims that identify the run: the issuer, the
@@ -500,31 +584,38 @@ func exchangeEntry(
 	e.Changes = []audit.Change{
 		{Key: "principal", Old: nil, New: r.PrincipalID, Layer: "", TakesEffect: ""},
 		{Key: "issuer", Old: nil, New: r.Issuer, Layer: "", TakesEffect: ""},
-		{Key: "subject", Old: nil, New: clean(tok.Subject(), maxClaimBytes), Layer: "", TakesEffect: ""},
-		{Key: "jti", Old: nil, New: clean(tok.ID(), maxClaimBytes), Layer: "", TakesEffect: ""},
+		{Key: "subject", Old: nil, New: clean(tok.Subject(), maxClaimRunes), Layer: "", TakesEffect: ""},
+		{Key: "jti", Old: nil, New: clean(tok.ID(), maxClaimRunes), Layer: "", TakesEffect: ""},
 		{Key: "expiresAt", Old: nil, New: t.ExpiresAt.UTC().Format(time.RFC3339), Layer: "", TakesEffect: ""},
 	}
 
 	return e
 }
 
-// clean returns s with each control or format character replaced by its
-// escape, cut to at most n bytes, so a claim never adds a line to a log.
+// clean returns s with each character that the audit log refuses (see
+// audit.IsHiddenRune) replaced by its escape, cut to at most n characters, so
+// a claim never adds a line to a log and a reason never passes the limit of
+// the audit log. Bytes that are not UTF-8 become U+FFFD.
 func clean(s string, n int) string {
-	var b strings.Builder
+	var (
+		b     strings.Builder
+		count int
+	)
 
 	for _, c := range s {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			b.WriteString(strconv.QuoteRune(c))
-
-			continue
+		piece := string(c)
+		if audit.IsHiddenRune(c) {
+			piece = strconv.QuoteRune(c)
 		}
 
-		if b.Len()+len(string(c)) > n {
+		size := utf8.RuneCountInString(piece)
+		if count+size > n {
 			break
 		}
 
-		b.WriteRune(c)
+		b.WriteString(piece)
+
+		count += size
 	}
 
 	return b.String()

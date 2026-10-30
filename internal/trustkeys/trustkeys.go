@@ -63,17 +63,25 @@ type Fetcher struct {
 	now    func() time.Time
 	mu     sync.Mutex
 	cache  map[string]entry
+	// flights holds a channel for each issuer with a fetch that runs. The
+	// fetch closes it when it ends. Each other caller for that issuer waits
+	// on it, so one issuer has at most one fetch at a time.
+	flights map[string]chan struct{}
 }
 
 var _ trustrule.KeyFetcher = (*Fetcher)(nil)
 
-// entry is the outcome of the last fetch for one issuer. err is set when the
-// fetch failed: the fetcher keeps a failure too, so a bad issuer costs at most
-// one fetch in RefreshAfter.
+// entry is what the fetcher knows of one issuer. triedAt is the time of the
+// last fetch, good or failed. keys and keysAt are the keys of the last good
+// fetch; keysAt is zero before the first one. err is the failure of the last
+// fetch and is nil after a good one. A failure never removes good keys: the
+// fetcher serves them until they are KeepFor old. The fetcher keeps a failure
+// too, so a bad issuer costs at most one fetch in RefreshAfter.
 type entry struct {
-	fetchedAt time.Time
-	keys      trustrule.KeySet
-	err       error
+	triedAt time.Time
+	keysAt  time.Time
+	keys    trustrule.KeySet
+	err     error
 }
 
 // New returns a Fetcher.
@@ -86,12 +94,21 @@ func New(cfg Config) *Fetcher {
 	client := egresshttp.ClientWith(cfg.Rules, egress.NoRedirect, egress.HTTPSOnly,
 		egresshttp.Options{RootCAs: cfg.RootCAs, Resolver: nil})
 
-	return &Fetcher{client: client, rules: cfg.Rules, now: now, mu: sync.Mutex{}, cache: map[string]entry{}}
+	return &Fetcher{
+		client: client, rules: cfg.Rules, now: now, mu: sync.Mutex{}, cache: map[string]entry{},
+		flights: map[string]chan struct{}{},
+	}
 }
 
 // Keys returns the signing keys of issuer. It serves the cached keys while
 // they are younger than KeepFor and hold kid (an empty kid needs no key). Else
-// it fetches again, at most once in RefreshAfter for each issuer.
+// it fetches again, at most once in RefreshAfter for each issuer, and with at
+// most one fetch at a time for each issuer.
+//
+// The fetch does not end when ctx ends: it runs to its own FetchTimeout, so
+// a caller who closes its request cannot leave a failure in the cache. A
+// caller whose ctx ends while it waits gets the error of ctx, and the cache
+// does not keep it.
 func (f *Fetcher) Keys(ctx context.Context, issuer, kid string) (trustrule.KeySet, error) {
 	if err := trustrule.ValidateDiscoveryIssuer(issuer); err != nil {
 		// Defense in depth: the rule passed the same check when a person
@@ -100,47 +117,123 @@ func (f *Fetcher) Keys(ctx context.Context, issuer, kid string) (trustrule.KeySe
 		return trustrule.KeySet{}, fmt.Errorf("%w: %w", trustrule.ErrKeysUnavailable, err)
 	}
 
-	now := f.now()
+	for {
+		f.mu.Lock()
 
-	f.mu.Lock()
-	cached, ok := f.cache[issuer]
-	f.mu.Unlock()
+		if wait, ok := f.flights[issuer]; ok {
+			f.mu.Unlock()
 
-	if ok && fresh(cached, now, kid) {
-		return cached.keys, cached.err
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return trustrule.KeySet{}, fmt.Errorf("%w: wait for the fetch: %w", trustrule.ErrKeysUnavailable,
+					context.Cause(ctx))
+			}
+		}
+
+		now := f.now()
+		cached, ok := f.cache[issuer]
+
+		if ok && !mustFetch(cached, now, kid) {
+			f.mu.Unlock()
+
+			return cached.answer(now)
+		}
+
+		done := make(chan struct{})
+		f.flights[issuer] = done
+		f.mu.Unlock()
+
+		e := f.fly(context.WithoutCancel(ctx), issuer, now, cached, done)
+
+		return e.answer(now)
 	}
+}
+
+// fly runs the fetch of the flight done for issuer and records its outcome.
+// It ends the flight also when the fetch panics, so no caller waits for ever.
+func (f *Fetcher) fly(ctx context.Context, issuer string, now time.Time, prev entry, done chan struct{}) entry {
+	defer close(done)
+
+	ended := false
+
+	defer func() {
+		if !ended {
+			f.mu.Lock()
+			delete(f.flights, issuer)
+			f.mu.Unlock()
+		}
+	}()
 
 	keys, err := f.fetch(ctx, issuer)
+	e := f.record(issuer, now, prev, keys, err)
+	ended = true
 
-	f.store(issuer, entry{fetchedAt: now, keys: keys, err: err})
-
-	return keys, err
+	return e
 }
 
-// fresh reports whether e can answer at now for kid.
-func fresh(e entry, now time.Time, kid string) bool {
-	age := now.Sub(e.fetchedAt)
-
+// mustFetch reports whether e cannot answer at now for kid without a fetch.
+func mustFetch(e entry, now time.Time, kid string) bool {
 	switch {
-	case age < RefreshAfter:
-		return true
-	case age >= KeepFor || e.err != nil:
+	case now.Sub(e.triedAt) < RefreshAfter:
 		return false
+	case !e.hasKeys(now):
+		return true
 	default:
-		return kid == "" || e.keys.Has(kid)
+		return kid != "" && !e.keys.Has(kid)
 	}
 }
 
-// store keeps e for issuer, and drops the oldest entry when the cache is full.
-func (f *Fetcher) store(issuer string, e entry) {
+// hasKeys reports whether e holds good keys that are younger than KeepFor
+// at now.
+func (e *entry) hasKeys(now time.Time) bool {
+	return !e.keysAt.IsZero() && now.Sub(e.keysAt) < KeepFor
+}
+
+// answer returns the keys of e at now, or the failure of its last fetch when
+// it holds no good keys.
+func (e *entry) answer(now time.Time) (trustrule.KeySet, error) {
+	if e.hasKeys(now) {
+		return e.keys, nil
+	}
+
+	if e.err != nil {
+		return trustrule.KeySet{}, e.err
+	}
+
+	return trustrule.KeySet{}, fmt.Errorf("%w: the keys are older than %s", trustrule.ErrKeysUnavailable, KeepFor)
+}
+
+// record keeps the outcome of the fetch that started at now for issuer, ends
+// the flight of issuer, and returns the new entry. prev is the entry before
+// the fetch. A failure keeps the good keys of prev.
+func (f *Fetcher) record(issuer string, now time.Time, prev entry, keys trustrule.KeySet, err error) entry {
+	e := prev
+	e.triedAt = now
+	e.err = err
+
+	if err == nil {
+		e.keys, e.keysAt = keys, now
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	delete(f.flights, issuer)
+	f.store(issuer, e)
+
+	return e
+}
+
+// store keeps e for issuer, and drops the entry of the oldest fetch when the
+// cache is full. The caller holds f.mu.
+func (f *Fetcher) store(issuer string, e entry) {
 	if _, ok := f.cache[issuer]; !ok && len(f.cache) >= MaxIssuers {
 		oldest := ""
 
 		for k, v := range f.cache {
-			if oldest == "" || v.fetchedAt.Before(f.cache[oldest].fetchedAt) {
+			if oldest == "" || v.triedAt.Before(f.cache[oldest].triedAt) {
 				oldest = k
 			}
 		}

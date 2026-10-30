@@ -76,6 +76,14 @@ func (h *Handler) exchange(w http.ResponseWriter, r *http.Request, _ identity.Pr
 	rule := trustrule.ID("")
 	if in.Rule != nil {
 		rule = trustrule.ID(*in.Rule)
+
+		// The rule ID goes to the audit log: refuse each value that is not a
+		// rule ID before any use.
+		if ruleErr := rule.Validate(); ruleErr != nil {
+			h.writeError(ctx, w, problem.BadRequest(errcode.RequestBodyInvalid, "rule is not a trust rule ID"))
+
+			return
+		}
 	}
 
 	res, err := h.exchanger.Exchange(ctx, trustrulesvc.ExchangeInput{

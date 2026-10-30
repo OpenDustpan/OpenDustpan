@@ -131,7 +131,7 @@ policy, one hour by default.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
-| 400 | `request.body-invalid` | The body is not one JSON object with `token`. |
+| 400 | `request.body-invalid` | The body is not one JSON object with `token`, or `rule` is not a rule ID. |
 | 401 | `trust-rule.no-match` | No rule of the namespace accepts the token, or the namespace does not exist. The answer never names the failed check: the audit log of the namespace does. |
 | 409 | `trust-rule.ambiguous` | More than one rule accepts the token. Name the rule in `rule`. |
 

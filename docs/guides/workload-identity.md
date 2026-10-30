@@ -38,7 +38,9 @@ that the issuer is not the public URL of this server.
 A refused exchange answers 401 with `trust-rule.no-match`, and never says
 which check failed. The audit log of the namespace holds an entry with the
 action `trust-rule:exchange`, the outcome `denied` and the reason. Many
-refusals in one minute write one entry with the count. A successful exchange
+refusals in one minute write one entry with the count. A refusal of a token
+that the keys of a rule verified has its own entry for each rule and `sub`,
+so a stream of malformed tokens cannot hide it. A successful exchange
 writes an entry with the principal, the issuer, the `sub` and the `jti` of the
 token, the ID of the access token and its expiry. No entry holds a token.
 
@@ -60,9 +62,11 @@ for a token that names an unknown key.
 | Time of one read of the keys of an issuer | at most 10 seconds |
 | Keys of one key set | at most 100 |
 | Issuers in the cache of keys | at most 256 |
-| Reads of the keys of one issuer | at most one in 30 seconds |
+| Reads of the keys of one issuer | at most one at a time, and at most one in 30 seconds |
+| Keys that the server keeps after a failed read | the last good keys, until they are 5 minutes old |
 | Trust rules of one namespace | at most 100 |
-| Refusal entries in the audit log | one for each namespace in each minute, with the count of the others |
+| Refusal entries in the audit log, for tokens that no rule verified | one for each namespace in each minute, with the count of the others |
+| Refusal entries in the audit log, for tokens that the keys of a rule verified | one for each rule and subject in each minute, with the count of the others, for at most 64 rule and subject pairs of each namespace; the others share one entry in each minute |
 
 ## Set it up
 

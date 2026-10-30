@@ -136,11 +136,25 @@ type memAudit struct {
 
 	mu      sync.Mutex
 	entries []audit.Entry
+	// fail is the number of the next appends that fail.
+	fail int
 }
+
+// errAuditDown is the error of an append that fails on purpose.
+var errAuditDown = errors.New("the audit store is down")
 
 func (m *memAudit) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
 	if err := e.Validate(); err != nil {
 		return audit.Entry{}, err
+	}
+
+	m.mu.Lock()
+	failNow := m.fail > 0
+	m.fail = max(m.fail-1, 0)
+	m.mu.Unlock()
+
+	if failNow {
+		return audit.Entry{}, errAuditDown
 	}
 
 	if e.Namespace != fence.Namespace {
@@ -209,7 +223,7 @@ func newExchangeFixtureAt(t *testing.T, now func() time.Time) *exchangeFixture {
 			rules:     []trustrule.Rule{staticRule(k.jwks, "deploy", "prn-worker")},
 			exchanges: nil, entries: nil, err: nil,
 		},
-		audit:  &memAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		audit:  &memAudit{Store: nil, mu: sync.Mutex{}, entries: nil, fail: 0},
 		keys:   &fakeKeys{keys: ks, err: nil, reads: 0},
 		issuer: k,
 		people: fakePrincipals{
@@ -577,5 +591,142 @@ func TestNewExchangerNeedsItsPorts(t *testing.T) {
 	})
 	if !errors.Is(err, trustrule.ErrMissingDependency) {
 		t.Fatalf("NewExchanger = %v, want ErrMissingDependency", err)
+	}
+}
+
+// TestExchangeWritesTheEntryOfAnOversizeReason checks that a reason over the
+// limit of the audit log is cut, so the refusal still writes its entry.
+func TestExchangeWritesTheEntryOfAnOversizeReason(t *testing.T) {
+	t.Parallel()
+
+	f := newExchangeFixture(t)
+
+	header := `{"alg":"EdDSA","` + strings.Repeat("a", 600) + `\u2028":1}`
+	tok := base64.RawURLEncoding.EncodeToString([]byte(header)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"`+staticIssuer+`"}`)) + ".c2ln"
+
+	if _, err := f.exchange(t, tok); !errors.Is(err, trustrulesvc.ErrNoMatch) || errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("Exchange = %v, want ErrNoMatch and a written entry", err)
+	}
+
+	entries := f.audit.all()
+	if len(entries) != 1 {
+		t.Fatalf("refusal entries = %d, want 1", len(entries))
+	}
+
+	if err := audit.ValidateReason(entries[0].Reason); err != nil || entries[0].Reason == "" {
+		t.Fatalf("reason %q: %v", entries[0].Reason, err)
+	}
+}
+
+// TestExchangeRefusesARuleFieldThatIsNotARuleID checks the check of the
+// service alone: the handler did not run, and the rule field holds a line
+// break. The refusal writes its entry with no object ID.
+func TestExchangeRefusesARuleFieldThatIsNotARuleID(t *testing.T) {
+	t.Parallel()
+
+	f := newExchangeFixture(t)
+
+	_, err := f.x.Exchange(t.Context(), trustrulesvc.ExchangeInput{
+		Namespace: "acme", Token: f.issuer.token(t, nil), Rule: "trr-x\n", Request: emptyEntry(),
+	})
+	if !errors.Is(err, trustrulesvc.ErrNoMatch) {
+		t.Fatalf("Exchange = %v, want ErrNoMatch", err)
+	}
+
+	if len(f.rules.exchanges) != 0 {
+		t.Fatal("the refused exchange issued a token")
+	}
+
+	entries := f.audit.all()
+	if len(entries) != 1 || entries[0].ObjectID != "" || !strings.Contains(entries[0].Reason, "rule field") {
+		t.Fatalf("refusal entries = %+v, want one entry of the rule field with no object ID", entries)
+	}
+}
+
+// TestExchangeNeverPutsAnInvalidRuleIDInTheLog checks the last check of the
+// object of a refusal alone: the stored rule has an ID that is not a rule
+// ID, its keys verify the token, and its principal is disabled.
+func TestExchangeNeverPutsAnInvalidRuleIDInTheLog(t *testing.T) {
+	t.Parallel()
+
+	f := newExchangeFixture(t)
+	f.rules.rules[0].ID = "trr-x\n"
+
+	p := f.people["prn-worker"]
+	p.DisabledAt = exchangeNow()
+	f.people["prn-worker"] = p
+
+	if _, err := f.exchange(t, f.issuer.token(t, nil)); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+		t.Fatalf("Exchange = %v, want ErrNoMatch", err)
+	}
+
+	entries := f.audit.all()
+	if len(entries) != 1 || entries[0].ObjectID != "" {
+		t.Fatalf("refusal entries = %+v, want one entry with no object ID", entries)
+	}
+}
+
+// TestExchangeJunkNeverHidesASignedRefusal checks the keys of the limiter:
+// junk first, then a token that the keys of the rule verify for a subject
+// that the rule does not accept. Each writes its own entry in one window.
+func TestExchangeJunkNeverHidesASignedRefusal(t *testing.T) {
+	t.Parallel()
+
+	f := newExchangeFixture(t)
+
+	for range 5 {
+		if _, err := f.exchange(t, "not-a-token"); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+			t.Fatalf("junk: Exchange = %v, want ErrNoMatch", err)
+		}
+	}
+
+	fork := f.issuer.token(t, func(c map[string]any) { c["sub"] = "repo:evil/fork:ref:refs/heads/main" })
+
+	if _, err := f.exchange(t, fork); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+		t.Fatalf("signed: Exchange = %v, want ErrNoMatch", err)
+	}
+
+	entries := f.audit.all()
+	if len(entries) != 2 {
+		t.Fatalf("refusal entries = %d, want one for the junk and one for the signed token", len(entries))
+	}
+
+	signed := entries[1]
+	if !strings.Contains(signed.Reason, "repo:evil/fork") || signed.ObjectID != string(f.rules.rules[0].ID) {
+		t.Fatalf("signed refusal = %+v, want its subject and its rule", signed)
+	}
+
+	// A second signed refusal for the same rule and subject is counted.
+	if _, err := f.exchange(t, fork); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+		t.Fatalf("signed again: Exchange = %v, want ErrNoMatch", err)
+	}
+
+	if got := len(f.audit.all()); got != 2 {
+		t.Fatalf("refusal entries = %d, want the same signed refusal counted in its window", got)
+	}
+}
+
+// TestExchangeFailsClosedAndKeepsTheWindow checks a failed write of a
+// refusal entry: the error reaches the caller, and the next refusal of the
+// same window writes its entry with the count of the failed one.
+func TestExchangeFailsClosedAndKeepsTheWindow(t *testing.T) {
+	t.Parallel()
+
+	f := newExchangeFixture(t)
+	f.audit.fail = 1
+
+	_, err := f.exchange(t, "not-a-token")
+	if !errors.Is(err, trustrulesvc.ErrNoMatch) || !errors.Is(err, errAuditDown) {
+		t.Fatalf("Exchange with a failed entry = %v, want ErrNoMatch and the error of the write", err)
+	}
+
+	if _, err := f.exchange(t, "not-a-token"); err == nil || errors.Is(err, errAuditDown) {
+		t.Fatalf("Exchange after the failure = %v, want ErrNoMatch", err)
+	}
+
+	entries := f.audit.all()
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Reason, "1 refused exchanges") {
+		t.Fatalf("refusal entries = %+v, want one entry that counts the refusal of the failed write", entries)
 	}
 }

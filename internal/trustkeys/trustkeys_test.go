@@ -1,6 +1,7 @@
 package trustkeys_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,15 +32,19 @@ type issuer struct {
 	// discovery returns the discovery document, from the URL of the server.
 	discovery func(base string) (int, string)
 	jwks      string
+	// gate, when set, holds each answer until it is closed.
+	gate chan struct{}
 }
 
 // newIssuer starts a fake provider with one Ed25519 key with the kid k1.
 func newIssuer(t *testing.T) *issuer {
 	t.Helper()
 
-	iss := &issuer{server: nil, requests: atomic.Int64{}, mu: sync.Mutex{}, discovery: nil, jwks: keySet(t, "k1")}
+	iss := &issuer{
+		server: nil, requests: atomic.Int64{}, mu: sync.Mutex{}, discovery: nil, jwks: keySet(t, "k1"), gate: nil,
+	}
 	iss.discovery = func(base string) (int, string) {
-		return http.StatusOK, fmt.Sprintf(`{"issuer":%q,"jwks_uri":%q}`, base, base+"/jwks")
+		return http.StatusOK, fmt.Sprintf(`{"issuer":%q,"jwks_uri":%q}`, base, iss.server.URL+"/jwks")
 	}
 
 	iss.server = httptest.NewUnstartedServer(http.HandlerFunc(iss.serve))
@@ -53,15 +59,21 @@ func (iss *issuer) serve(w http.ResponseWriter, r *http.Request) {
 	iss.requests.Add(1)
 
 	iss.mu.Lock()
-	discovery, jwks := iss.discovery, iss.jwks
+	discovery, jwks, gate := iss.discovery, iss.jwks, iss.gate
 	iss.mu.Unlock()
+
+	if gate != nil {
+		<-gate
+	}
 
 	status, body := http.StatusNotFound, ""
 
-	switch r.URL.Path {
-	case "/.well-known/openid-configuration":
-		status, body = discovery(iss.server.URL)
-	case "/jwks":
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration"):
+		// An issuer under a path of the server: the discovery document
+		// names that issuer, so one server serves many issuers.
+		status, body = discovery(iss.server.URL + strings.TrimSuffix(r.URL.Path, "/.well-known/openid-configuration"))
+	case r.URL.Path == "/jwks":
 		status, body = http.StatusOK, jwks
 	default:
 	}
@@ -272,5 +284,222 @@ func TestKeysKeepsAndRefreshesWithALimit(t *testing.T) {
 
 	if got := iss.requests.Load(); got != 4 {
 		t.Fatalf("requests for a known kid = %d, want 4", got)
+	}
+}
+
+// TestKeysFetchesOnAContextOfItsOwn checks that a caller who leaves cannot
+// leave a failure in the cache: the fetch of a caller whose context ended
+// still runs, and the next caller gets the keys with no new fetch.
+func TestKeysFetchesOnAContextOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	iss := newIssuer(t)
+	f := fetcher(iss, newClock())
+
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := f.Keys(gone, iss.server.URL, "k1"); err != nil {
+		t.Fatalf("Keys of a caller who left = %v, want the keys", err)
+	}
+
+	keys, err := f.Keys(t.Context(), iss.server.URL, "k1")
+	if err != nil || !keys.Has("k1") {
+		t.Fatalf("Keys after a caller who left = %v, want the key k1", err)
+	}
+
+	if got := iss.requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want one fetch", got)
+	}
+}
+
+// TestKeysKeepsGoodKeysAfterAFailedFetch checks that a failed fetch never
+// removes good keys that are younger than KeepFor.
+func TestKeysKeepsGoodKeysAfterAFailedFetch(t *testing.T) {
+	t.Parallel()
+
+	iss := newIssuer(t)
+	c := newClock()
+	f := fetcher(iss, c)
+
+	if _, err := f.Keys(t.Context(), iss.server.URL, "k1"); err != nil {
+		t.Fatalf("Keys = %v", err)
+	}
+
+	iss.mu.Lock()
+	iss.discovery = func(string) (int, string) { return http.StatusServiceUnavailable, "" }
+	iss.mu.Unlock()
+
+	c.Add(trustkeys.RefreshAfter)
+
+	// An unknown kid makes a fetch, which fails.
+	keys, err := f.Keys(t.Context(), iss.server.URL, "unknown")
+	if err != nil || !keys.Has("k1") {
+		t.Fatalf("Keys after a failed fetch = %v, want the good keys", err)
+	}
+
+	if got := iss.requests.Load(); got != 3 {
+		t.Fatalf("requests = %d, want the failed fetch of the discovery document", got)
+	}
+
+	if keys, err := f.Keys(t.Context(), iss.server.URL, "k1"); err != nil || !keys.Has("k1") {
+		t.Fatalf("Keys of k1 after a failed fetch = %v, want the good keys", err)
+	}
+
+	c.Add(trustkeys.KeepFor)
+
+	if _, err := f.Keys(t.Context(), iss.server.URL, "k1"); !errors.Is(err, trustrule.ErrKeysUnavailable) {
+		t.Fatalf("Keys after KeepFor with a failing issuer = %v, want ErrKeysUnavailable", err)
+	}
+}
+
+// TestKeysJoinsTheFetchesOfOneIssuer checks that many callers at once make
+// one fetch, and that a caller who leaves while it waits gets an error that
+// the cache does not keep.
+func TestKeysJoinsTheFetchesOfOneIssuer(t *testing.T) {
+	t.Parallel()
+
+	const callers = 50
+
+	iss := newIssuer(t)
+	iss.gate = make(chan struct{})
+	f := fetcher(iss, newClock())
+
+	var (
+		wg     sync.WaitGroup
+		failed atomic.Int64
+	)
+
+	for range callers {
+		wg.Go(func() {
+			if _, err := f.Keys(t.Context(), iss.server.URL, "k1"); err != nil {
+				failed.Add(1)
+			}
+		})
+	}
+
+	// One fetch is now in flight and waits at the gate.
+	for iss.requests.Load() == 0 {
+		runtime.Gosched()
+	}
+
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := f.Keys(gone, iss.server.URL, "k1"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Keys of a caller who left while it waited = %v, want context.Canceled", err)
+	}
+
+	close(iss.gate)
+	wg.Wait()
+
+	if got := failed.Load(); got != 0 {
+		t.Fatalf("%d of %d callers failed", got, callers)
+	}
+
+	if got := iss.requests.Load(); got != 2 {
+		t.Fatalf("requests of %d callers = %d, want one fetch (2 requests)", callers, got)
+	}
+}
+
+// TestKeysRechecksTheIssuer checks the issuer check of the fetcher alone:
+// the egress rules allow the loopback, so only the form of the issuer
+// refuses it, and the fake gets no request.
+func TestKeysRechecksTheIssuer(t *testing.T) {
+	t.Parallel()
+
+	iss := newIssuer(t)
+	f := fetcher(iss, newClock())
+
+	for _, u := range []string{iss.server.URL + "/?x=1", iss.server.URL + "/#x", "https://user@" +
+		strings.TrimPrefix(iss.server.URL, "https://")} {
+		if _, err := f.Keys(t.Context(), u, ""); !errors.Is(err, trustrule.ErrKeysUnavailable) {
+			t.Errorf("Keys(%s) = %v, want ErrKeysUnavailable", u, err)
+		}
+	}
+
+	if got := iss.requests.Load(); got != 0 {
+		t.Fatalf("the fake got %d requests, want 0", got)
+	}
+}
+
+// TestKeysNamesTheGuardThatRefused checks each guard of a fetch by the
+// reason that it gives. Another guard refuses most of these answers too,
+// so the reason shows that this guard acted.
+func TestKeysNamesTheGuardThatRefused(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		discovery func(base string) (int, string)
+		reason    string
+	}{
+		{"an http jwks_uri", func(base string) (int, string) {
+			return http.StatusOK, fmt.Sprintf(`{"issuer":%q,"jwks_uri":"http://example.com/jwks"}`, base)
+		}, "no https jwks_uri"},
+		{"a jwks_uri that the rules refuse", func(base string) (int, string) {
+			return http.StatusOK, fmt.Sprintf(`{"issuer":%q,"jwks_uri":"https://169.254.169.254/jwks"}`, base)
+		}, "jwks_uri:"},
+		{"a status other than 200", func(string) (int, string) {
+			return http.StatusFound, `{}`
+		}, "status other than 200"},
+		{"a document over the limit", func(base string) (int, string) {
+			return http.StatusOK, fmt.Sprintf(`{"issuer":%q,"jwks_uri":%q}`, base, base+"/jwks") +
+				strings.Repeat(" ", trustkeys.MaxDocumentBytes)
+		}, "larger than the limit"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			iss := newIssuer(t)
+			iss.discovery = tc.discovery
+
+			_, err := fetcher(iss, newClock()).Keys(t.Context(), iss.server.URL, "")
+			if !errors.Is(err, trustrule.ErrKeysUnavailable) || !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("Keys = %v, want ErrKeysUnavailable with %q", err, tc.reason)
+			}
+		})
+	}
+}
+
+// TestKeysHoldsAtMostMaxIssuers checks the cap of the cache: one issuer
+// more than MaxIssuers drops the oldest, which then needs a new fetch.
+func TestKeysHoldsAtMostMaxIssuers(t *testing.T) {
+	t.Parallel()
+
+	iss := newIssuer(t)
+	c := newClock()
+	f := fetcher(iss, c)
+
+	issuerAt := func(i int) string { return fmt.Sprintf("%s/i/%d", iss.server.URL, i) }
+
+	for i := range trustkeys.MaxIssuers + 1 {
+		if _, err := f.Keys(t.Context(), issuerAt(i), "k1"); err != nil {
+			t.Fatalf("Keys of issuer %d = %v", i, err)
+		}
+
+		// Each fetch is later than the one before, so the first is the
+		// oldest.
+		c.Add(time.Millisecond)
+	}
+
+	before := iss.requests.Load()
+
+	if _, err := f.Keys(t.Context(), issuerAt(trustkeys.MaxIssuers), "k1"); err != nil {
+		t.Fatalf("Keys of the last issuer = %v", err)
+	}
+
+	if got := iss.requests.Load(); got != before {
+		t.Fatalf("the last issuer made %d requests, want 0 from the cache", got-before)
+	}
+
+	if _, err := f.Keys(t.Context(), issuerAt(0), "k1"); err != nil {
+		t.Fatalf("Keys of the first issuer = %v", err)
+	}
+
+	if got := iss.requests.Load(); got != before+2 {
+		t.Fatalf("the dropped first issuer made %d requests, want one fetch (2)", got-before)
 	}
 }
