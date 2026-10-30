@@ -114,9 +114,9 @@ func newFakeWith(t *testing.T, permissions map[string]string, classic bool) (*gi
 	t.Helper()
 
 	f := githubfake.New(t, githubfake.Config{
-		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
+		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 99, Login: "acme"},
 		User: githubfake.Account{ID: 0, Login: ""}, UserToken: userValue, ClassicToken: classic,
-		Permissions: permissions, Key: nil, Now: nil, WebhookClient: nil,
+		Permissions: permissions, ContentsLimit: 0, Key: nil, Now: nil, WebhookClient: nil,
 	})
 
 	c, err := f.AddRepo("acme/infra", map[string][]byte{
