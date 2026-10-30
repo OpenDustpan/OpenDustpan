@@ -38,12 +38,14 @@ func TestAuditRoutes(t *testing.T) {
 		"GET /api/audit/entries":            {identity.ActionNamespaceReadAudit},
 		"GET /api/audit/entries/{sequence}": {identity.ActionNamespaceReadAudit},
 		"GET /api/audit/check":              {identity.ActionNamespaceReadAudit},
+		"GET /api/audit/export":             {identity.ActionNamespaceReadAudit},
 	}
 
 	wantServer := map[string][]identity.Action{
 		"GET /api/audit/entries":            {identity.ActionServerReadAudit},
 		"GET /api/audit/entries/{sequence}": {identity.ActionServerReadAudit},
 		"GET /api/audit/check":              {identity.ActionServerReadAudit},
+		"GET /api/audit/export":             {identity.ActionServerReadAudit},
 	}
 
 	routes := handler.Routes()
