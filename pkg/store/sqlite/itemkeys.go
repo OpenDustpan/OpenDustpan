@@ -32,7 +32,7 @@ func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	deadline := secret.AttemptDeadline(ctx, time.Now())
+	deadline := s.attemptDeadline(ctx, time.Now())
 
 	// The deadline of ctx ends the transaction, and database/sql rolls it
 	// back.

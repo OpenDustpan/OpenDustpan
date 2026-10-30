@@ -81,8 +81,13 @@ the blob store wrote it. The blob store gives this time, so the rule allows a
 difference of at most 15 minutes between the clock of the server and the
 clock of the blob store. Keep both clocks in step, for example with NTP.
 
-If a key blob has a time more than 15 minutes ahead of the server clock, the
-cleanup deletes no key blob of that namespace in that run.
+Each cleanup run measures the difference first. It writes an empty probe
+object, `item-keys/clock-probe-<20 letters and digits>`, in the directory of
+the namespace, reads the time that the blob store gives it, and deletes it.
+If the two clocks differ by more than 15 minutes, ahead or behind, or if a key
+blob has a time more than 15 minutes ahead of the server clock, the cleanup
+deletes no key blob of that namespace in that run. A probe that a failed
+delete left is deleted by a later run, 1 hour after it was written.
 
 ## Backups and moves
 

@@ -1230,10 +1230,18 @@ func testSealerGarbageWaitsForTheCommit(t *testing.T, r *SealerRig) {
 	}
 
 	// After the grace period, only the orphan of the rolled-back write is
-	// garbage. The committed blob stays.
-	later := time.Now().Add(secret.ItemKeyBlobGracePeriod + time.Minute)
+	// garbage. The committed blob stays. A view of the store makes the item
+	// key blobs older than the grace period, and the server clock and the
+	// probe stay in step.
+	aged, err := secret.NewItemKeyBlobs(
+		agedBlobs{Store: r.Blobs, age: secret.ItemKeyBlobGracePeriod + time.Minute},
+		noRefusals{}, r.Mismatches,
+	)
+	if err != nil {
+		t.Fatalf("aged item key blobs: %v", err)
+	}
 
-	got, err := r.ItemBlobs.Garbage(t.Context(), r.Acme.ID, namer, later)
+	got, err := aged.Garbage(t.Context(), r.Acme.ID, namer, time.Now())
 	if err != nil {
 		t.Fatalf("garbage after the grace period: %v", err)
 	}
@@ -1317,4 +1325,29 @@ func checkOneBlobOf(t *testing.T, r *SealerRig, k secret.ItemKey) {
 	if d := blob.DigestBytes(readBlob(t, r, key)); d.Size != k.Blob.Size || d.MD5 != k.Blob.MD5 {
 		t.Errorf("the blob of %s does not match its record", k.ID)
 	}
+}
+
+// agedBlobs is a view of a blob store whose listing makes each item key blob
+// older by age, as the time of the store gives it after that time passed. A
+// probe of a reaper run keeps the time of the store, because the run writes it
+// now.
+type agedBlobs struct {
+	blob.Store
+
+	age time.Duration
+}
+
+func (a agedBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	objects, err := a.Store.List(ctx, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
+
+	for i := range objects {
+		if _, parseErr := secret.ParseItemKeyBlobKey(objects[i].Key); parseErr == nil {
+			objects[i].ModifiedAt = objects[i].ModifiedAt.Add(-a.age)
+		}
+	}
+
+	return objects, nil
 }

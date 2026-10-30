@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -452,4 +453,61 @@ func TestItemKeyTransactionTimeoutEndsALateTransaction(t *testing.T) {
 	if err != nil || got.Shredded() || got.ID != k.ID {
 		t.Errorf("record after the late transaction = %+v, %v, want the record unchanged", got, err)
 	}
+}
+
+// TestInItemKeyTxEndsALateWrite proves that InItemKeyTx arms the deadline of
+// the database: a write through the transaction after the deadline fails, so
+// fn never returns nil and the check before the commit is not what stops it.
+// The write uses a context with no deadline.
+func TestInItemKeyTxEndsALateWrite(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	ref := seedItemKey(t, s)
+	late := lateItemKey(t, ref)
+	fence := namespace.Fence{Namespace: ref.Scope.Namespace, FailoverVersion: 1}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	var writeErr error
+
+	err := s.InItemKeyTx(ctx, fence, func(tx secret.ItemKeyTx) error {
+		waitPast(600 * time.Millisecond)
+
+		_, writeErr = tx.CreateItemKey(context.WithoutCancel(ctx), late)
+
+		return writeErr
+	})
+	if writeErr == nil || err == nil {
+		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail", writeErr, err)
+	}
+
+	if _, getErr := s.GetItemKey(t.Context(), late.Ref); !errors.Is(getErr, secret.ErrKeyNotFound) {
+		t.Errorf("a late write left a record: err = %v", getErr)
+	}
+}
+
+// lateItemKey returns a new record in the namespace of ref, for another item.
+func lateItemKey(t *testing.T, ref secret.ItemRef) secret.ItemKey {
+	t.Helper()
+
+	other, err := secret.NewItemRef(ref.Scope, ref.Kind, "pln-late")
+	if err != nil {
+		t.Fatalf("item ref: %v", err)
+	}
+
+	return secret.ItemKey{
+		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ShreddedAt: time.Time{}, Ref: other,
+		ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
+		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}, Attempt: "abcdefghij0123456789"},
+	}
+}
+
+// waitPast waits for d.
+func waitPast(d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	<-timer.C
 }

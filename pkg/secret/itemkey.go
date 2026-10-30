@@ -30,11 +30,12 @@ var (
 	// commit before its attempt deadline. The transaction rolls back, and its
 	// blob stays for the reaper.
 	ErrItemKeyAttemptExpired = errors.New("item key write passed its attempt deadline")
-	// ErrItemKeyBlobClockSkew reports a listing of item key blobs with a
-	// modification time further in the future than ItemKeyBlobClockSkew. The
-	// clocks of the server and the blob store differ by more than the reaper
-	// rule allows, so the reaper deletes nothing.
-	ErrItemKeyBlobClockSkew = errors.New("item key blob time is too far ahead of the server clock")
+	// ErrItemKeyBlobClockSkew reports that the clock of the blob store and
+	// the clock of the server differ by more than ItemKeyBlobClockSkew, ahead
+	// or behind. The reaper deletes nothing in that run.
+	ErrItemKeyBlobClockSkew = errors.New(
+		"the blob store clock differs from the server clock by more than the allowed skew",
+	)
 )
 
 // ItemKeyAttemptDeadline is the longest time from the start of an item key
@@ -48,8 +49,9 @@ const ItemKeyAttemptDeadline = 30 * time.Minute
 
 // ItemKeyBlobClockSkew is the largest difference between the clock of the
 // server and the clock of the blob store that the reaper rule allows. The
-// reaper reads the age of a blob from the time of the store. A listing with a
-// time further ahead than this fails the run.
+// reaper reads the age of a blob from the time of the store, so each run
+// measures the difference with a probe blob first, and a larger difference
+// in either direction fails the run.
 const ItemKeyBlobClockSkew = 15 * time.Minute
 
 // AttemptDeadline returns the attempt deadline of an item key transaction

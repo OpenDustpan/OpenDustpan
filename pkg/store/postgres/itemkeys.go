@@ -33,9 +33,6 @@ var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "",
 func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
 	deadline := secret.AttemptDeadline(ctx, time.Now())
 
-	ctx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		if err := q.SetTransactionTimeout(ctx, transactionTimeoutMs(deadline, time.Now())); err != nil {
 			return fmt.Errorf("set the attempt deadline: %w", err)

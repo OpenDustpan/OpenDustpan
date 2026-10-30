@@ -26,15 +26,21 @@ const (
 )
 
 // memBlobs is a blob.Store in memory that counts the calls that reach it.
+// Put stamps each object with the time of the clock of the store, which
+// setClock changes.
 type memBlobs struct {
 	objects  map[blob.Key][]byte
 	modified map[blob.Key]time.Time
+	clock    time.Time
 	calls    int
 	mu       sync.Mutex
 }
 
 func newMemBlobs() *memBlobs {
-	return &memBlobs{objects: map[blob.Key][]byte{}, modified: map[blob.Key]time.Time{}, calls: 0, mu: sync.Mutex{}}
+	return &memBlobs{
+		objects: map[blob.Key][]byte{}, modified: map[blob.Key]time.Time{}, clock: garbageNow(), calls: 0,
+		mu: sync.Mutex{},
+	}
 }
 
 func (m *memBlobs) Put(_ context.Context, key blob.Key, r io.Reader) error {
@@ -53,6 +59,7 @@ func (m *memBlobs) Put(_ context.Context, key blob.Key, r io.Reader) error {
 	}
 
 	m.objects[key] = data
+	m.modified[key] = m.clock
 
 	return nil
 }
@@ -110,6 +117,27 @@ func (m *memBlobs) setModified(key blob.Key, at time.Time) {
 	defer m.mu.Unlock()
 
 	m.modified[key] = at
+}
+
+// setClock sets the time that the store stamps on the next writes.
+func (m *memBlobs) setClock(at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.clock = at
+}
+
+// keys returns the keys that the store holds.
+func (m *memBlobs) keys() []blob.Key {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]blob.Key, 0, len(m.objects))
+	for k := range m.objects {
+		out = append(out, k)
+	}
+
+	return out
 }
 
 // replace overwrites the object under key, as a store that ignores a

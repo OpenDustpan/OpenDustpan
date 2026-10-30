@@ -42,7 +42,7 @@ func TestFilterGarbageRefusesAKeyOfAnotherNamespace(t *testing.T) {
 		return false, nil
 	}
 
-	got, err := filterGarbage(t.Context(), ns, objects, named, now)
+	got, err := garbageRun{ns: ns, named: named, now: now, probe: ""}.filter(t.Context(), objects)
 	if err != nil {
 		t.Fatalf("filter: %v", err)
 	}
@@ -53,5 +53,34 @@ func TestFilterGarbageRefusesAKeyOfAnotherNamespace(t *testing.T) {
 
 	if len(asked) != 1 || asked[0].Namespace != ns {
 		t.Errorf("records asked for %v, want only the blob of %s", asked, ns)
+	}
+}
+
+// TestFilterGarbageKeepsTheProbeOfTheRun shows that the probe of the run is
+// never garbage, also when the store gives it an old time, and that a probe of
+// another namespace is never garbage either.
+func TestFilterGarbageKeepsTheProbeOfTheRun(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ns    = namespace.ID("ns-aaaaaaaaaaaaaaaaaaaa")
+		other = namespace.ID("ns-bbbbbbbbbbbbbbbbbbbb")
+	)
+
+	now := time.Date(2026, time.October, 30, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-2 * ItemKeyBlobGracePeriod)
+	probe := blob.Key("namespaces/" + string(ns) + "/item-keys/clock-probe-abcdefghij0123456789")
+
+	objects := []blob.Object{
+		{Key: probe, ModifiedAt: old},
+		{Key: blob.Key("namespaces/" + string(other) + "/item-keys/clock-probe-0123456789abcdefghij"), ModifiedAt: old},
+		{Key: blob.Key("namespaces/" + string(ns) + "/item-keys/clock-probe-short"), ModifiedAt: old},
+	}
+
+	named := func(context.Context, ItemKeyBlob) (bool, error) { return false, nil }
+
+	got, err := garbageRun{ns: ns, named: named, now: now, probe: probe}.filter(t.Context(), objects)
+	if err != nil || len(got) != 0 {
+		t.Errorf("garbage = %v, %v, want none", got, err)
 	}
 }

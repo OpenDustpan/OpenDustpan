@@ -394,19 +394,30 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 // error when it cannot read the records.
 type ItemKeyBlobNamer func(ctx context.Context, b ItemKeyBlob) (bool, error)
 
+// clockProbePrefix starts the name of the probe blob of a reaper run, in the
+// item-keys directory of a namespace. No item key ID has this form.
+const clockProbePrefix = "clock-probe-"
+
 // Garbage returns the item key blobs of the namespace ns that a reaper can
-// delete at the time now: the blobs that no committed record names, and that
-// are older than ItemKeyBlobGracePeriod. A writer puts a blob before it
-// commits the record that names it, so a younger blob can belong to a write
-// that still commits, and Garbage never returns it. Garbage deletes nothing.
-// The caller deletes the keys after it checks that no backup runs.
+// delete at the time now, the time of the server: the blobs that no committed
+// record names, and that are older than ItemKeyBlobGracePeriod. A writer puts
+// a blob before it commits the record that names it, so a younger blob can
+// belong to a write that still commits, and Garbage never returns it. Garbage
+// deletes no item key blob. The caller deletes the keys after it checks that
+// no backup runs.
+//
+// The age of a blob comes from the clock of the blob store. So each run first
+// puts a probe blob with a new name, reads its time from the listing, and
+// deletes it at the end. When that time differs from now by more than
+// ItemKeyBlobClockSkew, ahead or behind, the run returns
+// ErrItemKeyBlobClockSkew and no key. A probe blob of an earlier run that a
+// failed delete left is garbage after the grace period.
 //
 // Garbage fails closed: a blob with a time of zero or a time after now, and a
 // key that is not an item key blob key of ns, are never garbage, and an error
-// of named or of the listing returns the error and no key. A blob with a time
-// more than ItemKeyBlobClockSkew after now returns ErrItemKeyBlobClockSkew and
-// no key: the clocks differ by more than the rule allows, so no age in the
-// listing is certain.
+// of named, of the probe or of the listing returns the error and no key. A
+// blob with a time more than ItemKeyBlobClockSkew after now returns
+// ErrItemKeyBlobClockSkew and no key.
 func (b *ItemKeyBlobs) Garbage(
 	ctx context.Context, ns namespace.ID, named ItemKeyBlobNamer, now time.Time,
 ) ([]blob.Key, error) {
@@ -423,60 +434,128 @@ func (b *ItemKeyBlobs) Garbage(
 		return nil, err
 	}
 
-	objects, err := v.List(ctx, v.Prefix()+itemKeyDir)
+	probe, err := v.Key(itemKeyDir + clockProbePrefix + ident.NewID(""))
 	if err != nil {
-		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), scopeaudit.OutsideNamespace)
+		return nil, fmt.Errorf("clock probe key: %w", err)
 	}
 
-	return filterGarbage(ctx, ns, objects, named, now)
+	if err = v.Put(ctx, probe, bytes.NewReader(nil)); err != nil {
+		return nil, b.refuse(ctx, ns, "put", fmt.Errorf("put the clock probe: %w", err), scopeaudit.OutsideNamespace)
+	}
+
+	objects, listErr := v.List(ctx, v.Prefix()+itemKeyDir)
+
+	// The probe goes in every case. A failed delete fails the run, and a later
+	// run finds the probe as garbage.
+	if delErr := v.Delete(context.WithoutCancel(ctx), probe); delErr != nil {
+		return nil, fmt.Errorf("delete the clock probe: %w", delErr)
+	}
+
+	if listErr != nil {
+		return nil, b.refuse(
+			ctx,
+			ns,
+			"list",
+			fmt.Errorf("list item key blobs: %w", listErr),
+			scopeaudit.OutsideNamespace,
+		)
+	}
+
+	if clockErr := checkProbeClock(objects, probe, now); clockErr != nil {
+		return nil, clockErr
+	}
+
+	run := garbageRun{ns: ns, named: named, now: now, probe: probe}
+
+	return run.filter(ctx, objects)
 }
 
-// filterGarbage returns the keys of objects that are garbage in the
-// namespace ns at the time now, with the rule of Garbage. It is the one place
-// of that rule, and it does not rely on the view that listed objects.
-func filterGarbage(
-	ctx context.Context, ns namespace.ID, objects []blob.Object, named ItemKeyBlobNamer, now time.Time,
-) ([]blob.Key, error) {
-	var garbage []blob.Key
+// checkProbeClock finds the probe in objects and returns
+// ErrItemKeyBlobClockSkew when its time differs from now by more than
+// ItemKeyBlobClockSkew. A listing without the probe is an error too: the run
+// cannot know the clock of the store.
+func checkProbeClock(objects []blob.Object, probe blob.Key, now time.Time) error {
+	i := slices.IndexFunc(objects, func(o blob.Object) bool { return o.Key == probe })
+	if i < 0 {
+		return fmt.Errorf("%w: the listing does not hold the clock probe", ErrItemKeyBlobClockSkew)
+	}
 
+	diff := objects[i].ModifiedAt.Sub(now)
+	if objects[i].ModifiedAt.IsZero() || diff > ItemKeyBlobClockSkew || diff < -ItemKeyBlobClockSkew {
+		return fmt.Errorf("%w: the store clock is %s from the server clock, the limit is %s",
+			ErrItemKeyBlobClockSkew, diff.Round(time.Second), ItemKeyBlobClockSkew)
+	}
+
+	return nil
+}
+
+// garbageRun is one run of the reaper rule in the namespace ns at the time
+// now. probe is the probe blob of the run, which is never garbage.
+type garbageRun struct {
+	named ItemKeyBlobNamer
+	now   time.Time
+	ns    namespace.ID
+	probe blob.Key
+}
+
+// filter returns the keys of objects that are garbage, with the rule of
+// Garbage. It is the one place of that rule, and it does not rely on the view
+// that listed objects.
+func (g garbageRun) filter(ctx context.Context, objects []blob.Object) ([]blob.Key, error) {
 	// The clock check comes first, for the whole listing: a store time far
 	// ahead of the server shows that the two clocks are not in step, so no
 	// age in the listing is certain, and no key of this run is garbage.
 	for i := range objects {
-		if objects[i].ModifiedAt.After(now.Add(ItemKeyBlobClockSkew)) {
+		if objects[i].ModifiedAt.After(g.now.Add(ItemKeyBlobClockSkew)) {
 			return nil, fmt.Errorf("%w: a blob is %s ahead, the limit is %s", ErrItemKeyBlobClockSkew,
-				objects[i].ModifiedAt.Sub(now).Round(time.Second), ItemKeyBlobClockSkew)
+				objects[i].ModifiedAt.Sub(g.now).Round(time.Second), ItemKeyBlobClockSkew)
 		}
 	}
 
+	var garbage []blob.Key
+
 	for i := range objects {
-		obj := objects[i]
-
-		// The grace period comes first: a blob of a write that still commits
-		// is never a candidate, whatever the records say now.
-		if obj.ModifiedAt.IsZero() || now.Sub(obj.ModifiedAt) < ItemKeyBlobGracePeriod {
-			continue
+		isGarbage, err := g.isGarbage(ctx, objects[i])
+		if err != nil {
+			return nil, err
 		}
 
-		// Defense in depth: the view lists only under the item-keys directory
-		// of ns. Each key is checked again, so a listing fault of an adapter
-		// never gives the reaper a key of another namespace or another family.
-		part, parseErr := ParseItemKeyBlobKey(obj.Key)
-		if parseErr != nil || part.Namespace != ns {
-			continue
-		}
-
-		isNamed, namedErr := named(ctx, part)
-		if namedErr != nil {
-			return nil, fmt.Errorf("read the records of item key blobs: %w", namedErr)
-		}
-
-		if !isNamed {
-			garbage = append(garbage, obj.Key)
+		if isGarbage {
+			garbage = append(garbage, objects[i].Key)
 		}
 	}
 
 	return garbage, nil
+}
+
+// isGarbage reports whether obj is garbage in this run.
+func (g garbageRun) isGarbage(ctx context.Context, obj blob.Object) (bool, error) {
+	// The grace period comes first: a blob of a write that still commits is
+	// never a candidate, whatever the records say now.
+	if obj.ModifiedAt.IsZero() || g.now.Sub(obj.ModifiedAt) < ItemKeyBlobGracePeriod || obj.Key == g.probe {
+		return false, nil
+	}
+
+	// A probe of an earlier run that a failed delete left. Only a probe of
+	// this namespace counts.
+	if isClockProbe(g.ns, obj.Key) {
+		return true, nil
+	}
+
+	// Defense in depth: the view lists only under the item-keys directory of
+	// ns. Each key is checked again, so a listing fault of an adapter never
+	// gives the reaper a key of another namespace or another family.
+	part, ok := itemKeyBlobOf(g.ns, obj.Key)
+	if !ok {
+		return false, nil
+	}
+
+	isNamed, err := g.named(ctx, part)
+	if err != nil {
+		return false, fmt.Errorf("read the records of item key blobs: %w", err)
+	}
+
+	return !isNamed, nil
 }
 
 // checkDigest compares the size and the MD5 of wrapped with want. On a
@@ -501,6 +580,22 @@ func (b *ItemKeyBlobs) checkDigest(ctx context.Context, ns namespace.ID, wrapped
 	}
 
 	return ErrItemKeyBlobMismatch
+}
+
+// itemKeyBlobOf returns the parts of key when key is an item key blob key of
+// the namespace ns, and false for any other key.
+func itemKeyBlobOf(ns namespace.ID, key blob.Key) (ItemKeyBlob, bool) {
+	part, err := ParseItemKeyBlobKey(key)
+
+	return part, err == nil && part.Namespace == ns
+}
+
+// isClockProbe reports whether key is a probe blob of a reaper run in the
+// namespace ns: namespaces/<ns>/item-keys/clock-probe-<20 letters and digits>.
+func isClockProbe(ns namespace.ID, key blob.Key) bool {
+	rest, ok := strings.CutPrefix(key.String(), "namespaces/"+ns.String()+"/"+itemKeyDir+clockProbePrefix)
+
+	return ok && validAttempt(rest)
 }
 
 // view returns the view of the store for the namespace ns.

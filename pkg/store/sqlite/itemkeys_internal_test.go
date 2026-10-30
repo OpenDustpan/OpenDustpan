@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -384,5 +385,98 @@ func TestItemKeyAttemptColumnRefusesABadLength(t *testing.T) {
 		if _, err := s.conn.ExecContext(t.Context(), update); err == nil {
 			t.Errorf("%s succeeded, want a refusal of the column check", update)
 		}
+	}
+}
+
+// TestInItemKeyTxEndsALateWrite proves that InItemKeyTx gives the
+// transaction its deadline: database/sql rolls the transaction back when the
+// deadline passes, so a write through the transaction after the deadline fails, so
+// fn never returns nil and the check before the commit is not what stops it.
+// The write uses a context with no deadline.
+func TestInItemKeyTxEndsALateWrite(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	ref := seedItemKey(t, s)
+	late := lateItemKey(t, ref)
+	fence := namespace.Fence{Namespace: ref.Scope.Namespace, FailoverVersion: 1}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	var writeErr error
+
+	err := s.InItemKeyTx(ctx, fence, func(tx secret.ItemKeyTx) error {
+		waitPast(600 * time.Millisecond)
+
+		_, writeErr = tx.CreateItemKey(context.WithoutCancel(ctx), late)
+
+		return writeErr
+	})
+	if writeErr == nil || err == nil {
+		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail", writeErr, err)
+	}
+
+	if _, getErr := s.GetItemKey(t.Context(), late.Ref); !errors.Is(getErr, secret.ErrKeyNotFound) {
+		t.Errorf("a late write left a record: err = %v", getErr)
+	}
+}
+
+// lateItemKey returns a new record in the namespace of ref, for another item.
+func lateItemKey(t *testing.T, ref secret.ItemRef) secret.ItemKey {
+	t.Helper()
+
+	other, err := secret.NewItemRef(ref.Scope, ref.Kind, "pln-late")
+	if err != nil {
+		t.Fatalf("item ref: %v", err)
+	}
+
+	return secret.ItemKey{
+		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ShreddedAt: time.Time{}, Ref: other,
+		ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
+		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}, Attempt: "abcdefghij0123456789"},
+	}
+}
+
+// waitPast waits for d.
+func waitPast(d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	<-timer.C
+}
+
+// TestInItemKeyTxGivesItsOwnDeadline proves that InItemKeyTx ends the
+// transaction at its attempt deadline when the caller gives no deadline. The
+// store has a short attempt deadline, the context of the call has none, and a
+// write after the deadline fails, so fn never returns nil and the check before
+// the commit is not what stops it.
+func TestInItemKeyTxGivesItsOwnDeadline(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	s.attemptDeadline = func(_ context.Context, start time.Time) time.Time {
+		return start.Add(200 * time.Millisecond)
+	}
+
+	ref := seedItemKey(t, s)
+	late := lateItemKey(t, ref)
+	fence := namespace.Fence{Namespace: ref.Scope.Namespace, FailoverVersion: 1}
+
+	var writeErr error
+
+	err := s.InItemKeyTx(t.Context(), fence, func(tx secret.ItemKeyTx) error {
+		waitPast(600 * time.Millisecond)
+
+		_, writeErr = tx.CreateItemKey(t.Context(), late)
+
+		return writeErr
+	})
+	if writeErr == nil || err == nil {
+		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail", writeErr, err)
+	}
+
+	if _, getErr := s.GetItemKey(t.Context(), late.Ref); !errors.Is(getErr, secret.ErrKeyNotFound) {
+		t.Errorf("a late write left a record: err = %v", getErr)
 	}
 }

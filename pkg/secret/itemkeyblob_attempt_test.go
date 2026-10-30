@@ -633,3 +633,138 @@ func TestItemKeyBlobPeriodsLeaveRoomForTheSkew(t *testing.T) {
 		t.Errorf("deadline + lease + skew = %v, want less than the grace period %v", sum, secret.ItemKeyBlobGracePeriod)
 	}
 }
+
+// TestItemKeyBlobsGarbageMeasuresTheStoreClock is the test of the clock
+// probe. The store clock runs behind or ahead of the server by the offset. A
+// store behind the server makes every blob look older, so without the probe a
+// blob of a write that can still commit would look like garbage. The case
+// from the review: the blob is put at server time T and stamped T - 40 min,
+// the reaper runs at T + 21 min, and no record exists yet.
+func TestItemKeyBlobsGarbageMeasuresTheStoreClock(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		offset  time.Duration
+		wantErr bool
+	}{
+		{name: "the store 40 minutes behind", offset: -40 * time.Minute, wantErr: true},
+		{
+			name:    "the store just past the skew behind",
+			offset:  -secret.ItemKeyBlobClockSkew - time.Second,
+			wantErr: true,
+		},
+		{name: "the store inside the skew behind", offset: -secret.ItemKeyBlobClockSkew + time.Second, wantErr: false},
+		{name: "the store in step", offset: 0, wantErr: false},
+		{name: "the store inside the skew ahead", offset: secret.ItemKeyBlobClockSkew - time.Second, wantErr: false},
+		{name: "the store just past the skew ahead", offset: secret.ItemKeyBlobClockSkew + time.Second, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			put := garbageNow()
+			reap := put.Add(21 * time.Minute)
+
+			b, store, _ := newItemKeyBlobs(t)
+			store.setClock(put.Add(tc.offset))
+
+			key := mustKey(t, b, nsA, secret.NewItemKeyID(), 1)
+			if err := b.Put(t.Context(), nsA, key, []byte("wrapped")); err != nil {
+				t.Fatalf("put: %v", err)
+			}
+
+			store.setClock(reap.Add(tc.offset))
+
+			got, err := b.Garbage(t.Context(), nsA, namerOf(), reap)
+
+			switch {
+			case tc.wantErr && (!errors.Is(err, secret.ErrItemKeyBlobClockSkew) || got != nil):
+				t.Errorf("garbage = %v, %v, want no key and ErrItemKeyBlobClockSkew", got, err)
+			case !tc.wantErr && (err != nil || len(got) != 0):
+				t.Errorf("garbage = %v, %v, want no key and no error: the blob is younger than the grace period",
+					got, err)
+			default:
+			}
+
+			if probes := clockProbesIn(store); len(probes) != 0 {
+				t.Errorf("the run left its probe: %v", probes)
+			}
+		})
+	}
+}
+
+// clockProbesIn returns the probe blobs that the store holds.
+func clockProbesIn(store *memBlobs) []blob.Key {
+	var probes []blob.Key
+
+	for _, k := range store.keys() {
+		if strings.Contains(k.String(), "/item-keys/clock-probe-") {
+			probes = append(probes, k)
+		}
+	}
+
+	return probes
+}
+
+// TestItemKeyBlobsGarbageCleansAStaleProbe shows that a probe that an earlier
+// run left is garbage once it is older than the grace period, and not before.
+func TestItemKeyBlobsGarbageCleansAStaleProbe(t *testing.T) {
+	t.Parallel()
+
+	b, store, _ := newItemKeyBlobs(t)
+	dir := "namespaces/" + string(nsA) + "/item-keys/"
+	old := blob.Key(dir + "clock-probe-" + testAttempt)
+	young := blob.Key(dir + "clock-probe-0123456789abcdefghij")
+
+	for key, at := range map[blob.Key]time.Time{
+		old:   garbageNow().Add(-2 * secret.ItemKeyBlobGracePeriod),
+		young: garbageNow().Add(-time.Minute),
+	} {
+		if err := store.Put(t.Context(), key, strings.NewReader("")); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		store.setModified(key, at)
+	}
+
+	got, err := b.Garbage(t.Context(), nsA, namerOf(), garbageNow())
+	if err != nil || !slices.Equal(got, []blob.Key{old}) {
+		t.Errorf("garbage = %v, %v, want only the old probe %s", got, err, old)
+	}
+}
+
+// failingPutBlobs refuses every write.
+type failingPutBlobs struct {
+	*memBlobs
+}
+
+func (failingPutBlobs) Put(context.Context, blob.Key, io.Reader) error {
+	return errAuditDown
+}
+
+// TestItemKeyBlobsGarbageFailsWithoutAProbe shows that a run that cannot put
+// its probe returns the error and no key: it cannot know the store clock.
+func TestItemKeyBlobsGarbageFailsWithoutAProbe(t *testing.T) {
+	t.Parallel()
+
+	mem, rec := newMemBlobs(), newFakeRecorder(nil)
+
+	b, err := secret.NewItemKeyBlobs(failingPutBlobs{memBlobs: mem}, rec, rec)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	orphan := blob.Key("namespaces/" + string(nsA) + "/item-keys/ik-1/v1-" + testAttempt)
+	if putErr := mem.Put(t.Context(), orphan, strings.NewReader("x")); putErr != nil {
+		t.Fatalf("seed: %v", putErr)
+	}
+
+	mem.setModified(orphan, garbageNow().Add(-2*secret.ItemKeyBlobGracePeriod))
+
+	got, err := b.Garbage(t.Context(), nsA, namerOf(), garbageNow())
+	if !errors.Is(err, errAuditDown) || got != nil {
+		t.Errorf("garbage with no probe = %v, %v, want no key and the error of the put", got, err)
+	}
+}
