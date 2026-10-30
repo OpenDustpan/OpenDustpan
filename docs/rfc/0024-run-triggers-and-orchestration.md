@@ -253,6 +253,129 @@ them need the job claimer (issue 1162) and the job service (issue 1165).
    of question 6.
 6. **The `outputs-changed` condition.** Needs the digest of the root outputs.
 
+## Proposal for Milestone 5: schedule and follows firing (2026-10-30)
+
+This section is ready to accept. ADR 267 decides the model. Slice 1 (the
+store, the routes, the cycle refusal and the manual fire) is in the code.
+Milestone 5 needs slices 2, 3, 5 and 6. Slice 4 (a push to a review
+request) is the first slice of RFC 27. Facts about other products are in
+the research note [m5-precedents](../research/m5-precedents.md).
+
+### Questions and recommendations
+
+These questions are details that ADR 267 leaves to the slices.
+
+1. **The depth limit of the guard (ADR 267 decision 17).**
+   - (a) 10 levels. The job carries the depth in its trigger reference: a
+     start by a `follows` trigger takes the depth of the job that wrote the
+     source version, plus one. A version with no job (a workstation run)
+     has depth 0.
+   - (b) 20 levels.
+
+   Precedent: Spacelift passes the chain of triggers to its policies up to
+   20 levels. HCP Terraform allows 20 source workspaces for one target, but
+   that is a fan-in limit, not a depth.
+   *Recommendation: (a).* A chain deeper than 10 in one namespace is more
+   likely a loop of rows from a restore than a plan. A refusal writes the
+   notification `trigger.start-refused` with the chain.
+2. **Two upstream versions before the follower plan runs.**
+   - (a) A newer start of the same follower unit by any `follows` trigger
+     cancels its older plan job that is still `queued` (not dispatched),
+     with the reason `superseded`. A plan that already runs stays.
+   - (b) Each version starts its own plan.
+   - (c) The follower waits for all its sources (Spacelift).
+
+   Precedent: Spacelift waits for every upstream stack of a run. HCP
+   Terraform queues each run in order. ADR 267 decision 19 already replaces
+   the older plan of a push.
+   *Recommendation: (a).* A plan reads the current state. Two plans of one
+   unit in a queue give the same answer, and a person reads two. (c) needs
+   run order, which ADR 267 decision 22 puts in a separate RFC.
+3. **A schedule slot while the earlier scheduled plan still waits.**
+   - (a) Skip the slot and record it on the trigger as `skipped: previous
+     plan still queued`.
+   - (b) Start a second plan.
+
+   *Recommendation: (a).* HCP Terraform cancels a health assessment that
+   meets a run and moves it to the next period. The skip shows in the API.
+4. **The digest of `outputs-changed` (slice 6).**
+   - (a) The tool package computes, in the transaction of each final state
+     version, an HMAC-SHA256 over the canonical JSON of the root outputs,
+     with a key of the namespace. The store keeps the HMAC, never a plain
+     hash, so the digest of a secret output tells nothing about its value.
+     For a Pulumi secret output, the input is the ciphertext. The Pulumi CLI
+     keeps the ciphertext of an unchanged secret value from one update to
+     the next. An e2e step checks this before the slice relies on it. When
+     the ciphertext changes, the output counts as changed, and the follower
+     plans once more than needed.
+   - (b) A plain SHA-256 of the outputs.
+
+   Precedent: Spacelift starts a dependent with output references only when
+   a referenced output changed, unless "Trigger always" is on.
+   *Recommendation: (a).* (b) lets a person who reads the digest test a
+   guess of a secret value.
+5. **The e2e step of a schedule.** A custom expression of 5 fields can fire
+   at the next minute of each hour. The e2e step computes
+   `<minute + 2> * * * *` at run time and waits at most 3 minutes for the
+   plan job. The test of two instances that fire one slot once runs in
+   `servertest` with a clock that the test moves.
+
+### Ports
+
+- `trigger.Store.ClaimDue(ctx, now, limit)`: claims the due schedule
+  triggers with one conditional update for each trigger, and returns the
+  slot of each. Conformance cases first: two claimers get each slot once,
+  a slot that the schedule does not give is refused, and an outage of three
+  slots gives one claim for the latest slot.
+- `trigger.Store.SetNextSlot` and the field `lastSkip` (question 3).
+- The tool packages report each final state version to the wiring as
+  today, and the wiring calls `trigger.Dispatcher.Upstream` after the
+  commit, through a durable operation `trigger.upstream` with the start key
+  `<unit ID>/<state version>`, so a crash after the commit loses no start.
+- `trigger.OutputDigest` (new, slice 6): the HMAC of question 4, and a
+  field `OutputsDigest` on the final state version that the tool packages
+  report.
+
+### End-to-end steps
+
+1. Slice 2: unit B follows OpenTofu workspace A. The real `tofu apply` of A
+   from a workstation writes a final state version. A plan job of B starts
+   with the source kind `trigger`, and its record names the trigger and the
+   saver. The same for a Pulumi stack A with `pulumi up`. A `pulumi
+   refresh` of A starts nothing.
+2. Slice 3: the schedule step of question 5.
+3. Slice 5: a chain of 11 `follows` triggers made through rows in the test
+   database stops at the guard with `trigger.start-refused`.
+4. Slice 6: B follows A with `when: outputs-changed`. An apply of A that
+   changes no output starts nothing. An apply that changes one output starts
+   a plan of B. A Pulumi secret output that keeps its value starts nothing.
+
+### Security tests (ADR 250)
+
+| Step | Test |
+| --- | --- |
+| Check at the boundary | `ClaimDue` with a slot that the cron expression does not give, and a stored cron text of 10 KiB from another version: refused. |
+| Contain | The idempotency key of an upstream start holds only IDs that passed their check. A unit name with `/` and `%` does not change the key. |
+| Limit | 51 followers of one source are refused at save. A source with 50 followers that applies starts 50 plans and no more. |
+| Authorization at the point of use | A saver who lost `unit:read-outputs` on the source: the job of B reads no output of A, and `trigger.saver-lost-access` is written. |
+| Fail closed | A missing saver, a disabled saver, and an error of the identity store each deny the read and write an audit entry. |
+
+### Work items
+
+M5-1 is the work item that builds the runner launcher routes, in progress
+on 2026-10-30. An item that depends on M5-1 waits until it merges. Each
+item that adds a migration is in the conflict group `store-migrations`. So
+no two of them collide on the migration number or on the hashes of
+`TestFrozenMigrations`.
+
+| ID | Item | Size | Conflict group | Depends on |
+| --- | --- | --- | --- | --- |
+| TR-1 | `ClaimDue`, `SetNextSlot`, skip record: conformance cases, SQL in both dialects | M | store-migrations | none |
+| TR-2 | The `trigger.schedule` tick and the spread, `servertest` with two instances, e2e step 2, docs page section | M | trigger-dispatch | TR-1, M5-1 |
+| TR-3 | The `trigger.upstream` operation from the final state versions of both tools, the declared edge, e2e step 1, docs page section | M | trigger-dispatch | M5-1 |
+| TR-4 | The depth guard and the supersede rule of question 2, e2e step 3 | S | trigger-dispatch | TR-3 |
+| TR-5 | `OutputDigest` in both tool packages, `when: outputs-changed`, e2e step 4 | M | store-migrations | TR-3 |
+
 ## Outcome
 
 Accepted as

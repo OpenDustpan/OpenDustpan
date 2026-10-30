@@ -4265,16 +4265,27 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 
 	ctx := t.Context()
 
-	const (
-		apiURL = "http://api.dustpan.test"
-		appURL = "http://app.dustpan.test/" + e2e.Subject
-	)
+	const apiURL = "http://api.dustpan.test"
+
+	// Pulumi 3.273.0 prints the console host without the subject path. Earlier
+	// releases print the path, so each version keeps its own strict expectation.
+	atLeast, err := e2e.VersionAtLeast(env.Install().Version, "3.273.0")
+	if err != nil {
+		t.Fatalf("console url expectation: %v", err)
+	}
+
+	path := "/" + e2e.Subject
+	if atLeast {
+		path = ""
+	}
+
+	appURL := "http://app.dustpan.test" + path
 
 	// The CLI inherits the console URL scheme from the backend URL, so the
 	// override keeps http on a plain-HTTP server and https on a TLS server.
-	overrideURL := "http://console.example.test:3000/" + e2e.Subject
+	overrideURL := "http://console.example.test:3000" + path
 	if strings.HasPrefix(env.URL, "https://") {
-		overrideURL = "https://console.example.test:3000/" + e2e.Subject
+		overrideURL = "https://console.example.test:3000" + path
 	}
 
 	env.Step(ctx, t, step("console url from 127.0.0.1", contains("as "+e2e.Subject+" ()\n"), "login"))
