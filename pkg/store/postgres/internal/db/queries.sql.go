@@ -1034,6 +1034,25 @@ func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int6
 	return count, err
 }
 
+const countBlobPurges = `-- name: CountBlobPurges :one
+SELECT COUNT(*) AS pending, COALESCE(MIN(purged_at_ms), 0)::BIGINT AS oldest_ms
+FROM blob_purges
+`
+
+type CountBlobPurgesRow struct {
+	Pending  int64
+	OldestMs int64
+}
+
+// The number of blob purge records and the purge time of the oldest one. The
+// time is 0 when no record exists.
+func (q *Queries) CountBlobPurges(ctx context.Context) (CountBlobPurgesRow, error) {
+	row := q.db.QueryRow(ctx, countBlobPurges)
+	var i CountBlobPurgesRow
+	err := row.Scan(&i.Pending, &i.OldestMs)
+	return i, err
+}
+
 const countCallerGrants = `-- name: CountCallerGrants :one
 WITH holders (kind, id) AS (
   SELECT 'principal'::text, $1::text
