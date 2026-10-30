@@ -13,6 +13,7 @@
 package runnerapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,6 +60,12 @@ type Config struct {
 	Claimer    job.Claimer
 	Sweeps     runner.SweepClaimer
 	Operations durable.Store
+	// Recorder records the steps and the log chunks of a launcher. Without
+	// it, the step and log paths of a job session answer not-found.
+	Recorder job.Recorder
+	// Jobs reads the job of a session, for its assignment. Without it, the
+	// session exchange answers not-found before it uses the handoff token.
+	Jobs JobReader
 
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
@@ -89,6 +96,12 @@ type Config struct {
 	PollInterval time.Duration
 }
 
+// JobReader is the part of job.Store that the session exchange needs.
+type JobReader interface {
+	// Get returns the job id, or job.ErrNotFound.
+	Get(ctx context.Context, id job.ID) (job.Job, error)
+}
+
 // Handler serves the runner protocol and the runner management API. The 429
 // for a second concurrent poll of one runner holds for each server instance.
 type Handler struct {
@@ -99,6 +112,8 @@ type Handler struct {
 	claimer    job.Claimer
 	sweeps     runner.SweepClaimer
 	operations durable.Store
+	recorder   job.Recorder
+	jobs       JobReader
 	authn      identity.Authenticator
 	authz      identity.Authorizer
 	guard      *refusal.Recorder
@@ -140,7 +155,7 @@ func (cfg Config) validate() error {
 }
 
 // NewHandler returns a Handler. Every Config field except Claimer, Sweeps,
-// Operations, Sessions, Now and PollInterval is required.
+// Operations, Recorder, Jobs, Sessions, Now and PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -174,6 +189,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		claimer:    cfg.Claimer,
 		sweeps:     cfg.Sweeps,
 		operations: cfg.Operations,
+		recorder:   cfg.Recorder,
+		jobs:       cfg.Jobs,
 		authn:      cfg.Authenticator,
 		authz:      cfg.Authorizer,
 		sessions:   cfg.Sessions,

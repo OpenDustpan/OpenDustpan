@@ -33,6 +33,13 @@ func WithJobClaimer(c job.Claimer) Option {
 	return func(o *settings) { o.jobClaimer = c }
 }
 
+// WithJobRecorder sets the recorder that the steps and the log chunks of a
+// launcher call. Without it, the step and log paths of a job session answer
+// not-found. The session exchange also needs WithJobStore.
+func WithJobRecorder(r job.Recorder) Option {
+	return func(o *settings) { o.jobRecorder = r }
+}
+
 // newRunnerHandler builds the runner protocol and the runner management API,
 // or returns nil when the server has no runner stores or no public URL. The
 // join challenge names the public URL without a trailing slash, so a runner
@@ -57,7 +64,8 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 
 	handler, err := runnerapi.NewHandler(runnerapi.Config{
 		Namespaces: svc.namespaces, Pools: cfg.runners, Members: cfg.runners, Handoffs: cfg.runners,
-		Claimer: cfg.jobClaimer, Sweeps: nil, Operations: cfg.durableStore, Authenticator: cfg.authenticator,
+		Claimer: cfg.jobClaimer, Sweeps: nil, Operations: cfg.durableStore,
+		Recorder: cfg.jobRecorder, Jobs: cfg.jobStore, Authenticator: cfg.authenticator,
 		Authorizer: cfg.authorizer, Sessions: cfg.sessionCookies, Logger: cfg.logger, Release: release,
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,

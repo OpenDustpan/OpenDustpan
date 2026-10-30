@@ -334,7 +334,11 @@ func TestReplicasClaimOnePhase(t *testing.T) {
 	first, second := openPostgresAt(t, schemaURL), openPostgresAt(t, schemaURL)
 
 	e := newEnvOn(t, func(*testing.T) stores { return first })
-	_, replica, _ := serve(t, second, serveOptions{now: nil, authz: identity.AdminOnly{}, claimer: nil})
+	_, replica, _ := serve(
+		t,
+		second,
+		serveOptions{now: nil, authz: identity.AdminOnly{}, claimer: nil, recorder: nil, jobs: nil, logger: nil},
+	)
 
 	pool := e.createPool()
 	servers := []*env{e, {t: t, store: second, server: replica, handler: nil, claimer: nil, fence: e.fence, clock: nil}}
