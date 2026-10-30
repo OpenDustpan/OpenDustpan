@@ -338,7 +338,10 @@ func TestItemKeyBlobsGarbageWaitsForTheCommit(t *testing.T) {
 		{name: "an old blob that no record names", modified: old, named: false, garbage: true},
 		{name: "an old blob that a record names", modified: old, named: true, garbage: false},
 		{name: "a blob with no time", modified: time.Time{}, named: false, garbage: false},
-		{name: "a blob from the future", modified: now.Add(time.Hour), named: false, garbage: false},
+		{
+			name: "a blob from the future inside the clock skew", modified: now.Add(secret.ItemKeyBlobClockSkew),
+			named: false, garbage: false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -589,9 +592,44 @@ func TestAttemptDeadline(t *testing.T) {
 			t.Errorf("a commit at %v err = %v, want ErrItemKeyAttemptExpired", at, err)
 		}
 	}
+}
 
-	if secret.ItemKeyAttemptDeadline >= secret.ItemKeyBlobGracePeriod {
-		t.Errorf("attempt deadline %v is not shorter than the grace period %v",
-			secret.ItemKeyAttemptDeadline, secret.ItemKeyBlobGracePeriod)
+// TestItemKeyBlobsGarbageFailsOnAStoreClockAhead shows that a store clock that
+// runs ahead of the server by more than the allowed skew fails the whole run:
+// no key is garbage, also an old blob that no record names.
+func TestItemKeyBlobsGarbageFailsOnAStoreClockAhead(t *testing.T) {
+	t.Parallel()
+
+	b, store, _ := newItemKeyBlobs(t)
+	orphan := mustKey(t, b, nsA, secret.NewItemKeyID(), 1)
+	ahead := mustKey(t, b, nsA, secret.NewItemKeyID(), 1)
+
+	for key, at := range map[blob.Key]time.Time{
+		orphan: garbageNow().Add(-2 * secret.ItemKeyBlobGracePeriod),
+		ahead:  garbageNow().Add(secret.ItemKeyBlobClockSkew + time.Second),
+	} {
+		if err := b.Put(t.Context(), nsA, key, []byte("wrapped")); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+
+		store.setModified(key, at)
+	}
+
+	got, err := b.Garbage(t.Context(), nsA, namerOf(), garbageNow())
+	if !errors.Is(err, secret.ErrItemKeyBlobClockSkew) || got != nil {
+		t.Errorf("garbage with a store clock ahead = %v, %v, want no key and ErrItemKeyBlobClockSkew", got, err)
+	}
+}
+
+// TestItemKeyBlobPeriodsLeaveRoomForTheSkew shows the order of the periods of
+// the reaper rule: the attempt deadline, plus the lease of an instance, plus the
+// allowed clock skew, is shorter than the grace period.
+func TestItemKeyBlobPeriodsLeaveRoomForTheSkew(t *testing.T) {
+	t.Parallel()
+
+	const lease = 30 * time.Second
+
+	if sum := secret.ItemKeyAttemptDeadline + lease + secret.ItemKeyBlobClockSkew; sum >= secret.ItemKeyBlobGracePeriod {
+		t.Errorf("deadline + lease + skew = %v, want less than the grace period %v", sum, secret.ItemKeyBlobGracePeriod)
 	}
 }

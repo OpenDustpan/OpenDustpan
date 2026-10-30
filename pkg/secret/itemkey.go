@@ -30,17 +30,27 @@ var (
 	// commit before its attempt deadline. The transaction rolls back, and its
 	// blob stays for the reaper.
 	ErrItemKeyAttemptExpired = errors.New("item key write passed its attempt deadline")
+	// ErrItemKeyBlobClockSkew reports a listing of item key blobs with a
+	// modification time further in the future than ItemKeyBlobClockSkew. The
+	// clocks of the server and the blob store differ by more than the reaper
+	// rule allows, so the reaper deletes nothing.
+	ErrItemKeyBlobClockSkew = errors.New("item key blob time is too far ahead of the server clock")
 )
 
 // ItemKeyAttemptDeadline is the longest time from the start of an item key
-// transaction to its commit. The writer puts the wrapped key blob inside the
-// transaction, so the time from the put to the commit is shorter. A blob that
-// no committed record names becomes garbage only after
-// ItemKeyBlobGracePeriod, which is longer, so the reaper never deletes the blob
-// of a write that can still commit. The difference of the two periods is the
-// largest clock difference between the server and the blob store that the
-// rule allows.
+// transaction to its commit. The writer makes the blob key and puts the
+// wrapped key blob inside the transaction, so the time from the put to the
+// commit is shorter. A blob that no committed record names becomes garbage
+// only after ItemKeyBlobGracePeriod, which is longer than this deadline plus
+// ItemKeyBlobClockSkew, so the reaper never deletes the blob of a write that
+// can still commit.
 const ItemKeyAttemptDeadline = 30 * time.Minute
+
+// ItemKeyBlobClockSkew is the largest difference between the clock of the
+// server and the clock of the blob store that the reaper rule allows. The
+// reaper reads the age of a blob from the time of the store. A listing with a
+// time further ahead than this fails the run.
+const ItemKeyBlobClockSkew = 15 * time.Minute
 
 // AttemptDeadline returns the attempt deadline of an item key transaction
 // that starts at start under ctx: the earlier of the deadline of ctx and

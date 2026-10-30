@@ -31,9 +31,11 @@ const MaxItemKeyVersion = 1 << 20
 // that no committed record names stays before it is garbage. A writer puts the
 // blob before it commits the record, so a blob without a record can belong to
 // a write that still commits. The store ends each item key transaction at
-// ItemKeyAttemptDeadline, so no write commits later than that after its put.
-// The period is the deadline, plus the lease of an instance, plus a margin for
-// a clock difference between the server and the blob store.
+// ItemKeyAttemptDeadline (30 minutes), so no write commits later than that
+// after its put. The period of 1 hour is longer than the deadline, plus the
+// lease of an instance (30 seconds), plus ItemKeyBlobClockSkew (15 minutes),
+// the largest clock difference between the server and the blob store that the
+// rule allows.
 const ItemKeyBlobGracePeriod = time.Hour
 
 // attemptLen is the length of the attempt part of a blob key: the length of
@@ -401,7 +403,10 @@ type ItemKeyBlobNamer func(ctx context.Context, b ItemKeyBlob) (bool, error)
 //
 // Garbage fails closed: a blob with a time of zero or a time after now, and a
 // key that is not an item key blob key of ns, are never garbage, and an error
-// of named or of the listing returns the error and no key.
+// of named or of the listing returns the error and no key. A blob with a time
+// more than ItemKeyBlobClockSkew after now returns ErrItemKeyBlobClockSkew and
+// no key: the clocks differ by more than the rule allows, so no age in the
+// listing is certain.
 func (b *ItemKeyBlobs) Garbage(
 	ctx context.Context, ns namespace.ID, named ItemKeyBlobNamer, now time.Time,
 ) ([]blob.Key, error) {
@@ -433,6 +438,16 @@ func filterGarbage(
 	ctx context.Context, ns namespace.ID, objects []blob.Object, named ItemKeyBlobNamer, now time.Time,
 ) ([]blob.Key, error) {
 	var garbage []blob.Key
+
+	// The clock check comes first, for the whole listing: a store time far
+	// ahead of the server shows that the two clocks are not in step, so no
+	// age in the listing is certain, and no key of this run is garbage.
+	for i := range objects {
+		if objects[i].ModifiedAt.After(now.Add(ItemKeyBlobClockSkew)) {
+			return nil, fmt.Errorf("%w: a blob is %s ahead, the limit is %s", ErrItemKeyBlobClockSkew,
+				objects[i].ModifiedAt.Sub(now).Round(time.Second), ItemKeyBlobClockSkew)
+		}
+	}
 
 	for i := range objects {
 		obj := objects[i]

@@ -610,8 +610,12 @@ func testItemKeyTxDeadline(t *testing.T, s ItemKeyStore) {
 		t.Errorf("a late transaction left a record: err = %v", getErr)
 	}
 
-	err = s.InItemKeyTx(t.Context(), fence, func(tx secret.ItemKeyTx) error {
-		_, createErr := tx.CreateItemKey(t.Context(), newItemKey(inTime, "builtin-1"))
+	// The same deadline, with a commit just inside it.
+	inTimeCtx, cancelInTime := context.WithTimeout(t.Context(), attemptDeadlineForTest)
+	defer cancelInTime()
+
+	err = s.InItemKeyTx(inTimeCtx, fence, func(tx secret.ItemKeyTx) error {
+		_, createErr := tx.CreateItemKey(inTimeCtx, newItemKey(inTime, "builtin-1"))
 
 		return createErr
 	})

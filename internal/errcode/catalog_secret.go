@@ -6,6 +6,9 @@ const (
 	// SecretConsoleSession is a console session on a route that encrypts or
 	// decrypts the secrets of a stack.
 	SecretConsoleSession = "secret.console-session"
+	// SecretItemKeyBlobClockSkew is a listing of item key blobs whose time is
+	// too far ahead of the clock of the server.
+	SecretItemKeyBlobClockSkew = "secret.item-key-blob-clock-skew"
 	// SecretItemKeyAttemptExpired is a write of an item key that did not
 	// commit before its attempt deadline.
 	SecretItemKeyAttemptExpired = "secret.item-key-attempt-expired"
@@ -28,6 +31,12 @@ func secretSpecs() []Spec {
 			Code:    SecretConsoleSession,
 			Meaning: "a console session cannot encrypt or decrypt secrets: the request needs an access token",
 			Args:    nil,
+		},
+		{
+			Code: SecretItemKeyBlobClockSkew,
+			Meaning: "the clock of the blob store is ahead of the clock of the server by more than the reaper allows, " +
+				"so the reaper deletes no key blob",
+			Args: nil,
 		},
 		{
 			Code:    SecretItemKeyAttemptExpired,
