@@ -99,6 +99,10 @@ func TestCLIs(t *testing.T) {
 		// Fails for every served route that no step reached, so an
 		// endpoint can never land without its e2e step again.
 		checkRouteCoverage(t, reports)
+
+		// Fails when a CLI version loses a route, a status or a field that its
+		// contract file records, and lists the new reads of a version with no file.
+		checkContracts(t, reports)
 	})
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
@@ -3898,6 +3902,7 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	}
 
 	checkAuditChain(ctx, t, env, org)
+	checkAuditExport(ctx, t, env, org)
 }
 
 // checkAuditEntryRead proves that GET /api/audit/entries/{sequence} reads
