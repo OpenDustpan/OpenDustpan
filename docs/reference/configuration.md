@@ -24,7 +24,7 @@ the same list.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
-| `--issuer-base-url` | `DUSTPAN_ISSUER_BASE_URL` | `issuer-base-url` | (none: the issuer uses `--public-url`; with neither, the server signs no token) |
+| `--issuer-base-url` | `DUSTPAN_ISSUER_BASE_URL` | `issuer-base-url` | (none: the issuer uses `--public-url`; with neither setting, the issuer is off) |
 | `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | `trusted-proxies` | (none: the server uses the address of the TCP peer only) |
 | `--trusted-proxy-header` | `DUSTPAN_TRUSTED_PROXY_HEADER` | `trusted-proxy-header` | `x-forwarded-for` (or `forwarded`) |
 | `--ip-allowlists` | `DUSTPAN_IP_ALLOWLISTS` | `ip-allowlists` | (none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, or every client reads as the address of the proxy. See Recovery in docs/explanation/security-model.md for the recovery path. |

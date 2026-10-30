@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
@@ -151,9 +152,9 @@ func issuerErrors(err error) (problem.Problem, bool) {
 	case errors.Is(err, profile.ErrIssuerKeyExpired):
 		return problem.New(http.StatusConflict, errcode.IssuerKeyExpired, err.Error()), true
 	case errors.Is(err, profile.ErrInvalid):
-		return problem.New(http.StatusBadRequest, errcode.IssuerInvalid, err.Error()), true
+		return problem.New(http.StatusBadRequest, errcode.IssuerInvalid, textOf(err, profile.ErrInvalid)), true
 	case errors.Is(err, profile.ErrConflict):
-		return problem.New(http.StatusConflict, errcode.IssuerConflict, err.Error()), true
+		return problem.New(http.StatusConflict, errcode.IssuerConflict, textOf(err, profile.ErrConflict)), true
 	default:
 		return problem.Pass()
 	}
@@ -171,3 +172,10 @@ func resolveNamespace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 
 // formatTime formats a time as RFC 3339 in UTC.
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+// textOf returns the text of err without the name of the sentinel of the
+// profile package that starts it, so an answer of the issuer does not speak of
+// a profile.
+func textOf(err, sentinel error) string {
+	return strings.Replace(err.Error(), sentinel.Error()+": ", "", 1)
+}
