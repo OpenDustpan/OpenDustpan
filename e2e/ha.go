@@ -364,6 +364,11 @@ func (c *HACluster) SetComponents(raw string) {
 	c.cfg.components = raw
 }
 
+// Binary returns the server binary that the next start of an instance runs.
+func (c *HACluster) Binary() string {
+	return c.cfg.bin
+}
+
 // SetBinary sets the server binary that every instance runs from its next
 // start on: bin is the path of the binary. A running instance keeps its
 // binary. A rolling deploy stops an instance, calls SetBinary and starts the

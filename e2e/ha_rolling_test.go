@@ -198,6 +198,7 @@ func haRollingDeploy(t *testing.T, env *e2e.Env, pair backupPair) {
 	ctx := t.Context()
 	cluster := env.HA(t)
 
+	original := cluster.Binary()
 	oldBin := e2e.BuildBinaryWithVersion(ctx, t, t.TempDir(), haOldBuild)
 	newBin := e2e.BuildBinaryWithVersion(ctx, t, t.TempDir(), haNewBuild)
 
@@ -223,7 +224,11 @@ func haRollingDeploy(t *testing.T, env *e2e.Env, pair backupPair) {
 		t.Fatalf("%v", err)
 	}
 
-	// The cluster ends the step on the newer build, also when a check fails.
+	// The binaries of the step live in its temporary directories, which go
+	// away with the step. A later step starts instances with the binary of
+	// the suite, so the cleanup puts it back. A running instance keeps its
+	// process, so the pool stays on the newer build until a step restarts it.
+	// The cleanup also starts an instance that a failed step left down.
 	t.Cleanup(func() {
 		cluster.SetBinary(newBin)
 
@@ -236,6 +241,8 @@ func haRollingDeploy(t *testing.T, env *e2e.Env, pair backupPair) {
 				t.Logf("start instance %d again: %v", i, err)
 			}
 		}
+
+		cluster.SetBinary(original)
 	})
 
 	env.Recorder.SetStep("5 rolling deploy")
