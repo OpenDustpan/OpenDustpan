@@ -61,8 +61,10 @@ type family struct {
 	NewPath string `json:"newPath"`
 	// seed writes the objects that a read family reads, before its runs.
 	seed func(ctx context.Context, r *protoRun) error
-	old  func(ctx context.Context, r *protoRun, i int) error
-	new  func(ctx context.Context, r *protoRun, i int) error
+	// pause is the wait after each run, outside the timing. See restorePresent.
+	pause time.Duration
+	old   func(ctx context.Context, r *protoRun, i int) error
+	new   func(ctx context.Context, r *protoRun, i int) error
 }
 
 // protoRun is what the operations of one run share.
@@ -147,6 +149,7 @@ func writeThenCommit(name string, size int) family {
 		Name: name, Bytes: size, Read: false,
 		OldPath: seqConditionalTx,
 		NewPath: "PUT under an attempt key + fenced tx",
+		pause:   0,
 		seed:    nil,
 		old: func(ctx context.Context, r *protoRun, i int) error {
 			key := r.fixedKey(i)
@@ -174,6 +177,7 @@ func putOnly(name string, size int) family {
 		Name: name, Bytes: size, Read: false,
 		OldPath: seqConditional,
 		NewPath: "PUT under an attempt key",
+		pause:   0,
 		seed:    nil,
 		old: func(ctx context.Context, r *protoRun, i int) error {
 			return r.putConditional(ctx, r.fixedKey(i))
@@ -214,6 +218,7 @@ func restoreWrite() family {
 		Name: "restore write (key absent)", Bytes: checkpointBytes, Read: false,
 		OldPath: seqConditional,
 		NewPath: "GET live key (absent) + fence check + PUT",
+		pause:   0,
 		seed:    nil,
 		old: func(ctx context.Context, r *protoRun, i int) error {
 			return r.putConditional(ctx, r.fixedKey(i))
@@ -245,10 +250,19 @@ var errKeyPresentStatus = errors.New("conditional PUT on a present key answered 
 // answers 200 and writes the same bytes again. The new path reads the live
 // key, compares its size and hash with the manifest, and skips the write.
 func restorePresent() family {
+	// MinIO refuses the conditional PUT on a present key before it reads the
+	// body. The body is above 256 KiB, so the Go server closes the
+	// connection, and each refused write opens a new one. 10,000 writes leave
+	// 10,000 sockets in TIME_WAIT on the host for 60 seconds. Three runs in a
+	// row use up the 28,232 ports of the host range, and the next connections
+	// fail. A pause of 65 seconds after each run lets the sockets close.
+	const restorePresentPause = 65 * time.Second
+
 	return family{
 		Name: "restore write (key present)", Bytes: checkpointBytes, Read: true,
 		OldPath: seqConditional + " (refused: present)",
 		NewPath: "GET live key + compare size and hash (skip)",
+		pause:   restorePresentPause,
 		seed: func(ctx context.Context, r *protoRun) error {
 			return parallel(protoSeedCount, func(i int) error {
 				return r.putPlain(ctx, r.readPrefix+"/"+strconv.Itoa(i))
@@ -286,6 +300,7 @@ func auditCheck() family {
 		Name: "audit checkpoint check (read)", Bytes: auditCheckpointBytes, Read: true,
 		OldPath: "GET the copy",
 		NewPath: "LIST the position prefix + GET each copy (1)",
+		pause:   0,
 		seed: func(ctx context.Context, r *protoRun) error {
 			return parallel(protoSeedCount, func(i int) error {
 				base := r.readPrefix + "/" + strconv.Itoa(i)
@@ -329,6 +344,9 @@ func protocolFamilies() []family {
 		restorePresent(),
 		putOnly("audit checkpoint write", auditCheckpointBytes),
 		auditCheck(),
+		unitImportCreateTx(),
+		restoreAbsentBatched(),
+		auditCheckPaged(),
 	}
 }
 
@@ -430,11 +448,7 @@ func (p protocolRunner) runFamily(
 				return runErr
 			}
 
-			if res == nil {
-				continue
-			}
-
-			if err := save(*res); err != nil {
+			if err := keep(ctx, res, f.pause, save); err != nil {
 				return err
 			}
 		}
@@ -604,4 +618,35 @@ func attemptPart(key string) string {
 	}
 
 	return key
+}
+
+// keep saves res, unless it is nil because the run was done before, and
+// then waits pause.
+func keep(ctx context.Context, res *protoResult, pause time.Duration, save func(protoResult) error) error {
+	if res == nil {
+		return nil
+	}
+
+	if err := save(*res); err != nil {
+		return err
+	}
+
+	return waitFor(ctx, pause)
+}
+
+// waitFor waits d, or until ctx ends.
+func waitFor(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait between runs: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
 }

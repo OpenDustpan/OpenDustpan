@@ -372,3 +372,15 @@ func TestSelectsFamily(t *testing.T) {
 		t.Fatal("-families selects the wrong families")
 	}
 }
+
+func TestPaddedSortsInOrder(t *testing.T) {
+	t.Parallel()
+
+	if got := padded(42); got != "000042" {
+		t.Fatalf("padded(42) = %q", got)
+	}
+
+	if padded(999) >= padded(1000) {
+		t.Fatal("padded keys do not sort in the order of their numbers")
+	}
+}

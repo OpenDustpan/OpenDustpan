@@ -153,6 +153,41 @@ func (m *pgModel) fencedWrite(ctx context.Context, unit string, seq int64, key s
 	return nil
 }
 
+// fencedWriteTwo is a fenced transaction that inserts two rows: the row of
+// unit, and the row of extra that records the attempt. It is five round
+// trips: one more insert than fencedWrite.
+func (m *pgModel) fencedWriteTwo(ctx context.Context, unit, extra string, seq int64, key string) error {
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+
+	var version int64
+
+	err = tx.QueryRow(ctx, "SELECT version FROM fence WHERE ns = $1 FOR SHARE", benchNamespace).Scan(&version)
+	if err != nil {
+		return errors.Join(fmt.Errorf("read fence: %w", err), tx.Rollback(ctx))
+	}
+
+	if version != 1 {
+		return errors.Join(fmt.Errorf("%w: %d", errFenceMoved, version), tx.Rollback(ctx))
+	}
+
+	for _, u := range []string{unit, extra} {
+		_, err = tx.Exec(ctx, "INSERT INTO blob_rows (unit, seq, blob_key, fence) VALUES ($1, $2, $3, $4)",
+			u, seq, key, version)
+		if err != nil {
+			return errors.Join(fmt.Errorf("insert row: %w", err), tx.Rollback(ctx))
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	return nil
+}
+
 // checkFence reads the fence row: one round trip, as a writer checks the
 // fence again before a write.
 func (m *pgModel) checkFence(ctx context.Context) error {
