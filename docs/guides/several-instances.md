@@ -158,10 +158,13 @@ The database can stop, restart or fail over to a replica. While an instance cann
 The adapters treat these failures as a database that does not answer:
 
 - A failed connection.
-- An error in the SQLSTATE class 08.
-- The SQLSTATE codes 57P01, 57P02 and 57P03.
-- A read-only database (25006).
+- The SQLSTATE codes 08000, 08001, 08003, 08004, 08006 and 08007 (a connection exception).
+- The SQLSTATE codes 57P01, 57P02 and 57P03 (the database server stops, crashes or does not accept connections yet).
+- The SQLSTATE code 25006 (a read-only database, for example after a failover to a replica).
+- The SQLSTATE code 53300 (too many connections). A session that ends frees a connection, so a new try can work.
 - A SQLite database that stays busy after its busy timeout.
+
+Other errors of the database stay errors with status 500. For example, 08P01 (protocol violation) is a bug. The codes 53200 (out of memory) and 53100 (disk full) are server faults. A new try is likely to meet them again.
 
 ### How long a CLI command retries
 

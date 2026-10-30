@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"strings"
 	"syscall"
 
 	"github.com/jackc/pgx/v5"
@@ -14,14 +13,25 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 )
 
-// SQLSTATE codes that mean the database does not answer, besides the class 08
-// of connection exceptions.
+// SQLSTATE codes that mean the database does not answer. The connection
+// exceptions are listed one by one: 08P01 (protocol violation) is a bug of
+// the client or the server and not an outage, so it stays a server error.
+// 53300 (too many connections) is a limit that clears when sessions end. The
+// other codes of class 53 (for example 53200, out of memory, and 53100, disk
+// full) stay server errors: the same call is likely to fail again, and a
+// client that tries again would only hide the fault.
 const (
-	connectionClass  = "08"
-	adminShutdown    = "57P01"
-	crashShutdown    = "57P02"
-	cannotConnectNow = "57P03"
-	readOnlyTransact = "25006"
+	connectionDoesNotExist    = "08003"
+	connectionFailure         = "08006"
+	connectionException       = "08000"
+	unableToEstablish         = "08001"
+	rejectedEstablishment     = "08004"
+	transactionResolutionLost = "08007"
+	adminShutdown             = "57P01"
+	crashShutdown             = "57P02"
+	cannotConnectNow          = "57P03"
+	readOnlyTransact          = "25006"
+	tooManyConnections        = "53300"
 )
 
 // classify reports whether err means that the database does not answer, and
@@ -65,13 +75,16 @@ func connectionLost(err error) bool {
 
 // classifyCode maps a SQLSTATE code to a class.
 func classifyCode(code string) (storeerr.Class, bool) {
-	switch {
-	case strings.HasPrefix(code, connectionClass):
+	switch code {
+	case connectionException, unableToEstablish, connectionDoesNotExist, rejectedEstablishment,
+		connectionFailure, transactionResolutionLost:
 		return storeerr.ConnectionFailed, true
-	case code == adminShutdown, code == crashShutdown, code == cannotConnectNow:
+	case adminShutdown, crashShutdown, cannotConnectNow:
 		return storeerr.Shutdown, true
-	case code == readOnlyTransact:
+	case readOnlyTransact:
 		return storeerr.ReadOnly, true
+	case tooManyConnections:
+		return storeerr.Capacity, true
 	default:
 		return "", false
 	}

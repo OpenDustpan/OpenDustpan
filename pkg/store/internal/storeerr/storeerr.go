@@ -6,6 +6,7 @@ package storeerr
 
 import (
 	"errors"
+	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -23,6 +24,9 @@ const (
 	// ReadOnly means that the database refuses writes, for example after a
 	// failover to a replica.
 	ReadOnly Class = "database is read-only"
+	// Capacity means that the database server refuses a new session for now,
+	// because it has no free one.
+	Capacity Class = "database has no free session"
 	// Busy means that the database file stayed locked for the whole busy bound.
 	Busy Class = "database is busy"
 )
@@ -52,6 +56,17 @@ func (e *Error) Class() Class {
 // Unwrap returns namespace.ErrUnavailable and the driver error.
 func (e *Error) Unwrap() []error {
 	return []error{namespace.ErrUnavailable, e.cause}
+}
+
+// Sentinel returns sentinel, and also err when err is a database that does not
+// answer. A store port that has its own failure sentinel uses it, so that its
+// callers keep the sentinel and the APIs still answer 503 for a lost database.
+func Sentinel(sentinel, err error) error {
+	if Is(err) {
+		return fmt.Errorf("%w: %w", sentinel, err)
+	}
+
+	return sentinel
 }
 
 // Is reports whether err already is an Error, so that an adapter does not

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
@@ -31,12 +32,18 @@ func (s *Store) GetState(ctx context.Context) (maintenance.State, error) {
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("select installation state postgres database: %w", maintenance.ErrUnavailable)
+		return "", fmt.Errorf(
+			"select installation state postgres database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	state, err := maintenance.ParseState(raw)
 	if err != nil {
-		return "", fmt.Errorf("select installation state postgres database: %w", maintenance.ErrUnavailable)
+		return "", fmt.Errorf(
+			"select installation state postgres database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	return state, nil
@@ -64,7 +71,10 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 
 		n, err := q.SetInstallationState(ctx, string(state))
 		if err != nil {
-			return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+			return fmt.Errorf(
+				"store installation state postgres database: %w",
+				storeerr.Sentinel(maintenance.ErrUnavailable, err),
+			)
 		}
 
 		changed = n
@@ -100,7 +110,10 @@ func lockWritesExclusive(ctx context.Context, q *db.Queries, wait time.Duration,
 	}
 
 	if err := q.SetLockTimeout(ctx, strconv.FormatInt(wait.Milliseconds(), 10)+"ms"); err != nil {
-		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+		return fmt.Errorf(
+			"store installation state postgres database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	if err := q.LockWritesExclusive(ctx, writeLockClass); err != nil {
@@ -108,7 +121,10 @@ func lockWritesExclusive(ctx context.Context, q *db.Queries, wait time.Duration,
 			return fmt.Errorf("store installation state postgres database: waited %s: %w", wait, onTimeout)
 		}
 
-		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+		return fmt.Errorf(
+			"store installation state postgres database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	return nil
@@ -134,7 +150,10 @@ func unavailable(err error) error {
 		return err
 	}
 
-	return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+	return fmt.Errorf(
+		"store installation state postgres database: %w",
+		storeerr.Sentinel(maintenance.ErrUnavailable, err),
+	)
 }
 
 // SetStateIf implements maintenance.Store. It stores next only when the
@@ -242,7 +261,10 @@ func (s *Store) setStateIn(
 		State_2: string(expected),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+		return 0, fmt.Errorf(
+			"store installation state postgres database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	return n, nil
@@ -258,7 +280,10 @@ func clearJournalOnEnter(ctx context.Context, q *db.Queries, next maintenance.St
 	}
 
 	if err := q.ClearMaintenanceRevocationsOnEnter(ctx); err != nil {
-		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+		return fmt.Errorf(
+			"store installation state postgres database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	return nil
