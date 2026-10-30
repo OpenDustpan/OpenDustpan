@@ -141,6 +141,16 @@ The request needs a running instance. A binary below the minimum cannot write. W
 These checks use the minimum:
 
 - **Writes.** Each write of an instance compares the version of its binary with the highest minimum in the schema. A binary below the minimum fails the write in its own transaction. The Pulumi CLI, OpenTofu and the API get 503. The error code is `schema.binary-below-minimum`, and the text names both versions: `binary version v0.3.0 is below v0.4.0, the minimum binary version of the database schema, so this instance cannot write: stop this instance and run version v0.4.0 or later`. Reads still work. The row delete at a clean stop still works.
+- **Background work.** An instance with a binary below the minimum does not claim or run background work. These calls fail with the same error:
+  - the start, the claim, the renewal, the steps and the end of a durable operation.
+  - the schedules and their ticks, and the heartbeat.
+  - the start and the end of a backup.
+  - the change of the installation state.
+  - the audit chain and the shipping of an audit sink.
+  - the registration of the instance.
+  - the count of sign-in failures.
+
+  A refused claim leaves the operation unclaimed, so an instance of a new binary takes it. These calls stay open, so an old instance can stop cleanly. It deletes its own row, hands back its claims and the lease of an audit sink, and appends audit entries. The revocation of a token, a session or a grant stays open too.
 - **Migrations.** A migration that sets a new minimum does not run while a row below that minimum exists. The new instance fails to start with an error that names the migration, the new minimum and each row: `migration 0200_example.sql sets the minimum binary version v0.4.0 while 1 instance rows are below it: ins-4q2n7xk5b6d3m1p0a8wz (v0.3.0): stop these instances, or delete the row of an instance that no longer runs (DELETE /api/server/instances/{id}), and start again`. Stop the old instances, or delete the rows of the instances that no longer run, and start the new instance again.
 - **Readiness.** An instance with a binary below the minimum answers 503 on the readiness probe. The `failed` list names the check `binary-minimum`, so a load balancer takes the instance out of the pool. The body holds no version text.
 - **Restore.** A restore on a binary below the minimum fails when it starts and again in the swap. The error names both versions. The live data and the minimum stay as they were. Start the restore on an instance of the new binary.
