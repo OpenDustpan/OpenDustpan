@@ -77,6 +77,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "the sweep lock lets one holder in at a time", test: testSweepLock},
 		{name: "blob purge records page as inventory.PageBlobPurges", test: testBlobPurgePages},
 		{name: "blob purge records hold the namespace ID, also after the name returns", test: testBlobPurgeNamespaceID},
+		{name: "the blob purge backlog counts the records and the oldest purge time", test: testBlobPurgeBacklog},
 		{name: "update tags replaces all tags", test: testUpdateTags},
 		{name: "update tags clears all tags", test: testUpdateTagsClear},
 		{name: "update tags on missing stack is ErrNotFound", test: testUpdateTagsMissing},
