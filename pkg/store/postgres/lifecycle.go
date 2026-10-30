@@ -648,7 +648,7 @@ func (s *Store) CountBlobPurges(ctx context.Context) (inventory.BlobPurgeBacklog
 // blobPurgeBacklogOf builds the backlog from the count and the purge time of
 // the oldest record in milliseconds. The time stays zero when no record exists.
 func blobPurgeBacklogOf(pending, oldestMs int64) inventory.BlobPurgeBacklog {
-	out := inventory.BlobPurgeBacklog{Pending: pending}
+	out := inventory.BlobPurgeBacklog{Pending: pending, OldestPurgedAt: time.Time{}}
 	if pending > 0 {
 		out.OldestPurgedAt = codec.FromMillis(oldestMs)
 	}

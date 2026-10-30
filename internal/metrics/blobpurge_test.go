@@ -3,7 +3,6 @@ package metrics_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -13,8 +12,17 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 )
 
-// fixedNow is the clock of the blob purge gauge tests.
-var fixedNow = time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)
+// testNow is the clock of the blob purge gauge tests.
+func testNow() time.Time {
+	return time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)
+}
+
+// readFailure is the error of a failed store read in the table.
+type readFailure struct{}
+
+func (readFailure) Error() string {
+	return "read failed"
+}
 
 // gaugeValue returns the value of the sample of name in the exposition text out.
 func gaugeValue(t *testing.T, out, name string) float64 {
@@ -53,15 +61,14 @@ func TestBlobPurgeBacklogGauges(t *testing.T) {
 		{name: "no record", pending: 0, oldestAge: 0, readErr: nil, wantPending: 0, wantAge: 0},
 		{name: "one record", pending: 1, oldestAge: 90 * time.Second, readErr: nil, wantPending: 1, wantAge: 90},
 		{name: "three records", pending: 3, oldestAge: time.Hour, readErr: nil, wantPending: 3, wantAge: 3600},
-		{name: "failed read exports zero", pending: 3, oldestAge: time.Hour, readErr: errors.New("boom"),
-			wantPending: 0, wantAge: 0},
+		{name: "failed read exports zero", pending: 3, oldestAge: time.Hour, readErr: readFailure{}, wantPending: 0, wantAge: 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			oldest := fixedNow.Add(-tt.oldestAge)
+			oldest := testNow().Add(-tt.oldestAge)
 			if tt.pending == 0 {
 				oldest = time.Time{}
 			}
@@ -71,7 +78,7 @@ func TestBlobPurgeBacklogGauges(t *testing.T) {
 			}
 
 			reg := metrics.NewRegistry()
-			metrics.RegisterBlobPurgeBacklog(reg, read, func() time.Time { return fixedNow })
+			metrics.RegisterBlobPurgeBacklog(reg, read, func() time.Time { return testNow() })
 
 			var buf bytes.Buffer
 			if err := reg.Write(&buf); err != nil {
@@ -98,11 +105,11 @@ func TestBlobPurgeBacklogGaugesShareOneRead(t *testing.T) {
 	read := func(context.Context) (int64, time.Time, error) {
 		reads.Add(1)
 
-		return 2, fixedNow.Add(-time.Minute), nil
+		return 2, testNow().Add(-time.Minute), nil
 	}
 
 	reg := metrics.NewRegistry()
-	metrics.RegisterBlobPurgeBacklog(reg, read, func() time.Time { return fixedNow })
+	metrics.RegisterBlobPurgeBacklog(reg, read, func() time.Time { return testNow() })
 
 	var buf bytes.Buffer
 	if err := reg.Write(&buf); err != nil {

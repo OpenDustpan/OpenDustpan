@@ -1095,9 +1095,15 @@ func testBlobPurgeBacklog(t *testing.T, s Store) {
 			t.Fatalf("delete stack %s: %v", st.Ref, err)
 		}
 
-		if err := s.PurgeStack(t.Context(), st.ID, ns.Fence(), time.Time{},
-			lifecycleEntry(ns.Name, "unit:purge")); err != nil {
-			t.Fatalf("purge stack %s: %v", st.Ref, err)
+		purgeErr := s.PurgeStack(
+			t.Context(),
+			st.ID,
+			ns.Fence(),
+			time.Time{},
+			lifecycleEntry(ns.Name, "unit:purge"),
+		)
+		if purgeErr != nil {
+			t.Fatalf("purge stack %s: %v", st.Ref, purgeErr)
 		}
 
 		checkBlobPurgeBacklog(t, counter, purges, int64(i+1))
