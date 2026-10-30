@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // errGuardDown is the error of a guard that cannot decide.
@@ -287,6 +288,74 @@ func TestStateGuardOnALostStoreAnswers503WithRetryAfter(t *testing.T) {
 						rt.name, rec.Code, rec.Header().Get("Retry-After"), len(f.pulumi.calls),
 						errcode.NamespaceUnavailable, rec.Body)
 				}
+			})
+		}
+	}
+}
+
+// storeFaultCase is a guard error that the store causes and the text that the
+// 503 body holds.
+type storeFaultCase struct {
+	name string
+	err  error
+	want []string
+}
+
+// storeFaultCases returns the guard errors that the store causes. The guard
+// wraps a failed decision record in a refusal, so each cause comes in both
+// forms.
+func storeFaultCases() []storeFaultCase {
+	below := &schema.MinimumError{SchemaMinimum: "v1.1.0", BinaryVersion: "v1.0.0"}
+	belowText := []string{"v1.0.0", "v1.1.0", "schema.binary-below-minimum"}
+	wrapped := func(cause error) error {
+		return &gate.RefusalError{
+			Err:      fmt.Errorf("%w: write the decision record: %w", gate.ErrUnavailable, cause),
+			Record:   "gdr-1",
+			Messages: []string{"The decision record could not be written, so the write is refused."},
+		}
+	}
+
+	return []storeFaultCase{
+		{"minimum error", below, belowText},
+		{"minimum error in a refusal", wrapped(below), belowText},
+		{"store lost", namespace.ErrUnavailable, []string{"namespace.unavailable"}},
+		{"store lost in a refusal", wrapped(namespace.ErrUnavailable), []string{"namespace.unavailable"}},
+		{"other failure in a refusal", wrapped(errGuardDown), []string{"gate.unavailable"}},
+	}
+}
+
+// checkStoreFault runs one case on one route and checks the 503, the text and
+// that no call reached the Pulumi port.
+func checkStoreFault(t *testing.T, tt storeFaultCase, rt guardRoute) {
+	t.Helper()
+
+	f := guardedFixture(t, newRecordingGuard(tt.err))
+
+	rec := serveRoute(t, f, rt)
+	if rec.Code != http.StatusServiceUnavailable || len(f.pulumi.calls) != 0 {
+		t.Fatalf("%s answers %d with %d calls, want 503 and none: %s",
+			rt.name, rec.Code, len(f.pulumi.calls), rec.Body)
+	}
+
+	for _, want := range tt.want {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("body lacks %q: %s", want, rec.Body)
+		}
+	}
+
+	if strings.Contains(rec.Body.String(), errGuardDown.Error()) {
+		t.Errorf("body %q shows the internal error text", rec.Body)
+	}
+}
+
+func TestStateGuardStoreFaultNamesTheCause(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range storeFaultCases() {
+		for _, rt := range guardRoutes() {
+			t.Run(tt.name+" on "+rt.name, func(t *testing.T) {
+				t.Parallel()
+				checkStoreFault(t, tt, rt)
 			})
 		}
 	}

@@ -93,6 +93,9 @@ type Store struct {
 	// logger records the warnings of the store. It defaults to a discard
 	// handler; pass WithLogger to record them.
 	logger *slog.Logger
+	// tracer, when set, sees every statement, batch, prepare and copy of the
+	// pool. Nil in production.
+	tracer pgx.QueryTracer
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -132,6 +135,16 @@ func WithInstallationKind(kind installation.Kind) Option {
 // the server stays the one process that changes the schema.
 func WithoutMigrate() Option {
 	return func(s *Store) { s.noMigrate = true }
+}
+
+// WithQueryTracer makes the pool report each statement, batch, prepare and
+// copy to tracer. The tracer may also implement pgx.BatchTracer,
+// pgx.PrepareTracer and pgx.CopyFromTracer, and then it sees those too. A
+// benchmark of database round trips uses it. Without it, the pool has no
+// tracer. The pool pings an idle connection with the protocol layer, which the
+// tracer does not see.
+func WithQueryTracer(tracer pgx.QueryTracer) Option {
+	return func(s *Store) { s.tracer = tracer }
 }
 
 var (
@@ -192,6 +205,22 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
 
+	s := &Store{
+		pool: nil, txs: guardedPool{pool: nil}, queries: nil, stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
+		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
+		beforeLockDelete: nil, stateLockWait: 0,
+		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
+		tracer: nil,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	if s.tracer != nil {
+		cfg.ConnConfig.Tracer = s.tracer
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
@@ -203,28 +232,10 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
 	}
 
-	s := &Store{
-		pool:                pool,
-		txs:                 guardedPool{pool: pool},
-		queries:             db.New(guardedDB{inner: pool}),
-		stagingMu:           sync.Mutex{},
-		stagingSchema:       "",
-		keepAccessHook:      nil,
-		betweenProfileReads: atomic.Pointer[func()]{},
-		snapshotBegin:       snapshotBeginQuery(live),
-		beforeLockDelete:    nil,
-		stateLockWait:       0,
-		binaryVersion:       "",
-		gate:                nil,
-		kind:                "",
-		noMigrate:           false,
-		logger:              slog.New(slog.DiscardHandler),
-	}
+	s.pool = pool
+	s.txs = guardedPool{pool: pool}
+	s.queries = db.New(guardedDB{inner: pool})
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
-
-	for _, opt := range opts {
-		opt(s)
-	}
 
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
@@ -955,7 +966,10 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // chain) must run while the installation is in maintenance mode. The control
 // path is for the writes that keep the installation able to enter, leave and
 // restore from maintenance mode, and that record what happens. Each caller is
-// a write that maintenance mode must not refuse.
+// a write that maintenance mode must not refuse. It does not check the minimum
+// binary version either, so only a write that an old binary needs to stop
+// cleanly uses it, or a write that records what happened. A write that changes
+// domain data or runs work uses inMinimumTx.
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
@@ -964,6 +978,19 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, nil)
+}
+
+// inMinimumTx runs fn in a control transaction that refuses a binary below the
+// minimum binary version of the schema. It reads the minimum in the same
+// transaction as fn, before fn runs, and it reads no installation state, so
+// maintenance mode does not refuse it. A control write that changes domain
+// data or runs work uses it, so a worker of an old binary, which a rolling
+// deploy leaves running, cannot claim or run an operation. A control write
+// that an old binary needs to stop cleanly uses inControlTx.
+//
+// The same rule about nested transactions as for inControlTx applies.
+func (s *Store) inMinimumTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, func(tx pgx.Tx) error { return s.checkTxMinimum(ctx, tx) })
 }
 
 // runTx runs before, when set, and then fn in one transaction.

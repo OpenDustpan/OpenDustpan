@@ -4142,16 +4142,26 @@ VALUES (
 ON CONFLICT (log_id, seq) DO NOTHING;
 
 -- name: GetJobLogChunk :one
-SELECT c.sha256, c.size, c.confirmed
+SELECT c.sha256, c.size, c.confirmed, c.blob_key
 FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.seq = sqlc.arg(seq);
 
 -- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
-SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5)
+SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5),
+    blob_key = sqlc.arg(blob_key)
 WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
   AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListJobLogChunkKeys :many
+-- The blob key of each confirmed chunk of one log version, in the order of the
+-- chunk numbers.
+SELECT c.seq, c.blob_key
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.confirmed = 1
+ORDER BY c.seq;
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is
@@ -4172,3 +4182,45 @@ WHERE id = sqlc.arg(id);
 SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
+
+-- name: InsertTrustRule :execrows
+-- The caller checks the fence and the principal in the same transaction. A
+-- rule with a taken ID, or with a name that the namespace has, is not written.
+INSERT INTO trust_rules (
+    id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+)
+VALUES (
+    sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(name), sqlc.arg(issuer), sqlc.arg(audience),
+    sqlc.arg(key_source), sqlc.arg(static_keys), sqlc.arg(conditions_json), sqlc.arg(principal_id),
+    sqlc.arg(created_by), sqlc.arg(created_at_ms)
+)
+ON CONFLICT DO NOTHING;
+
+-- name: CountTrustRulesInNamespace :one
+SELECT COUNT(*) FROM trust_rules WHERE namespace = sqlc.arg(namespace);
+
+-- name: GetTrustRulePrincipal :one
+-- Reads the principal of a new rule in the transaction of the create, so a
+-- delete of the principal cannot pass between the check and the insert.
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms
+FROM principals
+WHERE id = sqlc.arg(id);
+
+-- name: GetTrustRule :one
+-- The namespace is part of the key: a rule of another namespace reads as no
+-- row.
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+-- name: ListTrustRulesOfNamespace :many
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace)
+ORDER BY name, id;
+
+-- name: DeleteTrustRule :execrows
+DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);

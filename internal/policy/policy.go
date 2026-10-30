@@ -18,6 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 var (
@@ -111,14 +115,19 @@ const (
 	MaxReasonBytes = 1 << 10
 	// MaxApprovals bounds the approvals that one decision asks for.
 	MaxApprovals = 10
+	// MaxApprovalGroups bounds the groups of the approvals of one decision.
+	MaxApprovalGroups = 32
 	// MaxAnswerBytes bounds the answer of an engine over the network.
 	MaxAnswerBytes = 64 << 10
 )
 
 // Approvals is what a decision of EffectApprove asks for: Count approvals
 // by members of Groups. Empty Groups lets any principal with the approve
-// action approve.
+// action approve. Rule is the ID of the approval rule that asks: one rule
+// gives one requirement, and two rules give two requirements, also with the
+// same groups.
 type Approvals struct {
+	Rule   string   `json:"rule"`
 	Groups []string `json:"groups,omitempty"`
 	Count  int      `json:"count"`
 }
@@ -136,7 +145,8 @@ type Decision struct {
 
 // Validate reports whether d is a decision within the limits. It returns
 // ErrInvalidDecision otherwise. A decision of EffectApprove needs from 1 to
-// MaxApprovals approvals. Another effect has no approvals. The error text
+// MaxApprovals approvals, with a valid approval rule ID, by at most
+// MaxApprovalGroups groups that each have a valid group name. Another effect has no approvals. The error text
 // never quotes a value of d, because d can come from the answer of an
 // engine over the network.
 func (d Decision) Validate() error {
@@ -155,9 +165,39 @@ func (d Decision) Validate() error {
 		return fmt.Errorf("%w: %d approvals, give 1 to %d", ErrInvalidDecision, d.Approvals.Count, MaxApprovals)
 	case d.Effect != EffectApprove && d.Approvals != nil:
 		return fmt.Errorf("%w: approvals on the effect %q", ErrInvalidDecision, d.Effect)
+	case d.Approvals != nil:
+		return validateRuleAndGroups(d.Approvals)
 	default:
 		return nil
 	}
+}
+
+// validateRuleAndGroups checks the rule ID and the approver groups of the
+// approvals of a decision. The error never quotes the rule.
+func validateRuleAndGroups(a *Approvals) error {
+	if _, err := gate.ParseRuleID(a.Rule); err != nil {
+		return fmt.Errorf("%w: the approvals name no valid approval rule ID", ErrInvalidDecision)
+	}
+
+	return validateGroups(a.Groups)
+}
+
+// validateGroups checks the approver groups of a decision. The answer of an
+// engine over the network is untrusted, so a group name is checked here too,
+// before the caller resolves it.
+func validateGroups(groups []string) error {
+	if len(groups) > MaxApprovalGroups {
+		return fmt.Errorf("%w: %d approver groups, the limit is %d", ErrInvalidDecision, len(groups),
+			MaxApprovalGroups)
+	}
+
+	for i, g := range groups {
+		if principal.ValidateGroupName(g) != nil {
+			return fmt.Errorf("%w: the approver group %d has a name that is not valid", ErrInvalidDecision, i)
+		}
+	}
+
+	return nil
 }
 
 func validateReasons(reasons []string) error {
@@ -192,9 +232,9 @@ type Engine interface {
 }
 
 // Combined is the join of the decisions of more than one engine (Combine).
-// Each item of Approvals is one requirement, and a change needs each of
-// them: the approvals of two engines never merge into one requirement with
-// the groups of both.
+// Each item of Approvals is one requirement of one approval rule, and a change
+// needs each of them: the approvals of two rules never merge into one
+// requirement, also when they name the same groups.
 type Combined struct {
 	Effect    Effect      `json:"effect"`
 	Reasons   []string    `json:"reasons,omitempty"`
@@ -203,21 +243,25 @@ type Combined struct {
 
 // Combine joins the decisions of more than one engine: the strictest effect
 // wins. One deny gives deny, with the reasons of each deny. Else one approve
-// gives approve, with one requirement for each approve: its count of
+// gives approve, with one requirement for each approval rule: its count of
 // approvals by members of its groups, with the groups sorted and with no
-// duplicates. Two approves with the same groups give one requirement with
-// the higher count. So an approve by security and an approve by dba need an
-// approval by security and an approval by dba, never one approval by
-// either. The requirements are sorted by their groups. Else the result is
-// allow, also for no decision. The record keeps each decision with its own
-// Engine and PolicyVersion.
+// duplicates. Two approves that name the same rule give one requirement with
+// the higher count, and they must name the same groups. Two approves that
+// name two rules give two requirements, also with the same groups. So an
+// approve by the rule security and an approve by the rule dba need an
+// approval for each, never one approval for either, and two rules that name
+// the group dba need two approvals by members of dba. The requirements are
+// sorted by their rule IDs. Else the result is allow, also for no decision.
+// The record keeps each decision with its own Engine and PolicyVersion.
 //
 // Combine first checks each decision with Decision.Validate, and returns an
 // error that wraps ErrInvalidDecision and names the index of the first
 // decision that fails: an empty or unknown effect, an approve with no
-// approvals or with a count outside 1 to MaxApprovals, or approvals on
-// another effect. So a decision that an engine or a caller built wrong never
-// becomes an allow.
+// approvals, with a count outside 1 to MaxApprovals or with no valid rule ID,
+// or approvals on another effect. It returns the same error for two approves
+// of one rule that name other groups, because one rule has one definition.
+// So a decision that an engine or a caller built wrong never becomes an
+// allow.
 func Combine(ds []Decision) (Combined, error) {
 	for i := range ds {
 		if err := ds[i].Validate(); err != nil {
@@ -238,13 +282,13 @@ func Combine(ds []Decision) (Combined, error) {
 		return out, nil
 	}
 
-	return combineApprovals(ds), nil
+	return combineApprovals(ds)
 }
 
 // combineApprovals joins the decisions of EffectApprove of ds, which
-// Decision.Validate checked: one requirement for each set of groups, with
-// the highest count of that set. With no approve, the result is allow.
-func combineApprovals(ds []Decision) Combined {
+// Decision.Validate checked: one requirement for each approval rule, with the
+// highest count of that rule. With no approve, the result is allow.
+func combineApprovals(ds []Decision) (Combined, error) {
 	out := Combined{Effect: EffectAllow, Reasons: nil, Approvals: nil}
 
 	for i := range ds {
@@ -259,17 +303,23 @@ func combineApprovals(ds []Decision) Combined {
 		slices.Sort(groups)
 		groups = slices.Compact(groups)
 
-		at := slices.IndexFunc(out.Approvals, func(a Approvals) bool { return slices.Equal(a.Groups, groups) })
-		if at >= 0 {
-			out.Approvals[at].Count = max(out.Approvals[at].Count, ds[i].Approvals.Count)
+		at := slices.IndexFunc(out.Approvals, func(a Approvals) bool { return a.Rule == ds[i].Approvals.Rule })
+		if at < 0 {
+			out.Approvals = append(out.Approvals,
+				Approvals{Rule: ds[i].Approvals.Rule, Groups: groups, Count: ds[i].Approvals.Count})
 
 			continue
 		}
 
-		out.Approvals = append(out.Approvals, Approvals{Groups: groups, Count: ds[i].Approvals.Count})
+		if !slices.Equal(out.Approvals[at].Groups, groups) {
+			return Combined{}, fmt.Errorf("decision %d: %w: one approval rule names two sets of groups",
+				i, ErrInvalidDecision)
+		}
+
+		out.Approvals[at].Count = max(out.Approvals[at].Count, ds[i].Approvals.Count)
 	}
 
-	slices.SortFunc(out.Approvals, func(a, b Approvals) int { return slices.Compare(a.Groups, b.Groups) })
+	slices.SortFunc(out.Approvals, func(a, b Approvals) int { return strings.Compare(a.Rule, b.Rule) })
 
-	return out
+	return out, nil
 }

@@ -1,8 +1,9 @@
 # Registry API
 
-The private registry holds the providers that a team publishes. This page
-describes the routes that publish a provider version, list versions and manage
-the trusted signing keys, and the routes of the provider registry protocol that
+The private registry holds the providers and the modules that a team
+publishes. This page describes the routes that publish a provider version or a
+module version, list versions and manage the trusted signing keys, and the
+routes of the provider registry protocol and the module registry protocol that
 OpenTofu reads.
 
 ## Registry API
@@ -18,6 +19,10 @@ the namespace as its object.
 | `GET /providers` | `registry:read` | not applicable | One page of the providers of the namespace that have a release, ordered by name |
 | `GET /providers/{name}/versions` | `registry:read` | not applicable | The releases of the provider, from the lowest version to the highest |
 | `GET /providers/{name}/versions/{version}` | `registry:read` | not applicable | The release |
+| `PUT /modules/{name}/{system}/versions/{version}` | `registry:publish` | taken | 200 and the module release |
+| `GET /modules` | `registry:read` | not applicable | One page of the modules of the namespace that have a release, ordered by name and system |
+| `GET /modules/{name}/{system}/versions` | `registry:read` | not applicable | The releases of the module, from the lowest version to the highest |
+| `GET /modules/{name}/{system}/versions/{version}` | `registry:read` | not applicable | The module release |
 | `POST /keys` | `registry:manage-keys` | taken | 201 and the key |
 | `GET /keys` | `registry:manage-keys` | not applicable | The keys of the namespace, ordered by fingerprint |
 | `DELETE /keys/{fingerprint}` | `registry:manage-keys` | taken | 204 and no body |
@@ -89,6 +94,32 @@ The answer is the release:
 }
 ```
 
+### Modules
+
+The body of `PUT /modules/{name}/{system}/versions/{version}` is
+`{"upload": "<token>"}`. The token names one file that `POST /uploads` staged
+in the same namespace. The file is a zip file or a tar.gz file. A module has no
+signature, so the publish needs no signing key. The server reads every entry
+of the archive and refuses an archive with 422 and the code
+`registry.module-archive-refused`. The server makes the file name of the stored
+archive. The answer is the module release:
+
+```json
+{
+  "namespace": "acme",
+  "name": "vpc",
+  "system": "aws",
+  "version": "1.0.0",
+  "publishedAt": "2026-10-21T09:00:00Z",
+  "publishedBy": "ada",
+  "archive": {"name": "vpc-aws-1.0.0.tar.gz", "sha256": "...", "size": 12345}
+}
+```
+
+`GET /modules` answers `{"modules": [{"namespace", "name", "system"}], "nextPageToken"}`
+and pages as `GET /providers` does. `GET /modules/{name}/{system}/versions`
+answers `{"releases": [...]}`.
+
 ### Keys
 
 The body of `POST /keys` is `{"armoredPublicKey": "<ASCII armor>"}`. The answer
@@ -117,6 +148,7 @@ example `server.internal` for a 500.
 | 422 | `registry.signature-invalid` | The signature is not valid for the checksums file |
 | 422 | `registry.signature-untrusted-key` | No key of the namespace made the signature |
 | 422 | `registry.archive-set-refused` | The checksums file, a hash or a file name fails a check |
+| 422 | `registry.module-archive-refused` | The module archive has an unsafe path or link, passes a limit, or is not a zip file or a tar.gz file |
 | 422 | `registry.key-limit` | The namespace holds 16 keys |
 
 ## Provider registry protocol
@@ -158,11 +190,35 @@ A request for a host other than the host of the public URL, a name outside the
 rule, a missing namespace, provider or version, and a release whose key the
 namespace removed all answer 404. The answer does not tell the causes apart.
 
+## Module registry protocol
+
+OpenTofu reads these routes. The service discovery document names them as
+`modules.v1`, and only when the server has a public URL and a registry. A
+module address is `<host>/<namespace>/<name>/<system>`, where the host is the
+host of the public URL and the namespace is the OpenDustpan namespace.
+
+| Method and path | Action | Answer |
+| --- | --- | --- |
+| `GET /v1/modules/{namespace}/{name}/{system}/versions` | `registry:read` | `{"modules": [{"versions": [{"version": "1.0.0"}]}]}` |
+| `GET /v1/modules/{namespace}/{name}/{system}/{version}/download` | `registry:read` | 204 with the signed address of the archive in the header `X-Terraform-Get` |
+| `GET /v1/modules/{namespace}/{name}/{system}/{version}/files/{sha256}` | the signed address | The bytes of the archive |
+
+The first two routes take the token in the header `Authorization: Bearer`. The
+signed address is valid for 15 minutes, for the archive of one release. It has
+the member `archive` with the value `zip` or `tar.gz`, so that OpenTofu knows
+how to unpack the file. A signature of a module address does not open a file of
+a provider, and a signature of a provider address does not open a module.
+The checks of the host, the errors and the 404 answers are the same as for the
+provider registry protocol.
+
 ## Limits
 
 | Limit | Value |
 | --- | --- |
 | One file | 512 MiB |
+| One module archive | 64 MiB |
+| One module archive when unpacked | 1 GiB |
+| Entries in one module archive | 20,000 |
 | All files of one release | 2 GiB |
 | Archives for one version | 64 |
 | Plugin protocols for one version | 4 |

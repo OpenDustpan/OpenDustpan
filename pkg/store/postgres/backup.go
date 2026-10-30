@@ -45,10 +45,12 @@ const (
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
+	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
 	pgColReason      = "reason"
 	pgColSeq         = "seq"
+	pgColBlobKey     = "blob_key"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
@@ -122,6 +124,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopySinkTables()...)
 	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
+	tables = append(tables, pgCopyTrustRuleTables()...)
 
 	return tables
 }
@@ -167,7 +170,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
 				pgColDigest, "invalid", "features", "saved_at_ms",
-				"blob_key", pgColSize, "blob_size", "blob_md5",
+				pgColBlobKey, pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
@@ -179,7 +182,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "update_journal",
 			columns: []string{
-				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", pgColSHA256, "md5", pgColSize,
+				pgColStackID, pgColUpdateID, pgColArrival, pgColBlobKey, pgColSHA256, "md5", pgColSize,
 				"lowest_sequence", "sequence_ids", "operation_ids",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
@@ -479,7 +482,7 @@ func pgCopySessionTables() []pgCopyTable {
 		},
 		{
 			table:   "oidc_providers",
-			columns: []string{pgColProviderID, "issuer", pgColCreatedAtMs},
+			columns: []string{pgColProviderID, pgColIssuer, pgColCreatedAtMs},
 			orderBy: []string{pgColProviderID},
 		},
 		{
@@ -1532,7 +1535,7 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
 	}
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
 			ID:          r.ID.String(),
 			State:       string(backup.StateRunning),
@@ -1581,7 +1584,7 @@ func (s *Store) FinishBackup(
 
 	var out backup.Record
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
 		// The fence comes first: a stale claim changes nothing and learns
 		// nothing about the row.
 		if err := recordStep(ctx, q, f, nil); err != nil {
@@ -1790,7 +1793,7 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the registry, the Git host connections,
-// the notification sinks and the triggers.
+// the notification sinks, the triggers and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -1808,5 +1811,9 @@ func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging str
 		return err
 	}
 
-	return checkStagedTriggers(ctx, pool, staging)
+	if err := checkStagedTriggers(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedTrustRules(ctx, pool, staging)
 }
