@@ -17,6 +17,7 @@ const (
 	backupColDigest      = "digest"
 	backupColPrincipalID = "principal_id"
 	backupColEndedAtMs   = "ended_at_ms"
+	backupColError       = "error"
 	backupColName        = "name"
 	backupColIssuer      = "issuer"
 	backupColNameKey     = "name_key"
@@ -419,6 +420,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteSinkBackupTables(),
 		sqliteTriggerBackupTables(),
 		sqliteItemKeyBackupTables(),
+		sqliteCatalogBackupTables(),
 		sqliteTrustRuleBackupTables(),
 	)
 }
@@ -516,6 +518,13 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 		{
 			table:   backup.TableInstanceVersions,
 			columns: []string{"id", "binary_version", backupColStartedAtMs},
+		},
+		{
+			table: backup.TableStoreChecks,
+			columns: []string{
+				"id", backupColTarget, backupColState, "requested_by", backupColStartedAtMs, backupColEndedAtMs,
+				backupColError, "report",
+			},
 		},
 	}
 }

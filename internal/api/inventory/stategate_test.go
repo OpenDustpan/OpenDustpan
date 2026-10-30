@@ -318,8 +318,8 @@ func storeFaultCases() []storeFaultCase {
 	return []storeFaultCase{
 		{"minimum error", below, belowText},
 		{"minimum error in a refusal", wrapped(below), belowText},
-		{"store lost", namespace.ErrUnavailable, []string{"namespace.unavailable"}},
-		{"store lost in a refusal", wrapped(namespace.ErrUnavailable), []string{"namespace.unavailable"}},
+		{"store lost", namespace.ErrUnavailable, []string{errcode.NamespaceUnavailable}},
+		{"store lost in a refusal", wrapped(namespace.ErrUnavailable), []string{errcode.NamespaceUnavailable}},
 		{"other failure in a refusal", wrapped(errGuardDown), []string{"gate.unavailable"}},
 	}
 }

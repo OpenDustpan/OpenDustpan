@@ -150,8 +150,10 @@ no Pulumi CLI and no OpenTofu CLI.
 
 The command builds the web console, starts the server on
 `http://127.0.0.1:8080`, and seeds two namespaces with demo stacks, update
-history and one backup. It prints the URL and the sign-in token. Use the
-token on the sign-in page.
+history and one backup. It then reads two routes that the console calls. A
+404 on either route means that the console at `CONSOLE_REF` calls a route
+that this server does not serve, and the command stops. It prints the URL and
+the sign-in token. Use the token on the sign-in page.
 
 The server uses port 8080 by default. Set another port with
 `make demo DEMO_PORT=<port>`.
@@ -228,8 +230,8 @@ Restore a Pulumi checkpoint with
 The restore answers 400 when the stored checkpoint of that version is not a deployment that the Pulumi CLI can read. It writes no new version.
 
 `opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
-`opendustpan upgrade check` and `opendustpan namespace create` are API
-clients. Each takes `--server` and `--ca-file`, and reads the token from
+`opendustpan upgrade check`, `opendustpan store check` and
+`opendustpan namespace create` are API clients. Each takes `--server` and `--ca-file`, and reads the token from
 `DUSTPAN_ADMIN_TOKEN`. `opendustpan restore` runs through the API in
 maintenance mode, with `--backup`, `--check-only` and `--force`. The
 [backup guide](docs/guides/backup-restore-upgrade.md) shows each command

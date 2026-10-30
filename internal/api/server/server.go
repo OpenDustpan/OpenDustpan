@@ -22,6 +22,7 @@ import (
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -161,6 +162,9 @@ type Config struct {
 	// store keeps none: the instance routes are not mounted. Both SQL adapters
 	// keep them.
 	Instances installation.InstanceStore
+	// StoreChecks runs the deep checks of the blob store. Nil means the server
+	// has none: the store check routes are not mounted.
+	StoreChecks *storecheck.Service
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -216,6 +220,7 @@ type Handler struct {
 	gitHost        *forge.Service
 	idem           *idempotent.Middleware
 	instances      installation.InstanceStore
+	storeChecks    *storecheck.Service
 	mux            *patternMux
 	routes         []Route
 }
@@ -282,9 +287,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		preferences:    cfg.Preferences,
 		gitHost:        cfg.GitHost,
 		idem:           cfg.Idempotency,
-		instances:      cfg.Instances,
-		mux:            newPatternMux(),
-		routes:         nil,
+		instances:      cfg.Instances, storeChecks: cfg.StoreChecks,
+		mux:    newPatternMux(),
+		routes: nil,
 	}
 
 	if h.now == nil {
@@ -602,7 +607,7 @@ func classifyIdentity(err error) (failure, bool) {
 // part of the contract: the first function that maps the error decides.
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
-		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
+		classifyStoreCheck, classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
 		classifyIPAllowlist, classifyGateConfig, classifySessionPolicy, classifySignIn, classifyProviders,
 		classifyGitHost, classifyInstance, classifyRequest,
 	} {

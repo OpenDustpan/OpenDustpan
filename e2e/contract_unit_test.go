@@ -20,10 +20,7 @@ func contractRun(store e2e.Store, requests ...e2e.Entry) e2e.Run {
 
 func contractEntry(path string, status int, body string) e2e.Entry {
 	return e2e.Entry{
-		Step: "", Method: "GET", Host: "", Path: path, Query: "", UserAgent: "pulumi-cli/1",
-		Backend: "", Accept: "", ContentType: "", RequestBody: "", ResponseBody: body,
-		ResponseHeaders: []string{"Content-Type: application/json", "X-Request-Id"}, ResponseCut: false,
-		Seq: 0, Status: status, RequestBytes: 0, ResponseBytes: 0, At: time.Time{},
+		Step: "", Method: "GET", Host: "", Path: path, Query: "", UserAgent: "pulumi-cli/1", Backend: "", Accept: "", ContentType: "", RequestBody: "", ResponseBody: body, ResponseHeaders: []string{"Content-Type: application/json", "X-Request-Id"}, ResponseCut: false, Seq: 0, Status: status, RequestBytes: 0, ResponseBytes: 0, At: time.Time{},
 	}
 }
 

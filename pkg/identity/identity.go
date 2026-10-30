@@ -228,6 +228,10 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionInstallationStoreCheck allows starting and reading the store checks
+	// of the installation: the deep check of a blob store, which writes
+	// throwaway objects under a prefix of its own. Its object is ServerObject.
+	ActionInstallationStoreCheck Action = "installation:store-check"
 	// ActionServerManageSettings allows changing the installation settings
 	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
 	// settings name it: the start entry and the entry of a reload of the
@@ -584,6 +588,10 @@ const (
 	// namespace that holds the registry. No built-in role below the
 	// administrator holds it.
 	ActionRegistryPublish Action = "registry:publish"
+	// ActionNamespaceManageIssuer allows making, rotating and checking the
+	// signing keys of the OIDC issuer of a namespace, changing its settings
+	// and exporting its two files. Its object is a namespace.
+	ActionNamespaceManageIssuer Action = "namespace:manage-issuer"
 	// ActionRegistryManageKeys allows registering and removing the trusted
 	// signing keys of a namespace, and listing them. Its object is the
 	// namespace that holds the registry.

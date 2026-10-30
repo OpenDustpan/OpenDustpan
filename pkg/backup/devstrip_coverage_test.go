@@ -84,8 +84,14 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "label of a principal that the strip removes with its row",
 	},
-	"profile_revisions.author": {strip: false, reason: "history text of who wrote the revision"},
-	"profiles.created_by":      {strip: false, reason: "history text of who made the profile"},
+	"profile_revisions.author":   {strip: false, reason: "history text of who wrote the revision"},
+	"profiles.created_by":        {strip: false, reason: "history text of who made the profile"},
+	"issuer_settings.updated_by": {strip: false, reason: "history text of who changed the settings"},
+	"issuer_settings.subject_template": {
+		strip: false, reason: "a list of subject key names, such as namespace and unit; it names no principal",
+	},
+	"issuer_settings.allow_block_subjects": {strip: false, reason: "a flag; it names no principal"},
+	"issuer_settings.include_actor_name":   {strip: false, reason: "a flag; it names no principal"},
 	"saved_views.owner": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: a view of a missing principal matches no reader",
@@ -99,12 +105,31 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who registered the key",
 	},
+	"catalog_blueprint_versions.published_by": {
+		strip:  false,
+		reason: "history text of who published the version; a published version never changes",
+	},
 	"registry_releases.published_by": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who published the release",
 	},
-	"job_freezes.created_by":              {strip: false, reason: "history text of who made the freeze"},
-	"notification_sinks.created_by":       {strip: false, reason: "history text of who made the sink"},
+	"job_freezes.created_by":        {strip: false, reason: "history text of who made the freeze"},
+	"notification_sinks.created_by": {strip: false, reason: "history text of who made the sink"},
+	"notifications.subject":         {strip: false, reason: "history text of who caused the notification"},
+	"notification_subscriptions.created_by": {
+		strip: false,
+		reason: "subject of the last writer; a delivery checks the current grants of that principal " +
+			"and skips when the principal is gone",
+	},
+	"notification_deliveries.principal": {
+		strip: false,
+		reason: "ID of the principal whose access decides the delivery; the check before each attempt " +
+			"skips the delivery when the principal is gone",
+	},
+	"notification_deliveries.owner": {
+		strip:  false,
+		reason: "name of an instance that holds the claim, not of a person",
+	},
 	"job_freezes.ended_by":                {strip: false, reason: "history text of who ended the freeze"},
 	"runner_join_tokens.created_by":       {strip: false, reason: "history text of who made the join token"},
 	"runner_join_tokens.used_by":          {strip: false, reason: "ID of a runner, not of a person"},

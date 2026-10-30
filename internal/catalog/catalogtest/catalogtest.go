@@ -38,17 +38,11 @@ type Harness struct {
 // Domain makes the rows that the Catalog needs and that other ports own,
 // and reads what the stores write to other ports.
 type Domain interface {
-	// CreateNamespace creates the namespace name and returns its fence.
-	CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error)
+	BlueprintDomain
+
 	// CreateUnit creates a unit of tool in the namespace of fence and
 	// returns its reference, with its stable unit ID set.
 	CreateUnit(ctx context.Context, fence namespace.Fence, tool, name string) (identity.Object, error)
-	// BumpFence increments the failover version of the namespace of fence,
-	// as a failover does, and returns the new fence.
-	BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error)
-	// AuditEntries returns the audit entries of the namespace ns, in the
-	// order of their append.
-	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
 	// Operation returns the kind of the durable operation with the start
 	// key key, and false when none exists.
 	Operation(ctx context.Context, key string) (durable.Kind, bool, error)
@@ -97,12 +91,6 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a revision past its deadline with a running job keeps its unit and its reservation", testExpireRunning},
 		{"a state version applies the revision from git at its commit", testObserve},
 		{"list selects by blueprint and by state", testList},
-		{"a new draft gets version 1, and a stale one is ErrConflict", testDraft},
-		{"a publish stores the next version, and a version never changes", testPublish},
-		{"a publish of a stale draft is ErrConflict", testPublishStale},
-		{"a retire marks a version, once", testRetire},
-		{"a list of blueprints gives the newest version of each", testListBlueprints},
-		{"a blueprint write on a stale fence writes nothing", testBlueprintFenced},
 	}
 
 	for _, tc := range cases {
@@ -111,6 +99,82 @@ func Run(t *testing.T, newHarness Factory) {
 
 			h := newHarness(t)
 			tc.run(t, h, setUp(t, h))
+		})
+	}
+
+	RunBlueprints(t, func(t *testing.T) BlueprintHarness {
+		t.Helper()
+
+		h := newHarness(t)
+
+		return BlueprintHarness{Blueprints: h.Blueprints, Domain: h.Domain}
+	})
+}
+
+// BlueprintHarness is one fresh, empty database for one case of the
+// blueprint cases. An adapter that has no request store yet runs
+// RunBlueprints with it.
+type BlueprintHarness struct {
+	Blueprints catalog.BlueprintStore
+	Domain     BlueprintDomain
+}
+
+// BlueprintDomain is the part of Domain that the blueprint cases use.
+type BlueprintDomain interface {
+	// CreateNamespace creates the namespace name and returns its fence.
+	CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error)
+	// BumpFence increments the failover version of the namespace of fence,
+	// as a failover does, and returns the new fence.
+	BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error)
+	// AuditEntries returns the audit entries of the namespace ns, in the
+	// order of their append.
+	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
+}
+
+// BlueprintFactory returns a fresh blueprint harness for one case.
+type BlueprintFactory func(t *testing.T) BlueprintHarness
+
+// RunBlueprints executes the blueprint cases of the suite against harnesses
+// from newHarness. Run executes them too.
+func RunBlueprints(t *testing.T, newHarness BlueprintFactory) {
+	t.Helper()
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, h BlueprintHarness, f fixture)
+	}{
+		{"a new draft gets version 1, and a stale one is ErrConflict", testDraft},
+		{"a publish stores the next version, and a version never changes", testPublish},
+		{"a publish of a stale draft is ErrConflict", testPublishStale},
+		{"a retire marks a version, once", testRetire},
+		{"a list of blueprints gives the newest version of each", testListBlueprints},
+		{"a blueprint write on a stale fence writes nothing", testBlueprintFenced},
+		{"a blueprint write appends its audit entries, and a refused write appends none", testBlueprintAudit},
+		{"a publish of a draft that does not exist is ErrConflict", testPublishNoDraft},
+		{"a blueprint of one namespace is not read in another", testBlueprintNamespaces},
+		{"a document keeps every field through a draft and a publish", testBlueprintRoundTrip},
+		{"a draft above the blueprint limit is ErrLimit", testBlueprintLimit},
+		{"a publish above the version limit is ErrLimit", testVersionLimit},
+		{"a reference of another namespace writes nothing under the fence", testRefOfAnotherNamespace},
+		{"a publish refuses a document that fails its checks", testPublishRefusals},
+		{"a write refuses an audit entry that fails its checks", testBadEntries},
+		{"a version below 1 and a bad Expr version are refused", testBadVersionInput},
+		{"a publish records the stored draft once, and a retire is for one version", testPublishStoredDraft},
+		{"concurrent publishes of one draft give one winner, and versions 1 to 12", testPublishRace},
+		{"concurrent writes of one draft version give one winner", testDraftRace},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			fence, err := h.Domain.CreateNamespace(t.Context(), ns)
+			if err != nil {
+				t.Fatalf("CreateNamespace() = %v", err)
+			}
+
+			tc.run(t, h, fixture{unit: identity.Object{}, fence: fence})
 		})
 	}
 }

@@ -67,7 +67,7 @@ func (h *Handler) guardStateWrite(
 	// answer is the 503 of every other write path, with the text that names
 	// both versions. The check reads the chain of the error, so it also finds
 	// the cause inside a refusal that says the decision record could not be
-	// written. A lost store is handled above.
+	// written. A lost store answers the 503 of namespace.unavailable above.
 	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
 		h.logger.WarnContext(ctx, "state write not decided: this binary is below the minimum of the schema",
 			slog.String("object", obj.String()), slog.Any("error", err))

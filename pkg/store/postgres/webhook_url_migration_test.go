@@ -19,8 +19,9 @@ const webhookURLVersion = 133
 
 // TestWebhookURLMigration applies the migrations before webhook URLs became
 // secret items, plants a webhook sink with a plain text URL as its target,
-// then opens the store, which applies the rest. No table may hold the URL
-// after that, and the sink fails closed until a person sets the URL again.
+// then opens the store, which applies the rest. The migration of the scoped
+// sink tables makes the sink tables again with no row, because no tag shipped
+// the old shape. So no sink is left, and no table may hold the URL.
 func TestWebhookURLMigration(t *testing.T) {
 	t.Parallel()
 
@@ -51,7 +52,10 @@ func TestWebhookURLMigration(t *testing.T) {
 		t.Fatalf("get namespace: %v", err)
 	}
 
-	notifytest.CheckMigratedWebhook(t, s.NotificationSinks(), ns.Fence())
+	if got, sinksErr := s.NotificationSinks().Sinks(ctx, ns.Name); sinksErr != nil || len(got) != 0 {
+		t.Fatalf("Sinks after the scoped tables = %v (%v), want none", got, sinksErr)
+	}
+
 	checkNoPlainURL(t, schemaURL)
 }
 
@@ -165,8 +169,9 @@ func plantLegacyWebhook(t *testing.T, schemaURL string) {
 	}
 }
 
-// checkNoPlainURL fails if a sink target still holds a part of the URL that
-// the legacy sink had, or if the target with user information is not empty.
+// checkNoPlainURL fails if a sink table still holds a row. The migration of the
+// scoped sink tables makes them again with no row, so no part of the URL that
+// the legacy sink had stays in the database.
 func checkNoPlainURL(t *testing.T, schemaURL string) {
 	t.Helper()
 
@@ -185,28 +190,12 @@ func checkNoPlainURL(t *testing.T, schemaURL string) {
 
 	var count int
 
-	err = conn.QueryRow(ctx,
-		`SELECT count(*) FROM notification_sinks WHERE position($1 IN target) > 0 OR position('/' IN target) > 0`,
-		notifytest.LegacyToken()).Scan(&count)
+	err = conn.QueryRow(ctx, countSinkRows).Scan(&count)
 	if err != nil || count != 0 {
-		t.Fatalf("sinks that hold the URL after the migration = %d (%v), want 0", count, err)
-	}
-
-	for _, sh := range notifytest.LegacyShapes() {
-		var got string
-
-		err = conn.QueryRow(ctx, `SELECT target FROM notification_sinks WHERE id = $1`, sh.ID).Scan(&got)
-		if err != nil || got != sh.Want {
-			t.Fatalf("target of %s after the migration = %q (%v), want %q", sh.ID, got, err, sh.Want)
-		}
-	}
-
-	// A target with user information never passed the egress rules, but the
-	// migration still scrubs it: the target becomes empty.
-	var target string
-
-	err = conn.QueryRow(ctx, `SELECT target FROM notification_sinks WHERE id = 'snk-userinfo'`).Scan(&target)
-	if err != nil || target != "" {
-		t.Fatalf("target of the sink with user information = %q (%v), want empty", target, err)
+		t.Fatalf("rows of the sink tables after the migration = %d (%v), want 0", count, err)
 	}
 }
+
+// countSinkRows counts the rows of the three sink tables.
+const countSinkRows = `SELECT (SELECT count(*) FROM notification_sinks) + (SELECT count(*) FROM notification_sink_secrets) +
+	(SELECT count(*) FROM notification_sink_refs)`

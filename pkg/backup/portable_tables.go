@@ -615,7 +615,7 @@ func portableSpec() []PortableTable {
 				{Name: "auto_create", Kind: KindBool},
 				{Name: "enabled", Kind: KindBool},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "updated_at_ms", Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: "version", Kind: KindInteger},
 				{Name: "mode", Kind: KindText},
 				{Name: "authorization_url", Kind: KindText},
@@ -721,8 +721,11 @@ func portableSpec() []PortableTable {
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),
+		portableOutboxTables(),
+		portableDeliveryTables(),
 		portableTriggerTables(),
 		portableItemKeyTables(),
+		portableCatalogTables(),
 		portableTrustRuleTables(),
 	)
 }
