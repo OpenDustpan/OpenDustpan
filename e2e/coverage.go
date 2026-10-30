@@ -16,6 +16,7 @@ import (
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	issuerapi "opendustpan.org/opendustpan/internal/api/issuer"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
@@ -29,6 +30,7 @@ import (
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/token"
@@ -99,6 +101,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
+	issuerRoutes := coverageIssuerRoutes(tb)
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
@@ -108,7 +111,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
-		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
+		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, issuerRoutes, sinkRoutes, jobRoutes,
 		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, server,
 	)
 	out = slices.Grow(out, probeRouteCount)
@@ -965,6 +968,53 @@ func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 	})
 	if err != nil {
 		tb.Fatalf("drift handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageIssuerRoutes returns the routes of the issuer. The stores are empty
+// shells: they exist only to build a Handler for its route table.
+func coverageIssuerRoutes(tb testing.TB) []RouteRef {
+	tb.Helper()
+
+	svc, err := issuersvc.NewService(issuersvc.Config{
+		Store:         struct{ profile.IssuerStore }{nil},
+		Namespaces:    coverageNamespaceStore{},
+		Sealer:        struct{ profile.Sealer }{nil},
+		Authorizer:    coverageAuthorizer{},
+		Notifier:      nil,
+		HTTP:          nil,
+		IssuerBaseURL: "",
+		PublicURL:     "",
+		Now:           nil,
+		Log:           nil,
+	})
+	if err != nil {
+		tb.Fatalf("issuer service: %v", err)
+	}
+
+	handler, err := issuerapi.NewHandler(issuerapi.Config{
+		Issuer:         svc,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("issuer handler: %v", err)
 	}
 
 	routes := handler.Routes()
