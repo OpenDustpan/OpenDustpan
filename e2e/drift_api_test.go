@@ -154,6 +154,16 @@ func driftScenario(t *testing.T, env *e2e.Env) {
 	refusesBadChecks(ctx, t, env, &routes)
 	unknownUnitsAnswerNotFound(ctx, t, env)
 	memberReadsNothing(ctx, t, env, &routes)
+
+	// No API route records a drift result yet, so the last step writes it through
+	// the store of the in-process server. The server binary holds its database
+	// open, so the step cannot run there. Every step above runs against both.
+	if e2e.UseBinaryServer() {
+		t.Log("skip: the drift section of a drifted unit; it records the result through the in-process store")
+
+		return
+	}
+
 	contextReadsDrift(ctx, t, env, &driftContextCase{unitID: unitID, jobID: started, base: base})
 }
 
