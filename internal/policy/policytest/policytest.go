@@ -61,6 +61,8 @@ const (
 	ForbiddenReason    = "this blueprint is not allowed"
 	DBAGroup           = "dba"
 	DBAApprovals       = 2
+	// DBARule is the ID of the approval rule that PolicyApproveDBA names.
+	DBARule = "dba-approval"
 	// Deadline is the deadline that the suite gives to each call of a slow
 	// engine.
 	Deadline = 200 * time.Millisecond
@@ -164,8 +166,9 @@ func testApprove(t *testing.T, kinds []policy.Kind, newEngine Factory) {
 		t.Fatalf("Decide() = %+v, want approve", d)
 	}
 
-	if d.Approvals.Count != DBAApprovals || !slices.Equal(d.Approvals.Groups, []string{DBAGroup}) {
-		t.Fatalf("approvals = %+v, want %d by %q", *d.Approvals, DBAApprovals, DBAGroup)
+	if d.Approvals.Count != DBAApprovals || !slices.Equal(d.Approvals.Groups, []string{DBAGroup}) ||
+		d.Approvals.Rule != DBARule {
+		t.Fatalf("approvals = %+v, want %d by %q from the rule %q", *d.Approvals, DBAApprovals, DBAGroup, DBARule)
 	}
 }
 
