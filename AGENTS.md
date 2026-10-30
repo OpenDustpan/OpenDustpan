@@ -112,6 +112,7 @@ internal/              code that is not part of the SDK
                        domain packages and helpers that the SDK port closure does not reach
   calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
                        features with their own package and suite (<name>test/)
+  expr/                the built-in Expr engine (catalog.Evaluator); the only package that imports the Expr library
   registry/            the registry service (service/), the release check (releasecheck/) and the signature fixture (pgpfixture/)
   egress/egresshttp/   the HTTP client that applies the egress rules
   breakglass/, graph/, history/, store/, blob/, notify/

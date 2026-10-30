@@ -100,6 +100,14 @@ linters:
           deny:
             - pkg: opendustpan.org/opendustpan
               desc: The client generator reads the published description; it never imports server code.
+        expr:
+          # The Expr engine of internal/expr is the only code that imports the
+          # library. Everything else uses the catalog.Evaluator port.
+          files:
+            - "!**/internal/expr/**"
+          deny:
+            - pkg: github.com/expr-lang/expr
+              desc: Only internal/expr imports the Expr library; use the catalog.Evaluator port.
         journal:
           # The journal takes bytes and gives bytes (ADR 43, decision 3.3). It
           # imports no part of the server, so a later move to a separate module
