@@ -43,6 +43,9 @@ type seededImports struct {
 	open  string // An import in StatePlanning: ended_at_ms is 0.
 	ended string // An import in StateCanceled: ended_at_ms is not 0.
 	gone  string // A purged import: its row is in imports_purged.
+	// uploadAt is the commit time of the upload row of each import. The store
+	// sets it from its own clock, so the check reads it from the source.
+	uploadAt map[string]time.Time
 }
 
 // seedBackupImports writes three imports, so the round trip carries both
@@ -60,10 +63,10 @@ func seedBackupImports(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 	ctx := t.Context()
 	fence := acme.Fence()
 	e := lifecycleEntry(acme.Name, "import:run")
-	ids := &seededImports{open: "imp-open", ended: "imp-ended", gone: "imp-gone"}
+	ids := &seededImports{open: "imp-open", ended: "imp-ended", gone: "imp-gone", uploadAt: map[string]time.Time{}}
 
 	for _, id := range []string{ids.open, ids.ended, ids.gone} {
-		seedOneImport(t, ports, acme, id)
+		ids.uploadAt[id] = seedOneImport(t, ports, acme, id)
 	}
 
 	for _, id := range []string{ids.ended, ids.gone} {
@@ -82,7 +85,7 @@ func seedBackupImports(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 
 // seedOneImport writes the import id with one unit, its target, its counts
 // and two ledger rows.
-func seedOneImport(t *testing.T, ports ImportPorts, acme namespace.Namespace, id string) {
+func seedOneImport(t *testing.T, ports ImportPorts, acme namespace.Namespace, id string) time.Time {
 	t.Helper()
 
 	ctx := t.Context()
@@ -117,12 +120,19 @@ func seedOneImport(t *testing.T, ports ImportPorts, acme namespace.Namespace, id
 		t.Fatalf("commit upload of %s: %v", id, err)
 	}
 
+	rows, err := ports.Uploads.UploadCommits(ctx, acme.Name, id, commit.UnitDir)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("read upload commits of %s: %v, %v", id, rows, err)
+	}
+
 	for n, version := range []string{"v1", "v2"} {
 		row := backupLedgerRow(acme.Name, id, unit.ID, version, now().Add(time.Duration(n)*time.Second))
 		if err := ports.SeedLedger(ctx, acme.Name, row); err != nil {
 			t.Fatalf("seed ledger of %s: %v", id, err)
 		}
 	}
+
+	return rows[0].CommittedAt
 }
 
 func backupImport(ns namespace.Name, id string) unitimport.Import {
@@ -247,7 +257,7 @@ func checkRestoredUploadCommits(t *testing.T, ports ImportPorts, ns namespace.Na
 	for _, id := range []string{ids.open, ids.ended} {
 		rows, err := ports.Uploads.UploadCommits(t.Context(), ns, id, "0123456789abcdef0123456789abcdef")
 		if err != nil || len(rows) != 1 || rows[0].Sequence != 1 || rows[0].Facts != "0000000001-a1b2c3.json" ||
-			!rows[0].CommittedAt.Equal(now()) {
+			!rows[0].CommittedAt.Equal(ids.uploadAt[id]) {
 			t.Fatalf("restored upload commits of %s = %+v, %v, want the one seeded row", id, rows, err)
 		}
 	}
