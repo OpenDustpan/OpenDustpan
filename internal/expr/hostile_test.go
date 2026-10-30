@@ -1,6 +1,7 @@
 package expr_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"regexp"
@@ -407,5 +408,80 @@ func TestOperatorNamesCannotBeWritten(t *testing.T) {
 		if err := expr.New().Compile(source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
 			t.Fatalf("Compile(%q) = %v, want ErrInvalid", source, err)
 		}
+	}
+}
+
+// TestEnvTypeLayer sends values that are not JSON values, whose size the
+// check of the environment cannot know unless it refuses them.
+func TestEnvTypeLayer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"1 MiB list of strings", make([]string, 1<<20)},
+		{"a list of 1 MiB strings", [][]byte{make([]byte, 1<<20)}},
+		{"a map of strings", map[string]string{"k": strings.Repeat("a", 1<<20)}},
+		{"a list of integers", make([]int, 1<<20)},
+		{"a byte slice", make([]byte, 1<<20)},
+		{"an integer", 7},
+		{"a pointer", new(string)},
+		{"a struct", struct{ S string }{S: strings.Repeat("a", 1<<20)}},
+		{"a function", func() {}},
+		{"a list that holds a typed list", []any{make([]string, 1<<20)}},
+		{"an object that holds a typed object", map[string]any{"k": map[string]string{"k": "v"}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for place, edit := range map[string]func(env *catalog.Env){
+				"inputs": func(env *catalog.Env) { env.Inputs["v"] = tc.value },
+				"value":  func(env *catalog.Env) { env.Value = tc.value },
+				"input":  func(env *catalog.Env) { env.Input = tc.value },
+			} {
+				env := hostileEnv()
+				edit(env)
+
+				got, err := expr.New().Bool(t.Context(), "true", env)
+				if got || !errors.Is(err, catalog.ErrRuleFailed) {
+					t.Fatalf("%s: Bool() = %v, %v, want false, ErrRuleFailed", place, got, err)
+				}
+			}
+		})
+	}
+}
+
+// TestEnvTypesAreAccepted checks the JSON types that the check allows.
+func TestEnvTypesAreAccepted(t *testing.T) {
+	t.Parallel()
+
+	env := hostileEnv()
+	env.Value = nil
+	env.Input = map[string]any{"n": json.Number("5"), "f": float64(1.5), "b": true, "z": nil, "l": []any{"a", 1.0}}
+	env.Inputs["list"] = []any{map[string]any{"k": "v"}}
+
+	if got, err := expr.New().Bool(t.Context(), "input.b && len(inputs.list) == 1", env); err != nil || !got {
+		t.Fatalf("Bool() = %v, %v, want true", got, err)
+	}
+}
+
+// TestRunErrorIsShort checks that the error of a failed run never holds a
+// whole value of the environment, which the library quotes.
+func TestRunErrorIsShort(t *testing.T) {
+	t.Parallel()
+
+	env := hostileEnv()
+	env.Inputs["s"] = strings.Repeat("Z", 100_000)
+
+	got, err := expr.New().Bool(t.Context(), "int(inputs.s) > 0", env)
+	if got || !errors.Is(err, catalog.ErrRuleFailed) {
+		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
+	}
+
+	if n := len(err.Error()); n > 300 || strings.Contains(err.Error(), strings.Repeat("Z", 300)) {
+		t.Fatalf("Bool() error has %d bytes, want at most 300 and no long part of the value", n)
 	}
 }
