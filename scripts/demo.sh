@@ -107,6 +107,34 @@ fi
 echo "demo: seeding demo data"
 DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" go run ./cmd/demo-seed -url "$DEMO_URL"
 
+# check_console_read sends one GET of the console's reads with the admin token
+# and fails when the answer is not 2xx. A 404 means that the console at
+# CONSOLE_REF calls a route that this server does not serve. The token goes
+# through the environment and the output holds only the status code.
+check_console_read() {
+  path="$1"
+  status="$(DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" node -e '
+fetch(process.argv[1], {
+  headers: { Authorization: "Bearer " + process.env.DUSTPAN_ADMIN_TOKEN },
+}).then((r) => process.stdout.write(String(r.status)), () => process.stdout.write("0"));
+' "$DEMO_URL$path")"
+  case "$status" in
+    2??) ;;
+    404)
+      echo "demo: the console at CONSOLE_REF calls routes that this server does not serve; update CONSOLE_REF: GET $path answered 404" >&2
+      exit 1
+      ;;
+    *)
+      echo "demo: GET $path answered $status, not 2xx: the server log is printed above" >&2
+      exit 1
+      ;;
+  esac
+}
+
+echo "demo: checking the console reads"
+check_console_read "/api/dustpan/v1/namespaces/demo-platform/units"
+check_console_read "/api/server/backups"
+
 printf 'OpenDustpan demo is ready at %s/\n' "$DEMO_URL"
 printf 'Sign-in token for the sign-in page: %s\n' "$ADMIN_TOKEN"
 
