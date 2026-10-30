@@ -47,6 +47,8 @@ var devColumnDecisions = map[string]devDecision{
 	"access_tokens.principal_id":      {strip: true, reason: "token of a removed principal"},
 	"temp_admins.principal_id":        {strip: true, reason: "temporary administrator that is a removed principal"},
 	"temp_admins.subject":             {strip: true, reason: "temporary administrator with the dev prefix"},
+	"trust_rules.principal_id":        {strip: true, reason: "trust rule that acts as a removed principal"},
+	"trust_rules.created_by":          {strip: false, reason: "history text of who made the trust rule"},
 	"grants.subject_kind":             {strip: false, reason: "a kind word, not a subject"},
 	"grants.created_by":               {strip: false, reason: "history text of who made the grant"},
 	"grants.revoked_by":               {strip: false, reason: "history text of who revoked the grant"},
@@ -96,6 +98,10 @@ var devColumnDecisions = map[string]devDecision{
 	"registry_keys.added_by": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who registered the key",
+	},
+	"catalog_blueprint_versions.published_by": {
+		strip:  false,
+		reason: "history text of who published the version; a published version never changes",
 	},
 	"registry_releases.published_by": {
 		strip:  false,

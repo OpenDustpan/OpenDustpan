@@ -26,7 +26,7 @@ func (d *DurableOperations) Beat(ctx context.Context, owner string, lease time.D
 		return fmt.Errorf("heartbeat lease %v is not positive: %w", lease, durable.ErrInvalid)
 	}
 
-	return d.store.inControlTx(ctx, func(q *db.Queries) error {
+	return d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the database clock: %w", err)

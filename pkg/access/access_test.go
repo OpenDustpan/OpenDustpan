@@ -1607,6 +1607,7 @@ func TestBuiltInRolesHoldTheGateActions(t *testing.T) {
 	}{
 		{access.RoleViewer, true, false},
 		{access.RoleSecretViewer, true, false},
+		{access.RolePlanner, true, false},
 		{access.RoleAuditor, true, false},
 		{access.RoleWriter, true, false},
 		{access.RoleMaintainer, true, false},
@@ -1651,6 +1652,7 @@ func TestBuiltInRolesHoldTheNotificationAction(t *testing.T) {
 	}{
 		{access.RoleViewer, false},
 		{access.RoleSecretViewer, false},
+		{access.RolePlanner, false},
 		{access.RoleAuditor, false},
 		{access.RoleWriter, false},
 		{access.RoleMaintainer, false},
@@ -1695,6 +1697,7 @@ func TestBuiltInRolesHoldTheOutputSharingActions(t *testing.T) {
 	}{
 		{access.RoleViewer, true, false},
 		{access.RoleSecretViewer, true, false},
+		{access.RolePlanner, true, false},
 		{access.RoleAuditor, true, false},
 		{access.RoleWriter, true, false},
 		{access.RoleMaintainer, true, false},

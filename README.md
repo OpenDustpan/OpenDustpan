@@ -323,6 +323,8 @@ How-to guides:
   of an OpenTofu workspace and read its latest drift result.
 - [Run triggers](docs/guides/run-triggers.md): save a trigger on a stack or a
   workspace, fire it by hand, and see what the server checks.
+- [The planner role](docs/guides/planner-role.md): what a planner can do, what
+  it cannot do, and the limit of the role on a workstation.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.
@@ -355,6 +357,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the
+  keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the

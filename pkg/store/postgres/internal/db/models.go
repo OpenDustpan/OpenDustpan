@@ -114,6 +114,26 @@ type BlobPurge struct {
 	NamespaceID string
 }
 
+type CatalogBlueprint struct {
+	NamespaceID      string
+	Name             string
+	DraftVersion     int64
+	DraftJson        string
+	DraftUpdatedAtMs int64
+}
+
+type CatalogBlueprintVersion struct {
+	NamespaceID   string
+	Name          string
+	Number        int64
+	DraftVersion  int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
+}
+
 type Checkpoint struct {
 	UpdateID      string
 	LeaseDigest   []byte
@@ -505,6 +525,7 @@ type JobLogChunk struct {
 	Confirmed   int64
 	StoredSize  int64
 	StoredMd5   []byte
+	BlobKey     string
 }
 
 type JobPlan struct {
@@ -955,6 +976,20 @@ type Trigger struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+}
+
+type TrustRule struct {
+	ID             string
+	Namespace      string
+	Name           string
+	Issuer         string
+	Audience       string
+	KeySource      string
+	StaticKeys     string
+	ConditionsJson string
+	PrincipalID    string
+	CreatedBy      string
+	CreatedAtMs    int64
 }
 
 type UnitFinalVersion struct {

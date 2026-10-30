@@ -116,6 +116,7 @@ func areas() []func() []Spec {
 		storeCheckSpecs,
 		tokenSpecs,
 		triggerSpecs,
+		trustRuleSpecs,
 		unitSpecs,
 		updateSpecs,
 		upgradeSpecs,

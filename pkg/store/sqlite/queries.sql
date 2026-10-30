@@ -4142,16 +4142,26 @@ VALUES (
 ON CONFLICT (log_id, seq) DO NOTHING;
 
 -- name: GetJobLogChunk :one
-SELECT c.sha256, c.size, c.confirmed
+SELECT c.sha256, c.size, c.confirmed, c.blob_key
 FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.seq = sqlc.arg(seq);
 
 -- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
-SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5)
+SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5),
+    blob_key = sqlc.arg(blob_key)
 WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
   AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListJobLogChunkKeys :many
+-- The blob key of each confirmed chunk of one log version, in the order of the
+-- chunk numbers.
+SELECT c.seq, c.blob_key
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.confirmed = 1
+ORDER BY c.seq;
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is
@@ -4216,3 +4226,133 @@ WHERE state = 'running'
       WHERE o.start_key = sqlc.arg('prefix') || store_checks.id
         AND o.kind = sqlc.arg('kind')
         AND o.state IN ('failed', 'canceled'));
+
+-- name: InsertCatalogBlueprint :execrows
+-- The caller checks the fence in the same transaction. A blueprint of the same
+-- name in the namespace is not written.
+INSERT INTO catalog_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), 1, sqlc.arg(draft_json), sqlc.arg(draft_updated_at_ms)
+)
+ON CONFLICT (namespace_id, name) DO NOTHING;
+
+-- name: UpdateCatalogBlueprintDraft :execrows
+-- The draft changes only at the version that the caller read.
+UPDATE catalog_blueprints
+SET draft_version = draft_version + 1, draft_json = sqlc.arg(draft_json), draft_updated_at_ms = sqlc.arg(draft_updated_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprints.name = sqlc.arg(name) AND draft_version = sqlc.arg(draft_version);
+
+-- name: CountCatalogBlueprints :one
+SELECT COUNT(*) FROM catalog_blueprints
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetCatalogBlueprintDraft :one
+SELECT b.draft_version, b.draft_json
+FROM catalog_blueprints AS b
+JOIN namespaces AS n ON n.id = b.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND b.name = sqlc.arg(name);
+
+-- name: GetCatalogBlueprintVersionOfDraft :one
+-- The number of the version that published a draft version. No row means the
+-- draft version has no version.
+SELECT v.number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.draft_version = sqlc.arg(draft_version);
+
+-- name: LastCatalogBlueprintVersion :one
+-- The last published number of a blueprint, 0 for none. The caller holds the
+-- write lock of the namespace, so the next number is exact.
+SELECT CAST(COALESCE(MAX(v.number), 0) AS BIGINT) AS number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name);
+
+-- name: InsertCatalogBlueprintVersion :exec
+INSERT INTO catalog_blueprint_versions (
+    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), sqlc.arg(number), sqlc.arg(draft_version), sqlc.arg(document_json), sqlc.arg(expr_version),
+    sqlc.arg(published_by), sqlc.arg(published_at_ms), 0
+);
+
+-- name: GetCatalogBlueprintVersion :one
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.number = sqlc.arg(number);
+
+-- name: ListCatalogBlueprintLatest :many
+-- The newest published version of each blueprint of a namespace, by name.
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+  AND v.number = (
+      SELECT MAX(w.number) FROM catalog_blueprint_versions AS w
+      WHERE w.namespace_id = v.namespace_id AND w.name = v.name
+  )
+ORDER BY v.name;
+
+-- name: RetireCatalogBlueprintVersion :execrows
+-- A retire of a retired version matches the row and changes nothing.
+UPDATE catalog_blueprint_versions
+SET retired = 1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: SetCatalogBlueprintExprVersion :execrows
+UPDATE catalog_blueprint_versions
+SET expr_version = sqlc.arg(expr_version)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: InsertTrustRule :execrows
+-- The caller checks the fence and the principal in the same transaction. A
+-- rule with a taken ID, or with a name that the namespace has, is not written.
+INSERT INTO trust_rules (
+    id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+)
+VALUES (
+    sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(name), sqlc.arg(issuer), sqlc.arg(audience),
+    sqlc.arg(key_source), sqlc.arg(static_keys), sqlc.arg(conditions_json), sqlc.arg(principal_id),
+    sqlc.arg(created_by), sqlc.arg(created_at_ms)
+)
+ON CONFLICT DO NOTHING;
+
+-- name: CountTrustRulesInNamespace :one
+SELECT COUNT(*) FROM trust_rules WHERE namespace = sqlc.arg(namespace);
+
+-- name: GetTrustRulePrincipal :one
+-- Reads the principal of a new rule in the transaction of the create, so a
+-- delete of the principal cannot pass between the check and the insert.
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms
+FROM principals
+WHERE id = sqlc.arg(id);
+
+-- name: GetTrustRule :one
+-- The namespace is part of the key: a rule of another namespace reads as no
+-- row.
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+-- name: ListTrustRulesOfNamespace :many
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace)
+ORDER BY name, id;
+
+-- name: DeleteTrustRule :execrows
+DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+

@@ -10,6 +10,7 @@ import (
 	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/internal/registry/modulecheck"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -65,6 +66,10 @@ func TestErrorsHaveCodes(t *testing.T) {
 		{
 			"archive set refused", releasecheck.ErrRefused,
 			http.StatusUnprocessableEntity, errcode.RegistryArchiveSetRefused,
+		},
+		{
+			"module archive refused", modulecheck.ErrRefused,
+			http.StatusUnprocessableEntity, errcode.RegistryModuleArchiveRefused,
 		},
 		{"no keys", service.ErrNoKeys, http.StatusUnprocessableEntity, errcode.RegistryNoKeys},
 		{"too many keys", registry.ErrKeyLimit, http.StatusUnprocessableEntity, errcode.RegistryKeyLimit},

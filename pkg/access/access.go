@@ -154,6 +154,7 @@ var families = map[identity.Action]Family{
 	identity.ActionNamespaceReadAccess:            FamilyData,
 	identity.ActionNamespaceManagePrincipals:      FamilyData,
 	identity.ActionNamespaceManagePrincipalTokens: FamilyData,
+	identity.ActionNamespaceManageTrustRules:      FamilyData,
 	identity.ActionNamespaceReadGates:             FamilyData,
 	identity.ActionNamespaceManageGates:           FamilyData,
 	// The connections of a namespace to a Git host.

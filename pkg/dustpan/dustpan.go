@@ -98,6 +98,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/trustrule"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -284,6 +285,9 @@ type settings struct {
 	// sourceFilters keeps the source filter of each namespace, or nil without
 	// it. See WithSourceFilters.
 	sourceFilters source.Filters
+	// trustRules keeps the workload trust rules of each namespace, or nil
+	// without them. See WithTrustRules.
+	trustRules trustrule.Store
 	// jobClaimer claims the phases of runner jobs for the runners of the
 	// protocol, or is nil. See WithJobClaimer.
 	jobClaimer job.Claimer
@@ -817,6 +821,7 @@ func defaultSettings() *settings {
 		durableStore:            nil,
 		runners:                 nil,
 		sourceFilters:           nil,
+		trustRules:              nil,
 		jobClaimer:              nil,
 		components:              AllComponents(),
 		operationLease:          0,
@@ -1288,6 +1293,8 @@ type neutralHandlers struct {
 	registry http.Handler
 	// sourceFilter is nil when no store of the source filter is set.
 	sourceFilter http.Handler
+	// trustRules is nil when no trust rule store is set.
+	trustRules http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1341,13 +1348,9 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	var sourceFilter http.Handler
-
-	if cfg.sourceFilters != nil {
-		sourceFilter, err = newSourceFilterHandler(svc, cfg, onFailure)
-		if err != nil {
-			return neutralHandlers{}, err
-		}
+	settingAPIs, err := newNamespaceSettingHandlers(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
 	}
 
 	return neutralHandlers{
@@ -1357,8 +1360,41 @@ func newNeutralHandlers(
 		drift:    jobAPIs.drift,
 		registry: registries,
 
-		sourceFilter: sourceFilter,
+		sourceFilter: settingAPIs.sourceFilter,
+		trustRules:   settingAPIs.trustRules,
 	}, nil
+}
+
+// namespaceSettingHandlers holds the source filter API and the trust rule
+// API. Each is nil when its store is not set.
+type namespaceSettingHandlers struct {
+	sourceFilter http.Handler
+	trustRules   http.Handler
+}
+
+// newNamespaceSettingHandlers builds the source filter API and the trust rule
+// API of the stores that cfg sets.
+func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) (namespaceSettingHandlers, error) {
+	var (
+		out namespaceSettingHandlers
+		err error
+	)
+
+	if cfg.sourceFilters != nil {
+		out.sourceFilter, err = newSourceFilterHandler(svc, cfg, onFailure)
+		if err != nil {
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil}, err
+		}
+	}
+
+	if cfg.trustRules != nil {
+		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure)
+		if err != nil {
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil}, err
+		}
+	}
+
+	return out, nil
 }
 
 // jobAPIs holds the jobs API and the drift API, which share one job service.
@@ -4046,6 +4082,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	mountV1(mux, a.triggers, wrapV1)
 	mountV1(mux, a.drift, wrapV1)
 	mountV1(mux, a.sourceFilter, wrapV1)
+	mountV1(mux, a.trustRules, wrapV1)
 	// The capabilities document and the dev sign-in belong to the
 	// installation API, so they stay available in maintenance mode like the
 	// rest of it.
@@ -4078,6 +4115,12 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// other tool routes.
 	mux.Handle(
 		"/v1/providers/",
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
+	// The module registry protocol lives at the path that service discovery
+	// names as modules.v1, and follows the same rules.
+	mux.Handle(
+		"/v1/modules/",
 		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
 	)
 

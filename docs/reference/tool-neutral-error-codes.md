@@ -112,3 +112,4 @@ Each error answer has the header `Cache-Control: no-store`.
 | 404 | `namespace.not-found` | No namespace with this name |
 | 404 | `audit.entry-not-found` | No entry at this sequence |
 | 501 | `audit.entry-read-unavailable` | The store cannot read one entry: list the entries |
+| 500 | `audit.export-not-recorded` | The server could not write the audit entry of the export, so it sent no entries |
