@@ -669,12 +669,21 @@ func logOfRow(j *job.Job, row *LogRow) *job.LogRef {
 
 // CheckChunkRow returns an error that wraps ErrDamaged unless a stored chunk
 // row of the log logID has the rules of a reserve: a number below
-// job.MaxLogChunks, a size from 0 to job.MaxLogChunk, a SHA-256 and a blob key
-// that is empty or the key of an attempt of this chunk of the log of the job
-// jobID (job.ChunkBlobKey). A restore uses it on the rows of a staged backup.
-func CheckChunkRow(jobID, logID string, seq, size int64, sha, blobKey string) error {
+// job.MaxLogChunks, a size from 0 to job.MaxLogChunk and a SHA-256. A chunk
+// that is confirmed has the blob key of an attempt of this chunk of the log of
+// the job jobID (job.ChunkBlobKey), and a chunk that is not has none. A
+// restore uses it on the rows of a staged backup.
+func CheckChunkRow(jobID, logID string, seq, size int64, sha string, confirmed bool, blobKey string) error {
 	if seq < 0 || seq >= job.MaxLogChunks || size < 0 || size > job.MaxLogChunk || !job.ValidHash(sha) {
 		return fmt.Errorf("%w: chunk %d of log %s is not valid", ErrDamaged, seq, logID)
+	}
+
+	if !confirmed {
+		if blobKey != "" {
+			return fmt.Errorf("%w: chunk %d of log %s is not confirmed and has a blob key", ErrDamaged, seq, logID)
+		}
+
+		return nil
 	}
 
 	if _, err := job.ChunkBlobKey(job.ID(jobID), logID, int(seq), blobKey); err != nil {

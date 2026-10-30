@@ -4535,7 +4535,7 @@ WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg
 
 -- name: ListJobLogChunkKeys :many
 -- The blob key of each confirmed chunk of one log version, in the order of the
--- chunk numbers. The empty text is a chunk from the first key layout.
+-- chunk numbers.
 SELECT c.seq, c.blob_key
 FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id

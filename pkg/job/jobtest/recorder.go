@@ -43,11 +43,9 @@ type RecorderHarness struct {
 	// Retention is the retention that the recorder applies to new plans and
 	// log versions.
 	Retention history.RetentionSettings
-	// Sealer is the item sealer under the recorder. The cases of the first key
-	// layout of a log chunk use it to store a chunk as an earlier version did.
+	// Sealer is the item sealer under the recorder. The cases of the chunk keys
+	// use its item key function to reserve a log version.
 	Sealer secret.ItemSealer
-	// Artifacts reads and writes the blobs of plans and logs over Blobs.
-	Artifacts *job.ArtifactBlobs
 }
 
 // RecorderParts are the stores of one database that NewRecorderHarness builds
@@ -133,7 +131,7 @@ func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	return RecorderHarness{
 		Harness: parts.Harness, Recorder: rec, Reader: reader, Records: parts.Records, Blobs: parts.Blobs,
 		ItemKeys:  parts.ItemKeys,
-		Retention: retention, Sealer: sealer, Artifacts: artifacts,
+		Retention: retention, Sealer: sealer,
 	}
 }
 

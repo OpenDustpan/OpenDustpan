@@ -3,6 +3,7 @@ package job_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -55,9 +56,17 @@ func planRef(ns namespace.ID, k job.OutputKind) job.PlanPartRef {
 	return job.PlanPartRef{Namespace: ns, Job: "job-1", Plan: "pln-1", Kind: k}
 }
 
-// chunkRef returns the reference of the chunk seq of the log jlv-1 of job-1.
+// chunkRef returns the reference of the chunk seq of the log jlv-1 of job-1,
+// for the attempt jla-1.
 func chunkRef(ns namespace.ID, seq int) job.LogChunkRef {
-	return job.LogChunkRef{Namespace: ns, Job: "job-1", Version: "jlv-1", Seq: seq}
+	return job.LogChunkRef{
+		Namespace: ns, Job: "job-1", Version: "jlv-1", Seq: seq, BlobKey: attemptKeyOf("job-1", "jlv-1", seq),
+	}
+}
+
+// attemptKeyOf returns the blob key of the attempt jla-1 of the chunk seq.
+func attemptKeyOf(id job.ID, version string, seq int) string {
+	return fmt.Sprintf("job/%s/log/%s/%08d-jla-1", id, version, seq)
 }
 
 func TestNewArtifactBlobsNeedsItsPorts(t *testing.T) {
@@ -269,7 +278,7 @@ func TestArtifactBlobsKeepTheKeyLayout(t *testing.T) {
 	}
 
 	want := []string{
-		"namespaces/" + ns.String() + "/job/job-1/log/jlv-1/00000012",
+		"namespaces/" + ns.String() + "/job/job-1/log/jlv-1/00000012-jla-1",
 		"namespaces/" + ns.String() + "/job/job-1/plan/pln-1/plan-display",
 	}
 
@@ -331,10 +340,11 @@ func TestArtifactBlobsIDAllowlist(t *testing.T) {
 					Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Plan: job.PlanIDPrefix + tt.id,
 					Kind: job.OutputPlanApply,
 				})
+			chunkJob, chunkVersion := job.ID(job.IDPrefix+tt.id), job.LogVersionIDPrefix+tt.id
 			_, chunkErr := b.OpenLogChunk(t.Context(),
 				job.LogChunkRef{
-					Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Version: job.LogVersionIDPrefix + tt.id,
-					Seq: 0,
+					Namespace: ns, Job: chunkJob, Version: chunkVersion, Seq: 0,
+					BlobKey: attemptKeyOf(chunkJob, chunkVersion, 0),
 				})
 
 			for what, err := range map[string]error{"plan part": planErr, "log chunk": chunkErr} {

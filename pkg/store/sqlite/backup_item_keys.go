@@ -161,7 +161,7 @@ LEFT JOIN namespaces AS n ON n.id = p.namespace_id`)
 // Defense in depth: a reader checks the hash of a log again. This check stays
 // so that a bad row fails the restore and does not wait for a reader.
 func checkStagedLogChunks(ctx context.Context, conn *sql.DB) error {
-	rows, err := conn.QueryContext(ctx, `SELECT c.log_id, c.seq, c.sha256, c.size, l.id, l.job_id, c.blob_key FROM job_log_chunks AS c
+	rows, err := conn.QueryContext(ctx, `SELECT c.log_id, c.seq, c.sha256, c.size, l.id, l.job_id, c.blob_key, c.confirmed = 1 FROM job_log_chunks AS c
 LEFT JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id`)
 	if err != nil {
 		return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
@@ -176,9 +176,10 @@ LEFT JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id`)
 			logID, sha, blobKey string
 			seq, size           int64
 			log, jobID          sql.NullString
+			confirmed           bool
 		)
 
-		if scanErr := rows.Scan(&logID, &seq, &sha, &size, &log, &jobID, &blobKey); scanErr != nil {
+		if scanErr := rows.Scan(&logID, &seq, &sha, &size, &log, &jobID, &blobKey, &confirmed); scanErr != nil {
 			return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
 		}
 
@@ -186,7 +187,7 @@ LEFT JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id`)
 			return fmt.Errorf("staged chunk %d of log %q has no log version: %w", seq, logID, backup.ErrCorrupt)
 		}
 
-		if chunkErr := jobstore.CheckChunkRow(jobID.String, logID, seq, size, sha, blobKey); chunkErr != nil {
+		if chunkErr := jobstore.CheckChunkRow(jobID.String, logID, seq, size, sha, confirmed, blobKey); chunkErr != nil {
 			return fmt.Errorf("staged chunk %d of log %q is not valid: %w: %w", seq, logID, chunkErr, backup.ErrCorrupt)
 		}
 	}

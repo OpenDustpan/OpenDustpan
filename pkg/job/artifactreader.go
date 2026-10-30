@@ -189,6 +189,18 @@ func chunkBinding(id ID, version string, seq int, stored string) ([]byte, error)
 	return []byte(key.String()), nil
 }
 
+// probeBinding returns a binding for the probe of the item key of a log
+// version. The probe reads no content, so any valid binding of the version
+// serves.
+func probeBinding(id ID, version string) ([]byte, error) {
+	key, err := LogChunkAttemptKey(id, version, 0, LogAttemptIDPrefix+"probe")
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(key.String()), nil
+}
+
 // openLogVersion opens the stored chunks of the log version in rec, in
 // order. The version is open when rec.Log.ClosedAt is zero.
 func openLogVersion(
@@ -207,7 +219,7 @@ func openLogVersion(
 
 	// The record of the item key answers before any blob read: a shredded key
 	// fails here, also for a log with no chunk.
-	first, err := chunkBinding(rec.Job, log.ID, 0, "")
+	first, err := probeBinding(rec.Job, log.ID)
 	if err != nil {
 		return nil, err
 	}

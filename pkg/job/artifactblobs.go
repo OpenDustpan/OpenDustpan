@@ -38,8 +38,7 @@ type LogChunkRef struct {
 	Job       ID
 	Version   string
 	Seq       int
-	// BlobKey is the key of the blob, as ChunkBlobKey reads it. The empty
-	// text names the blob of the first layout.
+	// BlobKey is the key of the blob, as ChunkBlobKey reads it.
 	BlobKey string
 }
 
@@ -126,15 +125,9 @@ func (b *ArtifactBlobs) PutLogChunk(ctx context.Context, ref LogChunkRef, r io.R
 	return b.refuse(ctx, ref.Namespace, opPut, at.view.Put(ctx, at.key, r), at)
 }
 
-// DeleteLogChunk deletes the blob of one write attempt of a chunk. It refuses
-// ref with no BlobKey with ErrInvalid: the blob of the first layout is the blob
-// of a row that may name it, and a writer never deletes it. A blob that does
-// not exist is not an error.
+// DeleteLogChunk deletes the blob of one write attempt of a chunk. A blob that
+// does not exist is not an error.
 func (b *ArtifactBlobs) DeleteLogChunk(ctx context.Context, ref LogChunkRef) error {
-	if ref.BlobKey == "" {
-		return fmt.Errorf("%w: delete of a log chunk with no attempt key", ErrInvalid)
-	}
-
 	at, err := b.logKey(ref)
 	if err != nil {
 		return err

@@ -12114,7 +12114,7 @@ type ListJobLogChunkKeysRow struct {
 }
 
 // The blob key of each confirmed chunk of one log version, in the order of the
-// chunk numbers. The empty text is a chunk from the first key layout.
+// chunk numbers.
 func (q *Queries) ListJobLogChunkKeys(ctx context.Context, arg ListJobLogChunkKeysParams) ([]ListJobLogChunkKeysRow, error) {
 	rows, err := q.db.Query(ctx, listJobLogChunkKeys, arg.Namespace, arg.LogID)
 	if err != nil {

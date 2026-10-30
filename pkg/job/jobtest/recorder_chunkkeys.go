@@ -1,7 +1,6 @@
 package jobtest
 
 import (
-	"bytes"
 	"errors"
 	"slices"
 	"strings"
@@ -9,18 +8,15 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/job"
-	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // chunkKeyCases returns the cases of the blob key that the row of a log chunk
-// holds: the first confirm wins, the key of a row is checked, and a log from
-// the first key layout reads.
+// holds: the first confirm wins, the key of a row is checked, and the recorder
+// stores each chunk under the key of its attempt.
 func chunkKeyCases() []recorderCase {
 	return []recorderCase{
 		{"chunk keys: the first confirm of a chunk wins and the row keeps its blob key", testChunkConfirmFirstWins},
 		{"chunk keys: a confirm with a key that is not an attempt of the chunk is ErrInvalid", testChunkConfirmBadKey},
-		{"chunk keys: a log from the first key layout reads", testChunkLegacyLayout},
-		{"chunk keys: a log with chunks from both key layouts reads", testChunkMixedLayouts},
 		{"chunk keys: a chunk the recorder stores has the key of its attempt", testChunkAttemptKey},
 	}
 }
@@ -122,7 +118,9 @@ func testChunkConfirmBadKey(t *testing.T, h RecorderHarness) {
 		{"a key with an attempt of another kind", base + "-xyz-good"},
 		{"a key with a longer path", good + "/more"},
 		{"a key that leaves the log", "job/" + string(a.Claim.Job) + "/log/../log/" + version + "/00000000-jla-good"},
-		{"the first layout with a suffix", base + "x"},
+		{"the shared prefix with no attempt", base},
+		{"the shared prefix with a suffix", base + "x"},
+		{"no key", ""},
 		{"a text that is no key", "not a key"},
 	}
 
@@ -139,109 +137,13 @@ func testChunkConfirmBadKey(t *testing.T, h RecorderHarness) {
 	}
 }
 
-// storeFirstLayoutChunk stores the chunk 0 of a new log version as the first
-// key layout did: sealed with the binding of the key job/<job>/log/<version>/<seq>,
-// stored under that key, and confirmed with no blob key.
-func storeFirstLayoutChunk(t *testing.T, h RecorderHarness, a *job.Assignment, content string) string {
-	t.Helper()
-
-	version := reserveFirstChunk(t, h, a, content)
-
-	j := jobOf(t, h.Harness, a.Claim.Job)
-	item := itemKeyOf(t, &j, secret.ItemKindJobLog, version)
-
-	key, err := job.LogChunkKey(a.Claim.Job, version, 0)
-	if err != nil {
-		t.Fatalf("LogChunkKey = %v", err)
-	}
-
-	sealed, err := h.Sealer.SealContent(t.Context(), item, []byte(key.String()), bytes.NewReader([]byte(content)))
-	if err != nil {
-		t.Fatalf("SealContent = %v", err)
-	}
-
-	measured := blob.NewDigestReader(sealed)
-
-	ns, err := h.Namespaces.GetNamespace(t.Context(), a.Claim.Fence.Namespace)
-	if err != nil {
-		t.Fatalf("GetNamespace = %v", err)
-	}
-
-	ref := job.LogChunkRef{Namespace: ns.ID, Job: a.Claim.Job, Version: version, Seq: 0, BlobKey: ""}
-	if err = h.Artifacts.PutLogChunk(t.Context(), ref, measured); err != nil {
-		t.Fatalf("PutLogChunk = %v", err)
-	}
-
-	won, err := h.Records.ConfirmLogChunk(t.Context(), a.Claim, job.ChunkConfirm{
-		Step: stepPrepare, Version: version, Seq: 0, Stored: measured.Digest(), BlobKey: "",
-	})
-	if err != nil || !won {
-		t.Fatalf("ConfirmLogChunk of the first layout = %v, %v; want true, nil", won, err)
-	}
-
-	return version
-}
-
-func testChunkLegacyLayout(t *testing.T, h RecorderHarness) {
-	t.Helper()
-
-	a := logCaseStep(t, h)
-	version := storeFirstLayoutChunk(t, h, a, "old\n")
-
-	// A reader of the open log reads the chunk of the first layout.
-	if got, err := readLog(t, h, version); err != nil || string(got) != "old\n" {
-		t.Fatalf("OpenLog of the first layout = %q, %v; want %q", got, err, "old\n")
-	}
-
-	// EndStep reads the log to close it, with the blob key of the row.
-	mustEnd(t, h, a, stepPrepare, 0)
-
-	rec, err := h.Records.Log(t.Context(), a.Claim.Fence.Namespace, version)
-	if err != nil {
-		t.Fatalf("Log = %v", err)
-	}
-
-	if !slices.Equal(rec.ChunkKeys, []string{""}) || rec.Log.ClosedAt.IsZero() {
-		t.Fatalf("closed log = %+v with chunk keys %q; want closed, with the empty key of the first layout",
-			rec.Log, rec.ChunkKeys)
-	}
-
-	if got, err := readLog(t, h, version); err != nil || string(got) != "old\n" {
-		t.Fatalf("OpenLog of the closed first layout = %q, %v; want %q", got, err, "old\n")
-	}
-}
-
-func testChunkMixedLayouts(t *testing.T, h RecorderHarness) {
-	t.Helper()
-
-	a := logCaseStep(t, h)
-	version := storeFirstLayoutChunk(t, h, a, "old\n")
-
-	// The recorder takes the next chunk with the key of an attempt. The log
-	// then holds both layouts, and EndStep reads both to close it.
-	mustAppend(t, h, a, 1, "new\n")
-	mustEnd(t, h, a, stepPrepare, 0)
-
-	rec, err := h.Records.Log(t.Context(), a.Claim.Fence.Namespace, version)
-	if err != nil {
-		t.Fatalf("Log = %v", err)
-	}
-
-	if len(rec.ChunkKeys) != chunksPair || rec.ChunkKeys[0] != "" || rec.ChunkKeys[1] == "" {
-		t.Fatalf("chunk keys = %q; want the empty key of the first layout, then the key of an attempt", rec.ChunkKeys)
-	}
-
-	if got, err := readLog(t, h, version); err != nil || string(got) != "old\nnew\n" {
-		t.Fatalf("OpenLog of both layouts = %q, %v; want %q", got, err, "old\nnew\n")
-	}
-}
-
 func testChunkAttemptKey(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	a := logCaseStep(t, h)
 	mustAppend(t, h, a, 0, "one\n")
 	mustAppend(t, h, a, 1, "two\n")
+	mustEnd(t, h, a, stepPrepare, 0)
 
 	log := logOf(t, h, a)
 
@@ -254,22 +156,23 @@ func testChunkAttemptKey(t *testing.T, h RecorderHarness) {
 		t.Fatalf("chunk keys = %q, want 2", rec.ChunkKeys)
 	}
 
-	for seq, key := range rec.ChunkKeys {
-		if _, err := job.ChunkBlobKey(a.Claim.Job, log.ID, seq, key); err != nil || key == "" {
-			t.Errorf("chunk %d key = %q, %v; want the key of an attempt", seq, key, err)
-		}
-	}
-
-	// Each key that a row names has its blob.
 	var held []string
 
 	for _, o := range blobsUnder(t, h, a.Claim.Fence.Namespace) {
 		held = append(held, o.Key.String())
 	}
 
-	for _, key := range rec.ChunkKeys {
+	for seq, key := range rec.ChunkKeys {
+		if _, err := job.ChunkBlobKey(a.Claim.Job, log.ID, seq, key); err != nil {
+			t.Errorf("chunk %d key = %q, %v; want the key of an attempt", seq, key, err)
+		}
+
 		if !slices.ContainsFunc(held, func(k string) bool { return strings.HasSuffix(k, key) }) {
 			t.Errorf("no blob for the key %q in %q", key, held)
 		}
+	}
+
+	if got, err := readLog(t, h, log.ID); err != nil || string(got) != "one\ntwo\n" {
+		t.Fatalf("OpenLog = %q, %v; want %q", got, err, "one\ntwo\n")
 	}
 }

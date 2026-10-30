@@ -23,12 +23,12 @@ func TestChunkBlobKey(t *testing.T) {
 		want    string
 		invalid bool
 	}{
-		{name: "no stored key is the first layout", seq: 3, stored: "", want: base},
+		{name: "no stored key", seq: 3, stored: "", invalid: true},
 		{name: "the key of an attempt", seq: 3, stored: base + "-jla-abc123", want: base + "-jla-abc123"},
 		{name: "the key of another chunk", seq: 3, stored: "job/job-abc/log/jlv-one/00000004-jla-abc", invalid: true},
 		{name: "the key of another version", seq: 3, stored: "job/job-abc/log/jlv-two/00000003-jla-abc", invalid: true},
 		{name: "the key of another job", seq: 3, stored: "job/job-xyz/log/jlv-one/00000003-jla-abc", invalid: true},
-		{name: "the first layout written out", seq: 3, stored: base, invalid: true},
+		{name: "the shared prefix with no attempt", seq: 3, stored: base, invalid: true},
 		{name: "an empty attempt", seq: 3, stored: base + "-", invalid: true},
 		{name: "an attempt of another prefix", seq: 3, stored: base + "-xyz-abc", invalid: true},
 		{name: "an attempt with a slash", seq: 3, stored: base + "-jla-a/b", invalid: true},

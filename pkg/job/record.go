@@ -72,8 +72,7 @@ type ChunkReserve struct {
 // ChunkRow is the stored record of one chunk of a log version. Confirmed is
 // true when the blob of the chunk is stored and the chunk counts in
 // LogRef.Chunks. BlobKey is the key of the blob of the winning attempt, as
-// ChunkBlobKey reads it. It is empty for a chunk that is not confirmed and for
-// a chunk from the first layout, whose blob has the key of LogChunkKey.
+// ChunkBlobKey reads it. It is empty for a chunk that is not confirmed.
 type ChunkRow struct {
 	SHA256    string
 	Size      int64
@@ -91,8 +90,7 @@ type ChunkConfirm struct {
 	// holds for the chunk, in the blob under BlobKey.
 	Stored blob.Digest
 	// BlobKey is the key of the blob of this write attempt, as
-	// LogChunkAttemptKey makes it. The empty text means the key of
-	// LogChunkKey, which only a test of the first layout uses.
+	// LogChunkAttemptKey makes it.
 	BlobKey string
 }
 
@@ -121,9 +119,8 @@ type ArtifactRecord struct {
 	Plan *PlanRef
 	Log  *LogRef
 	// ChunkKeys is set for a log version that Log returns. Element seq is the
-	// blob key of the confirmed chunk seq, as ChunkBlobKey reads it: the empty
-	// text for a chunk from the first layout. The list has one element for
-	// each confirmed chunk, in the order of their numbers.
+	// blob key of the confirmed chunk seq, as ChunkBlobKey reads it. The list
+	// has one element for each confirmed chunk, in the order of their numbers.
 	ChunkKeys []string
 }
 
@@ -172,7 +169,8 @@ type RecordStore interface {
 	// another blob key: the blob of c is then not named by any row, and the
 	// caller deletes it. It returns ErrInvalid for a chunk that no reserve
 	// recorded or that is not the next one, for a c.Stored with no size, and
-	// for a c.BlobKey that is not the key of an attempt of this chunk.
+	// for a c.BlobKey that is empty or is not the key of an attempt of this
+	// chunk.
 	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, c ChunkConfirm) (bool, error)
 	// ReservePlan records the plan np before its parts exist, with its item key
 	// in the same transaction, and returns it. A reserved plan has no part and
