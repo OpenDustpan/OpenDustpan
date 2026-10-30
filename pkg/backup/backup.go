@@ -159,6 +159,8 @@ var Tables = []string{
 	"profile_revisions",
 	"manual_locks",
 	TablePersonPreferences,
+	TableForgeAccountLinks,
+	TableForgeLinkRequests,
 	"saved_views",
 	"drift_results",
 	TableGitHostAppRegistrations,

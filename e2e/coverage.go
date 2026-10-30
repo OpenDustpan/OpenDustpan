@@ -1412,6 +1412,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		GitHost:          coverageGitHost(tb),
 		Idempotency:      nil,
 		Instances:        nil,

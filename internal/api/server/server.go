@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -137,6 +138,10 @@ type Config struct {
 	// keeps none: the preferences routes answer 501. Both SQL adapters keep
 	// them.
 	Preferences *preferences.Service
+	// GitHostLinks keeps the links from Git host accounts to principals. Nil
+	// means the store keeps none: the link routes answer 501. Both SQL adapters
+	// keep them.
+	GitHostLinks *forgelink.Service
 	// Workers reports the components of the process and the state of the
 	// worker, and refuses the start of a durable operation when no worker
 	// claimed or renewed a claim. Nil means no refusal and an empty report.
@@ -213,6 +218,7 @@ type Handler struct {
 	signIn         *signInState
 	kind           installation.Kind
 	preferences    *preferences.Service
+	gitHostLinks   *forgelink.Service
 	gitHost        *forge.Service
 	idem           *idempotent.Middleware
 	instances      installation.InstanceStore
@@ -280,6 +286,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
 		preferences:    cfg.Preferences,
+		gitHostLinks:   cfg.GitHostLinks,
 		gitHost:        cfg.GitHost,
 		idem:           cfg.Idempotency,
 		instances:      cfg.Instances,

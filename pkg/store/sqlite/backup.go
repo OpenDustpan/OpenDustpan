@@ -1204,5 +1204,9 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 
-	return checkStagedTriggers(ctx, conn)
+	if err := checkStagedTriggers(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedForgeLinks(ctx, conn)
 }

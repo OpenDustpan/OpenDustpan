@@ -375,6 +375,8 @@ func devStripCases() []devStripCase {
 				out = out.with(t, "sessions", DevSessionRow("ses-dev", "prn-dev", "dev"))
 				out = out.with(t, "access_tokens", DevTokenRow("tok-dev", "prn-dev"))
 				out = out.with(t, "person_preferences", DevPreferencesRow("prn-dev"))
+				out = out.with(t, "forge_account_links", DevForgeLinkRow("prn-dev"))
+				out = out.with(t, "forge_link_requests", DevForgeLinkRequestRow("prn-dev"))
 				out = out.with(t, "principal_groups", DevGroupRow("grp-1"))
 
 				return out.with(t, "group_members", DevMemberRow("grp-1", "prn-dev"))
@@ -382,11 +384,13 @@ func devStripCases() []devStripCase {
 			classes: map[backup.DevRemovalClass]int64{
 				backup.RemovedPrincipals: 1, backup.RemovedGrants: 1, backup.RemovedSessions: 1,
 				backup.RemovedAccessTokens: 1, backup.RemovedGroupMembers: 1, backup.RemovedPreferences: 1,
+				backup.RemovedForgeLinks: 1, backup.RemovedForgeLinkRequests: 1,
 			},
 			principals: map[string]map[backup.DevRemovalClass]int64{
 				"dev:admin": {
 					backup.RemovedGrants: 1, backup.RemovedSessions: 1, backup.RemovedAccessTokens: 1,
-					backup.RemovedGroupMembers: 1, backup.RemovedPreferences: 1,
+					backup.RemovedGroupMembers: 1, backup.RemovedPreferences: 1, backup.RemovedForgeLinks: 1,
+					backup.RemovedForgeLinkRequests: 1,
 				},
 			},
 		},

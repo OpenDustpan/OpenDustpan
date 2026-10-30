@@ -195,10 +195,11 @@ var families = map[identity.Action]Family{
 	identity.ActionRegistryPublish:                   FamilyData,
 	identity.ActionRegistryManageKeys:                FamilyData,
 
-	identity.ActionCallerRead:              FamilySelf,
-	identity.ActionRoleRead:                FamilySelf,
-	identity.ActionTokenManageOwn:          FamilySelf,
-	identity.ActionCallerManagePreferences: FamilySelf,
+	identity.ActionCallerRead:               FamilySelf,
+	identity.ActionRoleRead:                 FamilySelf,
+	identity.ActionTokenManageOwn:           FamilySelf,
+	identity.ActionCallerManagePreferences:  FamilySelf,
+	identity.ActionCallerManageGitHostLinks: FamilySelf,
 }
 
 // FamilyOf returns the family of action, and false when the core does not

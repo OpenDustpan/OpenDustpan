@@ -332,6 +332,17 @@ func endPrincipal(ctx context.Context, q *db.Queries, id string, ns namespace.Na
 		return 0, fmt.Errorf("delete preferences of the principal: %w", err)
 	}
 
+	// The Git host account links and the open link requests of a principal go
+	// away with it too, so that an account never runs a command as an ended
+	// principal.
+	if err := q.DeleteForgeAccountLinksOfPrincipal(ctx, id); err != nil {
+		return 0, fmt.Errorf("delete Git host account links of the principal: %w", err)
+	}
+
+	if err := q.DeleteForgeLinkRequestsOfPrincipal(ctx, id); err != nil {
+		return 0, fmt.Errorf("delete link requests of the principal: %w", err)
+	}
+
 	return n, nil
 }
 

@@ -191,6 +191,7 @@ func (s *Service) Accept(
 	e.Changes = append(slices.Clone(e.Changes), accountChanges(r.Proved.Account, r.Proved.Login)...)
 	e.Changes = append(
 		e.Changes,
+		audit.Change{Key: "forgeLink.change", Old: nil, New: "linked", Layer: "", TakesEffect: ""},
 		audit.Change{Key: "forgeLink.principal", Old: nil, New: person.ID, Layer: "", TakesEffect: ""},
 	)
 
@@ -260,6 +261,11 @@ func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e
 
 	e = s.entry(e, s.now().UTC().Truncate(time.Millisecond), principalID)
 	e.Changes = append(slices.Clone(e.Changes), accountChanges(a, current.Login)...)
+	e.Changes = append(
+		e.Changes,
+		audit.Change{Key: "forgeLink.change", Old: nil, New: "deleted", Layer: "", TakesEffect: ""},
+		audit.Change{Key: "forgeLink.principal", Old: nil, New: principalID, Layer: "", TakesEffect: ""},
+	)
 
 	if err := s.store.DeleteLink(ctx, a, e); err != nil {
 		return fmt.Errorf("delete the link: %w", err)

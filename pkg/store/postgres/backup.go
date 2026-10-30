@@ -115,6 +115,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyProfileTables()...)
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
+	tables = append(tables, pgCopyForgeLinkTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
@@ -1808,5 +1809,9 @@ func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging str
 		return err
 	}
 
-	return checkStagedTriggers(ctx, pool, staging)
+	if err := checkStagedTriggers(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedForgeLinks(ctx, pool, staging)
 }

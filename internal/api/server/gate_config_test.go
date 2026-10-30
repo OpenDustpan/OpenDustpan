@@ -128,10 +128,11 @@ func gateHandler(
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
-		Preferences: nil,
-		GitHost:     nil,
-		Idempotency: nil,
-		Workers:     nil, InstallationKind: "", Now: nil, TempAdmins: nil,
+		Preferences:  nil,
+		GitHostLinks: nil,
+		GitHost:      nil,
+		Idempotency:  nil,
+		Workers:      nil, InstallationKind: "", Now: nil, TempAdmins: nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: authz, Logger: slog.New(slog.DiscardHandler),
 		Namespaces: nss, Backups: nil, Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal),
 		Metrics: stubMetrics{}, Version: "test", Schema: st, Journal: nil, Principals: nil, Access: nil,

@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -99,6 +100,14 @@ type auditStore interface {
 func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
 	t.Helper()
 
+	return newAccessFixtureLinks(t, entries, false)
+}
+
+// newAccessFixtureLinks is newAccessFixtureWith with the routes of the Git host
+// account links mounted when withLinks is true.
+func newAccessFixtureLinks(t *testing.T, entries func(st *sqlite.Store) auditStore, withLinks bool) accessFixture {
+	t.Helper()
+
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -155,8 +164,14 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("sessions: %v", err)
 	}
 
+	var links *forgelink.Service
+	if withLinks {
+		links = forgelink.NewService(st.ForgeLinks(), st, nil, nil)
+	}
+
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		GitHostLinks:     links,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,

@@ -98,6 +98,7 @@ func newIPAllowHandler(
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,

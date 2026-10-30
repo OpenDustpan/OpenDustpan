@@ -123,7 +123,14 @@ func (f forgeLinks) AcceptRequest(
 	err := f.s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
 		var acceptErr error
 
-		link, replaced, acceptErr = forgelinkstore.ApplyAccept(ctx, linkTx{requestTx: requestTx{q: q}}, hash, principal, previous, now)
+		link, replaced, acceptErr = forgelinkstore.ApplyAccept(
+			ctx,
+			linkTx{requestTx: requestTx{q: q}},
+			hash,
+			principal,
+			previous,
+			now,
+		)
 
 		return acceptErr
 	})

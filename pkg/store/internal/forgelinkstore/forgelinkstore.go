@@ -266,7 +266,10 @@ func readRequest(ctx context.Context, tx RequestTx, hash string) (forgelink.Requ
 // when another account proved it.
 func sameProof(req forgelink.Request, p forgelink.Proof) (forgelink.Request, error) {
 	if req.Proved.Account != p.Account {
-		return forgelink.Request{}, fmt.Errorf("%w: another Git host account proved this request", forgelink.ErrConflict)
+		return forgelink.Request{}, fmt.Errorf(
+			"%w: another Git host account proved this request",
+			forgelink.ErrConflict,
+		)
 	}
 
 	return req, nil

@@ -807,10 +807,11 @@ func TestPreferencesUnavailable(t *testing.T) {
 	}
 
 	h, err := newCheckedHandler(t, apiserver.Config{
-		Preferences: nil,
-		GitHost:     nil,
-		Idempotency: nil,
-		Workers:     nil, InstallationKind: "", Now: nil, TempAdmins: nil, Authenticator: prefsCallerSet(),
+		Preferences:  nil,
+		GitHostLinks: nil,
+		GitHost:      nil,
+		Idempotency:  nil,
+		Workers:      nil, InstallationKind: "", Now: nil, TempAdmins: nil, Authenticator: prefsCallerSet(),
 		Authorizer: allowAll{}, Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil,
 		Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{},
 		Version: "test", Schema: nil, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: newTestAudit(),

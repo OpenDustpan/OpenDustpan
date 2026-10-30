@@ -155,6 +155,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Authenticator:    tokenAuthenticator{},

@@ -51,6 +51,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Preferences:    nil,
+		GitHostLinks:   nil,
 		GitHost:        nil,
 		Idempotency:    nil,
 		Instances:      nil,
