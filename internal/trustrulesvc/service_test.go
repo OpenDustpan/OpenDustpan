@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,9 @@ func newFixture(t *testing.T) fixture {
 		"prn-person":   principalOf("prn-person", principal.KindPerson, ""),
 		"prn-server":   principalOf("prn-server", principal.KindService, ""),
 		"prn-stranger": principalOf("prn-stranger", principal.KindService, "other"),
+		"prn-member":   principalOf("prn-member", principal.KindPerson, "acme"),
+		"prn-workload": principalOf("prn-workload", principal.KindWorkload, "acme"),
+		"prn-robot":    principalOf("prn-robot", principal.Kind("robot"), "acme"),
 	}
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
@@ -284,6 +288,29 @@ func TestCreateRefusesAPrincipalOutsideTheNamespace(t *testing.T) {
 		_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
 		if !errors.Is(err, trustrule.ErrPrincipal) {
 			t.Errorf("principal %s: Create = %v, want ErrPrincipal", id, err)
+		}
+
+		if len(f.store.created) != 0 || len(f.authz.checked) != 0 {
+			t.Errorf("principal %s: the refused create reached the store or the authorizer", id)
+		}
+	}
+}
+
+// TestCreateNeedsAServicePrincipal checks the kind check alone: each
+// principal is of the namespace and not disabled, so only its kind refuses
+// it.
+func TestCreateNeedsAServicePrincipal(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{"prn-member", "prn-workload", "prn-robot"} {
+		f := newFixture(t)
+
+		in := input()
+		in.PrincipalID = id
+
+		_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+		if !errors.Is(err, trustrule.ErrPrincipal) || !strings.Contains(err.Error(), "not a service principal") {
+			t.Errorf("principal %s: Create = %v, want ErrPrincipal of the kind check", id, err)
 		}
 
 		if len(f.store.created) != 0 || len(f.authz.checked) != 0 {

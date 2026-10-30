@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -294,8 +295,8 @@ func (s *Service) checkPrincipal(ctx context.Context, id string, ns namespace.Na
 	}
 
 	switch {
-	case p.Kind == principal.KindPerson:
-		return fmt.Errorf("%w: principal %q is a person", trustrule.ErrPrincipal, id)
+	case p.Kind != principal.KindService:
+		return fmt.Errorf("%w: principal %q is a %s, not a service principal", trustrule.ErrPrincipal, id, p.Kind)
 	case p.Namespace != ns:
 		return fmt.Errorf("%w: principal %q is not a principal of the namespace %q", trustrule.ErrPrincipal, id, ns)
 	case !p.DisabledAt.IsZero():
@@ -340,9 +341,16 @@ func (s *Service) entry(e audit.Entry, ns namespace.Name, id trustrule.ID, actio
 func (s *Service) createEntry(e audit.Entry, r *trustrule.Rule) audit.Entry {
 	out := s.entry(e, r.Namespace, r.ID, ActionCreate)
 
+	// Each value is quoted, so a value that holds the separator ", " still
+	// reads as one value.
 	conds := make([]string, 0, len(r.Conditions))
 	for _, c := range r.Conditions {
-		conds = append(conds, c.Claim+" in ["+strings.Join(c.Values, ", ")+"]")
+		quoted := make([]string, 0, len(c.Values))
+		for _, v := range c.Values {
+			quoted = append(quoted, strconv.Quote(v))
+		}
+
+		conds = append(conds, c.Claim+" in ["+strings.Join(quoted, ", ")+"]")
 	}
 
 	out.Changes = []audit.Change{

@@ -19,8 +19,8 @@ import (
 // namespace, and principal:manage-tokens on the principal of a new rule.
 type Store interface {
 	// Create stores r. In the transaction of the write it checks that the
-	// principal r.PrincipalID exists, is not deleted, is not a person, and
-	// is a principal of the namespace r.Namespace. It returns:
+	// principal r.PrincipalID exists, is not deleted, is a service
+	// principal, and is a principal of the namespace r.Namespace. It returns:
 	//   - ErrInvalid when r.Validate fails.
 	//   - ErrPrincipal when the principal fails the check above.
 	//   - ErrExists when the ID is taken, or when the namespace has a rule

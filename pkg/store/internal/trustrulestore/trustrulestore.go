@@ -177,15 +177,15 @@ type PrincipalRow struct {
 
 // CheckPrincipal returns trustrule.ErrPrincipal when p cannot be the
 // principal of a rule of the namespace ns: it does not exist, it is
-// deleted, it is a person, or it is not a principal of ns.
+// deleted, it is not a service principal, or it is not a principal of ns.
 func CheckPrincipal(p PrincipalRow, ns namespace.Name) error {
 	switch {
 	case !p.Found:
 		return fmt.Errorf("%w: no such principal", trustrule.ErrPrincipal)
 	case p.DeletedAtMs != 0:
 		return fmt.Errorf("%w: the principal is deleted", trustrule.ErrPrincipal)
-	case principal.Kind(p.Kind) == principal.KindPerson:
-		return fmt.Errorf("%w: the principal is a person", trustrule.ErrPrincipal)
+	case principal.Kind(p.Kind) != principal.KindService:
+		return fmt.Errorf("%w: the principal is not a service principal", trustrule.ErrPrincipal)
 	case p.Namespace == "" || p.Namespace != ns.String():
 		return fmt.Errorf("%w: the principal is not a principal of the namespace %q", trustrule.ErrPrincipal, ns)
 	default:

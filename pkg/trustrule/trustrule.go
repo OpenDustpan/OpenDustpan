@@ -40,8 +40,8 @@ var (
 	// ErrLimit reports a namespace that holds MaxPerNamespace rules.
 	ErrLimit = errors.New("the namespace holds the maximum number of trust rules")
 	// ErrPrincipal reports a principal that a rule cannot name: it does not
-	// exist, it is not a principal of the namespace of the rule, it is a
-	// person, or it is disabled.
+	// exist, it is not a principal of the namespace of the rule, it is not
+	// a service principal, or it is disabled.
 	ErrPrincipal = errors.New("the principal cannot be the principal of a trust rule")
 	// ErrIssuerRefused reports an issuer of this installation. A token that
 	// this installation signs never becomes an access token of it.
@@ -365,8 +365,8 @@ func checkText(field, s string, maxLen int) error {
 	}
 
 	for _, c := range s {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: the %s holds the control or format character %U", ErrInvalid, field, c)
+		if unicode.IsControl(c) || unicode.In(c, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return fmt.Errorf("%w: the %s holds the control, format or separator character %U", ErrInvalid, field, c)
 		}
 	}
 

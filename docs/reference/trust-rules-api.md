@@ -144,7 +144,7 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 400 | `request.body-invalid` | The body is not one JSON object. It has an unknown field, a missing field, or data after the object. |
 | 400 | `trust-rule.invalid` | A field fails its rules. The message names the field. |
 | 400 | `trust-rule.issuer-refused` | The issuer is at or under the public URL of the server. |
-| 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is a person, or is not a principal of the namespace. |
+| 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is not a service principal, or is not a principal of the namespace. |
 | 401 | | The request has no valid credential. |
 | 403 | | The caller lacks the action of the route, or `principal:manage-tokens` on the principal. |
 | 403 | `trust-rule.sign-in-required` | The caller used an access token to create a rule. |

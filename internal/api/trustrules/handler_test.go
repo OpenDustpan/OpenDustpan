@@ -98,7 +98,7 @@ func TestTrustRuleChangesWriteAuditEntries(t *testing.T) {
 
 	for key, want := range map[string]string{
 		"issuer": created.Issuer, "audience": created.Audience, "principal": e.worker, "keySource": "discovery",
-		"conditions": "repository in [acme/infra]; sub in [repo:acme/infra:ref:refs/heads/main]",
+		"conditions": `repository in ["acme/infra"]; sub in ["repo:acme/infra:ref:refs/heads/main"]`,
 	} {
 		if changed[key] != want {
 			t.Errorf("change %s = %q, want %q", key, changed[key], want)

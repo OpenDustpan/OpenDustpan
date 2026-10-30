@@ -55,6 +55,8 @@ func TestValidateRefuses(t *testing.T) {
 		{"a principal ID with a slash", func(r *trustrule.Rule) { r.PrincipalID = "prn/../x" }},
 		{"an empty audience", func(r *trustrule.Rule) { r.Audience = "" }},
 		{"an audience with a format character", func(r *trustrule.Rule) { r.Audience = "a\u200bb" }},
+		{"a name with a line separator", func(r *trustrule.Rule) { r.Name = "a\u2028b" }},
+		{"an audience with a paragraph separator", func(r *trustrule.Rule) { r.Audience = "a\u2029b" }},
 		{"an unknown key source", func(r *trustrule.Rule) { r.Keys = "jku" }},
 		{"static keys with discovery", func(r *trustrule.Rule) { r.StaticKeys = "{}" }},
 		{"a static rule with no keys", func(r *trustrule.Rule) { r.Keys = trustrule.KeySourceStatic }},
@@ -136,6 +138,7 @@ func TestValidateConditions(t *testing.T) {
 		{"no value", []trustrule.Condition{{Claim: "sub", Values: nil}}},
 		{"an empty value", []trustrule.Condition{{Claim: "sub", Values: []string{""}}}},
 		{"a value twice", []trustrule.Condition{{Claim: "sub", Values: []string{"a", "a"}}}},
+		{"a value with a line separator", []trustrule.Condition{{Claim: "sub", Values: []string{"a\u2028b"}}}},
 		{"too many values", []trustrule.Condition{{Claim: "sub", Values: many}}},
 		{"a value with a control character", []trustrule.Condition{{Claim: "sub", Values: []string{"a\x00b"}}}},
 		{"a long value", []trustrule.Condition{

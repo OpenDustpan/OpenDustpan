@@ -194,3 +194,25 @@ func TestParseKeySetRefuses(t *testing.T) {
 		})
 	}
 }
+
+// TestParseKeySetRefusesAnAlgOutsideTheAllowlist checks the alg allowlist of
+// a key alone: the check that the alg fits the key type refuses the same
+// keys, so the test asserts the error of the allowlist.
+func TestParseKeySetRefusesAnAlgOutsideTheAllowlist(t *testing.T) {
+	t.Parallel()
+
+	rsaPub := rsaJWK(&rsa2048(t).PublicKey)
+
+	for _, alg := range []string{"none", "HS256", "HS512", "RS1"} {
+		t.Run("alg "+alg, func(t *testing.T) {
+			t.Parallel()
+
+			raw := set(t, with(rsaPub, map[string]any{"alg": alg}))
+
+			_, err := trustrule.ParseKeySet([]byte(raw))
+			if !errors.Is(err, trustrule.ErrKeySet) || !strings.Contains(err.Error(), "is not an allowed algorithm") {
+				t.Fatalf("ParseKeySet = %v, want the error of the alg allowlist", err)
+			}
+		})
+	}
+}
