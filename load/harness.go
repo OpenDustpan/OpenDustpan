@@ -110,7 +110,7 @@ type Config struct {
 // DefaultConfig answers the nightly run: 10,000 units and three body sizes.
 func DefaultConfig() Config {
 	return Config{
-		Store:              "sqlite",
+		Store:              storeSQLite,
 		Namespace:          "load",
 		Token:              "",
 		Units:              defaultUnits,

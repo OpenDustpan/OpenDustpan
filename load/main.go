@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -21,9 +23,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -78,25 +80,82 @@ func main() {
 	}
 }
 
+// harnessFlags holds the parsed flags of one harness run.
+type harnessFlags struct {
+	out         string
+	units       int
+	ns          string
+	flows       string
+	blobs       string
+	probe       bool
+	maxDuration time.Duration
+	blobCfg     BlobFlowConfig
+}
+
+// parseHarnessFlags parses and checks args.
+func parseHarnessFlags(args []string) (harnessFlags, error) {
+	flags := flag.NewFlagSet("load", flag.ContinueOnError)
+
+	f := harnessFlags{
+		out: "", units: 0, ns: "", flows: "", blobs: "", probe: false, maxDuration: 0,
+		blobCfg: DefaultBlobFlowConfig(),
+	}
+
+	flags.StringVar(&f.out, "out", "load-report.json", "write the JSON report to `path`")
+	flags.IntVar(&f.units, "units", defaultUnits, "build `n` units, half stacks and half workspaces")
+	flags.StringVar(&f.ns, "namespace", "load", "measure in namespace `name`")
+	flags.StringVar(&f.flows, "flows", flowsAll, "run `set` all (the nightly report) or blobs (the blob flow report)")
+	flags.StringVar(&f.blobs, "blobs", blobsFS, "live blob store `kind`: fs (a directory) or s3 (DUSTPAN_TEST_S3_*)")
+	flags.BoolVar(&f.probe, "s3-probe", true, "open the S3 store with the conditional-write probe, as the server does")
+	flags.DurationVar(&f.maxDuration, "max-duration", 0, "stop the run after `duration`; 0 sets no bound")
+	flags.IntVar(&f.blobCfg.Reps, "reps", f.blobCfg.Reps, "blobs: time `n` state uploads and n checkpoint saves")
+	flags.IntVar(&f.blobCfg.StateBytes, "state-bytes", f.blobCfg.StateBytes, "blobs: state size in `bytes`")
+	flags.IntVar(&f.blobCfg.CheckpointBytes, "checkpoint-bytes", f.blobCfg.CheckpointBytes,
+		"blobs: checkpoint size in `bytes`")
+	flags.IntVar(&f.blobCfg.DatasetUnits, "dataset-units", f.blobCfg.DatasetUnits,
+		"blobs: `n` workspaces and n stacks in the backup data set")
+	flags.BoolVar(&f.blobCfg.Backup, "backup", f.blobCfg.Backup, "blobs: take a backup of the data set and restore it")
+	flags.IntVar(&f.blobCfg.HTTPTimeoutSecs, "http-timeout", f.blobCfg.HTTPTimeoutSecs,
+		"blobs: bound each request to `seconds`")
+
+	if err := flags.Parse(args); err != nil {
+		return harnessFlags{}, fmt.Errorf("parse flags: %w", err)
+	}
+
+	return f, f.check()
+}
+
+// check refuses flag values the harness cannot run.
+func (f harnessFlags) check() error {
+	switch {
+	case f.flows != flowsAll && f.flows != flowsBlobs:
+		return errBadFlows
+	case f.flows == flowsBlobs && (f.blobCfg.Reps < 1 || f.blobCfg.DatasetUnits < 0 || f.blobCfg.HTTPTimeoutSecs < 1):
+		return errBadReps
+	case f.units < 1:
+		return errBadUnits
+	case f.ns == "":
+		return errBadNamespace
+	case f.maxDuration < 0:
+		return errBadDuration
+	default:
+		return nil
+	}
+}
+
 // runHarness parses args, starts the servers, replays the traffic and writes
 // the report.
 func runHarness(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("load", flag.ContinueOnError)
-
-	out := flags.String("out", "load-report.json", "write the JSON report to `path`")
-	units := flags.Int("units", defaultUnits, "build `n` units, half stacks and half workspaces")
-	ns := flags.String("namespace", "load", "measure in namespace `name`")
-
-	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
+	f, err := parseHarnessFlags(args)
+	if err != nil {
+		return err
 	}
 
-	if *units < 1 {
-		return errBadUnits
-	}
+	if f.maxDuration > 0 {
+		var cancel context.CancelFunc
 
-	if *ns == "" {
-		return errBadNamespace
+		ctx, cancel = context.WithTimeout(ctx, f.maxDuration)
+		defer cancel()
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -112,20 +171,7 @@ func runHarness(ctx context.Context, args []string) error {
 		}
 	}()
 
-	cfg := DefaultConfig()
-	cfg.Namespace = *ns
-	cfg.Units = *units
-	cfg.Token = harnessToken()
-	cfg.Store = storeName()
-
-	served, cleanup, err := openServers(ctx, logger, dir, *ns)
-	if err != nil {
-		return err
-	}
-
-	defer cleanup(context.WithoutCancel(ctx))
-
-	report, err := Execute(ctx, cfg, served)
+	report, err := f.execute(ctx, logger, dir)
 	if err != nil {
 		return err
 	}
@@ -137,18 +183,49 @@ func runHarness(ctx context.Context, args []string) error {
 
 	data = append(data, '\n')
 
-	if err := os.WriteFile(*out, data, 0o600); err != nil {
+	if err := os.WriteFile(f.out, data, 0o600); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 
-	logger.InfoContext(
-		ctx, "wrote load report",
-		slog.String("path", *out),
-		slog.Int64("duration_ms", int64(report.DurationMs)),
-		slog.Int("units_listed", report.Lists.UnitsListed),
-	)
+	logger.InfoContext(ctx, "wrote load report", slog.String("path", f.out), slog.String("flows", f.flows))
 
 	return nil
+}
+
+// execute starts the servers in dir and runs the flows of f.
+func (f harnessFlags) execute(ctx context.Context, logger *slog.Logger, dir string) (any, error) {
+	settings, err := newBlobSettings(f.blobs, f.probe, dir)
+	if err != nil {
+		return nil, err
+	}
+
+	setup := serverSetup{blobs: settings, oneInstance: false, backup: false}
+	if f.flows == flowsBlobs {
+		setup.oneInstance, setup.backup = true, f.blobCfg.Backup
+	}
+
+	served, cleanup, err := openServers(ctx, logger, f.ns, setup)
+	if err != nil {
+		return nil, err
+	}
+
+	defer cleanup(context.WithoutCancel(ctx))
+
+	if f.flows == flowsBlobs {
+		cfg := f.blobCfg
+		cfg.Namespace, cfg.Token, cfg.Store = f.ns, harnessToken(), storeName()
+		cfg.Blobs, cfg.S3Probe = f.blobs, f.probe
+
+		return ExecuteBlobFlows(ctx, cfg, served)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Namespace = f.ns
+	cfg.Units = f.units
+	cfg.Token = harnessToken()
+	cfg.Store = storeName()
+
+	return Execute(ctx, cfg, served)
 }
 
 // storeName answers the store the harness runs against.
@@ -157,8 +234,11 @@ func storeName() string {
 		return "postgres"
 	}
 
-	return "sqlite"
+	return storeSQLite
 }
+
+// storeSQLite names the SQLite store in the reports.
+const storeSQLite = "sqlite"
 
 // ports groups every store port one server instance needs.
 type ports struct {
@@ -175,6 +255,7 @@ type ports struct {
 	runners     dustpan.RunnerStores
 	durable     dustpan.DurableStore
 	allowlists  ipallow.Store
+	kinds       installation.KindStore
 }
 
 // portsOfSQLite answers the ports of one SQLite handle.
@@ -193,6 +274,7 @@ func portsOfSQLite(store *sqlite.Store) ports {
 		runners:     store.Runners(),
 		durable:     store.DurableOperations(),
 		allowlists:  store,
+		kinds:       store,
 	}
 }
 
@@ -212,6 +294,7 @@ func portsOfPostgres(store *postgres.Store) ports {
 		runners:     store.Runners(),
 		durable:     store.DurableOperations(),
 		allowlists:  store,
+		kinds:       store,
 	}
 }
 
@@ -245,7 +328,8 @@ type servers struct {
 func openServers(
 	ctx context.Context,
 	logger *slog.Logger,
-	dir, ns string,
+	ns string,
+	setup serverSetup,
 ) (servers, func(context.Context), error) {
 	var cleanups []func(context.Context)
 
@@ -261,11 +345,7 @@ func openServers(
 		return servers{}, func(context.Context) {}, err
 	}
 
-	instances := 1
-	if os.Getenv(postgresURLEnv) != "" {
-		instances = 2
-	}
-
+	instances := setup.instances()
 	pgURL := os.Getenv(postgresURLEnv)
 
 	if pgURL != "" {
@@ -281,7 +361,7 @@ func openServers(
 	served := make([]instance, 0, instances)
 
 	for range instances {
-		one, instanceErr := openInstance(ctx, logger, dir, pgURL)
+		one, instanceErr := openInstance(ctx, logger, setup.blobs, pgURL)
 		if instanceErr != nil {
 			return onErr(ctx, instanceErr)
 		}
@@ -300,7 +380,7 @@ func openServers(
 		return onErr(ctx, err)
 	}
 
-	running, serveErr := serveAll(ctx, served, wrapper)
+	running, serveErr := serveAll(ctx, logger, served, wrapper, setup)
 	cleanups = append(cleanups, running.closers...)
 
 	if serveErr != nil {
@@ -311,6 +391,27 @@ func openServers(
 	fixtures.gateURL = running.gateURL
 
 	return fixtures, cleanup, nil
+}
+
+// backupOption opens the backup target when setup asks for backups, and
+// answers the server option that sets it with the func that closes it.
+func backupOption(
+	ctx context.Context,
+	logger *slog.Logger,
+	setup serverSetup,
+) ([]dustpan.Option, func(context.Context), error) {
+	if !setup.backup {
+		return nil, func(context.Context) {}, nil
+	}
+
+	target, err := setup.blobs.openBackupTarget(ctx)
+	if err != nil {
+		return nil, func(context.Context) {}, err
+	}
+
+	closeTarget := closeFunc(logger, func(context.Context) error { return target.close() })
+
+	return []dustpan.Option{dustpan.WithBackupTarget(target.store, target.name)}, closeTarget, nil
 }
 
 // running holds the servers that serveAll started: the instance URLs, the URL
@@ -324,13 +425,35 @@ type running struct {
 // serveAll serves every instance, then the server that checks IP allowlists
 // over the first instance. On an error it answers the servers it started, so
 // the caller closes them.
-func serveAll(ctx context.Context, served []instance, wrapper *secret.BuiltinWrapper) (running, error) {
+func serveAll(
+	ctx context.Context,
+	logger *slog.Logger,
+	served []instance,
+	wrapper *secret.BuiltinWrapper,
+	setup serverSetup,
+) (running, error) {
 	var out running
 
+	extra, closeTarget, err := backupOption(ctx, logger, setup)
+	if err != nil {
+		return out, err
+	}
+
+	out.closers = append(out.closers, closeTarget)
+
+	serve := serveInstance
+	if len(extra) > 0 {
+		serve = func(
+			ctx context.Context, one instance, wrapper *secret.BuiltinWrapper, opts ...dustpan.Option,
+		) (string, func(context.Context), error) {
+			return runInstance(ctx, logger, one, wrapper, opts...)
+		}
+	}
+
 	for i := range served {
-		instanceURL, closeServer, err := serveInstance(ctx, served[i], wrapper)
-		if err != nil {
-			return out, err
+		instanceURL, closeServer, serveErr := serve(ctx, served[i], wrapper, extra...)
+		if serveErr != nil {
+			return out, serveErr
 		}
 
 		out.urls = append(out.urls, instanceURL)
@@ -358,6 +481,42 @@ func gateOptions(p ports) []dustpan.Option {
 	}
 }
 
+// Run sets of the -flows flag.
+const (
+	flowsAll   = "all"
+	flowsBlobs = "blobs"
+)
+
+// errBadFlows reports a -flows value that names no run set.
+var errBadFlows = errors.New("-flows must be all or blobs")
+
+// errBadDuration reports a negative -max-duration.
+var errBadDuration = errors.New("-max-duration must not be negative")
+
+// errBadReps reports a blob flow run without attempts.
+var errBadReps = errors.New("-reps and -http-timeout must be at least 1 and -dataset-units at least 0")
+
+// serverSetup is what openServers starts besides the store: the blob
+// settings, one instance only, and the backup target.
+type serverSetup struct {
+	blobs       blobSettings
+	oneInstance bool
+	backup      bool
+}
+
+// pgInstances is the count of instances on PostgreSQL.
+const pgInstances = 2
+
+// instances answers the count of instances to start: two on PostgreSQL,
+// so the report covers several instances, unless setup asks for one.
+func (s serverSetup) instances() int {
+	if os.Getenv(postgresURLEnv) != "" && !s.oneInstance {
+		return pgInstances
+	}
+
+	return 1
+}
+
 // instance is one serving instance: its ports and blob store with cleanup.
 type instance struct {
 	ports   ports
@@ -370,45 +529,47 @@ type instance struct {
 func openInstance(
 	ctx context.Context,
 	logger *slog.Logger,
-	dir string,
+	settings blobSettings,
 	pgURL string,
 ) (instance, error) {
-	blobs, blobsErr := fs.Open(filepath.Join(dir, "blobs"))
+	blobs, blobsErr := settings.openLive(ctx)
 	if blobsErr != nil {
-		return instance{}, fmt.Errorf("open blob store: %w", blobsErr)
+		return instance{}, blobsErr
 	}
 
 	if pgURL == "" {
-		store, storeErr := sqlite.Open(ctx, filepath.Join(dir, "dustpan.db"))
+		store, storeErr := sqlite.Open(
+			ctx, filepath.Join(settings.dir, "dustpan.db"), sqlite.WithInstallationKind(installation.KindProduction),
+		)
 		if storeErr != nil {
 			return instance{}, fmt.Errorf("open sqlite store: %w", storeErr)
 		}
 
 		return instance{
 			ports: portsOfSQLite(store),
-			blobs: blobs,
+			blobs: blobs.store,
 			cleanup: closeFunc(logger, func(context.Context) error {
 				if err := store.Close(); err != nil {
 					return fmt.Errorf("close sqlite store: %w", err)
 				}
 
-				return blobs.Close()
+				return blobs.close()
 			}),
 		}, nil
 	}
 
-	store, storeErr := postgres.Open(ctx, pgURL)
+	store, storeErr := postgres.Open(ctx, pgURL, postgres.WithInstallationKind(installation.KindProduction))
 	if storeErr != nil {
 		return instance{}, fmt.Errorf("open postgres store: %w", storeErr)
 	}
 
 	return instance{
 		ports: portsOfPostgres(store),
-		blobs: blobs,
+		blobs: blobs.store,
 		cleanup: closeFunc(logger, func(shutdownCtx context.Context) error {
 			store.CloseContext(shutdownCtx)
 
-			return blobs.Close()
+			return blobs.close()
 		}),
 	}, nil
 }
@@ -552,26 +713,113 @@ func newHarnessWrapper() (*secret.BuiltinWrapper, error) {
 	return wrapper, nil
 }
 
-// serveInstance builds the server for one instance and answers its test URL.
-// wrapper is the key-encryption key that all instances share. extra options
-// follow the options every server gets.
-func serveInstance(
+// runStopTimeout bounds the wait for a stopped instance of runInstance.
+const runStopTimeout = time.Minute
+
+// errRunStopped reports an instance of runInstance that did not stop in time.
+var errRunStopped = errors.New("server did not stop in time")
+
+// runInstance builds the server for one instance and runs it with Run on a
+// loopback listener, as the server binary does, and answers its URL. Run
+// also starts the workers, so the backups and the restores of the instance
+// run to their end. extra options follow the options every server gets.
+func runInstance(
 	ctx context.Context,
+	logger *slog.Logger,
 	served instance,
 	wrapper *secret.BuiltinWrapper,
 	extra ...dustpan.Option,
 ) (string, func(context.Context), error) {
 	noop := func(context.Context) {}
 
-	authn, err := identity.NewStaticToken("load", harnessToken())
+	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", noop, fmt.Errorf("authenticator: %w", err)
+		return "", noop, fmt.Errorf("listen: %w", err)
 	}
 
-	// The public URL is the address of the server itself: the OpenTofu upload
-	// URL and the runner protocol name it. The listener exists before the
-	// server starts, so its address is known here.
-	ts := httptest.NewUnstartedServer(nil)
+	instanceURL := "http://" + ln.Addr().String()
+
+	extra = append(extra,
+		dustpan.WithListener(ln),
+		dustpan.WithInstallationKind(installation.KindProduction),
+		dustpan.WithInstallationKindStore(served.ports.kinds),
+	)
+
+	srv, err := newInstanceServer(served, wrapper, instanceURL, extra...)
+	if err != nil {
+		return "", noop, errors.Join(err, ln.Close())
+	}
+
+	runCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan error, 1)
+
+	go func() { done <- srv.Run(runCtx) }()
+
+	stopRun := func(stopCtx context.Context) {
+		stop()
+
+		select {
+		case <-done:
+		case <-time.After(runStopTimeout):
+			logger.ErrorContext(stopCtx, "stop instance", slog.String("error", errRunStopped.Error()))
+		}
+	}
+
+	if err := waitServing(ctx, instanceURL); err != nil {
+		stopRun(ctx)
+
+		return "", noop, err
+	}
+
+	return instanceURL, stopRun, nil
+}
+
+// waitServing polls the liveness route of the server at base until it
+// answers, or fails after runStopTimeout.
+func waitServing(ctx context.Context, base string) error {
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(runStopTimeout)
+
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health/live", http.NoBody)
+		if err != nil {
+			return fmt.Errorf("wait for server: %w", err)
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				return fmt.Errorf("wait for server: %w", closeErr)
+			}
+
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for server: %w", ctx.Err())
+		case <-time.After(waitServingPoll):
+		}
+	}
+
+	return fmt.Errorf("wait for server at %s: %w", base, errRunStopped)
+}
+
+// waitServingPoll is the pause between two reads of waitServing.
+const waitServingPoll = 50 * time.Millisecond
+
+// newInstanceServer builds the server of one instance with the options
+// every server gets, then extra.
+func newInstanceServer(
+	served instance,
+	wrapper *secret.BuiltinWrapper,
+	publicURL string,
+	extra ...dustpan.Option,
+) (*dustpan.Server, error) {
+	authn, err := identity.NewStaticToken("load", harnessToken())
+	if err != nil {
+		return nil, fmt.Errorf("authenticator: %w", err)
+	}
 
 	opts := []dustpan.Option{
 		dustpan.WithInstallation(harnessInstallation),
@@ -590,14 +838,38 @@ func serveInstance(
 		dustpan.WithDurableStore(served.ports.durable),
 		dustpan.WithJobStore(served.ports.jobs),
 		dustpan.WithRunners(served.ports.runners),
-		dustpan.WithPublicURL("http://" + ts.Listener.Addr().String()),
+		dustpan.WithPublicURL(publicURL),
 	}
 
 	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
+		return nil, fmt.Errorf("new server: %w", err)
+	}
+
+	return srv, nil
+}
+
+// serveInstance builds the server for one instance and answers its test URL.
+// wrapper is the key-encryption key that all instances share. extra options
+// follow the options every server gets.
+func serveInstance(
+	ctx context.Context,
+	served instance,
+	wrapper *secret.BuiltinWrapper,
+	extra ...dustpan.Option,
+) (string, func(context.Context), error) {
+	noop := func(context.Context) {}
+
+	// The public URL is the address of the server itself: the OpenTofu upload
+	// URL and the runner protocol name it. The listener exists before the
+	// server starts, so its address is known here.
+	ts := httptest.NewUnstartedServer(nil)
+
+	srv, err := newInstanceServer(served, wrapper, "http://"+ts.Listener.Addr().String(), extra...)
+	if err != nil {
 		ts.Close()
 
-		return "", noop, fmt.Errorf("new server: %w", err)
+		return "", noop, err
 	}
 
 	if startErr := srv.Start(ctx); startErr != nil {
