@@ -203,9 +203,8 @@ func decodeBulk(t *testing.T, rec *httptest.ResponseRecorder) bulkAnswer {
 	return a
 }
 
-func bulkBody(settings string, versions ...string) string {
-	return `{"units":[{"id":"` + netID + `","version":` + versions[0] + `},{"id":"` + appID + `","version":` +
-		versions[1] + `}],"settings":` + settings + `}`
+func bulkBody(settings string) string {
+	return `{"units":[{"id":"` + netID + `","version":0},{"id":"` + appID + `","version":0}],"settings":` + settings + `}`
 }
 
 // wantItems fails the test unless every item of the answer is ok at version.
@@ -226,7 +225,7 @@ func TestKeyedBulkCallDoesFailedItemsAgain(t *testing.T) {
 
 	r := newRig(t, fullAccess()...)
 	header := map[string]string{"Idempotency-Key": "bulk-1"}
-	body := bulkBody(validBody, "0", "0")
+	body := bulkBody(validBody)
 
 	// Every write fails with a server error: no item stores an answer.
 	r.store.failWith = errDiskFull
@@ -251,7 +250,7 @@ func TestKeyedBulkCallAnswersStoredItems(t *testing.T) {
 
 	r := newRig(t, fullAccess()...)
 	header := map[string]string{"Idempotency-Key": "bulk-4"}
-	body := bulkBody(validBody, "0", "0")
+	body := bulkBody(validBody)
 
 	wantItems(t, r.call(t, http.MethodPost, bulkPath, body, header), 1)
 
@@ -273,8 +272,8 @@ func TestKeyedBulkCallWithAnotherBodyIsRefused(t *testing.T) {
 	r := newRig(t, fullAccess()...)
 	header := map[string]string{"Idempotency-Key": "bulk-2"}
 
-	wantStatus(t, r.call(t, http.MethodPost, bulkPath, bulkBody(validBody, "0", "0"), header), http.StatusOK, "")
-	wantStatus(t, r.call(t, http.MethodPost, bulkPath, bulkBody(`{"pool":""}`, "0", "0"), header),
+	wantStatus(t, r.call(t, http.MethodPost, bulkPath, bulkBody(validBody), header), http.StatusOK, "")
+	wantStatus(t, r.call(t, http.MethodPost, bulkPath, bulkBody(`{"pool":""}`), header),
 		http.StatusUnprocessableEntity, errcode.RequestIdempotencyKeyReused)
 }
 
@@ -283,7 +282,7 @@ func TestKeyedBulkReplayChecksTheActionsOfEachItemAgain(t *testing.T) {
 
 	r := newRig(t, fullAccess()...)
 	header := map[string]string{"Idempotency-Key": "bulk-3"}
-	body := bulkBody(validBody, "0", "0")
+	body := bulkBody(validBody)
 
 	wantStatus(t, r.call(t, http.MethodPost, bulkPath, body, header), http.StatusOK, "")
 
@@ -309,7 +308,7 @@ func TestKeyedBulkCallWithAnInvalidKeyIsRefused(t *testing.T) {
 	r := newRig(t, fullAccess()...)
 	header := map[string]string{"Idempotency-Key": strings.Repeat("k", 256)}
 
-	wantStatus(t, r.call(t, http.MethodPost, bulkPath, bulkBody(validBody, "0", "0"), header),
+	wantStatus(t, r.call(t, http.MethodPost, bulkPath, bulkBody(validBody), header),
 		http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid)
 
 	if n := r.store.written(); n != 0 {

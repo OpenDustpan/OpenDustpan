@@ -65,6 +65,10 @@ func jsonAnswer(body any, version int64) (idempotency.Answer, error) {
 
 // writeAnswer sends a, or answers the error of the step that made it.
 func (h *Handler) writeAnswer(ctx context.Context, w http.ResponseWriter, a *idempotency.Answer, err error) {
+	if err == nil && a == nil {
+		err = errNoAnswer
+	}
+
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -408,3 +412,7 @@ func (h *Handler) endItem(ctx context.Context, ref idempotency.Ref, token string
 
 	h.abandon(endCtx, ref, token)
 }
+
+// errNoAnswer reports a step that made neither an answer nor an error. It
+// maps to the internal error answer.
+var errNoAnswer = errors.New("the step made no answer")
