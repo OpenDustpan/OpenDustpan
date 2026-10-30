@@ -38,8 +38,15 @@ ANALYSIS_TAGS := e2e,upgrade,soak
 NILAWAY       := go run go.uber.org/nilaway/cmd/nilaway@v0.0.0-20260918162853-acb8859b9031
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
+# nilaway holds the whole program in memory. With the default GOGC it grew to
+# 13.9 GB and the kernel killed it in a 15 GB container. A lower GOGC and a
+# soft memory limit keep it inside such a container, at some extra CPU time.
+# Set NILAWAY_GOGC or NILAWAY_GOMEMLIMIT to change them.
+NILAWAY_GOGC      ?= 25
+NILAWAY_GOMEMLIMIT ?= 12GiB
+
 nilaway: ## Nil-panic analysis of our packages; dependencies are read but not reported.
-	GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
+	GOGC=$(NILAWAY_GOGC) GOMEMLIMIT=$(NILAWAY_GOMEMLIMIT) GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
 
 vuln: ## Known vulnerabilities in the code paths we call (reads the database at vuln.go.dev).
 	$(GOVULNCHECK) -tags $(ANALYSIS_TAGS) ./...
