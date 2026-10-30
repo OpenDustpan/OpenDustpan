@@ -171,6 +171,10 @@ func parseSignature(header string) (string, [][]byte, error) {
 		}
 	}
 
+	// Defense in depth: with no v1 the compare in Verify finds no match and
+	// returns ErrSignature too; this check stays so that a change of that loop
+	// cannot accept a header with no signature. It does not rely on the size
+	// check, the secret check or the time check.
 	if len(sigs) == 0 {
 		return "", nil, fmt.Errorf("%w: no v1", ErrSignature)
 	}
