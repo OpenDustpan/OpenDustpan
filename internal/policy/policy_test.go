@@ -658,7 +658,8 @@ func TestCedarDecisionKeepsTheRule(t *testing.T) {
 }
 
 // TestVerifyErrorsHoldNoHeaderText puts a marker in each part of a header that
-// Verify reads, and checks that no error holds the marker.
+// Verify reads, at each place where it can refuse, and checks that Verify
+// returns the sentinel of that place and that the error holds no marker.
 func TestVerifyErrorsHoldNoHeaderText(t *testing.T) {
 	t.Parallel()
 
@@ -673,26 +674,34 @@ func TestVerifyErrorsHoldNoHeaderText(t *testing.T) {
 		t.Fatalf("Sign() = %v", err)
 	}
 
-	cases := map[string]string{
-		"a part with no '='":          good + "," + marker,
-		"a key with no value":         good + "," + marker + "=",
-		"a v1 that is not hex":        "t=1790000000,v1=" + marker,
-		"a t that is not a number":    "t=" + marker + ",v1=00",
-		"a t with the marker inside":  "t=1790000000" + marker + ",v1=00",
-		"a v1 with the marker, 2nd":   good + ",v1=" + marker,
-		"an unknown key with marker":  marker + "=" + marker + "," + good,
-		"a repeated t with a marker":  good + ",t=" + marker,
-		"the marker as the only part": marker,
+	_, sig, _ := strings.Cut(good, ",")
+	ts := "t=1790000000"
+
+	cases := []struct {
+		name   string
+		header string
+		want   error
+	}{
+		{"a part with no '='", good + "," + marker, policy.ErrSignature},
+		{"the marker as the only part", marker, policy.ErrSignature},
+		{"a v1 that is not hex", ts + ",v1=" + marker, policy.ErrSignature},
+		{"a t that is not a number", "t=" + marker + ",v1=00", policy.ErrSignature},
+		{"a t with the marker inside", ts + marker + ",v1=00", policy.ErrSignature},
+		{"a repeated t with a marker", good + ",t=" + marker, policy.ErrSignature},
+		{"a fifth v1 that holds the marker", ts + strings.Repeat(","+sig, policy.MaxSignatures) + ",v1=" + marker,
+			policy.ErrSignature},
+		{"no v1, with the marker as a key", ts + "," + marker + "=x", policy.ErrSignature},
+		{"a header above the limit, the marker at its end",
+			ts + strings.Repeat(",x=y", policy.MaxSignatureHeaderBytes/4) + "," + marker, policy.ErrSignature},
 	}
 
-	for name, header := range cases {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := policy.Verify(header, body, secret, at)
-			if err == nil {
-				// An unknown key does not count, so the header may pass.
-				return
+			err := policy.Verify(tc.header, body, secret, at)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Verify() = %v, want %v", err, tc.want)
 			}
 
 			if strings.Contains(err.Error(), marker) {
