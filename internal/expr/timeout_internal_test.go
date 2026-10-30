@@ -3,9 +3,11 @@ package expr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/catalog"
 )
@@ -155,5 +157,27 @@ func TestRunCap(t *testing.T) {
 
 	if got, err = e.Bool(t.Context(), "true", env); err != nil || !got {
 		t.Fatalf("Bool() with a free slot = %v, %v, want true", got, err)
+	}
+}
+
+func TestClip(t *testing.T) {
+	t.Parallel()
+
+	short := fmt.Errorf("%w", errBusy)
+	if got := clip(short); !errors.Is(got, short) || got.Error() != errBusy.Error() {
+		t.Fatalf("clip(short) = %v, want the same error", got)
+	}
+
+	cause := errWork
+	long := fmt.Errorf("%w: %s", cause, strings.Repeat("é", 1000))
+	got := clip(long)
+
+	if n := len(got.Error()); n > MaxErrorBytes+len("...") || !utf8.ValidString(got.Error()) {
+		t.Fatalf("clip(long) has %d bytes (valid UTF-8: %v), want at most %d and valid", n,
+			utf8.ValidString(got.Error()), MaxErrorBytes+len("..."))
+	}
+
+	if !errors.Is(got, cause) {
+		t.Fatalf("clip(long) = %v, want an error that wraps the cause", got)
 	}
 }
