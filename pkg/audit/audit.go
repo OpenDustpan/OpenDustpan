@@ -60,6 +60,9 @@ const (
 	// server stopped an access that crossed a boundary, for example a read of
 	// a blob key of another namespace.
 	KindSecurity Kind = "security"
+	// KindAuditRead records a read or an export of the audit log: who read
+	// the entries of which scope, and for which range.
+	KindAuditRead Kind = "audit-read"
 )
 
 // ServerScope is the scope of the entries of actions that are not in a
@@ -326,7 +329,7 @@ func (e Entry) validatePrincipal() error {
 // knownKind reports whether k is one of the kinds of this package.
 func knownKind(k Kind) bool {
 	switch k {
-	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity:
+	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity, KindAuditRead:
 		return true
 	default:
 		return false

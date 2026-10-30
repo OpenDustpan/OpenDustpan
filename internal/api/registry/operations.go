@@ -44,6 +44,26 @@ var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, versionPath): apidesc.Name("getProviderRelease", tagRegistry).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, releaseBody),
+	apidesc.Pattern(http.MethodPut, moduleVersionPath): apidesc.Name("publishModuleRelease", tagRegistry).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[publishModuleBody]("PublishModuleReleaseRequest"), moduleReleaseBody),
+	apidesc.Pattern(http.MethodGet, modulesPath): apidesc.Name("listRegistryModules", tagRegistry).
+		On(apidesc.KindNamespace).
+		WithQuery(
+			apidesc.IntegerParam("pageSize", "The largest number of modules on the page."),
+			apidesc.StringParam("pageToken", "The nextPageToken of the page before."),
+		).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listModulesResponse](
+			"ListRegistryModulesResponse", apidesc.Named[moduleDocument]("RegistryModule"),
+		)),
+	apidesc.Pattern(http.MethodGet, moduleVersionsPath): apidesc.Name("listModuleReleases", tagRegistry).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listModuleReleasesResponse](
+			"ListModuleReleasesResponse", moduleReleaseNames...,
+		)),
+	apidesc.Pattern(http.MethodGet, moduleVersionPath): apidesc.Name("getModuleRelease", tagRegistry).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, moduleReleaseBody),
 	apidesc.Pattern(http.MethodPost, keysPath): apidesc.Name("addRegistryKey", tagRegistry).
 		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
@@ -64,6 +84,9 @@ var (
 	releaseNames = []apidesc.Declaration{apidesc.Named[releaseFile]("ProviderReleaseFile")}
 	releaseBody  = apidesc.Typed[releaseDocument]("ProviderRelease", releaseNames...)
 	keyResponse  = apidesc.Typed[keyDocument]("RegistryKey")
+
+	moduleReleaseNames = []apidesc.Declaration{apidesc.Named[moduleArchiveDocument]("ModuleReleaseArchive")}
+	moduleReleaseBody  = apidesc.Typed[moduleReleaseDocument]("ModuleRelease", moduleReleaseNames...)
 )
 
 // queryOf returns the query of a request, as the label of its route allows

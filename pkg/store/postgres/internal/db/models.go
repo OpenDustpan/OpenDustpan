@@ -525,6 +525,7 @@ type JobLogChunk struct {
 	Confirmed   int64
 	StoredSize  int64
 	StoredMd5   []byte
+	BlobKey     string
 }
 
 type JobPlan struct {
@@ -964,6 +965,20 @@ type Trigger struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+}
+
+type TrustRule struct {
+	ID             string
+	Namespace      string
+	Name           string
+	Issuer         string
+	Audience       string
+	KeySource      string
+	StaticKeys     string
+	ConditionsJson string
+	PrincipalID    string
+	CreatedBy      string
+	CreatedAtMs    int64
 }
 
 type UnitFinalVersion struct {

@@ -68,7 +68,7 @@ func (s *Store) SaveCheckResult(ctx context.Context, invalid int) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the clock of the store: %w", err)
@@ -93,7 +93,7 @@ func (s *Store) SaveCheckMark(ctx context.Context, mark audit.CheckMark) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the clock of the store: %w", err)

@@ -27,6 +27,16 @@ const SignatureTolerance = 5 * time.Minute
 // MinSecretBytes is the shortest shared secret of a webhook.
 const MinSecretBytes = 32
 
+// Limits of a signature header that Verify reads. A header from the network is
+// untrusted, so Verify refuses one above them before it parses it.
+const (
+	// MaxSignatureHeaderBytes bounds the header.
+	MaxSignatureHeaderBytes = 1 << 10
+	// MaxSignatures bounds the v1 values of one header. Two are active during
+	// a rotation.
+	MaxSignatures = 4
+)
+
 var (
 	// ErrSignature reports a signature header that does not parse, or no
 	// signature that matches the body with a secret.
@@ -78,36 +88,34 @@ func Sign(body []byte, at time.Time, secrets ...[]byte) (string, error) {
 // header matches, ErrSignatureTime when the time of the header is more than
 // SignatureTolerance from now, and ErrSignature for a header that does not
 // parse or no match. The compare takes the same time for each byte.
+//
+// Verify fails closed. It returns ErrSecret for a secret shorter than
+// MinSecretBytes, as Sign does, because a receiver with an empty or short
+// secret would accept a signature that anyone can make. It returns
+// ErrSignature for a header above MaxSignatureHeaderBytes, with more than
+// MaxSignatures values of v1, with no v1, with a repeated t, or with a time
+// that is not in the form that Sign writes. The errors never quote the
+// header.
 func Verify(header string, body, secret []byte, now time.Time) error {
-	var (
-		ts   string
-		sigs [][]byte
-	)
+	// Defense in depth: the caller reads the secret from its settings and
+	// checks its length too; this check stays so that a new caller cannot
+	// skip it.
+	if len(secret) < MinSecretBytes {
+		return fmt.Errorf("%w: %d bytes, the minimum is %d", ErrSecret, len(secret), MinSecretBytes)
+	}
 
-	for part := range strings.SplitSeq(header, ",") {
-		key, value, ok := strings.Cut(part, "=")
-		if !ok {
-			return fmt.Errorf("%w: part %q has no '='", ErrSignature, part)
-		}
+	if len(header) > MaxSignatureHeaderBytes {
+		return fmt.Errorf("%w: the header has %d bytes, the limit is %d", ErrSignature, len(header),
+			MaxSignatureHeaderBytes)
+	}
 
-		switch key {
-		case "t":
-			ts = value
-		case "v1":
-			sig, err := hex.DecodeString(value)
-			if err != nil {
-				return fmt.Errorf("%w: v1 is not hex", ErrSignature)
-			}
-
-			sigs = append(sigs, sig)
-		default:
-			// A later scheme adds its own key. Keys that the receiver
-			// does not know do not count.
-		}
+	ts, sigs, err := parseSignature(header)
+	if err != nil {
+		return err
 	}
 
 	unix, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil {
+	if err != nil || strconv.FormatInt(unix, 10) != ts {
 		return fmt.Errorf("%w: no valid time", ErrSignature)
 	}
 
@@ -123,6 +131,55 @@ func Verify(header string, body, secret []byte, now time.Time) error {
 	}
 
 	return ErrSignature
+}
+
+// parseSignature reads the time and the v1 values of a signature header.
+func parseSignature(header string) (string, [][]byte, error) {
+	var (
+		ts   string
+		seen bool
+		sigs [][]byte
+	)
+
+	for part := range strings.SplitSeq(header, ",") {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			return "", nil, fmt.Errorf("%w: a part of the header has no '='", ErrSignature)
+		}
+
+		switch key {
+		case "t":
+			if seen {
+				return "", nil, fmt.Errorf("%w: t is given two times", ErrSignature)
+			}
+
+			ts, seen = value, true
+		case "v1":
+			if len(sigs) == MaxSignatures {
+				return "", nil, fmt.Errorf("%w: more than %d signatures", ErrSignature, MaxSignatures)
+			}
+
+			sig, err := hex.DecodeString(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("%w: v1 is not hex", ErrSignature)
+			}
+
+			sigs = append(sigs, sig)
+		default:
+			// A later scheme adds its own key. Keys that the receiver
+			// does not know do not count.
+		}
+	}
+
+	// Defense in depth: with no v1 the compare in Verify finds no match and
+	// returns ErrSignature too; this check stays so that a change of that loop
+	// cannot accept a header with no signature. It does not rely on the size
+	// check, the secret check or the time check.
+	if len(sigs) == 0 {
+		return "", nil, fmt.Errorf("%w: no v1", ErrSignature)
+	}
+
+	return ts, sigs, nil
 }
 
 func mac(secret []byte, ts string, body []byte) []byte {

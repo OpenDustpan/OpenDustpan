@@ -65,6 +65,7 @@ func gated() []errcodetest.Adapter {
 		// the shared error module to the gated writer of each adapter.
 		api("route", nil, nil),
 		api("triggers", nil, nil),
+		api("trustrules", nil, nil),
 	}
 }
 

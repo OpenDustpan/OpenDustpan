@@ -396,7 +396,7 @@ _Avoid_: User (when the caller can be a machine), actor
 _Copy says_: "principal", explained once where it first shows: "a person, a service or a workload".
 
 **Principal kind**:
-What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload`. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
+What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `service`. A trust rule names a service principal of its namespace, as a cloud maps a workload identity to a service account. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
 _Avoid_: Principal type, account type, token kind (a token kind is `personal` or `service`)
 
 **Principal of a namespace**:
@@ -460,7 +460,7 @@ An access token that belongs to a principal that is not a person, for a machine 
 _Avoid_: API key, robot token, machine token
 
 **Trust rule**:
-A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets (ADR 54).
+A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets: a service principal of that namespace (ADR 54).
 _Avoid_: Trust policy, federation rule
 
 **Group**:
@@ -781,7 +781,7 @@ A trigger of the kind `follows`. It names a source unit. After the source applie
 _Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
 
 **Registry release**:
-One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101). A module release holds one archive and no signature.
 _Avoid_: Package, artifact (that is a plan or a log of a job)
 
 **Registry address**:
@@ -871,7 +871,7 @@ The first of the two writes that store a plan (`job.RecordStore.ReservePlan`). I
 _Avoid_: Draft plan, pending plan
 
 **Chunk reserve and `confirm`**:
-The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Another hash for a reserved sequence number is a conflict.
+The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Each write attempt stores its blob under a key of its own, `<sequence number>-<attempt ID>`, and the second write records that key in the row. The attempt whose second write commits first wins. An attempt that loses deletes only its own blob. Another hash for a reserved sequence number is a conflict.
 _Avoid_: Two-phase commit (the blob store is not part of a transaction), staging
 
 **Step key**:
