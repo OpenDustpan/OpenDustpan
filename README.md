@@ -150,8 +150,10 @@ no Pulumi CLI and no OpenTofu CLI.
 
 The command builds the web console, starts the server on
 `http://127.0.0.1:8080`, and seeds two namespaces with demo stacks, update
-history and one backup. It prints the URL and the sign-in token. Use the
-token on the sign-in page.
+history and one backup. It then reads two routes that the console calls. A
+404 on either route means that the console at `CONSOLE_REF` calls a route
+that this server does not serve, and the command stops. It prints the URL and
+the sign-in token. Use the token on the sign-in page.
 
 The server uses port 8080 by default. Set another port with
 `make demo DEMO_PORT=<port>`.
