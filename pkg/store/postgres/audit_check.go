@@ -69,7 +69,7 @@ func (s *Store) SaveCheckResult(ctx context.Context, invalid int) error {
 		return fmt.Errorf("invalid count %d: %w", invalid, audit.ErrInvalidCheckState)
 	}
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		if err := q.SaveAuditChainCheckResult(ctx, int64(invalid)); err != nil {
 			return fmt.Errorf("save audit chain check result: %w", err)
 		}
@@ -85,7 +85,7 @@ func (s *Store) SaveCheckMark(ctx context.Context, mark audit.CheckMark) error {
 		return fmt.Errorf("audit chain check mark: %w", err)
 	}
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		err := q.SaveAuditChainMark(ctx, db.SaveAuditChainMarkParams{
 			Epoch: mark.Epoch, Scope: mark.Scope.String(), Sequence: mark.Sequence,
 		})
