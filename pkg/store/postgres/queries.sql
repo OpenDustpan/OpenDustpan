@@ -2236,6 +2236,12 @@ WHERE purged_at_ms >= sqlc.arg(after_ms)
 ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
 LIMIT sqlc.arg(page_limit);
 
+-- name: CountBlobPurges :one
+-- The number of blob purge records and the purge time of the oldest one. The
+-- time is 0 when no record exists.
+SELECT COUNT(*) AS pending, COALESCE(MIN(purged_at_ms), 0)::BIGINT AS oldest_ms
+FROM blob_purges;
+
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60
 -- decision 13). A sink with no row holds no entry of the namespace.
