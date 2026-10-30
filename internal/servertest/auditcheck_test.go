@@ -97,7 +97,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 func scopeObjects(t *testing.T, store *fs.Store, scope namespace.Name) int {
 	t.Helper()
 
-	key, err := audit.FirstLayoutCheckpointKey(0, scope, 1)
+	key, err := audit.CheckpointKey(0, scope, 1, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
@@ -115,7 +115,7 @@ func scopeObjects(t *testing.T, store *fs.Store, scope namespace.Name) int {
 func checkpointObjects(t *testing.T, store *fs.Store) int {
 	t.Helper()
 
-	key, err := audit.FirstLayoutCheckpointKey(0, "acme", 1)
+	key, err := audit.CheckpointKey(0, "acme", 1, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 
 	// Both servers stay live. A checkpoint above the end of the log is a cut
 	// log: whichever server checks first finds it and stores the mark.
-	badKey, err := audit.FirstLayoutCheckpointKey(0, "acme", 999_999)
+	badKey, err := audit.CheckpointKey(0, "acme", 999_999, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}

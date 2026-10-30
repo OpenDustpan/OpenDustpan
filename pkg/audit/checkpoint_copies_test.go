@@ -253,13 +253,9 @@ func TestCheckpointsFindCopiesThatSignDifferentHashes(t *testing.T) {
 		// rebuilt is the attempt part of the copy over the rebuilt log. The
 		// good copy has the attempt part of "5": the case orders the copies.
 		rebuilt string
-		// firstLayout stores the copy over the rebuilt log under the key of
-		// the first layout.
-		firstLayout bool
 	}{
-		{name: "the rebuilt copy lists first", rebuilt: "0", firstLayout: false},
-		{name: "the rebuilt copy lists last", rebuilt: "f", firstLayout: false},
-		{name: "the rebuilt copy has the key of the first layout", rebuilt: "", firstLayout: true},
+		{name: "the rebuilt copy lists first", rebuilt: "0"},
+		{name: "the rebuilt copy lists last", rebuilt: "f"},
 	}
 
 	for _, tc := range cases {
@@ -271,10 +267,7 @@ func TestCheckpointsFindCopiesThatSignDifferentHashes(t *testing.T) {
 
 			f.rechain(3)
 
-			rebuilt := firstLayoutKey(t, 0, 3)
-			if !tc.firstLayout {
-				rebuilt = copyKey(t, 0, 3, tc.rebuilt)
-			}
+			rebuilt := copyKey(t, 0, 3, tc.rebuilt)
 
 			f.blobs.store(t, rebuilt, f.signed(t, f.entries.entries[2].Hash))
 
@@ -375,30 +368,6 @@ func TestCheckpointsTwoHonestWritersRaiseNoAlarm(t *testing.T) {
 	}
 }
 
-// TestCheckpointsReadTheFirstLayout proves that a checkpoint under a key of
-// the first layout counts as a copy: the check reads it, and a write at its
-// sequence finds it and signs nothing more.
-func TestCheckpointsReadTheFirstLayout(t *testing.T) {
-	t.Parallel()
-
-	f := newReplacingFixture(t, 3)
-	f.blobs.store(t, firstLayoutKey(t, 0, 3), f.signed(t, f.entries.entries[2].Hash))
-
-	if got := verifyWith(t, f.checkpoints()); !got.Valid || got.Checked != 1 {
-		t.Fatalf("verify: got %+v, want valid with 1 copy read", got)
-	}
-
-	if wrote, err := writeAcme(t, f.checkpoints()); err != nil || wrote {
-		t.Fatalf("write: got %v, %v, want nothing written", wrote, err)
-	}
-
-	f.rechain(3)
-
-	if got := verifyWith(t, f.checkpoints()); got.Valid || got.BadSequence != 3 {
-		t.Fatalf("verify over the rebuilt log: got %+v, want invalid at 3", got)
-	}
-}
-
 // TestCheckpointsRefuseBadCopyDirectories proves that the check and the
 // writer fail a scope whose directory holds a key that the server does not
 // write, or more copies of one sequence than MaxCheckpointCopies, and that
@@ -415,23 +384,35 @@ func TestCheckpointsRefuseBadCopyDirectories(t *testing.T) {
 			t.Helper()
 			f.blobs.store(
 				t,
-				blob.Key(strings.Replace(firstLayoutKey(t, 0, 3).String(), "0003.json", "0003.txt", 1)),
+				blob.Key(strings.Replace(copyKey(t, 0, 3, "a").String(), ".json", ".txt", 1)),
 				nil,
 			)
 		}},
 		{name: "a short attempt part", wantSeq: 0, fill: func(t *testing.T, f replacingFixture) {
 			t.Helper()
-			f.blobs.store(t, blob.Key(strings.Replace(firstLayoutKey(t, 0, 3).String(), ".json", "-abc.json", 1)), nil)
+			f.blobs.store(
+				t,
+				blob.Key(strings.Replace(copyKey(t, 0, 3, "a").String(), strings.Repeat("a", 32), "abc", 1)),
+				nil,
+			)
+		}},
+		{name: "a key with no attempt part", wantSeq: 0, fill: func(t *testing.T, f replacingFixture) {
+			t.Helper()
+			f.blobs.store(
+				t,
+				blob.Key(strings.Replace(copyKey(t, 0, 3, "a").String(), "-"+strings.Repeat("a", 32), "", 1)),
+				f.signed(t, f.entries.entries[2].Hash),
+			)
 		}},
 		{name: "a key in a subdirectory", wantSeq: 0, fill: func(t *testing.T, f replacingFixture) {
 			t.Helper()
-			k := firstLayoutKey(t, 0, 3).String()
+			k := copyKey(t, 0, 3, "a").String()
 			i := strings.LastIndexByte(k, '/')
 			f.blobs.store(t, blob.Key(k[:i]+"/x"+k[i:]), nil)
 		}},
 		{name: "sequence 0", wantSeq: 0, fill: func(t *testing.T, f replacingFixture) {
 			t.Helper()
-			f.blobs.store(t, firstLayoutKey(t, 0, 0), nil)
+			f.blobs.store(t, copyKey(t, 0, 0, "a"), nil)
 		}},
 		{name: "too many copies", wantSeq: 3, fill: func(t *testing.T, f replacingFixture) {
 			t.Helper()
@@ -546,7 +527,7 @@ func epochCopyKey(t *testing.T, epoch int64, b string) blob.Key {
 }
 
 // TestCheckpointsEpochSelection proves that the current epoch is the
-// highest epoch with a valid signature, over the copies of both layouts, and
+// highest epoch with a valid signature over its copies, and
 // that a bad copy never counts: it fails the read.
 func TestCheckpointsEpochSelection(t *testing.T) {
 	t.Parallel()
@@ -562,26 +543,6 @@ func TestCheckpointsEpochSelection(t *testing.T) {
 			t.Helper()
 			s.store(t, epochCopyKey(t, 1, "a"), epochCopy(t, 7, 1))
 		}},
-		{
-			name:    "the first layout and a newer copy",
-			want:    3,
-			wantErr: nil,
-			fill: func(t *testing.T, s *replacingBlobs) {
-				t.Helper()
-				s.store(t, epochKey(t, 2), epochCopy(t, 7, 2))
-				s.store(t, epochCopyKey(t, 3, "a"), epochCopy(t, 7, 3))
-			},
-		},
-		{
-			name:    "a newer epoch of the first layout",
-			want:    2,
-			wantErr: nil,
-			fill: func(t *testing.T, s *replacingBlobs) {
-				t.Helper()
-				s.store(t, epochCopyKey(t, 1, "a"), epochCopy(t, 7, 1))
-				s.store(t, epochKey(t, 2), epochCopy(t, 7, 2))
-			},
-		},
 		{name: "two copies of one epoch", want: 2, wantErr: nil, fill: func(t *testing.T, s *replacingBlobs) {
 			t.Helper()
 			s.store(t, epochCopyKey(t, 1, "a"), epochCopy(t, 7, 1))
@@ -625,6 +586,13 @@ func TestCheckpointsEpochSelection(t *testing.T) {
 				t.Helper()
 				s.store(t, epochCopyKey(t, 1, "a"), epochCopy(t, 7, 1))
 				s.store(t, "audit-checkpoints/epochs/latest.json", epochCopy(t, 7, 5))
+			},
+		},
+		{
+			name: "an epoch key with no attempt part", want: 0, wantErr: audit.ErrCheckpointMismatch,
+			fill: func(t *testing.T, s *replacingBlobs) {
+				t.Helper()
+				s.store(t, "audit-checkpoints/epochs/00000001.json", epochCopy(t, 7, 1))
 			},
 		},
 		{name: "epoch 0", want: 0, wantErr: audit.ErrCheckpointMismatch, fill: func(t *testing.T, s *replacingBlobs) {

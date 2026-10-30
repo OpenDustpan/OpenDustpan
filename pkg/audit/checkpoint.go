@@ -39,8 +39,7 @@ import (
 // the copies of the sequence and checks each one: when one exists, it signs
 // nothing more. The check reads every copy of a sequence that it checks. Two
 // copies with a valid signature that sign different hashes are a mismatch. A
-// sweep never deletes a copy: every copy is evidence. The check also reads the
-// key <sequence>.json of the first layout, which holds one copy.
+// sweep never deletes a copy: every copy is evidence.
 //
 // An epoch groups the checkpoints of one history of the log. A restore
 // starts a new epoch, because the restored log can lose entries that older
@@ -216,18 +215,6 @@ func EpochKey(epoch int64, attempt string) (blob.Key, error) {
 	return key, nil
 }
 
-// FirstLayoutEpochKey returns the blob key of the epoch object of epoch in
-// the first layout, which holds one copy and no attempt part. The server
-// reads keys of this layout and never writes them.
-func FirstLayoutEpochKey(epoch int64) (blob.Key, error) {
-	key, err := blob.ParseKey(fmt.Sprintf("%s%0*d%s", epochDir, checkpointEpochDigits, epoch, checkpointKeySuffix))
-	if err != nil {
-		return "", fmt.Errorf("audit checkpoint epoch key %d: %w", epoch, err)
-	}
-
-	return key, nil
-}
-
 // MarshalEpoch encodes e in its stored JSON form.
 func MarshalEpoch(e EpochRecord) ([]byte, error) {
 	out, err := json.Marshal(epochJSON{
@@ -282,19 +269,6 @@ func CheckpointKey(epoch int64, scope namespace.Name, seq int64, attempt string)
 	return key, nil
 }
 
-// FirstLayoutCheckpointKey returns the blob key of the checkpoint of scope at
-// seq in epoch in the first layout, which holds one copy and no attempt part.
-// The server reads keys of this layout and never writes them.
-func FirstLayoutCheckpointKey(epoch int64, scope namespace.Name, seq int64) (blob.Key, error) {
-	key, err := blob.ParseKey(fmt.Sprintf("%s%0*d%s",
-		checkpointDir(epoch, scope), checkpointSequenceDigits, seq, checkpointKeySuffix))
-	if err != nil {
-		return "", fmt.Errorf("checkpoint key of %s: %w", scope, err)
-	}
-
-	return key, nil
-}
-
 // IsCheckpointKey reports whether key is under CheckpointPrefix. Every
 // checkpoint copy and epoch copy is evidence, so a sweep never deletes a key
 // for which it answers true.
@@ -320,10 +294,9 @@ func validAttempt(attempt string) bool {
 	return true
 }
 
-// parseCopyName parses the name of a key under dir: "<number>.json" of the
-// first layout or "<number>-<attempt>.json", with the number padded to
-// digits. It answers the number, or false for any other name, for a key
-// outside dir, and for a number below 1.
+// parseCopyName parses the name of a key under dir: "<number>-<attempt>.json",
+// with the number padded to digits. It answers the number, or false for any
+// other name, for a key outside dir, and for a number below 1.
 func parseCopyName(key blob.Key, dir string, digits int) (int64, bool) {
 	rest, ok := strings.CutPrefix(key.String(), dir)
 	if !ok {
@@ -337,11 +310,8 @@ func parseCopyName(key blob.Key, dir string, digits int) (int64, bool) {
 
 	number, attempt := base[:digits], base[digits:]
 
-	if attempt != "" {
-		part, ok := strings.CutPrefix(attempt, "-")
-		if !ok || !validAttempt(part) {
-			return 0, false
-		}
+	if part, ok := strings.CutPrefix(attempt, "-"); !ok || !validAttempt(part) {
+		return 0, false
 	}
 
 	for _, c := range []byte(number) {

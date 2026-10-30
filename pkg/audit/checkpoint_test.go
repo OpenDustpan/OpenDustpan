@@ -170,13 +170,13 @@ func (f checkpointFixture) key(t *testing.T, epoch, seq int64) blob.Key {
 func storedCopies(t *testing.T, blobs blob.Store, epoch, seq int64) []blob.Key {
 	t.Helper()
 
-	first, err := audit.FirstLayoutCheckpointKey(epoch, "acme", seq)
+	probe, err := audit.CheckpointKey(epoch, "acme", seq, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
 
-	dir := first.String()[:strings.LastIndexByte(first.String(), '/')+1]
-	name := strings.TrimSuffix(first.String()[len(dir):], ".json")
+	dir := probe.String()[:strings.LastIndexByte(probe.String(), '/')+1]
+	name, _, _ := strings.Cut(probe.String()[len(dir):], "-")
 
 	objects, err := blobs.List(t.Context(), dir)
 	if err != nil {
@@ -186,25 +186,12 @@ func storedCopies(t *testing.T, blobs blob.Store, epoch, seq int64) []blob.Key {
 	var out []blob.Key
 
 	for _, obj := range objects {
-		if rest := strings.TrimPrefix(obj.Key.String(), dir); strings.HasPrefix(rest, name) {
+		if rest := strings.TrimPrefix(obj.Key.String(), dir); strings.HasPrefix(rest, name+"-") {
 			out = append(out, obj.Key)
 		}
 	}
 
 	return out
-}
-
-// firstLayoutKey returns the key of the checkpoint of acme at seq in epoch in
-// the first layout.
-func firstLayoutKey(t *testing.T, epoch, seq int64) blob.Key {
-	t.Helper()
-
-	k, err := audit.FirstLayoutCheckpointKey(epoch, "acme", seq)
-	if err != nil {
-		t.Fatalf("checkpoint key: %v", err)
-	}
-
-	return k
 }
 
 func TestCheckpointsWriteAndVerify(t *testing.T) {
@@ -682,19 +669,9 @@ func TestCheckpointKey(t *testing.T) {
 			want: "audit-checkpoints/00000003/40736572766572/00000000000000000042-" + attempt + ".json",
 		},
 		{
-			name: "the first layout",
-			key:  func() (blob.Key, error) { return audit.FirstLayoutCheckpointKey(3, audit.ServerScope, 42) },
-			want: "audit-checkpoints/00000003/40736572766572/00000000000000000042.json",
-		},
-		{
 			name: "an epoch copy",
 			key:  func() (blob.Key, error) { return audit.EpochKey(4, attempt) },
 			want: "audit-checkpoints/epochs/00000004-" + attempt + ".json",
-		},
-		{
-			name: "an epoch of the first layout",
-			key:  func() (blob.Key, error) { return audit.FirstLayoutEpochKey(4) },
-			want: "audit-checkpoints/epochs/00000004.json",
 		},
 		{
 			name: "a scope with capital letters",
@@ -861,11 +838,11 @@ func TestSigner(t *testing.T) {
 	}
 }
 
-// epochKey returns the epoch key of epoch in the first layout.
+// epochKey returns the key of a copy of epoch.
 func epochKey(t *testing.T, epoch int64) blob.Key {
 	t.Helper()
 
-	k, err := audit.FirstLayoutEpochKey(epoch)
+	k, err := audit.EpochKey(epoch, strings.Repeat("e", 32))
 	if err != nil {
 		t.Fatalf("epoch key: %v", err)
 	}
@@ -1040,7 +1017,7 @@ func TestCheckpointsFindACopiedCheckpoint(t *testing.T) {
 		t.Fatalf("read checkpoint: %v", err)
 	}
 
-	if err := f.blobs.Put(t.Context(), firstLayoutKey(t, 1, 3), bytes.NewReader(raw)); err != nil {
+	if err := f.blobs.Put(t.Context(), copyKey(t, 1, 3, "1"), bytes.NewReader(raw)); err != nil {
 		t.Fatalf("copy checkpoint to epoch 1: %v", err)
 	}
 

@@ -16,29 +16,30 @@ func TestParseCopyNameRefusesHostileNames(t *testing.T) {
 	dir := checkpointDir(0, "acme")
 	seq := "00000000000000000003"
 	attempt := strings.Repeat("a", 32)
+	end := "-" + attempt + ".json"
 
 	cases := []struct {
 		name string
 		key  string
 		want int64
 	}{
-		{name: "the first layout", key: dir + seq + ".json", want: 3},
-		{name: "a copy", key: dir + seq + "-" + attempt + ".json", want: 3},
-		{name: "another directory", key: checkpointDir(0, "other") + seq + ".json", want: 0},
-		{name: "a subdirectory", key: dir + "x/" + seq + ".json", want: 0},
-		{name: "a parent segment", key: dir + "../" + seq + ".json", want: 0},
-		{name: "no suffix", key: dir + seq, want: 0},
-		{name: "another suffix", key: dir + seq + ".txt", want: 0},
-		{name: "a short number", key: dir + "3.json", want: 0},
-		{name: "a long number", key: dir + "0" + seq + ".json", want: 0},
-		{name: "a sign", key: dir + "+0000000000000000003.json", want: 0},
-		{name: "sequence 0", key: dir + strings.Repeat("0", 20) + ".json", want: 0},
-		{name: "a number above int64", key: dir + strings.Repeat("9", 20) + ".json", want: 0},
+		{name: "a copy", key: dir + seq + end, want: 3},
+		{name: "no attempt part", key: dir + seq + ".json", want: 0},
+		{name: "another directory", key: checkpointDir(0, "other") + seq + end, want: 0},
+		{name: "a subdirectory", key: dir + "x/" + seq + end, want: 0},
+		{name: "a parent segment", key: dir + "../" + seq + end, want: 0},
+		{name: "no suffix", key: dir + seq + "-" + attempt, want: 0},
+		{name: "another suffix", key: dir + seq + "-" + attempt + ".txt", want: 0},
+		{name: "a short number", key: dir + "3" + end, want: 0},
+		{name: "a long number", key: dir + "0" + seq + end, want: 0},
+		{name: "a sign", key: dir + "+0000000000000000003" + end, want: 0},
+		{name: "sequence 0", key: dir + strings.Repeat("0", 20) + end, want: 0},
+		{name: "a number above int64", key: dir + strings.Repeat("9", 20) + end, want: 0},
 		{name: "no dash", key: dir + seq + attempt + ".json", want: 0},
 		{name: "an empty attempt", key: dir + seq + "-.json", want: 0},
 		{name: "a short attempt", key: dir + seq + "-" + attempt[:31] + ".json", want: 0},
 		{name: "a capital attempt", key: dir + seq + "-" + strings.ToUpper(attempt) + ".json", want: 0},
-		{name: "two attempts", key: dir + seq + "-" + attempt + "-" + attempt + ".json", want: 0},
+		{name: "two attempts", key: dir + seq + "-" + attempt + end, want: 0},
 	}
 
 	for _, tc := range cases {

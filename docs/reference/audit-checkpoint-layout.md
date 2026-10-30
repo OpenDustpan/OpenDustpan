@@ -11,8 +11,6 @@ checks them.
 | --- | --- |
 | Checkpoint copy | `audit-checkpoints/<epoch>/<scope>/<sequence>-<attempt>.json` |
 | Epoch copy | `audit-checkpoints/epochs/<epoch>-<attempt>.json` |
-| Checkpoint of the first layout | `audit-checkpoints/<epoch>/<scope>/<sequence>.json` |
-| Epoch of the first layout | `audit-checkpoints/epochs/<epoch>.json` |
 
 - `<epoch>` is the epoch number in decimal, padded with zeros to 8 digits.
   The first epoch object has the number 1. Checkpoints before the first
@@ -23,8 +21,7 @@ checks them.
   20 digits. It is 1 or more.
 - `<attempt>` is 32 lowercase hexadecimal characters: 16 random bytes that
   each write attempt makes.
-- The server writes only the keys with an attempt part. It reads the keys of
-  the first layout too. A key of the first layout holds one copy.
+- Every key has an attempt part. A key without one is not a copy.
 
 ## Copies
 

@@ -29,7 +29,7 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 	acme := createChainNamespace(t, st)
 	appendChainEntry(t, st, acme, "req-1")
 
-	key, err := audit.FirstLayoutCheckpointKey(0, acme.Name, 1)
+	key, err := audit.CheckpointKey(0, acme.Name, 1, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
@@ -194,13 +194,13 @@ func runCheckpointServer(
 }
 
 // waitForCopy waits until the blob store holds a copy of the checkpoint
-// that first names in the first layout: first itself, or a key with the same
-// sequence and an attempt part.
-func waitForCopy(t *testing.T, blobs blob.Store, first blob.Key) {
+// at the sequence that probe names: a key with the same sequence and any
+// attempt part.
+func waitForCopy(t *testing.T, blobs blob.Store, probe blob.Key) {
 	t.Helper()
 
-	dir := first.String()[:strings.LastIndexByte(first.String(), '/')+1]
-	name := strings.TrimSuffix(first.String()[len(dir):], ".json")
+	dir := probe.String()[:strings.LastIndexByte(probe.String(), '/')+1]
+	name, _, _ := strings.Cut(probe.String()[len(dir):], "-")
 	deadline := time.Now().Add(chainWait)
 
 	for {
@@ -210,13 +210,13 @@ func waitForCopy(t *testing.T, blobs blob.Store, first blob.Key) {
 		}
 
 		for _, obj := range objects {
-			if strings.HasPrefix(strings.TrimPrefix(obj.Key.String(), dir), name) {
+			if strings.HasPrefix(strings.TrimPrefix(obj.Key.String(), dir), name+"-") {
 				return
 			}
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("no copy of checkpoint %s after %s", first, chainWait)
+			t.Fatalf("no copy of checkpoint %s after %s", name, chainWait)
 		}
 
 		pauseChain(t)
