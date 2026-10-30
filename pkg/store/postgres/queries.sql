@@ -4704,6 +4704,71 @@ SET expr_version = sqlc.arg(expr_version)
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
 
+-- name: GetNamespaceByID :one
+-- The namespace with the stable ID id.
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+FROM namespaces
+WHERE id = sqlc.arg(id);
+
+-- name: ListIssuerKeys :many
+-- Every key of the issuer of a namespace, also the deleted keys, oldest first.
+SELECT id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+FROM issuer_keys
+WHERE namespace_id = sqlc.arg(namespace_id)
+ORDER BY created_at_ms, id;
+
+-- name: InsertIssuerKey :exec
+INSERT INTO issuer_keys (
+    namespace_id, id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(state), sqlc.arg(public_key), sqlc.arg(sealed),
+    sqlc.arg(created_at_ms), sqlc.arg(activated_at_ms), sqlc.arg(retired_at_ms), sqlc.arg(deleted_at_ms)
+);
+
+-- name: UpdateIssuerKey :execrows
+-- The new state, times and sealed key of one key. The caller checked the move.
+UPDATE issuer_keys
+SET state = sqlc.arg(state), sealed = sqlc.arg(sealed), activated_at_ms = sqlc.arg(activated_at_ms),
+    retired_at_ms = sqlc.arg(retired_at_ms), deleted_at_ms = sqlc.arg(deleted_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND state = sqlc.arg(from_state);
+
+-- name: GetIssuerSettings :one
+SELECT issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms, updated_by,
+    copy_check
+FROM issuer_settings
+WHERE namespace_id = sqlc.arg(namespace_id);
+
+-- name: UpsertIssuerSettings :execrows
+-- Stores the settings at the version new_version when the stored version is
+-- the one before it. A namespace with no row has version 0. It keeps the
+-- stored copy check when the issuer URL stays, and clears it when the URL
+-- changes: a check of one address says nothing about another.
+INSERT INTO issuer_settings (
+    namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
+    updated_by, copy_check
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(issuer_url), sqlc.arg(subject_template), sqlc.arg(allow_block_subjects),
+    sqlc.arg(include_actor_name), sqlc.arg(new_version), sqlc.arg(updated_at_ms), sqlc.arg(updated_by), ''
+)
+ON CONFLICT (namespace_id) DO UPDATE SET
+    issuer_url = excluded.issuer_url, subject_template = excluded.subject_template,
+    allow_block_subjects = excluded.allow_block_subjects, include_actor_name = excluded.include_actor_name,
+    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by,
+    copy_check = CASE WHEN issuer_settings.issuer_url = excluded.issuer_url THEN issuer_settings.copy_check ELSE '' END
+WHERE issuer_settings.version = excluded.version - 1;
+
+-- name: ListIssuerURLs :many
+-- Every issuer URL that a namespace sets, ordered. The server compares them
+-- with the issuer of a trust rule.
+SELECT DISTINCT issuer_url FROM issuer_settings WHERE issuer_url <> '' ORDER BY issuer_url;
+
+-- name: UpdateIssuerCopyCheck :execrows
+-- Stores the last copy check when the issuer URL that it checked is the stored
+-- one. It keeps the version, so a copy check never changes the entity tag of
+-- the settings. No row, or another URL, writes nothing.
+UPDATE issuer_settings SET copy_check = sqlc.arg(copy_check)
+WHERE namespace_id = sqlc.arg(namespace_id) AND issuer_url = sqlc.arg(issuer_url);
+
 -- name: InsertTrustRule :execrows
 -- The caller checks the fence and the principal in the same transaction. A
 -- rule with a taken ID, or with a name that the namespace has, is not written.
