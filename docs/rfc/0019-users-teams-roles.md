@@ -51,6 +51,35 @@ The project owner chose this export. It helps a reviewer check access.
 - The export helps with periodic access reviews. It helps with ISO/IEC
   27002:2022 5.18, SOC 2 CC6.2 and CC6.3.
 
+## Proposal for groups from a directory (2026-10-30)
+
+Status of this section: a proposal, ready to accept as an ADR with RFC 21.
+It decides nothing. [RFC 21](0021-directory-sync-and-sign-in.md) proposes
+LDAP sync, SCIM and group claims for each sign-in method (section "Proposal
+for the rest of milestone 4 (2026-10-30)", P1, P2 and P8). These parts touch
+the groups of this RFC:
+
+- **Nested groups of a directory give a flat membership.** The lead decision
+  of 2026-10-13 says that groups do not nest. An LDAP group or an identity
+  provider group can hold another group. The server stores a direct
+  membership of the principal for each group that the principal reaches
+  through the directory, with the source `ldap`, `scim` or `claim`. It makes
+  no group a member of a group. Precedent: Active Directory gives the
+  transitive groups of a user through the matching rule
+  `LDAP_MATCHING_RULE_IN_CHAIN` (not fetched).
+- **A directory group keeps its source.** A group from LDAP or SCIM has the
+  source `ldap` or `scim`, and the lead decision of 2026-10-13 already makes
+  a membership change through the API answer 409 for it. A group that a
+  person makes stays `local`, and a group claim at sign-in can add a
+  membership to it only when the group trusts the identity provider (ADR 70
+  decisions 14 to 16).
+- **Two sources with one group name.** A group name is unique in its home. A
+  directory group whose name matches a `local` group does not join it. The
+  sync does not make the directory group, raises an alert and writes an
+  audit entry, and an administrator renames one of the two. The server never
+  merges two groups because their names match, as it never links two
+principals by a name (ADR 216 decision 9).
+
 ## Open questions
 
 - (research) How do roles map to the Pulumi CLI's and the TFE API's own team and
