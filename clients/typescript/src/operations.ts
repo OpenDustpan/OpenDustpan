@@ -79,11 +79,13 @@ import {
   decodeListDeletedUnitsResponse,
   decodeListGitHostConnectionsResponse,
   decodeListGitHostInstallationsResponse,
+  decodeListModuleReleasesResponse,
   decodeListNotificationSinksResponse,
   decodeListProfileRevisionsResponse,
   decodeListProfilesResponse,
   decodeListProviderReleasesResponse,
   decodeListRegistryKeysResponse,
+  decodeListRegistryModulesResponse,
   decodeListRegistryProvidersResponse,
   decodeListUnitsResponse,
   decodeListViewsResponse,
@@ -93,6 +95,8 @@ import {
   decodeMaintenanceActiveWorkError,
   decodeMaintenanceActiveWorkErrorArgs,
   decodeManualLock,
+  decodeModuleRelease,
+  decodeModuleReleaseArchive,
   decodeNamespaceIssuer,
   decodeNamespaceIssuerExport,
   decodeNamespaceIssuerKeys,
@@ -112,10 +116,12 @@ import {
   decodeProviderRelease,
   decodeProviderReleaseFile,
   decodePublishFile,
+  decodePublishModuleReleaseRequest,
   decodePublishProviderReleaseRequest,
   decodePutGitHostAppRequest,
   decodePutGitHostInstallationRequest,
   decodeRegistryKey,
+  decodeRegistryModule,
   decodeRegistryProvider,
   decodeReplaceNotificationSinkRequest,
   decodeRequestBodyTooLargeError,
@@ -255,11 +261,13 @@ import type {
   ListDeletedUnitsResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListModuleReleasesResponse,
   ListNotificationSinksResponse,
   ListProfileRevisionsResponse,
   ListProfilesResponse,
   ListProviderReleasesResponse,
   ListRegistryKeysResponse,
+  ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -269,6 +277,8 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   ManualLock,
+  ModuleRelease,
+  ModuleReleaseArchive,
   NamespaceIssuer,
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
@@ -288,10 +298,12 @@ import type {
   ProviderRelease,
   ProviderReleaseFile,
   PublishFile,
+  PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
   RegistryKey,
+  RegistryModule,
   RegistryProvider,
   ReplaceNotificationSinkRequest,
   RequestBodyTooLargeError,
@@ -734,6 +746,17 @@ export interface GetJobInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getModuleRelease. */
+export interface GetModuleReleaseInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly system: string;
+    readonly version: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getNamespaceContext. */
 export interface GetNamespaceContextInput {
   readonly path: {
@@ -937,6 +960,16 @@ export interface ListGitHostInstallationsInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation listModuleReleases. */
+export interface ListModuleReleasesInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly system: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation listNotificationSinks. */
 export interface ListNotificationSinksInput {
   readonly path: {
@@ -989,6 +1022,20 @@ export interface ListProviderReleasesInput {
 export interface ListRegistryKeysInput {
   readonly path: {
     readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listRegistryModules. */
+export interface ListRegistryModulesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly query?: {
+    /** The largest number of modules on the page. */
+    readonly pageSize?: number;
+    /** The nextPageToken of the page before. */
+    readonly pageToken?: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -1096,6 +1143,20 @@ export interface MakeGitHostConnectionDefaultInput {
   };
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch?: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation publishModuleRelease. */
+export interface PublishModuleReleaseInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly system: string;
+    readonly version: string;
+  };
+  readonly body: PublishModuleReleaseRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
@@ -1984,6 +2045,23 @@ export const operations = {
     },
     ref(() => decodeJob),
   ),
+  getModuleRelease: operation<ModuleRelease>(
+    {
+      id: "getModuleRelease",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/registry/modules/{name}/{system}/versions/{version}",
+      pathParameters: ["namespace", "name", "system", "version"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeModuleRelease),
+  ),
   getNamespaceContext: operation<ContextDocument>(
     {
       id: "getNamespaceContext",
@@ -2341,6 +2419,23 @@ export const operations = {
     },
     ref(() => decodeListGitHostInstallationsResponse),
   ),
+  listModuleReleases: operation<ListModuleReleasesResponse>(
+    {
+      id: "listModuleReleases",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/registry/modules/{name}/{system}/versions",
+      pathParameters: ["namespace", "name", "system"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListModuleReleasesResponse),
+  ),
   listNotificationSinks: operation<ListNotificationSinksResponse>(
     {
       id: "listNotificationSinks",
@@ -2425,6 +2520,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListRegistryKeysResponse),
+  ),
+  listRegistryModules: operation<ListRegistryModulesResponse>(
+    {
+      id: "listRegistryModules",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/registry/modules",
+      pathParameters: ["namespace"],
+      queryParameters: ["pageSize", "pageToken"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListRegistryModulesResponse),
   ),
   listRegistryProviders: operation<ListRegistryProvidersResponse>(
     {
@@ -2578,6 +2690,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeGitHostConnection),
+  ),
+  publishModuleRelease: operation<ModuleRelease>(
+    {
+      id: "publishModuleRelease",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/registry/modules/{name}/{system}/versions/{version}",
+      pathParameters: ["namespace", "name", "system", "version"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeModuleRelease),
   ),
   publishProviderRelease: operation<ProviderRelease>(
     {

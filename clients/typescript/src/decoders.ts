@@ -97,11 +97,13 @@ import type {
   ListDeletedUnitsResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListModuleReleasesResponse,
   ListNotificationSinksResponse,
   ListProfileRevisionsResponse,
   ListProfilesResponse,
   ListProviderReleasesResponse,
   ListRegistryKeysResponse,
+  ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -111,6 +113,8 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   ManualLock,
+  ModuleRelease,
+  ModuleReleaseArchive,
   NamespaceIssuer,
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
@@ -130,10 +134,12 @@ import type {
   ProviderRelease,
   ProviderReleaseFile,
   PublishFile,
+  PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
   RegistryKey,
+  RegistryModule,
   RegistryProvider,
   ReplaceNotificationSinkRequest,
   RequestBodyTooLargeError,
@@ -837,6 +843,11 @@ export const decodeListGitHostInstallationsResponse: Decoder<ListGitHostInstalla
   installations: array(ref(() => decodeGitHostInstallation)),
 });
 
+/** The validator of ListModuleReleasesResponse. */
+export const decodeListModuleReleasesResponse: Decoder<ListModuleReleasesResponse> = object<ListModuleReleasesResponse>("ListModuleReleasesResponse", {
+  releases: array(ref(() => decodeModuleRelease)),
+});
+
 /** The validator of ListNotificationSinksResponse. */
 export const decodeListNotificationSinksResponse: Decoder<ListNotificationSinksResponse> = object<ListNotificationSinksResponse>("ListNotificationSinksResponse", {
   sinks: array(ref(() => decodeNotificationSink)),
@@ -862,6 +873,12 @@ export const decodeListProviderReleasesResponse: Decoder<ListProviderReleasesRes
 /** The validator of ListRegistryKeysResponse. */
 export const decodeListRegistryKeysResponse: Decoder<ListRegistryKeysResponse> = object<ListRegistryKeysResponse>("ListRegistryKeysResponse", {
   keys: array(ref(() => decodeRegistryKey)),
+});
+
+/** The validator of ListRegistryModulesResponse. */
+export const decodeListRegistryModulesResponse: Decoder<ListRegistryModulesResponse> = object<ListRegistryModulesResponse>("ListRegistryModulesResponse", {
+  modules: array(ref(() => decodeRegistryModule)),
+  nextPageToken: string,
 });
 
 /** The validator of ListRegistryProvidersResponse. */
@@ -925,6 +942,24 @@ export const decodeManualLock: Decoder<ManualLock> = object<ManualLock>("ManualL
   object: string,
   reason: string,
   since: string,
+});
+
+/** The validator of ModuleRelease. */
+export const decodeModuleRelease: Decoder<ModuleRelease> = object<ModuleRelease>("ModuleRelease", {
+  archive: ref(() => decodeModuleReleaseArchive),
+  name: string,
+  namespace: string,
+  publishedAt: string,
+  publishedBy: string,
+  system: string,
+  version: string,
+});
+
+/** The validator of ModuleReleaseArchive. */
+export const decodeModuleReleaseArchive: Decoder<ModuleReleaseArchive> = object<ModuleReleaseArchive>("ModuleReleaseArchive", {
+  name: string,
+  sha256: string,
+  size: int64,
 });
 
 /** The validator of NamespaceIssuer. */
@@ -1097,6 +1132,11 @@ export const decodePublishFile: Decoder<PublishFile> = object<PublishFile>("Publ
   upload: string,
 });
 
+/** The validator of PublishModuleReleaseRequest. */
+export const decodePublishModuleReleaseRequest: Decoder<PublishModuleReleaseRequest> = object<PublishModuleReleaseRequest>("PublishModuleReleaseRequest", {
+  upload: string,
+});
+
 /** The validator of PublishProviderReleaseRequest. */
 export const decodePublishProviderReleaseRequest: Decoder<PublishProviderReleaseRequest> = object<PublishProviderReleaseRequest>("PublishProviderReleaseRequest", {
   files: array(ref(() => decodePublishFile)),
@@ -1122,6 +1162,13 @@ export const decodeRegistryKey: Decoder<RegistryKey> = object<RegistryKey>("Regi
   addedBy: string,
   armoredPublicKey: string,
   fingerprint: string,
+});
+
+/** The validator of RegistryModule. */
+export const decodeRegistryModule: Decoder<RegistryModule> = object<RegistryModule>("RegistryModule", {
+  name: string,
+  namespace: string,
+  system: string,
 });
 
 /** The validator of RegistryProvider. */

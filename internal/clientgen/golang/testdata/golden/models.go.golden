@@ -198,6 +198,7 @@ const (
 	ErrorCodeRegistryKeyExists                   ErrorCode = "registry.key-exists"
 	ErrorCodeRegistryKeyInvalid                  ErrorCode = "registry.key-invalid"
 	ErrorCodeRegistryKeyLimit                    ErrorCode = "registry.key-limit"
+	ErrorCodeRegistryModuleArchiveRefused        ErrorCode = "registry.module-archive-refused"
 	ErrorCodeRegistryNoKeys                      ErrorCode = "registry.no-keys"
 	ErrorCodeRegistryNotFound                    ErrorCode = "registry.not-found"
 	ErrorCodeRegistryNotStaged                   ErrorCode = "registry.not-staged"

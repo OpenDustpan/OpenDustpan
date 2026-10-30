@@ -43,6 +43,7 @@ import type {
   GetGitHostConnectionInput,
   GetGitHostInstallationInput,
   GetJobInput,
+  GetModuleReleaseInput,
   GetNamespaceContextInput,
   GetNamespaceIssuerInput,
   GetNamespaceLockInput,
@@ -64,11 +65,13 @@ import type {
   ListDeletedUnitsInput,
   ListGitHostConnectionsInput,
   ListGitHostInstallationsInput,
+  ListModuleReleasesInput,
   ListNotificationSinksInput,
   ListProfileRevisionsInput,
   ListProfilesInput,
   ListProviderReleasesInput,
   ListRegistryKeysInput,
+  ListRegistryModulesInput,
   ListRegistryProvidersInput,
   ListTrustRulesInput,
   ListUnitTriggersInput,
@@ -78,6 +81,7 @@ import type {
   LockCollectionInput,
   LockNamespaceInput,
   MakeGitHostConnectionDefaultInput,
+  PublishModuleReleaseInput,
   PublishProviderReleaseInput,
   PutGitHostAppInput,
   PutGitHostInstallationInput,
@@ -179,11 +183,13 @@ import type {
   ListDeletedUnitsResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListModuleReleasesResponse,
   ListNotificationSinksResponse,
   ListProfileRevisionsResponse,
   ListProfilesResponse,
   ListProviderReleasesResponse,
   ListRegistryKeysResponse,
+  ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -193,6 +199,8 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   ManualLock,
+  ModuleRelease,
+  ModuleReleaseArchive,
   NamespaceIssuer,
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
@@ -212,10 +220,12 @@ import type {
   ProviderRelease,
   ProviderReleaseFile,
   PublishFile,
+  PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
   RegistryKey,
+  RegistryModule,
   RegistryProvider,
   ReplaceNotificationSinkRequest,
   RequestBodyTooLargeError,
@@ -441,6 +451,10 @@ export class Client {
     return execute(this.transport, operations.getJob, input);
   }
 
+  getModuleRelease(input: GetModuleReleaseInput): Promise<Answer<ModuleRelease>> {
+    return execute(this.transport, operations.getModuleRelease, input);
+  }
+
   getNamespaceContext(input: GetNamespaceContextInput): Promise<Answer<ContextDocument>> {
     return execute(this.transport, operations.getNamespaceContext, input);
   }
@@ -525,6 +539,10 @@ export class Client {
     return execute(this.transport, operations.listGitHostInstallations, input);
   }
 
+  listModuleReleases(input: ListModuleReleasesInput): Promise<Answer<ListModuleReleasesResponse>> {
+    return execute(this.transport, operations.listModuleReleases, input);
+  }
+
   listNotificationSinks(input: ListNotificationSinksInput): Promise<Answer<ListNotificationSinksResponse>> {
     return execute(this.transport, operations.listNotificationSinks, input);
   }
@@ -543,6 +561,10 @@ export class Client {
 
   listRegistryKeys(input: ListRegistryKeysInput): Promise<Answer<ListRegistryKeysResponse>> {
     return execute(this.transport, operations.listRegistryKeys, input);
+  }
+
+  listRegistryModules(input: ListRegistryModulesInput): Promise<Answer<ListRegistryModulesResponse>> {
+    return execute(this.transport, operations.listRegistryModules, input);
   }
 
   listRegistryProviders(input: ListRegistryProvidersInput): Promise<Answer<ListRegistryProvidersResponse>> {
@@ -579,6 +601,10 @@ export class Client {
 
   makeGitHostConnectionDefault(input: MakeGitHostConnectionDefaultInput): Promise<Answer<GitHostConnection>> {
     return execute(this.transport, operations.makeGitHostConnectionDefault, input);
+  }
+
+  publishModuleRelease(input: PublishModuleReleaseInput): Promise<Answer<ModuleRelease>> {
+    return execute(this.transport, operations.publishModuleRelease, input);
   }
 
   publishProviderRelease(input: PublishProviderReleaseInput): Promise<Answer<ProviderRelease>> {

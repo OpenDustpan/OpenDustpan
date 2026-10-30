@@ -761,7 +761,7 @@ func runInstance(
 		select {
 		case runErr := <-done:
 			if runErr != nil {
-				logger.ErrorContext(stopCtx, "run instance", slog.String("error", runErr.Error()))
+				logger.ErrorContext(stopCtx, "stop instance", slog.String("error", runErr.Error()))
 			}
 		case <-time.After(runStopTimeout):
 			logger.ErrorContext(stopCtx, "stop instance", slog.String("error", errRunStopped.Error()))
