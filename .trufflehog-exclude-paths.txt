@@ -14,3 +14,5 @@
 ^pkg/job/location_test\.go$
 # a fake credential in a test fixture in an old commit, removed from the tree later
 ^pkg/source/filters_test\.go$
+# a fake credential in a test in an old commit, removed from the tree later
+^pkg/trustrule/trustrule_test\.go$
