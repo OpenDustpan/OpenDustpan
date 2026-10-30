@@ -71,11 +71,13 @@ type ChunkReserve struct {
 
 // ChunkRow is the stored record of one chunk of a log version. Confirmed is
 // true when the blob of the chunk is stored and the chunk counts in
-// LogRef.Chunks.
+// LogRef.Chunks. BlobKey is the key of the blob of the winning attempt, as
+// ChunkBlobKey reads it. It is empty for a chunk that is not confirmed.
 type ChunkRow struct {
 	SHA256    string
 	Size      int64
 	Confirmed bool
+	BlobKey   string
 }
 
 // ChunkConfirm names the chunk that ConfirmLogChunk counts: the chunk Seq of
@@ -85,8 +87,11 @@ type ChunkConfirm struct {
 	Version string
 	Seq     int
 	// Stored is the size and the MD5 of the sealed bytes that the blob store
-	// holds for the chunk.
+	// holds for the chunk, in the blob under BlobKey.
 	Stored blob.Digest
+	// BlobKey is the key of the blob of this write attempt, as
+	// LogChunkAttemptKey makes it.
+	BlobKey string
 }
 
 // ChunkPlan is what PlanChunk decides for a reserve of a chunk.
@@ -113,6 +118,10 @@ type ArtifactRecord struct {
 	Step string
 	Plan *PlanRef
 	Log  *LogRef
+	// ChunkKeys is set for a log version that Log returns. Element seq is the
+	// blob key of the confirmed chunk seq, as ChunkBlobKey reads it. The list
+	// has one element for each confirmed chunk, in the order of their numbers.
+	ChunkKeys []string
 }
 
 // RecordStore is the persistence port for the writes of a Recorder and for
@@ -151,12 +160,18 @@ type RecordStore interface {
 	// rules are in PlanChunk. It returns the plan, which names the version.
 	ReserveLogChunk(ctx context.Context, pc PhaseClaim, step string, c ChunkReserve, newLog *NewLog) (ChunkPlan, error)
 	// ConfirmLogChunk marks the chunk c as stored, and counts it in
-	// LogRef.Chunks and LogRef.Size. The store keeps c.Stored, the size and the
-	// MD5 of the sealed bytes in the blob store, in the row of the chunk. A
-	// chunk that is counted already changes nothing, and its stored values
-	// stay. It returns ErrInvalid for a chunk that no reserve recorded or that
-	// is not the next one, and for a c.Stored with no size.
-	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, c ChunkConfirm) error
+	// LogRef.Chunks and LogRef.Size. The store keeps c.BlobKey and c.Stored,
+	// the size and the MD5 of the sealed bytes in the blob store, in the row of
+	// the chunk. The first confirm of a chunk wins: it returns true. A chunk
+	// that is counted already changes nothing, and its blob key and stored
+	// values stay. The call then returns true if the row holds c.BlobKey (the
+	// call repeats a confirm that committed), and false if the row holds
+	// another blob key: the blob of c is then not named by any row, and the
+	// caller deletes it. It returns ErrInvalid for a chunk that no reserve
+	// recorded or that is not the next one, for a c.Stored with no size, and
+	// for a c.BlobKey that is empty or is not the key of an attempt of this
+	// chunk.
+	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, c ChunkConfirm) (bool, error)
 	// ReservePlan records the plan np before its parts exist, with its item key
 	// in the same transaction, and returns it. A reserved plan has no part and
 	// is not readable. It applies the checks of PutPlan: when the current state

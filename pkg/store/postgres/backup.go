@@ -50,6 +50,7 @@ const (
 	pgColNamespaceID = "namespace_id"
 	pgColReason      = "reason"
 	pgColSeq         = "seq"
+	pgColBlobKey     = "blob_key"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
@@ -169,7 +170,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
 				pgColDigest, "invalid", "features", "saved_at_ms",
-				"blob_key", pgColSize, "blob_size", "blob_md5",
+				pgColBlobKey, pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
@@ -181,7 +182,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "update_journal",
 			columns: []string{
-				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", pgColSHA256, "md5", pgColSize,
+				pgColStackID, pgColUpdateID, pgColArrival, pgColBlobKey, pgColSHA256, "md5", pgColSize,
 				"lowest_sequence", "sequence_ids", "operation_ids",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
