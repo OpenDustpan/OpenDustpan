@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
@@ -33,12 +33,18 @@ func (s *Store) GetState(ctx context.Context) (maintenance.State, error) {
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("select installation state sqlite database: %w", storeerr.Sentinel(maintenance.ErrUnavailable, err))
+		return "", fmt.Errorf(
+			"select installation state sqlite database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	state, err := maintenance.ParseState(raw)
 	if err != nil {
-		return "", fmt.Errorf("select installation state sqlite database: %w", storeerr.Sentinel(maintenance.ErrUnavailable, err))
+		return "", fmt.Errorf(
+			"select installation state sqlite database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	return state, nil
@@ -76,7 +82,10 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("store installation state sqlite database: %w", storeerr.Sentinel(maintenance.ErrUnavailable, err))
+		return fmt.Errorf(
+			"store installation state sqlite database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	if n == 0 {
@@ -167,7 +176,10 @@ func (s *Store) setStateIfWithin(
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return err
 	case err != nil:
-		return fmt.Errorf("store installation state sqlite database: %w", storeerr.Sentinel(maintenance.ErrUnavailable, err))
+		return fmt.Errorf(
+			"store installation state sqlite database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	case changed == 0:
 		return errChanged
 	default:
@@ -195,7 +207,10 @@ func setStateIn(
 		State_2: string(expected),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("store installation state sqlite database: %w", storeerr.Sentinel(maintenance.ErrUnavailable, err))
+		return 0, fmt.Errorf(
+			"store installation state sqlite database: %w",
+			storeerr.Sentinel(maintenance.ErrUnavailable, err),
+		)
 	}
 
 	return n, nil

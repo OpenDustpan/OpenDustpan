@@ -18,8 +18,10 @@ import (
 type lostInstances struct{ err error }
 
 func (l lostInstances) RegisterInstance(context.Context, installation.Instance) error { return l.err }
-func (l lostInstances) UnregisterInstance(context.Context, string) error              { return l.err }
-func (l lostInstances) DeleteInstance(context.Context, string) error                  { return l.err }
+
+func (l lostInstances) UnregisterInstance(context.Context, string) error { return l.err }
+
+func (l lostInstances) DeleteInstance(context.Context, string) error { return l.err }
 
 func (l lostInstances) ListInstances(context.Context) ([]installation.Instance, error) {
 	return nil, l.err
@@ -61,8 +63,18 @@ func TestMaintenanceAndInstanceRoutesAnswer503WhenTheStoreIsLost(t *testing.T) {
 
 	maintenanceRoutes := []storeLostRoute{
 		{"state", http.MethodGet, "/api/server/maintenance", func(f *fakeMaintenance, err error) { f.getErr = err }},
-		{"enter", http.MethodPost, "/api/server/maintenance/enter", func(f *fakeMaintenance, err error) { f.enterErr = err }},
-		{"leave", http.MethodPost, "/api/server/maintenance/leave", func(f *fakeMaintenance, err error) { f.leaveErr = err }},
+		{
+			"enter",
+			http.MethodPost,
+			"/api/server/maintenance/enter",
+			func(f *fakeMaintenance, err error) { f.enterErr = err },
+		},
+		{
+			"leave",
+			http.MethodPost,
+			"/api/server/maintenance/leave",
+			func(f *fakeMaintenance, err error) { f.leaveErr = err },
+		},
 	}
 
 	for _, route := range maintenanceRoutes {
