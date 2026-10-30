@@ -251,16 +251,29 @@ The server reads every entry of the archive before it stores the archive. It
 refuses the publish with 422 and the code `registry.module-archive-refused`
 when:
 
-- an entry has an absolute path, a path with `..`, a backslash, a drive or a
-  control character
-- a symbolic link points outside the archive, or has an absolute target
+- an entry has an absolute path or a segment `..`
+- a path has a character outside the allowed set. A path may hold ASCII
+  letters, digits and the symbols `-`, `_`, `.`, `+`, `@`, `=` and `,`. The
+  server refuses a space, a colon, a backslash, a control character and every
+  byte above 0x7f, so a name with a letter such as `é` is refused in all its
+  forms
+- a segment of a path ends with a dot, is longer than 255 bytes, or has the
+  name of a Windows device (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and
+  `LPT1` to `LPT9`, in any case and with any extension)
+- two entries have one path, with the case of the letters ignored
+- a symbolic link has an absolute target or points outside the archive
+- the target of a symbolic link passes through another symbolic link or ends at
+  one. This covers chains and loops of links
 - an entry is below a symbolic link
 - the archive holds a hard link, a device or another special file
-- two entries have one path, with the case of the letters ignored
-- the archive holds more than 20,000 entries
+- the archive holds more than 20,000 entries. For a zip file the server reads
+  the count from the end of the file and refuses before it reads the directory
 - the entries are more than 1 GiB when unpacked. The server counts the bytes
   that it reads, and it does not use the sizes in the headers.
 - the file is not a zip file and not a tar.gz file
+
+A tar.gz file from `git archive` has a pax global header. The server accepts
+it as metadata, and it does not use any path or link in it.
 
 The archive file is at most 64 MiB. A refused publish leaves nothing that
 OpenTofu can read, and the server removes the uploaded file.

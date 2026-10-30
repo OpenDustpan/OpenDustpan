@@ -14,12 +14,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"path"
-	"slices"
 	"strings"
 )
 
@@ -142,11 +143,20 @@ type budget struct {
 	entries int
 }
 
-// add counts one entry and refuses at the limit.
-func (b *budget) add(name string) error {
+// count counts one header of the archive and refuses at the limit of entries.
+func (b *budget) count() error {
 	b.entries++
 	if b.entries > b.limits.Entries {
 		return refuse("more than %d entries", b.limits.Entries)
+	}
+
+	return nil
+}
+
+// add counts one entry and checks its path.
+func (b *budget) add(name string) error {
+	if err := b.count(); err != nil {
+		return err
 	}
 
 	return checkName(name)
@@ -171,39 +181,138 @@ func (b *budget) read(r io.Reader, name string, dst io.Writer) error {
 	return nil
 }
 
+// MaxSegmentBytes is the longest segment of a path.
+const MaxSegmentBytes = 255
+
+// asciiLimit is the first byte that is not ASCII.
+const asciiLimit = 0x80
+
+// nameSymbols are the characters, besides ASCII letters and digits, that a
+// path of a module may hold. Every other character is refused: a space, a
+// colon (a drive or an alternate stream), a backslash, a control character and
+// every byte above 0x7f. A path with only ASCII has no second form in Unicode
+// normalization, so two paths cannot differ by their normal form.
+const nameSymbols = "-_.+@=,"
+
+// isDeviceName reports whether name, in upper case and without an extension,
+// is a name that Windows opens as a device: CON, PRN, AUX, NUL, COM1 to COM9
+// and LPT1 to LPT9.
+func isDeviceName(name string) bool {
+	switch name {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+
+	if len(name) != len("COM1") {
+		return false
+	}
+
+	return (name[:3] == "COM" || name[:3] == "LPT") && name[3] >= '1' && name[3] <= '9'
+}
+
 // checkName refuses a path that can leave the directory where a client unpacks
-// the archive. The rules use an allowlist of what a path may hold.
+// the archive, or that names a file in a way that one platform reads as
+// another. The rules are an allowlist: a path is valid only when each segment
+// passes checkSegment. One slash at the end marks a directory.
 func checkName(name string) error {
-	switch {
-	case name == "" || len(name) > MaxPathBytes:
+	if name == "" || len(name) > MaxPathBytes {
 		return refuse("entry path is empty or longer than %d bytes", MaxPathBytes)
-	case strings.HasPrefix(name, "/"):
+	}
+
+	if strings.HasPrefix(name, "/") {
 		return refuse("entry %q has an absolute path", name)
-	case strings.Contains(name, "\\"):
-		return refuse("entry %q has a backslash in its path", name)
-	case len(name) >= 2 && name[1] == ':':
-		return refuse("entry %q has a drive in its path", name)
 	}
 
-	for _, c := range []byte(name) {
-		if c < 0x20 || c == 0x7f {
-			return refuse("entry %q has a control character in its path", name)
+	for seg := range strings.SplitSeq(strings.TrimSuffix(name, "/"), "/") {
+		switch seg {
+		case ".":
+		case "..":
+			return refuse("entry %q leaves the archive with ..", name)
+		default:
+			if err := checkSegment(seg); err != nil {
+				return refuse("entry %q: %v", name, err)
+			}
 		}
-	}
-
-	if slices.Contains(strings.Split(name, "/"), "..") {
-		return refuse("entry %q leaves the archive with ..", name)
 	}
 
 	return nil
 }
 
+// segmentError is the reason that checkSegment refuses a segment.
+type segmentError string
+
+func (e segmentError) Error() string { return string(e) }
+
+// checkSegment refuses a segment of a path that is not on the allowlist. The
+// segment is not "." and not "..": the callers handle those two.
+func checkSegment(seg string) error {
+	if seg == "" || len(seg) > MaxSegmentBytes {
+		return segmentError("a path segment is empty or longer than 255 bytes")
+	}
+
+	for i := range len(seg) {
+		if err := checkSegmentByte(seg[i]); err != nil {
+			return err
+		}
+	}
+
+	if strings.HasSuffix(seg, ".") {
+		return segmentError("a path segment ends with a dot")
+	}
+
+	base, _, _ := strings.Cut(seg, ".")
+	if isDeviceName(strings.ToUpper(base)) {
+		return segmentError("a path segment has the name of a device on Windows")
+	}
+
+	return nil
+}
+
+// checkSegmentByte refuses a byte that is not an ASCII letter, a digit or one
+// of nameSymbols. The reason names the kind of byte.
+func checkSegmentByte(c byte) error {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', strings.IndexByte(nameSymbols, c) >= 0:
+		return nil
+	case c == '\\':
+		return segmentError("a path has a backslash")
+	case c == ':':
+		return segmentError("a path has a colon")
+	case c < 0x20 || c == 0x7f:
+		return segmentError("a path has a control character")
+	case c >= asciiLimit:
+		return segmentError("a path has a byte that is not ASCII")
+	default:
+		return segmentError("a path has a character that is not allowed")
+	}
+}
+
 // readZip reads every entry of a zip archive.
 func readZip(data []byte, limits Limits) ([]entry, error) {
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	// The count in the end-of-central-directory record is checked before the
+	// reader builds the directory, so an archive cannot make the server hold a
+	// list of entries that is longer than the limit.
+	if err := checkZipCount(data, limits); err != nil {
+		return nil, err
+	}
+
+	guard := &directoryGuard{r: bytes.NewReader(data), left: zipDirectoryBytes(limits)}
+
+	zr, err := zip.NewReader(guard, int64(len(data)))
 	if err != nil {
+		if errors.Is(err, errDirectoryTooLarge) {
+			return nil, refuse(
+				"the central directory of the zip archive is larger than %d bytes",
+				zipDirectoryBytes(limits),
+			)
+		}
+
 		return nil, refuse("the zip archive cannot be read: %v", err)
 	}
+
+	// The directory is built. The content of the entries is read without the
+	// guard: the budget of the unpacked size limits it.
+	guard.left = -1
 
 	b := budget{limits: limits, bytes: 0, entries: 0}
 
@@ -235,6 +344,108 @@ func readZip(data []byte, limits Limits) ([]entry, error) {
 	}
 
 	return out, nil
+}
+
+// Sizes in the end-of-central-directory record of a zip archive.
+const (
+	zipEndRecordLen    = 22
+	zipMaxCommentLen   = 1<<16 - 1
+	zip64LocatorLen    = 20
+	zip64EndRecordLen  = 56
+	zipMaxCount16      = 0xffff
+	zipDirectoryHeader = 46
+	zipDirectoryExtra  = 1024
+)
+
+// zipDirectoryBytes returns the most bytes that the reader may read to build
+// the directory. It covers the search for the end record and the longest
+// directory that limits.Entries entries can have. This is a second layer: the
+// count check works on the number that the archive states, and this limit works
+// on the bytes that the reader really reads, however many entries they hold.
+func zipDirectoryBytes(limits Limits) int64 {
+	perEntry := int64(zipDirectoryHeader + MaxPathBytes + zipDirectoryExtra)
+
+	return int64(zipEndRecordLen+zipMaxCommentLen) + perEntry*int64(limits.Entries)/4
+}
+
+// errDirectoryTooLarge reports that the reader read more than the guard allows.
+var errDirectoryTooLarge = errors.New("the central directory is too large")
+
+// directoryGuard is a reader that stops after a number of bytes while left is
+// not negative. A negative left turns the guard off.
+type directoryGuard struct {
+	r    *bytes.Reader
+	left int64
+}
+
+func (g *directoryGuard) ReadAt(p []byte, off int64) (int, error) {
+	if g.left >= 0 {
+		g.left -= int64(len(p))
+		if g.left < 0 {
+			return 0, errDirectoryTooLarge
+		}
+	}
+
+	n, err := g.r.ReadAt(p, off)
+	if err != nil {
+		return n, fmt.Errorf("read the zip archive: %w", err)
+	}
+
+	return n, nil
+}
+
+// checkZipCount reads the number of entries that the end-of-central-directory
+// record states, and refuses an archive above the limit. It reads the record in
+// the way of the zip reader of Go: the last record signature whose comment
+// fits in the file.
+func checkZipCount(data []byte, limits Limits) error {
+	end := -1
+
+	lowest := max(0, len(data)-zipEndRecordLen-zipMaxCommentLen)
+	for i := len(data) - zipEndRecordLen; i >= lowest; i-- {
+		if string(data[i:i+4]) == "PK\x05\x06" {
+			end = i
+
+			break
+		}
+	}
+
+	if end < 0 {
+		return refuse("the zip archive has no end record")
+	}
+
+	count := uint64(binary.LittleEndian.Uint16(data[end+10:]))
+
+	if count == zipMaxCount16 {
+		var err error
+
+		if count, err = zip64Count(data, end); err != nil {
+			return err
+		}
+	}
+
+	if count > math.MaxInt32 || int(count) > limits.Entries {
+		return refuse("the zip archive states more than %d entries", limits.Entries)
+	}
+
+	return nil
+}
+
+// zip64Count reads the number of entries from the Zip64 end record that the
+// locator before the end record names.
+func zip64Count(data []byte, end int) (uint64, error) {
+	loc := end - zip64LocatorLen
+	if loc < 0 || string(data[loc:loc+4]) != "PK\x06\x07" {
+		return 0, refuse("the zip archive states 65535 entries or more and has no Zip64 record")
+	}
+
+	offset := binary.LittleEndian.Uint64(data[loc+8:])
+	if offset > uint64(len(data)) || uint64(len(data))-offset < zip64EndRecordLen ||
+		string(data[offset:offset+4]) != "PK\x06\x06" {
+		return 0, refuse("the Zip64 record of the zip archive is not valid")
+	}
+
+	return binary.LittleEndian.Uint64(data[offset+32:]), nil
 }
 
 // readZipFile counts the real bytes of a regular file.
@@ -318,29 +529,18 @@ func readTar(r io.Reader, limits Limits) ([]entry, error) {
 	var out []entry
 
 	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
+		e, more, err := readTarNext(&b, tr, limited)
+		if err != nil {
+			return nil, err
+		}
+
+		if !more {
 			break
 		}
 
-		if limited.N <= 0 {
-			return nil, refuse("the archive unpacks to more than %d bytes", limits.UnpackedBytes)
+		if e.name != "" {
+			out = append(out, e)
 		}
-
-		if err != nil {
-			return nil, refuse("the tar stream cannot be read: %v", err)
-		}
-
-		e, entryErr := readTarEntry(&b, tr, hdr)
-		if limited.N <= 0 {
-			return nil, refuse("the archive unpacks to more than %d bytes", limits.UnpackedBytes)
-		}
-
-		if entryErr != nil {
-			return nil, entryErr
-		}
-
-		out = append(out, e)
 	}
 
 	// Bytes after the end of the tar stream count too.
@@ -353,6 +553,40 @@ func readTar(r io.Reader, limits Limits) ([]entry, error) {
 	}
 
 	return out, nil
+}
+
+// readTarNext reads the next header of the stream and the body that follows it.
+// It returns more as false at the end of the stream. It returns an entry with
+// no name for a header that is metadata.
+func readTarNext(b *budget, tr *tar.Reader, limited *io.LimitedReader) (entry, bool, error) {
+	var none entry
+
+	hdr, err := tr.Next()
+	if errors.Is(err, io.EOF) {
+		return none, false, nil
+	}
+
+	if limited.N <= 0 {
+		return none, false, refuse("the archive unpacks to more than %d bytes", b.limits.UnpackedBytes)
+	}
+
+	if err != nil {
+		return none, false, refuse("the tar stream cannot be read: %v", err)
+	}
+
+	// A pax global header is metadata for the tools that write the archive, for
+	// example git archive. The check counts it as an entry, ignores its content,
+	// and never applies a path or a link field of it.
+	if hdr.Typeflag == tar.TypeXGlobalHeader {
+		return none, true, b.count()
+	}
+
+	e, err := readTarEntry(b, tr, hdr)
+	if limited.N <= 0 {
+		return none, false, refuse("the archive unpacks to more than %d bytes", b.limits.UnpackedBytes)
+	}
+
+	return e, err == nil, err
 }
 
 // readTarEntry checks one header and counts the bytes of its body.
@@ -384,17 +618,16 @@ func readTarEntry(b *budget, tr *tar.Reader, hdr *tar.Header) (entry, error) {
 	return e, nil
 }
 
-// checkTree checks the paths together: no path twice, no link that points
-// outside the archive and no entry below a link.
+// checkTree checks the paths together: no path twice, no link whose target
+// leaves the archive or passes through a link, and no entry below a link.
 func checkTree(entries []entry) error {
 	seen := make(map[string]bool, len(entries))
 	links := map[string]bool{}
 
+	// A path is compared in lower case. The names hold only ASCII, so the lower
+	// case form is the form of a file system that folds case.
 	for _, e := range entries {
-		clean := path.Clean(e.name)
-		// Two paths that differ only in case are one path on a file system that
-		// folds case.
-		key := strings.ToLower(clean)
+		key := strings.ToLower(path.Clean(e.name))
 
 		if seen[key] {
 			return refuse("entry %q appears twice", e.name)
@@ -402,20 +635,28 @@ func checkTree(entries []entry) error {
 
 		seen[key] = true
 
+		if e.target != "" {
+			links[key] = true
+		}
+	}
+
+	for _, e := range entries {
 		if e.target == "" {
 			continue
 		}
 
-		if err := checkLink(clean, e.target); err != nil {
+		if err := checkLink(path.Clean(e.name), e.target, links); err != nil {
 			return err
 		}
-
-		links[key] = true
 	}
 
-	// An entry below a link would be written through the link. A target that
-	// looks safe as text can then leave the archive, so no entry may have a
-	// link for an ancestor.
+	return checkBelowLinks(entries, links)
+}
+
+// checkBelowLinks refuses an entry that has a link for an ancestor. Such an
+// entry would be written through the link, and a target that looks safe as text
+// can then leave the archive.
+func checkBelowLinks(entries []entry, links map[string]bool) error {
 	for _, e := range entries {
 		dir := path.Dir(strings.ToLower(path.Clean(e.name)))
 
@@ -431,25 +672,43 @@ func checkTree(entries []entry) error {
 	return nil
 }
 
-// checkLink refuses a link whose target is not inside the archive. The target
-// is relative to the directory of the link.
-func checkLink(name, target string) error {
-	switch {
-	case target == "":
+// checkLink refuses a link whose target is not safe. The target is relative to
+// the directory of the link. The check walks the target one segment at a time
+// and keeps the path that the walk has reached. It refuses when the walk goes
+// above the root of the archive, and when any path that the walk reaches is a
+// link: a target that passes through another link, or ends at one, is read
+// through that link on a disk, and the text of the target no longer says where
+// it goes. A chain of links and a loop of links are refused by the same rule.
+func checkLink(name, target string, links map[string]bool) error {
+	if target == "" {
 		return refuse("link %q has no target", name)
-	case strings.HasPrefix(target, "/") || strings.Contains(target, "\\") || (len(target) >= 2 && target[1] == ':'):
+	}
+
+	if strings.HasPrefix(target, "/") {
 		return refuse("link %q has an absolute target", name)
 	}
 
-	for _, c := range []byte(target) {
-		if c < 0x20 || c == 0x7f {
-			return refuse("link %q has a control character in its target", name)
-		}
-	}
+	here := path.Dir(name)
 
-	joined := path.Join(path.Dir(name), target)
-	if joined == ".." || strings.HasPrefix(joined, "../") {
-		return refuse("link %q points outside the archive", name)
+	for seg := range strings.SplitSeq(target, "/") {
+		switch seg {
+		case "", ".":
+		case "..":
+			if here == "." {
+				return refuse("link %q points outside the archive", name)
+			}
+
+			here = path.Dir(here)
+		default:
+			if err := checkSegment(seg); err != nil {
+				return refuse("link %q has a target that is not allowed: %v", name, err)
+			}
+
+			here = path.Join(here, seg)
+			if links[strings.ToLower(here)] {
+				return refuse("link %q has a target that passes through the link %q", name, here)
+			}
+		}
 	}
 
 	return nil
