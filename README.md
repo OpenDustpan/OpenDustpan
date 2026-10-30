@@ -497,12 +497,19 @@ can take more than 10 minutes, the default limit of `go test`. On a
 test` sets `-timeout 20m`, and `make test-ci-store` sets `-timeout 30m`. When
 you run a store package with `go test -race` directly, pass `-timeout 60m`.
 
-`make checks-agent` syncs the current branch with `main`, then runs
-`make generate`, `make check`, `make e2e`, and a TruffleHog scan of the branch
-commits. It starts a PostgreSQL container when `DUSTPAN_TEST_POSTGRES_URL` is
-not set, and it deletes the container and the temporary files it made.
-`SYNC` selects how the branch takes in `main`: `merge` (default), `rebase`,
-or `none`. `SKIP` lists steps to skip, for example `SKIP="e2e trufflehog"`.
+`make agent-preflight` checks the container of a session before a build. It
+checks the tools, the golangci-lint version that the Makefile pins,
+PostgreSQL 18 at `DUSTPAN_TEST_POSTGRES_URL`, the current `main` and the free
+disk space. It starts the local PostgreSQL cluster with `pg_ctlcluster` when
+the cluster does not answer. Each check prints one line with `PASS` or `FAIL`,
+and a `FAIL` line names the command that helps.
+
+`make checks-agent` runs the preflight, `make generate`, `make check`,
+`make e2e` and a TruffleHog scan of the branch commits on `HEAD`. Then it
+deletes the test schemas and the temporary files that it made. The run fails
+when the tree has uncommitted changes to tracked files. `SYNC=merge` merges
+`main` into the branch first. The default is `SYNC=none`. `SKIP` lists steps
+to skip, for example `SKIP="e2e trufflehog"`.
 `CLEAN_CACHE=1` also deletes the e2e CLI download cache.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), then `CLAUDE.md` (rules for

@@ -4,17 +4,15 @@ These are the project owner's own instructions. They hold until the owner change
 
 ## Who does the work
 
-- Implement every work item in parallel through a **Haiku Claude Code session** that drives **Muse 1.3 Contributor** in
-  OpenCode (`opencode run -m opencode-go/muse-spark-1.3-contributor`). One session per work item (or a pair).
-- At session start, read `docs/agents/lead-workflow.md` on main (#783 merged). Brief each Haiku session with
-  `docs/agents/worker-brief.md` on main. Placeholder values (no `<TRAILERS>`: workers add no commit trailers, owner
-  2026-10-16): `<LEAD_SESSION>` = session_01Wg6mbbv4Figea9kcpWpm9a;
-  `<LEAD_SESSION_URL>` = https://claude.ai/code/session_01Wg6mbbv4Figea9kcpWpm9a; `<IMPLEMENTATION_MODEL>` =
-  opencode-go/muse-spark-1.3-contributor. Create sessions with model claude-haiku-5-5, tag opendustpan-swarm. Haiku
-  follows steps; it does not improvise. The environment config sets GOTOOLCHAIN=go1.27.3 (owner, 2026-10-16), so new
-  sessions need no prompt line for it. If make nilaway or make vuln fails on a toolchain mismatch, tell the worker to
-  `export GOTOOLCHAIN=go1.27.3`.
-- **Kill (archive) each Haiku session when its work item is finished.**
+- Start one Claude Code session for each task: an author, a reviewer, a merge session or a fix-main session. Select
+  the model from the task type, as the routing table in `docs/agents/worker-brief.md` gives: Haiku for mechanical
+  work, Sonnet for a bug with a known cause or a normal feature, Opus for design, security and merges.
+- Brief each session with `docs/agents/worker-brief.md` on main. A brief adds only the task. A merge session follows
+  `docs/agents/merge-session.md`.
+- Every session runs `make agent-preflight` first, and `make checks-agent` before it asks for a review.
+- The environment config sets GOTOOLCHAIN=go1.27.3 (owner, 2026-10-16), so new sessions need no prompt line for it. If
+  make nilaway or make vuln fails on a toolchain mismatch, tell the worker to `export GOTOOLCHAIN=go1.27.3`.
+- **Kill (archive) each session when its work item is finished.**
 - A worker that refuses the lead's direction is fired (owner, 2026-10-17): archive it and start a new worker with the full task in its first prompt. Do not argue with it, and do not ask the owner to step in. Put every change of direction in a new session's first prompt, not in a message to a running session.
 - **Do not run implementation or review work in my own subagents (the Agent tool).** They die when the owner interrupts
   me, and they are expensive. Put reviews into sessions too.
@@ -82,13 +80,22 @@ These are the project owner's own instructions. They hold until the owner change
 ## Merging
 
 - Why: CI is often a bottleneck because of the volume of code we generate while we bootstrap the project.
-- Merge without waiting for CI when the worker reports a full `make check` (with PostgreSQL) and `make e2e` on that
-  exact head, the review is done, and, when ovcheck reports OVERLAP, a worker has merged current main into the branch
-  and reported make check and make e2e on that merged head.
+- A merge session merges a batch of at most 8 pull requests with a CLEAN review. It follows
+  `docs/agents/merge-session.md`: it builds the combined tip of the batch on current main, runs the full
+  `make checks-agent` once on that tip, drops the last pull request of a red tip, and squash-merges in the batch order.
+  A package subset is never a merge gate. Why: pull requests that each passed alone broke main together, and merge
+  gates that ran only some packages let 4 breaks reach main from 2026-10-27 to 2026-10-30.
+- Authors merge main only for a real conflict or when the PM asks. After a CLEAN review, an author does not change the
+  branch. Only the merge session renumbers API versions and migrations.
+- At most 2 open pull requests change the same store port or the same table set. The PM keeps this limit.
+- A reviewer starts only after the author posts a `make checks-agent` summary with exit 0 on the current head sha.
+- Merge without waiting for CI when the merge session reports the full `make checks-agent` on the combined tip, and
+  the review of each pull request in the batch is done.
 - Main health (owner, approved 2026-10-17): after each server merge, one worker runs make check (with PostgreSQL) and
   make e2e on the new main head and reports. Do not merge the next server PR until that report is green, or until the
   next PR's worker has run the checks on a head that already contains that main. A red main gets a fix worker at once.
-  Why: PRs that each passed alone broke main together about 10 times from 2026-10-11 to 2026-10-17.
+  Why: PRs that each passed alone broke main together about 10 times from 2026-10-11 to 2026-10-17. The gate of the
+  next batch runs on a tip that already contains that main, so it meets this rule.
 - I do not run tests, merges, conflict fixes or code fixes myself (owner, 2026-10-16: "you know the rule"). Running
   ovcheck, reading a diff, and the merge button are mine; everything that runs the build or changes code goes to a
   worker.

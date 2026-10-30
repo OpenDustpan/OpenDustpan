@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# checks-agent runs the required suites of a branch after it takes in main.
+# checks-agent runs the required suites on the head of a branch.
 #
-# It syncs with origin/main, starts a PostgreSQL container when
-# DUSTPAN_TEST_POSTGRES_URL is not set, runs make generate, make check and
-# make e2e, scans the branch commits with TruffleHog, then removes the
-# container and the temporary files it made. Run it with make checks-agent.
+# It runs scripts/agent-preflight.sh (tools, lint version, PostgreSQL 18,
+# main, disk), can merge main into the branch, runs make generate, make check
+# and make e2e, scans the branch commits with TruffleHog, then removes the
+# test schemas and the temporary files it made. Run it with make checks-agent.
+# The summary names the HEAD that the suites ran on. The run fails when the
+# tree has uncommitted changes to tracked files, because then the result is
+# not the result of HEAD.
 #
 # Environment:
-#   SYNC          how the branch takes in main: merge (default), rebase, none
+#   SYNC          how the branch takes in main: none (default) or merge. An
+#                 author merges main only for a real conflict or when the PM
+#                 asks. There is no rebase: a rebase needs a force-push.
 #   SKIP          space-separated step names to skip, for example "e2e trufflehog"
 #   CLEAN_CACHE   1 also deletes the e2e CLI download cache (default 0)
-#   DUSTPAN_TEST_POSTGRES_URL  PostgreSQL URL for the suites (default: start
-#                              a container and export its URL for the run)
+#   UPSTREAM_URL  the repository to fetch main from
+#                 (default https://github.com/OpenDustpan/OpenDustpan.git)
+#   DUSTPAN_TEST_POSTGRES_URL  PostgreSQL URL for the suites. It must be set.
+#                              The preflight starts the local cluster with
+#                              pg_ctlcluster when it does not answer.
 set -euo pipefail
 
 export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
@@ -19,20 +27,19 @@ export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
-SYNC="${SYNC:-merge}"
+SYNC="${SYNC:-none}"
+UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/OpenDustpan/OpenDustpan.git}"
+export UPSTREAM_URL
 SKIP="${SKIP:-}"
 CLEAN_CACHE="${CLEAN_CACHE:-0}"
 
 # STEPS holds the run order. A new suite is one entry here and one step
 # function named step_<entry> below.
-STEPS=(sync postgres generate check e2e trufflehog)
+STEPS=(sync preflight generate check e2e trufflehog)
 
 declare -A STATUS
 declare -A DURATION
 
-CONTAINER=""
-STARTED_PG=0
-USED_EXISTING_PG=0
 ABORT=0
 TMP_ROOT="$(mktemp -d)"
 E2E_CACHE="${E2E_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/opendustpan-e2e}"
@@ -49,16 +56,7 @@ fail_step() {
 cleanup() {
   rc=$?
   trap - EXIT INT TERM
-  if [ "$STARTED_PG" = 1 ] && [ -n "${DUSTPAN_TEST_POSTGRES_URL:-}" ]; then
-    schemas="$(psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc "select schema_name from information_schema.schemata where schema_name like 'test\_%'" 2>/dev/null || true)"
-    for schema in $schemas; do
-      case "$schema" in
-        test_*) ;;
-        *) continue ;;
-      esac
-      psql "$DUSTPAN_TEST_POSTGRES_URL" -c "drop schema \"$schema\" cascade" >/dev/null 2>&1 || true
-    done
-  elif [ "$USED_EXISTING_PG" = 1 ] && [ -n "${DUSTPAN_TEST_POSTGRES_URL:-}" ]; then
+  if [ -n "${DUSTPAN_TEST_POSTGRES_URL:-}" ]; then
     count="$(psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()" 2>/dev/null || true)"
     count="$(printf '%s' "$count" | tr -d '[:space:]')"
     if [ "$count" = "0" ]; then
@@ -73,9 +71,6 @@ cleanup() {
     else
       echo "skipped test schema cleanup: $count other clients connected" >&2
     fi
-  fi
-  if [ -n "$CONTAINER" ]; then
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   fi
   if [ -n "${TMP_ROOT:-}" ] && [ -d "$TMP_ROOT" ]; then
     rm -rf "$TMP_ROOT"
@@ -104,91 +99,31 @@ step_sync() {
     none)
       return 2
       ;;
-    merge | rebase)
-      ;;
+    merge) ;;
     *)
-      fail_step "sync: unknown SYNC value '$SYNC', want merge, rebase or none"
+      fail_step "sync: unknown SYNC value '$SYNC', want none or merge"
       return 1
       ;;
   esac
 
-  if ! git fetch origin main; then
-    fail_step "sync: git fetch origin main failed"
+  if ! git fetch "$UPSTREAM_URL" "+refs/heads/main:refs/remotes/origin/main"; then
+    fail_step "sync: git fetch of main failed"
     return 1
   fi
-
-  if [ "$SYNC" = "merge" ]; then
-    if ! git merge --no-edit origin/main; then
-      log "sync: merge conflict in:"
-      print_conflicts
-      return 1
-    fi
-    return 0
-  fi
-
-  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
-  if [ -n "$upstream" ] && git merge-base --is-ancestor HEAD "$upstream" 2>/dev/null; then
-    fail_step "sync: refuse rebase: upstream $upstream already holds this branch, a rebase needs a force-push"
-    return 1
-  fi
-  if ! git rebase origin/main; then
-    log "sync: rebase conflict in:"
+  if ! git merge --no-edit refs/remotes/origin/main; then
+    log "sync: merge conflict in:"
     print_conflicts
-    git rebase --abort || true
     return 1
   fi
   return 0
 }
 
-ensure_docker() {
-  if docker info >/dev/null 2>&1; then
-    return 0
-  fi
-  log "postgres: docker is not running, starting dockerd"
-  dockerd >/dev/null 2>&1 &
-  for ((i = 0; i < 60; i++)); do
-    if docker info >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
-  fail_step "postgres: dockerd did not start in 60 seconds"
-  return 1
-}
-
-step_postgres() {
-  if [ -n "${DUSTPAN_TEST_POSTGRES_URL:-}" ]; then
-    USED_EXISTING_PG=1
-    log "postgres: DUSTPAN_TEST_POSTGRES_URL is set, keep it"
-    return 0
-  fi
-  for tool in docker psql python3; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-      fail_step "postgres: missing required tool: $tool"
-      return 1
-    fi
-  done
-  ensure_docker || return 1
-  port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-  CONTAINER="checks-agent-pg-$$"
-  if ! docker run -d --rm --name "$CONTAINER" -e POSTGRES_PASSWORD=pg --shm-size=1g \
-    -p "$port":5432 --tmpfs /var/lib/postgresql \
-    mirror.gcr.io/library/postgres:18 >/dev/null; then
-    fail_step "postgres: docker run failed"
+step_preflight() {
+  if ! REQUIRE_CURRENT=0 "$ROOT/scripts/agent-preflight.sh"; then
+    fail_step "preflight: a check failed, see the FAIL line above"
     return 1
   fi
-  DUSTPAN_TEST_POSTGRES_URL="postgres://postgres:pg@127.0.0.1:$port/postgres?sslmode=disable"
-  export DUSTPAN_TEST_POSTGRES_URL
-  for ((i = 0; i < 60; i++)); do
-    if psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc 'select 1' >/dev/null 2>&1; then
-      STARTED_PG=1
-      log "postgres: container $CONTAINER answers"
-      return 0
-    fi
-    sleep 1
-  done
-  fail_step "postgres: container $CONTAINER did not answer in 60 seconds, see docker logs $CONTAINER"
-  return 1
+  return 0
 }
 
 step_generate() {
@@ -286,6 +221,11 @@ done
 
 log "summary: HEAD $(git rev-parse HEAD)"
 failed=0
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  log "summary: FAIL the tree has uncommitted changes to tracked files, so this result is not the result of HEAD. Commit them, then run make checks-agent again."
+  git status --short --untracked-files=no >&2
+  failed=1
+fi
 for step in "${STEPS[@]}"; do
   log "summary: $step ${STATUS[$step]} (${DURATION[$step]}s)"
   if [ "${STATUS[$step]}" = "FAIL" ]; then

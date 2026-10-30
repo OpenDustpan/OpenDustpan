@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regenerate-baseline check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent agent-preflight clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -25,6 +25,7 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	python3 -I scripts/runner-deps-guard.py
 	python3 -I scripts/module-age-gate.py --selftest
 	python3 -I scripts/module-age-gate.py
+	./scripts/agent-preflight.sh --selftest
 	golangci-lint run ./...
 
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
@@ -204,8 +205,11 @@ clients-ts-test: ## Compile the TypeScript client strictly and run its tests (ne
 clients-conformance: clients-ts-test ## Build the server, generate the Go and TypeScript clients from the description that the server serves, and run the client conformance suite on them. Not part of check.
 	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test $(RACE_TEST_FLAGS) -count=1 -timeout 25m -run 'TestGoClientConformance|TestTypeScriptClientConformance' ./internal/clientgen/conformance/
 
-checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
+checks-agent: ## Run the preflight, generate, check, e2e and a TruffleHog scan of the branch commits on HEAD, with cleanup (SYNC=none|merge, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
 	./scripts/checks-agent.sh
+
+agent-preflight: ## Check the container of a session: tools, the golangci-lint pin, PostgreSQL 18 (starts it), the current main and free disk.
+	./scripts/agent-preflight.sh
 
 # With TOXIPROXY_URL set, the target uses that Toxiproxy server (CI runs it
 # as a service container) and downloads no binary.
