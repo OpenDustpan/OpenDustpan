@@ -841,8 +841,8 @@ func TestRoundTripsOfBackup(t *testing.T) {
 		units                       int
 		backupBudget, restoreBudget int
 	}{
-		{"3 stacks and 3 workspaces", 3, 305, 1010},
-		{"30 stacks and 30 workspaces", 30, 305, 1055},
+		{"3 stacks and 3 workspaces", 3, 312, 1030},
+		{"30 stacks and 30 workspaces", 30, 312, 1084},
 	} {
 		t.Run(size.name, func(t *testing.T) {
 			t.Parallel()

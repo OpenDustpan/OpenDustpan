@@ -23,7 +23,7 @@ func TestGrantRefusesTheNamespaceServiceRecord(t *testing.T) {
 	own := f.unit(t, unitObject(t, "acme", "proj/dev"))
 
 	role, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
-		Name: "planner", Description: "", Actions: []identity.Action{identity.ActionUnitRunPlan},
+		Name: "run-plan-only", Description: "", Actions: []identity.Action{identity.ActionUnitRunPlan},
 	})
 	if err != nil {
 		t.Fatalf("create role: %v", err)
@@ -56,7 +56,7 @@ func TestUnitRunPlanRoleForAStoredPerson(t *testing.T) {
 	own := unitObject(t, "acme", "proj/dev")
 
 	role, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
-		Name: "planner", Description: "", Actions: []identity.Action{identity.ActionUnitRunPlan},
+		Name: "run-plan-only", Description: "", Actions: []identity.Action{identity.ActionUnitRunPlan},
 	})
 	if err != nil {
 		t.Fatalf("create role: %v", err)
