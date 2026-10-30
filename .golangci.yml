@@ -393,6 +393,12 @@ linters:
         - empty
         - stdlib
         - generic
+        # The error translation of the PostgreSQL store wraps the pool and its
+        # transactions. sqlc's DBTX interface and the pgx transaction
+        # starters require these return types.
+        - github.com/jackc/pgx/v5.Rows
+        - github.com/jackc/pgx/v5.Row
+        - github.com/jackc/pgx/v5.Tx
 
     misspell:
       locale: US
