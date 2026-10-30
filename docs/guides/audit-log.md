@@ -297,6 +297,15 @@ The action is `server:manage-settings`, and the kind is `change`.
   `next start`: the entry records a change, and the new value applies at
   the next start.
 
+- A change through the [settings API](../reference/settings-api.md) writes one
+  entry with the channel `api`. The subject is the principal that made the
+  change. The action is `server:manage-settings` for the installation. For a
+  namespace, the entry is in the log of the namespace and the action is
+  `namespace:manage-settings`. One request writes one entry, with one change
+  for each key. The `layer` of a change is the layer of the new value, for
+  example `database`. A request that the server refuses because of its
+  content writes one entry with the outcome `failure`.
+
 No route of the API reads the installation log (`@server`) yet. These entries become
 readable through the API when that route lands.
 

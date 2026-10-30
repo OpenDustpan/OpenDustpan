@@ -228,11 +228,21 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionServerReadSettings allows reading the settings resource of the
+	// installation: each declared setting with its effective value and its
+	// source. Its object is ServerObject.
+	ActionServerReadSettings Action = "server:read-settings"
 	// ActionServerManageSettings allows changing the installation settings
-	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
-	// settings name it: the start entry and the entry of a reload of the
-	// configuration file. RFC 68 decides the settings API that checks it.
+	// through the settings resource. Its object is ServerObject. The audit
+	// entries of the settings name it: the start entry and the entry of a
+	// reload of the configuration file.
 	ActionServerManageSettings Action = "server:manage-settings"
+	// ActionNamespaceReadSettings allows reading the settings resource of a
+	// namespace. Its object is the namespace.
+	ActionNamespaceReadSettings Action = "namespace:read-settings"
+	// ActionNamespaceManageSettings allows changing the settings resource of
+	// a namespace. Its object is the namespace.
+	ActionNamespaceManageSettings Action = "namespace:manage-settings"
 	// ActionServerSetAuditChain allows approving a change of the audit
 	// chain to the setting of the server, on or off. A change to off also
 	// needs ActionServerDisableAuditChain. Its object is ServerObject.

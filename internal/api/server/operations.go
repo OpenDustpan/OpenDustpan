@@ -12,6 +12,7 @@ import (
 const (
 	tagApprovals   = "approvals"
 	tagPreferences = "preferences"
+	tagSettings    = "settings"
 )
 
 // operationLabels names the routes of this adapter that sit under
@@ -68,6 +69,24 @@ var operationLabels = map[string]apidesc.Label{
 		WithBodies(apidesc.Typed[updatePreferencesRequest](
 			"UpdatePreferencesRequest", apidesc.Named[terminalSchemesPatchRequest]("TerminalSchemesPatch"),
 		), preferencesSchema),
+	apidesc.Pattern(http.MethodGet, settingsPath): apidesc.Name("getSettings", tagSettings).
+		WithETag().
+		On(apidesc.KindServer).
+		WithBodies(apidesc.NoBody, settingsSchema),
+	apidesc.Pattern(http.MethodPatch, settingsPath): apidesc.Name("updateSettings", tagSettings).
+		WithIfMatchRequired().
+		WithETag().
+		On(apidesc.KindServer).
+		WithBodies(settingsPatchSchema, settingsSchema),
+	apidesc.Pattern(http.MethodGet, namespaceSettingsPath): apidesc.Name("getNamespaceSettings", tagSettings).
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, settingsSchema),
+	apidesc.Pattern(http.MethodPatch, namespaceSettingsPath): apidesc.Name("updateNamespaceSettings", tagSettings).
+		WithIfMatchRequired().
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(settingsPatchSchema, settingsSchema),
 }
 
 // The bodies that several routes share. The types of the bodies are the types
@@ -84,6 +103,10 @@ var (
 	preferencesSchema  = apidesc.Typed[preferencesResponse](
 		"Preferences", apidesc.Named[terminalSchemesResponse]("TerminalSchemes"),
 	)
+	settingsSchema = apidesc.Typed[settingsBody](
+		"Settings", apidesc.Named[settingBody]("Setting"), settingValueSchema,
+	)
+	settingsPatchSchema = apidesc.Typed[settingsPatchRequest]("UpdateSettingsRequest", settingValueSchema)
 )
 
 // Operations returns the routes of this adapter that the description of the

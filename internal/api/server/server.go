@@ -35,6 +35,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
+	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
@@ -137,6 +138,10 @@ type Config struct {
 	// keeps none: the preferences routes answer 501. Both SQL adapters keep
 	// them.
 	Preferences *preferences.Service
+	// Settings keeps the settings resource of the installation and of the
+	// namespaces. Nil means the store keeps none: the settings routes answer
+	// 501. Both SQL adapters keep them.
+	Settings *setting.Service
 	// Workers reports the components of the process and the state of the
 	// worker, and refuses the start of a durable operation when no worker
 	// claimed or renewed a claim. Nil means no refusal and an empty report.
@@ -213,6 +218,7 @@ type Handler struct {
 	signIn         *signInState
 	kind           installation.Kind
 	preferences    *preferences.Service
+	settings       *setting.Service
 	gitHost        *forge.Service
 	idem           *idempotent.Middleware
 	instances      installation.InstanceStore
@@ -233,26 +239,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
-	// The audit store must keep the entries of refused requests too, so it
-	// must also keep the entries of each namespace. A store that does not
-	// gives no handler: a refusal must never go without an entry.
-	denialStore, ok := cfg.Audit.(audit.Store)
-	if !ok {
-		return nil, fmt.Errorf(
-			"%w: an audit store with namespace entries, for the refused requests",
-			ErrMissingDependency,
-		)
-	}
-
-	recorder, err := denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	guard, err := newGuard(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("denial recorder: %w", err)
+		return nil, err
 	}
 
 	h := &Handler{
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
-		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("installation"),
+		guard:          guard,
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		backups:        cfg.Backups,
@@ -280,6 +275,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
 		preferences:    cfg.Preferences,
+		settings:       cfg.Settings,
 		gitHost:        cfg.GitHost,
 		idem:           cfg.Idempotency,
 		instances:      cfg.Instances,
@@ -297,6 +293,27 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// newGuard returns the recorder of the refused requests of the installation
+// API. The audit store must keep the entries of refused requests too, so it
+// must also keep the entries of each namespace. A store that does not gives
+// no handler: a refusal must never go without an entry.
+func newGuard(cfg Config) (*denials.Recorder, error) {
+	denialStore, ok := cfg.Audit.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: an audit store with namespace entries, for the refused requests",
+			ErrMissingDependency,
+		)
+	}
+
+	recorder, err := denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
+	return recorder.WithLimiter(cfg.DenialLimiter).WithSurface("installation"), nil
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required

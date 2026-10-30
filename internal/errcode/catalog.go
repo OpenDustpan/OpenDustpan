@@ -107,6 +107,7 @@ func areas() []func() []Spec {
 		schemaSpecs,
 		secretSpecs,
 		serverSpecs,
+		settingsSpecs,
 		sessionSpecs,
 		signInSpecs,
 		sinkSpecs,

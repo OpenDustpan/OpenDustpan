@@ -836,6 +836,19 @@ type SessionPolicy struct {
 	TokenFreshnessMs sql.NullInt64
 }
 
+type Setting struct {
+	ScopeID     string
+	Key         string
+	Value       string
+	UpdatedAtMs int64
+}
+
+type SettingsState struct {
+	ScopeID      string
+	Revision     int64
+	StaticDigest string
+}
+
 type SignInFailure struct {
 	Source      string
 	WindowEndMs int64

@@ -808,6 +808,7 @@ func TestPreferencesUnavailable(t *testing.T) {
 
 	h, err := newCheckedHandler(t, apiserver.Config{
 		Preferences: nil,
+		Settings:    nil,
 		GitHost:     nil,
 		Idempotency: nil,
 		Workers:     nil, InstallationKind: "", Now: nil, TempAdmins: nil, Authenticator: prefsCallerSet(),

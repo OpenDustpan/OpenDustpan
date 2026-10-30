@@ -34,6 +34,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
+	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/setting/settingtest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -349,6 +351,7 @@ func newServiceBackedHandlerOf(
 		CheckpointEpochs: fakeEpochs{},
 		DenialLimiter:    nil,
 		Preferences:      preferences.NewService(st, st, nil),
+		Settings:         newRouteTestSettings(st),
 		GitHost:          nil,
 		Idempotency:      nil,
 		Instances:        nil,
@@ -727,6 +730,8 @@ var routeBodies = map[string]string{
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
 	"PATCH /api/dustpan/v1/me/preferences":                                    `{"theme":"terminal"}`,
+	"PATCH /api/dustpan/v1/settings":                                          `{"test.label":"blue"}`,
+	"PATCH /api/dustpan/v1/namespaces/{namespace}/settings":                   `{"test.nsLimit":9}`,
 }
 
 // routeGrantBody is the body of each grant route: a role that no seeded
@@ -1080,8 +1085,17 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 // setRouteContentType gives the PATCH of the preferences the merge patch
 // type, which the route requires.
 func setRouteContentType(req *http.Request, route apiserver.Route) {
-	if route.Method == http.MethodPatch && route.Path == "/api/dustpan/v1/me/preferences" {
+	if route.Method != http.MethodPatch {
+		return
+	}
+
+	switch route.Path {
+	case "/api/dustpan/v1/me/preferences":
 		req.Header.Set("Content-Type", "application/merge-patch+json")
+	case "/api/dustpan/v1/settings", "/api/dustpan/v1/namespaces/{namespace}/settings":
+		req.Header.Set("Content-Type", "application/merge-patch+json")
+		req.Header.Set("If-Match", `"0"`)
+	default:
 	}
 }
 
@@ -1527,6 +1541,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 
 	full := apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -1688,6 +1703,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -1731,6 +1747,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	without, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -1805,4 +1822,10 @@ type productionKind struct{}
 // ReadKind implements backup.KindReader.
 func (productionKind) ReadKind(_ context.Context) (installation.Kind, error) {
 	return installation.KindProduction, nil
+}
+
+// newRouteTestSettings returns the settings service of the route tests: the
+// registry of the settings conformance suite over the store st.
+func newRouteTestSettings(st *sqlite.Store) *setting.Service {
+	return setting.NewService(st.SettingStore(), settingtest.Registry(), nil, st, nil)
 }

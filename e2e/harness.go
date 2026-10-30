@@ -682,7 +682,7 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
 	return slices.Concat(
 		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
-		registryStoreOptions(st), sinkStoreOptions(st), publicURLOptions(args.publicURL),
+		settingStoreOptions(st), registryStoreOptions(st), sinkStoreOptions(st), publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
 	)
 }

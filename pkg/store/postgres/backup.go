@@ -122,6 +122,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopySinkTables()...)
 	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
+	tables = append(tables, pgCopySettingTables()...)
 
 	return tables
 }
@@ -155,7 +156,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "updates",
 			columns: []string{
-				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, "revision",
+				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, pgColRevision,
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
 				"journal_records_changed",
@@ -318,7 +319,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "workspaces",
 			columns: []string{
-				"id", pgColNamespace, pgColName, "revision", "lock_id", "lock_holder",
+				"id", pgColNamespace, pgColName, pgColRevision, "lock_id", "lock_holder",
 				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, pgColUpdatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes", pgColDeletedAtMs, pgColDeletedName,
 			},

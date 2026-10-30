@@ -113,7 +113,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"dry_run",
 				backupColStatus,
 				backupColVersion,
-				"revision",
+				backupColRevision,
 				"lease_digest",
 				"lease_expires_at_ms",
 				backupColCreatedAtMs,
@@ -322,7 +322,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"id",
 				backupColNamespace,
 				backupColName,
-				"revision",
+				backupColRevision,
 				"lock_id",
 				"lock_holder",
 				"lock_reason",
@@ -417,6 +417,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteSinkBackupTables(),
 		sqliteTriggerBackupTables(),
 		sqliteItemKeyBackupTables(),
+		sqliteSettingBackupTables(),
 	)
 }
 
@@ -578,7 +579,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "installation_secret_keys",
-			columns: []string{"scope_id", backupColWrapperID, "ciphertext", backupColCreatedAtMs},
+			columns: []string{backupColScopeID, backupColWrapperID, "ciphertext", backupColCreatedAtMs},
 		},
 		{
 			table: "sign_in_providers",
