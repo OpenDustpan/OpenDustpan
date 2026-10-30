@@ -112,6 +112,10 @@ func (r PageRequest) Validate() error {
 // by key and hold only keys under the prefix of req. It is for adapters that
 // hold the whole listing already. It does not validate req.
 func PageOf(objects []Object, req PageRequest) Page {
+	if len(objects) == 0 {
+		return Page{Objects: nil, Next: ""}
+	}
+
 	start, _ := slices.BinarySearchFunc(objects, req.After, func(o Object, after Key) int {
 		if after == "" {
 			return 1
@@ -124,6 +128,10 @@ func PageOf(objects []Object, req PageRequest) Page {
 	// starts after After, so it skips an object whose key equals After.
 	if start < len(objects) && req.After != "" && objects[start].Key == req.After {
 		start++
+	}
+
+	if start >= len(objects) {
+		return Page{Objects: nil, Next: ""}
 	}
 
 	end := min(start+req.Limit, len(objects))
