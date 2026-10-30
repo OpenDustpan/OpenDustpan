@@ -123,8 +123,8 @@ func (t *s3Target) measurePuts(ctx context.Context, prefix string, sizes []sizeR
 			return nil, err
 		}
 
-		for _, mode := range putModes() {
-			out = append(out, putResult{SizeBytes: sr.Bytes, Mode: mode, Stats: res[mode].stats()})
+		for j, mode := range putModes() {
+			out = append(out, putResult{SizeBytes: sr.Bytes, Mode: mode, Stats: res[j].stats()})
 		}
 	}
 
@@ -133,21 +133,18 @@ func (t *s3Target) measurePuts(ctx context.Context, prefix string, sizes []sizeR
 
 // putRound writes p warmupPuts times untimed, then reps times timed, in
 // each mode in turn, each under a new key of prefix, and deletes the keys.
-func (t *s3Target) putRound(ctx context.Context, prefix string, p payload, reps int) (map[string]*tally, error) {
+// It answers one tally for each mode, in the order of putModes.
+func (t *s3Target) putRound(ctx context.Context, prefix string, p payload, reps int) ([]tally, error) {
 	modes := putModes()
 	keys := make([]string, 0, (warmupPuts+reps)*len(modes))
-	series := map[string]*tally{}
-
-	for _, mode := range modes {
-		series[mode] = &tally{samples: nil, errors: 0, first: ""}
-	}
+	series := make([]tally, len(modes))
 
 	for i := range warmupPuts + reps {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("put series: %w", err)
 		}
 
-		for _, mode := range modes {
+		for j, mode := range modes {
 			key, err := newKey(prefix+"-"+mode, i)
 			if err != nil {
 				return nil, err
@@ -156,7 +153,7 @@ func (t *s3Target) putRound(ctx context.Context, prefix string, p payload, reps 
 			keys = append(keys, key)
 
 			if i >= warmupPuts {
-				series[mode].time(func() error { return t.putOnce(ctx, mode, key, p) })
+				series[j].time(func() error { return t.putOnce(ctx, mode, key, p) })
 
 				continue
 			}

@@ -93,9 +93,6 @@ type Store struct {
 	// tracer, when set, sees every statement, batch, prepare and copy of the
 	// pool. Nil in production.
 	tracer pgx.QueryTracer
-	// poolHook, when set, changes the pool configuration before the pool
-	// opens. Nil in production.
-	poolHook func(*pgxpool.Config)
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -140,16 +137,11 @@ func WithoutMigrate() Option {
 // WithQueryTracer makes the pool report each statement, batch, prepare and
 // copy to tracer. The tracer may also implement pgx.BatchTracer,
 // pgx.PrepareTracer and pgx.CopyFromTracer, and then it sees those too. A
-// benchmark of database round trips uses it. Without it, the pool has no tracer.
+// benchmark of database round trips uses it. Without it, the pool has no
+// tracer. The pool pings an idle connection with the protocol layer, which the
+// tracer does not see.
 func WithQueryTracer(tracer pgx.QueryTracer) Option {
 	return func(s *Store) { s.tracer = tracer }
-}
-
-// WithPoolConfig makes Open call hook with the configuration of the pool
-// before it opens the pool. A test uses it to wrap a pool callback, for
-// example ShouldPing, so that it can count the pings of the pool.
-func WithPoolConfig(hook func(*pgxpool.Config)) Option {
-	return func(s *Store) { s.poolHook = hook }
 }
 
 var (
@@ -199,7 +191,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
 		beforeLockDelete: nil, stateLockWait: 0,
 		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
-		tracer: nil, poolHook: nil,
+		tracer: nil,
 	}
 
 	for _, opt := range opts {
@@ -208,10 +200,6 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	if s.tracer != nil {
 		cfg.ConnConfig.Tracer = s.tracer
-	}
-
-	if s.poolHook != nil {
-		s.poolHook(cfg)
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
