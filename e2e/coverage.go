@@ -985,6 +985,8 @@ func coverageSettingsRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		Idempotency:    nil,
+		Records:        nil,
 	})
 	if err != nil {
 		tb.Fatalf("unit settings handler: %v", err)
