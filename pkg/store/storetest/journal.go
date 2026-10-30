@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1214,4 +1215,67 @@ func testJournalBatches(t *testing.T, f fixture) {
 	if err != nil || len(none) != 0 {
 		t.Fatalf("journal batches of a missing update = %v, %v; want empty", none, err)
 	}
+}
+
+// testJournalConcurrentWinner sends several writes of one batch at once, each
+// under the key of its own attempt. With the same content, exactly one write
+// stores the batch and each other write reports a retry. With different
+// content, exactly one write stores it and each other write fails with
+// ErrJournalConflict. The rows keep the key of the winner in both cases.
+func testJournalConcurrentWinner(t *testing.T, f fixture) {
+	t.Helper()
+
+	for round := range checkpointRounds {
+		for _, same := range []bool{false, true} {
+			u := f.runJournaled(t, f.ref, "u"+strconv.Itoa(round)+strconv.FormatBool(same))
+			rows := make([]stack.JournalRow, checkpointWriters)
+
+			for i := range rows {
+				sha := byte(1)
+				if !same {
+					sha = byte(i + 1)
+				}
+
+				write := journalWrite{sha: sha, attempt: "attempt" + strconv.Itoa(1000+i), seqs: []int64{1, 2}}
+				rows[i] = journalRowAttempt(t, f.s, u, write)
+			}
+
+			retried, errs := putAtOnce(t, f, rows)
+			winner := wantOneJournalWinner(t, retried, errs, same)
+
+			keys, err := f.s.JournalKeys(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+			if err != nil || len(keys) != 1 || keys[0] != rows[winner].BlobKey {
+				t.Fatalf("round %d: journal keys = %v, %v; want only the key of the winner", round, keys, err)
+			}
+
+			f.end(t, u, stack.StatusSucceeded)
+		}
+	}
+}
+
+// wantOneJournalWinner fails the test unless exactly one write stored the batch
+// and each other write has the answer of its content. It returns the index of
+// the winner.
+func wantOneJournalWinner(t *testing.T, retried []bool, errs []error, same bool) int {
+	t.Helper()
+
+	winner, won := -1, 0
+
+	for i := range errs {
+		switch {
+		case errs[i] == nil && !retried[i]:
+			winner = i
+			won++
+		case same && errs[i] == nil && retried[i]:
+		case !same && errors.Is(errs[i], stack.ErrJournalConflict) && !retried[i]:
+		default:
+			t.Fatalf("write %d: retried = %v, err = %v, same content = %v", i, retried[i], errs[i], same)
+		}
+	}
+
+	if won != 1 {
+		t.Fatalf("%d writes stored the batch, want exactly one (same content = %v)", won, same)
+	}
+
+	return winner
 }

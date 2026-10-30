@@ -81,6 +81,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		},
 		{name: "a journal batch replay under another key keeps the first key", test: testJournalReplayOtherKey},
 		{name: "journal batches give the key, the SHA-256 and the size", test: testJournalBatches},
+		{name: "concurrent writes of one journal batch: one winner", test: testJournalConcurrentWinner},
 		{name: "journal version round trip", test: testJournalVersionRoundTrip},
 		{name: "journal version of a new update is zero", test: testJournalVersionDefaultsToZero},
 		{name: "count of running journaled updates", test: testCountRunningJournaledUpdates},
