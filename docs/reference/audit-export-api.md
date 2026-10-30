@@ -9,7 +9,7 @@ log does not change the memory that an export uses.
 | Query value | Required | Meaning |
 | --- | --- | --- |
 | `organization` | yes | The namespace to export, or `@server` for the installation log. |
-| `format` | no | `json`. This is the default and the one format that the server sends. |
+| `format` | no | `json` (the default) or `cef`. |
 | `fromSequence` | no | The first sequence to send. A positive number. The default is 1. |
 | `from` | no | Send only entries with a time at or after this value, in Unix milliseconds. |
 | `to` | no | Send only entries with a time at or before this value, in Unix milliseconds. |
@@ -23,8 +23,9 @@ The route needs the action `namespace:read-audit` on the namespace, or
 The server reads from `fromSequence` to the last sequence that the log holds
 when the export starts. An entry that a person appends later is not in the
 export. A time range reads each entry from `fromSequence` and keeps the
-entries inside the range, so use `fromSequence` to skip the start of a large
-log.
+entries inside the range. The read has no early stop, so a clock that went
+back cannot drop an entry. To skip the start of a large log, set
+`fromSequence` to the first sequence that you need.
 
 ## Response
 
@@ -40,6 +41,40 @@ empty for the first entry of a scope.
 If the server cannot read an entry after it sent the first line, it ends the
 transfer with an error. A client must treat a transfer that did not end
 cleanly as an export that is not whole.
+
+## CEF lines
+
+With `format=cef`, the answer has the content type `text/plain` and one
+ArcSight Common Event Format line for each entry. The header is
+`CEF:0|OpenDustpan|OpenDustpan|1|<action>|<kind>|<severity>|`. The version `1`
+is the version of this mapping. The action is the signature ID and the kind is
+the name. The severity is 3 for `success`, 5 for `failure`, 7 for `denied`
+and 10 for any other outcome.
+
+| Key | Field of the entry |
+| --- | --- |
+| `rt` | `atMs` |
+| `suser` | `subject` |
+| `src` | `sourceIP` |
+| `act` | `action` |
+| `outcome` | `outcome` |
+| `requestClientApplication` | `userAgent` |
+| `reason` | `reason` |
+| `cn1` (label `sequence`) | `sequence` |
+| `cs1` (label `scope`) | the scope |
+| `cs2` (label `object`) | `object` |
+| `cs3` (label `channel`) | `channel` |
+| `cs4` (label `requestID`) | `requestID` |
+| `cs5` (label `hash`) | `hash` |
+| `cs6` (label `prevHash`) | `prevHash` |
+| `flexString1` (label `objectID`) | `objectID` |
+| `flexString2` (label `principalKind`) | `principalKind` |
+
+A field with no value writes no key. The server escapes the backslash, the
+line ends and (in the header) the pipe, and (in the extension) the equals
+sign, as the CEF format requires. The CEF line does not hold every field that
+the hash covers (for example `tokenID`, `version` and `changes`), so the
+offline check needs the `json` format.
 
 ## The entry of the export
 

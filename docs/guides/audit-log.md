@@ -344,7 +344,8 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 ```
 
 `GET /api/audit/export?organization=<namespace>` sends the entries of the
-namespace oldest first, one JSON object for each line. It needs the same
+namespace oldest first, one JSON object for each line, or one CEF line
+for each entry with `format=cef`. It needs the same
 action. Use it to keep a copy of a range, or to check a range with no help
 from the server. The lines hold the previous hash and the hash, so a reader
 can compute each hash again. See
@@ -841,4 +842,3 @@ This guide does not cover these items.
 
 - Retention.
 - The full catalog of events.
-- Export through the API in JSON and CEF.
