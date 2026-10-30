@@ -83,7 +83,9 @@ The server does not decide the steps from the request. For an OpenTofu
 workspace, the plan steps are `tofu init -input=false` and
 `tofu plan -input=false -out=tfplan`. For a Pulumi stack, the plan step is
 `pulumi preview --non-interactive --stack=<namespace>/<project>/<stack>`. It
-changes no resource. The log of the step holds the preview. A job starts with
+changes no resource. A Pulumi job has no stored plan, so `job:read-plans` shows
+nothing for it. The preview is in the log of the step, and the Pulumi CLI masks
+it only. A caller reads the log with `job:read-logs`. A job starts with
 no profile, so a runner gives it no secrets of a profile.
 
 ### Retry a start

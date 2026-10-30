@@ -465,6 +465,34 @@ const (
 	pulumiSkipUpdate     = "PULUMI_SKIP_UPDATE_CHECK"
 )
 
+// maxPulumiName is the most bytes of the organization, the project or the
+// stack of a Pulumi stack in an argument.
+const maxPulumiName = 100
+
+// validPulumiName reports whether s is on the allowlist of the organization,
+// the project and the stack of a Pulumi stack in an argument: 1 to
+// maxPulumiName ASCII letters, digits, '_', '.' and '-', with a letter, a
+// digit or '_' first, so a segment is never a flag, '.' or '..'.
+func validPulumiName(s string) bool {
+	if s == "" || len(s) > maxPulumiName || !isPulumiNameStart(s[0]) {
+		return false
+	}
+
+	for i := 1; i < len(s); i++ {
+		if c := s[i]; !isPulumiNameStart(c) && c != '.' && c != '-' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isPulumiNameStart reports whether c may start a segment of a Pulumi stack:
+// an ASCII letter, a digit or '_'.
+func isPulumiNameStart(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
 // planSteps returns the default steps of a plan for the tool of the unit. Only
 // the tools with a plan step list here start a job.
 func planSteps(unit identity.Object) ([]job.Step, error) {
@@ -521,16 +549,19 @@ func tofuStep(name string, args ...string) job.Step {
 // The step changes no resource and leaves no output: the log of the step
 // holds the preview.
 func pulumiPreviewStep(unit identity.Object) (job.Step, error) {
-	project, name, ok := strings.Cut(unit.UnitName(), "/")
+	project, name, _ := strings.Cut(unit.UnitName(), "/")
 
-	// Defense in depth: the unit object comes from a checked route and a
-	// stored stack, and the Pulumi CLI refuses a bad name too. This check
-	// stays so that a name that is not "project/stack" never reaches an
-	// argument list.
-	if !ok || project == "" || name == "" || strings.ContainsAny(name, "/\x00\r\n ") ||
-		strings.ContainsAny(project, "\x00\r\n ") {
-		return job.Step{}, fmt.Errorf("%w: the Pulumi stack name %q is not of the form project/stack", job.ErrInvalid,
-			unit.UnitName())
+	// Defense in depth: this allowlist stays so that a new caller of the
+	// planner cannot put a hostile name in an argument. It does not rely on
+	// the other layers: identity.UnitObject checks the unit name, the route
+	// and the stored stack check the name when the stack is made, the argument
+	// list passes the name to the program with no shell, and the Pulumi CLI
+	// checks the name too.
+	for _, part := range []string{string(unit.Namespace()), project, name} {
+		if !validPulumiName(part) {
+			return job.Step{}, fmt.Errorf("%w: the Pulumi stack %q is not of the form project/stack with letters, "+
+				"digits, '_', '.' and '-'", job.ErrInvalid, unit.UnitName())
+		}
 	}
 
 	stack := pulumiStackFlag + string(unit.Namespace()) + "/" + project + "/" + name
