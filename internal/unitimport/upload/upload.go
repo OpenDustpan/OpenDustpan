@@ -11,7 +11,6 @@
 //	<unit key>/unit.json                    the tool and the name of the unit
 //	<unit key>/<sequence>.<attempt>.bin     the bytes of one attempt to store the version
 //	<unit key>/<sequence>-<attempt>.json    the facts of one attempt to store the version
-//	<unit key>/<sequence>.json              the facts of a version that an older layout committed
 //
 // Each attempt writes its body and its facts file to its own keys, and no key
 // is written twice, so a store that replaces an object instead of refusing a
@@ -21,10 +20,6 @@
 // decides which attempt that is. A body or a facts file that no row names is
 // never read. The attempt that loses deletes its two files. The cancel and the
 // release of the import delete each object below the prefix.
-//
-// A reader accepts both layouts. A version has a commit row, or it has a
-// facts file named <sequence>.json that an older layout wrote with a
-// create-only write. The row wins when a sequence has both.
 package upload
 
 import (
@@ -54,12 +49,8 @@ const MaxMetadataBytes = 64 << 10
 // maxFactsBytes is the most that the source reads of a facts or unit file.
 const maxFactsBytes = MaxMetadataBytes + 4<<10
 
-// legacyFacts is the name of a facts file of the older layout, and attemptFacts
-// is the name of a facts file of one attempt.
-var (
-	legacyFacts  = regexp.MustCompile(`^\d{10}\.json$`)
-	attemptFacts = regexp.MustCompile(`^\d{10}-[0-9a-z]{1,64}\.json$`)
-)
+// attemptFacts is the name of a facts file of one attempt.
+var attemptFacts = regexp.MustCompile(`^\d{10}-[0-9a-z]{1,64}\.json$`)
 
 // sequenceDigits is the width of a sequence in a key and in a version ID, so
 // that the order of the keys is the order of the versions.
@@ -656,7 +647,7 @@ func (s *Source) unitDir(u unitimport.SourceUnit) string {
 // here is a defense-in-depth layer next to the check of the commit row, so a
 // name from a restored row cannot point outside the unit directory.
 func (s *Source) factsKey(u unitimport.SourceUnit, name string) (blob.Key, error) {
-	if !legacyFacts.MatchString(name) && !attemptFacts.MatchString(name) {
+	if !attemptFacts.MatchString(name) {
 		return "", invalid("an upload file name is not a facts file name")
 	}
 
@@ -724,9 +715,8 @@ type versionIndex struct {
 	names map[int]string
 }
 
-// index returns the committed versions of u. A version is a commit row, or a
-// facts file of the older layout that no row replaces. A facts file of an
-// attempt that no row names is not a version.
+// index returns the committed versions of u: the commit rows. A facts file of
+// an attempt that no row names is not a version.
 func (s *Source) index(ctx context.Context, u unitimport.SourceUnit) (versionIndex, error) {
 	rows, err := s.commits.Store.UploadCommits(ctx, s.commits.Fence.Namespace, s.commits.ImportID, s.unitDirName(u))
 	if err != nil {
@@ -743,23 +733,6 @@ func (s *Source) index(ctx context.Context, u unitimport.SourceUnit) (versionInd
 		}
 
 		idx.names[r.Sequence] = r.Facts
-	}
-
-	objs, err := s.blobs.List(ctx, s.unitDir(u))
-	if err != nil {
-		return versionIndex{}, fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-	}
-
-	for _, o := range objs {
-		name := o.Key.String()[strings.LastIndex(o.Key.String(), "/")+1:]
-		if !legacyFacts.MatchString(name) {
-			continue
-		}
-
-		n, convErr := strconv.Atoi(strings.TrimSuffix(name, ".json"))
-		if _, hasRow := idx.names[n]; convErr == nil && !hasRow {
-			idx.names[n] = name
-		}
 	}
 
 	for n := range idx.names {
