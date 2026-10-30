@@ -13,6 +13,9 @@ import (
 // Column names of the sink tables that other tables share.
 const (
 	sinkColScope      = "scope"
+	sinkColSinkID     = "sink_id"
+	sinkColPrincipal  = "principal"
+	sinkColSubject    = "subject"
 	sinkColRef        = "ref"
 	sinkColCiphertext = "ciphertext"
 )
@@ -30,7 +33,7 @@ func pgCopySinkTables() []pgCopyTable {
 		},
 		{
 			table:   "notification_sink_secrets",
-			columns: []string{sinkColScope, sinkColRef, "sink_id", "position", sinkColCiphertext},
+			columns: []string{sinkColScope, sinkColRef, sinkColSinkID, "position", sinkColCiphertext},
 			orderBy: []string{sinkColScope, sinkColRef},
 		},
 		{
@@ -41,10 +44,10 @@ func pgCopySinkTables() []pgCopyTable {
 		{
 			table: "notifications",
 			columns: []string{
-				sinkColScope, "sequence", "id", "type", "object", "object_id", "subject", "agent", "severity",
+				sinkColScope, pgColSequence, "id", "type", "object", "object_id", sinkColSubject, "agent", "severity",
 				"summary", "links", "attributes", "recipients", "dedupe_key", "at_ms",
 			},
-			orderBy: []string{sinkColScope, "sequence"},
+			orderBy: []string{sinkColScope, pgColSequence},
 		},
 		{
 			table:   "notification_sequences",
@@ -53,13 +56,21 @@ func pgCopySinkTables() []pgCopyTable {
 		},
 		{
 			table:   "notification_cursors",
-			columns: []string{pgColName, sinkColScope, "sequence"},
+			columns: []string{pgColName, sinkColScope, pgColSequence},
 			orderBy: []string{pgColName, sinkColScope},
 		},
 		{
 			table: "notification_subscriptions",
 			columns: []string{
-				"id", sinkColScope, "sink_id", "types", "objects", "min_severity", "state", "reason", pgColCreatedBy,
+				"id",
+				sinkColScope,
+				sinkColSinkID,
+				"types",
+				"objects",
+				"min_severity",
+				pgColState,
+				"reason",
+				pgColCreatedBy,
 				pgColVersion,
 			},
 			orderBy: []string{"id"},
@@ -67,8 +78,21 @@ func pgCopySinkTables() []pgCopyTable {
 		{
 			table: "notification_deliveries",
 			columns: []string{
-				"id", sinkColScope, "notification_id", "subscription_id", "sink_id", "contact", "principal", "state",
-				"attempts", "next_at_ms", "last_error", "delivered_at_ms", "owner", "lease_until_ms", pgColVersion,
+				"id",
+				sinkColScope,
+				"notification_id",
+				"subscription_id",
+				sinkColSinkID,
+				"contact",
+				sinkColPrincipal,
+				pgColState,
+				"attempts",
+				"next_at_ms",
+				"last_error",
+				"delivered_at_ms",
+				"owner",
+				"lease_until_ms",
+				pgColVersion,
 			},
 			orderBy: []string{"id"},
 		},

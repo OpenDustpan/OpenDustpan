@@ -3,6 +3,8 @@ package backup
 // Column names of the sink tables that other tables share.
 const (
 	portColScope      = "scope"
+	portColSinkID     = "sink_id"
+	portColObject     = "object"
 	portColRef        = "ref"
 	portColCiphertext = "ciphertext"
 )
@@ -33,7 +35,7 @@ func portableSinkTables() []PortableTable {
 			Columns: []Column{
 				{Name: portColScope, Kind: KindText},
 				{Name: portColRef, Kind: KindText},
-				{Name: "sink_id", Kind: KindText},
+				{Name: portColSinkID, Kind: KindText},
 				{Name: "position", Kind: KindInteger},
 				{Name: portColCiphertext, Kind: KindBytes},
 			},
@@ -46,15 +48,22 @@ func portableSinkTables() []PortableTable {
 				{Name: portColRef, Kind: KindText},
 			},
 		},
+	}
+}
+
+// portableOutboxTables is the portable description of the outbox tables: the
+// notifications, the counter of each scope and the cursor of each dispatcher.
+func portableOutboxTables() []PortableTable {
+	return []PortableTable{
 		{
 			Table:   "notifications",
-			OrderBy: []string{portColScope, "sequence"},
+			OrderBy: []string{portColScope, portColSequence},
 			Columns: []Column{
 				{Name: portColScope, Kind: KindText},
-				{Name: "sequence", Kind: KindInteger},
+				{Name: portColSequence, Kind: KindInteger},
 				{Name: "id", Kind: KindText},
 				{Name: "type", Kind: KindText},
-				{Name: "object", Kind: KindText},
+				{Name: portColObject, Kind: KindText},
 				{Name: "object_id", Kind: KindText},
 				{Name: "subject", Kind: KindText},
 				{Name: "agent", Kind: KindText},
@@ -81,20 +90,27 @@ func portableSinkTables() []PortableTable {
 			Columns: []Column{
 				{Name: portColName, Kind: KindText},
 				{Name: portColScope, Kind: KindText},
-				{Name: "sequence", Kind: KindInteger},
+				{Name: portColSequence, Kind: KindInteger},
 			},
 		},
+	}
+}
+
+// portableDeliveryTables is the portable description of the subscription and
+// the delivery tables.
+func portableDeliveryTables() []PortableTable {
+	return []PortableTable{
 		{
 			Table:   "notification_subscriptions",
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
 				{Name: portColScope, Kind: KindText},
-				{Name: "sink_id", Kind: KindText},
+				{Name: portColSinkID, Kind: KindText},
 				{Name: "types", Kind: KindText},
 				{Name: "objects", Kind: KindText},
 				{Name: "min_severity", Kind: KindInteger},
-				{Name: "state", Kind: KindText},
+				{Name: portColState, Kind: KindText},
 				{Name: "reason", Kind: KindText},
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
@@ -108,10 +124,10 @@ func portableSinkTables() []PortableTable {
 				{Name: portColScope, Kind: KindText},
 				{Name: "notification_id", Kind: KindText},
 				{Name: "subscription_id", Kind: KindText},
-				{Name: "sink_id", Kind: KindText},
+				{Name: portColSinkID, Kind: KindText},
 				{Name: "contact", Kind: KindText},
 				{Name: "principal", Kind: KindText},
-				{Name: "state", Kind: KindText},
+				{Name: portColState, Kind: KindText},
 				{Name: "attempts", Kind: KindInteger},
 				{Name: "next_at_ms", Kind: KindInteger},
 				{Name: "last_error", Kind: KindText},

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -24,22 +23,33 @@ import (
 // it in the same transaction. The store keeps the rows of namespaces and the
 // rows of audit.ServerScope.
 func (s *Store) Notifications() NotificationStore {
-	return NotificationStore{sinks: sinks{s: s}}
+	return NotificationStore{s: s}
 }
 
 // NotificationStore implements notify.Outbox, notify.Subscriptions,
-// notify.Deliveries and notify.SinkStore over one database. It embeds the
-// sink reads.
+// notify.Deliveries and notify.SinkStore over one database.
 type NotificationStore struct {
-	sinks
+	s *Store
 }
 
 var (
-	_ notify.Outbox        = NotificationStore{sinks: sinks{s: nil}}
-	_ notify.Subscriptions = NotificationStore{sinks: sinks{s: nil}}
-	_ notify.Deliveries    = NotificationStore{sinks: sinks{s: nil}}
-	_ notify.SinkStore     = NotificationStore{sinks: sinks{s: nil}}
+	_ notify.Outbox        = NotificationStore{s: nil}
+	_ notify.Subscriptions = NotificationStore{s: nil}
+	_ notify.Deliveries    = NotificationStore{s: nil}
+	_ notify.SinkStore     = NotificationStore{s: nil}
 )
+
+// SinkSecrets implements notify.Subscriptions.
+func (k NotificationStore) SinkSecrets(
+	ctx context.Context, scope namespace.Name, id string,
+) ([]notify.SealedSecret, error) {
+	return sinks{s: k.s}.SinkSecrets(ctx, scope, id)
+}
+
+// Sinks implements notify.Subscriptions.
+func (k NotificationStore) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, error) {
+	return sinks{s: k.s}.Sinks(ctx, scope)
+}
 
 // scopedWrite names the row of a write: how to find its scope, and the error
 // for a fence that belongs to another scope. e is the audit entry that the
@@ -92,16 +102,22 @@ func (s *Store) inScopedTx(
 			return fnErr
 		}
 
-		if w.entry == nil {
-			return nil
-		}
-
-		if _, appendErr := appendAuditEntry(ctx, q, *w.entry); appendErr != nil {
-			return fmt.Errorf("append audit entry: %w", appendErr)
-		}
-
-		return nil
+		return appendScopedEntry(ctx, q, w.entry)
 	})
+}
+
+// appendScopedEntry appends e in the transaction of q. A nil entry appends
+// nothing.
+func appendScopedEntry(ctx context.Context, q *db.Queries, e *audit.Entry) error {
+	if e == nil {
+		return nil
+	}
+
+	if _, err := appendAuditEntry(ctx, q, *e); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // checkNotifyFence returns mismatch when fence does not belong to scope,
@@ -224,19 +240,21 @@ func appendNotifications(ctx context.Context, q *db.Queries, scope namespace.Nam
 			return encErr
 		}
 
-		if insErr := q.InsertNotification(ctx, db.InsertNotificationParams{
+		insErr := q.InsertNotification(ctx, db.InsertNotificationParams{
 			Scope: row.Scope, Sequence: row.Sequence, ID: row.ID, Type: row.Type, Object: row.Object,
 			ObjectID: row.ObjectID, Subject: row.Subject, Agent: row.Agent, Severity: row.Severity,
 			Summary: row.Summary, Links: row.Links, Attributes: row.Attributes, Recipients: row.Recipients,
 			DedupeKey: row.DedupeKey, AtMs: row.AtMs,
-		}); insErr != nil {
+		})
+		if insErr != nil {
 			return fmt.Errorf("insert notification: %w", insErr)
 		}
 	}
 
-	if setErr := q.SetNotificationSequence(ctx, db.SetNotificationSequenceParams{
+	setErr := q.SetNotificationSequence(ctx, db.SetNotificationSequenceParams{
 		LastSequence: last, Scope: scope.String(),
-	}); setErr != nil {
+	})
+	if setErr != nil {
 		return fmt.Errorf("write notification sequence: %w", setErr)
 	}
 
@@ -307,7 +325,7 @@ func (k NotificationStore) After(
 	}
 
 	rows, err := k.s.queries.ListNotificationsAfter(ctx, db.ListNotificationsAfterParams{
-		Scope: scope.String(), After: seq, MaxRows: int32(min(limit, math.MaxInt32)),
+		Scope: scope.String(), After: seq, MaxRows: rowLimit(limit),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("select notifications: %w", err)
@@ -315,7 +333,9 @@ func (k NotificationStore) After(
 
 	out := make([]notify.Notification, 0, len(rows))
 
-	for _, r := range rows {
+	for i := range rows {
+		r := &rows[i]
+
 		n, convErr := notifystore.Notification(notifystore.NotificationRow{
 			Scope: r.Scope, Sequence: r.Sequence, ID: r.ID, Type: r.Type, Object: r.Object, ObjectID: r.ObjectID,
 			Subject: r.Subject, Agent: r.Agent, Severity: r.Severity, Summary: r.Summary, Links: r.Links,
@@ -333,7 +353,10 @@ func (k NotificationStore) After(
 
 // Cursor implements notify.Outbox.
 func (k NotificationStore) Cursor(ctx context.Context, name string, scope namespace.Name) (int64, error) {
-	seq, err := k.s.queries.GetNotificationCursor(ctx, db.GetNotificationCursorParams{Name: name, Scope: scope.String()})
+	seq, err := k.s.queries.GetNotificationCursor(
+		ctx,
+		db.GetNotificationCursorParams{Name: name, Scope: scope.String()},
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -353,9 +376,10 @@ func (k NotificationStore) MoveCursor(ctx context.Context, fence namespace.Fence
 
 	return k.s.inScopedTx(ctx, fence, scopedWrite{scope: known(m.Scope), mismatch: notify.ErrInvalid, entry: nil},
 		func(q *db.Queries, _ namespace.Name) error {
-			if err := q.EnsureNotificationCursor(ctx, db.EnsureNotificationCursorParams{
+			err := q.EnsureNotificationCursor(ctx, db.EnsureNotificationCursorParams{
 				Name: m.Name, Scope: m.Scope.String(),
-			}); err != nil {
+			})
+			if err != nil {
 				return fmt.Errorf("make notification cursor: %w", err)
 			}
 
@@ -421,7 +445,12 @@ func (k NotificationStore) PutSink(
 		}
 
 		if changed {
-			if suspendErr := suspendSubscriptionsOf(ctx, q, s.Scope, s.ID, stored.Version, e); suspendErr != nil {
+			if suspendErr := suspendSubscriptionsOf(
+				ctx,
+				q,
+				sinkChange{scope: s.Scope, sink: s.ID, version: stored.Version},
+				e,
+			); suspendErr != nil {
 				return suspendErr
 			}
 		}
@@ -463,15 +492,23 @@ func sinkDestinationChanged(ctx context.Context, q *db.Queries, s notify.Sink) (
 	return old.Target != s.Target || !slices.Equal(refs, s.SecretRefs), nil
 }
 
+// sinkChange names the sink whose destination a write changed, and the version
+// of the sink that the write stores.
+type sinkChange struct {
+	scope   namespace.Name
+	sink    string
+	version int64
+}
+
 // suspendSubscriptionsOf suspends each active subscription of the sink id with
 // the reason notify.ReasonSinkChanged and increments its version, so a put
 // that read the subscription before the change gets notify.ErrConflict. It
 // appends one notice for each subscription that it suspends, and skips each
 // pending delivery of each subscription of the sink, so a delivery that was
 // routed to the old place is never sent to the new one.
-func suspendSubscriptionsOf(
-	ctx context.Context, q *db.Queries, scope namespace.Name, id string, version int64, e audit.Entry,
-) error {
+func suspendSubscriptionsOf(ctx context.Context, q *db.Queries, c sinkChange, e audit.Entry) error {
+	scope, id, version := c.scope, c.sink, c.version
+
 	rows, err := q.ListNotificationSubscriptionsOfSink(ctx, db.ListNotificationSubscriptionsOfSinkParams{
 		Scope: scope.String(), SinkID: id,
 	})
@@ -498,16 +535,19 @@ func suspendSubscriptionsOf(
 
 	for i := range subs {
 		if subs[i].State == notify.SubscriptionStateActive {
-			if susErr := q.SuspendNotificationSubscription(ctx, db.SuspendNotificationSubscriptionParams{
+			susErr := q.SuspendNotificationSubscription(ctx, db.SuspendNotificationSubscriptionParams{
 				Reason: notify.ReasonSinkChanged, ID: subs[i].ID, Scope: scope.String(),
-			}); susErr != nil {
+			})
+			if susErr != nil {
 				return fmt.Errorf("suspend subscription: %w", susErr)
 			}
 		}
 
-		if skipErr := q.SkipPendingNotificationDeliveriesOfSubscription(
-			ctx, db.SkipPendingNotificationDeliveriesOfSubscriptionParams{Scope: scope.String(), SubscriptionID: subs[i].ID},
-		); skipErr != nil {
+		skipErr := q.SkipPendingNotificationDeliveriesOfSubscription(
+			ctx,
+			db.SkipPendingNotificationDeliveriesOfSubscriptionParams{Scope: scope.String(), SubscriptionID: subs[i].ID},
+		)
+		if skipErr != nil {
 			return fmt.Errorf("skip pending deliveries: %w", skipErr)
 		}
 	}
@@ -519,7 +559,9 @@ func suspendSubscriptionsOf(
 func subscriptionsOf(rows []db.NotificationSubscription) ([]notify.Subscription, error) {
 	out := make([]notify.Subscription, 0, len(rows))
 
-	for _, r := range rows {
+	for i := range rows {
+		r := &rows[i]
+
 		s, err := notifystore.Subscription(notifystore.SubscriptionRow{
 			ID: r.ID, Scope: r.Scope, SinkID: r.SinkID, Types: r.Types, Objects: r.Objects,
 			MinSeverity: r.MinSeverity, State: r.State, Reason: r.Reason, CreatedBy: r.CreatedBy, Version: r.Version,
@@ -551,15 +593,17 @@ func (k NotificationStore) DeleteSink(ctx context.Context, id string, fence name
 			return fmt.Errorf("delete sink %s: %w", id, notify.ErrInUse)
 		}
 
-		if delErr := q.DeleteNotificationSinkSecrets(ctx, db.DeleteNotificationSinkSecretsParams{
+		delErr := q.DeleteNotificationSinkSecrets(ctx, db.DeleteNotificationSinkSecretsParams{
 			SinkID: id, Namespace: scope.String(),
-		}); delErr != nil {
+		})
+		if delErr != nil {
 			return fmt.Errorf("delete sink secrets: %w", delErr)
 		}
 
-		if _, delErr := q.DeleteNotificationSink(ctx, db.DeleteNotificationSinkParams{
+		_, delErr = q.DeleteNotificationSink(ctx, db.DeleteNotificationSinkParams{
 			ID: id, Namespace: scope.String(),
-		}); delErr != nil {
+		})
+		if delErr != nil {
 			return fmt.Errorf("delete sink: %w", delErr)
 		}
 
@@ -588,7 +632,7 @@ func (k NotificationStore) PutSubscription(
 		return fmt.Errorf("put subscription: %w", err)
 	}
 
-	types, objects, err := notifystore.EncodeFilter(s.Filter)
+	filter, err := notifystore.EncodeFilter(s.Filter)
 	if err != nil {
 		return err
 	}
@@ -596,35 +640,19 @@ func (k NotificationStore) PutSubscription(
 	w := scopedWrite{scope: known(s.Scope), mismatch: notify.ErrInvalid, entry: &e}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, _ namespace.Name) error {
-		sink, sinkErr := q.GetNotificationSink(ctx, s.Sink)
-		if errors.Is(sinkErr, pgx.ErrNoRows) || sinkErr == nil && sink.Namespace != s.Scope.String() {
-			return fmt.Errorf("put subscription %s: sink %s: %w", s.ID, s.Sink, notify.ErrNotFound)
+		exists, checkErr := checkSubscriptionWrite(ctx, q, s)
+		if checkErr != nil {
+			return checkErr
 		}
 
-		if sinkErr != nil {
-			return fmt.Errorf("select sink: %w", sinkErr)
+		var writeErr error
+		if exists {
+			writeErr = updateSubscription(ctx, q, s, filter)
+		} else {
+			writeErr = insertSubscription(ctx, q, s, filter)
 		}
 
-		old, oldErr := q.GetNotificationSubscription(ctx, s.ID)
-
-		var version int64
-
-		switch {
-		case oldErr == nil && old.Scope != s.Scope.String():
-			return fmt.Errorf("put subscription %s: %w", s.ID, notify.ErrNotFound)
-		case oldErr == nil:
-			version = old.Version
-		case !errors.Is(oldErr, pgx.ErrNoRows):
-			return fmt.Errorf("select subscription: %w", oldErr)
-		default:
-			// The subscription is new.
-		}
-
-		if version != s.Version {
-			return fmt.Errorf("put subscription %s: %w", s.ID, notify.ErrConflict)
-		}
-
-		if writeErr := writeSubscription(ctx, q, s, types, objects, oldErr == nil); writeErr != nil {
+		if writeErr != nil {
 			return writeErr
 		}
 
@@ -635,33 +663,74 @@ func (k NotificationStore) PutSubscription(
 	})
 }
 
-// writeSubscription inserts a new subscription, or replaces the stored one at
-// the version of s. It returns notify.ErrConflict when another write changed
-// the subscription since.
-func writeSubscription(
-	ctx context.Context, q *db.Queries, s notify.Subscription, types, objects string, exists bool,
-) error {
-	var (
-		n   int64
-		err error
-	)
-
-	if exists {
-		n, err = q.UpdateNotificationSubscription(ctx, db.UpdateNotificationSubscriptionParams{
-			SinkID: s.Sink, Types: types, Objects: objects, MinSeverity: int64(s.Filter.MinSeverity),
-			State: string(s.State), Reason: s.Reason, CreatedBy: s.CreatedBy, ID: s.ID, Scope: s.Scope.String(),
-			Version: s.Version,
-		})
-	} else {
-		n, err = q.InsertNotificationSubscription(ctx, db.InsertNotificationSubscriptionParams{
-			ID: s.ID, Scope: s.Scope.String(), SinkID: s.Sink, Types: types, Objects: objects,
-			MinSeverity: int64(s.Filter.MinSeverity), State: string(s.State), Reason: s.Reason,
-			CreatedBy: s.CreatedBy,
-		})
+// checkSubscriptionWrite checks the write of s against the stored sink and the
+// stored subscription. It reports whether the subscription exists. It returns
+// notify.ErrNotFound for a sink that is not in the scope of s and for a stored
+// subscription of another scope, and notify.ErrConflict when s.Version is not
+// the stored version (0 for a new subscription).
+func checkSubscriptionWrite(ctx context.Context, q *db.Queries, s notify.Subscription) (bool, error) {
+	sink, err := q.GetNotificationSink(ctx, s.Sink)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && sink.Namespace != s.Scope.String() {
+		return false, fmt.Errorf("put subscription %s: sink %s: %w", s.ID, s.Sink, notify.ErrNotFound)
 	}
 
 	if err != nil {
-		return fmt.Errorf("write subscription: %w", err)
+		return false, fmt.Errorf("select sink: %w", err)
+	}
+
+	old, err := q.GetNotificationSubscription(ctx, s.ID)
+
+	var version int64
+
+	exists := false
+
+	switch {
+	case err == nil && old.Scope != s.Scope.String():
+		return false, fmt.Errorf("put subscription %s: %w", s.ID, notify.ErrNotFound)
+	case err == nil:
+		version, exists = old.Version, true
+	case !errors.Is(err, pgx.ErrNoRows):
+		return false, fmt.Errorf("select subscription: %w", err)
+	default:
+		// The subscription is new.
+	}
+
+	if version != s.Version {
+		return false, fmt.Errorf("put subscription %s: %w", s.ID, notify.ErrConflict)
+	}
+
+	return exists, nil
+}
+
+// insertSubscription writes a new subscription. It returns notify.ErrConflict
+// when another write made the subscription since.
+func insertSubscription(ctx context.Context, q *db.Queries, s notify.Subscription, f notifystore.Filter) error {
+	n, err := q.InsertNotificationSubscription(ctx, db.InsertNotificationSubscriptionParams{
+		ID: s.ID, Scope: s.Scope.String(), SinkID: s.Sink, Types: f.Types, Objects: f.Objects,
+		MinSeverity: int64(s.Filter.MinSeverity), State: string(s.State), Reason: s.Reason,
+		CreatedBy: s.CreatedBy,
+	})
+	if err != nil {
+		return fmt.Errorf("insert subscription: %w", err)
+	}
+
+	if n == 0 {
+		return fmt.Errorf("put subscription %s: %w", s.ID, notify.ErrConflict)
+	}
+
+	return nil
+}
+
+// updateSubscription replaces the stored subscription at the version of s. It
+// returns notify.ErrConflict when another write changed it since.
+func updateSubscription(ctx context.Context, q *db.Queries, s notify.Subscription, f notifystore.Filter) error {
+	n, err := q.UpdateNotificationSubscription(ctx, db.UpdateNotificationSubscriptionParams{
+		SinkID: s.Sink, Types: f.Types, Objects: f.Objects, MinSeverity: int64(s.Filter.MinSeverity),
+		State: string(s.State), Reason: s.Reason, CreatedBy: s.CreatedBy, ID: s.ID, Scope: s.Scope.String(),
+		Version: s.Version,
+	})
+	if err != nil {
+		return fmt.Errorf("update subscription: %w", err)
 	}
 
 	if n == 0 {
@@ -691,15 +760,17 @@ func (k NotificationStore) DeleteSubscription(
 	w := scopedWrite{scope: scope, mismatch: notify.ErrNotFound, entry: &e}
 
 	return k.s.inScopedTx(ctx, fence, w, func(q *db.Queries, scope namespace.Name) error {
-		if err := q.DeletePendingNotificationDeliveriesOfSubscription(
+		err := q.DeletePendingNotificationDeliveriesOfSubscription(
 			ctx, db.DeletePendingNotificationDeliveriesOfSubscriptionParams{Scope: scope.String(), SubscriptionID: id},
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("delete pending deliveries: %w", err)
 		}
 
-		if _, err := q.DeleteNotificationSubscription(ctx, db.DeleteNotificationSubscriptionParams{
+		_, err = q.DeleteNotificationSubscription(ctx, db.DeleteNotificationSubscriptionParams{
 			ID: id, Scope: scope.String(),
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("delete subscription: %w", err)
 		}
 
@@ -782,10 +853,11 @@ func enqueueDeliveries(ctx context.Context, q *db.Queries, ds []notify.Delivery)
 			// The ID is new.
 		}
 
-		if insErr := q.InsertNotificationDelivery(ctx, db.InsertNotificationDeliveryParams{
+		insErr := q.InsertNotificationDelivery(ctx, db.InsertNotificationDeliveryParams{
 			ID: d.ID, Scope: d.Scope.String(), NotificationID: d.Notification, SubscriptionID: d.Subscription,
 			SinkID: d.Sink, Contact: d.Contact, Principal: d.Principal, NextAtMs: notifystore.Millis(d.NextAt),
-		}); insErr != nil {
+		})
+		if insErr != nil {
 			return fmt.Errorf("insert delivery: %w", insErr)
 		}
 
@@ -824,7 +896,7 @@ func (k NotificationStore) Claim(
 		func(q *db.Queries, _ namespace.Name) error {
 			rows, err := q.ClaimNotificationDeliveries(ctx, db.ClaimNotificationDeliveriesParams{
 				Owner: req.Owner, LeaseUntilMs: req.Now.Add(req.Lease).UnixMilli(), Scope: req.Scope.String(),
-				NowMs: req.Now.UnixMilli(), MaxRows: int32(min(req.Limit, math.MaxInt32)),
+				NowMs: req.Now.UnixMilli(), MaxRows: rowLimit(req.Limit),
 			})
 			if err != nil {
 				return fmt.Errorf("claim deliveries: %w", err)
@@ -853,7 +925,9 @@ func (k NotificationStore) Claim(
 func deliveriesOf(rows []db.NotificationDelivery) ([]notify.Delivery, error) {
 	out := make([]notify.Delivery, 0, len(rows))
 
-	for _, r := range rows {
+	for i := range rows {
+		r := &rows[i]
+
 		d, err := notifystore.Delivery(deliveryRow(r))
 		if err != nil {
 			return nil, fmt.Errorf("delivery %s: %w", r.ID, err)
@@ -865,7 +939,7 @@ func deliveriesOf(rows []db.NotificationDelivery) ([]notify.Delivery, error) {
 	return out, nil
 }
 
-func deliveryRow(r db.NotificationDelivery) notifystore.DeliveryRow {
+func deliveryRow(r *db.NotificationDelivery) notifystore.DeliveryRow {
 	return notifystore.DeliveryRow{
 		ID: r.ID, Scope: r.Scope, NotificationID: r.NotificationID, SubscriptionID: r.SubscriptionID,
 		SinkID: r.SinkID, Contact: r.Contact, Principal: r.Principal, State: r.State, Attempts: r.Attempts,
@@ -942,7 +1016,7 @@ func (k NotificationStore) History(
 
 		rows, err := q.ListNotificationDeliveriesOfSubscription(ctx,
 			db.ListNotificationDeliveriesOfSubscriptionParams{
-				Scope: scope.String(), SubscriptionID: id, MaxRows: int32(min(limit, math.MaxInt32)),
+				Scope: scope.String(), SubscriptionID: id, MaxRows: rowLimit(limit),
 			})
 		if err != nil {
 			return fmt.Errorf("select deliveries: %w", err)
@@ -969,7 +1043,7 @@ func (k NotificationStore) Redeliver(ctx context.Context, id string, fence names
 			return fmt.Errorf("select delivery: %w", err)
 		}
 
-		d, err := notifystore.Delivery(deliveryRow(row))
+		d, err := notifystore.Delivery(deliveryRow(&row))
 		if err != nil {
 			return fmt.Errorf("delivery %s: %w", id, err)
 		}

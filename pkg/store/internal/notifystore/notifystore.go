@@ -153,20 +153,27 @@ type SubscriptionRow struct {
 	Version     int64
 }
 
+// Filter is the text form of the type list and the object list of a
+// notify.Filter.
+type Filter struct {
+	Types   string
+	Objects string
+}
+
 // EncodeFilter returns the text form of the type list and the object list of
 // f.
-func EncodeFilter(f notify.Filter) (types, objects string, err error) {
+func EncodeFilter(f notify.Filter) (Filter, error) {
 	t, err := json.Marshal(nonNil(f.Types))
 	if err != nil {
-		return "", "", fmt.Errorf("encode filter types: %w", err)
+		return Filter{}, fmt.Errorf("encode filter types: %w", err)
 	}
 
 	o, err := json.Marshal(nonNil(f.Objects))
 	if err != nil {
-		return "", "", fmt.Errorf("encode filter objects: %w", err)
+		return Filter{}, fmt.Errorf("encode filter objects: %w", err)
 	}
 
-	return string(t), string(o), nil
+	return Filter{Types: string(t), Objects: string(o)}, nil
 }
 
 func nonNil(s []string) []string {

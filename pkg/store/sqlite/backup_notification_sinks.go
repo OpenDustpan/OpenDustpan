@@ -12,6 +12,9 @@ import (
 // Column names of the sink tables that other tables share.
 const (
 	sinkColScope      = "scope"
+	sinkColSinkID     = "sink_id"
+	sinkColPrincipal  = "principal"
+	sinkColSubject    = "subject"
 	sinkColRef        = "ref"
 	sinkColCiphertext = "ciphertext"
 )
@@ -29,7 +32,7 @@ func sqliteSinkBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "notification_sink_secrets",
-			columns: []string{sinkColScope, sinkColRef, "sink_id", "position", sinkColCiphertext},
+			columns: []string{sinkColScope, sinkColRef, sinkColSinkID, "position", sinkColCiphertext},
 		},
 		{
 			table:   "notification_sink_refs",
@@ -38,8 +41,21 @@ func sqliteSinkBackupTables() []sqliteBackupTable {
 		{
 			table: "notifications",
 			columns: []string{
-				sinkColScope, "sequence", "id", "type", "object", "object_id", "subject", "agent", "severity",
-				"summary", "links", "attributes", "recipients", "dedupe_key", backupColAtMs,
+				sinkColScope,
+				backupColSequence,
+				"id",
+				"type",
+				"object",
+				"object_id",
+				sinkColSubject,
+				"agent",
+				"severity",
+				"summary",
+				"links",
+				"attributes",
+				"recipients",
+				"dedupe_key",
+				backupColAtMs,
 			},
 		},
 		{
@@ -48,20 +64,32 @@ func sqliteSinkBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "notification_cursors",
-			columns: []string{backupColName, sinkColScope, "sequence"},
+			columns: []string{backupColName, sinkColScope, backupColSequence},
 		},
 		{
 			table: "notification_subscriptions",
 			columns: []string{
-				"id", sinkColScope, "sink_id", "types", "objects", "min_severity", "state", "reason",
+				"id", sinkColScope, sinkColSinkID, "types", "objects", "min_severity", backupColState, "reason",
 				backupColCreatedBy, backupColVersion,
 			},
 		},
 		{
 			table: "notification_deliveries",
 			columns: []string{
-				"id", sinkColScope, "notification_id", "subscription_id", "sink_id", "contact", "principal", "state",
-				"attempts", "next_at_ms", "last_error", "delivered_at_ms", "owner", "lease_until_ms",
+				"id",
+				sinkColScope,
+				"notification_id",
+				"subscription_id",
+				sinkColSinkID,
+				"contact",
+				sinkColPrincipal,
+				backupColState,
+				"attempts",
+				"next_at_ms",
+				"last_error",
+				"delivered_at_ms",
+				backupColOwner,
+				"lease_until_ms",
 				backupColVersion,
 			},
 		},
@@ -110,9 +138,7 @@ FROM notification_sinks ORDER BY id`
 	var out []sinkstore.Row
 
 	for rows.Next() {
-		var (
-			row sinkstore.Row
-		)
+		var row sinkstore.Row
 
 		scanErr := rows.Scan(&row.ID, &row.Namespace, &row.Kind, &row.Name, &row.Platform, &row.Target,
 			&row.CreatedBy, &row.Version)

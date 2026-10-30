@@ -76,6 +76,8 @@ func testConcurrentCursor(t *testing.T, h Harness) {
 			won++
 		case !errors.Is(err, notify.ErrConflict):
 			t.Fatalf("concurrent MoveCursor: err = %v, want nil or ErrConflict", err)
+		default:
+			// A move that lost the race.
 		}
 	}
 

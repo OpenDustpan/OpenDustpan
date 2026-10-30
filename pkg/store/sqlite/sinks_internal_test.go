@@ -240,6 +240,14 @@ func checkServedAndNotWritten(t *testing.T, s *Store) {
 	}
 }
 
+// scopeGoneStatements points the rows of a sink table at a scope that names no
+// namespace.
+var scopeGoneStatements = map[string]string{
+	"notification_sinks":        `UPDATE notification_sinks SET scope = 'gone'`,
+	"notification_sink_secrets": `UPDATE notification_sink_secrets SET scope = 'gone'`,
+	"notification_sink_refs":    `UPDATE notification_sink_refs SET scope = 'gone'`,
+}
+
 // TestCheckStagedSinksRefusesAMissingNamespace proves that a sink, a secret
 // item and a held ref whose scope names no namespace of the backup are
 // corrupt, so the restore never brings in a row that no namespace owns.
@@ -266,7 +274,7 @@ func TestCheckStagedSinksRefusesAMissingNamespace(t *testing.T) {
 func dropNamespace(t *testing.T, s *Store, table string) {
 	t.Helper()
 
-	if _, err := s.conn.ExecContext(t.Context(), `UPDATE `+table+` SET scope = 'gone'`); err != nil {
+	if _, err := s.conn.ExecContext(t.Context(), scopeGoneStatements[table]); err != nil {
 		t.Fatalf("change the scope of %s: %v", table, err)
 	}
 }
