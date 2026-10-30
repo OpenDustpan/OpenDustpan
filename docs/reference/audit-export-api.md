@@ -51,7 +51,9 @@ Before the first line, the server writes one entry with the kind `audit-read`
 in the scope that it reads. The action is the read action of the route, and
 the object is `audit-export <scope>` followed by the values of the request.
 The entry is not in the export that wrote it. If the server cannot write it,
-the answer is 500 with the code `audit.export-not-recorded` and no line.
+it sends no line. A namespace that is fenced, is not at home on this
+installation, or is in maintenance mode answers 409, 421 or 503 with its own
+code. Any other cause answers 500 with the code `audit.export-not-recorded`.
 
 ## Check a range with no help from the server
 
