@@ -5,8 +5,15 @@
 -- write.
 
 -- The sink tables held the ID of a namespace. They hold the scope now, so that
--- a sink can belong to the server scope. The rows keep their values.
-CREATE TABLE notification_sinks_scoped (
+-- a sink can belong to the server scope. No tag shipped the old shape, so the
+-- tables are dropped and made again, and no row is copied.
+DROP TABLE notification_sink_refs;
+
+DROP TABLE notification_sink_secrets;
+
+DROP TABLE notification_sinks;
+
+CREATE TABLE notification_sinks (
     id         text   NOT NULL PRIMARY KEY,
     scope      text   NOT NULL,
     kind       text   NOT NULL,
@@ -17,11 +24,7 @@ CREATE TABLE notification_sinks_scoped (
     version    bigint NOT NULL
 );
 
-INSERT INTO notification_sinks_scoped (id, scope, kind, name, platform, target, created_by, version)
-SELECT k.id, n.name, k.kind, k.name, k.platform, k.target, k.created_by, k.version
-FROM notification_sinks AS k JOIN namespaces AS n ON n.id = k.namespace_id;
-
-CREATE TABLE notification_sink_secrets_scoped (
+CREATE TABLE notification_sink_secrets (
     scope      text   NOT NULL,
     ref        text   NOT NULL,
     sink_id    text   NOT NULL,
@@ -30,26 +33,11 @@ CREATE TABLE notification_sink_secrets_scoped (
     PRIMARY KEY (scope, ref)
 );
 
-INSERT INTO notification_sink_secrets_scoped (scope, ref, sink_id, position, ciphertext)
-SELECT n.name, s.ref, s.sink_id, s.position, s.ciphertext
-FROM notification_sink_secrets AS s JOIN namespaces AS n ON n.id = s.namespace_id;
-
-CREATE TABLE notification_sink_refs_scoped (
+CREATE TABLE notification_sink_refs (
     scope text NOT NULL,
     ref   text NOT NULL,
     PRIMARY KEY (scope, ref)
 );
-
-INSERT INTO notification_sink_refs_scoped (scope, ref)
-SELECT n.name, r.ref FROM notification_sink_refs AS r JOIN namespaces AS n ON n.id = r.namespace_id;
-
-DROP TABLE notification_sink_refs;
-DROP TABLE notification_sink_secrets;
-DROP TABLE notification_sinks;
-
-ALTER TABLE notification_sinks_scoped RENAME TO notification_sinks;
-ALTER TABLE notification_sink_secrets_scoped RENAME TO notification_sink_secrets;
-ALTER TABLE notification_sink_refs_scoped RENAME TO notification_sink_refs;
 
 CREATE INDEX notification_sinks_scope ON notification_sinks (scope, id);
 
