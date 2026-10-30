@@ -70,6 +70,28 @@ type protocolFile struct {
 	// old path does not run as intended.
 	Enforced map[string]bool `json:"enforced"`
 	Results  []protoResult   `json:"results"`
+	// Replaced lists each result that a later run replaced because it had
+	// errors: its identity, its time, its error count and its first error.
+	Replaced []string `json:"replaced"`
+}
+
+// replace stores r. A stored result with the same identity goes to
+// Replaced, and r takes its place.
+func (pf *protocolFile) replace(r protoResult) {
+	for i := range pf.Results {
+		old := &pf.Results[i]
+		if old.id() != r.id() {
+			continue
+		}
+
+		pf.Replaced = append(pf.Replaced, fmt.Sprintf("%s at %s: %d errors, first: %s",
+			old.id(), old.Time, old.Errors, oneLine(old.FirstError)))
+		pf.Results[i] = r
+
+		return
+	}
+
+	pf.Results = append(pf.Results, r)
 }
 
 // readProtocol reads protocol.json of dir, or answers an empty file.
@@ -81,6 +103,7 @@ func readProtocol(dir string) (*protocolFile, error) {
 			Host:     readHost(),
 			Families: nil,
 			Enforced: map[string]bool{},
+			Replaced: nil,
 			Results:  nil,
 		}, nil
 	}
@@ -192,13 +215,15 @@ type protocolStores struct {
 
 // runProtocolStores runs every family on each store of o.
 func runProtocolStores(ctx context.Context, logger *slog.Logger, o options, ps protocolStores, pf *protocolFile) error {
+	// A result with an error is not a valid measurement: the run does it
+	// again and replaces it.
 	done := map[string]bool{}
 	for i := range pf.Results {
-		done[pf.Results[i].id()] = true
+		done[pf.Results[i].id()] = pf.Results[i].Errors == 0
 	}
 
 	save := func(r protoResult) error {
-		pf.Results = append(pf.Results, r)
+		pf.replace(r)
 
 		return writeProtocol(o.out, pf)
 	}
@@ -309,6 +334,10 @@ func verdict(oldPath, newPath pathSummary) string {
 		return "incomplete"
 	}
 
+	if oldPath.Errors > 0 || newPath.Errors > 0 {
+		return "invalid: a run has errors"
+	}
+
 	if deltaPct(oldPath.P50.Median, newPath.P50.Median) <= protocolMeasurePct &&
 		deltaPct(oldPath.P99.Median, newPath.P99.Median) <= protocolMeasurePct &&
 		deltaPct(oldPath.OpsPerSec.Median, newPath.OpsPerSec.Median) >= -protocolMeasurePct {
@@ -365,6 +394,10 @@ func renderProtocol(pf *protocolFile) string {
 	}
 
 	writeGapNotes(&b, pf.Results)
+
+	if len(pf.Replaced) > 0 {
+		b.WriteString("\nRuns done again because they had errors:\n\n- " + strings.Join(pf.Replaced, "\n- ") + "\n")
+	}
 
 	return b.String()
 }

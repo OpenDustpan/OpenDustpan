@@ -300,7 +300,7 @@ func TestRenderNoVerdictWithoutEnforcement(t *testing.T) {
 
 	pf := &protocolFile{
 		Plan: protocolPlan{Ops: 10000, Runs: 5, Concurrency: 16}, Host: readHost(), Families: nil,
-		Enforced: map[string]bool{"s": false}, Results: []protoResult{oldRun, newRun},
+		Enforced: map[string]bool{"s": false}, Results: []protoResult{oldRun, newRun}, Replaced: nil,
 	}
 
 	out := renderProtocol(pf)
@@ -312,5 +312,44 @@ func TestRenderNoVerdictWithoutEnforcement(t *testing.T) {
 	pf.Enforced["s"] = true
 	if out := renderProtocol(pf); !strings.Contains(out, "does not meet") {
 		t.Fatalf("render of a store that enforces:\n%s", out)
+	}
+}
+
+func TestReplaceKeepsTheReplacedRun(t *testing.T) {
+	t.Parallel()
+
+	bad := resultOf(1, 2, 3, 4, 7)
+	bad.FirstError = "PUT did not answer 200: status 507"
+
+	other := resultOf(1, 2, 3, 4, 0)
+	other.Run = 2
+
+	good := resultOf(5, 6, 7, 8, 0)
+
+	pf := &protocolFile{
+		Plan: protocolPlan{Ops: 1, Runs: 1, Concurrency: 1}, Host: readHost(), Families: nil,
+		Enforced: map[string]bool{"s": true}, Results: []protoResult{bad, other}, Replaced: nil,
+	}
+
+	pf.replace(good)
+
+	if len(pf.Results) != 2 || pf.Results[0].P50Ms != 5 || pf.Results[1].Run != 2 {
+		t.Fatalf("results after replace = %+v", pf.Results)
+	}
+
+	if len(pf.Replaced) != 1 || !strings.Contains(pf.Replaced[0], "7 errors") ||
+		!strings.Contains(pf.Replaced[0], "status 507") {
+		t.Fatalf("replaced = %q", pf.Replaced)
+	}
+}
+
+func TestVerdictInvalidWithErrors(t *testing.T) {
+	t.Parallel()
+
+	ok := summarize([]protoResult{resultOf(10, 20, 100, 1, 0)})
+	bad := summarize([]protoResult{resultOf(10, 20, 100, 1, 3)})
+
+	if got := verdict(ok, bad); got != "invalid: a run has errors" {
+		t.Fatalf("verdict with errors = %q", got)
 	}
 }
