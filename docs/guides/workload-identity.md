@@ -48,6 +48,22 @@ or cloud metadata address, and follows no redirect. It keeps the keys for 5
 minutes, and reads them again at most once in 30 seconds for each issuer, also
 for a token that names an unknown key.
 
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Size of the JWT | at most 16 KiB |
+| Tolerance of `exp`, `nbf` and `iat` | 60 seconds |
+| Time from now to `exp` | at most 24 hours |
+| Lifetime of the access token | `exchangeLifetimeSeconds`, 60 to 86400, one hour by default, and at most the maximum lifetime of the token policy |
+| Size of a discovery document or a JWKS that the server reads | at most 256 KiB |
+| Time of one read of the keys of an issuer | at most 10 seconds |
+| Keys of one key set | at most 100 |
+| Issuers in the cache of keys | at most 256 |
+| Reads of the keys of one issuer | at most one in 30 seconds |
+| Trust rules of one namespace | at most 100 |
+| Refusal entries in the audit log | one for each namespace in each minute, with the count of the others |
+
 ## Set it up
 
 1. Make a service principal in the namespace, and give it the role that the
