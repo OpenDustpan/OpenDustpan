@@ -1,11 +1,11 @@
 ---
-rfc: 112
+rfc: 113
 title: Rules that hold by themselves, with code gates, nested agent files, project skills and a size budget
 status: discussing
 created: 2026-10-30
 ---
 
-# RFC 112. Rules that hold by themselves, with code gates, nested agent files, project skills and a size budget
+# RFC 113. Rules that hold by themselves, with code gates, nested agent files, project skills and a size budget
 
 Status: discussing. Design only. The owner approved the goal on 2026-10-30.
 This RFC holds the options, a recommendation for each question, and the plan
@@ -136,7 +136,10 @@ standard-library Python check, run by `make lint`, that fails when a version
 in `.github/workflows/*.yml` differs from the Makefile variable. **Reason:**
 it fails closed, it costs no download, and it also stops the drift of the
 other four pinned tools. The error text names the install page and the
-version.
+version. The preflight script of the steward pull request also checks the
+lint version when a session starts. The two checks read the same Makefile
+variable. The check in `make lint` stays, because it runs where the lint runs,
+also for a person who never runs the preflight script.
 
 #### Q1b. PostgreSQL is required, and it must run (F2, F10)
 
@@ -147,16 +150,21 @@ version.
 | `make test`, `make e2e`, `make e2e-ha` and `make merge-gates` fail without `DUSTPAN_TEST_POSTGRES_URL`, unless `DUSTPAN_TEST_SQLITE_ONLY=1` is set | Small. A person who wants a fast local loop sets one variable. | The skip becomes a choice that is visible in the command line. |
 | The Go tests fail instead of skip | Large. `go test ./...` with no database stops working for every contributor. | Too strict for a first checkout. |
 
-**Recommendation:** the third option, plus a readiness step. A new target
-`pg-ready` runs `psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc 'select 1'` with a
-timeout of 5 seconds. When the server refuses, it prints the one command that
-helps, `service postgresql start`, and fails. The targets in the list above
-depend on `pg-ready`. The e2e summary also ends with one line that counts the
-stores that did not run. **Reason:** the Make targets are the entry points of
-agents and of CI. A plain `go test ./...` stays usable on a laptop. The
-readiness check fails in 5 seconds with a clear cause, not after 20 minutes
-with a connection error. A target that starts PostgreSQL by itself is a
-possible later step (open question 2).
+**Recommendation:** the third option, plus a readiness step. The readiness
+step is not new work of this RFC. The ways-of-working steward pull request
+(see "Work that this RFC builds on") adds `scripts/agent-preflight.sh`. That
+script checks that PostgreSQL is up, the lint version, the merge base and the
+free disk space. It also changes `scripts/checks-agent.sh` to start the native
+PostgreSQL with `pg_ctlcluster`. This RFC adds only a Make target `pg-ready`
+that calls the PostgreSQL part of the preflight script, with a timeout of 5
+seconds. The targets in the list above depend on `pg-ready`. The e2e summary
+also ends with one line that counts the stores that did not run. **Reason:**
+the Make targets are the entry points of agents and of CI. A plain
+`go test ./...` stays usable on a laptop. The readiness check fails in 5
+seconds with a clear cause, not after 20 minutes with a connection error. One
+preflight script holds the check, so the check and the start of PostgreSQL do
+not drift apart. Whether `pg-ready` may also start PostgreSQL follows the
+choice of the steward pull request (open question 2).
 
 #### Q1c. Version and migration number clashes between open pull requests (F3, F8)
 
@@ -214,7 +222,12 @@ This rule stops the next ones.
 
 `scripts/checks-agent.sh` (`make checks-agent`) already syncs with `main`,
 starts PostgreSQL when the URL is not set, and runs `make generate`,
-`make check`, `make e2e` and a TruffleHog scan of the branch commits.
+`make check`, `make e2e` and a TruffleHog scan of the branch commits. The
+steward pull request changes this script: native PostgreSQL with
+`pg_ctlcluster`, no rebase option, and no credential literal. From the next
+merge session on, the merge session also gates once on the combined head of
+each batch, with a full `make check` and `make e2e` and no package subsets
+(`docs/agents/merge-session.md` of that pull request).
 
 | Option | Cost | Gives |
 | --- | --- | --- |
@@ -222,12 +235,18 @@ starts PostgreSQL when the URL is not set, and runs `make generate`,
 | `make merge-gates` as a fixed mode of `checks-agent.sh` | Small changes to one script. | One script. The merge mode refuses `SKIP`, requires PostgreSQL through `pg-ready`, runs on the head as it is (`SYNC=none`), and fails when `make generate` leaves a diff. |
 | A Git pre-push hook | Not installed in fresh containers. | Not reliable. |
 
-**Recommendation:** the second option. `make merge-gates` runs on the merged
-head and prints a summary block with the head SHA and the result of each
-step. The agent pastes that block into the pull request, as `CONTRIBUTING.md`
-asks. **Reason:** F3, F7 and F8 all passed on the branch and failed on the
-merged head. One target, with no way to skip a step, closes that gap. It uses
-the script that already exists.
+**Recommendation:** the second option, built on the script as the steward
+pull request leaves it. That pull request is not redesigned here. This RFC
+adds only the Make target and a merge mode: the mode calls
+`scripts/agent-preflight.sh` first, refuses `SKIP`, runs on the head as it is
+(`SYNC=none`), and fails when `make generate` leaves a diff. It prints a
+summary block with the head SHA and the result of each step. The agent pastes
+that block into the pull request, as `CONTRIBUTING.md` asks. The merge
+session runs the same target on the combined head of each batch, so the batch
+gate of the steward pull request and the gate of one branch are one command.
+**Reason:** F3, F7 and F8 all passed on the branch and failed on the merged
+head. One target, with no way to skip a step, closes that gap. It uses the
+script that already exists.
 
 #### Q1g. The forward completeness of `storefault` (F7)
 
@@ -387,7 +406,12 @@ and `jobs.go` do today. **Reason:** this removes the cause of the repeated
 `e2e/coverage.go` use the same script and the same timing. One pull request
 for each file, in the order of the size budget list.
 
-### Q4. Nested `CLAUDE.md` files
+### Q4. Nested `CLAUDE.md` files as area briefs
+
+The owner rejected standing lead sessions for each area as overhead. The
+context of an area lives in files instead. A nested `CLAUDE.md` is the
+one-page brief of its area. An area label on issues and the briefs of the PM
+point at it.
 
 Claude Code reads a `CLAUDE.md` in a subdirectory when it reads files there.
 `.claude/rules/*.md` with `paths:` front matter is a second way, which
@@ -410,15 +434,40 @@ Claude Code reads a `CLAUDE.md` in a subdirectory when it reads files there.
 
   The ADR numbers in this table are the first draft. The pull request that
   writes each file checks them against `docs/adr/`.
-- Each nested file: 40 lines or fewer. A first line that names the package.
-  A last line `ADRs: <numbers>`. Rules only, in strict ASD-STE100, because
-  they are instructions for agents (ADR 14). No copy of a global rule. The
-  root `CLAUDE.md` stays the only place for global rules.
+- Each nested file is an area brief of 40 lines or fewer, with five fixed
+  sections in this order:
+  - **Owns:** what the area owns, in two or three lines: its packages, its
+    ports, its tables or its routes.
+  - **Invariants:** the rules that each change of the area keeps.
+  - **Pitfalls:** the mistakes that review or a `fix-main` pull request
+    found in this area, one line each, with the rule that prevents them.
+  - **Gates:** the commands that fail when a rule of the area breaks, for
+    example `make merge-gates` or one named test.
+  - **ADRs:** the numbers of the ADRs that the area follows.
+
+  It is in strict ASD-STE100, because it is an instruction for agents
+  (ADR 14). It holds no copy of a global rule. The root `CLAUDE.md` stays
+  the only place for global rules.
+- Each area brief has an issue label of the form `area:<name>`, for example
+  `area:store`, `area:api`, `area:e2e`, `area:backup` and `area:dustpan`.
+  `docs/agents/issue-tracker.md` lists each label with the path of its
+  brief. A PM brief to a worker names the area brief to read first, instead
+  of a copy of its content. A worker that has an issue with an area label
+  reads that brief before it reads code.
+- The pitfall loop. Each review finding and each `fix-main` pull request that
+  shows a pitfall of an area changes that area. The first choice is a gate:
+  a test, a lint rule or a Make target. When no gate is possible, the pull
+  request that fixes the finding adds one line under **Pitfalls**. A pitfall
+  line that later gets a gate moves to **Gates**. The 40-line limit forces
+  this: a long pitfall list is a sign that a gate is missing. For example,
+  #2103 would have added the method set test of Q1g to **Gates** of
+  `pkg/store/CLAUDE.md`, not a line of text.
 - `AGENTS.md` next to each nested file is a symbolic link to it. The root
   `AGENTS.md` is today a second copy of the root `CLAUDE.md`, a regular file,
   with no check that the two are equal. It becomes a link too.
 - A check, `scripts/agent-files-check.py`, run by `make docs-lint`:
-  - Each nested `CLAUDE.md` has 40 lines or fewer and an `ADRs:` line.
+  - Each nested `CLAUDE.md` has 40 lines or fewer and the five sections in
+    their order.
   - Each ADR that it names exists in `docs/adr/`.
   - Each `AGENTS.md` is a link to the `CLAUDE.md` in the same directory.
   - When an ADR says that it supersedes ADR N, each nested file that names
@@ -432,8 +481,10 @@ Claude Code reads a `CLAUDE.md` in a subdirectory when it reads files there.
   package that the diff touches.
 
 **Reason:** a short file next to the code is read when the agent works there,
-which is the moment the rule matters. The 40-line limit keeps it a list of
-rules, not a second manual. The superseded-ADR check makes staleness a fail,
+which is the moment the rule matters. It costs no session that waits for
+work. The area label and the PM brief lead a worker to it before the first
+edit. The 40-line limit keeps it a brief, not a second manual, and pushes
+each pitfall towards a gate. The superseded-ADR check makes staleness a fail,
 not a memory task.
 
 ADR 66 lists `CLAUDE.md` among the files that may hold internal references.
@@ -448,7 +499,7 @@ Four skills, each a workflow that spans several files:
 | `od-add-endpoint` | The e2e step first. The route and its authorization actions (the route test). The description and `make api-version-bump` (the pin test). `make clients-generate` (`make clients-check`). The error codes of the catalog (the error code gate). The user documentation page (ADR 214). `make merge-gates`. |
 | `od-add-store-method` | The port method and its documented errors. The conformance tests first. Both dialects, with sqlc for fixed queries. The fence. The `storefault` forward (the method set test). `make generate`, then `make merge-gates`. |
 | `od-add-backup-table` | The migration in both dialects. The table list or the control table list with its reason. The column list (`ErrCoverage`). The staged-row checks. The restore round trip. `make merge-gates`. |
-| `od-merge-pr` | For the merge session. Run `git fetch` with the full URL. Merge `main` with `git merge`. On a version or a migration clash, the bump and renumber targets. `make merge-gates` on the merged head. Paste the summary. Push alone, in the allowed form. Never amend, rebase, force-push, stash or reset. |
+| `od-merge-pr` | For the merge session. The steps and their order come from `docs/agents/merge-session.md` of the steward pull request, and the skill links it. Run `git fetch` with the full URL. Merge `main` with `git merge`. On a version or a migration clash, the bump and renumber targets. `make merge-gates` on the merged head. Paste the summary. Push alone, in the allowed form. Never amend, rebase, force-push, stash or reset. |
 
 | Option for the location | Cost | Gives |
 | --- | --- | --- |
@@ -503,6 +554,24 @@ Sources of candidates:
 package are easy to review and easy to revert. A report that never fails does
 not block other work.
 
+## Work that this RFC builds on
+
+The ways-of-working steward session has the PM's go-ahead for one pull
+request that does three things:
+
+- It changes `scripts/checks-agent.sh`: native PostgreSQL with
+  `pg_ctlcluster`, no rebase option, and no credential literal.
+- It adds `scripts/agent-preflight.sh`, which checks that PostgreSQL is up,
+  the lint version, the merge base and the free disk space.
+- It updates `docs/agents/`: `merge-session.md`, `worker-brief.md` and
+  `lead-workflow.md`. From the next merge session on, merges also gate once
+  on the combined head of each batch, with a full `make check` and
+  `make e2e` and no package subsets.
+
+This RFC does not redesign that work. Pull requests 2 and 3 below add Make
+targets on top of it. The merge skill of Q5 follows
+`docs/agents/merge-session.md` of that pull request, and does not repeat it.
+
 ## Plan of the follow-up pull requests
 
 Each pull request is small and has one concern. "Owner" means that the owner
@@ -512,15 +581,15 @@ column names the shared files and the open drafts that touch the same area.
 | # | Pull request | Files | Gate that it adds | Conflicts | Depends on |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Tool version variables and the version check | `Makefile`, `scripts/tool-pins-check.py` | `make lint` fails on a golangci-lint version that is not the pin, and on a CI pin that differs from the Makefile | `Makefile`, low | none |
-| 2 | PostgreSQL is required, and `pg-ready` | `Makefile`, `scripts/pg-ready.sh`, the e2e summary in `e2e/report.go` | `make test`, `make e2e`, `make e2e-ha` fail without the URL, unless `DUSTPAN_TEST_SQLITE_ONLY=1`. `pg-ready` fails in 5 seconds. | `Makefile`. CI jobs without PostgreSQL set the opt-out explicitly. | none |
-| 3 | `make merge-gates` | `Makefile`, `scripts/checks-agent.sh` | A merge mode with no skip, PostgreSQL required, a clean `make generate`, and a summary block | `scripts/checks-agent.sh`, low | 1, 2 |
+| 2 | PostgreSQL is required, and `pg-ready` | `Makefile`, the e2e summary in `e2e/report.go`. `pg-ready` calls `scripts/agent-preflight.sh` of the steward pull request. | `make test`, `make e2e`, `make e2e-ha` fail without the URL, unless `DUSTPAN_TEST_SQLITE_ONLY=1`. `pg-ready` fails in 5 seconds. | `Makefile`. CI jobs without PostgreSQL set the opt-out explicitly. | the steward pull request |
+| 3 | `make merge-gates` | `Makefile`, a merge mode in `scripts/checks-agent.sh` as the steward pull request leaves it | A merge mode with the preflight first, no skip, a clean `make generate`, and a summary block. The batch gate of the merge session runs the same target. | `scripts/checks-agent.sh`. Lands after the steward pull request. | 1, 2, the steward pull request |
 | 4 | Version bump and migration renumber targets | `Makefile`, `scripts/migration-renumber.sh`, a test in `pkg/store/internal/migrate` | A test fails on two migration files with one number in one dialect | Migration test files, low | none |
 | 5 | Method set tests of the fault wrappers | `internal/store/storefault/methods_test.go`, `internal/blob/blobfault/methods_test.go` | A fail for an adapter method that the wrapper does not forward | Draft #2114 changes the blob `Store` port. Land after it, or add its method to the test. | none |
 | 6 | The credential URL rule | `.semgrep/credential-url.yml`, `Makefile`, a test helper package | `make semgrep` fails on a new credential-shaped literal | Draft #2117. Land after it. | none |
 | 7 | The push hook (owner) | `.claude/settings.json`, `.claude/hooks/push-alone.py` | A refused compound `git push`, with the allowed form | `.claude/settings.json`, low | none |
 | 8 | `Follows:` lines of the benchmark models | `cmd/s3bench/*.go`, `load/*.go`, one test in each | A fail for a model that names no live symbol | Draft #2045 changes `cmd/s3bench`. Land after it. | none |
 | 9 | The size budget | `scripts/size-budget.py`, `scripts/size-budget.txt`, `Makefile` | A fail for a new file over 1,500 lines, and for a listed file over its ceiling | `Makefile`, low | none |
-| 10 | Nested agent files and their check (owner) | the eight `CLAUDE.md` files of Q4, their `AGENTS.md` links, the root `AGENTS.md` link, `scripts/agent-files-check.py`, `Makefile` | Line limit, ADR names, links, superseded ADRs, STE lint | None in code | 2, 3, 4, 5 (the files name their targets) |
+| 10 | Area briefs and their check (owner) | the eight `CLAUDE.md` files of Q4, their `AGENTS.md` links, the root `AGENTS.md` link, `scripts/agent-files-check.py`, `Makefile`, the `area:` labels in `docs/agents/issue-tracker.md` | Line limit, the five sections, ADR names, links, superseded ADRs, STE lint | `docs/agents/` with the steward pull request. Lands after it. | 2, 3, 4, 5 (the briefs name their gates), the steward pull request |
 | 11 | Project skills (owner) | `.agents/project-skills/od-*/SKILL.md`, the six Repowise skills moved, `.claude/skills/` links, the check of PR 10 | Lock and link checks, STE lint in strict mode | `.claude/skills/` | 3, 4, 10 |
 | 12 | The split script and the split of `e2e/e2e_test.go` | `scripts/split-go-file.go`, `scripts/split-plans/e2e.txt`, `e2e/*_test.go` | The size budget line of the file goes down | Most open pull requests that add an e2e step. First merge of a merge session. | 9 |
 | 13 | The split of `pkg/dustpan/dustpan.go` | `scripts/split-plans/dustpan.txt`, `pkg/dustpan/*.go` | Same | Most open pull requests that add a route. First merge of a merge session, not the same session as 12. | 12 |
@@ -538,12 +607,13 @@ once 3 lands.
 1. Q1b: should CI jobs that today run without PostgreSQL set
    `DUSTPAN_TEST_SQLITE_ONLY=1`, or should each such job have a PostgreSQL
    service?
-2. Q1b: should `pg-ready` try `service postgresql start` once when the URL
-   points to `localhost`, or only print the command? Starting a service from
-   a gate is a side effect.
+2. Q1b: should `pg-ready` start PostgreSQL once with `pg_ctlcluster`, as
+   `checks-agent.sh` does after the steward pull request, or only print the
+   command? Starting a service from a gate is a side effect.
 3. Q2: is 1,500 the right first limit, or does the owner want 1,000 with a
    list of 120 files?
-4. Q4: does ADR 66 decision 3 cover nested `CLAUDE.md` files? This RFC reads
+4. Q4: does ADR 66 decision 3 cover nested `CLAUDE.md` files, the area
+   briefs? This RFC reads
    it so. If not, the nested files cite no ADR numbers, and the
    superseded-ADR check of PR 10 goes away.
 5. Q5: `od-` as the prefix of project skills, or another prefix?
