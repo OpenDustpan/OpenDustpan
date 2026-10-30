@@ -475,18 +475,21 @@ func (b *ItemKeyBlobs) Garbage(
 // ItemKeyBlobClockSkew. A listing without the probe is an error too: the run
 // cannot know the clock of the store.
 func checkProbeClock(objects []blob.Object, probe blob.Key, now time.Time) error {
-	i := slices.IndexFunc(objects, func(o blob.Object) bool { return o.Key == probe })
-	if i < 0 {
-		return fmt.Errorf("%w: the listing does not hold the clock probe", ErrItemKeyBlobClockSkew)
+	for _, obj := range objects {
+		if obj.Key != probe {
+			continue
+		}
+
+		diff := obj.ModifiedAt.Sub(now)
+		if obj.ModifiedAt.IsZero() || diff > ItemKeyBlobClockSkew || diff < -ItemKeyBlobClockSkew {
+			return fmt.Errorf("%w: the store clock is %s from the server clock, the limit is %s",
+				ErrItemKeyBlobClockSkew, diff.Round(time.Second), ItemKeyBlobClockSkew)
+		}
+
+		return nil
 	}
 
-	diff := objects[i].ModifiedAt.Sub(now)
-	if objects[i].ModifiedAt.IsZero() || diff > ItemKeyBlobClockSkew || diff < -ItemKeyBlobClockSkew {
-		return fmt.Errorf("%w: the store clock is %s from the server clock, the limit is %s",
-			ErrItemKeyBlobClockSkew, diff.Round(time.Second), ItemKeyBlobClockSkew)
-	}
-
-	return nil
+	return fmt.Errorf("%w: the listing does not hold the clock probe", ErrItemKeyBlobClockSkew)
 }
 
 // garbageRun is one run of the reaper rule in the namespace ns at the time
