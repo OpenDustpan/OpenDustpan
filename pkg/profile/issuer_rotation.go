@@ -92,7 +92,7 @@ func planEmergency(keys []Key, now time.Time) RotationPlan {
 }
 
 func byState(keys []Key, s KeyState) []Key {
-	var out []Key
+	out := make([]Key, 0, len(keys))
 
 	for i := range keys {
 		if keys[i].State == s {
