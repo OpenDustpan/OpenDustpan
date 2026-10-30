@@ -72,6 +72,22 @@ func newDeletedSweeper(
 	return &deletedSweeper{sweeper: sweeper, observed: observed, logger: cfg.logger}, nil
 }
 
+// registerBlobPurgeMetrics adds the blob purge gauges to registry. The gauges
+// read the store at scrape time. Without a store that counts the blob purge
+// records, nothing is added.
+func registerBlobPurgeMetrics(registry *metrics.Registry, cfg *settings) {
+	counter, ok := cfg.inventoryReader.(inventory.BlobPurgeCounter)
+	if !ok {
+		return
+	}
+
+	metrics.RegisterBlobPurgeBacklog(registry, func(ctx context.Context) (int64, time.Time, error) {
+		backlog, err := counter.CountBlobPurges(ctx)
+
+		return backlog.Pending, backlog.OldestPurgedAt, err
+	}, cfg.now)
+}
+
 // Sweep runs one retention sweep with the audit entry e and counts its
 // outcome. A sweep that cannot read the store counts as one failure and logs
 // a warning with the error kind, never the error text. A sweep that the
