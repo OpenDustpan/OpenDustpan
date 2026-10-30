@@ -101,14 +101,22 @@ func jwt(t *testing.T, key *rsa.PrivateKey, appID string, lifetime time.Duration
 	return signing + "." + enc.EncodeToString(sig)
 }
 
-// newFake starts a fake with the shared key and one repository.
+// newFake starts a fake with one repository.
 func newFake(t *testing.T) (*githubfake.Fake, githubfake.Commit) {
+	t.Helper()
+
+	return newFakeWith(t, nil, false)
+}
+
+// newFakeWith starts a fake with the permissions of the installation, and a
+// user token that is a classic token when classic is true.
+func newFakeWith(t *testing.T, permissions map[string]string, classic bool) (*githubfake.Fake, githubfake.Commit) {
 	t.Helper()
 
 	f := githubfake.New(t, githubfake.Config{
 		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
-		User: githubfake.Account{ID: 0, Login: ""}, UserToken: userValue,
-		Permissions: nil, Key: nil, Now: nil, WebhookClient: nil,
+		User: githubfake.Account{ID: 0, Login: ""}, UserToken: userValue, ClassicToken: classic,
+		Permissions: permissions, Key: nil, Now: nil, WebhookClient: nil,
 	})
 
 	c, err := f.AddRepo("acme/infra", map[string][]byte{

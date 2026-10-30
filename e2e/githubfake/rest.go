@@ -31,6 +31,10 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/blobs/{sha}", f.getBlob)
 	mux.HandleFunc("POST /graphql", f.graphql)
+	// GitHub answers a path that it does not have, and a method that a path does
+	// not have, with the same JSON 404. Without this pattern, the mux answers
+	// plain text 404 and 405.
+	mux.HandleFunc("/", f.notFound)
 
 	return f.record(mux)
 }
@@ -66,6 +70,11 @@ func writeBody(w io.Writer, data []byte) {
 // message answers an error in the form of GitHub.
 func (f *Fake) message(w http.ResponseWriter, status int, text string) {
 	f.writeJSON(w, status, wireMessage{Message: text})
+}
+
+// notFound answers a request that no other pattern serves.
+func (f *Fake) notFound(w http.ResponseWriter, _ *http.Request) {
+	f.message(w, http.StatusNotFound, "Not Found")
 }
 
 func (f *Fake) getInstallation(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +179,11 @@ func (f *Fake) getUser(w http.ResponseWriter, r *http.Request) {
 			Set("Github-Authentication-Token-Expiration", f.faults.expiry.UTC().Format("2006-01-02 15:04:05 UTC"))
 	}
 
-	w.Header().Set("X-Oauth-Scopes", "repo, read:org")
+	// Only a classic token has scopes. A fine-grained token has none.
+	if f.cfg.ClassicToken {
+		w.Header().Set("X-Oauth-Scopes", "repo, read:org")
+	}
+
 	f.writeJSON(w, http.StatusOK, wireAccount{ID: f.cfg.User.ID, Login: f.cfg.User.Login})
 }
 
@@ -185,7 +198,7 @@ func (f *Fake) repoOf(w http.ResponseWriter, r *http.Request, perm, level string
 	full := r.PathValue("owner") + "/" + r.PathValue("repo")
 
 	rp, found := f.repos[full]
-	if !found || !f.permitted(r, full, "metadata", "read") {
+	if !found || !f.permitted(r, full, "metadata", levelNameRead) {
 		f.message(w, http.StatusNotFound, "Not Found")
 
 		return nil, false
@@ -206,7 +219,7 @@ func person(at time.Time) wirePerson {
 }
 
 func (f *Fake) getCommit(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", "read")
+	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
 	if !ok {
 		return
 	}
@@ -234,7 +247,7 @@ func (f *Fake) getCommit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Fake) getContents(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", "read")
+	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
 	if !ok {
 		return
 	}
@@ -350,7 +363,7 @@ func dirEntries(rp *repo, c *commit, dir string) []wireEntry {
 }
 
 func (f *Fake) getBlob(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", "read")
+	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
 	if !ok {
 		return
 	}

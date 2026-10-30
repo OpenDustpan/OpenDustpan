@@ -192,7 +192,12 @@ func shortName(fullName string) string {
 	return name
 }
 
-// The ranks of the permission levels.
+// The permission levels and their ranks.
+const (
+	levelNameRead  = "read"
+	levelNameWrite = "write"
+)
+
 const (
 	levelRead  = 1
 	levelWrite = 2
@@ -201,9 +206,9 @@ const (
 // levelRank orders the permission levels. An unknown level is zero.
 func levelRank(level string) int {
 	switch level {
-	case "read":
+	case levelNameRead:
 		return levelRead
-	case "write":
+	case levelNameWrite:
 		return levelWrite
 	default:
 		return 0

@@ -119,11 +119,14 @@ linters:
             - pkg: github.com/jackc/pgx
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
         githubfake:
-          # The fake GitHub host is test infrastructure. Only test files and
-          # the e2e suite import it, so the binary never links it.
+          # The fake GitHub host is test infrastructure. No file of the binary
+          # (cmd/, pkg/ and internal/) imports it, except a test file, so the
+          # binary never links it.
           files:
+            - "**/cmd/**"
+            - "**/pkg/**"
+            - "**/internal/**"
             - "!**/*_test.go"
-            - "!**/e2e/**"
           deny:
             - pkg: opendustpan.org/opendustpan/e2e/githubfake
               desc: The fake GitHub host is for tests; the binary never links it.

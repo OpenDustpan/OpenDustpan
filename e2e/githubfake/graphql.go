@@ -95,13 +95,13 @@ func (f *Fake) graphql(w http.ResponseWriter, r *http.Request) {
 	in := req.Variables.Input
 
 	rp, found := f.repos[in.Branch.Repository]
-	if !found || !f.permitted(r, in.Branch.Repository, "metadata", "read") {
+	if !found || !f.permitted(r, in.Branch.Repository, "metadata", levelNameRead) {
 		f.gqlError(w, gqlNotFound, "Could not resolve to a Repository with the name '"+in.Branch.Repository+"'.")
 
 		return
 	}
 
-	if !f.permitted(r, in.Branch.Repository, "contents", "write") {
+	if !f.permitted(r, in.Branch.Repository, "contents", levelNameWrite) {
 		f.gqlError(w, gqlForbidden, "Resource not accessible by integration")
 
 		return
