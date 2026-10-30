@@ -157,11 +157,15 @@ func newHarness(t *testing.T, opts ...options) *harness {
 	})
 
 	h := &harness{
-		t: t, svc: nil, store: st, clock: &clock{mu: sync.Mutex{}, now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)},
-		outbox: &outbox{mu: sync.Mutex{}, notes: nil}, ns: namespace.Namespace{
-			CreatedAt: time.Time{}, ID: "", Name: "", PrimaryInstallation: "", Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		t: t, svc: nil, store: st,
+		clock:  &clock{mu: sync.Mutex{}, now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)},
+		outbox: &outbox{mu: sync.Mutex{}, notes: nil},
+		ns: namespace.Namespace{
+			CreatedAt: time.Time{}, ID: "", Name: "", PrimaryInstallation: "",
+			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 			FailoverVersion: 0,
-		}, admin: nil, reader: nil, nobody: nil,
+		},
+		admin: nil, reader: nil, nobody: nil,
 	}
 
 	h.ns = h.addNamespace("acme")
@@ -294,4 +298,20 @@ func auditBy(subject string) audit.Entry {
 		Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0, PrincipalKind: audit.PrincipalKindPerson, JobID: "", Reason: "",
 	}
+}
+
+// patch changes the settings of the namespace as a.
+func (h *harness) patch(
+	a *profile.Actor, p profile.SettingsPatch, version int64, fresh func() error,
+) (profile.IssuerSettings, error) {
+	h.t.Helper()
+
+	req := &issuersvc.PatchRequest{Fresh: fresh, Patch: p, IfVersion: version}
+
+	got, err := h.svc.Patch(h.t.Context(), a, h.ns.Name, req)
+	if err != nil {
+		return profile.IssuerSettings{}, fmt.Errorf("patch: %w", err)
+	}
+
+	return got, nil
 }

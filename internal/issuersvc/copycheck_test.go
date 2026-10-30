@@ -128,21 +128,20 @@ func (h *harness) checkCopy() profile.CopyCheck {
 func (h *harness) setIssuerURL(url string) {
 	h.t.Helper()
 
-	if _, err := h.svc.Patch(h.t.Context(), h.admin, h.ns.Name, patchURL(url), 0, okFresh); err != nil {
+	if _, err := h.patch(h.admin, patchURL(url), 0, okFresh); err != nil {
 		h.t.Fatalf("set issuerURL: %v", err)
 	}
 }
 
-// stepOK returns whether the step called name passed, and whether the check
-// has the step.
-func stepOK(c profile.CopyCheck, name string) (bool, bool) {
-	for _, s := range c.Steps {
-		if s.Name == name {
-			return s.OK, true
+// stepOf returns the step of the check called name, and nil when it has none.
+func stepOf(c *profile.CopyCheck, name string) *profile.CopyStep {
+	for i := range c.Steps {
+		if c.Steps[i].Name == name {
+			return &c.Steps[i]
 		}
 	}
 
-	return false, false
+	return nil
 }
 
 // checkStepsPass fails the test for a step of the check that is missing or
@@ -151,8 +150,8 @@ func checkStepsPass(t *testing.T, c profile.CopyCheck, names ...string) {
 	t.Helper()
 
 	for _, s := range names {
-		if ok, found := stepOK(c, s); !found || !ok {
-			t.Errorf("step %s: ok %v, found %v", s, ok, found)
+		if step := stepOf(&c, s); step == nil || !step.OK {
+			t.Errorf("step %s: %v", s, step)
 		}
 	}
 }
@@ -162,7 +161,11 @@ func checkStepsPass(t *testing.T, c profile.CopyCheck, names ...string) {
 func namesRoutes(t *testing.T, err error) {
 	t.Helper()
 
-	namesRoutes(t, err)
+	for _, route := range []string{"/issuer/export", "/issuer/keys/check-copy"} {
+		if !strings.Contains(err.Error(), route) {
+			t.Errorf("the error does not name %s: %v", route, err)
+		}
+	}
 }
 
 // verifyAgainst checks a token against a JWKS, for the issuer url.
@@ -254,7 +257,7 @@ func TestACopyThatLacksTheActiveKeyFails(t *testing.T) {
 		t.Fatalf("copy check = %+v", c)
 	}
 
-	if ok, _ := stepOK(c, "active-key"); ok {
+	if step := stepOf(&c, "active-key"); step != nil && step.OK {
 		t.Error("the active key step passes")
 	}
 
@@ -286,11 +289,11 @@ func TestTheCopyCheckRefusesADocumentThatNamesAnotherIssuerOrKeyAddress(t *testi
 			t.Errorf("%s: the copy check passes", name)
 		}
 
-		if ok, _ := stepOK(c, "discovery"); ok {
+		if step := stepOf(&c, "discovery"); step != nil && step.OK {
 			t.Errorf("%s: the discovery step passes", name)
 		}
 
-		if _, found := stepOK(c, "jwks"); found {
+		if stepOf(&c, "jwks") != nil {
 			t.Errorf("%s: the check read the JWKS after a bad discovery document", name)
 		}
 	}
@@ -506,7 +509,7 @@ func TestAnActiveKeyNeverSignsForMoreThan180DaysAndWarnsFromDay90(t *testing.T) 
 		t.Fatalf("the schedule promoted without a copy: %v", got)
 	}
 
-	h.wantWarning("90 days are left", "day 90")
+	h.wantWarning("90 days remain", "day 90")
 
 	st, err := h.svc.Get(t.Context(), h.reader, h.ns.Name)
 	if err != nil || len(st.Warnings) != 1 {
@@ -518,7 +521,7 @@ func TestAnActiveKeyNeverSignsForMoreThan180DaysAndWarnsFromDay90(t *testing.T) 
 	}
 
 	h.clock.Advance(89 * day)
-	h.wantWarning("1 days are left", "day 179")
+	h.wantWarning("1 days remain", "day 179")
 
 	h.clock.Advance(day)
 

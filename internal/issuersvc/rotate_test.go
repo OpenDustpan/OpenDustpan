@@ -424,7 +424,7 @@ func TestEveryManagementCallChecksItsAction(t *testing.T) {
 
 	calls := map[string]func(a *profile.Actor) error{
 		"Patch": func(a *profile.Actor) error {
-			_, err := h.svc.Patch(ctx, a, h.ns.Name, patchAllow(false), 0, nil)
+			_, err := h.patch(a, patchAllow(false), 0, nil)
 
 			return err
 		},

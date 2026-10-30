@@ -41,7 +41,6 @@ func TestPatchNeedsAFreshStepForAChangeThatReducesSecurity(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	ctx := t.Context()
 	url := "https://files.example.com/acme"
 
 	needsFresh := map[string]profile.SettingsPatch{
@@ -58,13 +57,13 @@ func TestPatchNeedsAFreshStepForAChangeThatReducesSecurity(t *testing.T) {
 			continue
 		}
 
-		_, err := h.svc.Patch(ctx, h.admin, h.ns.Name, p, version, nil)
+		_, err := h.patch(h.admin, p, version, nil)
 		wantErr(t, name+" with no fresh check", err, profile.ErrFreshRequired)
 
-		_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, p, version, func() error { return errNoFresh })
+		_, err = h.patch(h.admin, p, version, func() error { return errNoFresh })
 		wantErr(t, name+" with an old sign-in", err, errNoFresh)
 
-		got, err := h.svc.Patch(ctx, h.admin, h.ns.Name, p, version, okFresh)
+		got, err := h.patch(h.admin, p, version, okFresh)
 		if err != nil {
 			t.Fatalf("%s with a fresh step: %v", name, err)
 		}
@@ -73,14 +72,7 @@ func TestPatchNeedsAFreshStepForAChangeThatReducesSecurity(t *testing.T) {
 	}
 
 	// allowBlockSubjects from true to false makes security stronger: no step.
-	got, err := h.svc.Patch(
-		ctx,
-		h.admin,
-		h.ns.Name,
-		patchAllow(false),
-		version,
-		nil,
-	)
+	got, err := h.patch(h.admin, patchAllow(false), version, nil)
 	if err != nil {
 		t.Fatalf("allowBlockSubjects to false: %v", err)
 	}
@@ -88,11 +80,11 @@ func TestPatchNeedsAFreshStepForAChangeThatReducesSecurity(t *testing.T) {
 	version = got.Version
 
 	// and from false back to true needs one.
-	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, patchAllow(true), version, nil)
+	_, err = h.patch(h.admin, patchAllow(true), version, nil)
 	wantErr(t, "allowBlockSubjects to true", err, profile.ErrFreshRequired)
 
 	// includeActorName to false is allowed with no step.
-	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, patchActor(false), version, nil)
+	_, err = h.patch(h.admin, patchActor(false), version, nil)
 	if err != nil {
 		t.Errorf("includeActorName to false: %v", err)
 	}
@@ -102,9 +94,8 @@ func TestPatchKeepsWhatItDoesNotName(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	ctx := t.Context()
 
-	got, err := h.svc.Patch(ctx, h.admin, h.ns.Name, patchAllow(false), 0, nil)
+	got, err := h.patch(h.admin, patchAllow(false), 0, nil)
 	if err != nil || got.Version != 1 || got.UpdatedBy != alice || got.UpdatedAt.IsZero() {
 		t.Fatalf("Patch = %+v, %v", got, err)
 	}
@@ -113,7 +104,7 @@ func TestPatchKeepsWhatItDoesNotName(t *testing.T) {
 		t.Errorf("a patch changed a field it did not name: %+v", got)
 	}
 
-	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, patchActor(false), 0, nil)
+	_, err = h.patch(h.admin, patchActor(false), 0, nil)
 	wantErr(t, "Patch on a stale version", err, profile.ErrConflict)
 }
 
@@ -141,7 +132,7 @@ func TestPatchRefusesABadValueAndChangesNothing(t *testing.T) {
 		"a per-run value":   patchTemplate("namespace", "job"),
 		"commit in subject": patchTemplate("namespace", "commit"),
 	} {
-		_, err := h.svc.Patch(ctx, h.admin, h.ns.Name, p, 0, okFresh)
+		_, err := h.patch(h.admin, p, 0, okFresh)
 		wantErr(t, name, err, profile.ErrInvalid)
 	}
 
@@ -160,14 +151,7 @@ func TestPatchStoresTheTemplateInTheOrderOfTheSubject(t *testing.T) {
 
 	h := newHarness(t)
 
-	got, err := h.svc.Patch(
-		t.Context(),
-		h.admin,
-		h.ns.Name,
-		patchTemplate("access", "unit", "namespace_id", "ref_protected"),
-		0,
-		okFresh,
-	)
+	got, err := h.patch(h.admin, patchTemplate("access", "unit", "namespace_id", "ref_protected"), 0, okFresh)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +166,7 @@ func TestEachSettingsChangeWritesAnAuditEntry(t *testing.T) {
 
 	h := newHarness(t)
 
-	_, err := h.svc.Patch(t.Context(), h.admin, h.ns.Name, patchURL("https://files.example.com/acme"), 0, okFresh)
+	_, err := h.patch(h.admin, patchURL("https://files.example.com/acme"), 0, okFresh)
 	if err != nil {
 		t.Fatal(err)
 	}
