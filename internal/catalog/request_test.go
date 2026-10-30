@@ -270,9 +270,12 @@ func TestGateForRefusesAGroupThatCannotBeResolved(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			d, err := policy.Combine([]policy.Decision{approveOf(tt.group)})
-			if err != nil {
-				t.Fatalf("Combine() = %v", err)
+			// Built by hand, as a caller other than Combine can build it:
+			// GateFor refuses the group on its own, also when Combine
+			// would have refused the decision first.
+			d := policy.Combined{
+				Effect: policy.EffectApprove, Reasons: nil,
+				Approvals: []policy.Approvals{{Groups: []string{tt.group}, Count: 1}},
 			}
 
 			gates, err := catalog.GateFor(t.Context(), &d, true, newGroupNames("security", "dba"))
