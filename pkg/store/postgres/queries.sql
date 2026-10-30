@@ -4557,3 +4557,81 @@ WHERE id = sqlc.arg(id);
 SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
+
+-- name: InsertForgeLinkRequest :exec
+INSERT INTO forge_link_requests (
+    token_sha256, principal_id, created_at_ms, expires_at_ms, proved_kind, proved_host, proved_account_id,
+    proved_login, proved_delivery_id, proved_at_ms, used_at_ms
+) VALUES (
+    sqlc.arg(token_sha256), sqlc.arg(principal_id), sqlc.arg(created_at_ms), sqlc.arg(expires_at_ms), '', '', '', '', '',
+    0, 0
+);
+
+-- name: DeleteExpiredForgeLinkRequestsOf :exec
+DELETE FROM forge_link_requests
+WHERE forge_link_requests.principal_id = sqlc.arg(principal_id) AND forge_link_requests.expires_at_ms <= sqlc.arg(before_ms);
+
+-- name: CountOpenForgeLinkRequests :one
+SELECT COUNT(*) AS open_requests FROM forge_link_requests
+WHERE forge_link_requests.principal_id = sqlc.arg(principal_id) AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.expires_at_ms > sqlc.arg(now_ms);
+
+-- name: GetForgeLinkRequest :one
+SELECT r.token_sha256, r.principal_id, r.created_at_ms, r.expires_at_ms, r.proved_kind, r.proved_host,
+    r.proved_account_id, r.proved_login, r.proved_delivery_id, r.proved_at_ms, r.used_at_ms
+FROM forge_link_requests AS r
+WHERE r.token_sha256 = sqlc.arg(token_sha256);
+
+-- name: ProveForgeLinkRequest :execrows
+-- The first proof wins: the statement changes a row only while it has no proof
+-- and no accept, and before its expiry.
+UPDATE forge_link_requests
+SET proved_kind = sqlc.arg(proved_kind), proved_host = sqlc.arg(proved_host),
+    proved_account_id = sqlc.arg(proved_account_id), proved_login = sqlc.arg(proved_login),
+    proved_delivery_id = sqlc.arg(proved_delivery_id), proved_at_ms = sqlc.arg(proved_at_ms)
+WHERE forge_link_requests.token_sha256 = sqlc.arg(token_sha256) AND forge_link_requests.proved_at_ms = 0
+  AND forge_link_requests.used_at_ms = 0 AND forge_link_requests.expires_at_ms > sqlc.arg(now_ms);
+
+-- name: UseForgeLinkRequest :execrows
+-- The accept wins once: the statement changes a row only for the principal that
+-- started it, after a proof, before its expiry, and while it has no accept.
+UPDATE forge_link_requests
+SET used_at_ms = sqlc.arg(used_at_ms)
+WHERE forge_link_requests.token_sha256 = sqlc.arg(token_sha256) AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.proved_at_ms > 0 AND forge_link_requests.expires_at_ms > sqlc.arg(used_at_ms)
+  AND forge_link_requests.principal_id = sqlc.arg(principal_id);
+
+-- name: GetForgeAccountLink :one
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.kind = sqlc.arg(kind) AND l.host = sqlc.arg(host) AND l.account_id = sqlc.arg(account_id);
+
+-- name: ListForgeAccountLinksOf :many
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.principal_id = sqlc.arg(principal_id)
+ORDER BY l.kind COLLATE "C", l.host COLLATE "C", l.account_id COLLATE "C";
+
+-- name: InsertForgeAccountLink :exec
+INSERT INTO forge_account_links (kind, host, account_id, login, principal_id, linked_at_ms)
+VALUES (sqlc.arg(kind), sqlc.arg(host), sqlc.arg(account_id), sqlc.arg(login), sqlc.arg(principal_id),
+    sqlc.arg(linked_at_ms));
+
+-- name: ReplaceForgeAccountLink :execrows
+-- Replaces the link only while it names the principal that the person saw.
+UPDATE forge_account_links
+SET login = sqlc.arg(login), principal_id = sqlc.arg(principal_id), linked_at_ms = sqlc.arg(linked_at_ms)
+WHERE forge_account_links.kind = sqlc.arg(kind) AND forge_account_links.host = sqlc.arg(host)
+  AND forge_account_links.account_id = sqlc.arg(account_id)
+  AND forge_account_links.principal_id = sqlc.arg(previous_principal_id);
+
+-- name: DeleteForgeAccountLink :execrows
+DELETE FROM forge_account_links
+WHERE forge_account_links.kind = sqlc.arg(kind) AND forge_account_links.host = sqlc.arg(host)
+  AND forge_account_links.account_id = sqlc.arg(account_id);
+
+-- name: DeleteForgeAccountLinksOfPrincipal :exec
+DELETE FROM forge_account_links WHERE forge_account_links.principal_id = sqlc.arg(principal_id);
+
+-- name: DeleteForgeLinkRequestsOfPrincipal :exec
+DELETE FROM forge_link_requests WHERE forge_link_requests.principal_id = sqlc.arg(principal_id);
