@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -494,5 +495,79 @@ func TestFailingRunsCallTheStoreOnlyUnderTheirPrefix(t *testing.T) {
 				t.Fatalf("the objects outside the prefix changed: %v", got)
 			}
 		})
+	}
+}
+
+const listCaseName = "list returns the objects under a prefix ordered by key"
+
+func TestListCaseFindsAStoreThatBreaksThePagingRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		fault func(req blob.PageRequest, all []blob.Object) blob.Page
+	}{
+		{"ignores After", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			return blob.PageOf(all, blob.PageRequest{Prefix: req.Prefix, After: "", Limit: req.Limit})
+		}},
+		{"ignores the limit", func(_ blob.PageRequest, all []blob.Object) blob.Page {
+			return blob.Page{Objects: all, Next: ""}
+		}},
+		{"gives a wrong Next", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			page := blob.PageOf(all, req)
+			if page.Next != "" && len(page.Objects) > 0 {
+				page.Next = page.Objects[0].Key
+			}
+
+			return page
+		}},
+		{"gives keys out of order", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			page := blob.PageOf(all, req)
+			slices.Reverse(page.Objects)
+
+			return page
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, nil)
+			r.blobs.pageFault = tc.fault
+
+			id := r.start(t, "blobs")
+			r.runOne(t)
+
+			_, report := r.report(t, id)
+			if report == nil {
+				t.Fatal("no report")
+			}
+
+			for _, c := range report.Cases {
+				if c.Name == listCaseName && c.Passed {
+					t.Fatalf("the list case passed on a store that %s", tc.name)
+				}
+			}
+		})
+	}
+}
+
+func TestListCasePassesOnAStoreThatFollowsThePagingRules(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, nil)
+	id := r.start(t, "blobs")
+	r.runOne(t)
+
+	_, report := r.report(t, id)
+	if report == nil {
+		t.Fatal("no report")
+	}
+
+	for _, c := range report.Cases {
+		if !c.Passed {
+			t.Errorf("case %q failed: %s", c.Name, c.Message)
+		}
 	}
 }
