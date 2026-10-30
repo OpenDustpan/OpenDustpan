@@ -1435,6 +1435,17 @@ func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (i
 	return count, err
 }
 
+const countTrustRulesInNamespace = `-- name: CountTrustRulesInNamespace :one
+SELECT COUNT(*) FROM trust_rules WHERE namespace = ?1
+`
+
+func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTrustRulesInNamespace, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUnitGateObjects = `-- name: CountUnitGateObjects :one
 SELECT COUNT(*)
 FROM gate_objects
@@ -3098,6 +3109,23 @@ type DeleteTriggerParams struct {
 
 func (q *Queries) DeleteTrigger(ctx context.Context, arg DeleteTriggerParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTrigger, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTrustRule = `-- name: DeleteTrustRule :execrows
+DELETE FROM trust_rules WHERE namespace = ?1 AND id = ?2
+`
+
+type DeleteTrustRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) DeleteTrustRule(ctx context.Context, arg DeleteTrustRuleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTrustRule, arg.Namespace, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -6854,6 +6882,60 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 	return i, err
 }
 
+const getTrustRule = `-- name: GetTrustRule :one
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = ?1 AND id = ?2
+`
+
+type GetTrustRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+// The namespace is part of the key: a rule of another namespace reads as no
+// row.
+func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (TrustRule, error) {
+	row := q.db.QueryRowContext(ctx, getTrustRule, arg.Namespace, arg.ID)
+	var i TrustRule
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Name,
+		&i.Issuer,
+		&i.Audience,
+		&i.KeySource,
+		&i.StaticKeys,
+		&i.ConditionsJson,
+		&i.PrincipalID,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getTrustRulePrincipal = `-- name: GetTrustRulePrincipal :one
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms
+FROM principals
+WHERE id = ?1
+`
+
+type GetTrustRulePrincipalRow struct {
+	Kind        string
+	Namespace   string
+	DeletedAtMs int64
+}
+
+// Reads the principal of a new rule in the transaction of the create, so a
+// delete of the principal cannot pass between the check and the insert.
+func (q *Queries) GetTrustRulePrincipal(ctx context.Context, id string) (GetTrustRulePrincipalRow, error) {
+	row := q.db.QueryRowContext(ctx, getTrustRulePrincipal, id)
+	var i GetTrustRulePrincipalRow
+	err := row.Scan(&i.Kind, &i.Namespace, &i.DeletedAtMs)
+	return i, err
+}
+
 const getUnitCollection = `-- name: GetUnitCollection :one
 SELECT c.name
 FROM collection_members AS m
@@ -9043,6 +9125,55 @@ func (q *Queries) InsertSavedView(ctx context.Context, arg InsertSavedViewParams
 		arg.Owner,
 		arg.Name,
 		arg.QueryJson,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertTrustRule = `-- name: InsertTrustRule :execrows
+INSERT INTO trust_rules (
+    id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+)
+VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8, ?9,
+    ?10, ?11
+)
+ON CONFLICT DO NOTHING
+`
+
+type InsertTrustRuleParams struct {
+	ID             string
+	Namespace      string
+	Name           string
+	Issuer         string
+	Audience       string
+	KeySource      string
+	StaticKeys     string
+	ConditionsJson string
+	PrincipalID    string
+	CreatedBy      string
+	CreatedAtMs    int64
+}
+
+// The caller checks the fence and the principal in the same transaction. A
+// rule with a taken ID, or with a name that the namespace has, is not written.
+func (q *Queries) InsertTrustRule(ctx context.Context, arg InsertTrustRuleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTrustRule,
+		arg.ID,
+		arg.Namespace,
+		arg.Name,
+		arg.Issuer,
+		arg.Audience,
+		arg.KeySource,
+		arg.StaticKeys,
+		arg.ConditionsJson,
+		arg.PrincipalID,
+		arg.CreatedBy,
 		arg.CreatedAtMs,
 	)
 	if err != nil {
@@ -13658,6 +13789,49 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrustRulesOfNamespace = `-- name: ListTrustRulesOfNamespace :many
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = ?1
+ORDER BY name, id
+`
+
+func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]TrustRule, error) {
+	rows, err := q.db.QueryContext(ctx, listTrustRulesOfNamespace, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TrustRule
+	for rows.Next() {
+		var i TrustRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Name,
+			&i.Issuer,
+			&i.Audience,
+			&i.KeySource,
+			&i.StaticKeys,
+			&i.ConditionsJson,
+			&i.PrincipalID,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
 		); err != nil {
 			return nil, err
 		}

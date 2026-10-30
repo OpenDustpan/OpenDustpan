@@ -45,6 +45,7 @@ const (
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
+	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
 	pgColReason      = "reason"
@@ -122,6 +123,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopySinkTables()...)
 	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
+	tables = append(tables, pgCopyTrustRuleTables()...)
 
 	return tables
 }
@@ -479,7 +481,7 @@ func pgCopySessionTables() []pgCopyTable {
 		},
 		{
 			table:   "oidc_providers",
-			columns: []string{pgColProviderID, "issuer", pgColCreatedAtMs},
+			columns: []string{pgColProviderID, pgColIssuer, pgColCreatedAtMs},
 			orderBy: []string{pgColProviderID},
 		},
 		{
@@ -1790,7 +1792,7 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the registry, the Git host connections,
-// the notification sinks and the triggers.
+// the notification sinks, the triggers and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -1808,5 +1810,9 @@ func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging str
 		return err
 	}
 
-	return checkStagedTriggers(ctx, pool, staging)
+	if err := checkStagedTriggers(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedTrustRules(ctx, pool, staging)
 }

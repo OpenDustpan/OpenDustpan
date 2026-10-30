@@ -27,11 +27,13 @@ import (
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
+	trustrulesapi "opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -60,6 +62,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/trustrule"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -105,11 +108,12 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	sourceFilterRoutes := coverageSourceFilterRoutes(tb, namespaces)
+	trustRuleRoutes := coverageTrustRuleRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
 		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, server,
+		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, trustRuleRoutes, server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -904,6 +908,45 @@ func coverageSourceFilterRoutes(tb testing.TB, namespaces *namespace.Service) []
 	return out
 }
 
+// coverageTrustRuleRoutes returns the trust rule adapter's route table.
+func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
+		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
+		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
+		InstallationURLs: nil, CheckURL: nil, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("trust rule service: %v", err)
+	}
+
+	handler, err := trustrulesapi.NewHandler(trustrulesapi.Config{
+		Namespaces:     namespaces,
+		Rules:          rules,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		Now:            nil,
+	})
+	if err != nil {
+		tb.Fatalf("trust rule handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // coverageTriggerRoutes returns the trigger adapter's route table.
 func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
@@ -1571,6 +1614,7 @@ func CoverageAllowlist() []AllowEntry {
 		savedViewAllowEntries(),
 		sinkAllowEntries(),
 		sourceFilterAllowEntries(),
+		trustRuleAllowEntries(),
 		apiDescriptionAllowEntries(),
 	)
 }
@@ -2731,6 +2775,26 @@ func sourceFilterAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: why},
 		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: why},
+	}
+}
+
+// trustRuleAllowEntries covers the routes of the workload trust rules of a
+// namespace. No CLI calls them: the console and the clients of the API do.
+// The steps of TestTrustRuleAPI call each of them with the token of an
+// administrator.
+func trustRuleAllowEntries() []AllowEntry {
+	const (
+		rules = "/api/dustpan/v1/namespaces/{namespace}/trust-rules"
+		rule  = rules + "/{rule_id}"
+		test  = "TestTrustRuleAPI"
+		why   = "Console and client route: no CLI calls it. The steps of TestTrustRuleAPI call it through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: rules, CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: rules, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: rule, CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: rule, CoveringTest: test, Reason: why},
 	}
 }
 

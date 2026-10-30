@@ -67,8 +67,12 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	"consoleHeaders": {"checkSettings": "api", "mountAPI": "api"},
 	"allowedOrigins": {"buildMux": "all", "checkSettings": "api", "mountAPI": "api", "newSignIn": "api"},
 	"publicURL": {
-		"checkSettings": "api", "newInventoryHandler": "api", "newRunnerHandler": "api", "newSignIn": "api",
-		"storedSignInReady": "api",
+		"checkSettings":       "api",
+		"newInventoryHandler": "api",
+		"newRunnerHandler":    "api",
+		"newSignIn":           "api",
+		"newTrustRuleHandler": "api",
+		"storedSignInReady":   "api",
 	},
 	"proxies": {"newClientIPResolver": "all"},
 	"ipAllowlists": {
