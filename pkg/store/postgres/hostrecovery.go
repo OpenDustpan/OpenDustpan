@@ -38,7 +38,7 @@ func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecov
 		BeginQuery: "", CommitQuery: "",
 	}
 
-	txErr := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	txErr := pgx.BeginTxFunc(ctx, s.txs, opts, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
 
 		if err := q.LockServerAuditScope(ctx); err != nil {

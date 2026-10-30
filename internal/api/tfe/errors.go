@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -148,8 +149,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		return
 	}
 
-	if class.status == http.StatusServiceUnavailable {
+	switch {
+	case class.status == http.StatusServiceUnavailable && errors.Is(err, namespace.ErrUnavailable):
+		problem.SetStoreRetryAfter(w)
+	case class.status == http.StatusServiceUnavailable:
 		bodygate.SetRetryAfterJitter(w)
+	default:
 	}
 
 	h.writeClassError(ctx, w, class)
