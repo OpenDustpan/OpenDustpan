@@ -132,6 +132,21 @@ func TestCheckPrincipal(t *testing.T) {
 			false,
 		},
 		{
+			"a workload of the namespace",
+			trustrulestore.PrincipalRow{Kind: "workload", Namespace: "acme", DeletedAtMs: 0, Found: true},
+			false,
+		},
+		{
+			"a kind of another version",
+			trustrulestore.PrincipalRow{Kind: "robot", Namespace: "acme", DeletedAtMs: 0, Found: true},
+			false,
+		},
+		{
+			"no kind",
+			trustrulestore.PrincipalRow{Kind: "", Namespace: "acme", DeletedAtMs: 0, Found: true},
+			false,
+		},
+		{
 			"a principal of the installation",
 			trustrulestore.PrincipalRow{Kind: "service", Namespace: "", DeletedAtMs: 0, Found: true},
 			false,

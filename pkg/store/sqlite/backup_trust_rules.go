@@ -26,8 +26,8 @@ func sqliteTrustRuleBackupTables() []sqliteBackupTable {
 
 // checkStagedTrustRules checks each trust rule row of a staged backup with
 // the rules of a new rule: the row passes the checks of a rule, and its
-// principal is a principal of the staged backup that is not deleted, is not
-// a person, and belongs to the namespace of the rule. A row that fails makes
+// principal is a principal of the staged backup that is not deleted, is a
+// service principal, and belongs to the namespace of the rule. A row that fails makes
 // the backup corrupt, so a restore never brings in a rule that the server
 // would not have stored. It returns backup.ErrCorrupt.
 //

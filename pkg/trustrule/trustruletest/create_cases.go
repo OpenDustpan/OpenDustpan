@@ -144,6 +144,8 @@ func testCreatePrincipal(t *testing.T, h Harness) {
 		{"a person of the installation", h.Principal(t, "", principal.KindPerson)},
 		{"a service principal of the installation", h.Principal(t, "", principal.KindService)},
 		{"a workload of the installation", h.Principal(t, "", principal.KindWorkload)},
+		{"a workload of the namespace", h.Principal(t, nsAcme, principal.KindWorkload)},
+		{"a person of the namespace", h.Principal(t, nsAcme, principal.KindPerson)},
 		{"a service principal of another namespace", workload(t, h, nsOther)},
 		{"a deleted service principal of the namespace", deleted},
 	}
