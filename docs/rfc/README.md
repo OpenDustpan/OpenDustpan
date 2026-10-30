@@ -54,7 +54,7 @@ both together.
 | [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | accepted |
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209); `pulumi env` versions and routes (ADR 261) |
-| [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
+| [6](0006-runners-and-remote-runs.md) | Runners and remote runs | accepted (ADR 282); open gaps moved to RFCs 107 to 110 |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | accepted (ADRs 211, 249) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted; the backup of one namespace (ADR 218) |
 | [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft; the branding preset setting accepted (ADR 212), operator branding accepted (ADR 235) |
@@ -83,7 +83,7 @@ both together.
 | [32](0032-object-storage.md) | Object storage adapters | accepted; no bucket of the customer (ADR 221) |
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | accepted |
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
-| [35](0035-packaging.md) | Packaging and installation | draft; TLS, binaries and the image accepted (ADR 27), the Helm chart accepted (ADR 246) |
+| [35](0035-packaging.md) | Packaging and installation | accepted (ADRs 27, 246, 283) |
 | [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
 | [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
@@ -154,4 +154,8 @@ both together.
 | [104](0104-dialect-neutral-store-logic.md) | Dialect-neutral store logic, so that a third SQL dialect can come later | accepted (ADR 274) |
 | [105](0105-purge-and-backup-at-the-same-time.md) | Blob deletes while a backup runs, from the purge, the checkpoint replace and the journal build | accepted (ADR 280) |
 | [106](0106-the-start-gate-for-the-services-of-the-sdk-server.md) | The start gate for the services of the SDK server, not only for its handler | discussing |
+| [107](0107-run-limits-and-the-run-queue.md) | Run limits and the run queue, from the gaps of RFC 6 | draft |
+| [108](0108-run-options-re-runs-and-run-variables.md) | Run options, re-runs and run variables, from the gaps of RFC 6 | draft |
+| [109](0109-job-kinds-for-state-operations-and-many-runs.md) | Job kinds for state operations and many runs, from the gaps of RFC 6 | draft |
+| [110](0110-step-results-hooks-approval-steps-and-scanners.md) | Step results: hooks, approval steps and scanners, from the gaps of RFC 6 | draft |
 | [111](0111-blueprint-rollouts-and-the-migration-of-answers.md) | Blueprint rollouts and the migration of answers | discussing |
