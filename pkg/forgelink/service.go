@@ -35,6 +35,7 @@ type Service struct {
 	people People
 	now    func() time.Time
 	random io.Reader
+	intake bool
 }
 
 // NewService returns a Service. now gives the time of a change, and nil means
@@ -48,7 +49,23 @@ func NewService(store Store, people People, now func() time.Time, random io.Read
 		random = rand.Reader
 	}
 
-	return &Service{store: store, people: people, now: now, random: random}
+	return &Service{store: store, people: people, now: now, random: random, intake: false}
+}
+
+// WithIntake returns a copy of s that reports an intake: the code that checks the
+// signed events of a Git host and calls Prove exists. Until that code exists, a
+// request can never get a proof, so the routes that start, show and accept a
+// request stay unmounted. The server that has the intake sets this once.
+func (s *Service) WithIntake() *Service {
+	c := *s
+	c.intake = true
+
+	return &c
+}
+
+// HasIntake reports whether s has an intake that proves link requests.
+func (s *Service) HasIntake() bool {
+	return s.intake
 }
 
 // Started is a link request that a person started. Token is the one-time token.
@@ -191,6 +208,7 @@ func (s *Service) Accept(
 	}
 
 	e = s.entry(e, now, person.ID)
+	lost := s.lostEntry(e, now, r, previous)
 	e.Changes = append(slices.Clone(e.Changes), accountChanges(r.Proved.Account, r.Proved.Login)...)
 	e.Changes = append(
 		e.Changes,
@@ -205,9 +223,10 @@ func (s *Service) Accept(
 		)
 	}
 
-	accepted, err := s.store.AcceptRequest(
-		ctx, Acceptance{TokenSHA256: HashToken(token), Principal: person.ID, Previous: previous, At: now}, e,
-	)
+	accepted, err := s.store.AcceptRequest(ctx, Acceptance{
+		TokenSHA256: HashToken(token), Principal: person.ID, Previous: previous, At: now,
+		Lost: lost,
+	}, e)
 	if err != nil {
 		return Link{}, "", fmt.Errorf("accept the link request: %w", err)
 	}
@@ -315,6 +334,36 @@ func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e
 	}
 
 	return nil
+}
+
+// lostEntry returns the audit entry of the principal previous, which loses the
+// link of the account of r to the principal of r. The object is the old holder,
+// so the old holder finds the loss in its own entries. The entry also records
+// the intent to tell the old holder: the notification type for it does not exist
+// yet, so no notice goes out, and the entry is the only record of the loss.
+func (s *Service) lostEntry(base audit.Entry, now time.Time, r Request, previous string) audit.Entry {
+	if previous == "" {
+		return base
+	}
+
+	e := s.entry(base, now, previous)
+	e.Changes = slices.Clone(base.Changes)
+	e.Changes = append(e.Changes, accountChanges(r.Proved.Account, r.Proved.Login)...)
+	e.Changes = append(
+		e.Changes,
+		audit.Change{Key: "forgeLink.change", Old: nil, New: "replaced", Layer: "", TakesEffect: ""},
+		audit.Change{Key: "forgeLink.principal", Old: nil, New: previous, Layer: "", TakesEffect: ""},
+		audit.Change{Key: "forgeLink.replacedBy", Old: nil, New: r.Principal, Layer: "", TakesEffect: ""},
+		audit.Change{
+			Key:         "forgeLink.notice",
+			Old:         nil,
+			New:         "intended: no notification type yet",
+			Layer:       "",
+			TakesEffect: "",
+		},
+	)
+
+	return e
 }
 
 // entry sets the fields of e that the service owns.

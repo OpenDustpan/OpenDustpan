@@ -140,7 +140,12 @@ func (m *Mem) ProveRequest(
 func (m *Mem) AcceptRequest(_ context.Context, a forgelink.Acceptance, e audit.Entry) (forgelink.Accepted, error) {
 	var accepted forgelink.Accepted
 
-	err := m.write(e, func() error {
+	entries := []audit.Entry{e}
+	if a.Previous != "" {
+		entries = append(entries, a.Lost)
+	}
+
+	err := m.writeAll(entries, func() error {
 		r, ok := m.requests[a.TokenSHA256]
 		if !ok {
 			return forgelink.ErrNotFound
@@ -229,15 +234,24 @@ func (m *Mem) LinksOf(_ context.Context, principal string) ([]forgelink.Link, er
 
 // write runs change under the mutex and appends e when change succeeds.
 func (m *Mem) write(e audit.Entry, change func() error) error {
-	if err := e.Validate(); err != nil {
-		return fmt.Errorf("%w: %w", audit.ErrInvalidEntry, err)
+	return m.writeAll([]audit.Entry{e}, change)
+}
+
+// writeAll runs change under the mutex and appends each entry when change
+// succeeds. An entry that is not valid, or not in the server scope, stops the
+// write.
+func (m *Mem) writeAll(entries []audit.Entry, change func() error) error {
+	for i := range entries {
+		if err := entries[i].Validate(); err != nil {
+			return fmt.Errorf("%w: %w", audit.ErrInvalidEntry, err)
+		}
+
+		if entries[i].Namespace != audit.ServerScope {
+			return fmt.Errorf("%w: the entry is not in the server scope", audit.ErrInvalidEntry)
+		}
 	}
 
-	if e.Namespace != audit.ServerScope {
-		return fmt.Errorf("%w: the entry is not in the server scope", audit.ErrInvalidEntry)
-	}
-
-	return m.Write(serverFence(), opsmem.Scope(audit.ServerScope), []audit.Entry{e}, func() error {
+	return m.Write(serverFence(), opsmem.Scope(audit.ServerScope), entries, func() error {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 

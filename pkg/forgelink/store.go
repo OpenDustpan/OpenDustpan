@@ -10,12 +10,17 @@ import (
 // Acceptance is what a person gives to Store.AcceptRequest. TokenSHA256 names
 // the request, Principal is the principal that accepts, Previous is the
 // principal of the current link of the account that the accept page showed, or
-// empty, and At is the time of the accept.
+// empty, and At is the time of the accept. Lost is the audit entry of the
+// principal that loses its link: the store appends it in the same transaction
+// when the accept replaces a link, so the old holder finds the loss under its
+// own object. It must be a valid entry in the scope audit.ServerScope when
+// Previous is not empty, and the store ignores it otherwise.
 type Acceptance struct {
 	TokenSHA256 string
 	Principal   string
 	Previous    string
 	At          time.Time
+	Lost        audit.Entry
 }
 
 // Accepted is the result of an accept: the link that it made, and the principal
@@ -55,7 +60,8 @@ type Store interface {
 	// a.TokenSHA256 for a.Principal, once, in one transaction. In that transaction it reads the
 	// request, applies Request.CheckAccept, checks the current link of the
 	// account against previous, stores the link with Request.LinkOf, marks the
-	// request as used at a.At, and appends the audit entry e. So one token never
+	// request as used at a.At, and appends the audit entry e. A replaced link
+	// appends a.Lost too, in the same transaction. So one token never
 	// makes two links, and a token never gets used without a link.
 	//
 	// a.Previous is the principal of the current link of the account that the

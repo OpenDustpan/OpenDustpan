@@ -3,6 +3,7 @@ package forgelink_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -481,5 +482,137 @@ func TestExpiredRequest(t *testing.T) {
 
 	if _, err := f.svc.Show(t.Context(), session("ana"), started.Token); !errors.Is(err, forgelink.ErrExpired) {
 		t.Fatalf("show after the expiry = %v, want ErrExpired", err)
+	}
+}
+
+// countingStore counts the calls of AcceptRequest, so a test sees whether the
+// service reached the store.
+type countingStore struct {
+	forgelink.Store
+
+	accepts int
+}
+
+func (c *countingStore) AcceptRequest(
+	ctx context.Context, a forgelink.Acceptance, e audit.Entry,
+) (forgelink.Accepted, error) {
+	c.accepts++
+
+	return c.Store.AcceptRequest(ctx, a, e)
+}
+
+// TestAcceptChecksBeforeItReachesTheStore proves the check of the service: a
+// request that no account proved does not reach the store at all, so the store
+// is not the only layer that refuses it.
+func TestAcceptChecksBeforeItReachesTheStore(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	counting := &countingStore{Store: f.store, accepts: 0}
+	svc := forgelink.NewService(counting, f.people, func() time.Time { return f.clock }, &counter{n: 0})
+
+	started, err := svc.Start(t.Context(), session("ana"))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	_, _, err = svc.Accept(t.Context(), session("ana"), started.Token, "", entry())
+	if !errors.Is(err, forgelink.ErrNotProved) || counting.accepts != 0 {
+		t.Fatalf("accept = %v after %d store calls, want ErrNotProved before the store", err, counting.accepts)
+	}
+
+	f.clock = f.clock.Add(forgelink.RequestLifetime)
+
+	_, _, err = svc.Accept(t.Context(), session("ana"), started.Token, "", entry())
+	if !errors.Is(err, forgelink.ErrExpired) || counting.accepts != 0 {
+		t.Fatalf("accept after the expiry = %v after %d store calls, want ErrExpired before the store", err,
+			counting.accepts)
+	}
+}
+
+// TestOnlyAPersonRecordsAreListed proves the check of personRecord: a caller that
+// does not act as a person gets nothing, whatever record its subject names.
+func TestOnlyAPersonRecordsAreListed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.link(t, "42", "")
+
+	for name, caller := range map[string]identity.Principal{
+		"a service principal": callerOf("user:ana", identity.KindService, identity.CredentialSession),
+		"a workload":          callerOf("user:ana", identity.KindWorkload, identity.CredentialSession),
+		"a job token":         callerOf("user:ana", identity.KindPerson, identity.CredentialJobToken),
+		"a trust token":       callerOf("user:ana", identity.KindPerson, identity.CredentialTrustToken),
+	} {
+		links, err := f.svc.List(t.Context(), caller)
+		if !errors.Is(err, forgelink.ErrNotPerson) || len(links) != 0 {
+			t.Errorf("list for %s = %v, %v, want ErrNotPerson", name, links, err)
+		}
+	}
+}
+
+// TestResolveRefusesAccountsThatCannotAct proves the checks of Resolve, each
+// alone: a break-glass account, a service record and a disabled person.
+func TestResolveRefusesAccountsThatCannotAct(t *testing.T) {
+	t.Parallel()
+
+	for name, change := range map[string]func(*principal.Principal){
+		"a break-glass account": func(p *principal.Principal) { p.BreakGlass = true },
+		"a service record":      func(p *principal.Principal) { p.Kind = principal.KindService },
+		"a disabled person":     func(p *principal.Principal) { p.DisabledAt = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC) },
+	} {
+		f := newFixture(t)
+		f.link(t, "42", "")
+
+		p := f.people.byID["ana"]
+		change(&p)
+		f.people.byID["ana"] = p
+
+		if _, err := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(err, forgelink.ErrNotLinked) {
+			t.Errorf("resolve for %s = %v, want ErrNotLinked", name, err)
+		}
+	}
+}
+
+// TestReplacedLinkWritesTheLossForTheOldHolder proves that the principal that
+// loses a link finds an entry under its own object, with the intent of the
+// notice.
+func TestReplacedLinkWritesTheLossForTheOldHolder(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.link(t, "42", "")
+
+	started, err := f.svc.Start(t.Context(), session("bob"))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if _, proveErr := f.svc.Prove(t.Context(), started.Token, proof("42", "x")); proveErr != nil {
+		t.Fatalf("prove: %v", proveErr)
+	}
+
+	if _, _, err = f.svc.Accept(t.Context(), session("bob"), started.Token, "ana", entry()); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	var lost *audit.Entry
+
+	all := f.store.Entries(t.Context())
+	for i := range all {
+		if all[i].Object == principal.Ref("ana") && strings.Contains(audit.EncodeChanges(all[i].Changes), "replaced") {
+			lost = &all[i]
+		}
+	}
+
+	if lost == nil {
+		t.Fatalf("no entry of the loss under %q in %d entries", principal.Ref("ana"), len(all))
+	}
+
+	text := audit.EncodeChanges(lost.Changes)
+	for _, want := range []string{`"new":"bob"`, `"key":"forgeLink.notice"`, `"new":"42"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("entry of the loss lacks %s: %s", want, text)
+		}
 	}
 }

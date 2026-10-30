@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forgelink"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // Sizes and times of the cases.
@@ -680,5 +681,64 @@ func caseAcceptAudit(t *testing.T, h Harness) {
 	got := h.AuditEntries(t)
 	if len(got) != 1 || got[0].Namespace != audit.ServerScope || got[0].Action != e.Action {
 		t.Errorf("audit entries = %+v, want one entry of %q in the server scope", got, e.Action)
+	}
+}
+
+func caseReplaceEntry(t *testing.T, h Harness) {
+	t.Helper()
+
+	ana, bob := h.Principal(t, "ana"), h.Principal(t, "bob")
+	link(t, h, tokenA, ana, "42")
+
+	hash := start(t, h, tokenB, bob)
+	prove(t, h, hash, "42", "ana-gh")
+
+	before := entries(t, h)
+
+	_, _, err := accept(t, h, hash, bob, ana)
+	must(t, "accept", err)
+
+	got := h.AuditEntries(t)
+	if len(got) != before+twoLinks {
+		t.Fatalf("audit entries = %d, want %d: the link and the loss of the old holder", len(got), before+twoLinks)
+	}
+
+	if got[before].Object == principal.Ref(ana) || got[before+1].Object != principal.Ref(ana) {
+		t.Errorf("objects = %q, %q, want the entry of the loss under %q", got[before].Object, got[before+1].Object,
+			principal.Ref(ana))
+	}
+}
+
+func caseReplaceBadEntry(t *testing.T, h Harness) {
+	t.Helper()
+
+	ana, bob := h.Principal(t, "ana"), h.Principal(t, "bob")
+	link(t, h, tokenA, ana, "42")
+
+	hash := start(t, h, tokenB, bob)
+	prove(t, h, hash, "42", "ana-gh")
+
+	a := acceptance(hash, bob, ana, at(acceptAt))
+	a.Lost.Action = ""
+
+	before := entries(t, h)
+
+	_, err := h.Store.AcceptRequest(t.Context(), a, linkEntry())
+	wantErr(t, "invalid entry of the old holder", err, audit.ErrInvalidEntry)
+
+	a.Lost = linkEntry()
+	a.Lost.Namespace = "shop"
+
+	_, err = h.Store.AcceptRequest(t.Context(), a, linkEntry())
+	wantErr(t, "entry of another scope", err, audit.ErrInvalidEntry)
+
+	stored, err := h.Store.LinkOf(t.Context(), account("42"))
+	must(t, "link of", err)
+
+	req, getErr := h.Store.GetRequest(t.Context(), hash)
+	must(t, "get", getErr)
+
+	if stored.Principal != ana || !req.UsedAt.IsZero() || entries(t, h) != before {
+		t.Errorf("a refused replace changed the link %+v, the request %+v or the entries", stored, req)
 	}
 }

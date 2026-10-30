@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forgelink"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // Harness is one fresh, empty store for one case.
@@ -71,6 +72,8 @@ func cases() []suiteCase {
 		{"an expired request cannot be accepted", caseAcceptExpired},
 		{"an accept never replaces a link silently", caseNoSilentReplace},
 		{"an accept that replaces a link names the principal that lost it", caseReplace},
+		{"a replaced link writes a second entry under the old holder", caseReplaceEntry},
+		{"an invalid entry for the old holder stops a replace", caseReplaceBadEntry},
 		{"a refused accept leaves the request good", caseRefusedAcceptKeepsRequest},
 		{"the fields of an account match exactly", caseExactIDs},
 		{"a renamed login is the same account", caseRenamedLogin},
@@ -177,9 +180,14 @@ func link(t *testing.T, h Harness, token, principal, id string) {
 	must(t, "accept", err)
 }
 
-// acceptance returns the acceptance of the request hash by principal at the time at.
-func acceptance(hash, principal, previous string, at time.Time) forgelink.Acceptance {
-	return forgelink.Acceptance{TokenSHA256: hash, Principal: principal, Previous: previous, At: at}
+// acceptance returns the acceptance of the request hash by accepting at the time at.
+func acceptance(hash, accepting, previous string, at time.Time) forgelink.Acceptance {
+	a := forgelink.Acceptance{TokenSHA256: hash, Principal: accepting, Previous: previous, At: at, Lost: linkEntry()}
+	if previous != "" {
+		a.Lost.Object = principal.Ref(previous)
+	}
+
+	return a
 }
 
 func entries(t *testing.T, h Harness) int {

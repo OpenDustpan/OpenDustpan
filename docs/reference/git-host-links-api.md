@@ -8,7 +8,21 @@ that make, list and delete the links.
 
 The paths of the API start with `/api/dustpan/v1`.
 
-## How a link is made
+## What is available now
+
+The server does not yet receive the signed events of a Git host. So no Git host
+account can prove itself, and the server does not mount the routes that start,
+show and accept a link request. Until that work is done, no link can be made,
+and the list is empty. These routes work now:
+
+- `GET /me/linked-accounts`
+- `DELETE /me/linked-accounts/{kind}/{host}/{account}`
+- `DELETE /principals/{principal}/linked-accounts/{kind}/{host}/{account}`
+
+The sections that describe the other three routes say how they will work. They
+are not available yet.
+
+## How a link will be made
 
 A link needs proof from two sides. Neither side alone makes a link.
 
@@ -32,9 +46,9 @@ person can have 10 requests at one time that are not accepted and not expired.
 
 | Method and path | Action | Answer |
 | --- | --- | --- |
-| `POST /me/linked-account-requests` | `caller:manage-git-host-links` | 201 with the token |
-| `POST /me/linked-account-requests/show` | `caller:manage-git-host-links` | The state of the request |
-| `POST /me/linked-accounts` | `caller:manage-git-host-links` | 201 with the link |
+| `POST /me/linked-account-requests` (not available yet) | `caller:manage-git-host-links` | 201 with the token |
+| `POST /me/linked-account-requests/show` (not available yet) | `caller:manage-git-host-links` | The state of the request |
+| `POST /me/linked-accounts` (not available yet) | `caller:manage-git-host-links` | 201 with the link |
 | `GET /me/linked-accounts` | `caller:read` | The links of the person |
 | `DELETE /me/linked-accounts/{kind}/{host}/{account}` | `caller:manage-git-host-links` | 204 |
 | `DELETE /principals/{principal}/linked-accounts/{kind}/{host}/{account}` | `server:manage-principals` | 204 |
@@ -48,7 +62,7 @@ break-glass account cannot make a link.
 The token is in the body of the request and never in the URL, so no access log
 holds it.
 
-## Start a request
+## Start a request (not available yet)
 
 `POST /me/linked-account-requests` takes no body.
 
@@ -63,7 +77,7 @@ holds it.
 Post the token from the Git host account that you want to link. The answer
 shows the token one time. Start a new request when you lose it.
 
-## Show a request
+## Show a request (not available yet)
 
 `POST /me/linked-account-requests/show` takes `{"token": "..."}`.
 
@@ -89,7 +103,7 @@ A token that no request of yours holds gets 404 with the code
 `git-host.link-request-not-found`. The answer is the same for a token of
 another person and for a token that does not exist.
 
-## Accept a request
+## Accept a request (not available yet)
 
 `POST /me/linked-accounts` takes the token and, when the account has a link,
 the principal that the page showed.
@@ -159,6 +173,12 @@ deleted each write an audit entry with the action
 `caller:manage-git-host-links`, or `server:manage-principals` for an
 administrator. The entry names the kind, the host, the ID and the login of the
 account and the principal of the link. It never holds a token.
+
+A link that replaces another one writes a second entry, in the same
+transaction. Its object is the principal that lost the link, so that principal
+finds the loss in its own entries. The entry records that the principal is to be
+told. The server sends no notice yet, because the notification type does not
+exist, so the entry is the only record of the loss.
 
 A refused change writes an entry with the outcome `failure`, or `denied` for a
 caller that is not a person in a console session.

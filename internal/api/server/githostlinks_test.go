@@ -99,7 +99,7 @@ func (f accessFixture) proveLink(t *testing.T, token, id, login string) {
 		DeliveryID: "delivery-" + id,
 	}
 
-	svc := forgelink.NewService(f.store.ForgeLinks(), f.store, nil, nil)
+	svc := forgelink.NewService(f.store.ForgeLinks(), f.store, nil, nil).WithIntake()
 	if _, err := svc.Prove(t.Context(), token, p); err != nil {
 		t.Fatalf("prove: %v", err)
 	}
@@ -506,5 +506,54 @@ func TestGitHostLinkAuditEntries(t *testing.T) {
 
 	if made != 1 || deleted != 1 || denied != 1 {
 		t.Fatalf("entries: %d made, %d deleted, %d denied, want 1 each: %q", made, deleted, denied, entries)
+	}
+}
+
+// TestGitHostLinkRoutesCheckTheSessionFirst proves the check of the route, which
+// the service does not replace: a request with an access token is refused before
+// the route reads its body or its path. A bad body or a bad account gives 403 and
+// not 400, because the service never sees them.
+func TestGitHostLinkRoutesCheckTheSessionFirst(t *testing.T) {
+	t.Parallel()
+
+	f := newLinkFixture(t)
+
+	for _, c := range []apiCall{
+		{http.MethodPost, linkShowURL, `not json`, http.StatusForbidden},
+		{http.MethodPost, linksURL, `{"unknown":1}`, http.StatusForbidden},
+		{http.MethodDelete, linksURL + "/svn/GitHub.com/x", "", http.StatusForbidden},
+	} {
+		var failure linkErrorDoc
+
+		f.as(t, "alice", c, &failure)
+
+		if failure.ErrorCode != "git-host.link-person-required" {
+			t.Errorf("%s %s code = %q, want person-required", c.method, c.path, failure.ErrorCode)
+		}
+	}
+}
+
+// TestGitHostLinkRequestRoutesWaitForTheIntake proves that the routes that start,
+// show and accept a request are not mounted for a service with no intake, and
+// that the list and the deletes are.
+func TestGitHostLinkRequestRoutesWaitForTheIntake(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixtureLinks(
+		t,
+		func(st *sqlite.Store) auditStore { return st },
+		func(st *sqlite.Store) *forgelink.Service {
+			return forgelink.NewService(st.ForgeLinks(), st, nil, nil)
+		},
+	)
+
+	for _, c := range []apiCall{
+		{http.MethodPost, linkRequestsURL, "", http.StatusNotFound},
+		{http.MethodPost, linkShowURL, `{}`, http.StatusNotFound},
+		{http.MethodPost, linksURL, `{}`, http.StatusMethodNotAllowed},
+		{http.MethodGet, linksURL, "", http.StatusOK},
+		{http.MethodDelete, linksURL + ghAccountPath + "1", "", http.StatusNotFound},
+	} {
+		f.asPerson(t, "alice", c, nil)
 	}
 }

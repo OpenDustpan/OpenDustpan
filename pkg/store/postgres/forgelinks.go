@@ -124,8 +124,21 @@ func (f forgeLinks) AcceptRequest(
 		var acceptErr error
 
 		accepted, acceptErr = forgelinkstore.ApplyAccept(ctx, linkTx{requestTx{q: q}}, a)
+		if acceptErr != nil || accepted.Replaced == "" {
+			return acceptErr
+		}
 
-		return acceptErr
+		// The principal that lost its link finds the loss under its own object,
+		// in the transaction of the accept.
+		if lostErr := validServerEntry(a.Lost); lostErr != nil {
+			return lostErr
+		}
+
+		if _, appendErr := appendAuditEntry(ctx, q, a.Lost); appendErr != nil {
+			return fmt.Errorf("append audit entry: %w", appendErr)
+		}
+
+		return nil
 	})
 	if err != nil {
 		return forgelink.Accepted{}, err

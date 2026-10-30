@@ -262,19 +262,7 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 
 	manage := []identity.Action{identity.ActionCallerManageGitHostLinks}
 
-	return []Route{
-		{
-			Method: http.MethodPost, Path: gitHostLinkRequestsPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.startGitHostLink,
-		},
-		{
-			Method: http.MethodPost, Path: gitHostLinkShowPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.showGitHostLink,
-		},
-		{
-			Method: http.MethodPost, Path: gitHostLinksPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.acceptGitHostLink,
-		},
+	routes := []Route{
 		{
 			Method: http.MethodGet, Path: gitHostLinksPath, Scope: ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
@@ -290,6 +278,27 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 			Serve: h.deletePrincipalGitHostLink,
 		},
 	}
+
+	// A request that no Git host account can prove makes no link, so the routes
+	// that start, show and accept one wait for the intake of the signed events.
+	if !h.gitHostLinks.HasIntake() {
+		return routes
+	}
+
+	return append(routes, []Route{
+		{
+			Method: http.MethodPost, Path: gitHostLinkRequestsPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveCaller, ActionsFor: nil, Serve: h.startGitHostLink,
+		},
+		{
+			Method: http.MethodPost, Path: gitHostLinkShowPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveCaller, ActionsFor: nil, Serve: h.showGitHostLink,
+		},
+		{
+			Method: http.MethodPost, Path: gitHostLinksPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveCaller, ActionsFor: nil, Serve: h.acceptGitHostLink,
+		},
+	}...)
 }
 
 // requireSessionCaller refuses a request that a console session did not make.

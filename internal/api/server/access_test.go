@@ -109,7 +109,7 @@ func noGitHostLinks(*sqlite.Store) *forgelink.Service { return nil }
 // gitHostLinksOf gives the link service of the store: the routes of the links
 // are mounted.
 func gitHostLinksOf(st *sqlite.Store) *forgelink.Service {
-	return forgelink.NewService(st.ForgeLinks(), st, nil, nil)
+	return forgelink.NewService(st.ForgeLinks(), st, nil, nil).WithIntake()
 }
 
 // newAccessFixtureLinks is newAccessFixtureWith with the link service that links
