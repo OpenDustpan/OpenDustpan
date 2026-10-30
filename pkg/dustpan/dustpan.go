@@ -62,11 +62,13 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -86,6 +88,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -186,9 +189,15 @@ type settings struct {
 	// workspaceBlobs is the blob store of the workspace service: the blob
 	// store behind the in-process cache when WithBlobCache sets a size, else
 	// blobStore. Every other user reads blobStore.
-	workspaceBlobs       blob.Store
-	inventoryReader      inventory.Reader
-	profileStore         profile.Store
+	workspaceBlobs  blob.Store
+	inventoryReader inventory.Reader
+	profileStore    profile.Store
+	// issuerStore keeps the signing keys and the settings of the OIDC issuer
+	// of each namespace, or is nil. issuerBaseURL is the host of the issuer URL,
+	// and issuerOutbox receives its notices.
+	issuerStore          profile.IssuerStore
+	issuerBaseURL        string
+	issuerOutbox         notify.Outbox
 	sinks                sinkSettings
 	jobStore             job.Store
 	triggerStore         trigger.Store
@@ -650,6 +659,7 @@ type Server struct {
 	workspaces    *workspace.Service
 	backups       *backup.Service
 	restores      *backup.RestoreService
+	storeChecks   *storecheck.Service
 	now           func() time.Time
 	registry      *metrics.Registry
 	tlsCertFile   string
@@ -702,7 +712,9 @@ type Server struct {
 	durableOwner string
 	// reconciler does the periodic work of the job model: the schedule
 	// job.reconcile. It is nil without a job store or a namespace service.
-	reconciler      *job.Reconciler
+	reconciler *job.Reconciler
+	// issuer is the OIDC issuer, or nil. The schedule issuer.rotate calls it.
+	issuer          *issuersvc.Service
 	inactivityEvery time.Duration
 	deletedEvery    time.Duration
 	// components are the components this process runs. watch reads the
@@ -721,6 +733,9 @@ type services struct {
 	// manualLocks is the manual lock service, or nil when the store holds no
 	// manual locks.
 	manualLocks *manuallock.Service
+	// issuer is the OIDC issuer, or nil when the store keeps none. assemble
+	// sets it.
+	issuer *issuersvc.Service
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
@@ -766,6 +781,9 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
+		issuerStore:             nil,
+		issuerBaseURL:           "",
+		issuerOutbox:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		triggerStore:            nil,
@@ -1098,6 +1116,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		workspaces:    svc.workspaces,
 		backups:       backups,
 		restores:      mount.restores,
+		storeChecks:   mount.storeChecks,
 		now:           cfg.now,
 		registry:      observed.Registry(),
 		tlsCertFile:   cfg.tlsCertFile,
@@ -1114,9 +1133,9 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, mount.signIn),
 		kind:             newKindState(cfg), instances: newInstanceState(cfg),
-		durable:         cfg.durableStore,
-		durableOwner:    durableOwner(cfg),
-		reconciler:      reconciler,
+		durable:      cfg.durableStore,
+		durableOwner: durableOwner(cfg),
+		reconciler:   reconciler, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components,
@@ -1129,7 +1148,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 }
 
 // prepareBackground builds the metrics, the worker watch, the sweeper of
-// deleted units and the audit shipper, and sets them in cfg and svc. One
+// deleted units and the audit shipper, and sets them in cfg and svc, and builds the issuer. One
 // registry holds every metric family: the request, runtime and build families,
 // and the readiness failure counter of the probe.
 func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *audit.Shipper, error) {
@@ -1156,6 +1175,10 @@ func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *a
 
 	cfg.auditShipper = shipper
 
+	if svc.issuer, err = newIssuerService(*svc, cfg); err != nil {
+		return nil, nil, err
+	}
+
 	return observed, shipper, nil
 }
 
@@ -1172,6 +1195,7 @@ type adapters struct {
 	ready       *readiness
 	maintenance *maintenance.Watcher
 	restores    *backup.RestoreService
+	storeChecks *storecheck.Service
 	chain       *auditChain
 	// signIn is the console sign-in, or nil with no provider.
 	signIn *serverapi.SignIn
@@ -1234,7 +1258,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	serverAPI, restores, err := newInstallationAPI(cfg, installationDeps{
+	parts, err := newInstallationAPI(cfg, installationDeps{
 		services: svc, backups: backups, maint: maint, observed: observed, chain: chain, policies: sessionPolicies,
 		signIn: signIn,
 	})
@@ -1247,10 +1271,11 @@ func newAdapters(
 		pulumi:          api,
 		tfe:             tfeAPI,
 		tofuHTTP:        tofuHTTPAPI,
-		server:          serverAPI,
+		server:          parts.handler,
 		ready:           newReadiness(cfg, observed, chain),
 		maintenance:     watcher,
-		restores:        restores,
+		restores:        parts.restores,
+		storeChecks:     parts.storeChecks,
 		chain:           chain,
 		signIn:          signIn,
 	}
@@ -1274,6 +1299,8 @@ type neutralHandlers struct {
 	runners http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
+	// issuer is nil when no issuer store is set.
+	issuer http.Handler
 	// sinks is nil when no sink store is set.
 	sinks http.Handler
 	// jobs is nil when no job store is set.
@@ -1317,12 +1344,8 @@ func newNeutralHandlers(
 	if err != nil {
 		return neutralHandlers{}, err
 	}
-	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
-	if err != nil {
-		return neutralHandlers{}, err
-	}
 
-	sinks, err := newSinksHandler(svc, cfg, onFailure)
+	profileAPI, err := newProfileAPIs(svc, cfg, onFailure, policies)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1348,15 +1371,50 @@ func newNeutralHandlers(
 	}
 
 	return neutralHandlers{
-		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
-		jobs:     jobAPIs.jobs,
-		triggers: triggers,
-		drift:    jobAPIs.drift,
-		registry: registries,
+		inventory: units,
+		audit:     entries,
+		context:   contexts,
+		runners:   runners,
+		profiles:  profileAPI.profiles,
+		issuer:    profileAPI.issuer,
+		sinks:     profileAPI.sinkAPI,
+		jobs:      jobAPIs.jobs,
+		triggers:  triggers,
+		drift:     jobAPIs.drift,
+		registry:  registries,
 
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
 	}, nil
+}
+
+// profileAPIs holds the profiles API, the issuer API and the sinks API.
+type profileAPIs struct {
+	profiles http.Handler
+	issuer   http.Handler
+	sinkAPI  http.Handler
+}
+
+// newProfileAPIs builds the profiles API, the issuer API and the sinks API.
+func newProfileAPIs(
+	svc services, cfg *settings, onFailure func(), policies *session.Policies,
+) (profileAPIs, error) {
+	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	issuer, err := newIssuerHandler(svc, cfg, onFailure, policies)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	sinks, err := newSinksHandler(svc, cfg, onFailure)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	return profileAPIs{profiles: profiles, issuer: issuer, sinkAPI: sinks}, nil
 }
 
 // namespaceSettingHandlers holds the source filter API and the trust rule
@@ -1647,7 +1705,17 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, checkRetention(cfg.softDeleteRetention)
+	return base, errors.Join(checkIssuerBaseURL(cfg.issuerBaseURL), checkRetention(cfg.softDeleteRetention))
+}
+
+// checkIssuerBaseURL refuses an issuer base URL that does not parse. An empty
+// value is valid: the issuer then uses the public URL.
+func checkIssuerBaseURL(raw string) error {
+	if err := profile.CheckIssuerBaseURL(raw); err != nil {
+		return fmt.Errorf("issuer base URL: %w", err)
+	}
+
+	return nil
 }
 
 // checkStoreOptions refuses a missing state store, blob store or inventory
@@ -1876,6 +1944,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		access:      nil,
 		collections: nil,
 		gates:       nil,
+		issuer:      nil,
 	}, nil
 }
 
@@ -2058,20 +2127,26 @@ func (s *Server) newHTTPServer(ln net.Listener, tlsCfg *tls.Config) *http.Server
 	}
 }
 
-// startBackupWorker claims and runs backup and restore operations until ctx
-// is done. The returned function waits until the workers stopped. Without a
+// startBackupWorker claims and runs backup, restore and store check operations
+// until ctx is done. The returned function waits until the workers stopped. Without a
 // backup service there is nothing to run.
 func (s *Server) startBackupWorker(ctx context.Context) func() {
-	if s.backups == nil {
+	if s.backups == nil && s.storeChecks == nil {
 		return func() {}
 	}
 
 	var wg sync.WaitGroup
 
-	wg.Go(func() { s.backups.Work(ctx) })
+	if s.backups != nil {
+		wg.Go(func() { s.backups.Work(ctx) })
+	}
 
 	if s.restores != nil {
 		wg.Go(func() { s.restores.Work(ctx) })
+	}
+
+	if s.storeChecks != nil {
+		wg.Go(func() { s.storeChecks.Work(ctx) })
 	}
 
 	return wg.Wait
@@ -2862,22 +2937,33 @@ type installationDeps struct {
 
 // newInstallationAPI builds the restore service and the tool-neutral
 // installation API from the backup service and the maintenance service.
-func newInstallationAPI(
-	cfg *settings, deps installationDeps,
-) (http.Handler, *backup.RestoreService, error) {
+func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts, error) {
 	restores, err := newRestoreService(cfg, deps, deps.maint)
 	if err != nil {
-		return nil, nil, err
+		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
 	}
 
 	bindAuditChain(deps.chain, deps.maint, restores, cfg)
 
-	serverAPI, err := newServerHandler(cfg, deps, restores)
+	checks, _, err := newStoreCheckService(cfg, deps.maint)
 	if err != nil {
-		return nil, nil, err
+		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
 	}
 
-	return serverAPI, restores, nil
+	serverAPI, err := newServerHandler(cfg, deps, restores, checks)
+	if err != nil {
+		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+	}
+
+	return installationParts{handler: serverAPI, restores: restores, storeChecks: checks}, nil
+}
+
+// installationParts holds what newInstallationAPI builds: the installation API
+// and the services that the server runs in its worker.
+type installationParts struct {
+	handler     http.Handler
+	restores    *backup.RestoreService
+	storeChecks *storecheck.Service
 }
 
 // newServerHandler builds the tool-neutral installation API. It carries the
@@ -2888,7 +2974,7 @@ func newInstallationAPI(
 // the upgrade check reads, and the principal service when the store keeps
 // principals (ADR 52).
 func newServerHandler(
-	cfg *settings, deps installationDeps, restores *backup.RestoreService,
+	cfg *settings, deps installationDeps, restores *backup.RestoreService, checks *storecheck.Service,
 ) (http.Handler, error) {
 	grants := deps.services.access
 
@@ -2951,7 +3037,7 @@ func newServerHandler(
 		Preferences:      newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
-		Instances:        cfg.instanceStore,
+		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -4050,16 +4136,12 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// The paths of the inventory and the context API under /api/dustpan/v1/
 	// reach their own handlers by exact path, so another area can take the
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
-	mountV1(mux, a.inventory, wrapV1)
-	mountV1(mux, a.context, wrapV1)
-	mountV1(mux, a.profiles, wrapV1)
-	mountV1(mux, a.sinks, wrapV1)
-	mountV1(mux, a.registry, wrapV1)
-	mountV1(mux, a.jobs, wrapV1)
-	mountV1(mux, a.triggers, wrapV1)
-	mountV1(mux, a.drift, wrapV1)
-	mountV1(mux, a.sourceFilter, wrapV1)
-	mountV1(mux, a.trustRules, wrapV1)
+	for _, h := range []http.Handler{
+		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.drift,
+		a.sourceFilter, a.trustRules,
+	} {
+		mountV1(mux, h, wrapV1)
+	}
 	// The capabilities document and the dev sign-in belong to the
 	// installation API, so they stay available in maintenance mode like the
 	// rest of it.
@@ -4086,6 +4168,13 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// version endpoints under /api/v2/ pass the maintenance gate, so the
 	// CLI still meets the 503 refusal that names maintenance.
 	mux.Handle("GET /.well-known/terraform.json", a.tfe)
+	// The protocol routes of the OIDC issuers live outside the versioned API:
+	// their path is part of the issuer URL that clouds hold. They answer public
+	// data only, and they stay available in maintenance mode like the
+	// discovery document of the TFE adapter.
+	if a.issuer != nil {
+		mux.Handle("/oidc/", withJSONMethodNotAllowed(a.issuer))
+	}
 	// The provider registry protocol of OpenTofu lives outside /api/, at the
 	// path that service discovery names. The handler answers 404 for every path
 	// of it when no registry is set. It is refused in maintenance mode like the

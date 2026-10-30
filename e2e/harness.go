@@ -657,11 +657,13 @@ func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Optio
 	case *sqlite.Store:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	case *postgres.Store:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	default:

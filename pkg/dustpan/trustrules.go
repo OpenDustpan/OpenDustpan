@@ -45,6 +45,43 @@ func WithTrustRuleKeysRootCAs(pool *x509.CertPool) Option {
 	return func(o *settings) { o.trustRules.cas = pool }
 }
 
+// trustRuleEgress returns the egress rules of the reads of the keys of an
+// issuer.
+func trustRuleEgress(cfg *settings) egress.Rules {
+	return egress.Rules{Allow: nil, LoopbackForTests: cfg.trustRules.loopback}
+}
+
+// newTrustRuleService builds the trust rule service. When the server has an
+// issuer, the service asks it whether an issuer URL is one that this
+// installation signs for itself, so a rule never trusts the issuer of the
+// server.
+func newTrustRuleService(svc services, cfg *settings) (*trustrulesvc.Service, error) {
+	principals, ok := cfg.namespaceStore.(trustrulesvc.Principals)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no principals for the trust rules: %w", ErrMissingOption)
+	}
+
+	// A nil *issuersvc.Service must not become a non-nil interface.
+	var own trustrulesvc.OwnIssuer
+	if svc.issuer != nil {
+		own = svc.issuer
+	}
+
+	rules := trustRuleEgress(cfg)
+
+	ruleSvc, err := trustrulesvc.NewService(trustrulesvc.Config{
+		Store: cfg.trustRules.store, Namespaces: svc.namespaces, Principals: principals, Authorizer: cfg.authorizer,
+		InstallationURLs: []string{cfg.publicURL}, OwnIssuer: own,
+		CheckURL: func(raw string) error { return rules.CheckURL(raw, egress.HTTPSOnly) },
+		Now:      cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("trust rule service: %w", err)
+	}
+
+	return ruleSvc, nil
+}
+
 // newTrustRuleHandler builds the trust rule API. The caller builds it only
 // when the server has a trust rule store.
 func newTrustRuleHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
@@ -53,21 +90,9 @@ func newTrustRuleHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		return nil, err
 	}
 
-	principals, ok := cfg.namespaceStore.(trustrulesvc.Principals)
-	if !ok {
-		return nil, fmt.Errorf("namespace store keeps no principals for the trust rules: %w", ErrMissingOption)
-	}
-
-	rules := egress.Rules{Allow: nil, LoopbackForTests: cfg.trustRules.loopback}
-
-	ruleSvc, err := trustrulesvc.NewService(trustrulesvc.Config{
-		Store: cfg.trustRules.store, Namespaces: svc.namespaces, Principals: principals, Authorizer: cfg.authorizer,
-		InstallationURLs: []string{cfg.publicURL},
-		CheckURL:         func(raw string) error { return rules.CheckURL(raw, egress.HTTPSOnly) },
-		Now:              cfg.now,
-	})
+	ruleSvc, err := newTrustRuleService(svc, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("trust rule service: %w", err)
+		return nil, err
 	}
 
 	// The server serves the exchange only when it keeps access tokens and
@@ -75,7 +100,7 @@ func newTrustRuleHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 	var exchanger *trustrulesvc.Exchanger
 
 	if exchanges, ok := cfg.trustRules.store.(trustrule.ExchangeStore); ok && svc.tokens != nil {
-		exchanger, err = newExchanger(svc, cfg, principals, exchanges, rules)
+		exchanger, err = newExchanger(svc, cfg, exchanges)
 		if err != nil {
 			return nil, err
 		}
@@ -102,11 +127,14 @@ func newTrustRuleHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 }
 
 // newExchanger builds the token exchange over the exchange store exchanges.
-// The keys of a discovery rule come through the egress rules rules.
-func newExchanger(
-	svc services, cfg *settings, principals trustrulesvc.Principals, exchanges trustrule.ExchangeStore,
-	rules egress.Rules,
-) (*trustrulesvc.Exchanger, error) {
+// The keys of a discovery rule come through the egress rules of the trust
+// rules.
+func newExchanger(svc services, cfg *settings, exchanges trustrule.ExchangeStore) (*trustrulesvc.Exchanger, error) {
+	principals, ok := cfg.namespaceStore.(trustrulesvc.Principals)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no principals for the token exchange: %w", ErrMissingOption)
+	}
+
 	neutralAudit, err := auditStoreOf(cfg)
 	if err != nil {
 		return nil, err
@@ -120,7 +148,7 @@ func newExchanger(
 	x, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: cfg.trustRules.store, Exchanges: exchanges, Namespaces: svc.namespaces, Principals: principals,
 		Tokens: svc.tokens, Audit: neutralAudit, ServerAudit: serverAudit, Refusals: nil,
-		Keys:             trustkeys.New(trustkeys.Config{Rules: rules, RootCAs: cfg.trustRules.cas, Now: cfg.now}),
+		Keys: trustkeys.New(trustkeys.Config{Rules: trustRuleEgress(cfg), RootCAs: cfg.trustRules.cas, Now: cfg.now}),
 		InstallationURLs: []string{cfg.publicURL}, Now: cfg.now,
 	})
 	if err != nil {

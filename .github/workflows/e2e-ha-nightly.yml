@@ -1,4 +1,3 @@
-# Not active here: the owner copies this file to .github/workflows/e2e-ha-nightly.yml.
 # The high availability end-to-end suite (make e2e-ha), once each night on
 # main: three server binaries of one installation behind a round-robin proxy,
 # on PostgreSQL. The steps are a kill during work, a kill during a backup, and

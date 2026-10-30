@@ -1,0 +1,6 @@
+storecheck.cooldown
+storecheck.invalid-target
+storecheck.no-target
+storecheck.not-found
+storecheck.refused
+storecheck.running

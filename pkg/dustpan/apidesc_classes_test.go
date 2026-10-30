@@ -37,7 +37,7 @@ var outsideByDesign = []string{
 	// The paths that an identity provider, a cloud trust policy, an MCP
 	// client, a scrape configuration or a chat app stores.
 	"/sign-in/{id}/callback",
-	"/oidc/{namespace}/.well-known/openid-configuration", "/oidc/{namespace}/jwks",
+	"/oidc/{nsid}/.well-known/openid-configuration", "/oidc/{nsid}/jwks",
 	"/mcp", "/metrics",
 	"/chat/{tool}/actions",
 }
@@ -339,6 +339,9 @@ var rootMounts = []string{
 	// TFE adapter serves it and lists the route table in its own tests. The
 	// module registry protocol follows the same rule.
 	"/v1/providers/", "/v1/modules/",
+	// The protocol routes of the OIDC issuers. The path is part of the issuer
+	// URL that clouds hold, so it cannot move under the prefix.
+	"/oidc/",
 	// Service discovery, the metrics route and the probes.
 	"GET /.well-known/terraform.json", "GET /metrics",
 	"GET /health/live", "GET /health/ready", "GET /health/ready/{component}",
