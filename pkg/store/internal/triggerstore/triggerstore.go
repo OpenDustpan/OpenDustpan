@@ -87,6 +87,13 @@ func rebuild(r Row) (trigger.Trigger, error) {
 			ErrCorrupt, trigger.ErrInvalid, r.NextSlotMs)
 	}
 
+	// An enabled schedule trigger always has a next slot: Put sets it. A row
+	// without one is not a row that this server wrote, and a claim of it fails.
+	if r.Kind == string(trigger.KindSchedule) && r.Enabled == 1 && r.NextSlotMs == 0 {
+		return trigger.Trigger{}, fmt.Errorf("%w: %w: an enabled schedule trigger has a next slot",
+			ErrCorrupt, trigger.ErrInvalid)
+	}
+
 	if r.Enabled != 0 && r.Enabled != 1 {
 		return trigger.Trigger{}, fmt.Errorf("%w: %w: the enabled flag is %d, not 0 or 1",
 			ErrCorrupt, trigger.ErrInvalid, r.Enabled)

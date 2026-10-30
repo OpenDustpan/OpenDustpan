@@ -239,7 +239,7 @@ func TestCheckClaim(t *testing.T) {
 	}{
 		{"due", claim(slot, slot), hourly, slot, next, nil},
 		{"a later slot skips", claim(later, later), hourly, slot, later.Add(time.Hour), nil},
-		{"no stored slot", claim(slot, slot), hourly, time.Time{}, next, nil},
+		{"no stored slot", claim(slot, slot), hourly, time.Time{}, time.Time{}, trigger.ErrInvalid},
 		{"taken", claim(slot, next), hourly, next, time.Time{}, trigger.ErrNotDue},
 		{"off", claim(slot, slot), off, slot, time.Time{}, trigger.ErrDisabled},
 		{

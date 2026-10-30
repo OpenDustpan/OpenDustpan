@@ -171,10 +171,11 @@ func (c Claim) Validate() error {
 }
 
 // CheckClaim applies the rules of a claim to the stored trigger t, whose next
-// slot is next (the zero time when the store records none). It returns the
-// slot that follows c.Slot, which becomes the next slot. It returns:
+// slot is next. It returns the slot that follows c.Slot, which becomes the next
+// slot. It returns:
 //   - ErrInvalid when c fails Validate, when t is not a valid schedule trigger,
-//     and when c.Slot is not a time that the schedule gives,
+//     when next is the zero time (an enabled schedule trigger always has a
+//     slot), and when c.Slot is not a time that the schedule gives,
 //   - ErrDisabled when t is off,
 //   - ErrNotDue when c.Slot is before next: a claim took that slot or a later
 //     slot already.
@@ -204,11 +205,18 @@ func CheckClaim(c Claim, t Trigger, next time.Time) (time.Time, error) {
 		return time.Time{}, ErrDisabled
 	}
 
+	// An enabled schedule trigger always has a next slot: Put sets it, and the
+	// store refuses a row without one. A zero value here is a row that fails its
+	// checks, so the claim fails closed.
+	if next.IsZero() {
+		return time.Time{}, fmt.Errorf("%w: the trigger has no next slot", ErrInvalid)
+	}
+
 	if !IsSlot(t, c.Slot) {
 		return time.Time{}, fmt.Errorf("%w: the time is not a slot of the schedule", ErrInvalid)
 	}
 
-	if !next.IsZero() && c.Slot.Before(next) {
+	if c.Slot.Before(next) {
 		return time.Time{}, ErrNotDue
 	}
 
@@ -220,7 +228,7 @@ func CheckClaim(c Claim, t Trigger, next time.Time) (time.Time, error) {
 // of an enabled schedule trigger that keeps its frequency keeps prevNext, so a
 // save that changes nothing about the schedule never skips or repeats a slot.
 // A new trigger, a trigger that was off, a trigger with another frequency, and a
-// trigger with no recorded slot get the first slot after at. prev is the stored
+// trigger with a zero prevNext get the first slot after at. prev is the stored
 // trigger that t replaces, and nil when there is none. Every store adapter calls
 // it in the transaction of Put.
 func PutSlot(t Trigger, at time.Time, prev *Trigger, prevNext time.Time) (time.Time, error) {

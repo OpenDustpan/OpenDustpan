@@ -54,6 +54,10 @@ func TestRowRoundTrip(t *testing.T) {
 			t.Parallel()
 
 			row := triggerstore.RowOf(want, 42)
+			if want.Kind == trigger.KindSchedule {
+				row.NextSlotMs = 1 // Put sets the next slot of an enabled schedule trigger.
+			}
+
 			if row.CreatedAtMs != 42 || row.UpdatedAtMs != 42 || row.Namespace != "acme" {
 				t.Errorf("row = %+v, want times 42 and namespace acme", row)
 			}
@@ -530,6 +534,11 @@ func TestApplyClaimRefusesARowThatFailsItsChecks(t *testing.T) {
 	row.NextSlotMs = -5
 	negative.rows["s1"] = row
 
+	noSlot := newMemTx(hourly())
+	row = noSlot.rows["s1"]
+	row.NextSlotMs = 0
+	noSlot.rows["s1"] = row
+
 	tests := []struct {
 		name string
 		tx   *memTx
@@ -537,6 +546,7 @@ func TestApplyClaimRefusesARowThatFailsItsChecks(t *testing.T) {
 	}{
 		{"a cron expression that is too frequent", newMemTx(bad), trigger.ErrInvalid},
 		{"a negative slot", negative, triggerstore.ErrCorrupt},
+		{"an enabled schedule trigger with no slot", noSlot, triggerstore.ErrCorrupt},
 	}
 
 	for _, tc := range tests {

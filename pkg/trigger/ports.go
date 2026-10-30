@@ -84,9 +84,9 @@ type Store interface {
 	// package) when the trigger is an enabled schedule trigger and is new, was
 	// off, or has another frequency. A replace that keeps an enabled schedule
 	// trigger and its frequency keeps the slot. ClaimDue moves it. It returns
-	// the zero time for a trigger that has no slot: a trigger of another kind,
-	// a trigger that is off, and a schedule trigger that was stored before the
-	// store kept slots. It returns ErrNotFound for an unknown trigger and
+	// the zero time for a trigger that has no slot: a trigger of another kind
+	// and a trigger that is off. An enabled schedule trigger always has a slot,
+	// and the store refuses a row that has none. It returns ErrNotFound for an unknown trigger and
 	// ErrInvalid for an ID or a namespace that fails validation. NextSlot does
 	// not check access.
 	NextSlot(ctx context.Context, ns namespace.Name, id ID) (time.Time, error)
@@ -99,9 +99,7 @@ type Store interface {
 	//
 	// A claim can name a slot after the next slot: the slots between them are
 	// skipped. So after an outage one claim for the latest missed slot starts
-	// one run, and never one run for each missed slot. A schedule trigger with
-	// no recorded slot accepts any slot that the schedule gives and that is not
-	// after c.Now.
+	// one run, and never one run for each missed slot.
 	//
 	// It returns:
 	//   - nil for the one claim that took the slot,
