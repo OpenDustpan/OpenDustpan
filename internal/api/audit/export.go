@@ -35,15 +35,18 @@ const exportTimeLimit = 30 * time.Minute
 // does not depend on the size of the log.
 const exportFlushEvery = 256
 
-// exportFormatJSON is the one format of the export: one JSON object for each
-// line.
-const exportFormatJSON = "json"
+// The formats of the export. json is one JSON object for each line. cef is
+// one ArcSight Common Event Format line for each entry.
+const (
+	exportFormatJSON = "json"
+	exportFormatCEF  = "cef"
+)
 
 // Errors of the export. classify maps them to the answers of the console.
 var (
 	// errInvalidFormat reports a format value that the export does not
 	// serve.
-	errInvalidFormat = errors.New("invalid format: send json")
+	errInvalidFormat = errors.New("invalid format: send json or cef")
 	// errInvalidTime reports a from or to value that is not a number of
 	// Unix milliseconds.
 	errInvalidTime = errors.New("invalid from or to: send Unix milliseconds, zero or more")
@@ -59,6 +62,7 @@ var (
 
 // exportRequest is a checked export request. Zero From or To means no bound.
 type exportRequest struct {
+	format       string
 	fromMs       int64
 	toMs         int64
 	hasFrom      bool
@@ -66,7 +70,7 @@ type exportRequest struct {
 	fromSequence int64
 }
 
-// exportLine is one line of the export: the wire shape of an entry of the
+// exportLine is one line of the json export: the wire shape of an entry of the
 // list and the scope of the entry. A reader needs the scope to compute the
 // hash again, because the hash covers it.
 //
@@ -84,7 +88,12 @@ func parseExport(r *http.Request) (exportRequest, error) {
 
 	var out exportRequest
 
-	if format := query.Get("format"); format != "" && format != exportFormatJSON {
+	switch format := query.Get("format"); format {
+	case "", exportFormatJSON:
+		out.format = exportFormatJSON
+	case exportFormatCEF:
+		out.format = exportFormatCEF
+	default:
 		return out, errInvalidFormat
 	}
 
@@ -139,7 +148,7 @@ func (q exportRequest) contains(atMs int64) bool {
 // description returns the object of the audit entry of the export: the
 // scope, the format and every bound of the request.
 func (q exportRequest) description(scope namespace.Name) string {
-	parts := []string{"audit-export", scope.String(), "format=" + exportFormatJSON}
+	parts := []string{"audit-export", scope.String(), "format=" + q.format}
 	if q.hasFrom {
 		parts = append(parts, "from="+strconv.FormatInt(q.fromMs, 10))
 	}
@@ -202,7 +211,12 @@ func (h *Handler) exportEntries(
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	contentType := "application/x-ndjson; charset=utf-8"
+	if req.format == exportFormatCEF {
+		contentType = "text/plain; charset=utf-8"
+	}
+
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
@@ -229,7 +243,7 @@ func (h *Handler) exportEntries(
 func (h *Handler) streamExport(
 	ctx context.Context, w http.ResponseWriter, ns namespace.Name, req exportRequest, lastSeq int64,
 ) error {
-	out := &exportWriter{buf: bufio.NewWriter(w), ctl: http.NewResponseController(w), written: 0}
+	out := &exportWriter{format: req.format, buf: bufio.NewWriter(w), ctl: http.NewResponseController(w), written: 0}
 
 	for seq := req.fromSequence; seq <= lastSeq; seq++ {
 		if err := ctx.Err(); err != nil {
@@ -266,6 +280,7 @@ func (h *Handler) streamExport(
 // exportWriter writes the lines of an export and sends them to the client
 // in groups of exportFlushEvery lines.
 type exportWriter struct {
+	format  string
 	buf     *bufio.Writer
 	ctl     *http.ResponseController
 	written int
@@ -273,8 +288,14 @@ type exportWriter struct {
 
 // write adds the line of e and sends the group when it is full.
 func (o *exportWriter) write(e audit.Entry) error {
-	line, err := json.Marshal(exportLine{auditEntry: toAuditEntry(e), Namespace: e.Namespace.String()})
-	if err != nil {
+	var (
+		line []byte
+		err  error
+	)
+
+	if o.format == exportFormatCEF {
+		line = []byte(cefLine(e))
+	} else if line, err = json.Marshal(exportLine{auditEntry: toAuditEntry(e), Namespace: e.Namespace.String()}); err != nil {
 		return fmt.Errorf("encode line: %w", err)
 	}
 
