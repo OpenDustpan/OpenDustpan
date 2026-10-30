@@ -688,6 +688,19 @@ func caseReplaceEntry(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana, bob := h.Principal(t, "ana"), h.Principal(t, "bob")
+
+	// The two objects must differ and be valid references, or the check below
+	// proves nothing.
+	if principal.Ref(ana) == principal.Ref(bob) || principal.Ref(ana) == principal.Ref("") {
+		t.Fatalf(
+			"the fixture IDs %q and %q give the references %q and %q",
+			ana,
+			bob,
+			principal.Ref(ana),
+			principal.Ref(bob),
+		)
+	}
+
 	link(t, h, tokenA, ana, "42")
 
 	hash := start(t, h, tokenB, bob)
@@ -695,7 +708,10 @@ func caseReplaceEntry(t *testing.T, h Harness) {
 
 	before := entries(t, h)
 
-	_, _, err := accept(t, h, hash, bob, ana)
+	e := linkEntry()
+	e.Object = principal.Ref(bob)
+
+	_, err := h.Store.AcceptRequest(t.Context(), acceptance(hash, bob, ana, at(acceptAt)), e)
 	must(t, "accept", err)
 
 	got := h.AuditEntries(t)
@@ -703,18 +719,17 @@ func caseReplaceEntry(t *testing.T, h Harness) {
 		t.Fatalf("audit entries = %d, want %d: the link and the loss of the old holder", len(got), before+twoLinks)
 	}
 
-	// The order of the two entries is not part of the contract: the old holder
-	// finds exactly one of them under its own object.
-	under := 0
+	// The order of the two entries is not part of the contract: the new link is
+	// under the new holder, and the loss is under the old holder.
+	byObject := map[string]int{}
 
 	for i := before; i < len(got); i++ {
-		if got[i].Object == principal.Ref(ana) {
-			under++
-		}
+		byObject[got[i].Object]++
 	}
 
-	if under != 1 {
-		t.Errorf("%d of the new entries are under %q, want the entry of the loss only", under, principal.Ref(ana))
+	if byObject[principal.Ref(bob)] != 1 || byObject[principal.Ref(ana)] != 1 {
+		t.Errorf("objects of the new entries = %v, want one under %q and one under %q", byObject, principal.Ref(bob),
+			principal.Ref(ana))
 	}
 }
 

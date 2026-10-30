@@ -22,7 +22,7 @@ func TestMemConformance(t *testing.T) {
 			Principal: func(t *testing.T, name string) string {
 				t.Helper()
 
-				return name
+				return "prn-" + name
 			},
 			AuditEntries: func(t *testing.T) []audit.Entry {
 				t.Helper()

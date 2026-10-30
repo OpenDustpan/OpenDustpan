@@ -41,7 +41,7 @@ func (p *people) GetPrincipal(_ context.Context, id string) (principal.Principal
 
 func person(id string) principal.Principal {
 	return principal.Principal{
-		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: id, Subject: "user:" + id,
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-" + id, Subject: "user:" + id,
 		DisplayName: "Display " + id, Kind: principal.KindPerson, Source: "", Namespace: "", GroupCount: 0,
 		BreakGlass: false,
 	}
@@ -86,7 +86,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{
 		svc:    nil,
 		store:  forgelinktest.NewMem(),
-		people: &people{byID: map[string]principal.Principal{"ana": person("ana"), "bob": person("bob")}},
+		people: &people{byID: map[string]principal.Principal{"prn-ana": person("ana"), "prn-bob": person("bob")}},
 		clock:  time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC),
 	}
 
@@ -218,7 +218,7 @@ func TestThePersonCannotNameTheAccount(t *testing.T) {
 	f := newFixture(t)
 	l := f.link(t, "42", "")
 
-	if l.Account != gh("42") || l.Principal != "ana" {
+	if l.Account != gh("42") || l.Principal != "prn-ana" {
 		t.Fatalf("link = %+v, want the account of the proof for ana", l)
 	}
 }
@@ -282,7 +282,7 @@ func TestOnlyAPersonInASessionMakesALink(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t)
-			f.people.byID["dan"], f.people.byID["gus"], f.people.byID["svc"] = disabled, glass, service
+			f.people.byID["prn-dan"], f.people.byID["prn-gus"], f.people.byID["prn-svc"] = disabled, glass, service
 
 			if _, err := f.svc.Start(t.Context(), tc.caller); !errors.Is(err, forgelink.ErrNotPerson) {
 				t.Errorf("start = %v, want ErrNotPerson", err)
@@ -306,7 +306,7 @@ func TestExactIDs(t *testing.T) {
 	f := newFixture(t)
 	f.link(t, "AbC", "")
 
-	if p, err := f.svc.Resolve(t.Context(), gh("AbC")); err != nil || p.ID != "ana" {
+	if p, err := f.svc.Resolve(t.Context(), gh("AbC")); err != nil || p.ID != "prn-ana" {
 		t.Fatalf("resolve exact = %v, %v, want ana", p.ID, err)
 	}
 
@@ -334,12 +334,12 @@ func TestRenamedLoginKeepsTheLink(t *testing.T) {
 	f.link(t, "42", "")
 
 	// The account renames its login. A proof carries the new login. The ID is the same.
-	l := f.link(t, "42", "ana")
+	l := f.link(t, "42", "prn-ana")
 	if l.Account.ID != "42" || l.Login != "login-42" {
 		t.Fatalf("link = %+v", l)
 	}
 
-	if p, err := f.svc.Resolve(t.Context(), gh("42")); err != nil || p.ID != "ana" {
+	if p, err := f.svc.Resolve(t.Context(), gh("42")); err != nil || p.ID != "prn-ana" {
 		t.Fatalf("resolve = %v, %v", p.ID, err)
 	}
 }
@@ -364,7 +364,7 @@ func TestNoSilentReplace(t *testing.T) {
 		t.Fatalf("show: %v", err)
 	}
 
-	if view.Current.Principal != "ana" || view.CurrentName != "Display ana" {
+	if view.Current.Principal != "prn-ana" || view.CurrentName != "Display ana" {
 		t.Fatalf("show = %+v, want the link of ana", view)
 	}
 
@@ -373,12 +373,12 @@ func TestNoSilentReplace(t *testing.T) {
 		t.Fatalf("accept without the previous principal = %v, want ErrConflict", err)
 	}
 
-	if p, resolveErr := f.svc.Resolve(t.Context(), gh("42")); resolveErr != nil || p.ID != "ana" {
+	if p, resolveErr := f.svc.Resolve(t.Context(), gh("42")); resolveErr != nil || p.ID != "prn-ana" {
 		t.Fatalf("the link of ana changed: %v, %v", p.ID, resolveErr)
 	}
 
-	l, replaced, err := f.svc.Accept(t.Context(), session("bob"), started.Token, "ana", entry())
-	if err != nil || l.Principal != "bob" || replaced != "ana" {
+	l, replaced, err := f.svc.Accept(t.Context(), session("bob"), started.Token, "prn-ana", entry())
+	if err != nil || l.Principal != "prn-bob" || replaced != "prn-ana" {
 		t.Fatalf("accept with the previous principal = %+v, %q, %v", l, replaced, err)
 	}
 }
@@ -389,15 +389,15 @@ func TestResolveRefusesAPrincipalThatCannotAct(t *testing.T) {
 	f := newFixture(t)
 	f.link(t, "42", "")
 
-	p := f.people.byID["ana"]
+	p := f.people.byID["prn-ana"]
 	p.DisabledAt = f.clock
-	f.people.byID["ana"] = p
+	f.people.byID["prn-ana"] = p
 
 	if _, err := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(err, forgelink.ErrNotLinked) {
 		t.Fatalf("resolve for a disabled principal = %v, want ErrNotLinked", err)
 	}
 
-	delete(f.people.byID, "ana")
+	delete(f.people.byID, "prn-ana")
 
 	if _, err := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(err, forgelink.ErrNotLinked) {
 		t.Fatalf("resolve for a deleted principal = %v, want ErrNotLinked", err)
@@ -414,7 +414,7 @@ func TestDeleteOwnLinkOnly(t *testing.T) {
 		t.Fatalf("delete by another person = %v, want ErrNotFound", err)
 	}
 
-	if err := f.svc.DeleteFor(t.Context(), "bob", gh("42"), entry()); !errors.Is(err, forgelink.ErrNotFound) {
+	if err := f.svc.DeleteFor(t.Context(), "prn-bob", gh("42"), entry()); !errors.Is(err, forgelink.ErrNotFound) {
 		t.Fatalf("delete for another principal = %v, want ErrNotFound", err)
 	}
 
@@ -427,7 +427,7 @@ func TestDeleteOwnLinkOnly(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	if err := f.svc.DeleteFor(t.Context(), "ana", gh("42"), entry()); !errors.Is(err, forgelink.ErrNotFound) {
+	if err := f.svc.DeleteFor(t.Context(), "prn-ana", gh("42"), entry()); !errors.Is(err, forgelink.ErrNotFound) {
 		t.Fatalf("second delete = %v, want ErrNotFound", err)
 	}
 }
@@ -445,7 +445,7 @@ func TestAuditEntriesNameTheAccount(t *testing.T) {
 
 	e := got[0]
 	if e.Namespace != audit.ServerScope || e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess ||
-		e.Object != principal.Ref("ana") {
+		e.Object != principal.Ref("prn-ana") {
 		t.Fatalf("entry = %+v", e)
 	}
 
@@ -456,7 +456,7 @@ func TestAuditEntriesNameTheAccount(t *testing.T) {
 
 	for k, want := range map[string]string{
 		"forgeLink.kind": "github", "forgeLink.host": "github.com", "forgeLink.accountId": "42",
-		"forgeLink.principal": "ana",
+		"forgeLink.principal": "prn-ana",
 	} {
 		if keys[k] != want {
 			t.Errorf("change %s = %q, want %q", k, keys[k], want)
@@ -564,9 +564,9 @@ func TestResolveRefusesAccountsThatCannotAct(t *testing.T) {
 		f := newFixture(t)
 		f.link(t, "42", "")
 
-		p := f.people.byID["ana"]
+		p := f.people.byID["prn-ana"]
 		change(&p)
-		f.people.byID["ana"] = p
+		f.people.byID["prn-ana"] = p
 
 		if _, err := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(err, forgelink.ErrNotLinked) {
 			t.Errorf("resolve for %s = %v, want ErrNotLinked", name, err)
@@ -592,27 +592,55 @@ func TestReplacedLinkWritesTheLossForTheOldHolder(t *testing.T) {
 		t.Fatalf("prove: %v", proveErr)
 	}
 
-	if _, _, err = f.svc.Accept(t.Context(), session("bob"), started.Token, "ana", entry()); err != nil {
+	if _, _, err = f.svc.Accept(t.Context(), session("bob"), started.Token, "prn-ana", entry()); err != nil {
 		t.Fatalf("accept: %v", err)
 	}
 
-	var lost *audit.Entry
+	split := splitLinkEntries(f.store.Entries(t.Context()))
+	linked, lost := split.linked, split.lost
 
-	all := f.store.Entries(t.Context())
-	for i := range all {
-		if all[i].Object == principal.Ref("ana") && strings.Contains(audit.EncodeChanges(all[i].Changes), "replaced") {
-			lost = &all[i]
-		}
+	// The new link is under the new holder, and the loss is under the old holder
+	// and names the new holder. The two objects differ, and neither is the
+	// invalid reference that an ID with no prefix would give.
+	if len(linked) != 1 || len(lost) != 1 {
+		t.Fatalf("entries of the link %d and of the loss %d, want one each under prn-bob and prn-ana",
+			len(linked), len(lost))
 	}
 
-	if lost == nil {
-		t.Fatalf("no entry of the loss under %q in %d entries", principal.Ref("ana"), len(all))
+	if lost[0].Object != principal.Ref("prn-ana") || principal.Ref("prn-ana") == principal.Ref("prn-bob") {
+		t.Fatalf("the loss is under %q, want %q", lost[0].Object, principal.Ref("prn-ana"))
 	}
 
-	text := audit.EncodeChanges(lost.Changes)
-	for _, want := range []string{`"new":"bob"`, `"key":"forgeLink.notice"`, `"new":"42"`} {
+	text := audit.EncodeChanges(lost[0].Changes)
+	for _, want := range []string{`"key":"forgeLink.replacedBy","new":"prn-bob"`, `"key":"forgeLink.notice"`, `"new":"42"`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("entry of the loss lacks %s: %s", want, text)
 		}
 	}
+}
+
+// splitLinkEntries returns the entries of a new link under prn-bob and the
+// entries of a replaced link.
+// linkEntries holds the entries of a new link and of a replaced link.
+type linkEntries struct {
+	linked []audit.Entry
+	lost   []audit.Entry
+}
+
+func splitLinkEntries(all []audit.Entry) linkEntries {
+	var out linkEntries
+
+	for i := range all {
+		text := audit.EncodeChanges(all[i].Changes)
+
+		switch {
+		case strings.Contains(text, `"key":"forgeLink.change","new":"replaced"`):
+			out.lost = append(out.lost, all[i])
+		case strings.Contains(text, `"key":"forgeLink.change","new":"linked"`) && all[i].Object == principal.Ref("prn-bob"):
+			out.linked = append(out.linked, all[i])
+		default:
+		}
+	}
+
+	return out
 }
