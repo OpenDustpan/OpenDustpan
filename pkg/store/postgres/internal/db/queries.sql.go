@@ -247,6 +247,65 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 	return err
 }
 
+const appendInventoryChange = `-- name: AppendInventoryChange :one
+WITH ns AS (
+    SELECT id FROM namespaces WHERE namespaces.name = $8
+), head AS (
+    INSERT INTO inventory_change_heads (namespace_id, last_seq)
+    SELECT id, 1 FROM ns
+    ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+    RETURNING namespace_id, last_seq
+)
+INSERT INTO inventory_changes (
+    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+)
+SELECT
+    head.namespace_id, head.last_seq, $1::bigint, $2::text, $3::text,
+    $4::text, $5::text, $6::text,
+    COALESCE((
+        SELECT c.name
+        FROM collection_members AS m
+        JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+        WHERE m.unit_id = $3::text
+    ), '')::text,
+    $7::text, NULL
+FROM head
+RETURNING seq
+`
+
+type AppendInventoryChangeParams struct {
+	AtMs          int64
+	Tool          string
+	UnitID        string
+	UnitName      string
+	DisplayName   string
+	Status        string
+	Kind          string
+	NamespaceName string
+}
+
+// Appends one row to the change log of the namespace that has the name now, in
+// one statement: it resolves the namespace, takes the next number of the log,
+// and writes the row with the name of the collection that holds the unit. No
+// row comes back when the namespace does not exist. The statement runs last in
+// the transaction of the write, after every other row lock, so the order of the
+// numbers is the order of the commits of the namespace.
+func (q *Queries) AppendInventoryChange(ctx context.Context, arg AppendInventoryChangeParams) (int64, error) {
+	row := q.db.QueryRow(ctx, appendInventoryChange,
+		arg.AtMs,
+		arg.Tool,
+		arg.UnitID,
+		arg.UnitName,
+		arg.DisplayName,
+		arg.Status,
+		arg.Kind,
+		arg.NamespaceName,
+	)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
+}
+
 const backupBlobs = `-- name: BackupBlobs :many
 SELECT content_key, size, md5, sealed
 FROM state_versions
@@ -7559,21 +7618,6 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	return name, err
 }
 
-const getUnitCollectionName = `-- name: GetUnitCollectionName :one
-SELECT c.name
-FROM collection_members AS m
-JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
-WHERE m.unit_id = $1
-`
-
-// The name of the collection that holds the unit, for a change log row.
-func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (string, error) {
-	row := q.db.QueryRow(ctx, getUnitCollectionName, unitID)
-	var name string
-	err := row.Scan(&name)
-	return name, err
-}
-
 const getUnitFinalVersion = `-- name: GetUnitFinalVersion :one
 SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
@@ -8772,44 +8816,6 @@ func (q *Queries) InsertImportUnit(ctx context.Context, arg InsertImportUnitPara
 		arg.Bytes,
 		arg.Encryption,
 		arg.Findings,
-	)
-	return err
-}
-
-const insertInventoryChange = `-- name: InsertInventoryChange :exec
-INSERT INTO inventory_changes (
-    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-`
-
-type InsertInventoryChangeParams struct {
-	NamespaceID   string
-	Seq           int64
-	AtMs          int64
-	Tool          string
-	UnitID        string
-	Name          string
-	DisplayName   string
-	Status        string
-	Collection    string
-	Kind          string
-	ResourceCount pgtype.Int8
-}
-
-func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventoryChangeParams) error {
-	_, err := q.db.Exec(ctx, insertInventoryChange,
-		arg.NamespaceID,
-		arg.Seq,
-		arg.AtMs,
-		arg.Tool,
-		arg.UnitID,
-		arg.Name,
-		arg.DisplayName,
-		arg.Status,
-		arg.Collection,
-		arg.Kind,
-		arg.ResourceCount,
 	)
 	return err
 }
@@ -14989,23 +14995,6 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const nextInventoryChangeSeq = `-- name: NextInventoryChangeSeq :one
-INSERT INTO inventory_change_heads (namespace_id, last_seq)
-VALUES ($1, 1)
-ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
-RETURNING last_seq
-`
-
-// Takes the next number of the change log of one namespace. The statement runs
-// last in the transaction of the write, after every other row lock, so the
-// order of the numbers is the order of the commits of the namespace.
-func (q *Queries) NextInventoryChangeSeq(ctx context.Context, namespaceID string) (int64, error) {
-	row := q.db.QueryRow(ctx, nextInventoryChangeSeq, namespaceID)
-	var last_seq int64
-	err := row.Scan(&last_seq)
-	return last_seq, err
 }
 
 const nextJobSeq = `-- name: NextJobSeq :one
