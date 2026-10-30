@@ -60,12 +60,29 @@ func TestCheckOwnIssuerAsksTheIssuerService(t *testing.T) {
 		{"the static check alone", nil, "https://dustpan.example.com/oidc/ns-1", true},
 		{"no issuer service, another issuer", nil, "https://token.example.com", false},
 		{
-			"the issuer service says it signs", &fakeOwn{owns: map[string]bool{"https://files.example.com/acme": true}},
-			"https://files.example.com/acme", true,
+			"the issuer service says it signs",
+			&fakeOwn{owns: map[string]bool{"https://files.example.com/acme": true}, err: nil, asks: nil},
+			"https://files.example.com/acme",
+			true,
 		},
-		{"the issuer service says it does not sign", &fakeOwn{owns: nil}, "https://token.example.com", false},
-		{"the issuer service cannot answer", &fakeOwn{owns: nil, err: errLookup}, "https://token.example.com", true},
-		{"the static check wins over a no", &fakeOwn{owns: nil}, "https://dustpan.example.com", true},
+		{
+			"the issuer service says it does not sign",
+			&fakeOwn{owns: nil, err: nil, asks: nil},
+			"https://token.example.com",
+			false,
+		},
+		{
+			"the issuer service cannot answer",
+			&fakeOwn{owns: nil, err: errLookup, asks: nil},
+			"https://token.example.com",
+			true,
+		},
+		{
+			"the static check wins over a no",
+			&fakeOwn{owns: nil, err: nil, asks: nil},
+			"https://dustpan.example.com",
+			true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -94,7 +111,7 @@ func TestCheckOwnIssuerAsksTheIssuerService(t *testing.T) {
 func TestCreateRefusesAnIssuerThatTheIssuerServiceOwns(t *testing.T) {
 	t.Parallel()
 
-	own := &fakeOwn{owns: map[string]bool{"https://files.example.com/acme": true}}
+	own := &fakeOwn{owns: map[string]bool{"https://files.example.com/acme": true}, err: nil, asks: nil}
 	f := ownFixture(t, own)
 
 	in := input()

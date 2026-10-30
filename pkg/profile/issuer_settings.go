@@ -259,7 +259,10 @@ func NormalizeIssuer(raw string) string {
 	host := strings.TrimRight(strings.ToLower(u.Hostname()), ".")
 	scheme := strings.ToLower(u.Scheme)
 
-	if port := u.Port(); port != "" && !(scheme == "https" && port == "443") && !(scheme == "http" && port == "80") {
+	port := u.Port()
+	defaultPort := (scheme == "https" && port == "443") || (scheme == "http" && port == "80")
+
+	if port != "" && !defaultPort {
 		host = net.JoinHostPort(host, port)
 	} else if strings.Contains(host, ":") {
 		host = "[" + host + "]"

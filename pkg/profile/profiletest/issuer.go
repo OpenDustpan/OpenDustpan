@@ -55,12 +55,7 @@ func RunIssuer(t *testing.T, newStore IssuerFactory) {
 		{"a namespace is found by its ID", testIssuerResolve},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			tc.test(t, newStore(t))
-		})
-	}
+	runCases(t, newStore, cases)
 }
 
 func issuerNamespace(t *testing.T, s IssuerStore, name string) namespace.Namespace {
@@ -808,7 +803,8 @@ func testIssuerURLs(t *testing.T, s IssuerStore) {
 		set := issuerSettings(tc.ns.Name)
 		set.IssuerURL = tc.url
 
-		if _, err = s.Issuer.PutIssuerSettings(t.Context(), set, 0, tc.ns.Fence(), issuerEntries(tc.ns.Name)); err != nil {
+		_, err = s.Issuer.PutIssuerSettings(t.Context(), set, 0, tc.ns.Fence(), issuerEntries(tc.ns.Name))
+		if err != nil {
 			t.Fatalf("put %s: %v", tc.ns.Name, err)
 		}
 	}
@@ -824,7 +820,8 @@ func testIssuerURLs(t *testing.T, s IssuerStore) {
 	cleared := issuerSettings(acme.Name)
 	cleared.IssuerURL = ""
 
-	if _, err = s.Issuer.PutIssuerSettings(t.Context(), cleared, 1, acme.Fence(), issuerEntries(acme.Name)); err != nil {
+	_, err = s.Issuer.PutIssuerSettings(t.Context(), cleared, 1, acme.Fence(), issuerEntries(acme.Name))
+	if err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 

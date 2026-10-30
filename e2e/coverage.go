@@ -932,7 +932,7 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
 		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
-		InstallationURLs: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
 	})
 	if err != nil {
 		tb.Fatalf("trust rule service: %v", err)

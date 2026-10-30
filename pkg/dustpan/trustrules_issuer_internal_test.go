@@ -35,9 +35,31 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 	set.IssuerURL = "https://files.example.com/acme"
 
 	entry := audit.Entry{
-		At: time.Now(), Namespace: ns.Name, Subject: "ada", Action: "namespace:manage-issuer", Object: "namespace:acme",
-		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+		At:            time.Now(),
+		Namespace:     ns.Name,
+		Subject:       "ada",
+		Action:        "namespace:manage-issuer",
+		Object:        "namespace:acme",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
 		PrincipalKind: audit.PrincipalKindPerson,
+		IDPSubject:    "",
+		TokenID:       "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		JobID:         "",
+		Reason:        "",
 	}
 
 	if _, err := st.Issuer().PutIssuerSettings(t.Context(), set, 0, ns.Fence(), []audit.Entry{entry}); err != nil {
@@ -51,7 +73,8 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 
 	issuer, err := issuersvc.NewService(issuersvc.Config{
 		Store: st.Issuer(), Namespaces: st, Sealer: noSealer{}, Authorizer: identity.AdminOnly{},
-		IssuerBaseURL: "https://issuer.example.com", PublicURL: "https://api.example.com",
+		Notifier: nil, Fetcher: nil, IssuerBaseURL: "https://issuer.example.com", PublicURL: "https://api.example.com",
+		Now: nil, Log: nil,
 	})
 	if err != nil {
 		t.Fatalf("issuer service: %v", err)
@@ -63,12 +86,19 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 	cfg.authorizer = identity.AdminOnly{}
 	cfg.publicURL = "https://api.example.com"
 
-	with, err := newTrustRuleService(services{namespaces: nsSvc, issuer: issuer}, cfg)
+	var withServices services
+	withServices.namespaces = nsSvc
+	withServices.issuer = issuer
+
+	with, err := newTrustRuleService(withServices, cfg)
 	if err != nil {
 		t.Fatalf("service with an issuer: %v", err)
 	}
 
-	without, err := newTrustRuleService(services{namespaces: nsSvc, issuer: nil}, cfg)
+	var withoutServices services
+	withoutServices.namespaces = nsSvc
+
+	without, err := newTrustRuleService(withoutServices, cfg)
 	if err != nil {
 		t.Fatalf("service without an issuer: %v", err)
 	}
@@ -88,13 +118,8 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 
 	// Without the issuer, the public URL still holds, and the stored issuerURL
 	// is not known to the service: the wiring is what carries it.
-	if err = without.CheckOwnIssuer(
-		t.Context(),
-		"https://api.example.com/oidc/ns-1",
-	); !errors.Is(
-		err,
-		trustrule.ErrIssuerRefused,
-	) {
+	err = without.CheckOwnIssuer(t.Context(), "https://api.example.com/oidc/ns-1")
+	if !errors.Is(err, trustrule.ErrIssuerRefused) {
 		t.Errorf("without an issuer: the public URL = %v, want ErrIssuerRefused", err)
 	}
 
@@ -103,13 +128,15 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 	}
 }
 
+var errNoSealer = errors.New("no sealer")
+
 // noSealer is a sealer for a test that never makes or opens a key.
 type noSealer struct{}
 
 func (noSealer) Encrypt(context.Context, secret.Scope, [][]byte) ([][]byte, error) {
-	return nil, errors.New("no sealer")
+	return nil, errNoSealer
 }
 
 func (noSealer) Decrypt(context.Context, secret.Scope, [][]byte) ([][]byte, error) {
-	return nil, errors.New("no sealer")
+	return nil, errNoSealer
 }

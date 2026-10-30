@@ -406,7 +406,7 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 			Namespaces:       fakeNamespaces{},
 			Principals:       fakePrincipals{},
 			Authorizer:       &grants{allow: nil, checked: nil},
-			InstallationURLs: nil, CheckURL: nil,
+			InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil,
 			Now: nil,
 		}
 	}

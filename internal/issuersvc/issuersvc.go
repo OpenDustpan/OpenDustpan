@@ -124,11 +124,6 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 
-	if cfg.Notifier == nil {
-		log.LogAttrs(context.Background(), slog.LevelInfo,
-			"issuer: notices are off: no outbox is set, so the server logs each notice and sends none")
-	}
-
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, authz: cfg.Authorizer,
 		notifier: cfg.Notifier, fetcher: cfg.Fetcher, issuerBase: cfg.IssuerBaseURL,
