@@ -238,6 +238,23 @@ type BlobPurges interface {
 	FinishBlobPurge(ctx context.Context, tool, unitID string) error
 }
 
+// BlobPurgeBacklog is the size of the blob purge backlog: the records that
+// the sweep has not finished, across every namespace.
+type BlobPurgeBacklog struct {
+	// Pending is the number of blob purge records.
+	Pending int64
+	// OldestPurgedAt is the purge time of the oldest record. It is the zero
+	// time when Pending is 0.
+	OldestPurgedAt time.Time
+}
+
+// BlobPurgeCounter reads the size of the blob purge backlog in one call.
+type BlobPurgeCounter interface {
+	// CountBlobPurges returns the size of the blob purge backlog. It defines
+	// no sentinel error.
+	CountBlobPurges(ctx context.Context) (BlobPurgeBacklog, error)
+}
+
 // DefaultDeletedPageSize is the page size of a query that asks for none.
 const DefaultDeletedPageSize = 50
 

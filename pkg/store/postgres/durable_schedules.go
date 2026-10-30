@@ -23,7 +23,7 @@ func (d *DurableOperations) EnsureSchedule(ctx context.Context, spec durable.Sch
 
 	var sc durable.Schedule
 
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the database clock: %w", err)
@@ -98,7 +98,7 @@ func (d *DurableOperations) ClaimTick(ctx context.Context, spec durable.Schedule
 		claimed bool
 	)
 
-	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+	err := d.store.inMinimumTx(ctx, func(q *db.Queries) error {
 		var claimErr error
 
 		tick, claimed, claimErr = claimTick(ctx, q, spec)

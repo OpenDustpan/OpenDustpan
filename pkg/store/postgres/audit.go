@@ -427,6 +427,22 @@ func (s *Store) inControlFencedUpdateTx(
 	})
 }
 
+// inMinimumFencedUpdateTx runs fn as inControlFencedUpdateTx does, and refuses
+// a binary below the minimum binary version of the schema, as inMinimumTx
+// does. The chain markers and the sink cursor of a namespace use it: they run
+// work, and an old binary must not run it.
+func (s *Store) inMinimumFencedUpdateTx(
+	ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error,
+) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
+		if err := checkFenceForUpdate(ctx, q, fence); err != nil {
+			return err
+		}
+
+		return fn(q)
+	})
+}
+
 // checkFenceForUpdate holds the namespace row of fence FOR UPDATE and
 // checks its failover version. It returns namespace.ErrNotFound for a
 // missing namespace and namespace.ErrFenced for a stale version.

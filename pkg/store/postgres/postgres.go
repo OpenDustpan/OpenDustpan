@@ -925,7 +925,10 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // chain) must run while the installation is in maintenance mode. The control
 // path is for the writes that keep the installation able to enter, leave and
 // restore from maintenance mode, and that record what happens. Each caller is
-// a write that maintenance mode must not refuse.
+// a write that maintenance mode must not refuse. It does not check the minimum
+// binary version either, so only a write that an old binary needs to stop
+// cleanly uses it, or a write that records what happened. A write that changes
+// domain data or runs work uses inMinimumTx.
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
@@ -934,6 +937,19 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, nil)
+}
+
+// inMinimumTx runs fn in a control transaction that refuses a binary below the
+// minimum binary version of the schema. It reads the minimum in the same
+// transaction as fn, before fn runs, and it reads no installation state, so
+// maintenance mode does not refuse it. A control write that changes domain
+// data or runs work uses it, so a worker of an old binary, which a rolling
+// deploy leaves running, cannot claim or run an operation. A control write
+// that an old binary needs to stop cleanly uses inControlTx.
+//
+// The same rule about nested transactions as for inControlTx applies.
+func (s *Store) inMinimumTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, func(tx pgx.Tx) error { return s.checkTxMinimum(ctx, tx) })
 }
 
 // runTx runs before, when set, and then fn in one transaction.
