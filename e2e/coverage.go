@@ -27,6 +27,7 @@ import (
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
+	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
@@ -847,6 +848,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
+		Workers:        nil,
 		Jobs:           struct{ job.Store }{nil},
 		Starter:        struct{ job.Starter }{nil},
 		Pools:          nil,
@@ -917,6 +919,7 @@ func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 
 	handler, err := triggersapi.NewHandler(triggersapi.Config{
 		Namespaces:     namespaces,
+		Workers:        nil,
 		Units:          coverageReader{},
 		Store:          struct{ trigger.Store }{nil},
 		Manager:        manager,
@@ -948,6 +951,7 @@ func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 
 	handler, err := driftapi.NewHandler(driftapi.Config{
 		Namespaces:     namespaces,
+		Workers:        nil,
 		Units:          coverageReader{},
 		Results:        struct{ drift.Store }{nil},
 		Checker:        struct{ drift.Checker }{nil},
@@ -1027,6 +1031,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Namespaces: coverageNamespaces(tb),
 		Senders:    nil,
 		Ports:      egress.Ports{},
+		Counter:    authgatetest.NewMemory(nil),
 		Now:        nil,
 	})
 	if err != nil {
@@ -2448,6 +2453,12 @@ func restoreAllowEntries() []AllowEntry {
 			CoveringTest: restoreCoveringTest,
 			Reason: "Operator route: only the restore command reads a restore. " +
 				"The harness step polls it until it succeeds and checks the manifest.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/restores/{id}/cancel",
+			CoveringTest: "TestCancelRestoreBeforeTheSwap",
+			Reason: "Operator route: no CLI command cancels a restore. The tests of the installation API " +
+				"cancel a restore before the swap, after the swap and after the end.",
 		},
 	}
 }

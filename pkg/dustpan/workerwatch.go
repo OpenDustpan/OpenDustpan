@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -167,7 +168,7 @@ func (w *workerWatch) AdmitStart(ctx context.Context) error {
 		return nil //nolint:nilerr // A store error is not proof of a missing worker.
 	}
 
-	return fmt.Errorf("%w for more than %d lease periods", server.ErrNoWorker, stuckLeases)
+	return fmt.Errorf("%w for more than %d lease periods", admit.ErrNoWorker, stuckLeases)
 }
 
 // attach gives the watch what it reads from the server, which exists after
@@ -235,9 +236,13 @@ func (w *workerWatch) setWatchedFrom(at time.Time) {
 
 // read reads the last heartbeat, the unclaimed operations and the due
 // schedules. A worker counts as stuck when no worker claimed or renewed a
-// claim for more than 2 lease periods. The unclaimed work is information
-// only: a schedule that old workers do not know, or one long job, leaves
-// work unclaimed while the workers are alive. The caller holds w.mu.
+// claim for more than 2 lease periods of that worker: the lease period is the
+// one that the worker recorded with its heartbeat, so an api process with a
+// shorter lease than its workers never counts a live worker as stuck. A
+// heartbeat that records no lease, and a store with no heartbeat, count with
+// the lease period of this process. The unclaimed work is information only: a
+// schedule that old workers do not know, or one long job, leaves work
+// unclaimed while the workers are alive. The caller holds w.mu.
 func (w *workerWatch) read(ctx context.Context) (server.WorkerReport, error) {
 	report := emptyReport()
 	report.LeaseSeconds = w.leasePeriod().Seconds()
@@ -258,10 +263,16 @@ func (w *workerWatch) read(ctx context.Context) (server.WorkerReport, error) {
 		silentFrom = beat.At
 	}
 
-	report.SilentSeconds = max(beat.Now.Sub(silentFrom), 0).Seconds()
-	report.Stuck = report.SilentSeconds > (stuckLeases * w.leasePeriod()).Seconds()
+	lease := w.leasePeriod()
+	if beat.Lease > 0 {
+		lease = beat.Lease
+	}
 
-	if err := w.readOperations(ctx, &report, beat.Now); err != nil {
+	report.LeaseSeconds = lease.Seconds()
+	report.SilentSeconds = max(beat.Now.Sub(silentFrom), 0).Seconds()
+	report.Stuck = report.SilentSeconds > (stuckLeases * lease).Seconds()
+
+	if err := w.readOperations(ctx, &report, beat.Now, lease); err != nil {
 		return emptyReport(), err
 	}
 
@@ -274,9 +285,12 @@ func (w *workerWatch) read(ctx context.Context) (server.WorkerReport, error) {
 
 // readOperations adds the unclaimed operations to report. It lists only
 // those that wait longer than 2 lease periods, and counts all of them in the
-// oldest age. now is the time of the store.
-func (w *workerWatch) readOperations(ctx context.Context, report *server.WorkerReport, now time.Time) error {
-	limit := stuckLeases * w.leasePeriod()
+// oldest age. now is the time of the store, and lease is the lease period
+// that read decided on.
+func (w *workerWatch) readOperations(
+	ctx context.Context, report *server.WorkerReport, now time.Time, lease time.Duration,
+) error {
+	limit := stuckLeases * lease
 
 	ops, err := w.store.List(ctx, durable.Filter{
 		Kind:   "",
@@ -350,7 +364,7 @@ func (w *workerWatch) beatIfDue(ctx context.Context) {
 		return
 	}
 
-	if err := w.store.Beat(ctx, w.owner); err != nil {
+	if err := w.store.Beat(ctx, w.owner, w.leasePeriod()); err != nil {
 		w.lastBeat.Store(last)
 
 		if ctx.Err() == nil {
@@ -425,6 +439,10 @@ func (t trackingStore) Claim(ctx context.Context, req durable.ClaimRequest) (dur
 	return t.ops().Claim(ctx, req)
 }
 
+// errNoStepCanceler reports a wrapped store of durable operations that
+// cannot cancel before a step.
+var errNoStepCanceler = errors.New("the store of durable operations cannot cancel before a step")
+
 // Extend records the renewal and extends through the wrapped store.
 func (t trackingStore) Extend(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
 	return t.ops().Extend(ctx, c, lease)
@@ -469,4 +487,19 @@ func (t trackingOps) Extend(ctx context.Context, c durable.Claim, lease time.Dur
 	}
 
 	return claim, nil
+}
+
+// CancelBefore cancels through the wrapped store, which must implement
+// durable.StepCanceler. A restore cancels through it.
+func (t trackingOps) CancelBefore(ctx context.Context, id durable.ID, step string) error {
+	canceler, ok := t.Store.(durable.StepCanceler)
+	if !ok {
+		return fmt.Errorf("cancel durable operation %s: %w", id, errNoStepCanceler)
+	}
+
+	if err := canceler.CancelBefore(ctx, id, step); err != nil {
+		return fmt.Errorf("cancel before step %q: %w", step, err)
+	}
+
+	return nil
 }

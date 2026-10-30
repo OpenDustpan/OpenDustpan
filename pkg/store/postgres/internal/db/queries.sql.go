@@ -2041,40 +2041,6 @@ func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams
 	return result.RowsAffected(), nil
 }
 
-const createRestore = `-- name: CreateRestore :execrows
-INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT DO NOTHING
-`
-
-type CreateRestoreParams struct {
-	ID          string
-	State       string
-	BackupID    string
-	PreBackupID string
-	RequestedBy string
-	StartedAtMs int64
-	EndedAtMs   pgtype.Int8
-	Error       string
-}
-
-func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (int64, error) {
-	result, err := q.db.Exec(ctx, createRestore,
-		arg.ID,
-		arg.State,
-		arg.BackupID,
-		arg.PreBackupID,
-		arg.RequestedBy,
-		arg.StartedAtMs,
-		arg.EndedAtMs,
-		arg.Error,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const createRole = `-- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -3800,6 +3766,36 @@ func (q *Queries) EndMembershipsOfPrincipal(ctx context.Context, arg EndMembersh
 	return err
 }
 
+const endRestore = `-- name: EndRestore :execrows
+UPDATE restores
+SET state = $1, error = $2, ended_at_ms = $3, dev_report = $4, maintenance_entered = false
+WHERE id = $5 AND state IN ('checking', 'applying')
+`
+
+type EndRestoreParams struct {
+	State     string
+	Error     string
+	EndedAtMs pgtype.Int8
+	DevReport string
+	ID        string
+}
+
+// Moves one running restore to its end state with its final dev report, and
+// clears its maintenance flag. A finished restore matches no row.
+func (q *Queries) EndRestore(ctx context.Context, arg EndRestoreParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endRestore,
+		arg.State,
+		arg.Error,
+		arg.EndedAtMs,
+		arg.DevReport,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const endRotatedAccessToken = `-- name: EndRotatedAccessToken :execrows
 UPDATE access_tokens
 SET expires_at_ms = LEAST(expires_at_ms, $1::bigint), replaced_by = $2::text
@@ -3971,22 +3967,6 @@ func (q *Queries) FailEndedBackups(ctx context.Context, arg FailEndedBackupsPara
 	return result.RowsAffected(), nil
 }
 
-const failRunningRestores = `-- name: FailRunningRestores :exec
-UPDATE restores
-SET state = 'failed', error = $1, ended_at_ms = $2
-WHERE state IN ('checking', 'applying')
-`
-
-type FailRunningRestoresParams struct {
-	Error     string
-	EndedAtMs pgtype.Int8
-}
-
-func (q *Queries) FailRunningRestores(ctx context.Context, arg FailRunningRestoresParams) error {
-	_, err := q.db.Exec(ctx, failRunningRestores, arg.Error, arg.EndedAtMs)
-	return err
-}
-
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
 SET serial = $1, lineage = $2, md5 = $3, outputs = $4, status = 'finalized', finalized_at_ms = $5, size = $6
@@ -4072,32 +4052,6 @@ type FinishBackupParams struct {
 
 func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int64, error) {
 	result, err := q.db.Exec(ctx, finishBackup,
-		arg.State,
-		arg.Error,
-		arg.EndedAtMs,
-		arg.ID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const finishRestore = `-- name: FinishRestore :execrows
-UPDATE restores
-SET state = $1, error = $2, ended_at_ms = $3
-WHERE id = $4 AND state IN ('checking', 'applying')
-`
-
-type FinishRestoreParams struct {
-	State     string
-	Error     string
-	EndedAtMs pgtype.Int8
-	ID        string
-}
-
-func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (int64, error) {
-	result, err := q.db.Exec(ctx, finishRestore,
 		arg.State,
 		arg.Error,
 		arg.EndedAtMs,
@@ -6042,13 +5996,14 @@ func (q *Queries) GetLatestCheckpointByRef(ctx context.Context, arg GetLatestChe
 }
 
 const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
-SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1
+SELECT owner, at_ms, lease_ms FROM durable_heartbeats
+ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbeat, error) {
 	row := q.db.QueryRow(ctx, getLatestDurableHeartbeat)
 	var i DurableHeartbeat
-	err := row.Scan(&i.Owner, &i.AtMs)
+	err := row.Scan(&i.Owner, &i.AtMs, &i.LeaseMs)
 	return i, err
 }
 
@@ -6571,9 +6526,21 @@ FROM restores
 WHERE id = $1
 `
 
-func (q *Queries) GetRestore(ctx context.Context, id string) (Restore, error) {
+type GetRestoreRow struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Error       string
+	DevReport   string
+}
+
+func (q *Queries) GetRestore(ctx context.Context, id string) (GetRestoreRow, error) {
 	row := q.db.QueryRow(ctx, getRestore, id)
-	var i Restore
+	var i GetRestoreRow
 	err := row.Scan(
 		&i.ID,
 		&i.State,
@@ -6585,6 +6552,45 @@ func (q *Queries) GetRestore(ctx context.Context, id string) (Restore, error) {
 		&i.Error,
 		&i.DevReport,
 	)
+	return i, err
+}
+
+const getRestoreAuditEvents = `-- name: GetRestoreAuditEvents :one
+SELECT state, audit_events
+FROM restores
+WHERE id = $1
+`
+
+type GetRestoreAuditEventsRow struct {
+	State       string
+	AuditEvents string
+}
+
+// Reads the state of one restore and the object texts of its audit events.
+func (q *Queries) GetRestoreAuditEvents(ctx context.Context, id string) (GetRestoreAuditEventsRow, error) {
+	row := q.db.QueryRow(ctx, getRestoreAuditEvents, id)
+	var i GetRestoreAuditEventsRow
+	err := row.Scan(&i.State, &i.AuditEvents)
+	return i, err
+}
+
+const getRestoreMaintenance = `-- name: GetRestoreMaintenance :one
+SELECT state, maintenance_entered
+FROM restores
+WHERE id = $1
+`
+
+type GetRestoreMaintenanceRow struct {
+	State              string
+	MaintenanceEntered bool
+}
+
+// Reads the state of one restore and whether it holds the maintenance mode
+// that it entered.
+func (q *Queries) GetRestoreMaintenance(ctx context.Context, id string) (GetRestoreMaintenanceRow, error) {
+	row := q.db.QueryRow(ctx, getRestoreMaintenance, id)
+	var i GetRestoreMaintenanceRow
+	err := row.Scan(&i.State, &i.MaintenanceEntered)
 	return i, err
 }
 
@@ -9322,6 +9328,36 @@ func (q *Queries) InsertRegistryRelease(ctx context.Context, arg InsertRegistryR
 		arg.ArchivesJson,
 		arg.PublishedAtMs,
 		arg.StoredFilesJson,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertRestore = `-- name: InsertRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report)
+VALUES ($1, 'checking', $2, '', $3, $4, NULL, '', $5)
+ON CONFLICT DO NOTHING
+`
+
+type InsertRestoreParams struct {
+	ID          string
+	BackupID    string
+	RequestedBy string
+	StartedAtMs int64
+	DevReport   string
+}
+
+// Stores one checking restore. The unique index on the running restores, and
+// the primary key, make a second running restore or a taken ID match no row.
+func (q *Queries) InsertRestore(ctx context.Context, arg InsertRestoreParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertRestore,
+		arg.ID,
+		arg.BackupID,
+		arg.RequestedBy,
+		arg.StartedAtMs,
+		arg.DevReport,
 	)
 	if err != nil {
 		return 0, err
@@ -12903,15 +12939,27 @@ FROM restores
 ORDER BY started_at_ms DESC, id ASC
 `
 
-func (q *Queries) ListRestores(ctx context.Context) ([]Restore, error) {
+type ListRestoresRow struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Error       string
+	DevReport   string
+}
+
+func (q *Queries) ListRestores(ctx context.Context) ([]ListRestoresRow, error) {
 	rows, err := q.db.Query(ctx, listRestores)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Restore
+	var items []ListRestoresRow
 	for rows.Next() {
-		var i Restore
+		var i ListRestoresRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.State,
@@ -14372,6 +14420,23 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	_, err := q.db.Exec(ctx, lockGateRefusal, lockKey)
 	return err
+}
+
+const lockInstallationState = `-- name: LockInstallationState :one
+SELECT state
+FROM installation
+WHERE id = 1
+FOR UPDATE
+`
+
+// The installation state, with the row locked FOR UPDATE until the end of the
+// transaction, so a leave of maintenance mode waits for the swap of a
+// restore that checked the state.
+func (q *Queries) LockInstallationState(ctx context.Context) (string, error) {
+	row := q.db.QueryRow(ctx, lockInstallationState)
+	var state string
+	err := row.Scan(&state)
+	return state, err
 }
 
 const lockNamespaceCreatesExclusive = `-- name: LockNamespaceCreatesExclusive :exec
@@ -16720,10 +16785,31 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 	return result.RowsAffected(), nil
 }
 
+const setRestoreAuditEvents = `-- name: SetRestoreAuditEvents :execrows
+UPDATE restores
+SET audit_events = $1
+WHERE id = $2 AND state IN ('checking', 'applying')
+`
+
+type SetRestoreAuditEventsParams struct {
+	AuditEvents string
+	ID          string
+}
+
+// Stores the audit events of one running restore. A restore that does not
+// run matches no row.
+func (q *Queries) SetRestoreAuditEvents(ctx context.Context, arg SetRestoreAuditEventsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setRestoreAuditEvents, arg.AuditEvents, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setRestoreDevReport = `-- name: SetRestoreDevReport :execrows
 UPDATE restores
 SET dev_report = $1
-WHERE id = $2
+WHERE id = $2 AND state IN ('checking', 'applying')
 `
 
 type SetRestoreDevReportParams struct {
@@ -16731,10 +16817,31 @@ type SetRestoreDevReportParams struct {
 	ID        string
 }
 
-// Stores the report of the dev data of one restore, with the codes of its
-// warnings. A restore that does not exist matches no row.
+// Stores the report of the dev data of one running restore, with the codes
+// of its warnings. A restore that does not run matches no row.
 func (q *Queries) SetRestoreDevReport(ctx context.Context, arg SetRestoreDevReportParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setRestoreDevReport, arg.DevReport, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setRestoreMaintenanceEntered = `-- name: SetRestoreMaintenanceEntered :execrows
+UPDATE restores
+SET maintenance_entered = $1
+WHERE id = $2 AND state IN ('checking', 'applying')
+`
+
+type SetRestoreMaintenanceEnteredParams struct {
+	MaintenanceEntered bool
+	ID                 string
+}
+
+// Sets whether one running restore holds the maintenance mode that it
+// entered. A restore that does not run matches no row.
+func (q *Queries) SetRestoreMaintenanceEntered(ctx context.Context, arg SetRestoreMaintenanceEnteredParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setRestoreMaintenanceEntered, arg.MaintenanceEntered, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -17837,19 +17944,21 @@ func (q *Queries) UpsertDriftResult(ctx context.Context, arg UpsertDriftResultPa
 
 const upsertDurableHeartbeat = `-- name: UpsertDurableHeartbeat :exec
 
-INSERT INTO durable_heartbeats (owner, at_ms) VALUES ($1::text, $2::bigint)
-ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms
+INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+VALUES ($1::text, $2::bigint, $3::bigint)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms
 `
 
 type UpsertDurableHeartbeatParams struct {
-	Owner string
-	NowMs int64
+	Owner   string
+	NowMs   int64
+	LeaseMs int64
 }
 
 // Durable heartbeats. Every time comes from the database clock, read in the
 // transaction of the write.
 func (q *Queries) UpsertDurableHeartbeat(ctx context.Context, arg UpsertDurableHeartbeatParams) error {
-	_, err := q.db.Exec(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs)
+	_, err := q.db.Exec(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs, arg.LeaseMs)
 	return err
 }
 

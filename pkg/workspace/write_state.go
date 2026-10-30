@@ -391,6 +391,15 @@ func (s *Service) declarePlaceholder(
 // versions, and refuses with ErrTooManyPending when the workspace holds the
 // maximum. It returns the function that releases the stripe. A cleanup failure
 // never fails the declare, as in BeginState.
+//
+// This check is an early refusal and a defense-in-depth layer. It does not
+// hold the cap alone: the stripe lives in this process, and the count here is
+// read before the insert, so two instances on one database can both pass it.
+// The cap holds in the store, which counts the pending versions and inserts
+// the new one in one fenced transaction and answers ErrTooManyPending. The
+// stripe stays to save the store from conflicting declares of one workspace in
+// this process. Do not remove the check here: it spares a refused declare the
+// work between this point and the insert.
 func (s *Service) admitDeclare(ctx context.Context, w Workspace) (func(), error) {
 	unlock := s.lockKey("begin/" + w.ID.String())
 

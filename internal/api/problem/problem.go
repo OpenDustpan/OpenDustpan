@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -354,7 +355,21 @@ func Shared(err error) (Problem, bool) {
 		return p, true
 	}
 
-	return Namespace(err)
+	if p, ok := Namespace(err); ok {
+		return p, true
+	}
+
+	return Worker(err)
+}
+
+// Worker returns the answer to a start that the worker check refused: 503
+// with the command that starts a worker.
+func Worker(err error) (Problem, bool) {
+	if errors.Is(err, admit.ErrNoWorker) {
+		return answer(http.StatusServiceUnavailable, errcode.WorkerAbsent, admit.Message), true
+	}
+
+	return Pass()
 }
 
 // Auth returns the answer to an error of the authentication or the

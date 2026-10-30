@@ -86,7 +86,7 @@ type memDB struct {
 	ops       map[durable.ID]*durable.Operation
 	byKey     map[string]durable.ID
 	schedules map[string]*memSchedule
-	beats     map[string]time.Time
+	beats     map[string]memBeat
 	fences    map[namespace.Name]int64
 	values    []string
 	broken    string
@@ -100,7 +100,7 @@ func newMemDB(broken string) *memDB {
 		ops:       map[durable.ID]*durable.Operation{},
 		byKey:     map[string]durable.ID{},
 		schedules: map[string]*memSchedule{},
-		beats:     map[string]time.Time{},
+		beats:     map[string]memBeat{},
 		fences:    map[namespace.Name]int64{},
 		values:    nil,
 		broken:    broken,
@@ -505,8 +505,38 @@ func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 		return durable.ErrNotFound
 	}
 
-	now := s.db.clock(s.skew)
+	return cancelOp(op, s.db.clock(s.skew))
+}
 
+// CancelBefore implements durable.StepCanceler. The lock of the database
+// makes the check of the step and the cancel one step.
+func (s memStore) CancelBefore(_ context.Context, id durable.ID, step string) error {
+	if step == "" {
+		return durable.ErrInvalid
+	}
+
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	op := s.db.ops[id]
+	if op == nil {
+		return durable.ErrNotFound
+	}
+
+	if op.State == durable.StateSucceeded || op.State == durable.StateFailed {
+		return durable.ErrFinished
+	}
+
+	if _, done := op.Step(step); done {
+		return durable.ErrStepDone
+	}
+
+	return cancelOp(op, s.db.clock(s.skew))
+}
+
+// cancelOp applies a cancel to op at now, with the rules of Cancel. The
+// caller holds the lock of the database.
+func cancelOp(op *durable.Operation, now time.Time) error {
 	switch op.State {
 	case durable.StatePending:
 		op.State = durable.StateCanceled
@@ -518,7 +548,7 @@ func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 		return durable.ErrFinished
 	case durable.StateCanceled:
 	default:
-		return fmt.Errorf("operation %s: %w: %q", id, errUnknownState, op.State)
+		return fmt.Errorf("operation %s: %w: %q", op.ID, errUnknownState, op.State)
 	}
 
 	return nil
@@ -742,9 +772,20 @@ func (m *memDB) heartbeatHarness() HeartbeatHarness {
 	}
 }
 
-func (s memStore) Beat(_ context.Context, owner string) error {
+// memBeat is the beat of one owner: its time and the lease period that it
+// recorded.
+type memBeat struct {
+	at    time.Time
+	lease time.Duration
+}
+
+func (s memStore) Beat(_ context.Context, owner string, lease time.Duration) error {
 	if owner == "" {
 		return fmt.Errorf("heartbeat owner is empty: %w", durable.ErrInvalid)
+	}
+
+	if lease <= 0 {
+		return fmt.Errorf("heartbeat lease %v is not positive: %w", lease, durable.ErrInvalid)
 	}
 
 	s.db.mu.Lock()
@@ -752,13 +793,13 @@ func (s memStore) Beat(_ context.Context, owner string) error {
 
 	now := s.db.clock(s.skew)
 
-	for name, at := range s.db.beats {
-		if now.Sub(at) > durable.HeartbeatRetention {
+	for name, b := range s.db.beats {
+		if now.Sub(b.at) > durable.HeartbeatRetention {
 			delete(s.db.beats, name)
 		}
 	}
 
-	s.db.beats[owner] = now
+	s.db.beats[owner] = memBeat{at: now, lease: lease}
 
 	return nil
 }
@@ -767,11 +808,16 @@ func (s memStore) LastBeat(_ context.Context) (durable.Beat, error) {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
 
-	beat := durable.Beat{Owner: "", At: time.Time{}, Now: s.db.clock(s.skew)}
+	beat := durable.Beat{Owner: "", At: time.Time{}, Lease: 0, Now: s.db.clock(s.skew)}
 
-	for owner, at := range s.db.beats {
-		if at.After(beat.At) || (at.Equal(beat.At) && owner > beat.Owner) {
-			beat.Owner, beat.At = owner, at
+	var validUntil time.Time
+
+	for owner, b := range s.db.beats {
+		until := b.at.Add(b.lease)
+
+		if beat.Owner == "" || until.After(validUntil) ||
+			(until.Equal(validUntil) && (b.at.After(beat.At) || (b.at.Equal(beat.At) && owner > beat.Owner))) {
+			beat.Owner, beat.At, beat.Lease, validUntil = owner, b.at, b.lease, until
 		}
 	}
 

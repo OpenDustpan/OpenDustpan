@@ -477,6 +477,8 @@ func sqliteControlTables() []sqliteBackupTable {
 				backupColEndedAtMs,
 				"error",
 				"dev_report",
+				"maintenance_entered",
+				"audit_events",
 			},
 		},
 		{
@@ -532,7 +534,7 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		},
 		{
 			table:   backup.TableDurableHeartbeats,
-			columns: []string{"owner", backupColAtMs},
+			columns: []string{"owner", backupColAtMs, "lease_ms"},
 		},
 	}
 }

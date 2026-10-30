@@ -9,13 +9,14 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 // runningStarter starts the backup and restore rows. Every store adapter
-// implements it with backup.Registry and backup.RestoreRegistry.
+// implements it with backup.Registry and backup.RestoreOperations.
 type runningStarter interface {
 	CreateBackup(ctx context.Context, r backup.Record) error
-	CreateRestore(ctx context.Context, r backup.RestoreRecord) error
+	StartRestore(ctx context.Context, r backup.RestoreRecord, start durable.StartRequest) error
 }
 
 // testSharedOneRunning starts a backup and a restore on both handles at the
@@ -50,11 +51,12 @@ func testSharedOneRunning(t *testing.T, a, b Store) {
 			})
 		})
 		wg.Go(func() {
-			restoreErrs[i] = h.CreateRestore(t.Context(), backup.RestoreRecord{
-				StartedAt: start, EndedAt: time.Time{}, ID: backup.RestoreID(ident.NewID("rst-")),
+			id := backup.RestoreID(ident.NewID("rst-"))
+			restoreErrs[i] = h.StartRestore(t.Context(), backup.RestoreRecord{
+				StartedAt: start, EndedAt: time.Time{}, ID: id,
 				BackupID: backup.ID(ident.NewID("bkp-")), PreBackupID: "", RequestedBy: "admin", Error: "",
 				State: backup.RestoreChecking, DevReport: nil,
-			})
+			}, restoreOpStart(id))
 		})
 	}
 

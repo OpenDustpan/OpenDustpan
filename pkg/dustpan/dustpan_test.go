@@ -1438,25 +1438,23 @@ func seedRunningBackup(t *testing.T, st *sqlite.Store, now time.Time) {
 	}
 }
 
-// The three stores below shadow one dev data port of the SQLite store with a
-// method of another signature, so the store holds every other port and fails
-// the type assertion to the missing one.
+// The three stores below shadow one port of the dev data rules of the SQLite
+// store with a method of another signature, so the store holds every other
+// port and fails the type assertion to the missing one. The strip runs in
+// the stage of RestoreStaging, and the report goes to the row through
+// RestoreOperations.
 type (
 	noKindReaderStore struct{ *sqlite.Store }
-	noStripperStore   struct{ *sqlite.Store }
-	noRecorderStore   struct{ *sqlite.Store }
+	noStagingStore    struct{ *sqlite.Store }
+	noOperationsStore struct{ *sqlite.Store }
 )
 
 func (noKindReaderStore) ReadKind() {}
 
-func (noStripperStore) StripDevStaged() {}
+func (noStagingStore) StageRestore() {}
 
-func (noRecorderStore) RecordDevReport() {}
+func (noOperationsStore) RecordRestoreReport() {}
 
-// TestServerWithoutDevPortsDoesNotStart proves that no restore route works
-// with a store that lacks a dev data port: the server does not start, and the
-// error names the port. A production restore never skips the kind check, the
-// strip or the report because a port is missing.
 func TestServerWithoutDevPortsDoesNotStart(t *testing.T) {
 	t.Parallel()
 
@@ -1466,8 +1464,11 @@ func TestServerWithoutDevPortsDoesNotStart(t *testing.T) {
 		missing string
 	}{
 		{name: "no KindReader", wrap: func(s *sqlite.Store) namespace.Store { return noKindReaderStore{s} }, missing: "KindReader"},
-		{name: "no DevStripper", wrap: func(s *sqlite.Store) namespace.Store { return noStripperStore{s} }, missing: "DevStripper"},
-		{name: "no DevReportRecorder", wrap: func(s *sqlite.Store) namespace.Store { return noRecorderStore{s} }, missing: "DevReportRecorder"},
+		{name: "no RestoreStaging", wrap: func(s *sqlite.Store) namespace.Store { return noStagingStore{s} }, missing: "RestoreStaging"},
+		{
+			name: "no RestoreOperations", wrap: func(s *sqlite.Store) namespace.Store { return noOperationsStore{s} },
+			missing: "RestoreOperations",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

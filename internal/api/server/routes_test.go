@@ -221,7 +221,7 @@ const testNamespace = "routes"
 // failed, never checking or applying, so the POST route answers 202 in
 // the same tests instead of 409 for a running restore, and GET skips the
 // manifest read that only succeeded rows need.
-const testRestoreID = backup.RestoreID("rst-test00000000000001")
+const testRestoreID = backup.RestoreID("rst-testaaaaaaaaaaaaaaaa")
 
 // failedSeed returns a failed backup row, so the GET-by-id route answers 200
 // in the generic enforcement tests. The seed is failed, never running, so the
@@ -797,19 +797,22 @@ func newRouteTestRestores(
 	t.Helper()
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:         st,
-		Registry:     st,
-		Backups:      service,
-		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
-		Blobs:        live,
-		Target:       target,
-		Key:          nil,
-		Installation: "test",
-		AfterApply:   nil,
-		Admit:        nil,
-
+		Live:            st,
+		Operations:      st.DurableOperationsPort(),
+		Backups:         service,
+		Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
+		Blobs:           live,
+		Target:          target,
+		Key:             nil,
+		Installation:    "test",
+		AfterApply:      nil,
+		Admit:           nil,
 		AllowDevBackups: false,
 		AllowDevHint:    "",
+		Owner:           "",
+		Lease:           0,
+		CleanupLockWait: 0,
+		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
 	})
@@ -833,19 +836,40 @@ func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
 
 	seed := backup.RestoreRecord{
 		StartedAt:   time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		EndedAt:     time.Date(2026, time.October, 11, 13, 0, 0, 0, time.UTC),
+		EndedAt:     time.Time{},
 		ID:          testRestoreID,
 		BackupID:    testBackupID,
 		PreBackupID: "",
 		RequestedBy: "tester",
 		Error:       "",
-		State:       backup.RestoreFailed,
+		State:       backup.RestoreChecking,
 		DevReport:   nil,
 	}
 
-	seedErr := st.CreateRestore(t.Context(), seed)
-	if seedErr != nil {
-		t.Fatalf("seed restore %s: %v", testRestoreID, seedErr)
+	start := durable.StartRequest{
+		Key: backup.RestoreOperationKey(testRestoreID), Kind: backup.RestoreOperationKind,
+		Version: backup.RestoreOperationVersion, Input: []byte("{}"),
+	}
+	if err := st.StartRestore(t.Context(), seed, start); err != nil {
+		t.Fatalf("seed restore %s: %v", testRestoreID, err)
+	}
+
+	// A cancel ends the operation, and the sweep of ended operations fails
+	// the row, as for a restore that a person canceled.
+	ops, err := st.DurableOperations().List(t.Context(), durable.Filter{
+		Kind: backup.RestoreOperationKind, States: nil, Limit: 0,
+	})
+	if err != nil || len(ops) != 1 {
+		t.Fatalf("list restore operations = %d, %v; want one", len(ops), err)
+	}
+
+	if err := st.DurableOperations().CancelBefore(t.Context(), ops[0].ID, backup.RestoreStepSwap); err != nil {
+		t.Fatalf("cancel seed restore %s: %v", testRestoreID, err)
+	}
+
+	ended := time.Date(2026, time.October, 11, 13, 0, 0, 0, time.UTC)
+	if _, err := st.FailEndedRestores(t.Context(), ended, false); err != nil {
+		t.Fatalf("fail seed restore %s: %v", testRestoreID, err)
 	}
 }
 
@@ -1176,7 +1200,8 @@ func freshAuthRoutes() []string {
 // wantSuccessStatus answers the success status of route: a route in
 // freshAuthRoutes answers 403 to an access token, POST
 // /api/server/backups and POST /api/server/restores start work in the
-// background and answer 202, POST /api/server/namespaces creates a namespace
+// background and answer 202, POST /api/server/restores/{id}/cancel answers 202
+// for the seed restore that a cancel already stopped, POST /api/server/namespaces creates a namespace
 // and answers 201, every other route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
 	if slices.Contains(freshAuthRoutes(), route.Method+" "+route.Path) {
@@ -1191,7 +1216,8 @@ func wantSuccessStatus(route apiserver.Route) int {
 // fresh authentication.
 func wantOtherSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
+		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
+			route.Path == "/api/server/restores/{id}/cancel") {
 		return http.StatusAccepted
 	}
 

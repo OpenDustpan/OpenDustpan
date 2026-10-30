@@ -145,16 +145,16 @@ request or from the API, with policy checks before an apply.
 
 | Where   | Item                                                                        | Part                            | State |
 |---------|-----------------------------------------------------------------------------|---------------------------------|-------|
-| server  | [RFC 6](rfc/0006-runners-and-remote-runs.md) Runners and remote runs        | all                             | draft |
-| server  | [RFC 5](rfc/0005-profiles.md) Profiles                                      | all                             | draft |
-| server  | [RFC 12](rfc/0012-api-edits-and-write-back.md) API edits and write-back     | all                             | draft |
-| server  | [RFC 13](rfc/0013-policy-and-approvals.md) Policy and approvals             | all                             | draft |
-| server  | [RFC 28](rfc/0028-stored-plans.md) Stored plans                             | all                             | draft |
+| server  | [RFC 6](rfc/0006-runners-and-remote-runs.md) Runners and remote runs        | all                             | accepted in part (ADR 100-103, 130-139) |
+| server  | [RFC 5](rfc/0005-profiles.md) Profiles                                      | all                             | discussing; core accepted |
+| server  | [RFC 12](rfc/0012-api-edits-and-write-back.md) API edits and write-back     | all                             | accepted in part |
+| server  | [RFC 13](rfc/0013-policy-and-approvals.md) Policy and approvals             | all                             | accepted |
+| server  | [RFC 28](rfc/0028-stored-plans.md) Stored plans                             | all                             | accepted |
 | server  | [RFC 27](rfc/0027-pull-request-automation.md) Pull request automation       | all                             | draft |
-| server  | [RFC 30](rfc/0030-opentofu-remote-execution.md) CLI-driven remote execution | all                             | draft |
-| server  | [RFC 23](rfc/0023-events-and-notifications.md) Events and notifications     | all                             | draft |
-| server  | [RFC 15](rfc/0015-output-sharing.md) Output sharing                         | all                             | draft |
-| server  | [RFC 24](rfc/0024-run-triggers-and-orchestration.md) Run triggers           | all                             | draft |
+| server  | [RFC 30](rfc/0030-opentofu-remote-execution.md) CLI-driven remote execution | all                             | accepted in part |
+| server  | [RFC 23](rfc/0023-events-and-notifications.md) Events and notifications     | all                             | accepted |
+| server  | [RFC 15](rfc/0015-output-sharing.md) Output sharing                         | all                             | accepted |
+| server  | [RFC 24](rfc/0024-run-triggers-and-orchestration.md) Run triggers           | all                             | accepted |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                       | run page with timeline and diff | draft |
 
 ## Milestone 6. Self-service
@@ -164,13 +164,13 @@ promote units from them, inside guard rails.
 
 | Where   | Item                                                                            | Part                    | State |
 |---------|---------------------------------------------------------------------------------|-------------------------|-------|
-| server  | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | all                     | draft |
+| server  | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | all                     | accepted; domain core built |
 | server  | [RFC 43](rfc/0043-ephemeral-units.md) Ephemeral units                           | all                     | draft |
 | server  | [RFC 55](rfc/0055-environment-promotion.md) Environment promotion               | all                     | draft |
-| server  | [RFC 10](rfc/0010-artifact-registry-and-curated-upstreams.md) Artifact registry | all                     | draft |
+| server  | [RFC 10](rfc/0010-artifact-registry-and-curated-upstreams.md) Artifact registry | all                     | accepted in part; providers done |
 | server  | [RFC 56](rfc/0056-upgrade-pull-requests.md) Upgrade pull requests               | all                     | draft |
 | server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all                     | draft |
-| console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | draft |
+| console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | accepted; domain core built |
 
 ## Milestone 7. High availability on one database
 
@@ -299,7 +299,7 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
 - [ ] Milestone 6 met.
 - [ ] Milestone 7 met.
 - [x] A `LICENSE` in this repository ([ADR 22](adr/0022-apache-2-license.md)).
-- [ ] A `LICENSE` in the Console repository.
+- [x] A `LICENSE` in the Console repository.
 - [x] A `--version` flag that the build stamps.
 - [x] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
 - [x] The binary refuses to start on a database schema that is newer than it

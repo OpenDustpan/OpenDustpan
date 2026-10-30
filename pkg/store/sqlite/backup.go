@@ -1184,22 +1184,6 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 	return fmt.Errorf("select backup: %w", err)
 }
 
-// createRestoreConflict answers why CreateRestore inserted no row: the ID is
-// taken (ErrRestoreExists), or the unique index on running restores refused a
-// second running restore (ErrRestoreRunning).
-func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) error {
-	_, err := s.fetchRestore(ctx, id)
-	if err == nil {
-		return backup.ErrRestoreExists
-	}
-
-	if errors.Is(err, backup.ErrRestoreNotFound) {
-		return backup.ErrRestoreRunning
-	}
-
-	return err
-}
-
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the registry, the Git host connections,
 // the notification sinks and the triggers.

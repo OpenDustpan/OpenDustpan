@@ -65,7 +65,6 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) startSteps(ctx context.Context) error {
 	steps := []func(context.Context) error{
 		s.startUp,
-		s.failStoppedRestores,
 		s.startUpAuditChain,
 		s.bindSignInProviders,
 	}

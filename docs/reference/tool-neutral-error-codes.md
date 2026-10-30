@@ -43,6 +43,7 @@ Each error answer has the header `Cache-Control: no-store`.
 | 500 | `server.internal` | An error that the server does not classify. The message is `internal error` |
 | 503 | `maintenance.in-maintenance` | The installation is in maintenance mode |
 | 503 | `schema.binary-below-minimum` | The binary version of this server is below the minimum binary version of the database schema, so this server cannot write. The arguments are `binaryVersion` and `minimumVersion` |
+| 503 | `worker.absent` | No worker claimed or renewed a claim for 2 lease periods of the worker. The server refuses a request that starts a durable operation. Start a worker with `opendustpan serve --components worker` |
 
 ## Inventory API
 

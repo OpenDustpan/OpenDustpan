@@ -188,7 +188,8 @@ func (h *Handler) backupRoutes() []Route {
 }
 
 // restoreRoutes returns the restore rows of the route table (ADR 38
-// decision 1): start a restore, list restores, and read one restore.
+// decision 1): start a restore, list restores, read one restore, and cancel
+// one restore before its swap.
 func (h *Handler) restoreRoutes() []Route {
 	return []Route{
 		{
@@ -214,6 +215,14 @@ func (h *Handler) restoreRoutes() []Route {
 			Actions: []identity.Action{identity.ActionServerRestore},
 			Resolve: resolveServer, ActionsFor: nil,
 			Serve: h.getRestore,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/server/restores/{id}/cancel",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerRestore},
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.cancelRestore,
 		},
 	}
 }

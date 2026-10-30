@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -92,7 +93,7 @@ func TestWriteErrorDenialComesFirst(t *testing.T) {
 		{"principal", principal.ErrNotFound},
 		{"role or grant", access.ErrNotFound},
 		{"token", accesstoken.ErrNotFound},
-		{"worker", apiserver.ErrNoWorker},
+		{"worker", admit.ErrNoWorker},
 		{"ip allowlist", ipallow.ErrDisabled},
 		{"gate config", gate.ErrNotFound},
 		{"session policy", session.ErrInvalid},

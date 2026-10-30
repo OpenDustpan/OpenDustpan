@@ -23,78 +23,27 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 		return backup.KeepAccessResult{}, backup.ErrCorrupt
 	}
 
-	staging := s.stagingSchema
+	plan := swapPlan{staging: s.stagingSchema, previous: "", keepAccess: true, before: nil, after: nil}
 
-	result, err := s.swapStagingSchemaKeepingAccess(ctx, staging)
+	dropped, err := s.swapStaging(ctx, plan)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
 	s.stagingSchema = ""
 
-	return result, nil
+	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
 }
 
-// swapStagingSchemaKeepingAccess copies the live access tables over the
-// staged ones, checks the kept grants and principals against the staged
-// namespaces and units, and swaps the schemas in one transaction.
-// Principals merge by ID: existing ones are updated, extra ones are deleted,
-// and missing ones are inserted last. The transaction locks the live access
-// tables first, so a revoke between the copy and the swap cannot be lost.
-func (s *Store) swapStagingSchemaKeepingAccess(
-	ctx context.Context, staging string,
-) (backup.KeepAccessResult, error) {
-	var result backup.KeepAccessResult
-
-	if !hasStagingPrefix(staging) {
-		return result, fmt.Errorf("apply staging schema %q: %w", staging, backup.ErrCorrupt)
-	}
-
-	opts := pgx.TxOptions{
-		IsoLevel:       pgx.ReadCommitted,
-		AccessMode:     pgx.ReadWrite,
-		DeferrableMode: pgx.NotDeferrable,
-		BeginQuery:     "",
-		CommitQuery:    "",
-	}
-
-	err := inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
-		dropped, txErr := s.keepAccessTx(ctx, tx, staging)
-		result.DroppedTempAdmins = dropped
-
-		return txErr
-	})
-
-	return result, err
-}
-
-// keepAccessTx runs the keep-access swap in tx and returns the count of
+// keepAccessTx runs the rest of a swap that keeps the access tables, in tx,
+// after the swap lock and the check of the dev data: it copies the live
+// access tables over the staged ones, checks the kept grants and principals
+// against the staged namespaces and units, and swaps the schemas. Principals
+// merge by ID: existing ones are updated, extra ones are deleted, and missing
+// ones are inserted last. It locks the live access tables first, so a revoke
+// between the copy and the swap cannot be lost. It returns the count of the
 // dropped temp_admins rows.
-func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, staging string) (int64, error) {
-	var live string
-
-	if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
-		return 0, fmt.Errorf("read live schema: %w", err)
-	}
-
-	if live == "" || live == staging {
-		return 0, fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
-	}
-
-	// The swap lock comes first, before the swap touches a live table, so
-	// that no snapshot read overlaps the swap.
-	if err := lockSwap(ctx, tx, live); err != nil {
-		return 0, err
-	}
-
-	// The checks cover the minimum binary version of the live schema, so that
-	// a binary below it cannot swap in a schema that it built, and the whole
-	// staging area, also the access tables that the swap does not take. They
-	// run before any write.
-	if err := s.checkSwap(ctx, tx, staging); err != nil {
-		return 0, err
-	}
-
+func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, live string, plan swapPlan) (int64, error) {
 	if err := lockLiveAccessTables(ctx, tx, live); err != nil {
 		return 0, err
 	}
@@ -103,7 +52,7 @@ func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, staging string) (in
 		s.keepAccessHook(ctx, tx, live)
 	}
 
-	if err := keepAccessTables(ctx, tx, live, staging); err != nil {
+	if err := keepAccessTables(ctx, tx, live, plan.staging); err != nil {
 		return 0, err
 	}
 
@@ -111,20 +60,23 @@ func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, staging string) (in
 	// principals, which keepAccessTables put into the staged schema. So a
 	// staged row can name a principal that the live principals table does
 	// not hold.
-	dropped, err := dropDanglingTempAdmins(ctx, tx, staging)
+	dropped, err := dropDanglingTempAdmins(ctx, tx, plan.staging)
 	if err != nil {
 		return 0, err
 	}
 
-	return dropped, swapSchemas(ctx, tx, live, staging)
+	previous, drop := previousSchema(live, plan.previous)
+
+	return dropped, swapSchemas(ctx, tx, swapNames{live: live, previous: previous, staging: plan.staging, drop: drop})
 }
 
 // swapSchemas moves the live schema aside, moves the staged schema live,
-// drops the old live schema and the control schema of the staging area, and
-// fences the restored namespaces, in tx. The installation, backups and
-// restores tables live in the control schema, which the swap never renames.
-func swapSchemas(ctx context.Context, tx pgx.Tx, live, staging string) error {
-	previous := live + "_previous"
+// drops the old live schema when names.drop says so and the control schema
+// of the staging area, and fences the restored namespaces, in tx. The
+// installation, backups and restores tables live in the control schema,
+// which the swap never renames.
+func swapSchemas(ctx context.Context, tx pgx.Tx, names swapNames) error {
+	live, previous, staging := names.live, names.previous, names.staging
 
 	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
 		return fmt.Errorf("move live schema aside: %w", err)
@@ -138,8 +90,10 @@ func swapSchemas(ctx context.Context, tx pgx.Tx, live, staging string) error {
 		return err
 	}
 
-	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
-		return fmt.Errorf("drop previous schema: %w", err)
+	if names.drop {
+		if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
+			return fmt.Errorf("drop previous schema: %w", err)
+		}
 	}
 
 	if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {

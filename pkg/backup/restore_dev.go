@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
@@ -169,50 +168,6 @@ func emptyDevReport() DevStripReport {
 	}
 }
 
-// detectStaged looks at the staged data of a production restore for dev data
-// and refuses when it finds some and the server did not start with the
-// setting that allows a dev backup. It removes nothing. A failure to look
-// fails the restore. The result lands in run.report.
-func (s *RestoreService) detectStaged(ctx context.Context, run *devRun) error {
-	report, err := s.live.StripDevStaged(ctx, DevStripDetect)
-	if err != nil {
-		return fmt.Errorf("look for dev data in the staged data: %w", err)
-	}
-
-	run.report = report
-
-	if !report.Empty() && !s.allowDev {
-		return &devRefusalError{text: refusalSentence(reasonDevData, s.devHint)}
-	}
-
-	return nil
-}
-
-// stripStaged removes the dev data from the staged data of a production
-// restore and proves that none remains. The staged data decides, not the kind
-// in the manifest. It never touches a live table. A failure wraps
-// ErrDevStripIncomplete, and the caller discards the staging area.
-func (s *RestoreService) stripStaged(ctx context.Context, run *devRun) error {
-	if err := s.detectStaged(ctx, run); err != nil {
-		return err
-	}
-
-	if run.report.Empty() {
-		return nil
-	}
-
-	removed, err := s.live.StripDevStaged(ctx, DevStripRemove)
-	if err != nil {
-		return errors.Join(ErrDevStripIncomplete, fmt.Errorf("remove the dev data from the staged data: %w", err))
-	}
-
-	run.report = removed
-
-	s.logRemoval(ctx, removed)
-
-	return nil
-}
-
 // logRemoval writes one warning to the log for each class that the strip
 // removed rows of, with the count. A line holds no subject, no token and no
 // session ID.
@@ -233,79 +188,10 @@ func (s *RestoreService) logRemoval(ctx context.Context, report DevStripReport) 
 	}
 }
 
-// recordDevReport stores the report, with the warnings of the restore, in the
-// restore record. The restores table survives the swap, so the report is
-// there also when the audit entries cannot be written.
-func (s *RestoreService) recordDevReport(ctx context.Context, id RestoreID, run *devRun) error {
-	run.report.Warnings = run.warnings()
-
-	if err := s.live.RecordDevReport(ctx, id, run.report); err != nil {
-		return fmt.Errorf("record the dev data report of restore %s: %w", id, err)
-	}
-
-	return nil
-}
-
-// appendDevAudit writes the audit entries of the dev data that a restore
-// removed, after the swap, in the restored data: one entry for each removed
-// principal up to MaxAuditedPrincipals, one summary entry for the other
-// principals, and one entry for each class that has no principal. It returns
-// false when an append failed. Then the restore still ends as finished and
-// the caller adds the warning WarnAuditAppendFailed.
-func (s *RestoreService) appendDevAudit(ctx context.Context, id RestoreID, req RestoreRequest, run *devRun) bool {
-	store, ok := s.live.(serverAuditAppender)
-	if !ok || run.report.Empty() {
-		return ok
-	}
-
-	ok = true
-
-	for _, entry := range devAuditObjects(id, req.BackupID, run.report) {
-		if _, err := store.AppendServer(ctx, s.devAuditEntry(req, entry)); err != nil {
-			s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", id.String()))
-
-			ok = false
-		}
-	}
-
-	return ok
-}
-
 // serverAuditAppender is the port of the server audit log that the restore
 // service writes to after the swap.
 type serverAuditAppender interface {
 	AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
-}
-
-// devAuditEntry returns the audit entry for one removal line.
-func (s *RestoreService) devAuditEntry(req RestoreRequest, object string) audit.Entry {
-	return audit.Entry{
-		At:            s.now().UTC(),
-		Namespace:     audit.ServerScope,
-		Subject:       req.RequestedBy,
-		IDPSubject:    "",
-		TokenID:       "",
-		Action:        string(identity.ActionServerRestore),
-		Object:        object,
-		Version:       "",
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      "",
-		UserAgent:     "",
-		Channel:       audit.ChannelAPI,
-		Kind:          audit.KindChange,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     "",
-		ObjectID:      "",
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: "",
-		JobID:         "",
-	}
 }
 
 // devAuditObjects returns the object text of each audit entry of a report.

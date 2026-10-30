@@ -119,3 +119,22 @@ type Store interface {
 	// operation that succeeded or failed.
 	Cancel(ctx context.Context, id ID) error
 }
+
+// StepCanceler cancels an operation only while one of its steps is not
+// recorded. A kind with a step after which a stop must not happen, for
+// example the swap of a restore, cancels through it. Each SQL store adapter
+// implements it with its Store, and runs the conformance cases of package
+// durabletest.
+type StepCanceler interface {
+	// CancelBefore stops the operation id with the rules of Cancel, but only
+	// while the operation has not recorded the step called step. It checks
+	// in this order, and returns the error of the first check that fails:
+	// ErrInvalid for an empty step, ErrNotFound for an unknown ID,
+	// ErrFinished for an operation that succeeded or failed, and ErrStepDone
+	// when the step is recorded. A canceled operation changes nothing and
+	// returns nil, as a second Cancel does. On an error it changes nothing.
+	// The check and the cancel are one transaction, so a step record cannot
+	// commit between them: a RecordStep of the step, or a step write of
+	// another port, that runs after it returns ErrCanceled.
+	CancelBefore(ctx context.Context, id ID, step string) error
+}

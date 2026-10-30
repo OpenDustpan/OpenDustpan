@@ -104,6 +104,19 @@ backup before restore: bkp-cnsz7imkyfh4mcrk5n3z
 It ends with `restore rst-aaa succeeded`. Only one restore runs
 at a time. A second start while one runs answers 409.
 
+The server answers the start with 202 and the restore ID. A `worker` process
+runs the restore in steps, and records the result of each step in the
+database. Run at least one `worker` process. When no worker claimed work for
+2 lease periods, the start answers 503 with the error code `worker.absent`. When the
+process that runs a restore stops, another worker continues the restore after
+the lease ends. The [several instances guide](several-instances.md) gives the
+steps.
+
+During a rolling deploy, a worker that runs a binary below the minimum binary
+version of the schema fails the check step of a restore, and the step is
+retried. A worker on a new binary can take the retry and continue the
+restore. When the step fails 5 times, the restore fails and changes nothing.
+
 Before the server applies anything, it checks the manifest, the
 key-encryption key, every named blob, and the SQL part, then loads the SQL
 data into a staging area and checks the staged data. A failed check stops
@@ -135,7 +148,8 @@ answer 503. A write to the installation API also answers 503 with
 grants, groups, roles, namespaces and policies, and a write in this time
 would be lost. Reads of the installation API, the maintenance routes and the
 backup and restore routes stay available. The server leaves maintenance mode
-when the restore ends, also after a failure. The server does not enter
+when the restore ends, also after a failure or a cancel. A maintenance mode
+that an operator entered before the restore stays. The server does not enter
 maintenance mode while an update or a run is active, unless the request sets
 `--force`, which cancels them first and names them. If work starts during a
 forced enter, the server tries again and cancels that work too, up to three
@@ -202,6 +216,51 @@ database may be the other kind.
 A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens, preferences of people and sign-in providers. It also keeps the registration of the GitHub App and the map of GitHub installations to namespaces. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
 A restore needs the key-encryption key that encrypted every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
+
+### Cancel a restore
+
+A restore can stop before it swaps the staged data into the live data. No CLI
+command cancels a restore. Send the request to the installation API with a
+token that has the action `server:restore`:
+
+```sh
+curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+  https://dustpan.example/api/server/restores/rst-aaa/cancel
+```
+
+| Answer | Meaning |
+| --- | --- |
+| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. |
+| 409 `restore.swapped` | The restore already swapped the data. It runs to its end. To undo it, restore the backup taken before it. |
+| 409 `restore.ended` | The restore already ended. |
+| 404 | No restore has this ID. |
+
+Each cancel of a known restore writes an audit entry. A canceled restore
+leaves the live data unchanged, and leaves the maintenance mode that it
+entered. The server increments the failover version of every namespace after
+a restore that stopped with no end, also after a cancel.
+
+### Staging areas and temporary blobs
+
+A restore loads the backup into a staging area. On PostgreSQL the staging area
+is a schema named `restore_stage_<id>_<n>`, and after the swap the old live
+data stays in a schema named `restore_prev_<id>` until the restore drops it.
+On SQLite the staging area is a file next to the database file, named
+`<database>.stage-rst-<id>-<n>`. A blob that the restore copies goes first to
+a temporary key under `restore-tmp/` in the live blob store.
+
+The last steps of a restore drop its staging areas and delete its temporary
+keys. A restore that fails drops them too. A restore that stopped with no end
+can leave them: the next restore drops them. If you take your own dump of a
+PostgreSQL database, leave out these schemas:
+
+```sh
+pg_dump --exclude-schema='restore_*' "$DATABASE_URL"
+```
+
+The restore never deletes a live blob. When a live blob has bytes that differ
+from the backup, the restore writes the bytes of the backup, logs a warning and
+writes an audit entry.
 
 ### Revocations in maintenance mode
 

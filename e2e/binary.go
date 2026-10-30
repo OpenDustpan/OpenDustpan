@@ -143,6 +143,10 @@ type backendConfig struct {
 	// auditChain passes --audit-chain with this value when set, so a test
 	// restarts the server with another setting of the audit chain.
 	auditChain string
+	// components passes --components with this value when set, so a test
+	// runs servers that have only some components. Empty keeps the default,
+	// which runs all of them.
+	components string
 	// signIn turns on the console sign-in through a test OpenID provider
 	// when it is not nil.
 	signIn *binarySignIn
@@ -535,6 +539,10 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, "--audit-chain", cfg.auditChain)
 	}
 
+	if cfg.components != "" {
+		args = append(args, "--components", cfg.components)
+	}
+
 	if cfg.publicURL != "" && cfg.signIn == nil {
 		args = append(args, "--public-url", cfg.publicURL)
 	}
@@ -702,6 +710,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		tokens:            e.backendCfg.tokens,
 		deltaCutoff:       0,
 		auditChain:        "",
+		components:        "",
 		publicURL:         "",
 	}
 
@@ -1140,6 +1149,7 @@ func binaryBackendConfig(in envInput, bin, dbURL string, setup blobSetup, cert b
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
 		auditChain:        "",
+		components:        "",
 		signIn:            nil,
 		publicURL:         "",
 	}

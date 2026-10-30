@@ -114,11 +114,11 @@ With `api` processes only, nobody runs the background work. Four signs show that
 - The metric `dustpan_oldest_unclaimed_operation_age_seconds` shows how long the oldest unclaimed operation or due schedule waits. It is 0 when none waits. It does not decide the refusal below. A long job, or a schedule that an older worker does not know, leaves work unclaimed while the workers run.
 - `GET /api/server/worker` of the installation API shows `silentSeconds` and lists each due schedule and each operation that no worker claimed for more than 2 lease periods. It needs the action `server:observe`.
 
-Each worker records a heartbeat in the store when it claims work or renews a claim. The time of the store counts, not the clock of the process that reads it. When no worker claimed or renewed a claim for 2 lease periods, an `api` process refuses each request that inserts a durable operation with 503. Today that is the approval of an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process counts the 2 lease periods from the time it began to watch. So it never refuses a start right after it began. A process that runs only `worker` does not fail the restores of the `api` processes when it starts.
+Each worker records a heartbeat in the store when it claims work or renews a claim. The heartbeat holds the lease period of the worker. The `api` process reads the time of the store, not its own clock. It also reads the lease period of the worker, not its own lease period. Suppose no worker claimed or renewed a claim for 2 lease periods of the worker. Then the `api` process refuses each request that inserts a durable operation. It answers 503 with the error code `worker.absent`. These requests start a backup, start a restore, start a job, start a drift check, fire a trigger or approve an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process counts the 2 lease periods from the time it began to watch. So it never refuses a start right after it began. A start of a process never fails a restore that another instance runs.
 
 `GET /api/server/components` lists the components of the process that answers.
 
-A restore runs in the process that took the request, so it needs no worker. Send the request to an `api` process that has enough time and memory for it.
+A restore is a durable operation too. The `api` process that took the request stores it, and a `worker` process runs its steps. The worker loads the backup into a staging area and checks it. Then it enters maintenance mode, takes the backup of the live data and copies the blobs. Then it swaps the staged data into the live data, leaves maintenance mode and drops the staging area. Each step records its result in the database. When the instance that runs a restore stops, another `worker` process continues the restore after the lease ends, from the step after the last recorded step. Run at least one `worker` process with enough time and memory for a restore, or the restore waits. Any instance answers the state of a restore, and any instance takes a cancel before the swap.
 
 A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops with SIGTERM, it gives the claim back, and another `worker` process continues the backup at once. When the instance dies with no clean stop, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
 
@@ -203,7 +203,18 @@ Set `--trusted-proxies` (`DUSTPAN_TRUSTED_PROXIES`) to the addresses of the load
 
 Send health checks to the readiness probe. The [observe guide](observe.md) gives the probe paths.
 
+## Limits that count in each instance
+
+These limits count in the memory of one instance. The limit of the installation is the limit of one instance times the number of instances.
+
+| Limit | What it bounds | Effect with several instances |
+| --- | --- | --- |
+| `--max-body-bytes-in-flight` | The memory that large request bodies hold at one time. | Each instance keeps its own budget. This is the intended effect: the limit protects the memory of one process. |
+| Audit entries of refused requests | One audit entry for each refused action, object kind and scope in each minute, with a count of the others. | Each instance writes its own first entry for a key in a minute. The entries of the same denial can be as many as the instances. |
+| Checks of a Git host connection | One check of a connection in 10 seconds, and 30 checks of an installation of the Git host in 1 minute. | Each instance applies the limits. The checks that the Git host receives can be as many as the instances times the limit. |
+
+Three limits count in the database, so they hold for all instances. They are the sign-in failure budget, the limit of pending state versions of a workspace, and the limits of the test of a notification destination.
+
 ## Limits
 
 - SQLite holds one instance only. Do not start two processes on one SQLite file.
-- At start, an instance can mark a restore as failed while another instance runs it. Start or restart an instance only when no restore runs.

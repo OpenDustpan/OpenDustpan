@@ -478,16 +478,6 @@ func (f *fakeRegistry) FailEndedBackups(ctx context.Context, endedAt time.Time) 
 	return changed, nil
 }
 
-// failGetsAfter makes GetBackup fail with err after n successful reads. Run
-// reads the row twice for a backup that one claim finishes, so n = 2 lets a
-// backup run and fails the read that follows it.
-func (f *fakeRegistry) failGetsAfter(n int, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.failGet, f.failGetAfter = err, n
-}
-
 // insertLocked stores r. The caller holds f.mu.
 func (f *fakeRegistry) insertLocked(r backup.Record) error {
 	if _, ok := f.rows[r.ID]; ok {

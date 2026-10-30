@@ -354,6 +354,13 @@ func (c *HACluster) StopAll(tb testing.TB) {
 	}
 }
 
+// SetComponents sets the components that every instance runs from its next
+// start on: raw is the value of --components, for example "api". A running
+// instance keeps its components. Call it while no instance starts or stops.
+func (c *HACluster) SetComponents(raw string) {
+	c.cfg.components = raw
+}
+
 // StartAll starts every instance that does not run, one after the other, and
 // waits until the proxy sends requests to all of them.
 func (c *HACluster) StartAll(ctx context.Context, tb testing.TB) {
