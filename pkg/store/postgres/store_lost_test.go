@@ -278,7 +278,7 @@ func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
 		CreatedAt: time.Now(), ID: namespace.NewID(), Name: "read-only-write", PrimaryInstallation: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 0,
 	})
-	if !errors.Is(err, namespace.ErrUnavailable) {
+	if err == nil || !errors.Is(err, namespace.ErrUnavailable) {
 		t.Fatalf("write on a read-only session: err = %v, want it to wrap namespace.ErrUnavailable", err)
 	}
 
