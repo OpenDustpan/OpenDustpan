@@ -229,6 +229,10 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "content seals and opens, also over many chunks and empty", test: testSealerRoundTrip},
 		{name: "a second NewItemKey returns the first record", test: testSealerNewKeyTwice},
 		{name: "writers of one item agree on one key and leave one blob", test: testSealerConcurrentNewKey},
+		{
+			name: "two writers of one item, many rounds: one record wins, the loser deletes only its own blob",
+			test: testSealerRaceRounds,
+		},
 		{name: "an item with no key does not seal or open", test: testSealerNoKey},
 		{name: "a stale fence writes no record and no blob", test: testSealerStaleFence},
 		{name: "a fence of another namespace writes no record and no blob", test: testSealerOtherNamespaceFence},
@@ -1236,5 +1240,81 @@ func testSealerGarbageWaitsForTheCommit(t *testing.T, r *SealerRig) {
 
 	if len(got) != 1 || got[0] == committedKey {
 		t.Errorf("garbage after the grace period = %v, want the one orphan and not %s", got, committedKey)
+	}
+}
+
+// raceRounds is the number of rounds of the race case.
+const raceRounds = 25
+
+// testSealerRaceRounds runs two concurrent first writes of one item, each with
+// its own random key, in many rounds. In each round exactly one record wins:
+// both writers get that record, as the port promises, and the loser deletes
+// its own blob and no other. One blob stays for each item, and it is the blob
+// that the record names, with the size and the MD5 of the record.
+func testSealerRaceRounds(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	for round := range raceRounds {
+		ref := sealerRef(t, "unit-race", secret.ItemKindPlan, fmt.Sprintf("pln-%d", round))
+
+		var (
+			wg   sync.WaitGroup
+			got  [2]secret.ItemKey
+			errs [2]error
+		)
+
+		for i := range got {
+			wg.Go(func() {
+				got[i], errs[i] = newKeyVia(t.Context(), r, r.Sealer, ref, r.fence())
+			})
+		}
+
+		wg.Wait()
+
+		for i := range got {
+			if errs[i] != nil {
+				t.Fatalf("round %d: writer %d: %v", round, i, errs[i])
+			}
+		}
+
+		if !sameItemKey(got[0], got[1]) {
+			t.Fatalf("round %d: the writers got two records: %s and %s", round, got[0].ID, got[1].ID)
+		}
+
+		checkOneBlobOf(t, r, got[0])
+
+		// The loser wrote under its own item key ID. Its blob is gone, so the
+		// namespace holds one blob for each round.
+		if n := len(keyBlobs(t, r, r.Acme.ID)); n != round+1 {
+			t.Fatalf("round %d: item key blobs = %d, want %d: a losing write left its blob", round, n, round+1)
+		}
+	}
+}
+
+// checkOneBlobOf checks that the directory of the item key of k holds exactly
+// the blob that k names, with the size and the MD5 of k, and no orphan of a
+// losing write.
+func checkOneBlobOf(t *testing.T, r *SealerRig, k secret.ItemKey) {
+	t.Helper()
+
+	key, err := r.ItemBlobs.Key(r.Acme.ID, k.ID, k.Blob.Version, k.Blob.Attempt)
+	if err != nil {
+		t.Fatalf("key of %s: %v", k.ID, err)
+	}
+
+	var inDir []blob.Key
+
+	for _, o := range keyBlobs(t, r, r.Acme.ID) {
+		if strings.Contains(o.Key.String(), "/"+string(k.ID)+"/") {
+			inDir = append(inDir, o.Key)
+		}
+	}
+
+	if len(inDir) != 1 || inDir[0] != key {
+		t.Fatalf("blobs of the winning item key %s = %v, want only %s", k.ID, inDir, key)
+	}
+
+	if d := blob.DigestBytes(readBlob(t, r, key)); d.Size != k.Blob.Size || d.MD5 != k.Blob.MD5 {
+		t.Errorf("the blob of %s does not match its record", k.ID)
 	}
 }
