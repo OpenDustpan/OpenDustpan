@@ -1,17 +1,18 @@
 ---
 rfc: 112
 title: The token exchange issues a stored access token
-status: discussing
+status: accepted
 created: 2026-10-30
+adr: 284
 ---
 
 # RFC 112. The token exchange issues a stored access token
 
-Status: discussing. This RFC proposes an amendment of
+Status: accepted ([ADR 284](../adr/0284-the-token-exchange-issues-a-stored-access-token.md)).
+This RFC proposes an amendment of
 [ADR 54](../adr/0054-workload-identity-oidc-jwt-and-mtls.md) on two points.
 The code of the token exchange (pull request 2105) follows the proposal. The
-pull request does not merge before the project owner accepts or rejects this
-RFC.
+project owner accepted the proposal on 30 October 2026.
 
 ## Problem
 
@@ -129,4 +130,7 @@ the side of the server.
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Accepted on 30 October 2026 by the project owner: the token exchange issues a
+stored, short-lived access token. [ADR 284](../adr/0284-the-token-exchange-issues-a-stored-access-token.md)
+holds the decision and amends ADR 54 on both points (option A of point 1 and
+option A of point 2). The open question on mTLS stays open.

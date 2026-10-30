@@ -159,4 +159,4 @@ both together.
 | [109](0109-job-kinds-for-state-operations-and-many-runs.md) | Job kinds for state operations and many runs, from the gaps of RFC 6 | draft |
 | [110](0110-step-results-hooks-approval-steps-and-scanners.md) | Step results: hooks, approval steps and scanners, from the gaps of RFC 6 | draft |
 | [111](0111-blueprint-rollouts-and-the-migration-of-answers.md) | Blueprint rollouts and the migration of answers | discussing |
-| [112](0112-the-token-exchange-issues-a-stored-access-token.md) | The token exchange issues a stored access token | discussing |
+| [112](0112-the-token-exchange-issues-a-stored-access-token.md) | The token exchange issues a stored access token | accepted (ADR 284) |
