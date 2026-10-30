@@ -69,12 +69,26 @@ chmod 700 "$WORK"
 SECRETS="$WORK/secrets"
 mkdir -m 700 "$SECRETS"
 
+TRASH_PID=""
+
+# empty_minio_trash deletes the content of the MinIO trash directory every
+# 10 seconds until the run ends. The trash holds objects that MinIO deleted
+# already, so this frees space and changes no object.
+empty_minio_trash() {
+	while sleep 10; do
+		docker exec "$NAME-minio" sh -c 'rm -rf /tmp/data/.minio.sys/tmp/.trash/*' >/dev/null 2>&1 || true
+	done
+}
+
 remove_containers() {
 	docker rm -f "$NAME-toxiproxy" "$NAME-minio" "$NAME-garage" "$NAME-postgres" >/dev/null 2>&1 || true
 	docker network rm "$NET" >/dev/null 2>&1 || true
 }
 
 cleanup() {
+	if [ -n "$TRASH_PID" ]; then
+		kill "$TRASH_PID" 2>/dev/null || true
+	fi
 	remove_containers
 	rm -rf "$WORK"
 }
@@ -123,20 +137,17 @@ docker run -d --name "$NAME-postgres" --network "$NET" --network-alias postgres 
 	-e POSTGRES_PASSWORD_FILE=/run/secrets/pg-password \
 	"$POSTGRES_IMAGE" >/dev/null
 
-# MinIO moves a deleted object to a trash directory and empties it every
-# 5 minutes by default. A protocol run writes and deletes gigabytes in that
-# time, so MinIO runs out of disk and answers 507. A cleanup every 5 seconds
-# frees the space between two runs. The data directory is a tmpfs: on a
-# host whose disk is a share of a larger file system, MinIO can read the
-# free space wrong and answer 507 while space is free. A tmpfs reports its
-# own size, so MinIO sees the real free space.
+# The MinIO data directory is a tmpfs of a fixed size, so the free space
+# that MinIO sees is the space it has. MinIO moves a deleted object to a
+# trash directory and empties it later. A protocol run writes and deletes
+# gigabytes faster than MinIO empties the trash, and MinIO then answers
+# 507. empty_minio_trash below deletes the trash every 10 seconds.
 echo "bench-s3: start MinIO"
 docker run -d --name "$NAME-minio" --network "$NET" --network-alias minio \
 	-v "$SECRETS/minio-access:/run/secrets/minio-access:ro" \
 	-v "$SECRETS/minio-secret:/run/secrets/minio-secret:ro" \
 	-e MINIO_ROOT_USER_FILE=/run/secrets/minio-access \
 	-e MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-secret \
-	-e MINIO_API_DELETE_CLEANUP_INTERVAL=5s \
 	--tmpfs "/tmp/data:rw,size=${BENCH_S3_MINIO_TMPFS:-8g}" \
 	"$MINIO_IMAGE" server /tmp/data >/dev/null
 
@@ -262,6 +273,9 @@ run_load() {
 		echo "bench-s3: load harness failed for $step on $store; see $OUT_DIR/load/$step-$store.log" >&2
 	fi
 }
+
+empty_minio_trash &
+TRASH_PID=$!
 
 echo "bench-s3: set up the proxies and the buckets"
 bench setup
