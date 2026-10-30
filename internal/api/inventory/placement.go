@@ -2,8 +2,10 @@ package inventory
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -11,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // maxPlacementBodyBytes bounds the body of a placement rule write. The body
@@ -44,10 +47,12 @@ func (h *Handler) placementRoutes() []Route {
 
 	row := func(method, path string, actions []identity.Action, resolve ObjectResolver, serve RouteHandler) Route {
 		return Route{
-			Route: route.Route[identity.Object]{
-				Method: method, Path: path, Scope: route.ScopeAuthorized, Actions: actions,
-				Resolve: resolve, Serve: serve,
-			},
+			Method:           method,
+			Path:             path,
+			Scope:            route.ScopeAuthorized,
+			Actions:          actions,
+			Resolve:          resolve,
+			Serve:            serve,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
 		}
@@ -92,7 +97,7 @@ type placementRuleRequest struct {
 	Project    *string `dustpan:"required" json:"project"`
 	Stack      *string `dustpan:"required" json:"stack"`
 	Collection *string `dustpan:"required" json:"collection"`
-	Position   *int    `json:"position"`
+	Position   *int    `dustpan:"optional" json:"position"`
 }
 
 // resolvePlacementRule returns the namespace of the path as the object, and
@@ -115,27 +120,29 @@ func resolvePlacementRule(w http.ResponseWriter, r *http.Request) (identity.Obje
 func (h *Handler) listPlacementRules(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
-	ctx := r.Context()
-
-	if _, err := h.namespaces.Get(ctx, obj.Namespace()); err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	rules, err := h.placements.List(ctx, obj.Namespace())
+	rules, err := h.rulesOfNamespace(r.Context(), obj.Namespace())
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeError(r.Context(), w, err)
 
 		return
 	}
 
-	out := make([]placementRuleEntry, 0, len(rules))
-	for _, rule := range rules {
-		out = append(out, placementRuleOf(rule))
+	h.writeJSON(r.Context(), w, http.StatusOK, placementRulesResponse{Rules: placementEntries(rules)})
+}
+
+// rulesOfNamespace reads the rules of ns. It returns the error of the
+// namespace service first, so a missing namespace is not an empty list.
+func (h *Handler) rulesOfNamespace(ctx context.Context, ns namespace.Name) ([]collection.Rule, error) {
+	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+		return nil, fmt.Errorf("read namespace %s: %w", ns, err)
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, placementRulesResponse{Rules: out})
+	rules, err := h.placements.List(ctx, ns)
+	if err != nil {
+		return nil, fmt.Errorf("list placement rules: %w", err)
+	}
+
+	return rules, nil
 }
 
 // createPlacementRule serves POST on the rule list. It answers 201 with the
@@ -162,7 +169,7 @@ func (h *Handler) createPlacementRule(
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusCreated, placementRuleOf(rule))
+	h.writeJSON(ctx, w, http.StatusCreated, placementRuleOf(&rule))
 }
 
 // readPlacementRule serves GET on one rule. A rule that the namespace does not
@@ -179,7 +186,7 @@ func (h *Handler) readPlacementRule(
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, placementRuleOf(rule))
+	h.writeJSON(ctx, w, http.StatusOK, placementRuleOf(&rule))
 }
 
 // updatePlacementRule serves PUT on one rule. The body replaces the tool, the
@@ -205,7 +212,7 @@ func (h *Handler) updatePlacementRule(
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, placementRuleOf(rule))
+	h.writeJSON(ctx, w, http.StatusOK, placementRuleOf(&rule))
 }
 
 // deletePlacementRule serves DELETE on one rule. It answers 204. The units
@@ -241,11 +248,11 @@ func readPlacementRule(w http.ResponseWriter, r *http.Request) (collection.RuleI
 
 	var in placementRuleRequest
 
-	if err := dec.Decode(&in); err != nil {
+	if decErr := dec.Decode(&in); decErr != nil {
 		return collection.RuleInput{}, errPlacementBody
 	}
 
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if decErr := dec.Decode(&struct{}{}); !errors.Is(decErr, io.EOF) {
 		return collection.RuleInput{}, errPlacementBody
 	}
 
@@ -253,19 +260,24 @@ func readPlacementRule(w http.ResponseWriter, r *http.Request) (collection.RuleI
 		return collection.RuleInput{}, errPlacementBody
 	}
 
+	return placementInput(&in)
+}
+
+// placementInput parses the fields of a decoded body. All pointers are set.
+func placementInput(in *placementRuleRequest) (collection.RuleInput, error) {
 	project, err := collection.ParsePattern(*in.Project)
 	if err != nil {
-		return collection.RuleInput{}, err
+		return collection.RuleInput{}, fmt.Errorf("project: %w", err)
 	}
 
 	stack, err := collection.ParsePattern(*in.Stack)
 	if err != nil {
-		return collection.RuleInput{}, err
+		return collection.RuleInput{}, fmt.Errorf("stack: %w", err)
 	}
 
 	name, err := collection.ParseName(*in.Collection)
 	if err != nil {
-		return collection.RuleInput{}, err
+		return collection.RuleInput{}, fmt.Errorf("collection: %w", err)
 	}
 
 	out := collection.RuleInput{Tool: *in.Tool, Project: project, Stack: stack, Collection: name, Position: 0}
@@ -276,8 +288,18 @@ func readPlacementRule(w http.ResponseWriter, r *http.Request) (collection.RuleI
 	return out, nil
 }
 
+// placementEntries maps the rules to their wire shape, in the same order.
+func placementEntries(rules []collection.Rule) []placementRuleEntry {
+	out := make([]placementRuleEntry, 0, len(rules))
+	for i := range rules {
+		out = append(out, placementRuleOf(&rules[i]))
+	}
+
+	return out
+}
+
 // placementRuleOf maps a domain rule to its wire shape.
-func placementRuleOf(r collection.Rule) placementRuleEntry {
+func placementRuleOf(r *collection.Rule) placementRuleEntry {
 	return placementRuleEntry{
 		ID:         r.ID,
 		Namespace:  r.Namespace.String(),

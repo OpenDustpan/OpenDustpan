@@ -12,57 +12,43 @@ import (
 func TestParsePattern(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		input   string
-		wantErr bool
-	}{
-		{"literal", "payments", false},
-		{"star", "*", false},
-		{"prefix star", "prod*", false},
-		{"inner star", "a*b", false},
-		{"three stars", "*a*b*", false},
-		{"dots, dashes and underscores", "my.app_v2-x", false},
-		{"longest", strings.Repeat("a", collection.MaxPatternLength), false},
-		{"empty", "", true},
-		{"too long", strings.Repeat("a", collection.MaxPatternLength+1), true},
-		{"two stars together", "a**", true},
-		{"four stars", "*a*b*c*", true},
-		{"regexp group", "(a+)+$", true},
-		{"regexp class", "[a-z]+", true},
-		{"question mark", "a?", true},
-		{"slash", "a/b", true},
-		{"backslash", `a\*`, true},
-		{"space", "a b", true},
-		{"line feed", "a\nb", true},
-		{"carriage return", "a\r", true},
-		{"null byte", "a\x00", true},
-		{"unicode letter", "café", true},
-		{"unicode dash", "a‑b", true},
-		{"template", "${secret}", true},
+	valid := []string{
+		"payments", "*", "prod*", "a*b", "*a*b*", "my.app_v2-x", strings.Repeat("a", collection.MaxPatternLength),
 	}
+	for _, in := range valid {
+		got, err := collection.ParsePattern(in)
+		if err != nil || got.String() != in {
+			t.Errorf("ParsePattern(%q) = %q, %v, want the same pattern", in, got, err)
+		}
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+func TestParsePatternRejectsHostileInput(t *testing.T) {
+	t.Parallel()
 
-			got, err := collection.ParsePattern(tt.input)
-			if tt.wantErr {
-				if !errors.Is(err, collection.ErrInvalidPattern) {
-					t.Fatalf("ParsePattern(%q) err = %v, want ErrInvalidPattern", tt.input, err)
-				}
-
-				if got != "" {
-					t.Errorf("ParsePattern(%q) = %q with an error, want empty", tt.input, got)
-				}
-
-				return
-			}
-
-			if err != nil || got.String() != tt.input {
-				t.Fatalf("ParsePattern(%q) = %q, %v, want the same pattern", tt.input, got, err)
-			}
-		})
+	invalid := map[string]string{
+		"empty":           "",
+		"too long":        strings.Repeat("a", collection.MaxPatternLength+1),
+		"two stars":       "a**",
+		"four stars":      "*a*b*c*",
+		"regexp group":    "(a+)+$",
+		"regexp class":    "[a-z]+",
+		"question mark":   "a?",
+		"slash":           "a/b",
+		"backslash":       `a\*`,
+		"space":           "a b",
+		"line feed":       "a\nb",
+		"carriage return": "a\r",
+		"null byte":       "a\x00",
+		"unicode letter":  "caf\u00e9",
+		"unicode dash":    "a\u2011b",
+		"template":        "${secret}",
+	}
+	for name, in := range invalid {
+		got, err := collection.ParsePattern(in)
+		if !errors.Is(err, collection.ErrInvalidPattern) || got != "" {
+			t.Errorf("%s: ParsePattern(%q) = %q, %v, want empty and ErrInvalidPattern", name, in, got, err)
+		}
 	}
 }
 
@@ -200,6 +186,7 @@ func rule(t *testing.T, project, stack, coll string) collection.Rule {
 	}
 
 	return collection.Rule{
+		CreatedAt: time.Time{}, ID: "", Namespace: "", CreatedBy: "",
 		Tool: collection.ToolPulumi, Project: collection.Pattern(project), Stack: collection.Pattern(stack),
 		Collection: name, Position: 1,
 	}

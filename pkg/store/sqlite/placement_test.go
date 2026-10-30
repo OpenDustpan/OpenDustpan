@@ -12,6 +12,18 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
+const manageRules = "namespace:manage-placement-rules"
+
+// placementFixture is the acme namespace with three collections and a
+// placement service on the real store.
+type placementFixture struct {
+	t     *testing.T
+	log   audit.Store
+	svc   *collection.PlacementService
+	colls *collection.Service
+	ns    namespace.Name
+}
+
 func placementEntry(ns namespace.Name, action string) audit.Entry {
 	return audit.Entry{
 		At: time.Time{}, Namespace: ns, Subject: "admin", IDPSubject: "", TokenID: "",
@@ -22,8 +34,8 @@ func placementEntry(ns namespace.Name, action string) audit.Entry {
 	}
 }
 
-func TestPlacementService(t *testing.T) {
-	t.Parallel()
+func newPlacementFixture(t *testing.T) *placementFixture {
+	t.Helper()
 
 	s := open(t)
 	ctx := t.Context()
@@ -44,8 +56,8 @@ func TestPlacementService(t *testing.T) {
 
 	for _, name := range []string{"payments", "payments-prod", "sandbox"} {
 		ref := collection.Ref{Namespace: ns.Name, Name: mustCollectionName(t, name)}
-		if _, err := colls.Create(ctx, ref, placementEntry(ns.Name, "collection:create")); err != nil {
-			t.Fatalf("create collection %q: %v", name, err)
+		if _, createErr := colls.Create(ctx, ref, placementEntry(ns.Name, "collection:create")); createErr != nil {
+			t.Fatalf("create collection %q: %v", name, createErr)
 		}
 	}
 
@@ -54,130 +66,202 @@ func TestPlacementService(t *testing.T) {
 		t.Fatalf("placement service: %v", err)
 	}
 
-	in := func(project, stack, coll string, pos int) collection.RuleInput {
-		return collection.RuleInput{
-			Tool: collection.ToolPulumi, Project: collection.Pattern(project), Stack: collection.Pattern(stack),
-			Collection: mustCollectionName(t, coll), Position: pos,
-		}
+	return &placementFixture{t: t, log: s, svc: svc, colls: colls, ns: ns.Name}
+}
+
+func (f *placementFixture) input(project, stack, coll string, pos int) collection.RuleInput {
+	f.t.Helper()
+
+	return collection.RuleInput{
+		Tool: collection.ToolPulumi, Project: collection.Pattern(project), Stack: collection.Pattern(stack),
+		Collection: mustCollectionName(f.t, coll), Position: pos,
 	}
-	create := func(project, stack, coll string, pos int) (collection.Rule, error) {
-		return svc.Create(ctx, ns.Name, in(project, stack, coll, pos), placementEntry(ns.Name, "namespace:manage-placement-rules"))
-	}
-	order := func() []string {
-		t.Helper()
+}
 
-		rules, err := svc.List(ctx, ns.Name)
-		if err != nil {
-			t.Fatalf("List: %v", err)
-		}
+func (f *placementFixture) create(project, stack, coll string, pos int) (collection.Rule, error) {
+	f.t.Helper()
 
-		out := make([]string, len(rules))
-		for i, r := range rules {
-			out[i] = r.Project.String() + "/" + r.Stack.String()
-		}
+	return f.svc.Create(f.t.Context(), f.ns, f.input(project, stack, coll, pos), placementEntry(f.ns, manageRules))
+}
 
-		return out
+func (f *placementFixture) mustCreate(project, stack, coll string, pos int) collection.Rule {
+	f.t.Helper()
+
+	r, err := f.create(project, stack, coll, pos)
+	if err != nil {
+		f.t.Fatalf("create %s/%s: %v", project, stack, err)
 	}
 
-	// No rule: nothing matches, and the error names the fix.
-	_, err = svc.Place(ctx, ns.Name, collection.ToolPulumi, "payments", "prod")
+	return r
+}
+
+func (f *placementFixture) update(id string, in collection.RuleInput) error {
+	f.t.Helper()
+
+	_, err := f.svc.Update(f.t.Context(), f.ns, id, in, placementEntry(f.ns, manageRules))
+
+	return err
+}
+
+func (f *placementFixture) order() []string {
+	f.t.Helper()
+
+	rules, err := f.svc.List(f.t.Context(), f.ns)
+	if err != nil {
+		f.t.Fatalf("List: %v", err)
+	}
+
+	out := make([]string, len(rules))
+	for i := range rules {
+		out[i] = rules[i].Project.String() + "/" + rules[i].Stack.String()
+	}
+
+	return out
+}
+
+func (f *placementFixture) wantOrder(want ...string) {
+	f.t.Helper()
+
+	if got := f.order(); !slices.Equal(got, want) {
+		f.t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+func (f *placementFixture) place(project, stack string) (collection.Rule, error) {
+	f.t.Helper()
+
+	return f.svc.Place(f.t.Context(), f.ns, collection.ToolPulumi, project, stack)
+}
+
+func (f *placementFixture) auditEntries() []audit.Entry {
+	f.t.Helper()
+
+	listing, err := f.log.List(f.t.Context(), f.ns, audit.Page{Number: 1, Size: 50})
+	if err != nil {
+		f.t.Fatalf("list audit: %v", err)
+	}
+
+	return listing.Entries
+}
+
+func TestPlacementNoMatch(t *testing.T) {
+	t.Parallel()
+
+	f := newPlacementFixture(t)
+
+	_, err := f.place("payments", "prod")
 	if !errors.Is(err, collection.ErrNoPlacement) || !strings.Contains(err.Error(), "placement-rules") {
 		t.Fatalf("Place with no rule: err = %v, want ErrNoPlacement with the fix", err)
 	}
 
-	general, err := create("payments", "*", "payments", 0)
-	if err != nil {
-		t.Fatalf("create general rule: %v", err)
+	f.mustCreate("payments", "prod*", "payments-prod", 0)
+
+	if _, err = f.place("web", "prod"); !errors.Is(err, collection.ErrNoPlacement) {
+		t.Errorf("Place of an unknown project: err = %v, want ErrNoPlacement", err)
 	}
 
-	// A narrower rule after a wider one never matches: refused.
-	_, err = create("payments", "prod*", "payments-prod", 0)
-	if !errors.Is(err, collection.ErrPlacementConflict) {
-		t.Fatalf("create hidden rule: err = %v, want ErrPlacementConflict", err)
+	if _, err = f.place("payments", "dev"); !errors.Is(err, collection.ErrNoPlacement) {
+		t.Errorf("Place of an unmatched stack: err = %v, want ErrNoPlacement", err)
 	}
+}
 
-	// Inserted before the wider rule, it is accepted.
-	specific, err := create("payments", "prod*", "payments-prod", 1)
-	if err != nil {
-		t.Fatalf("create specific rule first: %v", err)
-	}
+func TestPlacementOrderDecidesTheCollection(t *testing.T) {
+	t.Parallel()
 
-	if want := []string{"payments/prod*", "payments/*"}; !slices.Equal(order(), want) {
-		t.Fatalf("order = %v, want %v", order(), want)
-	}
+	f := newPlacementFixture(t)
+	f.mustCreate("payments", "*", "payments", 0)
+	f.mustCreate("payments", "prod*", "payments-prod", 1)
+	f.mustCreate("billing", "*", "sandbox", 0)
+	f.wantOrder("payments/prod*", "payments/*", "billing/*")
 
-	// The same patterns twice is a conflict, whatever the collection.
-	if _, err := create("payments", "prod*", "sandbox", 0); !errors.Is(err, collection.ErrPlacementConflict) {
-		t.Errorf("create duplicate patterns: err = %v, want ErrPlacementConflict", err)
-	}
-
-	// A move that puts the wide rule first hides the specific rule: refused.
-	moveIn := in("payments", "*", "payments", 1)
-	if _, err := svc.Update(ctx, ns.Name, general.ID, moveIn, placementEntry(ns.Name, "namespace:manage-placement-rules")); !errors.Is(err, collection.ErrPlacementConflict) {
-		t.Errorf("update that hides a later rule: err = %v, want ErrPlacementConflict", err)
-	}
-
-	// Widening the specific rule to cover the general one is refused too.
-	wide := in("payments", "*", "payments-prod", 0)
-	if _, err := svc.Update(ctx, ns.Name, specific.ID, wide, placementEntry(ns.Name, "namespace:manage-placement-rules")); !errors.Is(err, collection.ErrPlacementConflict) {
-		t.Errorf("update that hides the later rule: err = %v, want ErrPlacementConflict", err)
-	}
-
-	tests := []struct {
-		project, stack, want string
-	}{
+	tests := []struct{ project, stack, want string }{
 		{"payments", "prod-eu", "payments-prod"},
 		{"payments", "dev", "payments"},
 	}
 	for _, tt := range tests {
-		got, err := svc.Place(ctx, ns.Name, collection.ToolPulumi, tt.project, tt.stack)
+		got, err := f.place(tt.project, tt.stack)
 		if err != nil || got.Collection.String() != tt.want {
 			t.Errorf("Place(%s/%s) = %q, %v, want %q", tt.project, tt.stack, got.Collection, err, tt.want)
 		}
 	}
+}
 
-	if _, err := svc.Place(ctx, ns.Name, collection.ToolPulumi, "web", "prod"); !errors.Is(err, collection.ErrNoPlacement) {
-		t.Errorf("Place of an unknown project: err = %v, want ErrNoPlacement", err)
+func TestPlacementConflicts(t *testing.T) {
+	t.Parallel()
+
+	f := newPlacementFixture(t)
+	general := f.mustCreate("payments", "*", "payments", 0)
+
+	// A narrower rule after a wider one never matches.
+	if _, err := f.create("payments", "prod*", "payments-prod", 0); !errors.Is(err, collection.ErrPlacementConflict) {
+		t.Errorf("create hidden rule: err = %v, want ErrPlacementConflict", err)
 	}
 
-	// Invalid input never reaches the store.
+	specific := f.mustCreate("payments", "prod*", "payments-prod", 1)
+
+	// The same patterns twice is a conflict, whatever the collection.
+	if _, err := f.create("payments", "prod*", "sandbox", 0); !errors.Is(err, collection.ErrPlacementConflict) {
+		t.Errorf("create duplicate patterns: err = %v, want ErrPlacementConflict", err)
+	}
+
+	// A move that puts the wide rule first hides the specific rule.
+	err := f.update(general.ID, f.input("payments", "*", "payments", 1))
+	if !errors.Is(err, collection.ErrPlacementConflict) {
+		t.Errorf("update that hides a later rule: err = %v, want ErrPlacementConflict", err)
+	}
+
+	// Widening the specific rule to cover the general one hides it too.
+	err = f.update(specific.ID, f.input("payments", "*", "payments-prod", 0))
+	if !errors.Is(err, collection.ErrPlacementConflict) {
+		t.Errorf("update that hides the later rule: err = %v, want ErrPlacementConflict", err)
+	}
+
+	f.wantOrder("payments/prod*", "payments/*")
+}
+
+func TestPlacementInvalidInputNeverReachesTheStore(t *testing.T) {
+	t.Parallel()
+
+	f := newPlacementFixture(t)
+
 	bad := []collection.RuleInput{
-		in("(a+)+$", "*", "payments", 0),
-		in("a", "x\ny", "payments", 0),
-		in("a", "*", "payments", -1),
-		in("a", "*", "payments", 9),
+		f.input("(a+)+$", "*", "payments", 0),
+		f.input("a", "x\ny", "payments", 0),
+		f.input("a", "*", "payments", -1),
+		f.input("a", "*", "payments", 9),
+		f.input("a", "*", "nowhere", 0),
 		{Tool: "opentofu", Project: "a", Stack: "*", Collection: mustCollectionName(t, "payments"), Position: 0},
-		in("a", "*", "nowhere", 0),
 	}
 	for i, b := range bad {
-		if _, err := svc.Create(ctx, ns.Name, b, placementEntry(ns.Name, "namespace:manage-placement-rules")); err == nil {
+		_, err := f.svc.Create(t.Context(), f.ns, b, placementEntry(f.ns, manageRules))
+		if err == nil {
 			t.Errorf("create of bad input %d succeeded", i)
 		}
 	}
 
-	if want := []string{"payments/prod*", "payments/*"}; !slices.Equal(order(), want) {
-		t.Errorf("order after bad input = %v, want %v", order(), want)
-	}
+	f.wantOrder()
+}
 
-	// The write is audited with the rule ID and text.
-	update := in("payments", "prod-*", "payments-prod", 0)
-	if _, err := svc.Update(ctx, ns.Name, specific.ID, update, placementEntry(ns.Name, "namespace:manage-placement-rules")); err != nil {
+func TestPlacementWritesAreAudited(t *testing.T) {
+	t.Parallel()
+
+	f := newPlacementFixture(t)
+	general := f.mustCreate("payments", "*", "payments", 0)
+	specific := f.mustCreate("payments", "prod*", "payments-prod", 1)
+
+	if err := f.update(specific.ID, f.input("payments", "prod-*", "payments-prod", 0)); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
-	if err := svc.Delete(ctx, ns.Name, general.ID, placementEntry(ns.Name, "namespace:manage-placement-rules")); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-
-	listing, err := s.List(ctx, ns.Name, audit.Page{Number: 1, Size: 50})
+	err := f.svc.Delete(t.Context(), f.ns, general.ID, placementEntry(f.ns, manageRules))
 	if err != nil {
-		t.Fatalf("list audit: %v", err)
+		t.Fatalf("delete: %v", err)
 	}
 
 	var withRule int
 
-	for _, e := range listing.Entries {
-		if e.Action == "namespace:manage-placement-rules" && strings.HasPrefix(e.ObjectID, "plr-") {
+	for _, e := range f.auditEntries() {
+		if e.Action == manageRules && strings.HasPrefix(e.ObjectID, "plr-") {
 			withRule++
 		}
 	}
@@ -185,37 +269,34 @@ func TestPlacementService(t *testing.T) {
 	if withRule != 4 {
 		t.Errorf("audit entries of rule writes = %d, want 4 (2 creates, 1 update, 1 delete)", withRule)
 	}
+}
 
-	// Deleting a collection removes its rules and writes them to the audit entry.
-	ref := collection.Ref{Namespace: ns.Name, Name: mustCollectionName(t, "payments-prod")}
-	if err := colls.Delete(ctx, ref, placementEntry(ns.Name, "collection:delete")); err != nil {
+func TestPlacementCollectionDeleteTakesRulesAndAuditsThem(t *testing.T) {
+	t.Parallel()
+
+	f := newPlacementFixture(t)
+	rule := f.mustCreate("payments", "prod*", "payments-prod", 0)
+
+	ref := collection.Ref{Namespace: f.ns, Name: mustCollectionName(t, "payments-prod")}
+	if err := f.colls.Delete(t.Context(), ref, placementEntry(f.ns, "collection:delete")); err != nil {
 		t.Fatalf("delete collection: %v", err)
 	}
 
-	if got := order(); len(got) != 0 {
-		t.Errorf("rules after the delete of their collection = %v, want none", got)
-	}
-
-	listing, err = s.List(ctx, ns.Name, audit.Page{Number: 1, Size: 50})
-	if err != nil {
-		t.Fatalf("list audit: %v", err)
-	}
+	f.wantOrder()
 
 	var named bool
 
-	for _, e := range listing.Entries {
+	for _, e := range f.auditEntries() {
 		if e.Action != "collection:delete" {
 			continue
 		}
 
 		for _, c := range e.Changes {
-			if c.Key == "placement-rule:"+specific.ID && c.New == "removed" {
-				named = true
-			}
+			named = named || (c.Key == "placement-rule:"+rule.ID && c.New == "removed")
 		}
 	}
 
 	if !named {
-		t.Error("the audit entry of the collection delete does not name the removed rule")
+		t.Error("the audit entry of the collection delete does not name the deleted rule")
 	}
 }

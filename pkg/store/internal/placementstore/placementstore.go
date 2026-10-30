@@ -75,8 +75,10 @@ func RemovedChanges(removed []Removed, room int) []audit.Change {
 
 	for i, r := range removed {
 		if i == limit && len(removed) > room {
+			more := strconv.Itoa(len(removed) - limit)
+
 			out = append(out, audit.Change{
-				Key: "placement-rule:more", Old: nil, New: strconv.Itoa(len(removed) - limit), Layer: "", TakesEffect: "",
+				Key: "placement-rule:more", Old: nil, New: more, Layer: "", TakesEffect: "",
 			})
 
 			break

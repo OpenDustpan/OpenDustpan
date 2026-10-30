@@ -39,7 +39,7 @@ func pgCopyImportTables() []pgCopyTable {
 				pgColNamespaceID,
 				pgColImportID,
 				"id",
-				"position",
+				pgColPosition,
 				"source_tool",
 				"source_name",
 				"target_name",

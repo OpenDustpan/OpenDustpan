@@ -2565,10 +2565,7 @@
           },
           "position": {
             "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "project": {
             "type": "string"
@@ -2582,7 +2579,6 @@
         },
         "required": [
           "collection",
-          "position",
           "project",
           "stack",
           "tool"

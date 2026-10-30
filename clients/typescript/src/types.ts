@@ -670,7 +670,7 @@ export interface PlacementRule {
 
 export interface PlacementRuleRequest {
   readonly collection: string;
-  readonly position: number | null;
+  readonly position?: number;
   readonly project: string;
   readonly stack: string;
   readonly tool: string;

@@ -737,6 +737,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Placements:    nil,
 		OutputSharing: sharing,
 		Outputs:       outputs,
 		Views:         coverageViews(tb),

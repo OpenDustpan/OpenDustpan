@@ -867,18 +867,9 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
-	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
+	err = svc.addCollectionServices(cfg)
 	if err != nil {
 		return nil, err
-	}
-
-	// A custom store without placement rules gets no service, so its placement
-	// routes are not served and the rest of the API works as before.
-	if store, ok := cfg.namespaceStore.(collection.PlacementStore); ok {
-		svc.placements, err = newPlacementService(cfg, store)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	backups, err := newBackupService(cfg, svc)
@@ -1850,6 +1841,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		deleted:     nil,
 		access:      nil,
 		collections: nil,
+		placements:  nil,
 		gates:       nil,
 	}, nil
 }
@@ -3178,6 +3170,25 @@ func newCollectionService(cfg *settings) (*collection.Service, error) {
 	}
 
 	return svc, nil
+}
+
+// addCollectionServices sets the collection service, the gate service and the
+// placement rule service. A custom store without placement rules gets no
+// placement service, so its placement routes are not served and the rest of the
+// API works as before.
+func (s *services) addCollectionServices(cfg *settings) error {
+	var err error
+
+	s.collections, s.gates, err = newCollectionAndGateServices(cfg, s.namespaces)
+	if err != nil {
+		return err
+	}
+
+	if store, ok := cfg.namespaceStore.(collection.PlacementStore); ok {
+		s.placements, err = newPlacementService(cfg, store)
+	}
+
+	return err
 }
 
 // newPlacementService builds the placement rule service on the namespace store

@@ -29,7 +29,7 @@ func pgCopySinkTables() []pgCopyTable {
 		},
 		{
 			table:   "notification_sink_secrets",
-			columns: []string{pgColNamespaceID, sinkColRef, "sink_id", "position", sinkColCiphertext},
+			columns: []string{pgColNamespaceID, sinkColRef, "sink_id", pgColPosition, sinkColCiphertext},
 			orderBy: []string{pgColNamespaceID, sinkColRef},
 		},
 		{

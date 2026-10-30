@@ -909,7 +909,7 @@ export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>
 /** The validator of PlacementRuleRequest. */
 export const decodePlacementRuleRequest: Decoder<PlacementRuleRequest> = object<PlacementRuleRequest>("PlacementRuleRequest", {
   collection: string,
-  position: nullable(int64),
+  position: optional(int64),
   project: string,
   stack: string,
   tool: string,

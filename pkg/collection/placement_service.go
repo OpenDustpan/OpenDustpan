@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -94,7 +95,7 @@ func (s *PlacementService) Create(
 	by.At = at
 	by.ObjectID = r.ID
 
-	by.Version = r.Text() + "; position " + fmt.Sprint(r.Position)
+	by.Version = r.Text() + "; position " + strconv.Itoa(r.Position)
 	if err := s.store.CreatePlacementRule(ctx, r, fence, by); err != nil {
 		return Rule{}, fmt.Errorf("create placement rule in %s: %w", ns, err)
 	}
@@ -146,7 +147,7 @@ func (s *PlacementService) Update(
 	by.At = s.now().UTC()
 	by.ObjectID = r.ID
 
-	by.Version = r.Text() + "; position " + fmt.Sprint(r.Position)
+	by.Version = r.Text() + "; position " + strconv.Itoa(r.Position)
 	if err := s.store.UpdatePlacementRule(ctx, r, fence, by); err != nil {
 		return Rule{}, fmt.Errorf("update placement rule %s: %w", id, err)
 	}
@@ -208,39 +209,37 @@ func (s *PlacementService) Place(
 // the rule again; this check stays so that a new caller of the service gets a
 // clear error before any read.
 func checkRuleInput(in RuleInput) error {
-	r := Rule{Tool: in.Tool, Project: in.Project, Stack: in.Stack, Collection: in.Collection, Position: max(in.Position, 1)}
 	if in.Position < 0 {
 		return fmt.Errorf("%w: %d", ErrInvalidPosition, in.Position)
 	}
 
-	return r.Validate()
+	return validateRuleFields(in.Tool, in.Project, in.Stack, in.Collection)
 }
 
 // checkConflicts checks the list rules, in list order, for the rule with ID
 // changed: no earlier rule may hide it, and it may not hide a later rule.
 func checkConflicts(rules []Rule, changed string) error {
-	for i, r := range rules {
-		if r.ID != changed {
-			continue
-		}
-
-		for _, earlier := range rules[:i] {
-			if earlier.Hides(r) {
-				return fmt.Errorf("%w: rule %q already matches every unit of %q, "+
-					"so this rule never matches: put it before that rule or narrow its patterns",
-					ErrPlacementConflict, earlier.Text(), r.Text())
-			}
-		}
-
-		for _, later := range rules[i+1:] {
-			if r.Hides(later) {
-				return fmt.Errorf("%w: rule %q would match every unit of %q, "+
-					"so that rule never matches: put it after that rule or narrow its patterns",
-					ErrPlacementConflict, r.Text(), later.Text())
-			}
-		}
-
+	i := slices.IndexFunc(rules, func(r Rule) bool { return r.ID == changed })
+	if i < 0 {
 		return nil
+	}
+
+	r := &rules[i]
+
+	for j := range i {
+		if rules[j].Hides(*r) {
+			return fmt.Errorf("%w: rule %q already matches every unit of %q, "+
+				"so this rule never matches: put it before that rule or narrow its patterns",
+				ErrPlacementConflict, rules[j].Text(), r.Text())
+		}
+	}
+
+	for j := i + 1; j < len(rules); j++ {
+		if r.Hides(rules[j]) {
+			return fmt.Errorf("%w: rule %q would match every unit of %q, "+
+				"so that rule never matches: put it after that rule or narrow its patterns",
+				ErrPlacementConflict, r.Text(), rules[j].Text())
+		}
 	}
 
 	return nil

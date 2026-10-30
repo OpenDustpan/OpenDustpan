@@ -48,8 +48,8 @@ func (s *Store) CreatePlacementRule(
 			return fmt.Errorf("place rule: %w", err)
 		}
 
-		if _, err := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); err != nil {
-			return err
+		if _, idErr := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); idErr != nil {
+			return idErr
 		}
 
 		err = q.CreatePlacementRule(ctx, db.CreatePlacementRuleParams{
@@ -97,8 +97,8 @@ func (s *Store) UpdatePlacementRule(
 			return fmt.Errorf("place rule: %w", err)
 		}
 
-		if _, err := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); err != nil {
-			return err
+		if _, idErr := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); idErr != nil {
+			return idErr
 		}
 
 		n, err := q.UpdatePlacementRuleContent(ctx, db.UpdatePlacementRuleContentParams{
@@ -170,8 +170,7 @@ func (s *Store) GetPlacementRule(ctx context.Context, ns namespace.Name, id stri
 		return collection.Rule{}, fmt.Errorf("select placement rule: %w", err)
 	}
 
-	return placementRuleFromRow(row.ID, row.Namespace, row.Position, row.Tool, row.Project, row.Stack,
-		row.CollectionName, row.CreatedBy, row.CreatedAtMs), nil
+	return placementRuleFromRow(&row), nil
 }
 
 // ListPlacementRules implements collection.PlacementStore.
@@ -185,28 +184,26 @@ func (s *Store) ListPlacementRules(ctx context.Context, ns namespace.Name) ([]co
 	}
 
 	out := make([]collection.Rule, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, placementRuleFromRow(row.ID, row.Namespace, row.Position, row.Tool, row.Project,
-			row.Stack, row.CollectionName, row.CreatedBy, row.CreatedAtMs))
+	for i := range rows {
+		row := db.GetPlacementRuleRow(rows[i])
+		out = append(out, placementRuleFromRow(&row))
 	}
 
 	return out, nil
 }
 
 // placementRuleFromRow converts a placement_rules row into a domain rule.
-func placementRuleFromRow(
-	id, ns string, position int64, tool, project, stack, coll, createdBy string, createdAtMs int64,
-) collection.Rule {
+func placementRuleFromRow(row *db.GetPlacementRuleRow) collection.Rule {
 	return collection.Rule{
-		CreatedAt:  codec.FromMillis(createdAtMs),
-		ID:         id,
-		Namespace:  namespace.Name(ns),
-		Tool:       tool,
-		Project:    collection.Pattern(project),
-		Stack:      collection.Pattern(stack),
-		Collection: collection.Name(coll),
-		CreatedBy:  createdBy,
-		Position:   int(position),
+		CreatedAt:  codec.FromMillis(row.CreatedAtMs),
+		ID:         row.ID,
+		Namespace:  namespace.Name(row.Namespace),
+		Tool:       row.Tool,
+		Project:    collection.Pattern(row.Project),
+		Stack:      collection.Pattern(row.Stack),
+		Collection: collection.Name(row.CollectionName),
+		CreatedBy:  row.CreatedBy,
+		Position:   int(row.Position),
 	}
 }
 
@@ -244,8 +241,10 @@ func purgePlacementRules(
 	}
 
 	removed := make([]placementstore.Removed, len(rows))
-	for i, row := range rows {
-		removed[i] = placementstore.Removed{ID: row.ID, Tool: row.Tool, Match: row.Project + "/" + row.Stack}
+	for i := range rows {
+		removed[i] = placementstore.Removed{
+			ID: rows[i].ID, Tool: rows[i].Tool, Match: rows[i].Project + "/" + rows[i].Stack,
+		}
 	}
 
 	err = q.DeletePlacementRulesOfCollection(ctx, db.DeletePlacementRulesOfCollectionParams{

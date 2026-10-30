@@ -68,8 +68,18 @@ type Pattern string
 // MaxPatternWildcards '*' characters, and no two of them are next to each
 // other. The function rejects an invalid pattern and does not change it.
 func ParsePattern(s string) (Pattern, error) {
-	if len(s) == 0 || len(s) > MaxPatternLength {
-		return "", fmt.Errorf("%w: %q must have 1 to %d characters", ErrInvalidPattern, s, MaxPatternLength)
+	if err := checkPattern(s); err != nil {
+		return "", err
+	}
+
+	return Pattern(s), nil
+}
+
+// checkPattern returns nil when s is a valid pattern, else the error that
+// ParsePattern returns.
+func checkPattern(s string) error {
+	if s == "" || len(s) > MaxPatternLength {
+		return fmt.Errorf("%w: %q must have 1 to %d characters", ErrInvalidPattern, s, MaxPatternLength)
 	}
 
 	stars := 0
@@ -82,19 +92,19 @@ func ParsePattern(s string) (Pattern, error) {
 			stars++
 
 			if i > 0 && s[i-1] == '*' {
-				return "", fmt.Errorf("%w: %q has two '*' next to each other", ErrInvalidPattern, s)
+				return fmt.Errorf("%w: %q has two '*' next to each other", ErrInvalidPattern, s)
 			}
 		case isPatternLiteral(c):
 		default:
-			return "", fmt.Errorf("%w: %q has a character that is not allowed", ErrInvalidPattern, s)
+			return fmt.Errorf("%w: %q has a character that is not allowed", ErrInvalidPattern, s)
 		}
 	}
 
 	if stars > MaxPatternWildcards {
-		return "", fmt.Errorf("%w: %q has more than %d '*' characters", ErrInvalidPattern, s, MaxPatternWildcards)
+		return fmt.Errorf("%w: %q has more than %d '*' characters", ErrInvalidPattern, s, MaxPatternWildcards)
 	}
 
-	return Pattern(s), nil
+	return nil
 }
 
 func isPatternLiteral(c byte) bool {
@@ -177,24 +187,30 @@ type Rule struct {
 // PlacementStore adapter calls it before a write, so a caller that builds a
 // Pattern without ParsePattern cannot store a pattern that was not checked.
 func (r Rule) Validate() error {
-	if !slices.Contains(PlacementTools(), r.Tool) {
-		return fmt.Errorf("%w: %q, want one of %v", ErrInvalidPlacementTool, r.Tool, PlacementTools())
-	}
-
-	if _, err := ParsePattern(r.Project.String()); err != nil {
-		return err
-	}
-
-	if _, err := ParsePattern(r.Stack.String()); err != nil {
-		return err
-	}
-
-	if _, err := ParseName(r.Collection.String()); err != nil {
-		return err
-	}
-
 	if r.Position < 1 {
 		return fmt.Errorf("%w: %d", ErrInvalidPosition, r.Position)
+	}
+
+	return validateRuleFields(r.Tool, r.Project, r.Stack, r.Collection)
+}
+
+// validateRuleFields checks the tool, the two patterns and the collection name
+// of a rule.
+func validateRuleFields(tool string, project, stack Pattern, coll Name) error {
+	if !slices.Contains(PlacementTools(), tool) {
+		return fmt.Errorf("%w: %q, want one of %v", ErrInvalidPlacementTool, tool, PlacementTools())
+	}
+
+	if err := checkPattern(project.String()); err != nil {
+		return err
+	}
+
+	if err := checkPattern(stack.String()); err != nil {
+		return err
+	}
+
+	if _, err := ParseName(coll.String()); err != nil {
+		return err
 	}
 
 	return nil
@@ -221,13 +237,15 @@ func (r Rule) Text() string {
 // with the given project and stack name, with true. The caller passes the rules
 // in list order. It returns false when no rule matches.
 func FirstMatch(rules []Rule, tool, project, stack string) (Rule, bool) {
-	for _, r := range rules {
-		if r.Matches(tool, project, stack) {
-			return r, true
+	for i := range rules {
+		if rules[i].Matches(tool, project, stack) {
+			return rules[i], true
 		}
 	}
 
-	return Rule{}, false
+	var none Rule
+
+	return none, false
 }
 
 // PlacementError is the error of a unit that no rule places. It matches

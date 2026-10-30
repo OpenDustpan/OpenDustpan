@@ -32,7 +32,7 @@ func portableSinkTables() []PortableTable {
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: portColRef, Kind: KindText},
 				{Name: "sink_id", Kind: KindText},
-				{Name: "position", Kind: KindInteger},
+				{Name: portColPosition, Kind: KindInteger},
 				{Name: portColCiphertext, Kind: KindBytes},
 			},
 		},
