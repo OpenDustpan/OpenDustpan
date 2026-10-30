@@ -551,7 +551,7 @@ func pagingFaults() []pagingFault {
 				return blob.PageOf(all, req)
 			},
 		},
-		{"gives a wrong Next", "", func(req blob.PageRequest, all []blob.Object) blob.Page {
+		{"gives a wrong Next", "next key of a list page", func(req blob.PageRequest, all []blob.Object) blob.Page {
 			page := blob.PageOf(all, req)
 			if page.Next != "" && len(page.Objects) > 0 {
 				page.Next = page.Objects[0].Key
