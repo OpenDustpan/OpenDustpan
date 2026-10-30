@@ -64,6 +64,9 @@ const (
 	// or a credential through a profile, for example an open of a profile,
 	// and each token that the issuer of a namespace signed for it.
 	KindAccess Kind = "access"
+	// KindAuditRead records a read or an export of the audit log: who read
+	// the entries of which scope, and for which range.
+	KindAuditRead Kind = "audit-read"
 )
 
 // ServerScope is the scope of the entries of actions that are not in a
@@ -330,7 +333,7 @@ func (e Entry) validatePrincipal() error {
 // knownKind reports whether k is one of the kinds of this package.
 func knownKind(k Kind) bool {
 	switch k {
-	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity, KindAccess:
+	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity, KindAccess, KindAuditRead:
 		return true
 	default:
 		return false
