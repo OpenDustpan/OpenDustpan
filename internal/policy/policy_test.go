@@ -617,6 +617,36 @@ func TestVerifyErrorsHoldNoHeaderText(t *testing.T) {
 	}
 }
 
+// TestVerifyHeaderSizeLimit checks the size limit alone: the header is valid,
+// with the right time and the right signature, and only the padding of unknown
+// keys makes it too large.
+func TestVerifyHeaderSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	secret := []byte(strings.Repeat("s", policy.MinSecretBytes))
+	body := []byte("{}")
+	at := time.Unix(1_790_000_000, 0)
+
+	good, err := policy.Sign(body, at, secret)
+	if err != nil {
+		t.Fatalf("Sign() = %v", err)
+	}
+
+	// The header at the limit passes, and one byte more is refused.
+	atLimit := good + "," + strings.Repeat("k", policy.MaxSignatureHeaderBytes-len(good)-len(",")-len("=")) + "="
+	if len(atLimit) != policy.MaxSignatureHeaderBytes {
+		t.Fatalf("test header has %d bytes, want %d", len(atLimit), policy.MaxSignatureHeaderBytes)
+	}
+
+	if err := policy.Verify(atLimit, body, secret, at); err != nil {
+		t.Fatalf("Verify(at the limit) = %v, want nil", err)
+	}
+
+	if err := policy.Verify(atLimit+"x", body, secret, at); !errors.Is(err, policy.ErrSignature) {
+		t.Fatalf("Verify(one byte above the limit) = %v, want ErrSignature", err)
+	}
+}
+
 func TestVerifyHugeTime(t *testing.T) {
 	t.Parallel()
 
