@@ -74,8 +74,10 @@ project owner. Do not ask the project owner anything.
 10. Merge `main` into your branch only for a real conflict or when the PM asks.
     After a CLEAN review, do not change the branch. Only the merge session
     renumbers API versions and migrations.
-11. Run `make nilaway` alone, after `go clean -cache`, with no other build or
-    test at the same time.
+11. Run `make nilaway` alone, with no other build or test at the same time.
+    The target sets `GOGC=25` and `GOMEMLIMIT=12GiB`. Do not run
+    `go clean -cache`. It does not change the result of nilaway, and the
+    next build and the gopls start must then do all the work again.
 12. Pull requests are drafts. A pull request that waits for a decision of
     the owner has the label `needs-owner`.
 13. End every GitHub post with this footer:
