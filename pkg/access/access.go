@@ -194,6 +194,7 @@ var families = map[identity.Action]Family{
 	identity.ActionRegistryRead:                      FamilyData,
 	identity.ActionRegistryPublish:                   FamilyData,
 	identity.ActionRegistryManageKeys:                FamilyData,
+	identity.ActionNamespaceManageIssuer:             FamilyData,
 
 	identity.ActionCallerRead:              FamilySelf,
 	identity.ActionRoleRead:                FamilySelf,

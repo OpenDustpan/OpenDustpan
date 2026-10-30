@@ -188,7 +188,7 @@ func testIssuerInitialConflict(t *testing.T, s IssuerStore) {
 	firstKeys(t, s, ns)
 
 	err := apply(t, s, ns, profile.KeyChange{
-		Add: []profile.Key{testKey(ns.Name, profile.KeyActive, epoch()), testKey(ns.Name, profile.KeyNext, epoch())},
+		Add:  []profile.Key{testKey(ns.Name, profile.KeyActive, epoch()), testKey(ns.Name, profile.KeyNext, epoch())},
 		Move: nil, Initial: true,
 	})
 	wantErr(t, "second first make", err, profile.ErrConflict)

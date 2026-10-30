@@ -32,6 +32,9 @@ var (
 	ErrIssuerKeyExpired = errors.New("the active signing key of the issuer signed for 180 days")
 )
 
+// ErrSubjectTooLong reports a subject above MaxSubjectBytes.
+var ErrSubjectTooLong = errors.New("the subject of the token is longer than 600 bytes")
+
 // Limits and times of the issuer. A namespace with an issuerURL has the same
 // rotation, with the copy check before each promotion.
 const (
@@ -65,6 +68,8 @@ const (
 	FileTokenLifetime = 15 * time.Minute
 	// MaxAudienceBytes is the longest audience.
 	MaxAudienceBytes = 255
+	// MaxSubjectBytes is the longest sub claim.
+	MaxSubjectBytes = 600
 	// MaxIssuerURLBytes is the longest issuerURL.
 	MaxIssuerURLBytes = 2048
 	// MaxEmergencyReason is the longest reason of an emergency rotation, in

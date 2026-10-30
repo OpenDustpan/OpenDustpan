@@ -65,7 +65,9 @@ func (memIssuerNamespaces) SetOverrides(context.Context, namespace.Name, namespa
 	return nil
 }
 
-func (memIssuerNamespaces) ListNamespaces(context.Context) ([]namespace.Namespace, error) { return nil, nil }
+func (memIssuerNamespaces) ListNamespaces(context.Context) ([]namespace.Namespace, error) {
+	return nil, nil
+}
 
 func (memIssuerNamespaces) Ping(context.Context) error { return nil }
 

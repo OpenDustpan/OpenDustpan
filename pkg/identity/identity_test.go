@@ -88,6 +88,7 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionAgentStartRun,
 		identity.ActionNamespaceManageAgentRuns,
 		identity.ActionNamespaceManageAgent,
+		identity.ActionNamespaceManageIssuer,
 		identity.ActionServerManageAgent,
 		identity.ActionServerAcceptAgentSecretAccess,
 		identity.ActionCallerManageAgentOptIns,
