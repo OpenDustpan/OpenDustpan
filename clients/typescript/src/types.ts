@@ -400,7 +400,7 @@ export interface IssuerSettings {
   readonly allowBlockSubjects: boolean;
   readonly etag: string;
   readonly includeActorName: boolean;
-  readonly issuerUrl: string;
+  readonly issuerURL: string;
   readonly subjectTemplate: ReadonlyArray<string>;
   readonly updatedAt?: string;
   readonly updatedBy?: string;
@@ -667,7 +667,7 @@ export interface ManualLock {
 
 export interface NamespaceIssuer {
   readonly copyCheck: IssuerCopyCheck | null;
-  readonly effectiveIssuerUrl?: string;
+  readonly effectiveIssuerURL?: string;
   readonly issuerHostConfigured: boolean;
   readonly keys: ReadonlyArray<IssuerKey>;
   readonly settings: IssuerSettings;
@@ -676,7 +676,7 @@ export interface NamespaceIssuer {
 
 export interface NamespaceIssuerExport {
   readonly files: ReadonlyArray<IssuerExportFile>;
-  readonly issuerUrl: string;
+  readonly issuerURL: string;
 }
 
 export interface NamespaceIssuerKeys {
@@ -1191,7 +1191,7 @@ export interface UpdateNamespaceIssuerRequest {
   /** Any JSON value of a plain output. */
   readonly includeActorName: unknown;
   /** Any JSON value of a plain output. */
-  readonly issuerUrl: unknown;
+  readonly issuerURL: unknown;
   /** Any JSON value of a plain output. */
   readonly subjectTemplate: unknown;
 }

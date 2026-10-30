@@ -617,7 +617,7 @@ export const decodeIssuerSettings: Decoder<IssuerSettings> = object<IssuerSettin
   allowBlockSubjects: boolean,
   etag: string,
   includeActorName: boolean,
-  issuerUrl: string,
+  issuerURL: string,
   subjectTemplate: array(string),
   updatedAt: optional(string),
   updatedBy: optional(string),
@@ -913,7 +913,7 @@ export const decodeManualLock: Decoder<ManualLock> = object<ManualLock>("ManualL
 /** The validator of NamespaceIssuer. */
 export const decodeNamespaceIssuer: Decoder<NamespaceIssuer> = object<NamespaceIssuer>("NamespaceIssuer", {
   copyCheck: nullable(ref(() => decodeIssuerCopyCheck)),
-  effectiveIssuerUrl: optional(string),
+  effectiveIssuerURL: optional(string),
   issuerHostConfigured: boolean,
   keys: array(ref(() => decodeIssuerKey)),
   settings: ref(() => decodeIssuerSettings),
@@ -923,7 +923,7 @@ export const decodeNamespaceIssuer: Decoder<NamespaceIssuer> = object<NamespaceI
 /** The validator of NamespaceIssuerExport. */
 export const decodeNamespaceIssuerExport: Decoder<NamespaceIssuerExport> = object<NamespaceIssuerExport>("NamespaceIssuerExport", {
   files: array(ref(() => decodeIssuerExportFile)),
-  issuerUrl: string,
+  issuerURL: string,
 });
 
 /** The validator of NamespaceIssuerKeys. */
@@ -1449,7 +1449,7 @@ export const decodeUpdateContextRequest: Decoder<UpdateContextRequest> = object<
 export const decodeUpdateNamespaceIssuerRequest: Decoder<UpdateNamespaceIssuerRequest> = object<UpdateNamespaceIssuerRequest>("UpdateNamespaceIssuerRequest", {
   allowBlockSubjects: anyValue,
   includeActorName: anyValue,
-  issuerUrl: anyValue,
+  issuerURL: anyValue,
   subjectTemplate: anyValue,
 });
 

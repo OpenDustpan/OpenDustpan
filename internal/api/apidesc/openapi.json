@@ -1646,7 +1646,7 @@
           "includeActorName": {
             "type": "boolean"
           },
-          "issuerUrl": {
+          "issuerURL": {
             "type": "string"
           },
           "subjectTemplate": {
@@ -1666,7 +1666,7 @@
           "allowBlockSubjects",
           "etag",
           "includeActorName",
-          "issuerUrl",
+          "issuerURL",
           "subjectTemplate"
         ],
         "type": "object"
@@ -2561,7 +2561,7 @@
               }
             ]
           },
-          "effectiveIssuerUrl": {
+          "effectiveIssuerURL": {
             "type": "string"
           },
           "issuerHostConfigured": {
@@ -2600,13 +2600,13 @@
             },
             "type": "array"
           },
-          "issuerUrl": {
+          "issuerURL": {
             "type": "string"
           }
         },
         "required": [
           "files",
-          "issuerUrl"
+          "issuerURL"
         ],
         "type": "object"
       },
@@ -4299,7 +4299,7 @@
           "includeActorName": {
             "description": "Any JSON value of a plain output."
           },
-          "issuerUrl": {
+          "issuerURL": {
             "description": "Any JSON value of a plain output."
           },
           "subjectTemplate": {
@@ -4309,7 +4309,7 @@
         "required": [
           "allowBlockSubjects",
           "includeActorName",
-          "issuerUrl",
+          "issuerURL",
           "subjectTemplate"
         ],
         "type": "object"
