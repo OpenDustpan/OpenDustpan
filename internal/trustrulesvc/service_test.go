@@ -290,8 +290,8 @@ func TestCreateRefusesAPrincipalOutsideTheNamespace(t *testing.T) {
 			t.Errorf("principal %s: Create = %v, want ErrPrincipal", id, err)
 		}
 
-		if len(f.store.created) != 0 || len(f.authz.checked) != 0 {
-			t.Errorf("principal %s: the refused create reached the store or the authorizer", id)
+		if len(f.store.created) != 0 {
+			t.Errorf("principal %s: the refused create reached the store", id)
 		}
 	}
 }
@@ -313,8 +313,29 @@ func TestCreateNeedsAServicePrincipal(t *testing.T) {
 			t.Errorf("principal %s: Create = %v, want ErrPrincipal of the kind check", id, err)
 		}
 
-		if len(f.store.created) != 0 || len(f.authz.checked) != 0 {
-			t.Errorf("principal %s: the refused create reached the store or the authorizer", id)
+		if len(f.store.created) != 0 {
+			t.Errorf("principal %s: the refused create reached the store", id)
+		}
+	}
+}
+
+// TestCreateDeniesBeforeItReadsThePrincipal checks that a caller without
+// principal:manage-tokens gets the same denial for each principal ID: it
+// never learns whether the ID names a principal of the namespace, or its
+// kind.
+func TestCreateDeniesBeforeItReadsThePrincipal(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{"prn-unknown", "prn-member", "prn-workload", "prn-worker", "prn-stranger"} {
+		f := newFixture(t)
+		f.authz.allow = nil
+
+		in := input()
+		in.PrincipalID = id
+
+		_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+		if !errors.Is(err, identity.ErrDenied) || errors.Is(err, trustrule.ErrPrincipal) {
+			t.Errorf("principal %s: Create = %v, want ErrDenied alone", id, err)
 		}
 	}
 }

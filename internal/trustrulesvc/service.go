@@ -186,12 +186,10 @@ func (s *Service) Create(
 		}
 	}
 
-	if err := s.checkPrincipal(ctx, r.PrincipalID, ns); err != nil {
-		return trustrule.Rule{}, err
-	}
-
 	// The right to make a rule for a principal is the right to act as it, as
-	// the right to make its tokens is. So a create needs the same action.
+	// the right to make its tokens is. So a create needs the same action. The
+	// check comes before the read of the principal, so a caller without the
+	// action never learns whether the ID names a principal, or its kind.
 	obj, err := identity.ParsePrincipalObject(r.PrincipalID)
 	if err != nil {
 		return trustrule.Rule{}, fmt.Errorf("%w: %w", trustrule.ErrPrincipal, err)
@@ -199,6 +197,10 @@ func (s *Service) Create(
 
 	if authzErr := s.authz.Authorize(ctx, caller, identity.ActionPrincipalManageTokens, obj); authzErr != nil {
 		return trustrule.Rule{}, fmt.Errorf("make a trust rule for principal %q: %w", r.PrincipalID, authzErr)
+	}
+
+	if principalErr := s.checkPrincipal(ctx, r.PrincipalID, ns); principalErr != nil {
+		return trustrule.Rule{}, principalErr
 	}
 
 	n, err := s.namespaces.WritableHere(ctx, ns)
