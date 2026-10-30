@@ -95,7 +95,7 @@ func (s *Store) AcquireSinkLease(ctx context.Context, sink, holder string, ttl t
 
 	var claim durable.Claim
 
-	err = s.inControlTx(ctx, func(q *db.Queries) error {
+	err = s.inMinimumTx(ctx, func(q *db.Queries) error {
 		if ensureErr := ensureSinkOperation(ctx, q, sink); ensureErr != nil {
 			return ensureErr
 		}
