@@ -218,9 +218,9 @@ func promotionReady(next []Key, now time.Time, o RotationOptions) (bool, error) 
 
 	if manual {
 		return false, fmt.Errorf(
-			"%w: the next key %s entered the JWKS at %s, and a verifier may cache the JWKS for %s: "+
+			"%w: the next key %s entered the JWKS at %s, and a verifier may keep the JWKS for up to 60 minutes: "+
 				"the key can become active after %s",
-			ErrConflict, next[0].ID, next[0].CreatedAt.UTC().Format(time.RFC3339), JWKSMaxAge,
+			ErrConflict, next[0].ID, next[0].CreatedAt.UTC().Format(time.RFC3339),
 			ready.UTC().Format(time.RFC3339),
 		)
 	}

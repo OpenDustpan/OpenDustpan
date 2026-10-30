@@ -477,7 +477,7 @@ func TestEveryManagementCallChecksItsAction(t *testing.T) {
 // emergency rotation: the new next key is in the JWKS for seconds, and a
 // verifier that cached the JWKS has not read it yet. A manual rotation is
 // refused with the time, and the schedule promotes nothing, until the key was
-// in the JWKS for twice the cache time of the JWKS.
+// in the JWKS for profile.MinNextKeyAge.
 func TestANormalRotationWaitsForTheNextKeyToAge(t *testing.T) {
 	t.Parallel()
 
@@ -498,7 +498,7 @@ func TestANormalRotationWaitsForTheNextKeyToAge(t *testing.T) {
 		_, err = h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
 		wantErr(t, "rotation before the next key is old enough", err, profile.ErrConflict)
 
-		if !strings.Contains(err.Error(), "can become active after 2026-11-01T12:10:00Z") {
+		if !strings.Contains(err.Error(), "can become active after 2026-11-01T14:00:00Z") {
 			t.Errorf("the refusal does not name the time: %v", err)
 		}
 

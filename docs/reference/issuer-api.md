@@ -142,8 +142,9 @@ from a token: the server needs a key that a copied file holds first.
 A normal rotation makes the `next` key active, retires the old key, and makes a
 new `next` key. When the namespace has no `next` key, the rotation makes one
 and promotes nothing: a relying party must see a key in the JWKS before the key
-signs. A `next` key becomes active only after it was in the JWKS for 10
-minutes, twice the cache time of the JWKS. A normal rotation before that
+signs. A `next` key becomes active only after it was in the JWKS for 2
+hours. Some verifiers keep a JWKS for up to 60 minutes, whatever the max-age
+header says. A normal rotation before that
 answers 409 with the code `issuer.conflict`, and the text names the time when
 the key can become active. An emergency rotation does not wait: it deletes
 every earlier key at once, also the `next` key, and makes a new `active` key

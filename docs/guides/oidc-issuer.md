@@ -83,8 +83,8 @@ there first. A token that the old key signed stays valid until it ends, at most
 60 minutes later.
 
 To rotate now, call `POST /issuer/keys/rotate`. This is a normal rotation. The
-`next` key must be in the JWKS for 10 minutes first, so that a cloud that
-cached the JWKS has read it. Before that, the call answers 409 and names the
+`next` key must be in the JWKS for 2 hours first, so that a cloud that
+cached the JWKS has read it. Some clouds keep a JWKS for up to 60 minutes. Before that, the call answers 409 and names the
 time when the key can become active.
 
 ### Emergency rotation

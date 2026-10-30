@@ -56,10 +56,10 @@ const (
 	// this long.
 	JWKSMaxAge = 5 * time.Minute
 	// MinNextKeyAge is how long a next key stays in the JWKS before a normal
-	// rotation makes it active: twice JWKSMaxAge, so a verifier that cached the
-	// JWKS just before the key came into it has read the key by then. An
-	// emergency rotation does not wait.
-	MinNextKeyAge = 2 * JWKSMaxAge
+	// rotation makes it active. It does not depend on JWKSMaxAge: some
+	// verifiers keep a JWKS for up to 60 minutes, whatever the max-age header
+	// says, so the wait is 2 hours. An emergency rotation does not wait.
+	MinNextKeyAge = 2 * time.Hour
 	// MaxActiveSigning is the longest time that an active key signs for a
 	// namespace with an issuerURL, when the copy check fails.
 	MaxActiveSigning = 180 * 24 * time.Hour
