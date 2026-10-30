@@ -414,3 +414,85 @@ func TestRunOnceWithNoWork(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoWork", err)
 	}
 }
+
+var errPutRefused = errors.New("put refused")
+
+// TestReaperGuardsTheTargetOfTheRow proves that the prefix reaper deletes on
+// the store of the target that the row names, and never on the other store: a
+// check of the blob store leaves the backup target alone, also for the exact
+// prefix of that check.
+func TestReaperGuardsTheTargetOfTheRow(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, nil)
+	id := r.start(t, "blobs")
+	r.runOne(t)
+
+	r.backup.seed(id.Prefix()+"x", "backups/bkp-x/manifest.json")
+	r.blobs.seed(id.Prefix() + "left")
+
+	_, err := r.svc.ReapPrefix(t.Context(), storecheck.TargetBackup, id, id.Prefix())
+	if !errors.Is(err, storecheck.ErrNotFound) {
+		t.Fatalf("ReapPrefix on the other target err = %v, want ErrNotFound", err)
+	}
+
+	if got := len(r.backup.keys()); got != 2 {
+		t.Fatalf("the backup target holds %d objects after the refusal, want 2", got)
+	}
+
+	if _, err := r.svc.ReapPrefix(t.Context(), storecheck.TargetBlobs, id, id.Prefix()); err != nil {
+		t.Fatalf("ReapPrefix on the target of the row: %v", err)
+	}
+
+	if got := len(r.blobs.keys()); got != 0 {
+		t.Fatalf("the blob store holds %d objects after the reap, want 0", got)
+	}
+
+	if got := len(r.backup.keys()); got != 2 {
+		t.Fatalf("the reap on the blob store changed the backup target: %d objects", got)
+	}
+}
+
+// TestFailingRunsCallTheStoreOnlyUnderTheirPrefix proves that a check whose
+// store fails, in each way that the suite meets, still sends every request to
+// its own prefix: no put, get, delete or list leaves it.
+func TestFailingRunsCallTheStoreOnlyUnderTheirPrefix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(r *rig)
+	}{
+		{"every get fails", func(r *rig) { r.blobs.getErr = errAdapter }},
+		{"every delete fails", func(r *rig) { r.blobs.deleteErr = errObjectLock }},
+		{"every put fails", func(r *rig) { r.blobs.putFail = func(blob.Key) error { return errPutRefused } }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, nil)
+			r.blobs.seed("namespaces/ns-x/data", "backups/bkp-x/manifest.json")
+			tc.mutate(r)
+
+			id := r.start(t, "blobs")
+			r.runOne(t)
+
+			if len(r.blobs.calls) == 0 {
+				t.Fatal("the check sent no request")
+			}
+
+			for _, call := range r.blobs.calls {
+				_, key, _ := strings.Cut(call, " ")
+				if !strings.HasPrefix(key, id.Prefix()) {
+					t.Fatalf("call %q leaves the prefix %q", call, id.Prefix())
+				}
+			}
+
+			if got := r.blobs.keys(); len(got) < 2 || got[0] != "backups/bkp-x/manifest.json" {
+				t.Fatalf("the objects outside the prefix changed: %v", got)
+			}
+		})
+	}
+}

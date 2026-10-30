@@ -56,6 +56,15 @@ func (s *Service) viewOf(ctx context.Context, store blob.Store, id ID, prefix st
 		return nil, err
 	}
 
+	// Defense in depth: the allowlist above holds one exact prefix. This check
+	// stays so that the prefix is also one that the garbage reaper skips. It
+	// does not rely on the allowlist or on the view.
+	if !blob.StoreCheckKey(blob.Key(prefix)) {
+		s.auditPrefixDenied(ctx, id)
+
+		return nil, ErrPrefixRefused
+	}
+
 	// Defense in depth: the allowlist above holds one exact prefix. This view
 	// stays so that a key that a case builds from the prefix, with a dot
 	// segment or a slash in a name, cannot leave the prefix. It does not rely
