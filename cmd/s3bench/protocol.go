@@ -54,9 +54,12 @@ var errGetBody = errors.New("GET answered a body of another size or hash")
 // family is one blob family of the protocol: its object size and the two
 // paths.
 type family struct {
-	Name    string `json:"name"`
-	Bytes   int    `json:"bytes"`
-	Read    bool   `json:"read"`
+	Name  string `json:"name"`
+	Bytes int    `json:"bytes"`
+	Read  bool   `json:"read"`
+	// OpBytes is the count of bytes that one operation moves, when it is not
+	// Bytes, the size of the object of the family.
+	OpBytes int    `json:"opBytes"`
 	OldPath string `json:"oldPath"`
 	NewPath string `json:"newPath"`
 	// seed writes the objects that a read family reads, before its runs.
@@ -147,6 +150,7 @@ func (r *protoRun) get(ctx context.Context, key string) error {
 func writeThenCommit(name string, size int) family {
 	return family{
 		Name: name, Bytes: size, Read: false,
+		OpBytes: 0,
 		OldPath: seqConditionalTx,
 		NewPath: "PUT under an attempt key + fenced tx",
 		pause:   0,
@@ -175,6 +179,7 @@ func writeThenCommit(name string, size int) family {
 func putOnly(name string, size int) family {
 	return family{
 		Name: name, Bytes: size, Read: false,
+		OpBytes: 0,
 		OldPath: seqConditional,
 		NewPath: "PUT under an attempt key",
 		pause:   0,
@@ -216,6 +221,7 @@ func unitImport() family {
 func restoreWrite() family {
 	return family{
 		Name: "restore write (key absent)", Bytes: checkpointBytes, Read: false,
+		OpBytes: 0,
 		OldPath: seqConditional,
 		NewPath: "GET live key (absent) + fence check + PUT",
 		pause:   0,
@@ -260,6 +266,7 @@ func restorePresent() family {
 
 	return family{
 		Name: "restore write (key present)", Bytes: checkpointBytes, Read: true,
+		OpBytes: 0,
 		OldPath: seqConditional + " (refused: present)",
 		NewPath: "GET live key + compare size and hash (skip)",
 		pause:   restorePresentPause,
@@ -298,6 +305,7 @@ func restorePresent() family {
 func auditCheck() family {
 	return family{
 		Name: "audit checkpoint check (read)", Bytes: auditCheckpointBytes, Read: true,
+		OpBytes: 0,
 		OldPath: "GET the copy",
 		NewPath: "LIST the position prefix + GET each copy (1)",
 		pause:   0,
@@ -344,9 +352,11 @@ func protocolFamilies() []family {
 		restorePresent(),
 		putOnly("audit checkpoint write", auditCheckpointBytes),
 		auditCheck(),
-		unitImportCreateTx(),
-		restoreAbsentBatched(),
-		auditCheckPaged(),
+		unitImportUpload(),
+		restoreCopyAbsent(),
+		restoreCopyPresent(),
+		auditWrite(),
+		auditVerify(),
 	}
 }
 
@@ -549,7 +559,12 @@ func (p protocolRunner) oneRun(ctx context.Context, spec runSpec, done map[strin
 	res.Errors, res.FirstError, res.P50Ms, res.P99Ms = s.Errors, s.FirstError, s.P50Ms, s.P99Ms
 	res.WallMs = float64(wall) / float64(time.Millisecond)
 	res.OpsPerSec = float64(s.Samples) / wall.Seconds()
-	res.BytesPerSec = res.OpsPerSec * float64(f.Bytes)
+	opBytes := f.Bytes
+	if f.OpBytes > 0 {
+		opBytes = f.OpBytes
+	}
+
+	res.BytesPerSec = res.OpsPerSec * float64(opBytes)
 
 	// A stopped run keeps no result, and its keys stay for the end of the
 	// whole run. One line names the stop, not one line for each key.

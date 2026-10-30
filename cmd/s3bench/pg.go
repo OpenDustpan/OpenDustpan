@@ -79,6 +79,9 @@ func createModelSchema(ctx context.Context, dsn, schema string) error {
 		"CREATE TABLE fence (ns TEXT PRIMARY KEY, version BIGINT NOT NULL)",
 		"CREATE TABLE blob_rows (unit TEXT NOT NULL, seq BIGINT NOT NULL, blob_key TEXT NOT NULL, " +
 			"fence BIGINT NOT NULL, PRIMARY KEY (unit, seq))",
+		"CREATE TABLE audit_chain (ns TEXT PRIMARY KEY, seq BIGINT NOT NULL)",
+		"CREATE TABLE audit_entries (ns TEXT NOT NULL, seq BIGINT NOT NULL, object TEXT NOT NULL, " +
+			"PRIMARY KEY (ns, seq))",
 	} {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 			return errors.Join(fmt.Errorf("set up the model tables: %w", execErr), conn.Close(ctx))
@@ -88,6 +91,11 @@ func createModelSchema(ctx context.Context, dsn, schema string) error {
 	_, err = conn.Exec(ctx, "INSERT INTO fence (ns, version) VALUES ($1, 1)", benchNamespace)
 	if err != nil {
 		return errors.Join(fmt.Errorf("set up the fence row: %w", err), conn.Close(ctx))
+	}
+
+	_, err = conn.Exec(ctx, "INSERT INTO audit_chain (ns, seq) VALUES ($1, 0)", benchNamespace)
+	if err != nil {
+		return errors.Join(fmt.Errorf("set up the audit chain row: %w", err), conn.Close(ctx))
 	}
 
 	if err := conn.Close(ctx); err != nil {
@@ -110,10 +118,86 @@ func (m *pgModel) close(ctx context.Context) error {
 	return nil
 }
 
-// truncate deletes every blob row, between two runs.
+// truncate deletes every blob row and audit entry, between two runs.
 func (m *pgModel) truncate(ctx context.Context) error {
-	if _, err := m.pool.Exec(ctx, "TRUNCATE blob_rows"); err != nil {
+	if _, err := m.pool.Exec(ctx, "TRUNCATE blob_rows, audit_entries"); err != nil {
 		return fmt.Errorf("truncate the blob rows: %w", err)
+	}
+
+	if _, err := m.pool.Exec(ctx, "UPDATE audit_chain SET seq = 0"); err != nil {
+		return fmt.Errorf("reset the audit chain: %w", err)
+	}
+
+	return nil
+}
+
+// commitAudited is the fenced, audited commit transaction of an upload: the
+// start, the read of the fence row with a lock for update, the insert of the
+// commit row, four statements of the audit append (the chain record, the
+// last entry, the insert of the entry, the update of the chain record), and
+// the commit. It is eight round trips. The lock on the fence row orders the
+// commits of one namespace, as the store's own audited writes do.
+func (m *pgModel) commitAudited(ctx context.Context, unit string, seq int64, key string) error {
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+
+	var version, chain, last int64
+
+	steps := []func() error{
+		func() error {
+			return tx.QueryRow(ctx, "SELECT version FROM fence WHERE ns = $1 FOR UPDATE", benchNamespace).Scan(&version)
+		},
+		func() error {
+			return execIn(ctx, tx, "INSERT INTO blob_rows (unit, seq, blob_key, fence) "+
+				"SELECT $1, $2, $3, version FROM fence WHERE ns = $4 AND version = 1", unit, seq, key, benchNamespace)
+		},
+		func() error {
+			return tx.QueryRow(ctx, "SELECT seq FROM audit_chain WHERE ns = $1", benchNamespace).Scan(&chain)
+		},
+		func() error {
+			return tx.QueryRow(ctx, "SELECT COALESCE(MAX(seq), 0) FROM audit_entries WHERE ns = $1", benchNamespace).
+				Scan(&last)
+		},
+		func() error {
+			return execIn(ctx, tx, "INSERT INTO audit_entries (ns, seq, object) VALUES ($1, $2, $3)",
+				benchNamespace, last+1, key)
+		},
+		func() error {
+			return execIn(ctx, tx, "UPDATE audit_chain SET seq = $2 WHERE ns = $1", benchNamespace, last+1)
+		},
+	}
+
+	for _, step := range steps {
+		if stepErr := step(); stepErr != nil {
+			return errors.Join(fmt.Errorf("audited commit: %w", stepErr), tx.Rollback(ctx))
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	return nil
+}
+
+// execIn runs one statement in tx.
+func execIn(ctx context.Context, tx pgx.Tx, sql string, args ...any) error {
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		return fmt.Errorf("exec: %w", err)
+	}
+
+	return nil
+}
+
+// readAuditChain is one read of the audit chain row: the model of a read of
+// the last entry of a scope, or of the state of the check marks.
+func (m *pgModel) readAuditChain(ctx context.Context) error {
+	var seq int64
+
+	if err := m.pool.QueryRow(ctx, "SELECT seq FROM audit_chain WHERE ns = $1", benchNamespace).Scan(&seq); err != nil {
+		return fmt.Errorf("read the audit chain: %w", err)
 	}
 
 	return nil
@@ -144,41 +228,6 @@ func (m *pgModel) fencedWrite(ctx context.Context, unit string, seq int64, key s
 		unit, seq, key, version)
 	if err != nil {
 		return errors.Join(fmt.Errorf("insert row: %w", err), tx.Rollback(ctx))
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
-
-	return nil
-}
-
-// fencedWriteTwo is a fenced transaction that inserts two rows: the row of
-// unit, and the row of extra that records the attempt. It is five round
-// trips: one more insert than fencedWrite.
-func (m *pgModel) fencedWriteTwo(ctx context.Context, unit, extra string, seq int64, key string) error {
-	tx, err := m.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin: %w", err)
-	}
-
-	var version int64
-
-	err = tx.QueryRow(ctx, "SELECT version FROM fence WHERE ns = $1 FOR SHARE", benchNamespace).Scan(&version)
-	if err != nil {
-		return errors.Join(fmt.Errorf("read fence: %w", err), tx.Rollback(ctx))
-	}
-
-	if version != 1 {
-		return errors.Join(fmt.Errorf("%w: %d", errFenceMoved, version), tx.Rollback(ctx))
-	}
-
-	for _, u := range []string{unit, extra} {
-		_, err = tx.Exec(ctx, "INSERT INTO blob_rows (unit, seq, blob_key, fence) VALUES ($1, $2, $3, $4)",
-			u, seq, key, version)
-		if err != nil {
-			return errors.Join(fmt.Errorf("insert row: %w", err), tx.Rollback(ctx))
-		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
