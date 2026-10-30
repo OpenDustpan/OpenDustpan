@@ -590,11 +590,15 @@ func TestVerifyErrorsHoldNoHeaderText(t *testing.T) {
 		{"a t that is not a number", "t=" + marker + ",v1=00", policy.ErrSignature},
 		{"a t with the marker inside", ts + marker + ",v1=00", policy.ErrSignature},
 		{"a repeated t with a marker", good + ",t=" + marker, policy.ErrSignature},
-		{"a fifth v1 that holds the marker", ts + strings.Repeat(","+sig, policy.MaxSignatures) + ",v1=" + marker,
-			policy.ErrSignature},
+		{
+			"a fifth v1 that holds the marker",
+			ts + strings.Repeat(","+sig, policy.MaxSignatures) + ",v1=" + marker, policy.ErrSignature,
+		},
 		{"no v1, with the marker as a key", ts + "," + marker + "=x", policy.ErrSignature},
-		{"a header above the limit, the marker at its end",
-			ts + strings.Repeat(",x=y", policy.MaxSignatureHeaderBytes/4) + "," + marker, policy.ErrSignature},
+		{
+			"a header above the limit, the marker at its end",
+			ts + strings.Repeat(",x=y", policy.MaxSignatureHeaderBytes/4) + "," + marker, policy.ErrSignature,
+		},
 	}
 
 	for _, tc := range cases {
