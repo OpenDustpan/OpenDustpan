@@ -97,3 +97,29 @@ func TestContractMissingNamesWhatIsGone(t *testing.T) {
 		t.Errorf("New = %v, want the one extra field", news)
 	}
 }
+
+func TestScenarioRunsLeavesOutTheRunsOfOtherTests(t *testing.T) {
+	t.Setenv("E2E_PULUMI_VERSIONS", "3.1.0,latest")
+
+	labeled := func(label string) e2e.Run {
+		run := contractRun("3.1.0")
+		run.Label = label
+
+		return run
+	}
+
+	runs := []e2e.Run{
+		labeled("3.1.0"), labeled("latest-delta-on"), labeled("3.1.0-delta-off"),
+		labeled("3.1.0-import"), labeled("3.1.0-pair"), labeled("9.9.9"), labeled(""),
+	}
+
+	got := make([]string, 0, 3)
+
+	for _, run := range e2e.ScenarioRuns(runs, e2e.Pulumi()) {
+		got = append(got, run.Label)
+	}
+
+	if want := []string{"3.1.0", "latest-delta-on", "3.1.0-delta-off"}; !slices.Equal(got, want) {
+		t.Errorf("labels = %v, want %v", got, want)
+	}
+}

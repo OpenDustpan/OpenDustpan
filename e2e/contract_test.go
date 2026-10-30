@@ -35,7 +35,7 @@ func checkContracts(t *testing.T, dir string) {
 		return
 	}
 
-	observed := e2e.ObserveContracts(e2e.ServedRoutes(t), runs)
+	observed := e2e.ObserveContracts(e2e.ServedRoutes(t), e2e.ScenarioRuns(runs, e2e.Pulumi(), e2e.OpenTofu()))
 
 	if os.Getenv(e2e.ContractUpdateEnv) == "1" {
 		for _, contract := range observed {

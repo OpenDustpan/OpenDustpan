@@ -49,6 +49,31 @@ type Contract struct {
 	Routes  []ContractRoute `json:"routes"`
 }
 
+// ScenarioRuns returns the runs of runs that the scenario of TestCLIs wrote: the
+// label is a version of the matrix of its tool, with or without the suffix of
+// the delta checkpoint runs. Other tests write reports to the same directory,
+// for example the import test with its wrong-token step. They run when the
+// whole suite runs and not when one test runs, and they finish at times that
+// no one controls, so the contract must not read them.
+func ScenarioRuns(runs []Run, tools ...Tool) []Run {
+	var out []Run
+
+	for i := range runs {
+		for j := range tools {
+			if runs[i].Tool != tools[j].Name {
+				continue
+			}
+
+			label := strings.TrimSuffix(strings.TrimSuffix(runs[i].Label, "-delta-on"), "-delta-off")
+			if slices.Contains(tools[j].Versions(), label) {
+				out = append(out, runs[i])
+			}
+		}
+	}
+
+	return out
+}
+
 // cliUserAgent returns the User-Agent prefix that the CLI of tool sends, or ""
 // for a tool that is not known.
 func cliUserAgent(tool string) string {
