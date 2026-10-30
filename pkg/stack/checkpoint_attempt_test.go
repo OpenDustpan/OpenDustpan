@@ -133,10 +133,10 @@ func runRaceCase(t *testing.T, tc raceCase) {
 	clk := newClock()
 	blobs := newReplacingBlob(clk)
 
-	var stale *staleRowStore
+	stale := &staleRowStore{memUpdates: nil, hide: atomic.Int32{}}
 
 	f := newUpdatesWrapped(t, clk, blobs, nil, func(m *memUpdates) stack.CheckpointStore {
-		stale = &staleRowStore{memUpdates: m, hide: atomic.Int32{}}
+		stale.memUpdates = m
 
 		return stale
 	})
