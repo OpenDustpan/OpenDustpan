@@ -166,8 +166,10 @@ the rest of RFC 27.
      merge queue event. With auto-merge, `merged_by` is the person who
      turned it on. With a merge queue, the merge happens after later pushes
      or a move of the base. In both, that person may not see the
-     revision that applies, so neither counts. A timeline that the server
-     cannot read does not count. In each case that does not count, the
+     revision that applies, so neither counts. The server reads each page of
+     the timeline before it decides that no such event exists. A timeline
+     that the server cannot read, also a read that stops before the last
+     page, does not count. In each case that does not count, the
      change order waits in `approved`, the summary comment says who can
      apply, and a person asks through the API, the console or the comment
      command `dustpan apply` on the merged review request.
@@ -383,7 +385,11 @@ the rest of RFC 27.
       new action `installation:lock` puts it with a reason. While it holds,
       no phase that changes dispatches in any namespace, and no pre-merge
       apply starts. Plans still run. It blocks the lock of a tool from a
-      workstation as each manual lock does. Each lock and each removal
+      workstation as each manual lock does. That check is on the hot paths
+      of the OpenTofu lock and of the start of a Pulumi update, so the
+      server reads the installation lock in the same query as the manual
+      locks of the unit, its collections and its namespace, with no second
+      round trip to the database. Each lock and each removal
       writes an audit entry of the installation and notifies the
       administrators of each namespace.
     - (b) No switch. An operator locks each namespace.
@@ -488,7 +494,7 @@ no two of them collide on the migration number or on the hashes of
 | PR-9 | Pre-merge apply: the setting, its levels, the fresh authentication, `CheckApply`, the hold and the merge. E2e steps 6 to 8. Docs page "Apply before merge" with the warning | L | changeorder-wiring | PR-8, WB-7 |
 | PR-10 | The Pulumi steps of e2e step 9 | M | e2e-steps | PR-9 |
 | PR-11 | The setting `reviewRequestPlans.profiles` (question 10), if the owner picks (c) | S | profile-providers | PR-3, PF-6 |
-| PR-12 | The installation lock (question 15), with its migration, e2e step 12 | M | store-migrations | none |
+| PR-12 | The installation lock (question 15), with its migration, e2e step 12. The lock check reads it in the one query of the manual locks. A query-count test or a benchmark of the OpenTofu lock path shows no added query. | M | store-migrations | none |
 
 ## Outcome
 
