@@ -396,7 +396,7 @@ _Avoid_: User (when the caller can be a machine), actor
 _Copy says_: "principal", explained once where it first shows: "a person, a service or a workload".
 
 **Principal kind**:
-What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload`. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
+What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `service`. A trust rule names a service principal of its namespace, as a cloud maps a workload identity to a service account. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
 _Avoid_: Principal type, account type, token kind (a token kind is `personal` or `service`)
 
 **Principal of a namespace**:
@@ -460,7 +460,7 @@ An access token that belongs to a principal that is not a person, for a machine 
 _Avoid_: API key, robot token, machine token
 
 **Trust rule**:
-A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets (ADR 54).
+A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets: a service principal of that namespace (ADR 54).
 _Avoid_: Trust policy, federation rule
 
 **Token exchange**:
