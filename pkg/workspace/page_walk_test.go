@@ -3,6 +3,7 @@ package workspace_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -122,12 +123,30 @@ func TestSweepDeletesPageByPage(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
+	// A finalized version names its blob. The orphans below sort before it, so
+	// it comes on the second page of the listing, after more than a page of
+	// blobs that no version names, and the sweep must keep it.
+	pending, err := f.svc.BeginState(
+		ctx, f.ws.ID, "alice", newState("l1", 1, "{\"v\":1}"), authority(forcedOnly(), nil),
+	)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	current, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
 	old := f.now.Add(-2 * workspace.SweepGracePeriod)
+	chtimesBlob(t, dir, current.Content, old)
+
+	var last blob.Key
 
 	for i := range strayCount {
-		key, err := blob.ParseKey(fmt.Sprintf("%ssv-stray/a%05d", f.stateDir(t, f.ws.ID), i))
-		if err != nil {
-			t.Fatalf("stray key: %v", err)
+		key, keyErr := blob.ParseKey(fmt.Sprintf("%ssv--stray/a%05d", f.stateDir(t, f.ws.ID), i))
+		if keyErr != nil {
+			t.Fatalf("stray key: %v", keyErr)
 		}
 
 		if putErr := blobs.Put(ctx, key, strings.NewReader("x")); putErr != nil {
@@ -135,9 +154,15 @@ func TestSweepDeletesPageByPage(t *testing.T) {
 		}
 
 		chtimesBlob(t, dir, key, old)
+
+		last = key
 	}
 
-	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "{\"v\":1}"), authority(forcedOnly(), nil))
+	if current.Content <= last {
+		t.Fatalf("the named blob %s sorts before the last stray %s: not after a full page", current.Content, last)
+	}
+
+	_, err = f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "{\"v\":2}"), authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -146,7 +171,7 @@ func TestSweepDeletesPageByPage(t *testing.T) {
 		t.Fatalf("deletes before the second page = %d, want at least %d", got, blob.MaxPageLimit)
 	}
 
-	if left := listBlobDir(t, dir); len(left) != 0 {
-		t.Fatalf("blobs after the sweep = %d, want none", len(left))
+	if left := listBlobDir(t, dir); !slices.Equal(left, []string{current.Content.String()}) {
+		t.Fatalf("blobs after the sweep = %d, want only the named blob %s", len(left), current.Content)
 	}
 }
