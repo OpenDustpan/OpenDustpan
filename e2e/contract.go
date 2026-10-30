@@ -235,8 +235,21 @@ func collectKeys(prefix string, value any, depth int, out *[]string) {
 // field. Each line names one thing. It returns nothing when got keeps the
 // whole contract of want. Extra routes and fields in got are no problem.
 func (want Contract) Missing(got Contract) []string {
+	return want.lacking(got,
+		"the CLI did not use this route", "the status %d is gone (now %v)", "the answer has no field %q")
+}
+
+// New returns what got has and want does not, in the same form as Missing. It
+// is the list of new reads of a CLI version that has no contract yet.
+func (want Contract) New(got Contract) []string {
+	return got.lacking(want, "new route", "new status %d (the contract has %v)", "new field %q in the answer")
+}
+
+// lacking returns what the receiver has and other does not. The three formats say the
+// route, the status and the field part of each line.
+func (want Contract) lacking(other Contract, noRoute, noStatus, noField string) []string {
 	byRoute := map[string]ContractRoute{}
-	for _, route := range got.Routes {
+	for _, route := range other.Routes {
 		byRoute[route.Route] = route
 	}
 
@@ -245,31 +258,25 @@ func (want Contract) Missing(got Contract) []string {
 	for _, route := range want.Routes {
 		seen, ok := byRoute[route.Route]
 		if !ok {
-			out = append(out, route.Route+": the CLI did not use this route")
+			out = append(out, route.Route+": "+noRoute)
 
 			continue
 		}
 
 		for _, status := range route.Statuses {
 			if !slices.Contains(seen.Statuses, status) {
-				out = append(out, fmt.Sprintf("%s: the status %d is gone (now %v)", route.Route, status, seen.Statuses))
+				out = append(out, route.Route+": "+fmt.Sprintf(noStatus, status, seen.Statuses))
 			}
 		}
 
 		for _, name := range route.ResponseKeys {
 			if !slices.Contains(seen.ResponseKeys, name) {
-				out = append(out, fmt.Sprintf("%s: the answer has no field %q", route.Route, name))
+				out = append(out, route.Route+": "+fmt.Sprintf(noField, name))
 			}
 		}
 	}
 
 	return out
-}
-
-// New returns what got has and want does not, in the same form as Missing. It
-// is the list of new reads of a CLI version that has no contract yet.
-func (want Contract) New(got Contract) []string {
-	return got.Missing(want)
 }
 
 // ContractPath returns the file of the contract of one tool and version.

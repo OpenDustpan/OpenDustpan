@@ -93,7 +93,7 @@ func TestContractMissingNamesWhatIsGone(t *testing.T) {
 		t.Errorf("a contract with no route must lose both routes: %v", want.Missing(lost))
 	}
 
-	if news := want.New(got); len(news) != 1 || !strings.Contains(news[0], "extra") {
+	if news := want.New(got); len(news) != 1 || !strings.Contains(news[0], "new field \"extra\"") {
 		t.Errorf("New = %v, want the one extra field", news)
 	}
 }
