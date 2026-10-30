@@ -225,6 +225,56 @@ Each route entry holds `method`, `path`, `refusedStatus`, `refusedCode`, and the
 The harness sends the requests one at a time from the local process.
 So the medians show the cost on the server and not the load of many clients.
 
+## Measure the blob flows
+
+The blob flow mode times the CLI flows that write a blob, and a backup and a restore.
+It does not seed the 10,000 units of the nightly run.
+
+```sh
+go run ./load -flows blobs -out /tmp/blob-report.json
+```
+
+The mode runs one instance with a backup target.
+The server runs with `Run`, as the server binary does, so its backup worker runs.
+The run first writes a data set: `-dataset-units` workspaces with one state version each and as many stacks with one checkpoint each.
+It takes a backup of the data set, then restores it with `force`.
+Then it times `-reps` OpenTofu state uploads on one workspace (lock, upload, unlock) and `-reps` Pulumi updates, each on its own stack.
+A failed attempt counts in the report and does not stop the run.
+
+These flags change the mode:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-blobs` | `fs` | Live blob store: `fs` (a directory) or `s3` |
+| `-s3-probe` | `true` | Open the S3 store with the conditional-write probe, as the server binary does |
+| `-reps` | `20` | Timed state uploads and timed checkpoint saves |
+| `-state-bytes` | `65536` | Size of each timed state |
+| `-checkpoint-bytes` | `262144` | Size of each timed checkpoint |
+| `-dataset-units` | `20` | Workspaces and stacks in the data set |
+| `-backup` | `true` | Take the backup and the restore |
+| `-http-timeout` | `120` | Bound of each request in seconds |
+| `-max-duration` | `0` | Bound of the whole run. `0` sets no bound |
+
+With `-blobs s3` the run reads the S3 server from `DUSTPAN_TEST_S3_ENDPOINT`, `DUSTPAN_TEST_S3_BUCKET`, `DUSTPAN_TEST_S3_ACCESS_KEY` and `DUSTPAN_TEST_S3_SECRET_KEY`.
+These are the same variables as `make test-s3` and the e2e suite.
+Each run writes under its own key prefix.
+A store that ignores `If-None-Match` fails the probe, so run it with `-s3-probe=false`.
+
+The report holds `config`, `datasetMs`, `durationMs` and these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `backup` | The backup of the data set: `ran`, `ms`, `state` and `error` |
+| `restore` | The restore of that backup. A restore first takes a backup of the live data, so its time holds that backup too |
+| `stateUpload` | The declare of a state version and the PUT of its content |
+| `stateCycle` | Lock, state upload and unlock |
+| `checkpointSave` | The first checkpoint save of an update |
+| `updateCycle` | Update create and start, checkpoint save and complete |
+
+Each flow entry holds `samples`, `p50Ms`, `p99Ms`, `maxMs`, `errors` and `firstError`.
+The S3 latency benchmark (`make bench-s3`) runs this mode for each network profile.
+See [S3 latency benchmark](../reference/s3-latency-benchmark.md).
+
 ## What this guide does not cover
 
 These items are not part of the harness:
