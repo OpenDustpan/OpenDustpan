@@ -196,46 +196,7 @@ func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step stri
 		return nil
 	}
 
-	key, err := LogChunkAttemptKey(j.ID, plan.Version, seq, ident.NewID(LogAttemptIDPrefix))
-	if err != nil {
-		return err
-	}
-
-	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: plan.Version, Seq: seq, BlobKey: key.String()}
-
-	stored, storeErr := r.storeChunk(ctx, c, &j, &ref, data)
-	if storeErr != nil {
-		return storeErr
-	}
-
-	won, err := r.store.ConfirmLogChunk(
-		ctx, c, ChunkConfirm{Step: step, Version: plan.Version, Seq: seq, Stored: stored, BlobKey: ref.BlobKey},
-	)
-	if err != nil {
-		// An error that does not prove a rollback, such as a failed COMMIT,
-		// can follow a commit: the row may name the blob, so the blob stays.
-		// If the commit did not happen, the orphan cleanup deletes it.
-		if provesRollback(err) {
-			r.deleteChunk(ctx, &ref)
-		}
-
-		return err
-	}
-
-	if !won {
-		// Another attempt of the chunk committed first, and its row names its
-		// own blob. The blob of this attempt is named by no row.
-		r.deleteChunk(ctx, &ref)
-	}
-
-	return nil
-}
-
-// deleteChunk deletes the blob of the attempt ref, which no row names. It does
-// not stop when the context ends, and it ignores a failure: the orphan cleanup
-// deletes what stays. It deletes only the key of its own attempt.
-func (r *DurableRecorder) deleteChunk(ctx context.Context, ref *LogChunkRef) {
-	_ = r.blobs.DeleteLogChunk(context.WithoutCancel(ctx), *ref) //nolint:errcheck // See above.
+	return r.writeChunk(ctx, c, &j, &chunkWrite{step: step, version: plan.Version, seq: seq, data: data})
 }
 
 // readChunk reads a chunk of at most MaxLogChunk bytes, and returns it with
@@ -421,6 +382,61 @@ func (r *DurableRecorder) Delivered(ctx context.Context, c PhaseClaim, d Deliver
 	)
 }
 
+// chunkWrite is one attempt to write the chunk seq of the log version of the
+// step.
+type chunkWrite struct {
+	step    string
+	version string
+	seq     int
+	data    []byte
+}
+
+// writeChunk stores the blob of one attempt of a chunk under a key of its own,
+// and counts the chunk. If another attempt counted the chunk first, it deletes
+// the blob of this attempt.
+func (r *DurableRecorder) writeChunk(ctx context.Context, c PhaseClaim, j *Job, w *chunkWrite) error {
+	key, err := LogChunkAttemptKey(j.ID, w.version, w.seq, ident.NewID(LogAttemptIDPrefix))
+	if err != nil {
+		return err
+	}
+
+	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: w.version, Seq: w.seq, BlobKey: key.String()}
+
+	stored, err := r.storeChunk(ctx, c, j, &ref, w.data)
+	if err != nil {
+		return err
+	}
+
+	won, err := r.store.ConfirmLogChunk(
+		ctx, c, ChunkConfirm{Step: w.step, Version: w.version, Seq: w.seq, Stored: stored, BlobKey: ref.BlobKey},
+	)
+	if err != nil {
+		// An error that does not prove a rollback, such as a failed COMMIT,
+		// can follow a commit: the row may name the blob, so the blob stays.
+		// If the commit did not happen, the orphan cleanup deletes it.
+		if provesRollback(err) {
+			r.deleteChunk(ctx, &ref)
+		}
+
+		return err
+	}
+
+	if !won {
+		// Another attempt of the chunk committed first, and its row names its
+		// own blob. The blob of this attempt is named by no row.
+		r.deleteChunk(ctx, &ref)
+	}
+
+	return nil
+}
+
+// deleteChunk deletes the blob of the attempt ref, which no row names. It does
+// not stop when the context ends, and it ignores a failure: the orphan cleanup
+// deletes what stays. It deletes only the key of its own attempt.
+func (r *DurableRecorder) deleteChunk(ctx context.Context, ref *LogChunkRef) {
+	_ = r.blobs.DeleteLogChunk(context.WithoutCancel(ctx), *ref) //nolint:errcheck // See above.
+}
+
 // deliveryEntry returns the audit entry of a delivery. It holds the commit and
 // the review request, and no secret.
 func deliveryEntry(j *Job, unit identity.Object, d *DeliveryResult, c PhaseClaim, at time.Time) audit.Entry {
@@ -460,7 +476,14 @@ func (r *DurableRecorder) closeLog(ctx context.Context, c PhaseClaim, name strin
 		return nil, fmt.Errorf("read log %s: %w", rec.Log.ID, err)
 	}
 
-	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: name, Plan: nil, Log: rec.Log, ChunkKeys: stored.ChunkKeys}
+	art := ArtifactRecord{
+		Job:       j.ID,
+		Unit:      j.Spec.Unit,
+		Step:      name,
+		Plan:      nil,
+		Log:       rec.Log,
+		ChunkKeys: stored.ChunkKeys,
+	}
 
 	rc, err := openLogVersion(ctx, r.blobs, r.sealer, nsID, &art)
 	if err != nil {

@@ -293,7 +293,9 @@ func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkCo
 		return row.BlobKey == c.BlobKey, nil
 	}
 
-	confirmErr := tx.ConfirmChunk(ctx, pc.Fence.Namespace, c.Version, c.Seq, c.Stored, c.BlobKey)
+	confirmErr := tx.ConfirmChunk(
+		ctx, pc.Fence.Namespace, c.Version, c.Seq, StoredChunk{Digest: c.Stored, BlobKey: c.BlobKey},
+	)
 	if confirmErr != nil {
 		return false, confirmErr
 	}
@@ -667,27 +669,44 @@ func logOfRow(j *job.Job, row *LogRow) *job.LogRef {
 	return nil
 }
 
+// ChunkRowCheck is a stored chunk row that CheckChunkRow checks: the chunk
+// Seq of the log Log of the job Job.
+type ChunkRowCheck struct {
+	Job, Log  string
+	Seq, Size int64
+	SHA256    string
+	// Confirmed is true when the chunk counts in its log. BlobKey is the key of
+	// the blob of the attempt that won it.
+	Confirmed bool
+	BlobKey   string
+}
+
 // CheckChunkRow returns an error that wraps ErrDamaged unless a stored chunk
-// row of the log logID has the rules of a reserve: a number below
-// job.MaxLogChunks, a size from 0 to job.MaxLogChunk and a SHA-256. A chunk
-// that is confirmed has the blob key of an attempt of this chunk of the log of
-// the job jobID (job.ChunkBlobKey), and a chunk that is not has none. A
-// restore uses it on the rows of a staged backup.
-func CheckChunkRow(jobID, logID string, seq, size int64, sha string, confirmed bool, blobKey string) error {
-	if seq < 0 || seq >= job.MaxLogChunks || size < 0 || size > job.MaxLogChunk || !job.ValidHash(sha) {
-		return fmt.Errorf("%w: chunk %d of log %s is not valid", ErrDamaged, seq, logID)
+// row has the rules of a reserve: a number below job.MaxLogChunks, a size from
+// 0 to job.MaxLogChunk and a SHA-256. A chunk that is confirmed has the blob
+// key of an attempt of this chunk of this log (job.ChunkBlobKey), and a chunk
+// that is not has none. A restore uses it on the rows of a staged backup.
+func CheckChunkRow(r *ChunkRowCheck) error {
+	if r.Seq < 0 || r.Seq >= job.MaxLogChunks || r.Size < 0 || r.Size > job.MaxLogChunk || !job.ValidHash(r.SHA256) {
+		return fmt.Errorf("%w: chunk %d of log %s is not valid", ErrDamaged, r.Seq, r.Log)
 	}
 
-	if !confirmed {
-		if blobKey != "" {
-			return fmt.Errorf("%w: chunk %d of log %s is not confirmed and has a blob key", ErrDamaged, seq, logID)
+	if !r.Confirmed {
+		if r.BlobKey != "" {
+			return fmt.Errorf("%w: chunk %d of log %s is not confirmed and has a blob key", ErrDamaged, r.Seq, r.Log)
 		}
 
 		return nil
 	}
 
-	if _, err := job.ChunkBlobKey(job.ID(jobID), logID, int(seq), blobKey); err != nil {
-		return fmt.Errorf("%w: chunk %d of log %s has a blob key that is not its own: %w", ErrDamaged, seq, logID, err)
+	if _, err := job.ChunkBlobKey(job.ID(r.Job), r.Log, int(r.Seq), r.BlobKey); err != nil {
+		return fmt.Errorf(
+			"%w: chunk %d of log %s has a blob key that is not its own: %w",
+			ErrDamaged,
+			r.Seq,
+			r.Log,
+			err,
+		)
 	}
 
 	return nil

@@ -70,14 +70,14 @@ func (s *replacingStore) Put(ctx context.Context, key blob.Key, r io.Reader) err
 
 	err = s.Store.Put(ctx, key, bytes.NewReader(data))
 	if !errors.Is(err, blob.ErrExists) {
-		return err //nolint:wrapcheck // The wrapper passes the error of the store.
+		return err
 	}
 
-	if err = s.Store.Delete(ctx, key); err != nil {
+	if err = s.Delete(ctx, key); err != nil {
 		return fmt.Errorf("replace %s: %w", key, err)
 	}
 
-	return s.Store.Put(ctx, key, bytes.NewReader(data)) //nolint:wrapcheck // See above.
+	return s.Store.Put(ctx, key, bytes.NewReader(data))
 }
 
 // newSpyHarness returns a recorder harness over the confirm spy and a blob
@@ -160,7 +160,7 @@ func digestOfKey(t *testing.T, store blob.Store, key string) blob.Digest {
 
 // chunkZeroRow returns the blob key that the row of chunk 0 of the log of the
 // step plan holds.
-func chunkZeroRow(t *testing.T, h *jobtest.RecorderHarness, a *job.Assignment) (string, string) {
+func chunkZeroRow(t *testing.T, h *jobtest.RecorderHarness, a *job.Assignment) zeroRow {
 	t.Helper()
 
 	version := mustGetJob(t, h, a.Claim.Job).Phases[0].Steps[0].Log.ID
@@ -170,7 +170,13 @@ func chunkZeroRow(t *testing.T, h *jobtest.RecorderHarness, a *job.Assignment) (
 		t.Fatalf("Log = %+v, %v; want one chunk", rec, err)
 	}
 
-	return version, rec.ChunkKeys[0]
+	return zeroRow{version: version, key: rec.ChunkKeys[0]}
+}
+
+// zeroRow is the log version of chunk 0 and the blob key that its row holds.
+type zeroRow struct {
+	version string
+	key     string
 }
 
 // TestRecorderChunkRetryUsesItsOwnKey proves that a retry of a chunk after a
@@ -207,7 +213,7 @@ func TestRecorderChunkRetryUsesItsOwnKey(t *testing.T) {
 		t.Fatalf("confirms = %+v, want two with two keys", seen)
 	}
 
-	_, row := chunkZeroRow(t, &h, a)
+	row := chunkZeroRow(t, &h, a).key
 	if row != seen[1].BlobKey {
 		t.Fatalf("row key = %q, want the key of the retry %q", row, seen[1].BlobKey)
 	}
@@ -274,34 +280,37 @@ func TestRecorderChunkRaceOnReplacingStore(t *testing.T) {
 		t.Fatalf("first attempt = %v, want nil: losing the race is not an error", err)
 	}
 
+	checkRaceOutcome(t, &h, spy, inner, a)
+}
+
+// checkRaceOutcome checks that the row of chunk 0 names the blob of the attempt
+// that committed first, that this blob is the only blob of the chunk, and that
+// its digest is the one the row holds.
+func checkRaceOutcome(
+	t *testing.T, h *jobtest.RecorderHarness, spy *confirmSpy, store blob.Store, a *job.Assignment,
+) {
+	t.Helper()
+
 	seen := spy.confirms()
 	if len(seen) != 2 || seen[0].BlobKey == seen[1].BlobKey {
 		t.Fatalf("confirms = %+v, want two with two keys", seen)
 	}
 
-	// The second attempt reached the store first, so its key is the second
-	// confirm in the list and it won.
-	version, row := chunkZeroRow(t, &h, a)
-
-	var winner job.ChunkConfirm
-
-	for _, cc := range seen {
-		if cc.BlobKey == row {
-			winner = cc
-		}
-	}
-
-	if winner.BlobKey == "" || winner.BlobKey != seen[1].BlobKey {
+	// The second attempt reached the store first, so it is the second confirm
+	// in the list and it won.
+	zero := chunkZeroRow(t, h, a)
+	version, row := zero.version, zero.key
+	if row != seen[1].BlobKey {
 		t.Fatalf("row key = %q, want the key of the attempt that committed first (%q)", row, seen[1].BlobKey)
 	}
 
-	keys := chunkZeroKeys(t, &h)
+	keys := chunkZeroKeys(t, h)
 	if len(keys) != 1 || !strings.HasSuffix(keys[0], row) {
 		t.Fatalf("blobs of chunk 0 = %q, want only the blob of the row %q", keys, row)
 	}
 
-	if got := digestOfKey(t, inner, keys[0]); got != winner.Stored {
-		t.Errorf("digest of the blob of the row = %+v, the row says %+v", got, winner.Stored)
+	if got := digestOfKey(t, store, keys[0]); got != seen[1].Stored {
+		t.Errorf("digest of the blob of the row = %+v, the row says %+v", got, seen[1].Stored)
 	}
 
 	rc, err := h.Reader.OpenLog(t.Context(), "acme", version)
@@ -325,7 +334,7 @@ type countingJobs struct {
 func (c *countingJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
 	c.reads.Add(1)
 
-	return c.Store.Get(ctx, id) //nolint:wrapcheck // The wrapper passes the error of the store.
+	return c.Store.Get(ctx, id)
 }
 
 // countingRecords counts the calls of the record store that each open one
@@ -342,21 +351,21 @@ func (c *countingRecords) ReserveLogChunk(
 ) (job.ChunkPlan, error) {
 	c.calls["ReserveLogChunk"].Add(1)
 
-	return c.RecordStore.ReserveLogChunk(ctx, pc, step, ch, nl) //nolint:wrapcheck // The wrapper passes the error.
+	return c.RecordStore.ReserveLogChunk(ctx, pc, step, ch, nl)
 }
 
 // ConfirmLogChunk implements job.RecordStore.
 func (c *countingRecords) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, cc job.ChunkConfirm) (bool, error) {
 	c.calls["ConfirmLogChunk"].Add(1)
 
-	return c.RecordStore.ConfirmLogChunk(ctx, pc, cc) //nolint:wrapcheck // The wrapper passes the error.
+	return c.RecordStore.ConfirmLogChunk(ctx, pc, cc)
 }
 
 // Log implements job.RecordStore.
 func (c *countingRecords) Log(ctx context.Context, ns namespace.Name, version string) (job.ArtifactRecord, error) {
 	c.calls["Log"].Add(1)
 
-	return c.RecordStore.Log(ctx, ns, version) //nolint:wrapcheck // The wrapper passes the error.
+	return c.RecordStore.Log(ctx, ns, version)
 }
 
 // TestRecorderAppendLogRoundTrips pins the database round trips of the hot
@@ -367,7 +376,7 @@ func TestRecorderAppendLogRoundTrips(t *testing.T) {
 	t.Parallel()
 
 	reads := new(atomic.Int64)
-	records := &countingRecords{calls: map[string]*atomic.Int64{
+	records := &countingRecords{RecordStore: nil, calls: map[string]*atomic.Int64{
 		"ReserveLogChunk": new(atomic.Int64), "ConfirmLogChunk": new(atomic.Int64), "Log": new(atomic.Int64),
 	}}
 

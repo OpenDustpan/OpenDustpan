@@ -2,6 +2,7 @@ package job_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/job"
@@ -16,43 +17,37 @@ func TestChunkBlobKey(t *testing.T) {
 		base    = "job/job-abc/log/jlv-one/00000003"
 	)
 
-	tests := []struct {
-		name    string
-		seq     int
-		stored  string
-		want    string
-		invalid bool
-	}{
-		{name: "no stored key", seq: 3, stored: "", invalid: true},
-		{name: "the key of an attempt", seq: 3, stored: base + "-jla-abc123", want: base + "-jla-abc123"},
-		{name: "the key of another chunk", seq: 3, stored: "job/job-abc/log/jlv-one/00000004-jla-abc", invalid: true},
-		{name: "the key of another version", seq: 3, stored: "job/job-abc/log/jlv-two/00000003-jla-abc", invalid: true},
-		{name: "the key of another job", seq: 3, stored: "job/job-xyz/log/jlv-one/00000003-jla-abc", invalid: true},
-		{name: "the shared prefix with no attempt", seq: 3, stored: base, invalid: true},
-		{name: "an empty attempt", seq: 3, stored: base + "-", invalid: true},
-		{name: "an attempt of another prefix", seq: 3, stored: base + "-xyz-abc", invalid: true},
-		{name: "an attempt with a slash", seq: 3, stored: base + "-jla-a/b", invalid: true},
-		{name: "an attempt with a dot segment", seq: 3, stored: base + "-jla-..", invalid: true},
-		{name: "an attempt with upper case", seq: 3, stored: base + "-jla-ABC", invalid: true},
-		{name: "an attempt that is too long", seq: 3, stored: base + "-jla-" + string(make([]byte, 80)), invalid: true},
-		{name: "a text that is no key", seq: 3, stored: "not a key", invalid: true},
+	t.Run("the key of an attempt", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := job.ChunkBlobKey(id, version, 3, base+"-jla-abc123")
+		if err != nil || got.String() != base+"-jla-abc123" {
+			t.Fatalf("ChunkBlobKey = %q, %v; want %q", got, err, base+"-jla-abc123")
+		}
+	})
+
+	invalid := []struct{ name, stored string }{
+		{"no stored key", ""},
+		{"the key of another chunk", "job/job-abc/log/jlv-one/00000004-jla-abc"},
+		{"the key of another version", "job/job-abc/log/jlv-two/00000003-jla-abc"},
+		{"the key of another job", "job/job-xyz/log/jlv-one/00000003-jla-abc"},
+		{"the shared prefix with no attempt", base},
+		{"an empty attempt", base + "-"},
+		{"an attempt of another prefix", base + "-xyz-abc"},
+		{"an attempt with a slash", base + "-jla-a/b"},
+		{"an attempt with a dot segment", base + "-jla-.."},
+		{"an attempt with upper case", base + "-jla-ABC"},
+		{"an attempt that is too long", base + "-jla-" + strings.Repeat("a", 80)},
+		{"a text that is no key", "not a key"},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := job.ChunkBlobKey(id, version, tt.seq, tt.stored)
-			if tt.invalid {
-				if !errors.Is(err, job.ErrInvalid) {
-					t.Fatalf("ChunkBlobKey(%q) = %q, %v; want ErrInvalid", tt.stored, got, err)
-				}
-
-				return
-			}
-
-			if err != nil || got.String() != tt.want {
-				t.Fatalf("ChunkBlobKey(%q) = %q, %v; want %q", tt.stored, got, err, tt.want)
+			got, err := job.ChunkBlobKey(id, version, 3, tt.stored)
+			if !errors.Is(err, job.ErrInvalid) {
+				t.Fatalf("ChunkBlobKey(%q) = %q, %v; want ErrInvalid", tt.stored, got, err)
 			}
 		})
 	}

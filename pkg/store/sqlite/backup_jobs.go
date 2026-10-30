@@ -74,6 +74,7 @@ func sqliteJobBackupTables() []sqliteBackupTable {
 // and the key of that blob.
 func sqliteJobChunkColumns() []string {
 	return []string{
-		"log_id", "seq", backupColNamespaceID, "sha256", "size", "confirmed", "stored_size", "stored_md5", "blob_key",
+		"log_id", "seq", backupColNamespaceID, "sha256", "size", "confirmed", "stored_size", "stored_md5",
+		backupColBlobKey,
 	}
 }

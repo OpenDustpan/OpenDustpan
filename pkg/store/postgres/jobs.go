@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -665,7 +664,15 @@ func (t *jobTx) Chunk(ctx context.Context, ns namespace.Name, log string, seq in
 	}
 
 	if err != nil {
-		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false, BlobKey: ""}, false, fmt.Errorf("select log chunk: %w", err)
+		return job.ChunkRow{
+				SHA256:    "",
+				Size:      0,
+				Confirmed: false,
+				BlobKey:   "",
+			}, false, fmt.Errorf(
+				"select log chunk: %w",
+				err,
+			)
 	}
 
 	return job.ChunkRow{
@@ -687,12 +694,17 @@ func (t *jobTx) InsertChunk(ctx context.Context, ns namespace.Name, log string, 
 
 // ConfirmChunk implements jobstore.Tx.
 func (t *jobTx) ConfirmChunk(
-	ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest, blobKey string,
+	ctx context.Context, ns namespace.Name, log string, seq int, stored jobstore.StoredChunk,
 ) error {
 	n, err := t.q.ConfirmJobLogChunk(
 		ctx,
 		db.ConfirmJobLogChunkParams{
-			LogID: log, Seq: int64(seq), Namespace: ns.String(), StoredSize: stored.Size, StoredMd5: stored.MD5[:], BlobKey: blobKey,
+			LogID:      log,
+			Seq:        int64(seq),
+			Namespace:  ns.String(),
+			StoredSize: stored.Digest.Size,
+			StoredMd5:  stored.Digest.MD5[:],
+			BlobKey:    stored.BlobKey,
 		},
 	)
 	if err != nil {

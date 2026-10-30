@@ -178,7 +178,8 @@ func closeWith(c io.Closer, err error) error {
 }
 
 // chunkBinding returns the binding of the chunk seq of a log version: its
-// blob key (stored is the blob key of its row, as ChunkBlobKey reads it), so a chunk does not open at another position, in another version
+// blob key (stored is the blob key of its row, as ChunkBlobKey reads it), so a chunk does not open at another position,
+// in another version
 // or in another job.
 func chunkBinding(id ID, version string, seq int, stored string) ([]byte, error) {
 	key, err := ChunkBlobKey(id, version, seq, stored)

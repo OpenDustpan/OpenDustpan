@@ -333,7 +333,7 @@ func TestPlanChunk(t *testing.T) {
 	}
 
 	rows := map[int]job.ChunkRow{
-		0: {SHA256: sum("a"), Size: 1, Confirmed: true},
+		0: {SHA256: sum("a"), Size: 1, Confirmed: true, BlobKey: ""},
 		1: {SHA256: sum("b"), Size: 1, Confirmed: false, BlobKey: ""},
 	}
 

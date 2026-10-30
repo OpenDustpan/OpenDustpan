@@ -243,7 +243,11 @@ VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1, '%
 		},
 		{name: "a log version that does not exist", insert: chunk("jlv-gone", "acme", 0, 1, artifactHash), ok: false},
 		{name: "a log version of another namespace", insert: chunk("jlv-1", "other", 0, 1, artifactHash), ok: false},
-		{name: "a confirmed chunk with no blob key", insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, ""), ok: false},
+		{
+			name:   "a confirmed chunk with no blob key",
+			insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, ""),
+			ok:     false,
+		},
 		{
 			name:   "a blob key of another chunk",
 			insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, attempt("jlv-1", 1)), ok: false,
@@ -253,8 +257,16 @@ VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1, '%
 			insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, attempt("jlv-2", 0)), ok: false,
 		},
 		{
-			name:   "a blob key that leaves the log",
-			insert: chunkWith("jlv-1", "acme", 0, 1, artifactHash, "job/job-1/log/jlv-1/../x/00000000-jla-x"), ok: false,
+			name: "a blob key that leaves the log",
+			insert: chunkWith(
+				"jlv-1",
+				"acme",
+				0,
+				1,
+				artifactHash,
+				"job/job-1/log/jlv-1/../x/00000000-jla-x",
+			),
+			ok: false,
 		},
 	}
 

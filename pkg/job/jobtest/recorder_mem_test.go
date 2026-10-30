@@ -697,7 +697,7 @@ func (m *memDB) Plan(_ context.Context, ns namespace.Name, plan string) (job.Art
 
 	p := e.plan
 
-	return job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: &p, Log: nil}, nil
+	return job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: &p, Log: nil, ChunkKeys: nil}, nil
 }
 
 // Log implements job.RecordStore.

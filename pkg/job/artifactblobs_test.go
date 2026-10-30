@@ -181,15 +181,21 @@ func hostileCalls() []hostileCall {
 			"a part kind that is not a plan output",
 			put(job.PlanPartRef{Namespace: "", Job: "job-1", Plan: "pln-1", Kind: "../x"}),
 		},
-		{"a version with a slash", chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1/2", Seq: 0})},
+		{
+			"a version with a slash",
+			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1/2", Seq: 0, BlobKey: ""}),
+		},
 		{
 			"a version with the prefix of a plan",
-			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "pln-1", Seq: 0}),
+			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "pln-1", Seq: 0, BlobKey: ""}),
 		},
-		{"a negative chunk number", chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1", Seq: -1})},
+		{
+			"a negative chunk number",
+			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1", Seq: -1, BlobKey: ""}),
+		},
 		{
 			"a chunk number above the limit",
-			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1", Seq: job.MaxLogChunks}),
+			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1", Seq: job.MaxLogChunks, BlobKey: ""}),
 		},
 		{"an open of a part with a hostile plan ID", func(b *job.ArtifactBlobs, ns namespace.ID) error {
 			_, err := b.OpenPlanPart(context.Background(),
@@ -199,7 +205,7 @@ func hostileCalls() []hostileCall {
 		}},
 		{"an open of a chunk with a hostile version", func(b *job.ArtifactBlobs, ns namespace.ID) error {
 			_, err := b.OpenLogChunk(context.Background(),
-				job.LogChunkRef{Namespace: ns, Job: "job-1", Version: "../jlv-1", Seq: 0})
+				job.LogChunkRef{Namespace: ns, Job: "job-1", Version: "../jlv-1", Seq: 0, BlobKey: ""})
 
 			return err
 		}},

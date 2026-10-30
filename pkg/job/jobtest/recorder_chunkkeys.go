@@ -52,14 +52,19 @@ func attemptKey(t *testing.T, a *job.Assignment, version string, seq int, attemp
 }
 
 // confirmWith confirms chunk seq of the version with the blob key key.
-func confirmWith(
-	t *testing.T, h RecorderHarness, a *job.Assignment, version string, seq int, key string,
-) (bool, error) {
+func confirmWith(t *testing.T, h RecorderHarness, a *job.Assignment, at chunkAt, key string) (bool, error) {
 	t.Helper()
 
 	return h.Records.ConfirmLogChunk(t.Context(), a.Claim, job.ChunkConfirm{
-		Step: stepPrepare, Version: version, Seq: seq, Stored: blob.Digest{Size: 1, MD5: [16]byte{1}}, BlobKey: key,
+		Step: stepPrepare, Version: at.version, Seq: at.seq, Stored: blob.Digest{Size: 1, MD5: [16]byte{1}},
+		BlobKey: key,
 	})
+}
+
+// chunkAt names a chunk of a log version.
+type chunkAt struct {
+	version string
+	seq     int
 }
 
 func testChunkConfirmFirstWins(t *testing.T, h RecorderHarness) {
@@ -83,7 +88,7 @@ func testChunkConfirmFirstWins(t *testing.T, h RecorderHarness) {
 	}
 
 	for _, tc := range cases {
-		won, err := confirmWith(t, h, a, version, 0, tc.key)
+		won, err := confirmWith(t, h, a, chunkAt{version, 0}, tc.key)
 		if err != nil || won != tc.want {
 			t.Errorf("%s: ConfirmLogChunk = %v, %v; want %v, nil", tc.name, won, err, tc.want)
 		}
@@ -125,14 +130,14 @@ func testChunkConfirmBadKey(t *testing.T, h RecorderHarness) {
 	}
 
 	for _, tc := range cases {
-		won, err := confirmWith(t, h, a, version, 0, tc.key)
+		won, err := confirmWith(t, h, a, chunkAt{version, 0}, tc.key)
 		if !errors.Is(err, job.ErrInvalid) || won {
 			t.Errorf("%s: ConfirmLogChunk = %v, %v; want false, ErrInvalid", tc.name, won, err)
 		}
 	}
 
 	// None of the refusals counted the chunk: the good key still wins.
-	if won, err := confirmWith(t, h, a, version, 0, good); err != nil || !won {
+	if won, err := confirmWith(t, h, a, chunkAt{version, 0}, good); err != nil || !won {
 		t.Fatalf("ConfirmLogChunk after the refusals = %v, %v; want true, nil", won, err)
 	}
 }
@@ -156,9 +161,10 @@ func testChunkAttemptKey(t *testing.T, h RecorderHarness) {
 		t.Fatalf("chunk keys = %q, want 2", rec.ChunkKeys)
 	}
 
-	var held []string
+	objects := blobsUnder(t, h, a.Claim.Fence.Namespace)
+	held := make([]string, 0, len(objects))
 
-	for _, o := range blobsUnder(t, h, a.Claim.Fence.Namespace) {
+	for _, o := range objects {
 		held = append(held, o.Key.String())
 	}
 

@@ -178,9 +178,15 @@ func TestCollectorChunkHostile(t *testing.T) {
 		{"a negative chunk number", chunkRow(-1, true, false, 1, good)},
 		{"a chunk number above the limit", chunkRow(1<<20, true, false, 1, good)},
 		{"a blob key of another chunk", withBlobKey(chunkRow(0, true, false, 1, good), blobKeyOf(1))},
-		{"a blob key of another job", withBlobKey(chunkRow(0, true, false, 1, good), "job/jobother/log/"+logID+"/00000000-jla-x")},
+		{
+			"a blob key of another job",
+			withBlobKey(chunkRow(0, true, false, 1, good), "job/jobother/log/"+logID+"/00000000-jla-x"),
+		},
 		{"a blob key that leaves the namespace", withBlobKey(chunkRow(0, true, false, 1, good), "../../x")},
-		{"a blob key with no attempt", withBlobKey(chunkRow(0, true, false, 1, good), blobKeyOf(0)[:len(blobKeyOf(0))-len("-jla-x")])},
+		{
+			"a blob key with no attempt",
+			withBlobKey(chunkRow(0, true, false, 1, good), blobKeyOf(0)[:len(blobKeyOf(0))-len("-jla-x")]),
+		},
 	}
 
 	for _, tt := range tests {
@@ -520,5 +526,9 @@ func TestCollectorKeepsUnverifiedUnique(t *testing.T) {
 	}
 
 	prefix := "namespaces/" + nsID + "/job/" + jobID + "/log/" + logID + "/"
-	assertCollected(t, &c, collected{keys: nil, unverified: []string{prefix + "00000001-jla-x", prefix + "00000002-jla-x"}})
+	assertCollected(
+		t,
+		&c,
+		collected{keys: nil, unverified: []string{prefix + "00000001-jla-x", prefix + "00000002-jla-x"}},
+	)
 }

@@ -250,23 +250,34 @@ type ArtifactTx interface {
 	// Log returns the log version row id of the namespace ns, and false when
 	// none exists.
 	Log(ctx context.Context, ns namespace.Name, id string) (LogRow, bool, error)
+	ChunkTx
+}
+
+// ChunkKey is the blob key that the row of the confirmed chunk Seq holds.
+type ChunkKey struct {
+	Seq     int
+	BlobKey string
+}
+
+// ChunkTx reads and writes the rows of log chunks of one transaction.
+type ChunkTx interface {
 	// Chunk returns the row of the chunk seq of the log version, and false
 	// when none exists.
 	Chunk(ctx context.Context, ns namespace.Name, log string, seq int) (job.ChunkRow, bool, error)
 	// InsertChunk stores the row of a chunk that is not confirmed. A row that
 	// exists stays as it is.
 	InsertChunk(ctx context.Context, ns namespace.Name, log string, seq int, c job.ChunkRow) error
-	// ConfirmChunk marks the row of the chunk as confirmed and keeps the size
-	// and the MD5 of its stored bytes, and the key of the blob of the attempt
-	// that won (the empty text for the key of the first layout).
-	ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest, blobKey string) error
+	// ConfirmChunk marks the row of the chunk as confirmed and keeps what the
+	// attempt that won stored.
+	ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int, stored StoredChunk) error
 	// ChunkKeys returns the blob key of each confirmed chunk of the log
 	// version, in the order of the chunk numbers.
 	ChunkKeys(ctx context.Context, ns namespace.Name, log string) ([]ChunkKey, error)
 }
 
-// ChunkKey is the blob key that the row of the confirmed chunk Seq holds.
-type ChunkKey struct {
-	Seq     int
+// StoredChunk is what the attempt that won a chunk stored: the size and the
+// MD5 of its sealed bytes in the blob store, and the key of its blob.
+type StoredChunk struct {
+	Digest  blob.Digest
 	BlobKey string
 }
