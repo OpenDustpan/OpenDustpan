@@ -65,7 +65,7 @@ server (issue #99).
 |---------|----------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|-------------------|
 | server  | [RFC 1](rfc/0001-opentofu-via-the-tfe-compatible-api.md) OpenTofu via the TFE-compatible API | all                                                                      | accepted (ADR 25) |
 | server  | [RFC 3](rfc/0003-domain-modules-for-updates-secrets-and-state.md) Domain modules             | 3: OpenTofu state                                                        | accepted (ADR 26) |
-| server  | [RFC 35](rfc/0035-packaging.md) Packaging and installation                                   | TLS, binary, container image                                             | accepted (ADR 27) |
+| server  | [RFC 35](rfc/0035-packaging.md) Packaging and installation                                   | TLS, binary, container image                                             | accepted (ADR 27, ADR 283) |
 | server  | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle                                          | the rest: soft delete, move, workspace lifecycle, tags as labels (RFC 4) | draft; soft delete accepted (ADR 47) |
 | server  | [RFC 63](rfc/0063-workspace-lock-holder.md) A workspace lock belongs to a principal          | follow-up after the exit test: all                                       | accepted (ADR 44) |
 | server  | [RFC 65](rfc/0065-opentofu-http-backend.md) OpenTofu through the http backend too            | follow-up after the exit test: all                                       | accepted (ADR 49) |
@@ -128,13 +128,103 @@ run from the first tag on.
 **Goal.** More than one person and more than one CI pipeline can share an
 install, each with only the access they need, and every change is on record.
 
+**Scope.** The owner decided on 2026-10-30 that milestone 4 has no scope
+cut. Each row of the table ships as planned.
+
+**Exit test.** On Linux, on SQLite and on PostgreSQL, through the real binary
+over TLS, the e2e suite does these steps for each Pulumi CLI and OpenTofu
+version in its matrix. The suite runs the test identity providers, a test
+SMTP server, a test syslog server and a test OTLP collector itself. Each
+step ends with a check of the audit entries that the step must write
+(step 12).
+
+1. **Sign-in methods.** For each method of RFC 21 and ADR 55, a person signs
+   in, gets a session, creates an access token, and runs `pulumi up` and
+   `tofu apply` with that token. The methods are OIDC, LDAP, SAML, CAS, an
+   OAuth 2.0 provider with no OIDC (a user-info endpoint and a claim
+   mapping), trusted-header sign-in, and a passkey of a local user with no
+   password. A trusted header from an address that is not a named proxy
+   gives no sign-in. Trusted-header sign-in is off until an administrator
+   turns it on.
+2. **MFA.** With "require MFA" on (ADR 46), a local user and an LDAP user
+   cannot finish a sign-in without a TOTP code or a WebAuthn key. An SSO
+   sign-in does not ask for a second factor. A token creation and a token
+   reveal without a fresh MFA step give the error of ADR 56.
+3. **SCIM.** A SCIM 2.0 client creates a user and a group, and adds the user
+   to the group. A grant of the group on a collection lets the user run
+   `pulumi up` and `tofu apply` there. The SCIM removal of the user disables
+   the sessions and the access tokens of the user and keeps them. The next
+   CLI command fails with 401. With the revocation setting on, a removal
+   revokes them (ADR 55 decision 9).
+4. **Groups, roles and grants.** A grant of `writer` on one collection lets
+   the CLIs write the units of that collection and gives 403 on a unit of
+   another collection. A grant of `viewer` lets `pulumi stack export` and
+   `tofu state pull` read, and refuses `pulumi up` and `tofu apply`. The
+   revocation of a grant takes effect on the next request. The access-review
+   export lists each grant with its holder, role, object, creator and time
+   (ADR 52).
+5. **The planner role.** A token of a principal with the `planner` role
+   (ADR 212) reads state with both CLIs. `pulumi up`, `pulumi destroy`,
+   `tofu apply` and `tofu destroy` give 403. The read of a secret value gives
+   403. The start of a plan-only job with `unit:run-plan` is step 3 of
+   milestone 5.
+6. **Token life cycle and expiry email.** An access token records its
+   last-used time. A token past its expiry gives 401 to both CLIs. A token
+   with no use for the inactivity period is disabled. Before the expiry, the
+   server sends the warning email to the test SMTP server, the API shows the
+   warning field, and the CLI shows the warning of ADR 53 decision 11. The
+   SMTP settings are those of ADR 212. A service principal gets a token with the lifetime
+   limits of ADR 67 and ADR 69.
+7. **Workload identity.** A CI job of the suite gets a JWT from a test OIDC
+   issuer, exchanges it for an access token (ADR 54), and runs `pulumi up`
+   and `tofu apply`. A JWT with a wrong audience, a wrong issuer or a claim
+   that no trust rule matches gives 401. A trust rule of one namespace gives
+   no access to another namespace.
+8. **IP allowlists.** An administrator turns the feature on. The
+   installation, a namespace and an access token each opt in to a list
+   (ADR 55 decision 8). A console sign-in and a CLI request with the token
+   from an address that is not on the list give 403. The same requests from
+   an address on the list pass. A scope that did not opt in has no list.
+9. **mTLS.** A workload with a client certificate from the trust bundle,
+   with a SPIFFE ID in the URI SAN that a trust rule names, gets an access
+   token, and the CLIs run with it. A certificate from another CA, an
+   expired certificate and an ID that no rule names get no token. Design
+   needed: which tool CLIs can send a client certificate, and how mTLS works
+   behind a TLS proxy of the operator (open questions of ADR 54). The step
+   proves the answer that the design gives.
+10. **Collections and placement.** A placement rule on the Pulumi project and
+    the stack name puts a new stack into its collection. The TFE project of
+    a new workspace puts it into the collection of that project (ADR 61).
+    `pulumi stack init` and `tofu init` for a unit that no rule places fail
+    with the error that names the missing rule, and the unit does not exist
+    (ADR 51 decision 5).
+11. **Break-glass mode 2.** An installation set at first boot to mode 2
+    (ADR 57) accepts a recovery request that the offline operator key signs,
+    and gives one admin session. A request with a wrong signature, or a
+    second use of the same request, gives no session. The use opens a
+    break-glass review (ADR 142).
+12. **Audit log, export and sinks.** Each of steps 1 to 11 writes the audit
+    entries of ADR 60. The audit export gives them for a time range. The
+    `otlp` sink sends them to the test OTLP collector, and the `syslog` and
+    `webhook` sinks send them too. With tamper evidence on, the chain check
+    passes, and a changed row fails it. Retention removes entries past the
+    period of ADR 68 and writes its own entry.
+13. **Console.** The browser tests of the console repository run against the
+    server of the suite. They add a member, make a group, give and revoke a
+    grant, and download the access-review export. They show the banner of
+    a token that expires soon. A section that the principal cannot open
+    shows the reason that the server gives.
+
+The full Pulumi and OpenTofu scenarios of milestones 1 to 3 still pass with
+an access token of a non-admin principal.
+
 | Where   | Item                                                                         | Part                                     | State |
 |---------|------------------------------------------------------------------------------|------------------------------------------|-------|
-| server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | collections                              | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
-| server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all                                      | discussing; groups, grants and export accepted (ADR 52) |
-| server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all                                      | discussing; token life cycle, workload identity, service principals and lifetimes accepted (ADR 53, ADR 54, ADR 67, ADR 69) |
-| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all                                      | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57) |
-| server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all                                      | discussing; port, entries, export, sinks and opt-in tamper evidence accepted (ADR 60); retention accepted (ADR 68) |
+| server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | collections, placement, the refusal of a unit with no collection | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
+| server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all, with the planner role               | discussing; groups, grants and export accepted (ADR 52), the planner role (ADR 212) |
+| server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all: expiry email, workload identity, mTLS | discussing; token life cycle, workload identity, service principals and lifetimes accepted (ADR 53, ADR 54, ADR 67, ADR 69) |
+| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all: OIDC, LDAP, SAML, CAS, OAuth 2.0, trusted header, passkeys, MFA, SCIM, IP allowlists, break-glass mode 2 | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57); design needed for the open questions of ADR 55 |
+| server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all: export, the OTLP sink               | discussing; port, entries, export, sinks and opt-in tamper evidence accepted (ADR 60); retention accepted (ADR 68) |
 | console | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | members, groups, grants, access-review export | discussing; groups, grants and export accepted (ADR 52) |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                        | sections with the reason they are locked | draft |
 
@@ -143,15 +233,106 @@ install, each with only the access they need, and every change is on record.
 **Goal.** OpenDustpan runs plans and applies itself, on runners, from a pull
 request or from the API, with policy checks before an apply.
 
+**Scope.** The owner decided on 2026-10-30 that milestone 5 has no scope
+cut. Each row of the table ships as planned. The owner also decided:
+
+- **Runners run both tools.** One runner pool runs Pulumi jobs and OpenTofu
+  jobs.
+- **The policy checks are the gates and approvals of ADRs 222 to 230.** No
+  other policy engine comes in this milestone.
+- **The first pull-request slice** is a plan, one commit status and one
+  summary comment for each pull request.
+- **An apply runs after the merge, from the default branch, by default.** A
+  pre-merge apply, from the branch of the pull request, is an option of a
+  unit. It is not the default. The docs say that the project does not
+  recommend it.
+
+**Exit test.** On Linux, on SQLite and on PostgreSQL, through the real binary
+over TLS, the e2e suite starts a runner pool with real runners of the
+project, and the fake GitHub API of the suite as the forge. The runners
+use the sandboxed process of the machine coordinator (ADR 137). For each
+Pulumi CLI and OpenTofu version in the matrix, the suite does these steps:
+
+1. **Runners.** A runner joins the pool with a join token (ADR 133), claims
+   jobs of both tools, and reports each one. A job that asks for a label
+   that no runner has stays `queued`. A runner that the suite kills during a
+   job loses its claim when the lease expires, and another runner takes the
+   job (ADR 131). The log streams to the API while the job runs.
+2. **A job from the API.** `POST` of a job with the operation `plan`, then
+   one with `apply`, for a stack and a workspace. The job runs `pulumi
+   preview` and `pulumi up`, and `tofu plan` and `tofu apply`, on the runner.
+   The update and the state version arrive through the tool APIs, and the job
+   links to them.
+3. **The planner role.** A principal with only the `planner` role starts a
+   plan-only job (`unit:run-plan`, ADR 212). An apply job of the same
+   principal gives 403.
+4. **Profiles.** The job opens its profile (ADRs 200 to 209). The tool reads
+   its config and its secrets as ADR 209 says for each tool. The job log
+   holds no secret value of the profile. A profile change makes a new
+   revision, and the next job uses it.
+5. **Stored plans.** The apply phase applies the stored plan of the plan
+   phase. A state change between the plan and the apply makes the plan
+   stale, and the job does not apply it (ADR 191 decision 7). A plan with no
+   change ends `succeeded` with no apply (ADR 213 decision 3).
+6. **Policy and approvals.** An approval rule on the unit needs two distinct
+   people. The apply waits in `awaiting-approval`, and one approval does not
+   start it. A new plan resets the approvals (ADR 191 decision 6). The
+   approval of a `destroy` needs a fresh MFA step (ADR 212 decision 3). An
+   access limit, a Cedar `forbid` policy, refuses an apply, and the decision
+   record names the policy (ADR 223). A gate in `enforce` mode refuses a
+   plan that the gate does not allow (ADR 224).
+7. **Pull request automation, first slice.** A push to a pull request
+   starts a plan for each unit that the change touches. The fake GitHub API
+   gets one commit status and one summary comment for each pull request. A
+   new push edits the same comment and does not add one.
+8. **Apply after the merge.** The merge of the pull request starts an apply
+   from the default branch at the merge commit. The apply meets the gates
+   and approvals of step 6. A push to the pull request branch does not
+   apply.
+9. **Pre-merge apply, the option.** On a unit that sets the pre-merge apply
+   option, an approved pull request applies from its branch. On a unit with
+   the default, the same request gives the error that names the option.
+   Design needed: RFC 27 is a draft. The step proves the behavior that the
+   design gives.
+10. **Write-back.** An API edit of a config value of a unit makes a commit on
+    the fake forge with the trailer of the job (ADR 101). The plan after the
+    commit shows the edit. A forge error that can pass retries, and a forge
+    error that cannot pass fails the job.
+11. **CLI-driven remote execution.** A workspace with `execution-mode`
+    `agent` runs `tofu plan` as a speculative plan on a runner. The CLI
+    shows the log of the runner (ADR 254). `tofu apply` with remote
+    execution runs the apply on a runner. Design needed: ADR 254 serves
+    plans only, and the apply stays open in RFC 30. The step proves the
+    behavior that the design gives.
+12. **Events and notifications.** A webhook sink with a subscription gets
+    the notifications of a job start, a wait for an approval, a job end and
+    a token expiry (ADR 53 decision 12). Each delivery has the signature of
+    ADR 145 decision 21. A sink that fails gets retries. No notification
+    holds a secret.
+13. **Output sharing.** A Pulumi job reads an output of an OpenTofu unit,
+    and an OpenTofu job reads an output of a Pulumi unit, when a sharing rule
+    of the producer names the consumer (ADR 273). With no rule, the read
+    gives 403. A secret output needs `unit:read-secrets` of the starter.
+14. **Run triggers.** A push to a pull request, a schedule and a `follows`
+    trigger each start a plan through the job service (ADR 267). A trigger
+    never applies. A `follows` trigger that makes a cycle is refused at save,
+    and the error names the path.
+15. **Console.** The browser tests of the console repository run against the
+    server of the suite. The run page shows the timeline, the live log, the
+    masked plan diff and the approval of step 6.
+
+The full Pulumi and OpenTofu scenarios of milestones 1 to 4 still pass from
+workstations, with no runner.
+
 | Where   | Item                                                                        | Part                            | State |
 |---------|-----------------------------------------------------------------------------|---------------------------------|-------|
-| server  | [RFC 6](rfc/0006-runners-and-remote-runs.md) Runners and remote runs        | all                             | accepted in part (ADR 100-103, 130-139) |
+| server  | [RFC 6](rfc/0006-runners-and-remote-runs.md) Runners and remote runs        | all                             | accepted (ADR 282); ADR 139 accepted, the runner in its own repository |
 | server  | [RFC 5](rfc/0005-profiles.md) Profiles                                      | all                             | discussing; core accepted |
 | server  | [RFC 12](rfc/0012-api-edits-and-write-back.md) API edits and write-back     | all                             | accepted in part |
-| server  | [RFC 13](rfc/0013-policy-and-approvals.md) Policy and approvals             | all                             | accepted |
+| server  | [RFC 13](rfc/0013-policy-and-approvals.md) Policy and approvals             | all: the gates and approvals of ADRs 222 to 230 | accepted |
 | server  | [RFC 28](rfc/0028-stored-plans.md) Stored plans                             | all                             | accepted |
-| server  | [RFC 27](rfc/0027-pull-request-automation.md) Pull request automation       | all                             | draft |
-| server  | [RFC 30](rfc/0030-opentofu-remote-execution.md) CLI-driven remote execution | all                             | accepted in part |
+| server  | [RFC 27](rfc/0027-pull-request-automation.md) Pull request automation       | all; first slice: a plan, one status, one summary comment; apply after the merge by default, pre-merge apply as an option | draft; owner direction 2026-10-30; design needed |
+| server  | [RFC 30](rfc/0030-opentofu-remote-execution.md) CLI-driven remote execution | all                             | accepted in part (ADR 254, plans); design needed for the apply |
 | server  | [RFC 23](rfc/0023-events-and-notifications.md) Events and notifications     | all                             | accepted |
 | server  | [RFC 15](rfc/0015-output-sharing.md) Output sharing                         | all                             | accepted |
 | server  | [RFC 24](rfc/0024-run-triggers-and-orchestration.md) Run triggers           | all                             | accepted |
@@ -162,14 +343,68 @@ request or from the API, with policy checks before an apply.
 **Goal.** A platform team publishes blueprints, and other teams create and
 promote units from them, inside guard rails.
 
+**Scope.** The owner decided on 2026-10-30 that milestone 6 has no scope
+cut. Each row of the table ships as planned.
+
+**Exit test.** On Linux, on SQLite and on PostgreSQL, through the real binary
+over TLS, with the runner pool and the fake GitHub API of the milestone 5
+test, the e2e suite does these steps for each Pulumi CLI and OpenTofu
+version in its matrix:
+
+1. **Blueprints.** A platform team publishes a blueprint for each tool
+   (ADRs 110 to 117). Another team requests a unit from it through the API.
+   The server checks the inputs and refuses a request with an input that
+   the blueprint does not allow, with an error that names the input. A
+   valid request makes the unit in its collection, and a job on a runner
+   applies it with `pulumi up` or `tofu apply`. A quota (ADR 115) refuses a
+   request past its limit.
+2. **Ephemeral units.** A unit from a blueprint has a time to live. Before
+   the end, a notification goes to the webhook sink of the suite. At the
+   end, a destroy job runs on a runner, and the unit is gone from the unit
+   list. A unit with an approval rule waits for the approval
+   before the destroy. Design needed: RFC 43 is a draft. The step proves the
+   behavior that the design gives.
+3. **Environment promotion.** Two units from the same blueprint, for
+   example `staging` and `production`, show the difference of their config
+   through the API. A promotion copies the config of one unit to the other
+   as an edit, with a write-back commit and a plan, and the gates of
+   milestone 5 apply. Design needed: RFC 55 is a draft. The step proves the
+   behavior that the design gives.
+4. **The artifact registry.** `tofu init` gets a private provider and a
+   private module from the registry (ADR 257, ADR 269). The Pulumi CLI gets
+   a resource plugin from it. A provider with a bad signature or a bad
+   checksum is refused.
+5. **Curated upstreams.** With curation on, `tofu init` and the Pulumi CLI
+   get a public artifact through the registry only when a curation rule
+   allows it. An artifact that no rule allows is refused, and the error
+   names the artifact. Design needed: the curation part of RFC 10 is open.
+   The step proves the behavior that the design gives.
+6. **Upgrade pull requests.** A unit pins an old version of a provider or a
+   module that the registry has in a newer version. The server opens a pull
+   request on the fake forge that changes the pin. Its plan runs as in
+   milestone 5 step 7. Design needed: RFC 56 is a draft. The step proves the
+   behavior that the design gives.
+7. **The egress proxy.** A job of a unit with the proxy on can reach only
+   the proxy. A request that an egress rule allows reaches the test endpoint
+   with the credential that the proxy adds. The job never holds that
+   credential, and the job log does not show it. A request that no rule
+   allows is refused, and the refusal writes an audit entry. A plan phase
+   cannot make a write that only the apply rule allows. Design needed:
+   RFC 16 is a draft. The step proves the behavior that the design gives.
+8. **Console.** The browser tests of the console repository run against the
+   server of the suite. They open the catalog, fill the create form of a
+   blueprint, see the error of a bad input, and make a unit.
+
+The full Pulumi and OpenTofu scenarios of milestones 1 to 5 still pass.
+
 | Where   | Item                                                                            | Part                    | State |
 |---------|---------------------------------------------------------------------------------|-------------------------|-------|
 | server  | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | all                     | accepted; domain core built |
-| server  | [RFC 43](rfc/0043-ephemeral-units.md) Ephemeral units                           | all                     | draft |
-| server  | [RFC 55](rfc/0055-environment-promotion.md) Environment promotion               | all                     | draft |
-| server  | [RFC 10](rfc/0010-artifact-registry-and-curated-upstreams.md) Artifact registry | all                     | accepted in part; providers done |
-| server  | [RFC 56](rfc/0056-upgrade-pull-requests.md) Upgrade pull requests               | all                     | draft |
-| server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all                     | draft |
+| server  | [RFC 43](rfc/0043-ephemeral-units.md) Ephemeral units                           | all                     | draft; design needed |
+| server  | [RFC 55](rfc/0055-environment-promotion.md) Environment promotion               | all                     | draft; design needed |
+| server  | [RFC 10](rfc/0010-artifact-registry-and-curated-upstreams.md) Artifact registry | all, with curated upstreams | accepted in part (ADR 257); providers done; design needed for curation |
+| server  | [RFC 56](rfc/0056-upgrade-pull-requests.md) Upgrade pull requests               | all                     | draft; design needed |
+| server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all: the job proxy      | draft; design needed |
 | console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | accepted; domain core built |
 
 ## Milestone 7. High availability on one database
@@ -293,7 +528,10 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
 - [x] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
 - [x] The binary refuses to start on a database schema that is newer than it
   knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
-- [ ] Install docs, with TLS ([RFC 35](rfc/0035-packaging.md) accepted first).
+- [ ] Install docs, with TLS from files and a reverse proxy
+  ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
+- [ ] Release workflows for the binaries, the image and the console tarball
+  ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
 
 ## Accepted designs that wait for adapters
@@ -315,9 +553,16 @@ design is in its ADRs.
 
 Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 
+RFCs 107 to 110 hold gaps that were never in the proposal of RFC 6. So their
+place here is not a scope cut of milestone 5.
+
 | Item                                                                                               | Waits on                                                        |
 |----------------------------------------------------------------------------------------------------|-----------------------------------------------------------------|
 | [RFC 7](rfc/0007-one-binary-many-roles.md) One binary, many roles                                  | a second role that needs its own process (runner, RFC 6)        |
+| [RFC 107](rfc/0107-run-limits-and-the-run-queue.md) Run limits and the run queue                    | runs (milestone 5)                                              |
+| [RFC 108](rfc/0108-run-options-re-runs-and-run-variables.md) Run options, re-runs and run variables | runs (milestone 5)                                              |
+| [RFC 109](rfc/0109-job-kinds-for-state-operations-and-many-runs.md) Job kinds for state operations | runs (milestone 5)                                              |
+| [RFC 110](rfc/0110-step-results-hooks-approval-steps-and-scanners.md) Step results and scanners     | runs (milestone 5)                                              |
 | [RFC 9](rfc/0009-themes-and-white-labeling.md) Themes and white-labeling                           | Console core views (RFC 52)                                     |
 | [RFC 11](rfc/0011-languages-and-locales.md) Languages and locales                                  | Console core views (RFC 52)                                     |
 | [RFC 25](rfc/0025-drift-detection.md) Drift detection                                              | runs (milestone 5)                                              |

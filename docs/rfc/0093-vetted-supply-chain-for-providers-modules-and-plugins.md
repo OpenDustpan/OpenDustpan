@@ -1,14 +1,16 @@
 ---
 rfc: 93
 title: A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins
-status: draft
+status: discussing
 created: 2026-10-20
 ---
 
 # RFC 93. A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins
 
-Status: draft. Nothing in this RFC is decided. No code exists for it. The
-owner answers the questions at the end (ADR 15).
+Status: discussing. Nothing in this RFC is decided. No code exists for it. The
+owner answers the questions at the end (ADR 15). The section "Proposal
+(2026-10-30): answers to the open questions" gives a recommendation for
+each.
 
 ## Problem
 
@@ -1120,6 +1122,89 @@ step:
     `@server`, and that it is not a secret item. ADR 129 decision 10 says
     that a secret item of that scope is a secret item. Which storage is
     intended?
+
+## Proposal (2026-10-30): answers to the open questions
+
+This section answers the open questions above, so that the RFC is ready to
+accept. RFC 10 holds the work items of the whole registry theme
+(Milestone 6), with this RFC as its curation part. One answer is an owner
+decision (D1), because it amends accepted ADRs.
+
+### New facts (2026-10-30)
+
+Each fact has a tag: **[fetched]** means that the page or the source file
+was read on 2026-10-30, **[not fetched]** means a search snippet only.
+
+- The network mirror protocol has no signature field. In
+  `internal/getproviders/http_mirror_source.go`, a package from a mirror
+  receives only a hash check (`NewPackageHashAuthentication`). The examples of
+  the protocol page use `h1:` only.
+  <https://opentofu.org/docs/internals/provider-network-mirror-protocol/>
+  [fetched],
+  <https://raw.githubusercontent.com/opentofu/opentofu/main/internal/getproviders/http_mirror_source.go>
+  [fetched]. So the version document of the mirror gives `h1:` for each
+  archive. The lock-file route gives `zh:` too, because `zh:` is the
+  SHA-256 of the zip that the server keeps.
+- A lock entry from a mirror holds "the checksums reported by the mirror,
+  rather than the origin registry's official checksums".
+  <https://opentofu.org/docs/cli/commands/providers/lock/> [fetched]
+- `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES` is defined in
+  `sdk/go/common/env/env.go`, and the code applies an override after it
+  resolves an explicit `pluginDownloadURL`.
+  <https://raw.githubusercontent.com/pulumi/pulumi/master/sdk/go/common/env/env.go>
+  [fetched]. An older pull request text says the opposite
+  <https://deepwiki.com/pulumi/pulumi/4.1-plugin-management> [not fetched],
+  so the e2e step checks it with the real CLI.
+- JFrog Curation blocks an "immature version" younger than a number of
+  days, and Terraform is not in its list of supported technologies.
+  <https://docs.jfrog.com/security/docs/list-of-available-conditions>
+  [fetched], <https://docs.jfrog.com/security/docs/supported-technologies>
+  [fetched]. A blocked download answers 403.
+  <https://docs.jfrog.com/security/docs/how-to-manage-virtual-repository-behavior-and-curation-in-jfrog-xray>
+  [fetched]
+- Artifactory serves Terraform and OpenTofu providers as a network mirror
+  and, from 7.125, through the provider registry protocol. With a mirror,
+  the CLI "relies on the original source for GPG signature trust".
+  <https://docs.jfrog.com/artifactory/docs/terraform-opentofu-and-terraform-backend-repositories>
+  [fetched]
+- Nexus Repository has Terraform repositories from 3.88, a proxy of
+  `registry.opentofu.org` from 3.94, and the provider registry protocol. No
+  network mirror was found.
+  <https://help.sonatype.com/en/terraform-repositories.html> [fetched].
+  Nexus Firewall quarantines only new components, and when the Firewall
+  service is not available, new requests stay in quarantine until a check
+  runs. <https://help.sonatype.com/en/firewall-quarantine.html> [fetched]
+- A minimum release age: Renovate `minimumReleaseAge` needs a release
+  timestamp from the datasource. pnpm `minimumReleaseAge` defaults to 1440
+  minutes. npm `min-release-age` is in days. uv `exclude-newer` takes a
+  date or a duration.
+  <https://raw.githubusercontent.com/renovatebot/renovate/main/docs/usage/configuration-options.md>
+  [fetched], <https://pnpm.io/settings/dependency-resolution> [fetched],
+  <https://docs.npmjs.com/cli/v11/using-npm/config> [fetched],
+  <https://docs.astral.sh/uv/reference/settings/> [fetched]
+
+### Answers
+
+| # | Question | Answer |
+| --- | --- | --- |
+| 1 | The names | Keep vetted package, package admission and package mirror. They do not clash with the glossary, and RFC 10 uses them too. |
+| 2 | `package.admit` as a seventh decision point | **Owner decision D1** (it amends ADRs 224, 225, 226 and 229). Recommended: option C.1, with the final installation gate that fails closed. |
+| 3 | Installation admissions that namespaces inherit | Yes. A namespace can revoke an inherited package for itself. It cannot admit a package that the installation revoked. |
+| 4 | OpenPGP | Decided. The owner approved `github.com/ProtonMail/go-crypto` on 2026-10-20 (issue 1293, which also asks for an ADR that records it), and `pkg/registry/pgpverify` uses it. So slice 1 checks the upstream signature with that adapter, and the signature result is `verified`, `unsigned`, `unknown-key` or `failed`, never `not-checked`. An earlier version of this proposal asked the owner again (D2). That question is withdrawn. |
+| 5 | Who fetches | The server, through `pkg/egress` with its own allowlist of upstream hosts, off until set (G.1). The upload of a person for an air gap (G.3) in the same milestone. A runner job only for git module sources (G.2, answer 7). |
+| 6 | Layer 4 | A failure before the plan, in the slice after slice 1. A warning teaches teams to ignore it. |
+| 7 | Modules | Both. Modules from an upstream module registry and `https` archives in the server fetch. Modules from git at a full commit through a runner job of the kind `package-fetch`, in a sandbox, after the server fetch works. Most public modules use git sources, so without it the feature serves few modules. |
+| 8 | Layer 5 | The audit finding that does not block (option 1). |
+| 9 | Can a scanner revoke | No. A scanner report gives facts and a finding. A person revokes. |
+| 10 | Minimum age | A fact for a gate, never a fixed rule. The source of `age.days` is the release date that the upstream host gives for the archive, for example the date of a GitHub release asset. The fetch records it. Else `age.available` is `false`. The starter pack holds a gate "approval when `age.available` is false or `age.days < 14`", as the immature-version rule of JFrog Curation does. |
+| 11 | Re-signing | No, as ADR 269 decision 7 decides for private releases. |
+| 12 | RFC 10 and this RFC | RFC 10 keeps private publishing, the version life cycle and the order of the work. This RFC is the curation part. |
+| 13 | Pending storage | 10 GiB of pending blobs for each namespace, an installation setting. A pending request expires after 7 days. |
+| 14 | The lock-file and checksums routes | Under `/api/dustpan/v1/namespaces/{namespace}/packages/`, because a person and a CI call them, not the CLI. The format code stays in the tool package: `pkg/workspace` gives the lock-file text and `pkg/stack` the `checksums` map, as pure functions. The route calls them through a port that the wiring fills, so no adapter calls another (ADR 12). |
+| 15 | The rotate route | A rotation is a create: `POST /api/dustpan/v1/package-keys` makes the next key, and `DELETE /api/dustpan/v1/package-keys/{id}` ends an old key at once. Both need `installation:manage-packages`, a fresh authentication and a reason. |
+| 16 | The storage of the package signing key | A secret item of the scope `@server`, under the rules of ADR 129 decision 10, with no route that lists or reads it. The text of section B that says "not a secret item" is replaced. The denylist of deleted key fingerprints stays outside the backup. |
+
+The work items are in RFC 10, "Proposal (2026-10-30)".
 
 ## Proposed glossary lines
 

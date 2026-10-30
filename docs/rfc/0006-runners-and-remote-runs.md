@@ -1,13 +1,16 @@
 ---
 rfc: 6
 title: Runners and remote runs
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 282
 ---
 
 # RFC 6. Runners and remote runs
 
-Status: draft. The names and the scope are proposals.
+Status: accepted as [ADR 282](../adr/0282-runners-and-remote-runs-accept-rfc-6.md)
+on 2026-10-30. ADRs 100 to 103 and 130 to 139 hold the decisions. Where
+this RFC and one of those ADRs differ, the ADR applies.
 
 ## Problem
 
@@ -160,8 +163,9 @@ _Avoid_: Deployment, hosted run
 
 ## Gaps from the competitor review
 
-Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
-worked into the proposal above.
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". ADR 282
+decision 6 moves the open gaps to RFCs 107 to 110, and decision 7 names
+the decisions that answer the others.
 
 - Log secret masking, such as `::add-mask` (Spacelift).
 - Run timeouts, a kill after no log output, expiry of queued jobs (Spacelift,
@@ -189,3 +193,13 @@ shared job model and its two executors. ADRs 130 to 138 decide runner pools,
 the runner protocol, the launcher and the source pipeline. ADR 135 supersedes
 the "Source" item of this RFC, and ADR 100 decision 19 supersedes its glossary
 entries for Job and the _Avoid_ entry "executor".
+
+Accepted on 2026-10-30 as
+[ADR 282](../adr/0282-runners-and-remote-runs-accept-rfc-6.md). The project
+owner decided it. ADR 282 also accepts ADR 139, with the runner in its
+own repository, `OpenDustpan/dustpan-runner`. The open
+gaps of the competitor review move to
+[RFC 107](0107-run-limits-and-the-run-queue.md),
+[RFC 108](0108-run-options-re-runs-and-run-variables.md),
+[RFC 109](0109-job-kinds-for-state-operations-and-many-runs.md) and
+[RFC 110](0110-step-results-hooks-approval-steps-and-scanners.md).
