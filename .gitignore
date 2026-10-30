@@ -18,6 +18,7 @@
 
 # Load harness report (make load writes it next to the Makefile)
 load-report.json
+bench-s3-out/
 
 # Soak run reports (make soak writes CSV and Markdown here)
 soak-reports/

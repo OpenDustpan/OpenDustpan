@@ -40,6 +40,20 @@ teams work today.
   alone?
 - How does comment noise stay low in a monorepo with many units?
 
+## Owner direction (2026-10-30)
+
+The project owner gave this direction on 2026-10-30, through the project
+manager. This section decides nothing. An ADR records a decision (ADR 15).
+
+- The first slice for a pull request is a plan, one commit status and one
+  summary comment.
+- An apply runs after the merge, from the default branch, by default.
+- A pre-merge apply, from the branch of the pull request, is also an
+  option. It is not the default, and the docs say that the project does not
+  recommend it.
+- Runners run both tools. The gates and approvals of ADRs 222 to 230 are
+  the policy checks.
+
 ## Outcome
 
 None yet.
