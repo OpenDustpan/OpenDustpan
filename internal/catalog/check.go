@@ -135,11 +135,12 @@ const (
 	ResultString ResultKind = "string"
 )
 
-// Limits of the built-in Expr engine. With them, the slowest expression that
-// a test found ran in 13 ms, with 1,000 groups in the environment, on one
-// core of a 2.1 GHz Xeon, with Expr v1.17.8. A rule of a usual size ran in
-// less than 1 ms. Without them, an expression of 200 bytes used all the
-// memory of the test machine.
+// Limits of the built-in Expr engine. Without the node limit, the memory
+// budget and the string limit, an expression of 200 bytes used all the memory
+// of a test machine. The engine adds its own limits for the work of the string
+// functions, the size of the environment and the runs that have not ended
+// (package internal/expr), because a loop over the groups that reads a long
+// string in each turn passed the time limit by seconds without them.
 const (
 	// MaxExprNodes is the node limit of the Expr compiler for one
 	// expression.
