@@ -880,8 +880,16 @@ is not canonical, and a credential that the job never holds.
 
 ### Owner decisions
 
-- **D4. The name of a rule.** Recommended: "proxy rule" and "proxy rule
-  set".
+- **D4. The name of a rule.** In short: what do we call one allow line of
+  the job proxy? Options:
+  1. "proxy rule" and "proxy rule set" (recommended). Short, and it names
+     the thing that applies it. Cost: "rule" alone is a common word, so
+     the text must always write "proxy rule".
+  2. "egress rule". The first word of this RFC. Cost: "egress" already
+     names the outbound guard and the egress allowlist of model calls, so
+     one word names two controls.
+  3. "request rule". It says what the rule matches. Cost: "request" already
+     names a Catalog request and a review request.
 - **D5. The RBAC of the Kubernetes coordinator.** ADR 136 decision 4 gives
   the coordinator create, get, list, watch and delete on Jobs, get on pods,
   get on its Secret and create on `tokenreviews`, and "no other

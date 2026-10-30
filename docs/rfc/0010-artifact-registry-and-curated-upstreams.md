@@ -280,9 +280,13 @@ give the curation part.
    - This changes the publish flow of ADR 269 and of
      `registry.Store.Publish`: a published version is still never changed,
      and a version in `testing` is not in the index.
-   - HCP Terraform runs the tests of a module before it publishes a
-     version (from the competitor review in the research doc "IaC and TACOS
-     landscape") [not fetched].
+   - HCP Terraform: "When enabled, HCP Terraform will run tests for every
+     commit to the designated branch. This lets you verify that it is safe
+     to publish new module versions." The page does not say that a failed
+     test stops the publish.
+     <https://developer.hashicorp.com/terraform/cloud-docs/registry/test>
+     [fetched]. So the gate of this decision is stricter than that
+     precedent: a failed test refuses the version.
 
 ### Ports
 
@@ -365,7 +369,7 @@ upload.
 
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
-| R2 | Modules from git tags | M | `registry` | M6-15 |
+| R2 | Modules from git tags | M | `registry`, `store-migrations` | M6-15 |
 | R3 | The life cycle: `deprecated`, `update-required`, `yanked`, `revoked`, with the layer 4 failure of `update-required` | M | `registry`, `store-migrations` | R9 for the layer 4 failure |
 | R4 | The package signing key: the secret item, create and delete routes, the denylist, the backup row | M | `pkgmirror-keys`, `store-migrations` | none |
 | R5 | `pkg/pkgmirror`: record, `Store`, `pkgmirrortest`, SQLite and PostgreSQL adapters | M | `pkgmirror`, `store-migrations` | none |

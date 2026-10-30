@@ -226,12 +226,33 @@ the objects of the API.
    `source.kind == "forge"`. The action `namespace:manage-preview-rules`
    saves a rule, with an audit entry. A namespace has at most 50 rules.
 
+   **No preview for a review request from a fork.** A review request whose
+   head is in another repository than the repository of the rule makes no
+   preview, at no event. Anyone can open such a review request on a public
+   repository, and a preview applies with the grants of the saver and the
+   profile of the blueprint. ADR 267 decision 19 already says "A push from
+   a fork starts nothing" for its plan. The preview service checks this
+   again on its own, as a layer that does not rely on the webhook filter of
+   ADR 267: before each submit, it reads the review request from the forge
+   through the forge port, and compares the head repository (its forge ID,
+   not its name) with the repository of the rule. A head that differs, a
+   head that the forge does not give, and a read that fails each make no
+   submit. The server records the reason `fork-head` or `forge-unavailable`
+   and writes an audit entry. The comparison is a pure function,
+   `preview.SameRepository`, with its own test.
+
    Whether a preview rule may apply with no person is owner decision D10.
 
 ### Owner decision D10. A preview rule applies
 
 ADR 267 decision 9 says that a trigger starts a plan and nothing else. A
-preview rule that only plans gives no preview. Options:
+preview rule that only plans gives no preview. A preview rule is not a
+trigger of ADR 267: it does not belong to one unit (ADR 267 decision 1),
+and it makes and destroys units. But it starts a change that no person
+starts at that time, from the same webhook. So option 1 **amends ADR 267
+decision 9**: "A trigger starts a plan and nothing else. A preview rule of
+RFC 55 is the one kind of automatic start that can apply, and only to the
+forks that it made." Options:
 
 1. **The submit of a preview rule applies (recommended).** The fork is a new
    unit that only the rule writes. Each gate still applies, so a team that
@@ -295,7 +316,12 @@ preview rule that only plans gives no preview. Options:
    is for a part of a unit that the caller can read, for example the
    output values: with `unit:read-outputs` on one side only, both sides
    are `hidden`.
-   A preview rule whose saver lost `catalog:request` makes no fork. A fork
+   A preview rule whose saver lost `catalog:request` makes no fork. A
+   review request whose head repository has another forge ID than the
+   repository of the rule makes no fork: a test calls the preview service
+   with such an event directly, with the webhook filter of ADR 267
+   skipped. A test also gives `preview.SameRepository` a head with the same
+   name and another ID, and a head with no ID. A fork
    that names a source request that the caller cannot read is a 404.
 5. **Fail closed.** A source with no applied revision, or under its `soak`,
    refuses the advance with the reason. A fact producer that fails gives
