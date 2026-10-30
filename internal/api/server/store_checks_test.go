@@ -146,7 +146,7 @@ func TestStartStoreCheckAnswers202AndWritesTheStartEntry(t *testing.T) {
 
 	e := entries[0]
 	if e.Action != "installation:store-check" || e.Subject != "tester" || e.Object != "store-check "+id ||
-		e.Outcome != audit.OutcomeSuccess || !strings.Contains(string(audit.EncodeChanges(e.Changes)), "blobs") {
+		e.Outcome != audit.OutcomeSuccess || !strings.Contains(audit.EncodeChanges(e.Changes), "blobs") {
 		t.Fatalf("entry = %+v", e)
 	}
 }

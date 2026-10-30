@@ -84,12 +84,13 @@ func checkStart(id string) durable.StartRequest {
 func startCheck(t *testing.T, s StoreCheckStore, id string, target storecheck.Target, at time.Time) {
 	t.Helper()
 
-	if err := s.Records.StartCheck(
+	err := s.Records.StartCheck(
 		t.Context(),
 		checkRow(id, target, at),
 		checkStart(id),
 		at.Add(-24*time.Hour),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("start %s: %v", id, err)
 	}
 }
@@ -189,7 +190,7 @@ func testCheckTakenID(t *testing.T, s StoreCheckStore) {
 func testCheckInvalidRow(t *testing.T, s StoreCheckStore) {
 	t.Helper()
 
-	bad := []storecheck.Record{
+	rows := []storecheck.Record{
 		checkRow("", storecheck.TargetBlobs, checkAt()),
 		checkRow("chk-../x", storecheck.TargetBlobs, checkAt()),
 		checkRow("chk-aaaa", "s3://bucket", checkAt()),
@@ -202,7 +203,8 @@ func testCheckInvalidRow(t *testing.T, s StoreCheckStore) {
 	notRunning := checkRow("chk-aaaa", storecheck.TargetBlobs, checkAt())
 	notRunning.State = storecheck.StateSucceeded
 
-	rows := append(bad, noRequester, notRunning)
+	rows = append(rows, noRequester, notRunning)
+
 	for i := range rows {
 		err := s.Records.StartCheck(t.Context(), rows[i], checkStart(rows[i].ID.String()), checkAt().Add(-time.Hour))
 		if err == nil {
@@ -261,32 +263,36 @@ func testCheckCooldown(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("start in the cooldown err = %v, want ErrCooldown", err)
 	}
 
-	if _, err := s.Records.GetCheck(t.Context(), "chk-bbbb"); !errors.Is(err, storecheck.ErrNotFound) {
+	_, err = s.Records.GetCheck(t.Context(), "chk-bbbb")
+	if !errors.Is(err, storecheck.ErrNotFound) {
 		t.Fatalf("a refused start stored a row: %v", err)
 	}
 
 	// The other target does not wait.
-	if err := s.Records.StartCheck(
+	err = s.Records.StartCheck(
 		t.Context(),
 		checkRow("chk-cccc", storecheck.TargetBackup, later),
 		checkStart("chk-cccc"),
 		endedAt.Add(-time.Second),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("start on the other target: %v", err)
 	}
 
 	// After the cooldown, the same target starts again.
 	fence = claimCheck(t, s)
-	if err := s.Records.FinishCheck(t.Context(), fence, "chk-cccc", endOf(later)); err != nil {
+	err = s.Records.FinishCheck(t.Context(), fence, "chk-cccc", endOf(later))
+	if err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 
-	if err := s.Records.StartCheck(
+	err = s.Records.StartCheck(
 		t.Context(),
 		checkRow("chk-dddd", storecheck.TargetBlobs, later),
 		checkStart("chk-dddd"),
 		endedAt.Add(time.Second),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("start after the cooldown: %v", err)
 	}
 }
@@ -350,7 +356,7 @@ func testCheckFinish(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("finish: %v", err)
 	}
 
-	got := s.row(t, "chk-aaaa")
+	got := s.firstRow(t)
 	if got.State != storecheck.StateFailed || got.Error != end.Error || !bytes.Equal(got.Report, end.Report) ||
 		!got.EndedAt.Equal(end.EndedAt) {
 		t.Fatalf("row = %+v", got)
@@ -382,12 +388,13 @@ func testCheckFinishNotRunning(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	if err := s.Records.FinishCheck(
+	err = s.Records.FinishCheck(
 		t.Context(),
 		op.Claim.Step("first"),
 		"chk-aaaa",
 		endOf(checkAt().Add(time.Minute)),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 
@@ -396,7 +403,7 @@ func testCheckFinishNotRunning(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("second finish err = %v, want ErrNotRunning", err)
 	}
 
-	got := s.row(t, "chk-aaaa")
+	got := s.firstRow(t)
 	if !got.EndedAt.Equal(checkAt().Add(time.Minute)) {
 		t.Fatalf("the second finish changed the end time to %v", got.EndedAt)
 	}
@@ -415,7 +422,7 @@ func testCheckFinishStale(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("err = %v, want ErrClaimLost", err)
 	}
 
-	if got := s.row(t, "chk-aaaa"); got.State != storecheck.StateRunning {
+	if got := s.firstRow(t); got.State != storecheck.StateRunning {
 		t.Fatalf("a stale fence changed the row to %q", got.State)
 	}
 }
@@ -434,7 +441,7 @@ func testCheckFinishOtherOperation(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("err = %v, want ErrClaimLost", err)
 	}
 
-	if got := s.row(t, "chk-aaaa"); got.State != storecheck.StateRunning {
+	if got := s.firstRow(t); got.State != storecheck.StateRunning {
 		t.Fatalf("the row of the fence changed to %q", got.State)
 	}
 }
@@ -466,15 +473,8 @@ func testCheckFinishBadState(t *testing.T, s StoreCheckStore) {
 		end := endOf(checkAt())
 		end.State = state
 
-		if err := s.Records.FinishCheck(
-			t.Context(),
-			fence,
-			"chk-aaaa",
-			end,
-		); !errors.Is(
-			err,
-			storecheck.ErrNotRunning,
-		) {
+		err := s.Records.FinishCheck(t.Context(), fence, "chk-aaaa", end)
+		if !errors.Is(err, storecheck.ErrNotRunning) {
 			t.Errorf("finish with state %q err = %v, want ErrNotRunning", state, err)
 		}
 	}
@@ -531,11 +531,12 @@ func testCheckFailEnded(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	if err := s.Ops.Fail(
+	err = s.Ops.Fail(
 		t.Context(),
 		op.Claim,
 		durable.Failure{Message: "adapter error https://s3.example.test", Final: true, RetryAfter: 0},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("fail operation: %v", err)
 	}
 
@@ -545,7 +546,7 @@ func testCheckFailEnded(t *testing.T, s StoreCheckStore) {
 		t.Fatalf("fail ended = %d, %v; want 1", n, err)
 	}
 
-	got := s.row(t, "chk-aaaa")
+	got := s.firstRow(t)
 	if got.State != storecheck.StateFailed || got.Error != storecheck.EndedWithoutFinishText ||
 		!got.EndedAt.Equal(endedAt) {
 		t.Fatalf("row = %+v", got)
@@ -558,13 +559,14 @@ func testCheckFailEnded(t *testing.T, s StoreCheckStore) {
 	}
 }
 
-// row returns the row id and fails the test on an error.
-func (s StoreCheckStore) row(t *testing.T, id storecheck.ID) storecheck.Record {
+// firstRow returns the row chk-aaaa, the check that most cases start first,
+// and fails the test on an error.
+func (s StoreCheckStore) firstRow(t *testing.T) storecheck.Record {
 	t.Helper()
 
-	row, err := s.Records.GetCheck(t.Context(), id)
+	row, err := s.Records.GetCheck(t.Context(), "chk-aaaa")
 	if err != nil {
-		t.Fatalf("get %s: %v", id, err)
+		t.Fatalf("get chk-aaaa: %v", err)
 	}
 
 	return row

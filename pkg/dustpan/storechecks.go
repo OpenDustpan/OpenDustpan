@@ -66,7 +66,10 @@ func newStoreCheckService(cfg *settings, maint *maintenance.Service) (*storechec
 // storeCheckAdmit returns the check that refuses a store check in maintenance
 // mode and while a restore runs. A state that it cannot read refuses too.
 func storeCheckAdmit(cfg *settings, maint *maintenance.Service) func(ctx context.Context) error {
-	restores, _ := cfg.namespaceStore.(backup.RestoreOperations)
+	var restores backup.RestoreOperations
+	if ops, ok := cfg.namespaceStore.(backup.RestoreOperations); ok {
+		restores = ops
+	}
 
 	return func(ctx context.Context) error {
 		if err := refuseInMaintenance(ctx, maint); err != nil {

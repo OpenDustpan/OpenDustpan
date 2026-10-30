@@ -2936,8 +2936,7 @@ func newServerHandler(
 		Preferences:      newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
-		Instances:        cfg.instanceStore,
-		StoreChecks:      checks,
+		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
