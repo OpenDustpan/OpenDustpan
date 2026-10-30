@@ -270,6 +270,13 @@ func pgCopyCollectionTables() []pgCopyTable {
 			orderBy: []string{pgColUnitID},
 		},
 		{
+			table: "placement_rules",
+			columns: []string{
+				"id", pgColNamespace, "position", pgColTool, "project", "stack", "collection_key", "created_by", pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, "position", "id"},
+		},
+		{
 			table: "object_context",
 			columns: []string{
 				pgColNamespaceID,

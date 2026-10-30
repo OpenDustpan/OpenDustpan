@@ -234,6 +234,12 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "placement_rules",
+			columns: []string{
+				"id", backupColNamespace, "position", backupColTool, "project", "stack", "collection_key", "created_by", backupColCreatedAtMs,
+			},
+		},
+		{
 			table: "object_context",
 			columns: []string{
 				backupColNamespaceID,
