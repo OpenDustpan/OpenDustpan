@@ -337,6 +337,9 @@ var rootMounts = []string{
 	// path, and the client cannot move it under the prefix of the REST API. The
 	// TFE adapter serves it and lists the route table in its own tests.
 	"/v1/providers/",
+	// The protocol routes of the OIDC issuers. The path is part of the issuer
+	// URL that clouds hold, so it cannot move under the prefix.
+	"/oidc/",
 	// Service discovery, the metrics route and the probes.
 	"GET /.well-known/terraform.json", "GET /metrics",
 	"GET /health/live", "GET /health/ready", "GET /health/ready/{component}",

@@ -286,7 +286,7 @@ func flagValue(raw json.RawMessage, def bool) (bool, error) {
 // mediaType returns the media type of the request, in lower case and without
 // its parameters.
 func mediaType(r *http.Request) string {
-	head, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
+	head, _, _ := strings.Cut(apidesc.Header(r, "Content-Type"), ";")
 
 	return strings.ToLower(strings.TrimSpace(head))
 }
