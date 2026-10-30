@@ -411,7 +411,9 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 		return nil, fmt.Errorf("stage backup %s for restore %s: %w", in.BackupID, in.ID, err)
 	}
 
-	if stage.DropIssuerKeys && !in.CheckOnly {
+	// The data decides, not the flag alone: the event names a drop that removed
+	// rows. The stage checked the row counts of the manifest against the data.
+	if stage.DropIssuerKeys && !in.CheckOnly && stage.Want.RowCounts[issuerKeysTable] > 0 {
 		if recErr := s.recordKeysDropped(ctx, sc, in); recErr != nil {
 			return nil, recErr
 		}
@@ -487,6 +489,9 @@ func (s *RestoreService) stageInput(
 
 	return area, stage, nil
 }
+
+// issuerKeysTable is the table of the signing keys of the OIDC issuers.
+const issuerKeysTable = "issuer_keys"
 
 // foreignInstallation reports whether the backup comes from another
 // installation than this server. It fails closed: a server with no

@@ -62,6 +62,7 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -86,6 +87,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -186,9 +188,15 @@ type settings struct {
 	// workspaceBlobs is the blob store of the workspace service: the blob
 	// store behind the in-process cache when WithBlobCache sets a size, else
 	// blobStore. Every other user reads blobStore.
-	workspaceBlobs       blob.Store
-	inventoryReader      inventory.Reader
-	profileStore         profile.Store
+	workspaceBlobs  blob.Store
+	inventoryReader inventory.Reader
+	profileStore    profile.Store
+	// issuerStore keeps the signing keys and the settings of the OIDC issuer
+	// of each namespace, or is nil. issuerBaseURL is the host of the issuer URL,
+	// and issuerOutbox receives its notices.
+	issuerStore          profile.IssuerStore
+	issuerBaseURL        string
+	issuerOutbox         notify.Outbox
 	sinks                sinkSettings
 	jobStore             job.Store
 	triggerStore         trigger.Store
@@ -699,7 +707,9 @@ type Server struct {
 	durableOwner string
 	// reconciler does the periodic work of the job model: the schedule
 	// job.reconcile. It is nil without a job store or a namespace service.
-	reconciler      *job.Reconciler
+	reconciler *job.Reconciler
+	// issuer is the OIDC issuer, or nil. The schedule issuer.rotate calls it.
+	issuer          *issuersvc.Service
 	inactivityEvery time.Duration
 	deletedEvery    time.Duration
 	// components are the components this process runs. watch reads the
@@ -718,6 +728,9 @@ type services struct {
 	// manualLocks is the manual lock service, or nil when the store holds no
 	// manual locks.
 	manualLocks *manuallock.Service
+	// issuer is the OIDC issuer, or nil when the store keeps none. assemble
+	// sets it.
+	issuer *issuersvc.Service
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
@@ -763,6 +776,9 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
+		issuerStore:             nil,
+		issuerBaseURL:           "",
+		issuerOutbox:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		triggerStore:            nil,
@@ -1058,6 +1074,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
+	if svc.issuer, err = newIssuerService(svc, cfg); err != nil {
+		return nil, err
+	}
+
 	mount, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
@@ -1113,6 +1133,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		durable:         cfg.durableStore,
 		durableOwner:    durableOwner(cfg),
 		reconciler:      reconciler,
+		issuer:          svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components,
@@ -1268,6 +1289,8 @@ type neutralHandlers struct {
 	runners http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
+	// issuer is nil when no issuer store is set.
+	issuer http.Handler
 	// sinks is nil when no sink store is set.
 	sinks http.Handler
 	// jobs is nil when no job store is set.
@@ -1314,6 +1337,11 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
+	issuer, err := newIssuerHandler(svc, cfg, onFailure, policies)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	sinks, err := newSinksHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
@@ -1344,7 +1372,7 @@ func newNeutralHandlers(
 	}
 
 	return neutralHandlers{
-		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, issuer: issuer, sinks: sinks,
 		jobs:     jobAPIs.jobs,
 		triggers: triggers,
 		drift:    jobAPIs.drift,
@@ -1608,6 +1636,10 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	base, err := baseurl.Parse(cfg.publicURL)
 	if err != nil {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
+	}
+
+	if _, issuerErr := baseurl.Parse(cfg.issuerBaseURL); issuerErr != nil {
+		return baseurl.Resolver{}, fmt.Errorf("issuer base URL: %w", issuerErr)
 	}
 
 	return base, checkRetention(cfg.softDeleteRetention)
@@ -4016,6 +4048,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	mountV1(mux, a.inventory, wrapV1)
 	mountV1(mux, a.context, wrapV1)
 	mountV1(mux, a.profiles, wrapV1)
+	mountV1(mux, a.issuer, wrapV1)
 	mountV1(mux, a.sinks, wrapV1)
 	mountV1(mux, a.registry, wrapV1)
 	mountV1(mux, a.jobs, wrapV1)
@@ -4048,6 +4081,13 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// version endpoints under /api/v2/ pass the maintenance gate, so the
 	// CLI still meets the 503 refusal that names maintenance.
 	mux.Handle("GET /.well-known/terraform.json", a.tfe)
+	// The protocol routes of the OIDC issuers live outside the versioned API:
+	// their path is part of the issuer URL that clouds hold. They answer public
+	// data only, and they stay available in maintenance mode like the
+	// discovery document of the TFE adapter.
+	if a.issuer != nil {
+		mux.Handle("/oidc/", withJSONMethodNotAllowed(a.issuer))
+	}
 	// The provider registry protocol of OpenTofu lives outside /api/, at the
 	// path that service discovery names. The handler answers 404 for every path
 	// of it when no registry is set. It is refused in maintenance mode like the

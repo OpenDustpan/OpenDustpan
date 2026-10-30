@@ -34,6 +34,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"context", a.context},
 		{"runners", a.runners},
 		{"profiles", a.profiles},
+		{"issuer", a.issuer},
 		{"sinks", a.sinks},
 		{"jobs", a.jobs},
 		{"triggers", a.triggers},

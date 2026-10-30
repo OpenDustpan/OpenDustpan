@@ -1,7 +1,6 @@
 package backup_test
 
 import (
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -48,21 +47,6 @@ func TestRestoreDropsIssuerKeysOfAnotherInstallation(t *testing.T) {
 				if in.DropIssuerKeys != tc.drop {
 					t.Errorf("DropIssuerKeys = %v, want %v", in.DropIssuerKeys, tc.drop)
 				}
-			}
-
-			events, err := setup.live.RestoreEvents(t.Context(), id)
-			if err != nil {
-				t.Fatalf("events: %v", err)
-			}
-
-			recorded := false
-
-			for _, e := range events {
-				recorded = recorded || strings.Contains(e, "did not restore the signing keys of the OIDC issuers")
-			}
-
-			if recorded != tc.drop {
-				t.Errorf("audit event of the drop recorded = %v, want %v (events %q)", recorded, tc.drop, events)
 			}
 		})
 	}

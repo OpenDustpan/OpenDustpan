@@ -25,6 +25,7 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 	"console-csp":                     "consoleHeaders",
 	"console-hsts":                    "consoleHeaders",
 	"public-url":                      "publicURL",
+	"issuer-base-url":                 "issuerBaseURL",
 	"trusted-proxies":                 "proxies",
 	"trusted-proxy-header":            "proxies",
 	"ip-allowlists":                   "ipAllowlists",

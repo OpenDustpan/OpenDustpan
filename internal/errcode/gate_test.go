@@ -41,6 +41,7 @@ func gated() []errcodetest.Adapter {
 			Skip: []string{"writeMaintenanceHTTPBackend", "writeMaintenanceRunner"},
 		},
 		api("inventory", nil, nil),
+		api("issuer", nil, nil),
 		api("jobs", nil, nil),
 		api("notifications", nil, nil),
 		api("objectcontext", nil, nil),

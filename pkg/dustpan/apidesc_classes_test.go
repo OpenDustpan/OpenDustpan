@@ -37,7 +37,7 @@ var outsideByDesign = []string{
 	// The paths that an identity provider, a cloud trust policy, an MCP
 	// client, a scrape configuration or a chat app stores.
 	"/sign-in/{id}/callback",
-	"/oidc/{namespace}/.well-known/openid-configuration", "/oidc/{namespace}/jwks",
+	"/oidc/{nsid}/.well-known/openid-configuration", "/oidc/{nsid}/jwks",
 	"/mcp", "/metrics",
 	"/chat/{tool}/actions",
 }
