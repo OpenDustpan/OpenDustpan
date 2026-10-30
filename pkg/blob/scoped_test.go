@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -68,12 +69,16 @@ func (m *memStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (m *memStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err //nolint:wrapcheck // Test fake.
+func (m *memStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
 	}
 
-	dir := strings.TrimSuffix(prefix, "/") + "/"
+	if err := ctx.Err(); err != nil {
+		return blob.Page{}, fmt.Errorf("list: %w", err)
+	}
+
+	dir := req.Dir()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -88,7 +93,7 @@ func (m *memStore) List(ctx context.Context, prefix string) ([]blob.Object, erro
 
 	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 
-	return out, nil
+	return blob.PageOf(out, req), nil
 }
 
 func (m *memStore) Ping(ctx context.Context) error {
@@ -176,9 +181,85 @@ func TestScopedListFailsClosed(t *testing.T) {
 		t.Fatalf("new scoped: %v", err)
 	}
 
-	objects, err := v.List(t.Context(), "namespaces/ns-abc/")
+	objects, err := blobtest.ListAll(t.Context(), v, "namespaces/ns-abc/")
 	if !errors.Is(err, blob.ErrOutOfScope) || len(objects) != 0 {
 		t.Fatalf("list = %v, %v; want no objects and ErrOutOfScope", objects, err)
+	}
+}
+
+// nextFault is a store that answers a Next key outside the scope, as an
+// adapter with a listing fault would.
+type nextFault struct {
+	*memStore
+
+	next blob.Key
+}
+
+func (n nextFault) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := n.memStore.ListPage(ctx, req)
+	page.Next = n.next
+
+	return page, err
+}
+
+// TestScopedListPageRefusesBadRequests proves the view fails closed on a
+// prefix outside the scope, on a Next key outside the scope, and on a request
+// that the store refuses.
+func TestScopedListPageRefusesBadRequests(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		store func() blob.Store
+		req   blob.PageRequest
+		want  error
+	}{
+		{
+			"empty prefix",
+			func() blob.Store { return newMemStore() },
+			blob.PageRequest{Prefix: "", After: "", Limit: 10},
+			blob.ErrOutOfScope,
+		},
+		{
+			"prefix of another namespace",
+			func() blob.Store { return newMemStore() },
+			blob.PageRequest{Prefix: "namespaces/ns-other/", After: "", Limit: 10},
+			blob.ErrOutOfScope,
+		},
+		{
+			"next key of another namespace",
+			func() blob.Store { return nextFault{memStore: newMemStore(), next: "namespaces/ns-other/x"} },
+			blob.PageRequest{Prefix: "namespaces/ns-abc/", After: "", Limit: 10},
+			blob.ErrOutOfScope,
+		},
+		{
+			"limit out of range",
+			func() blob.Store { return newMemStore() },
+			blob.PageRequest{Prefix: "namespaces/ns-abc/", After: "", Limit: 0},
+			blob.ErrInvalidPage,
+		},
+		{
+			"after outside the prefix",
+			func() blob.Store { return newMemStore() },
+			blob.PageRequest{Prefix: "namespaces/ns-abc/", After: "namespaces/ns-other/x", Limit: 10},
+			blob.ErrInvalidKey,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			v, err := blob.NewScoped(tc.store(), "ns-abc")
+			if err != nil {
+				t.Fatalf("new scoped: %v", err)
+			}
+
+			page, err := v.ListPage(t.Context(), tc.req)
+			if !errors.Is(err, tc.want) || len(page.Objects) != 0 || page.Next != "" {
+				t.Fatalf("page = %v, err = %v; want an empty page and %v", page, err, tc.want)
+			}
+		})
 	}
 }
 

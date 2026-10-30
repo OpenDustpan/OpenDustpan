@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -73,7 +75,7 @@ func (c *countingStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (c *countingStore) List(_ context.Context, prefix string) ([]blob.Object, error) {
+func (c *countingStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -88,6 +90,23 @@ func (c *countingStore) List(_ context.Context, prefix string) ([]blob.Object, e
 	}
 
 	return out, nil
+}
+
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (c *countingStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := c.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
 }
 
 func (c *countingStore) Ping(context.Context) error { return nil }
@@ -283,7 +302,7 @@ func TestScopedBlobsRefuseHostilePrefixes(t *testing.T) {
 
 			b, store, rec := newScopeFixture(t, nil)
 
-			if _, err := b.List(t.Context(), tc.prefix); !errors.Is(err, blob.ErrOutOfScope) {
+			if _, err := blobtest.ListAll(t.Context(), b, tc.prefix); !errors.Is(err, blob.ErrOutOfScope) {
 				t.Fatalf("list %q: err = %v, want blob.ErrOutOfScope", tc.prefix, err)
 			}
 
@@ -323,7 +342,7 @@ func TestScopedBlobsServeTheirOwnKeys(t *testing.T) {
 		t.Fatalf("get = %q, want body", got)
 	}
 
-	listed, listErr := b.List(ctx, b.updatePrefix("stk-1", "upd-1"))
+	listed, listErr := blobtest.ListAll(ctx, b, b.updatePrefix("stk-1", "upd-1"))
 	if listErr != nil || len(listed) != 1 {
 		t.Fatalf("list = %v, %v; want one object", listed, listErr)
 	}
@@ -591,11 +610,28 @@ type foreignLister struct {
 	*countingStore
 }
 
-func (foreignLister) List(context.Context, string) ([]blob.Object, error) {
+func (foreignLister) list(context.Context, string) ([]blob.Object, error) {
 	return []blob.Object{
 		{Key: "namespaces/ns-scope-a/pulumi/stk-1/upd-1/1", ModifiedAt: time.Time{}},
 		{Key: "namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", ModifiedAt: time.Time{}},
 	}, nil
+}
+
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (x foreignLister) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := x.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
 }
 
 // TestListRefusesAKeyOutsideTheStack checks the layer under the delete of a
@@ -617,7 +653,7 @@ func TestListRefusesAKeyOutsideTheStack(t *testing.T) {
 		t.Fatalf("scope: %v", err)
 	}
 
-	listed, err := b.List(t.Context(), b.stackPrefix(scopeStack))
+	listed, err := blobtest.ListAll(t.Context(), b, b.stackPrefix(scopeStack))
 	if !errors.Is(err, blob.ErrOutOfScope) || len(listed) != 0 {
 		t.Fatalf("list = %v, %v; want no key and blob.ErrOutOfScope", listed, err)
 	}

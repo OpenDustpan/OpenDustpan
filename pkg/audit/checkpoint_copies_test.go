@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 )
 
 // replacingBlobs is an in-memory blob store that ignores conditional
@@ -66,7 +67,7 @@ func (s *replacingBlobs) Delete(_ context.Context, key blob.Key) error {
 }
 
 // List answers the objects under the key directory prefix, ordered by key.
-func (s *replacingBlobs) List(_ context.Context, prefix string) ([]blob.Object, error) {
+func (s *replacingBlobs) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	dir := strings.TrimSuffix(prefix, "/") + "/"
 
 	s.mu.Lock()
@@ -83,6 +84,23 @@ func (s *replacingBlobs) List(_ context.Context, prefix string) ([]blob.Object, 
 	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 
 	return out, nil
+}
+
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (s *replacingBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := s.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
 }
 
 func (s *replacingBlobs) Ping(context.Context) error { return nil }
@@ -770,7 +788,7 @@ func TestCheckpointsNewEpochOnTwoInstances(t *testing.T) {
 		}
 	}
 
-	objects, err := f.blobs.List(t.Context(), audit.CheckpointPrefix+"/epochs/")
+	objects, err := blobtest.ListAll(t.Context(), f.blobs, audit.CheckpointPrefix+"/epochs/")
 	if err != nil || len(objects) != starters {
 		t.Fatalf("epoch copies: got %d, %v, want %d", len(objects), err, starters)
 	}

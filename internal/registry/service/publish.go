@@ -115,21 +115,26 @@ func (s *Service) sweepStaging(ctx context.Context, view *blob.Scoped, id namesp
 
 	prefix := dir.String()[:len(dir.String())-len("aaaaaaaaaaaaaaaaaaaa")]
 
-	objects, err := view.List(ctx, prefix)
-	if err != nil {
-		return
-	}
-
 	cutoff := s.now().Add(-StagingGrace)
+	seen := 0
 
-	for i, o := range objects {
-		if i >= maxStagedPerSweep {
-			return
+	// The walk stops after maxStagedPerSweep files, so a sweep stays bounded.
+	err = blob.Walk(ctx, view, prefix, func(o blob.Object) error {
+		if seen >= maxStagedPerSweep {
+			return errSweepBound
 		}
+
+		seen++
 
 		if o.ModifiedAt.Before(cutoff) {
 			s.dropStaged(ctx, view, o.Key)
 		}
+
+		return nil
+	})
+	if err != nil && !errors.Is(err, errSweepBound) {
+		// A failed listing leaves the rest to the next sweep.
+		return
 	}
 }
 

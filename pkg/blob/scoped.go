@@ -98,32 +98,36 @@ func (v *Scoped) Delete(ctx context.Context, key Key) error {
 	return v.store.Delete(ctx, key)
 }
 
-// List returns the objects under prefix, which must name a directory inside
-// the scope, with or without a trailing slash. The empty prefix, and a prefix
-// that is the parent of the scope or only a string prefix of it, return
-// ErrOutOfScope. If the store returns a key outside the scope, List returns
-// ErrOutOfScope and no objects.
-func (v *Scoped) List(ctx context.Context, prefix string) ([]Object, error) {
-	dir := strings.TrimSuffix(prefix, "/")
+// ListPage returns one page of the objects under req.Prefix, which must name
+// a directory inside the scope, with or without a trailing slash. The empty
+// prefix, and a prefix that is the parent of the scope or only a string
+// prefix of it, return ErrOutOfScope. If the store returns a key outside the
+// scope, ListPage returns ErrOutOfScope and no objects.
+func (v *Scoped) ListPage(ctx context.Context, req PageRequest) (Page, error) {
+	dir := strings.TrimSuffix(req.Prefix, "/")
 
 	if !v.dirInScope(dir) {
-		return nil, ErrOutOfScope
+		return Page{}, ErrOutOfScope
 	}
 
-	objects, err := v.store.List(ctx, prefix)
+	page, err := v.store.ListPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return Page{}, err
 	}
 
-	// Defense in depth: the store lists only under prefix. This check stays so
+	// Defense in depth: the store lists only under the prefix. This check stays so
 	// that an adapter with a listing fault cannot show a key of another namespace.
-	for i := range objects {
-		if !v.inScope(objects[i].Key) {
-			return nil, ErrOutOfScope
+	for i := range page.Objects {
+		if !v.inScope(page.Objects[i].Key) {
+			return Page{}, ErrOutOfScope
 		}
 	}
 
-	return objects, nil
+	if page.Next != "" && !v.inScope(page.Next) {
+		return Page{}, ErrOutOfScope
+	}
+
+	return page, nil
 }
 
 // Ping checks the store. It takes no key, so the scope does not apply.

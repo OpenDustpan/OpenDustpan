@@ -143,7 +143,13 @@ func (b *stateBlobs) list(ctx context.Context, ns namespace.ID, ws ID) ([]blob.O
 		return nil, b.refuse(ctx, ns, opList, blob.ErrOutOfScope, scopeaudit.OutsideUnitDirectory)
 	}
 
-	objects, err := v.List(ctx, workspaceDir(v, ws))
+	var objects []blob.Object
+
+	err = blob.Walk(ctx, v, workspaceDir(v, ws), func(o blob.Object) error {
+		objects = append(objects, o)
+
+		return nil
+	})
 	if err != nil {
 		return nil, b.refuse(ctx, ns, opList, fmt.Errorf("list state blobs: %w", err), scopeaudit.OutsideNamespace)
 	}

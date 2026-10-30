@@ -80,7 +80,7 @@ func (m *memBlobs) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (m *memBlobs) List(_ context.Context, prefix string) ([]blob.Object, error) {
+func (m *memBlobs) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -99,6 +99,23 @@ func (m *memBlobs) List(_ context.Context, prefix string) ([]blob.Object, error)
 	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 
 	return out, nil
+}
+
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (m *memBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := m.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
 }
 
 func (m *memBlobs) Ping(context.Context) error { return nil }

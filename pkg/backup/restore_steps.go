@@ -356,7 +356,7 @@ func (s *RestoreService) deleteOwnTempKeys(ctx context.Context, id RestoreID, to
 
 	prefix := tempKeyPrefix + "/" + id.String() + "/" + strconv.FormatInt(token, 10) + "/"
 
-	objects, err := s.blobs.List(ctx, prefix)
+	objects, err := listObjects(ctx, s.blobs, prefix)
 	if err != nil {
 		return fmt.Errorf("list the temporary blobs of restore %s: %w", id, err)
 	}
@@ -1234,7 +1234,7 @@ func (s *RestoreService) checkNamedBlobs(
 // restore whose row ended. The keys of a restore with no row stay: another
 // installation can share the store.
 func (s *RestoreService) deleteTempKeys(ctx context.Context, id RestoreID) error {
-	objects, err := s.blobs.List(ctx, tempKeyPrefix)
+	objects, err := listObjects(ctx, s.blobs, tempKeyPrefix)
 	if err != nil {
 		return fmt.Errorf("list the temporary blobs of restore %s: %w", id, err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -77,10 +78,10 @@ func (c *countingBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, e
 	return c.Store.Get(ctx, key)
 }
 
-func (c *countingBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (c *countingBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	c.counts.reads.Add(1)
 
-	return c.Store.List(ctx, prefix)
+	return c.Store.ListPage(ctx, req)
 }
 
 // noRefusals is a scopeaudit.Recorder that drops every refusal. The suite
@@ -289,7 +290,7 @@ func openSealed(ctx context.Context, s secret.ItemSealer, ref secret.ItemRef, bi
 func keyBlobs(t *testing.T, r *SealerRig, ns namespace.ID) []blob.Object {
 	t.Helper()
 
-	objects, err := r.Blobs.List(t.Context(), "namespaces/"+ns.String()+"/item-keys/")
+	objects, err := blobtest.ListAll(t.Context(), r.Blobs, "namespaces/"+ns.String()+"/item-keys/")
 	if err != nil {
 		t.Fatalf("list item key blobs: %v", err)
 	}

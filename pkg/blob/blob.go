@@ -95,11 +95,11 @@ type Store interface {
 	Get(ctx context.Context, key Key) (io.ReadCloser, error)
 	// Delete removes the object under key. Deleting a missing key is not an error.
 	Delete(ctx context.Context, key Key) error
-	// List returns the objects under prefix, ordered by key. Prefix names a
-	// key directory such as "<unit>/", with or without a trailing slash; a
-	// prefix that names no directory yields an empty list. A caller lists
-	// one unit to find stored objects no record references.
-	List(ctx context.Context, prefix string) ([]Object, error)
+	// ListPage returns one page of the objects under req.Prefix, ordered by
+	// key, as PageRequest describes. A caller that needs every object walks
+	// the pages with Walk. A caller lists one unit to find stored objects no
+	// record references.
+	ListPage(ctx context.Context, req PageRequest) (Page, error)
 	// Ping returns nil when the store can serve a request, and an error
 	// otherwise. The error holds no credential and no path.
 	Ping(ctx context.Context) error

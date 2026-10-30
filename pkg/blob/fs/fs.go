@@ -143,11 +143,29 @@ func (s *Store) Delete(ctx context.Context, key blob.Key) error {
 	return nil
 }
 
-// List implements blob.Store: the objects under prefix, ordered by key,
-// with their modification times in UTC. A prefix that names no directory
-// yields an empty list. The temporary directory never lists: in-flight
-// uploads stay invisible until their link lands.
-func (s *Store) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+// ListPage implements blob.Store: one page of the objects under the prefix,
+// ordered by key, with their modification times in UTC. A prefix that names
+// no directory yields an empty page. The temporary directory never lists:
+// in-flight uploads stay invisible until their link lands.
+//
+// A directory tree does not list in the order of the keys, so the adapter
+// reads the names under the prefix and sorts them before it cuts the page.
+// It keeps the names in memory, not the contents.
+func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, fmt.Errorf("list %s: %w", req.Prefix, err)
+	}
+
+	objects, err := s.listAll(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	return blob.PageOf(objects, req), nil
+}
+
+// listAll returns every object under prefix, ordered by key.
+func (s *Store) listAll(ctx context.Context, prefix string) ([]blob.Object, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list %s: %w", prefix, err)
 	}

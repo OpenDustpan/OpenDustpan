@@ -551,7 +551,7 @@ func (m *memBlob) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (m *memBlob) List(_ context.Context, prefix string) ([]blob.Object, error) {
+func (m *memBlob) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -566,6 +566,23 @@ func (m *memBlob) List(_ context.Context, prefix string) ([]blob.Object, error) 
 	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 
 	return out, nil
+}
+
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (m *memBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := m.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
 }
 
 func (m *memBlob) Ping(context.Context) error {
@@ -1858,11 +1875,11 @@ type recordBlob struct {
 	listed []string
 }
 
-// List implements blob.Store, recording prefix.
-func (m *recordBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	m.listed = append(m.listed, prefix)
+// ListPage implements blob.Store, recording the prefix of each request.
+func (m *recordBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	m.listed = append(m.listed, req.Prefix)
 
-	return m.memBlob.List(ctx, prefix)
+	return m.memBlob.ListPage(ctx, req)
 }
 
 // failBlob fails listings and deletes, to prove sweep failures stay out of
@@ -1875,12 +1892,12 @@ type failBlob struct {
 }
 
 // List implements blob.Store.
-func (m *failBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (m *failBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	if m.listErr != nil {
-		return nil, m.listErr
+		return blob.Page{}, m.listErr
 	}
 
-	return m.memBlob.List(ctx, prefix)
+	return m.memBlob.ListPage(ctx, req)
 }
 
 // Delete implements blob.Store.

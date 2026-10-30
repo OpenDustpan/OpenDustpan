@@ -655,7 +655,7 @@ func (r CheckpointResult) fail(seq int64, reason string) CheckpointResult {
 // good one. The objects are small, so the read caps each at 4 KiB like a
 // checkpoint.
 func (c *Checkpoints) Epoch(ctx context.Context) (int64, error) {
-	objects, err := c.blobs.List(ctx, epochDir)
+	objects, err := listObjects(ctx, c.blobs, epochDir)
 	if err != nil {
 		return 0, fmt.Errorf("list audit checkpoint epochs: %w", err)
 	}
@@ -832,7 +832,7 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 
 	dir := checkpointDir(epoch, scope)
 
-	objects, err := c.blobs.List(ctx, dir)
+	objects, err := listObjects(ctx, c.blobs, dir)
 	if err != nil {
 		return result, fmt.Errorf("list audit checkpoints of %s: %w", scope, err)
 	}
@@ -1054,7 +1054,7 @@ func withNewest(plan readPlan, highest, good int64) readPlan {
 func (c *Checkpoints) storedCopies(ctx context.Context, gk goodKey) (copySet, error) {
 	dir := checkpointDir(gk.epoch, gk.scope)
 
-	objects, err := c.blobs.List(ctx, dir)
+	objects, err := listObjects(ctx, c.blobs, dir)
 	if err != nil {
 		return copySet{}, fmt.Errorf("list audit checkpoints of %s: %w", gk.scope, err)
 	}
@@ -1477,4 +1477,22 @@ func randomIndex(n int) int {
 	}
 
 	return int(v.Int64())
+}
+
+// listObjects walks every page under dir and returns the objects. The check
+// needs the names of all copies of a directory to group them, so it keeps the
+// objects of one directory, not their contents.
+func listObjects(ctx context.Context, store blob.Store, dir string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, store, dir, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }

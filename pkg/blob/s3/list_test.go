@@ -1,6 +1,7 @@
 package s3_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,18 +11,19 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/s3"
 )
 
 // listPage builds a ListObjectsV2 answer with keys modified at modified. A
-// non-empty next marks the page truncated with that continuation token.
-func listPage(next string, modified time.Time, keys ...string) string {
+// true truncated marks the page truncated.
+func listPage(truncated bool, modified time.Time, keys ...string) string {
 	var doc strings.Builder
 
 	doc.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>`)
 
-	if next != "" {
-		doc.WriteString(`<IsTruncated>true</IsTruncated><NextContinuationToken>` + next + `</NextContinuationToken>`)
+	if truncated {
+		doc.WriteString(`<IsTruncated>true</IsTruncated>`)
 	} else {
 		doc.WriteString(`<IsTruncated>false</IsTruncated>`)
 	}
@@ -36,30 +38,13 @@ func listPage(next string, modified time.Time, keys ...string) string {
 	return doc.String()
 }
 
-// pagedHandler answers two pages: the first holds a valid key and a name
-// that is not a blob key, the second one more key. It checks that only the
-// second request carries the continuation token.
-func pagedHandler(t *testing.T, modified time.Time) func(*http.Request, []byte, int) (int, string) {
-	t.Helper()
-
-	return func(r *http.Request, _ []byte, call int) (int, string) {
-		token := r.URL.Query().Get("continuation-token")
-
-		if call == 0 {
-			if token != "" {
-				t.Errorf("first page sent continuation token %q", token)
-			}
-
-			return http.StatusOK, listPage("next-1", modified,
-				"pfx/tofu/ws-1/sv-2/a1", "pfx/tofu/ws-1/bad//name")
-		}
-
-		if token != "next-1" {
-			t.Errorf("continuation token = %q, want next-1", token)
-		}
-
-		return http.StatusOK, listPage("", modified, "pfx/tofu/ws-1/sv-1/a1")
-	}
+// listAnswer is one answer of a fake server in a paging case, and the
+// start-after and max-keys parameters that the request for it must carry.
+type listAnswer struct {
+	truncated  bool
+	keys       []string
+	startAfter string
+	maxKeys    string
 }
 
 // checkListed fails t unless got holds want in order, each modified at
@@ -104,29 +89,154 @@ func checkListRequest(t *testing.T, req capturedRequest, prefix string) {
 	}
 }
 
-func TestListFollowsPagesAndStripsPrefix(t *testing.T) {
+// TestListPageSendsStartAfterAndMaxKeys proves how one page maps to
+// requests: the cursor goes out as the start-after parameter with the store
+// prefix, the limit as max-keys, a name that is not a blob key is skipped and
+// the rest of the page is asked for after it, and Next is the last valid key
+// of a full page that the store says is truncated.
+func TestListPageSendsStartAfterAndMaxKeys(t *testing.T) {
 	t.Parallel()
 
 	modified := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
-	fake := newFakeServer(t, pagedHandler(t, modified))
+	cases := []struct {
+		name     string
+		after    blob.Key
+		limit    int
+		answers  []listAnswer
+		wantKeys []string
+		wantNext string
+	}{
+		{
+			name:     "first page, truncated",
+			limit:    2,
+			answers:  []listAnswer{{true, []string{"pfx/tofu/ws-1/a", "pfx/tofu/ws-1/b"}, "", "2"}},
+			wantKeys: []string{"tofu/ws-1/a", "tofu/ws-1/b"},
+			wantNext: "tofu/ws-1/b",
+		},
+		{
+			name:     "next page, last",
+			after:    "tofu/ws-1/b",
+			limit:    2,
+			answers:  []listAnswer{{false, []string{"pfx/tofu/ws-1/c"}, "pfx/tofu/ws-1/b", "2"}},
+			wantKeys: []string{"tofu/ws-1/c"},
+			wantNext: "",
+		},
+		{
+			name:  "a name that is not a key is skipped and the page is filled",
+			limit: 2,
+			answers: []listAnswer{
+				{true, []string{"pfx/tofu/ws-1/a", "pfx/tofu/ws-1/bad//name"}, "", "2"},
+				{false, []string{"pfx/tofu/ws-1/c"}, "pfx/tofu/ws-1/bad//name", "1"},
+			},
+			wantKeys: []string{"tofu/ws-1/a", "tofu/ws-1/c"},
+			wantNext: "",
+		},
+		{
+			name:  "a truncated page of only bad names asks again",
+			limit: 1,
+			answers: []listAnswer{
+				{true, []string{"pfx/tofu/ws-1/bad//name"}, "", "1"},
+				{false, []string{"pfx/tofu/ws-1/c"}, "pfx/tofu/ws-1/bad//name", "1"},
+			},
+			wantKeys: []string{"tofu/ws-1/c"},
+			wantNext: "",
+		},
+		{
+			name:     "an empty answer is an empty last page",
+			limit:    5,
+			answers:  []listAnswer{{false, nil, "", "5"}},
+			wantKeys: []string{},
+			wantNext: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeServer(t, func(r *http.Request, _ []byte, call int) (int, string) {
+				if call >= len(tc.answers) {
+					t.Errorf("server saw call %d, want %d calls", call, len(tc.answers))
+
+					return http.StatusInternalServerError, errorDoc("InternalError")
+				}
+
+				want := tc.answers[call]
+				query := r.URL.Query()
+
+				if got := query.Get("start-after"); got != want.startAfter {
+					t.Errorf("call %d: start-after = %q, want %q", call, got, want.startAfter)
+				}
+
+				if got := query.Get("max-keys"); got != want.maxKeys {
+					t.Errorf("call %d: max-keys = %q, want %q", call, got, want.maxKeys)
+				}
+
+				if query.Get("continuation-token") != "" {
+					t.Errorf("call %d: sent a continuation token", call)
+				}
+
+				return http.StatusOK, listPage(want.truncated, modified, want.keys...)
+			})
+			server := httptest.NewServer(fake)
+			t.Cleanup(server.Close)
+
+			s := openStore(t, server, testSigner(server.URL, nil), "pfx")
+
+			page, err := s.ListPage(t.Context(), blob.PageRequest{Prefix: "tofu/ws-1", After: tc.after, Limit: tc.limit})
+			if err != nil {
+				t.Fatalf("list page: %v", err)
+			}
+
+			checkListed(t, page.Objects, modified, tc.wantKeys)
+
+			if page.Next.String() != tc.wantNext {
+				t.Fatalf("next = %q, want %q", page.Next, tc.wantNext)
+			}
+
+			if calls := fake.calls(); calls != len(tc.answers) {
+				t.Fatalf("server saw %d calls, want %d", calls, len(tc.answers))
+			}
+
+			checkListRequest(t, fake.first(), "pfx/tofu/ws-1/")
+		})
+	}
+}
+
+// TestListPageRefusesBadRequestsBeforeTheStore proves a limit out of range
+// and an After outside the prefix fail without a request.
+func TestListPageRefusesBadRequestsBeforeTheStore(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeServer(t, func(*http.Request, []byte, int) (int, string) {
+		return http.StatusOK, listPage(false, time.Now())
+	})
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 
 	s := openStore(t, server, testSigner(server.URL, nil), "pfx")
 
-	got, err := s.List(t.Context(), "tofu/ws-1")
-	if err != nil {
-		t.Fatalf("list: %v", err)
+	cases := []struct {
+		name string
+		req  blob.PageRequest
+		want error
+	}{
+		{"limit zero", blob.PageRequest{Prefix: "a/", After: "", Limit: 0}, blob.ErrInvalidPage},
+		{"limit above the page", blob.PageRequest{Prefix: "a/", After: "", Limit: blob.MaxPageLimit + 1}, blob.ErrInvalidPage},
+		{"after outside the prefix", blob.PageRequest{Prefix: "a/", After: "b/x", Limit: 1}, blob.ErrInvalidKey},
+		{"after not a key", blob.PageRequest{Prefix: "a/", After: "a/../x", Limit: 1}, blob.ErrInvalidKey},
 	}
 
-	checkListed(t, got, modified, []string{"tofu/ws-1/sv-1/a1", "tofu/ws-1/sv-2/a1"})
-
-	if calls := fake.calls(); calls != 2 {
-		t.Fatalf("server saw %d calls, want 2", calls)
+	for _, tc := range cases {
+		if _, err := s.ListPage(t.Context(), tc.req); !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
 	}
 
-	checkListRequest(t, fake.first(), "pfx/tofu/ws-1/")
+	if calls := fake.calls(); calls != 0 {
+		t.Fatalf("server saw %d calls, want 0", calls)
+	}
 }
 
 // failFirstList returns a fake server whose first list answers status with
@@ -139,7 +249,7 @@ func failFirstList(t *testing.T, status int, code string) (*fakeServer, *s3.Stor
 			return status, errorDoc(code)
 		}
 
-		return http.StatusOK, listPage("", time.Now(), "a/b")
+		return http.StatusOK, listPage(false, time.Now(), "a/b")
 	})
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
@@ -152,7 +262,7 @@ func TestListRetriesServerError(t *testing.T) {
 
 	fake, s := failFirstList(t, http.StatusServiceUnavailable, "SlowDown")
 
-	got, err := s.List(t.Context(), "a/")
+	got, err := blobtest.ListAll(t.Context(), s, "a/")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -171,7 +281,7 @@ func TestListFailsOnAccessDenied(t *testing.T) {
 
 	fake, s := failFirstList(t, http.StatusForbidden, "AccessDenied")
 
-	if _, err := s.List(t.Context(), "a/"); err == nil {
+	if _, err := blobtest.ListAll(t.Context(), s, "a/"); err == nil {
 		t.Fatal("list after access denied = nil, want error")
 	}
 

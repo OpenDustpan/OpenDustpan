@@ -376,8 +376,8 @@ func (g *gatedRestoreTarget) Delete(ctx context.Context, key blob.Key) error {
 	return g.inner.Delete(ctx, key)
 }
 
-func (g *gatedRestoreTarget) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return g.inner.List(ctx, prefix)
+func (g *gatedRestoreTarget) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return g.inner.ListPage(ctx, req)
 }
 
 func (g *gatedRestoreTarget) Ping(ctx context.Context) error {

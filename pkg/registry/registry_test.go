@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -487,10 +488,27 @@ func (s *countStore) Delete(_ context.Context, _ blob.Key) error {
 	return nil
 }
 
-func (s *countStore) List(_ context.Context, _ string) ([]blob.Object, error) {
+func (s *countStore) list(_ context.Context, _ string) ([]blob.Object, error) {
 	s.calls.Add(1)
 
 	return nil, nil
+}
+
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (s *countStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := s.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
 }
 
 func (s *countStore) Ping(_ context.Context) error {

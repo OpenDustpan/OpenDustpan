@@ -921,8 +921,8 @@ func (m *mutatingTarget) Delete(ctx context.Context, key blob.Key) error {
 	return m.inner.Delete(ctx, key)
 }
 
-func (m *mutatingTarget) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return m.inner.List(ctx, prefix)
+func (m *mutatingTarget) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return m.inner.ListPage(ctx, req)
 }
 
 func (m *mutatingTarget) Ping(ctx context.Context) error {
