@@ -77,7 +77,7 @@ var _ jobstore.Runner = jobRunner{s: nil}
 // take the same row, so a lock that committed before is seen by the dispatch,
 // and a lock write that starts later waits for the dispatch.
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {
-	err := pgx.BeginFunc(ctx, r.s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, r.s.txs, func(tx pgx.Tx) error {
 		if _, err := readWritable(ctx, tx, readStateSQL, nil, r.s.binaryVersion); err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 
 // Read implements jobstore.Runner.
 func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
-	err := pgx.BeginTxFunc(ctx, r.s.pool, r.s.snapshotOptions(), func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, r.s.txs, r.s.snapshotOptions(), func(tx pgx.Tx) error {
 		return fn(&jobTx{tx: tx, q: r.s.queries.WithTx(tx)})
 	})
 	if err != nil {
