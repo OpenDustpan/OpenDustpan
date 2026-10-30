@@ -357,6 +357,8 @@ Reference:
   of a journaled update.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Git host account links API](docs/reference/git-host-links-api.md): the routes that
+  link an account of a Git host to a principal.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the
   stable codes that tell a missing permission, the IP allowlist and the session
   checks apart.
