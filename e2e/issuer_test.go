@@ -223,8 +223,8 @@ func issuerRotation(t *testing.T, env *e2e.Env, token string) {
 	post := http.MethodPost
 
 	issuerStep(t, env, token, issuerCall{
-		name: "a normal rotation makes the next key active", method: post, path: rotate, body: "",
-		want: http.StatusOK, check: mustHold(`"promoted":true`),
+		name: "a normal rotation waits for the next key to age", method: post, path: rotate, body: "",
+		want: http.StatusConflict, check: mustHold(`issuer.conflict`),
 	})
 	issuerStep(t, env, token, issuerCall{
 		name: "an emergency rotation needs a reason", method: post, path: rotate, body: `{"emergency":true}`,
