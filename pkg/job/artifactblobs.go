@@ -53,8 +53,8 @@ func ArtifactBlobFamily() scopeaudit.Family {
 // that the caller took from the row that it resolved and authorized, never
 // from a request field. Each key is
 // namespaces/<namespace ID>/job/<job ID>/plan/<plan ID>/<part> or
-// namespaces/<namespace ID>/job/<job ID>/log/<version ID>/<chunk>, built from
-// PlanPartKey and LogChunkKey.
+// namespaces/<namespace ID>/job/<job ID>/log/<version ID>/<chunk>-<attempt ID>,
+// built from PlanPartKey and LogChunkAttemptKey.
 //
 // A call whose parts do not make such a key returns ErrInvalid before any
 // call to the store. A key that leaves the namespace returns

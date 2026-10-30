@@ -120,8 +120,8 @@ func newSpyHarness(
 	return h, spy, inner
 }
 
-// chunkZeroKeys returns the keys of the blobs of chunk 0 of the job: the
-// blobs of the first layout and of every attempt.
+// chunkZeroKeys returns the keys of the blobs of chunk 0 of the job: the blob of
+// every attempt.
 func chunkZeroKeys(t *testing.T, h *jobtest.RecorderHarness) []string {
 	t.Helper()
 

@@ -53,8 +53,8 @@ type ChunkRow struct {
 	Shredded   bool
 	StoredSize int64
 	StoredMD5  []byte
-	// BlobKey is the key of the blob of the attempt that won the chunk. The empty
-	// text is a chunk from the first key layout.
+	// BlobKey is the key of the blob of the attempt that won the chunk, as
+	// job.ChunkBlobKey reads it. A confirmed chunk always has one.
 	BlobKey string
 }
 

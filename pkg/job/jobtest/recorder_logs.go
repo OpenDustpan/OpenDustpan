@@ -30,6 +30,8 @@ func logCases() []recorderCase {
 		{"logs: the item key of a log version is of the kind job-log", testLogItemKey},
 		{"logs: parallel writers of one chunk with one content give one chunk", testLogParallelSame},
 		{"logs: parallel writers of one chunk with other contents give one winner", testLogParallelOther},
+		{"logs: many rounds of two writers with other contents give one winner and one conflict", testLogRaceOther},
+		{"logs: many rounds of two writers with one content leave one blob for each chunk", testLogRaceSame},
 	}
 }
 
@@ -627,5 +629,114 @@ func replaceRaw(t *testing.T, h RecorderHarness, key blob.Key, data []byte) {
 
 	if err := h.Blobs.Put(t.Context(), key, bytes.NewReader(data)); err != nil {
 		t.Fatalf("put %s: %v", key, err)
+	}
+}
+
+// raceRounds is the number of chunks that a race case writes, two writers for
+// each chunk.
+const raceRounds = 25
+
+// logBlobCount returns the number of chunk blobs of logs in the namespace of a.
+func logBlobCount(t *testing.T, h RecorderHarness, a *job.Assignment) int {
+	t.Helper()
+
+	n := 0
+
+	for _, o := range blobsUnder(t, h, a.Claim.Fence.Namespace) {
+		if strings.Contains(o.Key.String(), "/log/") {
+			n++
+		}
+	}
+
+	return n
+}
+
+// raceTwo runs two AppendLog calls of the chunk seq at once, with the contents
+// in contents, and returns their errors.
+func raceTwo(t *testing.T, h RecorderHarness, a *job.Assignment, seq int, contents [2]string) [2]error {
+	t.Helper()
+
+	var (
+		errs [2]error
+		wg   sync.WaitGroup
+	)
+
+	for i, content := range contents {
+		wg.Go(func() { errs[i] = appendChunk(t, h, a, seq, content) })
+	}
+
+	wg.Wait()
+
+	return errs
+}
+
+func testLogRaceOther(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	a := logCaseStep(t, h)
+
+	var want strings.Builder
+
+	for seq := range raceRounds {
+		first := strings.Repeat("a", repeatSmall) + string(rune('0'+seq%10)) + "\n"
+		second := strings.Repeat("b", repeatSmall) + string(rune('0'+seq%10)) + "\n"
+
+		errs := raceTwo(t, h, a, seq, [2]string{first, second})
+
+		switch {
+		case errs[0] == nil && errors.Is(errs[1], job.ErrConflict):
+			want.WriteString(first)
+		case errs[1] == nil && errors.Is(errs[0], job.ErrConflict):
+			want.WriteString(second)
+		default:
+			t.Fatalf("round %d: errors = %v, %v; want one success and one ErrConflict", seq, errs[0], errs[1])
+		}
+	}
+
+	mustEnd(t, h, a, stepPrepare, 0)
+
+	log := logOf(t, h, a)
+	if got, err := readLog(t, h, log.ID); err != nil || string(got) != want.String() || log.Chunks != raceRounds {
+		t.Fatalf("log = %d bytes (%d chunks), %v; want the %d bytes of the winners", len(got), log.Chunks, err,
+			want.Len())
+	}
+
+	// A writer that lost the reserve stores no blob.
+	if n := logBlobCount(t, h, a); n != raceRounds {
+		t.Fatalf("chunk blobs = %d, want %d: one for each chunk", n, raceRounds)
+	}
+}
+
+func testLogRaceSame(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	a := logCaseStep(t, h)
+
+	var want strings.Builder
+
+	for seq := range raceRounds {
+		content := strings.Repeat("c", repeatSmall) + string(rune('0'+seq%10)) + "\n"
+
+		for i, err := range raceTwo(t, h, a, seq, [2]string{content, content}) {
+			if err != nil {
+				t.Fatalf("round %d: writer %d = %v, want nil", seq, i, err)
+			}
+		}
+
+		want.WriteString(content)
+	}
+
+	mustEnd(t, h, a, stepPrepare, 0)
+
+	log := logOf(t, h, a)
+	if got, err := readLog(t, h, log.ID); err != nil || string(got) != want.String() || log.Chunks != raceRounds {
+		t.Fatalf("log = %d bytes (%d chunks), %v; want the %d bytes of the content", len(got), log.Chunks, err,
+			want.Len())
+	}
+
+	// An attempt that lost the confirm deleted its own blob, and one that saw
+	// the confirmed chunk stored none.
+	if n := logBlobCount(t, h, a); n != raceRounds {
+		t.Fatalf("chunk blobs = %d, want %d: one for each chunk", n, raceRounds)
 	}
 }
