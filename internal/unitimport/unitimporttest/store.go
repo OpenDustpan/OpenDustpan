@@ -46,6 +46,7 @@ func RunStore(t *testing.T, newHarness Factory) {
 		{"an upload commit is listed", testUploadCommit},
 		{"a second upload commit of a version is refused", testUploadCommitRepeated},
 		{"a race of upload commits stores one", testUploadCommitRace},
+		{"many rounds of two racing upload commits", testUploadCommitRaceRounds},
 		{"upload commits of other units and imports stay apart", testUploadCommitIsolation},
 		{"an upload commit refuses bad values", testUploadCommitInvalid},
 		{"an upload commit needs a live import", testUploadCommitImport},

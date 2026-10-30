@@ -135,6 +135,79 @@ func testUploadCommitRace(t *testing.T, h Harness) {
 	}
 }
 
+// testUploadCommitRaceRounds races two attempts with different facts files
+// for each of many sequences. In each round exactly one commit wins, the other
+// gets ErrUploadExists, and the row names the facts file of the winner only,
+// so the facts file and the body of the loser stay unreferenced.
+func testUploadCommitRaceRounds(t *testing.T, h Harness) {
+	t.Helper()
+
+	const rounds = 40
+
+	fence := setup(t, h)
+
+	for round := 1; round <= rounds; round++ {
+		winner := raceRound(t, h, fence, round)
+
+		rows := mustUploadCommits(t, h, "imp-1", uploadDir)
+		if len(rows) != round || rows[round-1].Facts != fmt.Sprintf("%010d-r%da%d.json", round, round, winner) {
+			t.Fatalf("round %d: rows = %+v, want the facts file of attempt %d as the last row", round, rows, winner)
+		}
+	}
+
+	// One audit entry for each winner, none for a loser.
+	if got := len(h.Audited(t, "acme")); got != rounds+1 { // The create in setup is the first entry.
+		t.Errorf("audit entries = %d, want %d", got, rounds+1)
+	}
+}
+
+// raceRound commits the sequence round with two attempts at the same time. It
+// checks that exactly one wins and the other gets ErrUploadExists, and it
+// returns the index of the winner.
+func raceRound(t *testing.T, h Harness, fence namespace.Fence, round int) int {
+	t.Helper()
+
+	errs := [2]error{}
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+
+	for n := range errs {
+		wg.Go(func() {
+			<-start
+
+			errs[n] = h.Uploads.CommitUploadVersion(
+				t.Context(), fence, uploadCommit(uploadDir, round, fmt.Sprintf("r%da%d", round, n)), uploadEntry(),
+			)
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	winner := -1
+
+	for n, err := range errs {
+		if err == nil {
+			if winner >= 0 {
+				t.Fatalf("round %d: both attempts committed", round)
+			}
+
+			winner = n
+
+			continue
+		}
+
+		mustIs(t, fmt.Sprintf("round %d attempt %d", round, n), err, unitimport.ErrUploadExists)
+	}
+
+	if winner < 0 {
+		t.Fatalf("round %d: no attempt committed, errors %v", round, errs)
+	}
+
+	return winner
+}
+
 func testUploadCommitIsolation(t *testing.T, h Harness) {
 	t.Helper()
 
