@@ -622,7 +622,13 @@ func testIssuerSettingsFenced(t *testing.T, s IssuerStore) {
 	_, err := s.Issuer.PutIssuerSettings(t.Context(), issuerSettings(ns.Name), 0, stale, issuerEntries(ns.Name))
 	wantErr(t, "PutIssuerSettings", err, namespace.ErrFenced)
 
-	staleCheck := profile.CopyCheck{At: epoch(), URL: issuerSettings(ns.Name).IssuerURL, OK: true, Steps: nil, Verified: nil}
+	staleCheck := profile.CopyCheck{
+		At:       epoch(),
+		URL:      issuerSettings(ns.Name).IssuerURL,
+		OK:       true,
+		Steps:    nil,
+		Verified: nil,
+	}
 	err = s.Issuer.RecordCopyCheck(t.Context(), ns.Name, staleCheck, stale, issuerEntries(ns.Name))
 	wantErr(t, "RecordCopyCheck", err, namespace.ErrFenced)
 
@@ -670,7 +676,8 @@ func testIssuerCopyCheck(t *testing.T, s IssuerStore) {
 		t.Fatalf("settings after a copy check = %+v, %v", got, err)
 	}
 
-	if !got.CopyCheck.Holds(got.IssuerURL, active.ID) || !got.CopyCheck.Holds(got.IssuerURL, next.ID) || len(got.CopyCheck.Verified) != 2 {
+	if !got.CopyCheck.Holds(got.IssuerURL, active.ID) || !got.CopyCheck.Holds(got.IssuerURL, next.ID) ||
+		len(got.CopyCheck.Verified) != 2 {
 		t.Errorf("verified keys = %v, want the two keys of the namespace", got.CopyCheck.Verified)
 	}
 }

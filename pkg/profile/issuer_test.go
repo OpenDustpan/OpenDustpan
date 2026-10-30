@@ -262,22 +262,100 @@ func TestApplyKeysChecksEachMove(t *testing.T) {
 func TestCheckAudience(t *testing.T) {
 	t.Parallel()
 
-	const pub = "https://api.example.com"
+	const (
+		pub  = "https://api.example.com"
+		base = "https://issuer.example.com"
+	)
 
 	for aud, ok := range map[string]bool{
 		"sts.amazonaws.com": true, "api://AzureADTokenExchange": true, "https://api.example.org": true,
 		"https://api.example.com.evil.net": true, "https://api.example.comx": true,
+		"https://notapi.example.com": true, "https://issuer.example.com.evil.net": true,
 		"": false, "https://api.example.com": false, "https://api.example.com/": false,
 		"https://api.example.com/x/y": false, "HTTPS://API.EXAMPLE.COM": false, "https://api.example.com?a=b": false,
 		"a\nb": false, "a\tb": false, "a\x00": false, strings.Repeat("é", 128): false, strings.Repeat("a", 255): true,
 	} {
-		if err := profile.CheckAudience(aud, pub); (err == nil) != ok {
+		if err := profile.CheckAudience(aud, pub, base); (err == nil) != ok {
 			t.Errorf("CheckAudience(%.30q) = %v, want ok %v", aud, err, ok)
 		}
 	}
+}
 
-	if err := profile.CheckAudience("https://api.example.com", ""); err != nil {
-		t.Errorf("with no public URL: %v", err)
+// TestCheckAudienceRefusesEveryWriteOfAnOwnAddress sends the writes of the
+// address of this server that a text comparison misses.
+func TestCheckAudienceRefusesEveryWriteOfAnOwnAddress(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		aud  string
+		own  []string
+	}{
+		{"the default https port", "https://api.example.com:443/x", []string{"https://api.example.com"}},
+		{"the default port in the own URL", "https://api.example.com/x", []string{"https://api.example.com:443"}},
+		{"a trailing dot", "https://api.example.com./x", []string{"https://api.example.com"}},
+		{"a trailing dot in the own URL", "https://api.example.com/x", []string{"https://api.example.com."}},
+		{"capitals in scheme and host", "HTTPS://API.Example.COM/x", []string{"https://api.example.com"}},
+		{"a percent-encoded path", "https://api.example.com/%2e%2e/x", []string{"https://api.example.com"}},
+		{"user information", "https://user@api.example.com/x", []string{"https://api.example.com"}},
+		{"another port", "https://api.example.com:8443", []string{"https://api.example.com"}},
+		{"another scheme", "http://api.example.com", []string{"https://api.example.com"}},
+		{"a bare host", "api.example.com", []string{"https://api.example.com"}},
+		{"a bare host with port and path", "API.example.com.:443/x", []string{"https://api.example.com"}},
+		{"a scheme-relative URL", "//api.example.com/x", []string{"https://api.example.com"}},
+		{"a space around the own URL", "https://api.example.com", []string{" https://api.example.com/ "}},
+		{
+			"the issuer base host when the public URL is empty", "https://issuer.example.com/oidc/ns-1",
+			[]string{"", "https://issuer.example.com"},
+		},
+		{
+			"the issuer base host when the public URL differs", "https://ISSUER.example.com.",
+			[]string{"https://api.example.com", "https://issuer.example.com"},
+		},
+		{
+			"the public URL when an issuer base is set", "https://api.example.com",
+			[]string{"https://api.example.com", "https://issuer.example.com"},
+		},
+		{"an own URL with a path", "https://api.example.com/other", []string{"https://api.example.com/dustpan"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := profile.CheckAudience(tc.aud, tc.own...)
+			if !errors.Is(err, profile.ErrInvalid) {
+				t.Errorf("CheckAudience(%q, %q) = %v, want ErrInvalid", tc.aud, tc.own, err)
+			}
+		})
+	}
+
+	// No own URL: nothing to refuse.
+	if err := profile.CheckAudience("https://api.example.com"); err != nil {
+		t.Errorf("with no own URL: %v", err)
+	}
+
+	if err := profile.CheckAudience("https://api.example.com", "", ""); err != nil {
+		t.Errorf("with empty own URLs: %v", err)
+	}
+}
+
+func TestCheckIssuerBaseURL(t *testing.T) {
+	t.Parallel()
+
+	for raw, ok := range map[string]bool{
+		"": true, "https://issuer.example.com": true, "https://issuer.example.com/path": true,
+		"https://issuer.example.com:8443": true,
+		"http://issuer.example.com":       false, "https://issuer.example.com/": false, "https://issuer.example.com?x=1": false,
+		"https://issuer.example.com#f": false, "https://user@issuer.example.com": false, " https://issuer.example.com": false,
+		"https://issuer.example.com ": false, "https://issuer example.com": false, "issuer.example.com": false,
+		"/relative": false, "https://": false, "ftp://issuer.example.com": false, "https://issuer.example.com\n": false,
+		"https://" + strings.Repeat("a", 2100): false,
+	} {
+		err := profile.CheckIssuerBaseURL(raw)
+		if (err == nil) != ok || (err != nil && !errors.Is(err, profile.ErrInvalid)) {
+			t.Errorf("CheckIssuerBaseURL(%.40q) = %v, want ok %v", raw, err, ok)
+		}
 	}
 }
 

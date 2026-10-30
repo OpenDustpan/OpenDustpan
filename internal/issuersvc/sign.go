@@ -63,7 +63,7 @@ type signRequest struct {
 // caller has checked the audience and the lifetime too, and this function does
 // not rely on it.
 func (s *Service) sign(ctx context.Context, o profile.OpenContext, r signRequest) (profile.Token, error) {
-	if err := checkRequest(o, r, s.publicURL); err != nil {
+	if err := checkRequest(o, r, s.ownURLs()); err != nil {
 		return profile.Token{}, err
 	}
 
@@ -124,13 +124,13 @@ func (s *Service) sign(ctx context.Context, o profile.OpenContext, r signRequest
 }
 
 // checkRequest checks the request of a token against the rules of the issuer.
-func checkRequest(o profile.OpenContext, r signRequest, publicURL string) error {
+func checkRequest(o profile.OpenContext, r signRequest, own []string) error {
 	if r.lifetime < profile.MinTokenLifetime || r.lifetime > profile.MaxTokenLifetime {
 		return fmt.Errorf("%w: a token lives from %s to %s, not %s", profile.ErrInvalid, profile.MinTokenLifetime,
 			profile.MaxTokenLifetime, r.lifetime)
 	}
 
-	if err := profile.CheckAudience(r.aud, publicURL); err != nil {
+	if err := profile.CheckAudience(r.aud, own...); err != nil {
 		return err
 	}
 

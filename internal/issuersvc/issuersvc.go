@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -109,19 +111,50 @@ func NewService(cfg Config) (*Service, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 
+	// Defense in depth: NewServer checks the issuer base URL too. This check
+	// stays so that a caller of the service cannot give it a value that the
+	// server would refuse at start. The value becomes the iss of each
+	// namespace with no issuerURL, and a cloud trusts that address for good.
+	if err := profile.CheckIssuerBaseURL(cfg.IssuerBaseURL); err != nil {
+		return nil, fmt.Errorf("issuer base URL: %w", err)
+	}
+
+	publicURL, err := checkPublicURL(cfg.PublicURL)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, authz: cfg.Authorizer,
-		notifier: cfg.Notifier, fetcher: cfg.Fetcher, issuerBase: trimSlash(cfg.IssuerBaseURL),
-		publicURL: trimSlash(cfg.PublicURL), now: now, log: log, mu: sync.Mutex{}, cache: map[cacheKey]cachedKey{},
+		notifier: cfg.Notifier, fetcher: cfg.Fetcher, issuerBase: cfg.IssuerBaseURL,
+		publicURL: publicURL, now: now, log: log, mu: sync.Mutex{}, cache: map[cacheKey]cachedKey{},
 	}, nil
 }
 
-func trimSlash(s string) string {
-	for s != "" && s[len(s)-1] == '/' {
-		s = s[:len(s)-1]
+// checkPublicURL trims raw as the server does for its public URL and checks
+// that it is an absolute http or https URL with a host, no user information,
+// no query and no fragment. It returns the value without a trailing slash. An
+// empty value is valid: the issuer then has no host of its own.
+func checkPublicURL(raw string) (string, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if trimmed == "" {
+		return "", nil
 	}
 
-	return s
+	u, err := url.Parse(trimmed)
+	if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(trimmed, "#") {
+		return "", fmt.Errorf("%w: public URL: use an absolute http or https URL with a host, "+
+			"no user information, no query and no fragment", profile.ErrInvalid)
+	}
+
+	return trimmed, nil
+}
+
+// ownURLs returns the URLs that name this server: the public URL and the issuer
+// base URL. An audience at one of their hosts is refused.
+func (s *Service) ownURLs() []string {
+	return []string{s.publicURL, s.issuerBase}
 }
 
 // host returns the issuer host: the issuer base URL, else the public URL.

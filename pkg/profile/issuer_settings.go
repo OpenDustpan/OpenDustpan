@@ -223,6 +223,25 @@ func issuerURLPartFault(u *url.URL, raw string) string {
 	}
 }
 
+// CheckIssuerBaseURL checks the host of the issuer URLs of the server, the
+// setting issuerBaseURL: empty, which means that the publicURL gives the host,
+// or an absolute https URL with a host, no user information, no query, no
+// fragment, no space and no trailing slash. It has the rules of CheckIssuerURL,
+// because the value becomes the iss of every namespace with no issuerURL, and
+// no cloud accepts a change of it. The server refuses a value and does not
+// change it.
+func CheckIssuerBaseURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	if why := issuerURLFault(raw); why != "" {
+		return fmt.Errorf("%w: issuerBaseURL %s: %s", ErrInvalid, quoteShort(raw), why)
+	}
+
+	return nil
+}
+
 func quoteShort(s string) string {
 	if len(s) > maxEchoURL {
 		s = s[:maxEchoURL] + "..."

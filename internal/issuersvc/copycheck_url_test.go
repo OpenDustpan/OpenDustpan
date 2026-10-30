@@ -80,7 +80,11 @@ func TestACopyCheckThatStartedBeforeAPatchIsNotStored(t *testing.T) {
 	t.Parallel()
 
 	hs := newHost(t)
-	hook := &hookFetcher{next: issuerfetch.New(guardedClient(hs, egress.Rules{Allow: nil, LoopbackForTests: true})), before: nil, done: false}
+	hook := &hookFetcher{
+		next:   issuerfetch.New(guardedClient(hs, egress.Rules{Allow: nil, LoopbackForTests: true})),
+		before: nil,
+		done:   false,
+	}
 
 	h := newHarness(t, func(c *issuerConfig, _ *harness) { c.Fetcher = hook })
 	h.setIssuerURL(hs.url())

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"net/url"
 	"slices"
 	"strings"
 )
@@ -232,11 +233,17 @@ func snakeCase(name string) bool {
 }
 
 // CheckAudience checks an audience as a token needs it: 1 to MaxAudienceBytes
-// bytes, valid UTF-8, no control character, and not the publicURL of the
-// installation or a URL under it, so that a token of the issuer never
-// authenticates to OpenDustpan. publicURL is empty when the installation has
-// none. The server refuses a value and does not change it.
-func CheckAudience(aud, publicURL string) error {
+// bytes, valid UTF-8, no control character, and not an address of this server,
+// so that a token of the issuer never authenticates to OpenDustpan. own lists
+// the URLs of this server: the publicURL and the issuer base URL. An empty
+// entry is skipped. The server refuses a value and does not change it.
+//
+// The audience is refused when its host is the host of one of the URLs in own.
+// The comparison parses both values and ignores the case of the scheme and the
+// host, a trailing dot of the host, the port, the user information, the path
+// and the query, so "HTTPS://Host.:443/x" and "https://host" are one address.
+// A bare host name, with no scheme, is compared the same way.
+func CheckAudience(aud string, own ...string) error {
 	if aud == "" || len(aud) > MaxAudienceBytes {
 		return fmt.Errorf("%w: an audience has 1 to %d bytes", ErrInvalid, MaxAudienceBytes)
 	}
@@ -247,24 +254,49 @@ func CheckAudience(aud, publicURL string) error {
 		return fmt.Errorf("%w: an audience holds a control or invalid character", ErrInvalid)
 	}
 
-	if underPublicURL(aud, publicURL) {
-		return fmt.Errorf("%w: the audience is the address of this server or under it", ErrInvalid)
+	if audienceIsOwn(aud, own) {
+		return fmt.Errorf("%w: the audience is an address of this server", ErrInvalid)
 	}
 
 	return nil
 }
 
-// underPublicURL reports whether aud is publicURL or a URL under it. The
-// comparison ignores case and trailing slashes, so a refusal does not depend on
-// how a person writes the address.
-func underPublicURL(aud, publicURL string) bool {
-	if publicURL == "" {
+// audienceIsOwn reports whether the host of aud is the host of one of the
+// URLs in own.
+func audienceIsOwn(aud string, own []string) bool {
+	audHost := hostOf(aud)
+	if audHost == "" {
 		return false
 	}
 
-	pub := strings.ToLower(strings.TrimRight(publicURL, "/"))
-	got := strings.ToLower(strings.TrimRight(aud, "/"))
+	for _, raw := range own {
+		if h := hostOf(raw); h != "" && h == audHost {
+			return true
+		}
+	}
 
-	return got == pub || strings.HasPrefix(got, pub+"/") || strings.HasPrefix(got, pub+"?") ||
-		strings.HasPrefix(got, pub+"#")
+	return false
+}
+
+// hostOf returns the normalized host of a URL or of a bare host: lower case,
+// with no port, no trailing dot and no user information. It returns the empty
+// text for a value that has no host.
+func hostOf(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	if !strings.Contains(raw, "://") {
+		// A value with no scheme is read as a host with an optional port and
+		// path: "Host.:443/x".
+		raw = "//" + strings.TrimPrefix(raw, "//")
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimRight(strings.ToLower(u.Hostname()), ".")
 }

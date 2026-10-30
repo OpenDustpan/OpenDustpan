@@ -1412,7 +1412,6 @@ func newProfileAPIs(
 	}
 
 	return profileAPIs{profiles: profiles, issuer: issuer, sinkAPI: sinks}, nil
-
 }
 
 // namespaceSettingHandlers holds the source filter API and the trust rule
@@ -1709,7 +1708,7 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 // checkIssuerBaseURL refuses an issuer base URL that does not parse. An empty
 // value is valid: the issuer then uses the public URL.
 func checkIssuerBaseURL(raw string) error {
-	if _, err := baseurl.Parse(raw); err != nil {
+	if err := profile.CheckIssuerBaseURL(raw); err != nil {
 		return fmt.Errorf("issuer base URL: %w", err)
 	}
 
