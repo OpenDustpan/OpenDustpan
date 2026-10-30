@@ -131,6 +131,7 @@ type issuerBody struct {
 	Settings           settingsBody   `json:"settings"`
 	EffectiveIssuerURL string         `json:"effectiveIssuerURL,omitempty"`
 	IssuerHostSet      bool           `json:"issuerHostConfigured"`
+	Notices            string         `json:"notices"`
 	Keys               []keyBody      `json:"keys"`
 	CopyCheck          *copyCheckBody `json:"copyCheck"`
 	Warnings           []string       `json:"warnings"`
@@ -160,10 +161,22 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, p identity.Princip
 		return
 	}
 
+	// The effective outbox setting: "off" means that the server only logs the
+	// notices of the issuer.
+	notices := "off"
+	if st.NoticesOn {
+		notices = "on"
+	}
+
 	w.Header().Set("ETag", st.Settings.ETag())
 	h.writeJSON(ctx, w, http.StatusOK, issuerBody{
-		Settings: toSettings(st.Settings), EffectiveIssuerURL: st.EffectiveIssuerURL, IssuerHostSet: st.HostConfigured,
-		Keys: toKeys(st.Keys), CopyCheck: toCopyCheck(st.Settings.CopyCheck), Warnings: nonNilStrings(st.Warnings),
+		Settings:           toSettings(st.Settings),
+		EffectiveIssuerURL: st.EffectiveIssuerURL,
+		IssuerHostSet:      st.HostConfigured,
+		Notices:            notices,
+		Keys:               toKeys(st.Keys),
+		CopyCheck:          toCopyCheck(st.Settings.CopyCheck),
+		Warnings:           nonNilStrings(st.Warnings),
 	})
 }
 

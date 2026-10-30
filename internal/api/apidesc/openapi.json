@@ -2625,6 +2625,9 @@
             },
             "type": "array"
           },
+          "notices": {
+            "type": "string"
+          },
           "settings": {
             "$ref": "#/components/schemas/IssuerSettings"
           },
@@ -2639,6 +2642,7 @@
           "copyCheck",
           "issuerHostConfigured",
           "keys",
+          "notices",
           "settings",
           "warnings"
         ],

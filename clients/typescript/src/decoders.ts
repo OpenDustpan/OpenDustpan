@@ -933,6 +933,7 @@ export const decodeNamespaceIssuer: Decoder<NamespaceIssuer> = object<NamespaceI
   effectiveIssuerURL: optional(string),
   issuerHostConfigured: boolean,
   keys: array(ref(() => decodeIssuerKey)),
+  notices: string,
   settings: ref(() => decodeIssuerSettings),
   warnings: array(string),
 });

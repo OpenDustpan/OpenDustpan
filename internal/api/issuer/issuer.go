@@ -43,8 +43,9 @@ const (
 	// channelHeader says where a request came from, for the audit entry.
 	channelHeader = "Dustpan-Channel"
 	// publicMaxAge is the Cache-Control max-age of the protocol routes, in
-	// seconds.
-	publicMaxAge = 300
+	// seconds. The rotation waits twice this time before it makes a next key
+	// active.
+	publicMaxAge = int(profile.JWKSMaxAge / time.Second)
 )
 
 // Config holds the dependencies of a Handler. Every field except the ones

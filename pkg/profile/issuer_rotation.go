@@ -64,7 +64,10 @@ type RotationOptions struct {
 // namespace (the states next, active and retired).
 //
 // A normal rotation with no next key makes one and promotes nothing: a
-// relying party must see a key in the JWKS before the key signs.
+// relying party must see a key in the JWKS before the key signs. A next key
+// becomes active only after MinNextKeyAge in the JWKS: a normal rotation
+// before that returns ErrConflict with the time, and the schedule waits. An
+// emergency rotation does not wait, and its caller says so in the audit entry.
 func PlanRotation(keys []Key, now time.Time, o RotationOptions) (RotationPlan, error) {
 	switch o.Kind {
 	case RotateEmergency:
@@ -171,13 +174,14 @@ func planStep(keys []Key, now time.Time, o RotationOptions) (RotationPlan, error
 	end := cur.ActivatedAt.Add(ActiveKeyLifetime)
 	normal := o.Kind == RotateNormal
 
-	if normal && !o.Promote && len(next) > 0 {
-		return RotationPlan{}, fmt.Errorf("%w: the copy check did not find the next key", ErrIssuerKeyMissing)
+	ready, err := promotionReady(next, now, o)
+	if err != nil {
+		return RotationPlan{}, err
 	}
 
 	// A scheduled step promotes at the end of the lifetime. A normal rotation
 	// promotes now. A next key that this step makes never signs in this step.
-	if len(next) > 0 && o.Promote && (normal || !end.After(now)) {
+	if ready && o.Promote && (normal || !end.After(now)) {
 		p.promote(cur, &next[0], retired)
 		p.plan.NewNext = normal
 
@@ -189,6 +193,39 @@ func planStep(keys []Key, now time.Time, o RotationOptions) (RotationPlan, error
 	}
 
 	return p.plan, nil
+}
+
+// promotionReady reports whether a next key may become active: it exists and it
+// was in the JWKS for MinNextKeyAge, so a verifier that caches the JWKS knows
+// the key by then. A manual rotation that cannot promote gets an error: the
+// copy check did not find the next key (ErrIssuerKeyMissing), or the key is too
+// young (ErrConflict, with the time). The schedule only waits for its next step.
+func promotionReady(next []Key, now time.Time, o RotationOptions) (bool, error) {
+	if len(next) == 0 {
+		return false, nil
+	}
+
+	manual := o.Kind == RotateNormal
+
+	if manual && !o.Promote {
+		return false, fmt.Errorf("%w: the copy check did not find the next key", ErrIssuerKeyMissing)
+	}
+
+	ready := next[0].CreatedAt.Add(MinNextKeyAge)
+	if !ready.After(now) {
+		return true, nil
+	}
+
+	if manual {
+		return false, fmt.Errorf(
+			"%w: the next key %s entered the JWKS at %s, and a verifier may cache the JWKS for %s: "+
+				"the key can become active after %s",
+			ErrConflict, next[0].ID, next[0].CreatedAt.UTC().Format(time.RFC3339), JWKSMaxAge,
+			ready.UTC().Format(time.RFC3339),
+		)
+	}
+
+	return false, nil
 }
 
 // CheckKey checks the shape of a key before a store adds it.

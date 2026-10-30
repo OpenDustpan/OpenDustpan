@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/issuersvc"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -119,6 +120,10 @@ func TestOldKeyStaysPublishedForTheOverlap(t *testing.T) {
 	h := newHarness(t)
 	h.createKeys()
 
+	// The next key waits in the JWKS first. The old key signs the token right
+	// before the promotion.
+	h.clock.Advance(profile.MinNextKeyAge)
+
 	before := h.mustLogin()
 
 	h.clock.Advance(time.Minute)
@@ -149,7 +154,7 @@ func TestManualRotationPromotesAndCapsTheRetiredKeys(t *testing.T) {
 	signed = append(signed, h.mustLogin())
 
 	for i := range 4 {
-		h.clock.Advance(time.Minute)
+		h.clock.Advance(profile.MinNextKeyAge)
 
 		res, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
 		if err != nil {
@@ -207,6 +212,8 @@ func TestNormalRotationWithoutANextKeyMakesOne(t *testing.T) {
 	if got := h.mustLogin().KeyID; got != active {
 		t.Error("a key that no relying party has seen signed")
 	}
+
+	h.clock.Advance(profile.MinNextKeyAge)
 
 	res, err = h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
 	if err != nil || !res.Promoted {
@@ -463,5 +470,87 @@ func TestEveryManagementCallChecksItsAction(t *testing.T) {
 
 	if set.Version != 0 {
 		t.Error("a refused call changed the settings")
+	}
+}
+
+// TestANormalRotationWaitsForTheNextKeyToAge checks the wait after an
+// emergency rotation: the new next key is in the JWKS for seconds, and a
+// verifier that cached the JWKS has not read it yet. A manual rotation is
+// refused with the time, and the schedule promotes nothing, until the key was
+// in the JWKS for twice the cache time of the JWKS.
+func TestANormalRotationWaitsForTheNextKeyToAge(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.createKeys()
+
+	_, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name,
+		issuersvc.RotateRequest{Reason: "the store was copied", Emergency: true})
+	if err != nil {
+		t.Fatalf("emergency rotation: %v", err)
+	}
+
+	active := h.mustLogin().KeyID
+
+	for _, wait := range []time.Duration{time.Second, profile.MinNextKeyAge - 2*time.Second} {
+		h.clock.Advance(wait)
+
+		_, err = h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
+		wantErr(t, "rotation before the next key is old enough", err, profile.ErrConflict)
+
+		if !strings.Contains(err.Error(), "can become active after 2026-11-01T12:10:00Z") {
+			t.Errorf("the refusal does not name the time: %v", err)
+		}
+
+		if got := h.mustLogin().KeyID; got != active {
+			t.Error("a key that is not old enough signed")
+		}
+	}
+
+	h.clock.Advance(2 * time.Second)
+
+	res, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
+	if err != nil || !res.Promoted {
+		t.Fatalf("rotation when the next key is old enough = %+v, %v", res, err)
+	}
+}
+
+// TestAnEmergencyRotationSaysThatItSkippedTheWait checks that the audit entry
+// of an emergency rotation names the skipped wait and the reason.
+func TestAnEmergencyRotationSaysThatItSkippedTheWait(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.createKeys()
+
+	_, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name,
+		issuersvc.RotateRequest{Reason: "the store was copied", Emergency: true})
+	if err != nil {
+		t.Fatalf("emergency rotation: %v", err)
+	}
+
+	list, err := h.store.List(t.Context(), h.ns.Name, audit.Page{Number: 1, Size: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	found := false
+
+	for i := range list.Entries {
+		e := &list.Entries[i]
+		if e.Reason != "the store was copied" {
+			continue
+		}
+
+		for _, c := range e.Changes {
+			if c.Key == "minNextKeyAge" && strings.HasPrefix(c.New, "skipped:") &&
+				strings.Contains(c.New, "emergency") {
+				found = true
+			}
+		}
+	}
+
+	if !found {
+		t.Errorf("no entry of the emergency rotation names the skipped wait: %+v", list.Entries)
 	}
 }

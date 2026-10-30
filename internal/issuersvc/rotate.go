@@ -102,9 +102,13 @@ func (s *Service) runRotation(ctx context.Context, n *namespace.Namespace, r *ro
 	now := s.now().UTC()
 
 	plan, err := profile.PlanRotation(keys, now, profile.RotationOptions{Kind: r.kind, Promote: promote})
-	if err != nil {
+	if errors.Is(err, profile.ErrIssuerKeyMissing) {
 		return RotationResult{}, fmt.Errorf("%w: the rotation changes nothing: export the files with GET %s, "+
 			"copy them, then call POST %s", err, exportRoute(n.Name), checkCopyRoute(n.Name))
+	}
+
+	if err != nil {
+		return RotationResult{}, fmt.Errorf("plan the rotation: %w", err)
 	}
 
 	if plan.Empty() {
@@ -135,7 +139,17 @@ func (s *Service) runRotation(ctx context.Context, n *namespace.Namespace, r *ro
 	return RotationResult{Keys: infos(after), Deleted: plan.Deleted(), Promoted: plan.Promoted()}, nil
 }
 
+// emergencyNote is the change that an emergency rotation adds to its audit
+// entry: the new active key is not in any JWKS that a verifier cached, and the
+// entry says that the rotation skipped the wait of profile.MinNextKeyAge.
+const emergencyNote = "skipped: an emergency rotation replaces every key at once, so the new active key " +
+	"was in no cached JWKS before it signed"
+
 func (s *Service) rotationEntry(ns namespace.Name, r *rotation, changes []audit.Change) audit.Entry {
+	if r.kind == profile.RotateEmergency {
+		changes = append(changes, change("minNextKeyAge", emergencyNote))
+	}
+
 	if r.actor == nil {
 		return s.serverEntry(ns, string(r.kind)+" rotation", changes)
 	}

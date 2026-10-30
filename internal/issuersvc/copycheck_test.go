@@ -397,7 +397,7 @@ func TestManualRotationWaitsForTheCopy(t *testing.T) {
 
 	old := h.mustLogin()
 
-	h.clock.Advance(time.Minute)
+	h.clock.Advance(profile.MinNextKeyAge)
 
 	// The first rotation: the next key is in the copy, so it promotes. The
 	// new next key is in no copy.
@@ -409,7 +409,7 @@ func TestManualRotationWaitsForTheCopy(t *testing.T) {
 	before := h.keysOf(h.ns)
 
 	// The second rotation needs the new next key in the copy. It is not.
-	h.clock.Advance(time.Minute)
+	h.clock.Advance(profile.MinNextKeyAge)
 
 	_, err = h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
 	wantErr(t, "rotation before the copy", err, profile.ErrIssuerKeyMissing)

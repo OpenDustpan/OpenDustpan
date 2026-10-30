@@ -30,6 +30,8 @@ type noticeSpec struct {
 // it reports.
 func (s *Service) notice(ctx context.Context, n *namespace.Namespace, spec *noticeSpec) {
 	if s.notifier == nil {
+		s.skipped(ctx, n, spec)
+
 		return
 	}
 
@@ -46,6 +48,20 @@ func (s *Service) notice(ctx context.Context, n *namespace.Namespace, spec *noti
 			slog.String("type", string(spec.typ)), slog.String(attrNamespace, n.Name.String()),
 			slog.String("error", err.Error()))
 	}
+}
+
+// skipped logs a notice that the server did not send because it has no outbox.
+// The notice would warn a person, so a silent skip would hide the event: a
+// revoked key or a failed copy check logs at WARN, a new next key at INFO.
+func (s *Service) skipped(ctx context.Context, n *namespace.Namespace, spec *noticeSpec) {
+	level := slog.LevelWarn
+	if spec.severity == notify.SeverityInfo {
+		level = slog.LevelInfo
+	}
+
+	s.log.LogAttrs(ctx, level, "issuer: the notice was not sent: the server has no outbox for notices",
+		slog.String("type", string(spec.typ)), slog.String(attrNamespace, n.Name.String()),
+		slog.String("summary", spec.summary))
 }
 
 // rotationChange is what a rotation did, for its notices.

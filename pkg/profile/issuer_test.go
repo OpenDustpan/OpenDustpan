@@ -162,6 +162,31 @@ func planCases() []planCase {
 			mv(one, "oik-next", profile.KeyNext, profile.KeyDeleted),
 			mv(one, "oik-r1", profile.KeyRetired, profile.KeyDeleted),
 		).makesActive().makesNext(),
+		plan(
+			"normal rotation a second before the next key is old enough",
+			both,
+			t0().Add(profile.MinNextKeyAge-time.Second),
+			normal,
+			true,
+		).fails(profile.ErrConflict),
+		plan("normal rotation when the next key is old enough", both, t0().Add(profile.MinNextKeyAge), normal, true).
+			wantMoves(
+				mv(t0().Add(profile.MinNextKeyAge), "oik-active", profile.KeyActive, profile.KeyRetired),
+				mv(t0().Add(profile.MinNextKeyAge), "oik-next", profile.KeyNext, profile.KeyActive),
+			).makesNext().promotes(),
+		plan("normal rotation as the next key is made", both, t0(), normal, true).fails(profile.ErrConflict),
+		plan("a scheduled step at the end waits for a young next key", []profile.Key{
+			active, key("oik-young", profile.KeyNext, end.Add(-time.Minute)),
+		}, end, sched, true),
+		plan("a scheduled step promotes a next key that is old enough", []profile.Key{
+			active, key("oik-next", profile.KeyNext, end.Add(-profile.MinNextKeyAge)),
+		}, end, sched, true).wantMoves(promote...).promotes(),
+		plan("emergency does not wait for the next key", []profile.Key{
+			active, key("oik-young", profile.KeyNext, t0().Add(day)),
+		}, t0().Add(day), profile.RotateEmergency, false).wantMoves(
+			mv(t0().Add(day), "oik-active", profile.KeyActive, profile.KeyDeleted),
+			mv(t0().Add(day), "oik-young", profile.KeyNext, profile.KeyDeleted),
+		).makesActive().makesNext(),
 		plan("no key", nil, t0(), sched, true),
 		plan("unknown kind", []profile.Key{active}, t0(), "weekly", false).fails(profile.ErrInvalid),
 	}

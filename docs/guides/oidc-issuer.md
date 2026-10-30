@@ -82,7 +82,10 @@ A cloud reads the JWKS again after some minutes or hours, so a new key must be
 there first. A token that the old key signed stays valid until it ends, at most
 60 minutes later.
 
-To rotate now, call `POST /issuer/keys/rotate`. This is a normal rotation.
+To rotate now, call `POST /issuer/keys/rotate`. This is a normal rotation. The
+`next` key must be in the JWKS for 10 minutes first, so that a cloud that
+cached the JWKS has read it. Before that, the call answers 409 and names the
+time when the key can become active.
 
 ### Emergency rotation
 
@@ -168,4 +171,7 @@ Google Cloud, Vault and Kubernetes can take the keys with no URL.
 | `issuer.key-copy-missing` | The copy check at the `issuerURL` failed. |
 
 A notice holds the namespace, the key ID and the times. It never holds a key. A
-server sends a notice only when it has a notification outbox.
+server sends a notice only when it has a notification outbox. A server with no
+outbox logs each notice that it would send, at the level WARN for
+`issuer.key-revoked` and `issuer.key-copy-missing` and at the level INFO for
+`issuer.key-next`, and `GET /issuer` shows `"notices": "off"`.

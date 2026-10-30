@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -108,7 +109,12 @@ type fixture struct {
 	served http.Handler
 	store  *sqlite.Store
 	ns     namespace.Namespace
+	// skew moves the clock of the issuer forward, in nanoseconds.
+	skew *atomic.Int64
 }
+
+// advance moves the clock of the issuer forward by d.
+func (f fixture) advance(d time.Duration) { f.skew.Add(int64(d)) }
 
 // buildOptions change the fixture.
 type buildOptions struct {
@@ -205,9 +211,12 @@ func buildFixture(t *testing.T, o buildOptions) fixture {
 		host = ""
 	}
 
+	skew := &atomic.Int64{}
+
 	svc, err := issuersvc.NewService(issuersvc.Config{
 		Store: st.store.Issuer(), Namespaces: st.store, Sealer: st.secrets, Authorizer: authz, Notifier: nil,
-		Fetcher: nil, IssuerBaseURL: host, PublicURL: "", Now: nil, Log: nil,
+		Fetcher: nil, IssuerBaseURL: host, PublicURL: "",
+		Now: func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }, Log: nil,
 	})
 	if err != nil {
 		t.Fatalf("issuer service: %v", err)
@@ -237,7 +246,13 @@ func buildFixture(t *testing.T, o buildOptions) fixture {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, served: apidesctest.CheckStatus(t, handler), store: st.store, ns: st.ns}
+	return fixture{
+		handler: handler,
+		served:  apidesctest.CheckStatus(t, handler),
+		store:   st.store,
+		ns:      st.ns,
+		skew:    skew,
+	}
 }
 
 // request is one call of a test.

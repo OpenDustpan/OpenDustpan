@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/profile/profiletest"
 )
 
@@ -47,9 +48,11 @@ type stepWire struct {
 type wire struct {
 	Status             int          `json:"code"`
 	Code               string       `json:"errorCode"`
+	Message            string       `json:"message"`
 	Settings           settingsWire `json:"settings"`
 	EffectiveIssuerURL string       `json:"effectiveIssuerURL"`
 	HostConfigured     bool         `json:"issuerHostConfigured"`
+	Notices            string       `json:"notices"`
 	Keys               []keyWire    `json:"keys"`
 	Deleted            []string     `json:"deleted"`
 	Promoted           bool         `json:"promoted"`
@@ -391,6 +394,11 @@ func TestReadShowsEffectiveValuesAndKeysWithoutMaterial(t *testing.T) {
 		t.Errorf("state = %+v", w)
 	}
 
+	// The fixture has no outbox: the read says that the notices are off.
+	if w.Notices != "off" {
+		t.Errorf("notices = %q, want off for a server with no outbox", w.Notices)
+	}
+
 	if got.header.Get("ETag") != `"issuer.0"` || w.Settings.ETag != `"issuer.0"` || len(w.Keys) != 2 {
 		t.Errorf("ETag %q, settings %+v, %d keys", got.header.Get("ETag"), w.Settings, len(w.Keys))
 	}
@@ -570,6 +578,17 @@ func TestRotationAndEmergencyReason(t *testing.T) {
 	f.createKeys(t)
 
 	rotate := issuerPath + "/keys/rotate"
+
+	// The next key is in the JWKS for a moment only: the rotation is refused
+	// with the time, and the keys stay as they are.
+	young := f.do(t, send("admin", http.MethodPost, rotate, ""))
+	wantCode(t, "normal rotation of a young next key", young, http.StatusConflict)
+
+	if w := decode(t, young); w.Code != "issuer.conflict" || !strings.Contains(w.Message, "can become active after") {
+		t.Errorf("refusal = %+v, want issuer.conflict naming the time", w)
+	}
+
+	f.advance(profile.MinNextKeyAge)
 
 	got := f.do(t, send("admin", http.MethodPost, rotate, ""))
 	wantCode(t, "normal rotation with no body", got, http.StatusOK)

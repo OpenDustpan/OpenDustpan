@@ -680,6 +680,7 @@ export interface NamespaceIssuer {
   readonly effectiveIssuerURL?: string;
   readonly issuerHostConfigured: boolean;
   readonly keys: ReadonlyArray<IssuerKey>;
+  readonly notices: string;
   readonly settings: IssuerSettings;
   readonly warnings: ReadonlyArray<string>;
 }

@@ -74,7 +74,9 @@ The role `admin` holds `namespace:manage-issuer`.
 ### Read
 
 The answer has these members: `settings`, `effectiveIssuerURL`,
-`issuerHostConfigured`, `keys`, `copyCheck` and `warnings`. The answer has the
+`issuerHostConfigured`, `notices`, `keys`, `copyCheck` and `warnings`.
+`notices` is `on` when the server has a notification outbox, and `off` when it
+has none and only logs each notice that it would send. The answer has the
 header `ETag`. `settings` shows the effective value of each setting, also when
 nobody changed it:
 
@@ -140,8 +142,13 @@ from a token: the server needs a key that a copied file holds first.
 A normal rotation makes the `next` key active, retires the old key, and makes a
 new `next` key. When the namespace has no `next` key, the rotation makes one
 and promotes nothing: a relying party must see a key in the JWKS before the key
-signs. An emergency rotation deletes every earlier key at once, also the
-`next` key, and makes a new `active` key and a new `next` key. The answer has
+signs. A `next` key becomes active only after it was in the JWKS for 10
+minutes, twice the cache time of the JWKS. A normal rotation before that
+answers 409 with the code `issuer.conflict`, and the text names the time when
+the key can become active. An emergency rotation does not wait: it deletes
+every earlier key at once, also the `next` key, and makes a new `active` key
+and a new `next` key. Its audit entry has the change `minNextKeyAge`, which
+says that the rotation skipped the wait and why. The answer has
 `keys`, `deleted` (the IDs of the keys that the rotation deleted) and
 `promoted`.
 

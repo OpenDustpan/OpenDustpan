@@ -51,6 +51,15 @@ const (
 	NextKeyLead = 7 * 24 * time.Hour
 	// RetiredKeyKeep is how long a retired key stays in the JWKS.
 	RetiredKeyKeep = 7 * 24 * time.Hour
+	// JWKSMaxAge is the Cache-Control max-age of the discovery document and of
+	// the JWKS. A verifier that caches the JWKS may not know a new key for
+	// this long.
+	JWKSMaxAge = 5 * time.Minute
+	// MinNextKeyAge is how long a next key stays in the JWKS before a normal
+	// rotation makes it active: twice JWKSMaxAge, so a verifier that cached the
+	// JWKS just before the key came into it has read the key by then. An
+	// emergency rotation does not wait.
+	MinNextKeyAge = 2 * JWKSMaxAge
 	// MaxActiveSigning is the longest time that an active key signs for a
 	// namespace with an issuerURL, when the copy check fails.
 	MaxActiveSigning = 180 * 24 * time.Hour

@@ -26,6 +26,9 @@ type State struct {
 	Keys               []profile.KeyInfo
 	Warnings           []string
 	HostConfigured     bool
+	// NoticesOn says whether the server has an outbox for the notices of the
+	// issuer. Without one, the server logs each notice that it would send.
+	NoticesOn bool
 }
 
 // Get reads the settings, the metadata of the keys and the last copy check.
@@ -49,7 +52,10 @@ func (s *Service) Get(ctx context.Context, a *Actor, ns namespace.Name) (State, 
 		return State{}, fmt.Errorf("read key history: %w", err)
 	}
 
-	st := State{Settings: set, Keys: hist, EffectiveIssuerURL: "", HostConfigured: true, Warnings: nil}
+	st := State{
+		Settings: set, Keys: hist, EffectiveIssuerURL: "", HostConfigured: true, Warnings: nil,
+		NoticesOn: s.notifier != nil,
+	}
 
 	url, urlErr := s.issuerURL(&n, &set)
 
