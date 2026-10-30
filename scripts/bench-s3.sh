@@ -17,6 +17,11 @@
 #                   "-quick" or "-profiles eu-metro -limits"
 #   BENCH_S3_NAME   name prefix of the containers and the network
 #                   (default odp-bench-s3)
+#   BENCH_S3_MODE   empty for the profile run, or "protocol" for the
+#                   protocol run of the blob families (make bench-s3-protocol)
+#   BENCH_S3_PROTOCOL_PROFILES
+#                   profiles of the protocol run, split by spaces
+#                   (default "same-az cross-az eu-metro")
 #   BENCH_S3_PORT   first host port; the run uses this port (Toxiproxy API)
 #                   and the next three (MinIO, Garage, PostgreSQL)
 #                   (default 18474)
@@ -194,6 +199,9 @@ mkdir -p "$OUT_DIR/load"
 	echo "postgres=$POSTGRES_IMAGE"
 	echo "toxiproxy=$TOXIPROXY_IMAGE"
 	docker version --format 'docker={{.Server.Version}}'
+	echo "minio-version=$(docker exec "$NAME-minio" minio --version 2>/dev/null | head -1)"
+	echo "garage-version=$(docker exec "$NAME-garage" /garage --version 2>/dev/null | head -1)"
+	echo "postgres-version=$(docker exec "$NAME-postgres" postgres --version 2>/dev/null | head -1)"
 } >"$OUT_DIR/images.txt"
 
 COMMON=(
@@ -238,6 +246,21 @@ run_load() {
 
 echo "bench-s3: set up the proxies and the buckets"
 bench setup
+
+# The protocol mode runs the old path and the new path of each blob family
+# with a fixed count of operations, in alternating runs, for each profile.
+# A run that stops keeps protocol.json, and the next run with the same
+# BENCH_S3_OUT skips the results that it holds.
+if [ "${BENCH_S3_MODE:-}" = protocol ]; then
+	for step in ${BENCH_S3_PROTOCOL_PROFILES:-same-az cross-az eu-metro}; do
+		echo "bench-s3: protocol $step"
+		bench protocol -profile "$step" </dev/null
+	done
+	bench reset
+	echo "bench-s3: done; read $OUT_DIR/protocol.md"
+	exit 0
+fi
+
 bench profiles >"$WORK/steps"
 
 while read -r step kind stores reps dataset duration; do

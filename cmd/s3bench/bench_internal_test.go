@@ -130,3 +130,93 @@ func TestRedact(t *testing.T) {
 		t.Fatalf("redact = %q", got)
 	}
 }
+
+func TestSlugOf(t *testing.T) {
+	t.Parallel()
+
+	for in, want := range map[string]string{
+		"Pulumi checkpoint":             "pulumi-checkpoint",
+		"restore write (key absent)":    "restore-write-key-absent",
+		"audit checkpoint check (read)": "audit-checkpoint-check-read",
+		"  --x":                         "x",
+		"../../namespaces":              "namespaces",
+	} {
+		if got := slugOf(in); got != want {
+			t.Fatalf("slugOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestVerdict(t *testing.T) {
+	t.Parallel()
+
+	path := func(p50, p99, ops float64) pathSummary {
+		return pathSummary{
+			Runs: 5, P50: spread{Median: p50, Min: p50, Max: p50}, P99: spread{Median: p99, Min: p99, Max: p99},
+			OpsPerSec: spread{Median: ops, Min: ops, Max: ops}, MBPerSec: spread{Median: 0, Min: 0, Max: 0}, Errors: 0,
+		}
+	}
+
+	tests := []struct {
+		name     string
+		old, new pathSummary
+		want     string
+	}{
+		{"equal", path(10, 20, 100), path(10, 20, 100), "meets"},
+		{"p50 at 5 percent", path(10, 20, 100), path(10.5, 20, 100), "meets"},
+		{"p50 above 5 percent", path(10, 20, 100), path(10.6, 20, 100), "does not meet"},
+		{"p99 above 5 percent", path(10, 20, 100), path(10, 21.2, 100), "does not meet"},
+		{"throughput 6 percent lower", path(10, 20, 100), path(10, 20, 94), "does not meet"},
+		{"no runs", noRuns(), path(10, 20, 100), "incomplete"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := verdict(tt.old, tt.new); got != tt.want {
+				t.Fatalf("verdict = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSummarize(t *testing.T) {
+	t.Parallel()
+
+	results := []protoResult{
+		resultOf(3, 9, 100, 1<<20, 1),
+		resultOf(1, 7, 300, 3<<20, 0),
+		resultOf(2, 8, 200, 2<<20, 0),
+	}
+
+	s := summarize(results)
+	if s.Runs != 3 || s.P50.Median != 2 || s.P50.Min != 1 || s.P50.Max != 3 || s.OpsPerSec.Median != 200 ||
+		s.MBPerSec.Median != 2 || s.Errors != 1 {
+		t.Fatalf("summarize = %+v", s)
+	}
+}
+
+func TestAttemptPart(t *testing.T) {
+	t.Parallel()
+
+	if got := attemptPart("a/0-0a1b2c"); got != "0a1b2c" {
+		t.Fatalf("attemptPart = %q", got)
+	}
+}
+
+// noRuns answers the summary of a path with no run.
+func noRuns() pathSummary {
+	zero := spread{Median: 0, Min: 0, Max: 0}
+
+	return pathSummary{Runs: 0, P50: zero, P99: zero, OpsPerSec: zero, MBPerSec: zero, Errors: 0}
+}
+
+// resultOf answers a protocol result with the timing fields set.
+func resultOf(p50, p99, ops, bytesPerSec float64, errs int) protoResult {
+	return protoResult{
+		Profile: "p", Store: "s", Family: "f", Mode: modeOld, Run: 1, Ops: 1, Concurrency: 1,
+		Errors: errs, FirstError: "", P50Ms: p50, P99Ms: p99, WallMs: 1, OpsPerSec: ops, BytesPerSec: bytesPerSec,
+		Time: "",
+	}
+}
