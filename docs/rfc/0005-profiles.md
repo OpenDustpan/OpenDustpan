@@ -387,6 +387,143 @@ ADRs in these points. Each point stays open until the owner decides it.
 - The `/entries` routes are removed. They return in a later slice only after
   an RFC accepts them.
 
+## Proposal for Milestone 5: cloud credentials for a runner step (2026-10-30)
+
+This section is ready to accept. Milestone 5 needs a runner step that gets
+short-lived cloud credentials from a profile. ADR 203 decisions 5 to 8
+decide the delivery, ADR 204 and ADR 205 the issuer and its claims, and
+ADR 207 decisions 2 and 3 the cloud logins and their exports. The code has
+the document, the store and the REST API (slice 1 of question 17), and the
+runner protocol answers the job token and credential files
+(`protocol.CredentialsResponse`). It has no issuer, no login block and no
+open with the consumer `launcher`. Facts about other products are in the
+research note [m5-precedents](../research/m5-precedents.md).
+
+### What a step gets, end to end
+
+1. At start, the server fixes the attachments and the revisions in the spec
+   (ADR 203 decision 5). The gates of `profile.open` run (ADR 224).
+2. Before each step of the role `tool`, the launcher asks
+   `/runner/v1/session/credentials`. The server opens each profile of the
+   spec with the consumer `launcher`, the access `read` for a plan phase and
+   `write` for an apply phase, and the claims of ADR 205 (the job, the
+   phase, the unit, the `action`).
+3. A login block in `exchange` mode calls the cloud and answers a
+   credential file. A login block in `token` mode answers the signed token
+   and the settings of the SDK. The launcher writes each file with mode
+   0600 under the step directory on the memory-backed volume, and sets each
+   variable of the default exports to a path or to a value that is not
+   secret (`AWS_ROLE_ARN`, `AZURE_CLIENT_ID`).
+4. At two thirds of the life of a file, the launcher asks
+   `/runner/v1/session/credentials/renew` and replaces the file with a
+   rename (ADR 203 decision 7).
+5. At the end of the step, the launcher removes the step directory. A hook
+   step never gets a file (ADR 134 decision 7).
+
+### Questions
+
+Questions 2, 6, 7 and 17 of this RFC are open and decide the scope of this
+work. Each is an **owner decision**. The recommendations stay as above:
+
+- Question 2: AWS, Google Cloud and Azure first, then Vault (A).
+- Question 6: a job of a profile with an open rule waits at a gate (B).
+- Question 7: a runner job with no profile attachment is allowed (B). This
+  changes ADR 101 decision 1.
+- Question 17: the order of slices (A). This proposal builds slices 2 and
+  3, and the block `outputs/opendustpan` of slice 6, which RFC 15 needs.
+
+New questions:
+
+26. **Renewal of an `exchange` credential.** ADR 203 decision 7 renews the
+    token files of `token` mode. An `exchange` credential of AWS lives 1
+    hour by default, and a step can run 24 hours.
+    - (a) The renew route answers the files of both modes, and the launcher
+      renews both in the same way. For `exchange`, each renewal is a new
+      open of the block, with the gate of `profile.open` and the audit
+      entry.
+    - (b) An AWS `credential_process` helper in the config file, which the
+      launcher answers over its socket, so the SDK asks when it needs.
+    - (c) No renewal. A step must end inside the life of its credential.
+
+    Precedent: Spacelift does not refresh the AWS keys of a run, and gives a
+    lifetime of up to 12 hours with `generate_credentials_in_worker`. HCP
+    Terraform writes a shared config file for each alias for the phase.
+    *Recommendation: (a).* One mechanism for both modes. (b) adds a second
+    helper protocol in the place of the step.
+27. **The `run_phase` in the subject.** HCP Terraform ends its `sub` with
+    `run_phase:plan` or `run_phase:apply`, and gives a separate role for each
+    phase. ADR 205 has the claim `access` (`read` or `write`) from the phase.
+    *Recommendation:* no change. The docs page shows a trust policy that
+    allows a write role only for `access:write`, with the example of each
+    cloud.
+28. **A provider that reads only a variable.** ADR 101 accepts that such a
+    provider does not work on a runner. *Recommendation:* the docs page
+    lists the variables of each login (ADR 207 decision 3) and states that
+    each holds a path or a value that is not secret. No change.
+
+### Ports
+
+- `profile.Issuer` (ADR 204 decision 8): the keys, the rotation schedule,
+  the discovery document and the JWKS routes, with its conformance suite.
+- `profile.Provider` (ADR 206): the block call, with the conformance suite
+  for `login/aws`, `login/gcp`, `login/azure`, `login/oidc` and
+  `outputs/opendustpan`.
+- `profile.Service.Open` with the consumer `launcher` and a `PhaseContext`.
+- `runner.Credentials` (new, in the wiring of the runner API): maps an open
+  to `protocol.CredentialsResponse`, and serves the renew route.
+- `launcher.Files`: writes and renews the files by rename, and removes the
+  step directory.
+
+### End-to-end steps
+
+The e2e suite cannot reach a public cloud. It uses MinIO as a local AWS STS,
+which serves `AssumeRoleWithWebIdentity` with an OpenID provider that points
+at the issuer of the test server.
+
+1. `login/aws` in `exchange` mode: a job of the real `tofu apply` with the
+   `aws` provider makes a bucket in MinIO. The audit entry of the open names
+   the block and the `jti` of the token.
+2. `login/aws` in `token` mode: the same with the real Pulumi CLI and the
+   `aws` package. The server makes no call to MinIO.
+3. Renewal: a step that runs past two thirds of a credential of 15
+   minutes, the shortest that AWS STS gives, still writes to the bucket.
+   This step waits 11 minutes, so it runs in the nightly e2e run. The
+   launcher tests check the renewal with a clock that the test moves.
+4. A plan phase gets the read role: a plan that tries a write through a
+   data source of a test provider fails with the error of MinIO.
+5. A hook step before the tool step finds no file and no variable.
+6. `login/gcp` and `login/azure`: the launcher writes the files and the
+   variables that ADR 207 decision 3 names. A local fake of the token
+   endpoint, named in the external account configuration of Google Cloud
+   and in the authority host of Azure, gets the exchange from the real
+   provider. If a provider cannot point at a fake, the step checks the files
+   only, and the docs say which part a test covers.
+7. `outputs/opendustpan`: a Pulumi program reads an OpenTofu output (RFC 15
+   question 3).
+
+### Security tests (ADR 250)
+
+| Step | Test |
+| --- | --- |
+| Check at the boundary | Each of these credentials requests is refused: a step of the role `hook`, a step that is not in the spec, a phase that ended. A block input with a host that resolves to `169.254.169.254`. |
+| Contain | A file name from a profile with `..`, `/` or a NUL byte: refused. A file is written with `O_NOFOLLOW` in a directory that the launcher made. A variable value with a newline is refused. |
+| Limit | The token lives at most the lifetime of ADR 204 decision 6. The audience is one string. The renew route answers only the token files of the step. |
+| Authorization at the point of use | An attachment whose authority lost `profile:open` fails the next open and the next renewal. A session of a runner that an administrator retired gets `retired`. |
+| Fail closed | An error of the cloud, of the issuer key or of a gate fails the step with no file. A masked value that the tool prints shows as `[masked]` in the log. |
+
+### Work items
+
+| ID | Item | Size | Conflict group | Depends on |
+| --- | --- | --- | --- | --- |
+| PF-1 | The issuer: keys, rotation schedule, discovery and JWKS routes, settings, audit, conformance | L | profile-issuer | none |
+| PF-2 | The claim set of ADR 205 and the claims preview route | M | profile-issuer | PF-1 |
+| PF-3 | `profile.Provider` runtime and conformance suite, `login/oidc` | M | profile-providers | PF-1 |
+| PF-4 | `login/aws` in both modes, MinIO STS in the e2e harness, e2e steps 1 and 2 | L | profile-providers | PF-3, PF-6 |
+| PF-5 | `login/gcp` and `login/azure`, e2e step 6 | L | profile-providers | PF-3 |
+| PF-6 | Open with the consumer `launcher`, the credentials and renew routes, `launcher.Files`, e2e steps 3 to 5 | L | runnerapi-credentials | PF-3, M5-1 |
+| PF-7 | `outputs/opendustpan` with the `Attachments` port of RFC 15, e2e step 7 | M | profile-providers | PF-6, OS-1 |
+| PF-8 | Docs pages: "Cloud credentials for jobs" with a trust policy for each cloud | S | docs | PF-4, PF-5 |
+
 ## Outcome
 
 Accepted in part: ADRs 200 to 209, on the merge of their pull request. The
