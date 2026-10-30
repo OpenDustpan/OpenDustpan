@@ -316,7 +316,7 @@ func largeRun(tool string, store e2e.Store, version, marker, stderr string) e2e.
 	for i := range reportEntriesPerRun {
 		requests = append(requests, e2e.Entry{
 			Step:            "deploy",
-			At:            time.Time{},
+			At:              time.Time{},
 			Method:          "GET",
 			Host:            "",
 			Path:            "/api/stacks/acme/project/dev",

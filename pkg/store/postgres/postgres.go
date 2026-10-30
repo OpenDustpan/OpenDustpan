@@ -206,11 +206,22 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
 
 	s := &Store{
-		pool: nil, txs: guardedPool{pool: nil}, queries: nil, stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
-		beforeLockDelete: nil, stateLockWait: 0,
-		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
-		tracer: nil,
+		pool:                nil,
+		txs:                 guardedPool{pool: nil},
+		queries:             nil,
+		stagingMu:           sync.Mutex{},
+		stagingSchema:       "",
+		keepAccessHook:      nil,
+		betweenProfileReads: atomic.Pointer[func()]{},
+		snapshotBegin:       snapshotBeginQuery(live),
+		beforeLockDelete:    nil,
+		stateLockWait:       0,
+		binaryVersion:       "",
+		gate:                nil,
+		kind:                "",
+		noMigrate:           false,
+		logger:              slog.New(slog.DiscardHandler),
+		tracer:              nil,
 	}
 
 	for _, opt := range opts {

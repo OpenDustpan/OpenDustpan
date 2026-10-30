@@ -40,7 +40,7 @@ func TestCoverageAllowlistEntriesAreServed(t *testing.T) {
 func cliEntry(method, path, userAgent string, status int) e2e.Entry {
 	return e2e.Entry{
 		Step:            "",
-		At:            time.Time{},
+		At:              time.Time{},
 		Method:          method,
 		Path:            path,
 		Host:            "",

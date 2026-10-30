@@ -43,8 +43,8 @@ type Entry struct {
 	ResponseHeaders []string `json:"responseHeaders,omitempty"`
 	// ResponseCut is true when the answer was longer than the bytes that
 	// ResponseBody keeps, so ResponseBody is the start of the answer.
-	ResponseCut   bool  `json:"responseCut,omitempty"`
-	Seq          int    `json:"seq"`
+	ResponseCut bool `json:"responseCut,omitempty"`
+	Seq         int  `json:"seq"`
 	// At is the time the answer ended. It is not part of the report.
 	At            time.Time `json:"-"`
 	Status        int       `json:"status"`
@@ -159,7 +159,7 @@ func (r *Recorder) record(seq int, step string, req *http.Request, in *capture, 
 		Query:           req.URL.RawQuery,
 		UserAgent:       req.UserAgent(),
 		Backend:         backendOf(req),
-		At:            time.Now(),
+		At:              time.Now(),
 		Accept:          req.Header.Get("Accept"),
 		ContentType:     req.Header.Get("Content-Type"),
 		RequestBody:     string(in.kept),
