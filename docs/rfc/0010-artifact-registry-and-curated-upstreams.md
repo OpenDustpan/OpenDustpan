@@ -1,13 +1,14 @@
 ---
 rfc: 10
 title: Artifact registry and curated upstreams
-status: draft
+status: discussing
 created: 2026-10-10
 ---
 
 # RFC 10. Artifact registry and curated upstreams
 
-Status: draft.
+Status: discussing. The section "Proposal (2026-10-30)" is ready to accept,
+with one owner decision (D3) here and two in RFC 93 (D1 and D2).
 
 ## Problem
 
@@ -78,7 +79,212 @@ No tool needs a plugin (ADR 12).
 3. **Registry only, no proxy.** Private artifacts only, no curation of public
    ones. It is smaller, and it misses the regulated-team case.
 
+## Proposal (2026-10-30)
+
+This section makes the rest of RFC 10 ready to accept, for Milestone 6. It
+covers the curation of public packages (through RFC 93), the network
+mirror, Pulumi resource plugins, modules, scanning, the version life cycle
+and the registry files in a backup. It does not decide again what ADRs 257
+and 269 decide.
+
+### What is decided or built already
+
+- ADR 257: the tools' own HTTP protocols, and no OCI endpoint now.
+- ADR 269 decides these points:
+  - Own providers come first, by an upload of the archive set of ADR 177.
+  - The address host is the host of the server.
+  - A namespace never reads the registry of another namespace.
+  - The server does not sign again.
+  - Module sources come by upload first, and from git tags second.
+  - Each namespace registers its own signing keys.
+  - The allowlist of SHA-256 sums belongs to curation (RFC 93).
+  - A yank and a revoke both keep the record.
+- Built: `pkg/registry` (the address, the release, the ports, the suite
+  `registrytest`), `internal/registry/service` (the upload, the staged files,
+  the publish and the reads), the provider network mirror of uploaded
+  providers, and the copy of registry release files in a backup (pull
+  request 1986).
+- In progress in another session: registry modules by upload (M6-15).
+
+### Facts
+
+The facts of RFC 93, sections "Facts from primary sources" and "New facts
+(2026-10-30)", hold. Each has a tag there. The products that teams use
+today, in short:
+
+- Artifactory serves a network mirror and the provider registry protocol
+  for OpenTofu, and JFrog Curation does not list Terraform as a supported
+  technology [fetched, links in RFC 93].
+- Nexus Repository serves the provider registry protocol for OpenTofu from
+  3.88, and Nexus Firewall quarantines new components and fails closed when
+  its service is down [fetched, links in RFC 93].
+
+So no common artifact manager curates OpenTofu providers today. Option 2
+of this RFC ("point teams at their existing artifact managers") does not
+give the curation part.
+
+### Answers to the open questions
+
+| Question | Answer |
+| --- | --- |
+| Which protocol first | Decided by ADR 269: the provider network mirror, by upload. Next: modules by upload (M6-15). Then the curated mirror of RFC 93. Then Pulumi resource plugins. |
+| Does the registry sign again | No (ADR 269 decision 7). |
+| How a team publishes a private provider | By upload (ADR 269 decision 2). A build from a git tag by a runner stays a later step. The build tool of ADR 177 runs in the CI of the team, and the CI uploads. |
+| One cache for each namespace, or one for the server | A copy for each namespace (RFC 93, "Who owns a blob", option 1), so the isolation of ADR 220 stays whole. |
+| Which scanners | **Owner decision D3.** Recommended: no scanner in the server. A runner job of the kind `package-scan` runs a scanner image of the team, for example `govulncheck -mode=binary` or OSV-Scanner. It uploads a report in the model of RFC 90. The fact group `scan` of `package.admit` reads it. Option 2: a scanner in the server. It adds a tool, its database and its network access to the server. Option 3: no scanning in Milestone 6. |
+
+### Decisions
+
+1. **Pulumi resource plugins of a team.** A team uploads the Pulumi archive
+   set of ADR 177 decision 5: one `tar.gz` for each target, and a checksums
+   file of the SHA-256 of each archive. `pkg/registry` gets a second
+   release shape, `registry.PluginRelease`, with the kind `pulumi-plugin`,
+   as its package text already says. The upload checks the tar rules of
+   RFC 93 section F, step 2, and the SHA-256 of each archive against the
+   checksums file. The Pulumi CLI checks no signature, so a plugin release
+   has no signature (RFC 93 facts). The address is the namespace and the
+   plugin name.
+2. **How the Pulumi CLI downloads a plugin of a team.** Through the routes
+   `/pulumi/plugins/v1/cap/{capability}/...` of RFC 93 section B (the
+   capability in a path segment, because the CLI sends no credentials). A
+   runner job gets the capability from the launcher, at each phase. A
+   person or a team CI calls `POST /api/dustpan/v1/namespaces/{namespace}/registry/plugin-download-urls`,
+   with `namespace:download-packages`, and gets a capability that lives at
+   most 12 hours, for `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES`. The same
+   routes serve the vetted plugins of RFC 93. A checksums route gives the
+   `checksums` map for the `packages` entries of `Pulumi.yaml` (RFC 93
+   section D).
+3. **Modules from git tags.** After M6-15, the second source of ADR 269
+   decision 8: a principal names a forge connection, a repository, a
+   directory and a tag. The server gets the commit of the tag through the
+   source pipeline (ADR 135, `source.fetch`), makes the module archive from
+   the tree of that commit, and stores the commit and the SHA-256 with the
+   release. A tag that moves later changes nothing: a version never changes
+   (RFC 101 section E).
+4. **The deprecated state.** The life cycle of ADR 269 decision 11 gets a
+   third state, `deprecated`, with a message of at most 500 characters. A
+   deprecated version stays in the index and is served. The API, the
+   console and the job record of a runner job that installs it (RFC 93,
+   layer 4) show the message. HCP Terraform shows such a warning in the
+   runs of its consumers [fetched, link in RFC 56]. A revoke still blocks
+   at once.
+5. **Which units use which version.** The job record of RFC 93 layer 4
+   holds the address, the version and the hash of each provider and plugin
+   that a runner job installed. The route
+   `GET .../namespaces/{namespace}/registry/{kind}/{name}/versions/{version}/users`
+   lists the units whose last runner job installed it. A unit that no runner
+   job ran has no record, and the answer says so: the server never guesses
+   from state (an OpenTofu state holds no provider version).
+6. **Registry files in a backup.** The rule: a backup holds each blob that a
+   readable record names, and it says in its manifest which blobs it did
+   not copy.
+   - Registry release files: copied, built (pull request 1986).
+   - The archives of vetted packages, in the prefix of each namespace and in
+     the staging prefix of the installation (RFC 93, "Who owns a blob"):
+     copied, with the size and the MD5 of the stored bytes, as release
+     files are. A revoked package that keeps its blobs for forensics
+     (RFC 93 section B) is copied while its blobs exist.
+   - Pulumi plugin archives (decision 1): copied.
+   - Staged files of an upload, and the blobs of a pending admission: not
+     copied. The manifest lists them as not copied. A restore deletes each
+     staged row, and ends each pending admission `expired` with the reason
+     `restored-without-files`. So a restore never brings back a pending
+     admission with no bytes, and `backup.ErrBlobsNotBacked` keeps its
+     meaning.
+   - The package signing keys (RFC 93 answer 16): in the backup, sealed.
+     The denylist of deleted key fingerprints is not in the backup.
+   - A namespace backup (ADR 218 decision 4) holds the releases, the vetted
+     package records and the archive copies of its namespace, and never a
+     blob of the installation staging prefix.
+   - **A restored blob is untrusted input** (ADR 250). The restore checks
+     the SHA-256 of each registry and package blob against its record, and
+     refuses the restore with `backup.ErrCorrupt` on a mismatch. The mirror
+     routes check the SHA-256 of a blob again on the first read after a
+     restore, as a second layer.
+
+### Ports
+
+- `registry.PluginRelease` and a `PluginStore` port with its cases in
+  `registrytest`, or one store with the kind in the key, as the adapter
+  item decides with the suite first.
+- `pkg/pkgmirror` of RFC 93 section A: the record of a vetted package, the
+  `Store` port with the suite `pkgmirrortest`, the `Upstream` port with one
+  adapter for each kind, and the `Formatter` port for the lock-file text
+  and the `checksums` map (RFC 93 answer 14).
+- `pkgmirror.Scanner` for a scan report, if owner decision D3 takes the
+  runner job.
+- The backup rules add rows to the table list and to the blob walk of
+  `pkg/backup`. They add no port.
+
+### End-to-end steps (real CLIs)
+
+1. **Pulumi plugin of a team.** Upload the Pulumi archive set of a provider
+   that the suite builds. Run `pulumi up` on a runner and on the test host
+   with `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES` from the download URL route.
+   Check that the CLI fetched the plugin from the server, also for a
+   package whose schema names another `pluginDownloadURL`. Revoke the
+   version, and check that a new download fails.
+2. **Module from a git tag.** Publish a module from a tag of a repository
+   of the fake GitHub host. Run `tofu init` and `tofu plan` with the server
+   as the module registry. Move the tag, and check that the module version
+   still gives the first commit.
+3. **The curated mirror.** The e2e step of RFC 93 section I, with the
+   OpenPGP check when owner decision D2 takes the library.
+4. **Backup.** Publish a provider, a module and a plugin, admit a vetted
+   provider, and leave one upload staged and one admission pending. Back
+   up, restore into a new installation, and run `tofu init` and
+   `pulumi up` against the restored server. Check that the pending
+   admission is `expired` with `restored-without-files`. Change one byte of
+   a blob in a copy of the backup, and check that the restore refuses it.
+
+### Security tests (ADR 250)
+
+1. **Boundary.** A plugin archive with a hard link, a symlink, a device, a
+   PAX path `../x`, a setuid bit, a case-fold duplicate and trailing gzip
+   data. A checksums file with a name that is not in the upload. A tag name
+   with `..` and a ref that is not a tag.
+2. **Contain.** The server never unpacks a plugin to a disk. The archive
+   URL and the capability are built from the record, never from the request.
+3. **Limit.** A gzip ratio over the limit, an archive over 512 MiB, and the
+   12-hour bound of a download capability.
+4. **Authorize at use.** A capability of another namespace, of a revoked
+   version, after its expiry, and with a deleted key. A users list of a
+   version for a caller with no `unit:read` on a unit: the unit is not
+   named, and the answer counts it as hidden.
+5. **Fail closed.** A restore of a changed blob, a restore of a backup whose
+   manifest does not list a missing staged file, and a mirror read of a blob
+   whose SHA-256 differs from its record.
+
+### Work items
+
+Sizes and conflict groups as in RFC 111. M6-15 is registry modules by
+upload.
+
+| ID | Item | Size | Conflict group | Depends on |
+| --- | --- | --- | --- | --- |
+| R1 | The OpenPGP adapter of `registry.SignatureVerifier` and `KeyInspector` | M | `registry`, `go-mod` | owner decision D2 |
+| R2 | Modules from git tags | M | `registry` | M6-15 |
+| R3 | The `deprecated` state, and the users route of a version | S | `registry` | R9 for the users route |
+| R4 | The package signing key: the secret item, create and delete routes, the denylist, the backup row | M | `pkgmirror-keys` | none |
+| R5 | `pkg/pkgmirror`: record, `Store`, `pkgmirrortest`, SQLite and PostgreSQL adapters | M | `pkgmirror`, `store-migrations` | none |
+| R6 | Admission: `package.admit` with its built-in gate and rule. The server fetch through `pkg/egress`, with an upstream allowlist. The archive checks and the `h1:` hash. The upload for an air gap | L | `pkgmirror`, `gate-facts` | R5, owner decision D1 |
+| R7 | The curated network mirror routes, the signed archive URLs, the lock-file route | M | `api-tfe` | R4, R6 |
+| R8 | Layer 1 in the launcher: the `provider_installation` block and the Pulumi overrides | S | `launcher` | R7, R11 |
+| R9 | Layer 4: the job record report of the launcher and its check in the server | M | `launcher`, `job-start` | R8 |
+| R10 | Layer 5: the audit finding after a write | S | `pkgmirror` | R6 |
+| R11 | Pulumi resource plugins: `PluginRelease`, upload, capability routes, the download URL route, the checksums route, admission of public plugins | L | `registry`, `api-pulumi` | R4, R6 |
+| R12 | Modules in the curated mirror: the module registry routes for vetted modules, and the runner job `package-fetch` for git sources | L | `pkgmirror`, `runner-protocol` | R6 |
+| R13 | Backups: the vetted package blobs, the plugin blobs, the staging rules at restore, the SHA-256 check at restore, the namespace backup | M | `backup` | R5, R11 |
+| R14 | The scan job `package-scan` and the fact group `scan` | M | `pkgmirror`, `runner-protocol` | R6, owner decision D3 |
+| R15 | The e2e steps above and the docs pages "Publish a Pulumi plugin", "Vetted providers, modules and plugins" and the backup guide | L | `e2e`, `docs` | R2, R7, R11, R13 |
+
+Order: R1, R4 and R5 first (parallel), R2 after M6-15, then R6, then R7 and
+R11, then R8, R9, R10, R12 and R13, then R3 and R14, then R15.
+
 ## Open questions
+
+The section "Proposal (2026-10-30)" answers each question below.
+
 
 - Which protocol first: the OpenTofu provider mirror (smallest, most
   requested) or the module registry?

@@ -1,17 +1,18 @@
 ---
 rfc: 16
 title: Job proxy, with request rules and credential injection
-status: draft
+status: discussing
 created: 2026-10-10
 ---
 
 # RFC 16. Job proxy, with request rules and credential injection
 
-Status: draft. The owner decided two points on 2026-10-18: a research spike
+Status: discussing. The owner decided two points on 2026-10-18: a research spike
 comes first, and the names are "job proxy", "outbound guard" and "upstream
 proxy" (see `GLOSSARY.md`). Where the proxy runs is a proposal. How people
 write rules, and how policies (RFC 13) apply to them, is to be decided. The
-section "Prototype findings" gives the result of the spike.
+section "Prototype findings" gives the result of the spike. The section
+"Proposal (2026-10-30)" is ready to accept, with two owner decisions.
 
 **This is an escape hatch, not a default.** When a product has native RBAC or
 ABAC and short-lived credentials (OIDC, dynamic credentials), use those first:
@@ -557,7 +558,356 @@ The RFC recommends the points below. It does not decide them.
 9. Write each failure as a fixed reason in the audit record, and show
    "blocked by the job proxy" in the job log with the host and the path.
 
+## Proposal (2026-10-30)
+
+This section turns the recommendation of the spike into a design that is
+ready to accept. It does not change the decisions of the owner of
+2026-10-18 (the spike first, and the three names). Two points are owner
+decisions (D4 and D5 at the end of this section). The job proxy
+is security code (ADR 250), and SSRF through a rule host is in scope.
+
+### Facts from other proxies
+
+Each fact has a tag: **[fetched]** means that the page was read on
+2026-10-30, **[not fetched]** means a search snippet only.
+
+- **Squid.** `ssl_bump` with `peek`, `stare`, `splice` and `bump` ends TLS,
+  and the `ssl_crtd` helper makes a certificate for each site, signed by one
+  CA of the operator. The wiki warns that a stolen CA key allows a
+  man-in-the-middle attack on each client that trusts the CA.
+  `http_access` rules run in order, and the first match wins.
+  <https://www.squid-cache.org/Doc/config/ssl_bump/> [fetched],
+  <https://wiki.squid-cache.org/Features/DynamicSslCert> [fetched],
+  <https://wiki.squid-cache.org/SquidFaq/SquidAcl> [fetched].
+  SQUID-2004:1: the `%xx` decoder could insert a NUL and pass a `url_regex`
+  rule. <https://www.squid-cache.org/Advisories/SQUID-2004_1.txt> [fetched].
+  Squid is under the GPL 2.0 license, which `make trivy` refuses for a
+  component that we ship [not fetched: the license file was not read for
+  this RFC].
+- **Envoy.** The credential injector filter injects a fixed credential or an
+  OAuth2 client-credentials token. Its docs say: "This extension is
+  functional but has not had substantial production burn time", and "has
+  an unknown security posture".
+  <https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/http/credential_injector/v3/credential_injector.proto>
+  [fetched]. `normalize_path` and `merge_slashes` default to false, and
+  `path_with_escaped_slashes_action` can refuse `%2F` and `%5C`.
+  <https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto>
+  [fetched]. A CONNECT that Envoy ends goes on as raw TCP. HTTP inside it
+  needs internal listeners, and the docs give no recipe for TLS inside the
+  tunnel. <https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/upgrades>
+  [fetched]
+- **Smokescreen (Stripe).** A CONNECT proxy against SSRF. It resolves each
+  host and checks that each address is publicly routable, with an ACL for
+  each role from the client certificate. It does not end TLS.
+  <https://github.com/stripe/smokescreen> [fetched]
+- **OWASP SSRF cheat sheet.** "Domain allowlisting alone does not prevent
+  DNS rebinding." Bind the connection to the address that the check
+  validated, check every address of a name, and do not follow redirects.
+  <https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html>
+  [fetched]
+- **Go.** `crypto/x509` enforces name constraints for each name in a
+  certificate since Go 1.10. <https://go.dev/doc/go1.10> [fetched].
+  `http.ProxyFromEnvironment` reads `HTTPS_PROXY` and `NO_PROXY`, and
+  returns no proxy for `localhost`.
+  <https://pkg.go.dev/net/http#ProxyFromEnvironment> [fetched]
+- **StepSecurity Harden-Runner.** `egress-policy: block` with
+  `allowed-endpoints` blocks each other call of a GitHub Actions job.
+  <https://docs.stepsecurity.io/harden-runner> [fetched]
+
+So no product gives the three parts of this RFC together: a TLS end with a
+CA for each job, rules on the method and the path that refuse a path that
+is not canonical, and a credential that the job never holds.
+
+### Answers to the open questions
+
+| Question | Answer |
+| --- | --- |
+| The name of a rule | **Owner decision D4.** Recommended: "proxy rule". "Egress" names the outbound guard and the egress allowlist. |
+| The interface for rules, and how policies apply | Plain data (JSON), as the spike recommends. A gate never decides on one request. A gate decides on the change, and reads the fact group `proxy` (decision 9). |
+| Template variables, and secrets in templates | The unit, the operation, the labels, the answers of a Catalog request, and plain values of a profile. Never a secret value: the render refuses it (decision 4). |
+| Our own proxy in Go, or Envoy | Our own proxy in Go, with `net/http` and `crypto/tls`, and no new dependency (decision 1). |
+| Who reads the CA key | Nobody but the job proxy. One CA for each claim, in memory, with a name constraint and the lifetime of the claim (decision 6). |
+| Encodings in the response scan | Yes: the plain value, base64 (standard and URL, with and without padding), the JSON escape form and the percent form (decision 7). |
+| The credential of the upstream proxy | From the runner pool, never from the profile of a unit (decision 8). |
+| Client certificates and SPIFFE | A client certificate is a new export of a profile (decision 5). SPIFFE is part of owner decision D5. The SPIRE registration decides a SPIFFE ID, never OpenDustpan. |
+| Body formats and size | Part of owner decision D5. When it comes: JSON by JSON pointer first, then form fields, with a buffer of at most 1 MiB. |
+
+### Decisions
+
+1. **One binary, a separate process.** The job proxy is the mode `proxy` of
+   `dustpan-launcher` (ADR 134 decision 2): pure Go, static, with no new
+   dependency. One release carries it, and the release skew rules of ADR 132
+   apply. It always runs as its own process, as its own user, outside the
+   sandbox of the steps. It shares no file system, no process space and no
+   memory with a step or with the launcher of the steps.
+2. **Where it runs, for each isolation kind.**
+   - `firecracker` and `gvisor` (the machine coordinator, ADR 137): the
+     coordinator starts the job proxy on the host for each claim of a unit
+     with proxy rules, as a user of its own. The network namespace of the
+     sandbox gets one route, to the address of the job proxy, and the
+     coordinator drops every other packet of the sandbox, DNS included. The
+     tool needs no DNS: it sends the name in the CONNECT.
+   - `kubernetes` (ADR 136): the coordinator creates, for each such claim,
+     a proxy pod from `opendustpan/launcher:<release>`, and a
+     NetworkPolicy for that claim: the job pod may reach only the proxy pod,
+     and the proxy pod accepts only the job pod. A NetworkPolicy works only
+     with a network plugin that enforces it. So the coordinator runs a probe
+     at start and every hour: a pod with the job labels tries to open a
+     connection that the policy denies. If the connection opens, the
+     coordinator refuses each claim of a unit with proxy rules, with the
+     reason `network-policy-not-enforced`. This amends ADR 136 decision 4:
+     the service account of the coordinator gets `create` and `delete` on
+     NetworkPolicies of its own Kubernetes namespace (**owner decision D5**,
+     part b).
+   - `process`: no kernel boundary (ADR 137 decision 2). A unit with proxy
+     rules never runs on it. The start of such a job on a pool that allows
+     only `process` fails with `runner.ErrIsolation`, which names the
+     unit, and a runner with `process` isolation never claims it.
+3. **One exit.** The job proxy is the only exit of the sandbox. The launcher
+   and the tool also reach the OpenDustpan server through it, with a
+   built-in tunnel rule (way D) for the host of the server only. So the
+   launcher keeps its own TLS check of the server, and no other route
+   leaves the sandbox.
+4. **Proxy rules are plain data.** A **proxy rule set** is a JSON document
+   that a namespace, a blueprint version (field `proxy`) or a unit holds.
+   The rule sets of the scopes of a unit are joined. A rule only allows. A
+   rule has:
+   - `id` (1 to 64 bytes, letters, digits and `-`), and `operations`, a
+     list of `plan`, `apply`, `destroy` and `refresh`,
+   - `host`, an exact DNS name in lowercase, and `port` (default 443),
+   - `mode`: `inspect` (TLS end, way A), `tunnel` (host only, way D) or
+     `endpoint` (a loopback port, way B),
+   - for `inspect` and `endpoint`: `methods`, and `paths` with `*` (one
+     segment), `**` (the rest, last only) and `{{ variable }}` (one whole
+     segment),
+   - `credential` and `clientCertificate`: names of exports of a profile
+     of the unit (decision 5),
+   - `serverTrust`: `system` (the default) or the name of a CA export of a
+     profile.
+
+   The parser refuses an unknown field, a duplicate key, an IP literal
+   host (unless the range is allowed, decision 8), a path pattern that is
+   not canonical (the rules of "Making path rules safe"), and a document
+   over 64 KiB or 256 rules. Variables: `unit.tool`, `unit.namespace`,
+   `unit.name`, `unit.labels.<key>`, `operation`, `inputs.<name>` (a string
+   answer of a Catalog request) and `profile.<name>.<key>` (a value that is
+   not secret). The job start renders the rules, once. A value that is not
+   exactly one valid path segment, or a value marked secret, fails the
+   start with `jobproxy.ErrRender`, which names the rule and the variable.
+   The job spec holds the SHA-256 of the rendered rules, so each phase
+   runs the same rules.
+5. **Credentials for the job proxy only.** A profile document gets the
+   export key `proxy` (ADR 201 decision 9): a map from a name to a
+   `header` (name and value), `basic` (user and password), `query` (name and
+   value), `client-certificate` (certificate and key) or `ca`
+   (certificates). Only the consumer `job-proxy` gets `exports.proxy`. The
+   consumer `launcher` never gets it, and a test checks the answer of each
+   consumer. A rule that names an export that no attached profile gives
+   fails the job start with `jobproxy.ErrCredential`. This is the release
+   mode "to the job proxy only" of this RFC. The tool gets a placeholder,
+   for example the value `dustpan-placeholder`, in the variable that the
+   rule names.
+6. **The CA of a claim.** At start, the job proxy makes an ECDSA P-256 key
+   and a CA certificate in memory, with a name constraint to the hosts of
+   the `inspect` rules and the lifetime of the claim. It sends the
+   certificate, never the key, to the server through its session. The
+   launcher reads the certificate through its own session and writes a
+   bundle (the roots of the image plus the CA) for the tool steps, named by
+   `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and
+   `AWS_CA_BUNDLE`. `HTTPS_PROXY` and `HTTP_PROXY` name the job proxy, and
+   `NO_PROXY` is empty.
+7. **Each request.** For a CONNECT, the job proxy:
+   1. refuses a host that no rule names, with 403, before any TLS,
+   2. for `tunnel`, resolves the host, checks each address with the
+      outbound guard, and connects to the address that it checked,
+   3. for `inspect`, ends the TLS of the client with a leaf certificate of
+      the CA, refuses an SNI or a `Host` (`:authority`) that differs from
+      the CONNECT host, refuses a path that is not canonical with 400,
+      matches the method and the path against the rendered rules, and
+      refuses a request that no rule allows with 403 and the body "blocked
+      by the job proxy: <method> <host><path>: no rule matched",
+   4. deletes `Authorization`, `Proxy-Authorization`, `Cookie` and each
+      header that the credential sets, adds the credential, and sends the
+      request with its own TLS to the address that the outbound guard
+      checked, with HTTP/2 where the server offers it,
+   5. never follows a redirect: the tool follows it as a new request,
+   6. scans the response of a rule with a credential for each form of the
+      credential (the forms in the row "Encodings in the response scan"
+      above), with a window as long as the longest form, and breaks the
+      stream on a match.
+8. **The outbound guard and the upstream proxy.** The job proxy dials with
+   `pkg/egress` rules: it never opens the always-denied addresses, and it
+   opens a private address only in a range that the runner pool allows
+   (`egress.ParseAllowedRanges`). A pool can name an upstream proxy (a URL
+   and a credential). The pool seals the credential with the data key of
+   the namespace, and only a proxy session gets it. With an upstream proxy,
+   the job proxy still resolves and checks each rule host before the
+   CONNECT, and the docs say that the upstream proxy must apply its own
+   rules to the final address. An error text never holds the URL or the
+   credential of the upstream proxy: the job proxy maps each error to a
+   fixed reason.
+9. **Gates read a fact.** The fact schemas of `change.propose`,
+   `change.planned` and `change.apply` get the group `proxy` (a minor
+   version, ADR 226 decision 2): `enabled`, `rules` (the count),
+   `ruleSetDigest`, `credentialHosts` (a set of hosts) and `plainHttp`. So
+   a gate can deny an apply of a unit with the label `vendor=grafana` when
+   `proxy.enabled` is false. A gate never matches one request of a job.
+10. **Records.** The job proxy writes one record for each request: the
+    job, the phase, the unit, the operation, the mode, the method, the
+    host, the path when it is canonical, the rule, the decision, a fixed
+    reason, the status, the bytes and the time. It never holds a header, a
+    body, a query value, a credential or a library error text. The records
+    of a phase are a new kind of job log (ADR 152 retention), sealed with
+    an item key. The audit log gets one entry for each phase with the
+    counts of allowed and denied requests and the rule set digest. If the
+    job proxy cannot send its records, it refuses new requests after its
+    buffer of 10,000 records is full: no request without a record.
+11. **Actions.** `namespace:manage-proxy-rules` on the namespace and
+    `unit:manage-proxy-rules` on the unit save a rule set, with a fresh
+    authentication (ADR 227) and an audit entry that holds the old and the
+    new digest. A blueprint version holds rules through `blueprint:publish`.
+    `namespace:manage-runners` sets the allowed ranges and the upstream
+    proxy of a pool.
+12. **Routes.** `GET`, `PUT .../namespaces/{namespace}/proxy-rules`, `GET`,
+    `PUT .../units/{unit_id}/proxy-rules`, `GET .../units/{unit_id}/proxy-rules/rendered?operation=plan`
+    (the rules of the unit with their values, for a person who debugs),
+    and `GET .../jobs/{id}/proxy-records`. The runner protocol gets the
+    proxy session paths under `/runner/v1`.
+
+### Owner decisions
+
+- **D4. The name of a rule.** Recommended: "proxy rule" and "proxy rule
+  set".
+- **D5. The scope in Milestone 6.** (a) This RFC calls body matching,
+  SPIFFE, learn mode, the rule tester and a shared gateway "a later step,
+  each only when someone needs it". Recommended for Milestone 6: decisions
+  1 to 12 above, with the endpoint mode, the client certificate and the
+  response scan. Then the rule tester (a replay of the records of past jobs
+  against a changed rule set), because it reads stored records only and
+  adds no new attack surface. Body matching, SPIFFE, learn mode and the
+  shared gateway after Milestone 6, each with its own section here first.
+  (b) The service account of the Kubernetes coordinator gets `create` and
+  `delete` on NetworkPolicies (decision 2), which amends ADR 136 decision 4.
+
+### Ports
+
+- `pkg/jobproxy`: the rule set model, `jobproxy.Parse`, `jobproxy.Render`
+  (the variables of decision 4), `jobproxy.CanonicalPath`,
+  `jobproxy.Match`, the fixed reasons, and the port `jobproxy.RuleStore`
+  (get and put of a rule set for a scope, with the fence and the audit
+  entry) with its suite `jobproxytest`. Pure functions have table tests
+  and fuzz tests.
+- `jobproxy.Session`, the port that the proxy mode of the launcher uses:
+  `Assignment` (the rendered rules, the credentials, the pool settings),
+  `PutCA`, `PutRecords`. The runner protocol implements it.
+- The profile consumer `job-proxy` in `pkg/profile`.
+- The producer of the fact group `proxy` in `pkg/gate`.
+
+### End-to-end steps (real CLIs)
+
+The suite runs a machine runner with `gvisor` isolation (the item adds
+`runsc` to the e2e image), a fake product over TLS with one admin token and
+no RBAC, and a provider that the suite builds. The provider talks to the
+product over HTTPS and serves both tools (ADR 176). For OpenTofu and for
+the Pulumi CLI:
+
+1. Save a profile with `exports.proxy.grafana-admin` and a unit rule set:
+   `plan` allows `GET /api/folders/{{ inputs.team }}/**`, and `apply` adds
+   `POST` and `DELETE`.
+2. Run a plan. It succeeds. The product saw the real token. A hook step that
+   reads the whole environment and the files of the sandbox finds no byte
+   of the token.
+3. Change the program to read the folder of another team, and run a plan.
+   It fails, and the job log shows "blocked by the job proxy" with the host
+   and the path.
+4. Run an apply. It succeeds with `POST`. The records show each request
+   with its rule.
+5. Point the provider at a host with no rule. The CONNECT fails with 403,
+   and the plan fails.
+6. Make the product echo the `Authorization` header on one allowed path.
+   The job proxy breaks the stream, and the record says "response holds the
+   credential".
+7. Run the plan again on a pool with only `process` isolation. The start
+   fails with `runner.ErrIsolation`.
+
+### Security tests (ADR 250)
+
+Each test sends hostile input to one layer, with the other layers skipped.
+
+1. **Boundary (the rule set and the request).**
+   - Rule sets: an unknown field, a duplicate key, an IP literal host, a
+     host with a trailing dot or in uppercase, a `**` in the middle, a
+     pattern with `..`, `%2F` or `;`, and 257 rules.
+   - Requests to `jobproxy.CanonicalPath`: `..`, `%2e%2e`, `%2F`, `%5C`,
+     `//`, `;`, `%00`, `%25`, `team-%61`, an overlong UTF-8 form and a path
+     over 8 KiB, each refused with 400.
+   - Fuzz `CanonicalPath` and `Match`. No input that `CanonicalPath`
+     accepts may give two different paths.
+2. **Encode or contain.**
+   - A template value `team-a/../team-b`, `team-a/**` and an empty value
+     each fail the render.
+   - The job proxy sends the path that it checked byte for byte.
+   - CR and LF in a header value of the credential are refused when the
+     profile is saved, and again by the job proxy.
+   - The record holds no query value and no header.
+3. **Limit the effect.**
+   - The CA certificate has a name constraint, and a test checks that Go
+     refuses a leaf for a host outside it.
+   - The proxy key never leaves memory: a test reads the files and the
+     records of a claim and finds no key.
+   - Per-request time limits and a limit on open connections.
+   - The always-denied addresses: `169.254.169.254`, `::ffff:169.254.169.254`,
+     `::ffff:a9fe:a9fe`, `127.0.0.1`, `0.0.0.0`, `[::]` and a 6to4 address
+     of a metadata IP.
+   - DNS rebinding: a name that resolves to a public address at the check
+     and to `127.0.0.1` at the dial is refused at the dial.
+   - The same check through an upstream proxy, before the CONNECT.
+4. **Authorize at the point of use.**
+   - A CONNECT host with no rule.
+   - An SNI and a `Host` header that differ from the CONNECT host.
+   - A rule of `apply` used in a `plan`.
+   - A proxy session of one claim that asks for the rules of another
+     claim.
+   - A launcher session that asks for `exports.proxy`.
+   - A proxy session after its claim ended.
+   - The job start check that each named credential exists.
+5. **Fail closed and record.**
+   - An unknown mode, an unknown variable, a profile that cannot open, an
+     upstream proxy that is down, an endpoint certificate that is not
+     trusted, and a full record buffer. Each one denies.
+   - Each denial writes a record with a fixed reason.
+   - An error of the upstream proxy holds no URL and no credential in any
+     record or log.
+   - On Kubernetes, the coordinator refuses claims when the policy probe
+     connects.
+
+### Work items
+
+Sizes and conflict groups as in RFC 111.
+
+| ID | Item | Size | Conflict group | Depends on |
+| --- | --- | --- | --- | --- |
+| X1 | `pkg/jobproxy`: rule model, parser, `CanonicalPath`, `Render`, `Match`, reasons, table and fuzz tests | M | `jobproxy` | owner decision D4 (the name) |
+| X2 | `jobproxy.RuleStore`, `jobproxytest`, SQLite and PostgreSQL adapters, routes, the two actions | M | `store-migrations`, `identity-actions` | X1 |
+| X3 | The profile export `proxy` and the consumer `job-proxy`, with the consumer tests | M | `profile` | none |
+| X4 | The proxy core in the launcher module. CONNECT, the CA of a claim and the name binding. The modes `inspect`, `tunnel` and `endpoint`. Injection, and HTTP/2 through the TLS end. The outbound guard dial, the upstream proxy and the response scan | L | `jobproxy-core` | X1 |
+| X5 | The runner protocol: the proxy handoff token, the proxy session, the assignment, the CA and record uploads, the pool settings (allowed ranges, upstream proxy) | M | `runner-protocol` | X3, X4 |
+| X6 | The machine coordinator: the job proxy outside the sandbox, the routes and the drop rules for `gvisor` and `firecracker`, the refusal of `process` | M | `runner-machine` | X5 |
+| X7 | The Kubernetes coordinator: the proxy pod, the NetworkPolicy of a claim, the policy probe (after owner decision D5 b) | L | `runner-k8s` | X5 |
+| X8 | The launcher: the CA bundle, the proxy variables, the placeholders, the denial line in the step log | S | `launcher` | X5 |
+| X9 | The job start: the render of the rules, the digest in the spec, the credential check, the fact group `proxy` | M | `job-start`, `gate-facts` | X2, X3 |
+| X10 | The records as a job log kind, their retention, the audit summary and the read route | M | `job-logs` | X5 |
+| X11 | The e2e steps above, `runsc` in the e2e image, and the docs page "Narrow an admin key with the job proxy" | L | `e2e`, `docs` | X6, X8, X9, X10 |
+| X12 | The rule tester (if owner decision D5 a takes it) | M | `jobproxy` | X10 |
+
+Order: X1 and X3 in parallel, then X2 and X4, then X5, then X6, X8, X9
+and X10 in parallel, then X7 and X11, then X12.
+
 ## Open questions
+
+The section "Proposal (2026-10-30)" answers each question below, except
+the owner decisions D4 and D5.
+
 
 - The name of a rule of the job proxy: "egress rule", "proxy rule", or
   another word? "Egress" now names the outbound guard and the egress
