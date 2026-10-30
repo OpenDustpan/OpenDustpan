@@ -366,10 +366,6 @@ func (coverageBlobs) Delete(_ context.Context, _ blob.Key) error {
 	return nil
 }
 
-func (coverageBlobs) list(_ context.Context, _ string) ([]blob.Object, error) {
-	return nil, nil
-}
-
 // ListPage implements blob.Store: it cuts the page that req selects from the
 // objects of list.
 func (x coverageBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
@@ -389,6 +385,10 @@ func (x coverageBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob
 
 func (coverageBlobs) Ping(_ context.Context) error {
 	return nil
+}
+
+func (coverageBlobs) list(_ context.Context, _ string) ([]blob.Object, error) {
+	return nil, nil
 }
 
 // coverageUpdateStore answers no update and no state. It exists only to

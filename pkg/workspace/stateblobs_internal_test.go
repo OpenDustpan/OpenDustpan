@@ -75,23 +75,6 @@ func (s *callCountingStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (s *callCountingStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.calls++
-
-	var out []blob.Object
-
-	for key := range s.objects {
-		if strings.HasPrefix(key.String(), prefix) {
-			out = append(out, blob.Object{Key: key, ModifiedAt: time.Time{}})
-		}
-	}
-
-	return out, nil
-}
-
 // ListPage implements blob.Store: it cuts the page that req selects from the
 // objects of list.
 func (s *callCountingStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
@@ -110,6 +93,23 @@ func (s *callCountingStore) ListPage(ctx context.Context, req blob.PageRequest) 
 }
 
 func (s *callCountingStore) Ping(context.Context) error { return nil }
+
+func (s *callCountingStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.calls++
+
+	var out []blob.Object
+
+	for key := range s.objects {
+		if strings.HasPrefix(key.String(), prefix) {
+			out = append(out, blob.Object{Key: key, ModifiedAt: time.Time{}})
+		}
+	}
+
+	return out, nil
+}
 
 func (s *callCountingStore) callCount() int {
 	s.mu.Lock()

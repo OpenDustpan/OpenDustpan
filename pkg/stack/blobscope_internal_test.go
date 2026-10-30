@@ -75,23 +75,6 @@ func (c *countingStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (c *countingStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.calls++
-
-	var out []blob.Object
-
-	for key := range c.objects {
-		if strings.HasPrefix(key.String(), prefix) {
-			out = append(out, blob.Object{Key: key, ModifiedAt: time.Time{}})
-		}
-	}
-
-	return out, nil
-}
-
 // ListPage implements blob.Store: it cuts the page that req selects from the
 // objects of list.
 func (c *countingStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
@@ -110,6 +93,23 @@ func (c *countingStore) ListPage(ctx context.Context, req blob.PageRequest) (blo
 }
 
 func (c *countingStore) Ping(context.Context) error { return nil }
+
+func (c *countingStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.calls++
+
+	var out []blob.Object
+
+	for key := range c.objects {
+		if strings.HasPrefix(key.String(), prefix) {
+			out = append(out, blob.Object{Key: key, ModifiedAt: time.Time{}})
+		}
+	}
+
+	return out, nil
+}
 
 // count returns the number of calls that reached the store.
 func (c *countingStore) count() int {
@@ -610,28 +610,17 @@ type foreignLister struct {
 	*countingStore
 }
 
-func (foreignLister) list(context.Context, string) ([]blob.Object, error) {
-	return []blob.Object{
-		{Key: "namespaces/ns-scope-a/pulumi/stk-1/upd-1/1", ModifiedAt: time.Time{}},
-		{Key: "namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", ModifiedAt: time.Time{}},
-	}, nil
-}
-
-// ListPage implements blob.Store: it cuts the page that req selects from the
-// objects of list.
-func (x foreignLister) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+// ListPage implements blob.Store: it answers keys of two other stacks, whatever
+// the prefix is.
+func (foreignLister) ListPage(_ context.Context, req blob.PageRequest) (blob.Page, error) {
 	if err := req.Validate(); err != nil {
 		return blob.Page{}, err
 	}
 
-	objects, err := x.list(ctx, req.Prefix)
-	if err != nil {
-		return blob.Page{}, err
-	}
-
-	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
-
-	return blob.PageOf(objects, req), nil
+	return blob.PageOf([]blob.Object{
+		{Key: "namespaces/ns-scope-a/pulumi/stk-1/upd-1/1", ModifiedAt: time.Time{}},
+		{Key: "namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", ModifiedAt: time.Time{}},
+	}, req), nil
 }
 
 // TestListRefusesAKeyOutsideTheStack checks the layer under the delete of a

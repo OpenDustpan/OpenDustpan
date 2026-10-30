@@ -120,10 +120,6 @@ func (m *memoryBlobs) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (m *memoryBlobs) list(context.Context, string) ([]blob.Object, error) {
-	return nil, nil
-}
-
 // ListPage implements blob.Store: it cuts the page that req selects from the
 // objects of list.
 func (m *memoryBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
@@ -142,6 +138,10 @@ func (m *memoryBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.
 }
 
 func (m *memoryBlobs) Ping(context.Context) error { return nil }
+
+func (m *memoryBlobs) list(context.Context, string) ([]blob.Object, error) {
+	return nil, nil
+}
 
 // TestWrapBlobCacheKeepsOnlyTheStateOfANamespace proves the wiring: with a
 // cache size, a second read of the state of a namespace stays in the cache,

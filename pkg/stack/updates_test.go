@@ -551,23 +551,6 @@ func (m *memBlob) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (m *memBlob) list(_ context.Context, prefix string) ([]blob.Object, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var out []blob.Object
-
-	for key, obj := range m.objects {
-		if strings.HasPrefix(key.String(), prefix) {
-			out = append(out, blob.Object{ModifiedAt: obj.modifiedAt, Key: key})
-		}
-	}
-
-	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
-
-	return out, nil
-}
-
 // ListPage implements blob.Store: it cuts the page that req selects from the
 // objects of list.
 func (m *memBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
@@ -587,6 +570,23 @@ func (m *memBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page
 
 func (m *memBlob) Ping(context.Context) error {
 	return nil
+}
+
+func (m *memBlob) list(_ context.Context, prefix string) ([]blob.Object, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []blob.Object
+
+	for key, obj := range m.objects {
+		if strings.HasPrefix(key.String(), prefix) {
+			out = append(out, blob.Object{ModifiedAt: obj.modifiedAt, Key: key})
+		}
+	}
+
+	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return out, nil
 }
 
 // ageAll moves every stored modification time back by d, so tests prove the

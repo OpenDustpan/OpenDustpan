@@ -66,6 +66,25 @@ func (s *replacingBlobs) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (s *replacingBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := s.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
+}
+
+func (s *replacingBlobs) Ping(context.Context) error { return nil }
+
 // List answers the objects under the key directory prefix, ordered by key.
 func (s *replacingBlobs) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	dir := strings.TrimSuffix(prefix, "/") + "/"
@@ -85,25 +104,6 @@ func (s *replacingBlobs) list(_ context.Context, prefix string) ([]blob.Object, 
 
 	return out, nil
 }
-
-// ListPage implements blob.Store: it cuts the page that req selects from the
-// objects of list.
-func (s *replacingBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
-	if err := req.Validate(); err != nil {
-		return blob.Page{}, err
-	}
-
-	objects, err := s.list(ctx, req.Prefix)
-	if err != nil {
-		return blob.Page{}, err
-	}
-
-	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
-
-	return blob.PageOf(objects, req), nil
-}
-
-func (s *replacingBlobs) Ping(context.Context) error { return nil }
 
 // raw answers the bytes under key.
 func (s *replacingBlobs) raw(t *testing.T, key blob.Key) []byte {

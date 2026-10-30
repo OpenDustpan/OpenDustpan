@@ -472,8 +472,6 @@ func (fakeBlobs) Get(context.Context, blob.Key) (io.ReadCloser, error) {
 
 func (fakeBlobs) Delete(context.Context, blob.Key) error { return nil }
 
-func (fakeBlobs) list(context.Context, string) ([]blob.Object, error) { return nil, nil }
-
 // ListPage implements blob.Store: it cuts the page that req selects from the
 // objects of list.
 func (x fakeBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
@@ -492,6 +490,8 @@ func (x fakeBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Pag
 }
 
 func (fakeBlobs) Ping(context.Context) error { return nil }
+
+func (fakeBlobs) list(context.Context, string) ([]blob.Object, error) { return nil, nil }
 
 const (
 	testRegion    = namespace.InstallationName("eu-west")

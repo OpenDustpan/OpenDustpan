@@ -97,11 +97,13 @@ func testPageLimit(t *testing.T, s blob.Store) {
 
 			last := i == len(tc.pages)-1
 
-			switch {
-			case last && got.Next != "":
-				t.Fatalf("%s: last page has next %q, want none", tc.name, got.Next)
-			case !last && got.Next != got.Objects[len(got.Objects)-1].Key:
-				t.Fatalf("%s: page %d next = %q, want the last key %q", tc.name, i, got.Next, got.Objects[len(got.Objects)-1].Key)
+			wantNext := blob.Key("")
+			if !last {
+				wantNext = got.Objects[len(got.Objects)-1].Key
+			}
+
+			if got.Next != wantNext {
+				t.Fatalf("%s: page %d next = %q, want %q", tc.name, i, got.Next, wantNext)
 			}
 
 			after = got.Next

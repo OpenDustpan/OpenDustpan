@@ -169,6 +169,15 @@ func (b *scopedBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.
 	return page, nil
 }
 
+// Ping implements blob.Store. It takes no key, so the scope does not apply.
+func (b *scopedBlobs) Ping(ctx context.Context) error {
+	if err := b.view.Ping(ctx); err != nil {
+		return fmt.Errorf("ping stack blobs: %w", err)
+	}
+
+	return nil
+}
+
 // listAll walks every page under prefix and returns the objects. A caller
 // that needs the whole listing of one update or one stack uses it, and a
 // caller that can act on each object as it arrives uses blob.Walk.
@@ -185,15 +194,6 @@ func (b *scopedBlobs) listAll(ctx context.Context, prefix string) ([]blob.Object
 	}
 
 	return out, nil
-}
-
-// Ping implements blob.Store. It takes no key, so the scope does not apply.
-func (b *scopedBlobs) Ping(ctx context.Context) error {
-	if err := b.view.Ping(ctx); err != nil {
-		return fmt.Errorf("ping stack blobs: %w", err)
-	}
-
-	return nil
 }
 
 // narrow returns the access that is limited to the directory prefix inside the

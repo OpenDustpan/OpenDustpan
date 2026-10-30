@@ -164,6 +164,33 @@ func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, 
 	return blob.PageOf(objects, req), nil
 }
 
+// Ping reports whether the directory exists and accepts writes. It writes a
+// temporary file and removes it, so no file is left behind.
+func (s *Store) Ping(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ping blob store: %w", err)
+	}
+
+	name, err := tempName()
+	if err != nil {
+		return errPing
+	}
+
+	f, err := s.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm)
+	if err != nil {
+		return errPing
+	}
+
+	closeErr := f.Close()
+	removeErr := s.removeIfExists(name)
+
+	if closeErr != nil || removeErr != nil {
+		return errPing
+	}
+
+	return nil
+}
+
 // listAll returns every object under prefix, ordered by key.
 func (s *Store) listAll(ctx context.Context, prefix string) ([]blob.Object, error) {
 	if err := ctx.Err(); err != nil {
@@ -205,33 +232,6 @@ func (s *Store) listAll(ctx context.Context, prefix string) ([]blob.Object, erro
 	})
 
 	return out, nil
-}
-
-// Ping reports whether the directory exists and accepts writes. It writes a
-// temporary file and removes it, so no file is left behind.
-func (s *Store) Ping(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("ping blob store: %w", err)
-	}
-
-	name, err := tempName()
-	if err != nil {
-		return errPing
-	}
-
-	f, err := s.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm)
-	if err != nil {
-		return errPing
-	}
-
-	closeErr := f.Close()
-	removeErr := s.removeIfExists(name)
-
-	if closeErr != nil || removeErr != nil {
-		return errPing
-	}
-
-	return nil
 }
 
 // listDir appends every object under dir to out.

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,27 +69,11 @@ type failingListBlobs struct {
 	lists *atomic.Int64
 }
 
-func (b failingListBlobs) list(context.Context, string) ([]blob.Object, error) {
+// ListPage implements blob.Store: it counts the call and fails.
+func (b failingListBlobs) ListPage(context.Context, blob.PageRequest) (blob.Page, error) {
 	b.lists.Add(1)
 
-	return nil, errBlobList
-}
-
-// ListPage implements blob.Store: it cuts the page that req selects from the
-// objects of list.
-func (b failingListBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
-	if err := req.Validate(); err != nil {
-		return blob.Page{}, err
-	}
-
-	objects, err := b.list(ctx, req.Prefix)
-	if err != nil {
-		return blob.Page{}, err
-	}
-
-	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
-
-	return blob.PageOf(objects, req), nil
+	return blob.Page{}, errBlobList
 }
 
 // TestAuditChainGaugeKeepsTheMarksWhenTheEpochCannotBeRead proves that a

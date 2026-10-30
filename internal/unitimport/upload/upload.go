@@ -153,17 +153,6 @@ func (s *Source) Units(
 	return out, nil
 }
 
-// walkError turns the error of a walk of the uploads into the error of a
-// source. An error that already is a source error stays as it is, and a
-// store error is a source that cannot be reached.
-func (s *Source) walkError(err error) error {
-	if errors.Is(err, unitimport.ErrSourceUnreachable) || errors.Is(err, unitimport.ErrInvalid) {
-		return err
-	}
-
-	return fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-}
-
 // Versions implements unitimport.Source.
 func (s *Source) Versions(
 	ctx context.Context, _ unitimport.Credential, u unitimport.SourceUnit, after unitimport.VersionID, limit int,
@@ -324,6 +313,17 @@ func (s *Source) Delete(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// walkError turns the error of a walk of the uploads into the error of a
+// source. An error that already is a source error stays as it is, and a
+// store error is a source that cannot be reached.
+func (s *Source) walkError(err error) error {
+	if errors.Is(err, unitimport.ErrSourceUnreachable) || errors.Is(err, unitimport.ErrInvalid) {
+		return err
+	}
+
+	return fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
 }
 
 // prepare checks a Put before it writes. It returns the facts with the
