@@ -347,7 +347,7 @@ func testRestoreStagingKeepsCheckpointBlobs(t *testing.T, newStore RestoreFactor
 
 	want := newBlobCheckpoint(u, key, 0, `{"v":1}`)
 
-	if putErr := ps.src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
+	if _, putErr := ps.src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
 		t.Fatalf("put checkpoint: %v", putErr)
 	}
 

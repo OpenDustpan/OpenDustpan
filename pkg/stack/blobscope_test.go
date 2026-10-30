@@ -147,7 +147,7 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 		BlobMD5:       [16]byte{},
 	}
 
-	if err := f.store.PutCheckpoint(t.Context(), row, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
+	if _, err := f.store.PutCheckpoint(t.Context(), row, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
 		t.Fatalf("store the checkpoint row: %v", err)
 	}
 }

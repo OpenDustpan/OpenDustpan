@@ -352,9 +352,9 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 }
 
 // PutCheckpoint saves cp as the state of its update, unless a fault fires first.
-func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
+func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
 	if err := s.before(ctx, "PutCheckpoint"); err != nil {
-		return err
+		return false, err
 	}
 
 	return s.inner.PutCheckpoint(ctx, cp, fence)

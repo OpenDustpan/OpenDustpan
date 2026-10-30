@@ -90,13 +90,18 @@ type CheckpointStore interface {
 	// lease cp.Lease; otherwise it returns ErrWrongUpdateState, so a write
 	// authorized before a cancel cannot land after it. It returns
 	// ErrWrongUpdateState when the update is a preview or a dry run, which
-	// never saves state. For cp.Sequence > 0 it is idempotent: if the
-	// update's last checkpoint has the same sequence and digest it returns
-	// nil without writing, a different digest returns ErrCheckpointConflict,
-	// and a lower sequence returns ErrStaleCheckpoint. The row keeps the
-	// blob key with the size, the digest and the sequence, and no content.
-	// A checkpoint without a blob key returns ErrCheckpointNoKey.
-	PutCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) error
+	// never saves state. For cp.Sequence > 0 the same transaction decides
+	// which write wins: if the update's last checkpoint has the same sequence
+	// and digest it returns known = true without writing, and the row keeps
+	// the blob key of the first write, whatever key cp names. A different
+	// digest returns ErrCheckpointConflict, and a lower sequence returns
+	// ErrStaleCheckpoint. A write without a sequence number is never known:
+	// it replaces the row. The row keeps the blob key with the size, the
+	// digest and the sequence, and no content. A checkpoint without a blob
+	// key returns ErrCheckpointNoKey. When the answer is known or an error
+	// that no row followed, no row names the blob of cp, and the caller may
+	// delete that blob, which holds the key of its own attempt.
+	PutCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) (known bool, err error)
 	// LatestCheckpoint returns the checkpoint of the stack's highest version
 	// that has one, or ErrNoState.
 	LatestCheckpoint(ctx context.Context, ref Ref) (Checkpoint, error)
@@ -1100,7 +1105,9 @@ func (s *Updates) commitCheckpointRow(
 		BlobMD5:       sum,
 	}
 
-	return s.checkpoints.PutCheckpoint(ctx, cp, save.fence)
+	_, err := s.checkpoints.PutCheckpoint(ctx, cp, save.fence)
+
+	return err
 }
 
 // afterCheckpointSave deletes the blob of the previous save of the same

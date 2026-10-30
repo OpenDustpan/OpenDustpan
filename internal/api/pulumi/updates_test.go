@@ -193,13 +193,13 @@ func (m *memUpdateStore) ListUpdates(_ context.Context, ref stack.Ref, _ stack.P
 	return list, nil
 }
 
-func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) error {
+func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.checkpoints[cp.Update] = cp
 
-	return nil
+	return false, nil
 }
 
 // StateAt implements stack.StateAtReader for the one stack that the fixture

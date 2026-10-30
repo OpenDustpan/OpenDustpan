@@ -1552,7 +1552,7 @@ func (exportPanicsStore) CheckpointByVersion(
 // PutCheckpoint panics: the delete route never writes state.
 func (exportPanicsStore) PutCheckpoint(
 	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
-) error {
+) (bool, error) {
 	panic("delete must not write a checkpoint")
 }
 
@@ -2030,7 +2030,7 @@ func (emptyCheckpointStore) ActiveUpdate(_ context.Context, _ stack.Ref) (stack.
 
 func (emptyCheckpointStore) PutCheckpoint(
 	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
-) error {
+) (bool, error) {
 	panic("PutCheckpoint is not used by the delete route")
 }
 

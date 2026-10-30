@@ -103,6 +103,9 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "referenced blob keys follow the stack ID and refuse a missing stack", test: testReferencedBlobKeysByID},
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
+		{name: "a checkpoint replay under another key keeps the first key", test: testCheckpointReplayOtherKey},
+		{name: "a checkpoint conflict under another key keeps the first key", test: testCheckpointConflictOtherKey},
+		{name: "a checkpoint without a sequence number replaces the row and its key", test: testCheckpointUnsequencedKeys},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
 		{name: "latest checkpoint is the highest version", test: testCheckpointLatestIsHighest},
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
@@ -438,7 +441,7 @@ func (f historyFixture) putCheckpoint(t *testing.T, u stack.Update, body string)
 	cp := newCheckpoint(u, 0, body)
 	cp.BlobKey = checkpointKey(t, f.s, u, 0)
 
-	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
 		t.Fatalf("put checkpoint of %s: %v", u.ID, err)
 	}
 }
@@ -772,7 +775,9 @@ func testUpdateWritesFenced(t *testing.T, f fixture) {
 			return f.s.SaveUpdate(t.Context(), ended(running, stack.StatusSucceeded), stale)
 		},
 		"PutCheckpoint": func() error {
-			return f.s.PutCheckpoint(t.Context(), f.checkpoint(t, running, 0, `{}`), stale)
+			_, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, running, 0, `{}`), stale)
+
+			return err
 		},
 		"AppendEvents": func() error {
 			return f.s.AppendEvents(t.Context(), newEvents(running, 0), stale)
@@ -1313,6 +1318,30 @@ func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
 	return checkpointKey(t, f.s, u, seq)
 }
 
+// attemptKey returns the blob key of the save of u with seq that the attempt
+// wrote: the key of f.blobKey with the attempt ID after the number.
+func (f fixture) attemptKey(t *testing.T, u stack.Update, seq int64, attempt string) blob.Key {
+	t.Helper()
+
+	key, err := blob.ParseKey(f.blobKey(t, u, seq).String() + "-" + attempt)
+	if err != nil {
+		t.Fatalf("parse blob key: %v", err)
+	}
+
+	return key
+}
+
+// attemptCheckpoint returns a checkpoint of u under the key of one write
+// attempt, as f.checkpoint does for the key without an attempt ID.
+func (f fixture) attemptCheckpoint(t *testing.T, u stack.Update, seq int64, deployment, attempt string) stack.Checkpoint {
+	t.Helper()
+
+	cp := newCheckpoint(u, seq, deployment)
+	cp.BlobKey = f.attemptKey(t, u, seq, attempt)
+
+	return cp
+}
+
 // checkpoint returns a checkpoint of u as newCheckpoint does, under the blob
 // key that the service builds for the save: the store refuses any other key.
 func (f fixture) checkpoint(t *testing.T, u stack.Update, seq int64, deployment string) stack.Checkpoint {
@@ -1376,7 +1405,7 @@ func testCheckpointRoundTrip(t *testing.T, f fixture) {
 	want := f.checkpoint(t, u, 0, "{\"b\": 1,  \"a\":[ ], \"b\":2}\n")
 	want.Invalid = true
 
-	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -1385,7 +1414,7 @@ func testCheckpointRoundTrip(t *testing.T, f fixture) {
 	empty := f.checkpoint(t, u, 0, "")
 	empty.Features = nil
 
-	if err := f.s.PutCheckpoint(t.Context(), empty, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), empty, f.fence); err != nil {
 		t.Fatalf("put empty checkpoint: %v", err)
 	}
 
@@ -1400,7 +1429,7 @@ func testCheckpointLease(t *testing.T, f fixture) {
 	t.Helper()
 
 	waiting := f.create(t, f.ref, "waiting", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, waiting, 0, `{}`), f.fence); !errors.Is(
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, waiting, 0, `{}`), f.fence); !errors.Is(
 		err, stack.ErrWrongUpdateState,
 	) {
 		t.Fatalf("checkpoint of a not-started update: err = %v, want ErrWrongUpdateState", err)
@@ -1411,7 +1440,7 @@ func testCheckpointLease(t *testing.T, f fixture) {
 	forged := f.checkpoint(t, u, 0, `{}`)
 	forged.Lease = sha256.Sum256([]byte("another lease"))
 
-	if err := f.s.PutCheckpoint(t.Context(), forged, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
+	if _, err := f.s.PutCheckpoint(t.Context(), forged, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Fatalf("checkpoint under another lease: err = %v, want ErrWrongUpdateState", err)
 	}
 
@@ -1419,7 +1448,7 @@ func testCheckpointLease(t *testing.T, f fixture) {
 	late := f.checkpoint(t, u, 0, `{}`)
 	f.end(t, u, stack.StatusCanceled)
 
-	if err := f.s.PutCheckpoint(t.Context(), late, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
+	if _, err := f.s.PutCheckpoint(t.Context(), late, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Fatalf("checkpoint after cancel: err = %v, want ErrWrongUpdateState", err)
 	}
 
@@ -1433,7 +1462,9 @@ func testCheckpointSequence(t *testing.T, f fixture) {
 
 	u := f.run(t, f.ref, "u1", mutating())
 	put := func(seq int64, body string) error {
-		return f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, seq, body), f.fence)
+		_, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, seq, body), f.fence)
+
+		return err
 	}
 
 	if err := put(2, `{"n":2}`); err != nil {
@@ -1474,7 +1505,7 @@ func testCheckpointAcrossUpdates(t *testing.T, f fixture) {
 	t.Helper()
 
 	first := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, first, 5, `{"from":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, first, 5, `{"from":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1484,14 +1515,14 @@ func testCheckpointAcrossUpdates(t *testing.T, f fixture) {
 	second := f.run(t, f.ref, "u2", mutating())
 	want := f.checkpoint(t, second, 1, `{"from":2}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
 	}
 
 	assertCheckpoint(t, f, f.ref, want)
 
 	other := f.run(t, f.other(t), "d1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, other, 9, `{"from":"dev"}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, other, 9, `{"from":"dev"}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of another stack: %v", err)
 	}
 
@@ -1507,7 +1538,7 @@ func testCheckpointLatestIsHighest(t *testing.T, f fixture) {
 	first := f.run(t, f.ref, "u1", mutating())
 	firstCP := f.checkpoint(t, first, 0, `{"v":1}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1516,7 +1547,7 @@ func testCheckpointLatestIsHighest(t *testing.T, f fixture) {
 	second := f.run(t, f.ref, "u2", mutating())
 	secondCP := f.checkpoint(t, second, 0, `{"v":2}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
 	}
 
@@ -1539,7 +1570,7 @@ func testCheckpointByVersion(t *testing.T, f fixture) {
 	first := f.run(t, f.ref, "u1", mutating())
 	firstCP := f.checkpoint(t, first, 0, `{"v":1}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1548,7 +1579,7 @@ func testCheckpointByVersion(t *testing.T, f fixture) {
 	second := f.run(t, f.ref, "u2", mutating())
 	secondCP := f.checkpoint(t, second, 0, `{"v":2}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
 	}
 
@@ -1592,7 +1623,7 @@ func testCheckpointBlobMetadata(t *testing.T, f fixture) {
 	want := newBlobCheckpoint(u, f.blobKey(t, u, 3), 3, "{\"b\": 1,  \"a\":[ ], \"b\":2}\n")
 	want.Invalid = true
 
-	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -1625,7 +1656,7 @@ func testCheckpointByUpdate(t *testing.T, f fixture) {
 	first := f.run(t, f.ref, "u1", mutating())
 	want := f.checkpoint(t, first, 0, `{"v":1}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1665,7 +1696,7 @@ func testHistoryBlobSize(t *testing.T, f fixture) {
 	body := `{"v":1,"more":"a longer deployment"}`
 	want := newBlobCheckpoint(u, f.blobKey(t, u, 0), 0, body)
 
-	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -1701,7 +1732,7 @@ func testReferencedBlobKeys(t *testing.T, f fixture) {
 	first := f.run(t, f.ref, "u1", mutating())
 	firstKey := f.blobKey(t, first, 0)
 
-	if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(first, firstKey, 0, `{"v":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(first, firstKey, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1710,7 +1741,7 @@ func testReferencedBlobKeys(t *testing.T, f fixture) {
 	second := f.run(t, f.ref, "u2", mutating())
 	secondKey := f.blobKey(t, second, 0)
 
-	if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(second, secondKey, 0, `{"v":2}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(second, secondKey, 0, `{"v":2}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
 	}
 
@@ -1742,7 +1773,7 @@ func testReferencedBlobKeysByID(t *testing.T, f fixture) {
 	u := f.run(t, f.ref, "u1", mutating())
 	key := f.blobKey(t, u, 0)
 
-	if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(u, key, 0, `{"v":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(u, key, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -1799,7 +1830,7 @@ func testCheckpointWithoutKeyRefused(t *testing.T, f fixture) {
 	cp := f.checkpoint(t, u, 0, `{"v":1}`)
 	cp.BlobKey = ""
 
-	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointNoKey) {
+	if _, err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointNoKey) {
 		t.Fatalf("put checkpoint without a key: err = %v, want ErrCheckpointNoKey", err)
 	}
 
@@ -1824,7 +1855,7 @@ func testKeylessRowRefused(t *testing.T, f fixture) {
 	}
 
 	u := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -1849,7 +1880,7 @@ func testCheckpointPreviewRejected(t *testing.T, f fixture) {
 		"dry-run": dryRun(),
 	} {
 		u := f.run(t, f.ref, name, plan)
-		if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{}`), f.fence); !errors.Is(
+		if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{}`), f.fence); !errors.Is(
 			err, stack.ErrWrongUpdateState,
 		) {
 			t.Errorf("%s checkpoint: err = %v, want ErrWrongUpdateState", name, err)
@@ -1871,7 +1902,7 @@ func testCheckpointKeepsAfterEnd(t *testing.T, f fixture) {
 	failed := f.run(t, f.ref, "u1", mutating())
 	failedCP := f.checkpoint(t, failed, 0, `{"v":1}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), failedCP, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), failedCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1882,7 +1913,7 @@ func testCheckpointKeepsAfterEnd(t *testing.T, f fixture) {
 	canceled := f.run(t, f.ref, "u2", mutating())
 	canceledCP := f.checkpoint(t, canceled, 0, `{"v":2}`)
 
-	if err := f.s.PutCheckpoint(t.Context(), canceledCP, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), canceledCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
 	}
 
@@ -1899,7 +1930,7 @@ func testDeletedStackChildrenUnreachable(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -2138,7 +2169,7 @@ func finishWithDeployment(t *testing.T, f fixture, id, deployment string) stack.
 	t.Helper()
 
 	u := f.run(t, f.ref, id, mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, deployment), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, deployment), f.fence); err != nil {
 		t.Fatalf("put checkpoint of %s: %v", id, err)
 	}
 
@@ -2415,7 +2446,7 @@ func finishWithBlobDeployment(t *testing.T, f fixture, id, deployment string) {
 	u := f.run(t, f.ref, id, mutating())
 	cp := newBlobCheckpoint(u, f.blobKey(t, u, 0), 0, deployment)
 
-	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
 		t.Fatalf("put blob checkpoint of %s: %v", id, err)
 	}
 
@@ -2442,7 +2473,7 @@ func testDeleteRaceWithFinishingUpdate(t *testing.T, f fixture) {
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+		if _, err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 			completeErr = err
 
 			return
@@ -2530,7 +2561,7 @@ func runResourcedUpdate(t *testing.T, f fixture) error {
 	}
 
 	cp := f.checkpoint(t, startedUpdate, 0, resourcedDeployment)
-	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
 		return err
 	}
 
@@ -2723,7 +2754,7 @@ func seedRenameHistory(
 	u := f.run(t, f.ref, "u1", mutating())
 
 	wantCP := f.checkpoint(t, u, 0, `{"v":1}`)
-	if err := f.s.PutCheckpoint(t.Context(), wantCP, f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), wantCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -3183,7 +3214,7 @@ func testCheckpointReadsCarryIDs(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -3255,7 +3286,7 @@ func testCheckpointKeyBelongsToUpdate(t *testing.T, f fixture) {
 		cp := f.checkpoint(t, u, 1, `{"v":1}`)
 		cp.BlobKey = blob.Key(key)
 
-		if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointKey) {
+		if _, err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointKey) {
 			t.Errorf("put checkpoint with %s in the key: err = %v, want ErrCheckpointKey", name, err)
 		}
 
@@ -3268,7 +3299,99 @@ func testCheckpointKeyBelongsToUpdate(t *testing.T, f fixture) {
 		t.Fatalf("checkpoint after refused writes: err = %v, want ErrNoState", err)
 	}
 
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 1, `{"v":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 1, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint with the key of the update: %v", err)
+	}
+}
+
+// testCheckpointReplayOtherKey checks that a second write of one sequence and
+// one digest under the key of another attempt is a replay: the store reports
+// known, writes nothing and keeps the key of the first write, so the caller
+// deletes only its own blob. A write that the store reports as new is not
+// known.
+func testCheckpointReplayOtherKey(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	first := f.attemptCheckpoint(t, u, 2, `{"n":2}`, "attempt0001")
+	second := f.attemptCheckpoint(t, u, 2, `{"n":2}`, "attempt0002")
+
+	known, err := f.s.PutCheckpoint(t.Context(), first, f.fence)
+	if err != nil || known {
+		t.Fatalf("first write: known = %v, err = %v, want false, nil", known, err)
+	}
+
+	known, err = f.s.PutCheckpoint(t.Context(), second, f.fence)
+	if err != nil || !known {
+		t.Fatalf("replay under another key: known = %v, err = %v, want true, nil", known, err)
+	}
+
+	got, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("checkpoint by update: %v", err)
+	}
+
+	if got.BlobKey != first.BlobKey {
+		t.Fatalf("the row names another key after a replay: want the key of the first write")
+	}
+
+	// The same attempt again also answers known, and the row keeps its key.
+	known, err = f.s.PutCheckpoint(t.Context(), first, f.fence)
+	if err != nil || !known {
+		t.Fatalf("replay under the same key: known = %v, err = %v, want true, nil", known, err)
+	}
+
+	assertCheckpoint(t, f, f.ref, first)
+}
+
+// testCheckpointConflictOtherKey checks that a write of an earlier sequence,
+// or of one sequence with another digest, under the key of another attempt
+// fails with its sentinel and keeps the row and the key of the first write.
+func testCheckpointConflictOtherKey(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	first := f.attemptCheckpoint(t, u, 2, `{"n":2}`, "attempt0001")
+
+	if _, err := f.s.PutCheckpoint(t.Context(), first, f.fence); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		cp   stack.Checkpoint
+		want error
+	}{
+		{"same sequence, other digest", f.attemptCheckpoint(t, u, 2, `{"n":"other"}`, "attempt0002"), stack.ErrCheckpointConflict},
+		{"earlier sequence", f.attemptCheckpoint(t, u, 1, `{"n":1}`, "attempt0003"), stack.ErrStaleCheckpoint},
+	}
+
+	for _, tc := range tests {
+		known, err := f.s.PutCheckpoint(t.Context(), tc.cp, f.fence)
+		if !errors.Is(err, tc.want) || known {
+			t.Errorf("%s: known = %v, err = %v, want false, %v", tc.name, known, err, tc.want)
+		}
+	}
+
+	assertCheckpoint(t, f, f.ref, first)
+}
+
+// testCheckpointUnsequencedKeys checks that a write without a sequence
+// number is never a replay: each write replaces the row, with the key of its
+// own attempt, even for the same digest.
+func testCheckpointUnsequencedKeys(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+
+	for _, attempt := range []string{"attempt0001", "attempt0002"} {
+		cp := f.attemptCheckpoint(t, u, 0, `{"n":"a"}`, attempt)
+
+		known, err := f.s.PutCheckpoint(t.Context(), cp, f.fence)
+		if err != nil || known {
+			t.Fatalf("write %s: known = %v, err = %v, want false, nil", attempt, known, err)
+		}
+
+		assertCheckpoint(t, f, f.ref, cp)
 	}
 }

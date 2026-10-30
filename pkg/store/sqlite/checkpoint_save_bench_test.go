@@ -271,7 +271,7 @@ func benchFullSave(b *testing.B, managed int) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		if err := f.store.PutCheckpoint(ctx, f.benchCheckpoint(running, 0, deployment, digest), f.fence); err != nil {
+		if _, err := f.store.PutCheckpoint(ctx, f.benchCheckpoint(running, 0, deployment, digest), f.fence); err != nil {
 			b.Fatalf("save checkpoint: %v", err)
 		}
 	}
@@ -300,7 +300,7 @@ func benchDeltaSave(b *testing.B, managed int) {
 		serial++
 		b.StartTimer()
 
-		saveErr := f.store.PutCheckpoint(ctx, f.benchCheckpoint(running, 1, deployment, digest), f.fence)
+		_, saveErr := f.store.PutCheckpoint(ctx, f.benchCheckpoint(running, 1, deployment, digest), f.fence)
 		if saveErr != nil {
 			b.Fatalf("save checkpoint: %v", saveErr)
 		}

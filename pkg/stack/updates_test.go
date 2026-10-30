@@ -312,44 +312,44 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 	return list, nil
 }
 
-func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
+func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.checkFence(cp.Ref, fence); err != nil {
-		return err
+		return false, err
 	}
 
 	if !m.runningUnder(cp.Update, cp.Lease) {
-		return stack.ErrWrongUpdateState
+		return false, stack.ErrWrongUpdateState
 	}
 
 	if !m.updates[cp.Update].Mutates() {
-		return stack.ErrWrongUpdateState
+		return false, stack.ErrWrongUpdateState
 	}
 
 	if m.cancelOnPut != nil {
 		m.cancelOnPut()
 
-		return context.Canceled
+		return false, context.Canceled
 	}
 
 	if cp.Sequence > 0 {
 		if last, ok := m.checkpoints[cp.Update]; ok {
 			switch {
 			case cp.Sequence < last.Sequence:
-				return stack.ErrStaleCheckpoint
+				return false, stack.ErrStaleCheckpoint
 			case cp.Sequence == last.Sequence && cp.Digest == last.Digest:
-				return nil
+				return true, nil
 			case cp.Sequence == last.Sequence:
-				return stack.ErrCheckpointConflict
+				return false, stack.ErrCheckpointConflict
 			}
 		}
 	}
 
 	m.checkpoints[cp.Update] = cp
 
-	return nil
+	return false, nil
 }
 
 func (m *memUpdates) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.Checkpoint, error) {
@@ -1814,7 +1814,7 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 		BlobMD5:       [16]byte{},
 	}
 
-	if err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
+	if _, err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
 		t.Fatalf("store checkpoint with a missing blob: %v", err)
 	}
 

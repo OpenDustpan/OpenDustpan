@@ -331,8 +331,10 @@ func listUpdatesWith(ctx context.Context, q *db.Queries, ref stack.Ref, page sta
 // without a blob key returns stack.ErrCheckpointNoKey. Each write of the
 // running update overwrites the row of that update. The row stores no
 // resource count, so the save path never scans the deployment.
-func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
+	var known bool
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
 			return stack.ErrWrongUpdateState
@@ -347,8 +349,17 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 			return rowErr
 		}
 
-		return writeCheckpoint(ctx, q, cp, stackID, row)
+		var writeErr error
+
+		known, writeErr = writeCheckpoint(ctx, q, cp, stackID, row)
+
+		return writeErr
 	})
+	if err != nil {
+		return false, err
+	}
+
+	return known, nil
 }
 
 // checkCheckpointKey refuses a checkpoint whose blob key does not belong to the
@@ -368,26 +379,27 @@ func checkCheckpointKey(ctx context.Context, q *db.Queries, stackID string, cp s
 }
 
 // writeCheckpoint checks the key, the lease, rejects previews, checks the sequence,
-// then upserts the checkpoint of its update.
+// then upserts the checkpoint of its update. It returns true when the last checkpoint of the
+// update has the same sequence and digest: the write is a replay and the row keeps its blob key.
 func writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
-) error {
+) (bool, error) {
 	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
-		return keyErr
+		return false, keyErr
 	}
 
 	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
-		return leaseErr
+		return false, leaseErr
 	}
 
 	if previewErr := checkMutates(ctx, q, stackID, cp.Update); previewErr != nil {
-		return previewErr
+		return false, previewErr
 	}
 
 	if cp.Sequence > 0 {
 		retried, seqErr := checkSequence(ctx, q, cp, stackID)
 		if seqErr != nil || retried {
-			return seqErr
+			return retried, seqErr
 		}
 	}
 
@@ -407,10 +419,10 @@ func writeCheckpoint(
 		BlobMd5:       row.BlobMD5,
 	})
 	if putErr != nil {
-		return fmt.Errorf("upsert checkpoint: %w", putErr)
+		return false, fmt.Errorf("upsert checkpoint: %w", putErr)
 	}
 
-	return nil
+	return false, nil
 }
 
 // LatestCheckpoint implements stack.CheckpointStore. It returns the
