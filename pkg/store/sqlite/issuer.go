@@ -374,7 +374,7 @@ func (i *Issuer) readKeys(ctx context.Context, ns namespace.Name, keep func(prof
 
 	nsID, err := i.store.queries.GetNamespaceID(ctx, ns.String())
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return []profile.Key{}, nil
 	}
 
 	if err != nil {

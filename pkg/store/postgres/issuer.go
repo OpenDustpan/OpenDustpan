@@ -352,7 +352,7 @@ func (i *Issuer) inAuditedTx(
 func (i *Issuer) readKeys(ctx context.Context, ns namespace.Name, keep func(profile.Key) bool) ([]profile.Key, error) {
 	nsID, err := i.store.queries.GetNamespaceID(ctx, ns.String())
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return []profile.Key{}, nil
 	}
 
 	if err != nil {
