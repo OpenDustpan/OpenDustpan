@@ -104,10 +104,7 @@ does not know.
 ```json
 {
   "link": {
-    "kind": "github",
-    "host": "github.com",
-    "accountID": "583231",
-    "login": "octocat",
+    "account": { "kind": "github", "host": "github.com", "id": "583231", "login": "octocat" },
     "principal": "prn-5a10",
     "linkedAt": "2026-10-30T10:02:00Z"
   },

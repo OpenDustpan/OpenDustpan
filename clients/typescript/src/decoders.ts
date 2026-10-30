@@ -597,11 +597,8 @@ export const decodeGitHostInstallation: Decoder<GitHostInstallation> = object<Gi
 
 /** The validator of GitHostLink. */
 export const decodeGitHostLink: Decoder<GitHostLink> = object<GitHostLink>("GitHostLink", {
-  accountId: string,
-  host: string,
-  kind: string,
+  account: ref(() => decodeGitHostLinkAccount),
   linkedAt: dateTime,
-  login: string,
   principal: string,
 });
 

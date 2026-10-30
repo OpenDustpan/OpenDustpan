@@ -78,7 +78,7 @@ var operationLabels = map[string]apidesc.Label{
 			apidesc.Typed[acceptGitHostLinkRequest]("AcceptGitHostLinkRequest"),
 			apidesc.Typed[acceptGitHostLinkResponse](
 				"AcceptGitHostLinkResponse",
-				apidesc.Named[gitHostLinkBody]("GitHostLink"),
+				apidesc.Named[gitHostLinkBody]("GitHostLink"), apidesc.Named[gitHostAccountBody]("GitHostLinkAccount"),
 			),
 		),
 	apidesc.Pattern(http.MethodGet, gitHostLinksPath): apidesc.Name("listGitHostLinks", tagGitHostLink).
@@ -87,7 +87,7 @@ var operationLabels = map[string]apidesc.Label{
 			apidesc.NoBody,
 			apidesc.Typed[gitHostLinkListResponse](
 				"ListGitHostLinksResponse",
-				apidesc.Named[gitHostLinkBody]("GitHostLink"),
+				apidesc.Named[gitHostLinkBody]("GitHostLink"), apidesc.Named[gitHostAccountBody]("GitHostLinkAccount"),
 			),
 		),
 	apidesc.Pattern(http.MethodDelete, gitHostLinkPath): apidesc.Name("deleteGitHostLink", tagGitHostLink).

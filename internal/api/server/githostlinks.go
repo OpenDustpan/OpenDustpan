@@ -184,18 +184,17 @@ type gitHostAccountBody struct {
 
 // gitHostLinkBody is a link on the wire.
 type gitHostLinkBody struct {
-	Kind      string    `json:"kind"`
-	Host      string    `json:"host"`
-	AccountID string    `json:"accountID"`
-	Login     string    `json:"login"`
-	Principal string    `json:"principal"`
-	LinkedAt  time.Time `json:"linkedAt"`
+	Account   gitHostAccountBody `json:"account"`
+	Principal string             `json:"principal"`
+	LinkedAt  time.Time          `json:"linkedAt"`
 }
 
 // gitHostLinkOf returns the wire form of l.
 func gitHostLinkOf(l forgelink.Link) gitHostLinkBody {
 	return gitHostLinkBody{
-		Kind: string(l.Account.Kind), Host: l.Account.Host, AccountID: l.Account.ID, Login: l.Login,
+		Account: gitHostAccountBody{
+			Kind: string(l.Account.Kind), Host: l.Account.Host, ID: l.Account.ID, Login: l.Login,
+		},
 		Principal: l.Principal, LinkedAt: l.LinkedAt.UTC(),
 	}
 }

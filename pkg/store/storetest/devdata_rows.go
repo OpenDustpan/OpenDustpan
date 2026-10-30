@@ -166,7 +166,7 @@ func DevForgeLinkRow(principalID string) map[string]any {
 func DevForgeLinkRequestRow(principalID string) map[string]any {
 	return map[string]any{
 		"token_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "principal_id": principalID,
-		"created_at_ms": 1, "expires_at_ms": 2, "proved_kind": "", "proved_host": "", "proved_account_id": "",
+		"created_at_ms": 1, "expires_at_ms": 300001, "proved_kind": "", "proved_host": "", "proved_account_id": "",
 		"proved_login": "", "proved_delivery_id": "", "proved_at_ms": 0, "used_at_ms": 0,
 	}
 }

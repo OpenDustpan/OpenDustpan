@@ -1591,20 +1591,11 @@
       },
       "GitHostLink": {
         "properties": {
-          "accountId": {
-            "type": "string"
-          },
-          "host": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
+          "account": {
+            "$ref": "#/components/schemas/GitHostLinkAccount"
           },
           "linkedAt": {
             "format": "date-time",
-            "type": "string"
-          },
-          "login": {
             "type": "string"
           },
           "principal": {
@@ -1612,11 +1603,8 @@
           }
         },
         "required": [
-          "accountId",
-          "host",
-          "kind",
+          "account",
           "linkedAt",
-          "login",
           "principal"
         ],
         "type": "object"

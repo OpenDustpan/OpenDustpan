@@ -44,11 +44,8 @@ type linkRequestDoc struct {
 }
 
 type linkDoc struct {
-	Kind      string `json:"kind"`
-	Host      string `json:"host"`
-	AccountID string `json:"accountID"`
-	Login     string `json:"login"`
-	Principal string `json:"principal"`
+	Account   provedAccountDoc `json:"account"`
+	Principal string           `json:"principal"`
 }
 
 type acceptedDoc struct {
@@ -148,7 +145,7 @@ func TestGitHostLinkFlow(t *testing.T) {
 		&accepted,
 	)
 
-	if accepted.Link.AccountID != "4711" || accepted.Link.Principal != "prn-alice" ||
+	if accepted.Link.Account.ID != "4711" || accepted.Link.Principal != "prn-alice" ||
 		accepted.ReplacedPrincipal != nil {
 		t.Fatalf("accepted = %+v", accepted)
 	}

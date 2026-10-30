@@ -383,11 +383,8 @@ export interface GitHostInstallation {
 }
 
 export interface GitHostLink {
-  readonly accountId: string;
-  readonly host: string;
-  readonly kind: string;
+  readonly account: GitHostLinkAccount;
   readonly linkedAt: string;
-  readonly login: string;
   readonly principal: string;
 }
 
