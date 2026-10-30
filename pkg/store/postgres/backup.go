@@ -44,6 +44,7 @@ const (
 	pgColCreatedBy   = "created_by"
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
+	pgColError       = "error"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
@@ -428,7 +429,21 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgRunnerControlTables())
+	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables())
+}
+
+// pgStoreCheckControlTables lists the column list of the store check rows,
+// which live in the control schema.
+func pgStoreCheckControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableStoreChecks,
+			columns: []string{
+				"id", pgColTarget, pgColState, "requested_by", pgColStartedAtMs, pgColEndedAtMs, pgColError, "report",
+			},
+			orderBy: []string{"id"},
+		},
+	}
 }
 
 // pgEmptiedTables lists the column list of every table of

@@ -40,6 +40,9 @@ var ErrUsage = errors.New(
 		"  opendustpan backup check\n" +
 		"  opendustpan restore\n" +
 		"\n" +
+		"Check the store:\n" +
+		"  opendustpan store check\n" +
+		"\n" +
 		"Upgrade:\n" +
 		"  opendustpan upgrade check\n" +
 		"\n" +

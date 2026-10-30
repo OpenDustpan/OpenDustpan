@@ -4551,3 +4551,44 @@ WHERE id = sqlc.arg(id);
 SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
+
+-- name: CreateStoreCheck :execrows
+INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
+VALUES ($1, $2, 'running', $3, $4, NULL, '', '')
+ON CONFLICT DO NOTHING;
+
+-- name: GetStoreCheck :one
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+WHERE id = $1;
+
+-- name: ListStoreChecks :many
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishStoreCheck :execrows
+UPDATE store_checks
+SET state = $1, error = $2, report = $3, ended_at_ms = $4
+WHERE id = $5 AND state = 'running';
+
+-- name: CountStoreChecksEndedSince :one
+-- The checks of one target that ended after the given time. A running check
+-- has no end time and is not counted.
+SELECT count(*)
+FROM store_checks
+WHERE target = $1 AND state <> 'running' AND ended_at_ms > $2;
+
+-- name: FailEndedStoreChecks :execrows
+-- Marks failed each running check whose operation ended failed or canceled
+-- without a finish write. The error text is a fixed text of the caller: the
+-- last error of the operation never reaches the row.
+UPDATE store_checks AS c
+SET state = 'failed',
+    error = sqlc.arg('error')::text,
+    ended_at_ms = sqlc.arg('ended_at_ms')
+FROM durable_operations AS o
+WHERE c.state = 'running'
+  AND o.start_key = sqlc.arg('prefix')::text || c.id
+  AND o.kind = sqlc.arg('kind')
+  AND o.state IN ('failed', 'canceled');

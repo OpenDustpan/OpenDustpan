@@ -429,6 +429,7 @@ var controlSchemaTables = []string{
 	backup.TableInstallation,
 	backup.TableMaintenanceRevocations,
 	backup.TableInstanceVersions,
+	backup.TableStoreChecks,
 }
 
 // keepChainState replaces the audit chain state of the restored schema live

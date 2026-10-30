@@ -41,6 +41,7 @@ func sweepChainServer(
 		workspaces:       nil,
 		backups:          nil,
 		restores:         nil,
+		storeChecks:      nil,
 		now:              nil,
 		registry:         nil,
 		tlsCertFile:      "",

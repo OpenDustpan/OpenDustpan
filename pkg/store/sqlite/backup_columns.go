@@ -17,6 +17,7 @@ const (
 	backupColDigest      = "digest"
 	backupColPrincipalID = "principal_id"
 	backupColEndedAtMs   = "ended_at_ms"
+	backupColError       = "error"
 	backupColName        = "name"
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
@@ -513,6 +514,13 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 		{
 			table:   backup.TableInstanceVersions,
 			columns: []string{"id", "binary_version", backupColStartedAtMs},
+		},
+		{
+			table: backup.TableStoreChecks,
+			columns: []string{
+				"id", backupColTarget, backupColState, "requested_by", backupColStartedAtMs, backupColEndedAtMs,
+				backupColError, "report",
+			},
 		},
 	}
 }

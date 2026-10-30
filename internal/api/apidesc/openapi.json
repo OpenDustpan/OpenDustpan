@@ -1141,6 +1141,12 @@
           "state-version.stale-serial",
           "state-version.too-large",
           "state-version.upload-denied",
+          "storecheck.cooldown",
+          "storecheck.invalid-target",
+          "storecheck.no-target",
+          "storecheck.not-found",
+          "storecheck.refused",
+          "storecheck.running",
           "token.already-exists",
           "token.caller-not-person",
           "token.ended",
@@ -2228,6 +2234,20 @@
         "required": [
           "nextPageToken",
           "providers"
+        ],
+        "type": "object"
+      },
+      "ListStoreChecksResponse": {
+        "properties": {
+          "storeChecks": {
+            "items": {
+              "$ref": "#/components/schemas/StoreCheck"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "storeChecks"
         ],
         "type": "object"
       },
@@ -3524,6 +3544,36 @@
         ],
         "type": "object"
       },
+      "StartStoreCheckRequest": {
+        "properties": {
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "StartStoreCheckResponse": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "target"
+        ],
+        "type": "object"
+      },
       "StateVersionRevealPathTooLongError": {
         "description": "The error answer with the code state-version.reveal-path-too-long.",
         "properties": {
@@ -3562,6 +3612,146 @@
         },
         "required": [
           "maxBytes"
+        ],
+        "type": "object"
+      },
+      "StoreCheck": {
+        "properties": {
+          "endedAt": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/StoreCheckReport"
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "requestedBy",
+          "startedAt",
+          "state",
+          "target"
+        ],
+        "type": "object"
+      },
+      "StoreCheckCase": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "passed"
+        ],
+        "type": "object"
+      },
+      "StoreCheckLatency": {
+        "properties": {
+          "p50Micros": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "p99Micros": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "p50Micros",
+          "p99Micros"
+        ],
+        "type": "object"
+      },
+      "StoreCheckReport": {
+        "properties": {
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/StoreCheckCase"
+            },
+            "type": "array"
+          },
+          "conditionalWrites": {
+            "type": "string"
+          },
+          "deleteLatency": {
+            "$ref": "#/components/schemas/StoreCheckLatency"
+          },
+          "deletesPerSecond": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "getBytesPerSecond": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "getLatency": {
+            "$ref": "#/components/schemas/StoreCheckLatency"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "prefixDeleted": {
+            "type": "boolean"
+          },
+          "putBytesPerSecond": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "putLatency": {
+            "$ref": "#/components/schemas/StoreCheckLatency"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "throttlingSeen": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cases",
+          "conditionalWrites",
+          "deleteLatency",
+          "deletesPerSecond",
+          "finishedAt",
+          "getBytesPerSecond",
+          "getLatency",
+          "passed",
+          "prefix",
+          "prefixDeleted",
+          "putBytesPerSecond",
+          "putLatency",
+          "startedAt",
+          "throttlingSeen"
         ],
         "type": "object"
       },
@@ -4256,7 +4446,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.18.0"
+    "version": "0.19.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -9141,6 +9331,132 @@
         ],
         "x-dustpan-actions": []
       }
+    },
+    "/api/dustpan/v1/store-checks": {
+      "get": {
+        "operationId": "listStoreChecks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListStoreChecksResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "store-checks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:store-check",
+            "object": "server"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "startStoreCheck",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartStoreCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartStoreCheckResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "store-checks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:store-check",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/store-checks/{id}": {
+      "get": {
+        "operationId": "getStoreCheck",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreCheck"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "store-checks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:store-check",
+            "object": "server"
+          }
+        ]
+      }
     }
   },
   "security": [
@@ -9205,6 +9521,9 @@
     },
     {
       "name": "source-filter"
+    },
+    {
+      "name": "store-checks"
     },
     {
       "name": "triggers"

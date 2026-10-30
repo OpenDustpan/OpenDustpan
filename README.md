@@ -228,8 +228,8 @@ Restore a Pulumi checkpoint with
 The restore answers 400 when the stored checkpoint of that version is not a deployment that the Pulumi CLI can read. It writes no new version.
 
 `opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
-`opendustpan upgrade check` and `opendustpan namespace create` are API
-clients. Each takes `--server` and `--ca-file`, and reads the token from
+`opendustpan upgrade check`, `opendustpan store check` and
+`opendustpan namespace create` are API clients. Each takes `--server` and `--ca-file`, and reads the token from
 `DUSTPAN_ADMIN_TOKEN`. `opendustpan restore` runs through the API in
 maintenance mode, with `--backup`, `--check-only` and `--force`. The
 [backup guide](docs/guides/backup-restore-upgrade.md) shows each command

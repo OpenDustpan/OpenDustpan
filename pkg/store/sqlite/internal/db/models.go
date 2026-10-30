@@ -917,6 +917,17 @@ type StateVersion struct {
 	UnlockedWrite     bool
 }
 
+type StoreCheck struct {
+	ID          string
+	Target      string
+	State       string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   int64
+	Error       string
+	Report      string
+}
+
 type TempAdmin struct {
 	PrincipalID      string
 	Subject          string

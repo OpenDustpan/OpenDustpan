@@ -103,10 +103,13 @@ const (
 //
 //nolint:gochecknoglobals // A constant table of actions; Go has no constant maps.
 var families = map[identity.Action]Family{
-	identity.ActionServerBackup:      FamilyOperator,
-	identity.ActionServerRestore:     FamilyOperator,
-	identity.ActionServerMaintenance: FamilyOperator,
-	identity.ActionServerObserve:     FamilyOperator,
+	identity.ActionServerBackup:  FamilyOperator,
+	identity.ActionServerRestore: FamilyOperator,
+	// The deep check of the blob store: it adds load to the store and writes
+	// throwaway objects under a prefix of its own.
+	identity.ActionInstallationStoreCheck: FamilyOperator,
+	identity.ActionServerMaintenance:      FamilyOperator,
+	identity.ActionServerObserve:          FamilyOperator,
 	// The version rows of the server processes: the list, and the delete of
 	// the row of a process that died.
 	identity.ActionServerReadInstances:  FamilyOperator,

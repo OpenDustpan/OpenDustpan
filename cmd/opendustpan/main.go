@@ -11,6 +11,7 @@
 //	opendustpan backup check [flags]
 //	opendustpan backup [flags]
 //	opendustpan restore [flags]
+//	opendustpan store check [flags]
 //	opendustpan audit-chain status [flags]
 //	opendustpan audit-chain approve [flags]
 //
