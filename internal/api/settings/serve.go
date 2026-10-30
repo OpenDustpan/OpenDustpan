@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -17,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/internal/unitsettingssvc"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/unitsettings"
 )
@@ -39,7 +41,9 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request, _ identity
 }
 
 // putSettings answers PUT .../units/{unit_id}/settings with the settings that
-// the request stores in place of the record at the version of If-Match.
+// the request stores in place of the record at the version of If-Match. A
+// request with the Idempotency-Key header runs once: the same key with the same
+// request answers the first answer again.
 func (h *Handler) putSettings(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
@@ -50,8 +54,57 @@ func (h *Handler) putSettings(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
+	if !idempotent.Present(r) {
+		h.storeSettings(w, r, p, t, expected)
+
+		return
+	}
+
+	if h.idem == nil {
+		h.writeError(ctx, w, errKeyUnsupported)
+
+		return
+	}
+
+	// The checks of the body run before the replay, so a caller who lost an
+	// action never gets the stored answer.
+	cur, err := h.keyedPreflight(w, r, p, t)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	err = h.idem.Handle(w, r, idempotent.Call{
+		Principal: p.Subject,
+		Build: func(result any) (idempotency.Answer, error) {
+			stored, ok := result.(unitsettings.Settings)
+			if !ok {
+				return idempotency.Answer{}, errWritten
+			}
+
+			view := cur.Updated(&stored)
+
+			return settingsAnswer(&view)
+		},
+		SecretAnswer: nil,
+		Required:     false,
+		Serve:        func(w http.ResponseWriter, r *http.Request) { h.storeSettings(w, r, p, t, expected) },
+	})
+	if err != nil {
+		h.writeError(ctx, w, err)
+	}
+}
+
+// storeSettings stores the body of r as the settings of the unit of t, over the
+// record at version expected, and answers with the new record.
+func (h *Handler) storeSettings(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, t *target, expected int64,
+) {
+	ctx := r.Context()
+
 	var body settingsBody
-	if err = decodeBody(w, r, &body); err != nil {
+	if err := decodeBody(w, r, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -64,8 +117,8 @@ func (h *Handler) putSettings(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	w.Header().Set("ETag", etag(view.Settings.Version))
-	h.writeJSON(ctx, w, settingsOf(&view))
+	answer, err := settingsAnswer(&view)
+	h.writeAnswer(ctx, w, &answer, err)
 }
 
 // replace stores body as the settings of the unit of t, over the record at
@@ -98,7 +151,7 @@ func (h *Handler) replace(
 		return unitsettingssvc.View{}, unitsettings.ErrConflict
 	}
 
-	if authErr := h.authorizeExtra(r, p, t, &cur, &in); authErr != nil {
+	if authErr := h.authorizeExtra(r, p, t, unitsettingssvc.NeedsOf(&cur, &in)); authErr != nil {
 		return unitsettingssvc.View{}, authErr
 	}
 
@@ -117,10 +170,9 @@ func (h *Handler) replace(
 // checks the fence and the version. This check stays so that a write that
 // names a connection or changes the steps never relies on unit:manage alone.
 func (h *Handler) authorizeExtra(
-	r *http.Request, p identity.Principal, t *target, cur *unitsettingssvc.View, in *unitsettings.Settings,
+	r *http.Request, p identity.Principal, t *target, needs unitsettingssvc.Needs,
 ) error {
 	ctx := r.Context()
-	needs := unitsettingssvc.NeedsOf(cur, in)
 
 	if needs.Connection != "" {
 		action := identity.ActionNamespaceUseGitHostConnection
@@ -143,7 +195,8 @@ func (h *Handler) authorizeExtra(
 
 // deleteSettings answers DELETE .../units/{unit_id}/settings with 204. The
 // record at the version of If-Match goes, and every field of the unit comes from
-// the namespace or the built-in value again.
+// the namespace or the built-in value again. The Idempotency-Key header makes a
+// retry safe.
 func (h *Handler) deleteSettings(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
@@ -153,6 +206,36 @@ func (h *Handler) deleteSettings(w http.ResponseWriter, r *http.Request, p ident
 
 		return
 	}
+
+	if !idempotent.Present(r) {
+		h.resetSettings(w, r, p, t, expected)
+
+		return
+	}
+
+	if h.idem == nil {
+		h.writeError(ctx, w, errKeyUnsupported)
+
+		return
+	}
+
+	err = h.idem.Handle(w, r, idempotent.Call{
+		Principal:    p.Subject,
+		Build:        func(any) (idempotency.Answer, error) { return deletedAnswer(), nil },
+		SecretAnswer: nil,
+		Required:     false,
+		Serve:        func(w http.ResponseWriter, r *http.Request) { h.resetSettings(w, r, p, t, expected) },
+	})
+	if err != nil {
+		h.writeError(ctx, w, err)
+	}
+}
+
+// resetSettings removes the record of the unit of t at version expected.
+func (h *Handler) resetSettings(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, t *target, expected int64,
+) {
+	ctx := r.Context()
 
 	cur, err := h.service.Read(ctx, t.obj)
 	if err != nil {
@@ -178,7 +261,7 @@ func (h *Handler) deleteSettings(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	idempotent.Write(w, deletedAnswer())
 }
 
 // getSuggestions answers GET .../units/{unit_id}/settings/suggestions with the
@@ -224,7 +307,8 @@ func (h *Handler) getDefaults(w http.ResponseWriter, r *http.Request, _ identity
 }
 
 // putDefaults answers PUT .../settings/unit-defaults with the defaults that the
-// request stores in place of the defaults at the version of If-Match.
+// request stores in place of the defaults at the version of If-Match. The
+// Idempotency-Key header makes a retry safe.
 func (h *Handler) putDefaults(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
@@ -235,8 +319,46 @@ func (h *Handler) putDefaults(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
+	if !idempotent.Present(r) {
+		h.storeDefaults(w, r, p, t, expected)
+
+		return
+	}
+
+	if h.idem == nil {
+		h.writeError(ctx, w, errKeyUnsupported)
+
+		return
+	}
+
+	err = h.idem.Handle(w, r, idempotent.Call{
+		Principal: p.Subject,
+		Build: func(result any) (idempotency.Answer, error) {
+			stored, ok := result.(unitsettings.NamespaceDefaults)
+			if !ok {
+				return idempotency.Answer{}, errWritten
+			}
+
+			return defaultsAnswer(&stored)
+		},
+		SecretAnswer: nil,
+		Required:     false,
+		Serve:        func(w http.ResponseWriter, r *http.Request) { h.storeDefaults(w, r, p, t, expected) },
+	})
+	if err != nil {
+		h.writeError(ctx, w, err)
+	}
+}
+
+// storeDefaults stores the pool of the body of r as the unit defaults of the
+// namespace of t, over the defaults at version expected.
+func (h *Handler) storeDefaults(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, t *target, expected int64,
+) {
+	ctx := r.Context()
+
 	var body defaultsBody
-	if err = decodeBody(w, r, &body); err != nil {
+	if err := decodeBody(w, r, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -249,8 +371,8 @@ func (h *Handler) putDefaults(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	w.Header().Set("ETag", etag(d.Version))
-	h.writeJSON(ctx, w, defaultsOf(&d))
+	answer, err := defaultsAnswer(&d)
+	h.writeAnswer(ctx, w, &answer, err)
 }
 
 func defaultsOf(d *unitsettings.NamespaceDefaults) defaultsResponse {
@@ -267,11 +389,23 @@ func defaultsOf(d *unitsettings.NamespaceDefaults) defaultsResponse {
 // is 200 with one result for each unit, in the order of the request. An item
 // that does not exist and an item that the caller cannot read give the same
 // error.
+//
+// With the Idempotency-Key header, each item keeps its own replay record. A
+// retry answers the stored result of an item that was written, and does an item
+// that failed again.
 func (h *Handler) bulkPut(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
+	if idempotent.Present(r) && h.records == nil {
+		h.writeError(ctx, w, errKeyUnsupported)
+
+		return
+	}
+
 	var body bulkBody
-	if err := decodeBody(w, r, &body); err != nil {
+
+	raw, err := readBody(w, r, &body)
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -289,52 +423,79 @@ func (h *Handler) bulkPut(w http.ResponseWriter, r *http.Request, p identity.Pri
 		return
 	}
 
+	var call *bulkCall
+
+	if idempotent.Present(r) {
+		call, err = h.beginBulk(r, p, raw)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		defer call.end(ctx, h)
+
+		if !call.started {
+			w.Header().Set(idempotent.ReplayedHeader, "true")
+		}
+	}
+
 	out := bulkResponse{Results: make([]bulkResult, 0, len(body.Units))}
 
 	for _, item := range body.Units {
-		out.Results = append(out.Results, h.bulkItem(r, p, t, item, body.Settings))
+		out.Results = append(out.Results, h.bulkItem(r, p, t, &bulkRun{item: item, body: body.Settings, call: call}))
 	}
 
+	call.finish()
 	h.writeJSON(ctx, w, out)
 }
 
-// bulkItem runs one item of a bulk call.
-func (h *Handler) bulkItem(
-	r *http.Request, p identity.Principal, ns *target, item bulkUnit, body *settingsBody,
-) bulkResult {
-	view, err := h.bulkWrite(r, p, ns, item, body)
-	if err != nil {
-		return h.bulkFailure(r, item.ID, err)
+// bulkItem runs one item of a bulk call. call is nil for a call with no key.
+func (h *Handler) bulkItem(r *http.Request, p identity.Principal, ns *target, run *bulkRun) bulkResult {
+	if run.call != nil {
+		return h.bulkItemKeyed(r, p, ns, run)
 	}
 
-	return bulkResult{ID: item.ID, Status: statusOK, Version: view.Settings.Version, Error: nil}
+	t, err := h.bulkTarget(r, p, ns, run.item)
+	if err != nil {
+		return h.bulkFailure(r, run.item.ID, err)
+	}
+
+	view, err := h.replace(r, p, &t, run.body, run.item.Version)
+	if err != nil {
+		return h.bulkFailure(r, run.item.ID, err)
+	}
+
+	return bulkResult{ID: run.item.ID, Status: statusOK, Version: view.Settings.Version, Error: nil}
 }
 
-func (h *Handler) bulkWrite(
-	r *http.Request, p identity.Principal, ns *target, item bulkUnit, body *settingsBody,
-) (unitsettingssvc.View, error) {
+// bulkTarget finds the unit of an item and checks the actions of the wrapper on
+// it, as a call on that unit alone does.
+func (h *Handler) bulkTarget(
+	r *http.Request, p identity.Principal, ns *target, item bulkUnit,
+) (target, error) {
 	ctx := r.Context()
 
 	if item.Version < 0 {
-		return unitsettingssvc.View{}, errIfMatchInvalid
+		return target{}, errIfMatchInvalid
 	}
 
 	t, err := h.unitIn(r, ns.ns, item.ID)
 	if err != nil {
-		return unitsettingssvc.View{}, err
+		return target{}, err
 	}
 
 	read := identity.ActionUnitRead
 	if err := readRefusal(read, h.guard.Authorize(ctx, r, p, read, t.obj)); err != nil {
-		return unitsettingssvc.View{}, err
+		return target{}, err
 	}
 
 	manage := identity.ActionUnitManage
 	if err := h.guard.Authorize(ctx, r, p, manage, t.obj); err != nil {
-		return unitsettingssvc.View{}, fmt.Errorf("authorize %s: %w", manage, err)
+		return target{}, fmt.Errorf("authorize %s: %w", manage, err)
 	}
 
-	return h.replace(r, p, &t, body, item.Version)
+	return t, nil
 }
 
 // bulkFailure makes the result of an item that failed. The error is the error

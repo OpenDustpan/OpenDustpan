@@ -13,10 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/settings"
 	"opendustpan.org/opendustpan/internal/unitsettingssvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -123,6 +126,7 @@ func (fakeInventory) GetUnit(_ context.Context, unitID string) (coreinventory.En
 // memStore is a unitsettings.Store in memory. failWith, when set, is the error
 // of every write.
 type memStore struct {
+	replays  idempotency.Store
 	mu       sync.Mutex
 	records  map[string]unitsettings.Settings
 	defaults unitsettings.NamespaceDefaults
@@ -131,9 +135,10 @@ type memStore struct {
 	failWith error
 }
 
-func newMemStore() *memStore {
+func newMemStore(records idempotency.Store) *memStore {
 	return &memStore{
-		mu: sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: noDefaults(),
+		replays: records,
+		mu:      sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: noDefaults(),
 		entries: nil, writes: 0, failWith: nil,
 	}
 }
@@ -151,7 +156,7 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 }
 
 func (m *memStore) Put(
-	_ context.Context, s *unitsettings.Settings, expected int64, _ namespace.Fence, e audit.Entry,
+	ctx context.Context, s *unitsettings.Settings, expected int64, _ namespace.Fence, e audit.Entry,
 ) (unitsettings.Settings, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -167,6 +172,11 @@ func (m *memStore) Put(
 	next := *s
 	next.Version = expected + 1
 	next.UpdatedAt = e.At
+
+	if err := m.finish(ctx, next); err != nil {
+		return unitsettings.Settings{}, err
+	}
+
 	m.records[s.Unit.UnitID()] = next
 	m.entries = append(m.entries, e)
 	m.writes++
@@ -175,7 +185,7 @@ func (m *memStore) Put(
 }
 
 func (m *memStore) Delete(
-	_ context.Context, unit identity.Object, expected int64, _ namespace.Fence, e audit.Entry,
+	ctx context.Context, unit identity.Object, expected int64, _ namespace.Fence, e audit.Entry,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -191,6 +201,10 @@ func (m *memStore) Delete(
 
 	if old.Version != expected {
 		return unitsettings.ErrConflict
+	}
+
+	if err := m.finish(ctx, old); err != nil {
+		return err
 	}
 
 	delete(m.records, unit.UnitID())
@@ -211,7 +225,7 @@ func (m *memStore) Defaults(context.Context, namespace.Name) (unitsettings.Names
 }
 
 func (m *memStore) SetDefaults(
-	_ context.Context, d unitsettings.NamespaceDefaults, expected int64, _ namespace.Fence, e audit.Entry,
+	ctx context.Context, d unitsettings.NamespaceDefaults, expected int64, _ namespace.Fence, e audit.Entry,
 ) (unitsettings.NamespaceDefaults, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -226,11 +240,35 @@ func (m *memStore) SetDefaults(
 
 	d.Version = expected + 1
 	d.UpdatedAt = e.At
+
+	if err := m.finish(ctx, d); err != nil {
+		return unitsettings.NamespaceDefaults{}, err
+	}
+
 	m.defaults = d
 	m.entries = append(m.entries, e)
 	m.writes++
 
 	return d, nil
+}
+
+// finish stores the answer of the request in ctx, as a store does in the
+// transaction of its write. It runs before the write is applied.
+func (m *memStore) finish(ctx context.Context, result any) error {
+	c, ok := idempotency.CompletionFrom(ctx)
+	if !ok {
+		return nil
+	}
+
+	complete := func(token string, a idempotency.Answer) error {
+		return m.replays.Complete(ctx, c.Ref, token, a)
+	}
+
+	if err := c.Finish(result, complete); err != nil {
+		return fmt.Errorf("store the answer: %w", err)
+	}
+
+	return nil
 }
 
 func (m *memStore) written() int {
@@ -382,6 +420,14 @@ func (*recordingAuthorizer) ListObjects(context.Context, identity.Principal, ide
 	return identity.Scope{}, errNoList
 }
 
+// revoke removes a check from holds, so the next check of it is denied.
+func (a *recordingAuthorizer) revoke(check string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	delete(a.holds, check)
+}
+
 func (a *recordingAuthorizer) seen() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -415,10 +461,11 @@ func (a *recordingAudit) denied() []audit.Entry {
 
 // rig holds a handler and the fakes behind it.
 type rig struct {
-	h     *settings.Handler
-	store *memStore
-	audit *recordingAudit
-	authz *recordingAuthorizer
+	h       *settings.Handler
+	records *idempotencytest.Memory
+	store   *memStore
+	audit   *recordingAudit
+	authz   *recordingAuthorizer
 }
 
 // fullAccess lists the checks of a caller that holds every action on the unit
@@ -441,9 +488,28 @@ func newRig(t *testing.T, holds ...string) *rig {
 func newRigWith(t *testing.T, sg unitsettingssvc.Suggester, holds ...string) *rig {
 	t.Helper()
 
+	return newRigFull(t, sg, rigOptions{withoutReplayRecords: false}, holds...)
+}
+
+// rigOptions changes how newRigFull builds the rig.
+type rigOptions struct {
+	// withoutReplayRecords builds the handler with no store of replay records,
+	// as a server that was started without one.
+	withoutReplayRecords bool
+}
+
+// newRigFull builds the rig.
+func newRigFull(t *testing.T, sg unitsettingssvc.Suggester, opts rigOptions, holds ...string) *rig {
+	t.Helper()
+
+	records := idempotencytest.NewMemory()
+
 	r := &rig{
-		h: nil, store: newMemStore(), audit: &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
-		authz: newAuthorizer(holds...),
+		h:       nil,
+		records: records,
+		store:   newMemStore(records),
+		audit:   &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		authz:   newAuthorizer(holds...),
 	}
 
 	namespaces, err := namespace.NewService(
@@ -461,11 +527,24 @@ func newRigWith(t *testing.T, sg unitsettingssvc.Suggester, holds ...string) *ri
 		t.Fatalf("service: %v", err)
 	}
 
-	r.h, err = settings.NewHandler(settings.Config{
+	idem, err := idempotent.New(idempotent.Config{
+		Store: records, Logger: slog.New(slog.DiscardHandler), Now: nil, MaxBodyBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("idempotency middleware: %v", err)
+	}
+
+	cfg := settings.Config{
+		Idempotency: idem, Records: records,
 		Namespaces: namespaces, Units: fakeInventory{}, Service: svc, Suggestions: sg,
 		Authenticator: tokenAuthenticator{}, Authorizer: r.authz, Audit: r.audit, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
-	})
+	}
+	if opts.withoutReplayRecords {
+		cfg.Idempotency, cfg.Records = nil, nil
+	}
+
+	r.h, err = settings.NewHandler(cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

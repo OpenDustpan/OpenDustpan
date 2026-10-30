@@ -23,6 +23,15 @@ import (
 // that the pool and the connection exist: a pool or a connection can end
 // after the write, so the planner checks them again at the start of a job.
 //
+// When the context of a write carries an idempotency.Completion, the store
+// stores the answer of the request in the transaction of the write, as its
+// last step. Put passes the stored Settings to the Completion, also for a
+// write that changes nothing. Delete passes a Settings that holds only the
+// unit. SetDefaults passes the stored NamespaceDefaults. A write that fails
+// stores no answer. The write returns idempotency.ErrLost, and changes nothing
+// (no row and no audit entry), when the pending record of the request is not
+// in place.
+//
 // A version is a count of writes. A write names the version that the caller
 // read, and 0 names a unit that has no record. The check runs in the
 // transaction of the write, so two writers with one version cannot both win.

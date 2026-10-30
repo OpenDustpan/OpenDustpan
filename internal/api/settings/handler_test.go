@@ -306,23 +306,6 @@ func TestPutFailsClosedOnAFencedWrite(t *testing.T) {
 		errcode.NamespaceFenced)
 }
 
-func TestIdempotencyKeyIsRefusedOnEveryWrite(t *testing.T) {
-	t.Parallel()
-
-	r := newRig(t, fullAccess()...)
-	header := map[string]string{"If-Match": `"0"`, "Idempotency-Key": "k-1"}
-
-	for _, tc := range []struct{ method, path string }{
-		{http.MethodPut, settingsPath},
-		{http.MethodDelete, settingsPath},
-		{http.MethodPut, defaultsPath},
-		{http.MethodPost, bulkPath},
-	} {
-		wantStatus(t, r.call(t, tc.method, tc.path, "{}", header), http.StatusBadRequest,
-			errcode.RequestIdempotencyKeyUnsupported)
-	}
-}
-
 func TestDeleteResetsTheRecord(t *testing.T) {
 	t.Parallel()
 

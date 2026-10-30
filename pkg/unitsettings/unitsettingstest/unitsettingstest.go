@@ -5,10 +5,12 @@
 package unitsettingstest
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/unitsettings"
@@ -24,6 +26,9 @@ type Harness struct {
 	Namespace func(t *testing.T, name string) namespace.Fence
 	Unit      func(t *testing.T, ns, tool, name string) identity.Object
 	Audit     func(t *testing.T, ns string) []audit.Entry
+	// Records is the store of replay records that completes in the
+	// transaction of a write.
+	Records idempotency.Store
 }
 
 // Factory returns a fresh harness for one subtest.
@@ -64,6 +69,7 @@ func cases() []suiteCase {
 	out = append(out, writeCases()...)
 	out = append(out, deleteCases()...)
 	out = append(out, defaultsCases()...)
+	out = append(out, idempotencyCases()...)
 
 	return out
 }
@@ -82,7 +88,7 @@ const (
 	writeMs = 1_700_000_000_000
 	// caseCount is the number of cases of the suite, for the capacity of the
 	// list.
-	caseCount = 32
+	caseCount = 48
 )
 
 // writeTime returns the time of the audit entries of the cases.
@@ -156,4 +162,26 @@ func trySetDefaults(
 	t.Helper()
 
 	return h.Store.SetDefaults(t.Context(), d, expected, fence, auditEntry(fence.Namespace))
+}
+
+// putIn writes s with the context ctx, which can carry a Completion.
+func putIn(
+	ctx context.Context, h Harness, s *unitsettings.Settings, expected int64, fence namespace.Fence,
+) (unitsettings.Settings, error) {
+	return h.Store.Put(ctx, s, expected, fence, auditEntry(fence.Namespace))
+}
+
+// deleteIn removes the record of unit with the context ctx.
+func deleteIn(
+	ctx context.Context, h Harness, unit identity.Object, expected int64, fence namespace.Fence,
+) error {
+	return h.Store.Delete(ctx, unit, expected, fence, auditEntry(fence.Namespace))
+}
+
+// setDefaultsIn writes d with the context ctx.
+func setDefaultsIn(
+	ctx context.Context, h Harness, d unitsettings.NamespaceDefaults, expected int64,
+	fence namespace.Fence,
+) (unitsettings.NamespaceDefaults, error) {
+	return h.Store.SetDefaults(ctx, d, expected, fence, auditEntry(fence.Namespace))
 }

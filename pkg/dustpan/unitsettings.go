@@ -73,6 +73,11 @@ func newUnitSettingsHandler(svc services, cfg *settings, onFailure func()) (http
 		return nil, false, fmt.Errorf("unit settings service: %w", err)
 	}
 
+	idem, err := idempotencyMiddleware(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+
 	handler, err := settingsapi.NewHandler(settingsapi.Config{
 		Namespaces:     svc.namespaces,
 		Units:          cfg.inventoryReader,
@@ -85,6 +90,8 @@ func newUnitSettingsHandler(svc services, cfg *settings, onFailure func()) (http
 		DenialLimiter:  cfg.denialLimiter,
 		Sessions:       cfg.sessionCookies,
 		Logger:         cfg.logger,
+		Idempotency:    idem,
+		Records:        cfg.idempotencyStore,
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("unit settings api: %w", err)

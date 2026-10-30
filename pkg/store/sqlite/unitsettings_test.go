@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -27,7 +28,8 @@ func newUnitSettingsHarness(t *testing.T, s *sqlite.Store) unitsettingstest.Harn
 	t.Helper()
 
 	return unitsettingstest.Harness{
-		Store: s.UnitSettings(),
+		Store:   s.UnitSettings(),
+		Records: s.Idempotency(idempotencytest.TestWrapper(t, 1)),
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 

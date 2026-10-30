@@ -119,6 +119,19 @@ type View struct {
 	// DefaultConnection is the default Git host connection of the namespace,
 	// or empty.
 	DefaultConnection string
+	// Context is what Resolve read from the namespace and the tool of the
+	// unit. Updated uses it to make the view of a new record with no read.
+	Context unitsettings.Context
+}
+
+// Updated returns the view of the record stored, with the defaults and the
+// namespace facts of v. It reads nothing, so a store can build the stored
+// answer of a request in the transaction of the write.
+func (v *View) Updated(stored *unitsettings.Settings) View {
+	return View{
+		Settings: *stored, Defaults: v.Defaults, Effective: unitsettings.Resolve(stored, v.Defaults, v.Context),
+		DefaultConnection: v.DefaultConnection, Context: v.Context,
+	}
 }
 
 // Read returns the view of unit, the unit reference with its stable unit ID.
@@ -222,6 +235,15 @@ func NeedsOf(cur *View, next *unitsettings.Settings) Needs {
 	return n
 }
 
+// NeedsKeyed returns the actions that a write with an Idempotency-Key needs.
+// A replay answers from the stored answer and does not run the write, so the
+// server cannot compare the body with the record that the first request
+// changed. A keyed write therefore needs the use action for each connection
+// that the body names, and the steps action when the body sets steps.
+func NeedsKeyed(next *unitsettings.Settings) Needs {
+	return Needs{Connection: next.CodeLocation.Connection, Steps: len(next.Steps) > 0}
+}
+
 func sameSteps(a, b []job.Step) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true
@@ -271,7 +293,9 @@ func (s *Service) Put(
 		return View{}, fmt.Errorf("write unit settings: %w", err)
 	}
 
-	return s.view(ctx, &stored)
+	// The view reads nothing: the answer of a keyed request holds the same
+	// bytes that the store kept in the transaction of the write.
+	return cur.Updated(&stored), nil
 }
 
 // checkDirectory returns an error that wraps unitsettings.ErrInvalid for a
@@ -382,7 +406,7 @@ func (s *Service) view(ctx context.Context, rec *unitsettings.Settings) (View, e
 
 	return View{
 		Settings: *rec, Defaults: defaults, Effective: unitsettings.Resolve(rec, defaults, c),
-		DefaultConnection: c.DefaultConnection,
+		DefaultConnection: c.DefaultConnection, Context: c,
 	}, nil
 }
 

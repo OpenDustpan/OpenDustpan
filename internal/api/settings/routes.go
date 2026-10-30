@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -64,6 +64,10 @@ type Route struct {
 	// Extra lists the actions that the handler may check after the wrapper,
 	// because the body decides them. The description of the API lists them.
 	Extra []identity.Action
+	// Keyed says that the route takes the Idempotency-Key header. A request with
+	// the header to a route that does not take it answers 400, so the server
+	// never ignores a key without an error.
+	Keyed bool
 	// Resolve finds the object of the request.
 	Resolve TargetResolver
 	// Serve handles the request after the wrapper has enforced the row.
@@ -87,32 +91,32 @@ func (h *Handler) buildRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: unitSettingsPath, Scope: ScopeAuthorized, Reads: read, Actions: nil,
-			Extra: nil, Resolve: h.resolveUnit, Serve: h.getSettings,
+			Extra: nil, Keyed: false, Resolve: h.resolveUnit, Serve: h.getSettings,
 		},
 		{
 			Method: http.MethodPut, Path: unitSettingsPath, Scope: ScopeAuthorized, Reads: read, Actions: manage,
-			Extra: extra, Resolve: h.resolveUnit, Serve: h.putSettings,
+			Extra: extra, Keyed: true, Resolve: h.resolveUnit, Serve: h.putSettings,
 		},
 		{
 			Method: http.MethodDelete, Path: unitSettingsPath, Scope: ScopeAuthorized, Reads: read,
-			Actions: manage, Extra: nil, Resolve: h.resolveUnit, Serve: h.deleteSettings,
+			Actions: manage, Extra: nil, Keyed: true, Resolve: h.resolveUnit, Serve: h.deleteSettings,
 		},
 		{
 			Method: http.MethodGet, Path: suggestionsPath, Scope: ScopeAuthorized, Reads: read, Actions: nil,
-			Extra: nil, Resolve: h.resolveUnit, Serve: h.getSuggestions,
+			Extra: nil, Keyed: false, Resolve: h.resolveUnit, Serve: h.getSuggestions,
 		},
 		{
 			Method: http.MethodGet, Path: defaultsPath, Scope: ScopeAuthorized, Reads: nil, Actions: nil,
-			Extra: nil, Resolve: h.resolveNamespace, Serve: h.getDefaults,
+			Extra: nil, Keyed: false, Resolve: h.resolveNamespace, Serve: h.getDefaults,
 		},
 		{
 			Method: http.MethodPut, Path: defaultsPath, Scope: ScopeAuthorized, Reads: nil,
-			Actions: []identity.Action{identity.ActionNamespaceAdmin}, Extra: nil,
+			Actions: []identity.Action{identity.ActionNamespaceAdmin}, Extra: nil, Keyed: true,
 			Resolve: h.resolveNamespace, Serve: h.putDefaults,
 		},
 		{
 			Method: http.MethodPost, Path: bulkPath, Scope: ScopeAuthorized, Reads: nil, Actions: nil,
-			Extra: slicesConcat(read, manage, extra), Resolve: h.resolveNamespace, Serve: h.bulkPut,
+			Extra: slicesConcat(read, manage, extra), Keyed: true, Resolve: h.resolveNamespace, Serve: h.bulkPut,
 		},
 	}
 }
@@ -195,9 +199,9 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 			r = r.WithContext(ctx)
 		}
 
-		// The store of the settings keeps no replay record, so a key would
-		// silently lose its protection: the server refuses the header.
-		if r.Method != http.MethodGet && len(apidesc.HeaderValues(r, idempotencyHeader)) > 0 {
+		// A route that does not take the key answers 400: the server never
+		// ignores the key without an error.
+		if !route.Keyed && r.Method != http.MethodGet && idempotent.Present(r) {
 			h.writeError(ctx, w, errKeyUnsupported)
 
 			return

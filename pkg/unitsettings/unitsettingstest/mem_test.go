@@ -2,10 +2,13 @@ package unitsettingstest_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/unitsettings"
@@ -27,14 +30,15 @@ type memSpace struct {
 // memStore is a unitsettings.Store in memory. It proves that the cases hold
 // for a correct adapter.
 type memStore struct {
-	spaces map[namespace.Name]*memSpace
-	mu     sync.Mutex
+	spaces  map[namespace.Name]*memSpace
+	records *idempotencytest.Memory
+	mu      sync.Mutex
 }
 
 var _ unitsettings.Store = (*memStore)(nil)
 
 func newMemStore() *memStore {
-	return &memStore{spaces: map[namespace.Name]*memSpace{}, mu: sync.Mutex{}}
+	return &memStore{spaces: map[namespace.Name]*memSpace{}, records: idempotencytest.NewMemory(), mu: sync.Mutex{}}
 }
 
 // Get implements unitsettings.Store.
@@ -57,7 +61,7 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 
 // Put implements unitsettings.Store.
 func (m *memStore) Put(
-	_ context.Context, s *unitsettings.Settings, expected int64, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, s *unitsettings.Settings, expected int64, fence namespace.Fence, e audit.Entry,
 ) (unitsettings.Settings, error) {
 	if err := s.Validate(); err != nil {
 		return zeroSettings(), err
@@ -81,6 +85,10 @@ func (m *memStore) Put(
 	}
 
 	if has && unitsettings.Equal(&old, s) {
+		if err := m.finish(ctx, old); err != nil {
+			return zeroSettings(), err
+		}
+
 		return old, nil
 	}
 
@@ -92,6 +100,12 @@ func (m *memStore) Put(
 	next := *s
 	next.Version = expected + 1
 	next.UpdatedAt = e.At
+
+	// The answer is the last step. A lost record changes nothing.
+	if err := m.finish(ctx, next); err != nil {
+		return zeroSettings(), err
+	}
+
 	sp.records[s.Unit.UnitID()] = next
 	sp.audit = append(sp.audit, unitsettings.ChangeEntry(e, prev, &next))
 
@@ -100,7 +114,7 @@ func (m *memStore) Put(
 
 // Delete implements unitsettings.Store.
 func (m *memStore) Delete(
-	_ context.Context, unit identity.Object, expected int64, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, unit identity.Object, expected int64, fence namespace.Fence, e audit.Entry,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,6 +131,14 @@ func (m *memStore) Delete(
 
 	if old.Version != expected {
 		return unitsettings.ErrConflict
+	}
+
+	var gone unitsettings.Settings
+
+	gone.Unit = unit
+
+	if err := m.finish(ctx, gone); err != nil {
+		return err
 	}
 
 	delete(sp.records, unit.UnitID())
@@ -143,7 +165,7 @@ func (m *memStore) Defaults(_ context.Context, ns namespace.Name) (unitsettings.
 
 // SetDefaults implements unitsettings.Store.
 func (m *memStore) SetDefaults(
-	_ context.Context, d unitsettings.NamespaceDefaults, expected int64, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, d unitsettings.NamespaceDefaults, expected int64, fence namespace.Fence, e audit.Entry,
 ) (unitsettings.NamespaceDefaults, error) {
 	if err := d.Validate(); err != nil {
 		return emptyDefaults(), err
@@ -162,16 +184,26 @@ func (m *memStore) SetDefaults(
 	}
 
 	if sp.defaults.Pool == d.Pool {
+		if err := m.finish(ctx, sp.defaults); err != nil {
+			return emptyDefaults(), err
+		}
+
 		return sp.defaults, nil
 	}
 
 	old := sp.defaults
-	sp.defaults = unitsettings.NamespaceDefaults{
+	next := unitsettings.NamespaceDefaults{
 		Namespace: d.Namespace,
 		Pool:      d.Pool,
 		Version:   expected + 1,
 		UpdatedAt: e.At,
 	}
+
+	if err := m.finish(ctx, next); err != nil {
+		return emptyDefaults(), err
+	}
+
+	sp.defaults = next
 	sp.audit = append(sp.audit, unitsettings.DefaultsEntry(e, old, sp.defaults))
 
 	return sp.defaults, nil
@@ -179,6 +211,7 @@ func (m *memStore) SetDefaults(
 
 func (m *memStore) harness() unitsettingstest.Harness {
 	return unitsettingstest.Harness{
+		Records:   m.records,
 		Store:     m,
 		Namespace: m.makeNamespace,
 		Unit:      m.makeUnit,
@@ -252,6 +285,24 @@ func (m *memStore) entries(t *testing.T, nsName string) []audit.Entry {
 	}
 
 	return append([]audit.Entry(nil), sp.audit...)
+}
+
+// finish stores the answer of the request in ctx, when it carries one. It runs
+// before the write is applied, so an error leaves the write undone.
+func (m *memStore) finish(ctx context.Context, result any) error {
+	c, ok := idempotency.CompletionFrom(ctx)
+	if !ok {
+		return nil
+	}
+
+	err := c.Finish(result, func(token string, a idempotency.Answer) error {
+		return m.records.Complete(ctx, c.Ref, token, a)
+	})
+	if err != nil {
+		return fmt.Errorf("store the answer: %w", err)
+	}
+
+	return nil
 }
 
 // space returns the namespace ns after it checked the fence.

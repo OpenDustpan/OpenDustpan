@@ -65,7 +65,7 @@ func (u UnitSettingsStore) Put(
 
 		stored, entry, err = settingsstore.Write(ctx, settingsTx{q: q}, s, expected, e)
 
-		return appendIfChanged(ctx, q, entry, err)
+		return appendAndFinish(ctx, q, entry, stored, err)
 	})
 	if err != nil {
 		return unitsettings.Settings{}, err
@@ -95,7 +95,11 @@ func (u UnitSettingsStore) Delete(
 			return err
 		}
 
-		return appendIfChanged(ctx, q, &entry, nil)
+		var gone unitsettings.Settings
+
+		gone.Unit = unit
+
+		return appendAndFinish(ctx, q, &entry, gone, nil)
 	})
 }
 
@@ -140,7 +144,7 @@ func (u UnitSettingsStore) SetDefaults(
 
 		stored, entry, err = settingsstore.WriteDefaults(ctx, settingsTx{q: q}, d, expected, e)
 
-		return appendIfChanged(ctx, q, entry, err)
+		return appendAndFinish(ctx, q, entry, stored, err)
 	})
 	if err != nil {
 		return unitsettings.NamespaceDefaults{}, err
@@ -149,23 +153,23 @@ func (u UnitSettingsStore) SetDefaults(
 	return stored, nil
 }
 
-// appendIfChanged appends entry in the transaction of q. A nil entry is a write
-// that changed nothing, and it appends nothing. An error err of the write comes
-// back as it is.
-func appendIfChanged(ctx context.Context, q *db.Queries, entry *audit.Entry, err error) error {
+// appendAndFinish appends entry in the transaction of q, and then stores the
+// answer of the request when ctx carries an idempotency.Completion. result is
+// what the write passes to the Completion. The answer is the last step of the
+// transaction. A nil entry is a write that changed nothing, and it appends
+// nothing. An error err of the write comes back as it is.
+func appendAndFinish(ctx context.Context, q *db.Queries, entry *audit.Entry, result any, err error) error {
 	if err != nil {
 		return err
 	}
 
-	if entry == nil {
-		return nil
+	if entry != nil {
+		if _, appendErr := appendAuditEntry(ctx, q, *entry); appendErr != nil {
+			return fmt.Errorf("append audit entry: %w", appendErr)
+		}
 	}
 
-	if _, appendErr := appendAuditEntry(ctx, q, *entry); appendErr != nil {
-		return fmt.Errorf("append audit entry: %w", appendErr)
-	}
-
-	return nil
+	return finishCompletion(ctx, q, result)
 }
 
 // settingsTx is the settingsstore.Tx over one SQLite transaction or the

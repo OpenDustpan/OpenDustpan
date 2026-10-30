@@ -132,6 +132,7 @@ func runUnitSettingsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	fx.refusesWhatItMust(ctx, t)
 	fx.setsNamespaceDefaults(ctx, t)
 	fx.linksManyUnits(ctx, t)
+	fx.repeatsAKeyedWrite(ctx, t)
 	fx.resetsAndAudits(ctx, t)
 }
 
@@ -419,6 +420,35 @@ func (fx *unitSettingsFixture) linksManyUnits(ctx context.Context, t *testing.T)
 			inDoc("unit-settings.bulk-size"),
 		).sending(http.MethodPost, `{"units":[],"settings":{}}`, ""),
 	)
+}
+
+// repeatsAKeyedWrite sends one write twice with one Idempotency-Key. The second
+// request would answer 412 if it ran, because it names the version that the
+// first one replaced. It answers the first answer, and the version moves once.
+func (fx *unitSettingsFixture) repeatsAKeyedWrite(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	path := fx.settings(fx.dbID)
+	body := `{"codeLocation":{"repository":"acme/infra","ref":"release"}}`
+	headers := map[string]string{"If-Match": `"1"`, "Idempotency-Key": "e2e-unit-settings-1"}
+
+	for _, name := range []string{"write with an Idempotency-Key", "repeat the write with the same key"} {
+		fx.env.APIStepWithHeadersAs(ctx, t, fx.admin, e2e.APIStepSpec{
+			UserAgent: unitSettingsAgent, Name: name, Method: http.MethodPut, Path: path, Body: body,
+			Want: http.StatusOK, Scheme: "token", Check: checkOrigins(2, map[string]string{"ref": "unit"}),
+		}, headers)
+	}
+
+	fx.run(ctx, t, fx.admin, readStep("read the settings after the repeated write", path, http.StatusOK,
+		checkOrigins(2, map[string]string{"ref": "unit"})))
+
+	other := map[string]string{"If-Match": `"2"`, "Idempotency-Key": "e2e-unit-settings-1"}
+
+	fx.env.APIStepWithHeadersAs(ctx, t, fx.admin, e2e.APIStepSpec{
+		UserAgent: unitSettingsAgent, Name: "refuse the same key with another request", Method: http.MethodPut,
+		Path: path, Body: `{"codeLocation":{"repository":"acme/infra","ref":"main"}}`,
+		Want: http.StatusUnprocessableEntity, Scheme: "token", Check: inDoc("request.idempotency-key-reused"),
+	}, other)
 }
 
 // resetsAndAudits resets a unit to the defaults and reads the audit entries of

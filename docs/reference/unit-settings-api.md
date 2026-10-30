@@ -47,8 +47,43 @@ A `PUT` needs two more actions when its body asks for them:
 The built-in role `maintainer` holds `namespace:use-git-host-connection`.
 The role `admin` holds every action.
 
-No route of this API takes an `Idempotency-Key` header. A write with the header
-fails with 400 and the code `request.idempotency-key-unsupported`.
+The server checks `namespace:use-git-host-connection` on the namespace for now,
+not on one connection. A connection has no object of its own in the grants yet.
+A grant for one connection alone does not give the action: the holder needs the
+action on the namespace.
+
+## Idempotency-Key
+
+`PUT` and `DELETE` of the settings, `PUT` of the unit defaults and the bulk call
+take the optional header `Idempotency-Key`. A client that retries a call after a
+time-out sends the same key and the same request. The key has 1 to 255 printable
+ASCII characters. The server keeps the record of a key for 24 hours.
+
+- The first request runs. The server stores its answer in the same transaction
+  as the write, so a crash never leaves an answer without its write.
+- A second request with the same key and the same request does not write again.
+  It answers the first answer with the header `Idempotent-Replayed: true`.
+- Before it answers, a replay checks the actions again. A caller who lost an
+  action gets 403 and not the stored answer. With a key, a `PUT` of the settings
+  needs `namespace:use-git-host-connection` for each connection that the body
+  names, and `unit:define-steps` when the body sets steps. A replay cannot
+  compare the body with the record that the first request changed.
+- The same key with another request fails with 422 and the code
+  `request.idempotency-key-reused`.
+- A request with a key whose first request has not ended fails with 409 and the
+  code `request.idempotency-key-in-progress`.
+- A key that is not valid fails with 400 and the code
+  `request.idempotency-key-invalid`.
+- A write that fails stores no answer, so a retry with the same key runs the
+  write again.
+- A server that keeps no replay records fails a request with a key with 400 and
+  the code `request.idempotency-key-unsupported`, because it does not ignore the
+  key. The `GET` routes ignore the header.
+
+The bulk call keeps one record for each unit. A retry with the same key answers
+the stored result of each unit that the first call wrote, and does each unit that
+failed again. The same key with another body fails with 422. A retry that finds
+the call done has the header `Idempotent-Replayed: true`.
 
 ## The settings document
 
@@ -161,8 +196,8 @@ for a unit with no record. The audit entry has the action `unit-settings-reset`.
 is a code location that the git details of a recent update of the unit name:
 `repository`, `commit`, `source`, `updateId` and `observedAt`. The route reads
 and writes nothing else. It never sets a field: a person accepts a suggestion by
-saving the settings. The list is empty for a unit whose tool keeps no git details
-of its runs, and for a server that keeps none.
+saving the settings. The list is empty until the server records the git details
+of updates. The server keeps none yet, so the list is empty for every unit.
 
 ## Unit defaults
 

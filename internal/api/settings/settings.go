@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -28,6 +29,7 @@ import (
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/internal/unitsettingssvc"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -81,6 +83,12 @@ type Config struct {
 	DenialLimiter *denylimit.Limiter
 	Sessions      *sessionauth.Checker
 	Logger        *slog.Logger
+	// Idempotency serves the Idempotency-Key header of a single write. Nil
+	// makes every request with the header answer 400.
+	Idempotency *idempotent.Middleware
+	// Records keeps the replay records of the items of a bulk call. Nil makes
+	// a bulk call with the header answer 400.
+	Records idempotency.Store
 }
 
 // Handler serves the unit settings API under /api/dustpan/v1/.
@@ -95,6 +103,8 @@ type Handler struct {
 	logger      *slog.Logger
 	mux         *patternMux
 	routes      []Route
+	idem        *idempotent.Middleware
+	records     idempotency.Store
 }
 
 // NewHandler returns a Handler. Every Config field except Sessions and
@@ -133,6 +143,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:      cfg.Logger,
 		mux:         newPatternMux(),
 		routes:      nil,
+		idem:        cfg.Idempotency,
+		records:     cfg.Records,
 	}
 
 	h.routes = h.buildRoutes()
@@ -196,8 +208,8 @@ var errIfMatchInvalid = errors.New(`If-Match must be one stored version in quote
 // errBulkSize reports a bulk call with no unit or with too many.
 var errBulkSize = fmt.Errorf("a bulk call needs 1 to %d units", MaxBulkUnits)
 
-// errKeyUnsupported reports a write with an Idempotency-Key header to a route
-// that takes none. The store of the settings does not keep a replay record yet.
+// errKeyUnsupported reports a request with an Idempotency-Key header to a route
+// that takes none, or to a server that keeps no replay records.
 var errKeyUnsupported = errors.New("this route does not take the Idempotency-Key header: send the request without it")
 
 // writeError answers err in the error shape of the tool-neutral APIs.

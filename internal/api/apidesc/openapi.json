@@ -8027,6 +8027,9 @@
             }
           },
           {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
             "$ref": "#/components/parameters/IfMatchRequired"
           }
         ],
@@ -8528,6 +8531,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -9095,6 +9101,9 @@
             }
           },
           {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
             "$ref": "#/components/parameters/IfMatchRequired"
           }
         ],
@@ -9210,6 +9219,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           },
           {
             "$ref": "#/components/parameters/IfMatchRequired"

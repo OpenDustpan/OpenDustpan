@@ -380,6 +380,8 @@ export interface BulkReplaceUnitSettingsInput {
     readonly namespace: string;
   };
   readonly body: BulkUnitSettingsRequest;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -1160,6 +1162,8 @@ export interface ReplaceUnitDefaultsInput {
   readonly body: UnitDefaultsRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -1172,6 +1176,8 @@ export interface ReplaceUnitSettingsInput {
   readonly body: UnitSettingsFields;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -1183,6 +1189,8 @@ export interface ResetUnitSettingsInput {
   };
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -1338,7 +1346,7 @@ export const operations = {
       pathParameters: ["namespace"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "none",
       requiredQueryParameters: [],
       requestBody: "application/json",
@@ -2613,7 +2621,7 @@ export const operations = {
       pathParameters: ["namespace"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: "application/json",
@@ -2630,7 +2638,7 @@ export const operations = {
       pathParameters: ["namespace", "unit_id"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: "application/json",
@@ -2647,7 +2655,7 @@ export const operations = {
       pathParameters: ["namespace", "unit_id"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: undefined,
