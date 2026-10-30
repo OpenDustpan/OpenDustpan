@@ -203,3 +203,122 @@ func checkAPIAnswers503(t *testing.T, err error) {
 		t.Fatalf("the API answers %d with Retry-After %q, want 503 and 5", rec.Code, rec.Header().Get("Retry-After"))
 	}
 }
+
+// makeDatabaseReadOnly makes every new session of the database that
+// schemaURL names read-only, as a primary that a failover demoted: the server
+// answers SQLSTATE 25006 to each write on a new session. A session that
+// exists keeps its setting. The isolated URL names a database of its own, so
+// the change reaches no other test.
+func makeDatabaseReadOnly(tb testing.TB, schemaURL string) {
+	tb.Helper()
+
+	conn, err := pgx.Connect(tb.Context(), schemaURL)
+	if err != nil {
+		tb.Fatalf("connect to make the database read-only: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(tb.Context()); closeErr != nil {
+			tb.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	const alter = `DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET default_transaction_read_only = on', ` +
+		`current_database()); END $$`
+	if _, execErr := conn.Exec(tb.Context(), alter); execErr != nil {
+		tb.Fatalf("make the database read-only: %v", execErr)
+	}
+}
+
+// TestStoreLostWhenDatabaseIsReadOnly proves that a write on a read-only
+// session (SQLSTATE 25006, as on a demoted primary) returns an error that
+// wraps namespace.ErrUnavailable, and that the API answers 503 with
+// Retry-After. The read on the same session still works. The store first
+// holds sessions that were writable, and the test ends them, so the pool
+// opens new sessions that are read-only, as a pool does after a failover.
+func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL suite", envURL)
+	}
+
+	suffix := make([]byte, 6)
+	if _, err := rand.Read(suffix); err != nil {
+		t.Fatalf("random name: %v", err)
+	}
+
+	app := "odp_readonly_" + hex.EncodeToString(suffix)
+	schemaURL := isolatedURL(t, base)
+	s := openURL(t, withApplicationName(t, schemaURL, app))
+
+	if err := s.Ping(t.Context()); err != nil {
+		t.Fatalf("ping before the change: %v", err)
+	}
+
+	makeDatabaseReadOnly(t, schemaURL)
+	terminateSessions(t.Context(), t, base, app)
+
+	// A read that meets a pool connection which the kill ended fails once
+	// and drops that connection. The next read opens a read-only session.
+	var readErr error
+
+	for range 3 {
+		if _, readErr = s.GetNamespace(t.Context(), "acme"); !errors.Is(readErr, namespace.ErrUnavailable) {
+			break
+		}
+	}
+
+	if !errors.Is(readErr, namespace.ErrNotFound) {
+		t.Fatalf("read on a read-only session: err = %v, want namespace.ErrNotFound", readErr)
+	}
+
+	err := s.CreateNamespace(t.Context(), namespace.Namespace{
+		CreatedAt: time.Now(), ID: namespace.NewID(), Name: "read-only-write", PrimaryInstallation: "",
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 0,
+	})
+	if !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("write on a read-only session: err = %v, want it to wrap namespace.ErrUnavailable", err)
+	}
+
+	checkAPIAnswers503(t, err)
+}
+
+// TestOpenRefusesReadOnlySessionWithReadWriteAttribute proves that the store
+// passes target_session_attrs=read-write to the driver: a pool refuses a
+// session that is read-only, so it never holds a connection to a demoted
+// primary. The same URL opens while the database is writable.
+func TestOpenRefusesReadOnlySessionWithReadWriteAttribute(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL suite", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+
+	u, err := url.Parse(schemaURL)
+	if err != nil {
+		t.Fatalf("parse the database URL: %v", err)
+	}
+
+	query := u.Query()
+	query.Set("target_session_attrs", "read-write")
+	u.RawQuery = query.Encode()
+	readWriteURL := u.String()
+
+	openURL(t, readWriteURL)
+
+	makeDatabaseReadOnly(t, schemaURL)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	if s, openErr := postgres.Open(ctx, readWriteURL); openErr == nil {
+		s.Close()
+
+		t.Fatal("Open on a read-only database with target_session_attrs=read-write answered no error")
+	}
+}

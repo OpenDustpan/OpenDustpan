@@ -190,6 +190,52 @@ A database failover that is longer than these times makes running CLI commands f
 
 Run the same command again after the database answers. The next `pulumi preview` and `tofu plan` show no changes.
 
+## Database settings for a failover
+
+After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. Settings in the `DUSTPAN_DATABASE` URL help the pool to leave such a connection:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `target_session_attrs=read-write` | (none) | A new connection must reach a server that accepts writes. The driver closes a connection to a read-only server and does not give it to the pool. Without it, a new connection can reach a read-only server. |
+| `pool_max_conn_lifetime=<duration>` | `1h` | The pool closes a connection when it is older than this time, and opens a new one. A short time limits how long a connection to an old primary can live. |
+| `pool_health_check_period=<duration>` | `1m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
+
+A duration is a number with a unit, for example `5m` or `30s`. The server passes the three settings to the driver as the URL gives them. A value that is not valid stops the start of the server. Example:
+
+```
+DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&target_session_attrs=read-write&pool_max_conn_lifetime=5m&pool_health_check_period=10s'
+```
+
+The values `5m` and `10s` are examples. Nobody measured them against a managed database.
+
+The URL can name more than one host, separated by commas. With `target_session_attrs=read-write`, the driver tries the hosts in order and uses the first one that accepts writes. Use this form only when the database service does not give one address that always names the primary.
+
+### What was tested
+
+The tests ran on 2026-10-30 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
+
+- The settings above reach the pool as the URL gives them. A value that is not valid is refused.
+- The server answers 503 with `Retry-After: 5` and the error code `namespace.unavailable` for each write while a proxy cuts all its database connections. After the proxy lets the connections through again, the same server accepts writes. Nobody restarted it.
+- A session that the database ended (`pg_terminate_backend`) gives the same 503 answer.
+- A database with `default_transaction_read_only = on` gives the SQLSTATE code 25006 to each write on a new session. A write then gets the same 503 answer. A read still works.
+- With `target_session_attrs=read-write`, the server does not open against that read-only database. It opens against the same database when the database accepts writes.
+
+### What should work, and was not tested
+
+No test ran on a managed database service, on a real promotion of a standby, or on a proxy that pools connections. The notes below follow from how the services are documented to work. They are not results. Read the documentation of your service for the failover time, and test a failover before you rely on it.
+
+| Service | Address to use | Notes |
+| --- | --- | --- |
+| Amazon RDS Multi-AZ | The endpoint name of the DB instance or of the cluster | The endpoint name moves to the new primary. The pool must open new connections to find it, so keep `pool_max_conn_lifetime` short. |
+| Google Cloud SQL, high availability | The IP address or the connection name of the instance | The instance keeps its address when it fails over to the standby. A connection through a Cloud SQL connector or proxy ends and opens again. |
+| Azure Database for PostgreSQL Flexible Server, zone-redundant high availability | The server name | The server name stays the same. The connections end during the failover. |
+| Patroni | The address of a proxy or a load balancer that sends traffic only to the leader (for example, a health check on the Patroni `/primary` route) | Do not use the address of one node. |
+| CloudNativePG | The read-write service of the cluster (`<cluster>-rw`) | Do not use the read (`-r`) or read-only (`-ro`) services. |
+
+For each service, set `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
+
+During the failover, the instances answer 503 on the readiness probe. They also answer 503 on each request that needs the database. Section "When the database does not answer" describes this. This guide makes no claim about the failover time or about data loss. Both depend on the service and on its settings for synchronous replication.
+
 ## Settings that stay on one host
 
 Some targets write to the disk of the host that runs the instance. Each instance then holds a part of the data.

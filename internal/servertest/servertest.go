@@ -211,6 +211,15 @@ func (c *Cluster) BlobDir() string {
 func (c *Cluster) Do(t *testing.T, i int, method, path, body string) (int, string) {
 	t.Helper()
 
+	status, _, data := c.DoHeader(t, i, method, path, body)
+
+	return status, data
+}
+
+// DoHeader is Do with the response header in the result.
+func (c *Cluster) DoHeader(t *testing.T, i int, method, path, body string) (int, http.Header, string) {
+	t.Helper()
+
 	req, err := http.NewRequestWithContext(t.Context(), method, c.URL(i)+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -236,7 +245,24 @@ func (c *Cluster) Do(t *testing.T, i int, method, path, body string) (int, strin
 		t.Fatalf("read body: %v", readErr)
 	}
 
-	return resp.StatusCode, string(data)
+	return resp.StatusCode, resp.Header, string(data)
+}
+
+// CutDatabase closes every database connection of server i and refuses its
+// new ones until RestoreDatabase, as a database that fails over does. The
+// server keeps running. CutDatabase fails the test when server i does not run.
+func (c *Cluster) CutDatabase(t *testing.T, i int) {
+	t.Helper()
+
+	c.instance(t, i, "cut the database of").db.cut()
+}
+
+// RestoreDatabase lets server i reach the database again after CutDatabase.
+// It does not restart the server.
+func (c *Cluster) RestoreDatabase(t *testing.T, i int) {
+	t.Helper()
+
+	c.instance(t, i, "restore the database of").db.resume()
 }
 
 // authScheme returns the Authorization scheme of the API that serves path.
@@ -373,6 +399,22 @@ func (c *Cluster) Restart(t *testing.T, i int) {
 	c.mu.Lock()
 	c.instances[i] = in
 	c.mu.Unlock()
+}
+
+// instance returns the running server i, and fails the test with action when
+// it does not run.
+func (c *Cluster) instance(t *testing.T, i int, action string) *instance {
+	t.Helper()
+
+	c.mu.Lock()
+	in := c.instances[i]
+	c.mu.Unlock()
+
+	if in == nil {
+		t.Fatalf("%s server %d: the server does not run", action, i)
+	}
+
+	return in
 }
 
 // start opens the handles of server i, runs it and waits until it answers
