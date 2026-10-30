@@ -210,6 +210,11 @@ func TestWiderTokenIsRefused(t *testing.T) {
 			"no repository list",
 			`{` + answerStart + `,"permissions":{"contents":"read"},"repository_selection":"selected"}`,
 		},
+		{
+			"all repositories with a list",
+			`{` + answerStart + `,"permissions":{"contents":"read"},"repository_selection":"all","repositories":[{"name":"infra"}]}`,
+		},
+		{"no selection", `{` + answerStart + `,"permissions":{"contents":"read"},"repositories":[{"name":"infra"}]}`},
 		{"no permissions", `{` + answerStart + `,"repository_selection":"selected","repositories":[{"name":"infra"}]}`},
 	}
 
@@ -380,5 +385,48 @@ func TestRenamedRepositoryIsNotFoundAndNotFollowed(t *testing.T) {
 		if strings.Contains(r.URI, "platform") {
 			t.Errorf("the adapter followed the redirect to %s", r.URI)
 		}
+	}
+}
+
+// TestOwnerCompareIgnoresCase checks that GitHub logins are case-insensitive:
+// an owner that differs only in case is accepted, and any other owner is
+// refused before a token request or a read.
+func TestOwnerCompareIgnoresCase(t *testing.T) {
+	t.Parallel()
+
+	const answer = `{"token":"ghs_ok","permissions":{"contents":"read","metadata":"read"},` +
+		`"repository_selection":"selected","repositories":[{"name":"infra"}]}`
+
+	tests := []struct {
+		repo  string
+		reads int64
+		found bool
+	}{
+		{"acme/infra", 1, false},
+		{"ACME/infra", 1, false},
+		{"Acme/infra", 1, false},
+		{"acme-org/infra", 0, true},
+		{"acm/infra", 0, true},
+		{"other/infra", 0, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.repo, func(t *testing.T) {
+			t.Parallel()
+
+			raw := rawApp(t, answer)
+			_, err := raw.fg.Head(t.Context(), tc.repo, "main")
+
+			// The server of the test answers 404 to a read, so an accepted
+			// owner is a read that reached it.
+			if raw.reads.Load() != tc.reads {
+				t.Fatalf("%d reads reached the server, want %d (error %v)", raw.reads.Load(), tc.reads, err)
+			}
+
+			if refused := errors.Is(err, forge.ErrNotFound) &&
+				strings.Contains(err.Error(), "account"); refused != tc.found {
+				t.Fatalf("Head = %v, refused for the account = %v, want %v", err, refused, tc.found)
+			}
+		})
 	}
 }
