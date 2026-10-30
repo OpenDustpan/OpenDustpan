@@ -97,6 +97,10 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who registered the key",
 	},
+	"catalog_blueprint_versions.published_by": {
+		strip:  false,
+		reason: "history text of who published the version; a published version never changes",
+	},
 	"registry_releases.published_by": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who published the release",

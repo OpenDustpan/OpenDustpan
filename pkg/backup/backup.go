@@ -171,6 +171,8 @@ var Tables = []string{
 	"notification_sink_refs",
 	"triggers",
 	"item_keys",
+	"catalog_blueprints",
+	"catalog_blueprint_versions",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

@@ -3,10 +3,14 @@ package catalogtest
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/catalog"
+	"opendustpan.org/opendustpan/internal/policy"
+	"opendustpan.org/opendustpan/internal/quota"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -54,7 +58,7 @@ func blueprintEntries() []audit.Entry {
 	return []audit.Entry{entry(catalog.ActionBlueprintPublish, "payments/postgres")}
 }
 
-func putDraft(t *testing.T, h Harness, f fixture, b catalog.Blueprint, version int64) int64 {
+func putDraft(t *testing.T, h BlueprintHarness, f fixture, b catalog.Blueprint, version int64) int64 {
 	t.Helper()
 
 	got, err := h.Blueprints.PutDraft(t.Context(), b, version, f.fence, blueprintEntries())
@@ -65,7 +69,7 @@ func putDraft(t *testing.T, h Harness, f fixture, b catalog.Blueprint, version i
 	return got
 }
 
-func publish(t *testing.T, h Harness, f fixture, name string, draft int64) catalog.Version {
+func publish(t *testing.T, h BlueprintHarness, f fixture, name string, draft int64) catalog.Version {
 	t.Helper()
 
 	b, at, err := h.Blueprints.Draft(t.Context(), bref(name))
@@ -84,7 +88,7 @@ func publish(t *testing.T, h Harness, f fixture, name string, draft int64) catal
 	return v
 }
 
-func testDraft(t *testing.T, h Harness, f fixture) {
+func testDraft(t *testing.T, h BlueprintHarness, f fixture) {
 	t.Helper()
 
 	if v := putDraft(t, h, f, blueprint("postgres", "PostgreSQL"), 0); v != 1 {
@@ -112,7 +116,7 @@ func testDraft(t *testing.T, h Harness, f fixture) {
 	}
 }
 
-func testPublish(t *testing.T, h Harness, f fixture) {
+func testPublish(t *testing.T, h BlueprintHarness, f fixture) {
 	t.Helper()
 
 	putDraft(t, h, f, blueprint("postgres", "First"), 0)
@@ -134,7 +138,7 @@ func testPublish(t *testing.T, h Harness, f fixture) {
 	}
 }
 
-func testPublishStale(t *testing.T, h Harness, f fixture) {
+func testPublishStale(t *testing.T, h BlueprintHarness, f fixture) {
 	t.Helper()
 
 	putDraft(t, h, f, blueprint("postgres", "First"), 0)
@@ -153,7 +157,7 @@ func testPublishStale(t *testing.T, h Harness, f fixture) {
 	}
 }
 
-func testRetire(t *testing.T, h Harness, f fixture) {
+func testRetire(t *testing.T, h BlueprintHarness, f fixture) {
 	t.Helper()
 
 	putDraft(t, h, f, blueprint("postgres", "First"), 0)
@@ -184,7 +188,7 @@ func testRetire(t *testing.T, h Harness, f fixture) {
 	}
 }
 
-func testListBlueprints(t *testing.T, h Harness, f fixture) {
+func testListBlueprints(t *testing.T, h BlueprintHarness, f fixture) {
 	t.Helper()
 
 	putDraft(t, h, f, blueprint("redis", "Redis"), 0)
@@ -211,7 +215,7 @@ func testListBlueprints(t *testing.T, h Harness, f fixture) {
 	}
 }
 
-func testBlueprintFenced(t *testing.T, h Harness, f fixture) {
+func testBlueprintFenced(t *testing.T, h BlueprintHarness, f fixture) {
 	t.Helper()
 
 	if _, err := h.Domain.BumpFence(t.Context(), f.fence); err != nil {
@@ -225,5 +229,203 @@ func testBlueprintFenced(t *testing.T, h Harness, f fixture) {
 
 	if _, _, err := h.Blueprints.Draft(t.Context(), bref("postgres")); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatalf("Draft() after a fenced write = %v, want ErrNotFound", err)
+	}
+}
+
+func testBlueprintAudit(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	count := func(want int) {
+		t.Helper()
+
+		got, err := h.Domain.AuditEntries(t.Context(), ns)
+		if err != nil || len(got) != want {
+			t.Fatalf("AuditEntries() = %d entries, %v, want %d", len(got), err, want)
+		}
+	}
+
+	putDraft(t, h, f, blueprint("postgres", "First"), 0)
+	count(1)
+
+	// A refused write appends no entry.
+	_, err := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "x"), 0, f.fence, blueprintEntries())
+	if !errors.Is(err, catalog.ErrConflict) {
+		t.Fatalf("PutDraft(stale) = %v, want ErrConflict", err)
+	}
+
+	count(1)
+
+	publish(t, h, f, "postgres", 1)
+	count(2)
+
+	retireErr := h.Blueprints.Retire(t.Context(), bref("postgres"), 1, f.fence, blueprintEntries())
+	if retireErr != nil {
+		t.Fatalf("Retire() = %v", retireErr)
+	}
+
+	count(3)
+
+	err = h.Blueprints.Retire(t.Context(), bref("postgres"), 2, f.fence, blueprintEntries())
+	if !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("Retire(unknown) = %v, want ErrNotFound", err)
+	}
+
+	count(3)
+}
+
+func testPublishNoDraft(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	for _, at := range []int64{0, 1} {
+		p := catalog.Publication{
+			At: time.Now().UTC(), Ref: bref("postgres"), By: "platform",
+			Blueprint: blueprint("postgres", "First"), DraftVersion: at,
+		}
+
+		_, err := h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
+		if !errors.Is(err, catalog.ErrConflict) {
+			t.Fatalf("Publish(no draft, at %d) = %v, want ErrConflict", at, err)
+		}
+	}
+
+	if _, err := h.Blueprints.Version(t.Context(), bref("postgres"), 1); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("Version(1) = %v, want ErrNotFound", err)
+	}
+}
+
+func testBlueprintNamespaces(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	const other = namespace.Name("billing")
+
+	otherFence, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace() = %v", err)
+	}
+
+	putDraft(t, h, f, blueprint("postgres", "Payments"), 0)
+	publish(t, h, f, "postgres", 1)
+
+	otherRef := catalog.BlueprintRef{Namespace: other, Name: "postgres"}
+	if _, _, readErr := h.Blueprints.Draft(t.Context(), otherRef); !errors.Is(readErr, catalog.ErrNotFound) {
+		t.Fatalf("Draft(other namespace) = %v, want ErrNotFound", readErr)
+	}
+
+	if _, readErr := h.Blueprints.Version(t.Context(), otherRef, 1); !errors.Is(readErr, catalog.ErrNotFound) {
+		t.Fatalf("Version(other namespace) = %v, want ErrNotFound", readErr)
+	}
+
+	if got, listErr := h.Blueprints.ListBlueprints(t.Context(), other); listErr != nil || len(got) != 0 {
+		t.Fatalf("ListBlueprints(other) = %d, %v, want none", len(got), listErr)
+	}
+
+	// The same name in the other namespace is another blueprint, at its own version.
+	e := entry(catalog.ActionBlueprintPublish, "billing/postgres")
+	e.Namespace = other
+
+	v, err := h.Blueprints.PutDraft(t.Context(), blueprint("postgres", "Billing"), 0, otherFence, []audit.Entry{e})
+	if err != nil || v != 1 {
+		t.Fatalf("PutDraft(other namespace) = %d, %v, want 1", v, err)
+	}
+
+	if got, _, readErr := h.Blueprints.Draft(t.Context(), bref("postgres")); readErr != nil || got.Title != "Payments" {
+		t.Fatalf("Draft() = %q, %v, want the first namespace title", got.Title, readErr)
+	}
+
+	// An audit entry of another namespace writes nothing.
+	_, err = h.Blueprints.PutDraft(t.Context(), blueprint("redis", "x"), 0, otherFence, blueprintEntries())
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("PutDraft(entry of another namespace) = %v, want ErrInvalidEntry", err)
+	}
+
+	if _, _, err := h.Blueprints.Draft(t.Context(), catalog.BlueprintRef{Namespace: other, Name: "redis"}); !errors.Is(
+		err, catalog.ErrNotFound,
+	) {
+		t.Fatalf("Draft(redis) after a refused write = %v, want ErrNotFound", err)
+	}
+}
+
+func testBlueprintRoundTrip(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	b := blueprint("postgres", "PostgreSQL")
+	b.Description = "A database."
+	b.Inputs[0].Validate = []catalog.Rule{{Rule: "value != ''", Message: "Give a size."}}
+	b.Policy = []catalog.PolicyRule{{
+		When: "inputs.size == 'large'", Effect: policy.EffectApprove, Message: "A DBA approves a large database.",
+		Groups: []string{"dba"}, Approvals: 1,
+	}}
+	b.Quotas = []catalog.QuotaRule{{
+		Kind: quota.KindUnits, Scope: quota.ScopeNamespace, Window: "", Rule: "", Message: "", Max: 50,
+	}}
+
+	putDraft(t, h, f, b, 0)
+
+	got, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+	if err != nil || !reflect.DeepEqual(got, b) {
+		t.Fatalf("Draft() = %+v, %v, want %+v", got, err, b)
+	}
+
+	v := publish(t, h, f, "postgres", 1)
+	b.ExprVersion = "v1.17.8"
+
+	if !reflect.DeepEqual(v.Blueprint, b) {
+		t.Fatalf("Publish() = %+v, want %+v", v.Blueprint, b)
+	}
+
+	read, err := h.Blueprints.Version(t.Context(), bref("postgres"), 1)
+	if err != nil || !reflect.DeepEqual(read.Blueprint, b) || read.PublishedBy != "platform" ||
+		!read.PublishedAt.Equal(v.PublishedAt) || read.Namespace != ns || read.Number != 1 {
+		t.Fatalf("Version(1) = %+v, %v, want %+v", read, err, v)
+	}
+}
+
+func testBlueprintLimit(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	for i := range catalog.MaxBlueprints {
+		name := "bp" + strconv.Itoa(i)
+		if _, err := h.Blueprints.PutDraft(t.Context(), blueprint(name, "T"), 0, f.fence, nil); err != nil {
+			t.Fatalf("PutDraft(%s) = %v", name, err)
+		}
+	}
+
+	_, err := h.Blueprints.PutDraft(t.Context(), blueprint("over", "T"), 0, f.fence, blueprintEntries())
+	if !errors.Is(err, catalog.ErrLimit) {
+		t.Fatalf("PutDraft(over the limit) = %v, want ErrLimit", err)
+	}
+
+	if _, _, err := h.Blueprints.Draft(t.Context(), bref("over")); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("Draft(over) = %v, want ErrNotFound", err)
+	}
+
+	// A change of a draft that exists is not a new blueprint.
+	if _, err := h.Blueprints.PutDraft(t.Context(), blueprint("bp0", "U"), 1, f.fence, nil); err != nil {
+		t.Fatalf("PutDraft(existing, at the limit) = %v", err)
+	}
+}
+
+func testVersionLimit(t *testing.T, h BlueprintHarness, f fixture) {
+	t.Helper()
+
+	putDraft(t, h, f, blueprint("postgres", "T"), 0)
+
+	b, _, err := h.Blueprints.Draft(t.Context(), bref("postgres"))
+	if err != nil {
+		t.Fatalf("Draft() = %v", err)
+	}
+
+	p := catalog.Publication{At: time.Now().UTC(), Ref: bref("postgres"), By: "platform", Blueprint: b, DraftVersion: 1}
+
+	for i := range catalog.MaxVersions {
+		v, pubErr := h.Blueprints.Publish(t.Context(), p, f.fence, nil)
+		if pubErr != nil || v.Number != i+1 {
+			t.Fatalf("Publish() = %d, %v, want %d", v.Number, pubErr, i+1)
+		}
+	}
+
+	_, err = h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
+	if !errors.Is(err, catalog.ErrLimit) {
+		t.Fatalf("Publish(over the limit) = %v, want ErrLimit", err)
 	}
 }

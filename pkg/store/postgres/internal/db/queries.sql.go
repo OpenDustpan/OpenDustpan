@@ -996,6 +996,18 @@ func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsPa
 	return count, err
 }
 
+const countCatalogBlueprints = `-- name: CountCatalogBlueprints :one
+SELECT COUNT(*) FROM catalog_blueprints
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+`
+
+func (q *Queries) CountCatalogBlueprints(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, countCatalogBlueprints, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countEnabledBreakGlassPrincipal = `-- name: CountEnabledBreakGlassPrincipal :one
 SELECT COUNT(*) FROM principals
 WHERE id = $1 AND namespace = '' AND break_glass AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
@@ -4427,6 +4439,90 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 		&i.EndedAtMs,
 		&i.Target,
 		&i.Error,
+	)
+	return i, err
+}
+
+const getCatalogBlueprintDraft = `-- name: GetCatalogBlueprintDraft :one
+SELECT b.draft_version, b.draft_json
+FROM catalog_blueprints AS b
+JOIN namespaces AS n ON n.id = b.namespace_id
+WHERE n.name = $1 AND b.name = $2
+`
+
+type GetCatalogBlueprintDraftParams struct {
+	Namespace string
+	Name      string
+}
+
+type GetCatalogBlueprintDraftRow struct {
+	DraftVersion int64
+	DraftJson    string
+}
+
+func (q *Queries) GetCatalogBlueprintDraft(ctx context.Context, arg GetCatalogBlueprintDraftParams) (GetCatalogBlueprintDraftRow, error) {
+	row := q.db.QueryRow(ctx, getCatalogBlueprintDraft, arg.Namespace, arg.Name)
+	var i GetCatalogBlueprintDraftRow
+	err := row.Scan(&i.DraftVersion, &i.DraftJson)
+	return i, err
+}
+
+const getCatalogBlueprintDraftVersion = `-- name: GetCatalogBlueprintDraftVersion :one
+SELECT b.draft_version
+FROM catalog_blueprints AS b
+JOIN namespaces AS n ON n.id = b.namespace_id
+WHERE n.name = $1 AND b.name = $2
+`
+
+type GetCatalogBlueprintDraftVersionParams struct {
+	Namespace string
+	Name      string
+}
+
+func (q *Queries) GetCatalogBlueprintDraftVersion(ctx context.Context, arg GetCatalogBlueprintDraftVersionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getCatalogBlueprintDraftVersion, arg.Namespace, arg.Name)
+	var draft_version int64
+	err := row.Scan(&draft_version)
+	return draft_version, err
+}
+
+const getCatalogBlueprintVersion = `-- name: GetCatalogBlueprintVersion :one
+SELECT n.name AS namespace, v.name, v.number, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1 AND v.name = $2 AND v.number = $3
+`
+
+type GetCatalogBlueprintVersionParams struct {
+	Namespace string
+	Name      string
+	Number    int64
+}
+
+type GetCatalogBlueprintVersionRow struct {
+	Namespace     string
+	Name          string
+	Number        int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
+}
+
+func (q *Queries) GetCatalogBlueprintVersion(ctx context.Context, arg GetCatalogBlueprintVersionParams) (GetCatalogBlueprintVersionRow, error) {
+	row := q.db.QueryRow(ctx, getCatalogBlueprintVersion, arg.Namespace, arg.Name, arg.Number)
+	var i GetCatalogBlueprintVersionRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Name,
+		&i.Number,
+		&i.DocumentJson,
+		&i.ExprVersion,
+		&i.PublishedBy,
+		&i.PublishedAtMs,
+		&i.Retired,
 	)
 	return i, err
 }
@@ -8117,6 +8213,71 @@ func (q *Queries) InsertBlobPurge(ctx context.Context, arg InsertBlobPurgeParams
 	return err
 }
 
+const insertCatalogBlueprint = `-- name: InsertCatalogBlueprint :execrows
+INSERT INTO catalog_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, 1, $3, $4
+)
+ON CONFLICT (namespace_id, name) DO NOTHING
+`
+
+type InsertCatalogBlueprintParams struct {
+	Namespace        string
+	Name             string
+	DraftJson        string
+	DraftUpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A blueprint of the same
+// name in the namespace is not written.
+func (q *Queries) InsertCatalogBlueprint(ctx context.Context, arg InsertCatalogBlueprintParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertCatalogBlueprint,
+		arg.Namespace,
+		arg.Name,
+		arg.DraftJson,
+		arg.DraftUpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertCatalogBlueprintVersion = `-- name: InsertCatalogBlueprintVersion :exec
+INSERT INTO catalog_blueprint_versions (
+    namespace_id, name, number, document_json, expr_version, published_by, published_at_ms, retired
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, $3, $4, $5,
+    $6, $7, 0
+)
+`
+
+type InsertCatalogBlueprintVersionParams struct {
+	Namespace     string
+	Name          string
+	Number        int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+}
+
+func (q *Queries) InsertCatalogBlueprintVersion(ctx context.Context, arg InsertCatalogBlueprintVersionParams) error {
+	_, err := q.db.Exec(ctx, insertCatalogBlueprintVersion,
+		arg.Namespace,
+		arg.Name,
+		arg.Number,
+		arg.DocumentJson,
+		arg.ExprVersion,
+		arg.PublishedBy,
+		arg.PublishedAtMs,
+	)
+	return err
+}
+
 const insertDeletedInventory = `-- name: InsertDeletedInventory :exec
 INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -9850,6 +10011,27 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 	return i, err
 }
 
+const lastCatalogBlueprintVersion = `-- name: LastCatalogBlueprintVersion :one
+SELECT CAST(COALESCE(MAX(v.number), 0) AS BIGINT) AS number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1 AND v.name = $2
+`
+
+type LastCatalogBlueprintVersionParams struct {
+	Namespace string
+	Name      string
+}
+
+// The last published number of a blueprint, 0 for none. The caller holds the
+// write lock of the namespace, so the next number is exact.
+func (q *Queries) LastCatalogBlueprintVersion(ctx context.Context, arg LastCatalogBlueprintVersionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lastCatalogBlueprintVersion, arg.Namespace, arg.Name)
+	var number int64
+	err := row.Scan(&number)
+	return number, err
+}
+
 const latestWorkspaceStateFinalize = `-- name: LatestWorkspaceStateFinalize :one
 SELECT finalized_at_ms
 FROM state_versions
@@ -10299,6 +10481,60 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 			&i.UnitID,
 			&i.NamespaceID,
 			&i.PurgedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCatalogBlueprintLatest = `-- name: ListCatalogBlueprintLatest :many
+SELECT n.name AS namespace, v.name, v.number, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1
+  AND v.number = (
+      SELECT MAX(w.number) FROM catalog_blueprint_versions AS w
+      WHERE w.namespace_id = v.namespace_id AND w.name = v.name
+  )
+ORDER BY v.name
+`
+
+type ListCatalogBlueprintLatestRow struct {
+	Namespace     string
+	Name          string
+	Number        int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
+}
+
+// The newest published version of each blueprint of a namespace, by name.
+func (q *Queries) ListCatalogBlueprintLatest(ctx context.Context, namespace string) ([]ListCatalogBlueprintLatestRow, error) {
+	rows, err := q.db.Query(ctx, listCatalogBlueprintLatest, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCatalogBlueprintLatestRow
+	for rows.Next() {
+		var i ListCatalogBlueprintLatestRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Name,
+			&i.Number,
+			&i.DocumentJson,
+			&i.ExprVersion,
+			&i.PublishedBy,
+			&i.PublishedAtMs,
+			&i.Retired,
 		); err != nil {
 			return nil, err
 		}
@@ -15706,6 +15942,28 @@ func (q *Queries) RestoreWorkspace(ctx context.Context, arg RestoreWorkspacePara
 	return result.RowsAffected(), nil
 }
 
+const retireCatalogBlueprintVersion = `-- name: RetireCatalogBlueprintVersion :execrows
+UPDATE catalog_blueprint_versions
+SET retired = 1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND catalog_blueprint_versions.name = $2 AND number = $3
+`
+
+type RetireCatalogBlueprintVersionParams struct {
+	Namespace string
+	Name      string
+	Number    int64
+}
+
+// A retire of a retired version matches the row and changes nothing.
+func (q *Queries) RetireCatalogBlueprintVersion(ctx context.Context, arg RetireCatalogBlueprintVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retireCatalogBlueprintVersion, arg.Namespace, arg.Name, arg.Number)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const retireRunner = `-- name: RetireRunner :exec
 UPDATE runners SET retired_at_ms = $1 WHERE id = $2
 `
@@ -16414,6 +16672,33 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 		arg.MigratingAtMs,
 	)
 	return err
+}
+
+const setCatalogBlueprintExprVersion = `-- name: SetCatalogBlueprintExprVersion :execrows
+UPDATE catalog_blueprint_versions
+SET expr_version = $1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+  AND catalog_blueprint_versions.name = $3 AND number = $4
+`
+
+type SetCatalogBlueprintExprVersionParams struct {
+	ExprVersion string
+	Namespace   string
+	Name        string
+	Number      int64
+}
+
+func (q *Queries) SetCatalogBlueprintExprVersion(ctx context.Context, arg SetCatalogBlueprintExprVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setCatalogBlueprintExprVersion,
+		arg.ExprVersion,
+		arg.Namespace,
+		arg.Name,
+		arg.Number,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setDurableScheduleInterval = `-- name: SetDurableScheduleInterval :exec
@@ -17441,6 +17726,36 @@ func (q *Queries) UnlockSweep(ctx context.Context, class int32) (bool, error) {
 	var unlocked bool
 	err := row.Scan(&unlocked)
 	return unlocked, err
+}
+
+const updateCatalogBlueprintDraft = `-- name: UpdateCatalogBlueprintDraft :execrows
+UPDATE catalog_blueprints
+SET draft_version = draft_version + 1, draft_json = $1, draft_updated_at_ms = $2
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+  AND catalog_blueprints.name = $4 AND draft_version = $5
+`
+
+type UpdateCatalogBlueprintDraftParams struct {
+	DraftJson        string
+	DraftUpdatedAtMs int64
+	Namespace        string
+	Name             string
+	DraftVersion     int64
+}
+
+// The draft changes only at the version that the caller read.
+func (q *Queries) UpdateCatalogBlueprintDraft(ctx context.Context, arg UpdateCatalogBlueprintDraftParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateCatalogBlueprintDraft,
+		arg.DraftJson,
+		arg.DraftUpdatedAtMs,
+		arg.Namespace,
+		arg.Name,
+		arg.DraftVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateExists = `-- name: UpdateExists :one

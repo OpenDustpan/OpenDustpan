@@ -721,5 +721,6 @@ func portableSpec() []PortableTable {
 		portableSinkTables(),
 		portableTriggerTables(),
 		portableItemKeyTables(),
+		portableCatalogTables(),
 	)
 }
