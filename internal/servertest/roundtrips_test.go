@@ -28,22 +28,16 @@ import (
 // This file holds the regression benchmark of database round trips: for each
 // flow, the number of round trips that the server makes to PostgreSQL. A
 // budget bounds each count from above, so a change that adds a round trip
-// fails. The budget also bounds the count from below, so a change that removes
-// round trips must lower the budget, and the budgets only go down.
+// fails. For a request flow the budget also bounds the count from below, so a
+// change that removes round trips must lower the budget, and the budgets only
+// go down. A backup and a restore have only the upper bound, because their
+// count changes from run to run with the timing of the operation. The test log
+// shows the measured count of each flow. Each flow runs on its own server, in a
+// parallel subtest.
 
 // budgetSlack is the number of round trips that a count of a request flow may
 // be below its budget before the test asks for a lower budget.
 const budgetSlack = 3
-
-// Slack of the background flows. The count of a backup or a restore changes by
-// some round trips from run to run, because the work of its operation depends
-// on timing. Each budget is the highest count of repeated runs under load plus 4.
-// The slack is above the spread of the runs, which was up to 17 for a backup
-// and up to 27 for a restore.
-const (
-	backupSlack  = 25
-	restoreSlack = 30
-)
 
 // warmCycles is the number of runs of a request flow before the measured run,
 // so that the statement cache of each connection does not change the count.
@@ -314,7 +308,7 @@ func (r *roundTripTracer) storeOptions() []postgres.Option {
 
 // checkBudget fails the test when the count is above the budget, or more than
 // budgetSlack below it. It prints the statements of the flow.
-func checkBudget(t *testing.T, name string, trips []roundTrip, budget, slack int) {
+func checkBudget(t *testing.T, name string, trips []roundTrip, budget int) {
 	t.Helper()
 
 	got := len(trips)
@@ -322,11 +316,27 @@ func checkBudget(t *testing.T, name string, trips []roundTrip, budget, slack int
 	switch {
 	case got > budget:
 		t.Errorf("%s: %d round trips, budget %d\n%s", name, got, budget, listTrips(trips))
-	case got < budget-slack:
+	case got < budget-budgetSlack:
 		t.Errorf("%s: %d round trips, budget %d: lower the budget to %d\n%s", name, got, budget, got, listTrips(trips))
 	default:
 		t.Logf("%s: %d round trips, budget %d", name, got, budget)
 	}
+}
+
+// checkCeiling fails the test when the count is above the budget. A count below
+// the budget passes, and the log shows it. The budget is the highest count of
+// repeated runs under load plus 4.
+func checkCeiling(t *testing.T, name string, trips []roundTrip, budget int) {
+	t.Helper()
+
+	got := len(trips)
+	if got > budget {
+		t.Errorf("%s: %d round trips, budget %d\n%s", name, got, budget, listTrips(trips))
+
+		return
+	}
+
+	t.Logf("%s: %d round trips, budget %d", name, got, budget)
 }
 
 // withoutPrepares returns the round trips that are not a prepare. A prepare
@@ -338,14 +348,18 @@ func withoutPrepares(trips []roundTrip) []roundTrip {
 	return filterTrips(trips, func(trip roundTrip) bool { return trip.kind != "prepare" })
 }
 
-// withoutTimerReads returns the round trips that are not a statement that a
-// timer starts. The poll that claims a durable operation runs on a timer, and
-// it also carries a pkg/backup frame when it starts a backup. The audit chain
-// gate and the maintenance gate read their stored state again when their cache
-// is older than its limit, and that read runs on the goroutine of the request
-// that finds the cache old.
-// The count of these depends on timing, so the budgets leave them out. The
+// withoutTimerReads returns the round trips that are not one of four
+// statements whose count follows the clock and not the work of the flow. The
 // statement list keeps them.
+//
+//   - ClaimDurableOperation and EndExpiredCanceledDurableOperations: the runner
+//     of durable operations claims on a timer. A backup or a restore holds a
+//     pkg/backup frame while it runs, so each tick of the timer in the run counts
+//     as a round trip of the flow. The number of ticks is the length of the run.
+//   - GetAuditChainState and GetInstallationState: the audit chain gate and the
+//     maintenance gate cache their stored state for a limit. The first request,
+//     or step of an operation, after the limit passes reads the state again. The
+//     number of reads is the number of times the limit passed in the run.
 func withoutTimerReads(trips []roundTrip) []roundTrip {
 	return filterTrips(trips, func(trip roundTrip) bool {
 		switch trip.sql {
@@ -671,11 +685,11 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 44, func(h *rtHarness) {
+		{"lock", 42, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
-		{"unlock", 12, func(h *rtHarness) {
+		{"unlock", 10, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.unlock)
 		}},
@@ -705,30 +719,33 @@ func requestFlows() []requestFlow {
 }
 
 // TestRoundTripsOfRequests counts the round trips of each request flow on a
-// warm server. The flows share one server and run in order, so the test has no
-// parallel subtest.
+// warm server. Each flow has its own server.
 func TestRoundTripsOfRequests(t *testing.T) {
 	t.Parallel()
 
-	h := newRoundTripHarness(t, traceRequest, dustpan.WithPublicURL("https://dustpan.example.com"))
-	h.workspace = h.createWorkspace("web")
-	h.createStack("base")
-
 	for _, flow := range requestFlows() {
-		h.warm = true
-		for range warmCycles {
+		t.Run(flow.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newRoundTripHarness(t, traceRequest, dustpan.WithPublicURL("https://dustpan.example.com"))
+			h.workspace = h.createWorkspace("web")
+			h.createStack("base")
+
+			h.warm = true
+			for range warmCycles {
+				flow.run(h)
+			}
+
+			h.warm = false
+			h.trips = nil
 			flow.run(h)
-		}
 
-		h.warm = false
-		h.trips = nil
-		flow.run(h)
+			if h.trips == nil {
+				t.Fatalf("%s: the flow measured nothing", flow.name)
+			}
 
-		if h.trips == nil {
-			t.Fatalf("%s: the flow measured nothing", flow.name)
-		}
-
-		checkBudget(t, flow.name, withoutTimerReads(withoutPrepares(h.trips)), flow.budget, budgetSlack)
+			checkBudget(t, flow.name, withoutTimerReads(withoutPrepares(h.trips)), flow.budget)
+		})
 	}
 }
 
@@ -814,17 +831,10 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 }
 
 // TestRoundTripsOfBackup counts the round trips of a backup and of a restore
-// of 3 stacks and 3 workspaces, then of 30 stacks and 30 workspaces, so that a
-// term that grows with the data shows.
+// of 3 stacks and 3 workspaces, and of 30 stacks and 30 workspaces, so that a
+// term that grows with the data shows. Each size has its own server.
 func TestRoundTripsOfBackup(t *testing.T) {
 	t.Parallel()
-
-	target, err := fs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backup target: %v", err)
-	}
-
-	h := newRoundTripHarness(t, traceBackup, dustpan.WithBackupTarget(target, "test"))
 
 	for _, size := range []struct {
 		name                        string
@@ -834,23 +844,26 @@ func TestRoundTripsOfBackup(t *testing.T) {
 		{"3 stacks and 3 workspaces", 3, 305, 1003},
 		{"30 stacks and 30 workspaces", 30, 305, 1055},
 	} {
-		h.seedUnits(size.units)
+		t.Run(size.name, func(t *testing.T) {
+			t.Parallel()
 
-		run := h.runBackupAndRestore()
+			target, err := fs.Open(t.TempDir())
+			if err != nil {
+				t.Fatalf("open backup target: %v", err)
+			}
 
-		checkBudget(
-			t,
-			"backup of "+size.name,
-			withoutTimerReads(withoutPrepares(run.backup)),
-			size.backupBudget,
-			backupSlack,
-		)
-		checkBudget(
-			t,
-			"restore of "+size.name,
-			withoutTimerReads(withoutPrepares(run.restore)),
-			size.restoreBudget,
-			restoreSlack,
-		)
+			h := newRoundTripHarness(t, traceBackup, dustpan.WithBackupTarget(target, "test"))
+			h.seedUnits(size.units)
+
+			run := h.runBackupAndRestore()
+
+			checkCeiling(t, "backup of "+size.name, withoutTimerReads(withoutPrepares(run.backup)), size.backupBudget)
+			checkCeiling(
+				t,
+				"restore of "+size.name,
+				withoutTimerReads(withoutPrepares(run.restore)),
+				size.restoreBudget,
+			)
+		})
 	}
 }
