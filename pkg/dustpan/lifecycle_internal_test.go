@@ -393,3 +393,31 @@ func TestDeletedReadScopeCollections(t *testing.T) {
 		})
 	}
 }
+
+// TestDeletedReadScopeOfReadsTheMembers proves that the scope of a store that
+// holds collections reads their members, and that the scope of a store that
+// does not hold them reads none.
+func TestDeletedReadScopeOfReadsTheMembers(t *testing.T) {
+	t.Parallel()
+
+	f := newScopeFixture(t)
+
+	for _, tc := range []struct {
+		name  string
+		store any
+		want  bool
+	}{
+		{name: "a store with collections", store: f.store, want: true},
+		{name: "a store without collections", store: struct{}{}, want: false},
+		{name: "no store", store: nil, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			scope := deletedReadScopeOf(f.authz, tc.store)
+			if got := scope.members != nil; got != tc.want {
+				t.Fatalf("scope has a member reader = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}

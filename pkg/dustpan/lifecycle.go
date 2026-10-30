@@ -227,6 +227,10 @@ type collectionMembers interface {
 	ListCollectionUnits(ctx context.Context, ref collection.Ref) ([]string, error)
 }
 
+// The collection store reads the members of a collection. A change of
+// collection.Store that drops the method fails here, not at run time.
+var _ collectionMembers = collection.Store(nil)
+
 // newDeletedReadScope returns the scope of the deleted-unit reads for authz.
 // members reads the units of a collection. It is nil when the store holds no
 // collections: then a grant on a collection covers no deleted unit.
