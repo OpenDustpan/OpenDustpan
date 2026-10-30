@@ -73,6 +73,9 @@ var (
 	errWaitTimeout = errors.New("timed out")
 	// errBadCertificate reports a certificate file with no certificate.
 	errBadCertificate = errors.New("no certificate in the file")
+	// errBelowMinimum reports an instance that refused a request because its
+	// binary is below the minimum binary version of the schema.
+	errBelowMinimum = errors.New("the instance is below the minimum binary version")
 	// errBodyTooLarge reports a request body that the proxy cannot keep.
 	errBodyTooLarge = errors.New("the request body is too large for the proxy")
 )
@@ -359,6 +362,52 @@ func (c *HACluster) StopAll(tb testing.TB) {
 // instance keeps its components. Call it while no instance starts or stops.
 func (c *HACluster) SetComponents(raw string) {
 	c.cfg.components = raw
+}
+
+// SetBinary sets the server binary that every instance runs from its next
+// start on: bin is the path of the binary. A running instance keeps its
+// binary. A rolling deploy stops an instance, calls SetBinary and starts the
+// instance again. Call it while no instance starts or stops.
+func (c *HACluster) SetBinary(bin string) {
+	c.cfg.bin = bin
+}
+
+// InstanceRequest sends one request with the bootstrap token to instance i itself,
+// not through the proxy, and returns the status and the body. It shows what a
+// single instance answers, also when the proxy would send the request to
+// another one.
+func (e *Env) InstanceRequest(ctx context.Context, i int, method, path, body string) (int, string, error) {
+	cluster := e.ha
+	if cluster == nil || i < 0 || i >= len(cluster.instances) {
+		return 0, "", fmt.Errorf("%w: instance %d", errInstanceDown, i)
+	}
+
+	inst := cluster.instances[i]
+
+	req, err := http.NewRequestWithContext(ctx, method, inst.url+path, strings.NewReader(body))
+	if err != nil {
+		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	req.Header.Set("Authorization", "token "+e.token)
+
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := inst.transport.RoundTrip(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s on instance %d: %w", method, path, i, err)
+	}
+
+	raw, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return 0, "", fmt.Errorf("read %s %s on instance %d: %w", method, path, i, err)
+	}
+
+	return resp.StatusCode, string(raw), nil
 }
 
 // StartAll starts every instance that does not run, one after the other, and
@@ -697,6 +746,10 @@ func (t haTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	var lastErr error
 
+	// lastResp is the newest refusal of an instance below the minimum. The
+	// client sees it when no other instance takes the request.
+	var lastResp *http.Response
+
 	for range c.instances {
 		i := c.pick(tried)
 		if i < 0 {
@@ -704,35 +757,20 @@ func (t haTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		tried[i] = true
-		inst := c.instances[i]
 
-		out := req.Clone(req.Context())
-		out.URL.Scheme = "https"
-		out.URL.Host = "127.0.0.1:" + inst.port
-		out.Body = io.NopCloser(bytes.NewReader(body))
-		out.ContentLength = int64(len(body))
-		out.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
-
-		resp, sendErr := inst.transport.RoundTrip(out)
-		if sendErr == nil {
-			noteBackend(req, "i"+strconv.Itoa(i))
-
-			return resp, nil
+		resp, again, tryErr := c.try(req, body, i)
+		if !again {
+			return resp, tryErr
 		}
 
-		if req.Context().Err() != nil {
-			return nil, fmt.Errorf("send to instance %d: %w", i, sendErr)
+		lastErr = tryErr
+		if resp != nil {
+			lastResp = resp
 		}
+	}
 
-		lastErr = fmt.Errorf("send to instance %d: %w", i, sendErr)
-
-		// A failed instance leaves the pool until a probe passes again.
-		inst.healthy.Store(false)
-		inst.transport.CloseIdleConnections()
-
-		if !retryable(req.Method, sendErr) {
-			return nil, lastErr
-		}
+	if lastResp != nil {
+		return lastResp, nil
 	}
 
 	if lastErr == nil {
@@ -740,6 +778,95 @@ func (t haTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return nil, lastErr
+}
+
+// try sends req to instance i. again is true when the proxy may send req to
+// another instance: the instance failed in a way that is safe to repeat, or
+// it refused the request because its binary is below the minimum of the
+// schema. A refusal comes back as resp with errBelowMinimum.
+func (c *HACluster) try(req *http.Request, body []byte, i int) (*http.Response, bool, error) {
+	inst := c.instances[i]
+
+	out := req.Clone(req.Context())
+	out.URL.Scheme = "https"
+	out.URL.Host = "127.0.0.1:" + inst.port
+	out.Body = io.NopCloser(bytes.NewReader(body))
+	out.ContentLength = int64(len(body))
+	out.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+
+	resp, sendErr := inst.transport.RoundTrip(out)
+	if sendErr != nil {
+		if req.Context().Err() != nil {
+			return nil, false, fmt.Errorf("send to instance %d: %w", i, sendErr)
+		}
+
+		// A failed instance leaves the pool until a probe passes again.
+		inst.healthy.Store(false)
+		inst.transport.CloseIdleConnections()
+
+		return nil, retryable(req.Method, sendErr), fmt.Errorf("send to instance %d: %w", i, sendErr)
+	}
+
+	refused, replay, refusalErr := belowMinimumRefusal(resp)
+	if refusalErr != nil {
+		return nil, false, fmt.Errorf("instance %d: %w", i, refusalErr)
+	}
+
+	if refused {
+		// The instance refused before it wrote anything, so another instance
+		// can take the request, as a production load balancer does on a 503.
+		// The instance leaves the pool until a probe passes again.
+		inst.healthy.Store(false)
+
+		return replay, true, fmt.Errorf("instance %d: %w", i, errBelowMinimum)
+	}
+
+	noteBackend(req, "i"+strconv.Itoa(i))
+
+	return resp, false, nil
+}
+
+// minimumRefusalText is the part of the answer of an instance below the
+// minimum binary version that names the rule.
+const minimumRefusalText = "the minimum binary version of the database schema"
+
+// maxRefusalBody bounds the part of a 503 answer that the proxy reads.
+const maxRefusalBody = 64 << 10
+
+// belowMinimumRefusal reports whether resp is the refusal of an instance whose
+// binary is below the minimum of the schema: status 503 and the text that
+// names the rule. For an answer that is not a refusal, the body of resp stays
+// readable. For a refusal it returns a copy of the answer that holds the
+// whole body.
+func belowMinimumRefusal(resp *http.Response) (bool, *http.Response, error) {
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		return false, nil, nil
+	}
+
+	head, err := io.ReadAll(io.LimitReader(resp.Body, maxRefusalBody))
+	if err != nil {
+		return false, nil, fmt.Errorf("read the 503 answer: %w", err)
+	}
+
+	if !bytes.Contains(head, []byte(minimumRefusalText)) {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
+
+		return false, nil, nil
+	}
+
+	replay := new(http.Response)
+	*replay = *resp
+	replay.Body = io.NopCloser(bytes.NewReader(head))
+	replay.ContentLength = int64(len(head))
+
+	if err := resp.Body.Close(); err != nil {
+		return false, nil, fmt.Errorf("close the refusal: %w", err)
+	}
+
+	return true, replay, nil
 }
 
 // bufferBody reads the body of req, so the proxy can send it again.
