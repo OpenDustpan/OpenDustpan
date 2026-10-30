@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -1291,7 +1292,9 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref,
 func (s *Updates) resolveCheckpoint(ctx context.Context, bl *scopedBlobs, cp Checkpoint) (Checkpoint, error) {
 	// The key comes from a row. It must name a save of the update of the row
 	// in the stack of bl, so the read is narrowed to that directory.
-	raw, err := bl.narrow(bl.updatePrefix(bl.stack, cp.Update)).Get(ctx, cp.BlobKey)
+	prefix := bl.updatePrefix(bl.stack, cp.Update)
+
+	raw, err := bl.narrow(prefix).Get(ctx, cp.BlobKey)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return Checkpoint{}, fmt.Errorf("resolve checkpoint: %w", cerr)
@@ -1313,6 +1316,18 @@ func (s *Updates) resolveCheckpoint(ctx context.Context, bl *scopedBlobs, cp Che
 	}
 
 	if sha256.Sum256(deployment) != cp.Digest {
+		return Checkpoint{}, ErrCheckpointMismatch
+	}
+
+	// The number in the key is the sequence of the row. A row whose key names
+	// another save is a corrupt record, and its blob is not served. The scoped
+	// read comes first, so a key outside the scope gets its own refusal.
+	//
+	// Defense in depth: the row store checks the key of a write, and the write
+	// path builds it from the sequence. This check stays so that a row that
+	// reached the store by other means cannot serve the blob of another save.
+	name, named := parseCheckpointName(strings.TrimPrefix(cp.BlobKey.String(), prefix))
+	if !named || strconv.FormatUint(name.number, 10) != strconv.FormatInt(cp.Sequence, 10) {
 		return Checkpoint{}, ErrCheckpointMismatch
 	}
 

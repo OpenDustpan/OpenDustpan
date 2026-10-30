@@ -14548,7 +14548,7 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 	return result.RowsAffected()
 }
 
-const putCheckpoint = `-- name: PutCheckpoint :exec
+const putCheckpoint = `-- name: PutCheckpoint :execrows
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features_json, saved_at_ms,
@@ -14566,6 +14566,7 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     size = excluded.size,
     blob_size = excluded.blob_size,
     blob_md5 = excluded.blob_md5
+WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence
 `
 
 type PutCheckpointParams struct {
@@ -14584,8 +14585,12 @@ type PutCheckpointParams struct {
 	BlobMd5       []byte
 }
 
-func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) error {
-	_, err := q.db.ExecContext(ctx, putCheckpoint,
+// The row of the update decides which write wins. The conflict update runs only
+// for a write without a sequence number, or for a sequence above the stored one,
+// and the database checks that against the latest committed row, so two writers
+// of one sequence cannot both land. Zero rows mean that the write lost.
+func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, putCheckpoint,
 		arg.StackID,
 		arg.UpdateID,
 		arg.LeaseDigest,
@@ -14600,7 +14605,10 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.BlobSize,
 		arg.BlobMd5,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const putUnitFinalVersion = `-- name: PutUnitFinalVersion :exec

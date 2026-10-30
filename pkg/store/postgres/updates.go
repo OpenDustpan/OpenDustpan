@@ -403,7 +403,7 @@ func writeCheckpoint(
 		}
 	}
 
-	putErr := q.PutCheckpoint(ctx, db.PutCheckpointParams{
+	written, putErr := q.PutCheckpoint(ctx, db.PutCheckpointParams{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
 		LeaseDigest:   row.LeaseDigest,
@@ -422,7 +422,30 @@ func writeCheckpoint(
 		return false, fmt.Errorf("upsert checkpoint: %w", putErr)
 	}
 
+	if written == 0 {
+		return lostCheckpointRace(ctx, q, cp, stackID)
+	}
+
 	return false, nil
+}
+
+// lostCheckpointRace answers an upsert that wrote no row: a write of the same
+// sequence, or of a higher one, landed after the read of checkSequence and
+// before this write. The row of the update decided, so this write is a replay
+// when the sequence and the digest are the same, a conflict when only the
+// sequence is the same, and stale when the stored sequence is higher.
+//
+// Defense in depth: checkSequence answers the same cases from an earlier read.
+// This answer reads the row after the write that won, and it does not rely on
+// that earlier read. It fails closed with ErrCheckpointConflict for a row that
+// does not explain the lost write.
+func lostCheckpointRace(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string) (bool, error) {
+	retried, err := checkSequence(ctx, q, cp, stackID)
+	if err != nil || retried {
+		return retried, err
+	}
+
+	return false, stack.ErrCheckpointConflict
 }
 
 // LatestCheckpoint implements stack.CheckpointStore. It returns the
