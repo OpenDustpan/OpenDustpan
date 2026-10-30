@@ -1078,6 +1078,23 @@ The threat argument that takes the place of decision 1 for the network path:
   give the same power as a shell on the host. The guide recommends a
   hardware key (`sk-ssh-ed25519`), so that the key cannot be copied.
 
+**O14 in short.** Mode 2 lets an operator with no shell on the host recover
+an administrator over the network, with a request signed by an offline key.
+ADR 245 allows that power only to the host command today. So mode 2 needs an
+amendment of ADR 245, and no product has done this before.
+
+| Option | Gives | Costs |
+| --- | --- | --- |
+| A. Amend ADR 245 decision 12 as above: `internal/recovery` may reach the host issuer, from the mode 2 route only | Mode 2 ships as ADR 57 describes: recovery with no shell, no restart and no configuration change. | A new network path to a site administrator. Its security rests on the offline key and the proof secret, and the threat argument above replaces the shell argument of decision 1. |
+| B. No amendment. Mode 2 becomes a host command that checks a signature before it makes the temporary administrator | ADR 245 stays as written. | Mode 2 then needs a shell, as mode 1 does. It adds a key check and gives no path that mode 1 does not give. ADR 57 mode 2 does not ship as designed. |
+| C. No amendment and no mode 2 | Nothing new to build or attack. | ADR 57 decision 1 promises three modes. Removing one is a scope cut. |
+
+Precedent: none. Vault recovers a root token only with a quorum of key holders
+(fetched), and Keycloak recovers from the host (fetched). **Recommendation: A
+(owner decision O14).** It is the only option that ships mode 2 as accepted,
+and no single stolen part (the signed document, the proof secret or a
+place on the network) is enough to recover.
+
 **Open question 2: can an operator change the mode after the first boot?**
 Lead proposal: yes, through the API by an administrator, with an audit entry.
 ADR 245 says that a stored choice wins over the setting.
@@ -1231,7 +1248,15 @@ the item starts. This needs a check that the migration runner accepts a gap
 in the numbers while an item is open. The work item that first does it
 checks that, and also checks that it does not conflict with the hash of each
 file in TestFrozenMigrations or with the collapse rule of ADR 73. This is a
-process note, not part of the design.
+process note, not part of the design. The check on `main` at 252b87f:
+`migrate.Load` sorts by version and refuses only a duplicate, so a gap loads.
+TestFrozenMigrations pins the hash of each file and not the numbers. The
+collapse of ADR 73 makes one file above all the files that it replaces, and
+no tag has shipped yet. The risk that stays: when an item with a lower number
+merges after an item with a higher number, `migrate.Check` applies the lower
+file last on a database that has the higher one, which is another order than
+on a new database. So two items with given numbers must not change the same
+table, or the item that merges second takes a new number above the highest.
 
 ### Proposed terms
 
