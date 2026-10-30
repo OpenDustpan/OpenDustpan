@@ -411,8 +411,8 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 		return nil, fmt.Errorf("stage backup %s for restore %s: %w", in.BackupID, in.ID, err)
 	}
 
-	if noteErr := s.noteDroppedKeys(ctx, sc, in, stage); noteErr != nil {
-		return nil, noteErr
+	if dropErr := s.dropIssuerKeys(ctx, sc, in, area); dropErr != nil {
+		return nil, dropErr
 	}
 
 	if stage.Strip {
@@ -442,18 +442,29 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 	return out, nil
 }
 
-// noteDroppedKeys records the drop of the issuer keys of another
-// installation. The data decides, not the flag alone: the event names a drop
-// that removed rows. The stage checked the row counts of the manifest against
-// the data.
-func (s *RestoreService) noteDroppedKeys(
-	ctx context.Context, sc durable.StepContext, in restoreInput, stage RestoreStageInput,
+// dropIssuerKeys removes the issuer keys of the staged namespaces that belong
+// to another installation, and records each drop. The decision is for each
+// namespace, by the primary installation that the staged data names. A check
+// only run records nothing.
+func (s *RestoreService) dropIssuerKeys(
+	ctx context.Context, sc durable.StepContext, in restoreInput, area StagingArea,
 ) error {
-	if !stage.DropIssuerKeys || in.CheckOnly || stage.Want.RowCounts[issuerKeysTable] == 0 {
+	dropped, err := s.live.DropStagedIssuerKeys(ctx, area, s.installation)
+	if err != nil {
+		return fmt.Errorf("drop the issuer keys of other installations for restore %s: %w", in.ID, err)
+	}
+
+	if in.CheckOnly {
 		return nil
 	}
 
-	return s.recordKeysDropped(ctx, sc, in)
+	for _, d := range dropped {
+		if recErr := s.recordKeysDropped(ctx, sc, in, d); recErr != nil {
+			return recErr
+		}
+	}
+
+	return nil
 }
 
 // stageInput verifies the SQL part of the backup, and returns the staging
@@ -490,7 +501,6 @@ func (s *RestoreService) stageInput(
 		Open: portableOpener(ctx, s.target, in.BackupID), Want: restoreWant(manifest, wantBlobs),
 		Files: manifest.SQLFiles, Options: StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
 		Strip: dev.production(), StripMode: DevStripDetect,
-		DropIssuerKeys: s.foreignInstallation(manifest),
 	}
 
 	if dev.production() && s.allowDev && !in.CheckOnly {
@@ -500,28 +510,23 @@ func (s *RestoreService) stageInput(
 	return area, stage, nil
 }
 
-// issuerKeysTable is the table of the signing keys of the OIDC issuers.
-const issuerKeysTable = "issuer_keys"
-
-// foreignInstallation reports whether the backup comes from another
-// installation than this server. It fails closed: a server with no
-// installation name cannot say that the backup is its own.
-func (s *RestoreService) foreignInstallation(manifest Manifest) bool {
-	return s.installation == "" || !slices.Contains(manifest.PrimaryInstallations, s.installation)
-}
-
 // recordKeysDropped records, as an audit event of the restore and in the log,
-// that the restore did not restore the signing keys of the issuers.
-func (s *RestoreService) recordKeysDropped(ctx context.Context, sc durable.StepContext, in restoreInput) error {
-	object := "restore " + in.ID.String() + " did not restore the signing keys of the OIDC issuers: backup " +
-		in.BackupID.String() + " comes from another installation, so each namespace gets new keys"
+// that the restore did not restore the signing keys of the issuer of one
+// namespace.
+func (s *RestoreService) recordKeysDropped(
+	ctx context.Context, sc durable.StepContext, in restoreInput, d IssuerKeysDropped,
+) error {
+	object := fmt.Sprintf("restore %s did not restore the signing keys of the OIDC issuer of namespace %s "+
+		"(%d keys): backup %s holds the namespace of another installation, so the namespace gets new keys",
+		in.ID, d.Namespace, d.Keys, in.BackupID)
 
 	if err := s.live.RecordRestoreEvent(ctx, sc.Fence, in.ID, object); err != nil {
 		return fmt.Errorf("record the drop of the issuer keys for restore %s: %w", in.ID, err)
 	}
 
-	s.logger.WarnContext(ctx, "the restore does not restore the signing keys of the OIDC issuers",
-		slog.String("restore_id", in.ID.String()), slog.String("backup_id", in.BackupID.String()))
+	s.logger.WarnContext(ctx, "the restore does not restore the signing keys of the OIDC issuer of a namespace",
+		slog.String("restore_id", in.ID.String()), slog.String("backup_id", in.BackupID.String()),
+		slog.String("namespace", d.Namespace), slog.Int64("keys", d.Keys))
 
 	return nil
 }

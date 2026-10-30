@@ -53,7 +53,7 @@ func StageRestoreArea(t *testing.T, s StagedAreaStore) StagedArea {
 
 	in := backup.RestoreStageInput{
 		Open: sink.read, Want: sum, Files: files, Options: StageAs(t, s), Strip: false,
-		StripMode: backup.DevStripDetect, DropIssuerKeys: false,
+		StripMode: backup.DevStripDetect,
 	}
 
 	if _, _, err := s.StageRestore(ctx, area, in); err != nil {

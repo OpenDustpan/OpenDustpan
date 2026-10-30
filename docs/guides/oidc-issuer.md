@@ -53,10 +53,12 @@ The server seals each private key with the data key of the namespace before it
 stores the key. Only the part of the server that signs opens a private key,
 and only in the memory of the instance, for at most one minute. No route
 answers a private key. The backup of the namespace holds the sealed keys. A
-restore on the installation that made the backup keeps the keys, so the trust of
-each cloud stays. A restore on another installation restores no key: the
-namespace gets new keys, and its clouds must trust the new issuer URL. This
-way two installations never sign with one key.
+restore keeps the keys of each namespace whose primary installation is the
+installation that restores, so the trust of each cloud stays. It restores no
+key of a namespace that belongs to another installation, also when the same
+backup holds namespaces of both: the namespace gets new keys, and its clouds
+must trust the new issuer URL. The restore records each such namespace in its
+events. This way two installations never sign with one key.
 
 A namespace with no key gets an `active` key and a `next` key at its first
 token, or when you call `POST /issuer/keys`. A namespace that never opens a

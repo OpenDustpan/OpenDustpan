@@ -510,11 +510,14 @@ type RestoreStageInput struct {
 	// StageRestore returns. A restore into a production installation sets it.
 	Strip     bool
 	StripMode DevStripMode
-	// DropIssuerKeys removes the signing keys of the OIDC issuers from the
-	// staged data, and the record of the last copy check of each issuer. A
-	// restore from the backup of another installation sets it, so two
-	// installations never sign with one key.
-	DropIssuerKeys bool
+}
+
+// IssuerKeysDropped names a namespace whose signing keys of the OIDC issuer a
+// restore did not restore, and how many keys it dropped. A namespace that held
+// only the record of a copy check has Keys 0.
+type IssuerKeysDropped struct {
+	Namespace string
+	Keys      int64
 }
 
 // RestoreStaging is the staging port of a restore that runs as a durable
@@ -543,6 +546,18 @@ type RestoreStaging interface {
 	// The stage result of the runner names a after it returns. From then on
 	// the area is read-only until ApplyRestoreArea.
 	StageRestore(ctx context.Context, a StagingArea, in RestoreStageInput) (Summary, DevStripReport, error)
+
+	// DropStagedIssuerKeys removes from the staged area a the signing keys of
+	// the OIDC issuers, and the record of the last copy check, of every
+	// namespace whose primary installation is not keep, as the staged data
+	// says it. An empty keep keeps no namespace, and a key whose namespace is
+	// not in the staged data is not kept. The decision is for each namespace:
+	// a backup of two installations keeps the keys of one, so two
+	// installations never sign with one key. It returns one entry for each
+	// namespace that lost keys or a copy check, ordered by name. The settings
+	// of the issuers stay. ErrInvalidRestoreID for an area that is not valid,
+	// ErrCorrupt when a does not exist. The live data stays unchanged.
+	DropStagedIssuerKeys(ctx context.Context, a StagingArea, keep string) ([]IssuerKeysDropped, error)
 
 	// ApplyRestoreArea swaps the area a into the live data, as
 	// Applier.ApplyStaging does, or as AccessKeepingApplier does when

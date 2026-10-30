@@ -46,7 +46,14 @@ func seedBackupIssuer(t *testing.T, s BackupStore, acme namespace.Namespace) *se
 		return nil
 	}
 
-	store := seeder.IssuerPorts().Store
+	return seedIssuerOf(t, seeder.IssuerPorts().Store, acme)
+}
+
+// seedIssuerOf writes an active, a next and a retired key and the settings
+// with a copy check in the namespace acme.
+func seedIssuerOf(t *testing.T, store profile.IssuerStore, acme namespace.Namespace) *seededIssuer {
+	t.Helper()
+
 	ctx := t.Context()
 	at := now()
 
@@ -81,7 +88,7 @@ func seedBackupIssuer(t *testing.T, s BackupStore, acme namespace.Namespace) *se
 	}
 
 	set := profile.DefaultIssuerSettings(acme.Name)
-	set.IssuerURL = "https://files.example.com/acme"
+	set.IssuerURL = "https://files.example.com/" + acme.Name.String()
 	set.IncludeActorName = true
 	set.UpdatedAt = at
 	set.UpdatedBy = "alice"

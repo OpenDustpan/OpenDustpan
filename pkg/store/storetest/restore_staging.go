@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
@@ -21,7 +22,10 @@ func restoreStagingCases() []restoreCase {
 		{name: "the swap of a staging area checks the fence in its transaction", test: testRestoreAreaSwapFenced},
 		{name: "a cancel before the swap and the swap have one winner", test: testRestoreAreaSwapCanceled},
 		{name: "cleanup drops the areas of its restore and of ended restores", test: testRestoreAreaCleanup},
-		{name: "a stage from another installation restores no issuer key", test: testRestoreAreaDropsIssuerKeys},
+		{
+			name: "a restore drops the issuer keys of each namespace of another installation",
+			test: testRestoreAreaDropsIssuerKeys,
+		},
 	}
 }
 
@@ -44,11 +48,23 @@ type stagedRestore struct {
 func newStagedRestore(t *testing.T, newStore RestoreFactory) *stagedRestore {
 	t.Helper()
 
+	return newStagedRestoreWith(t, newStore, nil)
+}
+
+// newStagedRestoreWith is newStagedRestore with more data in the source store
+// before the export. extra may be nil.
+func newStagedRestoreWith(t *testing.T, newStore RestoreFactory, extra func(*testing.T, BackupStore)) *stagedRestore {
+	t.Helper()
+
 	src, dst := newStore(t), newStore(t)
 	ports := restorePortsOf(t, dst)
 	ps := portableRestoreStores(t, src, dst)
 
 	seedBackupStore(t, ps.src)
+
+	if extra != nil {
+		extra(t, ps.src)
+	}
 	sink, sum, files := exportPortable(t, ps.src)
 
 	id := mustStartRestoreOp(t, ports.ops)
@@ -65,7 +81,7 @@ func (r *stagedRestore) input(t *testing.T) backup.RestoreStageInput {
 
 	return backup.RestoreStageInput{
 		Open: r.sink.read, Want: r.sum, Files: r.files, Options: StageAs(t, r.dst), Strip: false,
-		StripMode: backup.DevStripDetect, DropIssuerKeys: false,
+		StripMode: backup.DevStripDetect,
 	}
 }
 
@@ -368,93 +384,168 @@ func (r *stagedRestore) finishAndCleanNext(t *testing.T, foreign backup.StagingA
 	}
 }
 
-// testRestoreAreaDropsIssuerKeys stages the backup of a store that keeps issuer
-// keys twice: with the keys, and as the backup of another installation. After
-// the swap the first destination holds the keys, and the second holds none and
-// no record of a copy check, while it keeps the settings.
+// issuerNamespaceOf is the namespace that the drop case adds to the source: it
+// belongs to another installation than the namespace acme.
+const issuerOtherInstallation = "us-east"
+
+// seedOtherInstallationIssuer adds the namespace globex of another
+// installation, with its issuer keys and its copy check, to the source store.
+func seedOtherInstallationIssuer(t *testing.T, src BackupStore) {
+	t.Helper()
+
+	seeder, ok := src.(IssuerSeeder)
+	if !ok {
+		return
+	}
+
+	globex := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: now(), Name: "globex", PrimaryInstallation: issuerOtherInstallation,
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := src.CreateNamespace(t.Context(), globex); err != nil {
+		t.Fatalf("create namespace %q: %v", globex.Name, err)
+	}
+
+	seedIssuerOf(t, seeder.IssuerPorts().Store, globex)
+}
+
+// testRestoreAreaDropsIssuerKeys stages one backup that holds the namespace
+// acme of the installation eu-west and the namespace globex of the
+// installation us-east. DropStagedIssuerKeys decides for each namespace: the
+// namespace of the installation that restores keeps its keys and its copy
+// check, and every other namespace loses both and keeps its settings. An
+// installation with no name keeps nothing.
 func testRestoreAreaDropsIssuerKeys(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
-	for _, outcome := range []issuerOutcome{issuerKept, issuerDropped} {
-		drop := outcome == issuerDropped
+	cases := []issuerDropCase{
+		{"the installation of acme", "eu-west", []string{"acme"}, []string{"globex"}},
+		{"the installation of globex", issuerOtherInstallation, []string{"globex"}, []string{"acme"}},
+		{"a third installation", "ap-south", nil, []string{"acme", "globex"}},
+		{"an installation with no name", "", nil, []string{"acme", "globex"}},
+		{"a name that only starts the same", "eu-west-2", nil, []string{"acme", "globex"}},
+		{"another case", "EU-WEST", nil, []string{"acme", "globex"}},
+	}
 
-		r := newStagedRestore(t, newStore)
-
-		seeder, ok := r.dst.(IssuerSeeder)
-		if !ok {
-			t.Skip("the store keeps no issuer keys")
-		}
-
-		in := r.input(t)
-		in.DropIssuerKeys = drop
-
-		area, err := backup.NewStagingArea(r.id, r.held.Claim.Token)
-		if err != nil {
-			t.Fatalf("staging area: %v", err)
-		}
-
-		if _, _, err = r.staging.StageRestore(t.Context(), area, in); err != nil {
-			t.Fatalf("stage (drop %v): %v", drop, err)
-		}
-
-		if err = r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
-			t.Fatalf("enter maintenance mode: %v", err)
-		}
-
-		swap := r.held.Claim.Step(backup.RestoreStepSwap)
-		if _, err = r.staging.ApplyRestoreArea(t.Context(), swap, area, false); err != nil {
-			t.Fatalf("swap (drop %v): %v", drop, err)
-		}
-
-		checkIssuerAfterStage(t, seeder.IssuerPorts().Store, outcome)
+	for _, tc := range cases {
+		runIssuerDropCase(t, newStore, &tc)
 	}
 }
 
-// issuerOutcome says whether a restore dropped the issuer keys or kept them.
-type issuerOutcome int
+// issuerDropCase is one installation name that the drop gets, with the
+// namespaces that keep their keys and those that lose them.
+type issuerDropCase struct {
+	name string
+	keep string
+	// kept lists the namespaces that keep their keys.
+	kept    []string
+	dropped []string
+}
 
-const (
-	issuerKept issuerOutcome = iota
-	issuerDropped
-)
-
-// issuerKeyCount is the count of seeded issuer keys.
-const issuerKeyCount = 3
-
-// checkIssuerAfterStage checks the issuer tables of the store after a restore
-// that dropped the keys, or kept them.
-func checkIssuerAfterStage(t *testing.T, store profile.IssuerStore, outcome issuerOutcome) {
+// runIssuerDropCase stages the backup with two installations, drops the keys
+// for the installation keep, swaps the area and checks each namespace.
+func runIssuerDropCase(t *testing.T, newStore RestoreFactory, tc *issuerDropCase) {
 	t.Helper()
 
-	dropped := outcome == issuerDropped
+	r := newStagedRestoreWith(t, newStore, seedOtherInstallationIssuer)
 
-	live, err := store.Live(t.Context(), "acme")
+	seeder, ok := r.dst.(IssuerSeeder)
+	if !ok {
+		t.Skip("the store keeps no issuer keys")
+	}
+
+	area := r.stage(t, r.held.Claim.Token)
+
+	report, err := r.staging.DropStagedIssuerKeys(t.Context(), area, tc.keep)
 	if err != nil {
-		t.Fatalf("Live: %v", err)
+		t.Fatalf("%s: DropStagedIssuerKeys: %v", tc.name, err)
 	}
 
-	set, err := store.GetIssuerSettings(t.Context(), "acme")
+	if got := droppedNames(report); !slices.Equal(got, tc.dropped) {
+		t.Errorf("%s: dropped namespaces = %v, want %v", tc.name, got, tc.dropped)
+	}
+
+	for _, d := range report {
+		if d.Keys != issuerKeyCount {
+			t.Errorf("%s: namespace %s dropped %d keys, want %d", tc.name, d.Namespace, d.Keys, issuerKeyCount)
+		}
+	}
+
+	if err = r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("%s: enter maintenance mode: %v", tc.name, err)
+	}
+
+	swap := r.held.Claim.Step(backup.RestoreStepSwap)
+	if _, err = r.staging.ApplyRestoreArea(t.Context(), swap, area, false); err != nil {
+		t.Fatalf("%s: swap: %v", tc.name, err)
+	}
+
+	for _, ns := range []string{"acme", "globex"} {
+		if slices.Contains(tc.kept, ns) {
+			checkIssuerKept(t, seeder.IssuerPorts().Store, namespace.Name(ns))
+		} else {
+			checkIssuerDropped(t, seeder.IssuerPorts().Store, namespace.Name(ns))
+		}
+	}
+}
+
+// droppedNames returns the namespaces of a drop report, in the order given.
+func droppedNames(dropped []backup.IssuerKeysDropped) []string {
+	names := make([]string, 0, len(dropped))
+	for _, d := range dropped {
+		names = append(names, d.Namespace)
+	}
+
+	return names
+}
+
+// issuerKeyCount is the count of seeded issuer keys in a namespace.
+const issuerKeyCount = 3
+
+// issuerState reads the live keys and the settings of a namespace.
+func issuerState(t *testing.T, store profile.IssuerStore, ns namespace.Name) ([]profile.Key, profile.IssuerSettings) {
+	t.Helper()
+
+	live, err := store.Live(t.Context(), ns)
 	if err != nil {
-		t.Fatalf("GetIssuerSettings: %v", err)
+		t.Fatalf("Live %s: %v", ns, err)
 	}
 
-	if dropped && (len(live) != 0 || set.CopyCheck != nil) {
-		t.Errorf(
-			"a restore from another installation kept %d issuer keys and the copy check %v",
-			len(live),
-			set.CopyCheck,
-		)
+	set, err := store.GetIssuerSettings(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("GetIssuerSettings %s: %v", ns, err)
 	}
 
-	if dropped && set.IssuerURL == "" {
-		t.Error("a restore from another installation dropped the settings of the issuer")
+	return live, set
+}
+
+// checkIssuerDropped checks that a restore dropped the keys and the copy check
+// of a namespace of another installation, and kept its settings.
+func checkIssuerDropped(t *testing.T, store profile.IssuerStore, ns namespace.Name) {
+	t.Helper()
+
+	live, set := issuerState(t, store, ns)
+
+	if len(live) != 0 || set.CopyCheck != nil {
+		t.Errorf("namespace %s of another installation kept %d issuer keys and the copy check %v",
+			ns, len(live), set.CopyCheck)
 	}
 
-	if !dropped && (len(live) != issuerKeyCount || set.CopyCheck == nil) {
-		t.Errorf(
-			"a restore from the same installation holds %d issuer keys and the copy check %v",
-			len(live),
-			set.CopyCheck,
-		)
+	if set.IssuerURL == "" {
+		t.Errorf("namespace %s of another installation lost the settings of its issuer", ns)
+	}
+}
+
+// checkIssuerKept checks that a restore kept the keys and the copy check of a
+// namespace of the restoring installation.
+func checkIssuerKept(t *testing.T, store profile.IssuerStore, ns namespace.Name) {
+	t.Helper()
+
+	live, set := issuerState(t, store, ns)
+
+	if len(live) != issuerKeyCount || set.CopyCheck == nil {
+		t.Errorf("namespace %s of the restoring installation holds %d issuer keys and the copy check %v",
+			ns, len(live), set.CopyCheck)
 	}
 }
