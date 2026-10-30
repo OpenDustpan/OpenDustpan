@@ -1010,3 +1010,60 @@ func checkDriftStep(t *testing.T, i int, s *job.Step, want []string) {
 		t.Errorf("step %d env = %v, want TF_IN_AUTOMATION alone", i, s.Env)
 	}
 }
+
+func TestPlanStepsPulumiRefuseHostileNamespaces(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ns   string
+	}{
+		{"semicolon", "a;b"},
+		{"leading dash", "-x"},
+		{"two dots", ".."},
+		{"one dot", "."},
+		{"slash", "a/b"},
+		{"space", "a b"},
+		{"newline", "a\nb"},
+		{"NUL", "a\x00b"},
+		{"quote", `a"b`},
+		{"command substitution", "$(id)"},
+		{"above the length limit", strings.Repeat("a", 101)},
+		{"empty", ""},
+		{"non-ASCII", "caf\u00e9"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			unit, err := identity.UnitObject("pulumi", namespace.Name(tt.ns), "web/prod")
+			if err != nil {
+				t.Fatalf("UnitObject(%q) = %v: the namespace must reach the step", tt.ns, err)
+			}
+
+			steps, err := planSteps(unit)
+			if !errors.Is(err, job.ErrInvalid) || steps != nil {
+				t.Fatalf("planSteps in the namespace %q = %+v, %v; want ErrInvalid and no step", tt.ns, steps, err)
+			}
+
+			if strings.ContainsAny(err.Error(), "\n\x00") || len(err.Error()) > 400 {
+				t.Errorf("error text %q holds a control character or is not bounded", err.Error())
+			}
+		})
+	}
+}
+
+func TestPlanStepsPulumiErrorEchoIsBounded(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("pulumi", "acme", "web/"+strings.Repeat("a;", 140))
+	if err != nil {
+		t.Fatalf("UnitObject = %v", err)
+	}
+
+	_, err = planSteps(unit)
+	if !errors.Is(err, job.ErrInvalid) || len(err.Error()) > 400 || !strings.Contains(err.Error(), "cut") {
+		t.Errorf("planSteps with a long name = %v; want ErrInvalid with a bounded text that says it is cut", err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/jobgate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -559,8 +560,9 @@ func pulumiPreviewStep(unit identity.Object) (job.Step, error) {
 	// checks the name too.
 	for _, part := range []string{string(unit.Namespace()), project, name} {
 		if !validPulumiName(part) {
-			return job.Step{}, fmt.Errorf("%w: the Pulumi stack %q is not of the form project/stack with letters, "+
-				"digits, '_', '.' and '-'", job.ErrInvalid, unit.UnitName())
+			return job.Step{}, fmt.Errorf("%w: the Pulumi stack %s in the namespace %s is not of the form "+
+				"project/stack with letters, digits, '_', '.' and '-'", job.ErrInvalid, ident.Echo(unit.UnitName()),
+				ident.Echo(string(unit.Namespace())))
 		}
 	}
 
