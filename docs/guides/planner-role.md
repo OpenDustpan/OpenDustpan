@@ -6,12 +6,13 @@ check a change before someone else applies it.
 
 ## What the role holds
 
-The role holds each action of `viewer`, and two more:
+The role holds each action of `viewer`, and three more:
 
 | Action | What it allows |
 | --- | --- |
 | `unit:run-plan` | Start a runner job that only plans. |
 | `job:read-plans` | Read the stored plans of jobs, with the values that the tool marks as sensitive masked. |
+| `job:read-logs` | Read the step logs of jobs. |
 
 ## What the role does not hold
 
@@ -26,10 +27,8 @@ The role does not hold these actions:
 
 ## Pulumi jobs
 
-A Pulumi job has no stored plan. Its preview is in the step log, and
-`job:read-logs` reads the step log. The role `planner` holds `job:read-plans`
-and does not hold `job:read-logs`, so a planner reads a Pulumi preview only
-when another grant gives `job:read-logs`.
+A Pulumi job has no stored plan. Its preview is in the step log. A planner
+reads the preview through the step log with `job:read-logs`.
 
 ## Secrets in a plan job
 

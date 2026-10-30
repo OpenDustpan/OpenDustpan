@@ -27,6 +27,7 @@ func TestPlannerRole(t *testing.T) {
 		{identity.ActionViewDelete, true},
 		{identity.ActionUnitRunPlan, true},
 		{identity.ActionJobReadPlans, true},
+		{identity.ActionJobReadLogs, true},
 		{identity.ActionUnitRunApply, false},
 		{identity.ActionUnitRunDestroy, false},
 		{identity.ActionUnitWriteBack, false},
@@ -65,7 +66,7 @@ func TestPlannerRole(t *testing.T) {
 }
 
 // TestPlannerActionSet pins the actions of planner as a set: exactly the
-// actions of viewer, unit:run-plan and job:read-plans. A new action in the
+// actions of viewer, unit:run-plan, job:read-plans and job:read-logs. A new action in the
 // role, or a viewer action that leaves it, fails this test.
 func TestPlannerActionSet(t *testing.T) {
 	t.Parallel()
@@ -74,14 +75,18 @@ func TestPlannerActionSet(t *testing.T) {
 	planner, _ := access.BuiltInRole(access.RolePlanner)
 
 	want := slices.Clone(viewer.Actions)
-	want = append(want, identity.ActionUnitRunPlan, identity.ActionJobReadPlans)
+	want = append(want, identity.ActionUnitRunPlan, identity.ActionJobReadPlans, identity.ActionJobReadLogs)
 	slices.Sort(want)
 
 	got := slices.Clone(planner.Actions)
 	slices.Sort(got)
 
 	if !slices.Equal(got, want) {
-		t.Errorf("planner actions = %v, want the viewer actions, unit:run-plan and job:read-plans: %v", got, want)
+		t.Errorf(
+			"planner actions = %v, want the viewer actions, unit:run-plan, job:read-plans and job:read-logs: %v",
+			got,
+			want,
+		)
 	}
 }
 

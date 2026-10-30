@@ -20,8 +20,8 @@ const (
 	// (ADR 41, decision 4).
 	RoleSecretViewer = "secret-viewer"
 	// RolePlanner reads like a viewer, starts a runner job that only plans,
-	// and reads the masked plans. It cannot apply, destroy, approve or read
-	// a secret value.
+	// and reads the masked plans and the job logs, where a Pulumi preview is.
+	// It cannot apply, destroy, approve or read a secret value.
 	RolePlanner = "planner"
 	// RoleWriter reads, and runs updates and applies: it reads state with
 	// plain secret values and writes it, sets the context of units, and
@@ -71,7 +71,7 @@ var builtInDescriptions = []struct {
 	{RoleSecretViewer, "Reads like a viewer, and reveals secret values."},
 	{
 		RolePlanner,
-		"Reads like a viewer, starts jobs that only plan, and reads the masked plans. Cannot apply or read secret values.",
+		"Reads like a viewer, starts jobs that only plan, and reads the masked plans and the job logs. Cannot apply or read secret values.",
 	},
 	{RoleWriter, "Reads, runs updates, plans and applies, reads secret values, and sets the context of units."},
 	{
@@ -196,7 +196,12 @@ func readerActions(id string) []identity.Action {
 	case RoleSecretViewer:
 		return append(viewerActions(), identity.ActionUnitReadSecrets)
 	case RolePlanner:
-		return append(viewerActions(), identity.ActionUnitRunPlan, identity.ActionJobReadPlans)
+		return append(
+			viewerActions(),
+			identity.ActionUnitRunPlan,
+			identity.ActionJobReadPlans,
+			identity.ActionJobReadLogs,
+		)
 	default:
 		return nil
 	}
