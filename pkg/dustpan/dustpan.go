@@ -1372,11 +1372,17 @@ func newNeutralHandlers(
 	}
 
 	return neutralHandlers{
-		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, issuer: issuer, sinks: sinks,
-		jobs:     jobAPIs.jobs,
-		triggers: triggers,
-		drift:    jobAPIs.drift,
-		registry: registries,
+		inventory: units,
+		audit:     entries,
+		context:   contexts,
+		runners:   runners,
+		profiles:  profiles,
+		issuer:    issuer,
+		sinks:     sinks,
+		jobs:      jobAPIs.jobs,
+		triggers:  triggers,
+		drift:     jobAPIs.drift,
+		registry:  registries,
 
 		sourceFilter: sourceFilter,
 	}, nil

@@ -111,8 +111,21 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
-		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, issuerRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, server,
+		pulumi,
+		tfe,
+		tofuHTTP,
+		inventory,
+		auditRoutes,
+		contextRoutes,
+		profileRoutes,
+		issuerRoutes,
+		sinkRoutes,
+		jobRoutes,
+		driftRoutes,
+		triggerRoutes,
+		registryRoutes,
+		sourceFilterRoutes,
+		server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -991,7 +1004,7 @@ func coverageIssuerRoutes(tb testing.TB) []RouteRef {
 		Sealer:        struct{ profile.Sealer }{nil},
 		Authorizer:    coverageAuthorizer{},
 		Notifier:      nil,
-		HTTP:          nil,
+		Fetcher:       nil,
 		IssuerBaseURL: "",
 		PublicURL:     "",
 		Now:           nil,

@@ -57,7 +57,7 @@ func portableProfileTables() []PortableTable {
 				{Name: "subject_template", Kind: KindText},
 				{Name: "allow_block_subjects", Kind: KindBool},
 				{Name: "include_actor_name", Kind: KindBool},
-				{Name: "version", Kind: KindInteger},
+				{Name: portColVersion, Kind: KindInteger},
 				{Name: "updated_at_ms", Kind: KindTime},
 				{Name: "updated_by", Kind: KindText},
 				{Name: "copy_check", Kind: KindText},

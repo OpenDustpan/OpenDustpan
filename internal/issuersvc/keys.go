@@ -27,7 +27,12 @@ func (s *Service) scope(ns namespace.Name) (secret.Scope, error) {
 
 // newKey makes a key of state in ns at the time at. The private key leaves this
 // function only as a sealed value.
-func (s *Service) newKey(ctx context.Context, ns namespace.Name, state profile.KeyState, at time.Time) (profile.Key, error) {
+func (s *Service) newKey(
+	ctx context.Context,
+	ns namespace.Name,
+	state profile.KeyState,
+	at time.Time,
+) (profile.Key, error) {
 	sc, err := s.scope(ns)
 	if err != nil {
 		return profile.Key{}, err
@@ -69,27 +74,51 @@ func (s *Service) newKey(ctx context.Context, ns namespace.Name, state profile.K
 // public key of its row, or that is not a key of the issuer.
 var errKeyMismatch = errors.New("the stored signing key does not match its public key")
 
-// open returns the private key of k. It keeps the key for keyCacheTime. Only
-// the signer calls it.
-func (s *Service) open(ctx context.Context, k profile.Key) (*rsa.PrivateKey, error) {
-	sum := sha256.Sum256(k.Sealed)
-	ck := cacheKey{ns: k.Namespace, id: k.ID}
-	now := s.now()
-
+// cached returns the opened key of k from the memory of the instance, and
+// drops each entry that is older than keyCacheTime.
+func (s *Service) cached(k *profile.Key, sum [sha256.Size]byte, now time.Time) (*rsa.PrivateKey, bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for key, c := range s.cache {
 		if now.Sub(c.at) >= keyCacheTime || now.Before(c.at) {
 			delete(s.cache, key)
 		}
 	}
 
-	if c, ok := s.cache[ck]; ok && c.sealed == sum {
-		s.mu.Unlock()
-
-		return c.key, nil
+	c, ok := s.cache[cacheKey{ns: k.Namespace, id: k.ID}]
+	if !ok || c.sealed != sum {
+		return nil, false
 	}
+
+	return c.key, true
+}
+
+// open returns the private key of k. It keeps the key for keyCacheTime. Only
+// the signer calls it.
+func (s *Service) open(ctx context.Context, k *profile.Key) (*rsa.PrivateKey, error) {
+	sum := sha256.Sum256(k.Sealed)
+	now := s.now()
+
+	if key, ok := s.cached(k, sum, now); ok {
+		return key, nil
+	}
+
+	priv, err := s.unseal(ctx, k)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.cache[cacheKey{ns: k.Namespace, id: k.ID}] = cachedKey{at: now, key: priv, sealed: sum}
 	s.mu.Unlock()
 
+	return priv, nil
+}
+
+// unseal opens the sealed private key of k and checks it against the public
+// key of the row.
+func (s *Service) unseal(ctx context.Context, k *profile.Key) (*rsa.PrivateKey, error) {
 	sc, err := s.scope(k.Namespace)
 	if err != nil {
 		return nil, err
@@ -119,10 +148,6 @@ func (s *Service) open(ctx context.Context, k profile.Key) (*rsa.PrivateKey, err
 		return nil, fmt.Errorf("%w: %s", errKeyMismatch, k.ID)
 	}
 
-	s.mu.Lock()
-	s.cache[ck] = cachedKey{at: now, key: priv, sealed: sum}
-	s.mu.Unlock()
-
 	return priv, nil
 }
 
@@ -147,9 +172,11 @@ func sortedKeys(keys []profile.Key) []profile.Key {
 }
 
 func findState(keys []profile.Key, st profile.KeyState) (profile.Key, bool) {
-	for _, k := range sortedKeys(keys) {
-		if k.State == st {
-			return k, true
+	sorted := sortedKeys(keys)
+
+	for i := range sorted {
+		if sorted[i].State == st {
+			return sorted[i], true
 		}
 	}
 

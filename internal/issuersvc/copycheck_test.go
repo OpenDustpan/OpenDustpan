@@ -2,6 +2,7 @@ package issuersvc_test
 
 import (
 	"crypto/x509"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/internal/issuerfetch"
 	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -46,7 +48,9 @@ func newHost(t *testing.T) *host {
 			return
 		}
 
-		_, _ = w.Write([]byte(body))
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 
 	t.Cleanup(hs.srv.Close)
@@ -76,7 +80,12 @@ func guardedClient(hs *host, rules egress.Rules) *http.Client {
 	pool := x509.NewCertPool()
 	pool.AddCert(hs.srv.Certificate())
 
-	return egresshttp.ClientWith(rules, egress.NoRedirect, egress.HTTPSOnly, egresshttp.Options{RootCAs: pool, Resolver: nil})
+	return egresshttp.ClientWith(
+		rules,
+		egress.NoRedirect,
+		egress.HTTPSOnly,
+		egresshttp.Options{RootCAs: pool, Resolver: nil},
+	)
 }
 
 // newURLHarness is a harness whose namespace sets an issuerURL on a host.
@@ -85,12 +94,10 @@ func newURLHarness(t *testing.T) (*harness, *host) {
 
 	hs := newHost(t)
 	h := newHarness(t, func(c *issuerConfig, _ *harness) {
-		c.HTTP = guardedClient(hs, egress.Rules{Allow: nil, LoopbackForTests: true})
+		c.Fetcher = issuerfetch.New(guardedClient(hs, egress.Rules{Allow: nil, LoopbackForTests: true}))
 	})
 
-	if _, err := h.svc.Patch(t.Context(), h.admin, h.ns.Name, profile.SettingsPatch{IssuerURL: str(hs.url())}, 0, okFresh); err != nil {
-		t.Fatalf("set issuerURL: %v", err)
-	}
+	h.setIssuerURL(hs.url())
 
 	return h, hs
 }
@@ -117,7 +124,18 @@ func (h *harness) checkCopy() profile.CopyCheck {
 	return c
 }
 
-func stepOK(c profile.CopyCheck, name string) (ok, found bool) {
+// setIssuerURL sets the issuerURL of the namespace with a fresh sign-in.
+func (h *harness) setIssuerURL(url string) {
+	h.t.Helper()
+
+	if _, err := h.svc.Patch(h.t.Context(), h.admin, h.ns.Name, patchURL(url), 0, okFresh); err != nil {
+		h.t.Fatalf("set issuerURL: %v", err)
+	}
+}
+
+// stepOK returns whether the step called name passed, and whether the check
+// has the step.
+func stepOK(c profile.CopyCheck, name string) (bool, bool) {
 	for _, s := range c.Steps {
 		if s.Name == name {
 			return s.OK, true
@@ -125,6 +143,40 @@ func stepOK(c profile.CopyCheck, name string) (ok, found bool) {
 	}
 
 	return false, false
+}
+
+// checkStepsPass fails the test for a step of the check that is missing or
+// that did not pass.
+func checkStepsPass(t *testing.T, c profile.CopyCheck, names ...string) {
+	t.Helper()
+
+	for _, s := range names {
+		if ok, found := stepOK(c, s); !found || !ok {
+			t.Errorf("step %s: ok %v, found %v", s, ok, found)
+		}
+	}
+}
+
+// namesRoutes fails the test when the text of err does not name the export
+// route and the route of the copy check.
+func namesRoutes(t *testing.T, err error) {
+	t.Helper()
+
+	namesRoutes(t, err)
+}
+
+// verifyAgainst checks a token against a JWKS, for the issuer url.
+func (h *harness) verifyAgainst(jwks []byte, value, issuer string, now time.Time) error {
+	h.t.Helper()
+
+	_, err := profiletest.VerifyToken(jwks, value, profiletest.Expect{
+		Now: now, Issuer: issuer, Audience: "sts.amazonaws.com",
+	})
+	if err != nil {
+		return fmt.Errorf("verify: %w", err)
+	}
+
+	return nil
 }
 
 func TestNoKeyNoTokenForANamespaceWithAnIssuerURL(t *testing.T) {
@@ -160,11 +212,7 @@ func TestTheServerSignsOnlyWithAKeyThatACopyHolds(t *testing.T) {
 	_, err := h.login("sts.amazonaws.com", 5*time.Minute)
 	wantErr(t, "Login before the first copy", err, profile.ErrIssuerKeyMissing)
 
-	for _, route := range []string{"/issuer/export", "/issuer/keys/check-copy"} {
-		if !strings.Contains(err.Error(), route) {
-			t.Errorf("the error does not name %s: %v", route, err)
-		}
-	}
+	namesRoutes(t, err)
 
 	f := h.export()
 	hs.copyFiles(t, f)
@@ -174,21 +222,14 @@ func TestTheServerSignsOnlyWithAKeyThatACopyHolds(t *testing.T) {
 		t.Fatalf("copy check = %+v", c)
 	}
 
-	for _, s := range []string{"discovery", "jwks", "active-key", "next-key"} {
-		if ok, found := stepOK(c, s); !found || !ok {
-			t.Errorf("step %s: ok %v, found %v", s, ok, found)
-		}
-	}
+	checkStepsPass(t, c, "discovery", "jwks", "active-key", "next-key")
 
 	tok := h.mustLogin()
 	if tok.Issuer != hs.url() {
 		t.Errorf("iss = %q, want the issuerURL %q", tok.Issuer, hs.url())
 	}
 
-	claims, err := profiletest.VerifyToken(f.JWKS, tok.Value, profiletest.Expect{
-		Now: h.clock.Now(), Issuer: hs.url(), Audience: "sts.amazonaws.com",
-	})
-	if err != nil || claims["iss"] != hs.url() {
+	if err = h.verifyAgainst(f.JWKS, tok.Value, hs.url(), h.clock.Now()); err != nil {
 		t.Errorf("the token does not verify against the copied files: %v", err)
 	}
 
@@ -294,12 +335,10 @@ func TestTheCopyCheckGoesThroughTheEgressGuard(t *testing.T) {
 	hs := newHost(t)
 	h := newHarness(t, func(c *issuerConfig, _ *harness) {
 		// The default rules refuse a loopback address.
-		c.HTTP = guardedClient(hs, egress.Rules{Allow: nil, LoopbackForTests: false})
+		c.Fetcher = issuerfetch.New(guardedClient(hs, egress.Rules{Allow: nil, LoopbackForTests: false}))
 	})
 
-	if _, err := h.svc.Patch(t.Context(), h.admin, h.ns.Name, profile.SettingsPatch{IssuerURL: str(hs.url())}, 0, okFresh); err != nil {
-		t.Fatal(err)
-	}
+	h.setIssuerURL(hs.url())
 
 	h.createKeys()
 	hs.copyFiles(t, h.export())
@@ -322,9 +361,7 @@ func TestTheCopyCheckFailsClosedWithNoClient(t *testing.T) {
 	hs := newHost(t)
 	h := newHarness(t)
 
-	if _, err := h.svc.Patch(t.Context(), h.admin, h.ns.Name, profile.SettingsPatch{IssuerURL: str(hs.url())}, 0, okFresh); err != nil {
-		t.Fatal(err)
-	}
+	h.setIssuerURL(hs.url())
 
 	h.createKeys()
 	hs.copyFiles(t, h.export())
@@ -374,11 +411,7 @@ func TestManualRotationWaitsForTheCopy(t *testing.T) {
 	_, err = h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
 	wantErr(t, "rotation before the copy", err, profile.ErrIssuerKeyMissing)
 
-	for _, route := range []string{"/issuer/export", "/issuer/keys/check-copy"} {
-		if !strings.Contains(err.Error(), route) {
-			t.Errorf("the error does not name %s: %v", route, err)
-		}
-	}
+	namesRoutes(t, err)
 
 	after := h.keysOf(h.ns)
 	if len(after) != len(before) {
@@ -394,15 +427,14 @@ func TestManualRotationWaitsForTheCopy(t *testing.T) {
 	// After the copy it works.
 	hs.copyFiles(t, h.export())
 
-	if res, err = h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false}); err != nil || !res.Promoted {
+	res, err = h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "", Emergency: false})
+	if err != nil || !res.Promoted {
 		t.Fatalf("rotation after the copy = %+v, %v", res, err)
 	}
 
 	// A token of the first key signed before the rotations still verifies
 	// against the copy.
-	if _, err = profiletest.VerifyToken(h.export().JWKS, old.Value, profiletest.Expect{
-		Now: old.IssuedAt, Issuer: hs.url(), Audience: "sts.amazonaws.com",
-	}); err != nil {
+	if err = h.verifyAgainst(h.export().JWKS, old.Value, hs.url(), old.IssuedAt); err != nil {
 		t.Errorf("the old token does not verify against the new copy: %v", err)
 	}
 }
@@ -416,12 +448,12 @@ func TestAfterAnEmergencyRotationNothingSignsUntilTheCopyHoldsTheNewKey(t *testi
 	h.checkCopy()
 	h.mustLogin()
 
-	if _, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name,
-		issuersvc.RotateRequest{Reason: "leak", Emergency: true}); err != nil {
+	_, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: "leak", Emergency: true})
+	if err != nil {
 		t.Fatalf("emergency rotation: %v", err)
 	}
 
-	_, err := h.login("sts.amazonaws.com", 5*time.Minute)
+	_, err = h.login("sts.amazonaws.com", 5*time.Minute)
 	wantErr(t, "Login after an emergency rotation", err, profile.ErrIssuerKeyMissing)
 
 	f := h.export()
@@ -433,10 +465,19 @@ func TestAfterAnEmergencyRotationNothingSignsUntilTheCopyHoldsTheNewKey(t *testi
 	h.checkCopy()
 
 	tok := h.mustLogin()
-	if _, err = profiletest.VerifyToken(f.JWKS, tok.Value, profiletest.Expect{
-		Now: h.clock.Now(), Issuer: hs.url(), Audience: "sts.amazonaws.com",
-	}); err != nil {
+	if err = h.verifyAgainst(f.JWKS, tok.Value, hs.url(), h.clock.Now()); err != nil {
 		t.Errorf("verify: %v", err)
+	}
+}
+
+// wantWarning signs a token and checks that it has the one warning that holds
+// text.
+func (h *harness) wantWarning(text, when string) {
+	h.t.Helper()
+
+	tok := h.mustLogin()
+	if len(tok.Warnings) != 1 || !strings.Contains(tok.Warnings[0], text) {
+		h.t.Errorf("warnings at %s = %v", when, tok.Warnings)
 	}
 }
 
@@ -465,10 +506,7 @@ func TestAnActiveKeyNeverSignsForMoreThan180DaysAndWarnsFromDay90(t *testing.T) 
 		t.Fatalf("the schedule promoted without a copy: %v", got)
 	}
 
-	tok := h.mustLogin()
-	if len(tok.Warnings) != 1 || !strings.Contains(tok.Warnings[0], "90 days are left") {
-		t.Errorf("warnings at day 90 = %v", tok.Warnings)
-	}
+	h.wantWarning("90 days are left", "day 90")
 
 	st, err := h.svc.Get(t.Context(), h.reader, h.ns.Name)
 	if err != nil || len(st.Warnings) != 1 {
@@ -480,21 +518,14 @@ func TestAnActiveKeyNeverSignsForMoreThan180DaysAndWarnsFromDay90(t *testing.T) 
 	}
 
 	h.clock.Advance(89 * day)
-
-	if tok = h.mustLogin(); len(tok.Warnings) != 1 || !strings.Contains(tok.Warnings[0], "1 days are left") {
-		t.Errorf("warnings at day 179 = %v", tok.Warnings)
-	}
+	h.wantWarning("1 days are left", "day 179")
 
 	h.clock.Advance(day)
 
 	_, err = h.login("sts.amazonaws.com", 5*time.Minute)
 	wantErr(t, "Login at day 180", err, profile.ErrIssuerKeyExpired)
 
-	for _, route := range []string{"/issuer/export", "/issuer/keys/check-copy"} {
-		if !strings.Contains(err.Error(), route) {
-			t.Errorf("the error does not name %s: %v", route, err)
-		}
-	}
+	namesRoutes(t, err)
 }
 
 func TestTheScheduleWaitsForTheCopyOfTheNextKey(t *testing.T) {

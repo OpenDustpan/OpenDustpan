@@ -7,10 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"slices"
+	"strings"
 
-	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
@@ -22,15 +21,22 @@ const (
 	stepNext      = "next-key"
 )
 
-// runCheck makes the copy check with the issuerURL of set:
-// it reads the discovery document and the JWKS at that URL through the egress
-// guard, and looks for the kid of the active key, and of the next key when
-// needNext is set. It passes only when each step passes. It stores nothing.
+// checkWant says which keys a copy check looks for. The active key is always
+// one of them.
+type checkWant struct {
+	// Next says that the check also looks for the next key.
+	Next bool
+}
+
+// runCheck makes the copy check with the issuerURL of set: it reads the
+// discovery document and the JWKS at that URL through the Fetcher, and looks
+// for the kid of the active key, and of the next key when want asks for it. It
+// passes only when each step passes. It stores nothing.
 //
 // The jwks_uri that it reads is built from the issuerURL, and never taken from
 // the document, so a copy cannot send the server to another address.
 func (s *Service) runCheck(
-	ctx context.Context, set profile.IssuerSettings, keys []profile.Key, needNext bool,
+	ctx context.Context, set *profile.IssuerSettings, keys []profile.Key, want checkWant,
 ) profile.CopyCheck {
 	// A check that cannot read the copy says nothing about the keys that an
 	// earlier check found: the active key keeps signing, as the days of its
@@ -40,71 +46,38 @@ func (s *Service) runCheck(
 		check.Verified = slices.Clone(set.CopyCheck.Verified)
 	}
 
-	add := func(name, detail string, ok bool) {
-		check.Steps = append(check.Steps, profile.CopyStep{Name: name, Detail: detail, OK: ok})
-	}
+	disc := profile.NewDiscovery(set.IssuerURL)
 
-	base := set.IssuerURL
-	disc := profile.NewDiscovery(base)
-
-	raw, err := s.fetch(ctx, base+"/.well-known/openid-configuration")
-	if err != nil {
-		add(stepDiscovery, err.Error(), false)
-
+	if !s.checkDiscovery(ctx, &check, set.IssuerURL, disc) {
 		return check
 	}
 
-	var got profile.Discovery
-	if jsonErr := decodeStrict(raw, &got); jsonErr != nil {
-		add(stepDiscovery, "the document is not a discovery document", false)
-
+	jwks, ok := s.checkJWKS(ctx, &check, disc.JWKSURI)
+	if !ok {
 		return check
 	}
 
-	if got.Issuer != base || got.JWKSURI != disc.JWKSURI {
-		add(stepDiscovery, fmt.Sprintf("issuer must be %s and jwks_uri must be %s", base, disc.JWKSURI), false)
-
-		return check
+	found := map[profile.KeyID]bool{}
+	for i := range jwks.Keys {
+		found[profile.KeyID(jwks.Keys[i].Kid)] = true
 	}
-
-	add(stepDiscovery, "read", true)
-
-	raw, err = s.fetch(ctx, disc.JWKSURI)
-	if err != nil {
-		add(stepJWKS, err.Error(), false)
-
-		return check
-	}
-
-	var set2 profile.JWKS
-	if jsonErr := decodeStrict(raw, &set2); jsonErr != nil {
-		add(stepJWKS, "the document is not a JWKS", false)
-
-		return check
-	}
-
-	add(stepJWKS, "read", true)
 
 	check.Verified = nil
-	found := map[profile.KeyID]bool{}
-	for _, k := range set2.Keys {
-		found[profile.KeyID(k.Kid)] = true
-	}
 
-	for _, k := range keys {
-		if k.State.Published() && found[k.ID] {
-			check.Verified = append(check.Verified, k.ID)
+	for i := range keys {
+		if keys[i].State.Published() && found[keys[i].ID] {
+			check.Verified = append(check.Verified, keys[i].ID)
 		}
 	}
 
 	slices.Sort(check.Verified)
 
 	active, hasActive := findState(keys, profile.KeyActive)
-	add(stepActive, string(active.ID), hasActive && found[active.ID])
+	check.AddStep(stepActive, string(active.ID), hasActive && found[active.ID])
 
-	if needNext {
+	if want.Next {
 		next, hasNext := findState(keys, profile.KeyNext)
-		add(stepNext, string(next.ID), hasNext && found[next.ID])
+		check.AddStep(stepNext, string(next.ID), hasNext && found[next.ID])
 	}
 
 	check.OK = !slices.ContainsFunc(check.Steps, func(st profile.CopyStep) bool { return !st.OK })
@@ -112,41 +85,107 @@ func (s *Service) runCheck(
 	return check
 }
 
-// errNoClient is the failure of a copy check on a server with no guarded
-// HTTP client.
-var errNoClient = errors.New("the server has no client for outbound requests")
+// checkDiscovery reads the discovery document at base and checks that it names
+// base as the issuer and the JWKS address of base. It adds its step and says
+// whether the check goes on.
+func (s *Service) checkDiscovery(ctx context.Context, c *profile.CopyCheck, base string, want profile.Discovery) bool {
+	raw, err := s.fetch(ctx, base+"/.well-known/openid-configuration")
+	if err != nil {
+		c.AddStep(stepDiscovery, err.Error(), false)
 
-// fetch reads one document through the guarded client. The text of its error
-// is safe for an answer: it names no address that the rules refused.
+		return false
+	}
+
+	var got profile.Discovery
+	if jsonErr := decodeStrict(raw, &got); jsonErr != nil {
+		c.AddStep(stepDiscovery, "the document is not a discovery document", false)
+
+		return false
+	}
+
+	if got.Issuer != base || got.JWKSURI != want.JWKSURI {
+		c.AddStep(stepDiscovery, fmt.Sprintf("issuer must be %s and jwks_uri must be %s", base, want.JWKSURI), false)
+
+		return false
+	}
+
+	c.AddStep(stepDiscovery, "read", true)
+
+	return true
+}
+
+// checkJWKS reads the JWKS at uri. It adds its step and says whether the check
+// goes on.
+func (s *Service) checkJWKS(ctx context.Context, c *profile.CopyCheck, uri string) (profile.JWKS, bool) {
+	raw, err := s.fetch(ctx, uri)
+	if err != nil {
+		c.AddStep(stepJWKS, err.Error(), false)
+
+		return profile.JWKS{}, false
+	}
+
+	var set profile.JWKS
+	if jsonErr := decodeStrict(raw, &set); jsonErr != nil {
+		c.AddStep(stepJWKS, "the document is not a JWKS", false)
+
+		return profile.JWKS{}, false
+	}
+
+	c.AddStep(stepJWKS, "read", true)
+
+	return set, true
+}
+
+// The errors of a Fetcher. Their text is safe for an answer: it names no
+// address that the rules refused.
+var (
+	// ErrFetchURL reports a URL that does not open.
+	ErrFetchURL = errors.New("the URL does not open")
+	// ErrFetchConnection reports a connection that failed or that the egress
+	// rules refused. The text does not tell the two apart.
+	ErrFetchConnection = errors.New("the connection failed")
+	// ErrFetchStatus reports an answer with a status other than 200.
+	ErrFetchStatus = errors.New("the answer is not 200")
+	// ErrFetchSize reports an answer that is too large or that cannot be read.
+	ErrFetchSize = errors.New("the answer is too large or cannot be read")
+	// ErrNoFetcher reports a server with no client for outbound requests.
+	ErrNoFetcher = errors.New("the server has no client for outbound requests")
+	// errTrailing reports data after the JSON value of a document.
+	errTrailing = errors.New("trailing data")
+)
+
+// Fetcher reads one document at an https URL for the copy check. The adapter
+// applies the egress rules, follows no redirect and limits the size of the
+// answer.
+type Fetcher interface {
+	// Fetch answers the body of a 200 answer. ErrFetchURL, ErrFetchConnection,
+	// ErrFetchStatus and ErrFetchSize.
+	Fetch(ctx context.Context, url string) ([]byte, error)
+}
+
+// fetch reads one document through the Fetcher. A server with no Fetcher fails
+// closed.
 func (s *Service) fetch(ctx context.Context, url string) ([]byte, error) {
-	if s.http == nil {
-		return nil, errNoClient
+	if s.fetcher == nil {
+		return nil, ErrNoFetcher
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	body, err := s.fetcher.Fetch(ctx, url)
 	if err != nil {
-		return nil, errors.New("the URL does not open")
-	}
-
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := s.http.Do(req)
-	if err != nil {
-		// The text does not tell a refused address from an unreachable one.
-		return nil, errors.New("the connection failed")
-	}
-	defer s.closeBody(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("the answer is %d, want 200", resp.StatusCode)
-	}
-
-	body, err := egresshttp.ReadBody(resp)
-	if err != nil {
-		return nil, errors.New("the answer is too large or cannot be read")
+		return nil, fmt.Errorf("read %s: %w", checkName(url), err)
 	}
 
 	return body, nil
+}
+
+// checkName names a document of the copy check for an error text: the part of
+// the URL after the issuerURL is the same for each namespace.
+func checkName(url string) string {
+	if i := strings.LastIndex(url, "/.well-known/"); i >= 0 {
+		return "the discovery document"
+	}
+
+	return "the JWKS"
 }
 
 // decodeStrict decodes one JSON value and refuses trailing data.
@@ -158,7 +197,7 @@ func decodeStrict(raw []byte, into any) error {
 	}
 
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("trailing data")
+		return errTrailing
 	}
 
 	return nil

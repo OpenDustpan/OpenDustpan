@@ -21,48 +21,68 @@ func ApplyKeys(ns namespace.Name, current []Key, ch KeyChange) ([]Key, error) {
 	out := slices.Clone(current)
 
 	if ch.Initial {
-		for _, k := range out {
-			if k.State != KeyDeleted {
+		for i := range out {
+			if out[i].State != KeyDeleted {
 				return nil, fmt.Errorf("%w: the namespace already has signing keys", ErrConflict)
 			}
 		}
 	}
 
-	for _, m := range ch.Move {
-		if err := CheckMove(m); err != nil {
-			return nil, err
-		}
-
-		i := slices.IndexFunc(out, func(k Key) bool { return k.ID == m.ID })
-		if i < 0 || out[i].Namespace != ns || out[i].State != m.From {
-			return nil, fmt.Errorf("%w: key %s is not in the state %s", ErrConflict, m.ID, m.From)
-		}
-
-		out[i] = moveKey(out[i], m)
+	out, err := applyMoves(ns, out, ch.Move)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, k := range ch.Add {
-		if k.Namespace != ns {
-			return nil, fmt.Errorf("%w: key %s is not a key of namespace %s", ErrInvalid, k.ID, ns)
-		}
-
-		if err := CheckKey(k); err != nil {
-			return nil, err
-		}
-
-		if slices.ContainsFunc(out, func(o Key) bool { return o.ID == k.ID }) {
-			return nil, fmt.Errorf("%w: key %s exists", ErrConflict, k.ID)
-		}
-
-		out = append(out, k)
+	out, err = applyAdds(ns, out, ch.Add)
+	if err != nil {
+		return nil, err
 	}
 
 	live := slices.DeleteFunc(slices.Clone(out), func(k Key) bool { return k.State == KeyDeleted })
-	if err := CheckKeySet(live); err != nil {
+	if err = CheckKeySet(live); err != nil {
 		return nil, err
 	}
 
 	return out, nil
+}
+
+func applyMoves(ns namespace.Name, keys []Key, moves []KeyMove) ([]Key, error) {
+	for _, m := range moves {
+		if err := CheckMove(m); err != nil {
+			return nil, err
+		}
+
+		i := slices.IndexFunc(keys, func(k Key) bool { return k.ID == m.ID })
+		if i < 0 || keys[i].Namespace != ns || keys[i].State != m.From {
+			return nil, fmt.Errorf("%w: key %s is not in the state %s", ErrConflict, m.ID, m.From)
+		}
+
+		keys[i] = moveKey(keys[i], m)
+	}
+
+	return keys, nil
+}
+
+func applyAdds(ns namespace.Name, keys, add []Key) ([]Key, error) {
+	for i := range add {
+		k := &add[i]
+
+		if k.Namespace != ns {
+			return nil, fmt.Errorf("%w: key %s is not a key of namespace %s", ErrInvalid, k.ID, ns)
+		}
+
+		if err := CheckKey(*k); err != nil {
+			return nil, err
+		}
+
+		if slices.ContainsFunc(keys, func(o Key) bool { return o.ID == k.ID }) {
+			return nil, fmt.Errorf("%w: key %s exists", ErrConflict, k.ID)
+		}
+
+		keys = append(keys, *k)
+	}
+
+	return keys, nil
 }
 
 func moveKey(k Key, m KeyMove) Key {
@@ -76,6 +96,7 @@ func moveKey(k Key, m KeyMove) Key {
 	case KeyDeleted:
 		k.DeletedAt = m.At
 	case KeyNext:
+	default:
 	}
 
 	if !m.To.HoldsPrivate() {

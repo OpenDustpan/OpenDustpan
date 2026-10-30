@@ -22,7 +22,11 @@ const (
 // issuerSpecs are the codes of the issuer.
 func issuerSpecs() []Spec {
 	return []Spec{
-		{Code: IssuerConflict, Meaning: "the issuer of the namespace changed or has keys, so the request cannot run", Args: nil},
+		{
+			Code:    IssuerConflict,
+			Meaning: "the issuer of the namespace changed or has keys, so the request cannot run",
+			Args:    nil,
+		},
 		{Code: IssuerInvalid, Meaning: "a setting or a request of the issuer is not valid", Args: nil},
 		{
 			Code:    IssuerKeyExpired,

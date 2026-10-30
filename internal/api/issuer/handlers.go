@@ -37,33 +37,27 @@ type keyBody struct {
 }
 
 func toKey(k profile.KeyInfo) keyBody {
-	out := keyBody{
+	return keyBody{
 		ID: string(k.ID), State: string(k.State), Algorithm: k.Algorithm, CreatedAt: formatTime(k.CreatedAt),
-		ActivatedAt: "", RetiredAt: "", DeletedAt: "", ExpiresAt: "",
+		ActivatedAt: optionalTime(k.ActivatedAt), RetiredAt: optionalTime(k.RetiredAt),
+		DeletedAt: optionalTime(k.DeletedAt), ExpiresAt: optionalTime(k.ExpiresAt),
+	}
+}
+
+// optionalTime formats a time that may not apply: the zero time gives the
+// empty text.
+func optionalTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
 	}
 
-	for _, f := range []struct {
-		to   *string
-		from interface{ IsZero() bool }
-		text string
-	}{
-		{&out.ActivatedAt, k.ActivatedAt, formatTime(k.ActivatedAt)},
-		{&out.RetiredAt, k.RetiredAt, formatTime(k.RetiredAt)},
-		{&out.DeletedAt, k.DeletedAt, formatTime(k.DeletedAt)},
-		{&out.ExpiresAt, k.ExpiresAt, formatTime(k.ExpiresAt)},
-	} {
-		if !f.from.IsZero() {
-			*f.to = f.text
-		}
-	}
-
-	return out
+	return formatTime(t)
 }
 
 func toKeys(in []profile.KeyInfo) []keyBody {
 	out := make([]keyBody, 0, len(in))
-	for _, k := range in {
-		out = append(out, toKey(k))
+	for i := range in {
+		out = append(out, toKey(in[i]))
 	}
 
 	return out
@@ -72,7 +66,7 @@ func toKeys(in []profile.KeyInfo) []keyBody {
 // settingsBody is the settings of the issuer of a namespace. A default shows
 // its effective value.
 type settingsBody struct {
-	IssuerURL          string   `json:"issuerUrl"`
+	IssuerURL          string   `json:"issuerURL"`
 	SubjectTemplate    []string `json:"subjectTemplate"`
 	AllowBlockSubjects bool     `json:"allowBlockSubjects"`
 	IncludeActorName   bool     `json:"includeActorName"`
@@ -135,7 +129,7 @@ func toCopyCheck(c *profile.CopyCheck) *copyCheckBody {
 // issuerBody is what a read of the issuer answers.
 type issuerBody struct {
 	Settings           settingsBody   `json:"settings"`
-	EffectiveIssuerURL string         `json:"effectiveIssuerUrl,omitempty"`
+	EffectiveIssuerURL string         `json:"effectiveIssuerURL,omitempty"`
 	IssuerHostSet      bool           `json:"issuerHostConfigured"`
 	Keys               []keyBody      `json:"keys"`
 	CopyCheck          *copyCheckBody `json:"copyCheck"`
@@ -184,7 +178,7 @@ func nonNilStrings(in []string) []string {
 // patchBody is a JSON Merge Patch of the settings. A field that is absent
 // keeps its value. A field set to null restores its default.
 type patchBody struct {
-	IssuerURL          json.RawMessage `json:"issuerUrl"`
+	IssuerURL          json.RawMessage `json:"issuerURL"`
 	SubjectTemplate    json.RawMessage `json:"subjectTemplate"`
 	AllowBlockSubjects json.RawMessage `json:"allowBlockSubjects"`
 	IncludeActorName   json.RawMessage `json:"includeActorName"`
@@ -231,13 +225,13 @@ func (b patchBody) toPatch() (profile.SettingsPatch, error) {
 	var p profile.SettingsPatch
 
 	bad := func(field string) error {
-		return problem.BadRequest(errcode.RequestBodyInvalid, fmt.Sprintf("%s has a value of the wrong type", field))
+		return problem.BadRequest(errcode.RequestBodyInvalid, field+" has a value of the wrong type")
 	}
 
 	if len(b.IssuerURL) > 0 {
 		v := ""
 		if !isNull(b.IssuerURL) && json.Unmarshal(b.IssuerURL, &v) != nil {
-			return p, bad("issuerUrl")
+			return p, bad("issuerURL")
 		}
 
 		p.IssuerURL = &v
@@ -252,15 +246,21 @@ func (b patchBody) toPatch() (profile.SettingsPatch, error) {
 		p.SubjectTemplate = &v
 	}
 
-	if v, ok, err := flag(b.AllowBlockSubjects, true); err != nil {
-		return p, bad("allowBlockSubjects")
-	} else if ok {
+	if len(b.AllowBlockSubjects) > 0 {
+		v, err := flagValue(b.AllowBlockSubjects, true)
+		if err != nil {
+			return p, bad("allowBlockSubjects")
+		}
+
 		p.AllowBlockSubjects = &v
 	}
 
-	if v, ok, err := flag(b.IncludeActorName, false); err != nil {
-		return p, bad("includeActorName")
-	} else if ok {
+	if len(b.IncludeActorName) > 0 {
+		v, err := flagValue(b.IncludeActorName, false)
+		if err != nil {
+			return p, bad("includeActorName")
+		}
+
 		p.IncludeActorName = &v
 	}
 
@@ -269,29 +269,33 @@ func (b patchBody) toPatch() (profile.SettingsPatch, error) {
 
 func isNull(raw json.RawMessage) bool { return strings.TrimSpace(string(raw)) == "null" }
 
-// flag reads a boolean of a merge patch. present is false for an absent
-// field, and null gives def.
-func flag(raw json.RawMessage, def bool) (value, present bool, err error) {
-	if len(raw) == 0 {
-		return false, false, nil
+// flagValue reads a boolean of a merge patch: null gives def.
+func flagValue(raw json.RawMessage, def bool) (bool, error) {
+	if isNull(raw) {
+		return def, nil
 	}
 
-	value = def
-	if !isNull(raw) {
-		if err = json.Unmarshal(raw, &value); err != nil {
-			return false, true, fmt.Errorf("decode flag: %w", err)
-		}
+	var v bool
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false, fmt.Errorf("decode flag: %w", err)
 	}
 
-	return value, true, nil
+	return v, nil
+}
+
+// mediaType returns the media type of the request, in lower case and without
+// its parameters.
+func mediaType(r *http.Request) string {
+	head, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
+
+	return strings.ToLower(strings.TrimSpace(head))
 }
 
 // patch serves PATCH .../issuer.
 func (h *Handler) patch(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	if ct := strings.ToLower(strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0])); ct != merge &&
-		ct != jsonType {
+	if ct := mediaType(r); ct != merge && ct != jsonType {
 		h.writeError(ctx, w, errMediaType)
 
 		return
@@ -318,7 +322,9 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request, p identity.Princ
 		return
 	}
 
-	got, err := h.issuer.Patch(ctx, actorOf(r, p), obj.Namespace(), patch, version, func() error { return h.checkFresh(r) })
+	got, err := h.issuer.Patch(ctx, actorOf(r, p), obj.Namespace(), &issuersvc.PatchRequest{
+		Patch: patch, IfVersion: version, Fresh: func() error { return h.checkFresh(r) },
+	})
 	if errors.Is(err, profile.ErrConflict) {
 		// The only conflict of a patch is a stale version.
 		err = errPrecondition
@@ -359,6 +365,10 @@ func (h *Handler) createKeys(w http.ResponseWriter, r *http.Request, p identity.
 	h.writeJSON(ctx, w, http.StatusCreated, keysBody{Keys: toKeys(keys)})
 }
 
+// maxEmptyBody is the size of the body "{}": the largest body of a route that
+// takes none.
+const maxEmptyBody = 2
+
 // emptyBody refuses a body on a route that takes none.
 func emptyBody(w http.ResponseWriter, r *http.Request) error {
 	var none struct{}
@@ -367,7 +377,7 @@ func emptyBody(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	return route.DecodeBody(w, r, 2, &none)
+	return route.DecodeBody(w, r, maxEmptyBody, &none)
 }
 
 // rotateRequest is the body of a rotation.
@@ -444,7 +454,7 @@ type exportFile struct {
 
 // exportBody is the answer of an export.
 type exportBody struct {
-	IssuerURL string       `json:"issuerUrl"`
+	IssuerURL string       `json:"issuerURL"`
 	Files     []exportFile `json:"files"`
 }
 

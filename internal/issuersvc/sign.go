@@ -35,8 +35,6 @@ const (
 	openAction = "profile:open"
 )
 
-var b64 = base64.RawURLEncoding
-
 // Login implements profile.Issuer.
 func (s *Service) Login(
 	ctx context.Context, o profile.OpenContext, block, aud string, lifetime time.Duration,
@@ -69,7 +67,7 @@ func (s *Service) sign(ctx context.Context, o profile.OpenContext, r signRequest
 		return profile.Token{}, err
 	}
 
-	name := o.Namespace.Name
+	name := o.Namespace
 
 	// Fail closed on a namespace that the open did not read as it is now. A
 	// stale failover version means that another instance may hold the
@@ -79,7 +77,7 @@ func (s *Service) sign(ctx context.Context, o profile.OpenContext, r signRequest
 		return profile.Token{}, fmt.Errorf("read namespace %s: %w", name, err)
 	}
 
-	if current.ID != o.Namespace.ID || current.FailoverVersion != o.Namespace.FailoverVersion {
+	if current.ID != o.NamespaceID || current.FailoverVersion != o.FailoverVersion {
 		return profile.Token{}, fmt.Errorf("sign for %s: %w", name, namespace.ErrFenced)
 	}
 
@@ -88,17 +86,17 @@ func (s *Service) sign(ctx context.Context, o profile.OpenContext, r signRequest
 		return profile.Token{}, fmt.Errorf("read issuer settings: %w", err)
 	}
 
-	iss, err := s.issuerURL(current, set)
+	iss, err := s.issuerURL(&current, &set)
 	if err != nil {
 		return profile.Token{}, err
 	}
 
-	active, err := s.signingKey(ctx, current, set, o.By)
+	active, err := s.signingKey(ctx, &current, &set, &o.By)
 	if err != nil {
 		return profile.Token{}, err
 	}
 
-	priv, err := s.open(ctx, active)
+	priv, err := s.open(ctx, &active)
 	if err != nil {
 		return profile.Token{}, err
 	}
@@ -116,12 +114,13 @@ func (s *Service) sign(ctx context.Context, o profile.OpenContext, r signRequest
 		return profile.Token{}, err
 	}
 
-	exp := now.Add(r.lifetime)
+	tok := profile.Token{
+		IssuedAt: now, ExpiresAt: now.Add(r.lifetime), Entry: audit.Entry{}, Value: value, ID: jti,
+		Issuer: iss, Subject: o.Subject, Audience: r.aud, KeyID: active.ID, Warnings: s.warnings(&set, &active, now),
+	}
+	tok.Entry = tokenEntry(o, r, &tok)
 
-	return profile.Token{
-		IssuedAt: now, ExpiresAt: exp, Entry: tokenEntry(o, r, jti, active.ID, exp, now), Value: value, ID: jti,
-		Issuer: iss, Subject: o.Subject, Audience: r.aud, KeyID: active.ID, Warnings: s.warnings(set, active, now),
-	}, nil
+	return tok, nil
 }
 
 // checkRequest checks the request of a token against the rules of the issuer.
@@ -135,7 +134,7 @@ func checkRequest(o profile.OpenContext, r signRequest, publicURL string) error 
 		return err
 	}
 
-	if o.Namespace.Name == "" || o.Namespace.ID == "" {
+	if o.Namespace == "" || o.NamespaceID == "" {
 		return fmt.Errorf("%w: the open names no namespace", profile.ErrInvalid)
 	}
 
@@ -177,7 +176,7 @@ func checkSubject(sub string) error {
 // signingKey returns the key that signs now for namespace ns, and makes the
 // first keys of a namespace that has none and no issuerURL.
 func (s *Service) signingKey(
-	ctx context.Context, ns namespace.Namespace, set profile.IssuerSettings, by audit.Entry,
+	ctx context.Context, ns *namespace.Namespace, set *profile.IssuerSettings, by *audit.Entry,
 ) (profile.Key, error) {
 	keys, err := s.store.Live(ctx, ns.Name)
 	if err != nil {
@@ -190,7 +189,7 @@ func (s *Service) signingKey(
 				profile.ErrIssuerKeyMissing, keysRoute(ns.Name))
 		}
 
-		if keys, err = s.firstKeys(ctx, ns, by, "the first open of a login block"); err != nil {
+		if keys, err = s.firstKeys(ctx, ns, by); err != nil {
 			return profile.Key{}, err
 		}
 	}
@@ -201,8 +200,8 @@ func (s *Service) signingKey(
 	}
 
 	if set.IssuerURL != "" {
-		if err = s.checkCopied(ns.Name, set, active); err != nil {
-			return profile.Key{}, err
+		if checkErr := s.checkCopied(ns.Name, set, &active); checkErr != nil {
+			return profile.Key{}, checkErr
 		}
 	}
 
@@ -211,7 +210,7 @@ func (s *Service) signingKey(
 
 // checkCopied checks the keys of a namespace with an issuerURL: the active key
 // is in a copied JWKS, and it signed for less than profile.MaxActiveSigning.
-func (s *Service) checkCopied(ns namespace.Name, set profile.IssuerSettings, active profile.Key) error {
+func (s *Service) checkCopied(ns namespace.Name, set *profile.IssuerSettings, active *profile.Key) error {
 	if s.now().Sub(active.ActivatedAt) >= profile.MaxActiveSigning {
 		return fmt.Errorf("%w: export the files with GET %s and check the copy with POST %s",
 			profile.ErrIssuerKeyExpired, exportRoute(ns), checkCopyRoute(ns))
@@ -225,9 +224,12 @@ func (s *Service) checkCopied(ns namespace.Name, set profile.IssuerSettings, act
 	return nil
 }
 
+// day is the length of a day, for the days that a warning counts.
+const day = 24 * time.Hour
+
 // warnings returns the texts for a person about a namespace with an issuerURL
 // whose active key signs after its 90 days.
-func (s *Service) warnings(set profile.IssuerSettings, active profile.Key, now time.Time) []string {
+func (s *Service) warnings(set *profile.IssuerSettings, active *profile.Key, now time.Time) []string {
 	if set.IssuerURL == "" {
 		return nil
 	}
@@ -237,12 +239,15 @@ func (s *Service) warnings(set profile.IssuerSettings, active profile.Key, now t
 		return nil
 	}
 
-	left := int((profile.MaxActiveSigning - age + 24*time.Hour - 1) / (24 * time.Hour))
+	left := int((profile.MaxActiveSigning - age + day - 1) / day)
 
-	return []string{fmt.Sprintf(
-		"the signing key signed for %d days and the copy at %s has no newer key: %d days are left before it stops signing; "+
-			"copy the files from GET %s and call POST %s",
-		int(age/(24*time.Hour)), set.IssuerURL, max(left, 0), exportRoute(set.Namespace), checkCopyRoute(set.Namespace))}
+	return []string{
+		fmt.Sprintf(
+			"The signing key signed for %d days and the copy at %s has no newer key. "+
+				"%d days remain before it stops signing. Copy the files from GET %s and call POST %s.",
+			int(age/day), set.IssuerURL, max(left, 0), exportRoute(set.Namespace), checkCopyRoute(set.Namespace),
+		),
+	}
 }
 
 func keysRoute(ns namespace.Name) string {
@@ -272,13 +277,13 @@ func payload(o profile.OpenContext, r signRequest, iss, jti string, now time.Tim
 	claims["nbf"] = now.Add(-notBeforeSkew).Unix()
 	claims["exp"] = now.Add(r.lifetime).Unix()
 	claims["jti"] = jti
-	claims["namespace"] = o.Namespace.Name.String()
-	claims["namespace_id"] = o.Namespace.ID.String()
+	claims["namespace"] = o.Namespace.String()
+	claims["namespace_id"] = o.NamespaceID.String()
 	claims["purpose"] = r.purpose
 
 	if r.purpose == purposeAdapter {
 		sum := sha256.Sum256(r.body)
-		claims["body_sha256"] = b64.EncodeToString(sum[:])
+		claims["body_sha256"] = base64.RawURLEncoding.EncodeToString(sum[:])
 	}
 
 	raw, err := json.Marshal(claims)
@@ -300,7 +305,7 @@ func compact(priv *rsa.PrivateKey, kid profile.KeyID, payload []byte) (string, e
 		return "", fmt.Errorf("encode token header: %w", err)
 	}
 
-	signing := b64.EncodeToString(header) + "." + b64.EncodeToString(payload)
+	signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
 	sum := sha256.Sum256([]byte(signing))
 
 	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, sum[:])
@@ -308,16 +313,16 @@ func compact(priv *rsa.PrivateKey, kid profile.KeyID, payload []byte) (string, e
 		return "", fmt.Errorf("sign token: %w", err)
 	}
 
-	return signing + "." + b64.EncodeToString(sig), nil
+	return signing + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
 // tokenEntry makes the audit entry of one token. It holds no token.
-func tokenEntry(o profile.OpenContext, r signRequest, jti string, kid profile.KeyID, exp, now time.Time) audit.Entry {
+func tokenEntry(o profile.OpenContext, r signRequest, t *profile.Token) audit.Entry {
 	e := o.By
-	e.At = now
-	e.Namespace = o.Namespace.Name
+	e.At = t.IssuedAt
+	e.Namespace = o.Namespace
 	e.Action = openAction
-	e.Object = identity.NamespaceObject(o.Namespace.Name).String()
+	e.Object = identity.NamespaceObject(o.Namespace).String()
 	e.ObjectID = string(o.ProfileID)
 	e.Kind = audit.KindAccess
 	e.Outcome = audit.OutcomeSuccess
@@ -327,9 +332,9 @@ func tokenEntry(o profile.OpenContext, r signRequest, jti string, kid profile.Ke
 		change("purpose", r.purpose),
 		change("audience", r.aud),
 		change("subject", o.Subject),
-		change("jti", jti),
-		change("exp", strconv.FormatInt(exp.Unix(), 10)),
-		change("kid", string(kid)),
+		change("jti", t.ID),
+		change("exp", strconv.FormatInt(t.ExpiresAt.Unix(), 10)),
+		change("kid", string(t.KeyID)),
 	}
 
 	return e

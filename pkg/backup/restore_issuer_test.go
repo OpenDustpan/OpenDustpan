@@ -26,7 +26,10 @@ func TestRestoreDropsIssuerKeysOfAnotherInstallation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.Installation = tc.installation })
+			setup := newRestoreServiceSetupWith(
+				t,
+				func(cfg *backup.RestoreConfig) { cfg.Installation = tc.installation },
+			)
 
 			id, err := startRestoreOf(t, setup, plainRestore())
 			if err != nil {

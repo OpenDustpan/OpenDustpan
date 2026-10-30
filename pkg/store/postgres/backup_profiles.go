@@ -29,7 +29,7 @@ func pgCopyProfileTables() []pgCopyTable {
 		{
 			table: "issuer_keys",
 			columns: []string{
-				pgColNamespaceID, "id", "state", "public_key", "sealed", pgColCreatedAtMs, "activated_at_ms",
+				pgColNamespaceID, "id", pgColState, "public_key", "sealed", pgColCreatedAtMs, "activated_at_ms",
 				"retired_at_ms", "deleted_at_ms",
 			},
 			orderBy: []string{pgColNamespaceID, "id"},

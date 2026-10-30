@@ -16,36 +16,48 @@ import (
 	"opendustpan.org/opendustpan/pkg/profile/profiletest"
 )
 
+// settingsWire is the settings of an answer.
+type settingsWire struct {
+	IssuerURL          string   `json:"issuerURL"`
+	SubjectTemplate    []string `json:"subjectTemplate"`
+	AllowBlockSubjects bool     `json:"allowBlockSubjects"`
+	IncludeActorName   bool     `json:"includeActorName"`
+	ETag               string   `json:"etag"`
+}
+
+// keyWire is the part of a key that the tests read.
+type keyWire struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+// fileWire is one exported file.
+type fileWire struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// stepWire is one step of a copy check.
+type stepWire struct {
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+}
+
 // wire is the part of an answer of the API that the tests read.
 type wire struct {
-	Status   int    `json:"code"`
-	Code     string `json:"errorCode"`
-	Settings struct {
-		IssuerURL          string   `json:"issuerUrl"`
-		SubjectTemplate    []string `json:"subjectTemplate"`
-		AllowBlockSubjects bool     `json:"allowBlockSubjects"`
-		IncludeActorName   bool     `json:"includeActorName"`
-		ETag               string   `json:"etag"`
-	} `json:"settings"`
-	EffectiveIssuerURL string `json:"effectiveIssuerUrl"`
-	HostConfigured     bool   `json:"issuerHostConfigured"`
-	Keys               []struct {
-		ID    string `json:"id"`
-		State string `json:"state"`
-	} `json:"keys"`
-	Deleted  []string `json:"deleted"`
-	Promoted bool     `json:"promoted"`
-	Files    []struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-	} `json:"files"`
-	OK    bool `json:"ok"`
-	Steps []struct {
-		Name string `json:"name"`
-		OK   bool   `json:"ok"`
-	} `json:"steps"`
-	// Settings of an update answer.
-	IssuerURL string `json:"issuerUrl"`
+	Status             int          `json:"code"`
+	Code               string       `json:"errorCode"`
+	Settings           settingsWire `json:"settings"`
+	EffectiveIssuerURL string       `json:"effectiveIssuerURL"`
+	HostConfigured     bool         `json:"issuerHostConfigured"`
+	Keys               []keyWire    `json:"keys"`
+	Deleted            []string     `json:"deleted"`
+	Promoted           bool         `json:"promoted"`
+	Files              []fileWire   `json:"files"`
+	OK                 bool         `json:"ok"`
+	Steps              []stepWire   `json:"steps"`
+	// IssuerURL and ETag are the members of an update answer.
+	IssuerURL string `json:"issuerURL"`
 	ETag      string `json:"etag"`
 }
 
@@ -67,13 +79,15 @@ func (f fixture) createKeys(t *testing.T) {
 	wantCode(t, "create keys", got, http.StatusCreated)
 }
 
-// forbiddenWords are members and texts that no answer of the API holds.
-var forbiddenWords = []string{`"sealed"`, "PRIVATE", `"d":`, `"dp"`, `"dq"`, `"qi"`, `"p":`, `"q":`, "PKCS"}
+// forbiddenWords returns members and texts that no answer of the API holds.
+func forbiddenWords() []string {
+	return []string{`"sealed"`, "PRIVATE", `"d":`, `"dp"`, `"dq"`, `"qi"`, `"p":`, `"q":`, "PKCS"}
+}
 
 func noKeyMaterial(t *testing.T, what string, r response) {
 	t.Helper()
 
-	for _, w := range forbiddenWords {
+	for _, w := range forbiddenWords() {
 		if strings.Contains(r.body, w) {
 			t.Errorf("%s: the answer holds %q", what, w)
 		}
@@ -85,8 +99,10 @@ func TestRouteTableMatchesTheMux(t *testing.T) {
 
 	f := newFixture(t)
 
-	var table []string
-	for _, rt := range f.handler.Routes() {
+	routes := f.handler.Routes()
+	table := make([]string, 0, len(routes))
+
+	for _, rt := range routes {
 		table = append(table, rt.Pattern())
 	}
 
@@ -116,17 +132,16 @@ func TestOnlyTheProtocolRoutesArePublic(t *testing.T) {
 	var public []string
 
 	for _, rt := range f.handler.Routes() {
-		switch rt.Scope {
-		case route.ScopePublic:
+		if rt.Scope == route.ScopePublic {
 			public = append(public, rt.Pattern())
 
 			if len(rt.Actions) != 0 {
 				t.Errorf("public route %s declares actions", rt.Pattern())
 			}
-		case route.ScopeAuthorized:
-			if len(rt.Actions) == 0 {
-				t.Errorf("route %s needs a sign-in and declares no action", rt.Pattern())
-			}
+		}
+
+		if rt.Scope == route.ScopeAuthorized && len(rt.Actions) == 0 {
+			t.Errorf("route %s needs a sign-in and declares no action", rt.Pattern())
 		}
 	}
 
@@ -230,9 +245,8 @@ func TestProtocolRoutesAnswerPublicData(t *testing.T) {
 	}
 
 	// The public keys verify a token of the issuer.
-	if _, err := profiletest.VerifyToken([]byte(keys.body), "a.b.c", profiletest.Expect{
-		Now: time.Now(), Issuer: issuer, Audience: "x",
-	}); err == nil {
+	forged := profiletest.Expect{Now: time.Now(), Issuer: issuer, Audience: "x"}
+	if _, err := profiletest.VerifyToken([]byte(keys.body), "a.b.c", forged); err == nil {
 		t.Error("a forged token verifies")
 	}
 }
@@ -271,7 +285,7 @@ func TestProtocolRoutesRefuseWhatIsNotANamespace(t *testing.T) {
 func TestNoIssuerHostAnswersNotConfigured(t *testing.T) {
 	t.Parallel()
 
-	f := buildFixture(t, buildOptions{noHost: true})
+	f := buildFixture(t, defaults().withoutHost())
 
 	got := f.do(t, get("", "/oidc/"+f.ns.ID.String()+"/.well-known/openid-configuration"))
 	wantCode(t, "discovery with no host", got, http.StatusNotFound)
@@ -349,9 +363,9 @@ func TestForbiddenCodes(t *testing.T) {
 		t.Run(cause.Name, func(t *testing.T) {
 			t.Parallel()
 
-			f := buildFixture(t, buildOptions{tweak: func(cfg *apiissuer.Config) {
+			f := buildFixture(t, defaults().tweaked(func(cfg *apiissuer.Config) {
 				cfg.Authorizer = errcodetest.Authorizer{Err: cause.Err}
-			}})
+			}))
 
 			got := f.do(t, get("admin", issuerPath))
 
@@ -414,8 +428,8 @@ func TestCreateKeysAnswers201Then409(t *testing.T) {
 		http.StatusBadRequest)
 }
 
-func patch(token, body string) request {
-	return send(token, http.MethodPatch, issuerPath, body).withHeader("Content-Type", "application/merge-patch+json")
+func patch(body string) request {
+	return send("admin", http.MethodPatch, issuerPath, body).withHeader("Content-Type", "application/merge-patch+json")
 }
 
 func TestPatchPreconditionsAndMediaType(t *testing.T) {
@@ -424,10 +438,10 @@ func TestPatchPreconditionsAndMediaType(t *testing.T) {
 	f := newFixture(t)
 	body := `{"includeActorName": false}`
 
-	wantCode(t, "no If-Match", f.do(t, patch("admin", body)), http.StatusPreconditionRequired)
+	wantCode(t, "no If-Match", f.do(t, patch(body)), http.StatusPreconditionRequired)
 
 	for _, tag := range []string{`"issuer.7"`, `W/"issuer.0"`, `"profile.1"`, `issuer.0`, `"issuer.-1"`, `"issuer.x"`, `"issuer."`} {
-		got := f.do(t, patch("admin", body).withHeader("If-Match", tag))
+		got := f.do(t, patch(body).withHeader("If-Match", tag))
 		wantCode(t, "If-Match "+tag, got, http.StatusPreconditionFailed)
 	}
 
@@ -436,11 +450,11 @@ func TestPatchPreconditionsAndMediaType(t *testing.T) {
 	wantCode(t, "media type", got, http.StatusUnsupportedMediaType)
 
 	for name, b := range map[string]string{
-		"unknown field": `{"colour": 1}`, "two values": `{} {}`, "not an object": `[]`, "wrong type": `{"includeActorName": "yes"}`,
-		"wrong type for the URL": `{"issuerUrl": 5}`, "wrong type for the template": `{"subjectTemplate": "namespace"}`,
-		"too large": `{"issuerUrl": "` + strings.Repeat("a", 20000) + `"}`,
+		"unknown field": `{"color": 1}`, "two values": `{} {}`, "not an object": `[]`, "wrong type": `{"includeActorName": "yes"}`,
+		"wrong type for the URL": `{"issuerURL": 5}`, "wrong type for the template": `{"subjectTemplate": "namespace"}`,
+		"too large": `{"issuerURL": "` + strings.Repeat("a", 20000) + `"}`,
 	} {
-		got = f.do(t, patch("admin", b).withHeader("If-Match", `"issuer.0"`))
+		got = f.do(t, patch(b).withHeader("If-Match", `"issuer.0"`))
 		wantCode(t, name, got, http.StatusBadRequest)
 	}
 
@@ -455,7 +469,7 @@ func TestPatchChangesAndReturnsTheNewTag(t *testing.T) {
 
 	f := newFixture(t)
 
-	got := f.do(t, patch("admin", `{"includeActorName": false, "allowBlockSubjects": false}`).
+	got := f.do(t, patch(`{"includeActorName": false, "allowBlockSubjects": false}`).
 		withHeader("If-Match", `"issuer.0"`))
 	wantCode(t, "patch", got, http.StatusOK)
 
@@ -465,12 +479,12 @@ func TestPatchChangesAndReturnsTheNewTag(t *testing.T) {
 	}
 
 	// The old tag is stale now.
-	stale := f.do(t, patch("admin", `{"allowBlockSubjects": true}`).withHeader("If-Match", `"issuer.0"`))
+	stale := f.do(t, patch(`{"allowBlockSubjects": true}`).withHeader("If-Match", `"issuer.0"`))
 	wantCode(t, "stale tag", stale, http.StatusPreconditionFailed)
 
 	// A null value restores the default. The default of allowBlockSubjects is
 	// true, which is a change that reduces security, so it needs a fresh step.
-	reset := f.do(t, patch("admin", `{"allowBlockSubjects": null}`).withHeader("If-Match", `"issuer.1"`))
+	reset := f.do(t, patch(`{"allowBlockSubjects": null}`).withHeader("If-Match", `"issuer.1"`))
 	wantCode(t, "null patch", reset, http.StatusForbidden)
 
 	st := decode(t, f.do(t, get("reader", issuerPath)))
@@ -485,24 +499,23 @@ func TestPatchRefusesABadValue(t *testing.T) {
 	f := newFixture(t)
 
 	for _, b := range []string{
-		`{"issuerUrl": "http://files.example.com"}`, `{"issuerUrl": "https://files.example.com/"}`,
+		`{"issuerURL": "http://files.example.com"}`, `{"issuerURL": "https://files.example.com/"}`,
 		`{"subjectTemplate": ["unit"]}`, `{"subjectTemplate": ["namespace", "job"]}`,
 	} {
-		got := f.do(t, patch("admin", b).withHeader("If-Match", `"issuer.0"`))
+		got := f.do(t, patch(b).withHeader("If-Match", `"issuer.0"`))
 		wantCode(t, b, got, http.StatusBadRequest)
 
 		if decode(t, got).Code != errcode.IssuerInvalid {
 			t.Errorf("%s: code = %q, want %s", b, decode(t, got).Code, errcode.IssuerInvalid)
 		}
 	}
-
 }
 
 func TestAChangeThatReducesSecurityNeedsAFreshSignIn(t *testing.T) {
 	t.Parallel()
 
 	const (
-		change   = `{"issuerUrl": "https://files.example.com/acme"}`
+		change   = `{"issuerURL": "https://files.example.com/acme"}`
 		newLogin = "/api/server/sign-in/corp?fresh=1"
 	)
 
@@ -522,9 +535,9 @@ func TestAChangeThatReducesSecurityNeedsAFreshSignIn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := buildFixture(t, buildOptions{withSession: true, sessionAge: tc.age})
+			f := buildFixture(t, defaults().session(tc.age))
 
-			req := patch("admin", change).withHeader("If-Match", `"issuer.0"`)
+			req := patch(change).withHeader("If-Match", `"issuer.0"`)
 			if !tc.token {
 				req = req.inSession()
 			}
@@ -544,7 +557,7 @@ func TestAChangeThatReducesSecurityNeedsAFreshSignIn(t *testing.T) {
 			changed := after.Settings.IssuerURL != ""
 
 			if changed != (tc.status == http.StatusOK) {
-				t.Errorf("issuerUrl set = %v after status %d", changed, tc.status)
+				t.Errorf("issuerURL set = %v after status %d", changed, tc.status)
 			}
 		})
 	}
@@ -614,12 +627,15 @@ func TestRotateWithNoKeysAndCopyChecksNeedAnIssuerURL(t *testing.T) {
 func TestExportAndCheckCopy(t *testing.T) {
 	t.Parallel()
 
-	f := buildFixture(t, buildOptions{withSession: true, sessionAge: time.Minute})
+	f := buildFixture(t, defaults().session(time.Minute))
 	f.createKeys(t)
 
-	set := f.do(t, patch("admin", `{"issuerUrl": "https://files.example.com/acme"}`).withHeader("If-Match", `"issuer.0"`).
-		inSession())
-	wantCode(t, "set issuerUrl", set, http.StatusOK)
+	set := f.do(
+		t,
+		patch(`{"issuerURL": "https://files.example.com/acme"}`).withHeader("If-Match", `"issuer.0"`).
+			inSession(),
+	)
+	wantCode(t, "set issuerURL", set, http.StatusOK)
 
 	exp := f.do(t, get("admin", issuerPath+"/export"))
 	wantCode(t, "export", exp, http.StatusOK)

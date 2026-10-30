@@ -12,10 +12,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
-func str(s string) *string { return &s }
-
-func flag(b bool) *bool { return &b }
-
 var errNoFresh = errors.New("the sign-in is too old")
 
 func okFresh() error { return nil }
@@ -49,10 +45,10 @@ func TestPatchNeedsAFreshStepForAChangeThatReducesSecurity(t *testing.T) {
 	url := "https://files.example.com/acme"
 
 	needsFresh := map[string]profile.SettingsPatch{
-		"issuerURL":                       {IssuerURL: &url},
-		"subject template":                {SubjectTemplate: &[]string{"namespace", "unit"}},
-		"includeActorName to true":        {IncludeActorName: flag(true)},
-		"subject template to the default": {SubjectTemplate: &[]string{}},
+		"issuerURL":                       patchURL(url),
+		"subject template":                patchTemplate("namespace", "unit"),
+		"includeActorName to true":        patchActor(true),
+		"subject template to the default": patchTemplate(),
 	}
 
 	version := int64(0)
@@ -77,7 +73,14 @@ func TestPatchNeedsAFreshStepForAChangeThatReducesSecurity(t *testing.T) {
 	}
 
 	// allowBlockSubjects from true to false makes security stronger: no step.
-	got, err := h.svc.Patch(ctx, h.admin, h.ns.Name, profile.SettingsPatch{AllowBlockSubjects: flag(false)}, version, nil)
+	got, err := h.svc.Patch(
+		ctx,
+		h.admin,
+		h.ns.Name,
+		patchAllow(false),
+		version,
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("allowBlockSubjects to false: %v", err)
 	}
@@ -85,11 +88,12 @@ func TestPatchNeedsAFreshStepForAChangeThatReducesSecurity(t *testing.T) {
 	version = got.Version
 
 	// and from false back to true needs one.
-	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, profile.SettingsPatch{AllowBlockSubjects: flag(true)}, version, nil)
+	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, patchAllow(true), version, nil)
 	wantErr(t, "allowBlockSubjects to true", err, profile.ErrFreshRequired)
 
 	// includeActorName to false is allowed with no step.
-	if _, err = h.svc.Patch(ctx, h.admin, h.ns.Name, profile.SettingsPatch{IncludeActorName: flag(false)}, version, nil); err != nil {
+	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, patchActor(false), version, nil)
+	if err != nil {
 		t.Errorf("includeActorName to false: %v", err)
 	}
 }
@@ -100,7 +104,7 @@ func TestPatchKeepsWhatItDoesNotName(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
 
-	got, err := h.svc.Patch(ctx, h.admin, h.ns.Name, profile.SettingsPatch{AllowBlockSubjects: flag(false)}, 0, nil)
+	got, err := h.svc.Patch(ctx, h.admin, h.ns.Name, patchAllow(false), 0, nil)
 	if err != nil || got.Version != 1 || got.UpdatedBy != alice || got.UpdatedAt.IsZero() {
 		t.Fatalf("Patch = %+v, %v", got, err)
 	}
@@ -109,7 +113,7 @@ func TestPatchKeepsWhatItDoesNotName(t *testing.T) {
 		t.Errorf("a patch changed a field it did not name: %+v", got)
 	}
 
-	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, profile.SettingsPatch{IncludeActorName: flag(false)}, 0, nil)
+	_, err = h.svc.Patch(ctx, h.admin, h.ns.Name, patchActor(false), 0, nil)
 	wantErr(t, "Patch on a stale version", err, profile.ErrConflict)
 }
 
@@ -120,28 +124,32 @@ func TestPatchRefusesABadValueAndChangesNothing(t *testing.T) {
 	ctx := t.Context()
 
 	for name, p := range map[string]profile.SettingsPatch{
-		"http URL":          {IssuerURL: str("http://files.example.com/acme")},
-		"no scheme":         {IssuerURL: str("files.example.com")},
-		"query":             {IssuerURL: str("https://files.example.com/acme?x=1")},
-		"fragment":          {IssuerURL: str("https://files.example.com/acme#x")},
-		"trailing slash":    {IssuerURL: str("https://files.example.com/acme/")},
-		"user information":  {IssuerURL: str("https://user:pw@files.example.com/acme")},
-		"space":             {IssuerURL: str("https://files.example.com/a b")},
-		"newline":           {IssuerURL: str("https://files.example.com/a\nb")},
-		"no host":           {IssuerURL: str("https:///acme")},
-		"javascript scheme": {IssuerURL: str("javascript:alert(1)")},
-		"too long":          {IssuerURL: str("https://files.example.com/" + strings.Repeat("a", 2100))},
-		"unknown key":       {SubjectTemplate: &[]string{"namespace", "email"}},
-		"twice":             {SubjectTemplate: &[]string{"namespace", "unit", "unit"}},
-		"no namespace":      {SubjectTemplate: &[]string{"unit", "access"}},
-		"a per-run value":   {SubjectTemplate: &[]string{"namespace", "job"}},
-		"commit in subject": {SubjectTemplate: &[]string{"namespace", "commit"}},
+		"http URL":          patchURL("http://files.example.com/acme"),
+		"no scheme":         patchURL("files.example.com"),
+		"query":             patchURL("https://files.example.com/acme?x=1"),
+		"fragment":          patchURL("https://files.example.com/acme#x"),
+		"trailing slash":    patchURL("https://files.example.com/acme/"),
+		"user information":  patchURL("https://user:pw@files.example.com/acme"),
+		"space":             patchURL("https://files.example.com/a b"),
+		"newline":           patchURL("https://files.example.com/a\nb"),
+		"no host":           patchURL("https:///acme"),
+		"javascript scheme": patchURL("javascript:alert(1)"),
+		"too long":          patchURL("https://files.example.com/" + strings.Repeat("a", 2100)),
+		"unknown key":       patchTemplate("namespace", "email"),
+		"twice":             patchTemplate("namespace", "unit", "unit"),
+		"no namespace":      patchTemplate("unit", "access"),
+		"a per-run value":   patchTemplate("namespace", "job"),
+		"commit in subject": patchTemplate("namespace", "commit"),
 	} {
 		_, err := h.svc.Patch(ctx, h.admin, h.ns.Name, p, 0, okFresh)
 		wantErr(t, name, err, profile.ErrInvalid)
 	}
 
-	set, _ := h.store.Issuer().GetIssuerSettings(ctx, h.ns.Name)
+	set, err := h.store.Issuer().GetIssuerSettings(ctx, h.ns.Name)
+	if err != nil {
+		t.Fatalf("GetIssuerSettings: %v", err)
+	}
+
 	if set.Version != 0 {
 		t.Error("a refused patch stored settings")
 	}
@@ -152,8 +160,14 @@ func TestPatchStoresTheTemplateInTheOrderOfTheSubject(t *testing.T) {
 
 	h := newHarness(t)
 
-	got, err := h.svc.Patch(t.Context(), h.admin, h.ns.Name,
-		profile.SettingsPatch{SubjectTemplate: &[]string{"access", "unit", "namespace_id", "ref_protected"}}, 0, okFresh)
+	got, err := h.svc.Patch(
+		t.Context(),
+		h.admin,
+		h.ns.Name,
+		patchTemplate("access", "unit", "namespace_id", "ref_protected"),
+		0,
+		okFresh,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,8 +182,8 @@ func TestEachSettingsChangeWritesAnAuditEntry(t *testing.T) {
 
 	h := newHarness(t)
 
-	if _, err := h.svc.Patch(t.Context(), h.admin, h.ns.Name,
-		profile.SettingsPatch{IssuerURL: str("https://files.example.com/acme")}, 0, okFresh); err != nil {
+	_, err := h.svc.Patch(t.Context(), h.admin, h.ns.Name, patchURL("https://files.example.com/acme"), 0, okFresh)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,24 +212,10 @@ func TestDiscoveryAndJWKSAnswerOnlyPublicData(t *testing.T) {
 		t.Fatalf("Discovery: %v", err)
 	}
 
-	if d.Issuer != h.issuer(h.ns) || d.JWKSURI != h.issuer(h.ns)+"/jwks" ||
-		!slices.Equal(d.ResponseTypesSupported, []string{"id_token"}) ||
-		!slices.Equal(d.SubjectTypesSupported, []string{"public"}) ||
-		!slices.Equal(d.IDTokenSigningAlgValuesSupported, []string{"RS256"}) ||
-		!slices.Equal(d.ScopesSupported, []string{"openid"}) {
-		t.Errorf("discovery = %+v", d)
-	}
-
-	for _, c := range []string{"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "namespace", "access", "unit_id", "ref_protected"} {
-		if !slices.Contains(d.ClaimsSupported, c) {
-			t.Errorf("claims_supported lacks %q", c)
-		}
-	}
-
-	raw, _ := json.Marshal(d)
+	checkDiscovery(t, h, d)
 
 	var members map[string]json.RawMessage
-	if err = json.Unmarshal(raw, &members); err != nil || len(members) != 7 {
+	if err = json.Unmarshal(mustJSON(t, d), &members); err != nil || len(members) != 7 {
 		t.Errorf("discovery members = %d, %v", len(members), err)
 	}
 
@@ -228,16 +228,51 @@ func TestDiscoveryAndJWKSAnswerOnlyPublicData(t *testing.T) {
 	}
 
 	for _, k := range set.Keys {
-		got := make([]string, 0, len(k))
-		for name := range k {
-			got = append(got, name)
+		checkJWK(t, k)
+	}
+}
+
+// checkDiscovery checks the members of a discovery document.
+func checkDiscovery(t *testing.T, h *harness, d profile.Discovery) {
+	t.Helper()
+
+	if d.Issuer != h.issuer(h.ns) || d.JWKSURI != h.issuer(h.ns)+"/jwks" ||
+		!slices.Equal(d.ResponseTypesSupported, []string{"id_token"}) ||
+		!slices.Equal(d.SubjectTypesSupported, []string{"public"}) ||
+		!slices.Equal(d.IDTokenSigningAlgValuesSupported, []string{"RS256"}) ||
+		!slices.Equal(d.ScopesSupported, []string{"openid"}) {
+		t.Errorf("discovery = %+v", d)
+	}
+
+	claims := []string{
+		"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "namespace", "access", "unit_id", "ref_protected",
+	}
+	for _, c := range claims {
+		if !slices.Contains(d.ClaimsSupported, c) {
+			t.Errorf("claims_supported lacks %q", c)
 		}
+	}
+}
 
-		slices.Sort(got)
+// checkJWK checks that a JWK holds the public members of an RS256 signing key
+// and nothing else.
+func checkJWK(t *testing.T, k map[string]string) {
+	t.Helper()
 
-		if !slices.Equal(got, []string{"alg", "e", "kid", "kty", "n", "use"}) || k["kty"] != "RSA" || k["alg"] != "RS256" ||
-			k["use"] != "sig" || k["e"] != "AQAB" {
-			t.Errorf("JWK members = %v", k)
+	got := make([]string, 0, len(k))
+	for name := range k {
+		got = append(got, name)
+	}
+
+	slices.Sort(got)
+
+	if !slices.Equal(got, []string{"alg", "e", "kid", "kty", "n", "use"}) {
+		t.Errorf("JWK members = %v", got)
+	}
+
+	for member, want := range map[string]string{"kty": "RSA", "alg": "RS256", "use": "sig", "e": "AQAB"} {
+		if k[member] != want {
+			t.Errorf("JWK %s = %q, want %q", member, k[member], want)
 		}
 	}
 }

@@ -75,6 +75,9 @@ func issuerNamespace(t *testing.T, s IssuerStore, name string) namespace.Namespa
 	return ns
 }
 
+// twoKeys is the count of live keys after the first make.
+const twoKeys = 2
+
 func issuerEntries(ns namespace.Name) []audit.Entry { return entries(ns, "namespace:manage-issuer") }
 
 func testKey(ns namespace.Name, state profile.KeyState, at time.Time) profile.Key {
@@ -94,19 +97,30 @@ func testKey(ns namespace.Name, state profile.KeyState, at time.Time) profile.Ke
 	return k
 }
 
+// keyPair is the first active key and the first next key of a namespace.
+type keyPair struct {
+	active profile.Key
+	next   profile.Key
+}
+
 // firstKeys makes the first active and next key of ns.
-func firstKeys(t *testing.T, s IssuerStore, ns namespace.Namespace) (active, next profile.Key) {
+func firstKeys(t *testing.T, s IssuerStore, ns namespace.Namespace) keyPair {
 	t.Helper()
 
-	active, next = testKey(ns.Name, profile.KeyActive, epoch()), testKey(ns.Name, profile.KeyNext, epoch())
+	active, next := testKey(ns.Name, profile.KeyActive, epoch()), testKey(ns.Name, profile.KeyNext, epoch())
 
-	err := s.Issuer.Apply(t.Context(), ns.Name, profile.KeyChange{Add: []profile.Key{active, next}, Move: nil, Initial: true},
-		ns.Fence(), issuerEntries(ns.Name))
+	err := s.Issuer.Apply(
+		t.Context(),
+		ns.Name,
+		profile.KeyChange{Add: []profile.Key{active, next}, Move: nil, Initial: true},
+		ns.Fence(),
+		issuerEntries(ns.Name),
+	)
 	if err != nil {
 		t.Fatalf("first make: %v", err)
 	}
 
-	return active, next
+	return keyPair{active: active, next: next}
 }
 
 func apply(t *testing.T, s IssuerStore, ns namespace.Namespace, ch profile.KeyChange) error {
@@ -123,7 +137,8 @@ func stateOf(t *testing.T, s IssuerStore, ns namespace.Name, id profile.KeyID) p
 		t.Fatalf("History: %v", err)
 	}
 
-	for _, k := range history {
+	for idx := range history {
+		k := &history[idx]
 		if k.ID == id {
 			return k.State
 		}
@@ -134,7 +149,8 @@ func stateOf(t *testing.T, s IssuerStore, ns namespace.Name, id profile.KeyID) p
 
 func ids(keys []profile.Key) []profile.KeyID {
 	out := make([]profile.KeyID, 0, len(keys))
-	for _, k := range keys {
+	for idx := range keys {
+		k := &keys[idx]
 		out = append(out, k.ID)
 	}
 
@@ -163,14 +179,16 @@ func testIssuerInitial(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	ns := issuerNamespace(t, s, "acme")
-	active, next := firstKeys(t, s, ns)
+	pair := firstKeys(t, s, ns)
+	active, next := pair.active, pair.next
 
 	live, err := s.Issuer.Live(t.Context(), ns.Name)
 	if err != nil || !slices.Equal(ids(live), ids([]profile.Key{active, next})) {
 		t.Fatalf("Live = %v, %v", ids(live), err)
 	}
 
-	for _, k := range live {
+	for idx := range live {
+		k := &live[idx]
 		if len(k.Sealed) == 0 || string(k.Public) != "public-key" || k.Namespace != ns.Name {
 			t.Errorf("live key %s = %+v", k.ID, k)
 		}
@@ -205,7 +223,8 @@ func testIssuerPublishedNoSecret(t *testing.T, s IssuerStore) {
 		t.Fatalf("Published = %v, %v", got, err)
 	}
 
-	for _, k := range got {
+	for idx := range got {
+		k := &got[idx]
 		if len(k.Sealed) != 0 {
 			t.Errorf("published key %s holds a private key", k.ID)
 		}
@@ -216,7 +235,8 @@ func testIssuerPromote(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	ns := issuerNamespace(t, s, "acme")
-	active, next := firstKeys(t, s, ns)
+	pair := firstKeys(t, s, ns)
+	active, next := pair.active, pair.next
 	at := epoch().Add(90 * 24 * time.Hour)
 	fresh := testKey(ns.Name, profile.KeyNext, at)
 
@@ -236,21 +256,34 @@ func testIssuerPromote(t *testing.T, s IssuerStore) {
 		t.Fatalf("Published = %d keys, %v, want 3", len(pub), err)
 	}
 
-	for _, k := range pub {
-		switch k.ID {
-		case active.ID:
-			if k.State != profile.KeyRetired || !k.RetiredAt.Equal(at) {
-				t.Errorf("old key = %+v", k)
-			}
-		case next.ID:
-			if k.State != profile.KeyActive || !k.ActivatedAt.Equal(at) {
-				t.Errorf("promoted key = %+v", k)
-			}
-		case fresh.ID:
-			if k.State != profile.KeyNext {
-				t.Errorf("new next key = %+v", k)
-			}
-		}
+	pair2 := promotedSet{old: active.ID, promoted: next.ID, fresh: fresh.ID, at: at}
+	for idx := range pub {
+		checkPromoted(t, &pub[idx], pair2)
+	}
+}
+
+// promotedSet names the three keys of a promotion and its time.
+type promotedSet struct {
+	at       time.Time
+	old      profile.KeyID
+	promoted profile.KeyID
+	fresh    profile.KeyID
+}
+
+// checkPromoted checks the state of one published key after a promotion.
+func checkPromoted(t *testing.T, k *profile.Key, w promotedSet) {
+	t.Helper()
+
+	if k.ID == w.old && (k.State != profile.KeyRetired || !k.RetiredAt.Equal(w.at)) {
+		t.Errorf("old key = %+v", k)
+	}
+
+	if k.ID == w.promoted && (k.State != profile.KeyActive || !k.ActivatedAt.Equal(w.at)) {
+		t.Errorf("promoted key = %+v", k)
+	}
+
+	if k.ID == w.fresh && k.State != profile.KeyNext {
+		t.Errorf("new next key = %+v", k)
 	}
 }
 
@@ -258,7 +291,8 @@ func testIssuerNoPrivateAfterRetire(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	ns := issuerNamespace(t, s, "acme")
-	active, next := firstKeys(t, s, ns)
+	pair := firstKeys(t, s, ns)
+	active, next := pair.active, pair.next
 	at := epoch().Add(time.Hour)
 
 	err := apply(t, s, ns, profile.KeyChange{Add: nil, Initial: false, Move: []profile.KeyMove{
@@ -274,7 +308,8 @@ func testIssuerNoPrivateAfterRetire(t *testing.T, s IssuerStore) {
 		t.Fatalf("Live: %v", err)
 	}
 
-	for _, k := range live {
+	for idx := range live {
+		k := &live[idx]
 		if k.State == profile.KeyRetired && len(k.Sealed) != 0 {
 			t.Errorf("retired key %s keeps its private key", k.ID)
 		}
@@ -289,7 +324,8 @@ func testIssuerDeleted(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	ns := issuerNamespace(t, s, "acme")
-	active, next := firstKeys(t, s, ns)
+	pair := firstKeys(t, s, ns)
+	active, next := pair.active, pair.next
 	at := epoch().Add(time.Hour)
 
 	err := apply(t, s, ns, profile.KeyChange{Add: nil, Initial: false, Move: []profile.KeyMove{
@@ -299,7 +335,7 @@ func testIssuerDeleted(t *testing.T, s IssuerStore) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	pub, _ := s.Issuer.Published(t.Context(), ns.Name)
+	pub := mustPublished(t, s, ns.Name)
 	if len(pub) != 1 || pub[0].ID != active.ID {
 		t.Errorf("Published after delete = %v", ids(pub))
 	}
@@ -309,7 +345,8 @@ func testIssuerDeleted(t *testing.T, s IssuerStore) {
 		t.Fatalf("History = %v, %v", history, err)
 	}
 
-	for _, h := range history {
+	for idx := range history {
+		h := &history[idx]
 		if h.ID == next.ID && (h.State != profile.KeyDeleted || !h.DeletedAt.Equal(at)) {
 			t.Errorf("deleted key in history = %+v", h)
 		}
@@ -325,22 +362,25 @@ func testIssuerWrongFrom(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	ns := issuerNamespace(t, s, "acme")
-	active, next := firstKeys(t, s, ns)
+	pair := firstKeys(t, s, ns)
+	active, next := pair.active, pair.next
 	at := epoch().Add(time.Hour)
 
-	err := apply(t, s, ns, profile.KeyChange{Add: []profile.Key{testKey(ns.Name, profile.KeyRetired, at)}, Initial: false,
+	err := apply(t, s, ns, profile.KeyChange{
+		Add: []profile.Key{testKey(ns.Name, profile.KeyRetired, at)}, Initial: false,
 		Move: []profile.KeyMove{
 			{At: at, ID: next.ID, From: profile.KeyNext, To: profile.KeyDeleted},
 			{At: at, ID: active.ID, From: profile.KeyNext, To: profile.KeyRetired},
-		}})
+		},
+	})
 	wantErr(t, "move with a wrong state", err, profile.ErrConflict)
 
 	if stateOf(t, s, ns.Name, next.ID) != profile.KeyNext || stateOf(t, s, ns.Name, active.ID) != profile.KeyActive {
 		t.Error("a refused change moved a key")
 	}
 
-	live, _ := s.Issuer.Live(t.Context(), ns.Name)
-	if len(live) != 2 {
+	live := mustLive(t, s, ns.Name)
+	if len(live) != twoKeys {
 		t.Errorf("a refused change added a key: %d keys", len(live))
 	}
 
@@ -400,7 +440,7 @@ func testIssuerNeedsSealed(t *testing.T, s IssuerStore) {
 		t.Fatal("an active key with no private key was stored")
 	}
 
-	pub, _ := s.Issuer.Published(t.Context(), ns.Name)
+	pub := mustPublished(t, s, ns.Name)
 	if len(pub) != 0 {
 		t.Errorf("a refused key is published: %v", ids(pub))
 	}
@@ -424,10 +464,10 @@ func testIssuerNamespaces(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	a, b := issuerNamespace(t, s, "acme"), issuerNamespace(t, s, "globex")
-	ka, _ := firstKeys(t, s, a)
-	kb, _ := firstKeys(t, s, b)
+	ka := firstKeys(t, s, a).active
+	kb := firstKeys(t, s, b).active
 
-	pub, _ := s.Issuer.Published(t.Context(), a.Name)
+	pub := mustPublished(t, s, a.Name)
 	if slices.Contains(ids(pub), kb.ID) || !slices.Contains(ids(pub), ka.ID) {
 		t.Errorf("acme publishes %v", ids(pub))
 	}
@@ -454,7 +494,7 @@ func testIssuerFenced(t *testing.T, s IssuerStore) {
 	}, stale, issuerEntries(ns.Name))
 	wantErr(t, "Apply", err, namespace.ErrFenced)
 
-	pub, _ := s.Issuer.Published(t.Context(), ns.Name)
+	pub := mustPublished(t, s, ns.Name)
 	if len(pub) != 0 {
 		t.Errorf("a fenced change stored %d keys", len(pub))
 	}
@@ -476,7 +516,7 @@ func testIssuerAudit(t *testing.T, s IssuerStore) {
 		audit.ErrInvalidEntry)
 	wantErr(t, "no entry", s.Issuer.Apply(t.Context(), ns.Name, ch, ns.Fence(), nil), profile.ErrInvalid)
 
-	pub, _ := s.Issuer.Published(t.Context(), ns.Name)
+	pub := mustPublished(t, s, ns.Name)
 	if len(pub) != 0 {
 		t.Errorf("a refused change stored %d keys", len(pub))
 	}
@@ -486,7 +526,8 @@ func testIssuerEmergency(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	ns := issuerNamespace(t, s, "acme")
-	active, next := firstKeys(t, s, ns)
+	pair := firstKeys(t, s, ns)
+	active, next := pair.active, pair.next
 	at := epoch().Add(time.Hour)
 	a2, n2 := testKey(ns.Name, profile.KeyActive, at), testKey(ns.Name, profile.KeyNext, at)
 
@@ -498,7 +539,7 @@ func testIssuerEmergency(t *testing.T, s IssuerStore) {
 		t.Fatalf("emergency change: %v", err)
 	}
 
-	pub, _ := s.Issuer.Published(t.Context(), ns.Name)
+	pub := mustPublished(t, s, ns.Name)
 	if !slices.Equal(ids(pub), ids([]profile.Key{a2, n2})) {
 		t.Errorf("Published after emergency = %v", ids(pub))
 	}
@@ -520,8 +561,7 @@ func testIssuerSettings(t *testing.T, s IssuerStore) {
 	ns := issuerNamespace(t, s, "acme")
 
 	got, err := s.Issuer.GetIssuerSettings(t.Context(), ns.Name)
-	if err != nil || got.Version != 0 || got.IssuerURL != "" || !got.AllowBlockSubjects || got.IncludeActorName ||
-		!slices.Equal(got.SubjectTemplate, profile.DefaultSubjectTemplate()) {
+	if err != nil || !isDefaultSettings(got) {
 		t.Fatalf("default settings = %+v, %v", got, err)
 	}
 
@@ -531,13 +571,22 @@ func testIssuerSettings(t *testing.T, s IssuerStore) {
 	}
 
 	got, err = s.Issuer.GetIssuerSettings(t.Context(), ns.Name)
-	if err != nil || got.Version != 1 || got.IssuerURL != "https://keys.example.com/acme" || !got.IncludeActorName ||
-		!got.UpdatedAt.Equal(epoch()) || got.UpdatedBy != subject {
+	if err != nil || !isStoredSettings(got) {
 		t.Errorf("stored settings = %+v, %v", got, err)
 	}
 
 	_, err = s.Issuer.GetIssuerSettings(t.Context(), "nobody")
 	wantErr(t, "settings of an unknown namespace", err, namespace.ErrNotFound)
+}
+
+func isDefaultSettings(got profile.IssuerSettings) bool {
+	return got.Version == 0 && got.IssuerURL == "" && got.AllowBlockSubjects && !got.IncludeActorName &&
+		slices.Equal(got.SubjectTemplate, profile.DefaultSubjectTemplate())
+}
+
+func isStoredSettings(got profile.IssuerSettings) bool {
+	return got.Version == 1 && got.IssuerURL == "https://keys.example.com/acme" && got.IncludeActorName &&
+		got.UpdatedAt.Equal(epoch()) && got.UpdatedBy == subject
 }
 
 func testIssuerSettingsStale(t *testing.T, s IssuerStore) {
@@ -555,8 +604,8 @@ func testIssuerSettingsStale(t *testing.T, s IssuerStore) {
 
 	in.AllowBlockSubjects = false
 
-	if put, err := s.Issuer.PutIssuerSettings(t.Context(), in, 1, ns.Fence(), issuerEntries(ns.Name)); err != nil ||
-		put.Version != 2 {
+	put, err := s.Issuer.PutIssuerSettings(t.Context(), in, 1, ns.Fence(), issuerEntries(ns.Name))
+	if err != nil || put.Version != 2 {
 		t.Errorf("second put = %+v, %v", put, err)
 	}
 }
@@ -571,8 +620,8 @@ func testIssuerSettingsFenced(t *testing.T, s IssuerStore) {
 	_, err := s.Issuer.PutIssuerSettings(t.Context(), issuerSettings(ns.Name), 0, stale, issuerEntries(ns.Name))
 	wantErr(t, "PutIssuerSettings", err, namespace.ErrFenced)
 
-	err = s.Issuer.RecordCopyCheck(t.Context(), ns.Name, profile.CopyCheck{At: epoch(), OK: true}, stale,
-		issuerEntries(ns.Name))
+	staleCheck := profile.CopyCheck{At: epoch(), OK: true, Steps: nil, Verified: nil}
+	err = s.Issuer.RecordCopyCheck(t.Context(), ns.Name, staleCheck, stale, issuerEntries(ns.Name))
 	wantErr(t, "RecordCopyCheck", err, namespace.ErrFenced)
 
 	bad := entry(ns.Name, "namespace:manage-issuer")
@@ -581,7 +630,7 @@ func testIssuerSettingsFenced(t *testing.T, s IssuerStore) {
 	_, err = s.Issuer.PutIssuerSettings(t.Context(), issuerSettings(ns.Name), 0, ns.Fence(), []audit.Entry{bad})
 	wantErr(t, "put with an invalid entry", err, audit.ErrInvalidEntry)
 
-	got, _ := s.Issuer.GetIssuerSettings(t.Context(), ns.Name)
+	got := mustSettings(t, s, ns.Name)
 	if got.Version != 0 {
 		t.Errorf("a refused write stored settings: %+v", got)
 	}
@@ -591,16 +640,21 @@ func testIssuerCopyCheck(t *testing.T, s IssuerStore) {
 	t.Helper()
 
 	ns := issuerNamespace(t, s, "acme")
-	active, next := firstKeys(t, s, ns)
+	pair := firstKeys(t, s, ns)
+	active, next := pair.active, pair.next
 
-	if _, err := s.Issuer.PutIssuerSettings(t.Context(), issuerSettings(ns.Name), 0, ns.Fence(),
-		issuerEntries(ns.Name)); err != nil {
-		t.Fatalf("put: %v", err)
+	_, putErr := s.Issuer.PutIssuerSettings(t.Context(), issuerSettings(ns.Name), 0, ns.Fence(), issuerEntries(ns.Name))
+	if putErr != nil {
+		t.Fatalf("put: %v", putErr)
 	}
 
 	check := profile.CopyCheck{
-		At: epoch().Add(time.Hour), OK: true,
-		Steps:    []profile.CopyStep{{Name: "discovery", OK: true, Detail: "read"}, {Name: "jwks", OK: true, Detail: "read"}},
+		At: epoch().Add(time.Hour),
+		OK: true,
+		Steps: []profile.CopyStep{
+			{Name: "discovery", OK: true, Detail: "read"},
+			{Name: "jwks", OK: true, Detail: "read"},
+		},
 		Verified: []profile.KeyID{active.ID, next.ID, profile.NewKeyID()},
 	}
 
@@ -630,4 +684,37 @@ func testIssuerResolve(t *testing.T, s IssuerStore) {
 
 	_, err = s.Issuer.NamespaceByID(t.Context(), namespace.NewID())
 	wantErr(t, "unknown ID", err, namespace.ErrNotFound)
+}
+
+func mustPublished(t *testing.T, s IssuerStore, ns namespace.Name) []profile.Key {
+	t.Helper()
+
+	keys, err := s.Issuer.Published(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("Published: %v", err)
+	}
+
+	return keys
+}
+
+func mustLive(t *testing.T, s IssuerStore, ns namespace.Name) []profile.Key {
+	t.Helper()
+
+	keys, err := s.Issuer.Live(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("Live: %v", err)
+	}
+
+	return keys
+}
+
+func mustSettings(t *testing.T, s IssuerStore, ns namespace.Name) profile.IssuerSettings {
+	t.Helper()
+
+	set, err := s.Issuer.GetIssuerSettings(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("GetIssuerSettings: %v", err)
+	}
+
+	return set
 }

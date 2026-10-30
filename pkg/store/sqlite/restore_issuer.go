@@ -32,7 +32,10 @@ func dropStagedIssuerKeys(ctx context.Context, path string) error {
 		`UPDATE issuer_settings SET copy_check = ''`,
 	} {
 		if _, execErr := tx.ExecContext(ctx, stmt); execErr != nil {
-			return errors.Join(fmt.Errorf("drop the issuer keys of the staged file: %w", backup.ErrExportRead), tx.Rollback())
+			return errors.Join(
+				fmt.Errorf("drop the issuer keys of the staged file: %w", backup.ErrExportRead),
+				tx.Rollback(),
+			)
 		}
 	}
 

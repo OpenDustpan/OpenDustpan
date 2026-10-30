@@ -48,13 +48,13 @@ The issuer URL of a namespace is `<issuer host>/oidc/<namespace ID>`. The
 issuer host is the setting `--issuer-base-url`. When it is empty, the issuer
 host is `--public-url`. A server with neither setting issues no token.
 
-A namespace can set `issuerUrl` to an `https` URL that it hosts, for example a
+A namespace can set `issuerURL` to an `https` URL that it hosts, for example a
 bucket of static files. Each token of the namespace then has that URL as `iss`,
 and the discovery document answers it as `issuer`. See the guide.
 
 The issuer URL is the identity of the issuer at each cloud. A change of the
 issuer host, or of the public URL when the issuer base URL is empty, breaks the
-trust of each cloud for each namespace that has no `issuerUrl`.
+trust of each cloud for each namespace that has no `issuerURL`.
 
 ## The management routes
 
@@ -67,20 +67,20 @@ The paths in this section start with `/api/dustpan/v1/namespaces/{namespace}`.
 | `POST /issuer/keys` | `namespace:manage-issuer` | 201 and the first keys. 409 when the namespace has keys. |
 | `POST /issuer/keys/rotate` | `namespace:manage-issuer` | The keys after the rotation |
 | `POST /issuer/keys/check-copy` | `namespace:manage-issuer` | The outcome of each step of the copy check |
-| `GET /issuer/export` | `namespace:manage-issuer` | The two files for the `issuerUrl` |
+| `GET /issuer/export` | `namespace:manage-issuer` | The two files for the `issuerURL` |
 
 The role `admin` holds `namespace:manage-issuer`.
 
 ### Read
 
-The answer has these members: `settings`, `effectiveIssuerUrl`,
+The answer has these members: `settings`, `effectiveIssuerURL`,
 `issuerHostConfigured`, `keys`, `copyCheck` and `warnings`. The answer has the
 header `ETag`. `settings` shows the effective value of each setting, also when
 nobody changed it:
 
 | Setting | Default |
 | --- | --- |
-| `issuerUrl` | Empty: the issuer URL is `<issuer host>/oidc/<namespace ID>` |
+| `issuerURL` | Empty: the issuer URL is `<issuer host>/oidc/<namespace ID>` |
 | `subjectTemplate` | `namespace`, `collection`, `tool`, `unit`, `access` |
 | `allowBlockSubjects` | `true` |
 | `includeActorName` | `false` |
@@ -91,7 +91,7 @@ The active key has `expiresAt`: the time when the schedule rotates it. The
 answer lists the deleted keys too, so an audit can see the history. It holds
 no key material.
 
-`warnings` is not empty when the namespace has an `issuerUrl` and its active
+`warnings` is not empty when the namespace has an `issuerURL` and its active
 key is older than 90 days. A text names the days that remain before the key
 stops signing, and the routes to call.
 
@@ -100,12 +100,12 @@ stops signing, and the routes to call.
 `PATCH /issuer` takes a JSON Merge Patch. Send `Content-Type:
 application/merge-patch+json` and `If-Match` with the `ETag` that you read.
 A request with no `If-Match` answers 428. A tag that is not the current tag
-answers 412. The body names the settings to change: `issuerUrl`,
+answers 412. The body names the settings to change: `issuerURL`,
 `subjectTemplate`, `allowBlockSubjects` and `includeActorName`. A member set to
 `null` restores its default. The answer has the new settings and the new
 `ETag`.
 
-`issuerUrl` is empty or an absolute `https` URL with a host, with no user
+`issuerURL` is empty or an absolute `https` URL with a host, with no user
 information, query, fragment or trailing slash. A subject template names keys
 from the list of subject keys and has `namespace` or `namespace_id`. The server
 stores the keys in the order of the list. A value that fails these rules
@@ -113,7 +113,7 @@ answers 400 with the error code `issuer.invalid`.
 
 A change that reduces security needs a console session with a recent sign-in:
 
-- any change of `issuerUrl`,
+- any change of `issuerURL`,
 - any change of `subjectTemplate`,
 - `allowBlockSubjects` from `false` to `true`,
 - `includeActorName` from `false` to `true`.
@@ -127,7 +127,7 @@ and the new value of each setting that it changed.
 
 `POST /issuer/keys` makes an `active` key and a `next` key for a namespace that
 has none. The server also makes them at the first token of a namespace that has
-no `issuerUrl`. A namespace with an `issuerUrl` and no key never gets a key
+no `issuerURL`. A namespace with an `issuerURL` and no key never gets a key
 from a token: the server needs a key that a copied file holds first.
 
 `POST /issuer/keys/rotate` rotates the keys now. The body is optional:
@@ -151,18 +151,18 @@ key at once. A token that this key signed is at most 60 minutes old.
 
 ### Copy check and export
 
-These routes serve a namespace that has an `issuerUrl`. A namespace with none
+These routes serve a namespace that has an `issuerURL`. A namespace with none
 answers 400 with the error code `issuer.invalid`.
 
 `GET /issuer/export` answers the two files that a person copies to the
-`issuerUrl`. Each file has `path` (relative to the `issuerUrl`), `contentType`
+`issuerURL`. Each file has `path` (relative to the `issuerURL`), `contentType`
 and `content` (the exact text to save). The export reads only. It never makes
 a key. For a namespace with no key it answers 409 with the error code
 `issuer.key-missing`.
 
 `POST /issuer/keys/check-copy` runs the copy check at once. The server reads
-`<issuerUrl>/.well-known/openid-configuration` and checks that `issuer` is the
-`issuerUrl` and that `jwks_uri` is `<issuerUrl>/jwks`. It then reads that JWKS
+`<issuerURL>/.well-known/openid-configuration` and checks that `issuer` is the
+`issuerURL` and that `jwks_uri` is `<issuerURL>/jwks`. It then reads that JWKS
 and looks for the `kid` of the active key, and of the next key when the
 namespace has one. Both reads go through the egress rules of the server: they
 refuse private addresses, follow no redirect and take only `https`. The answer
@@ -176,7 +176,7 @@ signs only with an active key that a check found in the copy.
 | `issuer.invalid` | 400 | A setting or a request is not valid |
 | `issuer.conflict` | 409 | The namespace already has keys |
 | `issuer.key-missing` | 409 | The namespace has no key, or no key that a copied JWKS holds |
-| `issuer.key-expired` | 409 | The active key signed for 180 days with an `issuerUrl` |
+| `issuer.key-expired` | 409 | The active key signed for 180 days with an `issuerURL` |
 | `issuer.not-configured` | 404 | The server has no issuer host |
 | `mfa.fresh-step-required` | 403 or 401 | The change needs a recent sign-in |
 

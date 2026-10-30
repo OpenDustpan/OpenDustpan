@@ -15,9 +15,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -50,9 +48,9 @@ type Config struct {
 	// Notifier receives issuer.key-next, issuer.key-revoked and
 	// issuer.key-copy-missing. Nil sends no notice.
 	Notifier Notifier
-	// HTTP makes the requests of the copy check. It must apply the egress
-	// rules (egresshttp.Client). Nil makes each copy check fail closed.
-	HTTP *http.Client
+	// Fetcher makes the requests of the copy check. It must apply the egress
+	// rules. Nil makes each copy check fail closed.
+	Fetcher Fetcher
 	// IssuerBaseURL and PublicURL give the issuer host. The issuer base URL
 	// wins; when it is empty the public URL is used. Both empty: the server
 	// issues no token.
@@ -69,7 +67,7 @@ type Service struct {
 	sealer     profile.Sealer
 	authz      identity.Authorizer
 	notifier   Notifier
-	http       *http.Client
+	fetcher    Fetcher
 	issuerBase string
 	publicURL  string
 	now        func() time.Time
@@ -113,7 +111,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, authz: cfg.Authorizer,
-		notifier: cfg.Notifier, http: cfg.HTTP, issuerBase: trimSlash(cfg.IssuerBaseURL),
+		notifier: cfg.Notifier, fetcher: cfg.Fetcher, issuerBase: trimSlash(cfg.IssuerBaseURL),
 		publicURL: trimSlash(cfg.PublicURL), now: now, log: log, mu: sync.Mutex{}, cache: map[cacheKey]cachedKey{},
 	}, nil
 }
@@ -140,7 +138,7 @@ func (s *Service) host() (string, error) {
 
 // issuerURL returns the issuer URL of namespace ns with settings set: its
 // issuerURL, else the host and the path with the stable ID.
-func (s *Service) issuerURL(ns namespace.Namespace, set profile.IssuerSettings) (string, error) {
+func (s *Service) issuerURL(ns *namespace.Namespace, set *profile.IssuerSettings) (string, error) {
 	if set.IssuerURL != "" {
 		return set.IssuerURL, nil
 	}
@@ -162,11 +160,4 @@ func (s *Service) require(ctx context.Context, a *Actor, ns namespace.Name, acti
 	}
 
 	return nil
-}
-
-// closeBody closes a response body and logs the failure.
-func (s *Service) closeBody(c io.Closer) {
-	if err := c.Close(); err != nil {
-		s.log.Debug("issuer: close response body", slog.String("error", err.Error()))
-	}
 }

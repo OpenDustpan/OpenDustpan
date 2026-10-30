@@ -2,7 +2,6 @@ package issuer_test
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,12 +25,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
-
-// packageSources holds every Go file in this package, so a test can prove from
-// the sources that no production file reaches the mux without recording.
-//
-//go:embed *.go
-var packageSources embed.FS
 
 const (
 	manage = identity.ActionNamespaceManageIssuer
@@ -71,7 +64,12 @@ func (testAuthn) AuthenticateToken(_ context.Context, token string) (identity.Pr
 // testAuthz allows the actions of the subject, minus the denied ones.
 type testAuthz struct{ deny map[identity.Action]bool }
 
-func (a testAuthz) Authorize(_ context.Context, p identity.Principal, action identity.Action, obj identity.Object) error {
+func (a testAuthz) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
 	if slices.Contains(grantsOf(p.Subject), action) && !a.deny[action] {
 		return nil
 	}
@@ -112,7 +110,7 @@ type fixture struct {
 	ns     namespace.Namespace
 }
 
-// build options.
+// buildOptions change the fixture.
 type buildOptions struct {
 	deny        map[identity.Action]bool
 	sessionAge  time.Duration
@@ -121,13 +119,43 @@ type buildOptions struct {
 	noHost      bool
 }
 
+// defaults returns the options of a plain fixture.
+func defaults() buildOptions {
+	return buildOptions{deny: nil, sessionAge: 0, withSession: false, tweak: nil, noHost: false}
+}
+
+func (o buildOptions) withoutHost() buildOptions {
+	o.noHost = true
+
+	return o
+}
+
+func (o buildOptions) session(age time.Duration) buildOptions {
+	o.withSession, o.sessionAge = true, age
+
+	return o
+}
+
+func (o buildOptions) tweaked(f func(cfg *apiissuer.Config)) buildOptions {
+	o.tweak = f
+
+	return o
+}
+
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 
-	return buildFixture(t, buildOptions{})
+	return buildFixture(t, defaults())
 }
 
-func buildFixture(t *testing.T, o buildOptions) fixture {
+// stack is the store, the namespace and the secret service of a fixture.
+type stack struct {
+	store   *sqlite.Store
+	secrets *secret.Service
+	ns      namespace.Namespace
+}
+
+func openStack(t *testing.T) stack {
 	t.Helper()
 
 	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -163,6 +191,13 @@ func buildFixture(t *testing.T, o buildOptions) fixture {
 		t.Fatalf("secret service: %v", err)
 	}
 
+	return stack{store: store, secrets: secrets, ns: ns}
+}
+
+func buildFixture(t *testing.T, o buildOptions) fixture {
+	t.Helper()
+
+	st := openStack(t)
 	authz := testAuthz{deny: o.deny}
 
 	host := "https://dustpan.example"
@@ -171,15 +206,15 @@ func buildFixture(t *testing.T, o buildOptions) fixture {
 	}
 
 	svc, err := issuersvc.NewService(issuersvc.Config{
-		Store: store.Issuer(), Namespaces: store, Sealer: secrets, Authorizer: authz, Notifier: nil, HTTP: nil,
-		IssuerBaseURL: host, PublicURL: "", Now: nil, Log: nil,
+		Store: st.store.Issuer(), Namespaces: st.store, Sealer: st.secrets, Authorizer: authz, Notifier: nil,
+		Fetcher: nil, IssuerBaseURL: host, PublicURL: "", Now: nil, Log: nil,
 	})
 	if err != nil {
 		t.Fatalf("issuer service: %v", err)
 	}
 
 	cfg := apiissuer.Config{
-		Issuer: svc, Authenticator: testAuthn{}, Authorizer: authz, Audit: store, Namespaces: nil,
+		Issuer: svc, Authenticator: testAuthn{}, Authorizer: authz, Audit: st.store, Namespaces: nil,
 		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, SessionPolicy: nil,
 		Logger: slog.New(slog.DiscardHandler),
 	}
@@ -202,7 +237,7 @@ func buildFixture(t *testing.T, o buildOptions) fixture {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, served: apidesctest.CheckStatus(t, handler), store: store, ns: ns}
+	return fixture{handler: handler, served: apidesctest.CheckStatus(t, handler), store: st.store, ns: st.ns}
 }
 
 // request is one call of a test.

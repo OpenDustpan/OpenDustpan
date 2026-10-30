@@ -65,7 +65,7 @@ func (r *stagedRestore) input(t *testing.T) backup.RestoreStageInput {
 
 	return backup.RestoreStageInput{
 		Open: r.sink.read, Want: r.sum, Files: r.files, Options: StageAs(t, r.dst), Strip: false,
-		StripMode: backup.DevStripDetect,
+		StripMode: backup.DevStripDetect, DropIssuerKeys: false,
 	}
 }
 
@@ -375,7 +375,9 @@ func (r *stagedRestore) finishAndCleanNext(t *testing.T, foreign backup.StagingA
 func testRestoreAreaDropsIssuerKeys(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
-	for _, drop := range []bool{false, true} {
+	for _, outcome := range []issuerOutcome{issuerKept, issuerDropped} {
+		drop := outcome == issuerDropped
+
 		r := newStagedRestore(t, newStore)
 
 		seeder, ok := r.dst.(IssuerSeeder)
@@ -404,14 +406,27 @@ func testRestoreAreaDropsIssuerKeys(t *testing.T, newStore RestoreFactory) {
 			t.Fatalf("swap (drop %v): %v", drop, err)
 		}
 
-		checkIssuerAfterStage(t, seeder.IssuerPorts().Store, drop)
+		checkIssuerAfterStage(t, seeder.IssuerPorts().Store, outcome)
 	}
 }
 
+// issuerOutcome says whether a restore dropped the issuer keys or kept them.
+type issuerOutcome int
+
+const (
+	issuerKept issuerOutcome = iota
+	issuerDropped
+)
+
+// issuerKeyCount is the count of seeded issuer keys.
+const issuerKeyCount = 3
+
 // checkIssuerAfterStage checks the issuer tables of the store after a restore
 // that dropped the keys, or kept them.
-func checkIssuerAfterStage(t *testing.T, store profile.IssuerStore, dropped bool) {
+func checkIssuerAfterStage(t *testing.T, store profile.IssuerStore, outcome issuerOutcome) {
 	t.Helper()
+
+	dropped := outcome == issuerDropped
 
 	live, err := store.Live(t.Context(), "acme")
 	if err != nil {
@@ -423,12 +438,23 @@ func checkIssuerAfterStage(t *testing.T, store profile.IssuerStore, dropped bool
 		t.Fatalf("GetIssuerSettings: %v", err)
 	}
 
-	switch {
-	case dropped && (len(live) != 0 || set.CopyCheck != nil):
-		t.Errorf("a restore from another installation kept %d issuer keys and the copy check %v", len(live), set.CopyCheck)
-	case dropped && set.IssuerURL == "":
+	if dropped && (len(live) != 0 || set.CopyCheck != nil) {
+		t.Errorf(
+			"a restore from another installation kept %d issuer keys and the copy check %v",
+			len(live),
+			set.CopyCheck,
+		)
+	}
+
+	if dropped && set.IssuerURL == "" {
 		t.Error("a restore from another installation dropped the settings of the issuer")
-	case !dropped && (len(live) != 3 || set.CopyCheck == nil):
-		t.Errorf("a restore from the same installation holds %d issuer keys and the copy check %v", len(live), set.CopyCheck)
+	}
+
+	if !dropped && (len(live) != issuerKeyCount || set.CopyCheck == nil) {
+		t.Errorf(
+			"a restore from the same installation holds %d issuer keys and the copy check %v",
+			len(live),
+			set.CopyCheck,
+		)
 	}
 }

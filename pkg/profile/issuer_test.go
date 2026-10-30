@@ -7,16 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
-var t0 = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-
 const day = 24 * time.Hour
+
+func t0() time.Time { return time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) }
 
 func key(id string, st profile.KeyState, created time.Time) profile.Key {
 	k := profile.Key{
-		CreatedAt: created, ID: profile.KeyID(id), Namespace: "acme", State: st, Public: []byte("p"),
+		CreatedAt: created, ActivatedAt: time.Time{}, RetiredAt: time.Time{}, DeletedAt: time.Time{},
+		ID: profile.KeyID(id), Namespace: "acme", State: st, Public: []byte("p"), Sealed: nil,
 	}
 
 	if st.HoldsPrivate() {
@@ -37,133 +39,197 @@ func retired(id string, created, at time.Time) profile.Key {
 	return k
 }
 
+// keyWith returns a key with a sealed key and a state that the caller sets.
+func keyWith(id, ns string, st profile.KeyState, sealed []byte) profile.Key {
+	return profile.Key{
+		CreatedAt: t0(), ActivatedAt: time.Time{}, RetiredAt: time.Time{}, DeletedAt: time.Time{},
+		ID: profile.KeyID(id), Namespace: namespace.Name(ns), State: st, Public: []byte("p"), Sealed: sealed,
+	}
+}
+
+func mv(at time.Time, id string, from, to profile.KeyState) profile.KeyMove {
+	return profile.KeyMove{At: at, ID: profile.KeyID(id), From: from, To: to}
+}
+
+func moves(m ...profile.KeyMove) profile.KeyChange {
+	return profile.KeyChange{Add: nil, Move: m, Initial: false}
+}
+
+func adds(k ...profile.Key) profile.KeyChange {
+	return profile.KeyChange{Add: k, Move: nil, Initial: false}
+}
+
+// planCase is one case of TestPlanRotationAtEachBoundary.
+type planCase struct {
+	name     string
+	keys     []profile.Key
+	at       time.Time
+	opts     profile.RotationOptions
+	moves    []profile.KeyMove
+	newNext  bool
+	newAct   bool
+	wantErr  error
+	promoted bool
+}
+
+func plan(name string, keys []profile.Key, at time.Time, kind profile.RotationKind, promote bool) planCase {
+	return planCase{
+		name: name, keys: keys, at: at, opts: profile.RotationOptions{Kind: kind, Promote: promote}, moves: nil,
+		newNext: false, newAct: false, wantErr: nil, promoted: false,
+	}
+}
+
+func (c planCase) wantMoves(m ...profile.KeyMove) planCase {
+	c.moves = m
+
+	return c
+}
+
+func (c planCase) makesNext() planCase {
+	c.newNext = true
+
+	return c
+}
+
+func (c planCase) makesActive() planCase {
+	c.newAct = true
+
+	return c
+}
+
+func (c planCase) promotes() planCase {
+	c.promoted = true
+
+	return c
+}
+
+func (c planCase) fails(err error) planCase {
+	c.wantErr = err
+
+	return c
+}
+
+func planCases() []planCase {
+	active := key("oik-active", profile.KeyActive, t0())
+	next := key("oik-next", profile.KeyNext, t0())
+	both := []profile.Key{active, next}
+	old := []profile.Key{active, retired("oik-old", t0().Add(-day), t0())}
+	end := t0().Add(90 * day)
+	one := t0().Add(day)
+	sched, normal := profile.RotateScheduled, profile.RotateNormal
+	promote := []profile.KeyMove{
+		mv(end, "oik-active", profile.KeyActive, profile.KeyRetired),
+		mv(end, "oik-next", profile.KeyNext, profile.KeyActive),
+	}
+
+	return []planCase{
+		plan("before the end", both, end.Add(-time.Second), sched, true),
+		plan("at the end", both, end, sched, true).wantMoves(promote...).promotes(),
+		plan("at the end with no copy of the next key", both, end, sched, false),
+		plan("at the end with no next key", []profile.Key{active}, end, sched, true).makesNext(),
+		plan("83 days: next key made", []profile.Key{active}, t0().Add(83*day), sched, true).makesNext(),
+		plan("83 days less a second: none", []profile.Key{active}, t0().Add(83*day-time.Second), sched, true),
+		plan("83 days with a next key: none", both, t0().Add(83*day), sched, true),
+		plan("retired for 7 days is deleted", old, t0().Add(7*day), sched, true).wantMoves(
+			mv(t0().Add(7*day), "oik-old", profile.KeyRetired, profile.KeyDeleted),
+		),
+		plan("retired for less than 7 days stays", old, t0().Add(7*day-time.Second), sched, true),
+		plan("normal rotation", both, one, normal, true).wantMoves(
+			mv(one, "oik-active", profile.KeyActive, profile.KeyRetired),
+			mv(one, "oik-next", profile.KeyNext, profile.KeyActive),
+		).makesNext().promotes(),
+		plan("normal rotation without a next key", []profile.Key{active}, one, normal, true).makesNext(),
+		plan(
+			"normal rotation with no copy of the next key",
+			both,
+			one,
+			normal,
+			false,
+		).fails(profile.ErrIssuerKeyMissing),
+		plan("the third retired key deletes the oldest", []profile.Key{
+			active,
+			next,
+			retired("oik-r1", t0().Add(-3*day), t0().Add(-2*day)),
+			retired("oik-r2", t0().Add(-2*day), t0().Add(-day)),
+		}, one, normal, true).wantMoves(
+			mv(one, "oik-active", profile.KeyActive, profile.KeyRetired),
+			mv(one, "oik-next", profile.KeyNext, profile.KeyActive),
+			mv(one, "oik-r1", profile.KeyRetired, profile.KeyDeleted),
+		).makesNext().promotes(),
+		plan("emergency replaces everything", []profile.Key{active, next, retired("oik-r1", t0(), t0())}, one,
+			profile.RotateEmergency, false).wantMoves(
+			mv(one, "oik-active", profile.KeyActive, profile.KeyDeleted),
+			mv(one, "oik-next", profile.KeyNext, profile.KeyDeleted),
+			mv(one, "oik-r1", profile.KeyRetired, profile.KeyDeleted),
+		).makesActive().makesNext(),
+		plan("no key", nil, t0(), sched, true),
+		plan("unknown kind", []profile.Key{active}, t0(), "weekly", false).fails(profile.ErrInvalid),
+	}
+}
+
+func sortMoves(m []profile.KeyMove) {
+	slices.SortFunc(m, func(a, b profile.KeyMove) int { return strings.Compare(string(a.ID), string(b.ID)) })
+}
+
 func TestPlanRotationAtEachBoundary(t *testing.T) {
 	t.Parallel()
 
-	active := key("oik-active", profile.KeyActive, t0)
-	next := key("oik-next", profile.KeyNext, t0)
-
-	for _, tc := range []struct {
-		name     string
-		keys     []profile.Key
-		at       time.Time
-		kind     profile.RotationKind
-		promote  bool
-		moves    []profile.KeyMove
-		newNext  bool
-		newAct   bool
-		wantErr  error
-		promoted bool
-	}{
-		{name: "before the end", keys: []profile.Key{active, next}, at: t0.Add(90*day - time.Second), kind: profile.RotateScheduled, promote: true},
-		{
-			name: "at the end", keys: []profile.Key{active, next}, at: t0.Add(90 * day), kind: profile.RotateScheduled, promote: true,
-			moves: []profile.KeyMove{
-				{At: t0.Add(90 * day), ID: "oik-active", From: profile.KeyActive, To: profile.KeyRetired},
-				{At: t0.Add(90 * day), ID: "oik-next", From: profile.KeyNext, To: profile.KeyActive},
-			}, promoted: true,
-		},
-		{name: "at the end with no copy of the next key", keys: []profile.Key{active, next}, at: t0.Add(90 * day), kind: profile.RotateScheduled},
-		{name: "at the end with no next key", keys: []profile.Key{active}, at: t0.Add(90 * day), kind: profile.RotateScheduled, promote: true, newNext: true},
-		{name: "83 days: next key made", keys: []profile.Key{active}, at: t0.Add(83 * day), kind: profile.RotateScheduled, promote: true, newNext: true},
-		{name: "83 days less a second: none", keys: []profile.Key{active}, at: t0.Add(83*day - time.Second), kind: profile.RotateScheduled, promote: true},
-		{name: "83 days with a next key: none", keys: []profile.Key{active, next}, at: t0.Add(83 * day), kind: profile.RotateScheduled, promote: true},
-		{
-			name: "retired for 7 days is deleted", keys: []profile.Key{active, retired("oik-old", t0.Add(-day), t0)}, at: t0.Add(7 * day),
-			kind: profile.RotateScheduled, promote: true,
-			moves: []profile.KeyMove{{At: t0.Add(7 * day), ID: "oik-old", From: profile.KeyRetired, To: profile.KeyDeleted}},
-		},
-		{
-			name: "retired for less than 7 days stays", keys: []profile.Key{active, retired("oik-old", t0.Add(-day), t0)},
-			at: t0.Add(7*day - time.Second), kind: profile.RotateScheduled, promote: true,
-		},
-		{
-			name: "normal rotation", keys: []profile.Key{active, next}, at: t0.Add(day), kind: profile.RotateNormal, promote: true,
-			moves: []profile.KeyMove{
-				{At: t0.Add(day), ID: "oik-active", From: profile.KeyActive, To: profile.KeyRetired},
-				{At: t0.Add(day), ID: "oik-next", From: profile.KeyNext, To: profile.KeyActive},
-			}, newNext: true, promoted: true,
-		},
-		{name: "normal rotation without a next key", keys: []profile.Key{active}, at: t0.Add(day), kind: profile.RotateNormal, promote: true, newNext: true},
-		{name: "normal rotation with no copy of the next key", keys: []profile.Key{active, next}, at: t0.Add(day), kind: profile.RotateNormal, wantErr: profile.ErrIssuerKeyMissing},
-		{
-			name: "the third retired key deletes the oldest", at: t0.Add(day), kind: profile.RotateNormal, promote: true,
-			keys: []profile.Key{
-				active, next, retired("oik-r1", t0.Add(-3*day), t0.Add(-2*day)), retired("oik-r2", t0.Add(-2*day), t0.Add(-day)),
-			},
-			moves: []profile.KeyMove{
-				{At: t0.Add(day), ID: "oik-active", From: profile.KeyActive, To: profile.KeyRetired},
-				{At: t0.Add(day), ID: "oik-next", From: profile.KeyNext, To: profile.KeyActive},
-				{At: t0.Add(day), ID: "oik-r1", From: profile.KeyRetired, To: profile.KeyDeleted},
-			}, newNext: true, promoted: true,
-		},
-		{
-			name: "emergency replaces everything", keys: []profile.Key{active, next, retired("oik-r1", t0, t0)}, at: t0.Add(day),
-			kind: profile.RotateEmergency,
-			moves: []profile.KeyMove{
-				{At: t0.Add(day), ID: "oik-active", From: profile.KeyActive, To: profile.KeyDeleted},
-				{At: t0.Add(day), ID: "oik-next", From: profile.KeyNext, To: profile.KeyDeleted},
-				{At: t0.Add(day), ID: "oik-r1", From: profile.KeyRetired, To: profile.KeyDeleted},
-			}, newAct: true, newNext: true,
-		},
-		{name: "no key", at: t0, kind: profile.RotateScheduled, promote: true},
-		{name: "unknown kind", keys: []profile.Key{active}, at: t0, kind: "weekly", wantErr: profile.ErrInvalid},
-	} {
+	for _, tc := range planCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			plan, err := profile.PlanRotation(tc.keys, tc.at, tc.kind, tc.promote)
-			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("error = %v, want %v", err, tc.wantErr)
-				}
-
-				return
-			}
-
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			sortMoves := func(m []profile.KeyMove) {
-				slices.SortFunc(m, func(a, b profile.KeyMove) int { return strings.Compare(string(a.ID), string(b.ID)) })
-			}
-			sortMoves(plan.Moves)
-			sortMoves(tc.moves)
-
-			if !slices.Equal(plan.Moves, tc.moves) || plan.NewNext != tc.newNext || plan.NewActive != tc.newAct ||
-				plan.Promoted() != tc.promoted {
-				t.Errorf("plan = %+v, want moves %v, newNext %v, newActive %v", plan, tc.moves, tc.newNext, tc.newAct)
-			}
-
-			// The plan never breaks the rules of a key set.
-			result, applyErr := profile.ApplyKeys("acme", tc.keys, profile.KeyChange{Move: plan.Moves})
-			if applyErr != nil {
-				t.Fatalf("ApplyKeys: %v", applyErr)
-			}
-
-			_ = result
+			checkPlan(t, tc)
 		})
+	}
+}
+
+func checkPlan(t *testing.T, tc planCase) {
+	t.Helper()
+
+	got, err := profile.PlanRotation(tc.keys, tc.at, tc.opts)
+	if tc.wantErr != nil {
+		if !errors.Is(err, tc.wantErr) {
+			t.Fatalf("error = %v, want %v", err, tc.wantErr)
+		}
+
+		return
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sortMoves(got.Moves)
+	sortMoves(tc.moves)
+
+	if !slices.Equal(got.Moves, tc.moves) || got.NewNext != tc.newNext || got.NewActive != tc.newAct ||
+		got.Promoted() != tc.promoted {
+		t.Errorf("plan = %+v, want moves %v, newNext %v, newActive %v", got, tc.moves, tc.newNext, tc.newAct)
+	}
+
+	// The plan never breaks the rules of a key set.
+	if _, applyErr := profile.ApplyKeys("acme", tc.keys, moves(got.Moves...)); applyErr != nil {
+		t.Fatalf("ApplyKeys: %v", applyErr)
 	}
 }
 
 func TestCheckKeySet(t *testing.T) {
 	t.Parallel()
 
-	a, n := key("oik-a", profile.KeyActive, t0), key("oik-n", profile.KeyNext, t0)
+	a, n := key("oik-a", profile.KeyActive, t0()), key("oik-n", profile.KeyNext, t0())
+	r := func(id string) profile.Key { return retired(id, t0(), t0()) }
 
 	for name, tc := range map[string]struct {
 		keys []profile.Key
 		ok   bool
 	}{
 		"active and next":           {[]profile.Key{a, n}, true},
-		"two active":                {[]profile.Key{a, key("oik-b", profile.KeyActive, t0)}, false},
-		"two next":                  {[]profile.Key{a, n, key("oik-b", profile.KeyNext, t0)}, false},
-		"three retired":             {[]profile.Key{a, retired("oik-1", t0, t0), retired("oik-2", t0, t0), retired("oik-3", t0, t0)}, false},
-		"two retired":               {[]profile.Key{a, retired("oik-1", t0, t0), retired("oik-2", t0, t0)}, true},
+		"two active":                {[]profile.Key{a, key("oik-b", profile.KeyActive, t0())}, false},
+		"two next":                  {[]profile.Key{a, n, key("oik-b", profile.KeyNext, t0())}, false},
+		"three retired":             {[]profile.Key{a, r("oik-1"), r("oik-2"), r("oik-3")}, false},
+		"two retired":               {[]profile.Key{a, r("oik-1"), r("oik-2")}, true},
 		"next with no active":       {[]profile.Key{n}, false},
-		"active with no sealed key": {[]profile.Key{{ID: "oik-x", State: profile.KeyActive, Namespace: "acme", Public: []byte("p"), CreatedAt: t0}}, false},
-		"retired with a sealed key": {[]profile.Key{a, {ID: "oik-x", State: profile.KeyRetired, Namespace: "acme", Public: []byte("p"), Sealed: []byte("s"), CreatedAt: t0}}, false},
+		"active with no sealed key": {[]profile.Key{keyWith("oik-x", "acme", profile.KeyActive, nil)}, false},
+		"retired with a sealed key": {[]profile.Key{a, keyWith("oik-x", "acme", profile.KeyRetired, []byte("s"))}, false},
 	} {
 		if err := profile.CheckKeySet(tc.keys); (err == nil) != tc.ok {
 			t.Errorf("%s: error = %v", name, err)
@@ -174,18 +240,18 @@ func TestCheckKeySet(t *testing.T) {
 func TestApplyKeysChecksEachMove(t *testing.T) {
 	t.Parallel()
 
-	a := key("oik-a", profile.KeyActive, t0)
+	a := key("oik-a", profile.KeyActive, t0())
 
 	for name, ch := range map[string]profile.KeyChange{
-		"wrong state":        {Move: []profile.KeyMove{{At: t0, ID: "oik-a", From: profile.KeyNext, To: profile.KeyRetired}}},
-		"unknown key":        {Move: []profile.KeyMove{{At: t0, ID: "oik-zz", From: profile.KeyActive, To: profile.KeyRetired}}},
-		"same state":         {Move: []profile.KeyMove{{At: t0, ID: "oik-a", From: profile.KeyActive, To: profile.KeyActive}}},
-		"no time":            {Move: []profile.KeyMove{{ID: "oik-a", From: profile.KeyActive, To: profile.KeyRetired}}},
-		"from deleted":       {Move: []profile.KeyMove{{At: t0, ID: "oik-a", From: profile.KeyDeleted, To: profile.KeyActive}}},
-		"initial with a key": {Initial: true},
-		"duplicate ID":       {Add: []profile.Key{key("oik-a", profile.KeyRetired, t0)}},
-		"other namespace":    {Add: []profile.Key{{ID: "oik-b", State: profile.KeyNext, Namespace: "globex", Public: []byte("p"), Sealed: []byte("s"), CreatedAt: t0}}},
-		"second active":      {Add: []profile.Key{key("oik-b", profile.KeyActive, t0)}},
+		"wrong state":        moves(mv(t0(), "oik-a", profile.KeyNext, profile.KeyRetired)),
+		"unknown key":        moves(mv(t0(), "oik-zz", profile.KeyActive, profile.KeyRetired)),
+		"same state":         moves(mv(t0(), "oik-a", profile.KeyActive, profile.KeyActive)),
+		"no time":            moves(mv(time.Time{}, "oik-a", profile.KeyActive, profile.KeyRetired)),
+		"from deleted":       moves(mv(t0(), "oik-a", profile.KeyDeleted, profile.KeyActive)),
+		"initial with a key": {Add: nil, Move: nil, Initial: true},
+		"duplicate ID":       adds(key("oik-a", profile.KeyRetired, t0())),
+		"other namespace":    adds(keyWith("oik-b", "globex", profile.KeyNext, []byte("s"))),
+		"second active":      adds(key("oik-b", profile.KeyActive, t0())),
 	} {
 		if _, err := profile.ApplyKeys("acme", []profile.Key{a}, ch); err == nil {
 			t.Errorf("%s: no error", name)

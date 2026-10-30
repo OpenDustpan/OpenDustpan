@@ -60,12 +60,12 @@ func seedBackupIssuer(t *testing.T, s BackupStore, acme namespace.Namespace) *se
 			k.Sealed = []byte("sealed-" + string(state) + "\x00\xff")
 		}
 
-		switch state {
-		case profile.KeyActive:
+		if state == profile.KeyActive {
 			k.ActivatedAt = at
-		case profile.KeyRetired:
+		}
+
+		if state == profile.KeyRetired {
 			k.RetiredAt = at
-		case profile.KeyNext, profile.KeyDeleted:
 		}
 
 		return k
@@ -139,25 +139,39 @@ func checkRestoredIssuer(t *testing.T, dst RestoreStore, acme namespace.Namespac
 		t.Fatalf("restored issuer keys = %d, %v, want %d", len(live), err, len(seeded.keys))
 	}
 
-	for _, want := range seeded.keys {
-		var got *profile.Key
-
-		for i := range live {
-			if live[i].ID == want.ID {
-				got = &live[i]
-			}
-		}
-
-		if got == nil || got.State != want.State || !bytes.Equal(got.Public, want.Public) ||
-			!bytes.Equal(got.Sealed, want.Sealed) || !got.CreatedAt.Equal(want.CreatedAt) {
-			t.Errorf("restored issuer key %s = %+v, want %+v", want.ID, got, want)
-		}
+	for i := range seeded.keys {
+		checkRestoredKey(t, live, &seeded.keys[i])
 	}
 
 	set, err := store.GetIssuerSettings(t.Context(), acme.Name)
-	if err != nil || set.Version != seeded.settings.Version || set.IssuerURL != seeded.settings.IssuerURL ||
-		!set.IncludeActorName || len(set.SubjectTemplate) != 3 || set.CopyCheck == nil ||
-		!set.CopyCheck.Holds(seeded.keys[0].ID) {
+	if err != nil || !sameSettings(&set, seeded) {
 		t.Errorf("restored issuer settings = %+v, %v, want %+v", set, err, seeded.settings)
+	}
+}
+
+// templateKeys is the count of keys of the seeded subject template.
+const templateKeys = 3
+
+func sameSettings(set *profile.IssuerSettings, seeded *seededIssuer) bool {
+	return set.Version == seeded.settings.Version && set.IssuerURL == seeded.settings.IssuerURL &&
+		set.IncludeActorName && len(set.SubjectTemplate) == templateKeys && set.CopyCheck != nil &&
+		set.CopyCheck.Holds(seeded.keys[0].ID)
+}
+
+// checkRestoredKey checks that live holds the key want byte for byte.
+func checkRestoredKey(t *testing.T, live []profile.Key, want *profile.Key) {
+	t.Helper()
+
+	var got *profile.Key
+
+	for i := range live {
+		if live[i].ID == want.ID {
+			got = &live[i]
+		}
+	}
+
+	if got == nil || got.State != want.State || !bytes.Equal(got.Public, want.Public) ||
+		!bytes.Equal(got.Sealed, want.Sealed) || !got.CreatedAt.Equal(want.CreatedAt) {
+		t.Errorf("restored issuer key %s = %+v, want %+v", want.ID, got, want)
 	}
 }

@@ -71,30 +71,6 @@ func (memIssuerNamespaces) ListNamespaces(context.Context) ([]namespace.Namespac
 
 func (memIssuerNamespaces) Ping(context.Context) error { return nil }
 
-// begin checks the fence and the entries of a write.
-func (m *memIssuer) begin(f namespace.Fence, es []audit.Entry) error {
-	ns, ok := m.namespaces[f.Namespace]
-	if !ok {
-		return namespace.ErrNotFound
-	}
-
-	if ns.FailoverVersion != f.FailoverVersion {
-		return namespace.ErrFenced
-	}
-
-	if len(es) == 0 {
-		return profile.ErrInvalid
-	}
-
-	for _, e := range es {
-		if err := e.Validate(); err != nil || e.Namespace != f.Namespace {
-			return audit.ErrInvalidEntry
-		}
-	}
-
-	return nil
-}
-
 func (m *memIssuer) NamespaceByID(_ context.Context, id namespace.ID) (namespace.Namespace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -108,45 +84,32 @@ func (m *memIssuer) NamespaceByID(_ context.Context, id namespace.ID) (namespace
 	return namespace.Namespace{}, namespace.ErrNotFound
 }
 
-func (m *memIssuer) read(ns namespace.Name, keep func(profile.Key) bool, secret bool) []profile.Key {
-	var out []profile.Key
-
-	for _, k := range m.keys[ns] {
-		if !keep(k) {
-			continue
-		}
-
-		if !secret {
-			k.Sealed = nil
-		}
-
-		out = append(out, k)
-	}
-
-	return out
-}
-
 func (m *memIssuer) Published(_ context.Context, ns namespace.Name) ([]profile.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.read(ns, func(k profile.Key) bool { return k.State.Published() }, false), nil
+	keys := m.read(ns)
+	for i := range keys {
+		keys[i].Sealed = nil
+	}
+
+	return keys, nil
 }
 
 func (m *memIssuer) Live(_ context.Context, ns namespace.Name) ([]profile.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.read(ns, func(k profile.Key) bool { return k.State.Published() }, true), nil
+	return m.read(ns), nil
 }
 
 func (m *memIssuer) History(_ context.Context, ns namespace.Name) ([]profile.KeyInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var out []profile.KeyInfo
-	for _, k := range m.keys[ns] {
-		out = append(out, k.Info())
+	out := make([]profile.KeyInfo, 0, len(m.keys[ns]))
+	for i := range m.keys[ns] {
+		out = append(out, m.keys[ns][i].Info())
 	}
 
 	return out, nil
@@ -229,10 +192,50 @@ func (m *memIssuer) RecordCopyCheck(
 	}
 
 	c.Verified = slices.DeleteFunc(slices.Clone(c.Verified), func(id profile.KeyID) bool {
-		return !slices.ContainsFunc(m.keys[ns], func(k profile.Key) bool { return k.ID == id && k.State != profile.KeyDeleted })
+		return !slices.ContainsFunc(
+			m.keys[ns],
+			func(k profile.Key) bool { return k.ID == id && k.State != profile.KeyDeleted },
+		)
 	})
 	cur.CopyCheck = &c
 	m.settings[ns] = cur
 
 	return nil
+}
+
+// begin checks the fence and the entries of a write.
+func (m *memIssuer) begin(f namespace.Fence, es []audit.Entry) error {
+	ns, ok := m.namespaces[f.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if ns.FailoverVersion != f.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	if len(es) == 0 {
+		return profile.ErrInvalid
+	}
+
+	for i := range es {
+		if err := es[i].Validate(); err != nil || es[i].Namespace != f.Namespace {
+			return audit.ErrInvalidEntry
+		}
+	}
+
+	return nil
+}
+
+// read returns a copy of the published keys of ns, with their sealed keys.
+func (m *memIssuer) read(ns namespace.Name) []profile.Key {
+	var out []profile.Key
+
+	for i := range m.keys[ns] {
+		if m.keys[ns][i].State.Published() {
+			out = append(out, m.keys[ns][i])
+		}
+	}
+
+	return out
 }

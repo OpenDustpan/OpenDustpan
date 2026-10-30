@@ -50,33 +50,38 @@ func (p RotationPlan) Deleted() []KeyID {
 	return out
 }
 
+// RotationOptions say how a rotation runs. Promote says that a promotion may
+// run. A namespace with an issuerURL sets it only when the copy check found
+// the next key. A scheduled step with no promotion still deletes old retired
+// keys and makes the next key. A normal rotation with no promotion returns
+// ErrIssuerKeyMissing.
+type RotationOptions struct {
+	Kind    RotationKind
+	Promote bool
+}
+
 // PlanRotation plans one rotation step at now for the live keys of a
 // namespace (the states next, active and retired).
 //
-// promote says that a promotion may run. A namespace with an issuerURL sets
-// it only when the copy check found the next key. A scheduled step with no
-// promotion still deletes old retired keys and makes the next key. A normal
-// rotation with promote false returns ErrIssuerKeyMissing.
-//
 // A normal rotation with no next key makes one and promotes nothing: a
 // relying party must see a key in the JWKS before the key signs.
-func PlanRotation(keys []Key, now time.Time, kind RotationKind, promote bool) (RotationPlan, error) {
-	switch kind {
+func PlanRotation(keys []Key, now time.Time, o RotationOptions) (RotationPlan, error) {
+	switch o.Kind {
 	case RotateEmergency:
 		return planEmergency(keys, now), nil
 	case RotateNormal, RotateScheduled:
-		return planStep(keys, now, kind, promote)
+		return planStep(keys, now, o)
 	default:
-		return RotationPlan{}, fmt.Errorf("%w: rotation kind %q", ErrInvalid, kind)
+		return RotationPlan{}, fmt.Errorf("%w: rotation kind %q", ErrInvalid, o.Kind)
 	}
 }
 
 func planEmergency(keys []Key, now time.Time) RotationPlan {
 	plan := RotationPlan{Moves: nil, NewActive: true, NewNext: true}
 
-	for _, k := range keys {
-		if k.State != KeyDeleted {
-			plan.Moves = append(plan.Moves, KeyMove{At: now, ID: k.ID, From: k.State, To: KeyDeleted})
+	for i := range keys {
+		if keys[i].State != KeyDeleted {
+			plan.Moves = append(plan.Moves, KeyMove{At: now, ID: keys[i].ID, From: keys[i].State, To: KeyDeleted})
 		}
 	}
 
@@ -86,9 +91,9 @@ func planEmergency(keys []Key, now time.Time) RotationPlan {
 func byState(keys []Key, s KeyState) []Key {
 	var out []Key
 
-	for _, k := range keys {
-		if k.State == s {
-			out = append(out, k)
+	for i := range keys {
+		if keys[i].State == s {
+			out = append(out, keys[i])
 		}
 	}
 
@@ -97,77 +102,93 @@ func byState(keys []Key, s KeyState) []Key {
 	return out
 }
 
-func planStep(keys []Key, now time.Time, kind RotationKind, promote bool) (RotationPlan, error) {
-	var plan RotationPlan
+// stepPlan builds the plan of one scheduled or normal step. It remembers the
+// keys that the plan deletes, so no key moves twice.
+type stepPlan struct {
+	plan RotationPlan
+	gone map[KeyID]bool
+	now  time.Time
+}
 
-	active := byState(keys, KeyActive)
-	next := byState(keys, KeyNext)
-	retired := byState(keys, KeyRetired)
-	gone := map[KeyID]bool{}
+func (p *stepPlan) move(k *Key, to KeyState) {
+	p.plan.Moves = append(p.plan.Moves, KeyMove{At: p.now, ID: k.ID, From: k.State, To: to})
 
-	del := func(k Key) {
-		plan.Moves = append(plan.Moves, KeyMove{At: now, ID: k.ID, From: k.State, To: KeyDeleted})
-		gone[k.ID] = true
+	if to == KeyDeleted {
+		p.gone[k.ID] = true
 	}
+}
 
-	for _, k := range retired {
-		if !k.RetiredAt.Add(RetiredKeyKeep).After(now) {
-			del(k)
+// deleteOld deletes the retired keys that stayed for RetiredKeyKeep.
+func (p *stepPlan) deleteOld(retired []Key) {
+	for i := range retired {
+		if !retired[i].RetiredAt.Add(RetiredKeyKeep).After(p.now) {
+			p.move(&retired[i], KeyDeleted)
+		}
+	}
+}
+
+// promote retires the active key and activates the next key. The JWKS holds at
+// most MaxRetiredKeys retired keys: the key that retires now needs a place, so
+// the oldest retired keys go first.
+func (p *stepPlan) promote(cur, next *Key, retired []Key) {
+	p.move(cur, KeyRetired)
+	p.move(next, KeyActive)
+
+	live := 0
+
+	for i := range retired {
+		if !p.gone[retired[i].ID] {
+			live++
 		}
 	}
 
+	for i := range retired {
+		if live < MaxRetiredKeys {
+			break
+		}
+
+		if !p.gone[retired[i].ID] {
+			p.move(&retired[i], KeyDeleted)
+
+			live--
+		}
+	}
+}
+
+func planStep(keys []Key, now time.Time, o RotationOptions) (RotationPlan, error) {
+	p := &stepPlan{plan: RotationPlan{Moves: nil, NewActive: false, NewNext: false}, gone: map[KeyID]bool{}, now: now}
+
+	active, next, retired := byState(keys, KeyActive), byState(keys, KeyNext), byState(keys, KeyRetired)
+
+	p.deleteOld(retired)
+
 	if len(active) == 0 {
 		// No key: the first make of keys is not a rotation.
-		return plan, nil
+		return p.plan, nil
 	}
 
-	cur := active[0]
-	due := !cur.ActivatedAt.Add(ActiveKeyLifetime).After(now)
+	cur := &active[0]
+	end := cur.ActivatedAt.Add(ActiveKeyLifetime)
+	normal := o.Kind == RotateNormal
 
-	if kind == RotateNormal && !promote && len(next) > 0 {
+	if normal && !o.Promote && len(next) > 0 {
 		return RotationPlan{}, fmt.Errorf("%w: the copy check did not find the next key", ErrIssuerKeyMissing)
 	}
 
 	// A scheduled step promotes at the end of the lifetime. A normal rotation
 	// promotes now. A next key that this step makes never signs in this step.
-	if len(next) > 0 && promote && (kind == RotateNormal || due) {
-		plan.Moves = append(plan.Moves,
-			KeyMove{At: now, ID: cur.ID, From: KeyActive, To: KeyRetired},
-			KeyMove{At: now, ID: next[0].ID, From: KeyNext, To: KeyActive},
-		)
+	if len(next) > 0 && o.Promote && (normal || !end.After(now)) {
+		p.promote(cur, &next[0], retired)
+		p.plan.NewNext = normal
 
-		live := 0
-
-		for _, k := range retired {
-			if !gone[k.ID] {
-				live++
-			}
-		}
-
-		// The JWKS holds at most MaxRetiredKeys retired keys: the key that
-		// retires now needs a place, so the oldest retired keys go first.
-		for _, k := range retired {
-			if live < MaxRetiredKeys {
-				break
-			}
-
-			if !gone[k.ID] {
-				del(k)
-
-				live--
-			}
-		}
-
-		plan.NewNext = kind == RotateNormal
-
-		return plan, nil
+		return p.plan, nil
 	}
 
-	if len(next) == 0 && (kind == RotateNormal || !cur.ActivatedAt.Add(ActiveKeyLifetime-NextKeyLead).After(now)) {
-		plan.NewNext = true
+	if len(next) == 0 && (normal || !end.Add(-NextKeyLead).After(now)) {
+		p.plan.NewNext = true
 	}
 
-	return plan, nil
+	return p.plan, nil
 }
 
 // CheckKey checks the shape of a key before a store adds it.
@@ -204,7 +225,8 @@ func CheckMove(m KeyMove) error {
 func CheckKeySet(keys []Key) error {
 	count := map[KeyState]int{}
 
-	for _, k := range keys {
+	for i := range keys {
+		k := &keys[i]
 		count[k.State]++
 
 		if k.State.HoldsPrivate() != (len(k.Sealed) > 0) {

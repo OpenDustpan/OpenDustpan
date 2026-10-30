@@ -99,8 +99,8 @@ func (o *outbox) Append(_ context.Context, _ namespace.Fence, ns []notify.Notifi
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	for _, n := range ns {
-		if err := n.Validate(); err != nil {
+	for i := range ns {
+		if err := ns[i].Validate(); err != nil {
 			return err
 		}
 	}
@@ -115,8 +115,8 @@ func (o *outbox) types() []notify.Type {
 	defer o.mu.Unlock()
 
 	out := make([]notify.Type, 0, len(o.notes))
-	for _, n := range o.notes {
-		out = append(out, n.Type)
+	for i := range o.notes {
+		out = append(out, o.notes[i].Type)
 	}
 
 	return out
@@ -135,7 +135,9 @@ type harness struct {
 	nobody *profile.Actor
 }
 
-var allActions = []identity.Action{identity.ActionNamespaceManageIssuer, identity.ActionNamespaceRead}
+func allActions() []identity.Action {
+	return []identity.Action{identity.ActionNamespaceManageIssuer, identity.ActionNamespaceRead}
+}
 
 // options changes the config of a harness.
 type options func(*issuersvc.Config, *harness)
@@ -155,17 +157,20 @@ func newHarness(t *testing.T, opts ...options) *harness {
 	})
 
 	h := &harness{
-		t: t, store: st, clock: &clock{mu: sync.Mutex{}, now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)},
-		outbox: &outbox{mu: sync.Mutex{}, notes: nil},
+		t: t, svc: nil, store: st, clock: &clock{mu: sync.Mutex{}, now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)},
+		outbox: &outbox{mu: sync.Mutex{}, notes: nil}, ns: namespace.Namespace{
+			CreatedAt: time.Time{}, ID: "", Name: "", PrimaryInstallation: "", Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			FailoverVersion: 0,
+		}, admin: nil, reader: nil, nobody: nil,
 	}
 
 	h.ns = h.addNamespace("acme")
 	h.admin, h.reader, h.nobody = h.actor(alice), h.actor("rita"), h.actor("nobody")
 
 	cfg := issuersvc.Config{
-		Store: st.Issuer(), Namespaces: st, Sealer: scopedSealer{}, Notifier: h.outbox, HTTP: nil,
+		Store: st.Issuer(), Namespaces: st, Sealer: scopedSealer{}, Notifier: h.outbox, Fetcher: nil,
 		Authorizer: grants{
-			alice: allActions, "rita": {identity.ActionNamespaceRead},
+			alice: allActions(), "rita": {identity.ActionNamespaceRead},
 		},
 		IssuerBaseURL: issuerHost, PublicURL: "https://api.example.com", Now: h.clock.Now, Log: nil,
 	}
@@ -199,8 +204,11 @@ func (h *harness) addNamespace(name string) namespace.Namespace {
 
 func (h *harness) actor(subject string) *profile.Actor {
 	return &profile.Actor{
-		Principal: identity.Principal{Subject: subject},
-		By:        audit.Entry{Channel: audit.ChannelAPI, PrincipalKind: audit.PrincipalKindPerson},
+		Principal: identity.Principal{
+			Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		},
+		By: auditBy(""),
 	}
 }
 
@@ -208,8 +216,9 @@ func (h *harness) actor(subject string) *profile.Actor {
 func (h *harness) open(ns namespace.Namespace, subject string) profile.OpenContext {
 	return profile.OpenContext{
 		Claims:    map[string]any{"access": "write", "tool": "pulumi"},
-		By:        audit.Entry{Subject: alice, Channel: audit.ChannelAPI, PrincipalKind: audit.PrincipalKindPerson},
-		Namespace: ns, Subject: subject, Profile: "aws", ProfileID: "prf-1",
+		By:        auditBy(alice),
+		Namespace: ns.Name, NamespaceID: ns.ID, FailoverVersion: ns.FailoverVersion, Subject: subject,
+		Profile: "aws", ProfileID: "prf-1",
 	}
 }
 
@@ -276,3 +285,13 @@ func wantErr(t *testing.T, what string, err, want error) {
 
 // issuerConfig is the config of the service under test.
 type issuerConfig = issuersvc.Config
+
+// auditBy returns the audit template of a person who acts through the API.
+func auditBy(subject string) audit.Entry {
+	return audit.Entry{
+		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: "", TokenID: "", Action: "", Object: "",
+		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
+		Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
+		Sequence: 0, FenceVersion: 0, PrincipalKind: audit.PrincipalKindPerson, JobID: "", Reason: "",
+	}
+}

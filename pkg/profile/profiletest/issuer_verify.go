@@ -23,6 +23,9 @@ type Expect struct {
 	Audience string
 }
 
+// compactParts is the number of parts of a compact JWT.
+const compactParts = 3
+
 // VerifyToken checks a compact JWT against the JWKS document jwks, as a cloud
 // does, and returns its claims. It is independent of the code of the issuer:
 // it uses only the standard library, and it accepts RS256 and nothing else.
@@ -31,7 +34,7 @@ type Expect struct {
 // wrong audience, an expired token and a token that is not yet valid.
 func VerifyToken(jwks []byte, token string, want Expect) (map[string]any, error) {
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
+	if len(parts) != compactParts {
 		return nil, fmt.Errorf("%w: a compact JWT has three parts", ErrToken)
 	}
 
@@ -89,46 +92,68 @@ func decodePart(part string, into any) error {
 	return nil
 }
 
-func findKey(jwks []byte, kid string) (*rsa.PublicKey, error) {
-	var doc struct {
-		Keys []struct {
-			Kty string `json:"kty"`
-			Use string `json:"use"`
-			Alg string `json:"alg"`
-			Kid string `json:"kid"`
-			N   string `json:"n"`
-			E   string `json:"e"`
-		} `json:"keys"`
-	}
+// jwkWire is one key of a JWKS as a relying party reads it.
+type jwkWire struct {
+	Kty string `json:"kty"`
+	Use string `json:"use"`
+	Alg string `json:"alg"`
+	Kid string `json:"kid"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
 
+// jwksWire is a JWKS as a relying party reads it.
+type jwksWire struct {
+	Keys []jwkWire `json:"keys"`
+}
+
+func findKey(jwks []byte, kid string) (*rsa.PublicKey, error) {
+	var doc jwksWire
 	if err := json.Unmarshal(jwks, &doc); err != nil {
 		return nil, fmt.Errorf("%w: the JWKS is not JSON", ErrToken)
 	}
 
-	for _, k := range doc.Keys {
-		if k.Kid != kid {
-			continue
+	for i := range doc.Keys {
+		if doc.Keys[i].Kid == kid {
+			return publicKeyOf(&doc.Keys[i])
 		}
-
-		if k.Kty != "RSA" || (k.Alg != "" && k.Alg != "RS256") || (k.Use != "" && k.Use != "sig") {
-			return nil, fmt.Errorf("%w: key %s is not an RS256 signing key", ErrToken, kid)
-		}
-
-		n, nerr := base64.RawURLEncoding.DecodeString(k.N)
-		e, eerr := base64.RawURLEncoding.DecodeString(k.E)
-
-		if nerr != nil || eerr != nil || len(e) == 0 || len(e) > 4 {
-			return nil, fmt.Errorf("%w: key %s does not decode", ErrToken, kid)
-		}
-
-		return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}, nil
 	}
 
 	return nil, fmt.Errorf("%w: no key %s in the JWKS", ErrToken, kid)
 }
 
+// maxExponentBytes bounds the public exponent of a key.
+const maxExponentBytes = 4
+
+func publicKeyOf(k *jwkWire) (*rsa.PublicKey, error) {
+	if k.Kty != "RSA" || (k.Alg != "" && k.Alg != "RS256") || (k.Use != "" && k.Use != "sig") {
+		return nil, fmt.Errorf("%w: key %s is not an RS256 signing key", ErrToken, k.Kid)
+	}
+
+	n, nerr := base64.RawURLEncoding.DecodeString(k.N)
+	e, eerr := base64.RawURLEncoding.DecodeString(k.E)
+
+	if nerr != nil || eerr != nil || len(e) == 0 || len(e) > maxExponentBytes {
+		return nil, fmt.Errorf("%w: key %s does not decode", ErrToken, k.Kid)
+	}
+
+	return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}, nil
+}
+
+// maxTokenLife is the longest exp - iat that a relying party accepts, in seconds.
+const maxTokenLife = 3600
+
+func stringClaim(c map[string]any, name string) string {
+	v, ok := c[name].(string)
+	if !ok {
+		return ""
+	}
+
+	return v
+}
+
 func checkClaims(c map[string]any, want Expect) error {
-	if iss, _ := c["iss"].(string); iss != want.Issuer {
+	if iss := stringClaim(c, "iss"); iss != want.Issuer {
 		return fmt.Errorf("%w: issuer %q, want %q", ErrToken, iss, want.Issuer)
 	}
 
@@ -138,14 +163,18 @@ func checkClaims(c map[string]any, want Expect) error {
 		return fmt.Errorf("%w: audience %v, want %q", ErrToken, c["aud"], want.Audience)
 	}
 
-	if sub, _ := c["sub"].(string); sub == "" {
+	if stringClaim(c, "sub") == "" {
 		return fmt.Errorf("%w: no sub", ErrToken)
 	}
 
-	if jti, _ := c["jti"].(string); !strings.HasPrefix(jti, "oit-") {
+	if !strings.HasPrefix(stringClaim(c, "jti"), "oit-") {
 		return fmt.Errorf("%w: no jti", ErrToken)
 	}
 
+	return checkTimes(c, want.Now)
+}
+
+func checkTimes(c map[string]any, at time.Time) error {
 	exp, expOK := c["exp"].(float64)
 	iat, iatOK := c["iat"].(float64)
 	nbf, nbfOK := c["nbf"].(float64)
@@ -154,14 +183,14 @@ func checkClaims(c map[string]any, want Expect) error {
 		return fmt.Errorf("%w: exp, iat and nbf are numbers", ErrToken)
 	}
 
-	now := float64(want.Now.Unix())
+	now := float64(at.Unix())
 
 	switch {
 	case now >= exp:
 		return fmt.Errorf("%w: the token expired", ErrToken)
 	case now < nbf:
 		return fmt.Errorf("%w: the token is not valid yet", ErrToken)
-	case exp-iat > 3600 || exp <= iat:
+	case exp-iat > maxTokenLife || exp <= iat:
 		return fmt.Errorf("%w: the lifetime is out of bounds", ErrToken)
 	default:
 		return nil

@@ -48,17 +48,21 @@ func replaceState(keys []profile.Key, st profile.KeyState, change func(k *profil
 func TestASealedKeyOfAnotherNamespaceNeverSigns(t *testing.T) {
 	t.Parallel()
 
-	ts := &tamperStore{}
+	ts := &tamperStore{IssuerStore: nil, live: nil}
 	h := newHarness(t, withTamper(ts))
 	other := h.addNamespace("globex")
 
-	if _, err := h.svc.Login(t.Context(), h.open(other, "namespace:globex:access:write"), "aws", "x", 5*time.Minute); err != nil {
+	_, err := h.svc.Login(t.Context(), h.open(other, "namespace:globex:access:write"), "aws", "x", 5*time.Minute)
+	if err != nil {
 		t.Fatalf("Login in globex: %v", err)
 	}
 
 	h.createKeys()
 
-	foreign, _ := h.store.Issuer().Live(t.Context(), other.Name)
+	foreign, err := h.store.Issuer().Live(t.Context(), other.Name)
+	if err != nil {
+		t.Fatalf("Live: %v", err)
+	}
 
 	var stolen []byte
 
@@ -87,7 +91,7 @@ func TestASealedKeyOfAnotherNamespaceNeverSigns(t *testing.T) {
 func TestASealedKeyOfAnotherRowNeverSignsUnderThisKid(t *testing.T) {
 	t.Parallel()
 
-	ts := &tamperStore{}
+	ts := &tamperStore{IssuerStore: nil, live: nil}
 	h := newHarness(t, withTamper(ts))
 	h.createKeys()
 
@@ -120,7 +124,7 @@ func TestASealedKeyOfAnotherRowNeverSignsUnderThisKid(t *testing.T) {
 func TestARetiredOrDeletedKeyNeverSigns(t *testing.T) {
 	t.Parallel()
 
-	ts := &tamperStore{}
+	ts := &tamperStore{IssuerStore: nil, live: nil}
 	h := newHarness(t, withTamper(ts))
 	h.createKeys()
 

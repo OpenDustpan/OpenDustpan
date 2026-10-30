@@ -19,7 +19,8 @@ var (
 	// for a server that has neither the setting issuerBaseURL nor the
 	// setting publicURL. The message names the two settings.
 	ErrIssuerNotConfigured = errors.New(
-		"the server has no issuer host: set issuerBaseURL or publicURL")
+		"the server has no issuer host: set issuerBaseURL or publicURL",
+	)
 	// ErrIssuerKeyMissing reports a token of a namespace with issuerURL whose
 	// signing key is in no copied JWKS yet. Also a namespace with no key, a
 	// manual rotation whose next key the copy check did not find, and an
@@ -251,9 +252,12 @@ type OpenContext struct {
 	// namespace, namespace_id and purpose.
 	Claims map[string]any
 	By     audit.Entry
-	// Namespace is the namespace as the open read it. Its failover version
-	// is the fence of the open.
-	Namespace namespace.Namespace
+	// Namespace and NamespaceID name the namespace as the open read it.
+	// FailoverVersion is the failover version that the open read: the fence of
+	// the open.
+	Namespace       namespace.Name
+	NamespaceID     namespace.ID
+	FailoverVersion int64
 	// Subject is the sub claim.
 	Subject string
 	// Profile and ProfileID name the profile of the block, for the audit
@@ -287,9 +291,9 @@ type Issuer interface {
 	// ErrIssuerNotConfigured, ErrIssuerKeyMissing, ErrIssuerKeyExpired,
 	// ErrInvalid for an audience or a lifetime that the rules refuse,
 	// namespace.ErrFenced for a stale fence.
-	Login(ctx context.Context, o OpenContext, block string, aud string, lifetime time.Duration) (Token, error)
+	Login(ctx context.Context, o OpenContext, block, aud string, lifetime time.Duration) (Token, error)
 	// Adapter signs a token with purpose "adapter" and the hash of body for
 	// one call of an external adapter. The lifetime is DefaultTokenLifetime.
 	// It returns the errors of Login.
-	Adapter(ctx context.Context, o OpenContext, block string, aud string, body []byte) (Token, error)
+	Adapter(ctx context.Context, o OpenContext, block, aud string, body []byte) (Token, error)
 }

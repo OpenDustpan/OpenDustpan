@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +18,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/profile/profiletest"
 )
 
-func (h *harness) verify(tok profile.Token, aud string) (map[string]any, error) {
+func (h *harness) verify(value, aud string) (map[string]any, error) {
 	h.t.Helper()
 
-	return profiletest.VerifyToken(h.jwks(h.ns), tok.Value, profiletest.Expect{
+	return profiletest.VerifyToken(h.jwks(h.ns), value, profiletest.Expect{
 		Now: h.clock.Now(), Issuer: h.issuer(h.ns), Audience: aud,
 	})
 }
@@ -31,7 +32,7 @@ func TestLoginSignsAVerifiableToken(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mustLogin()
 
-	claims, err := h.verify(tok, "sts.amazonaws.com")
+	claims, err := h.verify(tok.Value, "sts.amazonaws.com")
 	if err != nil {
 		t.Fatalf("independent verifier refused the token: %v", err)
 	}
@@ -47,21 +48,29 @@ func TestLoginSignsAVerifiableToken(t *testing.T) {
 		}
 	}
 
-	iat, exp, nbf := claims["iat"].(float64), claims["exp"].(float64), claims["nbf"].(float64)
+	iat, exp, nbf := num(t, claims, "iat"), num(t, claims, "exp"), num(t, claims, "nbf")
 	if exp-iat != 300 || iat-nbf != 30 || int64(iat) != h.clock.Now().Unix() {
 		t.Errorf("iat %v, nbf %v, exp %v: want a lifetime of 300 s and a skew of 30 s", iat, nbf, exp)
 	}
 
-	if tok.Issuer != h.issuer(h.ns) || tok.ID != claims["jti"] || tok.KeyID == "" || !tok.ExpiresAt.Equal(time.Unix(int64(exp), 0)) {
+	if tok.Issuer != h.issuer(h.ns) || tok.ID != claims["jti"] || tok.KeyID == "" ||
+		!tok.ExpiresAt.Equal(time.Unix(int64(exp), 0)) {
 		t.Errorf("token fields = %+v", tok)
 	}
 
-	parts := strings.Split(tok.Value, ".")
-	raw, _ := base64.RawURLEncoding.DecodeString(parts[0])
+	checkHeader(t, tok.Value, tok.KeyID)
+}
+
+// checkHeader checks that the header of a token holds the three members of the
+// issuer.
+func checkHeader(t *testing.T, value string, kid profile.KeyID) {
+	t.Helper()
+
+	raw := mustB64(t, strings.Split(value, ".")[0])
 
 	var header map[string]string
-	if err = json.Unmarshal(raw, &header); err != nil || header["alg"] != "RS256" || header["typ"] != "JWT" ||
-		header["kid"] != string(tok.KeyID) || len(header) != 3 {
+	if err := json.Unmarshal(raw, &header); err != nil || header["alg"] != "RS256" || header["typ"] != "JWT" ||
+		header["kid"] != string(kid) || len(header) != 3 {
 		t.Errorf("header = %v, %v", header, err)
 	}
 }
@@ -117,8 +126,8 @@ func TestTokenEntryHoldsTheFactsAndNeverTheToken(t *testing.T) {
 		}
 	}
 
-	raw, _ := json.Marshal(tok.Entry)
-	if strings.Contains(string(raw), tok.Value) || strings.Contains(string(raw), strings.Split(tok.Value, ".")[2]) {
+	text := fmt.Sprintf("%+v", tok.Entry)
+	if strings.Contains(text, tok.Value) || strings.Contains(text, strings.Split(tok.Value, ".")[2]) {
 		t.Error("the audit entry holds the token")
 	}
 
@@ -195,19 +204,19 @@ func TestATokenNeverOutlivesItsLifetime(t *testing.T) {
 
 	h.clock.Advance(299 * time.Second)
 
-	if _, err := h.verify(tok, "sts.amazonaws.com"); err != nil {
+	if _, err := h.verify(tok.Value, "sts.amazonaws.com"); err != nil {
 		t.Fatalf("the token is refused before its exp: %v", err)
 	}
 
 	h.clock.Advance(time.Second)
 
-	if _, err := h.verify(tok, "sts.amazonaws.com"); err == nil {
+	if _, err := h.verify(tok.Value, "sts.amazonaws.com"); err == nil {
 		t.Error("the token passes at its exp")
 	}
 
 	h.clock.Advance(-10 * time.Minute)
 
-	if _, err := h.verify(tok, "sts.amazonaws.com"); err == nil {
+	if _, err := h.verify(tok.Value, "sts.amazonaws.com"); err == nil {
 		t.Error("the token passes before its nbf")
 	}
 }
@@ -219,7 +228,7 @@ func TestAWrongAudienceIsRefusedByTheVerifier(t *testing.T) {
 	tok := h.mustLogin()
 
 	for _, aud := range []string{"api://AzureADTokenExchange", "sts.amazonaws.com ", "STS.AMAZONAWS.COM", ""} {
-		if _, err := h.verify(tok, aud); err == nil {
+		if _, err := h.verify(tok.Value, aud); err == nil {
 			t.Errorf("the verifier accepts the audience %q", aud)
 		}
 	}
@@ -242,7 +251,9 @@ func TestLoginRefusesClaimsThatReplaceTheIssuer(t *testing.T) {
 	}
 
 	o := h.open(h.ns, defaultSubject)
-	o.Claims = map[string]any{"https://aws.amazon.com/tags": map[string]any{"principal_tags": map[string]any{"a": []string{"b"}}}}
+	o.Claims = map[string]any{
+		"https://aws.amazon.com/tags": map[string]any{"principal_tags": map[string]any{"a": []string{"b"}}},
+	}
 
 	if _, err := h.svc.Login(t.Context(), o, "aws", "sts.amazonaws.com", 5*time.Minute); err != nil {
 		t.Errorf("the AWS tags claim is refused: %v", err)
@@ -287,7 +298,7 @@ func TestAdapterTokenBindsTheBody(t *testing.T) {
 		t.Fatalf("Adapter: %v", err)
 	}
 
-	claims, err := h.verify(tok, "https://adapter.example.com")
+	claims, err := h.verify(tok.Value, "https://adapter.example.com")
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -297,13 +308,13 @@ func TestAdapterTokenBindsTheBody(t *testing.T) {
 		t.Errorf("claims = %v", claims)
 	}
 
-	if exp, iat := claims["exp"].(float64), claims["iat"].(float64); exp-iat != 300 {
+	if exp, iat := num(t, claims, "exp"), num(t, claims, "iat"); exp-iat != 300 {
 		t.Errorf("adapter lifetime = %v s, want 300", exp-iat)
 	}
 
 	login := h.mustLogin()
 
-	other, err := h.verify(login, "sts.amazonaws.com")
+	other, err := h.verify(login.Value, "sts.amazonaws.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,11 +325,11 @@ func TestAdapterTokenBindsTheBody(t *testing.T) {
 }
 
 // forge builds a token with the given header and payload, signed by sign.
-func forge(header, payload map[string]any, sign func(signing string) []byte) string {
-	enc := func(v any) string {
-		raw, _ := json.Marshal(v)
+func forge(tb testing.TB, header, payload map[string]any, sign func(signing string) []byte) string {
+	tb.Helper()
 
-		return base64.RawURLEncoding.EncodeToString(raw)
+	enc := func(v any) string {
+		return base64.RawURLEncoding.EncodeToString(mustJSON(tb, v))
 	}
 
 	signing := enc(header) + "." + enc(payload)
@@ -332,7 +343,7 @@ func TestAlgorithmDowngradeIsRefused(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mustLogin()
 
-	claims, err := h.verify(tok, "sts.amazonaws.com")
+	claims, err := h.verify(tok.Value, "sts.amazonaws.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,25 +360,25 @@ func TestAlgorithmDowngradeIsRefused(t *testing.T) {
 	kid := string(tok.KeyID)
 
 	for name, token := range map[string]string{
-		"alg none":         forge(map[string]any{"alg": "none", "typ": "JWT", "kid": kid}, claims, func(string) []byte { return nil }),
-		"alg None":         forge(map[string]any{"alg": "None", "kid": kid}, claims, func(string) []byte { return nil }),
-		"alg empty":        forge(map[string]any{"alg": "", "kid": kid}, claims, func(string) []byte { return nil }),
-		"no alg":           forge(map[string]any{"kid": kid}, claims, func(string) []byte { return nil }),
+		"alg none":         forge(t, map[string]any{"alg": "none", "typ": "JWT", "kid": kid}, claims, func(string) []byte { return nil }),
+		"alg None":         forge(t, map[string]any{"alg": "None", "kid": kid}, claims, func(string) []byte { return nil }),
+		"alg empty":        forge(t, map[string]any{"alg": "", "kid": kid}, claims, func(string) []byte { return nil }),
+		"no alg":           forge(t, map[string]any{"kid": kid}, claims, func(string) []byte { return nil }),
 		"none with a body": tok.Value[:strings.LastIndex(tok.Value, ".")+1],
-		"HS256 with the public key as the secret": forge(map[string]any{"alg": "HS256", "typ": "JWT", "kid": kid}, claims,
+		"HS256 with the public key as the secret": forge(t, map[string]any{"alg": "HS256", "typ": "JWT", "kid": kid}, claims,
 			func(s string) []byte { m := hmac.New(sha256.New, pub); m.Write([]byte(s)); return m.Sum(nil) }),
-		"HS256 with the n value as the secret": forge(map[string]any{"alg": "HS256", "kid": kid}, claims,
+		"HS256 with the n value as the secret": forge(t, map[string]any{"alg": "HS256", "kid": kid}, claims,
 			func(s string) []byte {
 				m := hmac.New(sha256.New, []byte(doc.Keys[0].N))
 				m.Write([]byte(s))
 				return m.Sum(nil)
 			}),
-		"PS256": forge(map[string]any{"alg": "PS256", "kid": kid}, claims, func(string) []byte { return make([]byte, 256) }),
-		"RS256 with a zero signature": forge(map[string]any{"alg": "RS256", "kid": kid}, claims,
+		"PS256": forge(t, map[string]any{"alg": "PS256", "kid": kid}, claims, func(string) []byte { return make([]byte, 256) }),
+		"RS256 with a zero signature": forge(t, map[string]any{"alg": "RS256", "kid": kid}, claims,
 			func(string) []byte { return make([]byte, 256) }),
-		"RS256 with an unknown kid": forge(map[string]any{"alg": "RS256", "kid": "oik-aaaaaaaaaaaaaaaaaaaa"}, claims,
+		"RS256 with an unknown kid": forge(t, map[string]any{"alg": "RS256", "kid": "oik-aaaaaaaaaaaaaaaaaaaa"}, claims,
 			func(string) []byte { return make([]byte, 256) }),
-		"RS256 with no kid": forge(map[string]any{"alg": "RS256"}, claims, func(string) []byte { return make([]byte, 256) }),
+		"RS256 with no kid": forge(t, map[string]any{"alg": "RS256"}, claims, func(string) []byte { return make([]byte, 256) }),
 	} {
 		if _, verr := profiletest.VerifyToken(jwks, token, want); verr == nil {
 			t.Errorf("%s: the verifier accepts the token", name)
@@ -377,7 +388,7 @@ func TestAlgorithmDowngradeIsRefused(t *testing.T) {
 	// Every token that the issuer signs holds the one algorithm.
 	for range 3 {
 		parts := strings.Split(h.mustLogin().Value, ".")
-		raw, _ := base64.RawURLEncoding.DecodeString(parts[0])
+		raw := mustB64(t, parts[0])
 
 		var header map[string]string
 		if err = json.Unmarshal(raw, &header); err != nil || header["alg"] != "RS256" {
@@ -393,11 +404,11 @@ func TestATamperedPayloadIsRefused(t *testing.T) {
 	tok := h.mustLogin()
 	parts := strings.Split(tok.Value, ".")
 
-	raw, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	raw := mustB64(t, parts[1])
 	changed := strings.Replace(string(raw), "write", "admin", 1)
 	forged := parts[0] + "." + base64.RawURLEncoding.EncodeToString([]byte(changed)) + "." + parts[2]
 
-	if _, err := h.verify(profile.Token{Value: forged}, "sts.amazonaws.com"); err == nil {
+	if _, err := h.verify(forged, "sts.amazonaws.com"); err == nil {
 		t.Error("the verifier accepts a changed payload")
 	}
 }
@@ -435,16 +446,17 @@ func TestATokenOfAnotherNamespaceDoesNotVerify(t *testing.T) {
 
 	// A token of acme that carries the kid of globex is a forgery.
 	parts := strings.Split(mine.Value, ".")
-	hdr, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": string(theirs.KeyID)})
+	hdr := mustJSON(t, map[string]string{"alg": "RS256", "typ": "JWT", "kid": string(theirs.KeyID)})
 	forged := base64.RawURLEncoding.EncodeToString(hdr) + "." + parts[1] + "." + parts[2]
 
-	if _, verr := profiletest.VerifyToken(h.jwks(other), forged, profiletest.Expect{
+	_, verr := profiletest.VerifyToken(h.jwks(other), forged, profiletest.Expect{
 		Now: h.clock.Now(), Issuer: h.issuer(h.ns), Audience: "sts.amazonaws.com",
-	}); verr == nil {
+	})
+	if verr == nil {
 		t.Error("a token of acme with the kid of globex verifies")
 	}
 
-	if _, verr := h.verify(mine, "sts.amazonaws.com"); verr != nil {
+	if _, verr = h.verify(mine.Value, "sts.amazonaws.com"); verr != nil {
 		t.Errorf("the token of acme does not verify at acme: %v", verr)
 	}
 }
@@ -454,7 +466,7 @@ func TestAStaleFenceSignsNothing(t *testing.T) {
 
 	h := newHarness(t)
 	stale := h.open(h.ns, defaultSubject)
-	stale.Namespace.FailoverVersion--
+	stale.FailoverVersion--
 
 	_, err := h.svc.Login(t.Context(), stale, "aws", "sts.amazonaws.com", 5*time.Minute)
 	wantErr(t, "Login with a stale failover version", err, namespace.ErrFenced)
@@ -463,7 +475,7 @@ func TestAStaleFenceSignsNothing(t *testing.T) {
 	wantErr(t, "Adapter with a stale failover version", err, namespace.ErrFenced)
 
 	wrongID := h.open(h.ns, defaultSubject)
-	wrongID.Namespace.ID = namespace.NewID()
+	wrongID.NamespaceID = namespace.NewID()
 
 	_, err = h.svc.Login(t.Context(), wrongID, "aws", "sts.amazonaws.com", 5*time.Minute)
 	wantErr(t, "Login with another namespace ID", err, namespace.ErrFenced)
@@ -492,7 +504,10 @@ func TestNoIssuerHostNoToken(t *testing.T) {
 func TestPublicURLIsTheHostWhenNoIssuerBaseURL(t *testing.T) {
 	t.Parallel()
 
-	h := newHarness(t, func(c *issuerConfig, _ *harness) { c.IssuerBaseURL, c.PublicURL = "", "https://api.example.com/" })
+	h := newHarness(
+		t,
+		func(c *issuerConfig, _ *harness) { c.IssuerBaseURL, c.PublicURL = "", "https://api.example.com/" },
+	)
 
 	d, err := h.svc.Discovery(t.Context(), h.ns.ID)
 	if err != nil || d.Issuer != "https://api.example.com/oidc/"+h.ns.ID.String() {
@@ -517,10 +532,12 @@ func TestSignatureIsPKCS1v15OverSHA256(t *testing.T) {
 			continue
 		}
 
-		pub, _ = k.PublicKey()
+		if pub, err = k.PublicKey(); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	sig, _ := base64.RawURLEncoding.DecodeString(parts[2])
+	sig := mustB64(t, parts[2])
 	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 
 	if err = rsa.VerifyPKCS1v15(pub, crypto.SHA256, sum[:], sig); err != nil {

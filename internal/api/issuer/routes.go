@@ -34,7 +34,14 @@ func (h *Handler) buildRoutes() []Route {
 	manage := []identity.Action{identity.ActionNamespaceManageIssuer}
 
 	return []Route{
-		{Method: http.MethodGet, Path: discoveryPath, Scope: route.ScopePublic, Actions: nil, Resolve: nil, Serve: h.discovery},
+		{
+			Method:  http.MethodGet,
+			Path:    discoveryPath,
+			Scope:   route.ScopePublic,
+			Actions: nil,
+			Resolve: nil,
+			Serve:   h.discovery,
+		},
 		{Method: http.MethodGet, Path: jwksPath, Scope: route.ScopePublic, Actions: nil, Resolve: nil, Serve: h.jwks},
 		authorized(http.MethodGet, issuerPath, read, h.get),
 		authorized(http.MethodPatch, issuerPath, manage, h.patch),

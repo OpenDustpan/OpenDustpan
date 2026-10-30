@@ -1,7 +1,9 @@
 package issuersvc_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -38,8 +40,9 @@ func (h *harness) states() map[profile.KeyState]int {
 	h.t.Helper()
 
 	out := map[profile.KeyState]int{}
-	for _, k := range h.keysOf(h.ns) {
-		out[k.State]++
+	keys := h.keysOf(h.ns)
+	for i := range keys {
+		out[keys[i].State]++
 	}
 
 	return out
@@ -100,12 +103,12 @@ func TestScheduleRotatesAtEachBoundary(t *testing.T) {
 		}
 
 		tok := h.mustLogin()
-		if _, err := h.verify(tok, "sts.amazonaws.com"); err != nil {
+		if _, err := h.verify(tok.Value, "sts.amazonaws.com"); err != nil {
 			t.Errorf("%s: a new token does not verify: %v", st.name, err)
 		}
 	}
 
-	if _, err := h.verify(first, "sts.amazonaws.com"); err == nil {
+	if _, err := h.verify(first.Value, "sts.amazonaws.com"); err == nil {
 		t.Error("the token of the first key passes after its key was deleted and its life ended")
 	}
 }
@@ -131,7 +134,7 @@ func TestOldKeyStaysPublishedForTheOverlap(t *testing.T) {
 
 	// A token that the old key signed a minute before the promotion still
 	// verifies when a relying party reads the JWKS after it.
-	if _, err = h.verify(before, "sts.amazonaws.com"); err != nil {
+	if _, err = h.verify(before.Value, "sts.amazonaws.com"); err != nil {
 		t.Errorf("the token of the old key does not verify in the overlap: %v", err)
 	}
 }
@@ -142,7 +145,8 @@ func TestManualRotationPromotesAndCapsTheRetiredKeys(t *testing.T) {
 	h := newHarness(t)
 	h.createKeys()
 
-	signed := []profile.Token{h.mustLogin()}
+	signed := make([]profile.Token, 0, 5)
+	signed = append(signed, h.mustLogin())
 
 	for i := range 4 {
 		h.clock.Advance(time.Minute)
@@ -157,7 +161,8 @@ func TestManualRotationPromotesAndCapsTheRetiredKeys(t *testing.T) {
 		}
 
 		got := h.states()
-		if got[profile.KeyActive] != 1 || got[profile.KeyNext] != 1 || got[profile.KeyRetired] > profile.MaxRetiredKeys ||
+		if got[profile.KeyActive] != 1 || got[profile.KeyNext] != 1 ||
+			got[profile.KeyRetired] > profile.MaxRetiredKeys ||
 			h.published() > profile.MaxPublishedKeys {
 			t.Errorf("rotation %d: states %v, published %d", i+1, got, h.published())
 		}
@@ -171,11 +176,11 @@ func TestManualRotationPromotesAndCapsTheRetiredKeys(t *testing.T) {
 
 	// The tokens of the last three keys (5 minutes old) still verify; the
 	// oldest key was deleted early, as the cap says.
-	if _, err := h.verify(signed[len(signed)-1], "sts.amazonaws.com"); err != nil {
+	if _, err := h.verify(signed[len(signed)-1].Value, "sts.amazonaws.com"); err != nil {
 		t.Errorf("the newest token: %v", err)
 	}
 
-	if _, err := h.verify(signed[0], "sts.amazonaws.com"); err == nil {
+	if _, err := h.verify(signed[0].Value, "sts.amazonaws.com"); err == nil {
 		t.Error("the token of a key that the cap deleted still verifies")
 	}
 }
@@ -222,16 +227,7 @@ func TestEmergencyRotationReplacesEveryKey(t *testing.T) {
 	old := h.mustLogin()
 	oldKeys := h.keysOf(h.ns)
 
-	for name, reason := range map[string]string{
-		"empty": "", "blanks": "   ", "control": "a\x00b", "newline": "a\nb", "501 characters": strings.Repeat("a", 501),
-	} {
-		_, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name, issuersvc.RotateRequest{Reason: reason, Emergency: true})
-		wantErr(t, "reason "+name, err, profile.ErrInvalid)
-	}
-
-	if got := h.keysOf(h.ns); len(got) != len(oldKeys) {
-		t.Fatal("a refused emergency rotation changed the keys")
-	}
+	h.refuseBadReasons(len(oldKeys))
 
 	res, err := h.svc.Rotate(t.Context(), h.admin, h.ns.Name,
 		issuersvc.RotateRequest{Reason: "the store was copied", Emergency: true})
@@ -251,12 +247,12 @@ func TestEmergencyRotationReplacesEveryKey(t *testing.T) {
 		}
 	}
 
-	if _, err = h.verify(old, "sts.amazonaws.com"); err == nil {
+	if _, err = h.verify(old.Value, "sts.amazonaws.com"); err == nil {
 		t.Error("a token of an earlier key verifies after an emergency rotation")
 	}
 
 	fresh := h.mustLogin()
-	if _, err = h.verify(fresh, "sts.amazonaws.com"); err != nil {
+	if _, err = h.verify(fresh.Value, "sts.amazonaws.com"); err != nil {
 		t.Errorf("a new token: %v", err)
 	}
 
@@ -265,22 +261,51 @@ func TestEmergencyRotationReplacesEveryKey(t *testing.T) {
 		t.Errorf("notices = %v, want issuer.key-revoked and issuer.key-next", got)
 	}
 
-	history, err := h.store.Issuer().History(t.Context(), h.ns.Name)
+	if deleted := h.deletedCount(); deleted != 2 {
+		t.Errorf("history holds %d deleted keys, want 2", deleted)
+	}
+}
+
+// refuseBadReasons proves that an emergency rotation with a bad reason is
+// refused and changes nothing.
+func (h *harness) refuseBadReasons(keyCount int) {
+	h.t.Helper()
+
+	for name, reason := range map[string]string{
+		"empty": "", "blanks": "   ", "control": "a\x00b", "newline": "a\nb", "501 characters": strings.Repeat("a", 501),
+	} {
+		_, err := h.svc.Rotate(
+			h.t.Context(),
+			h.admin,
+			h.ns.Name,
+			issuersvc.RotateRequest{Reason: reason, Emergency: true},
+		)
+		wantErr(h.t, "reason "+name, err, profile.ErrInvalid)
+	}
+
+	if got := h.keysOf(h.ns); len(got) != keyCount {
+		h.t.Fatal("a refused emergency rotation changed the keys")
+	}
+}
+
+// deletedCount counts the deleted keys in the history of the namespace.
+func (h *harness) deletedCount() int {
+	h.t.Helper()
+
+	history, err := h.store.Issuer().History(h.t.Context(), h.ns.Name)
 	if err != nil {
-		t.Fatal(err)
+		h.t.Fatal(err)
 	}
 
 	deleted := 0
 
-	for _, k := range history {
-		if k.State == profile.KeyDeleted {
+	for i := range history {
+		if history[i].State == profile.KeyDeleted {
 			deleted++
 		}
 	}
 
-	if deleted != 2 {
-		t.Errorf("history holds %d deleted keys, want 2", deleted)
-	}
+	return deleted
 }
 
 func TestNoticesNameNoKeyMaterial(t *testing.T) {
@@ -300,16 +325,17 @@ func TestNoticesNameNoKeyMaterial(t *testing.T) {
 		t.Fatal("no notice for a new next key")
 	}
 
-	raw, _ := json.Marshal(h.outbox.notes)
+	text := fmt.Sprintf("%+v", h.outbox.notes)
 
 	for _, k := range h.keysOf(h.ns) {
-		if strings.Contains(string(raw), string(k.Sealed)) || strings.Contains(string(raw), string(k.Public)) {
+		if strings.Contains(text, string(k.Sealed)) || strings.Contains(text, string(k.Public)) {
 			t.Error("a notice holds a key")
 		}
 	}
 
 	n := h.outbox.notes[0]
-	if n.Type != notify.IssuerKeyNext || n.Attributes["kid"] == "" || n.Attributes["active-at"] == "" || n.Attributes["namespace"] != "acme" {
+	if n.Type != notify.IssuerKeyNext || n.Attributes["kid"] == "" || n.Attributes["active-at"] == "" ||
+		n.Attributes["namespace"] != "acme" {
 		t.Errorf("notice = %+v", n)
 	}
 }
@@ -340,35 +366,49 @@ func TestKeyMaterialStaysInTheStoreAndOutOfEveryAnswer(t *testing.T) {
 	h.clock.Advance(90 * day)
 	h.rotateAll()
 
-	for _, k := range h.keysOf(h.ns) {
-		switch k.State {
-		case profile.KeyNext, profile.KeyActive:
-			if len(k.Sealed) == 0 || strings.Contains(string(k.Sealed), "BEGIN") {
-				t.Errorf("%s key %s: sealed = %d bytes", k.State, k.ID, len(k.Sealed))
-			}
-		default:
-			if len(k.Sealed) != 0 {
-				t.Errorf("%s key %s keeps a private key", k.State, k.ID)
-			}
-		}
-	}
+	h.checkSealedByState()
 
 	st, err := h.svc.Get(t.Context(), h.reader, h.ns.Name)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 
-	raw, _ := json.Marshal(st)
+	raw := mustJSON(t, st)
+	jwks := h.jwks(h.ns)
 
 	for _, k := range h.keysOf(h.ns) {
-		if strings.Contains(string(raw), string(k.Public)) {
+		if bytes.Contains(raw, k.Public) {
 			t.Error("the state holds a public key blob")
 		}
 	}
 
 	for _, banned := range []string{"Sealed", "sealed", "PRIVATE", `"d"`, `"p"`, `"q"`, `"dp"`, `"dq"`, `"qi"`} {
-		if strings.Contains(string(raw), banned) || strings.Contains(string(h.jwks(h.ns)), banned) {
+		if bytes.Contains(raw, []byte(banned)) || bytes.Contains(jwks, []byte(banned)) {
 			t.Errorf("an answer holds %q", banned)
+		}
+	}
+}
+
+// checkSealedByState checks that only a next and an active key keep a sealed
+// private key.
+func (h *harness) checkSealedByState() {
+	h.t.Helper()
+
+	keys := h.keysOf(h.ns)
+	for i := range keys {
+		k := &keys[i]
+
+		switch k.State {
+		case profile.KeyNext, profile.KeyActive:
+			if len(k.Sealed) == 0 || strings.Contains(string(k.Sealed), "BEGIN") {
+				h.t.Errorf("%s key %s: sealed = %d bytes", k.State, k.ID, len(k.Sealed))
+			}
+		case profile.KeyRetired, profile.KeyDeleted:
+			if len(k.Sealed) != 0 {
+				h.t.Errorf("%s key %s keeps a private key", k.State, k.ID)
+			}
+		default:
+			h.t.Errorf("key %s has the unknown state %q", k.ID, k.State)
 		}
 	}
 }
@@ -384,8 +424,7 @@ func TestEveryManagementCallChecksItsAction(t *testing.T) {
 
 	calls := map[string]func(a *profile.Actor) error{
 		"Patch": func(a *profile.Actor) error {
-			no := false
-			_, err := h.svc.Patch(ctx, a, h.ns.Name, profile.SettingsPatch{AllowBlockSubjects: &no}, 0, nil)
+			_, err := h.svc.Patch(ctx, a, h.ns.Name, patchAllow(false), 0, nil)
 
 			return err
 		},
@@ -417,7 +456,11 @@ func TestEveryManagementCallChecksItsAction(t *testing.T) {
 		t.Error("a refused call changed the keys")
 	}
 
-	set, _ := h.store.Issuer().GetIssuerSettings(ctx, h.ns.Name)
+	set, err := h.store.Issuer().GetIssuerSettings(ctx, h.ns.Name)
+	if err != nil {
+		t.Fatalf("GetIssuerSettings: %v", err)
+	}
+
 	if set.Version != 0 {
 		t.Error("a refused call changed the settings")
 	}

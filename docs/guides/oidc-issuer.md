@@ -34,7 +34,7 @@ curl -H "Authorization: token $TOKEN" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/issuer
 ```
 
-The answer holds `effectiveIssuerUrl` and `issuerHostConfigured`.
+The answer holds `effectiveIssuerURL` and `issuerHostConfigured`.
 
 ## Keys
 
@@ -118,7 +118,7 @@ never holds the token. Use the `jti` to find the cloud sessions of an incident.
 
 A server on a private network is often not reachable from the internet, but a
 cloud such as AWS or Azure must read the JWKS. For this case a namespace can set
-`issuerUrl` to an `https` URL that it hosts, for example a bucket of static
+`issuerURL` to an `https` URL that it hosts, for example a bucket of static
 files. Then:
 
 - Each token has that URL as `iss`.
@@ -127,13 +127,13 @@ files. Then:
 Do these steps:
 
 1. Make the keys: `POST /issuer/keys`.
-2. Set `issuerUrl` with `PATCH /issuer`. This change needs a console session
+2. Set `issuerURL` with `PATCH /issuer`. This change needs a console session
    with a recent sign-in.
 3. Export the files: `GET /issuer/export`. Save the file with the path
    `.well-known/openid-configuration` and the file with the path `jwks` under
-   the `issuerUrl`.
+   the `issuerURL`.
 4. Check the copy: `POST /issuer/keys/check-copy`. The server reads the two files
-   at the `issuerUrl`. The check passes only when each step passes.
+   at the `issuerURL`. The check passes only when each step passes.
 
 Copy the files again after each rotation. The export holds the keys of the
 states `next`, `active` and `retired`, the same keys as the route
@@ -163,7 +163,7 @@ Google Cloud, Vault and Kubernetes can take the keys with no URL.
 | --- | --- |
 | `issuer.key-next` | The namespace has a new `next` key. It names the time when the key becomes active. |
 | `issuer.key-revoked` | An emergency rotation ran. |
-| `issuer.key-copy-missing` | The copy check at the `issuerUrl` failed. |
+| `issuer.key-copy-missing` | The copy check at the `issuerURL` failed. |
 
 A notice holds the namespace, the key ID and the times. It never holds a key. A
 server sends a notice only when it has a notification outbox.

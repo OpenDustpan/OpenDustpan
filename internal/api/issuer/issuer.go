@@ -136,7 +136,11 @@ func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status i
 func issuerErrors(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
-		return problem.New(http.StatusForbidden, errcode.MFAFreshStepRequired, sessionauth.FreshStepRequiredMessage), true
+		return problem.New(
+			http.StatusForbidden,
+			errcode.MFAFreshStepRequired,
+			sessionauth.FreshStepRequiredMessage,
+		), true
 	case errors.Is(err, errReauthenticate):
 		p := problem.New(http.StatusUnauthorized, errcode.MFAFreshStepRequired, err.Error())
 

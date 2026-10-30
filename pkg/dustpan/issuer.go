@@ -8,6 +8,7 @@ import (
 
 	issuerapi "opendustpan.org/opendustpan/internal/api/issuer"
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/internal/issuerfetch"
 	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -66,7 +67,7 @@ func newIssuerService(svc services, cfg *settings) (*issuersvc.Service, error) {
 		Sealer:        svc.secrets,
 		Authorizer:    cfg.authorizer,
 		Notifier:      notifier,
-		HTTP:          egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly),
+		Fetcher:       issuerfetch.New(egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly)),
 		IssuerBaseURL: cfg.issuerBaseURL,
 		PublicURL:     cfg.publicURL,
 		Now:           cfg.now,
@@ -139,14 +140,20 @@ func (s *Server) issuerRotateKindSpec() []durable.KindSpec {
 		return nil
 	}
 
-	return []durable.KindSpec{{
-		Kind: issuerRotateKind, Version: issuerRotateVersion, MinVersion: issuerRotateVersion,
-		Steps: []durable.Step{{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-			if err := s.issuer.RotateAll(ctx); err != nil {
-				return nil, fmt.Errorf("issuer rotation: %w", err)
-			}
+	return []durable.KindSpec{
+		{
+			Kind:       issuerRotateKind,
+			Version:    issuerRotateVersion,
+			MinVersion: issuerRotateVersion,
+			Steps: []durable.Step{
+				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+					if err := s.issuer.RotateAll(ctx); err != nil {
+						return nil, fmt.Errorf("issuer rotation: %w", err)
+					}
 
-			return nil, nil
-		}}},
-	}}
+					return nil, nil
+				}},
+			},
+		},
+	}
 }

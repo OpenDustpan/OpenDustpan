@@ -62,25 +62,6 @@ func issuerKeys(ctx context.Context, q *db.Queries, ns namespace.Name, nsID stri
 	return out, nil
 }
 
-// readKeys reads the keys of ns that keep reads, outside a write.
-func (i *Issuer) readKeys(ctx context.Context, ns namespace.Name, keep func(profile.Key) bool) ([]profile.Key, error) {
-	nsID, err := i.store.queries.GetNamespaceID(ctx, ns.String())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("select namespace ID: %w", err)
-	}
-
-	all, err := issuerKeys(ctx, i.store.queries, ns, nsID)
-	if err != nil {
-		return nil, err
-	}
-
-	return slices.DeleteFunc(all, func(k profile.Key) bool { return !keep(k) }), nil
-}
-
 // Published implements profile.Keys.
 func (i *Issuer) Published(ctx context.Context, ns namespace.Name) ([]profile.Key, error) {
 	keys, err := i.readKeys(ctx, ns, func(k profile.Key) bool { return k.State.Published() })
@@ -141,38 +122,17 @@ func (i *Issuer) Apply(
 }
 
 // writeIssuerKeys stores the difference between the keys before and after a
-// change. A key that leaves the state active goes first, so that the unique
-// index of the active key holds at each statement. A new key goes last.
+// change.
 func writeIssuerKeys(ctx context.Context, q *db.Queries, nsID string, before, after []profile.Key) error {
-	byID := map[profile.KeyID]profile.Key{}
-	for _, k := range before {
-		byID[k.ID] = k
-	}
+	w := codec.DiffIssuerKeys(before, after)
 
-	var moved, added []profile.Key
-
-	for _, k := range after {
-		old, ok := byID[k.ID]
-
-		switch {
-		case !ok:
-			added = append(added, k)
-		case old.State != k.State:
-			moved = append(moved, k)
-		}
-	}
-
-	// A move that leaves next or active first, then the move to active.
-	slices.SortStableFunc(moved, func(a, b profile.Key) int {
-		return issuerBoolInt(a.State == profile.KeyActive) - issuerBoolInt(b.State == profile.KeyActive)
-	})
-
-	for _, k := range moved {
-		r := codec.ToIssuerKeyRow(k)
+	for i := range w.Moved {
+		k := &w.Moved[i]
+		r := codec.ToIssuerKeyRow(*k)
 
 		n, err := q.UpdateIssuerKey(ctx, db.UpdateIssuerKeyParams{
-			State: r.State, Sealed: issuerBytes(r.Sealed), ActivatedAtMs: r.ActivatedAt, RetiredAtMs: r.RetiredAt,
-			DeletedAtMs: r.DeletedAt, NamespaceID: nsID, ID: r.ID, FromState: string(byID[k.ID].State),
+			State: r.State, Sealed: codec.NonNilBytes(r.Sealed), ActivatedAtMs: r.ActivatedAt, RetiredAtMs: r.RetiredAt,
+			DeletedAtMs: r.DeletedAt, NamespaceID: nsID, ID: r.ID, FromState: string(w.From[k.ID]),
 		})
 		if err != nil {
 			return fmt.Errorf("update issuer key: %w", err)
@@ -183,11 +143,12 @@ func writeIssuerKeys(ctx context.Context, q *db.Queries, nsID string, before, af
 		}
 	}
 
-	for _, k := range added {
-		r := codec.ToIssuerKeyRow(k)
+	for i := range w.Added {
+		k := &w.Added[i]
+		r := codec.ToIssuerKeyRow(*k)
 
 		err := q.InsertIssuerKey(ctx, db.InsertIssuerKeyParams{
-			NamespaceID: nsID, ID: r.ID, State: r.State, PublicKey: r.Public, Sealed: issuerBytes(r.Sealed),
+			NamespaceID: nsID, ID: r.ID, State: r.State, PublicKey: r.Public, Sealed: codec.NonNilBytes(r.Sealed),
 			CreatedAtMs: r.CreatedAt, ActivatedAtMs: r.ActivatedAt, RetiredAtMs: r.RetiredAt, DeletedAtMs: r.DeletedAt,
 		})
 		if isUniqueViolation(err) {
@@ -201,23 +162,6 @@ func writeIssuerKeys(ctx context.Context, q *db.Queries, nsID string, before, af
 	}
 
 	return nil
-}
-
-func issuerBoolInt(b bool) int {
-	if b {
-		return 1
-	}
-
-	return 0
-}
-
-// issuerBytes turns a nil slice into an empty one: the column is NOT NULL.
-func issuerBytes(b []byte) []byte {
-	if b == nil {
-		return []byte{}
-	}
-
-	return b
 }
 
 // GetIssuerSettings implements profile.IssuerSettingsStore.
@@ -355,9 +299,10 @@ func (i *Issuer) RecordCopyCheck(
 			return encErr
 		}
 
-		if upErr := q.UpsertIssuerCopyCheck(ctx, db.UpsertIssuerCopyCheckParams{
+		upErr := q.UpsertIssuerCopyCheck(ctx, db.UpsertIssuerCopyCheckParams{
 			NamespaceID: nsID, DefaultTemplate: template, CopyCheck: raw,
-		}); upErr != nil {
+		})
+		if upErr != nil {
 			return fmt.Errorf("store copy check: %w", upErr)
 		}
 
@@ -401,4 +346,23 @@ func (i *Issuer) inAuditedTx(
 
 		return nil
 	})
+}
+
+// readKeys reads the keys of ns that keep reads, outside a write.
+func (i *Issuer) readKeys(ctx context.Context, ns namespace.Name, keep func(profile.Key) bool) ([]profile.Key, error) {
+	nsID, err := i.store.queries.GetNamespaceID(ctx, ns.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("select namespace ID: %w", err)
+	}
+
+	all, err := issuerKeys(ctx, i.store.queries, ns, nsID)
+	if err != nil {
+		return nil, err
+	}
+
+	return slices.DeleteFunc(all, func(k profile.Key) bool { return !keep(k) }), nil
 }

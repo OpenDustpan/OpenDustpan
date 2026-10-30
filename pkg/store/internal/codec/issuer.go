@@ -80,8 +80,10 @@ func EncodeCopyCheck(c *profile.CopyCheck) (string, error) {
 		return "", nil
 	}
 
-	j := copyCheckJSON{Steps: make([]copyStepJSON, 0, len(c.Steps)), Verified: make([]string, 0, len(c.Verified)),
-		AtMs: IssuerMillis(c.At), OK: c.OK}
+	j := copyCheckJSON{
+		Steps: make([]copyStepJSON, 0, len(c.Steps)), Verified: make([]string, 0, len(c.Verified)),
+		AtMs: IssuerMillis(c.At), OK: c.OK,
+	}
 
 	for _, s := range c.Steps {
 		j.Steps = append(j.Steps, copyStepJSON{Name: s.Name, Detail: s.Detail, OK: s.OK})
@@ -147,4 +149,65 @@ func DecodeSubjectTemplate(raw string) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// IssuerKeyWrites are the rows that a change of the keys of a namespace writes.
+// Moved holds the keys that changed state, in the order of the writes: the
+// keys that leave the state active come before the key that enters it, so the
+// unique index of the active key holds at each statement. From holds the state
+// that each moved key had. Added holds the new keys, to insert last.
+type IssuerKeyWrites struct {
+	From  map[profile.KeyID]profile.KeyState
+	Moved []profile.Key
+	Added []profile.Key
+}
+
+// DiffIssuerKeys returns the writes that turn the keys before into the keys
+// after.
+func DiffIssuerKeys(before, after []profile.Key) IssuerKeyWrites {
+	w := IssuerKeyWrites{From: map[profile.KeyID]profile.KeyState{}, Moved: nil, Added: nil}
+	old := map[profile.KeyID]profile.KeyState{}
+
+	for i := range before {
+		old[before[i].ID] = before[i].State
+	}
+
+	for i := range after {
+		from, known := old[after[i].ID]
+
+		switch {
+		case !known:
+			w.Added = append(w.Added, after[i])
+		case from != after[i].State:
+			w.Moved = append(w.Moved, after[i])
+			w.From[after[i].ID] = from
+		default:
+		}
+	}
+
+	slices.SortStableFunc(w.Moved, func(a, b profile.Key) int {
+		return enters(a.State == profile.KeyActive) - enters(b.State == profile.KeyActive)
+	})
+
+	return w
+}
+
+// enters is 1 for a key that enters the state active, and 0 for another key.
+func enters(active bool) int {
+	return map[bool]int{false: 0, true: 1}[active]
+}
+
+// Flag encodes a boolean for a column of an integer type.
+func Flag(v bool) int64 {
+	return map[bool]int64{false: 0, true: 1}[v]
+}
+
+// NonNilBytes turns a nil slice into an empty one: a column of bytes is NOT
+// NULL.
+func NonNilBytes(b []byte) []byte {
+	if b == nil {
+		return []byte{}
+	}
+
+	return b
 }

@@ -16,15 +16,15 @@ import (
 // order of the subject. A new key goes at the end.
 func SubjectKeys() []string {
 	return []string{
-		"namespace", "namespace_id", "collection", "collection_id", "tool", "unit", "unit_id", "profile",
-		"profile_id", "root_profile", "access", "phase", "action", "ref_type", "ref", "ref_protected",
-		"runner_pool", "actor_type", "actor_id",
+		keyNamespace, keyNamespaceID, keyCollection, keyCollectionID, keyTool, keyUnit, keyUnitID, keyProfile,
+		keyProfileID, keyRootProfile, keyAccess, keyPhase, keyAction, keyRefType, keyRef, keyRefProtected,
+		keyRunnerPool, keyActorType, keyActorID,
 	}
 }
 
 // DefaultSubjectTemplate is the template of a namespace that sets none.
 func DefaultSubjectTemplate() []string {
-	return []string{"namespace", "collection", "tool", "unit", "access"}
+	return []string{keyNamespace, keyCollection, keyTool, keyUnit, keyAccess}
 }
 
 // CopyStep is the outcome of one step of the copy check.
@@ -43,6 +43,11 @@ type CopyCheck struct {
 	Steps    []CopyStep
 	Verified []KeyID
 	OK       bool
+}
+
+// AddStep adds the outcome of one step to the check.
+func (c *CopyCheck) AddStep(name, detail string, ok bool) {
+	c.Steps = append(c.Steps, CopyStep{Name: name, Detail: detail, OK: ok})
 }
 
 // Holds reports whether a check found the key id in the copy.
@@ -135,7 +140,11 @@ func CanonicalSubjectTemplate(t []string) ([]string, error) {
 
 	for _, k := range t {
 		if !slices.Contains(order, k) {
-			return nil, fmt.Errorf("%w: the subject template names the key %q, which is not a subject key", ErrInvalid, k)
+			return nil, fmt.Errorf(
+				"%w: the subject template names the key %q, which is not a subject key",
+				ErrInvalid,
+				k,
+			)
 		}
 
 		if seen[k] {
@@ -145,7 +154,7 @@ func CanonicalSubjectTemplate(t []string) ([]string, error) {
 		seen[k] = true
 	}
 
-	if !seen["namespace"] && !seen["namespace_id"] {
+	if !seen[keyNamespace] && !seen[keyNamespaceID] {
 		return nil, fmt.Errorf("%w: the subject template must name namespace or namespace_id", ErrInvalid)
 	}
 
@@ -160,6 +169,9 @@ func CanonicalSubjectTemplate(t []string) ([]string, error) {
 	return out, nil
 }
 
+// maxEchoURL is the longest part of a refused URL that an error repeats.
+const maxEchoURL = 60
+
 // CheckIssuerURL checks an issuerURL: empty, or an absolute https URL with a
 // host, no user information, no query, no fragment and no trailing slash.
 // The server refuses a value and does not change it.
@@ -168,40 +180,43 @@ func CheckIssuerURL(raw string) error {
 		return nil
 	}
 
-	bad := func(why string) error {
+	if why := issuerURLFault(raw); why != "" {
 		return fmt.Errorf("%w: issuerURL %s: %s", ErrInvalid, quoteShort(raw), why)
-	}
-
-	if len(raw) > MaxIssuerURLBytes {
-		return bad("it is longer than 2048 bytes")
-	}
-
-	for _, r := range raw {
-		if r < 0x21 || r == 0x7f {
-			return bad("it holds a space or a control character")
-		}
-	}
-
-	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Scheme != "https" || u.Hostname() == "" {
-		return bad("use an absolute https URL with a host")
-	}
-
-	switch {
-	case u.User != nil:
-		return bad("it holds user information")
-	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#"):
-		return bad("it holds a query or a fragment")
-	case strings.HasSuffix(raw, "/"):
-		return bad("remove the trailing slash")
 	}
 
 	return nil
 }
 
+// issuerURLFault returns why raw is not an issuerURL, or the empty text.
+func issuerURLFault(raw string) string {
+	if len(raw) > MaxIssuerURLBytes {
+		return "it is longer than 2048 bytes"
+	}
+
+	if strings.ContainsFunc(raw, func(r rune) bool { return r < 0x21 || r == 0x7f }) {
+		return "it holds a space or a control character"
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Scheme != "https" || u.Hostname() == "" {
+		return "use an absolute https URL with a host"
+	}
+
+	switch {
+	case u.User != nil:
+		return "it holds user information"
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#"):
+		return "it holds a query or a fragment"
+	case strings.HasSuffix(raw, "/"):
+		return "remove the trailing slash"
+	default:
+		return ""
+	}
+}
+
 func quoteShort(s string) string {
-	if len(s) > 60 {
-		s = s[:60] + "..."
+	if len(s) > maxEchoURL {
+		s = s[:maxEchoURL] + "..."
 	}
 
 	return fmt.Sprintf("%q", s)

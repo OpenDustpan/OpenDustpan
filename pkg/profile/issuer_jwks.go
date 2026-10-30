@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"slices"
@@ -60,12 +61,11 @@ func (k Key) JWK() (JWK, error) {
 // from the newest. A key of another state is left out, so a caller that passes
 // a deleted key still publishes nothing of it.
 func BuildJWKS(keys []Key) (JWKS, error) {
-	rank := map[KeyState]int{KeyActive: 0, KeyNext: 1, KeyRetired: 2}
 	pub := slices.DeleteFunc(slices.Clone(keys), func(k Key) bool { return !k.State.Published() })
 
 	slices.SortStableFunc(pub, func(a, b Key) int {
-		if rank[a.State] != rank[b.State] {
-			return rank[a.State] - rank[b.State]
+		if stateRank(a.State) != stateRank(b.State) {
+			return stateRank(a.State) - stateRank(b.State)
 		}
 
 		return b.CreatedAt.Compare(a.CreatedAt)
@@ -73,8 +73,8 @@ func BuildJWKS(keys []Key) (JWKS, error) {
 
 	out := JWKS{Keys: make([]JWK, 0, len(pub))}
 
-	for _, k := range pub {
-		jwk, err := k.JWK()
+	for i := range pub {
+		jwk, err := pub[i].JWK()
 		if err != nil {
 			return JWKS{}, err
 		}
@@ -85,16 +85,86 @@ func BuildJWKS(keys []Key) (JWKS, error) {
 	return out, nil
 }
 
+// stateRank orders the published states in the JWKS: active, next, retired.
+func stateRank(s KeyState) int {
+	switch s {
+	case KeyActive:
+		return 0
+	case KeyNext:
+		return 1
+	case KeyRetired, KeyDeleted:
+		return MaxPublishedKeys
+	default:
+		return MaxPublishedKeys
+	}
+}
+
 // Discovery is the OpenID Connect discovery document of the issuer of a
-// namespace. It holds public data only.
+// namespace. It holds public data only. Its members have the snake_case names
+// that OpenID Connect Discovery fixes, so it encodes itself.
 type Discovery struct {
-	Issuer                           string   `json:"issuer"`
-	JWKSURI                          string   `json:"jwks_uri"`
-	ResponseTypesSupported           []string `json:"response_types_supported"`
-	SubjectTypesSupported            []string `json:"subject_types_supported"`
-	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
-	ScopesSupported                  []string `json:"scopes_supported"`
-	ClaimsSupported                  []string `json:"claims_supported"`
+	Issuer                           string
+	JWKSURI                          string
+	ResponseTypesSupported           []string
+	SubjectTypesSupported            []string
+	IDTokenSigningAlgValuesSupported []string
+	ScopesSupported                  []string
+	ClaimsSupported                  []string
+}
+
+// The members of the discovery document.
+const (
+	memberIssuer        = "issuer"
+	memberJWKSURI       = "jwks_uri"
+	memberResponseTypes = "response_types_supported"
+	memberSubjectTypes  = "subject_types_supported"
+	memberSigningAlgs   = "id_token_signing_alg_values_supported"
+	memberScopes        = "scopes_supported"
+	memberClaims        = "claims_supported"
+)
+
+// MarshalJSON implements json.Marshaler.
+func (d Discovery) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(map[string]any{
+		memberIssuer: d.Issuer, memberJWKSURI: d.JWKSURI, memberResponseTypes: d.ResponseTypesSupported,
+		memberSubjectTypes: d.SubjectTypesSupported, memberSigningAlgs: d.IDTokenSigningAlgValuesSupported,
+		memberScopes: d.ScopesSupported, memberClaims: d.ClaimsSupported,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode discovery document: %w", err)
+	}
+
+	return raw, nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler. A member of another name is left
+// out.
+func (d *Discovery) UnmarshalJSON(raw []byte) error {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return fmt.Errorf("decode discovery document: %w", err)
+	}
+
+	var out Discovery
+
+	for name, into := range map[string]any{
+		memberIssuer: &out.Issuer, memberJWKSURI: &out.JWKSURI, memberResponseTypes: &out.ResponseTypesSupported,
+		memberSubjectTypes: &out.SubjectTypesSupported, memberSigningAlgs: &out.IDTokenSigningAlgValuesSupported,
+		memberScopes: &out.ScopesSupported, memberClaims: &out.ClaimsSupported,
+	} {
+		value, ok := members[name]
+		if !ok {
+			continue
+		}
+
+		if err := json.Unmarshal(value, into); err != nil {
+			return fmt.Errorf("decode discovery member %s: %w", name, err)
+		}
+	}
+
+	*d = out
+
+	return nil
 }
 
 // NewDiscovery returns the discovery document for the issuer URL issuer. The
@@ -115,20 +185,25 @@ const awsTagsClaim = "https://aws.amazon.com/tags"
 // registeredClaims are the claims that the issuer sets itself and that the
 // claims of an open never replace.
 func registeredClaims() []string {
-	return []string{"iss", "sub", "aud", "iat", "nbf", "exp", "jti", "namespace", "namespace_id", "purpose"}
+	return []string{
+		"iss", "sub", "aud", "iat", "nbf", "exp", "jti", keyNamespace, keyNamespaceID, "purpose",
+	}
 }
 
 // ClaimsSupported lists the claims that a token can hold. The list of the
 // claims of an open follows the claim set of the server.
 func ClaimsSupported() []string {
 	return slices.Concat(registeredClaims(), []string{
-		"profile", "profile_id", "profile_revision", "root_profile", "root_profile_id", "access", "action",
-		"tool_action", "phase", "tool", "unit", "unit_id", "unit_ref", "collection", "collection_id", "actor_type",
-		"actor_id", "actor", "act", "trigger", "job", "change_order", "change_order_revision", "runner_pool",
-		"runner_pool_id", "repository", "ref", "ref_type", "ref_protected", "commit", "source", "body_sha256",
-		awsTagsClaim,
+		keyProfile, keyProfileID, "profile_revision", keyRootProfile, "root_profile_id", keyAccess, keyAction,
+		"tool_action", keyPhase, keyTool, keyUnit, keyUnitID, "unit_ref", keyCollection, keyCollectionID,
+		keyActorType, keyActorID, "actor", "act", "trigger", "job", "change_order", "change_order_revision",
+		keyRunnerPool, "runner_pool_id", "repository", keyRef, keyRefType, keyRefProtected, "commit", "source",
+		"body_sha256", awsTagsClaim,
 	})
 }
+
+// maxClaimName is the longest claim name.
+const maxClaimName = 64
 
 // CheckClaimName reports whether name may be a claim of an open: snake_case,
 // or the AWS tags claim, and not a claim that the issuer sets itself.
@@ -137,21 +212,23 @@ func CheckClaimName(name string) error {
 		return fmt.Errorf("%w: the claim %q is set by the issuer", ErrInvalid, name)
 	}
 
-	if name == awsTagsClaim {
-		return nil
-	}
-
-	if name == "" || len(name) > 64 || name[0] < 'a' || name[0] > 'z' {
+	if name != awsTagsClaim && !snakeCase(name) {
 		return fmt.Errorf("%w: the claim name %q is not snake_case", ErrInvalid, name)
 	}
 
-	for _, r := range name {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
-			return fmt.Errorf("%w: the claim name %q is not snake_case", ErrInvalid, name)
-		}
+	return nil
+}
+
+// snakeCase reports whether name starts with a lowercase letter and holds only
+// lowercase letters, digits and underscores.
+func snakeCase(name string) bool {
+	if name == "" || len(name) > maxClaimName || name[0] < 'a' || name[0] > 'z' {
+		return false
 	}
 
-	return nil
+	return !strings.ContainsFunc(name, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
+	})
 }
 
 // CheckAudience checks an audience as a token needs it: 1 to MaxAudienceBytes
@@ -164,23 +241,30 @@ func CheckAudience(aud, publicURL string) error {
 		return fmt.Errorf("%w: an audience has 1 to %d bytes", ErrInvalid, MaxAudienceBytes)
 	}
 
-	for _, r := range aud {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == 0xfffd {
-			return fmt.Errorf("%w: an audience holds a control or invalid character", ErrInvalid)
-		}
+	if strings.ContainsFunc(aud, func(r rune) bool {
+		return r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == 0xfffd
+	}) {
+		return fmt.Errorf("%w: an audience holds a control or invalid character", ErrInvalid)
 	}
 
+	if underPublicURL(aud, publicURL) {
+		return fmt.Errorf("%w: the audience is the address of this server or under it", ErrInvalid)
+	}
+
+	return nil
+}
+
+// underPublicURL reports whether aud is publicURL or a URL under it. The
+// comparison ignores case and trailing slashes, so a refusal does not depend on
+// how a person writes the address.
+func underPublicURL(aud, publicURL string) bool {
 	if publicURL == "" {
-		return nil
+		return false
 	}
 
 	pub := strings.ToLower(strings.TrimRight(publicURL, "/"))
 	got := strings.ToLower(strings.TrimRight(aud, "/"))
 
-	if got == pub || strings.HasPrefix(got, pub+"/") || strings.HasPrefix(got, pub+"?") ||
-		strings.HasPrefix(got, pub+"#") {
-		return fmt.Errorf("%w: the audience is the address of this server or under it", ErrInvalid)
-	}
-
-	return nil
+	return got == pub || strings.HasPrefix(got, pub+"/") || strings.HasPrefix(got, pub+"?") ||
+		strings.HasPrefix(got, pub+"#")
 }
