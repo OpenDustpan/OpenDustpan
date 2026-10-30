@@ -46,10 +46,21 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		}
 
 		total, listErr = q.CountReviewGrants(ctx, db.CountReviewGrantsParams{
-			Principal: p.Principal, Expand: p.Expand, History: p.History, ToMs: p.ToMs, FromMs: p.FromMs,
-			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target, CollectionID: p.CollectionID,
-			Containers: p.Containers, ContainerRoles: p.ContainerRoles, TokenNamespace: p.TokenNamespace,
-			TokenNamespaceRoles: p.TokenNamespaceRoles, Subject: p.Subject,
+			Principal:           p.Principal,
+			Expand:              p.Expand,
+			History:             p.History,
+			ToMs:                p.ToMs,
+			FromMs:              p.FromMs,
+			AsOfMs:              p.AsOfMs,
+			AllGrants:           p.AllGrants,
+			Namespace:           p.Namespace,
+			Target:              p.Target,
+			CollectionID:        p.CollectionID,
+			Containers:          p.Containers,
+			ContainerRoles:      p.ContainerRoles,
+			TokenNamespace:      p.TokenNamespace,
+			TokenNamespaceRoles: p.TokenNamespaceRoles,
+			Subject:             p.Subject,
 		})
 		if listErr != nil {
 			return fmt.Errorf("count review rows: %w", listErr)

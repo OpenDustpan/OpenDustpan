@@ -113,8 +113,14 @@ func everyRow(scope access.ReviewScope) access.ReviewQuery {
 // allScope is the scope of every grant.
 func allScope() access.ReviewScope {
 	return access.ReviewScope{
-		Object: identity.Object{}, CollectionID: "", Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
-		TokenNamespaceRoles: nil, All: true,
+		Object:              identity.Object{},
+		CollectionID:        "",
+		Namespace:           "",
+		Containers:          nil,
+		ContainerRoles:      nil,
+		TokenNamespace:      "",
+		TokenNamespaceRoles: nil,
+		All:                 true,
 	}
 }
 

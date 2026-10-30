@@ -422,8 +422,14 @@ func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
 // manage access.
 func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewScope, map[string]bool, error) {
 	scope := ReviewScope{
-		Object: identity.Object{}, CollectionID: "", Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
-		TokenNamespaceRoles: nil, All: false,
+		Object:              identity.Object{},
+		CollectionID:        "",
+		Namespace:           "",
+		Containers:          nil,
+		ContainerRoles:      nil,
+		TokenNamespace:      "",
+		TokenNamespaceRoles: nil,
+		All:                 false,
 	}
 
 	roles, grantAccess, err := s.authz.reviewRoles(ctx)
@@ -624,8 +630,14 @@ func inheritedFrom(scope ReviewScope, obj identity.Object) *identity.Object {
 func reviewQuery(req ReviewRequest, obj identity.Object, now time.Time) (ReviewQuery, int, error) {
 	q := ReviewQuery{
 		Scope: ReviewScope{
-			Object: identity.Object{}, CollectionID: "", Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
-			TokenNamespaceRoles: nil, All: false,
+			Object:              identity.Object{},
+			CollectionID:        "",
+			Namespace:           "",
+			Containers:          nil,
+			ContainerRoles:      nil,
+			TokenNamespace:      "",
+			TokenNamespaceRoles: nil,
+			All:                 false,
 		},
 		Subject:   "",
 		Principal: "",

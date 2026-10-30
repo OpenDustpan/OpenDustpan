@@ -59,37 +59,21 @@ func newCollectionReviewFixture(t *testing.T) *collectionReviewFixture {
 	}
 
 	r := &collectionReviewFixture{fixture: f, svc: svc, payment: identity.Object{}, ids: map[string]string{}}
-
-	cols1 := map[string]collection.Collection{}
+	made := map[string]collection.Collection{}
 
 	for _, name := range []string{"payments", "platform"} {
-		c, createErr := cols.Create(ctx, collection.Ref{Namespace: "acme", Name: collection.Name(name)}, collectionEntry("collection:create"))
+		ref := collection.Ref{Namespace: "acme", Name: collection.Name(name)}
+
+		c, createErr := cols.Create(ctx, ref, collectionEntry("collection:create"))
 		if createErr != nil {
 			t.Fatalf("create collection %s: %v", name, createErr)
 		}
 
-		cols1[name] = c
+		made[name] = c
 	}
 
 	for name, in := range map[string]string{"web": "payments", "api": "payments", "data": "platform", "loose": ""} {
-		r.ids[name] = ident.NewID("ws-")
-
-		wsName, parseErr := workspace.ParseName(name)
-		if parseErr != nil {
-			t.Fatalf("workspace name: %v", parseErr)
-		}
-
-		w := workspace.Workspace{
-			NamespaceID: "", CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0),
-			Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			ID:        workspace.ID(r.ids[name]),
-			Ref:       workspace.Ref{Namespace: "acme", Name: wsName},
-			Revision:  1,
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-		}
-		if createErr := f.store.CreateWorkspace(ctx, w, ns.Fence()); createErr != nil {
-			t.Fatalf("create workspace %s: %v", name, createErr)
-		}
+		r.ids[name] = r.addWorkspace(t, ns, name)
 
 		if in == "" {
 			continue
@@ -97,26 +81,51 @@ func newCollectionReviewFixture(t *testing.T) *collectionReviewFixture {
 
 		move := collection.Move{
 			Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: name},
-			From: "", To: cols1[in].Ref, ToID: cols1[in].ID, EndsLock: false,
+			From: "", To: made[in].Ref, ToID: made[in].ID, EndsLock: false,
 		}
 		if moveErr := cols.SetUnit(ctx, move, collectionEntry("unit:move")); moveErr != nil {
 			t.Fatalf("move %s: %v", name, moveErr)
 		}
 	}
 
-	r.payment = identity.CollectionObject("acme", "payments").WithCollectionID(cols1["payments"].ID)
+	r.payment = identity.CollectionObject("acme", "payments").WithCollectionID(made["payments"].ID)
 
 	gone := collectionEntry("unit:manage")
 	gone.Object = "opentofu:acme/api"
 
 	deletion := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
-	if delErr := f.store.DeleteWorkspace(
-		ctx, workspace.Ref{Namespace: "acme", Name: "api"}, ns.Fence(), deletion,
-	); delErr != nil {
+	ref := workspace.Ref{Namespace: "acme", Name: "api"}
+
+	if delErr := f.store.DeleteWorkspace(ctx, ref, ns.Fence(), deletion); delErr != nil {
 		t.Fatalf("delete workspace: %v", delErr)
 	}
 
 	return r
+}
+
+// addWorkspace stores the workspace name in ns and returns its stable ID.
+func (r *collectionReviewFixture) addWorkspace(t *testing.T, ns namespace.Namespace, name string) string {
+	t.Helper()
+
+	wsName, err := workspace.ParseName(name)
+	if err != nil {
+		t.Fatalf("workspace name: %v", err)
+	}
+
+	w := workspace.Workspace{
+		NamespaceID: "", CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0),
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:        workspace.ID(ident.NewID("ws-")),
+		Ref:       workspace.Ref{Namespace: "acme", Name: wsName},
+		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := r.store.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
+		t.Fatalf("create workspace %s: %v", name, err)
+	}
+
+	return string(w.ID)
 }
 
 // collectionEntry returns a valid audit entry in acme.

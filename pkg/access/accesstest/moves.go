@@ -361,7 +361,7 @@ func testReviewCollectionUnits(t *testing.T, s access.Store) {
 	for name, to := range map[string]collection.Collection{"web": payments, "api": payments, "data": platform} {
 		move := collection.Move{
 			Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: name},
-			To:   to.Ref, ToID: to.ID, EndsLock: false,
+			From: "", To: to.Ref, ToID: to.ID, EndsLock: false,
 		}
 		if err := cs.SetUnitCollection(t.Context(), move, ns.Fence(), scoped(entry(), "acme")); err != nil {
 			t.Fatalf("move %s: %v", name, err)
@@ -382,7 +382,7 @@ func testReviewCollectionUnits(t *testing.T, s access.Store) {
 		return mustWorkspaceObject(t, name).WithUnitID(string(units[name]))
 	}
 
-	for i, g := range []struct {
+	for i, g := range []*struct {
 		id   string
 		role string
 		obj  identity.Object

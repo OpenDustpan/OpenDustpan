@@ -387,13 +387,12 @@ func checkLeaveLockedCollection(ctx context.Context, q *db.Queries, m collection
 // ListCollectionUnits implements collection.Store. The collection and its
 // members are read in one transaction, so the answer is one snapshot.
 func (s *Store) ListCollectionUnits(ctx context.Context, ref collection.Ref) ([]string, error) {
-
 	var ids []string
 
 	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
-		if _, getErr := q.GetCollection(ctx, db.GetCollectionParams{
-			Namespace: ref.Namespace.String(), NameKey: ref.Name.Key(),
-		}); getErr != nil {
+		key := db.GetCollectionParams{Namespace: ref.Namespace.String(), NameKey: ref.Name.Key()}
+
+		if _, getErr := q.GetCollection(ctx, key); getErr != nil {
 			if errors.Is(getErr, pgx.ErrNoRows) {
 				return collection.ErrNotFound
 			}

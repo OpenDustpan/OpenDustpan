@@ -70,7 +70,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a move to a collection that was re-created is refused", test: testMoveRecreatedTarget},
 		{name: "a Pulumi stack keeps its collection through a rename", test: testStackRename},
 		{name: "a soft-deleted unit does not keep its collection", test: testDeletedUnitMembership},
-		{name: "ListCollectionUnits holds the units of one collection, a deleted unit included", test: testListCollectionUnits},
+		{
+			name: "ListCollectionUnits holds the units of one collection, a deleted unit included",
+			test: testListCollectionUnits,
+		},
 		{name: "CollectionOf names the collection, and false when there is none", test: testCollectionOf},
 	}
 
@@ -885,7 +888,9 @@ func testListCollectionUnits(t *testing.T, s Store) {
 		to   collection.Collection
 		f    namespace.Fence
 	}{
-		{web, payments, ns.Fence()}, {api, payments, ns.Fence()}, {data, platform, ns.Fence()},
+		{web, payments, ns.Fence()},
+		{api, payments, ns.Fence()},
+		{data, platform, ns.Fence()},
 		{far, elsewhere, other.Fence()},
 	} {
 		if _, err := setUnit(t, s, m.unit, m.to.Ref, m.f); err != nil {
@@ -899,9 +904,9 @@ func testListCollectionUnits(t *testing.T, s Store) {
 	ref := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "web")}
 	d := auditFor(ns.Fence())
 
-	if err := s.DeleteWorkspace(t.Context(), ref, ns.Fence(), inventory.Deletion{
-		Entry: d, PurgeAfter: d.At.Add(time.Hour),
-	}); err != nil {
+	deletion := inventory.Deletion{Entry: d, PurgeAfter: d.At.Add(time.Hour)}
+
+	if err := s.DeleteWorkspace(t.Context(), ref, ns.Fence(), deletion); err != nil {
 		t.Fatalf("DeleteWorkspace: %v", err)
 	}
 

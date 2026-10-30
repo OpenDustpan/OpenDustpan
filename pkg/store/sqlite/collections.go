@@ -400,9 +400,9 @@ func (s *Store) ListCollectionUnits(ctx context.Context, ref collection.Ref) ([]
 	var ids []string
 
 	err := s.inReadTx(ctx, func(q *db.Queries) error {
-		if _, getErr := q.GetCollection(ctx, db.GetCollectionParams{
-			Namespace: ref.Namespace.String(), NameKey: ref.Name.Key(),
-		}); getErr != nil {
+		key := db.GetCollectionParams{Namespace: ref.Namespace.String(), NameKey: ref.Name.Key()}
+
+		if _, getErr := q.GetCollection(ctx, key); getErr != nil {
 			if errors.Is(getErr, sql.ErrNoRows) {
 				return collection.ErrNotFound
 			}
