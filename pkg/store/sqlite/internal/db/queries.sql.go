@@ -412,10 +412,79 @@ func (q *Queries) ClaimInstallationKind(ctx context.Context, kind sql.NullString
 	return result.RowsAffected()
 }
 
+const claimNotificationDeliveries = `-- name: ClaimNotificationDeliveries :many
+UPDATE notification_deliveries
+SET owner = ?1, lease_until_ms = ?2, version = notification_deliveries.version + 1
+WHERE notification_deliveries.id IN (
+    SELECT d.id FROM notification_deliveries AS d
+    WHERE d.scope = ?3 AND d.state = 'pending' AND d.next_at_ms <= ?4
+      AND d.lease_until_ms <= ?4
+    ORDER BY d.next_at_ms, d.id
+    LIMIT ?5
+)
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+          last_error, delivered_at_ms, owner, lease_until_ms, version
+`
+
+type ClaimNotificationDeliveriesParams struct {
+	Owner        string
+	LeaseUntilMs int64
+	Scope        string
+	NowMs        int64
+	MaxRows      int64
+}
+
+// Takes at most max_rows pending deliveries of the scope that are due and that
+// no live claim holds, oldest first. The caller runs it in a write transaction.
+func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNotificationDeliveriesParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.QueryContext(ctx, claimNotificationDeliveries,
+		arg.Owner,
+		arg.LeaseUntilMs,
+		arg.Scope,
+		arg.NowMs,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationDelivery
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.NotificationID,
+			&i.SubscriptionID,
+			&i.SinkID,
+			&i.Contact,
+			&i.Principal,
+			&i.State,
+			&i.Attempts,
+			&i.NextAtMs,
+			&i.LastError,
+			&i.DeliveredAtMs,
+			&i.Owner,
+			&i.LeaseUntilMs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const claimNotificationSinkRef = `-- name: ClaimNotificationSinkRef :execrows
-INSERT INTO notification_sink_refs (namespace_id, ref)
-VALUES ((SELECT n.id FROM namespaces AS n WHERE n.name = ?1), ?2)
-ON CONFLICT (namespace_id, ref) DO NOTHING
+INSERT INTO notification_sink_refs (scope, ref)
+VALUES (?1, ?2)
+ON CONFLICT (scope, ref) DO NOTHING
 `
 
 type ClaimNotificationSinkRefParams struct {
@@ -423,8 +492,8 @@ type ClaimNotificationSinkRefParams struct {
 	Ref       string
 }
 
-// Records that the namespace holds the ref. It writes nothing, and the caller
-// refuses the new value, when the namespace held the ref before.
+// Records that the scope holds the ref. It writes nothing, and the caller
+// refuses the new value, when the scope held the ref before.
 func (q *Queries) ClaimNotificationSinkRef(ctx context.Context, arg ClaimNotificationSinkRefParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, claimNotificationSinkRef, arg.Namespace, arg.Ref)
 	if err != nil {
@@ -1041,6 +1110,42 @@ WHERE name IN (SELECT value FROM json_each(?1))
 
 func (q *Queries) CountNamespacesByNames(ctx context.Context, names interface{}) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNamespacesByNames, names)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNotificationDeliveryRoute = `-- name: CountNotificationDeliveryRoute :one
+SELECT COUNT(*) FROM notification_deliveries
+WHERE scope = ?1 AND notification_id = ?2
+  AND subscription_id = ?3 AND contact = ?4
+`
+
+type CountNotificationDeliveryRouteParams struct {
+	Scope          string
+	NotificationID string
+	SubscriptionID string
+	Contact        string
+}
+
+func (q *Queries) CountNotificationDeliveryRoute(ctx context.Context, arg CountNotificationDeliveryRouteParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNotificationDeliveryRoute,
+		arg.Scope,
+		arg.NotificationID,
+		arg.SubscriptionID,
+		arg.Contact,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNotificationsByID = `-- name: CountNotificationsByID :one
+SELECT COUNT(*) FROM notifications WHERE id = ?1
+`
+
+func (q *Queries) CountNotificationsByID(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNotificationsByID, id)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2844,7 +2949,7 @@ func (q *Queries) DeleteMissingCollectionMembership(ctx context.Context, unitID 
 
 const deleteNotificationSink = `-- name: DeleteNotificationSink :execrows
 DELETE FROM notification_sinks
-WHERE notification_sinks.id = ?1 AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+WHERE notification_sinks.id = ?1 AND notification_sinks.scope = ?2
 `
 
 type DeleteNotificationSinkParams struct {
@@ -2863,7 +2968,7 @@ func (q *Queries) DeleteNotificationSink(ctx context.Context, arg DeleteNotifica
 const deleteNotificationSinkSecret = `-- name: DeleteNotificationSinkSecret :exec
 DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.ref = ?1 AND notification_sink_secrets.sink_id = ?2
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+  AND notification_sink_secrets.scope = ?3
 `
 
 type DeleteNotificationSinkSecretParams struct {
@@ -2879,8 +2984,7 @@ func (q *Queries) DeleteNotificationSinkSecret(ctx context.Context, arg DeleteNo
 
 const deleteNotificationSinkSecrets = `-- name: DeleteNotificationSinkSecrets :exec
 DELETE FROM notification_sink_secrets
-WHERE notification_sink_secrets.sink_id = ?1
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+WHERE notification_sink_secrets.sink_id = ?1 AND notification_sink_secrets.scope = ?2
 `
 
 type DeleteNotificationSinkSecretsParams struct {
@@ -2891,6 +2995,24 @@ type DeleteNotificationSinkSecretsParams struct {
 func (q *Queries) DeleteNotificationSinkSecrets(ctx context.Context, arg DeleteNotificationSinkSecretsParams) error {
 	_, err := q.db.ExecContext(ctx, deleteNotificationSinkSecrets, arg.SinkID, arg.Namespace)
 	return err
+}
+
+const deleteNotificationSubscription = `-- name: DeleteNotificationSubscription :execrows
+DELETE FROM notification_subscriptions
+WHERE notification_subscriptions.id = ?1 AND notification_subscriptions.scope = ?2
+`
+
+type DeleteNotificationSubscriptionParams struct {
+	ID    string
+	Scope string
+}
+
+func (q *Queries) DeleteNotificationSubscription(ctx context.Context, arg DeleteNotificationSubscriptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteNotificationSubscription, arg.ID, arg.Scope)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteObjectContext = `-- name: DeleteObjectContext :execrows
@@ -2942,6 +3064,21 @@ func (q *Queries) DeleteObjectOwners(ctx context.Context, arg DeleteObjectOwners
 		arg.ResourceKey,
 		arg.Source,
 	)
+	return err
+}
+
+const deletePendingNotificationDeliveriesOfSubscription = `-- name: DeletePendingNotificationDeliveriesOfSubscription :exec
+DELETE FROM notification_deliveries
+WHERE scope = ?1 AND subscription_id = ?2 AND state = 'pending'
+`
+
+type DeletePendingNotificationDeliveriesOfSubscriptionParams struct {
+	Scope          string
+	SubscriptionID string
+}
+
+func (q *Queries) DeletePendingNotificationDeliveriesOfSubscription(ctx context.Context, arg DeletePendingNotificationDeliveriesOfSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, deletePendingNotificationDeliveriesOfSubscription, arg.Scope, arg.SubscriptionID)
 	return err
 }
 
@@ -3665,6 +3802,35 @@ func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const ensureNotificationCursor = `-- name: EnsureNotificationCursor :exec
+INSERT INTO notification_cursors (name, scope, sequence)
+VALUES (?1, ?2, 0)
+ON CONFLICT (name, scope) DO NOTHING
+`
+
+type EnsureNotificationCursorParams struct {
+	Name  string
+	Scope string
+}
+
+func (q *Queries) EnsureNotificationCursor(ctx context.Context, arg EnsureNotificationCursorParams) error {
+	_, err := q.db.ExecContext(ctx, ensureNotificationCursor, arg.Name, arg.Scope)
+	return err
+}
+
+const ensureNotificationSequence = `-- name: EnsureNotificationSequence :exec
+INSERT INTO notification_sequences (scope, last_sequence)
+VALUES (?1, 0)
+ON CONFLICT (scope) DO NOTHING
+`
+
+// Makes the counter row of a scope. A PostgreSQL adapter locks this row to
+// order the appends of the scope.
+func (q *Queries) EnsureNotificationSequence(ctx context.Context, scope string) error {
+	_, err := q.db.ExecContext(ctx, ensureNotificationSequence, scope)
+	return err
 }
 
 const expireRunnerClaims = `-- name: ExpireRunnerClaims :exec
@@ -5989,11 +6155,94 @@ func (q *Queries) GetNamespaceSourceFilter(ctx context.Context, name string) (st
 	return source_filter, err
 }
 
+const getNotificationCursor = `-- name: GetNotificationCursor :one
+SELECT sequence FROM notification_cursors WHERE name = ?1 AND scope = ?2
+`
+
+type GetNotificationCursorParams struct {
+	Name  string
+	Scope string
+}
+
+func (q *Queries) GetNotificationCursor(ctx context.Context, arg GetNotificationCursorParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationCursor, arg.Name, arg.Scope)
+	var sequence int64
+	err := row.Scan(&sequence)
+	return sequence, err
+}
+
+const getNotificationDelivery = `-- name: GetNotificationDelivery :one
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE id = ?1
+`
+
+func (q *Queries) GetNotificationDelivery(ctx context.Context, id string) (NotificationDelivery, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationDelivery, id)
+	var i NotificationDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.NotificationID,
+		&i.SubscriptionID,
+		&i.SinkID,
+		&i.Contact,
+		&i.Principal,
+		&i.State,
+		&i.Attempts,
+		&i.NextAtMs,
+		&i.LastError,
+		&i.DeliveredAtMs,
+		&i.Owner,
+		&i.LeaseUntilMs,
+		&i.Version,
+	)
+	return i, err
+}
+
+const getNotificationIDByDedupe = `-- name: GetNotificationIDByDedupe :one
+SELECT id FROM notifications WHERE scope = ?1 AND dedupe_key = ?2
+`
+
+type GetNotificationIDByDedupeParams struct {
+	Scope     string
+	DedupeKey string
+}
+
+func (q *Queries) GetNotificationIDByDedupe(ctx context.Context, arg GetNotificationIDByDedupeParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationIDByDedupe, arg.Scope, arg.DedupeKey)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getNotificationScopeByID = `-- name: GetNotificationScopeByID :one
+SELECT scope FROM notifications WHERE id = ?1
+`
+
+func (q *Queries) GetNotificationScopeByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationScopeByID, id)
+	var scope string
+	err := row.Scan(&scope)
+	return scope, err
+}
+
+const getNotificationSequence = `-- name: GetNotificationSequence :one
+SELECT last_sequence FROM notification_sequences WHERE scope = ?1
+`
+
+func (q *Queries) GetNotificationSequence(ctx context.Context, scope string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationSequence, scope)
+	var last_sequence int64
+	err := row.Scan(&last_sequence)
+	return last_sequence, err
+}
+
 const getNotificationSink = `-- name: GetNotificationSink :one
-SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
-FROM notification_sinks AS k
-JOIN namespaces AS n ON n.id = k.namespace_id
-WHERE k.id = ?1
+SELECT id, scope AS namespace, kind, name, platform, target, created_by, version
+FROM notification_sinks
+WHERE id = ?1
 `
 
 type GetNotificationSinkRow struct {
@@ -6007,7 +6256,7 @@ type GetNotificationSinkRow struct {
 	Version   int64
 }
 
-// The caller compares the namespace of the row with the scope of the request.
+// The caller compares the scope of the row with the scope of the request.
 func (q *Queries) GetNotificationSink(ctx context.Context, id string) (GetNotificationSinkRow, error) {
 	row := q.db.QueryRowContext(ctx, getNotificationSink, id)
 	var i GetNotificationSinkRow
@@ -6018,6 +6267,30 @@ func (q *Queries) GetNotificationSink(ctx context.Context, id string) (GetNotifi
 		&i.Name,
 		&i.Platform,
 		&i.Target,
+		&i.CreatedBy,
+		&i.Version,
+	)
+	return i, err
+}
+
+const getNotificationSubscription = `-- name: GetNotificationSubscription :one
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE id = ?1
+`
+
+func (q *Queries) GetNotificationSubscription(ctx context.Context, id string) (NotificationSubscription, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationSubscription, id)
+	var i NotificationSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.SinkID,
+		&i.Types,
+		&i.Objects,
+		&i.MinSeverity,
+		&i.State,
+		&i.Reason,
 		&i.CreatedBy,
 		&i.Version,
 	)
@@ -9019,11 +9292,96 @@ func (q *Queries) InsertManualLock(ctx context.Context, arg InsertManualLockPara
 	return result.RowsAffected()
 }
 
+const insertNotification = `-- name: InsertNotification :exec
+INSERT INTO notifications (
+    scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links, attributes, recipients,
+    dedupe_key, at_ms
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5, ?6,
+    ?7, ?8, ?9, ?10, ?11,
+    ?12, ?13, ?14, ?15
+)
+`
+
+type InsertNotificationParams struct {
+	Scope      string
+	Sequence   int64
+	ID         string
+	Type       string
+	Object     string
+	ObjectID   string
+	Subject    string
+	Agent      string
+	Severity   int64
+	Summary    string
+	Links      string
+	Attributes string
+	Recipients string
+	DedupeKey  string
+	AtMs       int64
+}
+
+func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotificationParams) error {
+	_, err := q.db.ExecContext(ctx, insertNotification,
+		arg.Scope,
+		arg.Sequence,
+		arg.ID,
+		arg.Type,
+		arg.Object,
+		arg.ObjectID,
+		arg.Subject,
+		arg.Agent,
+		arg.Severity,
+		arg.Summary,
+		arg.Links,
+		arg.Attributes,
+		arg.Recipients,
+		arg.DedupeKey,
+		arg.AtMs,
+	)
+	return err
+}
+
+const insertNotificationDelivery = `-- name: InsertNotificationDelivery :exec
+INSERT INTO notification_deliveries (
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    last_error, delivered_at_ms, owner, lease_until_ms, version
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, 'pending', 0, ?8, '', 0, '', 0, 1
+)
+`
+
+type InsertNotificationDeliveryParams struct {
+	ID             string
+	Scope          string
+	NotificationID string
+	SubscriptionID string
+	SinkID         string
+	Contact        string
+	Principal      string
+	NextAtMs       int64
+}
+
+func (q *Queries) InsertNotificationDelivery(ctx context.Context, arg InsertNotificationDeliveryParams) error {
+	_, err := q.db.ExecContext(ctx, insertNotificationDelivery,
+		arg.ID,
+		arg.Scope,
+		arg.NotificationID,
+		arg.SubscriptionID,
+		arg.SinkID,
+		arg.Contact,
+		arg.Principal,
+		arg.NextAtMs,
+	)
+	return err
+}
+
 const insertNotificationSink = `-- name: InsertNotificationSink :execrows
-INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+INSERT INTO notification_sinks (id, scope, kind, name, platform, target, created_by, version)
 VALUES (
-    ?1, (SELECT n.id FROM namespaces AS n WHERE n.name = ?2),
-    ?3, ?4, ?5, ?6, ?7, 1
+    ?1, ?2, ?3, ?4, ?5, ?6,
+    ?7, 1
 )
 ON CONFLICT (id) DO NOTHING
 `
@@ -9057,11 +9415,8 @@ func (q *Queries) InsertNotificationSink(ctx context.Context, arg InsertNotifica
 }
 
 const insertNotificationSinkSecret = `-- name: InsertNotificationSinkSecret :exec
-INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
-VALUES (
-    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1), ?2, ?3,
-    ?4, ?5
-)
+INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+VALUES (?1, ?2, ?3, ?4, ?5)
 `
 
 type InsertNotificationSinkSecretParams struct {
@@ -9081,6 +9436,47 @@ func (q *Queries) InsertNotificationSinkSecret(ctx context.Context, arg InsertNo
 		arg.Ciphertext,
 	)
 	return err
+}
+
+const insertNotificationSubscription = `-- name: InsertNotificationSubscription :execrows
+INSERT INTO notification_subscriptions (
+    id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5, ?6,
+    ?7, ?8, ?9, 1
+)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertNotificationSubscriptionParams struct {
+	ID          string
+	Scope       string
+	SinkID      string
+	Types       string
+	Objects     string
+	MinSeverity int64
+	State       string
+	Reason      string
+	CreatedBy   string
+}
+
+// A subscription with the same ID is not written.
+func (q *Queries) InsertNotificationSubscription(ctx context.Context, arg InsertNotificationSubscriptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertNotificationSubscription,
+		arg.ID,
+		arg.Scope,
+		arg.SinkID,
+		arg.Types,
+		arg.Objects,
+		arg.MinSeverity,
+		arg.State,
+		arg.Reason,
+		arg.CreatedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertOIDCProvider = `-- name: InsertOIDCProvider :exec
@@ -10507,6 +10903,36 @@ func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueNotificationDeliveryScopes = `-- name: ListDueNotificationDeliveryScopes :many
+SELECT DISTINCT scope
+FROM notification_deliveries
+WHERE state = 'pending' AND next_at_ms <= ?1 AND lease_until_ms <= ?1
+ORDER BY scope
+`
+
+func (q *Queries) ListDueNotificationDeliveryScopes(ctx context.Context, nowMs int64) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listDueNotificationDeliveryScopes, nowMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var scope string
+		if err := rows.Scan(&scope); err != nil {
+			return nil, err
+		}
+		items = append(items, scope)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -12659,12 +13085,99 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 	return items, nil
 }
 
+const listNotificationDeliveriesOfSubscription = `-- name: ListNotificationDeliveriesOfSubscription :many
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = ?1 AND subscription_id = ?2
+ORDER BY next_at_ms DESC, id DESC
+LIMIT ?3
+`
+
+type ListNotificationDeliveriesOfSubscriptionParams struct {
+	Scope          string
+	SubscriptionID string
+	MaxRows        int64
+}
+
+func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, arg ListNotificationDeliveriesOfSubscriptionParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationDeliveriesOfSubscription, arg.Scope, arg.SubscriptionID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationDelivery
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.NotificationID,
+			&i.SubscriptionID,
+			&i.SinkID,
+			&i.Contact,
+			&i.Principal,
+			&i.State,
+			&i.Attempts,
+			&i.NextAtMs,
+			&i.LastError,
+			&i.DeliveredAtMs,
+			&i.Owner,
+			&i.LeaseUntilMs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationScopesAbove = `-- name: ListNotificationScopesAbove :many
+SELECT s.scope
+FROM notification_sequences AS s
+LEFT JOIN notification_cursors AS c ON c.scope = s.scope AND c.name = ?1
+WHERE EXISTS (
+    SELECT 1 FROM notifications AS n WHERE n.scope = s.scope AND n.sequence > COALESCE(c.sequence, 0)
+)
+ORDER BY s.scope
+`
+
+// The scopes that hold a notification above the cursor of the dispatcher.
+func (q *Queries) ListNotificationScopesAbove(ctx context.Context, name string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationScopesAbove, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var scope string
+		if err := rows.Scan(&scope); err != nil {
+			return nil, err
+		}
+		items = append(items, scope)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNotificationSinkRefs = `-- name: ListNotificationSinkRefs :many
-SELECT s.sink_id, s.ref
-FROM notification_sink_secrets AS s
-JOIN namespaces AS n ON n.id = s.namespace_id
-WHERE n.name = ?1
-ORDER BY s.sink_id, s.position
+SELECT sink_id, ref
+FROM notification_sink_secrets
+WHERE scope = ?1
+ORDER BY sink_id, position
 `
 
 type ListNotificationSinkRefsRow struct {
@@ -12672,7 +13185,7 @@ type ListNotificationSinkRefsRow struct {
 	Ref    string
 }
 
-// The secret refs of every sink of a namespace, in the order of each sink.
+// The secret refs of every sink of a scope, in the order of each sink.
 func (q *Queries) ListNotificationSinkRefs(ctx context.Context, namespace string) ([]ListNotificationSinkRefsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listNotificationSinkRefs, namespace)
 	if err != nil {
@@ -12697,11 +13210,10 @@ func (q *Queries) ListNotificationSinkRefs(ctx context.Context, namespace string
 }
 
 const listNotificationSinkSecrets = `-- name: ListNotificationSinkSecrets :many
-SELECT s.ref, s.ciphertext
-FROM notification_sink_secrets AS s
-JOIN namespaces AS n ON n.id = s.namespace_id
-WHERE n.name = ?1 AND s.sink_id = ?2
-ORDER BY s.position
+SELECT ref, ciphertext
+FROM notification_sink_secrets
+WHERE scope = ?1 AND sink_id = ?2
+ORDER BY position
 `
 
 type ListNotificationSinkSecretsParams struct {
@@ -12738,11 +13250,10 @@ func (q *Queries) ListNotificationSinkSecrets(ctx context.Context, arg ListNotif
 }
 
 const listNotificationSinks = `-- name: ListNotificationSinks :many
-SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
-FROM notification_sinks AS k
-JOIN namespaces AS n ON n.id = k.namespace_id
-WHERE n.name = ?1
-ORDER BY k.id
+SELECT id, scope AS namespace, kind, name, platform, target, created_by, version
+FROM notification_sinks
+WHERE scope = ?1
+ORDER BY id
 `
 
 type ListNotificationSinksRow struct {
@@ -12774,6 +13285,147 @@ func (q *Queries) ListNotificationSinks(ctx context.Context, namespace string) (
 			&i.Target,
 			&i.CreatedBy,
 			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationSubscriptions = `-- name: ListNotificationSubscriptions :many
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE scope = ?1
+ORDER BY id
+`
+
+func (q *Queries) ListNotificationSubscriptions(ctx context.Context, scope string) ([]NotificationSubscription, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationSubscriptions, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationSubscription
+	for rows.Next() {
+		var i NotificationSubscription
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.SinkID,
+			&i.Types,
+			&i.Objects,
+			&i.MinSeverity,
+			&i.State,
+			&i.Reason,
+			&i.CreatedBy,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationSubscriptionsOfSink = `-- name: ListNotificationSubscriptionsOfSink :many
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE scope = ?1 AND sink_id = ?2
+ORDER BY id
+`
+
+type ListNotificationSubscriptionsOfSinkParams struct {
+	Scope  string
+	SinkID string
+}
+
+func (q *Queries) ListNotificationSubscriptionsOfSink(ctx context.Context, arg ListNotificationSubscriptionsOfSinkParams) ([]NotificationSubscription, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationSubscriptionsOfSink, arg.Scope, arg.SinkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationSubscription
+	for rows.Next() {
+		var i NotificationSubscription
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.SinkID,
+			&i.Types,
+			&i.Objects,
+			&i.MinSeverity,
+			&i.State,
+			&i.Reason,
+			&i.CreatedBy,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationsAfter = `-- name: ListNotificationsAfter :many
+SELECT scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links, attributes,
+       recipients, dedupe_key, at_ms
+FROM notifications
+WHERE scope = ?1 AND sequence > ?2
+ORDER BY sequence
+LIMIT ?3
+`
+
+type ListNotificationsAfterParams struct {
+	Scope   string
+	After   int64
+	MaxRows int64
+}
+
+func (q *Queries) ListNotificationsAfter(ctx context.Context, arg ListNotificationsAfterParams) ([]Notification, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationsAfter, arg.Scope, arg.After, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Notification
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.Scope,
+			&i.Sequence,
+			&i.ID,
+			&i.Type,
+			&i.Object,
+			&i.ObjectID,
+			&i.Subject,
+			&i.Agent,
+			&i.Severity,
+			&i.Summary,
+			&i.Links,
+			&i.Attributes,
+			&i.Recipients,
+			&i.DedupeKey,
+			&i.AtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -14985,11 +15637,37 @@ func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64
 	return column_1, err
 }
 
+const moveNotificationCursor = `-- name: MoveNotificationCursor :execrows
+UPDATE notification_cursors
+SET sequence = ?1
+WHERE name = ?2 AND scope = ?3 AND sequence = ?4
+`
+
+type MoveNotificationCursorParams struct {
+	ToSequence   int64
+	Name         string
+	Scope        string
+	FromSequence int64
+}
+
+func (q *Queries) MoveNotificationCursor(ctx context.Context, arg MoveNotificationCursorParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, moveNotificationCursor,
+		arg.ToSequence,
+		arg.Name,
+		arg.Scope,
+		arg.FromSequence,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const moveNotificationSinkSecret = `-- name: MoveNotificationSinkSecret :exec
 UPDATE notification_sink_secrets
 SET position = ?1
 WHERE notification_sink_secrets.ref = ?2 AND notification_sink_secrets.sink_id = ?3
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?4)
+  AND notification_sink_secrets.scope = ?4
 `
 
 type MoveNotificationSinkSecretParams struct {
@@ -15774,6 +16452,71 @@ func (q *Queries) RecordMaintenanceRevocation(ctx context.Context, arg RecordMai
 		arg.AtMs,
 	)
 	return err
+}
+
+const recordNotificationAttempt = `-- name: RecordNotificationAttempt :execrows
+UPDATE notification_deliveries
+SET state = ?1, attempts = ?2, next_at_ms = ?3,
+    last_error = ?4, delivered_at_ms = ?5, owner = '',
+    lease_until_ms = 0, version = notification_deliveries.version + 1
+WHERE notification_deliveries.id = ?6 AND notification_deliveries.scope = ?7
+  AND notification_deliveries.owner = ?8 AND notification_deliveries.version = ?9
+  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > ?10
+`
+
+type RecordNotificationAttemptParams struct {
+	State         string
+	Attempts      int64
+	NextAtMs      int64
+	LastError     string
+	DeliveredAtMs int64
+	ID            string
+	Scope         string
+	Owner         string
+	Version       int64
+	NowMs         int64
+}
+
+// Stores the result for the live claim only: the owner and the version of the
+// stored claim, and a lease that has not passed at now_ms.
+func (q *Queries) RecordNotificationAttempt(ctx context.Context, arg RecordNotificationAttemptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordNotificationAttempt,
+		arg.State,
+		arg.Attempts,
+		arg.NextAtMs,
+		arg.LastError,
+		arg.DeliveredAtMs,
+		arg.ID,
+		arg.Scope,
+		arg.Owner,
+		arg.Version,
+		arg.NowMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const redeliverNotificationDelivery = `-- name: RedeliverNotificationDelivery :execrows
+UPDATE notification_deliveries
+SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
+WHERE notification_deliveries.id = ?1 AND notification_deliveries.scope = ?2
+  AND notification_deliveries.state <> 'pending'
+`
+
+type RedeliverNotificationDeliveryParams struct {
+	ID    string
+	Scope string
+}
+
+func (q *Queries) RedeliverNotificationDelivery(ctx context.Context, arg RedeliverNotificationDeliveryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, redeliverNotificationDelivery, arg.ID, arg.Scope)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const rejoinRunner = `-- name: RejoinRunner :exec
@@ -17082,6 +17825,20 @@ func (q *Queries) SetNamespaceSourceFilter(ctx context.Context, arg SetNamespace
 	return result.RowsAffected()
 }
 
+const setNotificationSequence = `-- name: SetNotificationSequence :exec
+UPDATE notification_sequences SET last_sequence = ?1 WHERE scope = ?2
+`
+
+type SetNotificationSequenceParams struct {
+	LastSequence int64
+	Scope        string
+}
+
+func (q *Queries) SetNotificationSequence(ctx context.Context, arg SetNotificationSequenceParams) error {
+	_, err := q.db.ExecContext(ctx, setNotificationSequence, arg.LastSequence, arg.Scope)
+	return err
+}
+
 const setPendingContentKey = `-- name: SetPendingContentKey :execrows
 UPDATE state_versions
 SET content_key = ?
@@ -17299,6 +18056,22 @@ func (q *Queries) ShredItemKey(ctx context.Context, arg ShredItemKeyParams) (int
 	return result.RowsAffected()
 }
 
+const skipPendingNotificationDeliveriesOfSubscription = `-- name: SkipPendingNotificationDeliveriesOfSubscription :exec
+UPDATE notification_deliveries
+SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
+WHERE scope = ?1 AND subscription_id = ?2 AND state = 'pending'
+`
+
+type SkipPendingNotificationDeliveriesOfSubscriptionParams struct {
+	Scope          string
+	SubscriptionID string
+}
+
+func (q *Queries) SkipPendingNotificationDeliveriesOfSubscription(ctx context.Context, arg SkipPendingNotificationDeliveriesOfSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, skipPendingNotificationDeliveriesOfSubscription, arg.Scope, arg.SubscriptionID)
+	return err
+}
+
 const softDeleteStack = `-- name: SoftDeleteStack :execrows
 UPDATE stacks
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?
@@ -17472,6 +18245,23 @@ func (q *Queries) SubjectsOfEnabledCaller(ctx context.Context, subject string) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const suspendNotificationSubscription = `-- name: SuspendNotificationSubscription :exec
+UPDATE notification_subscriptions
+SET state = 'suspended', reason = ?1, version = notification_subscriptions.version + 1
+WHERE notification_subscriptions.id = ?2 AND notification_subscriptions.scope = ?3
+`
+
+type SuspendNotificationSubscriptionParams struct {
+	Reason string
+	ID     string
+	Scope  string
+}
+
+func (q *Queries) SuspendNotificationSubscription(ctx context.Context, arg SuspendNotificationSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, suspendNotificationSubscription, arg.Reason, arg.ID, arg.Scope)
+	return err
 }
 
 const sweepIdempotencyRecords = `-- name: SweepIdempotencyRecords :execrows
@@ -18141,7 +18931,7 @@ const updateNotificationSink = `-- name: UpdateNotificationSink :execrows
 UPDATE notification_sinks
 SET name = ?1, target = ?2, version = notification_sinks.version + 1
 WHERE notification_sinks.id = ?3 AND notification_sinks.version = ?4
-  AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?5)
+  AND notification_sinks.scope = ?5
 `
 
 type UpdateNotificationSinkParams struct {
@@ -18161,6 +18951,49 @@ func (q *Queries) UpdateNotificationSink(ctx context.Context, arg UpdateNotifica
 		arg.ID,
 		arg.Version,
 		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateNotificationSubscription = `-- name: UpdateNotificationSubscription :execrows
+UPDATE notification_subscriptions
+SET sink_id = ?1, types = ?2, objects = ?3,
+    min_severity = ?4, state = ?5, reason = ?6,
+    created_by = ?7, version = notification_subscriptions.version + 1
+WHERE notification_subscriptions.id = ?8 AND notification_subscriptions.scope = ?9
+  AND notification_subscriptions.version = ?10
+`
+
+type UpdateNotificationSubscriptionParams struct {
+	SinkID      string
+	Types       string
+	Objects     string
+	MinSeverity int64
+	State       string
+	Reason      string
+	CreatedBy   string
+	ID          string
+	Scope       string
+	Version     int64
+}
+
+// The sink, the creator and the filter of a replace are the new values. The
+// version guards the replace.
+func (q *Queries) UpdateNotificationSubscription(ctx context.Context, arg UpdateNotificationSubscriptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateNotificationSubscription,
+		arg.SinkID,
+		arg.Types,
+		arg.Objects,
+		arg.MinSeverity,
+		arg.State,
+		arg.Reason,
+		arg.CreatedBy,
+		arg.ID,
+		arg.Scope,
+		arg.Version,
 	)
 	if err != nil {
 		return 0, err

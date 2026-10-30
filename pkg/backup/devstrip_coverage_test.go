@@ -113,8 +113,23 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who published the release",
 	},
-	"job_freezes.created_by":              {strip: false, reason: "history text of who made the freeze"},
-	"notification_sinks.created_by":       {strip: false, reason: "history text of who made the sink"},
+	"job_freezes.created_by":        {strip: false, reason: "history text of who made the freeze"},
+	"notification_sinks.created_by": {strip: false, reason: "history text of who made the sink"},
+	"notifications.subject":         {strip: false, reason: "history text of who caused the notification"},
+	"notification_subscriptions.created_by": {
+		strip: false,
+		reason: "subject of the last writer; a delivery checks the current grants of that principal " +
+			"and skips when the principal is gone",
+	},
+	"notification_deliveries.principal": {
+		strip: false,
+		reason: "ID of the principal whose access decides the delivery; the check before each attempt " +
+			"skips the delivery when the principal is gone",
+	},
+	"notification_deliveries.owner": {
+		strip:  false,
+		reason: "name of an instance that holds the claim, not of a person",
+	},
 	"job_freezes.ended_by":                {strip: false, reason: "history text of who ended the freeze"},
 	"runner_join_tokens.created_by":       {strip: false, reason: "history text of who made the join token"},
 	"runner_join_tokens.used_by":          {strip: false, reason: "ID of a runner, not of a person"},
