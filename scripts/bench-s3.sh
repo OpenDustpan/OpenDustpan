@@ -23,7 +23,8 @@
 #                   profiles of the protocol run, split by spaces
 #                   (default "same-az cross-az eu-metro")
 #   BENCH_S3_MINIO_TMPFS
-#                   size of the tmpfs that holds the MinIO data (default 8g)
+#                   size of a tmpfs for the MinIO data, for example 8g
+#                   (default: no tmpfs, the data is on the disk)
 #   BENCH_S3_PORT   first host port; the run uses this port (Toxiproxy API)
 #                   and the next three (MinIO, Garage, PostgreSQL)
 #                   (default 18474)
@@ -137,18 +138,22 @@ docker run -d --name "$NAME-postgres" --network "$NET" --network-alias postgres 
 	-e POSTGRES_PASSWORD_FILE=/run/secrets/pg-password \
 	"$POSTGRES_IMAGE" >/dev/null
 
-# The MinIO data directory is a tmpfs of a fixed size, so the free space
-# that MinIO sees is the space it has. MinIO moves a deleted object to a
-# trash directory and empties it later. A protocol run writes and deletes
-# gigabytes faster than MinIO empties the trash, and MinIO then answers
-# 507. empty_minio_trash below deletes the trash every 10 seconds.
+# MinIO moves a deleted object to a trash directory and empties it later.
+# A protocol run writes and deletes gigabytes faster than MinIO empties the
+# trash, and MinIO then answers 507. empty_minio_trash below deletes the
+# trash every 10 seconds. BENCH_S3_MINIO_TMPFS puts the MinIO data on a
+# tmpfs of that size instead of the disk. The tmpfs uses memory.
+MINIO_TMPFS=()
+if [ -n "${BENCH_S3_MINIO_TMPFS:-}" ]; then
+	MINIO_TMPFS=(--tmpfs "/tmp/data:rw,size=$BENCH_S3_MINIO_TMPFS")
+fi
 echo "bench-s3: start MinIO"
 docker run -d --name "$NAME-minio" --network "$NET" --network-alias minio \
 	-v "$SECRETS/minio-access:/run/secrets/minio-access:ro" \
 	-v "$SECRETS/minio-secret:/run/secrets/minio-secret:ro" \
 	-e MINIO_ROOT_USER_FILE=/run/secrets/minio-access \
 	-e MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-secret \
-	--tmpfs "/tmp/data:rw,size=${BENCH_S3_MINIO_TMPFS:-8g}" \
+	"${MINIO_TMPFS[@]+"${MINIO_TMPFS[@]}"}" \
 	"$MINIO_IMAGE" server /tmp/data >/dev/null
 
 echo "bench-s3: start Garage"
