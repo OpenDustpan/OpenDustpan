@@ -279,28 +279,42 @@ func storeCheckReportOf(report *storecheck.Report) *storeCheckReportJSON {
 // classifyStoreCheck maps the errors of the store checks. Each text is fixed:
 // the error of a store can hold an address, so it never reaches an answer.
 func classifyStoreCheck(err error) (failure, bool) {
-	switch {
-	case errors.Is(err, storecheck.ErrInvalidTarget):
+	if errors.Is(err, storecheck.ErrInvalidTarget) {
 		return failCoded(http.StatusBadRequest, `invalid target: use "blobs" or "backup"`,
 			errcode.StoreCheckInvalidTarget), true
-	case errors.Is(err, storecheck.ErrNotFound):
+	}
+
+	if errors.Is(err, storecheck.ErrNotFound) {
 		return failCoded(http.StatusNotFound, "store check not found: GET /api/dustpan/v1/store-checks lists the IDs",
 			errcode.StoreCheckNotFound), true
-	case errors.Is(err, storecheck.ErrNoTarget):
+	}
+
+	return classifyStoreCheckConflict(err)
+}
+
+// classifyStoreCheckConflict maps the refusals of a start, which answer 409.
+func classifyStoreCheckConflict(err error) (failure, bool) {
+	if errors.Is(err, storecheck.ErrNoTarget) {
 		return failCoded(http.StatusConflict, "this server has no store for the target: use another target",
 			errcode.StoreCheckNoTarget), true
-	case errors.Is(err, storecheck.ErrRunning):
+	}
+
+	if errors.Is(err, storecheck.ErrRunning) {
 		return failCoded(http.StatusConflict, "a store check is running: wait until it ends, then start again",
 			errcode.StoreCheckRunning), true
-	case errors.Is(err, storecheck.ErrCooldown):
+	}
+
+	if errors.Is(err, storecheck.ErrCooldown) {
 		return failCoded(http.StatusConflict,
 			"a store check on this target ended less than 15 minutes ago: wait, then start again",
 			errcode.StoreCheckCooldown), true
-	case errors.Is(err, storecheck.ErrRefused):
+	}
+
+	if errors.Is(err, storecheck.ErrRefused) {
 		return failCoded(http.StatusConflict,
 			"the installation is in maintenance mode or a restore runs: wait until it ends, then start again",
 			errcode.StoreCheckRefused), true
-	default:
-		return fail(0, ""), false
 	}
+
+	return fail(0, ""), false
 }
