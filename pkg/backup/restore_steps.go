@@ -401,7 +401,7 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 		return nil, err
 	}
 
-	area, stage, err := s.stageInput(ctx, in, sc.Fence.Token, pinned, dev)
+	area, stage, err := s.stageInput(ctx, in, sc.Fence, pinned, dev)
 	if err != nil {
 		return nil, err
 	}
@@ -441,13 +441,19 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 // stageInput verifies the SQL part of the backup, and returns the staging
 // area of the claim token and the input of the stage.
 func (s *RestoreService) stageInput(
-	ctx context.Context, in restoreInput, token int64, pinned pinnedManifest, dev *devRun,
+	ctx context.Context, in restoreInput, fence durable.StepFence, pinned pinnedManifest, dev *devRun,
 ) (StagingArea, RestoreStageInput, error) {
 	var none RestoreStageInput
 
 	manifest, err := readManifest(ctx, s.target, in.BackupID)
 	if err != nil {
 		return StagingArea{Restore: "", Token: 0}, none, err
+	}
+
+	// A key that a restore does not write refuses the restore before the
+	// first byte is staged or written.
+	if keyErr := s.refuseKeys(ctx, fence, in, manifest.Blobs); keyErr != nil {
+		return StagingArea{Restore: "", Token: 0}, none, keyErr
 	}
 
 	if verifyErr := verifySQLPart(ctx, s.target, in.BackupID, manifest.SQLFiles); verifyErr != nil {
@@ -459,7 +465,7 @@ func (s *RestoreService) stageInput(
 		return StagingArea{Restore: "", Token: 0}, none, err
 	}
 
-	area, err := NewStagingArea(in.ID, token)
+	area, err := NewStagingArea(in.ID, fence.Token)
 	if err != nil {
 		return StagingArea{Restore: "", Token: 0}, none, err
 	}
@@ -512,6 +518,12 @@ func (s *RestoreService) stepCheck(ctx context.Context, sc durable.StepContext, 
 	check := backupKeyCheck{target: s.target, peeker: s.live, id: in.BackupID, manifest: manifest, key: s.key}
 	if err := check.run(ctx); err != nil {
 		return nil, err
+	}
+
+	// Check the keys again: the check reads the target, which may have changed
+	// since the stage. The refusal comes before any read of a blob.
+	if keyErr := s.refuseKeys(ctx, sc.Fence, in, manifest.Blobs); keyErr != nil {
+		return nil, keyErr
 	}
 
 	if err := verifyTargetBlobs(ctx, s.target, manifest.Blobs); err != nil {
@@ -649,6 +661,12 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 	manifest, err := readManifest(ctx, s.target, in.BackupID)
 	if err != nil {
 		return nil, err
+	}
+
+	// The whole manifest is checked before the first live key is written, so
+	// a refused key leaves no blob that an earlier entry wrote.
+	if keyErr := s.refuseKeys(ctx, sc.Fence, in, manifest.Blobs); keyErr != nil {
+		return nil, keyErr
 	}
 
 	for _, ref := range manifest.Blobs {
@@ -1073,6 +1091,13 @@ func (s *RestoreService) copyBlob(
 	fence durable.StepFence,
 	ref ManifestBlob,
 ) error {
+	// Defense in depth: the steps check the whole manifest before they copy.
+	// This check stays so that no caller of copyBlob, such as the repair of
+	// after-apply, can write a key that a restore does not write.
+	if keyErr := s.refuseKeys(ctx, fence, in, []ManifestBlob{ref}); keyErr != nil {
+		return keyErr
+	}
+
 	live, err := blob.ParseKey(ref.Key)
 	if err != nil {
 		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)

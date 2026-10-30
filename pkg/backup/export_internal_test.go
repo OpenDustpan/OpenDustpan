@@ -38,3 +38,18 @@ func VerifyLiveBlobForTest(ctx context.Context, live blob.Store, ref ManifestBlo
 
 	return s.verifyLiveBlob(ctx, ref)
 }
+
+// ProtectedKeyForTest runs the deny layer of the restore key check.
+func ProtectedKeyForTest(key blob.Key) bool {
+	return protectedKey(key)
+}
+
+// WritableKeyForTest runs the allowlist layer of the restore key check.
+func WritableKeyForTest(key string) bool {
+	return writableKey(key)
+}
+
+// CheckRestoreKeyForTest runs both layers of the restore key check.
+func CheckRestoreKeyForTest(key string) error {
+	return checkRestoreKey(key)
+}

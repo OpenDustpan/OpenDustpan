@@ -764,7 +764,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 //
 //nolint:gochecknoglobals // A frozen list of sentinels, like the table lists of this package.
 var storedRestoreSentinels = []error{
-	ErrManifestKindInvalid, ErrDevStripIncomplete, ErrRestoreRunning, ErrRestoreAccessMismatch, ErrCorrupt,
+	ErrManifestKindInvalid, ErrDevStripIncomplete, ErrRestoreRunning, ErrRestoreAccessMismatch, ErrProtectedKey, ErrCorrupt,
 	ErrSchemaBeforeBaseline, ErrSchemaMismatch, ErrNotFound, ErrRestoreNotFound,
 }
 
