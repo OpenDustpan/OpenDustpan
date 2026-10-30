@@ -562,7 +562,7 @@ func testLogReadDamaged(t *testing.T, h RecorderHarness) {
 	}
 
 	first, second := objects[0].Key, objects[1].Key
-	if strings.HasSuffix(first.String(), "00000001") {
+	if strings.Contains(first.String(), "/00000001") {
 		first, second = second, first
 	}
 

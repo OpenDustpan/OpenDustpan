@@ -257,6 +257,16 @@ type ArtifactTx interface {
 	// exists stays as it is.
 	InsertChunk(ctx context.Context, ns namespace.Name, log string, seq int, c job.ChunkRow) error
 	// ConfirmChunk marks the row of the chunk as confirmed and keeps the size
-	// and the MD5 of its stored bytes.
-	ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest) error
+	// and the MD5 of its stored bytes, and the key of the blob of the attempt
+	// that won (the empty text for the key of the first layout).
+	ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest, blobKey string) error
+	// ChunkKeys returns the blob key of each confirmed chunk of the log
+	// version, in the order of the chunk numbers.
+	ChunkKeys(ctx context.Context, ns namespace.Name, log string) ([]ChunkKey, error)
+}
+
+// ChunkKey is the blob key that the row of the confirmed chunk Seq holds.
+type ChunkKey struct {
+	Seq     int
+	BlobKey string
 }

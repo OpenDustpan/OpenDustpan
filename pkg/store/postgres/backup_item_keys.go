@@ -194,7 +194,7 @@ func checkStagedLogChunks(ctx context.Context, pool *pgxpool.Pool, staging strin
 		return err
 	}
 
-	query := "SELECT c.log_id, c.seq, c.sha256, c.size, l.id FROM " + stagingTable(staging, "job_log_chunks") +
+	query := "SELECT c.log_id, c.seq, c.sha256, c.size, l.id, l.job_id, c.blob_key FROM " + stagingTable(staging, "job_log_chunks") +
 		" AS c LEFT JOIN " + stagingTable(staging, "job_logs") +
 		" AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id"
 
@@ -207,20 +207,20 @@ func checkStagedLogChunks(ctx context.Context, pool *pgxpool.Pool, staging strin
 
 	for rows.Next() {
 		var (
-			logID, sha string
-			seq, size  int64
-			log        *string
+			logID, sha, blobKey string
+			seq, size           int64
+			log, jobID          *string
 		)
 
-		if scanErr := rows.Scan(&logID, &seq, &sha, &size, &log); scanErr != nil {
+		if scanErr := rows.Scan(&logID, &seq, &sha, &size, &log, &jobID, &blobKey); scanErr != nil {
 			return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
 		}
 
-		if log == nil {
+		if log == nil || jobID == nil {
 			return fmt.Errorf("staged chunk %d of log %q has no log version: %w", seq, logID, backup.ErrCorrupt)
 		}
 
-		if chunkErr := jobstore.CheckChunkRow(logID, seq, size, sha); chunkErr != nil {
+		if chunkErr := jobstore.CheckChunkRow(*jobID, logID, seq, size, sha, blobKey); chunkErr != nil {
 			return fmt.Errorf("staged chunk %d of log %q is not valid: %w: %w", seq, logID, chunkErr, backup.ErrCorrupt)
 		}
 	}

@@ -334,7 +334,7 @@ func TestPlanChunk(t *testing.T) {
 
 	rows := map[int]job.ChunkRow{
 		0: {SHA256: sum("a"), Size: 1, Confirmed: true},
-		1: {SHA256: sum("b"), Size: 1, Confirmed: false},
+		1: {SHA256: sum("b"), Size: 1, Confirmed: false, BlobKey: ""},
 	}
 
 	//nolint:unparam // The signature is the one that PlanChunk takes.
@@ -397,7 +397,7 @@ func TestConfirmChunkRecord(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			row := job.ChunkRow{SHA256: sum("x"), Size: chunkBytes, Confirmed: false}
+			row := job.ChunkRow{SHA256: sum("x"), Size: chunkBytes, Confirmed: false, BlobKey: ""}
 			key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
 
 			changed, err := job.ConfirmChunkRecord(tt.j, key, tt.version, tt.seq, row)

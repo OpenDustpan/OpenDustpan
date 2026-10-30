@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -33,6 +34,8 @@ const (
 	PlanIDPrefix = "pln-"
 	// LogVersionIDPrefix starts the ID of one version of the log of a step.
 	LogVersionIDPrefix = "jlv-"
+	// LogAttemptIDPrefix starts the ID of one write attempt of a log chunk.
+	LogAttemptIDPrefix = "jla-"
 )
 
 // PlanPart is one part of a stored plan: one blob, sealed with the item
@@ -246,11 +249,53 @@ func PlanPartKey(id ID, plan string, k OutputKind) (blob.Key, error) {
 	return blob.ParseKey("job/" + string(id) + "/plan/" + plan + "/" + string(k))
 }
 
-// LogChunkKey returns the blob key of chunk seq of the log version with the
-// ID version of the job id: job/<job ID>/log/<version ID>/<seq in 8
-// digits>.
+// LogChunkKey returns the blob key that the first layout of the chunk seq of
+// the log version with the ID version of the job id has: job/<job ID>/log/<version
+// ID>/<seq in 8 digits>. A chunk row with no blob key (ChunkRow.BlobKey) has
+// this key. A writer does not use it any more: see LogChunkAttemptKey.
 func LogChunkKey(id ID, version string, seq int) (blob.Key, error) {
 	return blob.ParseKey(fmt.Sprintf("job/%s/log/%s/%08d", id, version, seq))
+}
+
+// LogChunkAttemptKey returns the blob key of one write attempt of the chunk
+// seq of the log version with the ID version of the job id: the key of
+// LogChunkKey, then "-", then the ID of the attempt. Each attempt has its own
+// key, so two attempts never write one key.
+func LogChunkAttemptKey(id ID, version string, seq int, attempt string) (blob.Key, error) {
+	if !validIDSegment(attempt, LogAttemptIDPrefix) {
+		return "", fmt.Errorf("%w: log chunk attempt %q", ErrInvalid, attempt)
+	}
+
+	return blob.ParseKey(fmt.Sprintf("job/%s/log/%s/%08d-%s", id, version, seq, attempt))
+}
+
+// ChunkBlobKey returns the blob key of the chunk seq of the log version with
+// the ID version of the job id, when the row of the chunk holds the blob key
+// stored. The empty text is a row from the first layout: the key is then
+// LogChunkKey. Any other text must be exactly the key that LogChunkAttemptKey
+// makes for these parts and some attempt. A key that is not, for example the
+// key of another chunk, another log version or another job, is ErrInvalid.
+//
+// Defense in depth: the store checks the same text when it writes the row, and
+// the blob view checks the namespace. This check stays so that a damaged or
+// restored row never makes a reader open a blob that is not the blob of its
+// chunk.
+func ChunkBlobKey(id ID, version string, seq int, stored string) (blob.Key, error) {
+	first, err := LogChunkKey(id, version, seq)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+
+	if stored == "" {
+		return first, nil
+	}
+
+	attempt, ok := strings.CutPrefix(stored, first.String()+"-")
+	if !ok {
+		return "", fmt.Errorf("%w: blob key of chunk %d of log %s", ErrInvalid, seq, version)
+	}
+
+	return LogChunkAttemptKey(id, version, seq, attempt)
 }
 
 // Substitution is one change to the text of a log for a redaction. The

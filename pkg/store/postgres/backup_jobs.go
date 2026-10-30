@@ -64,6 +64,7 @@ func pgCopyJobTables() []pgCopyTable {
 				"confirmed",
 				"stored_size",
 				"stored_md5",
+				"blob_key",
 			},
 			orderBy: []string{"log_id", pgColSeq},
 		},

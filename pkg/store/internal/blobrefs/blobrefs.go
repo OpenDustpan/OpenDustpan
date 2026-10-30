@@ -53,6 +53,9 @@ type ChunkRow struct {
 	Shredded   bool
 	StoredSize int64
 	StoredMD5  []byte
+	// BlobKey is the key of the blob of the attempt that won the chunk. The empty
+	// text is a chunk from the first key layout.
+	BlobKey string
 }
 
 // PlanRow is one row of the plan table, with the item key of the plan.
@@ -114,7 +117,7 @@ func (c *Collector) Chunk(row ChunkRow) error {
 		return fmt.Errorf("%w: log chunk %d of log %q", ErrRow, row.Seq, row.LogID)
 	}
 
-	rel, err := job.LogChunkKey(job.ID(row.JobID), row.LogID, int(row.Seq))
+	rel, err := job.ChunkBlobKey(job.ID(row.JobID), row.LogID, int(row.Seq), row.BlobKey)
 	if err != nil {
 		return fmt.Errorf("%w: log chunk key: %w", ErrRow, err)
 	}

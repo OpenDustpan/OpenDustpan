@@ -178,12 +178,12 @@ func closeWith(c io.Closer, err error) error {
 }
 
 // chunkBinding returns the binding of the chunk seq of a log version: its
-// blob key, so a chunk does not open at another position, in another version
+// blob key (stored is the blob key of its row, as ChunkBlobKey reads it), so a chunk does not open at another position, in another version
 // or in another job.
-func chunkBinding(id ID, version string, seq int) ([]byte, error) {
-	key, err := LogChunkKey(id, version, seq)
+func chunkBinding(id ID, version string, seq int, stored string) ([]byte, error) {
+	key, err := ChunkBlobKey(id, version, seq, stored)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return nil, err
 	}
 
 	return []byte(key.String()), nil
@@ -207,7 +207,7 @@ func openLogVersion(
 
 	// The record of the item key answers before any blob read: a shredded key
 	// fails here, also for a log with no chunk.
-	first, err := chunkBinding(rec.Job, log.ID, 0)
+	first, err := chunkBinding(rec.Job, log.ID, 0, "")
 	if err != nil {
 		return nil, err
 	}
@@ -219,8 +219,8 @@ func openLogVersion(
 	closed := !log.ClosedAt.IsZero()
 
 	return &logReader{
-		ctx: ctx, blobs: blobs, sealer: sealer, ns: nsID, job: rec.Job, ref: ref, log: log, cur: nil, closer: nil,
-		next: 0, sum: sha256.New(), done: false, check: closed, end: nil,
+		ctx: ctx, blobs: blobs, sealer: sealer, ns: nsID, job: rec.Job, ref: ref, log: log, keys: rec.ChunkKeys,
+		cur: nil, closer: nil, next: 0, sum: sha256.New(), done: false, check: closed, end: nil,
 	}, nil
 }
 
@@ -233,6 +233,8 @@ type logReader struct {
 	job    ID
 	ref    secret.ItemRef
 	log    *LogRef
+	// keys holds the blob key of each confirmed chunk (ArtifactRecord.ChunkKeys).
+	keys []string
 
 	cur    io.Reader
 	closer io.Closer
@@ -320,12 +322,20 @@ func (v *verifyReader) Close() error {
 
 // openChunk opens the chunk r.next.
 func (r *logReader) openChunk() error {
-	rc, err := r.blobs.OpenLogChunk(r.ctx, LogChunkRef{Namespace: r.ns, Job: r.job, Version: r.log.ID, Seq: r.next})
+	if r.next >= len(r.keys) {
+		return fmt.Errorf("%w: log chunk blob key", ErrNotFound)
+	}
+
+	stored := r.keys[r.next]
+
+	rc, err := r.blobs.OpenLogChunk(
+		r.ctx, LogChunkRef{Namespace: r.ns, Job: r.job, Version: r.log.ID, Seq: r.next, BlobKey: stored},
+	)
 	if err != nil {
 		return mapBlobError(err, "log chunk")
 	}
 
-	binding, err := chunkBinding(r.job, r.log.ID, r.next)
+	binding, err := chunkBinding(r.job, r.log.ID, r.next, stored)
 	if err != nil {
 		return closeWith(rc, err)
 	}

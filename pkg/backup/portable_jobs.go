@@ -104,6 +104,7 @@ func portableJobArtifactTables() []PortableTable {
 				{Name: "confirmed", Kind: KindInteger},
 				{Name: "stored_size", Kind: KindInteger},
 				{Name: "stored_md5", Kind: KindBytes},
+				{Name: "blob_key", Kind: KindText},
 			},
 		},
 	}

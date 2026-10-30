@@ -505,6 +505,7 @@ type JobLogChunk struct {
 	Confirmed   int64
 	StoredSize  int64
 	StoredMd5   []byte
+	BlobKey     string
 }
 
 type JobPlan struct {

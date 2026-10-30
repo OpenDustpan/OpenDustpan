@@ -538,14 +538,16 @@ func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIde
 
 const confirmJobLogChunk = `-- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
-SET confirmed = 1, stored_size = ?1, stored_md5 = ?2
-WHERE job_log_chunks.log_id = ?3 AND job_log_chunks.seq = ?4
-  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?5)
+SET confirmed = 1, stored_size = ?1, stored_md5 = ?2,
+    blob_key = ?3
+WHERE job_log_chunks.log_id = ?4 AND job_log_chunks.seq = ?5
+  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?6)
 `
 
 type ConfirmJobLogChunkParams struct {
 	StoredSize int64
 	StoredMd5  []byte
+	BlobKey    string
 	LogID      string
 	Seq        int64
 	Namespace  string
@@ -555,6 +557,7 @@ func (q *Queries) ConfirmJobLogChunk(ctx context.Context, arg ConfirmJobLogChunk
 	result, err := q.db.ExecContext(ctx, confirmJobLogChunk,
 		arg.StoredSize,
 		arg.StoredMd5,
+		arg.BlobKey,
 		arg.LogID,
 		arg.Seq,
 		arg.Namespace,
@@ -5370,7 +5373,7 @@ func (q *Queries) GetJobLog(ctx context.Context, arg GetJobLogParams) (GetJobLog
 }
 
 const getJobLogChunk = `-- name: GetJobLogChunk :one
-SELECT c.sha256, c.size, c.confirmed
+SELECT c.sha256, c.size, c.confirmed, c.blob_key
 FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = ?1 AND c.log_id = ?2 AND c.seq = ?3
@@ -5386,12 +5389,18 @@ type GetJobLogChunkRow struct {
 	Sha256    string
 	Size      int64
 	Confirmed int64
+	BlobKey   string
 }
 
 func (q *Queries) GetJobLogChunk(ctx context.Context, arg GetJobLogChunkParams) (GetJobLogChunkRow, error) {
 	row := q.db.QueryRowContext(ctx, getJobLogChunk, arg.Namespace, arg.LogID, arg.Seq)
 	var i GetJobLogChunkRow
-	err := row.Scan(&i.Sha256, &i.Size, &i.Confirmed)
+	err := row.Scan(
+		&i.Sha256,
+		&i.Size,
+		&i.Confirmed,
+		&i.BlobKey,
+	)
 	return i, err
 }
 
@@ -11597,6 +11606,49 @@ func (q *Queries) ListJobFreezes(ctx context.Context, arg ListJobFreezesParams) 
 			&i.CreatedBy,
 			&i.EndedBy,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobLogChunkKeys = `-- name: ListJobLogChunkKeys :many
+SELECT c.seq, c.blob_key
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = ?1 AND c.log_id = ?2 AND c.confirmed = 1
+ORDER BY c.seq
+`
+
+type ListJobLogChunkKeysParams struct {
+	Namespace string
+	LogID     string
+}
+
+type ListJobLogChunkKeysRow struct {
+	Seq     int64
+	BlobKey string
+}
+
+// The blob key of each confirmed chunk of one log version, in the order of the
+// chunk numbers. The empty text is a chunk from the first key layout.
+func (q *Queries) ListJobLogChunkKeys(ctx context.Context, arg ListJobLogChunkKeysParams) ([]ListJobLogChunkKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listJobLogChunkKeys, arg.Namespace, arg.LogID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJobLogChunkKeysRow
+	for rows.Next() {
+		var i ListJobLogChunkKeysRow
+		if err := rows.Scan(&i.Seq, &i.BlobKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

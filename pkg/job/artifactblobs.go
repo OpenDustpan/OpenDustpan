@@ -38,6 +38,9 @@ type LogChunkRef struct {
 	Job       ID
 	Version   string
 	Seq       int
+	// BlobKey is the key of the blob, as ChunkBlobKey reads it. The empty
+	// text names the blob of the first layout.
+	BlobKey string
 }
 
 // ArtifactBlobFamily is the family of the plan and log blobs, as the audit
@@ -112,7 +115,8 @@ func (b *ArtifactBlobs) OpenPlanPart(ctx context.Context, ref PlanPartRef) (io.R
 }
 
 // PutLogChunk stores r as the chunk ref. It returns blob.ErrExists when the
-// chunk exists already.
+// store refuses a second write of the key. A store may also replace the object
+// with no error: the row of the chunk, not this call, says which attempt won.
 func (b *ArtifactBlobs) PutLogChunk(ctx context.Context, ref LogChunkRef, r io.Reader) error {
 	at, err := b.logKey(ref)
 	if err != nil {
@@ -120,6 +124,23 @@ func (b *ArtifactBlobs) PutLogChunk(ctx context.Context, ref LogChunkRef, r io.R
 	}
 
 	return b.refuse(ctx, ref.Namespace, opPut, at.view.Put(ctx, at.key, r), at)
+}
+
+// DeleteLogChunk deletes the blob of one write attempt of a chunk. It refuses
+// ref with no BlobKey with ErrInvalid: the blob of the first layout is the blob
+// of a row that may name it, and a writer never deletes it. A blob that does
+// not exist is not an error.
+func (b *ArtifactBlobs) DeleteLogChunk(ctx context.Context, ref LogChunkRef) error {
+	if ref.BlobKey == "" {
+		return fmt.Errorf("%w: delete of a log chunk with no attempt key", ErrInvalid)
+	}
+
+	at, err := b.logKey(ref)
+	if err != nil {
+		return err
+	}
+
+	return b.refuse(ctx, ref.Namespace, opDelete, at.view.Delete(ctx, at.key), at)
 }
 
 // OpenLogChunk opens the chunk ref. It returns blob.ErrNotFound for a chunk
@@ -205,9 +226,9 @@ func (b *ArtifactBlobs) logKey(ref LogChunkRef) (keyAt, error) {
 		return keyAt{}, fmt.Errorf("%w: log chunk %d", ErrInvalid, ref.Seq)
 	}
 
-	rel, err := LogChunkKey(ref.Job, ref.Version, ref.Seq)
+	rel, err := ChunkBlobKey(ref.Job, ref.Version, ref.Seq, ref.BlobKey)
 	if err != nil {
-		return keyAt{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return keyAt{}, err
 	}
 
 	return b.scoped(ref.Namespace, rel)

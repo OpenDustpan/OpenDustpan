@@ -422,16 +422,37 @@ func (m *memDB) ReserveLogChunk(
 			m.records.chunks[plan.Version] = rows
 		}
 
-		rows[c.Seq] = job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false}
+		rows[c.Seq] = job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false, BlobKey: ""}
 	}
 
 	return plan, nil
 }
 
-// ConfirmLogChunk implements job.RecordStore.
-func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) error {
+// chunkKeys returns the blob key of each confirmed chunk of the log version, by
+// number. The caller holds m.mu.
+func (m *memDB) chunkKeys(version string) []string {
+	rows := m.records.chunks[version]
+	keys := make([]string, 0, len(rows))
+
+	for seq := 0; ; seq++ {
+		row, ok := rows[seq]
+		if !ok || !row.Confirmed {
+			return keys
+		}
+
+		keys = append(keys, row.BlobKey)
+	}
+}
+
+// ConfirmLogChunk implements job.RecordStore. The first confirm of a chunk
+// wins, as in the SQL adapters.
+func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) (bool, error) {
 	if c.Stored.Size <= 0 {
-		return fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
+		return false, fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
+	}
+
+	if _, err := job.ChunkBlobKey(pc.Job, c.Version, c.Seq, c.BlobKey); err != nil {
+		return false, fmt.Errorf("confirm log chunk: %w", err)
 	}
 
 	m.mu.Lock()
@@ -439,27 +460,32 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 
 	next, err := m.guard(ctx, pc)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	row, ok := m.records.chunks[c.Version][c.Seq]
 	if !ok {
-		return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
+		return false, fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
 	}
 
 	changed, err := job.ConfirmChunkRecord(&next, memKey(&pc, c.Step), c.Version, c.Seq, row)
 	if err != nil {
-		return fmt.Errorf("confirm log chunk: %w", err)
+		return false, fmt.Errorf("confirm log chunk: %w", err)
+	}
+
+	if row.Confirmed {
+		return row.BlobKey == c.BlobKey, nil
 	}
 
 	row.Confirmed = true
+	row.BlobKey = c.BlobKey
 	m.records.chunks[c.Version][c.Seq] = row
 
 	if changed {
 		m.store(&next, time.Now().UTC())
 	}
 
-	return nil
+	return true, nil
 }
 
 // gatePlan applies the rules of a plan write. For a stale plan it fails the
@@ -694,7 +720,9 @@ func (m *memDB) Log(_ context.Context, ns namespace.Name, version string) (job.A
 		if r.Name == e.step && r.Token == e.token && r.Log != nil && r.Log.ID == version {
 			l := *r.Log
 
-			return job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: e.step, Plan: nil, Log: &l}, nil
+			return job.ArtifactRecord{
+				Job: j.ID, Unit: j.Spec.Unit, Step: e.step, Plan: nil, Log: &l, ChunkKeys: m.chunkKeys(version),
+			}, nil
 		}
 	}
 

@@ -70,9 +70,10 @@ func sqliteJobBackupTables() []sqliteBackupTable {
 }
 
 // sqliteJobChunkColumns returns the backup columns of the log chunk table. The
-// last two hold the size and the MD5 of the stored bytes of the chunk blob.
+// last three hold the size and the MD5 of the stored bytes of the chunk blob
+// and the key of that blob.
 func sqliteJobChunkColumns() []string {
 	return []string{
-		"log_id", "seq", backupColNamespaceID, "sha256", "size", "confirmed", "stored_size", "stored_md5",
+		"log_id", "seq", backupColNamespaceID, "sha256", "size", "confirmed", "stored_size", "stored_md5", "blob_key",
 	}
 }
