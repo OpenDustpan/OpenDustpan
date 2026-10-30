@@ -537,6 +537,12 @@ func (p protocolRunner) oneRun(ctx context.Context, spec runSpec, done map[strin
 	res.OpsPerSec = float64(s.Samples) / wall.Seconds()
 	res.BytesPerSec = res.OpsPerSec * float64(f.Bytes)
 
+	// A stopped run keeps no result, and its keys stay for the end of the
+	// whole run. One line names the stop, not one line for each key.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("run %d of %s: %w", run, f.Name, err)
+	}
+
 	if err := errors.Join(p.target.deleteAll(ctx, r.keys), p.db.truncate(ctx)); err != nil {
 		return nil, fmt.Errorf("clean run %d of %s: %w", run, f.Name, err)
 	}
