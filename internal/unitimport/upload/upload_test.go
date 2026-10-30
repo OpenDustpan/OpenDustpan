@@ -456,7 +456,10 @@ func TestNewRefuses(t *testing.T) {
 	for name, tc := range map[string]struct {
 		prefix string
 		max    int64
-	}{"empty prefix": {"", 1}, "bad prefix": {"Upload/X", 1}, "no limit": {"upload/a", 0}} {
+	}{
+		"empty prefix": {"", 1}, "bad prefix": {"Upload/X", 1}, "no limit": {"upload/a", 0},
+		"audit checkpoint prefix": {"audit-checkpoints", 1}, "below the audit checkpoint prefix": {"audit-checkpoints/epochs", 1},
+	} {
 		if _, err = upload.New(store, commitsFor(newCommits()), tc.prefix, tc.max, time.Now); err == nil {
 			t.Errorf("%s: New succeeded, want an error", name)
 		}
@@ -912,5 +915,58 @@ func TestCommitAppendsOneAuditEntry(t *testing.T) {
 	if len(commits.entries) != 1 || commits.entries[0].Action != "import:upload-commit" ||
 		!commits.entries[0].At.Equal(clock()) {
 		t.Errorf("entries = %+v, want one import:upload-commit entry at the commit time", commits.entries)
+	}
+}
+
+// wideList is a blob store whose List answers an audit checkpoint copy
+// beside the keys below the prefix, as a List that matches too much does.
+type wideList struct {
+	*blobfs.Store
+
+	extra blob.Key
+}
+
+func (w wideList) List(ctx context.Context, p string) ([]blob.Object, error) {
+	objs, err := w.Store.List(ctx, p)
+
+	return append(objs, blob.Object{ModifiedAt: time.Time{}, Key: w.extra}), err
+}
+
+// TestDeleteKeepsAuditCheckpointCopies sends an audit checkpoint copy
+// straight to the delete loop, as if the prefix check of New and the prefix
+// filter of List had failed. The delete refuses it and the copy stays.
+func TestDeleteKeepsAuditCheckpointCopies(t *testing.T) {
+	t.Parallel()
+
+	store, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	copyKey, err := audit.CheckpointKey(0, "acme", 1, strings.Repeat("a", 32))
+	if err != nil {
+		t.Fatalf("checkpoint key: %v", err)
+	}
+
+	if err = store.Put(t.Context(), copyKey, strings.NewReader("{}")); err != nil {
+		t.Fatalf("put copy: %v", err)
+	}
+
+	s, err := upload.New(wideList{Store: store, extra: copyKey}, commitsFor(newCommits()), prefix, maxBytes, clock)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	if err = s.Delete(t.Context()); !errors.Is(err, unitimport.ErrInvalid) {
+		t.Fatalf("delete: got %v, want ErrInvalid", err)
+	}
+
+	body, err := store.Get(t.Context(), copyKey)
+	if err != nil {
+		t.Fatalf("copy after the delete: %v", err)
+	}
+
+	if err = body.Close(); err != nil {
+		t.Fatalf("close copy: %v", err)
 	}
 }

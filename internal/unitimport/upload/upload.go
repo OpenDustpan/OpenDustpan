@@ -91,8 +91,20 @@ var _ unitimport.Source = (*Source)(nil)
 func New(
 	blobs blob.Store, commits Commits, prefix string, maxBytes int64, now func() time.Time,
 ) (*Source, error) {
-	if _, err := blob.ParseKey(prefix); err != nil {
+	key, err := blob.ParseKey(prefix)
+	if err != nil {
 		return nil, fmt.Errorf("upload prefix: %w", err)
+	}
+
+	// The cancel and the release delete each object below the prefix, and
+	// every audit checkpoint copy is evidence that no sweep deletes.
+	if audit.IsCheckpointKey(key) {
+		return nil, fmt.Errorf(
+			"%w: upload prefix %s is under %s",
+			unitimport.ErrInvalid,
+			prefix,
+			audit.CheckpointPrefix,
+		)
 	}
 
 	if commits.Store == nil || commits.ImportID == "" || commits.Entry == nil {
@@ -329,6 +341,14 @@ func (s *Source) Delete(ctx context.Context) error {
 	}
 
 	for _, o := range objs {
+		// Defense in depth: New refuses a prefix under the audit checkpoint
+		// prefix, and List answers only keys below the prefix. This check
+		// stays so that a wrong prefix or a List that answers too much
+		// never deletes an audit checkpoint copy: every copy is evidence.
+		if audit.IsCheckpointKey(o.Key) {
+			return fmt.Errorf("%w: refuse to delete %s under %s", unitimport.ErrInvalid, o.Key, audit.CheckpointPrefix)
+		}
+
 		if err = blob.DeleteRetried(ctx, s.blobs, o.Key); err != nil {
 			return fmt.Errorf("%w: delete upload: %w", unitimport.ErrSourceUnreachable, err)
 		}
