@@ -208,7 +208,7 @@ type Recorder interface {
 	// code returns ErrConflict.
 	EndStep(ctx context.Context, c PhaseClaim, r StepRecord) error
 	// AppendLog stores the next chunk of the log of the step called step,
-	// as the blob LogChunkKey. Seq starts at 0 and grows by 1. Chunk 0
+	// as the blob LogChunkAttemptKey. Seq starts at 0 and grows by 1. Chunk 0
 	// creates the log version of the step under c, with a new item key of
 	// the kind secret.ItemKindJobLog and LogRef.ExpiresAt from
 	// history.RetentionSettings.JobLog. A

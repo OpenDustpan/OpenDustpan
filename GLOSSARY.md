@@ -871,7 +871,7 @@ The first of the two writes that store a plan (`job.RecordStore.ReservePlan`). I
 _Avoid_: Draft plan, pending plan
 
 **Chunk reserve and `confirm`**:
-The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Another hash for a reserved sequence number is a conflict.
+The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Each write attempt stores its blob under a key of its own, `<sequence number>-<attempt ID>`, and the second write records that key in the row. The attempt whose second write commits first wins. An attempt that loses deletes only its own blob. Another hash for a reserved sequence number is a conflict.
 _Avoid_: Two-phase commit (the blob store is not part of a transaction), staging
 
 **Step key**:
