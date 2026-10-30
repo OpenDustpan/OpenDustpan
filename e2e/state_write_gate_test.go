@@ -207,13 +207,13 @@ func (g *gateRun) newRecords(before, want int) []gate.Record {
 // put saves a gate of the unit.
 func (g *gateRun) put(id, condition string, outcome gate.Outcome, mode gate.Mode) {
 	g.t.Helper()
-	must(g.t, g.env.PutGate(g.t.Context(), g.ns, stateWriteGate(g.t, id, condition, outcome, mode)))
+	must(g.t, g.env.PutGate(g.t.Context(), g.t, stateWriteGate(g.t, id, condition, outcome, mode)))
 }
 
 // remove removes a gate of the unit.
 func (g *gateRun) remove(id string) {
 	g.t.Helper()
-	must(g.t, g.env.DeleteGate(g.t.Context(), g.ns, gateScope(g.t), gate.ID(id)))
+	must(g.t, g.env.DeleteGate(g.t.Context(), g.t, gateScope(g.t), gate.ID(id)))
 }
 
 // tofuStateWriteGateScenario proves, with the real OpenTofu CLI, the decision
@@ -323,7 +323,7 @@ func (g *gateRun) approvalGate() {
 		AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
 	}
 
-	must(g.t, g.env.PutApprovalRule(g.t.Context(), g.ns, rule))
+	must(g.t, g.env.PutApprovalRule(g.t.Context(), g.t, rule))
 	g.put("review-gate-e2e", lockCondition, gate.ApprovalOutcome("review-e2e"), gate.ModeEnforce)
 	g.post(
 		"gate: an approval outcome refuses the lock and names the rule",
@@ -335,7 +335,7 @@ func (g *gateRun) approvalGate() {
 		),
 	)
 	g.remove("review-gate-e2e")
-	must(g.t, g.env.DeleteApprovalRule(g.t.Context(), g.ns, rule.Scope, rule.ID))
+	must(g.t, g.env.DeleteApprovalRule(g.t.Context(), g.t, rule.Scope, rule.ID))
 }
 
 // accessLimit proves that a forbid access limit stops the lock.
@@ -347,7 +347,7 @@ func (g *gateRun) accessLimit() {
 		Policy: `forbid (principal, action == OpenDustpan::Action::"unit:write", resource);`,
 	}
 
-	must(g.t, g.env.PutAccessLimit(g.t.Context(), g.ns, limit))
+	must(g.t, g.env.PutAccessLimit(g.t.Context(), g.t, limit))
 	g.post("gate: an access limit refuses the lock", g.lockPath, http.StatusForbidden,
 		refusalCheck("gate.limited", "no-writes-e2e"))
 	g.planStep(
@@ -355,7 +355,7 @@ func (g *gateRun) accessLimit() {
 		true,
 		checkRefusedWithoutALock("gate.limited", "no-writes-e2e"),
 	)
-	must(g.t, g.env.DeleteAccessLimit(g.t.Context(), g.ns, limit.Scope, limit.ID))
+	must(g.t, g.env.DeleteAccessLimit(g.t.Context(), g.t, limit.Scope, limit.ID))
 }
 
 // noGate proves that, with no gate and no limit, a write goes on as before:
@@ -378,19 +378,22 @@ func (g *gateRun) noGate() {
 	}
 }
 
+// restoreGateCase names the operation that a gate refuses and the deleted unit
+// that the check lists.
+type restoreGateCase struct {
+	operation, name string
+}
+
 // restoreGateSteps prove the decision point state.write at the restore and at
 // the final delete of a deleted unit of the tool-neutral inventory API. A deny
 // gate for the operation answers 403 and changes nothing. They run with the
 // unit that target names, listed under name.
 func restoreGateSteps(
-	ctx context.Context, env *e2e.Env, target func() unitTarget, operation, name string,
+	ctx context.Context, tb testing.TB, env *e2e.Env, target func() unitTarget, c restoreGateCase,
 ) []e2e.StepSpec {
-	// The steps write a gate through the store of the in-process server. The
-	// server binary holds its database open, so the binary mode runs none.
-	if e2e.UseBinaryServer() {
-		return nil
-	}
+	tb.Helper()
 
+	operation, name := c.operation, c.name
 	id := gate.ID("deleted-" + operation + "-e2e")
 	ns := namespace.Name(e2e.Namespace)
 	// The gate holds for the collection of the deleted unit only, so the
@@ -416,7 +419,7 @@ func restoreGateSteps(
 				CheckedWith: gate.CheckedWith{Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0}},
 				State:       "", Reads: nil,
 			}
-			if err := env.PutGate(ctx, ns, g); err != nil {
+			if err := env.PutGate(ctx, tb, g); err != nil {
 				return err
 			}
 
@@ -443,7 +446,7 @@ func restoreGateSteps(
 			return checkDeletedListed(ctx, env, target(), name)
 		}, "workspace", "list", "-no-color"),
 		step("remove the gate of the "+operation, func(e2e.Result) error {
-			return env.DeleteGate(ctx, ns, scope, id)
+			return env.DeleteGate(ctx, tb, scope, id)
 		}, "workspace", "list", "-no-color"),
 	}
 }

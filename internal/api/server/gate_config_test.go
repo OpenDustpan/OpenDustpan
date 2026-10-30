@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/gate/cedargo"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -963,7 +964,7 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 	}
 
 	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: handler.env.store, Namespaces: nss, Approvers: testApprovers{}, Now: nil,
+		Store: handler.env.store, Namespaces: nss, Approvers: testApprovers{}, Engine: nil, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("gate config service: %v", err)
@@ -1216,4 +1217,12 @@ func (testApprovers) GroupByID(_ context.Context, id string) (gate.GroupRef, gat
 
 	return gate.GroupRef{ID: "", Name: ""}, gate.MemberCounts{Enabled: 0, Persons: 0},
 		fmt.Errorf("%w: group %q", gate.ErrNotFound, id)
+}
+
+// testGateEngine is the linked policy engine, with the one action that the
+// access limits of the tests name.
+//
+//nolint:ireturn // The service takes the engine port.
+func testGateEngine() gate.Engine {
+	return cedargo.New(cedargo.WithAccessActions("unit:write"))
 }

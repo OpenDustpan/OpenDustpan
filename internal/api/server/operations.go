@@ -113,11 +113,12 @@ func (h *Handler) Operations() []apidesc.Operation {
 //nolint:gochecknoglobals // A fixed table, built once from the two tables above.
 var allLabels = joinLabels()
 
-// joinLabels returns one table with the labels of operationLabels and of
-// gitHostOperationLabels.
+// joinLabels returns one table with the labels of operationLabels, of
+// gitHostOperationLabels and of the gate and access limit routes.
 func joinLabels() map[string]apidesc.Label {
 	labels := maps.Clone(operationLabels)
 	maps.Copy(labels, gitHostOperationLabels)
+	maps.Copy(labels, gateObjectLabels())
 
 	return labels
 }

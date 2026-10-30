@@ -211,7 +211,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	gates, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: st, Namespaces: namespaces, Approvers: testApprovers{}, Now: clock.Now,
+		Store: st, Namespaces: namespaces, Approvers: testApprovers{}, Engine: testGateEngine(), Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("gate config service: %v", err)

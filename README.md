@@ -355,6 +355,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Gate configuration API](docs/reference/gate-config-api.md): the routes that store,
+  read and delete gates and access limits.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the
