@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
@@ -976,6 +977,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status), slog.String("error_code", f.code))
 	} else {
 		h.logRefusal(ctx, err)
+	}
+
+	if f.status == http.StatusServiceUnavailable && errors.Is(err, namespace.ErrUnavailable) {
+		problem.SetStoreRetryAfter(w)
 	}
 
 	h.writeFailure(ctx, w, f)

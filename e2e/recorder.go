@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"time"
 )
 
 // maxCapturedBody bounds the request and response bytes kept per entry.
@@ -42,11 +43,13 @@ type Entry struct {
 	ResponseHeaders []string `json:"responseHeaders,omitempty"`
 	// ResponseCut is true when the answer was longer than the bytes that
 	// ResponseBody keeps, so ResponseBody is the start of the answer.
-	ResponseCut   bool  `json:"responseCut,omitempty"`
-	Seq           int   `json:"seq"`
-	Status        int   `json:"status"`
-	RequestBytes  int64 `json:"requestBytes"`
-	ResponseBytes int64 `json:"responseBytes"`
+	ResponseCut bool `json:"responseCut,omitempty"`
+	Seq         int  `json:"seq"`
+	// At is the time the answer ended. It is not part of the report.
+	At            time.Time `json:"-"`
+	Status        int       `json:"status"`
+	RequestBytes  int64     `json:"requestBytes"`
+	ResponseBytes int64     `json:"responseBytes"`
 }
 
 // Recorder logs every request that passes through its middleware.
@@ -156,6 +159,7 @@ func (r *Recorder) record(seq int, step string, req *http.Request, in *capture, 
 		Query:           req.URL.RawQuery,
 		UserAgent:       req.UserAgent(),
 		Backend:         backendOf(req),
+		At:              time.Now(),
 		Accept:          req.Header.Get("Accept"),
 		ContentType:     req.Header.Get("Content-Type"),
 		RequestBody:     string(in.kept),
