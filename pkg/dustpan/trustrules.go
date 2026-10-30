@@ -112,9 +112,14 @@ func newExchanger(
 		return nil, err
 	}
 
+	serverAudit, err := serverAuditOf(cfg.namespaceStore)
+	if err != nil {
+		return nil, err
+	}
+
 	x, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: cfg.trustRules.store, Exchanges: exchanges, Namespaces: svc.namespaces, Principals: principals,
-		Tokens: svc.tokens, Audit: neutralAudit, Refusals: nil,
+		Tokens: svc.tokens, Audit: neutralAudit, ServerAudit: serverAudit, Refusals: nil,
 		Keys:             trustkeys.New(trustkeys.Config{Rules: rules, RootCAs: cfg.trustRules.cas, Now: cfg.now}),
 		InstallationURLs: []string{cfg.publicURL}, Now: cfg.now,
 	})

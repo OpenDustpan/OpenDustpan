@@ -62,8 +62,8 @@ func signedRule(t *testing.T, issuer, tokenIssuer string) (trustrule.Rule, strin
 func bareExchanger() *Exchanger {
 	return &Exchanger{
 		cfg: ExchangeConfig{
-			Rules: nil, Exchanges: nil, Namespaces: nil, Principals: nil, Tokens: nil, Audit: nil, Refusals: nil,
-			Keys: nil, InstallationURLs: nil, Now: nil,
+			Rules: nil, Exchanges: nil, Namespaces: nil, Principals: nil, Tokens: nil, Audit: nil, ServerAudit: nil,
+			Refusals: nil, Keys: nil, InstallationURLs: nil, Now: nil,
 		},
 		own: nil, refusals: nil, now: internalNow,
 	}

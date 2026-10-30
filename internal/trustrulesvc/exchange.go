@@ -55,6 +55,10 @@ type ExchangeConfig struct {
 	Tokens     TokenIssuer
 	// Audit keeps the entries of the refused exchanges.
 	Audit audit.Store
+	// ServerAudit keeps the entries of the installation: the count of the
+	// refusals that the overflow of the limiter held back, which can hold
+	// the refusals of many namespaces.
+	ServerAudit audit.ServerStore
 	// Refusals bounds the audit entries of refused exchanges: one entry for
 	// each namespace in each window, with the count of the refusals that it
 	// stands for. Nil means a limiter of the exchanger only.
@@ -82,9 +86,9 @@ type Exchanger struct {
 func NewExchanger(cfg ExchangeConfig) (*Exchanger, error) {
 	switch {
 	case cfg.Rules == nil, cfg.Exchanges == nil, cfg.Namespaces == nil, cfg.Principals == nil, cfg.Tokens == nil,
-		cfg.Audit == nil:
-		return nil, fmt.Errorf("%w: the exchange needs rules, exchanges, namespaces, principals, tokens and audit",
-			trustrule.ErrMissingDependency)
+		cfg.Audit == nil, cfg.ServerAudit == nil:
+		return nil, fmt.Errorf("%w: the exchange needs rules, exchanges, namespaces, principals, tokens, audit "+
+			"and server audit", trustrule.ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -470,15 +474,27 @@ func (x *Exchanger) refuse(
 	e.Changes = nil
 	e.Reason = clean(reason, audit.MaxReasonLen)
 
-	if d.Suppressed > 0 {
+	// The count of the overflow of the limiter holds the refusals of every
+	// namespace, so it goes to the log of the installation, and the entry of
+	// this namespace carries no count.
+	var overflowErr error
+	if d.Overflow {
+		overflowErr = x.serverEntry(ctx, in.Request, fmt.Sprintf("the limiter of refused exchanges is full: the "+
+			"refusals of new keys share one entry in each minute; %d refused exchanges of any namespace before "+
+			"this one wrote no entry", d.Suppressed))
+	} else if d.Suppressed > 0 {
 		e.Reason = clean(fmt.Sprintf("%d refused exchanges before this one wrote no entry; %s", d.Suppressed,
 			reason), audit.MaxReasonLen)
 	}
 
-	if _, err := x.cfg.Audit.Append(ctx, ns.Fence(), e); err != nil {
+	if _, err := x.cfg.Audit.Append(ctx, ns.Fence(), e); err != nil || overflowErr != nil {
 		x.refusals.Release(key, d)
 
-		return errors.Join(answer, flushErr, fmt.Errorf("write the audit entry of a refused exchange: %w", err))
+		if err != nil {
+			err = fmt.Errorf("write the audit entry of a refused exchange: %w", err)
+		}
+
+		return errors.Join(answer, flushErr, overflowErr, err)
 	}
 
 	if flushErr != nil {
@@ -518,8 +534,7 @@ func signedKey(ns namespace.Name, s *signedBy) denylimit.Key {
 // back in an earlier window, in the namespace of the count. The aggregate of
 // a limiter principal goes to the namespace that the principal names. The
 // overflow of the whole limiter (more than denylimit.DefaultMaxKeys keys)
-// names no namespace, so it has no audit log to go to, and flush drops its
-// count.
+// names no namespace: its count goes to the log of the installation.
 func (x *Exchanger) flush(ctx context.Context, request audit.Entry, pending []denylimit.Pending) error {
 	var errs []error
 
@@ -529,6 +544,13 @@ func (x *Exchanger) flush(ctx context.Context, request audit.Entry, pending []de
 			// The aggregate of a limiter principal has no scope of its own,
 			// but each limiter principal of the exchange names one namespace.
 			scope = namespaceOfLimiterPrincipal(p.Key.Principal)
+		}
+
+		if p.Overflow && p.Suppressed > 0 {
+			errs = append(errs, x.serverEntry(ctx, request, fmt.Sprintf("%d refused exchanges of any namespace "+
+				"wrote no entry of their own: the limiter of refused exchanges was full", p.Suppressed)))
+
+			continue
 		}
 
 		if p.Overflow || scope == "" || p.Suppressed == 0 {
@@ -572,6 +594,30 @@ func (x *Exchanger) flush(ctx context.Context, request audit.Entry, pending []de
 	}
 
 	return errors.Join(errs...)
+}
+
+// serverEntry writes an entry of refused exchanges with the given reason in
+// the log of the installation.
+func (x *Exchanger) serverEntry(ctx context.Context, request audit.Entry, reason string) error {
+	e := request
+	e.At = x.now().UTC()
+	e.Namespace = audit.ServerScope
+	e.Subject = refusedSubject
+	e.TokenID = ""
+	e.Action = ActionExchange
+	e.Object = identity.ServerObject().String()
+	e.ObjectID = ""
+	e.Kind = audit.KindSecurity
+	e.Outcome = audit.OutcomeDenied
+	e.PrincipalKind = ""
+	e.Changes = nil
+	e.Reason = clean(reason, audit.MaxReasonLen)
+
+	if _, err := x.cfg.ServerAudit.AppendServer(ctx, e); err != nil {
+		return fmt.Errorf("write the count of refused exchanges in the log of the installation: %w", err)
+	}
+
+	return nil
 }
 
 // namespaceOfLimiterPrincipal returns the namespace of a limiter principal

@@ -68,6 +68,7 @@ for a token that names an unknown key.
 | Refusal entries in the audit log, for tokens that no rule verified | one for each namespace in each minute, with the count of the others |
 | Refusal entries in the audit log, for tokens that the keys of a rule verified | one for each rule and `sub` in each minute, with the count of the others |
 | Pairs of rule and `sub` with entries of their own | at most 64 in each namespace. The other pairs share one entry in each minute, with the count of the others. |
+| Keys of all refusal entries of the installation | at most 4096. Beyond that, the refusals of new keys share one entry in each minute, and the audit log of the installation holds their count. |
 
 ## Set it up
 
