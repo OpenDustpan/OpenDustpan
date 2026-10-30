@@ -666,7 +666,7 @@ type requestFlow struct {
 // they run.
 func requestFlows() []requestFlow {
 	return []requestFlow{
-		{"opentofu upload", 44, func(h *rtHarness) {
+		{"opentofu upload", 41, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.upload)
 			h.unlock()
@@ -679,7 +679,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 100, func(h *rtHarness) {
+		{"lock, upload and unlock", 97, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
@@ -692,7 +692,7 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		{"pulumi update cycle", 60, func(h *rtHarness) {
+		{"pulumi update cycle", 57, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
