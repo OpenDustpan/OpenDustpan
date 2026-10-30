@@ -423,8 +423,8 @@ func TestOwnerCompareIgnoresCase(t *testing.T) {
 				t.Fatalf("%d reads reached the server, want %d (error %v)", raw.reads.Load(), tc.reads, err)
 			}
 
-			if refused := errors.Is(err, forge.ErrNotFound) &&
-				strings.Contains(err.Error(), "account"); refused != tc.found {
+			refused := errors.Is(err, forge.ErrNotFound) && strings.Contains(err.Error(), "account")
+			if refused != tc.found {
 				t.Fatalf("Head = %v, refused for the account = %v, want %v", err, refused, tc.found)
 			}
 		})
