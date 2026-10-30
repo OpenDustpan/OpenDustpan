@@ -124,7 +124,7 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 
 	row := codec.ToBackupRow(r)
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
 		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
 			ID:          row.ID,
 			State:       string(backup.StateRunning),

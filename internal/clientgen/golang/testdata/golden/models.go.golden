@@ -98,6 +98,7 @@ const (
 	ErrorCodeAccessNoAction                      ErrorCode = "access.no-action"
 	ErrorCodeAuditEntryNotFound                  ErrorCode = "audit.entry-not-found"
 	ErrorCodeAuditEntryReadUnavailable           ErrorCode = "audit.entry-read-unavailable"
+	ErrorCodeAuditExportNotRecorded              ErrorCode = "audit.export-not-recorded"
 	ErrorCodeAuditReasonInvalid                  ErrorCode = "audit.reason-invalid"
 	ErrorCodeAuthRateLimited                     ErrorCode = "auth.rate-limited"
 	ErrorCodeAuthUnauthenticated                 ErrorCode = "auth.unauthenticated"
