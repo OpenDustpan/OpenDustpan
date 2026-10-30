@@ -1074,6 +1074,25 @@ func tempKey(id RestoreID, token int64, key string) (blob.Key, error) {
 	return tmp, nil
 }
 
+// copyBlob refuses a key that a restore does not write, then copies the blob
+// of ref into the live store with copyCheckedKey.
+//
+// Defense in depth: the steps check the whole manifest before they copy. This
+// check stays so that no caller of copyBlob, such as the repair of
+// after-apply, can write a key that a restore does not write.
+func (s *RestoreService) copyBlob(
+	ctx context.Context,
+	in restoreInput,
+	fence durable.StepFence,
+	ref ManifestBlob,
+) error {
+	if keyErr := s.refuseKeys(ctx, fence, in, []ManifestBlob{ref}); keyErr != nil {
+		return keyErr
+	}
+
+	return s.copyCheckedKey(ctx, in, fence, ref)
+}
+
 // copyBlob copies one blob of the backup into the live store with checked
 // bytes, with no conditional write and no delete of a live key:
 //
@@ -1085,19 +1104,12 @@ func tempKey(id RestoreID, token int64, key string) (blob.Key, error) {
 //     a repair: the restore overwrites it, and writes a log line and an
 //     audit entry. A store that refuses the overwrite fails the copy with
 //     ErrCorrupt.
-func (s *RestoreService) copyBlob(
+func (s *RestoreService) copyCheckedKey(
 	ctx context.Context,
 	in restoreInput,
 	fence durable.StepFence,
 	ref ManifestBlob,
 ) error {
-	// Defense in depth: the steps check the whole manifest before they copy.
-	// This check stays so that no caller of copyBlob, such as the repair of
-	// after-apply, can write a key that a restore does not write.
-	if keyErr := s.refuseKeys(ctx, fence, in, []ManifestBlob{ref}); keyErr != nil {
-		return keyErr
-	}
-
 	live, err := blob.ParseKey(ref.Key)
 	if err != nil {
 		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)

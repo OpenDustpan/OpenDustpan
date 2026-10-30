@@ -32,6 +32,29 @@ func (l *eventLive) RecordRestoreEvent(_ context.Context, _ durable.StepFence, _
 
 var errEventStore = errors.New("event store down")
 
+// keyService returns a RestoreService over live that has nothing else: a call
+// that needs a blob store panics on it.
+func keyService(live RestoreLive) *RestoreService {
+	return &RestoreService{
+		live: live, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil, target: nil,
+		key: nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
+		lockWait: 0, now: nil, logger: nil, runner: nil,
+	}
+}
+
+// keyInput returns the input of a restore of a backup.
+func keyInput() restoreInput {
+	return restoreInput{
+		ID: MintRestoreID(), BackupID: "bkp-1", PreBackupID: "", CheckOnly: false, Force: false,
+		RequestedBy: "", KeepAccessTables: false,
+	}
+}
+
+// noFence is a fence with no claim: the stub live store checks none.
+func noFence() durable.StepFence {
+	return durable.StepFence{Operation: "", Token: 0, Step: ""}
+}
+
 // TestCopyBlobRefusesProtectedKeys sends a hostile key straight to copyBlob,
 // as if the steps before it had not checked the manifest. The copy refuses
 // before it reads or writes any store: the service has no blob store, and the
@@ -49,13 +72,13 @@ func TestCopyBlobRefusesProtectedKeys(t *testing.T) {
 			t.Parallel()
 
 			live := &eventLive{RestoreLive: nil, events: nil, err: nil}
-			s := &RestoreService{live: live}
-			in := restoreInput{ID: MintRestoreID(), BackupID: "bkp-1"}
+			s := keyService(live)
+			in := keyInput()
 
 			err := s.copyBlob(
 				t.Context(),
 				in,
-				durable.StepFence{},
+				noFence(),
 				ManifestBlob{Key: key, Size: 1, MD5: "", Sealed: false},
 			)
 			if !errors.Is(err, ErrProtectedKey) {
@@ -76,19 +99,19 @@ func TestRefuseKeysFailsClosedWhenTheEventIsLost(t *testing.T) {
 	t.Parallel()
 
 	bad := []ManifestBlob{{Key: "audit-checkpoints/x", Size: 1, MD5: "", Sealed: false}}
-	in := restoreInput{ID: MintRestoreID(), BackupID: "bkp-1"}
+	in := keyInput()
 
 	live := &eventLive{RestoreLive: nil, events: nil, err: errEventStore}
-	s := &RestoreService{live: live}
+	s := keyService(live)
 
-	err := s.refuseKeys(t.Context(), durable.StepFence{}, in, bad)
+	err := s.refuseKeys(t.Context(), noFence(), in, bad)
 	if !errors.Is(err, ErrProtectedKey) || !errors.Is(err, errEventStore) {
 		t.Fatalf("refuseKeys with a lost event: err = %v, want the refusal joined to the store error", err)
 	}
 
 	live.err = durable.ErrClaimLost
 
-	err = s.refuseKeys(t.Context(), durable.StepFence{}, in, bad)
+	err = s.refuseKeys(t.Context(), noFence(), in, bad)
 	if !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("refuseKeys with a lost claim: err = %v, want ErrClaimLost", err)
 	}

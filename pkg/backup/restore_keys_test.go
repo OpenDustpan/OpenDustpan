@@ -99,7 +99,7 @@ func addManifestBlob(t *testing.T, setup *restoreServiceSetup, key string) {
 		t.Fatalf("decode manifest: %v", err)
 	}
 
-	var blobs []backup.ManifestBlob
+	blobs := make([]backup.ManifestBlob, 0, 1)
 	if raw, ok := doc["blobs"]; ok && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &blobs); err != nil {
 			t.Fatalf("decode manifest blobs: %v", err)
@@ -146,30 +146,39 @@ func TestRestoreRefusesProtectedKeysInTheManifest(t *testing.T) {
 				t.Fatalf("start: %v", err)
 			}
 
-			row := waitRestoreEnd(t, setup.regs, id)
-			if row.State != backup.RestoreFailed || !strings.Contains(row.Error, backup.ErrProtectedKey.Error()) {
-				t.Fatalf("restore = %s %q, want failed with the protected key text", row.State, row.Error)
-			}
-
-			if strings.Contains(row.Error, key) {
-				t.Errorf("the stored error text %q holds the hostile key", row.Error)
-			}
-
-			if n := setup.blobs.count(); n != 0 {
-				t.Errorf("live store holds %d blobs after the refusal, want none", n)
-			}
-
-			if calls := setup.live.stageCallCount(); calls != 0 {
-				t.Errorf("stage calls = %d, want none before the refusal", calls)
-			}
-
-			if c := setup.live.counts(); c.applied != 0 {
-				t.Errorf("applies = %d, want none", c.applied)
-			}
-
-			assertRefusalAudited(t, setup, id, key)
+			assertRefusedWithoutWrites(t, setup, id, key)
 		})
 	}
+}
+
+// assertRefusedWithoutWrites waits for the restore id and checks that it
+// ended failed with the stable text, wrote no live blob, staged nothing and
+// applied nothing.
+func assertRefusedWithoutWrites(t *testing.T, setup *restoreServiceSetup, id backup.RestoreID, key string) {
+	t.Helper()
+
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State != backup.RestoreFailed || !strings.Contains(row.Error, backup.ErrProtectedKey.Error()) {
+		t.Fatalf("restore = %s %q, want failed with the protected key text", row.State, row.Error)
+	}
+
+	if strings.Contains(row.Error, key) {
+		t.Errorf("the stored error text %q holds the hostile key", row.Error)
+	}
+
+	if n := setup.blobs.count(); n != 0 {
+		t.Errorf("live store holds %d blobs after the refusal, want none", n)
+	}
+
+	if calls := setup.live.stageCallCount(); calls != 0 {
+		t.Errorf("stage calls = %d, want none before the refusal", calls)
+	}
+
+	if c := setup.live.counts(); c.applied != 0 {
+		t.Errorf("applies = %d, want none", c.applied)
+	}
+
+	assertRefusalAudited(t, setup, id, key)
 }
 
 // assertRefusalAudited checks that the audit events and the audit entries of
@@ -196,8 +205,10 @@ func assertRefusalAudited(t *testing.T, setup *restoreServiceSetup, id backup.Re
 
 	entries := 0
 
-	for _, e := range setup.live.devSnapshot().appends {
-		if strings.Contains(e.Object, "refused blob key") {
+	appends := setup.live.devSnapshot().appends
+
+	for i := range appends {
+		if strings.Contains(appends[i].Object, "refused blob key") {
 			entries++
 		}
 	}

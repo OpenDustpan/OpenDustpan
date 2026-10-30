@@ -96,19 +96,6 @@ func checkRestoreKey(key string) error {
 	return nil
 }
 
-// checkRestoreKeys checks every blob key of the manifest and returns the
-// error for the first key that a restore may not write. It reads and writes
-// nothing.
-func checkRestoreKeys(blobs []ManifestBlob) error {
-	for _, ref := range blobs {
-		if err := checkRestoreKey(ref.Key); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // maxKeyInEvent bounds the part of a key that an audit event holds.
 const maxKeyInEvent = 256
 
