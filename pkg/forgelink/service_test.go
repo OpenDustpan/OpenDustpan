@@ -20,8 +20,8 @@ type people struct {
 }
 
 func (p *people) GetPrincipalBySubject(_ context.Context, subject string) (principal.Principal, error) {
-	for _, v := range p.byID {
-		if v.Subject == subject {
+	for id := range p.byID {
+		if v := p.byID[id]; v.Subject == subject {
 			return v, nil
 		}
 	}
@@ -46,8 +46,17 @@ func person(id string) principal.Principal {
 	}
 }
 
+// callerOf returns a caller with the subject, the kind and the credential.
+func callerOf(subject string, kind identity.Kind, credential identity.Credential) identity.Principal {
+	var p identity.Principal
+
+	p.Subject, p.Kind, p.Credential = subject, kind, credential
+
+	return p
+}
+
 func session(id string) identity.Principal {
-	return identity.Principal{Subject: "user:" + id, Kind: identity.KindPerson, Credential: identity.CredentialSession}
+	return callerOf("user:"+id, identity.KindPerson, identity.CredentialSession)
 }
 
 // counter is a reader of bytes that never repeat a block of 32 bytes, so each token differs.
@@ -74,6 +83,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 
 	f := &fixture{
+		svc:    nil,
 		store:  forgelinktest.NewMem(),
 		people: &people{byID: map[string]principal.Principal{"ana": person("ana"), "bob": person("bob")}},
 		clock:  time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC),
@@ -122,20 +132,20 @@ func proof(id, login string) forgelink.Proof {
 	return forgelink.Proof{Account: gh(id), Login: login, DeliveryID: "d-" + id}
 }
 
-// link makes the link of the account id for the person who in a full flow.
-func (f *fixture) link(t *testing.T, who, id, previous string) forgelink.Link {
+// link makes the link of the account id for the person ana in a full flow.
+func (f *fixture) link(t *testing.T, id, previous string) forgelink.Link {
 	t.Helper()
 
-	started, err := f.svc.Start(t.Context(), session(who))
+	started, err := f.svc.Start(t.Context(), session("ana"))
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
-	if _, err := f.svc.Prove(t.Context(), started.Token, proof(id, "login-"+id)); err != nil {
-		t.Fatalf("prove: %v", err)
+	if _, proveErr := f.svc.Prove(t.Context(), started.Token, proof(id, "login-"+id)); proveErr != nil {
+		t.Fatalf("prove: %v", proveErr)
 	}
 
-	l, _, err := f.svc.Accept(t.Context(), session(who), started.Token, previous, entry())
+	l, _, err := f.svc.Accept(t.Context(), session("ana"), started.Token, previous, entry())
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
@@ -143,104 +153,102 @@ func (f *fixture) link(t *testing.T, who, id, previous string) forgelink.Link {
 	return l
 }
 
-func TestBothSidesProve(t *testing.T) {
+func TestAccountAloneMakesNoLink(t *testing.T) {
 	t.Parallel()
 
-	t.Run("the person alone makes no link", func(t *testing.T) {
-		t.Parallel()
+	f := newFixture(t)
 
-		f := newFixture(t)
+	started, err := f.svc.Start(t.Context(), session("ana"))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
-		started, err := f.svc.Start(t.Context(), session("ana"))
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
+	if _, proveErr := f.svc.Prove(t.Context(), started.Token, proof("42", "ana-gh")); proveErr != nil {
+		t.Fatalf("prove: %v", proveErr)
+	}
 
-		_, _, err = f.svc.Accept(t.Context(), session("ana"), started.Token, "", entry())
-		if !errors.Is(err, forgelink.ErrNotProved) {
-			t.Fatalf("accept without a proof = %v, want ErrNotProved", err)
-		}
+	if _, resolveErr := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(resolveErr, forgelink.ErrNotLinked) {
+		t.Fatalf("resolve = %v, want ErrNotLinked: a proof alone is no link", resolveErr)
+	}
 
-		if _, err := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(err, forgelink.ErrNotLinked) {
-			t.Fatalf("resolve = %v, want ErrNotLinked", err)
-		}
-	})
-
-	t.Run("the account alone makes no link", func(t *testing.T) {
-		t.Parallel()
-
-		f := newFixture(t)
-
-		started, err := f.svc.Start(t.Context(), session("ana"))
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
-
-		if _, err := f.svc.Prove(t.Context(), started.Token, proof("42", "ana-gh")); err != nil {
-			t.Fatalf("prove: %v", err)
-		}
-
-		if _, err := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(err, forgelink.ErrNotLinked) {
-			t.Fatalf("resolve = %v, want ErrNotLinked: a proof alone is no link", err)
-		}
-
-		if n := len(f.store.Entries(t.Context())); n != 0 {
-			t.Fatalf("audit entries = %d, want none", n)
-		}
-	})
-
-	t.Run("a proof with a token that no person started proves nothing", func(t *testing.T) {
-		t.Parallel()
-
-		f := newFixture(t)
-		token := "tokenZtokenZtokenZtokenZtokenZtokenZtokenZtokenZ"
-
-		_, err := f.svc.Prove(t.Context(), token, proof("42", "x"))
-		if !errors.Is(err, forgelink.ErrNotFound) {
-			t.Fatalf("prove = %v, want ErrNotFound", err)
-		}
-
-		_, err = f.svc.Prove(t.Context(), "short", proof("42", "x"))
-		if !errors.Is(err, forgelink.ErrNotFound) {
-			t.Fatalf("prove with a short token = %v, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("the person cannot name the account: the proof does", func(t *testing.T) {
-		t.Parallel()
-
-		f := newFixture(t)
-		l := f.link(t, "ana", "42", "")
-
-		if l.Account != gh("42") || l.Principal != "ana" {
-			t.Fatalf("link = %+v, want the account of the proof for ana", l)
-		}
-	})
-
-	t.Run("a person who did not start the request cannot show or accept it", func(t *testing.T) {
-		t.Parallel()
-
-		f := newFixture(t)
-
-		started, err := f.svc.Start(t.Context(), session("ana"))
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
-
-		if _, err := f.svc.Prove(t.Context(), started.Token, proof("42", "x")); err != nil {
-			t.Fatalf("prove: %v", err)
-		}
-
-		if _, err := f.svc.Show(t.Context(), session("bob"), started.Token); !errors.Is(err, forgelink.ErrNotFound) {
-			t.Fatalf("show by another person = %v, want ErrNotFound", err)
-		}
-
-		_, _, err = f.svc.Accept(t.Context(), session("bob"), started.Token, "", entry())
-		if !errors.Is(err, forgelink.ErrNotFound) {
-			t.Fatalf("accept by another person = %v, want ErrNotFound", err)
-		}
-	})
+	if n := len(f.store.Entries(t.Context())); n != 0 {
+		t.Fatalf("audit entries = %d, want none", n)
+	}
 }
+
+func TestPersonAloneMakesNoLink(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	started, err := f.svc.Start(t.Context(), session("ana"))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	_, _, err = f.svc.Accept(t.Context(), session("ana"), started.Token, "", entry())
+	if !errors.Is(err, forgelink.ErrNotProved) {
+		t.Fatalf("accept without a proof = %v, want ErrNotProved", err)
+	}
+
+	if _, resolveErr := f.svc.Resolve(t.Context(), gh("42")); !errors.Is(resolveErr, forgelink.ErrNotLinked) {
+		t.Fatalf("resolve = %v, want ErrNotLinked", resolveErr)
+	}
+}
+
+func TestProofNeedsARequestOfAPerson(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	for name, token := range map[string]string{
+		"a token that no person started": "tokenZtokenZtokenZtokenZtokenZtokenZtokenZtokenZ",
+		"a short token":                  "short",
+	} {
+		if _, err := f.svc.Prove(t.Context(), token, proof("42", "x")); !errors.Is(err, forgelink.ErrNotFound) {
+			t.Errorf("prove with %s = %v, want ErrNotFound", name, err)
+		}
+	}
+}
+
+func TestThePersonCannotNameTheAccount(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	l := f.link(t, "42", "")
+
+	if l.Account != gh("42") || l.Principal != "ana" {
+		t.Fatalf("link = %+v, want the account of the proof for ana", l)
+	}
+}
+
+func TestAnotherPersonCannotShowOrAcceptARequest(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	started, err := f.svc.Start(t.Context(), session("ana"))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if _, proveErr := f.svc.Prove(t.Context(), started.Token, proof("42", "x")); proveErr != nil {
+		t.Fatalf("prove: %v", proveErr)
+	}
+
+	_, showErr := f.svc.Show(t.Context(), session("bob"), started.Token)
+	if !errors.Is(showErr, forgelink.ErrNotFound) {
+		t.Fatalf("show by another person = %v, want ErrNotFound", showErr)
+	}
+
+	_, _, err = f.svc.Accept(t.Context(), session("bob"), started.Token, "", entry())
+	if !errors.Is(err, forgelink.ErrNotFound) {
+		t.Fatalf("accept by another person = %v, want ErrNotFound", err)
+	}
+}
+
+// unknownToken is a token that no request holds.
+const unknownToken = "tokenZtokenZtokenZtokenZtokenZtokenZtokenZtokenZ"
 
 func TestOnlyAPersonInASessionMakesALink(t *testing.T) {
 	t.Parallel()
@@ -258,23 +266,10 @@ func TestOnlyAPersonInASessionMakesALink(t *testing.T) {
 		name   string
 		caller identity.Principal
 	}{
-		{
-			"an access token",
-			identity.Principal{
-				Subject:    "user:ana",
-				Kind:       identity.KindPerson,
-				Credential: identity.CredentialAccessToken,
-			},
-		},
-		{"no credential", identity.Principal{Subject: "user:ana", Kind: identity.KindPerson, Credential: ""}},
-		{
-			"a job token",
-			identity.Principal{Subject: "user:ana", Kind: identity.KindPerson, Credential: identity.CredentialJobToken},
-		},
-		{
-			"a service principal",
-			identity.Principal{Subject: "user:svc", Kind: identity.KindService, Credential: identity.CredentialSession},
-		},
+		{"an access token", callerOf("user:ana", identity.KindPerson, identity.CredentialAccessToken)},
+		{"no credential", callerOf("user:ana", identity.KindPerson, "")},
+		{"a job token", callerOf("user:ana", identity.KindPerson, identity.CredentialJobToken)},
+		{"a service principal", callerOf("user:svc", identity.KindService, identity.CredentialSession)},
 		{"a disabled person", session("dan")},
 		{"a break-glass account", session("gus")},
 		{"a service record behind a session", session("svc")},
@@ -292,17 +287,9 @@ func TestOnlyAPersonInASessionMakesALink(t *testing.T) {
 				t.Errorf("start = %v, want ErrNotPerson", err)
 			}
 
-			if _, _, err := f.svc.Accept(
-				t.Context(),
-				tc.caller,
-				"tokenZtokenZtokenZtokenZtokenZtokenZtokenZtokenZ",
-				"",
-				entry(),
-			); !errors.Is(
-				err,
-				forgelink.ErrNotPerson,
-			) {
-				t.Errorf("accept = %v, want ErrNotPerson", err)
+			_, _, acceptErr := f.svc.Accept(t.Context(), tc.caller, unknownToken, "", entry())
+			if !errors.Is(acceptErr, forgelink.ErrNotPerson) {
+				t.Errorf("accept = %v, want ErrNotPerson", acceptErr)
 			}
 
 			if err := f.svc.Delete(t.Context(), tc.caller, gh("42"), entry()); !errors.Is(err, forgelink.ErrNotPerson) {
@@ -316,7 +303,7 @@ func TestExactIDs(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.link(t, "ana", "AbC", "")
+	f.link(t, "AbC", "")
 
 	if p, err := f.svc.Resolve(t.Context(), gh("AbC")); err != nil || p.ID != "ana" {
 		t.Fatalf("resolve exact = %v, %v, want ana", p.ID, err)
@@ -343,10 +330,10 @@ func TestRenamedLoginKeepsTheLink(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.link(t, "ana", "42", "")
+	f.link(t, "42", "")
 
 	// The account renames its login. A proof carries the new login. The ID is the same.
-	l := f.link(t, "ana", "42", "ana")
+	l := f.link(t, "42", "ana")
 	if l.Account.ID != "42" || l.Login != "login-42" {
 		t.Fatalf("link = %+v", l)
 	}
@@ -360,20 +347,24 @@ func TestNoSilentReplace(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.link(t, "ana", "42", "")
+	f.link(t, "42", "")
 
 	started, err := f.svc.Start(t.Context(), session("bob"))
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
-	if _, err := f.svc.Prove(t.Context(), started.Token, proof("42", "x")); err != nil {
-		t.Fatalf("prove: %v", err)
+	if _, proveErr := f.svc.Prove(t.Context(), started.Token, proof("42", "x")); proveErr != nil {
+		t.Fatalf("prove: %v", proveErr)
 	}
 
 	view, err := f.svc.Show(t.Context(), session("bob"), started.Token)
-	if err != nil || !view.HasCurrent || view.Current.Principal != "ana" || view.CurrentName != "Display ana" {
-		t.Fatalf("show = %+v, %v, want the link of ana", view, err)
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+
+	if view.Current.Principal != "ana" || view.CurrentName != "Display ana" {
+		t.Fatalf("show = %+v, want the link of ana", view)
 	}
 
 	_, _, err = f.svc.Accept(t.Context(), session("bob"), started.Token, "", entry())
@@ -381,8 +372,8 @@ func TestNoSilentReplace(t *testing.T) {
 		t.Fatalf("accept without the previous principal = %v, want ErrConflict", err)
 	}
 
-	if p, err := f.svc.Resolve(t.Context(), gh("42")); err != nil || p.ID != "ana" {
-		t.Fatalf("the link of ana changed: %v, %v", p.ID, err)
+	if p, resolveErr := f.svc.Resolve(t.Context(), gh("42")); resolveErr != nil || p.ID != "ana" {
+		t.Fatalf("the link of ana changed: %v, %v", p.ID, resolveErr)
 	}
 
 	l, replaced, err := f.svc.Accept(t.Context(), session("bob"), started.Token, "ana", entry())
@@ -395,7 +386,7 @@ func TestResolveRefusesAPrincipalThatCannotAct(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.link(t, "ana", "42", "")
+	f.link(t, "42", "")
 
 	p := f.people.byID["ana"]
 	p.DisabledAt = f.clock
@@ -416,7 +407,7 @@ func TestDeleteOwnLinkOnly(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.link(t, "ana", "42", "")
+	f.link(t, "42", "")
 
 	if err := f.svc.Delete(t.Context(), session("bob"), gh("42"), entry()); !errors.Is(err, forgelink.ErrNotFound) {
 		t.Fatalf("delete by another person = %v, want ErrNotFound", err)
@@ -444,7 +435,7 @@ func TestAuditEntriesNameTheAccount(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.link(t, "ana", "42", "")
+	f.link(t, "42", "")
 
 	got := f.store.Entries(t.Context())
 	if len(got) != 1 {

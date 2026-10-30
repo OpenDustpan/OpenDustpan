@@ -7,6 +7,24 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 )
 
+// Acceptance is what a person gives to Store.AcceptRequest. TokenSHA256 names
+// the request, Principal is the principal that accepts, Previous is the
+// principal of the current link of the account that the accept page showed, or
+// empty, and At is the time of the accept.
+type Acceptance struct {
+	TokenSHA256 string
+	Principal   string
+	Previous    string
+	At          time.Time
+}
+
+// Accepted is the result of an accept: the link that it made, and the principal
+// that lost a link, or empty.
+type Accepted struct {
+	Link     Link
+	Replaced string
+}
+
 // Store keeps the links and the link requests. A link and a link request are
 // rows of the installation, not of a namespace: a person has one principal for
 // every namespace. So a write takes no fence. A write that changes access
@@ -33,24 +51,22 @@ type Store interface {
 	// returns the request, so a Git host that sends an event again is safe. The
 	// proof comes from a signed event, and the store trusts the caller for it.
 	ProveRequest(ctx context.Context, tokenSHA256 string, p Proof, now time.Time) (Request, error)
-	// AcceptRequest makes the link of the request with the token hash tokenSHA256
-	// for principal, once, in one transaction. In that transaction it reads the
+	// AcceptRequest makes the link of the request with the token hash
+	// a.TokenSHA256 for a.Principal, once, in one transaction. In that transaction it reads the
 	// request, applies Request.CheckAccept, checks the current link of the
 	// account against previous, stores the link with Request.LinkOf, marks the
-	// request as used at now, and appends the audit entry e. So one token never
+	// request as used at a.At, and appends the audit entry e. So one token never
 	// makes two links, and a token never gets used without a link.
 	//
-	// previous is the principal of the current link of the account that the
+	// a.Previous is the principal of the current link of the account that the
 	// accept page showed to the person, or empty when the page showed no link.
 	// AcceptRequest never replaces a link silently: it returns ErrConflict when
-	// previous is empty and the account has a link, and when previous is not
+	// a.Previous is empty and the account has a link, and when a.Previous is not
 	// empty and the stored link is missing or names another principal.
 	//
 	// It returns ErrNotFound, ErrUsed, ErrExpired, ErrDenied, ErrNotProved, and
-	// ErrConflict. replaced is the principal that lost a link, or empty.
-	AcceptRequest(
-		ctx context.Context, tokenSHA256, principal, previous string, now time.Time, e audit.Entry,
-	) (link Link, replaced string, err error)
+	// ErrConflict. Accepted.Replaced is the principal that lost a link, or empty.
+	AcceptRequest(ctx context.Context, a Acceptance, e audit.Entry) (Accepted, error)
 	// DeleteLink deletes the link of the account a and appends the audit entry
 	// e. It returns ErrNotFound for an account with no link and ErrInvalid for an
 	// account that fails Validate.

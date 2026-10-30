@@ -63,6 +63,7 @@ const (
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
 	pgColKind        = "kind"
+	pgColUsedAtMs    = "used_at_ms"
 	pgColTarget      = "target"
 	pgColObject      = "object"
 	pgColSubject     = "subject"

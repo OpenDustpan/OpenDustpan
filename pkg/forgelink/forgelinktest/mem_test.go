@@ -12,13 +12,23 @@ import (
 func TestMemConformance(t *testing.T) {
 	t.Parallel()
 
-	forgelinktest.Run(t, func(*testing.T) forgelinktest.Harness {
+	forgelinktest.Run(t, func(t *testing.T) forgelinktest.Harness {
+		t.Helper()
+
 		m := forgelinktest.NewMem()
 
 		return forgelinktest.Harness{
-			Store:        m,
-			Principal:    func(_ *testing.T, name string) string { return name },
-			AuditEntries: func(t *testing.T) []audit.Entry { return m.Entries(t.Context()) },
+			Store: m,
+			Principal: func(t *testing.T, name string) string {
+				t.Helper()
+
+				return name
+			},
+			AuditEntries: func(t *testing.T) []audit.Entry {
+				t.Helper()
+
+				return m.Entries(t.Context())
+			},
 		}
 	})
 }

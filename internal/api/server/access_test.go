@@ -100,12 +100,23 @@ type auditStore interface {
 func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureLinks(t, entries, false)
+	return newAccessFixtureLinks(t, entries, noGitHostLinks)
 }
 
-// newAccessFixtureLinks is newAccessFixtureWith with the routes of the Git host
-// account links mounted when withLinks is true.
-func newAccessFixtureLinks(t *testing.T, entries func(st *sqlite.Store) auditStore, withLinks bool) accessFixture {
+// noGitHostLinks gives no link service: the routes of the links are not mounted.
+func noGitHostLinks(*sqlite.Store) *forgelink.Service { return nil }
+
+// gitHostLinksOf gives the link service of the store: the routes of the links
+// are mounted.
+func gitHostLinksOf(st *sqlite.Store) *forgelink.Service {
+	return forgelink.NewService(st.ForgeLinks(), st, nil, nil)
+}
+
+// newAccessFixtureLinks is newAccessFixtureWith with the link service that links
+// gives for the store.
+func newAccessFixtureLinks(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, links func(*sqlite.Store) *forgelink.Service,
+) accessFixture {
 	t.Helper()
 
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
@@ -164,14 +175,9 @@ func newAccessFixtureLinks(t *testing.T, entries func(st *sqlite.Store) auditSto
 		t.Fatalf("sessions: %v", err)
 	}
 
-	var links *forgelink.Service
-	if withLinks {
-		links = forgelink.NewService(st.ForgeLinks(), st, nil, nil)
-	}
-
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
-		GitHostLinks:     links,
+		GitHostLinks:     links(st),
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,

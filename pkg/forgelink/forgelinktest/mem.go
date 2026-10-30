@@ -24,16 +24,6 @@ type Mem struct {
 	requests map[string]forgelink.Request
 }
 
-// Entries returns the audit entries of the server scope, in append order.
-func (m *Mem) Entries(ctx context.Context) []audit.Entry {
-	got, err := m.AuditEntries(ctx, audit.ServerScope)
-	if err != nil {
-		return nil
-	}
-
-	return got
-}
-
 // NewMem returns an empty reference store.
 func NewMem() *Mem {
 	return &Mem{
@@ -44,28 +34,21 @@ func NewMem() *Mem {
 	}
 }
 
+// Entries returns the audit entries of the server scope, in append order.
+func (m *Mem) Entries(ctx context.Context) []audit.Entry {
+	got, err := m.AuditEntries(ctx, audit.ServerScope)
+	if err != nil {
+		return nil
+	}
+
+	return got
+}
+
 var _ forgelink.Store = (*Mem)(nil)
 
 func serverFence() namespace.Fence { return namespace.Fence{Namespace: "", FailoverVersion: 0} }
 
-// write runs change under the mutex and appends e when change succeeds.
-func (m *Mem) write(e audit.Entry, change func() error) error {
-	if err := e.Validate(); err != nil {
-		return fmt.Errorf("%w: %w", audit.ErrInvalidEntry, err)
-	}
-
-	if e.Namespace != audit.ServerScope {
-		return fmt.Errorf("%w: the entry is not in the server scope", audit.ErrInvalidEntry)
-	}
-
-	return m.Write(serverFence(), opsmem.Scope(audit.ServerScope), []audit.Entry{e}, func() error {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-
-		return change()
-	})
-}
-
+// CreateRequest implements forgelink.Store.
 func (m *Mem) CreateRequest(_ context.Context, r forgelink.Request) error {
 	if err := r.Validate(); err != nil {
 		return err
@@ -84,13 +67,16 @@ func (m *Mem) CreateRequest(_ context.Context, r forgelink.Request) error {
 
 	open := 0
 
-	for hash, old := range m.requests {
+	for hash := range m.requests {
+		old := m.requests[hash]
+
 		switch {
 		case old.Principal != r.Principal:
 		case !old.ExpiresAt.After(r.CreatedAt):
 			delete(m.requests, hash)
 		case old.UsedAt.IsZero():
 			open++
+		default:
 		}
 	}
 
@@ -103,6 +89,7 @@ func (m *Mem) CreateRequest(_ context.Context, r forgelink.Request) error {
 	return nil
 }
 
+// GetRequest implements forgelink.Store.
 func (m *Mem) GetRequest(_ context.Context, hash string) (forgelink.Request, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -115,6 +102,7 @@ func (m *Mem) GetRequest(_ context.Context, hash string) (forgelink.Request, err
 	return r, nil
 }
 
+// ProveRequest implements forgelink.Store.
 func (m *Mem) ProveRequest(
 	_ context.Context, hash string, p forgelink.Proof, now time.Time,
 ) (forgelink.Request, error) {
@@ -148,47 +136,45 @@ func (m *Mem) ProveRequest(
 	return r, nil
 }
 
-func (m *Mem) AcceptRequest(
-	_ context.Context, hash, principal, previous string, now time.Time, e audit.Entry,
-) (forgelink.Link, string, error) {
-	var (
-		link     forgelink.Link
-		replaced string
-	)
+// AcceptRequest implements forgelink.Store.
+func (m *Mem) AcceptRequest(_ context.Context, a forgelink.Acceptance, e audit.Entry) (forgelink.Accepted, error) {
+	var accepted forgelink.Accepted
 
 	err := m.write(e, func() error {
-		r, ok := m.requests[hash]
+		r, ok := m.requests[a.TokenSHA256]
 		if !ok {
 			return forgelink.ErrNotFound
 		}
 
-		if err := r.CheckAccept(principal, now); err != nil {
+		if err := r.CheckAccept(a.Principal, a.At); err != nil {
 			return err
 		}
 
 		current, found := m.links[r.Proved.Account]
 
 		switch {
-		case previous == "" && found, previous != "" && (!found || current.Principal != previous):
+		case a.Previous == "" && found, a.Previous != "" && (!found || current.Principal != a.Previous):
 			return forgelink.ErrConflict
 		case found:
-			replaced = current.Principal
+			accepted.Replaced = current.Principal
+		default:
 		}
 
-		link = r.LinkOf(now)
-		r.UsedAt = now
-		m.requests[hash] = r
-		m.links[link.Account] = link
+		accepted.Link = r.LinkOf(a.At)
+		r.UsedAt = a.At
+		m.requests[a.TokenSHA256] = r
+		m.links[accepted.Link.Account] = accepted.Link
 
 		return nil
 	})
 	if err != nil {
-		return forgelink.Link{}, "", err
+		return forgelink.Accepted{}, err
 	}
 
-	return link, replaced, nil
+	return accepted, nil
 }
 
+// DeleteLink implements forgelink.Store.
 func (m *Mem) DeleteLink(_ context.Context, a forgelink.Account, e audit.Entry) error {
 	if err := a.Validate(); err != nil {
 		return err
@@ -205,6 +191,7 @@ func (m *Mem) DeleteLink(_ context.Context, a forgelink.Account, e audit.Entry) 
 	})
 }
 
+// LinkOf implements forgelink.Store.
 func (m *Mem) LinkOf(_ context.Context, a forgelink.Account) (forgelink.Link, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -217,6 +204,7 @@ func (m *Mem) LinkOf(_ context.Context, a forgelink.Account) (forgelink.Link, er
 	return l, nil
 }
 
+// LinksOf implements forgelink.Store.
 func (m *Mem) LinksOf(_ context.Context, principal string) ([]forgelink.Link, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -237,4 +225,22 @@ func (m *Mem) LinksOf(_ context.Context, principal string) ([]forgelink.Link, er
 	})
 
 	return out, nil
+}
+
+// write runs change under the mutex and appends e when change succeeds.
+func (m *Mem) write(e audit.Entry, change func() error) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("%w: %w", audit.ErrInvalidEntry, err)
+	}
+
+	if e.Namespace != audit.ServerScope {
+		return fmt.Errorf("%w: the entry is not in the server scope", audit.ErrInvalidEntry)
+	}
+
+	return m.Write(serverFence(), opsmem.Scope(audit.ServerScope), []audit.Entry{e}, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+
+		return change()
+	})
 }

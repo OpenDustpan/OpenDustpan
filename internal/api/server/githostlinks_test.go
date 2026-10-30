@@ -2,9 +2,9 @@ package server_test
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -26,23 +26,27 @@ type startedDoc struct {
 	ExpiresAt string `json:"expiresAt"`
 }
 
+type provedAccountDoc struct {
+	Kind  string `json:"kind"`
+	Host  string `json:"host"`
+	ID    string `json:"id"`
+	Login string `json:"login"`
+}
+
+type currentLinkDoc struct {
+	Principal string `json:"principal"`
+}
+
 type linkRequestDoc struct {
-	Proved  bool `json:"proved"`
-	Account *struct {
-		Kind  string `json:"kind"`
-		Host  string `json:"host"`
-		ID    string `json:"id"`
-		Login string `json:"login"`
-	} `json:"account"`
-	CurrentLink *struct {
-		Principal string `json:"principal"`
-	} `json:"currentLink"`
+	Proved      bool              `json:"proved"`
+	Account     *provedAccountDoc `json:"account"`
+	CurrentLink *currentLinkDoc   `json:"currentLink"`
 }
 
 type linkDoc struct {
 	Kind      string `json:"kind"`
 	Host      string `json:"host"`
-	AccountID string `json:"accountId"`
+	AccountID string `json:"accountID"`
 	Login     string `json:"login"`
 	Principal string `json:"principal"`
 }
@@ -64,7 +68,7 @@ type linkErrorDoc struct {
 func newLinkFixture(t *testing.T) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureLinks(t, func(st *sqlite.Store) auditStore { return st }, true)
+	return newAccessFixtureLinks(t, func(st *sqlite.Store) auditStore { return st }, gitHostLinksOf)
 }
 
 // asPerson sends one request as the console session of subject.
@@ -104,20 +108,14 @@ func (f accessFixture) proveLink(t *testing.T, token, id, login string) {
 	}
 }
 
-// linkAs makes the link of the account id for subject through the routes and the
-// proof. previous is the principal that the page showed, or empty.
-func (f accessFixture) linkAs(t *testing.T, subject, id, previous string) {
+// linkAlice makes the link of the account id for alice through the routes and
+// the proof.
+func (f accessFixture) linkAlice(t *testing.T, id string) {
 	t.Helper()
 
-	token := f.startLink(t, subject)
+	token := f.startLink(t, "alice")
 	f.proveLink(t, token, id, "login-"+id)
-
-	body := `{"token":"` + token + `"`
-	if previous != "" {
-		body += `,"previousPrincipal":"` + previous + `"`
-	}
-
-	f.asPerson(t, subject, apiCall{http.MethodPost, linksURL, body + `}`, http.StatusCreated}, nil)
+	f.asPerson(t, "alice", apiCall{http.MethodPost, linksURL, `{"token":"` + token + `"}`, http.StatusCreated}, nil)
 }
 
 func TestGitHostLinkFlow(t *testing.T) {
@@ -155,14 +153,6 @@ func TestGitHostLinkFlow(t *testing.T) {
 		t.Fatalf("accepted = %+v", accepted)
 	}
 
-	var mine, others linkListDoc
-	f.asPerson(t, "alice", apiCall{http.MethodGet, linksURL, "", http.StatusOK}, &mine)
-	f.asPerson(t, "bob", apiCall{http.MethodGet, linksURL, "", http.StatusOK}, &others)
-
-	if len(mine.Links) != 1 || len(others.Links) != 0 {
-		t.Fatalf("links of alice %+v and of bob %+v", mine, others)
-	}
-
 	// The token is good once.
 	var failure linkErrorDoc
 	f.asPerson(
@@ -175,8 +165,25 @@ func TestGitHostLinkFlow(t *testing.T) {
 	if failure.ErrorCode != "git-host.link-request-used" {
 		t.Fatalf("second accept code = %q", failure.ErrorCode)
 	}
+}
 
-	// Bob cannot delete the link of alice. Alice can.
+// TestGitHostLinkListAndDelete proves that a person lists and deletes only its
+// own links.
+func TestGitHostLinkListAndDelete(t *testing.T) {
+	t.Parallel()
+
+	f := newLinkFixture(t)
+	f.linkAlice(t, "4711")
+
+	var mine, others linkListDoc
+	f.asPerson(t, "alice", apiCall{http.MethodGet, linksURL, "", http.StatusOK}, &mine)
+	f.asPerson(t, "bob", apiCall{http.MethodGet, linksURL, "", http.StatusOK}, &others)
+
+	if len(mine.Links) != 1 || len(others.Links) != 0 {
+		t.Fatalf("links of alice %+v and of bob %+v", mine, others)
+	}
+
+	// Bob cannot delete the link of alice. Alice can, once.
 	del := linksURL + ghAccountPath + "4711"
 	f.asPerson(t, "bob", apiCall{http.MethodDelete, del, "", http.StatusNotFound}, nil)
 	f.asPerson(t, "alice", apiCall{http.MethodDelete, del, "", http.StatusNoContent}, nil)
@@ -217,7 +224,7 @@ func TestGitHostLinkNeedsBothSides(t *testing.T) {
 	// The body of the accept names no account: a field for it is refused.
 	f.proveLink(t, token, "4711", "alice-gh")
 	f.asPerson(t, "alice", apiCall{
-		http.MethodPost, linksURL, `{"token":"` + token + `","accountId":"1"}`, http.StatusBadRequest,
+		http.MethodPost, linksURL, `{"token":"` + token + `","accountID":"1"}`, http.StatusBadRequest,
 	}, &failure)
 
 	if failure.ErrorCode != "git-host.link-body-invalid" {
@@ -244,7 +251,7 @@ func TestGitHostLinkChangesNeedASession(t *testing.T) {
 	t.Parallel()
 
 	f := newLinkFixture(t)
-	f.linkAs(t, "alice", "4711", "")
+	f.linkAlice(t, "4711")
 
 	var failure linkErrorDoc
 
@@ -282,7 +289,7 @@ func TestGitHostLinkNoSilentReplace(t *testing.T) {
 	t.Parallel()
 
 	f := newLinkFixture(t)
-	f.linkAs(t, "alice", "4711", "")
+	f.linkAlice(t, "4711")
 
 	token := f.startLink(t, "bob")
 	f.proveLink(t, token, "4711", "alice-gh")
@@ -330,7 +337,7 @@ func TestGitHostLinkIDsMatchExactly(t *testing.T) {
 	t.Parallel()
 
 	f := newLinkFixture(t)
-	f.linkAs(t, "alice", "AbC", "")
+	f.linkAlice(t, "AbC")
 
 	for _, c := range []apiCall{
 		{http.MethodDelete, linksURL + ghAccountPath + "abc", "", http.StatusNotFound},
@@ -414,7 +421,7 @@ func TestGitHostLinkAdministratorDelete(t *testing.T) {
 	t.Parallel()
 
 	f := newLinkFixture(t)
-	f.linkAs(t, "alice", "4711", "")
+	f.linkAlice(t, "4711")
 
 	path := func(principal string) string {
 		return "/api/dustpan/v1/principals/" + principal + "/linked-accounts/github/github.com/4711"
@@ -433,6 +440,45 @@ func TestGitHostLinkAdministratorDelete(t *testing.T) {
 	}
 }
 
+// serverLinkEntries returns the audit entries of the links in the server scope,
+// as text with the outcome in front.
+func serverLinkEntries(t *testing.T, f accessFixture) []string {
+	t.Helper()
+
+	var out []string
+
+	for page := 1; ; page++ {
+		listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
+		if err != nil {
+			t.Fatalf("list audit: %v", err)
+		}
+
+		for i := range listing.Entries {
+			e := &listing.Entries[i]
+			if e.Action == "caller:manage-git-host-links" {
+				out = append(out, string(e.Outcome)+" "+e.Object+" "+audit.EncodeChanges(e.Changes))
+			}
+		}
+
+		if len(listing.Entries) < audit.MaxPageSize {
+			return out
+		}
+	}
+}
+
+// countLinkEntries counts the entries that contain every one of the parts.
+func countLinkEntries(entries []string, parts ...string) int {
+	n := 0
+
+	for _, e := range entries {
+		if !slices.ContainsFunc(parts, func(p string) bool { return !strings.Contains(e, p) }) {
+			n++
+		}
+	}
+
+	return n
+}
+
 // TestGitHostLinkAuditEntries proves that a link, a delete and a refusal each
 // write an entry that names the account and never a token.
 func TestGitHostLinkAuditEntries(t *testing.T) {
@@ -445,46 +491,23 @@ func TestGitHostLinkAuditEntries(t *testing.T) {
 	f.as(t, "alice", apiCall{http.MethodDelete, linksURL + ghAccountPath + "4711", "", http.StatusForbidden}, nil)
 	f.asPerson(t, "alice", apiCall{http.MethodDelete, linksURL + ghAccountPath + "4711", "", http.StatusNoContent}, nil)
 
-	var made, deleted, denied int
+	entries := serverLinkEntries(t, f)
 
-	for page := 1; ; page++ {
-		listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
-		if err != nil {
-			t.Fatalf("list audit: %v", err)
-		}
-
-		for _, e := range listing.Entries {
-			if e.Action != "caller:manage-git-host-links" {
-				continue
-			}
-
-			text := e.Object + " " + audit.EncodeChanges(e.Changes)
-			if strings.Contains(text, token) {
-				t.Fatalf("entry %d holds the token", e.Sequence)
-			}
-
-			switch {
-			case e.Outcome == audit.OutcomeDenied:
-				denied++
-			case strings.Contains(text, `"key":"forgeLink.change","new":"linked"`):
-				made++
-
-				if !strings.Contains(text, `"new":"4711"`) || !strings.Contains(text, `"new":"prn-alice"`) {
-					t.Errorf("entry of the link = %s", text)
-				}
-			case strings.Contains(text, `"key":"forgeLink.change","new":"deleted"`):
-				deleted++
-			}
-		}
-
-		if len(listing.Entries) < audit.MaxPageSize {
-			break
-		}
+	if n := countLinkEntries(entries, token); n != 0 {
+		t.Fatalf("%d entries hold the token", n)
 	}
+
+	made := countLinkEntries(
+		entries,
+		"success",
+		`"key":"forgeLink.change","new":"linked"`,
+		`"new":"4711"`,
+		`"new":"prn-alice"`,
+	)
+	deleted := countLinkEntries(entries, "success", `"key":"forgeLink.change","new":"deleted"`, `"new":"4711"`)
+	denied := countLinkEntries(entries, "denied")
 
 	if made != 1 || deleted != 1 || denied != 1 {
-		t.Fatalf("entries: %d made, %d deleted, %d denied, want 1 each", made, deleted, denied)
+		t.Fatalf("entries: %d made, %d deleted, %d denied, want 1 each: %q", made, deleted, denied, entries)
 	}
 }
-
-var _ = time.Second

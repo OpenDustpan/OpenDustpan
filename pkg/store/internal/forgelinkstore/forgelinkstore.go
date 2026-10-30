@@ -212,8 +212,8 @@ func ApplyProof(
 		return forgelink.Request{}, err
 	}
 
-	if err := req.Check(now); err != nil {
-		return forgelink.Request{}, err
+	if checkErr := req.Check(now); checkErr != nil {
+		return forgelink.Request{}, checkErr
 	}
 
 	if req.IsProved() {
@@ -303,48 +303,39 @@ type Tx interface {
 // Defense in depth: each write below is a statement that changes a row only
 // while its conditions hold, and a statement that changes none fails the step.
 // So a step that another writer overtook never makes a link.
-func ApplyAccept(
-	ctx context.Context, tx Tx, hash, principal, previous string, now time.Time,
-) (forgelink.Link, string, error) {
-	row, found, err := tx.Request(ctx, hash)
+func ApplyAccept(ctx context.Context, tx Tx, a forgelink.Acceptance) (forgelink.Accepted, error) {
+	var none forgelink.Accepted
+
+	req, err := readRequest(ctx, tx, a.TokenSHA256)
 	if err != nil {
-		return forgelink.Link{}, "", err
+		return none, err
 	}
 
-	if !found {
-		return forgelink.Link{}, "", forgelink.ErrNotFound
+	if checkErr := req.CheckAccept(a.Principal, a.At); checkErr != nil {
+		return none, checkErr
 	}
 
-	req, err := Request(row)
+	link := req.LinkOf(a.At)
+
+	if linkErr := link.Validate(); linkErr != nil {
+		return none, fmt.Errorf("accept link request: %w", linkErr)
+	}
+
+	replaced, err := putLink(ctx, tx, link, a.Previous)
 	if err != nil {
-		return forgelink.Link{}, "", fmt.Errorf("accept link request: %w", err)
+		return none, err
 	}
 
-	if err := req.CheckAccept(principal, now); err != nil {
-		return forgelink.Link{}, "", err
-	}
-
-	link := req.LinkOf(now)
-
-	if err := link.Validate(); err != nil {
-		return forgelink.Link{}, "", fmt.Errorf("accept link request: %w", err)
-	}
-
-	replaced, err := putLink(ctx, tx, link, previous)
+	used, err := tx.UseRequest(ctx, a.TokenSHA256, a.Principal, a.At.UnixMilli())
 	if err != nil {
-		return forgelink.Link{}, "", err
-	}
-
-	used, err := tx.UseRequest(ctx, hash, principal, now.UnixMilli())
-	if err != nil {
-		return forgelink.Link{}, "", err
+		return none, err
 	}
 
 	if !used {
-		return forgelink.Link{}, "", forgelink.ErrUsed
+		return none, forgelink.ErrUsed
 	}
 
-	return link, replaced, nil
+	return forgelink.Accepted{Link: link, Replaced: replaced}, nil
 }
 
 // putLink writes l and applies the rule that a link never replaces another link

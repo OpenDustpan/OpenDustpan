@@ -29,7 +29,11 @@ func TestAccountValidate(t *testing.T) {
 		{"empty ID", forgelink.Account{Kind: forge.KindGitHub, Host: "github.com", ID: ""}, false},
 		{"ID with a space", forgelink.Account{Kind: forge.KindGitHub, Host: "github.com", ID: "1 2"}, false},
 		{"ID with a newline", forgelink.Account{Kind: forge.KindGitHub, Host: "github.com", ID: "1\n2"}, false},
-		{"ID with a zero-width space", forgelink.Account{Kind: forge.KindGitHub, Host: "github.com", ID: "1​2"}, false},
+		{
+			"ID with a zero-width space",
+			forgelink.Account{Kind: forge.KindGitHub, Host: "github.com", ID: "1\u200b2"},
+			false,
+		},
 		{"ID that is not UTF-8", forgelink.Account{Kind: forge.KindGitHub, Host: "github.com", ID: "\xff"}, false},
 		{
 			"long ID",
@@ -122,11 +126,8 @@ func TestRequestCheckAccept(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := tc.r.CheckAccept(
-				tc.principal,
-				tc.at,
-			); !errors.Is(err, tc.want) &&
-				(err != nil || tc.want != nil) {
+			err := tc.r.CheckAccept(tc.principal, tc.at)
+			if !errors.Is(err, tc.want) && (err != nil || tc.want != nil) {
 				t.Errorf("CheckAccept = %v, want %v", err, tc.want)
 			}
 		})

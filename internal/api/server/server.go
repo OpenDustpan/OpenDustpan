@@ -285,13 +285,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
-		preferences:    cfg.Preferences,
-		gitHostLinks:   cfg.GitHostLinks,
-		gitHost:        cfg.GitHost,
-		idem:           cfg.Idempotency,
-		instances:      cfg.Instances,
-		mux:            newPatternMux(),
-		routes:         nil,
+		preferences:    cfg.Preferences, gitHostLinks: cfg.GitHostLinks,
+		gitHost:   cfg.GitHost,
+		idem:      cfg.Idempotency,
+		instances: cfg.Instances,
+		mux:       newPatternMux(),
+		routes:    nil,
 	}
 
 	if h.now == nil {

@@ -35,6 +35,7 @@ const (
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"
 	backupColKind        = "kind"
+	backupColUsedAtMs    = "used_at_ms"
 	backupColSubject     = "subject"
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"

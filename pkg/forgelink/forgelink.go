@@ -35,11 +35,11 @@ var (
 	// ErrInvalid reports a value that fails validation.
 	ErrInvalid = errors.New("invalid Git host account link")
 	// ErrNotFound reports an unknown link or link request.
-	ErrNotFound = errors.New("Git host account link not found")
+	ErrNotFound = errors.New("link of the Git host account not found")
 	// ErrConflict reports a write that collides with a stored row: a link that
 	// another principal holds, a link request with a hash that exists, or a link
 	// request that another account proved already.
-	ErrConflict = errors.New("Git host account link conflict")
+	ErrConflict = errors.New("conflict with a link of a Git host account")
 	// ErrUsed reports a link request that a person accepted already.
 	ErrUsed = errors.New("link request already used")
 	// ErrExpired reports a link request after its expiry.
@@ -59,7 +59,7 @@ var (
 	ErrLimit = errors.New("too many open link requests")
 	// ErrNotLinked reports an account that has no link that works: no link, or a
 	// link of a principal that is disabled or deleted.
-	ErrNotLinked = errors.New("Git host account is not linked")
+	ErrNotLinked = errors.New("the Git host account is not linked")
 )
 
 // Bounds of a link and of a link request.
@@ -109,7 +109,17 @@ func (a Account) Validate() error {
 // validHost reports whether h is a host name that is already in its one form.
 func validHost(h string) bool {
 	name, port, hasPort := strings.Cut(h, ":")
-	if name == "" || len(h) > MaxIDLen || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-") {
+	if len(h) > MaxIDLen || !validHostName(name) {
+		return false
+	}
+
+	return !hasPort || validPort(port)
+}
+
+// validHostName reports whether name is a DNS name of lowercase letters, digits,
+// "." and "-" that does not start with "." or "-".
+func validHostName(name string) bool {
+	if name == "" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-") {
 		return false
 	}
 
@@ -120,10 +130,11 @@ func validHost(h string) bool {
 		}
 	}
 
-	if !hasPort {
-		return true
-	}
+	return true
+}
 
+// validPort reports whether port is a port number with no leading zero.
+func validPort(port string) bool {
 	const maxPortDigits = 5
 
 	if port == "" || len(port) > maxPortDigits || port[0] == '0' {

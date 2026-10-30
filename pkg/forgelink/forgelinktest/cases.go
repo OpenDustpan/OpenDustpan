@@ -2,6 +2,7 @@ package forgelinktest
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -12,8 +13,20 @@ import (
 	"opendustpan.org/opendustpan/pkg/forgelink"
 )
 
-// racers is the number of callers in the cases with many calls at once.
-const racers = 16
+// Sizes and times of the cases.
+const (
+	// racers is the number of callers in the cases with many calls at once.
+	racers = 16
+	// firstRacer is the account ID of the first caller of the case with many proofs.
+	firstRacer = 100
+	// twoLinks is the number of links in the cases with two accounts.
+	twoLinks = 2
+	// proveAt, acceptAt and afterAccept are the times after the start of a request
+	// at which the cases prove it, accept it, and try it again.
+	proveAt     = time.Minute
+	acceptAt    = 2 * time.Minute
+	afterAccept = 3 * time.Minute
+)
 
 func caseRequestRoundTrip(t *testing.T, h Harness) {
 	t.Helper()
@@ -42,7 +55,7 @@ func caseRequestConflict(t *testing.T, h Harness) {
 	ana := h.Principal(t, "ana")
 	start(t, h, tokenA, ana)
 
-	r, err := forgelink.NewRequest(tokenA, ana, at(time.Minute))
+	r, err := forgelink.NewRequest(tokenA, ana, at(proveAt))
 	must(t, "new request", err)
 	wantErr(t, "same hash", h.Store.CreateRequest(t.Context(), r), forgelink.ErrConflict)
 }
@@ -70,11 +83,11 @@ func caseRequestInvalid(t *testing.T, h Harness) {
 	noPrincipal := good
 	noPrincipal.Principal = ""
 
-	for name, r := range map[string]forgelink.Request{
-		"a proof": proved, "an accept": used, "a hash in capitals": badHash, "a long lifetime": badLifetime,
-		"no principal": noPrincipal,
+	for name, r := range map[string]*forgelink.Request{
+		"a proof": &proved, "an accept": &used, "a hash in capitals": &badHash, "a long lifetime": &badLifetime,
+		"no principal": &noPrincipal,
 	} {
-		wantErr(t, name, h.Store.CreateRequest(t.Context(), r), forgelink.ErrInvalid)
+		wantErr(t, name, h.Store.CreateRequest(t.Context(), *r), forgelink.ErrInvalid)
 	}
 
 	if _, err := forgelink.NewRequest("short", ana, at(0)); err == nil {
@@ -93,12 +106,12 @@ func caseRequestLimit(t *testing.T, h Harness) {
 		must(t, "create request", h.Store.CreateRequest(t.Context(), r))
 	}
 
-	over, err := forgelink.NewRequest(tokenB, ana, at(time.Minute))
+	over, err := forgelink.NewRequest(tokenB, ana, at(proveAt))
 	must(t, "new request", err)
 	wantErr(t, "one over the limit", h.Store.CreateRequest(t.Context(), over), forgelink.ErrLimit)
 
 	// The limit is for one principal.
-	other, err := forgelink.NewRequest(tokenB, bob, at(time.Minute))
+	other, err := forgelink.NewRequest(tokenB, bob, at(proveAt))
 	must(t, "new request", err)
 	must(t, "another principal", h.Store.CreateRequest(t.Context(), other))
 
@@ -130,10 +143,10 @@ func caseProve(t *testing.T, h Harness) {
 
 	hash := start(t, h, tokenA, h.Principal(t, "ana"))
 
-	got, err := h.Store.ProveRequest(t.Context(), hash, proof("42", "ana-gh"), at(time.Minute))
+	got, err := h.Store.ProveRequest(t.Context(), hash, proof("42", "ana-gh"), at(proveAt))
 	must(t, "prove", err)
 
-	if !got.IsProved() || got.Proved != proof("42", "ana-gh") || !got.ProvedAt.Equal(at(time.Minute)) {
+	if !got.IsProved() || got.Proved != proof("42", "ana-gh") || !got.ProvedAt.Equal(at(proveAt)) {
 		t.Errorf("proved request = %+v", got)
 	}
 
@@ -149,11 +162,11 @@ func caseProveRepeat(t *testing.T, h Harness) {
 	t.Helper()
 
 	hash := start(t, h, tokenA, h.Principal(t, "ana"))
-	first, err := h.Store.ProveRequest(t.Context(), hash, proof("42", "ana-gh"), at(time.Minute))
+	first, err := h.Store.ProveRequest(t.Context(), hash, proof("42", "ana-gh"), at(proveAt))
 	must(t, "prove", err)
 
 	// A Git host sends an event again. The login can differ, the account does not.
-	again, err := h.Store.ProveRequest(t.Context(), hash, proof("42", "ana-renamed"), at(2*time.Minute))
+	again, err := h.Store.ProveRequest(t.Context(), hash, proof("42", "ana-renamed"), at(acceptAt))
 	must(t, "prove again", err)
 
 	if again != first {
@@ -167,7 +180,7 @@ func caseProveOtherAccount(t *testing.T, h Harness) {
 	hash := start(t, h, tokenA, h.Principal(t, "ana"))
 	prove(t, h, hash, "42", "ana-gh")
 
-	_, err := h.Store.ProveRequest(t.Context(), hash, proof("43", "mallory"), at(2*time.Minute))
+	_, err := h.Store.ProveRequest(t.Context(), hash, proof("43", "mallory"), at(acceptAt))
 	wantErr(t, "second account", err, forgelink.ErrConflict)
 
 	got, err := h.Store.GetRequest(t.Context(), hash)
@@ -192,7 +205,7 @@ func caseProveRefusals(t *testing.T, h Harness) {
 	_, _, err = accept(t, h, used, ana, "")
 	must(t, "accept", err)
 
-	_, err = h.Store.ProveRequest(t.Context(), used, proof("42", "x"), at(3*time.Minute))
+	_, err = h.Store.ProveRequest(t.Context(), used, proof("42", "x"), at(afterAccept))
 	wantErr(t, "used request", err, forgelink.ErrUsed)
 }
 
@@ -215,7 +228,7 @@ func caseProveInvalid(t *testing.T, h Harness) {
 		"unknown kind": other, "host in capitals": upper, "space in the ID": spaced, "no delivery": noDelivery,
 		"no ID": proof("", "x"),
 	} {
-		_, err := h.Store.ProveRequest(t.Context(), hash, p, at(time.Minute))
+		_, err := h.Store.ProveRequest(t.Context(), hash, p, at(proveAt))
 		wantErr(t, name, err, forgelink.ErrInvalid)
 	}
 
@@ -288,7 +301,7 @@ func caseAccept(t *testing.T, h Harness) {
 	got, replaced, err := accept(t, h, hash, ana, "")
 	must(t, "accept", err)
 
-	want := forgelink.Link{Account: account("42"), Login: "ana-gh", Principal: ana, LinkedAt: at(2 * time.Minute)}
+	want := forgelink.Link{Account: account("42"), Login: "ana-gh", Principal: ana, LinkedAt: at(acceptAt)}
 	if got != want || replaced != "" {
 		t.Errorf("link = %+v, replaced %q, want %+v", got, replaced, want)
 	}
@@ -326,7 +339,7 @@ func caseAcceptExpired(t *testing.T, h Harness) {
 	hash := start(t, h, tokenA, ana)
 	prove(t, h, hash, "42", "ana-gh")
 
-	_, _, err := h.Store.AcceptRequest(t.Context(), hash, ana, "", at(forgelink.RequestLifetime), linkEntry())
+	_, err := h.Store.AcceptRequest(t.Context(), acceptance(hash, ana, "", at(forgelink.RequestLifetime)), linkEntry())
 	wantErr(t, "at the expiry", err, forgelink.ErrExpired)
 
 	_, err = h.Store.LinkOf(t.Context(), account("42"))
@@ -337,7 +350,7 @@ func caseNoSilentReplace(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana, bob := h.Principal(t, "ana"), h.Principal(t, "bob")
-	link(t, h, tokenA, ana, "42", "")
+	link(t, h, tokenA, ana, "42")
 
 	// Bob links the same account. The accept page showed no link (previous empty),
 	// but the account has one: the write is a conflict, not a replace.
@@ -366,7 +379,7 @@ func caseReplace(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana, bob := h.Principal(t, "ana"), h.Principal(t, "bob")
-	link(t, h, tokenA, ana, "42", "")
+	link(t, h, tokenA, ana, "42")
 
 	hash := start(t, h, tokenB, bob)
 	prove(t, h, hash, "42", "ana-gh")
@@ -390,7 +403,7 @@ func caseRefusedAcceptKeepsRequest(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana, bob := h.Principal(t, "ana"), h.Principal(t, "bob")
-	link(t, h, tokenA, ana, "42", "")
+	link(t, h, tokenA, ana, "42")
 
 	hash := start(t, h, tokenB, bob)
 	prove(t, h, hash, "42", "x")
@@ -413,7 +426,7 @@ func caseExactIDs(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana := h.Principal(t, "ana")
-	link(t, h, tokenA, ana, "AbC", "")
+	link(t, h, tokenA, ana, "AbC")
 
 	for name, a := range map[string]forgelink.Account{
 		"ID in lowercase":  account("abc"),
@@ -430,9 +443,9 @@ func caseExactIDs(t *testing.T, h Harness) {
 	}
 
 	// An ID with other capitals is another account and makes its own link.
-	link(t, h, tokenB, ana, "abc", "")
+	link(t, h, tokenB, ana, "abc")
 
-	if links, err := h.Store.LinksOf(t.Context(), ana); err != nil || len(links) != 2 {
+	if links, err := h.Store.LinksOf(t.Context(), ana); err != nil || len(links) != twoLinks {
 		t.Errorf("links = %v, %v, want two accounts", links, err)
 	}
 }
@@ -441,7 +454,7 @@ func caseRenamedLogin(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana := h.Principal(t, "ana")
-	link(t, h, tokenA, ana, "42", "")
+	link(t, h, tokenA, ana, "42")
 
 	// The account renames its login to the old login of another account.
 	stored, err := h.Store.LinkOf(t.Context(), account("42"))
@@ -453,7 +466,7 @@ func caseRenamedLogin(t *testing.T, h Harness) {
 
 	// A different account with the login of the first one makes no match.
 	other := forgelink.Account{Kind: forge.KindGitHub, Host: host, ID: "login-42"}
-	if _, err := h.Store.LinkOf(t.Context(), other); err == nil {
+	if _, otherErr := h.Store.LinkOf(t.Context(), other); otherErr == nil {
 		t.Error("a login matched an account")
 	}
 
@@ -515,7 +528,7 @@ func caseConcurrentProve(t *testing.T, h Harness) {
 
 	for i := range racers {
 		wg.Go(func() {
-			_, results[i] = h.Store.ProveRequest(t.Context(), hash, proof(fmt.Sprint(100+i), "x"), at(time.Minute))
+			_, results[i] = h.Store.ProveRequest(t.Context(), hash, proof(strconv.Itoa(firstRacer+i), "x"), at(proveAt))
 		})
 	}
 
@@ -543,9 +556,9 @@ func caseLinksOf(t *testing.T, h Harness) {
 
 	ana, bob := h.Principal(t, "ana"), h.Principal(t, "bob")
 
-	link(t, h, tokenA, ana, "9", "")
-	link(t, h, tokenB, ana, "10", "")
-	link(t, h, "tokenCtokenCtokenCtokenCtokenCtokenCtokenCtokenC", bob, "11", "")
+	link(t, h, tokenA, ana, "9")
+	link(t, h, tokenB, ana, "10")
+	link(t, h, "tokenCtokenCtokenCtokenCtokenCtokenCtokenCtokenC", bob, "11")
 
 	got, err := h.Store.LinksOf(t.Context(), ana)
 	must(t, "links of ana", err)
@@ -566,23 +579,20 @@ func caseDelete(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana := h.Principal(t, "ana")
-	link(t, h, tokenA, ana, "42", "")
+	link(t, h, tokenA, ana, "42")
 
 	must(t, "delete", h.Store.DeleteLink(t.Context(), account("42"), entry("caller:manage-git-host-links")))
 
 	_, err := h.Store.LinkOf(t.Context(), account("42"))
 	wantErr(t, "link after the delete", err, forgelink.ErrNotFound)
 
-	if n := entries(t, h); n != 2 {
+	if n := entries(t, h); n != twoLinks {
 		t.Errorf("audit entries = %d, want 2 (the link and the delete)", n)
 	}
 
-	wantErr(
-		t,
-		"invalid account",
-		h.Store.DeleteLink(t.Context(), forgelink.Account{}, linkEntry()),
-		forgelink.ErrInvalid,
-	)
+	var none forgelink.Account
+
+	wantErr(t, "invalid account", h.Store.DeleteLink(t.Context(), none, linkEntry()), forgelink.ErrInvalid)
 }
 
 func caseDeleteMissing(t *testing.T, h Harness) {
@@ -599,7 +609,7 @@ func caseRelinkTime(t *testing.T, h Harness) {
 	t.Helper()
 
 	ana := h.Principal(t, "ana")
-	link(t, h, tokenA, ana, "42", "")
+	link(t, h, tokenA, ana, "42")
 	must(t, "delete", h.Store.DeleteLink(t.Context(), account("42"), linkEntry()))
 
 	later := at(time.Hour)
@@ -611,11 +621,11 @@ func caseRelinkTime(t *testing.T, h Harness) {
 	_, err = h.Store.ProveRequest(t.Context(), r.TokenSHA256, proof("42", "x"), later)
 	must(t, "prove", err)
 
-	got, _, err := h.Store.AcceptRequest(t.Context(), r.TokenSHA256, ana, "", later, linkEntry())
+	accepted, err := h.Store.AcceptRequest(t.Context(), acceptance(r.TokenSHA256, ana, "", later), linkEntry())
 	must(t, "accept", err)
 
-	if !got.LinkedAt.Equal(later) {
-		t.Errorf("linked at %v, want the time of the new link %v", got.LinkedAt, later)
+	if !accepted.Link.LinkedAt.Equal(later) {
+		t.Errorf("linked at %v, want the time of the new link %v", accepted.Link.LinkedAt, later)
 	}
 }
 
@@ -632,8 +642,8 @@ func caseEntryScope(t *testing.T, h Harness) {
 	empty := linkEntry()
 	empty.Action = ""
 
-	for name, e := range map[string]audit.Entry{"another scope": foreign, "invalid entry": empty} {
-		_, _, err := h.Store.AcceptRequest(t.Context(), hash, ana, "", at(2*time.Minute), e)
+	for name, e := range map[string]*audit.Entry{"another scope": &foreign, "invalid entry": &empty} {
+		_, err := h.Store.AcceptRequest(t.Context(), acceptance(hash, ana, "", at(acceptAt)), *e)
 		wantErr(t, name, err, audit.ErrInvalidEntry)
 	}
 
@@ -664,7 +674,7 @@ func caseAcceptAudit(t *testing.T, h Harness) {
 	e := linkEntry()
 	e.Reason = "test"
 
-	_, _, err := h.Store.AcceptRequest(t.Context(), hash, ana, "", at(2*time.Minute), e)
+	_, err := h.Store.AcceptRequest(t.Context(), acceptance(hash, ana, "", at(acceptAt)), e)
 	must(t, "accept", err)
 
 	got := h.AuditEntries(t)

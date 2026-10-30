@@ -16,13 +16,22 @@ func sqliteForgeLinkBackupTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
 		{
 			table:   "forge_account_links",
-			columns: []string{"kind", "host", "account_id", "login", backupColPrincipalID, "linked_at_ms"},
+			columns: []string{backupColKind, "host", "account_id", "login", backupColPrincipalID, "linked_at_ms"},
 		},
 		{
 			table: "forge_link_requests",
 			columns: []string{
-				"token_sha256", backupColPrincipalID, backupColCreatedAtMs, backupColExpiresAtMs, "proved_kind",
-				"proved_host", "proved_account_id", "proved_login", "proved_delivery_id", "proved_at_ms", "used_at_ms",
+				"token_sha256",
+				backupColPrincipalID,
+				backupColCreatedAtMs,
+				backupColExpiresAtMs,
+				"proved_kind",
+				"proved_host",
+				"proved_account_id",
+				"proved_login",
+				"proved_delivery_id",
+				"proved_at_ms",
+				backupColUsedAtMs,
 			},
 		},
 	}
@@ -51,14 +60,9 @@ func checkStagedForgeLinks(ctx context.Context, conn *sql.DB) (err error) {
 	for links.Next() {
 		var row forgelinkstore.LinkRow
 
-		if scanErr := links.Scan(
-			&row.Kind,
-			&row.Host,
-			&row.AccountID,
-			&row.Login,
-			&row.PrincipalID,
-			&row.LinkedAtMs,
-		); scanErr != nil {
+		dest := []any{&row.Kind, &row.Host, &row.AccountID, &row.Login, &row.PrincipalID, &row.LinkedAtMs}
+
+		if scanErr := links.Scan(dest...); scanErr != nil {
 			return fmt.Errorf("read staged Git host account links: %w", backup.ErrExportRead)
 		}
 

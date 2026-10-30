@@ -106,7 +106,7 @@ does not know.
   "link": {
     "kind": "github",
     "host": "github.com",
-    "accountId": "583231",
+    "accountID": "583231",
     "login": "octocat",
     "principal": "prn-5a10",
     "linkedAt": "2026-10-30T10:02:00Z"

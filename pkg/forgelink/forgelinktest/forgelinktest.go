@@ -56,6 +56,7 @@ func cases() []suiteCase {
 		{"a request is stored and read by the hash of its token", caseRequestRoundTrip},
 		{"a request with the hash of a stored one is a conflict", caseRequestConflict},
 		{"an invalid request is refused", caseRequestInvalid},
+		{"a person has a bounded number of open requests", caseRequestLimit},
 		{"an unknown request is not found", caseRequestUnknown},
 		{"a proof is recorded on the request", caseProve},
 		{"a repeated proof of the same account changes nothing", caseProveRepeat},
@@ -148,7 +149,7 @@ func start(t *testing.T, h Harness, token, principal string) string {
 func prove(t *testing.T, h Harness, hash, id, login string) {
 	t.Helper()
 
-	_, err := h.Store.ProveRequest(t.Context(), hash, proof(id, login), at(time.Minute))
+	_, err := h.Store.ProveRequest(t.Context(), hash, proof(id, login), at(proveAt))
 	must(t, "prove", err)
 }
 
@@ -156,18 +157,29 @@ func prove(t *testing.T, h Harness, hash, id, login string) {
 func accept(t *testing.T, h Harness, hash, principal, previous string) (forgelink.Link, string, error) {
 	t.Helper()
 
-	return h.Store.AcceptRequest(t.Context(), hash, principal, previous, at(2*time.Minute), linkEntry())
+	accepted, err := h.Store.AcceptRequest(
+		t.Context(),
+		acceptance(hash, principal, previous, at(acceptAt)),
+		linkEntry(),
+	)
+
+	return accepted.Link, accepted.Replaced, err
 }
 
 // link makes a link of the account id to principal by a full request.
-func link(t *testing.T, h Harness, token, principal, id, previous string) {
+func link(t *testing.T, h Harness, token, principal, id string) {
 	t.Helper()
 
 	hash := start(t, h, token, principal)
 	prove(t, h, hash, id, "login-"+id)
 
-	_, _, err := accept(t, h, hash, principal, previous)
+	_, _, err := accept(t, h, hash, principal, "")
 	must(t, "accept", err)
+}
+
+// acceptance returns the acceptance of the request hash by principal at the time at.
+func acceptance(hash, principal, previous string, at time.Time) forgelink.Acceptance {
+	return forgelink.Acceptance{TokenSHA256: hash, Principal: principal, Previous: previous, At: at}
 }
 
 func entries(t *testing.T, h Harness) int {

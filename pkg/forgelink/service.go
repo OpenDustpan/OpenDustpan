@@ -134,11 +134,14 @@ func (s *Service) Show(ctx context.Context, caller identity.Principal, token str
 		return View{}, err
 	}
 
-	if err := r.Check(s.now()); err != nil {
-		return View{}, err
+	if checkErr := r.Check(s.now()); checkErr != nil {
+		return View{}, checkErr
 	}
 
-	v := View{Request: r, Current: Link{}, HasCurrent: false, CurrentName: ""}
+	var v View
+
+	v.Request = r
+
 	if !r.IsProved() {
 		return v, nil
 	}
@@ -183,8 +186,8 @@ func (s *Service) Accept(
 
 	// The store applies the same rules in its transaction. This read lets the
 	// entry name the account, which only a proved request has.
-	if err := r.CheckAccept(person.ID, now); err != nil {
-		return Link{}, "", err
+	if checkErr := r.CheckAccept(person.ID, now); checkErr != nil {
+		return Link{}, "", checkErr
 	}
 
 	e = s.entry(e, now, person.ID)
@@ -202,12 +205,14 @@ func (s *Service) Accept(
 		)
 	}
 
-	link, replaced, err := s.store.AcceptRequest(ctx, HashToken(token), person.ID, previous, now, e)
+	accepted, err := s.store.AcceptRequest(
+		ctx, Acceptance{TokenSHA256: HashToken(token), Principal: person.ID, Previous: previous, At: now}, e,
+	)
 	if err != nil {
 		return Link{}, "", fmt.Errorf("accept the link request: %w", err)
 	}
 
-	return link, replaced, nil
+	return accepted.Link, accepted.Replaced, nil
 }
 
 // List returns the links of the person that caller is.
@@ -242,36 +247,6 @@ func (s *Service) Delete(ctx context.Context, caller identity.Principal, a Accou
 // principal. A link of another principal is ErrNotFound.
 func (s *Service) DeleteFor(ctx context.Context, principalID string, a Account, e audit.Entry) error {
 	return s.deleteOf(ctx, principalID, a, e)
-}
-
-// deleteOf deletes the link of a if principalID holds it.
-func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e audit.Entry) error {
-	if err := a.Validate(); err != nil {
-		return err
-	}
-
-	current, err := s.store.LinkOf(ctx, a)
-	if err != nil {
-		return fmt.Errorf("read the link: %w", err)
-	}
-
-	if current.Principal != principalID {
-		return ErrNotFound
-	}
-
-	e = s.entry(e, s.now().UTC().Truncate(time.Millisecond), principalID)
-	e.Changes = append(slices.Clone(e.Changes), accountChanges(a, current.Login)...)
-	e.Changes = append(
-		e.Changes,
-		audit.Change{Key: "forgeLink.change", Old: nil, New: "deleted", Layer: "", TakesEffect: ""},
-		audit.Change{Key: "forgeLink.principal", Old: nil, New: principalID, Layer: "", TakesEffect: ""},
-	)
-
-	if err := s.store.DeleteLink(ctx, a, e); err != nil {
-		return fmt.Errorf("delete the link: %w", err)
-	}
-
-	return nil
 }
 
 // Resolve returns the principal that the account a is linked to. The comment
@@ -310,6 +285,36 @@ func (s *Service) Resolve(ctx context.Context, a Account) (principal.Principal, 
 	}
 
 	return p, nil
+}
+
+// deleteOf deletes the link of a if principalID holds it.
+func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e audit.Entry) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+
+	current, err := s.store.LinkOf(ctx, a)
+	if err != nil {
+		return fmt.Errorf("read the link: %w", err)
+	}
+
+	if current.Principal != principalID {
+		return ErrNotFound
+	}
+
+	e = s.entry(e, s.now().UTC().Truncate(time.Millisecond), principalID)
+	e.Changes = append(slices.Clone(e.Changes), accountChanges(a, current.Login)...)
+	e.Changes = append(
+		e.Changes,
+		audit.Change{Key: "forgeLink.change", Old: nil, New: "deleted", Layer: "", TakesEffect: ""},
+		audit.Change{Key: "forgeLink.principal", Old: nil, New: principalID, Layer: "", TakesEffect: ""},
+	)
+
+	if err := s.store.DeleteLink(ctx, a, e); err != nil {
+		return fmt.Errorf("delete the link: %w", err)
+	}
+
+	return nil
 }
 
 // entry sets the fields of e that the service owns.

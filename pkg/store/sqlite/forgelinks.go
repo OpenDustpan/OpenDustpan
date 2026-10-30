@@ -40,9 +40,10 @@ func (f forgeLinks) CreateRequest(ctx context.Context, r forgelink.Request) erro
 	defer f.s.mu.RUnlock()
 
 	return f.s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.DeleteExpiredForgeLinkRequestsOf(ctx, db.DeleteExpiredForgeLinkRequestsOfParams{
+		err := q.DeleteExpiredForgeLinkRequestsOf(ctx, db.DeleteExpiredForgeLinkRequestsOfParams{
 			PrincipalID: r.Principal, BeforeMs: r.CreatedAt.UnixMilli(),
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("delete expired link requests: %w", err)
 		}
 
@@ -121,12 +122,11 @@ func (f forgeLinks) ProveRequest(
 
 // AcceptRequest implements forgelink.Store.
 func (f forgeLinks) AcceptRequest(
-	ctx context.Context, hash, principal, previous string, now time.Time, e audit.Entry,
-) (forgelink.Link, string, error) {
-	var (
-		link     forgelink.Link
-		replaced string
-	)
+	ctx context.Context,
+	a forgelink.Acceptance,
+	e audit.Entry,
+) (forgelink.Accepted, error) {
+	var accepted forgelink.Accepted
 
 	f.s.mu.RLock()
 	defer f.s.mu.RUnlock()
@@ -134,22 +134,15 @@ func (f forgeLinks) AcceptRequest(
 	err := f.s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
 		var acceptErr error
 
-		link, replaced, acceptErr = forgelinkstore.ApplyAccept(
-			ctx,
-			linkTx{requestTx: requestTx{q: q}},
-			hash,
-			principal,
-			previous,
-			now,
-		)
+		accepted, acceptErr = forgelinkstore.ApplyAccept(ctx, linkTx{requestTx{q: q}}, a)
 
 		return acceptErr
 	})
 	if err != nil {
-		return forgelink.Link{}, "", err
+		return forgelink.Accepted{}, err
 	}
 
-	return link, replaced, nil
+	return accepted, nil
 }
 
 // DeleteLink implements forgelink.Store.
@@ -261,7 +254,7 @@ type linkTx struct {
 	requestTx
 }
 
-var _ forgelinkstore.Tx = linkTx{requestTx: requestTx{q: nil}}
+var _ forgelinkstore.Tx = linkTx{requestTx{q: nil}}
 
 // Link implements forgelinkstore.Tx.
 func (x linkTx) Link(ctx context.Context, a forgelink.Account) (forgelinkstore.LinkRow, bool, error) {

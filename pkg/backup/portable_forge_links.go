@@ -11,9 +11,9 @@ func portableForgeLinkTables() []PortableTable {
 	return []PortableTable{
 		{
 			Table:   TableForgeAccountLinks,
-			OrderBy: []string{"kind", "host", "account_id"},
+			OrderBy: []string{portColKind, "host", "account_id"},
 			Columns: []Column{
-				{Name: "kind", Kind: KindText},
+				{Name: portColKind, Kind: KindText},
 				{Name: "host", Kind: KindText},
 				{Name: "account_id", Kind: KindText},
 				{Name: "login", Kind: KindText},

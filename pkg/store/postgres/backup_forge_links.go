@@ -16,14 +16,14 @@ func pgCopyForgeLinkTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
 			table:   "forge_account_links",
-			columns: []string{"kind", "host", "account_id", "login", pgColPrincipalID, "linked_at_ms"},
-			orderBy: []string{"kind", "host", "account_id"},
+			columns: []string{pgColKind, "host", "account_id", "login", pgColPrincipalID, "linked_at_ms"},
+			orderBy: []string{pgColKind, "host", "account_id"},
 		},
 		{
 			table: "forge_link_requests",
 			columns: []string{
 				"token_sha256", pgColPrincipalID, pgColCreatedAtMs, pgColExpiresAtMs, "proved_kind", "proved_host",
-				"proved_account_id", "proved_login", "proved_delivery_id", "proved_at_ms", "used_at_ms",
+				"proved_account_id", "proved_login", "proved_delivery_id", "proved_at_ms", pgColUsedAtMs,
 			},
 			orderBy: []string{"token_sha256"},
 		},
@@ -49,14 +49,9 @@ func checkStagedForgeLinks(ctx context.Context, pool *pgxpool.Pool, staging stri
 	for links.Next() {
 		var row forgelinkstore.LinkRow
 
-		if scanErr := links.Scan(
-			&row.Kind,
-			&row.Host,
-			&row.AccountID,
-			&row.Login,
-			&row.PrincipalID,
-			&row.LinkedAtMs,
-		); scanErr != nil {
+		dest := []any{&row.Kind, &row.Host, &row.AccountID, &row.Login, &row.PrincipalID, &row.LinkedAtMs}
+
+		if scanErr := links.Scan(dest...); scanErr != nil {
 			return fmt.Errorf("read staged Git host account links: %w", backup.ErrExportRead)
 		}
 

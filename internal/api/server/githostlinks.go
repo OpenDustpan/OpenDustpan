@@ -186,7 +186,7 @@ type gitHostAccountBody struct {
 type gitHostLinkBody struct {
 	Kind      string    `json:"kind"`
 	Host      string    `json:"host"`
-	AccountID string    `json:"accountId"`
+	AccountID string    `json:"accountID"`
 	Login     string    `json:"login"`
 	Principal string    `json:"principal"`
 	LinkedAt  time.Time `json:"linkedAt"`
@@ -512,7 +512,9 @@ func gitHostLinkAccount(r *http.Request) (forgelink.Account, linkFailure) {
 	}
 
 	if err := a.Validate(); err != nil {
-		return forgelink.Account{}, clientFailure(errGitHostLinkAccount)
+		var none forgelink.Account
+
+		return none, clientFailure(errGitHostLinkAccount)
 	}
 
 	return a, noFailure()

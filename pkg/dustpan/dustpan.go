@@ -2915,8 +2915,7 @@ func newServerHandler(
 		AuditSinks:       auditSinksOf(cfg),
 		Workers:          cfg.watch,
 		SignIn:           deps.signIn,
-		Preferences:      newPreferencesService(cfg),
-		GitHostLinks:     newForgeLinkService(cfg),
+		Preferences:      newPreferencesService(cfg), GitHostLinks: newForgeLinkService(cfg),
 
 		InstallationKind: cfg.installationKind,
 		Instances:        cfg.instanceStore,
