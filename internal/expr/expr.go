@@ -207,7 +207,7 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 	select {
 	case r := <-done:
 		if r.err != nil {
-			return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, r.err)
+			return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, clip(r.err))
 		}
 
 		return r.out, nil
