@@ -100,12 +100,12 @@ func harness(auth forge.AuthKind) forgetest.Factory {
 
 func TestConformanceApp(t *testing.T) {
 	t.Parallel()
-	forgetest.Run(t, harness(forge.AuthApp))
+	forgetest.Run(t, conformanceHarness(forge.AuthApp))
 }
 
 func TestConformanceToken(t *testing.T) {
 	t.Parallel()
-	forgetest.Run(t, harness(forge.AuthToken))
+	forgetest.Run(t, conformanceHarness(forge.AuthToken))
 }
 
 func TestKind(t *testing.T) {
@@ -477,19 +477,19 @@ func TestStatusMapping(t *testing.T) {
 }
 
 // TestUnusedMethodsAreUnsupported checks that the methods that are not in
-// this version name GitHub in their error, and that the adapter lists no
-// capability.
+// this version name GitHub in their error, and that the adapter lists the
+// capability of the files only.
 func TestUnusedMethodsAreUnsupported(t *testing.T) {
 	t.Parallel()
 
 	h := harness(forge.AuthApp)(t)
 
-	if caps := h.Forge.Capabilities(); len(caps) != 0 {
-		t.Fatalf("Capabilities = %v, want none", caps)
+	if caps := h.Forge.Capabilities(); len(caps) != 1 || caps[0] != forge.CapFiles {
+		t.Fatalf("Capabilities = %v, want files only", caps)
 	}
 
-	_, err := h.Forge.Head(t.Context(), "acme/infra", "main")
+	_, err := h.Forge.Compare(t.Context(), "acme/infra", "a", "b", 1)
 	if !errors.Is(err, forge.ErrUnsupported) || !strings.Contains(err.Error(), "GitHub") {
-		t.Fatalf("Head = %v", err)
+		t.Fatalf("Compare = %v", err)
 	}
 }

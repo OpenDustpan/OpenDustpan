@@ -785,7 +785,7 @@ A trigger of the kind `follows`. It names a source unit. After the source applie
 _Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
 
 **Registry release**:
-One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101). A module release holds one archive and no signature.
 _Avoid_: Package, artifact (that is a plan or a log of a job)
 
 **Registry address**:

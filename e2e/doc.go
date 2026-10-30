@@ -77,8 +77,10 @@
 //
 // Environment variables:
 //
-//	E2E_PULUMI_VERSIONS  comma-separated versions, or "latest" (default: see Pulumi)
-//	E2E_TOFU_VERSIONS    comma-separated versions, or "latest" (default: see OpenTofu)
+//	E2E_PULUMI_VERSIONS  comma-separated versions, "latest", or "pinned" for the
+//	                     pinned versions of the default (default: see Pulumi)
+//	E2E_TOFU_VERSIONS    comma-separated versions, "latest", or "pinned" for the
+//	                     pinned versions of the default (default: see OpenTofu)
 //	E2E_DATABASES        comma-separated stores: sqlite, postgres (default: sqlite,
 //	                     plus postgres when DUSTPAN_TEST_POSTGRES_URL is set)
 //	DUSTPAN_TEST_POSTGRES_URL  PostgreSQL URL for the postgres store; each run gets its own

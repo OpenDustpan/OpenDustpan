@@ -29,9 +29,9 @@ var outsideByDesign = []string{
 	"/api/v2/", "/.well-known/terraform.json",
 	// The OpenTofu HTTP backend.
 	"/tofu/state/",
-	// The provider registry protocol of OpenTofu. Service discovery names the
-	// path, so it cannot move under the prefix.
-	"/v1/providers/",
+	// The provider and module registry protocols of OpenTofu. Service discovery
+	// names the paths, so they cannot move under the prefix.
+	"/v1/providers/", "/v1/modules/",
 	// The runner protocol.
 	"/runner/v1/",
 	// The paths that an identity provider, a cloud trust policy, an MCP
@@ -336,8 +336,9 @@ var rootMounts = []string{
 	"/api/v2/", "/api/server/", "/api/", "/tofu/state/",
 	// The provider registry protocol of OpenTofu. Service discovery names its
 	// path, and the client cannot move it under the prefix of the REST API. The
-	// TFE adapter serves it and lists the route table in its own tests.
-	"/v1/providers/",
+	// TFE adapter serves it and lists the route table in its own tests. The
+	// module registry protocol follows the same rule.
+	"/v1/providers/", "/v1/modules/",
 	// Service discovery, the metrics route and the probes.
 	"GET /.well-known/terraform.json", "GET /metrics",
 	"GET /health/live", "GET /health/ready", "GET /health/ready/{component}",

@@ -13,6 +13,8 @@ const (
 	RegistryKeyInvalid = "registry.key-invalid"
 	// RegistryKeyLimit means that the namespace has the largest number of signing keys.
 	RegistryKeyLimit = "registry.key-limit"
+	// RegistryModuleArchiveRefused means that the check of the module archive refused the archive.
+	RegistryModuleArchiveRefused = "registry.module-archive-refused"
 	// RegistryNoKeys means that the namespace has no signing key to check the release.
 	RegistryNoKeys = "registry.no-keys"
 	// RegistryNotFound means that the registry object does not exist.
@@ -41,6 +43,7 @@ func registrySpecs() []Spec {
 		{Code: RegistryKeyExists, Meaning: "the signing key exists", Args: nil},
 		{Code: RegistryKeyInvalid, Meaning: "the signing key is not valid", Args: nil},
 		{Code: RegistryKeyLimit, Meaning: "the namespace has the largest number of signing keys", Args: nil},
+		{Code: RegistryModuleArchiveRefused, Meaning: "the check of the module archive refused the archive", Args: nil},
 		{Code: RegistryNoKeys, Meaning: "the namespace has no signing key to check the release", Args: nil},
 		{Code: RegistryNotFound, Meaning: "the registry object does not exist", Args: nil},
 		{Code: RegistryNotStaged, Meaning: "the release has no staged upload", Args: nil},

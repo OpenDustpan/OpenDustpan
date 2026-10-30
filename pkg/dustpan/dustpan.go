@@ -4094,6 +4094,12 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		"/v1/providers/",
 		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
 	)
+	// The module registry protocol lives at the path that service discovery
+	// names as modules.v1, and follows the same rules.
+	mux.Handle(
+		"/v1/modules/",
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
 
 	if cfg.consoleDir != "" {
 		headers := cfg.consoleHeaders.resolve(cfg.allowedOrigins)
