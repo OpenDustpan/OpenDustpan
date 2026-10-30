@@ -1,5 +1,3 @@
-# Not active here: the owner copies this file to .github/workflows/e2e-nightly.yml
-# and replaces the old file.
 # The end-to-end suite with the real server binary (E2E_SERVER=binary) on
 # SQLite, once each night on main. The ci.yml e2e job runs the suite with the
 # in-process server. This run shows that the shipped binary works with each
@@ -8,17 +6,12 @@
 # the newest release of each CLI, which the run downloads each time. A red
 # "latest" job with a green "pinned" job means that a new CLI release changed
 # something. It does not mean that the server broke, and it does not block a
-# release. This holds only when the test TestDriftAPI passes under
-# E2E_SERVER=binary. Today it fails there with "a drift record needs the
-# in-process server" and keeps both jobs red, so do not copy this file before
-# that test is fixed.
+# release.
 # Read the contract.md part of the job summary: it lists what the new release
 # reads that the newest contract file does not have.
 # The step summary shows summary.md and contract.md of the report directory.
 # The reports hold the names of the response headers and never the value of a
 # request header, so no secret reaches the summary.
-# No check lints this file while it is parked. Run actionlint on it before you
-# copy it.
 # GitHub sends the failure notification of a scheduled run to the user who
 # last changed the cron line.
 name: e2e-nightly
