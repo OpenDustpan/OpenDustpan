@@ -14,11 +14,22 @@ import (
 	"opendustpan.org/opendustpan/internal/policy"
 )
 
+// approve is the approve decision of the rule that is named after its groups,
+// or "anyone" for no group.
 func approve(count int, groups ...string) policy.Decision {
+	rule := strings.ToLower(strings.Join(groups, "-"))
+	if rule == "" {
+		rule = "anyone"
+	}
+
+	return approveRule(rule, count, groups...)
+}
+
+func approveRule(rule string, count int, groups ...string) policy.Decision {
 	return policy.Decision{
 		Effect:        policy.EffectApprove,
 		Reasons:       []string{"approve " + strings.Join(groups, ",")},
-		Approvals:     &policy.Approvals{Groups: groups, Count: count},
+		Approvals:     &policy.Approvals{Rule: rule, Groups: groups, Count: count},
 		Engine:        "",
 		PolicyVersion: "",
 	}
@@ -65,8 +76,8 @@ func TestCombine(t *testing.T) {
 				Effect:  policy.EffectApprove,
 				Reasons: []string{"approve security", "approve dba"},
 				Approvals: []policy.Approvals{
-					{Groups: []string{"dba"}, Count: 1},
-					{Groups: []string{"security"}, Count: 1},
+					{Rule: "dba", Groups: []string{"dba"}, Count: 1},
+					{Rule: "security", Groups: []string{"security"}, Count: 1},
 				},
 			},
 			err: nil,
@@ -78,21 +89,73 @@ func TestCombine(t *testing.T) {
 				Effect:  policy.EffectApprove,
 				Reasons: []string{"approve sre,dba", "approve dba"},
 				Approvals: []policy.Approvals{
-					{Groups: []string{"dba"}, Count: 2},
-					{Groups: []string{"dba", "sre"}, Count: 1},
+					{Rule: "dba", Groups: []string{"dba"}, Count: 2},
+					{Rule: "sre-dba", Groups: []string{"dba", "sre"}, Count: 1},
 				},
 			},
 			err: nil,
 		},
 		{
-			name: "equal group sets merge with the highest count",
-			in:   []policy.Decision{approve(1, "sre", "dba"), approve(3, "dba", "sre", "dba")},
+			name: "one rule merges with the highest count",
+			in: []policy.Decision{
+				approveRule("ops", 1, "sre", "dba"), approveRule("ops", 3, "dba", "sre", "dba"),
+			},
 			want: policy.Combined{
 				Effect:    policy.EffectApprove,
 				Reasons:   []string{"approve sre,dba", "approve dba,sre,dba"},
-				Approvals: []policy.Approvals{{Groups: []string{"dba", "sre"}, Count: 3}},
+				Approvals: []policy.Approvals{{Rule: "ops", Groups: []string{"dba", "sre"}, Count: 3}},
 			},
 			err: nil,
+		},
+		{
+			name: "two rules with the same groups stay two requirements",
+			in:   []policy.Decision{approveRule("security", 1, "dba"), approveRule("cost", 2, "dba")},
+			want: policy.Combined{
+				Effect:  policy.EffectApprove,
+				Reasons: []string{"approve dba", "approve dba"},
+				Approvals: []policy.Approvals{
+					{Rule: "cost", Groups: []string{"dba"}, Count: 2},
+					{Rule: "security", Groups: []string{"dba"}, Count: 1},
+				},
+			},
+			err: nil,
+		},
+		{
+			name: "two rules with no groups stay two requirements",
+			in:   []policy.Decision{approveRule("b", 1), approveRule("a", 1)},
+			want: policy.Combined{
+				Effect:  policy.EffectApprove,
+				Reasons: []string{"approve ", "approve "},
+				Approvals: []policy.Approvals{
+					{Rule: "a", Groups: nil, Count: 1},
+					{Rule: "b", Groups: nil, Count: 1},
+				},
+			},
+			err: nil,
+		},
+		{
+			name: "one rule with two sets of groups is an error",
+			in:   []policy.Decision{approveRule("ops", 1, "dba"), approveRule("ops", 1, "sre")},
+			want: none,
+			err:  policy.ErrInvalidDecision,
+		},
+		{
+			name: "an approve with no rule ID is an error",
+			in:   []policy.Decision{approveRule("", 1, "dba")},
+			want: none,
+			err:  policy.ErrInvalidDecision,
+		},
+		{
+			name: "an approve with a rule ID that is reserved is an error",
+			in:   []policy.Decision{approveRule("default", 1, "dba")},
+			want: none,
+			err:  policy.ErrInvalidDecision,
+		},
+		{
+			name: "an approve with a rule ID that is not valid is an error, next to a valid one",
+			in:   []policy.Decision{approveRule("ok", 1, "dba"), approveRule("Not Valid", 1, "dba")},
+			want: none,
+			err:  policy.ErrInvalidDecision,
 		},
 		{
 			name: "approve with no approvals is an error, not an allow",
@@ -122,7 +185,7 @@ func TestCombine(t *testing.T) {
 			name: "allow with approvals is an error",
 			in: []policy.Decision{{
 				Effect: policy.EffectAllow, Reasons: nil,
-				Approvals: &policy.Approvals{Groups: nil, Count: 1}, Engine: "", PolicyVersion: "",
+				Approvals: &policy.Approvals{Rule: "", Groups: nil, Count: 1}, Engine: "", PolicyVersion: "",
 			}},
 			want: none,
 			err:  policy.ErrInvalidDecision,
@@ -165,7 +228,7 @@ func TestDecisionValidate(t *testing.T) {
 			"allow with approvals",
 			policy.Decision{
 				Effect: policy.EffectAllow, Reasons: nil,
-				Approvals: &policy.Approvals{Groups: nil, Count: 1}, Engine: "", PolicyVersion: "",
+				Approvals: &policy.Approvals{Rule: "", Groups: nil, Count: 1}, Engine: "", PolicyVersion: "",
 			},
 			false,
 		},
@@ -314,7 +377,7 @@ func TestParseOPAAnswer(t *testing.T) {
 		{"deny with reasons", `{"result":{"effect":"deny","reasons":["no large in prod"]}}`, policy.EffectDeny, nil},
 		{
 			"approve",
-			`{"result":{"effect":"approve","approvals":{"count":2,"groups":["dba"]}}}`,
+			`{"result":{"effect":"approve","approvals":{"rule":"dba-approval","count":2,"groups":["dba"]}}}`,
 			policy.EffectApprove,
 			nil,
 		},
@@ -413,7 +476,7 @@ func TestCedar(t *testing.T) {
 		t.Fatalf("principal and parents = %+v, %+v", reqs[0].Principal, reqs[1].Parents)
 	}
 
-	approvals := policy.Approvals{Groups: []string{"dba"}, Count: 1}
+	approvals := policy.Approvals{Rule: "dba", Groups: []string{"dba"}, Count: 1}
 	cases := []struct {
 		first, second bool
 		want          policy.Effect
@@ -533,7 +596,7 @@ func TestDecisionGroups(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := approve(1, tc.groups...).Validate()
+			err := approveRule("r", 1, tc.groups...).Validate()
 			if tc.ok != (err == nil) || (err != nil && !errors.Is(err, policy.ErrInvalidDecision)) {
 				t.Fatalf("Validate() = %v, want ok %v", err, tc.ok)
 			}
@@ -542,7 +605,7 @@ func TestDecisionGroups(t *testing.T) {
 				t.Fatalf("Validate() = %q, the error quotes a group", err)
 			}
 
-			_, cerr := policy.Combine([]policy.Decision{approve(1, tc.groups...)})
+			_, cerr := policy.Combine([]policy.Decision{approveRule("r", 1, tc.groups...)})
 			if tc.ok != (cerr == nil) {
 				t.Fatalf("Combine() = %v, want ok %v", cerr, tc.ok)
 			}
@@ -553,8 +616,42 @@ func TestDecisionGroups(t *testing.T) {
 func TestParseWebhookAnswerRefusesBadGroups(t *testing.T) {
 	t.Parallel()
 
-	body := []byte(`{"effect":"approve","approvals":{"groups":["bad name"],"count":1}}`)
+	body := []byte(`{"effect":"approve","approvals":{"rule":"dba-approval","groups":["bad name"],"count":1}}`)
 	if _, err := policy.ParseWebhookAnswer(body); !errors.Is(err, policy.ErrInvalidDecision) {
 		t.Fatalf("ParseWebhookAnswer() = %v, want ErrInvalidDecision", err)
+	}
+}
+
+func TestParseAnswersNeedARuleID(t *testing.T) {
+	t.Parallel()
+
+	for _, rule := range []string{`"rule":"",`, ``, `"rule":"Bad Rule",`, `"rule":"owners",`} {
+		body := `{"effect":"approve","approvals":{` + rule + `"groups":["dba"],"count":1}}`
+
+		if _, err := policy.ParseWebhookAnswer([]byte(body)); !errors.Is(err, policy.ErrInvalidDecision) {
+			t.Fatalf("ParseWebhookAnswer(%s) = %v, want ErrInvalidDecision", body, err)
+		}
+
+		_, err := policy.ParseOPAAnswer([]byte(`{"result":`+body+`}`), "")
+		if !errors.Is(err, policy.ErrInvalidDecision) {
+			t.Fatalf("ParseOPAAnswer(%s) = %v, want ErrInvalidDecision", body, err)
+		}
+	}
+}
+
+func TestCedarDecisionKeepsTheRule(t *testing.T) {
+	t.Parallel()
+
+	named := policy.Approvals{Rule: "dba-approval", Groups: []string{"dba"}, Count: 1}
+
+	d := policy.CedarDecision(true, false, named, nil)
+	if d.Approvals == nil || d.Approvals.Rule != "dba-approval" {
+		t.Fatalf("CedarDecision() = %+v, want approvals of the rule dba-approval", d)
+	}
+
+	// A setting of the namespace with no rule ID gives a decision that Combine refuses.
+	d = policy.CedarDecision(true, false, policy.Approvals{Rule: "", Groups: []string{"dba"}, Count: 1}, nil)
+	if _, err := policy.Combine([]policy.Decision{d}); !errors.Is(err, policy.ErrInvalidDecision) {
+		t.Fatalf("Combine(no rule) = %v, want ErrInvalidDecision", err)
 	}
 }
