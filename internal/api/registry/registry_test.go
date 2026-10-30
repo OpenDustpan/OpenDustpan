@@ -157,8 +157,16 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 	verifier := pgpverify.Verifier{Now: nil}
 
 	svc, err := service.New(service.Config{
-		Store: store.Registry(), Keys: store.RegistryKeys(), Verifier: verifier, Inspector: verifier,
-		Blobs: blobs, Namespaces: store, Now: nil, MaxArchiveBytes: maxUpload, MaxReleaseBytes: 8 * maxUpload,
+		Store:                 store.Registry(),
+		Keys:                  store.RegistryKeys(),
+		Verifier:              verifier,
+		Inspector:             verifier,
+		Blobs:                 blobs,
+		Namespaces:            store,
+		Now:                   nil,
+		MaxArchiveBytes:       maxUpload,
+		MaxReleaseBytes:       8 * maxUpload,
+		MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		t.Fatalf("registry service: %v", err)
@@ -310,10 +318,10 @@ func (f fixture) trust(t *testing.T, ns string, sg pgpfixture.Signer) {
 }
 
 // stage uploads data and returns the token.
-func (f fixture) stage(t *testing.T, ns string, data []byte) string {
+func (f fixture) stage(t *testing.T, data []byte) string {
 	t.Helper()
 
-	got := f.call(t, "admin", http.MethodPost, "/api/dustpan/v1/namespaces/"+ns+"/registry/uploads", data)
+	got := f.call(t, "admin", http.MethodPost, base+"/uploads", data)
 	wantCode(t, "stage", got, http.StatusCreated)
 
 	var doc struct {
@@ -350,18 +358,18 @@ func (f fixture) publishBodyFor(t *testing.T, s archiveSet, name string) []byte 
 		map[string]string{
 			"role":   "sums",
 			"name":   releasecheck.SumsName(name, providerVersion),
-			"upload": f.stage(t, "acme", s.sums),
+			"upload": f.stage(t, s.sums),
 		},
 		map[string]string{
 			"role":   "signature",
 			"name":   releasecheck.SignatureName(name, providerVersion),
-			"upload": f.stage(t, "acme", s.sig),
+			"upload": f.stage(t, s.sig),
 		},
 	)
 
 	for _, n := range s.names {
 		files = append(files, map[string]string{
-			"role": "archive", "name": n, "upload": f.stage(t, "acme", s.archive[n]),
+			"role": "archive", "name": n, "upload": f.stage(t, s.archive[n]),
 		})
 	}
 
@@ -634,7 +642,16 @@ func TestAuthentication(t *testing.T) {
 // routeTarget fills the path values of a route.
 func routeTarget(rt apiregistry.Route) string {
 	return strings.NewReplacer(
-		"{namespace}", "acme", "{name}", "payments", "{version}", "1.0.0", "{fingerprint}", strings.Repeat("A", 40),
+		"{namespace}",
+		"acme",
+		"{name}",
+		"payments",
+		"{system}",
+		"aws",
+		"{version}",
+		"1.0.0",
+		"{fingerprint}",
+		strings.Repeat("A", 40),
 	).Replace(rt.Path)
 }
 
