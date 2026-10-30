@@ -277,3 +277,71 @@ func Delivery(r DeliveryRow) (notify.Delivery, error) {
 
 	return d, nil
 }
+
+// StagedRow is a row of a notification table in a staged backup. An adapter
+// reads it with Dest and checks it with Check, so the adapters of the two
+// dialects share one check for each kind of row.
+type StagedRow interface {
+	// Dest returns the destinations of the columns of the row, in the order of
+	// the staged query.
+	Dest() []any
+	// Check applies the rules of a stored row. It returns the ID of the row, and
+	// ErrCorrupt when the row fails.
+	Check() (string, error)
+}
+
+var (
+	_ StagedRow = (*NotificationRow)(nil)
+	_ StagedRow = (*SubscriptionRow)(nil)
+	_ StagedRow = (*DeliveryRow)(nil)
+)
+
+// Dest implements StagedRow for the columns scope, sequence, id, type, object,
+// object_id, subject, agent, severity, summary, links, attributes, recipients,
+// dedupe_key and at_ms.
+func (r *NotificationRow) Dest() []any {
+	return []any{
+		&r.Scope, &r.Sequence, &r.ID, &r.Type, &r.Object, &r.ObjectID, &r.Subject, &r.Agent, &r.Severity,
+		&r.Summary, &r.Links, &r.Attributes, &r.Recipients, &r.DedupeKey, &r.AtMs,
+	}
+}
+
+// Check implements StagedRow.
+func (r *NotificationRow) Check() (string, error) {
+	_, err := Notification(*r)
+
+	return r.ID, err
+}
+
+// Dest implements StagedRow for the columns id, scope, sink_id, types, objects,
+// min_severity, state, reason, created_by and version.
+func (r *SubscriptionRow) Dest() []any {
+	return []any{
+		&r.ID, &r.Scope, &r.SinkID, &r.Types, &r.Objects, &r.MinSeverity, &r.State, &r.Reason, &r.CreatedBy,
+		&r.Version,
+	}
+}
+
+// Check implements StagedRow.
+func (r *SubscriptionRow) Check() (string, error) {
+	_, err := Subscription(*r)
+
+	return r.ID, err
+}
+
+// Dest implements StagedRow for the columns id, scope, notification_id,
+// subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+// last_error, delivered_at_ms, owner, lease_until_ms and version.
+func (r *DeliveryRow) Dest() []any {
+	return []any{
+		&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact, &r.Principal, &r.State,
+		&r.Attempts, &r.NextAtMs, &r.LastError, &r.DeliveredAtMs, &r.Owner, &r.LeaseUntilMs, &r.Version,
+	}
+}
+
+// Check implements StagedRow.
+func (r *DeliveryRow) Check() (string, error) {
+	_, err := Delivery(*r)
+
+	return r.ID, err
+}
