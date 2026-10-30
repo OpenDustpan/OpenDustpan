@@ -282,6 +282,271 @@ worked into the proposal above.
   `.spacelift/config.yml` (Spacelift, env zero), within the one-home rule.
 - Pull request details are RFC 27; stored plans are RFC 28.
 
+## Proposal for Milestone 5 (2026-10-30)
+
+This section is ready to accept. It covers two parts of RFC 12 that
+Milestone 5 needs: the code location in the unit settings, and the commit
+of an API edit. It does not decide again what an ADR accepted. The facts
+about other products are in the research note
+[m5-precedents](../research/m5-precedents.md). Each fact there has a
+mark that says whether its source was read on 2026-10-30.
+
+### What is already decided
+
+| Source | Decision |
+| --- | --- |
+| ADR 100 decision 5 | The server fixes the code location, the commit, the pool and the steps at the start of a job. |
+| ADR 101 decisions 3 to 6 | Write-back runs in the server, through the `Forge` port, never with a git client. It edits only config files of the unit, does `apply` only, and the team's CI closes the job with the next final state version. |
+| ADR 101 decision 3 | The trailer `Dustpan-Job: <job ID>`, the branch `dustpan/<job ID>`, and a lookup before each commit after a takeover. |
+| ADR 103 decision 3 | OpenDustpan approvals add to the approvals of the Git host. |
+| ADR 213 decisions 7 and 8, ADR 271 | Sealed credentials, many connections with one default, the `Forge` port with capabilities, the action `namespace:use-git-host-connection`. |
+| ADR 270 decision 2 | Unit settings are not kept in the repository. Teams manage them through the API and the providers of OpenDustpan. |
+| `job.Planner` (code) | The port that reads the settings of a unit at start exists. No adapter exists, and no store holds unit settings. |
+
+### Part A: the code location in the unit settings
+
+**The model.** A **unit settings** record belongs to one unit, by its stable
+unit ID. It holds what the `job.Planner` reads at the start of a job:
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `executor` | `runner` or `write-back` | `runner` when the namespace has a runner pool for jobs, else `write-back` |
+| `pool` | the runner pool for jobs | none: a runner job fails at start with a message that names the field |
+| `codeLocation.connection` | the Git host connection | the default connection of the namespace (ADR 213 decision 8) |
+| `codeLocation.repository` | the repository, as `owner/name` for GitHub | none |
+| `codeLocation.ref` | the branch that the unit deploys from, the default branch of a review request | none |
+| `codeLocation.directory` | the working directory, relative and clean | `.` |
+| `writeBack.delivery` | `review-request` or `direct-push` | `review-request` |
+| `writeBack.files` | the config files of the unit that a write-back can edit, each checked by the `Editable` rule of the step planner of its tool | the default file of the tool: `Pulumi.<stack>.yaml`, or `<workspace>.auto.tfvars.json` |
+| `reviewRequests` | the settings of pull request automation (RFC 27) | off |
+| `steps` | the custom steps (ADR 101 decision 8) | none: the default steps of the tool |
+
+Each answer of the API shows the effective value of each field and where it
+comes from: `unit`, `namespace default` or `built-in default` (CLAUDE.md,
+"No magic").
+
+**Questions and recommendations.**
+
+1. **One code location, or many for one unit?**
+   - (a) One code location for each unit. A module outside the directory is
+     part of the commit, and the source snapshot holds the whole commit
+     (ADR 135), so a plan reads it.
+   - (b) A list of code locations, for a unit that reads two repositories.
+
+   Precedent: HCP Terraform, Spacelift and env zero each give a workspace,
+   a stack or an environment one repository, one branch and one directory.
+   Atlantis gives a project one `dir` (all from the research note).
+   *Recommendation: (a).* A module of another repository is a module
+   source, which the git credential mode of the pool serves (ADR 130
+   decision 11).
+2. **Where settings live, and defaults above the unit.**
+   - (a) A record for each unit, and namespace defaults for `pool` and the
+     connection only.
+   - (b) Settings at the namespace, the collection and the unit, merged
+     like profile attachments.
+   - (c) Settings in a file of the repository (`.spacelift/config.yml`
+     style).
+
+   Precedent: Spacelift and env zero read some settings from a file in the
+   repository. HCP Terraform keeps them in the workspace and in project
+   defaults. ADR 270 decision 2 refuses (c) for OpenDustpan.
+   *Recommendation: (a).* A merge of three levels for each field is a rule
+   that a person must learn to explain one job. The Catalog (blueprints)
+   already gives shared settings to many units.
+3. **A link of many units at once (RFC 12, "Existing projects").**
+   - (a) The bulk call of ADR 213 decision 5 on the settings route, and the
+     providers of OpenDustpan (ADR 270). A naming rule is a loop in the
+     caller.
+   - (b) A server-side naming rule that links each new unit.
+
+   *Recommendation: (a).* A server-side rule is a hidden rule. The read
+   route `GET .../settings/suggestions` answers the repository and the
+   commit that the git details of the last Pulumi updates name, as a
+   suggestion that a person accepts. It never sets a field.
+
+**Actions and routes** (prefix of ADR 210, `/api/dustpan/v1`):
+
+| Method and path | Actions |
+| --- | --- |
+| `GET /namespaces/{ns}/units/{tool}/{name}/settings` | `unit:read` |
+| `PUT /namespaces/{ns}/units/{tool}/{name}/settings` | `unit:manage`, plus `namespace:use-git-host-connection` on a connection that the body names, plus `unit:define-steps` when `steps` changes, plus `namespace:read-runners` on the pool |
+| `GET /namespaces/{ns}/units/{tool}/{name}/settings/suggestions` | `unit:read` |
+| `PUT /namespaces/{ns}/settings/unit-defaults` | `namespace:manage` |
+
+A `PUT` carries `If-Match` with the version of the record, so two writers
+cannot overwrite each other. Each write checks the fence and appends one
+audit entry with the old and the new value of each changed field. A change
+of the code location or of `writeBack.files` needs the connection to hold
+the capabilities that the settings use (`forge.Needs`): `files` and
+`commit` for write-back, `events` for review request automation.
+
+**Ports.**
+
+- `pkg/unitsettings` (new domain package): `Settings`, `Store` (`Get`,
+  `Put` with a version, `Delete` with the unit), `Validate`, and the
+  conformance suite `unitsettingstest`. The store adapters run it in both
+  dialects.
+- The wiring implements `job.Planner` over `unitsettings.Store`, the step
+  planner of each tool and the forge service, which resolves the head of
+  `ref` to a commit (`Files.Head`).
+
+### Part B: the commit of an API edit
+
+**The flow** (ADR 101 decision 3, made concrete):
+
+1. `job.Service.Start` with the executor `write-back` and the edits. The
+   policy input holds the old and new values (ADR 213 decision 4).
+2. Gates at `change.propose` and `change.apply` (ADR 224) run before the
+   deliver phase.
+3. The deliver phase reads each file at the base commit (`Files.ReadFile`),
+   applies the edits key by key, and records the blob ID of each file it
+   read.
+4. It records the start of the step `commit`, then commits through
+   `Commits.Commit` with the base commit and the expected blob IDs.
+5. For `review-request`, it opens the review request (`Reviews.OpenReview`)
+   on `dustpan/<job ID>`.
+6. `Recorder.Delivered`, then `awaiting-state` until the merge and the
+   final state version (ADR 100 decision 15).
+
+**Questions and recommendations.**
+
+4. **The GitHub API that makes the commit, and its signature (ADR 271
+   question 4).**
+   - (a) The GraphQL mutation `createCommitOnBranch`. One commit for many
+     files, with `expectedHeadOid`, so the commit fails when the branch
+     moved. GitHub signs a commit that a GitHub App makes this way and
+     shows it as verified. The app is the author. The person goes in a
+     `Co-authored-by` trailer.
+   - (b) The Git data API (blobs, a tree, a commit, then a ref update with
+     `force: false`). The author can be the person. The commit is not
+     signed unless the server signs it with a key of its own.
+   - (c) The contents API. One file for each commit, with the blob `sha`
+     of the file that it replaces.
+
+   Precedent: the research note lists which bots use which API. Branch
+   rules that need signed commits refuse (b) and (c) without a key in the
+   server.
+   *Owner decision.* Recommendation: (a). It works with the rule "require
+   signed commits", holds no signing key in the server, and makes one
+   commit for many files with a check of the head. The cost: the author on
+   GitHub is the app, not the person. The trailer `Co-authored-by` names
+   the person, and the job record and the audit entry are the record of who
+   asked. This changes the "Authorship" item of this RFC.
+5. **Conflict check on the content.** `createCommitOnBranch` checks the head
+   of the branch, not the file. For a direct push, the head of the ref
+   moves often.
+   - (a) Read again and retry: when the head moved, read each file at the
+     new head, and apply the edits again only when each edited key has the
+     value that it had at the base. Else fail with `job.ErrConflict`, and
+     the console shows both values. At most 3 retries.
+   - (b) Fail at once when the head moved.
+
+   *Recommendation: (a).* This is the rule of RFC 12 "Conflicts", and the
+   retry limit stops a loop on a busy branch.
+6. **The YAML of `Pulumi.<stack>.yaml`.** `go.yaml.in/yaml/v3` is a
+   dependency of the module already, and its `Node` API keeps comments and
+   key order. A secret value is written as the ciphertext of the `secret`
+   package, in the `secure:` form that the Pulumi CLI writes.
+   *Recommendation:* use it, with no new dependency. A key path that does
+   not exist is added at the end of `config:`. A file that does not parse
+   fails the job with the line number, and the server never writes a file
+   that it did not parse.
+7. **An edit of many units (a shared file).**
+   - (a) One job for each unit, as ADR 100 decision 2 says. A path that is
+     not an editable file of the unit fails at start. A shared file is not
+     editable through write-back.
+   - (b) One write-back for many units, as one review request.
+
+   Precedent: Renovate and Dependabot open one pull request for each
+   update group, and a group is a rule of the user (research note).
+   *Recommendation: (a)* for Milestone 5. A shared file is the home of a
+   value of many units. Its edit needs a design of its own (a change order
+   of write-back jobs), which a later RFC can add.
+8. **The merge method (ADR 271 question 11).** The server merges only for
+   the pre-merge apply option of RFC 27.
+   - (a) A field `mergeMethod` in `reviewRequests` of the unit settings:
+     `merge`, `squash` or `rebase`, default `merge`. The merge call names
+     the head commit that OpenDustpan applied, so GitHub refuses the merge
+     when the head moved.
+   - (b) The default method of the repository.
+
+   *Recommendation: (a).* GitHub's merge API takes the method as a
+   parameter with the default `merge`. An explicit field shows the value
+   in the API.
+9. **The bypass list of a protected branch (RFC 13 open question).**
+   *Recommendation:* OpenDustpan never asks for a bypass. A direct push
+   that branch protection refuses fails the job with `forge.ErrRefused`,
+   and the docs show the review request as the path for a protected
+   branch.
+10. **Branch cleanup.** *Recommendation:* the server removes the branch
+    `dustpan/<job ID>` after the merge or the close, through the API, only
+    when the head of the branch is still the commit that the job made. A
+    branch with a commit of a person stays.
+
+**Ports.** Methods that the `Forge` port needs for Part B, with conformance
+cases first in `forgetest`:
+
+- `Files.ReadFile` returns the blob ID of the file (the method exists
+  today, and the GitHub adapter implements it).
+- `Commits.Commit` takes the expected head and, for each change, the
+  expected blob ID (empty for a new file). The GitHub adapter implements
+  question 4.
+- `Commits.FindCommit`, `Reviews.OpenReview`, `ReadReview`, `CloseReview`
+  (exist as methods).
+- `Reviews.DeleteBranch(repo, branch, expectedHead)`: new, for question 10.
+
+### End-to-end steps
+
+The e2e suite cannot reach github.com. It gets a GitHub API fake
+(`e2e/githubfake`), a small HTTP server that serves the REST and GraphQL
+calls that the adapter makes, keeps a real git repository on disk, and
+signs webhooks with the event secret. The adapter unit tests check the same
+calls against recorded answers.
+
+1. A `PUT` of the unit settings, then a `GET` that shows each effective
+   value and its origin.
+2. An API edit of a Pulumi config key: the fake shows one commit on
+   `dustpan/<job ID>` with the trailer and the edited key, and one review
+   request. The real Pulumi CLI runs `pulumi up` on the merged commit
+   against OpenDustpan, and the job ends `succeeded`.
+3. The same for an OpenTofu `.auto.tfvars.json` key, with the real
+   `tofu apply`.
+4. A conflict: a commit of a person changes the edited key after the base.
+   The job fails with the conflict, and the fake shows no commit.
+5. A takeover: the test stops the instance after the commit and before
+   `Delivered`. The new claim finds the commit by its trailer and makes no
+   second commit.
+
+### Security tests (ADR 250)
+
+| Step | Test with hostile input sent straight to the step |
+| --- | --- |
+| Check at the boundary | The server refuses each of these settings and never changes it. The values: `..`, an absolute directory, `.github` in the path, a ref with a leading `-`, a control character, a file outside the directory. |
+| Contain | A YAML value holds a newline, an anchor, a tag and a document separator. The written file parses to exactly that value. A JSON key with `__proto__`-like names stays a plain key. |
+| Limit | 65 edits, a value of 256 KiB plus one byte, a file of more than the read limit: each refused. The connection token used for the commit has contents write on one repository only (the GitHub App installation). |
+| Authorization at the point of use | A `PUT` that names a connection without `namespace:use-git-host-connection` is refused. The deliver phase checks again that the settings still name the connection of the spec. |
+| Fail closed | A Git host error that is not a timeout or a rate limit fails the job. A file that does not parse fails the job. Each refusal writes an audit entry. |
+
+### Work items
+
+Size: S is under 400 changed lines, M under 1,000, L under 2,000. A
+conflict group names the files that two items must not change at the same
+time. M5-1 is the work item that builds the runner launcher routes, in progress on 2026-10-30. An item that depends on M5-1 waits until it merges. Each item that adds a migration is in the conflict group `store-migrations`. So no two of them collide on the migration number or on the hashes of `TestFrozenMigrations`.
+
+| ID | Item | Size | Conflict group | Depends on |
+| --- | --- | --- | --- | --- |
+| WB-1 | `pkg/unitsettings`: model, `Validate`, store port, conformance suite, memory adapter | M | unit-settings | none |
+| WB-2 | SQL store of unit settings in both dialects, migration, backup table | M | store-migrations | WB-1 |
+| WB-3 | Routes, actions, audit, `If-Match`, docs page "Unit settings" | M | api-units | WB-2 |
+| WB-4 | `job.Planner` adapter over unit settings and the step planners | M | job-wiring | WB-2, M5-1 |
+| WB-5 | GitHub adapter: `Head`, `ReadFile` with blob ID, forgetest cases | M | forge-github | none |
+| WB-6 | GitHub adapter: `Commit` (question 4), `FindCommit`, conformance cases | L | forge-github | WB-5, owner answer 4 |
+| WB-7 | GitHub adapter: `OpenReview`, `ReadReview`, `CloseReview`, `DeleteBranch` | M | forge-github | WB-6 |
+| WB-8 | `e2e/githubfake` with REST, GraphQL, git storage and signed webhooks | L | e2e-harness | none |
+| WB-9 | Write-back executor: read, edit (YAML and JSON), commit, deliver, lookup on takeover | L | job-writeback | WB-4, WB-6, WB-7 |
+| WB-10 | Review watcher: the merge and close effects on the webhook route of PR-2 (RFC 27), the `job.review-watch` poll | M | forge-events | WB-7, PR-2 |
+| WB-11 | e2e steps 2 to 5, docs page "Edit config through the API" | M | e2e-steps | WB-8, WB-9, WB-10 |
+
 ## Outcome
 
 Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
