@@ -276,10 +276,94 @@ func TestCheckpointsFindCopiesThatSignDifferentHashes(t *testing.T) {
 				t.Fatalf("verify: got %+v, want invalid at 3 for different hashes", got)
 			}
 
+			if f.entries.reads != 0 {
+				t.Fatalf("verify read %d entries, want none: the copies decide before the database", f.entries.reads)
+			}
+
 			if wrote, err := writeAcme(t, f.checkpoints()); !errors.Is(err, audit.ErrCheckpointMismatch) || wrote {
 				t.Fatalf("write: got %v, %v, want ErrCheckpointMismatch", wrote, err)
 			}
 		})
+	}
+}
+
+// TestCheckpointsFindABadCopyBesideAGoodCopy proves that a copy that does
+// not match its signature cannot hide behind a good copy of the same
+// sequence: the check reads every copy, in either list order, and fails the
+// scope at that sequence, and a write signs and stores nothing.
+func TestCheckpointsFindABadCopyBesideAGoodCopy(t *testing.T) {
+	t.Parallel()
+
+	bodies := []struct {
+		raw  func(t *testing.T, f replacingFixture) []byte
+		name string
+	}{
+		{name: "a copy signed by another key", raw: func(t *testing.T, f replacingFixture) []byte {
+			t.Helper()
+
+			other := replacingFixture{blobs: f.blobs, entries: f.entries, signer: newSigner(t, 9)}
+
+			return other.signed(t, f.entries.entries[2].Hash)
+		}},
+		{name: "a zero signature", raw: func(t *testing.T, f replacingFixture) []byte {
+			t.Helper()
+
+			cp, err := audit.UnmarshalCheckpoint(f.signed(t, f.entries.entries[2].Hash))
+			if err != nil {
+				t.Fatalf("decode checkpoint: %v", err)
+			}
+
+			cp.Signature = make([]byte, len(cp.Signature))
+
+			raw, err := audit.MarshalCheckpoint(cp)
+			if err != nil {
+				t.Fatalf("marshal checkpoint: %v", err)
+			}
+
+			return raw
+		}},
+		{name: "a truncated body", raw: func(t *testing.T, f replacingFixture) []byte {
+			t.Helper()
+
+			raw := f.signed(t, f.entries.entries[2].Hash)
+
+			return raw[:len(raw)/2]
+		}},
+	}
+
+	// The good copy has the attempt part of "5". The bad copy lists before
+	// it with "0" and after it with "f".
+	for _, body := range bodies {
+		for _, bad := range []string{"0", "f"} {
+			t.Run(body.name+" with attempt "+bad, func(t *testing.T) {
+				t.Parallel()
+
+				f := newReplacingFixture(t, 3)
+				f.blobs.store(t, copyKey(t, 0, 3, "5"), f.signed(t, f.entries.entries[2].Hash))
+				f.blobs.store(t, copyKey(t, 0, 3, bad), body.raw(t, f))
+				checkBadCopy(t, f)
+			})
+		}
+	}
+}
+
+// checkBadCopy proves that the check fails acme at 3, and that a write signs
+// and stores nothing.
+func checkBadCopy(t *testing.T, f replacingFixture) {
+	t.Helper()
+
+	if got := verifyWith(t, f.checkpoints()); got.Valid || got.BadSequence != 3 {
+		t.Fatalf("verify: got %+v, want invalid at 3", got)
+	}
+
+	puts := f.blobs.puts
+
+	if wrote, err := writeAcme(t, f.checkpoints()); !errors.Is(err, audit.ErrCheckpointMismatch) || wrote {
+		t.Fatalf("write: got %v, %v, want ErrCheckpointMismatch", wrote, err)
+	}
+
+	if f.blobs.puts != puts {
+		t.Fatal("write beside a bad copy stored an object")
 	}
 }
 

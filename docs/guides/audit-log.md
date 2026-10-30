@@ -551,6 +551,10 @@ It stores the mark at its next check.
 When a stored copy holds another hash, the write fails and that namespace or the installation stays invalid.
 The stored copy stays, so a later check also finds the mismatch.
 The database never decides which copy counts.
+An object that the server did not write can be under the directory of a namespace or the installation.
+Such an object also stops signing for it, before the server checks a signature.
+Examples are a key with another name, or a key with a valid name and a sequence above the end of the log.
+This is on purpose: the server signs nothing while it cannot explain an object, and the object stays as evidence.
 The server lists the stored checkpoints of a namespace or the installation first, and then reads the last entry of the namespace or the installation.
 The log only grows.
 So a stored checkpoint above the last entry shows a cut log.
