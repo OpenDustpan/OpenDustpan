@@ -10,6 +10,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 )
 
+// textNotSet is the text of an audit change for a value that is not set, and
+// for a secret, whose value no entry holds.
+const textNotSet = "not set"
+
 // Stored is what a store keeps for one scope.
 type Stored struct {
 	// Values holds the database value of each key that has one.
@@ -272,14 +276,14 @@ func changeEntry(in ChangeInput, scope Scope, values entryValues, changed []Edit
 
 		oldText, newText, layer := old.Value, next.Value, next.Source
 		if decl.Secret {
-			oldText, newText = "not set", "not set"
+			oldText, newText = textNotSet, textNotSet
 		}
 
 		// A delete of a database value that the static layer hides changes no
 		// effective value. The entry records the change that happened: the
 		// database value goes away, in the database layer.
 		if old.Shadowed {
-			oldText, newText, layer = old.DatabaseValue, "not set", SourceDatabase
+			oldText, newText, layer = old.DatabaseValue, textNotSet, SourceDatabase
 		}
 
 		entry.Changes = append(entry.Changes, audit.Change{
