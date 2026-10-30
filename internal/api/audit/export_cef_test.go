@@ -111,7 +111,12 @@ func TestExportCEFEscapesTheHeader(t *testing.T) {
 	handler, store := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
 	seedEntry(t, store, "acme", "alice")
 
-	store.entries["acme"][0].Action = `unit|x\y`
+	seeded := store.entries["acme"]
+	if len(seeded) == 0 {
+		t.Fatal("seed wrote no entry")
+	}
+
+	seeded[0].Action = `unit|x\y`
 
 	_, lines := cefExport(t, handler)
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], `CEF:0|OpenDustpan|OpenDustpan|1|unit\|x\\y|reveal|3|`) {
