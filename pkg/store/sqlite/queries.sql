@@ -1197,6 +1197,11 @@ SELECT blob_key FROM update_journal
 WHERE stack_id = ? AND update_id = ?
 ORDER BY arrival;
 
+-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;
+
 -- name: DeleteJournalSequences :exec
 DELETE FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ?;
@@ -2729,6 +2734,35 @@ INSERT INTO import_ledger (
 -- The number of committed versions of an import. An import that has one
 -- cannot plan again.
 SELECT COUNT(*) FROM import_ledger
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
+
+-- name: InsertImportUploadCommit :execrows
+-- The commit row of one upload version, in one statement: the namespace must
+-- hold the failover version of the caller, the import must not have
+-- ended, and the attempt must have started no more than deadline_ms before
+-- the clock of the database, and no more than skew_ms ahead of it. The time of
+-- the row is the clock of the database. It inserts no row when a check fails, and the primary key
+-- refuses a second row for the version.
+INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
+SELECT n.id, i.id, sqlc.arg(unit_dir), sqlc.arg(sequence), sqlc.arg(facts), CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+FROM namespaces n
+JOIN imports i ON i.namespace_id = n.id
+WHERE n.name = sqlc.arg(namespace) AND n.failover_version = sqlc.arg(failover_version)
+  AND i.id = sqlc.arg(import_id) AND i.state NOT IN ('released', 'canceled')
+  AND sqlc.arg(started_at_ms) + sqlc.arg(deadline_ms) >= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+  AND sqlc.arg(started_at_ms) <= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + sqlc.arg(skew_ms);
+
+-- name: ListImportUploadCommits :many
+-- The commit rows of one unit directory of an import, in the order of the
+-- sequences.
+SELECT namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms
+FROM import_upload_commits
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id)
+  AND unit_dir = sqlc.arg(unit_dir)
+ORDER BY sequence;
+
+-- name: DeleteImportUploadCommits :exec
+DELETE FROM import_upload_commits
 WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
 
 -- name: ListImportLedger :many
@@ -4443,6 +4477,41 @@ UPDATE unit_defaults
 SET pool = sqlc.arg(pool), version = CAST(sqlc.arg(expected) AS INTEGER) + 1, updated_at_ms = sqlc.arg(updated_at_ms)
 WHERE version = CAST(sqlc.arg(expected) AS INTEGER)
   AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+
+-- name: ListSettings :many
+-- The database values of one scope, in key order.
+SELECT key, value
+FROM settings
+WHERE scope_id = sqlc.arg(scope_id)
+ORDER BY key;
+
+-- name: GetSettingsState :one
+-- The revision and the digest of the static layer of one scope. No row means
+-- a scope that never changed.
+SELECT revision, static_digest
+FROM settings_state
+WHERE scope_id = sqlc.arg(scope_id);
+
+-- name: UpsertSetting :exec
+INSERT INTO settings (scope_id, key, value, updated_at_ms)
+VALUES (sqlc.arg(scope_id), sqlc.arg(key), sqlc.arg(value), sqlc.arg(updated_at_ms))
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms;
+
+-- name: DeleteSetting :exec
+DELETE FROM settings WHERE scope_id = sqlc.arg(scope_id) AND key = sqlc.arg(key);
+
+-- name: UpsertSettingsRevision :exec
+-- Sets the revision of a scope and keeps its digest.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), '')
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision;
+
+-- name: UpsertSettingsDigest :exec
+-- Sets the digest of the static layer and the revision of the installation.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), sqlc.arg(static_digest))
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest;
 
 
 -- name: CreateStoreCheck :execrows

@@ -1056,6 +1056,9 @@
             "restore.ended": "#/components/schemas/RestoreEndedError",
             "restore.swapped": "#/components/schemas/RestoreSwappedError",
             "schema.binary-below-minimum": "#/components/schemas/SchemaBinaryBelowMinimumError",
+            "settings.locked": "#/components/schemas/SettingsLockedError",
+            "settings.static-only": "#/components/schemas/SettingsStaticOnlyError",
+            "settings.value-invalid": "#/components/schemas/SettingsValueInvalidError",
             "sink.test-rate-limited": "#/components/schemas/SinkTestRateLimitedError",
             "stack.no-state-at-time": "#/components/schemas/StackNoStateAtTimeError",
             "stack.reveal-path-too-long": "#/components/schemas/StackRevealPathTooLongError",
@@ -1101,6 +1104,15 @@
           },
           {
             "$ref": "#/components/schemas/SchemaBinaryBelowMinimumError"
+          },
+          {
+            "$ref": "#/components/schemas/SettingsLockedError"
+          },
+          {
+            "$ref": "#/components/schemas/SettingsStaticOnlyError"
+          },
+          {
+            "$ref": "#/components/schemas/SettingsValueInvalidError"
           },
           {
             "$ref": "#/components/schemas/SinkTestRateLimitedError"
@@ -1287,6 +1299,12 @@
           "server.route-not-found",
           "session.csrf",
           "session.other-site",
+          "settings.key-unknown",
+          "settings.locked",
+          "settings.patch-invalid",
+          "settings.static-only",
+          "settings.unavailable",
+          "settings.value-invalid",
           "sign-in.refused",
           "sink.access-token",
           "sink.conflict",
@@ -3956,6 +3974,223 @@
         ],
         "type": "object"
       },
+      "Setting": {
+        "properties": {
+          "apply": {
+            "type": "string"
+          },
+          "databaseLayer": {
+            "type": "boolean"
+          },
+          "databaseValue": {
+            "description": "A string, a boolean or a whole number, as the kind of the setting says. It is null for a secret, and for a database value that does not exist."
+          },
+          "default": {
+            "description": "A string, a boolean or a whole number, as the kind of the setting says. It is null for a secret, and for a database value that does not exist."
+          },
+          "description": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "lockedBy": {
+            "type": "string"
+          },
+          "mayReduceSecurity": {
+            "type": "boolean"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "set": {
+            "type": "boolean"
+          },
+          "shadowed": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "value": {
+            "description": "A string, a boolean or a whole number, as the kind of the setting says. It is null for a secret, and for a database value that does not exist."
+          }
+        },
+        "required": [
+          "apply",
+          "databaseLayer",
+          "databaseValue",
+          "default",
+          "description",
+          "key",
+          "kind",
+          "locked",
+          "lockedBy",
+          "mayReduceSecurity",
+          "scope",
+          "secret",
+          "set",
+          "shadowed",
+          "source",
+          "value"
+        ],
+        "type": "object"
+      },
+      "Settings": {
+        "properties": {
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/Setting"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "revision",
+          "settings"
+        ],
+        "type": "object"
+      },
+      "SettingsLockedError": {
+        "description": "The error answer with the code settings.locked.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/SettingsLockedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "settings.locked"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "SettingsLockedErrorArgs": {
+        "description": "The arguments of the text of the error with the code settings.locked.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "source"
+        ],
+        "type": "object"
+      },
+      "SettingsStaticOnlyError": {
+        "description": "The error answer with the code settings.static-only.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/SettingsStaticOnlyErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "settings.static-only"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "SettingsStaticOnlyErrorArgs": {
+        "description": "The arguments of the text of the error with the code settings.static-only.",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "SettingsValueInvalidError": {
+        "description": "The error answer with the code settings.value-invalid.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/SettingsValueInvalidErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "settings.value-invalid"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "SettingsValueInvalidErrorArgs": {
+        "description": "The arguments of the text of the error with the code settings.value-invalid.",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
       "SinkTestRateLimitedError": {
         "description": "The error answer with the code sink.test-rate-limited.",
         "properties": {
@@ -5484,6 +5719,12 @@
               "null"
             ]
           }
+        },
+        "type": "object"
+      },
+      "UpdateSettingsRequest": {
+        "additionalProperties": {
+          "description": "A string, a boolean or a whole number, as the kind of the setting says. It is null for a secret, and for a database value that does not exist."
         },
         "type": "object"
       },
@@ -10431,6 +10672,119 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/settings": {
+      "get": {
+        "operationId": "getNamespaceSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "settings"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-settings",
+            "object": "namespace"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateNamespaceSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatchRequired"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "settings"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-settings",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/settings/unit-defaults": {
       "get": {
         "operationId": "getUnitDefaults",
@@ -13403,6 +13757,101 @@
         "x-dustpan-actions": []
       }
     },
+    "/api/dustpan/v1/settings": {
+      "get": {
+        "operationId": "getSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "settings"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:read-settings",
+            "object": "server"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateSettings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatchRequired"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "settings"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-settings",
+            "object": "server"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/store-checks": {
       "get": {
         "operationId": "listStoreChecks",
@@ -13598,6 +14047,9 @@
     },
     {
       "name": "registry"
+    },
+    {
+      "name": "settings"
     },
     {
       "name": "source-filter"

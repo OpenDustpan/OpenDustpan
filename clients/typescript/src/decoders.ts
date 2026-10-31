@@ -166,6 +166,14 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  Setting,
+  Settings,
+  SettingsLockedError,
+  SettingsLockedErrorArgs,
+  SettingsStaticOnlyError,
+  SettingsStaticOnlyErrorArgs,
+  SettingsValueInvalidError,
+  SettingsValueInvalidErrorArgs,
   SinkTestRateLimitedError,
   SinkTestRateLimitedErrorArgs,
   SourceFilter,
@@ -228,6 +236,7 @@ import type {
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
+  UpdateSettingsRequest,
   View,
   ViewLabel,
   ViewQuery,
@@ -569,6 +578,9 @@ export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("Error
   "restore.ended": ref(() => decodeRestoreEndedError),
   "restore.swapped": ref(() => decodeRestoreSwappedError),
   "schema.binary-below-minimum": ref(() => decodeSchemaBinaryBelowMinimumError),
+  "settings.locked": ref(() => decodeSettingsLockedError),
+  "settings.static-only": ref(() => decodeSettingsStaticOnlyError),
+  "settings.value-invalid": ref(() => decodeSettingsValueInvalidError),
   "sink.test-rate-limited": ref(() => decodeSinkTestRateLimitedError),
   "stack.no-state-at-time": ref(() => decodeStackNoStateAtTimeError),
   "stack.reveal-path-too-long": ref(() => decodeStackRevealPathTooLongError),
@@ -1384,6 +1396,72 @@ export const decodeSchemaBinaryBelowMinimumErrorArgs: Decoder<SchemaBinaryBelowM
   minimumVersion: string,
 });
 
+/** The validator of Setting. */
+export const decodeSetting: Decoder<Setting> = object<Setting>("Setting", {
+  apply: string,
+  databaseLayer: boolean,
+  databaseValue: anyValue,
+  default: anyValue,
+  description: string,
+  key: string,
+  kind: string,
+  locked: boolean,
+  lockedBy: string,
+  mayReduceSecurity: boolean,
+  scope: string,
+  secret: boolean,
+  set: boolean,
+  shadowed: boolean,
+  source: string,
+  value: anyValue,
+});
+
+/** The validator of Settings. */
+export const decodeSettings: Decoder<Settings> = object<Settings>("Settings", {
+  revision: int64,
+  settings: array(ref(() => decodeSetting)),
+});
+
+/** The validator of SettingsLockedError. */
+export const decodeSettingsLockedError: Decoder<SettingsLockedError> = object<SettingsLockedError>("SettingsLockedError", {
+  code: int64,
+  errorArgs: ref(() => decodeSettingsLockedErrorArgs),
+  errorCode: literal("settings.locked"),
+  message: string,
+});
+
+/** The validator of SettingsLockedErrorArgs. */
+export const decodeSettingsLockedErrorArgs: Decoder<SettingsLockedErrorArgs> = object<SettingsLockedErrorArgs>("SettingsLockedErrorArgs", {
+  key: string,
+  source: string,
+});
+
+/** The validator of SettingsStaticOnlyError. */
+export const decodeSettingsStaticOnlyError: Decoder<SettingsStaticOnlyError> = object<SettingsStaticOnlyError>("SettingsStaticOnlyError", {
+  code: int64,
+  errorArgs: ref(() => decodeSettingsStaticOnlyErrorArgs),
+  errorCode: literal("settings.static-only"),
+  message: string,
+});
+
+/** The validator of SettingsStaticOnlyErrorArgs. */
+export const decodeSettingsStaticOnlyErrorArgs: Decoder<SettingsStaticOnlyErrorArgs> = object<SettingsStaticOnlyErrorArgs>("SettingsStaticOnlyErrorArgs", {
+  key: string,
+});
+
+/** The validator of SettingsValueInvalidError. */
+export const decodeSettingsValueInvalidError: Decoder<SettingsValueInvalidError> = object<SettingsValueInvalidError>("SettingsValueInvalidError", {
+  code: int64,
+  errorArgs: ref(() => decodeSettingsValueInvalidErrorArgs),
+  errorCode: literal("settings.value-invalid"),
+  message: string,
+});
+
+/** The validator of SettingsValueInvalidErrorArgs. */
+export const decodeSettingsValueInvalidErrorArgs: Decoder<SettingsValueInvalidErrorArgs> = object<SettingsValueInvalidErrorArgs>("SettingsValueInvalidErrorArgs", {
+  key: string,
+});
+
 /** The validator of SinkTestRateLimitedError. */
 export const decodeSinkTestRateLimitedError: Decoder<SinkTestRateLimitedError> = object<SinkTestRateLimitedError>("SinkTestRateLimitedError", {
   code: int64,
@@ -1859,6 +1937,9 @@ export const decodeUpdatePreferencesRequest: Decoder<UpdatePreferencesRequest> =
   theme: optional(nullable(string)),
   timeZone: optional(nullable(string)),
 });
+
+/** The validator of UpdateSettingsRequest. */
+export const decodeUpdateSettingsRequest: Decoder<UpdateSettingsRequest> = record(anyValue);
 
 /** The validator of View. */
 export const decodeView: Decoder<View> = object<View>("View", {

@@ -391,6 +391,15 @@ type ImportUnit struct {
 	Findings     string
 }
 
+type ImportUploadCommit struct {
+	NamespaceID   string
+	ImportID      string
+	UnitDir       string
+	Sequence      int64
+	Facts         string
+	CommittedAtMs int64
+}
+
 type ImportsPurged struct {
 	NamespaceID string
 	ID          string
@@ -940,6 +949,19 @@ type SessionPolicy struct {
 	MaxLengthMs      int64
 	UpdatedAtMs      int64
 	TokenFreshnessMs sql.NullInt64
+}
+
+type Setting struct {
+	ScopeID     string
+	Key         string
+	Value       string
+	UpdatedAtMs int64
+}
+
+type SettingsState struct {
+	ScopeID      string
+	Revision     int64
+	StaticDigest string
 }
 
 type SignInFailure struct {

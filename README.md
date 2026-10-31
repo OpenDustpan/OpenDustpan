@@ -373,6 +373,9 @@ Reference:
   keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Settings API](docs/reference/settings-api.md): the routes that read the
+  settings of the installation and of a namespace, with the source of each
+  value, and change them.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the
   stable codes that tell a missing permission, the IP allowlist and the session
   checks apart.

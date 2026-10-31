@@ -150,6 +150,18 @@ func (f *fakeRows) JournalKeys(context.Context, stack.ID, stack.UpdateID) ([]blo
 	return f.keys, nil
 }
 
+// JournalBatches implements stack.JournalStore. The fake derives the batches
+// from the rows it kept, in order.
+func (f *fakeRows) JournalBatches(context.Context, stack.ID, stack.UpdateID) ([]stack.JournalBatchRef, error) {
+	out := make([]stack.JournalBatchRef, 0, len(f.rows))
+
+	for i := range f.rows {
+		out = append(out, stack.JournalBatchRef{Key: f.rows[i].BlobKey, SHA256: f.rows[i].SHA256, Size: f.rows[i].Size})
+	}
+
+	return out, nil
+}
+
 // JournalSweepable implements stack.JournalStore. The fake is sweepable unless sweepable
 // is false, as the store reports for a running update with an open journal.
 func (f *fakeRows) JournalSweepable(context.Context, stack.ID, stack.UpdateID) (bool, error) {
@@ -347,8 +359,8 @@ func TestJournalAppendWritesBlobBeforeRow(t *testing.T) {
 	}
 
 	row := rows.rows[0]
-	if want := blob.Key(journalPrefix + "stack-1/upd-1/journal/3"); row.BlobKey != want {
-		t.Fatalf("blob key = %q, want %q", row.BlobKey, want)
+	if head := journalPrefix + "stack-1/upd-1/journal/3-"; !hasAttemptKey(row.BlobKey, head) {
+		t.Fatalf("blob key = %q, want %q and an attempt ID", row.BlobKey, head)
 	}
 
 	if row.Size != int64(len(batchBody(5, 3, 4))) {
@@ -372,6 +384,8 @@ func TestJournalAppendDeletesBlobOnRefusal(t *testing.T) {
 	for _, refusal := range []error{
 		stack.ErrWrongUpdateState,
 		stack.ErrJournalConflict,
+		stack.ErrNotJournaled,
+		stack.ErrJournalKey,
 		namespace.ErrFenced,
 	} {
 		blobs := newFakeBlobs()
@@ -383,8 +397,8 @@ func TestJournalAppendDeletesBlobOnRefusal(t *testing.T) {
 			t.Fatalf("refusal %v: err = %v, want the refusal", refusal, err)
 		}
 
-		if strings.Join(blobs.calls, ",") != "put,delete" {
-			t.Fatalf("refusal %v: blob calls = %v, want put then delete", refusal, blobs.calls)
+		if strings.Join(blobs.calls, ",") != "put,delete" || len(blobs.objects) != 0 {
+			t.Fatalf("refusal %v: blob calls = %v, want put then delete and no object", refusal, blobs.calls)
 		}
 	}
 }
@@ -410,9 +424,10 @@ func TestJournalAppendKeepsBlobOnOtherFailure(t *testing.T) {
 	}
 }
 
-// TestJournalAppendRetryWritesNoBlob checks that a retry whose blob is already there
-// with the same content makes no new blob, and that the store decides the retry.
-func TestJournalAppendRetryWritesNoBlob(t *testing.T) {
+// TestJournalAppendDeletesOwnBlobOnRetry checks that a batch that the rows
+// already hold is a retry: the store decides it, and the blob of the retry,
+// which has the key of its own attempt, is deleted.
+func TestJournalAppendDeletesOwnBlobOnRetry(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
@@ -428,43 +443,66 @@ func TestJournalAppendRetryWritesNoBlob(t *testing.T) {
 		t.Fatalf("retry: %v", err)
 	}
 
-	if strings.Join(blobs.calls, ",") != "put,put" {
-		t.Fatalf("blob calls = %v, want a put for each call", blobs.calls)
+	if strings.Join(blobs.calls, ",") != "put,delete,put,delete" || len(blobs.objects) != 0 {
+		t.Fatalf("blob calls = %v, want a put and a delete for each call and no object", blobs.calls)
+	}
+
+	if len(rows.rows) != 2 || rows.rows[0].BlobKey == rows.rows[1].BlobKey {
+		t.Fatal("two appends of one batch share a blob key, want one key for each attempt")
 	}
 }
 
-// TestJournalAppendRefusesOtherBlobContent checks that a blob under the key that holds
-// other bytes stops the write before the row, records the refusal, and deletes nothing.
-func TestJournalAppendRefusesOtherBlobContent(t *testing.T) {
+// TestJournalAppendKeepsTheCommittedBlob checks, on a blob store that replaces
+// objects, that a second append of the same batch never writes the key of the
+// first: the first blob stays as it was.
+func TestJournalAppendKeepsTheCommittedBlob(t *testing.T) {
 	t.Parallel()
 
-	blobs := newFakeBlobs()
-	blobs.objects[blob.Key(journalPrefix+"stack-1/upd-1/journal/1")] = []byte("other bytes")
-	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
+	blobs := &replacingFakeBlobs{fakeBlobs: newFakeBlobs()}
+	rows := newFakeRows()
 	entries := newEntries(t, blobs, rows, allowAll{})
+	first, second := batchBody(1, 2), batchBody(1, 2, 3)
 
-	err := entries.Append(t.Context(), journalBatchFor(batchBody(1)), fence())
-	if !errors.Is(err, stack.ErrJournalConflict) {
-		t.Fatalf("err = %v, want ErrJournalConflict", err)
+	for _, body := range [][]byte{first, second} {
+		if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
+			t.Fatalf("append: %v", err)
+		}
 	}
 
-	if len(rows.rows) != 0 {
-		t.Fatal("the row was written for a blob with other content")
+	if len(rows.rows) != 2 || rows.rows[0].BlobKey == rows.rows[1].BlobKey {
+		t.Fatal("two appends share a blob key, want one key for each attempt")
 	}
 
-	if len(rows.refusals) != 1 {
-		t.Fatalf("refusals = %d, want the recorded refusal", len(rows.refusals))
+	if !bytes.Equal(blobs.objects[rows.rows[0].BlobKey], first) {
+		t.Fatal("the blob of the first append changed")
+	}
+}
+
+// replacingFakeBlobs is fakeBlobs with a Put that replaces an object and
+// returns no error, as a store that ignores If-None-Match does.
+type replacingFakeBlobs struct {
+	*fakeBlobs
+}
+
+func (r *replacingFakeBlobs) Put(_ context.Context, key blob.Key, body io.Reader) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return fmt.Errorf("read test blob: %w", err)
 	}
 
-	refusal := rows.refusals[0]
+	r.mu.Lock()
+	r.objects[key] = data
+	r.mu.Unlock()
 
-	if len(refusal.SequenceIDs) != 1 || refusal.SequenceIDs[0] != 1 {
-		t.Fatalf("refusal sequences = %v, want [1]", refusal.SequenceIDs)
-	}
+	return nil
+}
 
-	if refusal.Status != 409 {
-		t.Fatalf("refusal status = %d, want 409", refusal.Status)
-	}
+// hasAttemptKey reports whether key is head followed by an attempt ID of 20
+// characters.
+func hasAttemptKey(key blob.Key, head string) bool {
+	rest, ok := strings.CutPrefix(key.String(), head)
+
+	return ok && len(rest) == 20
 }
 
 // TestJournalAppendRefusesMalformedBatch checks the batch shape: entries, positive
@@ -674,5 +712,70 @@ func TestJournalRemoveBlobsJoinsFailures(t *testing.T) {
 
 	if strings.Join(blobs.calls, ",") != "delete,delete" {
 		t.Fatalf("blob calls = %v, want both deletes", blobs.calls)
+	}
+}
+
+// TestJournalBatchesCompareBytesWithTheRow checks that the read of the batches
+// compares the size and the SHA-256 of each blob with its row: a blob with the
+// recorded bytes is returned, and a blob with other bytes, the same size or
+// not, fails with ErrCheckpointMismatch and names no key.
+func TestJournalBatchesCompareBytesWithTheRow(t *testing.T) {
+	t.Parallel()
+
+	key := blob.Key(journalPrefix + "stack-1/upd-1/journal/1-attempt0001")
+	want := batchBody(1, 2)
+
+	tests := []struct {
+		name   string
+		stored []byte
+		ok     bool
+	}{
+		{"the recorded bytes", want, true},
+		{"other bytes of the same size", bytes.Repeat([]byte("x"), len(want)), false},
+		{"a longer blob", append(bytes.Clone(want), 'x'), false},
+		{"a shorter blob", want[:len(want)-1], false},
+		{"an empty blob", nil, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			blobs := newFakeBlobs()
+			blobs.objects[key] = tc.stored
+			rows := newFakeRows()
+			rows.rows = []stack.JournalRow{rowNaming(key, sha256.Sum256(want), int64(len(want)))}
+			entries := newEntries(t, blobs, rows, allowAll{})
+
+			got, err := entries.Batches(t.Context(), journalNS, "stack-1", "upd-1")
+
+			switch {
+			case tc.ok && (err != nil || len(got) != 1 || !bytes.Equal(got[0], want)):
+				t.Fatalf("batches = %q, %v; want the recorded bytes", got, err)
+			case !tc.ok && !errors.Is(err, stack.ErrCheckpointMismatch):
+				t.Fatalf("err = %v, want ErrCheckpointMismatch", err)
+			case !tc.ok && strings.Contains(err.Error(), key.String()):
+				t.Fatalf("error names the key: %v", err)
+			default:
+			}
+		})
+	}
+}
+
+// rowNaming returns a row that names the blob under key, with its SHA-256 and
+// its size, and nothing else.
+func rowNaming(key blob.Key, sum [sha256.Size]byte, size int64) stack.JournalRow {
+	return stack.JournalRow{
+		Ref:          stack.Ref{Namespace: "", Project: "", Stack: ""},
+		Update:       "",
+		Lease:        token.Digest{},
+		BlobKey:      key,
+		SHA256:       sum,
+		MD5:          [16]byte{},
+		Size:         size,
+		SequenceIDs:  nil,
+		OperationIDs: nil,
+		HasRebuild:   false,
+		Verify:       nil,
 	}
 }

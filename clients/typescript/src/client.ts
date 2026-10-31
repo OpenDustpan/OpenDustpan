@@ -59,12 +59,14 @@ import type {
   GetNamespaceContextInput,
   GetNamespaceIssuerInput,
   GetNamespaceLockInput,
+  GetNamespaceSettingsInput,
   GetNotificationSinkInput,
   GetOutputSharingInput,
   GetPreferencesInput,
   GetProfileInput,
   GetProfileRevisionInput,
   GetProviderReleaseInput,
+  GetSettingsInput,
   GetSourceFilterInput,
   GetStoreCheckInput,
   GetTriggerInput,
@@ -136,7 +138,9 @@ import type {
   UnlockNamespaceInput,
   UpdateNamespaceContextInput,
   UpdateNamespaceIssuerInput,
+  UpdateNamespaceSettingsInput,
   UpdatePreferencesInput,
+  UpdateSettingsInput,
   UpdateUnitContextInput,
 } from "./operations.js";
 import type { ApiTransport } from "./transport.js";
@@ -287,6 +291,14 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  Setting,
+  Settings,
+  SettingsLockedError,
+  SettingsLockedErrorArgs,
+  SettingsStaticOnlyError,
+  SettingsStaticOnlyErrorArgs,
+  SettingsValueInvalidError,
+  SettingsValueInvalidErrorArgs,
   SinkTestRateLimitedError,
   SinkTestRateLimitedErrorArgs,
   SourceFilter,
@@ -349,6 +361,7 @@ import type {
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
+  UpdateSettingsRequest,
   View,
   ViewLabel,
   ViewQuery,
@@ -585,6 +598,10 @@ export class Client {
     return execute(this.transport, operations.getNamespaceLock, input);
   }
 
+  getNamespaceSettings(input: GetNamespaceSettingsInput): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.getNamespaceSettings, input);
+  }
+
   getNotificationSink(input: GetNotificationSinkInput): Promise<Answer<NotificationSink>> {
     return execute(this.transport, operations.getNotificationSink, input);
   }
@@ -607,6 +624,10 @@ export class Client {
 
   getProviderRelease(input: GetProviderReleaseInput): Promise<Answer<ProviderRelease>> {
     return execute(this.transport, operations.getProviderRelease, input);
+  }
+
+  getSettings(input: GetSettingsInput = {}): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.getSettings, input);
   }
 
   getSourceFilter(input: GetSourceFilterInput): Promise<Answer<SourceFilter>> {
@@ -893,8 +914,16 @@ export class Client {
     return execute(this.transport, operations.updateNamespaceIssuer, input);
   }
 
+  updateNamespaceSettings(input: UpdateNamespaceSettingsInput): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.updateNamespaceSettings, input);
+  }
+
   updatePreferences(input: UpdatePreferencesInput): Promise<Answer<Preferences>> {
     return execute(this.transport, operations.updatePreferences, input);
+  }
+
+  updateSettings(input: UpdateSettingsInput): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.updateSettings, input);
   }
 
   updateUnitContext(input: UpdateUnitContextInput): Promise<Answer<ContextEntry>> {

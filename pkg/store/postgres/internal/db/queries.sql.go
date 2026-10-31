@@ -3064,6 +3064,21 @@ func (q *Queries) DeleteImportUnits(ctx context.Context, arg DeleteImportUnitsPa
 	return err
 }
 
+const deleteImportUploadCommits = `-- name: DeleteImportUploadCommits :exec
+DELETE FROM import_upload_commits
+WHERE namespace_id = $1 AND import_id = $2
+`
+
+type DeleteImportUploadCommitsParams struct {
+	NamespaceID string
+	ImportID    string
+}
+
+func (q *Queries) DeleteImportUploadCommits(ctx context.Context, arg DeleteImportUploadCommitsParams) error {
+	_, err := q.db.Exec(ctx, deleteImportUploadCommits, arg.NamespaceID, arg.ImportID)
+	return err
+}
+
 const deleteInstanceVersion = `-- name: DeleteInstanceVersion :execrows
 DELETE FROM instance_versions
 WHERE id = $1
@@ -3552,6 +3567,20 @@ WHERE stack_id = $1
 
 func (q *Queries) DeleteSecretKeysOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.Exec(ctx, deleteSecretKeysOfStack, stackID)
+	return err
+}
+
+const deleteSetting = `-- name: DeleteSetting :exec
+DELETE FROM settings WHERE scope_id = $1 AND key = $2
+`
+
+type DeleteSettingParams struct {
+	ScopeID string
+	Key     string
+}
+
+func (q *Queries) DeleteSetting(ctx context.Context, arg DeleteSettingParams) error {
+	_, err := q.db.Exec(ctx, deleteSetting, arg.ScopeID, arg.Key)
 	return err
 }
 
@@ -7850,6 +7879,26 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 	return i, err
 }
 
+const getSettingsState = `-- name: GetSettingsState :one
+SELECT revision, static_digest
+FROM settings_state
+WHERE scope_id = $1
+`
+
+type GetSettingsStateRow struct {
+	Revision     int64
+	StaticDigest string
+}
+
+// The revision and the digest of the static layer of one scope. No row means
+// a scope that never changed.
+func (q *Queries) GetSettingsState(ctx context.Context, scopeID string) (GetSettingsStateRow, error) {
+	row := q.db.QueryRow(ctx, getSettingsState, scopeID)
+	var i GetSettingsStateRow
+	err := row.Scan(&i.Revision, &i.StaticDigest)
+	return i, err
+}
+
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
     created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
@@ -9601,6 +9650,53 @@ func (q *Queries) InsertImportUnit(ctx context.Context, arg InsertImportUnitPara
 	return err
 }
 
+const insertImportUploadCommit = `-- name: InsertImportUploadCommit :execrows
+INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
+SELECT n.id, i.id, $1::text, $2::bigint, $3::text, (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+FROM namespaces n
+JOIN imports i ON i.namespace_id = n.id
+WHERE n.name = $4 AND n.failover_version = $5
+  AND i.id = $6 AND i.state NOT IN ('released', 'canceled')
+  AND $7::bigint + $8::bigint >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+  AND $7::bigint <= (extract(epoch FROM clock_timestamp()) * 1000)::bigint + $9::bigint
+`
+
+type InsertImportUploadCommitParams struct {
+	UnitDir         string
+	Sequence        int64
+	Facts           string
+	Namespace       string
+	FailoverVersion int64
+	ImportID        string
+	StartedAtMs     int64
+	DeadlineMs      int64
+	SkewMs          int64
+}
+
+// The commit row of one upload version, in one statement: the namespace must
+// hold the failover version of the caller, the import must not have
+// ended, and the attempt must have started no more than deadline_ms before
+// the clock of the database, and no more than skew_ms ahead of it. The time of
+// the row is the clock of the database. It inserts no row when a check fails, and the primary key
+// refuses a second row for the version.
+func (q *Queries) InsertImportUploadCommit(ctx context.Context, arg InsertImportUploadCommitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertImportUploadCommit,
+		arg.UnitDir,
+		arg.Sequence,
+		arg.Facts,
+		arg.Namespace,
+		arg.FailoverVersion,
+		arg.ImportID,
+		arg.StartedAtMs,
+		arg.DeadlineMs,
+		arg.SkewMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertIssuerKey = `-- name: InsertIssuerKey :exec
 INSERT INTO issuer_keys (
     namespace_id, id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
@@ -10817,6 +10913,43 @@ func (q *Queries) InsertWorkspaceResourceChange(ctx context.Context, arg InsertW
 		arg.LineageChanged,
 	)
 	return err
+}
+
+const journalBatchRefs = `-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival
+`
+
+type JournalBatchRefsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+type JournalBatchRefsRow struct {
+	BlobKey string
+	Sha256  []byte
+	Size    int64
+}
+
+func (q *Queries) JournalBatchRefs(ctx context.Context, arg JournalBatchRefsParams) ([]JournalBatchRefsRow, error) {
+	rows, err := q.db.Query(ctx, journalBatchRefs, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JournalBatchRefsRow
+	for rows.Next() {
+		var i JournalBatchRefsRow
+		if err := rows.Scan(&i.BlobKey, &i.Sha256, &i.Size); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const journalBlobKeys = `-- name: JournalBlobKeys :many
@@ -12701,6 +12834,49 @@ func (q *Queries) ListImportUnits(ctx context.Context, arg ListImportUnitsParams
 			&i.Bytes,
 			&i.Encryption,
 			&i.Findings,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImportUploadCommits = `-- name: ListImportUploadCommits :many
+SELECT namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms
+FROM import_upload_commits
+WHERE namespace_id = $1 AND import_id = $2
+  AND unit_dir = $3
+ORDER BY sequence
+`
+
+type ListImportUploadCommitsParams struct {
+	NamespaceID string
+	ImportID    string
+	UnitDir     string
+}
+
+// The commit rows of one unit directory of an import, in the order of the
+// sequences.
+func (q *Queries) ListImportUploadCommits(ctx context.Context, arg ListImportUploadCommitsParams) ([]ImportUploadCommit, error) {
+	rows, err := q.db.Query(ctx, listImportUploadCommits, arg.NamespaceID, arg.ImportID, arg.UnitDir)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ImportUploadCommit
+	for rows.Next() {
+		var i ImportUploadCommit
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ImportID,
+			&i.UnitDir,
+			&i.Sequence,
+			&i.Facts,
+			&i.CommittedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -14946,6 +15122,39 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		items = append(items, wrapper_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSettings = `-- name: ListSettings :many
+SELECT key, value
+FROM settings
+WHERE scope_id = $1
+ORDER BY key
+`
+
+type ListSettingsRow struct {
+	Key   string
+	Value string
+}
+
+// The database values of one scope, in key order.
+func (q *Queries) ListSettings(ctx context.Context, scopeID string) ([]ListSettingsRow, error) {
+	rows, err := q.db.Query(ctx, listSettings, scopeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSettingsRow
+	for rows.Next() {
+		var i ListSettingsRow
+		if err := rows.Scan(&i.Key, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -20191,6 +20400,64 @@ type UpsertPersonPreferencesParams struct {
 
 func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonPreferencesParams) error {
 	_, err := q.db.Exec(ctx, upsertPersonPreferences, arg.PrincipalID, arg.Document, arg.UpdatedAtMs)
+	return err
+}
+
+const upsertSetting = `-- name: UpsertSetting :exec
+INSERT INTO settings (scope_id, key, value, updated_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms
+`
+
+type UpsertSettingParams struct {
+	ScopeID     string
+	Key         string
+	Value       string
+	UpdatedAtMs int64
+}
+
+func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) error {
+	_, err := q.db.Exec(ctx, upsertSetting,
+		arg.ScopeID,
+		arg.Key,
+		arg.Value,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const upsertSettingsDigest = `-- name: UpsertSettingsDigest :exec
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES ($1, $2, $3)
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest
+`
+
+type UpsertSettingsDigestParams struct {
+	ScopeID      string
+	Revision     int64
+	StaticDigest string
+}
+
+// Sets the digest of the static layer and the revision of the installation.
+func (q *Queries) UpsertSettingsDigest(ctx context.Context, arg UpsertSettingsDigestParams) error {
+	_, err := q.db.Exec(ctx, upsertSettingsDigest, arg.ScopeID, arg.Revision, arg.StaticDigest)
+	return err
+}
+
+const upsertSettingsRevision = `-- name: UpsertSettingsRevision :exec
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES ($1, $2, '')
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision
+`
+
+type UpsertSettingsRevisionParams struct {
+	ScopeID  string
+	Revision int64
+}
+
+// Sets the revision of a scope and keeps its digest.
+func (q *Queries) UpsertSettingsRevision(ctx context.Context, arg UpsertSettingsRevisionParams) error {
+	_, err := q.db.Exec(ctx, upsertSettingsRevision, arg.ScopeID, arg.Revision)
 	return err
 }
 
