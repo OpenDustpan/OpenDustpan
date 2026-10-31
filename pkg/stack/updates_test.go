@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -631,7 +633,17 @@ func newUpdates(t *testing.T) updatesFixture {
 func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
 	t.Helper()
 
-	return newUpdatesWrapped(t, clk, blobs, logger, nil)
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: nil})
+}
+
+// newUpdatesGuarded is newUpdatesWith with guard as the guard of the blob
+// deletes.
+func newUpdatesGuarded(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, guard blobguard.Watch,
+) updatesFixture {
+	t.Helper()
+
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: guard, wrap: nil})
 }
 
 // newUpdatesWrapped is newUpdatesWith with a wrap of the checkpoint store: a
@@ -640,6 +652,25 @@ func newUpdatesWrapped(
 	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, wrap func(*memUpdates) stack.CheckpointStore,
 ) updatesFixture {
 	t.Helper()
+
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: wrap})
+}
+
+// updatesFixtureOptions holds the parts of the fixture that some tests set:
+// the guard of the blob deletes and the wrap of the checkpoint store. A nil
+// wrap uses the in-memory store itself.
+type updatesFixtureOptions struct {
+	guard blobguard.Watch
+	wrap  func(*memUpdates) stack.CheckpointStore
+}
+
+// newUpdatesFull builds the fixture with the guard and the wrap of opts.
+func newUpdatesFull(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, opts updatesFixtureOptions,
+) updatesFixture {
+	t.Helper()
+
+	guard, wrap := opts.guard, opts.wrap
 
 	ns := namespace.Namespace{
 		ID:                  namespace.NewID(),
@@ -672,6 +703,7 @@ func newUpdatesWrapped(
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
@@ -2109,6 +2141,27 @@ func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Upda
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:   blobguardtest.None{},
+		ManualLocks: nil, Updates: f.store, Tokens: nil,
+		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
+		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
+		Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
+		Journal: nil, Replayer: nil, Refusals: f.refusals,
+	})
+	if err != nil {
+		t.Fatalf("new updates: %v", err)
+	}
+
+	return svc
+}
+
+// withKeepSetHookAndGuard is withKeepSetHook with guard as the guard of the
+// blob deletes.
+func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Watch, before func()) *stack.Updates {
+	t.Helper()
+
+	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:   guard,
 		ManualLocks: nil, Updates: f.store, Tokens: nil,
 		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
 		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
