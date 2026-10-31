@@ -99,8 +99,8 @@ An entry holds these fields:
   `service` or `workload`. It is omitted when the server cannot name the
   kind, for example for the bootstrap admin token.
 - `jobID`: the job whose token acted, else omitted.
-- Kind: `tool-operation`, `reveal`, `override`, `change`, `read-access` or
-  `security`, never anything else, so a reader never confuses a tool that needed secrets
+- Kind: `tool-operation`, `reveal`, `override`, `change`, `read-access`,
+  `audit-read` or `security`, never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
 - Outcome: `success`, `failure` or `denied`.
 - `requestID`: the request ID the server mints. The server returns it in
@@ -342,6 +342,42 @@ where `S` is the first entry that does not match.
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/check?organization=acme"
 ```
+
+`GET /api/audit/export?organization=<namespace>` sends the entries of the
+namespace oldest first, one JSON object for each line, or one CEF line
+for each entry with `format=cef`. A CEF line does not hold every field that
+the hash covers, so the offline hash check needs `format=json`. It needs the same
+action. Use it to keep a copy of a range, or to check a range with no help
+from the server. The lines hold the previous hash and the hash, so a reader
+can compute each hash again. See
+[Audit export API](../reference/audit-export-api.md) for the query values, the
+fields and the steps of the offline check.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/export?organization=acme&fromSequence=100" \
+  > acme-audit.jsonl
+```
+
+Each export writes one entry of the kind `audit-read` in the log that it
+reads. If the server cannot write that entry, it sends no line.
+
+`GET /api/audit/export?organization=<namespace>` sends the entries of the
+namespace oldest first, one JSON object for each line. It needs the same
+action. Use it to keep a copy of a range, or to check a range with no help
+from the server. The lines hold the previous hash and the hash, so a reader
+can compute each hash again. See
+[Audit export API](../reference/audit-export-api.md) for the query values, the
+fields and the steps of the offline check.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/export?organization=acme&fromSequence=100" \
+  > acme-audit.jsonl
+```
+
+Each export writes one entry of the kind `audit-read` in the log that it
+reads. If the server cannot write that entry, it sends no line.
 
 The installation writes the entries of an action that is not in a namespace,
 such as a namespace create, to the installation log (`@server`). Read that log with
@@ -840,4 +876,3 @@ This guide does not cover these items.
 
 - Retention.
 - The full catalog of events.
-- Export through the API in JSON and CEF.

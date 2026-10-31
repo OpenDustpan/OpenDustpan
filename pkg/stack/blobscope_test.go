@@ -12,7 +12,9 @@ import (
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
@@ -48,10 +50,10 @@ func (c *countingBlob) Delete(ctx context.Context, key blob.Key) error {
 	return c.memBlob.Delete(ctx, key)
 }
 
-func (c *countingBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (c *countingBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	c.bump()
 
-	return c.memBlob.List(ctx, prefix)
+	return c.memBlob.ListPage(ctx, req)
 }
 
 // bump counts one call.
@@ -158,7 +160,7 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 func blobKeysOf(t *testing.T, store blob.Store) []string {
 	t.Helper()
 
-	all, err := store.List(t.Context(), "")
+	all, err := blobtest.ListAll(t.Context(), store, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -494,6 +496,7 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 // stores of f with the given blob store and recorder.
 func updatesConfigFor(f updatesFixture, blobs blob.Store, refusals scopeaudit.Recorder) stack.UpdatesConfig {
 	return stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		Updates:            f.store,
 		Checkpoints:        f.store,
 		Events:             f.store,

@@ -81,7 +81,17 @@ func (f *fakeBlobs) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (f *fakeBlobs) List(context.Context, string) ([]blob.Object, error) { return f.listed, nil }
+// ListPage implements blob.Store: it answers the keys in f.listed, in key order.
+func (f *fakeBlobs) ListPage(_ context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects := slices.Clone(f.listed)
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
+}
 
 func (f *fakeBlobs) Ping(context.Context) error { return nil }
 

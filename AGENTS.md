@@ -134,6 +134,7 @@ internal/              code that is not part of the SDK
 clients/typescript/    the generated TypeScript client package; make clients-check fails when it is not what a fresh run gives
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
+  githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
@@ -299,7 +300,11 @@ skill (ADR 14):
 ## Working in this repo
 
 - Ask before adding a dependency. Prefer the standard library.
-- Never add telemetry code, also not code that is off by default (ADR 74).
+- Never add phone-home code (ADR 74). Phone-home sends data about an installation, its use
+  or its users to a destination that the operator did not name. This rule applies also
+  to code that is opt-in or off by default. Metrics, logs, traces and run data are
+  observability, and the project wants them. Send them only to a destination that the
+  operator configures, or keep them in the server.
 - AI-assisted changes follow `CONTRIBUTING.md` (ADR 76): disclose the tool,
   sign off each commit, understand all of it, and pass `make check`. Until
   the push ends on 2026-10-22, an agent signs off with its own commit author

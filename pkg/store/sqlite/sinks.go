@@ -7,78 +7,22 @@ import (
 	"fmt"
 	"log/slog"
 
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/store/internal/sinkstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-// NotificationSinks returns the store of notification sinks. Each write
-// checks the installation state and the fence of its namespace, and appends
-// its audit entry in its own transaction. The store keeps the sinks of
-// namespaces. It refuses a sink of audit.ServerScope with notify.ErrInvalid.
+// NotificationSinks returns the store of notification sinks. It is the store of
+// Notifications, so a change of the destination of a sink also suspends its
+// subscriptions and skips their pending deliveries. Each write checks the
+// installation state and the fence of its scope, and appends its audit entry
+// in its own transaction. The store keeps the sinks of namespaces and of
+// audit.ServerScope.
 //
 //nolint:ireturn // Store-agnostic wiring takes the port.
 func (s *Store) NotificationSinks() notify.SinkStore {
-	return sinks{s: s}
-}
-
-// sinks is notify.SinkStore over the database of a Store.
-type sinks struct {
-	s *Store
-}
-
-var _ notify.SinkStore = sinks{s: nil}
-
-// checkSinkScope returns notify.ErrInvalid when the fence or the audit entry
-// of a write does not belong to the scope of the sink.
-//
-// Defense in depth: the fence check of the transaction compares the fence with
-// the namespace row, and the audit append compares the entry with the fence.
-// This check stays so that a sink of one namespace cannot be written under the
-// fence or the audit entry of another namespace, whatever the caller does.
-func checkSinkScope(scope namespace.Name, fence namespace.Fence, e audit.Entry) error {
-	if scope == "" || scope == audit.ServerScope || fence.Namespace != scope || e.Namespace != scope {
-		return fmt.Errorf("%w: the fence and the audit entry must name the namespace %q of the sink",
-			notify.ErrInvalid, scope)
-	}
-
-	return nil
-}
-
-// PutSink implements notify.SinkStore. When ctx carries an idempotency
-// completion, the transaction also stores its answer for the stored sink.
-func (k sinks) PutSink(
-	ctx context.Context, s notify.Sink, secrets []notify.SealedSecret, fence namespace.Fence, e audit.Entry,
-) error {
-	if err := s.ValidateWrite(); err != nil {
-		return fmt.Errorf("put sink: %w", err)
-	}
-
-	if err := s.ValidateSealed(secrets); err != nil {
-		return fmt.Errorf("put sink: %w", err)
-	}
-
-	if err := checkSinkScope(s.Scope, fence, e); err != nil {
-		return err
-	}
-
-	k.s.mu.RLock()
-	defer k.s.mu.RUnlock()
-
-	return k.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		stored, err := putSinkRow(ctx, q, s)
-		if err != nil {
-			return err
-		}
-
-		if secretsErr := putSinkSecrets(ctx, q, s, secrets); secretsErr != nil {
-			return secretsErr
-		}
-
-		return finishCompletion(ctx, q, stored)
-	})
+	return NotificationStore{s: s}
 }
 
 // putSinkRow checks the version and the scope of the stored sink, and writes
@@ -270,7 +214,11 @@ func writeSinkSecret(ctx context.Context, q *db.Queries, p secretPlace) error {
 }
 
 // SinkSecrets implements notify.SinkStore.
-func (k sinks) SinkSecrets(ctx context.Context, scope namespace.Name, id string) ([]notify.SealedSecret, error) {
+func (k NotificationStore) SinkSecrets(
+	ctx context.Context,
+	scope namespace.Name,
+	id string,
+) ([]notify.SealedSecret, error) {
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
@@ -298,54 +246,8 @@ func (k sinks) SinkSecrets(ctx context.Context, scope namespace.Name, id string)
 	return out, nil
 }
 
-// DeleteSink implements notify.SinkStore. When ctx carries an idempotency
-// completion, the transaction also stores its answer.
-func (k sinks) DeleteSink(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
-	scope := fence.Namespace
-
-	// A zero fence names no namespace, so it names no stored sink.
-	if scope == "" || scope == audit.ServerScope {
-		return fmt.Errorf("delete sink %s: %w", id, notify.ErrNotFound)
-	}
-
-	if e.Namespace != scope {
-		return fmt.Errorf("%w: the audit entry must name the namespace %q of the fence", notify.ErrInvalid, scope)
-	}
-
-	k.s.mu.RLock()
-	defer k.s.mu.RUnlock()
-
-	return k.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		row, err := q.GetNotificationSink(ctx, id)
-		if errors.Is(err, sql.ErrNoRows) || err == nil && row.Namespace != scope.String() {
-			return fmt.Errorf("delete sink %s: %w", id, notify.ErrNotFound)
-		}
-
-		if err != nil {
-			return fmt.Errorf("select sink: %w", err)
-		}
-
-		err = q.DeleteNotificationSinkSecrets(ctx, db.DeleteNotificationSinkSecretsParams{
-			SinkID: id, Namespace: scope.String(),
-		})
-		if err != nil {
-			return fmt.Errorf("delete sink secrets: %w", err)
-		}
-
-		_, err = q.DeleteNotificationSink(
-			ctx,
-			db.DeleteNotificationSinkParams{ID: id, Namespace: scope.String()},
-		)
-		if err != nil {
-			return fmt.Errorf("delete sink: %w", err)
-		}
-
-		return finishCompletion(ctx, q, id)
-	})
-}
-
 // Sinks implements notify.SinkStore. A row that fails its checks is left out.
-func (k sinks) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, error) {
+func (k NotificationStore) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, error) {
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
@@ -385,35 +287,4 @@ func (k sinks) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, 
 	}
 
 	return out, nil
-}
-
-// RecordSinkTest implements notify.SinkStore. When ctx carries an idempotency
-// completion, the transaction also stores its answer.
-func (k sinks) RecordSinkTest(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
-	scope := fence.Namespace
-
-	// A zero fence names no namespace, so it names no stored sink.
-	if scope == "" || scope == audit.ServerScope {
-		return fmt.Errorf("record test of sink %s: %w", id, notify.ErrNotFound)
-	}
-
-	if e.Namespace != scope {
-		return fmt.Errorf("%w: the audit entry must name the namespace %q of the fence", notify.ErrInvalid, scope)
-	}
-
-	k.s.mu.RLock()
-	defer k.s.mu.RUnlock()
-
-	return k.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		row, err := q.GetNotificationSink(ctx, id)
-		if errors.Is(err, sql.ErrNoRows) || err == nil && row.Namespace != scope.String() {
-			return fmt.Errorf("record test of sink %s: %w", id, notify.ErrNotFound)
-		}
-
-		if err != nil {
-			return fmt.Errorf("select sink: %w", err)
-		}
-
-		return finishCompletion(ctx, q, id)
-	})
 }

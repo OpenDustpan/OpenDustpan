@@ -115,7 +115,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 	t.Helper()
 
 	return newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: autoCreate, noPolicyRoutes: false, stored: nil, authz: nil, namespaces: nil,
+		autoCreate: autoCreate, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
 	})
 }
 
@@ -130,6 +130,8 @@ type signInEnvOptions struct {
 	namespaces     []namespace.Name
 	autoCreate     bool
 	noPolicyRoutes bool
+	// noGateEngine leaves the gate config service without a policy engine.
+	noGateEngine bool
 }
 
 // seedNamespaces makes the namespaces names in svc.
@@ -210,8 +212,13 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		admin, stored = opts.stored(st, clock)
 	}
 
+	var engine gate.Engine
+	if !opts.noGateEngine {
+		engine = testGateEngine()
+	}
+
 	gates, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: st, Namespaces: namespaces, Approvers: testApprovers{}, Now: clock.Now,
+		Store: st, Namespaces: namespaces, Approvers: testApprovers{}, Engine: engine, Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("gate config service: %v", err)
@@ -268,6 +275,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1157,6 +1165,7 @@ func TestSignInProviderDown(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1285,7 +1294,7 @@ func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 	t.Parallel()
 
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: true, stored: nil, authz: nil, namespaces: nil,
+		autoCreate: true, noPolicyRoutes: true, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
 	})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())

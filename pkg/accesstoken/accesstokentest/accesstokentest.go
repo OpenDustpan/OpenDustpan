@@ -786,6 +786,9 @@ func testByDigestPolicy(t *testing.T, s Store) {
 	want := accesstoken.Policy{
 		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
 		DisableTokens: true, DisableAccounts: false, DisableBreakGlass: false,
+		// A lifetime other than the default proves that the lookup reads the
+		// exchange lifetime of the stored policy.
+		ExchangeLifetime: 15 * time.Minute,
 	}
 
 	_, err = s.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
@@ -822,6 +825,9 @@ func testPolicy(t *testing.T, s Store) {
 	want := accesstoken.Policy{
 		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: 0,
 		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: false,
+		// A lifetime other than the default proves that the store keeps the
+		// exchange lifetime.
+		ExchangeLifetime: 2 * time.Hour,
 	}
 
 	stored, err := s.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
@@ -878,6 +884,7 @@ func testPolicyKeepsChanges(t *testing.T, s Store) {
 	updated := accesstoken.Policy{
 		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: accesstoken.DefaultInactivity,
 		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: false,
+		ExchangeLifetime: accesstoken.DefaultExchangeLifetime,
 	}
 
 	_, err := s.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {

@@ -77,6 +77,19 @@ persons and services.
   principal has now or gets later. A token acts with the grants of its
   principal at the time of each request. The design wants this: the grant of
   `principal:manage-tokens` is the decision.
+- **A workload trust rule needs `principal:manage-tokens` on its
+  principal.** A trust rule lets a workload with a matching token from its
+  issuer act as a service principal of the namespace of the rule. So a
+  create of a rule needs `namespace:manage-trust-rules` on the namespace
+  and `principal:manage-tokens` on the principal, the same right as a
+  service token. An access token cannot create a rule: only a person after
+  a sign-in can. A rule never names a principal of another namespace, a
+  person or a disabled principal, and never names an issuer of this server.
+- **A token exchange issues a short-lived token of the principal of a
+  rule.** A workload with a token that a trust rule accepts gets an access
+  token of the kind `trust` for the principal of the rule. It lives one hour
+  by default, no rotation renews it, and it never creates a rule or another
+  token. A refused exchange answers the same 401 for each failed check.
 - **An account administrator can act as any service principal.** The
   built-in roles `account-administrator` and `site-administrator` hold
   `principal:manage-tokens` on the installation, which holds every
@@ -399,7 +412,15 @@ through each API and check that the log and the metrics do not hold them.
 
 ## Outbound connections
 
-The server sends no telemetry. It connects only to the PostgreSQL database
+The server never phones home. No data about your installation, its users or
+its use goes to the project, to a vendor or to any other party that you did
+not name. This is also true with no configuration, and no setting, also no opt-in
+setting, turns it on. In OpenDustpan Cloud, the project is the operator:
+its metrics, logs and traces of the installations that it runs stay in its
+own systems.
+Metrics and logs are for you, and they stay. You scrape the Prometheus
+metrics, and the server sends logs only to the log outputs that you
+configure. It connects only to the PostgreSQL database
 and the S3-compatible storage that you configure. The commands
 `namespace create`, `backup`, `backup check`, `upgrade check` and `restore`
 call only the server in `--server`. `health` calls only the listen address of the local

@@ -12,8 +12,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
-// newGateConfigService returns the service of the approval defaults and the
-// approval rules over the namespace store, or nil when the store keeps no
+// newGateConfigService returns the service of the gates, the access limits, the
+// approval defaults and the approval rules over the namespace store, or nil when the store keeps no
 // gate configuration. Both SQL adapters keep it. The server then mounts no
 // route of the gate configuration.
 func newGateConfigService(
@@ -25,7 +25,11 @@ func newGateConfigService(
 	}
 
 	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: store, Namespaces: namespaces, Approvers: groupDirectory{groups: principals}, Now: cfg.now,
+		Store:      store,
+		Namespaces: namespaces,
+		Approvers:  groupDirectory{groups: principals},
+		Engine:     newGateEngine(),
+		Now:        cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gate config service: %w", err)

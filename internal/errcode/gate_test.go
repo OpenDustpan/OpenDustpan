@@ -41,6 +41,7 @@ func gated() []errcodetest.Adapter {
 			Skip: []string{"writeMaintenanceHTTPBackend", "writeMaintenanceRunner"},
 		},
 		api("inventory", nil, nil),
+		api("issuer", nil, nil),
 		api("jobs", nil, nil),
 		api("notifications", nil, nil),
 		api("objectcontext", nil, nil),
@@ -65,6 +66,7 @@ func gated() []errcodetest.Adapter {
 		// the shared error module to the gated writer of each adapter.
 		api("route", nil, nil),
 		api("triggers", nil, nil),
+		api("trustrules", nil, nil),
 	}
 }
 

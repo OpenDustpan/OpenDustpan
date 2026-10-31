@@ -43,6 +43,9 @@ type RecorderHarness struct {
 	// Retention is the retention that the recorder applies to new plans and
 	// log versions.
 	Retention history.RetentionSettings
+	// Sealer is the item sealer under the recorder. The cases of the chunk keys
+	// use its item key function to reserve a log version.
+	Sealer secret.ItemSealer
 }
 
 // RecorderParts are the stores of one database that NewRecorderHarness builds
@@ -128,7 +131,7 @@ func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	return RecorderHarness{
 		Harness: parts.Harness, Recorder: rec, Reader: reader, Records: parts.Records, Blobs: parts.Blobs,
 		ItemKeys:  parts.ItemKeys,
-		Retention: retention,
+		Retention: retention, Sealer: sealer,
 	}
 }
 
@@ -155,7 +158,7 @@ func RunRecorder(t *testing.T, newHarness RecorderFactory) {
 	t.Helper()
 
 	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planReadCases(),
-		deliveryCases(), keyTxCases())
+		deliveryCases(), keyTxCases(), chunkKeyCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -793,10 +796,23 @@ func blobsUnder(t *testing.T, h RecorderHarness, ns namespace.Name) []blob.Objec
 		t.Fatalf("GetNamespace(%s) = %v", ns, err)
 	}
 
-	objects, err := h.Blobs.List(t.Context(), "namespaces/"+n.ID.String()+"/job/")
+	objects, err := listBlobs(t.Context(), h.Blobs, "namespaces/"+n.ID.String()+"/job/")
 	if err != nil {
 		t.Fatalf("list the plan and log blobs: %v", err)
 	}
 
 	return objects
+}
+
+// listBlobs walks every page under prefix and returns the objects.
+func listBlobs(ctx context.Context, store blob.Store, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, store, prefix, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+
+	return out, err
 }

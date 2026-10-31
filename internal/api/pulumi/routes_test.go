@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
@@ -1623,6 +1624,7 @@ func newDeleteHandlerWithAudit(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Tokens:             nil,
@@ -1992,6 +1994,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 	stores := unusedUpdateStores{UpdateStore: nil, CheckpointStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,
@@ -2066,6 +2069,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 	stores := emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,

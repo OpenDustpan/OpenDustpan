@@ -145,12 +145,45 @@ counts the other outcomes:
   "failed": 0,
   "skipped": 0,
   "finishedBlobPurges": 1,
-  "pendingBlobPurges": 2
+  "pendingBlobPurges": 2,
+  "waitingBlobPurges": 1,
+  "waitingFor": "backup bkp-1"
 }
 ```
 
+`waitingBlobPurges` counts the pending records whose blobs the run did not
+delete because a backup or a restore runs. `waitingFor` names that backup or
+restore. It is an empty string when no record waits. A waiting record is not a
+failure. See "Blob deletes wait for a backup or a restore" below.
+
 The metric `dustpan_deleted_unit_sweep_total` counts the outcomes of each
 expiry run. See [Observe](observe.md).
+
+## Blob deletes wait for a backup or a restore
+
+A backup reads the data of the installation at one point in time, and then
+copies each blob that this data names. A restore copies blobs into the live
+store before it swaps the data. The server deletes no blob that such a
+backup or restore can need while the backup or the restore runs. This applies
+to the blobs of a purged stack or workspace, to checkpoints that a new
+checkpoint replaces, to the journal of an update that the server builds into a
+checkpoint, and to the blobs that no row names.
+
+- A purge commits at once. When a backup or a restore runs, the purge keeps
+  the blobs and the blob purge record. The server logs one INFO line with the
+  tool, the unit ID and the backup or restore ID.
+- The expiry run deletes the blobs of such a record when it is older than 24
+  hours and no backup or restore runs. It counts the record in
+  `waitingBlobPurges`.
+- A checkpoint that a new save replaces, and the journal blobs of a built
+  checkpoint, stay as unused blobs of the update. A later save or the start of
+  a later update of the stack deletes them when no backup or restore runs.
+- If the server cannot read whether a backup or a restore runs, it deletes
+  nothing. It logs a warning with the error kind, and a later run tries again.
+
+A long backup holds the deletes back for its whole run. A backup that
+stops without an end keeps them back until the server marks it failed. See
+[Back up, restore and upgrade](backup-restore-upgrade.md).
 
 ## After an upgrade or an installation restore
 

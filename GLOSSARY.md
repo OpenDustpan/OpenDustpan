@@ -273,6 +273,10 @@ _Avoid_: Export format, dump format
 The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28). It is also not the restore of a deleted unit (ADR 47).
 _Avoid_: Recovery, load, import
 
+**Store check**:
+The user-run deep check of a blob store (ADR 281). The server writes throwaway objects under `store-checks/<check ID>/` of the live blob store or of the backup target. It runs the blob conformance cases on them. It measures the latency, the throughput and the delete rate, reports the store capabilities, and deletes the objects. It is a durable operation with a fixed budget. The report says what one run measured on one store. It is not a service level.
+_Avoid_: Benchmark, probe, health check
+
 **Control table**:
 A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
 
@@ -396,7 +400,7 @@ _Avoid_: User (when the caller can be a machine), actor
 _Copy says_: "principal", explained once where it first shows: "a person, a service or a workload".
 
 **Principal kind**:
-What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload`. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
+What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `service`. A trust rule names a service principal of its namespace, as a cloud maps a workload identity to a service account. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
 _Avoid_: Principal type, account type, token kind (a token kind is `personal` or `service`)
 
 **Principal of a namespace**:
@@ -460,8 +464,12 @@ An access token that belongs to a principal that is not a person, for a machine 
 _Avoid_: API key, robot token, machine token
 
 **Trust rule**:
-A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets (ADR 54).
+A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets: a service principal of that namespace (ADR 54).
 _Avoid_: Trust policy, federation rule
+
+**Token exchange**:
+A request of a workload to a namespace. The workload sends a JWT of its issuer. It gets an access token of the kind `trust` for the principal of the one trust rule that accepts the JWT. The access token lives the exchange lifetime of the token policy, one hour by default (ADR 54, ADR 69).
+_Avoid_: Token swap, federation login, OIDC login
 
 **Group**:
 A named set of principals of one principal home: the installation or one namespace. A group of a namespace holds principals of that namespace only. A principal can be a member of more than one group of its home (ADR 52, ADR 215).
@@ -781,7 +789,7 @@ A trigger of the kind `follows`. It names a source unit. After the source applie
 _Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
 
 **Registry release**:
-One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101). A module release holds one archive and no signature.
 _Avoid_: Package, artifact (that is a plan or a log of a job)
 
 **Registry address**:
@@ -871,7 +879,7 @@ The first of the two writes that store a plan (`job.RecordStore.ReservePlan`). I
 _Avoid_: Draft plan, pending plan
 
 **Chunk reserve and `confirm`**:
-The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Another hash for a reserved sequence number is a conflict.
+The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Each write attempt stores its blob under a key of its own, `<sequence number>-<attempt ID>`, and the second write records that key in the row. The attempt whose second write commits first wins. An attempt that loses deletes only its own blob. Another hash for a reserved sequence number is a conflict.
 _Avoid_: Two-phase commit (the blob store is not part of a transaction), staging
 
 **Step key**:
@@ -1203,6 +1211,10 @@ _Avoid_: Identity provider (an identity provider signs in people), OIDC provider
 **Issued token**:
 A JWT that the issuer of a namespace signs, with the claims of ADR 205. Its `purpose` is `login` or `adapter`. It lives at most 60 minutes.
 _Avoid_: ID token, access token (an access token authenticates to OpenDustpan)
+
+**Copy check**:
+The check of the two files at the `issuerURL` of a namespace. The discovery document must name the issuer and the JWKS address. The JWKS must hold the key ID of the active key, and of the next key before a promotion (ADR 204 decision 3). The server signs only with a key that a copy check found.
+_Avoid_: Sync check, key check
 
 **Subject template**:
 The list of keys that make the `sub` of an issued token, for example `namespace`, `collection`, `tool`, `unit` and `access` (ADR 205 decision 6).
@@ -1554,6 +1566,16 @@ An error path of an HTTP adapter that answers without a code of the catalog (ADR
 _Avoid_: Legacy error, untyped error
 
 ### Operations
+
+**Phone-home**:
+Data about an installation, its use or its users that leaves the installation for a destination that the operator did not name (ADR 74). Examples of such destinations are the project, a vendor and any other third party. Examples are usage counts, feature use, crash reports, install pings and version checks that send data to a project server. The test is the destination: who chose it, and does data leave before the operator names it. Opt-in, opt-out and off by default are all phone-home. The server has no phone-home and no code for it.
+_Avoid_: Telemetry (alone: OpenTelemetry uses the same word for metrics, logs and traces), analytics, usage data (alone), tracking
+_Copy says_: "phone-home" or "usage reporting".
+
+**Observability**:
+The metrics, logs, traces, probes and audit log of an installation, for its operator (ADR 74 decision 4). Observability data goes only to a destination that the operator configures, for example a Prometheus scrape, an OpenTelemetry collector or a log sink. Or it stays in the server, for example the run data of jobs, and the operator reads it there. It is not phone-home.
+_Avoid_: Telemetry (alone), monitoring data, diagnostics
+_Copy says_: "metrics", "logs" or "traces", with the destination that the operator configures.
 
 **Incident**:
 An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.

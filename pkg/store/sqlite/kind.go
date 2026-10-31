@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 )
 
 var _ installation.KindStore = (*Store)(nil)
@@ -26,7 +27,10 @@ func (s *Store) ClaimKind(ctx context.Context, kind installation.Kind) (installa
 
 	_, err := s.queries.ClaimInstallationKind(ctx, sql.NullString{String: kind.String(), Valid: true})
 	if err != nil {
-		return "", fmt.Errorf("store installation kind sqlite database: %w", installation.ErrUnavailable)
+		return "", fmt.Errorf(
+			"store installation kind sqlite database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	raw, err := s.queries.GetInstallationKind(ctx)
@@ -37,7 +41,10 @@ func (s *Store) ClaimKind(ctx context.Context, kind installation.Kind) (installa
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("select installation kind sqlite database: %w", installation.ErrUnavailable)
+		return "", fmt.Errorf(
+			"select installation kind sqlite database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	return installation.FromStored(raw.String)
@@ -71,7 +78,7 @@ func (s *Store) checkKind(ctx context.Context) error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("read installation kind: %w", installation.ErrUnavailable)
+		return fmt.Errorf("read installation kind: %w", storeerr.Sentinel(installation.ErrUnavailable, err))
 	}
 
 	return installation.Check(raw.String, s.kind)
@@ -101,7 +108,10 @@ func (s *Store) readKindLocked(ctx context.Context) (installation.Kind, error) {
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("read installation kind sqlite database: %w", installation.ErrUnavailable)
+		return "", fmt.Errorf(
+			"read installation kind sqlite database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	return installation.FromStored(raw.String)

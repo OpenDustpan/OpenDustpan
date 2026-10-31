@@ -31,11 +31,9 @@ const haReportDirMode = 0o750
 // 1 (make e2e-ha). With one instance it skips.
 //
 // The steps run in order on one cluster per pair: alternation, a kill during
-// work, a kill during a backup, a kill during a restore, the job schedules and
-// a missing worker. The steps for a rolling deploy and a database outage are
-// named skips:
-// each waits for server code that does not exist yet, and a skip says so. The
-// step for a missing worker runs last, because it restarts every instance
+// work, a kill during a backup, a kill during a restore, a rolling deploy, the
+// job schedules, a database outage and a missing worker. The step for a
+// missing worker runs last, because it restarts every instance
 // with only the api component.
 func TestHighAvailability(t *testing.T) {
 	t.Parallel()
@@ -118,14 +116,16 @@ func runHighAvailability(t *testing.T, pair backupPair, store e2e.Store) {
 
 	t.Run("4 restart during restore", func(t *testing.T) { haRestartDuringRestore(t, env) })
 	t.Run("5 rolling deploy", func(t *testing.T) {
-		t.Skip("needs the write-path minimum version check")
+		haRollingDeploy(t, env, pair)
+		t.Run("mixed-version matrix", haMixedVersionMatrix)
 	})
 
 	t.Run("6 schedules", func(t *testing.T) { haSchedules(t, env) })
 
-	t.Run("7 database outage", func(t *testing.T) {
-		t.Skip("needs 503 with Retry-After on store loss")
-	})
+	var window haRetryWindow
+
+	t.Run("7a database outage", func(t *testing.T) { window = haLongOutage(t, env, pair) })
+	t.Run("7b short database outage", func(t *testing.T) { haShortOutage(t, env, pair, window) })
 	t.Run("8 no worker", func(t *testing.T) { haNoWorker(t, env) })
 }
 

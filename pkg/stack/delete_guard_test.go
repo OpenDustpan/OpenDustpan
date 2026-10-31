@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -738,6 +739,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 	blobs := newMemBlob(newClock())
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            mem,
 		Tokens:             nil,

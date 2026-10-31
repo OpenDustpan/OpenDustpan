@@ -85,12 +85,20 @@ func (s *Service) ServableReleases(ctx context.Context, ns namespace.Name, name 
 // registry.ErrNotFound for a namespace, a provider or a version that does not
 // exist.
 func (s *Service) Release(ctx context.Context, ns namespace.Name, name, version string) (registry.Release, error) {
-	addr := registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: name, System: ""}
+	return s.releaseAt(
+		ctx,
+		registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: name, System: ""},
+		version,
+	)
+}
+
+// releaseAt returns the release of version at addr, with the errors of Release.
+func (s *Service) releaseAt(ctx context.Context, addr registry.Address, version string) (registry.Release, error) {
 	if err := addr.Validate(); err != nil {
 		return registry.Release{}, fmt.Errorf("check the address: %w", err)
 	}
 
-	if _, err := s.namespaces.GetNamespace(ctx, ns); err != nil {
+	if _, err := s.namespaces.GetNamespace(ctx, addr.Namespace); err != nil {
 		return registry.Release{}, notFound(err)
 	}
 
@@ -149,7 +157,19 @@ func FileOf(rel registry.Release, sum string) (File, bool) {
 func (s *Service) Open(
 	ctx context.Context, ns namespace.Name, name, version, sum string,
 ) (File, io.ReadCloser, error) {
-	rel, err := s.Release(ctx, ns, name, version)
+	return s.openAt(
+		ctx,
+		registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: name, System: ""},
+		version,
+		sum,
+	)
+}
+
+// openAt opens a file of the release of version at addr, with the rules of Open.
+func (s *Service) openAt(
+	ctx context.Context, addr registry.Address, version, sum string,
+) (File, io.ReadCloser, error) {
+	rel, err := s.releaseAt(ctx, addr, version)
 	if err != nil {
 		return File{}, nil, err
 	}
@@ -159,7 +179,7 @@ func (s *Service) Open(
 		return File{}, nil, registry.ErrNotFound
 	}
 
-	rec, err := s.namespaces.GetNamespace(ctx, ns)
+	rec, err := s.namespaces.GetNamespace(ctx, addr.Namespace)
 	if err != nil {
 		return File{}, nil, notFound(err)
 	}

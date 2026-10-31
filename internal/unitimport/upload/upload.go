@@ -128,26 +128,26 @@ func (s *Source) Units(
 		return nil, err
 	}
 
-	objs, err := s.blobs.List(ctx, s.prefix)
-	if err != nil {
-		return nil, fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-	}
-
 	out := []unitimport.SourceUnit{}
 
-	for _, o := range objs {
+	err := blob.Walk(ctx, s.blobs, s.prefix, func(o blob.Object) error {
 		if !strings.HasSuffix(o.Key.String(), "/unit.json") {
-			continue
+			return nil
 		}
 
 		var f facts
 		if readErr := s.readJSON(ctx, o.Key, &f); readErr != nil {
-			return nil, readErr
+			return readErr
 		}
 
 		if len(sel.Names) == 0 || slices.Contains(sel.Names, f.Name) {
 			out = append(out, unitimport.SourceUnit{Tool: f.Tool, Name: f.Name})
 		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, s.walkError(err)
 	}
 
 	return out, nil
@@ -291,26 +291,39 @@ func (s *Source) Put(
 // Delete deletes each object below the prefix of the import: the unit files,
 // the facts files and the bodies, also the bodies that no facts file names.
 func (s *Source) Delete(ctx context.Context) error {
-	objs, err := s.blobs.List(ctx, s.prefix)
-	if err != nil {
-		return fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-	}
-
-	for _, o := range objs {
+	// The walk deletes each object as its page arrives. A key sorts after the
+	// cursor of the walk, so a delete does not move the walk.
+	err := blob.Walk(ctx, s.blobs, s.prefix, func(o blob.Object) error {
 		// Defense in depth: New refuses a prefix under the audit checkpoint
-		// prefix, and List answers only keys below the prefix. This check
-		// stays so that a wrong prefix or a List that answers too much
+		// prefix, and the listing answers only keys below the prefix. This check
+		// stays so that a wrong prefix or a listing that answers too much
 		// never deletes an audit checkpoint copy: every copy is evidence.
 		if audit.IsCheckpointKey(o.Key) {
 			return fmt.Errorf("%w: refuse to delete %s under %s", unitimport.ErrInvalid, o.Key, audit.CheckpointPrefix)
 		}
 
-		if err = blob.DeleteRetried(ctx, s.blobs, o.Key); err != nil {
-			return fmt.Errorf("%w: delete upload: %w", unitimport.ErrSourceUnreachable, err)
+		if delErr := blob.DeleteRetried(ctx, s.blobs, o.Key); delErr != nil {
+			return fmt.Errorf("%w: delete upload: %w", unitimport.ErrSourceUnreachable, delErr)
 		}
+
+		return nil
+	})
+	if err != nil {
+		return s.walkError(err)
 	}
 
 	return nil
+}
+
+// walkError turns the error of a walk of the uploads into the error of a
+// source. An error that already is a source error stays as it is, and a
+// store error is a source that cannot be reached.
+func (s *Source) walkError(err error) error {
+	if errors.Is(err, unitimport.ErrSourceUnreachable) || errors.Is(err, unitimport.ErrInvalid) {
+		return err
+	}
+
+	return fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
 }
 
 // prepare checks a Put before it writes. It returns the facts with the
@@ -627,24 +640,24 @@ func (s *Source) readJSON(ctx context.Context, k blob.Key, v any) error {
 
 // factsSequences returns the sequences of u that have a facts file, in order.
 func (s *Source) factsSequences(ctx context.Context, u unitimport.SourceUnit) ([]int, error) {
-	objs, err := s.blobs.List(ctx, s.unitDir(u))
-	if err != nil {
-		return nil, fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-	}
-
 	var seqs []int
 
-	for _, o := range objs {
+	err := blob.Walk(ctx, s.blobs, s.unitDir(u), func(o blob.Object) error {
 		name := o.Key.String()[strings.LastIndex(o.Key.String(), "/")+1:]
 
 		base, ok := strings.CutSuffix(name, ".json")
 		if !ok || base == "unit" {
-			continue
+			return nil
 		}
 
 		if n, convErr := strconv.Atoi(base); convErr == nil {
 			seqs = append(seqs, n)
 		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, s.walkError(err)
 	}
 
 	slices.Sort(seqs)

@@ -54,6 +54,27 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 
 	facts := newInventoryFacts(cfg)
 
+	log := cfg.logger
+	if log == nil {
+		log = slog.Default()
+	}
+
+	svc, err := gate.NewService(gate.ServiceConfig{
+		Store: store, Engine: newGateEngine(), Producers: nil,
+		Members: facts, Units: facts, Subjects: principalSubjects{}, Fences: namespaceFences{namespaces: namespaces},
+		Now: cfg.now, Log: log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gate service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// newGateEngine returns the linked policy engine. It knows each action of the
+// access families, so an access limit that names an action of the server
+// checks, and one that names another action does not.
+func newGateEngine() *cedargo.Engine {
 	var actions []string
 	for _, family := range []access.Family{
 		access.FamilyOperator, access.FamilyAdministration, access.FamilyData,
@@ -64,21 +85,7 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 		}
 	}
 
-	log := cfg.logger
-	if log == nil {
-		log = slog.Default()
-	}
-
-	svc, err := gate.NewService(gate.ServiceConfig{
-		Store: store, Engine: cedargo.New(cedargo.WithAccessActions(actions...)), Producers: nil,
-		Members: facts, Units: facts, Subjects: principalSubjects{}, Fences: namespaceFences{namespaces: namespaces},
-		Now: cfg.now, Log: log,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("gate service: %w", err)
-	}
-
-	return svc, nil
+	return cedargo.New(cedargo.WithAccessActions(actions...))
 }
 
 // inventoryFacts gives the collection and the labels of a unit from the

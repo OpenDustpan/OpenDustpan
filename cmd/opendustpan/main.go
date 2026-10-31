@@ -11,6 +11,7 @@
 //	opendustpan backup check [flags]
 //	opendustpan backup [flags]
 //	opendustpan restore [flags]
+//	opendustpan store check [flags]
 //	opendustpan audit-chain status [flags]
 //	opendustpan audit-chain approve [flags]
 //
@@ -287,6 +288,7 @@ type serveFlags struct {
 	tlsCert                      string
 	tlsKey                       string
 	publicURL                    string
+	issuerBaseURL                string
 	oidcIssuer                   string
 	oidcProvider                 string
 	oidcDisplayName              string
@@ -504,6 +506,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag("issuer-base-url").String(fs, &f.issuerBaseURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
@@ -1076,6 +1079,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithTrustedProxyHeader(f.trustedProxyHeader),
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),
 		dustpan.WithPublicURL(f.publicURL),
+		dustpan.WithIssuerBaseURL(f.issuerBaseURL),
 		dustpan.WithVersion(version),
 		dustpan.WithMaxCheckpointBytes(int(f.maxCheckpointBytes)),
 		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
@@ -1127,6 +1131,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, sourceFilterStoreOption(st)...)
+	opts = append(opts, trustRuleStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, triggerStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
@@ -1210,6 +1215,19 @@ func sourceFilterStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
+	default:
+		return nil
+	}
+}
+
+// trustRuleStoreOption returns the option of the trust rule store for st, or
+// nil when st keeps no trust rules.
+func trustRuleStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
 	default:
 		return nil
 	}
@@ -1321,11 +1339,13 @@ func profileStoreOption(st store, wrapper secret.Wrapper) []dustpan.Option {
 	case sqliteStore:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	case postgresStore:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	default:

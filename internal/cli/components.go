@@ -37,6 +37,7 @@ var componentOnly = map[string]string{
 	"console-csp":                     ComponentAPI,
 	"console-hsts":                    ComponentAPI,
 	"public-url":                      ComponentAPI,
+	"issuer-base-url":                 ComponentAPI,
 	"ip-allowlists":                   ComponentAPI,
 	"ip-allowlists-include-bootstrap": ComponentAPI,
 	"git-host-allowed-ranges":         ComponentAPI,
