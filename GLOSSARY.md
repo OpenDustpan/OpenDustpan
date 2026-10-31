@@ -108,7 +108,7 @@ The protocol that a source adapter speaks: `tfe-api`, `pulumi-service`, `s3`, `o
 _Avoid_: Source type, provider (that is a block of a profile or a plugin of a tool)
 
 **Job source kind**:
-Where the start of a job came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` (`job.SourceKind`). The server sets it from the caller of `job.Service.Start`. A request to the REST API always starts a job with `api`, and no field of the request changes it.
+Where the start of a job came from: `api`, `agent`, `self-service`, `forge`, `schedule` or `trigger` (`job.SourceKind`). The server sets it from the caller of `job.Service.Start`. A request to the REST API always starts a job with `api`, and no field of the request changes it.
 _Avoid_: Job origin, source type
 
 **Upload source**:
@@ -190,7 +190,7 @@ A source of the value of a setting: `flag`, `env`, `file`, `database` or `defaul
 _Avoid_: Level, tier
 
 **Optional module**:
-A feature outside the core that has its own routes, its own schedules or both, for example the Catalog or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 211). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
+A feature outside the core that has its own routes, its own schedules or both, for example Self-service or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 211). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
 _Avoid_: Feature flag, plugin, add-on, module (alone)
 
 **Capabilities document**:
@@ -355,7 +355,7 @@ The name that an operator gives an installation with `--installation` (`DUSTPAN_
 _Avoid_: Region, installation ID, server name
 
 **Primary installation**:
-The one installation that owns a namespace and accepts its writes. The namespace row names it. A namespace gets the installation that creates it, and only a promotion changes it (ADR 248).
+The one installation that owns a namespace and accepts its writes. The namespace row names it. A namespace gets the installation that creates it, and only a failover changes it (ADR 248).
 _Avoid_: Home region, home installation, home instance, owning installation, active installation, region (of a namespace)
 
 **Replica installation**:
@@ -374,18 +374,19 @@ _Avoid_: Shard, cell, pod, node
 The optional federation behavior in which a member sends a request for a namespace to its primary installation and streams the answer back. It makes one hop only. The primary installation checks the token and the authorization again. It refuses a request with a token that another installation made for its own installation principal.
 _Avoid_: Proxying (alone), redirect
 
-**Promotion**:
-The operator action that makes a replica installation the primary installation of a namespace. A planned promotion first demotes the old primary installation and loses no change. A forced promotion does not wait for the old primary installation. The server never promotes on its own. The unit of a promotion is the namespace.
-_Avoid_: Failover (as the name of the action), switchover, automatic failover
+**Failover**:
+The operator action that makes a replica installation the primary installation of a namespace (ADR 248, ADR 286). A **planned failover** first demotes the old primary installation and loses no change. A **forced failover** does not wait for the old primary installation. The server never fails over on its own: an operator starts each failover. The unit of a failover is the namespace.
+_Avoid_: Promotion (that is a step along a promotion path), switchover, automatic failover
+_Copy says_: "planned failover" and "forced failover". Say that an operator starts it, and that the server never fails over on its own.
 
 **Divergent tail**:
-The changes that a former primary installation wrote to a namespace after its last replicated change and before it applied a forced promotion. The former primary installation keeps them readable for an export. The server never merges them into the new primary installation.
+The changes that a former primary installation wrote to a namespace after its last replicated change and before it applied a forced failover. The former primary installation keeps them readable for an export. The server never merges them into the new primary installation.
 _Avoid_: Conflict, lost writes, split brain (as a name of the data)
 
 **Failover version**:
-A number that increases by one at each promotion of a namespace, and at each restore.
+A number that increases by one at each failover of a namespace, and at each restore.
 _Avoid_: Epoch, generation
-_Copy says_: no name. Say the effect and the one next step: "The namespace changed while this write ran. Run the command again." Where a name is needed, write "the number of changes of the namespace by a promotion or a restore".
+_Copy says_: no name. Say the effect and the one next step: "The namespace changed while this write ran. Run the command again." Where a name is needed, write "the number of changes of the namespace by a failover or a restore".
 
 **Fence**:
 The namespace and failover version that a write carries. A store rejects the write when the failover version is no longer current.
@@ -776,7 +777,7 @@ _Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edi
 
 **Storage limit**:
 The fair-use limit on the stored bytes of a namespace (ADR 220 decision 13). Its setting is `limits.storageBytes`. At the limit, the server refuses the start of new work, never work in progress.
-_Avoid_: Quota (the catalog quota is another concept), storage quota
+_Avoid_: Quota (the self-service quota is another concept), storage quota
 
 ### Resources and self-service
 
@@ -836,17 +837,30 @@ _Avoid_: Signing certificate, GPG key (the format is OpenPGP), trusted publisher
 A file of an upload that the server holds under a staging key until a publish moves it. It is not readable through the registry. A publish measures it again, checks it, and copies it to its content key. A staged file that no publish moved is deleted after 24 hours.
 _Avoid_: Temporary file, pending upload
 
-**Catalog**:
-The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
-_Avoid_: Service catalog, marketplace, portal, inventory
+**Self-service**:
+The request gateway of OpenDustpan, with its routes under `/api/dustpan/v1/self-service/` (ADR 210, ADR 286). A principal sends a self-service request to it, for example for a unit from a blueprint. Write it with a capital S as the name of the feature and the menu item. The private registry is a separate feature with its own menu item, **Registry**.
+_Avoid_: Catalog (as the name of the feature), service catalog, marketplace, portal, inventory, registry (that is the private registry)
 
-**Catalog request**:
-A declarative JSON document that a principal sends to the Catalog. It states the result that the principal wants, not the steps to get it.
-_Avoid_: Order, ticket, form
+**Self-service request**:
+A declarative JSON document that a principal sends to Self-service. It states the result that the principal wants, not the steps to get it.
+_Avoid_: Catalog request, order, ticket, form
 
 **Blueprint**:
 A program that a platform team offers for self-service, with an input schema, platform values and a version. Units made from it are normal stacks or workspaces.
 _Avoid_: Template (Pulumi templates copy code), no-code module, product, offering, golden path
+
+**Promotion path**:
+An ordered list of 2 to 10 units of one namespace, from dev to prod, along which a change moves (RFC 55, ADR 286). A unit is in at most one promotion path.
+_Avoid_: Lane, environment (that is a profile of the Pulumi CLI), pipeline, stage
+
+**Promote**:
+To move a change one step along a promotion path. The change copies the blueprint version and the marked answers of one unit to the next unit of the path, or the applied commit. It is a normal change of the next unit, with all its gates. One such change is a **promotion**. The server never promotes on its own.
+_Avoid_: Advance, deploy, sync
+_Copy says_: "promote" for a step along a promotion path only. For an installation, write "failover". For a signing key, write "activate".
+
+**Comparison**:
+The side-by-side read of two units, for example two steps of a promotion path (RFC 55). It stores nothing. The server marks each part that the caller cannot read `hidden`.
+_Avoid_: Diff (a state diff compares two versions of one unit), delta
 
 ### Jobs and runners
 
@@ -1096,7 +1110,7 @@ _Avoid_: Deploy job, run (alone)
 
 **Author (change order)**:
 The principal that created a change order, or that attached a plan revision to it (ADR 190 decision 4). An author never approves, requests changes, rejects, opens a blocking thread or resolves one, also when the author holds `changeorder:approve`. An agent is never an author.
-_Avoid_: Owner (that is a context field), requester (that is of a Catalog request)
+_Avoid_: Owner (that is a context field), requester (that is of a self-service request)
 
 **Signature**:
 The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A principal has at most one signature on each revision. A new revision voids it, with the cause `new-plan`, unless signature carry-over holds. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
@@ -1209,7 +1223,7 @@ A link from a profile to a namespace, a collection or a unit. The jobs of each u
 _Avoid_: Binding, assignment (an assignment is a runner term)
 
 **Attachment authority**:
-The principal whose actions an open uses. For a direct open, it is the caller. For a job open, it is the principal who made the attachment. For an attachment of the Catalog, it is the person who published the blueprint version. The server checks the full set of the attach checks again at each open of a job. These are the job start, each step, each token renewal and each read of a session. A person who passes the attach checks can re-authorize an attachment (ADR 203 decision 4).
+The principal whose actions an open uses. For a direct open, it is the caller. For a job open, it is the principal who made the attachment. For an attachment of Self-service, it is the person who published the blueprint version. The server checks the full set of the attach checks again at each open of a job. These are the job start, each step, each token renewal and each read of a session. A person who passes the attach checks can re-authorize an attachment (ADR 203 decision 4).
 _Avoid_: Attachment owner, run-as
 
 **Change rule**:
@@ -1238,6 +1252,7 @@ _Avoid_: Open request
 
 **Issuer**:
 The OIDC issuer of one namespace, at `https://<issuer host>/oidc/<namespace ID>`, with its own signing keys (ADR 204). The issuer host comes from the installation setting `issuerBaseURL`, else from `publicURL`. When the namespace sets `issuerURL`, `iss` is that URL, and the server signs only with a key that the copy check found at that URL. Its paths `/oidc/<namespace ID>/...` are outside the versioned API. Clouds and other systems trust it.
+A rotation of the signing keys of the issuer **activates** the `next` key: the `next` key becomes the `active` key (ADR 286). The rotate answer says it in the field `activated`.
 _Avoid_: Identity provider (an identity provider signs in people), OIDC provider (alone)
 
 **Issued token**:
@@ -1245,7 +1260,7 @@ A JWT that the issuer of a namespace signs, with the claims of ADR 205. Its `pur
 _Avoid_: ID token, access token (an access token authenticates to OpenDustpan)
 
 **Copy check**:
-The check of the two files at the `issuerURL` of a namespace. The discovery document must name the issuer and the JWKS address. The JWKS must hold the key ID of the active key, and of the next key before a promotion (ADR 204 decision 3). The server signs only with a key that a copy check found.
+The check of the two files at the `issuerURL` of a namespace. The discovery document must name the issuer and the JWKS address. The JWKS must hold the key ID of the active key, and of the next key before its activation (ADR 204 decision 3). The server signs only with a key that a copy check found.
 _Avoid_: Sync check, key check
 
 **Subject template**:
@@ -1559,7 +1574,7 @@ _Avoid_: Language (for formats), region
 
 **Message file**:
 The file that holds the messages of one language in ICU MessageFormat (ADR 181). The console has one for each language, and the server has one for each language of its emails and chat notices (ADR 234). It marks each high-stakes message, which needs native review before it ships. Each translated message carries its translation status and the hash of its English source (ADR 232).
-_Avoid_: Catalog (that is the self-service gateway), translation table
+_Avoid_: Catalog (a common noun for a fixed list), translation table
 
 **Term list**:
 The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). It adds to the shared term list, which holds the names of tools and projects, commands and CLI flags for every language (ADR 233). A check fails a translation that changes a term. A language can ship with a draft list. An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
@@ -1637,7 +1652,8 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
 - **Lease** names the update lease of the Pulumi CLI, the rotation lease of a rotator block, and a lease of Vault (ADR 207). Name which one.
 - **Orphan** means a stored file, for example a blob that no row names. For a cloud resource that no unit manages, or that two units manage, write "unmanaged resource" and name its kind.
-- **Catalog** is the self-service gateway only. The list of all units is the inventory.
+- **Catalog** is a common noun for a fixed list, for example the catalog of error codes or the tool catalog of the agent. It is not the name of a feature. The request gateway is Self-service (ADR 286). The list of all units is the inventory.
+- **Promotion** is a step along a promotion path only. The action that makes a replica installation the primary installation is a failover. A `next` signing key becomes the active key by an activation (ADR 286).
 - **Job** and **operation** are different. A job is work that OpenDustpan asks an executor to do on one unit. Each phase of a job is one durable operation (ADR 100). The operation of a job is `plan`, `apply`, `destroy` or `refresh`. Name which one.
 - **Migration** means a SQL schema migration only. For the move of a unit into OpenDustpan, write "import".
 - **Restore** has three meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). A restore of a deleted unit brings the unit back before its purge (ADR 47). Name which one.
