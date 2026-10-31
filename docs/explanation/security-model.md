@@ -409,7 +409,10 @@ through each API and check that the log and the metrics do not hold them.
 
 The server never phones home. No data about your installation, its users or
 its use goes to the project, to a vendor or to any other party that you did
-not name. This is also true with no configuration, and no switch turns it on.
+not name. This is also true with no configuration, and no setting, also no opt-in
+setting, turns it on. In OpenDustpan Cloud, the project is the operator:
+its metrics, logs and traces of the installations that it runs stay in its
+own systems.
 Metrics and logs are for you, and they stay. You scrape the Prometheus
 metrics, and the server sends logs only to the log outputs that you
 configure. It connects only to the PostgreSQL database

@@ -32,6 +32,8 @@ the open-source server.
    the operator chose. Data that stays in the server, where the operator
    reads it, is not phone-home. A switch does not change the answer: opt-in phone-home, opt-out
    phone-home and phone-home that is off by default are all phone-home.
+   A self-hosted installation sends nothing to the project, and no setting,
+   also no opt-in setting, turns on such a report.
 2. **No phone-home code.** The open-source server holds no code that collects
    data for phone-home or sends it. This includes code that is off by
    default, an opt-in switch, and a phone-home collector that has no
@@ -57,7 +59,10 @@ the open-source server.
    `opendustpan` commands. The console loads no analytics script.
 7. **The hosted distribution** (ADR 59) observes its own installation with
    the tools of decision 4. It adds no phone-home code to the open-source
-   server.
+   server. This is not an exception to the destination test: in the hosted
+   distribution the project is the operator, so the test allows its
+   observability of the installations that it runs. That data stays in the
+   systems of the hosted distribution.
 
 ## Consequences
 
