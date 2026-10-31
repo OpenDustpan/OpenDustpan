@@ -1,6 +1,6 @@
 # 70. Act-as reach, identity provider groups and break-glass accounts
 
-Status: accepted · 2026-10-15. The `server:` action names superseded in part by ADR 210. Decisions 11, 23 and 28 superseded in part by ADR 216: the sign-in of a namespace, and support access. The fresh MFA step of decisions 16, 17 and 23 uses the window of ADR 227. Decisions 26 and 27 refined by ADR 245: the host command, its reason and its review
+Status: accepted · 2026-10-15. The `server:` action names superseded in part by ADR 210. Decisions 11, 23 and 28 superseded in part by ADR 216: the sign-in of a namespace, and support access. The fresh MFA step of decisions 16, 17 and 23 uses the window of ADR 227. Decisions 26 and 27 refined by ADR 245: the host command, its reason and its review. Decision 26 changed by ADR 297: the "used, not reviewed" mark at the sign-in, and the review by sign-in ID
 
 Changed by:
 
