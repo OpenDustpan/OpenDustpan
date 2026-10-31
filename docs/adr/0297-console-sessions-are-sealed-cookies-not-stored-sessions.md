@@ -1,6 +1,6 @@
 # 297. Console sessions are sealed cookies, not stored sessions
 
-Status: accepted · 2026-10-31. The project owner set the direction on 31 October 2026. The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. The "Changes" list names the ADRs that this ADR changes. Answers open question 1 of the RFC 114 draft
+Status: accepted · 2026-10-31. The project owner set the direction on 31 October 2026. The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. One question is held for the owner: where the short state of a sign-in lives. The "Changes" list names the ADRs that this ADR changes. Answers open question 1 of the RFC 114 draft
 
 Changes:
 
@@ -336,7 +336,8 @@ credential.
     the idle limit, because no refresh reaches it.
 20. **Sign-in paths.**
     - **MFA.** A pending sign-in stays a short record in SQL, because it
-      must count wrong factors (ADR 285 decision 20). It holds no credential
+      must count wrong factors (ADR 285 decision 20). The owner decides this
+      point (the held question below). It holds no credential
       that authenticates a request. A good factor deletes it and writes the
       audit entry in one transaction, and the answer sets the cookies.
     - **Fresh authentication (ADR 227).** A good fresh step sets a new access
@@ -476,24 +477,60 @@ that day.
 - One request costs an AEAD open and one read of the principal, in place of
   one read of the session row and a write at most each minute.
 
-## Open points for the owner
+## Decisions of the PM on the open points
 
-1. A sign-out ends the session in one browser only, and a copy of its access
-   cookie works for at most 5 minutes. The other choice: each sign-out bumps
-   the valid-after time, and so signs the person out on each device.
-   Recommendation: one browser only.
-2. A successful refresh writes no audit entry, so the audit log does not
-   show when a session was last used. The other choice: one entry for each
-   refresh, about 144 entries for each person each 12 hours.
-   Recommendation: no entry.
-3. The JWS of the proof needs a parser. `github.com/go-jose/go-jose/v4` is in
-   `go.mod` as an indirect requirement of `go-oidc`. The design makes it a
-   direct requirement. The PM must approve that.
-4. The sign-in request of an identity provider and the pending sign-in of
-   MFA stay short records in SQL (10 minutes and 5 minutes). Neither can
-   authenticate a request. They could move to sealed cookies, but the count
-   of wrong factors needs a record on the server. Recommendation: keep them.
-5. A run of Dusty ignores the idle limit and ends at the absolute deadline.
-   The other choice: a run ends when no refresh of its sign-in ID happened
-   for the idle limit, which needs a record of each refresh.
-   Recommendation: the absolute deadline.
+The PM decided these points on 31 October 2026, under the owner's
+delegation:
+
+1. **A sign-out ends the session in one browser** (decision 16). "Sign out
+   everywhere" is a separate action that bumps the valid-after time.
+   Benchmark: the sign-out of GitHub and of Google ends the session of one
+   browser, and each has a separate action for the other sessions.
+2. **A refresh that succeeds writes no audit entry** (decision 21). Each
+   refusal writes one. Benchmark: the logs of cloud providers and identity
+   providers record sign-ins and failures, not each token refresh.
+3. **`github.com/go-jose/go-jose/v4` becomes a direct requirement.** It
+   parses and verifies the JWS of the refresh proof (decision 7). The binary
+   links it already through `go-oidc`. The project uses no parser of its own
+   for a JWS.
+4. **A run of Dusty ends at the absolute deadline, at a bump, or at a
+   sign-out of its sign-in** (decision 19). It does not follow the idle
+   limit, because that needs a record of each refresh.
+
+## Open question for the owner (held)
+
+**Where the short state of a sign-in lives.** Two records hold state between
+two requests of one sign-in. Neither can authenticate a request:
+
+- the sign-in request of an identity provider (`session.Request`: the
+  state, the nonce, the PKCE verifier and the thumbprint of the refresh
+  key), for at most 10 minutes,
+- the pending sign-in of MFA (ADR 285 decision 20), which counts the wrong
+  factors (5 make it void), for at most 5 minutes.
+
+The options:
+
+- **(a) Short records in SQL, as today.** Each record works once, and a
+  job deletes it after its expiry. The count of 5 wrong factors on the
+  pending sign-in stays exact. The cost: the database holds a record of a
+  sign-in in progress for up to 10 minutes. It is not a session.
+- **(b) Sealed cookies.** The sign-in request and the pending sign-in go
+  into sealed cookies with the attributes of the access cookie, and the
+  server stores nothing for them. The count of wrong factors moves to the
+  factor lock of the person that exists already (ADR 285 decision 14: 10
+  wrong factors in a row lock the factors of the person for 30 minutes,
+  in a count that each instance shares). The costs: a cookie cannot work
+  once, so a copy of the sign-in request cookie can start a callback again
+  inside its 10 minutes (the identity provider still gives each code once).
+  A copy of the pending sign-in cookie can try factors until the factor
+  lock of the person stops it, so the limit of 5 for each pending sign-in
+  goes away.
+
+**Recommendation: (a).** Neither record is a session or a credential that
+authenticates a request. Option (a) keeps "a sign-in request works once"
+and the limit of 5 wrong factors for each pending sign-in. Option (b)
+loses them both. It keeps the factor count of the person,
+which is a record on the server too.
+
+**Plain summary:** the server keeps a few minutes of state while a sign-in
+is in progress, and nothing after it.
