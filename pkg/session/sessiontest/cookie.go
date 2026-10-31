@@ -54,7 +54,8 @@ func RunSealer(t *testing.T, _ func(t *testing.T) session.Sealer) {
 		// The server nonce.
 		"NonceRoundTrip",
 		"ANonceOlderThanTheWindowIsStale",
-		"ANonceAfterTheServerTimeIsStale",
+		"ANonceUpTo5SecondsAheadOpens",
+		"ANonceMoreThan5SecondsAheadIsStale",
 		"ANonceDoesNotOpenAsACookie",
 		"ACookieDoesNotOpenAsANonce",
 		// Boundary: the form and the length, before any open.
@@ -163,7 +164,12 @@ func RunProofVerifier(t *testing.T, _ func(t *testing.T) session.ProofVerifier) 
 		"AProofWithADuplicateHeaderKeyIsMalformed",
 		"AProofWithADuplicateClaimIsMalformed",
 		"AProofWithADERSignatureIsMalformed",
-		"AProofWithNoNonceHasNoNonce",
+		"AProofWithNoNonceIsRefused",
+		"AProofWithANonceThatDoesNotOpenIsRefused",
+		"AProofWithACookieValueAsItsNonceIsRefused",
+		"TheVerifierAloneRefusesAProofWithAnOldNonce",
+		"TheVerifierAloneRefusesAProofWithANonceTooFarAhead",
+		"AGoodProofGivesTheTimeOfItsNonce",
 		"AProofWithNoJTIIsMalformed",
 		"AProofWithAJTIOfLessThan128BitsIsMalformed",
 		"AProofWithNoIATIsMalformed",
@@ -247,6 +253,10 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"AProofFromABrowserWithAClockTwoMinutesOffRefreshes",
 			"AProofWithNoNonceGetsUseDPoPNonceAndNoEntry",
 			"AProofWithAnOldNonceGetsUseDPoPNonceAndNoEntry",
+			"TheRefreshChecksTheNonceAgainAfterTheVerifier",
+			"ANonceFromAReplicaWithAClockAheadBy1SecondRefreshes",
+			"EachReplicaSendsOneNonceFor5Seconds",
+			"NonceRequestsDoNotUseUpTheSealBudget",
 			"UseDPoPNonceAnswersCountInTheSourceBudget",
 			"TwoRefreshCookiesUseTheFirstThatOpensAndMatches",
 			"MoreThanTwoRefreshCookiesAreRefused",
@@ -339,6 +349,7 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"ARunEndsAtASignOutOfItsSignIn",
 			"ARunRecordWithAZeroDeadlineEndsTheRun",
 			"ARunRecordWithASignInIDOfTheWrongFormEndsTheRun",
+			"APollWithAnExpiredAccessCookieDoesNotMoveTheIdleDeadline",
 		})
 	})
 
