@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // flowsScale is the -flows value of the scale run.
@@ -557,7 +558,14 @@ type cpuMark struct {
 
 // newMonitor connects to the database and finds the postmaster.
 func newMonitor(ctx context.Context, pgURL string, procs []*serverProc, storePID int) (*monitor, error) {
-	conn, err := pgx.Connect(ctx, pgURL)
+	// The pool settings in the URL (pool_max_conns and others) belong to the
+	// pool of the server, so the sampler reads the connection part only.
+	poolConfig, err := pgxpool.ParseConfig(pgURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse the database URL: %w", err)
+	}
+
+	conn, err := pgx.ConnectConfig(ctx, poolConfig.ConnConfig)
 	if err != nil {
 		return nil, fmt.Errorf("connect the sampler: %w", err)
 	}
