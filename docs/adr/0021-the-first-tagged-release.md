@@ -8,6 +8,7 @@ Changed by:
 - ADR 33 extends: the gate of the first release gets the schema check.
 - ADR 73 changes: the API rules of the Version section.
 - ADR 75 extends: the release cadence and the support policy.
+- ADR 246 extends: the Helm chart can ship with the first release.
 - ADR 279 changes: the When decision, the first release after milestone 2.
 - ADR 279 extends: the release gate gets the exit tests of milestones 1 to 7.
 - ADR 283 extends: the release gate gets the release workflow item.
