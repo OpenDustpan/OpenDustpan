@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -561,6 +562,7 @@ func newFixtureWith(
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            f.updates,
 		Tokens:             nil,
@@ -581,6 +583,7 @@ func newFixtureWith(
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.workspaces,
 		States:             states,
@@ -717,6 +720,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            f.updates,
 		Tokens:             nil,
@@ -737,6 +741,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.workspaces,
 		States:             fakeStates{},

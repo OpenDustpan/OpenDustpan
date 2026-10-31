@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -62,6 +63,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 	secrets := newMemSealer(t, namespaces)
 	refusals := workspacetest.NewRefusals()
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,

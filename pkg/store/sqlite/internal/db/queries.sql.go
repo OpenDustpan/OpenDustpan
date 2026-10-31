@@ -17272,6 +17272,33 @@ func (q *Queries) RunningUpdateAt(ctx context.Context, arg RunningUpdateAtParams
 	return version, err
 }
 
+const runningWork = `-- name: RunningWork :one
+SELECT kind, id
+FROM (
+    SELECT CAST('backup' AS TEXT) AS kind, id FROM backups WHERE state = 'running'
+    UNION ALL
+    SELECT CAST('restore' AS TEXT) AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+) AS running_work
+ORDER BY kind, id
+LIMIT 1
+`
+
+type RunningWorkRow struct {
+	Kind string
+	ID   string
+}
+
+// Reads one backup in the running state, or else one restore in the checking
+// or applying state, in one statement. The guard of the blob deletes uses it.
+// A backup comes first, and the smaller ID comes first, so the answer is the
+// same for the same rows.
+func (q *Queries) RunningWork(ctx context.Context) (RunningWorkRow, error) {
+	row := q.db.QueryRowContext(ctx, runningWork)
+	var i RunningWorkRow
+	err := row.Scan(&i.Kind, &i.ID)
+	return i, err
+}
+
 const saveAuditChainCheckResult = `-- name: SaveAuditChainCheckResult :exec
 INSERT INTO audit_chain_check (id, checked_at_ms, invalid)
 VALUES (1, ?1, ?2)

@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -4070,6 +4071,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	for i := range services {
 		svc, err := workspace.NewService(workspace.Config{
 			ManualLocks:        nil,
+			BlobGuard:          blobguardtest.None{},
 			Workspaces:         s,
 			States:             s,
 			Blobs:              blobs,
