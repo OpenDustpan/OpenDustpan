@@ -357,14 +357,19 @@ func (s *Source) prepare(
 	return f, unitFile, nil
 }
 
-// commit makes the unit file, and then it writes the facts file f, which
+// commit makes the unit file for the first version of a unit, and then it writes the facts file f, which
 // commits the version. The body at bk is deleted when the commit fails for
 // a reason that leaves the facts file unwritten.
 func (s *Source) commit(
 	ctx context.Context, u unitimport.SourceUnit, f facts, bk blob.Key, unitFile []byte,
 ) (unitimport.SourceVersion, error) {
-	if err := s.ensureUnit(ctx, u, unitFile); err != nil {
-		return unitimport.SourceVersion{}, s.discard(ctx, bk, err)
+	// checkNext lists the facts files before the body is stored, and it
+	// accepts only the next sequence. So a unit has no unit file only while
+	// its sequence is 1, and a later version writes the unit file never.
+	if f.Sequence == 1 {
+		if err := s.ensureUnit(ctx, u, unitFile); err != nil {
+			return unitimport.SourceVersion{}, s.discard(ctx, bk, err)
+		}
 	}
 
 	encoded, err := encode(f)
