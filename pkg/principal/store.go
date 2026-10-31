@@ -57,8 +57,12 @@ type RecordStore interface {
 	// keeps the principals of that kind, in the rows and in the total.
 	ListPrincipals(ctx context.Context, q Query, kind Kind) ([]Principal, int64, error)
 	// UpdatePrincipal replaces the display name and the update time of the
-	// principal with the ID p.ID. The subject, the kind and the creation
-	// time do not change. It returns ErrNotFound when no such principal
+	// principal with the ID p.ID. The subject, the kind, the break-glass flag
+	// and the creation time do not change. Today no write sets the
+	// break-glass flag on an existing person. The rule below guards a later
+	// write that does: it locks the row of the principal and returns
+	// ErrBreakGlassPassword when the person has a local password, in the same
+	// transaction. It returns ErrNotFound when no such principal
 	// exists.
 	UpdatePrincipal(ctx context.Context, p Principal, e audit.Entry) error
 	// DeletePrincipal ends the principal with the ID id and each membership

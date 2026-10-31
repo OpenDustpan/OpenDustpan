@@ -137,3 +137,7 @@ public issue for it.
 OpenDustpan is under the [Apache License 2.0](LICENSE). Section 5 of the
 license applies to your contribution: what you submit is under the same
 license, unless you say otherwise.
+
+OpenDustpan has no contributor license agreement and no copyright assignment.
+You keep the copyright of your contribution. The project cannot relicense your
+code without your agreement.
