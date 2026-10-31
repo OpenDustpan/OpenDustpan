@@ -365,9 +365,7 @@ func protocolFamilies() []family {
 		restoreCopyPresent(),
 		auditWrite(),
 		auditVerify(),
-		auditWriteFlat(),
 		auditWriteOneList(),
-		auditVerifyFlat(),
 	}
 }
 

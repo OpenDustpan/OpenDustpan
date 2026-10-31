@@ -132,13 +132,18 @@ func unitImportUpload() family {
 			return err
 		}
 
+		// The code writes the unit file for the first version of a unit
+		// only. The old path, before that change, wrote it for each version
+		// and the store refused all but the first write.
 		unitKey := r.prefix + "/u/" + padded(i/versionsPerUnit)
 		if i%versionsPerUnit == 0 {
 			r.remember(unitKey)
 		}
 
-		if err := r.putSmall(ctx, unitKey, unitFile, headerOf(mode)); err != nil {
-			return err
+		if mode == modeOld || i%versionsPerUnit == 0 {
+			if err := r.putSmall(ctx, unitKey, unitFile, headerOf(mode)); err != nil {
+				return err
+			}
 		}
 
 		if err := r.putSmall(ctx, factsKey, facts, headerOf(mode)); err != nil {
@@ -152,7 +157,7 @@ func unitImportUpload() family {
 		Name: "unit import upload (upload code)", Bytes: checkpointBytes, Read: false,
 		OpBytes: checkpointBytes + unitFileBytes + factsFileBytes, Candidate: false,
 		OldPath: "PUT body + PUT unit file + PUT facts, all with If-None-Match and fixed keys + audited fenced tx",
-		NewPath: "PUT body + PUT unit file + PUT facts, attempt keys + audited fenced tx",
+		NewPath: "PUT body + PUT unit file (first version of a unit only) + PUT facts, attempt keys + audited fenced tx",
 		pause:   0,
 		seed:    nil,
 		old:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },
@@ -270,9 +275,9 @@ func seedObjects(n int) func(ctx context.Context, r *protoRun) error {
 }
 
 // seedScope writes the epoch object and the checkpoint copies of one scope in
-// each layout: one key for each sequence (the old path), one key for each
-// copy under its sequence (the new path of the code), and one key for each
-// copy beside the others (the flat candidate).
+// each layout: one key for each sequence (the old path), and one key for each
+// copy beside the others, as <sequence>-<attempt> (the new path, which is
+// the layout of the code).
 func seedScope(ctx context.Context, r *protoRun) error {
 	if err := r.putPlain(ctx, r.readPrefix+"/epoch/"+padded(1)); err != nil {
 		return err
@@ -283,55 +288,33 @@ func seedScope(ctx context.Context, r *protoRun) error {
 
 		return errors.Join(
 			r.putPlain(ctx, r.readPrefix+"/old/"+seq),
-			r.putPlain(ctx, r.copyKey(layoutNested, seq)),
-			r.putPlain(ctx, r.copyKey(layoutFlat, seq)),
+			r.putPlain(ctx, r.copyKey(seq)),
 		)
 	})
 }
 
-// Layouts of the checkpoint copies of the new path.
-const (
-	// layoutNested is the layout of the code: <sequence>/<attempt>.
-	layoutNested = "nested"
-	// layoutFlat is the candidate layout: <sequence>-<attempt>.
-	layoutFlat = "flat"
-)
-
-// copyKey answers the key of the one copy of seq in layout.
-func (r *protoRun) copyKey(layout, seq string) string {
-	if layout == layoutFlat {
-		return r.readPrefix + "/flat/" + seq + "-" + r.attempt
-	}
-
-	return r.readPrefix + "/new/" + seq + "/" + r.attempt
+// copyKey answers the key of the one copy of seq: <sequence>-<attempt> in
+// one directory, as CheckpointKey makes it.
+func (r *protoRun) copyKey(seq string) string {
+	return r.readPrefix + "/new/" + seq + "-" + r.attempt
 }
 
-// copyDir answers the scope directory of the new path in layout.
-func (r *protoRun) copyDir(layout string) string {
-	if layout == layoutFlat {
-		return r.readPrefix + "/flat"
+// scopeDir answers the scope directory of a path: one key for each sequence
+// on the old path, the copies in one directory on the new path.
+func (r *protoRun) scopeDir(mode string) string {
+	if mode == modeOld {
+		return r.readPrefix + "/old"
 	}
 
 	return r.readPrefix + "/new"
 }
 
-// scopeDir answers the scope directory of a path: the old layout on the old
-// path, layout on the new path.
-func (r *protoRun) scopeDir(mode, layout string) string {
-	if mode == modeOld {
-		return r.readPrefix + "/old"
-	}
-
-	return r.copyDir(layout)
-}
-
-// writeVariant is one model of the audit checkpoint write: the layout of the
-// copies, whether the new path lists the scope a second time before the PUT,
-// and whether the model is a candidate rather than code.
+// writeVariant is one model of the audit checkpoint write: whether the new
+// path lists the scope a second time before the PUT, and whether the model is
+// a candidate rather than code.
 type writeVariant struct {
 	name       string
 	newPath    string
-	layout     string
 	listsTwice bool
 	candidate  bool
 }
@@ -341,23 +324,13 @@ type writeVariant struct {
 // check marks, the LIST of the scope directory, the read of the last entry,
 // the read of the epoch again, and the PUT of the checkpoint. The new path
 // lists the scope directory a second time in storeNew, and writes under a key
-// with an attempt part. The model writes the checkpoint outside the seeded
+// with an attempt part, <sequence>-<attempt> in the directory of the scope. The model writes the checkpoint outside the seeded
 // directory, so the directory keeps its size during a run.
 func auditWrite() family {
 	return auditWriteModel(writeVariant{
-		name:    "audit checkpoint write (Write)",
-		newPath: "the same with a second LIST of the scope, and the PUT under an attempt key",
-		layout:  layoutNested, listsTwice: true, candidate: false,
-	})
-}
-
-// auditWriteFlat is a candidate, not code: the write of auditWrite with the
-// copies in the flat layout.
-func auditWriteFlat() family {
-	return auditWriteModel(writeVariant{
-		name:    "audit checkpoint write, flat layout (candidate)",
-		newPath: "as the code, with the copies as <sequence>-<attempt> in one directory",
-		layout:  layoutFlat, listsTwice: true, candidate: true,
+		name:       "audit checkpoint write (Write)",
+		newPath:    "the same with a second LIST of the scope, and the PUT under <sequence>-<attempt>",
+		listsTwice: true, candidate: false,
 	})
 }
 
@@ -365,9 +338,9 @@ func auditWriteFlat() family {
 // without the second LIST of the scope in storeNew.
 func auditWriteOneList() family {
 	return auditWriteModel(writeVariant{
-		name:    "audit checkpoint write, one LIST (candidate)",
-		newPath: "as the code, without the second LIST of the scope before the PUT",
-		layout:  layoutNested, listsTwice: false, candidate: true,
+		name:       "audit checkpoint write, one LIST (candidate)",
+		newPath:    "as the code, without the second LIST of the scope before the PUT",
+		listsTwice: false, candidate: true,
 	})
 }
 
@@ -379,7 +352,7 @@ func auditWriteModel(v writeVariant) family {
 			key = r.attemptKey(i)
 		}
 
-		dir := r.scopeDir(mode, v.layout)
+		dir := r.scopeDir(mode)
 		listDir := func(d string) func() error {
 			return func() error { _, err := r.list(ctx, d); return err }
 		}
@@ -423,24 +396,13 @@ func auditWriteModel(v writeVariant) family {
 // requests.
 func auditVerify() family {
 	return auditVerifyModel("audit checkpoint check (Verify)",
-		"LIST scope + GET the copies of 10 planned checkpoints (1 each) + read last entry", layoutNested)
+		"LIST scope + GET the copies of 10 planned checkpoints (1 each) + read last entry")
 }
 
-// auditVerifyFlat is a candidate, not code: the check of auditVerify with
-// the copies in the flat layout.
-func auditVerifyFlat() family {
-	f := auditVerifyModel("audit checkpoint check, flat layout (candidate)",
-		"as the code, with the copies as <sequence>-<attempt> in one directory", layoutFlat)
-	f.Candidate = true
-
-	return f
-}
-
-// auditVerifyModel answers the check model with the copies of the new path
-// in layout.
-func auditVerifyModel(name, newPath, layout string) family {
+// auditVerifyModel answers the check model.
+func auditVerifyModel(name, newPath string) family {
 	op := func(ctx context.Context, r *protoRun, i int, mode string) error {
-		n, err := r.list(ctx, r.scopeDir(mode, layout))
+		n, err := r.list(ctx, r.scopeDir(mode))
 		if err != nil {
 			return err
 		}
@@ -454,7 +416,7 @@ func auditVerifyModel(name, newPath, layout string) family {
 
 			key := r.readPrefix + "/old/" + seq
 			if mode == modeNew {
-				key = r.copyKey(layout, seq)
+				key = r.copyKey(seq)
 			}
 
 			if err := r.get(ctx, key); err != nil {
