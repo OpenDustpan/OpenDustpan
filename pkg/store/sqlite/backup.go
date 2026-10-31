@@ -1185,10 +1185,14 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the drift results, the registry, the Git host connections,
+// of their own: the drift results, the unit settings, the registry, the Git host connections,
 // the notification sinks, the triggers, the catalog blueprints and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedUnitSettings(ctx, conn); err != nil {
 		return err
 	}
 
