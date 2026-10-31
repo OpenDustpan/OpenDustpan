@@ -1,6 +1,6 @@
 # Architecture and sizing
 
-This guide shows one supported layout and one target design. It shows what runs where, what the parts share, and what stops when one part stops. It also holds the sizing tables. No measured numbers exist yet.
+This guide shows one supported layout and one target design. It shows what runs where, what the parts share, and what stops when one part stops. It also holds the sizing tables. The [measured sizing page](measured-sizing.md) shows one load run of one to three instances.
 
 ## One instance with SQLite and a local blob directory
 
@@ -66,7 +66,7 @@ In the target design, you would back up this layout the same way as any installa
 
 ## Sizing
 
-No measured numbers exist yet. Size each installation from a load run, not from guesses. The [load harness guide](load.md) shows how to run the harness and how to read its report. Each table below gains one row per release, with the hardware and the date of the run.
+Size each installation from a load run, not from guesses. The [measured sizing page](measured-sizing.md) gives the numbers of one run of one to three instances on one host. The [load harness guide](load.md) shows how to run the harness and how to read its report. Each table below gains one row per release, with the hardware and the date of the run.
 
 ### Memory per instance
 
