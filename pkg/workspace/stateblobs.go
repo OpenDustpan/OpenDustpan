@@ -127,12 +127,14 @@ func (b *stateBlobs) deleteRetried(ctx context.Context, ns namespace.ID, ws ID, 
 	return b.refuse(ctx, ns, opDelete, blob.DeleteRetried(ctx, v, key), scopeaudit.PlaceOf(v, key))
 }
 
-// list returns the blobs of the workspace ws, in the namespace with ID ns. It
-// returns blob.ErrOutOfScope, and does not call the store, when ws is empty.
-func (b *stateBlobs) list(ctx context.Context, ns namespace.ID, ws ID) ([]blob.Object, error) {
+// walk calls fn with each page of the blobs of the workspace ws, in the
+// namespace with ID ns. It returns blob.ErrOutOfScope, and does not call the
+// store, when ws is empty. A caller acts on a page and goes on, so it never
+// holds the blobs of the whole workspace.
+func (b *stateBlobs) walk(ctx context.Context, ns namespace.ID, ws ID, fn func([]blob.Object) error) error {
 	v, err := b.view(ns)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Defense in depth: the callers take ws from the row of the workspace or
@@ -140,15 +142,15 @@ func (b *stateBlobs) list(ctx context.Context, ns namespace.ID, ws ID) ([]blob.O
 	// names a directory that is not the directory of one workspace. It does
 	// not rely on the callers or on the view.
 	if ws == "" {
-		return nil, b.refuse(ctx, ns, opList, blob.ErrOutOfScope, scopeaudit.OutsideUnitDirectory)
+		return b.refuse(ctx, ns, opList, blob.ErrOutOfScope, scopeaudit.OutsideUnitDirectory)
 	}
 
-	objects, err := v.List(ctx, workspaceDir(v, ws))
+	err = blob.WalkPages(ctx, v, workspaceDir(v, ws), fn)
 	if err != nil {
-		return nil, b.refuse(ctx, ns, opList, fmt.Errorf("list state blobs: %w", err), scopeaudit.OutsideNamespace)
+		return b.refuse(ctx, ns, opList, fmt.Errorf("list state blobs: %w", err), scopeaudit.OutsideNamespace)
 	}
 
-	return objects, nil
+	return nil
 }
 
 // workspaceDir returns the directory of the state blobs of the workspace ws in

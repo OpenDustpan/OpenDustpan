@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -416,7 +417,7 @@ func (e *env) stage(t *testing.T, ns namespace.Name, s *set) service.PublishRequ
 func (e *env) listing(t *testing.T, id namespace.ID, dir string) []string {
 	t.Helper()
 
-	objects, err := e.blobs.List(context.Background(), "namespaces/"+id.String()+"/registry/"+dir)
+	objects, err := blobtest.ListAll(context.Background(), e.blobs, "namespaces/"+id.String()+"/registry/"+dir)
 	if err != nil {
 		t.Fatalf("list blobs: %v", err)
 	}
