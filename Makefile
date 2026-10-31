@@ -136,8 +136,10 @@ chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubecon
 # on a CI runner with 4 cores. GO_TEST_TIMEOUT is the limit for each package.
 GO_TEST_TIMEOUT := 20m
 
-# TEST_TIMEOUT is the limit for each package in test, test-nocache and
-# test-postgres. These targets run the store packages together with all other
+# TEST_TIMEOUT is the limit for each package in test, test-nocache,
+# test-postgres, journal-test, bench and test-s3: each target that runs whole
+# packages. A target that runs one named test keeps the go test default. The
+# first three targets run the store packages together with all other
 # packages. In a session container with 4 CPUs and 15 GB, pkg/dustpan took
 # 1371 s, pkg/store/sqlite 1721 s and pkg/store/postgres 1405 s, each one
 # alone, so 20m failed every run. The CI targets keep GO_TEST_TIMEOUT and
@@ -188,7 +190,7 @@ test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL
 	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
-	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
+	go test -run '^$$' -bench . -benchtime 1x -timeout $(TEST_TIMEOUT) ./pkg/stack/ ./pkg/store/sqlite/
 
 load: ## Run the load harness against a self-started server and write load-report.json (SQLite default; set DUSTPAN_TEST_POSTGRES_URL for PostgreSQL). Not part of check.
 	go run ./load -out load-report.json
@@ -198,7 +200,7 @@ bench-s3: ## S3 latency benchmark: MinIO, Garage, PostgreSQL 18 and Toxiproxy in
 
 test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs DUSTPAN_TEST_S3_*).
 	@test -n "$$DUSTPAN_TEST_S3_ENDPOINT" && test -n "$$DUSTPAN_TEST_S3_BUCKET" && test -n "$$DUSTPAN_TEST_S3_ACCESS_KEY" && test -n "$$DUSTPAN_TEST_S3_SECRET_KEY" || (echo "set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY" && exit 1)
-	go test $(RACE_TEST_FLAGS) -count=1 ./pkg/blob/s3/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/blob/s3/...
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
@@ -265,7 +267,7 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations,
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
 
 journal-test: ## Journal route tests of the recording build. No CLI download; part of check.
-	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 ./internal/api/pulumi/ ./pkg/dustpan/
+	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./internal/api/pulumi/ ./pkg/dustpan/
 
 journal-guard: ## Refuse a release build that uses the journalrecording tag (ADR 43, work item 9).
 	@if grep -rq journalrecording Dockerfile .github/workflows scripts 2>/dev/null || \
