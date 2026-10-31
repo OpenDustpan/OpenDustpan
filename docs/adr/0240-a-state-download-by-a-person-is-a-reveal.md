@@ -1,6 +1,6 @@
 # 240. A state download by a person is a reveal, and a principal has a kind
 
-Status: accepted · 2026-10-18. Supersedes in part ADR 41 decisions 9 and 13, ADR 60 decision 4, ADR 223 decision 4 and ADR 226 decision 4. Extends ADR 41 decision 5 and the field list of ADR 72 decision 6
+Status: accepted · 2026-10-18. Supersedes in part ADR 41 decisions 9 and 13, ADR 60 decision 4, ADR 223 decision 4 and ADR 226 decision 4. Extends ADR 41 decision 5 and the field list of ADR 72 decision 6. Extended by ADR 297: the credential `session` names a request that an access cookie authenticates
 
 ## Context
 
