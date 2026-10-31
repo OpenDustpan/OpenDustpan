@@ -13,7 +13,7 @@ project's name, logo or colors as ours. As a label for a tool, in the console
 and in API values, write "Pulumi" or "OpenTofu" (see "Tool name" in
 `GLOSSARY.md`).
 
-Read `docs/adr/` and `docs/rfc/` before changing architecture. An ADR is a
+Read `docs/adr/INDEX.md`, `docs/adr/` and `docs/rfc/` before changing architecture. An ADR is a
 decision. An RFC is an open question (ADR 15). For an open question, write an
 RFC. Write an ADR only after the project owner accepts a decision. If a change
 contradicts an ADR, write an RFC first. Use the terms in `GLOSSARY.md` in code, docs and
@@ -377,7 +377,9 @@ has no checkout. It shows pushed commits only. The checkout is the truth.
   of files.
 - `get_symbol` returns a signature, a location and graph edges. It does not return source.
   Read the file at the returned line range.
-- Call `get_risk` before you edit a hotspot. Call `get_why` before you refactor.
+- Call `get_risk` before you edit a hotspot. Call `get_why` for the history of the code
+  before you refactor. For the decision that applies to the code, do the steps in
+  "Decisions".
 - `get_change_risk` scores one pushed commit by its sha. It does not score a range or
   uncommitted work.
 - Read the file again when `_meta.stale_warning` is present, when `confidence` is `low`, or
