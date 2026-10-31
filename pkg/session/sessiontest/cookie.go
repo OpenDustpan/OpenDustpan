@@ -307,6 +307,8 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"ThePendingSignInCookieIsStrict",
 			"AFactorStepWithNoProofIsRefused",
 			"AFactorStepWithAProofOfAnotherKeyIsRefused",
+			"APasskeySignInFinishWithNoProofIsRefused",
+			"APasskeySignInFinishWithAProofOfAnotherKeyIsRefused",
 			"AFreshStepWithNoProofIsRefused",
 			"AFreshStepWithAProofOfAnotherKeyIsRefused",
 			"AnEnrollmentWithNoProofIsRefused",
