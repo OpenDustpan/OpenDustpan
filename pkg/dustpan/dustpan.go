@@ -1950,14 +1950,8 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		updates:     updates,
 		secrets:     secrets,
 		workspaces:  workspaces,
-		tokens:      nil,
-		tempAdmins:  nil,
-		deleted:     nil,
-		access:      nil,
-		collections: nil,
-		placements:  nil,
-		gates:       nil,
-		issuer:      nil,
+		tokens: nil, tempAdmins: nil, deleted: nil, access: nil, collections: nil, placements: nil, gates: nil,
+		issuer: nil,
 	}, nil
 }
 
