@@ -190,20 +190,35 @@ Sources:
      the caller stays a canceled context, not an outage.
    - A path that runs for longer, for example the migrations, the backup
      export and import, the restore swap and the staging copy, names its own
-     bound in code. It sets `statement_timeout` and
-     `idle_in_transaction_session_timeout` with `SET LOCAL` in its
-     transaction, or uses a connection of its own. On `main` these paths
+     bound in code. The pool sets the server timeouts as start-up
+     parameters of each connection, so `RESET ALL` goes back to them. A
+     session `SET` on a connection that goes back to the pool stays on that
+     connection for the next request, so it is not allowed. Each kind of
+     path has one allowed form:
+     - Statements inside a transaction: `SET LOCAL statement_timeout` and
+       `SET LOCAL idle_in_transaction_session_timeout` in that transaction.
+     - A single statement outside a transaction, for example `CREATE SCHEMA`
+       or `DROP SCHEMA ... CASCADE`: the path runs it in a short transaction
+       with the same two `SET LOCAL` statements.
+     - A connection that the path keeps for a session (the sweep lock): the
+       path changes no session value, so its statements run under the
+       start-up values of the pool. When a path must change a session
+       value, it ends the connection with `Hijack` and a close. As a second
+       layer, the pool runs `RESET ALL` in its `AfterRelease` function, so
+       no session value of one path reaches the next request.
+
+     On `main` these paths
      are `pool.Acquire` in `inBackupTx`, `TryLockSweep`, and the direct
      `s.pool.Query` and `s.pool.Exec` calls of the backup code.
    - `TestLongPathsNameTheirBound` finds these paths with a static check: it
      parses the files of `pkg/store/postgres` with `go/ast` and finds each
      call of `Acquire`, `Hijack` and `Conn`, and each direct call on
      `s.pool`. A list kept by hand would drift. Each path that the check
-     finds must be in the allowlist of the test, and the test checks that
-     the path sets both `statement_timeout` and
-     `idle_in_transaction_session_timeout`, not only that the allowlist
-     names it. A
-     new path fails the test until it names its bounds.
+     finds must be in the allowlist of the test. The test checks that the
+     path uses one of the allowed forms above, not only that the allowlist
+     names it. It fails on a session `SET` (a `SET` with no `LOCAL`) in a
+     path that releases its connection to the pool. A new path fails the
+     test until it names its bounds.
    - These bounds are code rules. They go into the catalog of code rules,
      and the installation API shows their values (decision 6).
 4. **The pool leaves a read-only server.** When the adapter translates an
@@ -320,15 +335,17 @@ Sources:
    | Pulumi `StartUpdate` | No | `StartBy` commits a running update. The server does not store the token. The command fails at once. The next `pulumi up` gets 409 for up to `DefaultLease`, 5 minutes after the start, or until `pulumi cancel` | An accepted exception (PM). The guide gives the remedy `pulumi cancel` and the block of at most 5 minutes |
    | TFE state version upload and finalize | Yes (OpenTofu) | Success on a repeat (`confirmRetry`) | No change |
    | HTTP backend `LOCK` with the same lock ID | Yes (OpenTofu) | `lockAs` refuses any held lock with `ErrLocked`: 423, and `tofu` fails with its own lock in place | Success when the lock is still held, with the same lock ID and the same holder. The client chose the ID, so a match is the same request. The handler pre-check and the service both apply the rule, before the refusal of a held lock |
-   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | Yes (OpenTofu) | HTTP backend: the handler pre-check (`!ws.Lock.Locked() \|\| ws.Lock.ID != info.ID`) answers 409 with no body. Below it, `UnlockLock` runs `checkLockID` first and gives `ErrLockMismatch`. TFE: `heldBy` gives `ErrNotLocked`, 409 `workspace.not-locked` | The workspace row keeps a record of its last released lock. The record holds the lock ID, the holder, the time of the release, and the kind of release: normal or forced. The API of the workspace shows it. On a free workspace, the HTTP backend `UNLOCK` answers success only when the record has the lock ID of the request. The release must also be a normal release, not a forced one. TFE `actions/unlock` sends no lock ID. So it answers success only when the record names the caller as the holder, after a normal release. After a forced release, the original holder gets 409, so the operator and the CLI see that someone broke the lock. In all other cases, 409 as today. The record matches for 24 hours after the release, and not after that. No tool lock has a lease to use as the bound: an OpenTofu lock has none. 24 hours is far above each retry window of the CLIs: 15 seconds for the Pulumi CLI, more than 30 seconds plus `-lock-timeout` for OpenTofu. And a record cannot match an unlock from a later day. The rule goes in the handler pre-check and in the service, ahead of `checkLockID`. No state changes, so no audit entry. `make e2e` checks each CLI version |
+   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | Yes (OpenTofu) | HTTP backend: the handler pre-check (`!ws.Lock.Locked() \|\| ws.Lock.ID != info.ID`) answers 409 with no body. Below it, `UnlockLock` runs `checkLockID` first and gives `ErrLockMismatch`. TFE: `heldBy` gives `ErrNotLocked`, 409 `workspace.not-locked` | The workspace row keeps a record of its last released lock. The record holds the lock ID, the holder, the releaser, the time of the release, and the kind of release: normal or forced. In a forced release, the releaser differs from the holder. The API of the workspace shows it. On a free workspace, the HTTP backend `UNLOCK` answers success only when the record has the lock ID of the request. The release must also be a normal release, not a forced one. TFE `actions/unlock` sends no lock ID. So it answers success only when the record names the caller as the holder, after a normal release. After a forced release, the original holder gets 409, so the operator and the CLI see that someone broke the lock. A force-unlock is a write that OpenTofu also sends again after a 503. On a free workspace, a repeated force-unlock answers success when the record shows a forced release by the same caller. For the HTTP backend, that is an `UNLOCK` from a caller that is not the holder, with the lock ID of the record. For TFE, that is `actions/force-unlock` from the caller that the record names as the releaser. Today `forceUnlock` gives `ErrNotLocked` on a free workspace, and the TFE answer is 409. In all other cases, 409 as today. The record matches for 24 hours after the release, and not after that. No tool lock has a lease to use as the bound: an OpenTofu lock has none. 24 hours is far above each retry window of the CLIs: 15 seconds for the Pulumi CLI, more than 30 seconds plus `-lock-timeout` for OpenTofu. And a record cannot match an unlock from a later day. The rule goes in the handler pre-check and in the service, ahead of `checkLockID`. No state changes, so no audit entry. `make e2e` checks each CLI version |
    | TFE `actions/lock` sent again | Yes (OpenTofu) | 409 "is locked by" with the same subject. OpenTofu waits under `-lock-timeout`, then fails | An accepted exception (PM): the answer stays 409, and the lock fails closed. The real TFE also refuses a lock on a locked workspace. A match on the principal or the token cannot tell a retry from a second run. The lock record names the holder and the time. The guide gives the remedy: `tofu force-unlock` |
 
    - The record is a change of the workspace store port. Its conformance
      rows come first, before either adapter implements it. SQLite and
      PostgreSQL both get the migration. The backup table list holds the new
      columns, so `backup_coverage_test` passes.
-   - Step 9d (decision 12) adds a row for each lock and unlock route and for
-     `StartUpdate`.
+   - Step 9d (decision 12) adds a row for each lock, unlock and force-unlock
+     route and for `StartUpdate`. The rows include a repeated force-unlock
+     by the same caller (success) and a normal unlock by the original holder
+     after a forced release (409).
    - The guide changes its sentence "OpenTofu: ... the workspace has no
      lock": after a lost answer to a TFE lock, the lock can stay.
 10. **Replication mode (PM).** The guarantees of decisions 8, 9 and 11 hold
@@ -515,8 +532,10 @@ binaries are not present.
   - `TestLongPathsNameTheirBound`: the list of decision 3.
   - `TestExpiryInGapDoesNotCount`: a gap does not count, a crash does.
 - Tests in `pkg/workspace` and the HTTP adapters: the repeated lock and
-  unlock of decision 9, with one row for a matching record and one row for
-  each kind of mismatch.
+  unlock and force-unlock of decision 9, with one row for a matching record
+  and one row for each kind of mismatch: another lock ID, another caller,
+  a forced release for the original holder, a repeated force-unlock by the
+  same releaser, and a record older than 24 hours.
 - `e2e/ha_failover_test.go`: the check of the retry of each Pulumi and
   OpenTofu route of decision 9, with the round-robin HTTP proxy of
   `HACluster` that answers 503 to one route at a time.
@@ -595,7 +614,9 @@ The PM answered the architecture review on 2026-10-31:
 7. The server timeouts of decision 3 and the answer to 57014 are decisions
    of this ADR.
 
-The architecture review of round 2 (2026-10-31) changed decisions 3, 9, 10
+The architecture review of round 3 (2026-10-31) changed decisions 3 and 9:
+the allowed forms of the server timeouts on the long paths, and a repeated
+force-unlock. The architecture review of round 2 changed decisions 3, 9, 10
 and 11: the static check of the long paths, the record check in the handler
 and the service, the forced release, the declared replication mode, the
 classes that `Deferred` matches, the stable owner of a process, and the
