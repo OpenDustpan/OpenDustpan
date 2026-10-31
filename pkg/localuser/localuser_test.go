@@ -143,3 +143,34 @@ func TestDemoSubjectIsADevSubject(t *testing.T) {
 		t.Fatalf("ValidateSubject accepts %q; the API must not make the demo person", localuser.DemoSubject)
 	}
 }
+
+// TestServiceRules names the rules of the local user service that no store
+// can check. Each case skips until the service exists, so that the names are
+// the contract that the service meets.
+func TestServiceRules(t *testing.T) {
+	t.Parallel()
+
+	rules := []string{
+		"a sign-in that gets no room in the hash memory budget answers 429 and counts no name failure",
+		"the name failure counts after the hash gets its budget and before the compare",
+		"a full sign-in clears the count of its own source prefix and the global count of the name",
+		"an administrator unlock clears every prefix count and the global count of the name",
+		"the global lock of a name lasts 30 minutes and doubles for each new global lock up to 24 hours",
+		"the level of the global lock goes back to the start after 24 hours with no global lock",
+		"a passkey sign-in reads no name lock and no factor lock",
+		"a factor lock notifies the person and offers a password change",
+		"an SSO change that changes the effective local password setting writes one audit entry with the cause",
+		"an SSO change that turns the local password sign-in from off to on needs a fresh authentication",
+		"the answer of an SSO change names the new effective local password setting",
+		"next to an SSO provider a local password user needs a factor after the enrollment grace",
+		"the counts clear after the commit of the session, and a failed clear leaves them",
+		"the demo password is in no log record and no audit entry",
+	}
+
+	for _, rule := range rules {
+		t.Run(rule, func(t *testing.T) {
+			t.Parallel()
+			t.Skip("the local user service does not exist yet")
+		})
+	}
+}

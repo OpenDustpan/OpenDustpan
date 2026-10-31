@@ -345,15 +345,18 @@ type PasswordChange struct {
 //
 // Each write that stores a password hash for a person reads the break-glass
 // flag of the principal in its own transaction, and returns ErrBreakGlass for
-// a break-glass person. The service checks this too.
+// a break-glass person. The service checks this too. The reverse holds in
+// the principal store: a write that sets the break-glass flag on a person
+// with a password returns principal.ErrBreakGlassPassword.
 type Store interface {
-	// CreateUser stores u and appends e, in one transaction. h is empty for
-	// a user with no password yet. It returns ErrInvalid for a value that
-	// fails a check of this package, ErrAlreadyExists when the user name
-	// or the principal has a record, principal.ErrNotFound when the
-	// principal does not exist or is not a person, and ErrBreakGlass for a
-	// hash of a break-glass person.
-	CreateUser(ctx context.Context, u User, h PasswordHash, e audit.Entry) error
+	// CreateUser stores u, with no password, and appends e, in one
+	// transaction. A first password comes only from a set-up code
+	// (ResetStore.RedeemReset), and the demo password only from
+	// PasswordStore.SeedDemoPassword. It returns ErrInvalid for a value that
+	// fails a check of this package, ErrAlreadyExists when the user name or
+	// the principal has a record, and principal.ErrNotFound when the
+	// principal does not exist or is not a person.
+	CreateUser(ctx context.Context, u User, e audit.Entry) error
 	// UserByName returns the user whose stored user name is name, and its
 	// hash, or ErrNotFound. The hash is empty for a user with no password.
 	UserByName(ctx context.Context, name string) (User, PasswordHash, error)

@@ -72,10 +72,22 @@ complies with a standard. It says "designed against".
    configured, and off when one is. The API shows the effective value and
    where it comes from (`default` or `set`). Each change writes an audit
    entry, and a change from off to on is a weaker setting (ADR 212 decision
-   3). While it is off, the password sign-in, the set-up page and a reset
+   3).
+
+   A change of the SSO configuration can change the effective value when
+   the operator did not set it. Then the same transaction as the SSO change
+   writes `sign-in.local-password-setting-changed`, with the old value, the
+   new value and the cause (the SSO provider that the change adds or
+   deletes). The answer of the SSO change names the new effective value. An
+   SSO change that turns the effective value from off to on, for example
+   the removal of the last SSO provider, goes through the check of a weaker
+   setting: it needs a fresh authentication, as an explicit change does.
+   While it is off, the password sign-in, the set-up page and a reset
    answer `localuser.ErrPasswordSignInOff`. The passkey sign-in of a local
-   user does not depend on it. When it is on next to an SSO provider,
-   built-in MFA applies to each local user (decision 21). This amends ADR 46
+   user does not depend on it. While an SSO provider exists and the setting
+   is on, each local password user needs a second factor, with the grace of
+   `mfa.enrollmentGraceDays`, whatever the value of `mfa.requireForAll`
+   (decision 21). This amends ADR 46
    decision 1, which covers installs with no SSO provider only, and ADR 46
    decision 2, which now covers the persons who sign in through the SSO
    provider only. So a local password account cannot skip the MFA of the
@@ -109,7 +121,10 @@ complies with a standard. It says "designed against".
    password, a set-up code and a reset for a break-glass person
    (`localuser.ErrBreakGlass`), and the store refuses the same writes again
    in its own transaction, after it reads the break-glass flag of the
-   principal. So a break-glass account keeps the phishing-resistant sign-in
+   principal. The reverse holds too: the principal store refuses to set the
+   break-glass flag on a person who has a password
+   (`principal.ErrBreakGlassPassword`), under the same row lock of the
+   principal. The administrator deletes the password first. So a break-glass account keeps the phishing-resistant sign-in
    of ADR 70 decision 23, and no lockout by name can apply to it (RFC 21
    P1). Each write that changes the credentials of a person locks the row of
    the person principal first, in the local user store and in the passkey
@@ -117,7 +132,9 @@ complies with a standard. It says "designed against".
    the same time cannot both pass.
 5. **The first password comes from a set-up code (PM decision under the owner's delegation).** An
    administrator who makes a local user receives a one-use set-up code, not a
-   password field. The person opens the set-up page with the code and
+   password field. The port that makes a local user takes no password hash.
+   Only the redeem of a set-up code or a reset code, a change by the person
+   and the demo seed write a hash. The person opens the set-up page with the code and
    chooses the password, or adds a passkey. So no administrator chooses or
    sees the password of a person. The administrator who holds a set-up code
    or a reset code can use it until it is used or ends, so the server tells
@@ -175,7 +192,10 @@ complies with a standard. It says "designed against".
    receives `429`. The setting `password.hashMemoryBudgetKiB` holds the
    budget, at least 64 MiB, so one valid hash always fits. The source budget
    of decision 15 runs before the hash, so one source cannot fill the
-   budget. A distributed attacker can still fill it, and then each password
+   budget. A sign-in that receives `429` from the budget counts no name
+   failure and no factor failure: the server adds the failure only after
+   the hash has its budget, and before the compare. So an attacker who fills
+   the budget cannot add failures to the name of a real person. A distributed attacker can still fill it, and then each password
    sign-in answers `429` for a time. The passkey sign-in needs no hash, so
    it stays available. The guide states this limit.
    Benchmark: OWASP (fetched) warns that a memory-hard hash with a high cost
@@ -270,24 +290,45 @@ complies with a standard. It says "designed against".
       address) lock that pair for 30 minutes (scope `password`). So a guess
       from one network cannot lock the person out from another network.
     - **Name from every source.** 100 wrong passwords in a row for one user
-      name, from any source, lock the name for every source until an
-      administrator unlocks it (scope `passwordname`). This is the ceiling of
-      NIST, and it stops a distributed guess.
+      name, from any source, lock the name for every source (scope
+      `passwordname`). The first lock lasts 30 minutes. Each new global lock
+      of the same name doubles the time, up to 24 hours. After 24 hours with
+      no global lock, the next lock lasts 30 minutes again. This is the
+      ceiling of NIST, and it stops a distributed guess.
     - **Second factor of the person.** 10 wrong second factors in a row for
       one person, across every pending sign-in, lock the factors of the
       person for 30 minutes (scope `factor`, keyed by the principal ID).
       So a known password does not give unlimited guesses of a TOTP code.
+      A factor lock probably means that someone knows the password, so the
+      server notifies the person (by email when a mail sender exists, and on
+      the page of the sessions of the person) and offers a password change.
 
-    The key of a name count is an HMAC-SHA-256 of the folded user name under
-    a key of the installation. So the table holds no user name, and an
-    unknown name locks the same as a known name. The server adds each
-    failure before it checks the credential. It clears the name counts and
-    the factor count only at the end of the full sign-in, after the second
-    factor when one is needed. A good password alone clears nothing. So of
+    Each count has a name and a sub-key. The name of a name count is an
+    HMAC-SHA-256 of the folded user name under a key of the installation.
+    So the table holds no user name, and an unknown name locks the same as a
+    known name. The sub-key of `password` is the source prefix. So an
+    administrator can list and clear every count of one name in one call. The server adds each
+    failure before it compares the credential. Only the end of a full
+    sign-in, after the second factor when one is needed, clears counts: the
+    count of its own source prefix, the global count of the name, and the
+    factor count of the person. It clears them after the commit of the
+    session, and a failed clear leaves the counts, which is the safe
+    direction. The counts of other prefixes end by their time or by an
+    administrator unlock, which clears every count of the name. A good
+    password alone clears nothing. So of
     attempts at the same time, no more than the limit pass. When a count
-    cannot be written, the sign-in fails closed. The passkey sign-in never
-    reads a name lock, so a person with a passkey can always sign in while
-    a guess locks the name.
+    cannot be written, the sign-in fails closed. The discoverable passkey
+    sign-in reads no name lock and no factor lock, so a person with a
+    passkey can always sign in while a guess locks the name or the factors.
+    A passkey as a second factor after a password reads the factor lock,
+    as the other factors do.
+
+    The risk that stays: an attacker with 10 or more networks can keep a
+    password-only user out of the password sign-in for up to 24 hours at a
+    time, and lock the name again after each lock ends. The ways out are a
+    passkey, which reads no name lock, and an administrator unlock. The
+    immediate alert of decision 16 tells the administrators. The guide says
+    so, and advises a passkey for each administrator.
     Benchmark: PCI DSS v4.0.1 requirement 8.3.4: a lockout after not more
     than 10 attempts, for at least 30 minutes or until a person checks the
     identity (not fetched, quoted by RFC 21 P1). NIST SP 800-63B-4 (from a
@@ -376,7 +417,9 @@ complies with a standard. It says "designed against".
     the person (decision 14). A good factor turns the pending sign-in into a
     session in one transaction: the store deletes the pending sign-in,
     stores the session and appends the audit entry
-    (`mfa.PendingStore.CompletePending`). So a failed session write leaves
+    (`mfa.PendingStore.CompletePending`). The adapter writes the session
+    with the same code as `session.Store.CreateSession`, so one rule set
+    checks each session. So a failed session write leaves
     the pending sign-in as it was, and one pending sign-in makes one
     session only.
     Benchmark: NIST SP 800-63B-4 counts a multi-factor cryptographic
@@ -384,16 +427,19 @@ complies with a standard. It says "designed against".
     user verification values.
 21. **"Require MFA" applies to the password (owner, through RFC 21 P7).**
     The installation setting `mfa.requireForAll` makes each password
-    sign-in ask for a second factor. A person with no factor receives a session
+    sign-in ask for a second factor. While an SSO provider exists and
+    `signIn.localPassword.enabled` is on, each password sign-in asks for a
+    second factor too, whatever the value of `mfa.requireForAll`
+    (decision 1). A person with no factor receives a session
     that can only enroll a factor and sign out, after the grace of
     `mfa.enrollmentGraceDays`. A passkey sign-in meets the setting alone.
     The bootstrap admin token stays outside the setting (RFC 21 O12).
 
     A fresh authentication (ADR 227) of a local user is a passkey, or a
     password and a second factor. A password alone is never a fresh
-    authentication when `mfa.requireForAll` is on, or when the person has a
-    factor. Only a person with no factor, in an installation where MFA is not
-    required, receives a fresh authentication from the password alone, because
+    authentication when `mfa.requireForAll` is on, while an SSO provider
+    exists, or when the person has a factor. Only a person with no factor, in
+    an installation with no SSO provider where MFA is not required, receives a fresh authentication from the password alone, because
     no other step exists for that person.
 22. **A shorter minimum with MFA stays a choice.** NIST allows 8 characters
     for a password that is only part of MFA. The server does not lower the
@@ -497,7 +543,8 @@ complies with a standard. It says "designed against".
 
 28. **The ports of this ADR.** `pkg/localuser` holds `Store`,
     `PasswordStore`, `ResetStore`, `PasswordHasher` and `Blocklist`, with
-    their errors and defaults.
+    their errors and defaults. `pkg/principal` adds
+    `ErrBreakGlassPassword`.
     `pkg/mfa` holds `PasskeyStore`, `RecoveryCodeStore`, `PendingStore` and
     the MFA policy. `internal/authgate` holds `NameLockCounter`. The TOTP
     factor stays in `internal/stepup` (`TOTPStore`), shared with the CLI

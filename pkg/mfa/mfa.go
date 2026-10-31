@@ -246,7 +246,10 @@ type PendingStore interface {
 	// expire at or before at and is not void, deletes it, stores s with the
 	// digest sd of its secret, sets the last sign-in time of the person, and
 	// appends e. So a good factor makes one session only, and a failed
-	// session write leaves the pending sign-in as it was. It returns the
+	// session write leaves the pending sign-in as it was. The adapter writes
+	// the session with the same code as session.Store.CreateSession, so the
+	// session meets each check of that method. The caller clears the
+	// lockout counts only after the commit. It returns the
 	// errors of PendingByDigest, ErrInvalid when s names another person than
 	// the pending sign-in, and the errors of session.Store.CreateSession.
 	CompletePending(

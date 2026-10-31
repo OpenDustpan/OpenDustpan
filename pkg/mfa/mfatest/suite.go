@@ -64,6 +64,7 @@ func CaseNames() []string {
 		"a second complete fails with ErrNotFound and makes no session",
 		"a complete whose session write fails keeps the pending sign-in",
 		"a complete for a session of another person fails with ErrInvalid",
+		"a session from CompletePending reads back through session.Store and meets each check of CreateSession",
 		"a complete of a void pending sign-in fails with ErrVoid",
 		"two completes at the same time: one wins and one session exists",
 		"a prune deletes the expired pending sign-ins only",

@@ -41,7 +41,7 @@ func CaseNames() []string {
 	return []string{
 		// Store.
 		"a created user reads back by name and by principal with its audit entry",
-		"a created user with no password reads back with an empty hash",
+		"a created user has no password and reads back with an empty hash",
 		"a user name that does not match the pattern fails with ErrInvalid and stores nothing",
 		"a second user with the same name fails with ErrAlreadyExists",
 		"a second user for the same principal fails with ErrAlreadyExists",
@@ -63,7 +63,8 @@ func CaseNames() []string {
 		"a rename of the demo person fails with ErrDemoFixed",
 		"a change-required set and clear read back and each appends one entry",
 		"a change-required set for a user with no password fails with ErrNotFound",
-		"a user with a hash for a break-glass person fails with ErrBreakGlass and stores nothing",
+		"a set-up code redeemed for a break-glass person fails with ErrBreakGlass and stores no hash",
+		"a break-glass flag on a person with a password fails with principal.ErrBreakGlassPassword",
 		"a password set for a break-glass person fails with ErrBreakGlass and changes nothing",
 		"a password remove and a remove of the last passkey at the same time: one wins and the person keeps a credential",
 		"a demo seed on a dev installation stores the hash and appends one entry",

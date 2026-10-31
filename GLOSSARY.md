@@ -463,7 +463,7 @@ A one-use code that an administrator makes for a local user, to set up or reset 
 _Avoid_: Temporary password, reset token
 
 **Lockout by name**:
-The lock of a user name after wrong passwords in a row. 10 from one source prefix lock the name from that prefix for 30 minutes. 100 from every source lock the name for every source until an administrator unlocks it. Every instance shares the counts, and an unknown name locks the same as a known one. A passkey sign-in never reads the lock.
+The lock of a user name after wrong passwords in a row. 10 from one source prefix lock the name from that prefix for 30 minutes. 100 from every source lock the name for every source for 30 minutes, doubling for each new lock up to 24 hours. Every instance shares the counts, and an unknown name locks the same as a known one. A passkey sign-in never reads the lock.
 _Avoid_: Account lock (the principal stays enabled)
 
 **Demo user**:
