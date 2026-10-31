@@ -843,6 +843,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestBlobDeleteDuringBackup(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL blob delete suite", envURL)
+	}
+
+	storetest.RunBlobDelete(t, func(t *testing.T) storetest.BlobDeleteStore {
+		t.Helper()
+
+		return openBackup(t, base)
+	})
+}
+
 func TestPortableExportConformance(t *testing.T) {
 	t.Parallel()
 

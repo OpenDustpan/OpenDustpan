@@ -476,6 +476,61 @@ func (c *HACluster) WaitHealthy(ctx context.Context) error {
 	return fmt.Errorf("wait for healthy instances: %w", ctx.Err())
 }
 
+// InstanceResponse is the answer of one instance to Send.
+type InstanceResponse struct {
+	Status int
+	Header http.Header
+	Body   string
+}
+
+// InstanceRequest is a request that Send sends to one instance.
+type InstanceRequest struct {
+	Method string
+	Path   string
+	// Header holds the extra request headers.
+	Header http.Header
+	Body   string
+}
+
+// Send sends one request to instance i, not through the proxy, so a test can
+// see what that instance answers.
+func (c *HACluster) Send(ctx context.Context, i int, in InstanceRequest) (InstanceResponse, error) {
+	inst := c.instances[i]
+	method, path := in.Method, in.Path
+
+	var reader io.Reader = http.NoBody
+	if in.Body != "" {
+		reader = strings.NewReader(in.Body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, inst.url+path, reader)
+	if err != nil {
+		return InstanceResponse{}, fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	for name, values := range in.Header {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+
+	resp, err := inst.transport.RoundTrip(req)
+	if err != nil {
+		return InstanceResponse{}, fmt.Errorf("%s %s on instance %d: %w", method, path, i, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to its end below.
+	}()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return InstanceResponse{}, fmt.Errorf("read %s %s on instance %d: %w", method, path, i, err)
+	}
+
+	return InstanceResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(raw)}, nil
+}
+
 // end sends sig to the process of instance i and waits for it to exit.
 func (c *HACluster) end(i int, sig syscall.Signal, wait time.Duration) error {
 	inst := c.instances[i]

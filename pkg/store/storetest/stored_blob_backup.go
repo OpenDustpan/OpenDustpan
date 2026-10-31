@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -281,7 +282,7 @@ func seedStoredBlobs(t *testing.T, rig *StoredBlobBackupRig, wrapper secret.Wrap
 		t.Fatalf("get namespace: %v", err)
 	}
 
-	objects, err := rig.Recorder.Blobs.List(ctx, "namespaces/"+ns.ID.String()+"/job/")
+	objects, err := blobtest.ListAll(ctx, rig.Recorder.Blobs, "namespaces/"+ns.ID.String()+"/job/")
 	if err != nil {
 		t.Fatalf("list the job blobs: %v", err)
 	}

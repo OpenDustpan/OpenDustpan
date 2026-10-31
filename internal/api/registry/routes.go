@@ -35,13 +35,16 @@ type Route struct {
 }
 
 const (
-	registryPath  = v1Prefix + "/namespaces/{namespace}/registry"
-	uploadsPath   = registryPath + "/uploads"
-	providersPath = registryPath + "/providers"
-	versionsPath  = registryPath + "/providers/{name}/versions"
-	versionPath   = versionsPath + "/{version}"
-	keysPath      = registryPath + "/keys"
-	keyPath       = keysPath + "/{fingerprint}"
+	registryPath       = v1Prefix + "/namespaces/{namespace}/registry"
+	uploadsPath        = registryPath + "/uploads"
+	providersPath      = registryPath + "/providers"
+	versionsPath       = registryPath + "/providers/{name}/versions"
+	versionPath        = versionsPath + "/{version}"
+	modulesPath        = registryPath + "/modules"
+	moduleVersionsPath = modulesPath + "/{name}/{system}/versions"
+	moduleVersionPath  = moduleVersionsPath + "/{version}"
+	keysPath           = registryPath + "/keys"
+	keyPath            = keysPath + "/{fingerprint}"
 )
 
 // buildRoutes returns the route table. It is the single source of the patterns
@@ -59,6 +62,10 @@ func (h *Handler) buildRoutes() []Route {
 		h.readRoute(providersPath, read, h.listProviders),
 		h.readRoute(versionsPath, read, h.listReleases),
 		h.readRoute(versionPath, read, h.getRelease),
+		h.keyedRoute(http.MethodPut, moduleVersionPath, publish, h.publishModule, moduleReleaseAnswer),
+		h.readRoute(modulesPath, read, h.listModules),
+		h.readRoute(moduleVersionsPath, read, h.listModuleReleases),
+		h.readRoute(moduleVersionPath, read, h.getModuleRelease),
 		h.keyedRoute(http.MethodPost, keysPath, keys, h.addKey, keyAnswer),
 		h.readRoute(keysPath, keys, h.listKeys),
 		h.keyedRoute(http.MethodDelete, keyPath, keys, h.removeKey, removedKeyAnswer),

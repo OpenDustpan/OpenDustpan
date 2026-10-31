@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -375,13 +376,17 @@ const restoredWorkspace = "restored"
 // tofuRestoreSteps run after the workspace soft delete steps, while a new
 // workspace holds the name of the deleted workspace. They restore the deleted
 // workspace under a new name, which the CLI lists, then delete and purge it.
-func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string, existedAt *time.Time) []e2e.StepSpec {
+func tofuRestoreSteps(
+	ctx context.Context, tb testing.TB, env *e2e.Env, removedID *string, existedAt *time.Time,
+) []e2e.StepSpec {
+	tb.Helper()
+
 	newName := e2e.RemotePrefix + restoredWorkspace
 	// target reads the ID when a step runs: an earlier step sets it.
 	target := func() unitTarget { return unitTarget{org: e2e.Namespace, tool: "opentofu", id: *removedID} }
 
-	restoreGate := restoreGateSteps(ctx, env, target, "rollback", remoteProdName)
-	purgeGate := restoreGateSteps(ctx, env, target, "delete", newName)
+	restoreGate := restoreGateSteps(ctx, tb, env, target, restoreGateCase{operation: "rollback", name: remoteProdName})
+	purgeGate := restoreGateSteps(ctx, tb, env, target, restoreGateCase{operation: "delete", name: newName})
 
 	steps := []e2e.StepSpec{
 		step("deleted list holds the deleted workspace", func(e2e.Result) error {

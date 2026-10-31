@@ -1,6 +1,6 @@
 {
   "enabledPlugins": {
-    "gopls-lsp@claude-plugins-official": true
+    "gopls-lsp@claude-plugins-official": false
   },
   "permissions": {
     "allow": [

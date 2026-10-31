@@ -27,7 +27,7 @@ The paths in this guide are under `/api/dustpan/v1/`. See
 
 The built-in roles `admin`, `account-administrator` and `site-administrator`
 hold `namespace:manage-notifications`. The roles `viewer`, `auditor`,
-`secret-viewer`, `writer` and `maintainer` do not hold it. Each role that holds
+`secret-viewer`, `planner`, `writer` and `maintainer` do not hold it. Each role that holds
 `namespace:read` can list and read the destinations of its namespace.
 
 Your receiver needs an `https` URL with a public host name on port 443. The

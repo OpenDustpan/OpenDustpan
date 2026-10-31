@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/unitimport/upload"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -285,7 +286,7 @@ func checkUnchanged(t *testing.T, s *upload.Source, store *blobfs.Store, want in
 		t.Errorf("versions after a refused put = %v, %v, want %d", versions, err, want)
 	}
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil {
 		t.Fatalf("list blobs: %v", err)
 	}
@@ -310,7 +311,7 @@ func TestPutIgnoresACrashedUpload(t *testing.T) {
 	put(t, s, unit(), 1, []byte("one"))
 
 	// A body that no facts file names is a crash between the two writes.
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil || len(objs) == 0 {
 		t.Fatalf("list = %v, %v, want the files of the first version", objs, err)
 	}
@@ -439,7 +440,7 @@ func TestPutKeepsTheFactsWithinTheLimit(t *testing.T) {
 		t.Fatalf("put with a long tool: error = %v, want ErrSourceInvalid", err)
 	}
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil || len(objs) != 3 {
 		t.Errorf("objects = %d, %v, want the 3 files of the one version", len(objs), err)
 	}
@@ -526,7 +527,7 @@ func TestPutAfterAnUnknownCommitErrorKeepsTheFiles(t *testing.T) {
 		t.Fatalf("put error = %v, want ErrSourceUnreachable", err)
 	}
 
-	objs, listErr := store.List(t.Context(), prefix)
+	objs, listErr := listObjects(t.Context(), store, prefix)
 	if listErr != nil || len(objs) != 3 {
 		t.Errorf("objects = %d, %v, want unit.json, the body and the facts file", len(objs), listErr)
 	}
@@ -563,7 +564,7 @@ func TestDeleteRemovesEachObject(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil || len(objs) != 0 {
 		t.Fatalf("list after delete = %v, %v, want none", objs, err)
 	}
@@ -684,7 +685,7 @@ func TestTwoConcurrentPutsOnAStoreThatReplacesObjects(t *testing.T) {
 	}
 
 	// The loser deleted its own two files and nothing else.
-	objs, err := inner.List(t.Context(), prefix)
+	objs, err := listObjects(t.Context(), inner, prefix)
 	if err != nil || len(objs) != 3 {
 		t.Errorf("objects = %d, %v, want unit.json, the body and the facts file of the winner", len(objs), err)
 	}
@@ -898,7 +899,7 @@ func putAfter(t *testing.T, elapsed time.Duration) afterPut {
 
 	_, putErr := s.Put(t.Context(), unit(), 1, claims(1), strings.NewReader("late"))
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := listObjects(t.Context(), store, prefix)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -926,10 +927,12 @@ type wideList struct {
 	extra blob.Key
 }
 
-func (w wideList) List(ctx context.Context, p string) ([]blob.Object, error) {
-	objs, err := w.Store.List(ctx, p)
+func (w wideList) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := w.Store.ListPage(ctx, req)
 
-	return append(objs, blob.Object{ModifiedAt: time.Time{}, Key: w.extra}), err
+	page.Objects = append(page.Objects, blob.Object{ModifiedAt: time.Time{}, Key: w.extra})
+
+	return page, err
 }
 
 // TestDeleteKeepsAuditCheckpointCopies sends an audit checkpoint copy
@@ -969,4 +972,17 @@ func TestDeleteKeepsAuditCheckpointCopies(t *testing.T) {
 	if err = body.Close(); err != nil {
 		t.Fatalf("close copy: %v", err)
 	}
+}
+
+// listObjects returns every object under prefix, page by page.
+func listObjects(ctx context.Context, s blob.Store, prefix string) ([]blob.Object, error) {
+	var objs []blob.Object
+
+	err := blob.Walk(ctx, s, prefix, func(o blob.Object) error {
+		objs = append(objs, o)
+
+		return nil
+	})
+
+	return objs, err
 }

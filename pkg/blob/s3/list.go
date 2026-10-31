@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,11 +22,10 @@ const maxListBody = 8 << 20
 // ErrListTooLarge reports a ListObjectsV2 answer above 8 MiB.
 var ErrListTooLarge = errors.New("list answer exceeds 8 MiB")
 
-// listResult is the part of a ListObjectsV2 answer that List reads.
+// listResult is the part of a ListObjectsV2 answer that ListPage reads.
 type listResult struct {
-	NextContinuationToken string        `xml:"NextContinuationToken"`
-	Contents              []listContent `xml:"Contents"`
-	IsTruncated           bool          `xml:"IsTruncated"`
+	Contents    []listContent `xml:"Contents"`
+	IsTruncated bool          `xml:"IsTruncated"`
 }
 
 // listContent is one object of a ListObjectsV2 answer.
@@ -35,43 +34,94 @@ type listContent struct {
 	Key          string    `xml:"Key"`
 }
 
-// List returns the objects under prefix, ordered by key. Prefix names a key
-// directory with or without a trailing slash. It sends ListObjectsV2
-// requests and follows the continuation token until the last page. An
-// object name that is not a valid blob key, for example one that another
-// tool wrote under the store prefix, is not listed.
-func (s *Store) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("s3: list %s: %w", prefix, err)
+// ListPage returns one page of the objects under req.Prefix, ordered by key.
+// Prefix names a key directory with or without a trailing slash. It sends
+// ListObjectsV2 requests with the StartAfter and MaxKeys parameters, so a
+// page is one request unless the store holds object names that are not valid
+// blob keys, for example names that another tool wrote under the store
+// prefix. Such a name is not listed, and the adapter asks again for the rest
+// of the page after it.
+func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, fmt.Errorf("s3: list %s: %w", req.Prefix, err)
 	}
 
-	listPrefix := s.listPrefix(prefix)
+	if err := ctx.Err(); err != nil {
+		return blob.Page{}, fmt.Errorf("s3: list %s: %w", req.Prefix, err)
+	}
 
-	var (
-		out   []blob.Object
-		token string
-	)
+	listPrefix := s.listPrefix(req.Prefix)
+	startAfter := ""
+
+	if req.After != "" {
+		startAfter = s.objectName(req.After)
+	}
+
+	out := make([]blob.Object, 0, req.Limit)
 
 	for {
-		page, err := s.listPage(ctx, listPrefix, token)
+		raw, err := s.listOnce(ctx, listPrefix, startAfter, req.Limit-len(out))
 		if err != nil {
-			return nil, fmt.Errorf("s3: list %s: %w", prefix, err)
+			return blob.Page{}, fmt.Errorf("s3: list %s: %w", req.Prefix, err)
 		}
 
-		out = append(out, s.pageObjects(page)...)
+		want := req.Limit - len(out)
 
-		if !page.IsTruncated || page.NextContinuationToken == "" {
-			break
+		if err := checkAnswer(raw, listPrefix, startAfter, want); err != nil {
+			return blob.Page{}, fmt.Errorf("s3: list %s: %w", req.Prefix, err)
 		}
 
-		token = page.NextContinuationToken
+		out = append(out, s.pageObjects(raw)...)
+
+		if !raw.IsTruncated {
+			return blob.Page{Objects: out, Next: ""}, nil
+		}
+
+		startAfter = raw.Contents[len(raw.Contents)-1].Key
+
+		if len(out) >= req.Limit {
+			// The page is full and the store holds more. A page that
+			// holds only valid keys ends at its last key.
+			return blob.Page{Objects: out, Next: out[len(out)-1].Key}, nil
+		}
+	}
+}
+
+// checkAnswer fails closed on an answer that breaks the rules of the request.
+// Every name must be under listPrefix, after startAfter, and after the name
+// before it, and the answer must hold at most maxKeys names. A truncated
+// answer must hold a name, because the next request starts after the last
+// one: an answer that says more follow and holds nothing would end the listing
+// with objects missing. Each failure wraps blob.ErrInvalidPage.
+//
+// Defense in depth: a store that keeps the rules of ListObjectsV2 never breaks
+// them. This check stays so that a store that ignores prefix, start-after or
+// max-keys cannot show a key of another directory, a key twice, or a shorter
+// listing than the store holds. It does not rely on the caller of ListPage.
+func checkAnswer(raw listResult, listPrefix, startAfter string, maxKeys int) error {
+	if raw.IsTruncated && len(raw.Contents) == 0 {
+		return fmt.Errorf("the store says more keys follow and sends none: %w", blob.ErrInvalidPage)
 	}
 
-	slices.SortFunc(out, func(a, b blob.Object) int {
-		return strings.Compare(a.Key.String(), b.Key.String())
-	})
+	if len(raw.Contents) > maxKeys {
+		return fmt.Errorf("the store sent %d keys for max-keys %d: %w", len(raw.Contents), maxKeys, blob.ErrInvalidPage)
+	}
 
-	return out, nil
+	last := startAfter
+
+	for _, content := range raw.Contents {
+		if !strings.HasPrefix(content.Key, listPrefix) {
+			return fmt.Errorf("the store sent a key outside the prefix: %w", blob.ErrInvalidPage)
+		}
+
+		if content.Key <= last {
+			return fmt.Errorf("the store sent a key that is not after the one before it: %w", blob.ErrInvalidPage)
+		}
+
+		last = content.Key
+	}
+
+	return nil
 }
 
 // listPrefix returns the object name prefix that List sends for prefix:
@@ -119,8 +169,8 @@ func (s *Store) pageObjects(page listResult) []blob.Object {
 	return out
 }
 
-// listPage fetches one page with retries.
-func (s *Store) listPage(ctx context.Context, listPrefix, token string) (listResult, error) {
+// listOnce sends one ListObjectsV2 request, with retries.
+func (s *Store) listOnce(ctx context.Context, listPrefix, startAfter string, maxKeys int) (listResult, error) {
 	var lastErr error
 
 	for attempt := range s.maxAttempts {
@@ -128,7 +178,7 @@ func (s *Store) listPage(ctx context.Context, listPrefix, token string) (listRes
 			return listResult{}, fmt.Errorf("list page: %w", err)
 		}
 
-		page, err := s.listOnce(ctx, listPrefix, token)
+		page, err := s.listRequest(ctx, listPrefix, startAfter, maxKeys)
 		if err == nil {
 			return page, nil
 		}
@@ -148,8 +198,8 @@ func (s *Store) listPage(ctx context.Context, listPrefix, token string) (listRes
 	return listResult{}, lastErr
 }
 
-// listOnce sends one ListObjectsV2 request.
-func (s *Store) listOnce(ctx context.Context, listPrefix, token string) (listResult, error) {
+// listRequest sends one ListObjectsV2 request.
+func (s *Store) listRequest(ctx context.Context, listPrefix, startAfter string, maxKeys int) (listResult, error) {
 	listURL, err := s.bucketURL()
 	if err != nil {
 		return listResult{}, fmt.Errorf("bucket URL: %w", err)
@@ -159,8 +209,10 @@ func (s *Store) listOnce(ctx context.Context, listPrefix, token string) (listRes
 	query.Set("list-type", "2")
 	query.Set("prefix", listPrefix)
 
-	if token != "" {
-		query.Set("continuation-token", token)
+	query.Set("max-keys", strconv.Itoa(maxKeys))
+
+	if startAfter != "" {
+		query.Set("start-after", startAfter)
 	}
 
 	listURL.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
