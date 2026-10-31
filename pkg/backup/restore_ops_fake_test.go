@@ -351,6 +351,10 @@ func (l *restoreServiceLive) StageRestore(
 		return backup.Summary{}, none, err
 	}
 
+	l.mu.Lock()
+	l.staged = append(l.staged, in)
+	l.mu.Unlock()
+
 	sum, err := l.StagePortable(ctx, in.Open, in.Want, in.Files, in.Options)
 	if err != nil {
 		return backup.Summary{}, none, err
@@ -370,6 +374,23 @@ func (l *restoreServiceLive) StageRestore(
 	l.mu.Unlock()
 
 	return sum, report, nil
+}
+
+// DropStagedIssuerKeys implements backup.RestoreStaging. It records the
+// installation that it got, and answers the report of the test.
+func (l *restoreServiceLive) DropStagedIssuerKeys(
+	_ context.Context, a backup.StagingArea, keep string,
+) ([]backup.IssuerKeysDropped, error) {
+	if _, err := backup.NewStagingArea(a.Restore, a.Token); err != nil {
+		return nil, err
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.keeps = append(l.keeps, keep)
+
+	return append([]backup.IssuerKeysDropped(nil), l.dropReport...), nil
 }
 
 // applyMode says how the fake swaps a staging area.

@@ -121,13 +121,14 @@ func (s *Store) Delete(ctx context.Context, key blob.Key) error {
 	return s.inner.Delete(ctx, key)
 }
 
-// List returns the objects under prefix, unless a fault fires first.
-func (s *Store) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+// ListPage returns one page of the objects under the prefix, unless a fault
+// fires first. The fault name is "List".
+func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	if err := s.before(ctx, "List"); err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
-	return s.inner.List(ctx, prefix)
+	return s.inner.ListPage(ctx, req)
 }
 
 // Ping checks the inner store, unless a fault fires first.

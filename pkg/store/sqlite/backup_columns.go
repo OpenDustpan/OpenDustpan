@@ -17,10 +17,13 @@ const (
 	backupColDigest      = "digest"
 	backupColPrincipalID = "principal_id"
 	backupColEndedAtMs   = "ended_at_ms"
+	backupColError       = "error"
 	backupColName        = "name"
+	backupColIssuer      = "issuer"
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
 	backupColNamespaceID = "namespace_id"
+	backupColBlobKey     = "blob_key"
 	backupColReason      = "reason"
 	backupColWrapperID   = "wrapper_id"
 	backupColSequence    = "sequence"
@@ -139,7 +142,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"invalid",
 				"features_json",
 				"saved_at_ms",
-				"blob_key",
+				backupColBlobKey,
 				backupColSize,
 				"blob_size",
 				"blob_md5",
@@ -161,7 +164,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColStackID,
 				backupColUpdateID,
 				backupColArrival,
-				"blob_key",
+				backupColBlobKey,
 				backupColSHA256,
 				"md5",
 				backupColSize,
@@ -418,6 +421,8 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteSinkBackupTables(),
 		sqliteTriggerBackupTables(),
 		sqliteItemKeyBackupTables(),
+		sqliteCatalogBackupTables(),
+		sqliteTrustRuleBackupTables(),
 	)
 }
 
@@ -515,6 +520,13 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 			table:   backup.TableInstanceVersions,
 			columns: []string{"id", "binary_version", backupColStartedAtMs},
 		},
+		{
+			table: backup.TableStoreChecks,
+			columns: []string{
+				"id", backupColTarget, backupColState, "requested_by", backupColStartedAtMs, backupColEndedAtMs,
+				backupColError, "report",
+			},
+		},
 	}
 }
 
@@ -575,7 +587,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "oidc_providers",
-			columns: []string{backupColProviderID, "issuer", backupColCreatedAtMs},
+			columns: []string{backupColProviderID, backupColIssuer, backupColCreatedAtMs},
 		},
 		{
 			table:   "installation_secret_keys",
@@ -750,6 +762,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"disable_accounts",
 				"disable_break_glass",
 				backupColUpdatedAtMs,
+				"exchange_lifetime_ms",
 			},
 		},
 		{

@@ -62,6 +62,16 @@ type RegistryService interface {
 	// OpenFile opens a file of a published release by its SHA-256, or returns
 	// registry.ErrNotFound. The caller closes the reader.
 	OpenFile(ctx context.Context, ns namespace.Name, name, version, sum string) (size int64, r io.ReadCloser, err error)
+	// ModuleReleases returns the releases of a module, from the lowest version
+	// to the highest, or registry.ErrNotFound when it has none.
+	ModuleReleases(ctx context.Context, addr registry.Address) ([]registry.Release, error)
+	// ModuleRelease returns one release of a module, or registry.ErrNotFound.
+	ModuleRelease(ctx context.Context, ns namespace.Name, name, system, version string) (registry.Release, error)
+	// OpenModuleFile opens the archive of a published module release by its
+	// SHA-256, or returns registry.ErrNotFound. The caller closes the reader.
+	OpenModuleFile(
+		ctx context.Context, addr registry.Address, version, sum string,
+	) (size int64, r io.ReadCloser, err error)
 }
 
 // RegistryConfig holds the registry protocol settings of a Handler. A Handler
@@ -165,7 +175,7 @@ func (h *Handler) registryRoutes() []Route {
 		return nil
 	}
 
-	return []Route{
+	return append(h.moduleRoutes(), []Route{
 		{
 			Method: http.MethodGet,
 			Path:   registryPrefix + "{namespace}/{type}/versions",
@@ -200,7 +210,7 @@ func (h *Handler) registryRoutes() []Route {
 			Resolve: nil,
 			Serve:   h.registryFile,
 		},
-	}
+	}...)
 }
 
 // resolveRegistryNamespace returns the namespace in the path.

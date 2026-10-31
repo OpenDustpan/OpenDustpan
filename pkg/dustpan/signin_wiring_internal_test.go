@@ -207,6 +207,7 @@ func TestNewServerSessionsApplyInactivity(t *testing.T) {
 
 	change := accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: &inactivity, DisableTokens: nil, DisableAccounts: &on, DisableBreakGlass: nil,
+		ExchangeLifetime: nil,
 	}
 
 	if _, err := w.srv.tokens.SetPolicy(ctx, wiringEntry(w.clock.Now(), accesstoken.PolicyRef), change); err != nil {

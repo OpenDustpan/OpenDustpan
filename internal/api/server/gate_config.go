@@ -20,9 +20,18 @@ import (
 )
 
 // GateConfig is the gate configuration that the installation API serves:
-// the approval defaults and the approval rules of a scope. gate.ConfigService
-// is the implementation. It is defined here, in the package that consumes it.
+// the gates, the access limits, the approval defaults and the approval rules
+// of a scope. gate.ConfigService is the implementation. It is defined here,
+// in the package that consumes it.
 type GateConfig interface {
+	ApprovalConfig
+	GateObjects
+	AccessLimitObjects
+}
+
+// ApprovalConfig is the part of GateConfig for the approval defaults and the
+// approval rules of a namespace.
+type ApprovalConfig interface {
 	// ApprovalDefault returns the approval default of scope, or gate.ErrNotFound.
 	ApprovalDefault(ctx context.Context, scope gate.Scope) (gate.ApprovalDefault, error)
 	// PutApprovalDefault stores d, and returns it with its new version.
@@ -44,6 +53,31 @@ type GateConfig interface {
 	DeleteApprovalRule(ctx context.Context, ref gate.ObjectRef, e audit.Entry) error
 }
 
+// GateObjects is the part of GateConfig for the gates of a scope.
+type GateObjects interface {
+	// Gates returns the gates stored at scope, ordered by ID.
+	Gates(ctx context.Context, scope gate.Scope) ([]gate.Gate, error)
+	// Gate returns one gate of scope, or gate.ErrNotFound.
+	Gate(ctx context.Context, scope gate.Scope, id gate.ID) (gate.Gate, error)
+	// PutGate checks and stores g, and returns it with its new version.
+	// reason is the reason of a change that makes a final gate weaker.
+	PutGate(ctx context.Context, g gate.Gate, prev int64, reason string, e audit.Entry) (gate.Gate, error)
+	// DeleteGate removes the gate ref at its version.
+	DeleteGate(ctx context.Context, ref gate.ObjectRef, reason string, e audit.Entry) error
+}
+
+// AccessLimitObjects is the part of GateConfig for the access limits of a scope.
+type AccessLimitObjects interface {
+	// AccessLimits returns the access limits stored at scope, ordered by ID.
+	AccessLimits(ctx context.Context, scope gate.Scope) ([]gate.AccessLimit, error)
+	// AccessLimit returns one access limit of scope, or gate.ErrNotFound.
+	AccessLimit(ctx context.Context, scope gate.Scope, id gate.ID) (gate.AccessLimit, error)
+	// PutAccessLimit checks and stores l, and returns it with its new version.
+	PutAccessLimit(ctx context.Context, l gate.AccessLimit, prev int64, e audit.Entry) (gate.AccessLimit, error)
+	// DeleteAccessLimit removes the access limit ref at its version.
+	DeleteAccessLimit(ctx context.Context, ref gate.ObjectRef, e audit.Entry) error
+}
+
 // maxGateConfigBodyBytes bounds the body of an approval default or an
 // approval rule. The approver lists are small, so this is ample.
 const maxGateConfigBodyBytes = 64 * 1024
@@ -53,7 +87,7 @@ const (
 	approvalDefaultPath   = "/api/dustpan/v1/namespaces/{namespace}/approval-default"
 	approvalRulesPath     = "/api/dustpan/v1/namespaces/{namespace}/approval-rules"
 	approvalRuleItemPath  = "/api/dustpan/v1/namespaces/{namespace}/approval-rules/{id}"
-	gateConfigNotFoundMsg = "no such approval rule or approval default"
+	gateConfigNotFoundMsg = "no such gate, access limit, approval rule or approval default"
 )
 
 // errIfMatchInvalid answers an If-Match header that is not one version in
@@ -212,10 +246,13 @@ func gateEntry(r *http.Request, p identity.Principal) audit.Entry {
 }
 
 // gateConfigRoutes returns the rows of the approval defaults and the
-// approval rules of a namespace. Nil GateConfig means the store keeps no
-// gate configuration: no route is mounted. A read needs namespace:read-gates
-// and a write needs namespace:manage-gates, both on the namespace of the
-// path. A write also needs a fresh sign-in of a console session.
+// approval rules of a namespace, and of the gates and the access limits of a
+// namespace, of one of its collections and of one of its units. Nil
+// GateConfig means the store keeps no gate configuration: no route is
+// mounted. A read needs namespace:read-gates and a write needs
+// namespace:manage-gates, both on the namespace of the path, also for a
+// collection or a unit of it. A write also needs a fresh sign-in of a
+// console session.
 func (h *Handler) gateConfigRoutes() []Route {
 	if h.gates == nil {
 		return nil
@@ -231,7 +268,9 @@ func (h *Handler) gateConfigRoutes() []Route {
 		}
 	}
 
-	return []Route{
+	routes := h.gateObjectRoutes(row, read, manage)
+
+	return append(routes, []Route{
 		row(http.MethodGet, approvalDefaultPath, read, h.readApprovalDefault),
 		row(
 			http.MethodPut,
@@ -259,7 +298,7 @@ func (h *Handler) gateConfigRoutes() []Route {
 			manage,
 			h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalRule),
 		),
-	}
+	}...)
 }
 
 // readApprovalDefault serves GET /api/dustpan/v1/namespaces/{namespace}/approval-default.
@@ -585,19 +624,23 @@ func (h *Handler) existingVersion(r *http.Request, stored func() (int64, error))
 func classifyGateConfig(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, gate.ErrNotFound):
-		return fail(http.StatusNotFound, gateConfigNotFoundMsg), true
+		return failCoded(http.StatusNotFound, gateConfigNotFoundMsg, errcode.GateNotFound), true
 	case errors.Is(err, gate.ErrConflict):
-		return fail(http.StatusConflict, "the stored version changed: read it again and retry"), true
+		return failCoded(http.StatusConflict, "the stored version changed: read it again and retry",
+			errcode.GateVersionConflict), true
 	case errors.Is(err, gate.ErrFinal):
-		return fail(http.StatusConflict, err.Error()), true
+		return failCoded(http.StatusConflict, err.Error(), errcode.GateFinal), true
 	case errors.Is(err, errApproversUnmet):
 		return failCoded(http.StatusUnprocessableEntity, errApproversUnmet.Error(), errcode.GateApproversUnmet), true
 	case errors.Is(err, gate.ErrApprovers):
 		return classifyApprovers(err)
-	case errors.Is(err, gate.ErrInvalid), errors.Is(err, gate.ErrLimit):
-		return fail(http.StatusUnprocessableEntity, err.Error()), true
+	case errors.Is(err, gate.ErrLimit):
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateLimit), true
+	case errors.Is(err, gate.ErrInvalid):
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateInvalid), true
 	case errors.Is(err, gate.ErrUnavailable):
-		return fail(http.StatusServiceUnavailable, "the gate configuration is not available"), true
+		return failCoded(http.StatusServiceUnavailable, "the gate configuration is not available",
+			errcode.GateUnavailable), true
 	default:
 		return fail(0, ""), false
 	}

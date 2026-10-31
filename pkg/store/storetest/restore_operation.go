@@ -22,6 +22,7 @@ func restoreOperationCases() []restoreCase {
 	cases = append(cases, []restoreCase{
 		{name: "a restore start stores the row and the operation together", test: testRestoreOpStart},
 		{name: "a restore start refuses a second running restore", test: testRestoreOpStartRunning},
+		{name: "the running work read counts a checking or applying restore", test: testRunningRestore},
 		{name: "a restore start refuses a bad ID or a foreign operation", test: testRestoreOpStartRefused},
 		{name: "fenced restore writes record their steps", test: testRestoreOpFencedWrites},
 		{name: "a stale, canceled or foreign fence cannot write a restore row", test: testRestoreOpFenceRefused},

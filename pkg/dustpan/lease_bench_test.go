@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -128,8 +129,8 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	blobs := openBenchBlobs(b)
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		ManualLocks: nil,
-		Updates:     s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
+		ManualLocks: nil, BlobGuard: blobguardtest.None{},
+		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
 		Replayer: nil, Refusals: stacktest.NewRefusals(),
 	})

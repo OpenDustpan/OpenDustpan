@@ -18,6 +18,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -223,6 +224,12 @@ const testNamespace = "routes"
 // manifest read that only succeeded rows need.
 const testRestoreID = backup.RestoreID("rst-testaaaaaaaaaaaaaaaa")
 
+// testStoreCheckID is the failed store check the handler builders seed, so the
+// GET-by-id route answers 200 in the generic enforcement tests. The seed ended
+// long ago and is not running, so the POST route answers 202 in the same
+// tests instead of 409.
+const testStoreCheckID = storecheck.ID("chk-routetestaaaaaaaaaaaa")
+
 // failedSeed returns a failed backup row, so the GET-by-id route answers 200
 // in the generic enforcement tests. The seed is failed, never running, so the
 // POST route answers 202 in the same tests instead of 409: one backup runs at
@@ -270,6 +277,7 @@ func newServiceBackedHandlerOf(
 	target := openRouteTestBlobs(t)
 	service := newRouteTestBackups(t, st, live, target)
 	restores := newRouteTestRestores(t, st, service, live, target)
+	checks := newRouteTestStoreChecks(t, st, live, target)
 	seedRouteTestRows(t, st, seeds)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -352,6 +360,7 @@ func newServiceBackedHandlerOf(
 		GitHost:          nil,
 		Idempotency:      nil,
 		Instances:        nil,
+		StoreChecks:      checks,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -699,6 +708,7 @@ var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
 	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
+	"POST /api/dustpan/v1/store-checks":                        `{"target":"blobs"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
 	) + `"}`,
@@ -790,6 +800,24 @@ func newRouteTestBackups(
 	return service
 }
 
+// newRouteTestStoreChecks builds the store check service of one route test.
+func newRouteTestStoreChecks(
+	t *testing.T, st *sqlite.Store, live, target *blobfs.Store,
+) *storecheck.Service {
+	t.Helper()
+
+	service, err := storecheck.NewService(storecheck.Config{
+		Records: st, Operations: st.DurableOperationsPort(), Blobs: live, Backup: target, Audit: st, Admit: nil,
+		Limits: storecheck.Limits{MaxObjects: 0, MaxTotalBytes: 0, MaxObjectBytes: 0, Timeout: 0, Cooldown: 0},
+		Now:    nil, Owner: "", Lease: 0, Logger: nil,
+	})
+	if err != nil {
+		t.Fatalf("new store check service: %v", err)
+	}
+
+	return service
+}
+
 // newRouteTestRestores builds the restore service of one route test.
 func newRouteTestRestores(
 	t *testing.T, st *sqlite.Store, service *backup.Service, live, target *blobfs.Store,
@@ -871,6 +899,8 @@ func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
 	if _, err := st.FailEndedRestores(t.Context(), ended, false); err != nil {
 		t.Fatalf("fail seed restore %s: %v", testRestoreID, err)
 	}
+
+	seedRouteStoreCheck(t, st, ended)
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -1013,6 +1043,19 @@ func probeRoute(t *testing.T, handler testHandler, route apiserver.Route) {
 	}
 }
 
+// seededOperationID returns the ID of the seeded restore or the seeded store
+// check for a route of that family, and an empty text for any other route.
+func seededOperationID(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/api/server/restores"):
+		return string(testRestoreID)
+	case strings.HasPrefix(path, "/api/dustpan/v1/store-checks"):
+		return string(testStoreCheckID)
+	default:
+		return ""
+	}
+}
+
 // routeRequest builds a valid request for route: the {id} placeholder holds
 // the seeded running backup or the seeded checking restore, so the GET-by-id
 // routes answer 200 when allowed, and the namespace create route carries a
@@ -1027,8 +1070,8 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	switch {
 	case owner.ofOne:
 		id = owner.id
-	case strings.HasPrefix(route.Path, "/api/server/restores"):
-		id = string(testRestoreID)
+	case seededOperationID(route.Path) != "":
+		id = seededOperationID(route.Path)
 	case strings.HasPrefix(route.Path, "/api/server/principals"):
 		id = testPrincipalID
 	case strings.HasPrefix(route.Path, "/api/server/groups"):
@@ -1212,12 +1255,19 @@ func wantSuccessStatus(route apiserver.Route) int {
 	return wantOtherSuccessStatus(route)
 }
 
+// startsInBackground reports whether a POST to path starts work that runs in
+// the background and answers 202.
+func startsInBackground(path string) bool {
+	return slices.Contains([]string{
+		"/api/server/backups", "/api/server/restores", "/api/server/restores/{id}/cancel",
+		"/api/dustpan/v1/store-checks",
+	}, path)
+}
+
 // wantOtherSuccessStatus answers the success status of a route that needs no
 // fresh authentication.
 func wantOtherSuccessStatus(route apiserver.Route) int {
-	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
-			route.Path == "/api/server/restores/{id}/cancel") {
+	if route.Method == http.MethodPost && startsInBackground(route.Path) {
 		return http.StatusAccepted
 	}
 
@@ -1559,6 +1609,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	}
 
 	cases := []struct {
@@ -1720,6 +1771,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1763,6 +1815,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
@@ -1795,6 +1848,7 @@ func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, e
 	return inventory.SweepResult{
 		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
 		FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}, nil
 }
 
@@ -1805,4 +1859,38 @@ type productionKind struct{}
 // ReadKind implements backup.KindReader.
 func (productionKind) ReadKind(_ context.Context) (installation.Kind, error) {
 	return installation.KindProduction, nil
+}
+
+// seedRouteStoreCheck seeds one store check that ended failed long ago.
+func seedRouteStoreCheck(t *testing.T, st *sqlite.Store, ended time.Time) {
+	t.Helper()
+
+	row := storecheck.Record{
+		StartedAt: ended.Add(-time.Hour), EndedAt: time.Time{}, ID: testStoreCheckID, Target: storecheck.TargetBlobs,
+		State: storecheck.StateRunning, RequestedBy: "tester", Error: "", Report: nil,
+	}
+
+	start := durable.StartRequest{
+		Key: storecheck.OperationKey(testStoreCheckID), Kind: storecheck.OperationKind,
+		Version: storecheck.OperationVersion, Input: []byte("{}"),
+	}
+	if err := st.StartCheck(t.Context(), row, start, time.Time{}); err != nil {
+		t.Fatalf("seed store check %s: %v", testStoreCheckID, err)
+	}
+
+	ops, err := st.DurableOperations().
+		List(t.Context(), durable.Filter{Kind: storecheck.OperationKind, States: nil, Limit: 0})
+	if err != nil {
+		t.Fatalf("list store check operations: %v", err)
+	}
+
+	for i := range ops {
+		if err := st.DurableOperations().Cancel(t.Context(), ops[i].ID); err != nil {
+			t.Fatalf("cancel seed store check operation: %v", err)
+		}
+	}
+
+	if _, err := st.FailEndedChecks(t.Context(), ended); err != nil {
+		t.Fatalf("fail seed store check %s: %v", testStoreCheckID, err)
+	}
 }

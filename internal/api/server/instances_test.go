@@ -64,6 +64,7 @@ func newInstanceHandler(
 		SignIn:           nil,
 		DenialLimiter:    nil,
 		Instances:        instances,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

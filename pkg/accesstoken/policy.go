@@ -26,6 +26,13 @@ const (
 	// longer than touchEvery, so a token in use always has a last use inside
 	// the period.
 	MinInactivity = time.Hour
+	// DefaultExchangeLifetime is the lifetime of the access token that a
+	// workload gets in a token exchange.
+	DefaultExchangeLifetime = time.Hour
+	// MinExchangeLifetime and MaxExchangeLifetime bound the exchange
+	// lifetime. A token of a workload serves one run of a job.
+	MinExchangeLifetime = time.Minute
+	MaxExchangeLifetime = 24 * time.Hour
 )
 
 // Policy is the administrator setting of the token life cycle (ADR 53,
@@ -51,6 +58,9 @@ type Policy struct {
 	// DisableBreakGlass is deprecated and always false. The server refuses
 	// true: the setting is no longer supported.
 	DisableBreakGlass bool
+	// ExchangeLifetime is the lifetime of the access token that a workload
+	// gets in a token exchange. The maximum lifetime bounds it too.
+	ExchangeLifetime time.Duration
 }
 
 // DefaultPolicy returns the policy of a new installation.
@@ -62,13 +72,15 @@ func DefaultPolicy() Policy {
 		DisableTokens:     true,
 		DisableAccounts:   true,
 		DisableBreakGlass: false,
+		ExchangeLifetime:  DefaultExchangeLifetime,
 	}
 }
 
 // Validate reports whether p holds usable values: a maximum lifetime of one
 // second to MaxPolicyDuration, an inactivity period of zero or MinInactivity
-// to MaxPolicyDuration, both whole milliseconds, and the break-glass disable
-// off. It returns ErrInvalid when DisableBreakGlass is set: the setting is
+// to MaxPolicyDuration, both whole milliseconds, the break-glass disable
+// off, and an exchange lifetime of MinExchangeLifetime to
+// MaxExchangeLifetime. It returns ErrInvalid when DisableBreakGlass is set: the setting is
 // no longer supported.
 func (p Policy) Validate() error {
 	switch {
@@ -82,8 +94,25 @@ func (p Policy) Validate() error {
 	case p.DisableBreakGlass:
 		return fmt.Errorf("%w: the disableBreakGlass setting is no longer supported", ErrInvalid)
 	default:
-		return nil
+		return validateExchangeLifetime(p.ExchangeLifetime)
 	}
+}
+
+// validateExchangeLifetime returns ErrInvalid for an exchange lifetime that
+// is not MinExchangeLifetime to MaxExchangeLifetime in whole milliseconds.
+func validateExchangeLifetime(d time.Duration) error {
+	if d < MinExchangeLifetime || d > MaxExchangeLifetime || d%time.Millisecond != 0 {
+		return fmt.Errorf("%w: the exchange lifetime %s is not %s to %s in whole milliseconds", ErrInvalid, d,
+			MinExchangeLifetime, MaxExchangeLifetime)
+	}
+
+	return nil
+}
+
+// ExchangeLifetimeUnder returns the lifetime of an exchanged token: the
+// exchange lifetime of p, or the maximum lifetime of p when that is shorter.
+func (p Policy) ExchangeLifetimeUnder() time.Duration {
+	return min(p.ExchangeLifetime, p.MaxLifetime)
 }
 
 // DefaultLifetimeUnder returns the lifetime of a token when a request names

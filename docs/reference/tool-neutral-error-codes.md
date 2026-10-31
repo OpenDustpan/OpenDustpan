@@ -37,6 +37,12 @@ Each error answer has the header `Cache-Control: no-store`.
 | 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
 | 404 | `namespace.not-found` | No namespace with this name |
 | 404 | `instance.not-found` | No instance version row has this ID |
+| 400 | `storecheck.invalid-target` | The target of a store check is not `blobs` or `backup` |
+| 404 | `storecheck.not-found` | No store check has this ID, or the ID has a form that the server never makes |
+| 409 | `storecheck.running` | Another store check runs. One check runs at a time |
+| 409 | `storecheck.cooldown` | A store check on this target ended less than 15 minutes ago |
+| 409 | `storecheck.refused` | The installation is in maintenance mode or a restore runs |
+| 409 | `storecheck.no-target` | The server has no store for the target, for example no backup target |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 409 | `request.idempotency-key-lost` | A newer request took the `Idempotency-Key` before this request ended |
 | 421 | `namespace.not-home` | The namespace has another primary installation |

@@ -1,0 +1,9 @@
+trust-rule.already-exists
+trust-rule.ambiguous
+trust-rule.invalid
+trust-rule.issuer-refused
+trust-rule.limit
+trust-rule.no-match
+trust-rule.not-found
+trust-rule.principal-refused
+trust-rule.sign-in-required

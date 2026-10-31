@@ -228,6 +228,10 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionInstallationStoreCheck allows starting and reading the store checks
+	// of the installation: the deep check of a blob store, which writes
+	// throwaway objects under a prefix of its own. Its object is ServerObject.
+	ActionInstallationStoreCheck Action = "installation:store-check"
 	// ActionServerManageSettings allows changing the installation settings
 	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
 	// settings name it: the start entry and the entry of a reload of the
@@ -297,6 +301,12 @@ const (
 	// namespace. Its object is a namespace. It reaches only the principals
 	// of that namespace, through principal:manage-tokens on each of them.
 	ActionNamespaceManagePrincipalTokens Action = "namespace:manage-principal-tokens"
+	// ActionNamespaceManageTrustRules allows creating and deleting the
+	// workload trust rules of a namespace. Its object is a namespace. A rule
+	// lets a workload act as a principal of the namespace, so a create also
+	// needs principal:manage-tokens on that principal. Reading the rules
+	// needs ActionNamespaceReadAccess.
+	ActionNamespaceManageTrustRules Action = "namespace:manage-trust-rules"
 	// ActionNamespaceReadAccess allows reading the access-review export of a
 	// namespace, and its principals. Its object is a namespace.
 	ActionNamespaceReadAccess Action = "namespace:read-access"
@@ -584,6 +594,10 @@ const (
 	// namespace that holds the registry. No built-in role below the
 	// administrator holds it.
 	ActionRegistryPublish Action = "registry:publish"
+	// ActionNamespaceManageIssuer allows making, rotating and checking the
+	// signing keys of the OIDC issuer of a namespace, changing its settings
+	// and exporting its two files. Its object is a namespace.
+	ActionNamespaceManageIssuer Action = "namespace:manage-issuer"
 	// ActionRegistryManageKeys allows registering and removing the trusted
 	// signing keys of a namespace, and listing them. Its object is the
 	// namespace that holds the registry.

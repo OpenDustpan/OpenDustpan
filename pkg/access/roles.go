@@ -19,6 +19,10 @@ const (
 	// RoleSecretViewer reads like a viewer, and reveals secret values
 	// (ADR 41, decision 4).
 	RoleSecretViewer = "secret-viewer"
+	// RolePlanner reads like a viewer, starts a runner job that only plans,
+	// and reads the masked plans and the job logs, where a Pulumi preview is.
+	// It cannot apply, destroy, approve or read a secret value.
+	RolePlanner = "planner"
 	// RoleWriter reads, and runs updates and applies: it reads state with
 	// plain secret values and writes it, sets the context of units, and
 	// encrypts and decrypts secrets.
@@ -65,6 +69,10 @@ var builtInDescriptions = []struct {
 	{RoleViewer, "Reads namespaces, collections and units, and their state with secret values masked."},
 	{RoleAuditor, "Reads like a viewer, and reads the audit log and the access review."},
 	{RoleSecretViewer, "Reads like a viewer, and reveals secret values."},
+	{
+		RolePlanner,
+		"Reads like a viewer, starts jobs that only plan, and reads the masked plans and the job logs. Cannot apply or read secret values.",
+	},
 	{RoleWriter, "Reads, runs updates, plans and applies, reads secret values, and sets the context of units."},
 	{
 		RoleMaintainer,
@@ -153,15 +161,6 @@ func builtInActions(id string) []identity.Action {
 	switch id {
 	case RoleViewer:
 		return viewerActions()
-	case RoleAuditor:
-		return append(viewerActions(),
-			identity.ActionNamespaceReadAudit,
-			identity.ActionNamespaceReadAccess,
-			identity.ActionCollectionReadAccess,
-			identity.ActionUnitReadAccess,
-		)
-	case RoleSecretViewer:
-		return append(viewerActions(), identity.ActionUnitReadSecrets)
 	case RoleWriter:
 		return writerActions()
 	case RoleMaintainer:
@@ -179,6 +178,31 @@ func builtInActions(id string) []identity.Action {
 		return append(out, Actions(FamilyDelegation)...)
 	case RoleTokenManager:
 		return Actions(FamilyDelegation)
+	default:
+		return readerActions(id)
+	}
+}
+
+// readerActions returns the actions of a built-in role that reads like a
+// viewer, and nil for another ID.
+func readerActions(id string) []identity.Action {
+	switch id {
+	case RoleAuditor:
+		return append(viewerActions(),
+			identity.ActionNamespaceReadAudit,
+			identity.ActionNamespaceReadAccess,
+			identity.ActionCollectionReadAccess,
+			identity.ActionUnitReadAccess,
+		)
+	case RoleSecretViewer:
+		return append(viewerActions(), identity.ActionUnitReadSecrets)
+	case RolePlanner:
+		return append(
+			viewerActions(),
+			identity.ActionUnitRunPlan,
+			identity.ActionJobReadPlans,
+			identity.ActionJobReadLogs,
+		)
 	default:
 		return nil
 	}

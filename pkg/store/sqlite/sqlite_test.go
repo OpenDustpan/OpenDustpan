@@ -772,6 +772,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestBlobDeleteDuringBackup(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunBlobDelete(t, func(t *testing.T) storetest.BlobDeleteStore {
+		t.Helper()
+
+		st, ok := openBackup(t).(storetest.BlobDeleteStore)
+		if !ok {
+			t.Fatal("the backup store is not a storetest.BlobDeleteStore")
+		}
+
+		return st
+	})
+}
+
 func TestPortableExportConformance(t *testing.T) {
 	t.Parallel()
 
