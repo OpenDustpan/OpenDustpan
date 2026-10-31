@@ -1575,6 +1575,15 @@ func (e *Env) APIStepWithHeaders(ctx context.Context, t *testing.T, spec APIStep
 	e.apiStepWith(ctx, t, e.token, spec, headers)
 }
 
+// APIStepWithHeadersAs is APIStepWithHeaders for the person who owns token,
+// for example to send If-Match with the token of a person.
+func (e *Env) APIStepWithHeadersAs(
+	ctx context.Context, t *testing.T, token string, spec APIStepSpec, headers map[string]string,
+) {
+	t.Helper()
+	e.apiStepWith(ctx, t, token, spec, headers)
+}
+
 // APIStepA runs one TFE API request as principal A and records it as a step.
 func (e *Env) APIStepA(ctx context.Context, t *testing.T, spec APIStepSpec) {
 	t.Helper()
