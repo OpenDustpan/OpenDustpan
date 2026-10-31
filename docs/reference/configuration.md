@@ -11,7 +11,7 @@ the same list.
 | Flag | Environment | File key | Default |
 | --- | --- | --- | --- |
 | `--config` | `DUSTPAN_CONFIG` | (none) | (none) |
-| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later |
+| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
 | `--installation` | `DUSTPAN_INSTALLATION` | `installation` | `local` |
 | `--components` | `DUSTPAN_COMPONENTS` | `components` | `all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts durable operations, but never claims one. `worker` runs the durable operations, the schedules, the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 on each route except the probes and the metrics route. An unknown name stops the start. See the several instances guide (docs/guides/several-instances.md) |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
@@ -283,7 +283,7 @@ the steps.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `--database` | `DUSTPAN_DATABASE` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later |
+| `--database` | `DUSTPAN_DATABASE` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
 | `--reason` | (none) | (none) |
 | `--recovery-mode` | `DUSTPAN_RECOVERY_MODE` | `bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: recovery with a request signed with an offline operator key. `none`: no break-glass, the operator restores from a backup, and the host command refuses to run |
 | (none) | `DUSTPAN_DISABLE_HOST_RECOVERY` | (none: the host command is on). Set `true` or `1` in the environment of the operator account to turn it off. `false`, `0` and an empty value keep it on. The host command refuses any other value |

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/s3"
 )
 
@@ -199,7 +200,7 @@ func cleanupS3Prefix(ctx context.Context, tb testing.TB, store blob.Store) {
 
 	ctx = context.WithoutCancel(ctx)
 
-	objects, err := store.List(ctx, "")
+	objects, err := blobtest.ListAll(ctx, store, "")
 	if err != nil {
 		tb.Errorf("list S3 keys for cleanup: %v", err)
 
@@ -335,7 +336,7 @@ func (e *Env) listLiveKeys(ctx context.Context, tb testing.TB) []blob.Object {
 		return nil
 	}
 
-	objects, err := e.blobs.List(ctx, "")
+	objects, err := blobtest.ListAll(ctx, e.blobs, "")
 	if err != nil {
 		if e.blobDirGone(tb) {
 			return nil

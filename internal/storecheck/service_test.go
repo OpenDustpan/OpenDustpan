@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -494,5 +495,152 @@ func TestFailingRunsCallTheStoreOnlyUnderTheirPrefix(t *testing.T) {
 				t.Fatalf("the objects outside the prefix changed: %v", got)
 			}
 		})
+	}
+}
+
+const listCaseName = "list returns the objects under a prefix ordered by key"
+
+// pagingFault is a store that breaks one rule of the paged list. message is a
+// part of the text that the report gives for the list case.
+type pagingFault struct {
+	name    string
+	message string
+	page    func(req blob.PageRequest, all []blob.Object) blob.Page
+}
+
+// largestPage reports whether req is the first page of a walk: the largest
+// limit, and no After.
+func largestPage(req blob.PageRequest) bool {
+	return req.Limit == blob.MaxPageLimit && req.After == ""
+}
+
+func pagingFaults() []pagingFault {
+	return []pagingFault{
+		{"ignores After", "", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			return blob.PageOf(all, blob.PageRequest{Prefix: req.Prefix, After: "", Limit: req.Limit})
+		}},
+		{"ignores the limit", "", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			return blob.PageOf(all, blob.PageRequest{Prefix: req.Prefix, After: req.After, Limit: blob.MaxPageLimit})
+		}},
+		{"ignores After for the largest limit", "after a key", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			if req.Limit == blob.MaxPageLimit {
+				req.After = ""
+			}
+
+			return blob.PageOf(all, req)
+		}},
+		{
+			"gives keys out of order on the first walk page", "break the rules",
+			func(req blob.PageRequest, all []blob.Object) blob.Page {
+				page := blob.PageOf(all, req)
+				if largestPage(req) {
+					slices.Reverse(page.Objects)
+				}
+
+				return page
+			},
+		},
+		{
+			"drops an object from a walk",
+			"not the written keys",
+			func(req blob.PageRequest, all []blob.Object) blob.Page {
+				if largestPage(req) && len(all) > 1 {
+					all = all[1:]
+				}
+
+				return blob.PageOf(all, req)
+			},
+		},
+		{"gives a wrong Next", "next key of a list page", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			page := blob.PageOf(all, req)
+			if page.Next != "" && len(page.Objects) > 0 {
+				page.Next = page.Objects[0].Key
+			}
+
+			return page
+		}},
+		{"gives keys out of order", "", func(req blob.PageRequest, all []blob.Object) blob.Page {
+			page := blob.PageOf(all, req)
+			slices.Reverse(page.Objects)
+
+			return page
+		}},
+	}
+}
+
+func TestListCaseFindsAStoreThatBreaksThePagingRules(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range pagingFaults() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, nil)
+			r.blobs.pageFault = tc.page
+
+			id := r.start(t, "blobs")
+			r.runOne(t)
+
+			_, report := r.report(t, id)
+			if report == nil {
+				t.Fatal("no report")
+			}
+
+			idx := slices.IndexFunc(report.Cases, func(c storecheck.Case) bool { return c.Name == listCaseName })
+			if idx < 0 {
+				t.Fatal("the report has no list case")
+			}
+
+			got := report.Cases[idx]
+			if got.Passed {
+				t.Fatalf("the list case passed on a store that %s", tc.name)
+			}
+
+			if !strings.Contains(got.Message, tc.message) {
+				t.Errorf("message %q does not hold %q", got.Message, tc.message)
+			}
+		})
+	}
+}
+
+func TestListCasePassesOnAStoreThatFollowsThePagingRules(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, nil)
+	id := r.start(t, "blobs")
+	r.runOne(t)
+
+	_, report := r.report(t, id)
+	if report == nil {
+		t.Fatal("no report")
+	}
+
+	for _, c := range report.Cases {
+		if !c.Passed {
+			t.Errorf("case %q failed: %s", c.Name, c.Message)
+		}
+	}
+}
+
+func TestPrefixDeleteFollowsEveryPageOfAStoreWithSmallPages(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, nil)
+	r.blobs.pageFault = func(req blob.PageRequest, all []blob.Object) blob.Page {
+		req.Limit = 1
+
+		return blob.PageOf(all, req)
+	}
+
+	id := r.start(t, "blobs")
+	r.runOne(t)
+
+	_, report := r.report(t, id)
+	if report == nil || !report.PrefixDeleted {
+		t.Fatalf("report = %+v, want PrefixDeleted", report)
+	}
+
+	if left := r.blobs.keys(); len(left) != 0 {
+		t.Fatalf("store holds %d objects after the check, want 0", len(left))
 	}
 }

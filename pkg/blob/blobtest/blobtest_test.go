@@ -209,6 +209,20 @@ func (m *memObjects) delete(key blob.Key) {
 
 // list returns the objects under prefix, ordered by key. The caller holds no
 // lock.
+// listPage answers the page that req selects, after the checks of the port.
+func (m *memObjects) listPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	all, err := m.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	return blob.PageOf(all, req), nil
+}
+
 func (m *memObjects) list(ctx context.Context, prefix string) ([]blob.Object, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list %s: %w", prefix, err)
@@ -281,8 +295,8 @@ func (s *overwriteStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (s *overwriteStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return s.mem.list(ctx, prefix)
+func (s *overwriteStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return s.mem.listPage(ctx, req)
 }
 
 func (s *overwriteStore) Ping(ctx context.Context) error {
@@ -333,8 +347,8 @@ func (s *truncateStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (s *truncateStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return s.mem.list(ctx, prefix)
+func (s *truncateStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return s.mem.listPage(ctx, req)
 }
 
 func (s *truncateStore) Ping(ctx context.Context) error {
@@ -386,8 +400,8 @@ func (s *leakStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (s *leakStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return s.mem.list(ctx, prefix)
+func (s *leakStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return s.mem.listPage(ctx, req)
 }
 
 func (s *leakStore) Ping(ctx context.Context) error {
@@ -445,13 +459,13 @@ func newUnorderedStore() *unorderedStore {
 	return &unorderedStore{listBase: newListBase()}
 }
 
-func (s *unorderedStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	got, err := s.mem.list(ctx, prefix)
+func (s *unorderedStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	got, err := s.mem.listPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
-	slices.Reverse(got)
+	slices.Reverse(got.Objects)
 
 	return got, nil
 }
@@ -472,14 +486,14 @@ func newBadTimeStore() *badTimeStore {
 	return &badTimeStore{listBase: newListBase()}
 }
 
-func (s *badTimeStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	got, err := s.mem.list(ctx, prefix)
+func (s *badTimeStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	got, err := s.mem.listPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
-	for i := range got {
-		got[i].ModifiedAt = time.Time{}
+	for i := range got.Objects {
+		got.Objects[i].ModifiedAt = time.Time{}
 	}
 
 	return got, nil
@@ -502,18 +516,20 @@ func newExtraStore() *extraStore {
 	return &extraStore{listBase: newListBase()}
 }
 
-func (s *extraStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	got, err := s.mem.list(ctx, prefix)
+func (s *extraStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	got, err := s.mem.listPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
 	key, err := blob.ParseKey("tofu/ws-1/sv-9/a9")
 	if err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
-	return append(got, blob.Object{ModifiedAt: time.Now().UTC(), Key: key}), nil
+	got.Objects = append(got.Objects, blob.Object{ModifiedAt: time.Now().UTC(), Key: key})
+
+	return got, nil
 }
 
 func (s *extraStore) Delete(_ context.Context, key blob.Key) error {

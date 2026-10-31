@@ -89,10 +89,10 @@ func (c *countingStore) Delete(ctx context.Context, key blob.Key) error {
 	return c.Store.Delete(ctx, key)
 }
 
-func (c *countingStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (c *countingStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	c.calls.Add(1)
 
-	return c.Store.List(ctx, prefix)
+	return c.Store.ListPage(ctx, req)
 }
 
 func (c *countingStore) Ping(ctx context.Context) error {
@@ -148,7 +148,7 @@ func testScopeInside(t *testing.T, s blob.Store) {
 		t.Fatalf("second put through the view: err = %v, want ErrExists", putErr)
 	}
 
-	objects, err := view.List(t.Context(), view.Prefix())
+	objects, err := ListAll(t.Context(), view, view.Prefix())
 	if err != nil {
 		t.Fatalf("view list: %v", err)
 	}
@@ -334,7 +334,7 @@ func testScopeList(t *testing.T, s blob.Store) {
 	}
 
 	for _, prefix := range []string{root, root + "/"} {
-		got, err := viewA.List(t.Context(), prefix)
+		got, err := ListAll(t.Context(), viewA, prefix)
 		if err != nil {
 			t.Fatalf("list %q: %v", prefix, err)
 		}
@@ -344,7 +344,7 @@ func testScopeList(t *testing.T, s blob.Store) {
 		}
 	}
 
-	got, err := viewA.List(t.Context(), root+"/item-keys/")
+	got, err := ListAll(t.Context(), viewA, root+"/item-keys/")
 	if err != nil {
 		t.Fatalf("list item-keys: %v", err)
 	}
@@ -353,7 +353,7 @@ func testScopeList(t *testing.T, s blob.Store) {
 		t.Fatalf("list item-keys = %v, want %v", keys, want[:2])
 	}
 
-	got, err = viewA.List(t.Context(), root+"/ghost/")
+	got, err = ListAll(t.Context(), viewA, root+"/ghost/")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("list of a missing directory = %v, %v; want empty", objectKeys(got), err)
 	}
@@ -409,7 +409,7 @@ func testScopeHostilePrefixes(t *testing.T, s blob.Store) {
 	for name, prefix := range hostilePrefixes() {
 		before := counted.calls.Load()
 
-		objects, err := view.List(t.Context(), prefix)
+		objects, err := ListAll(t.Context(), view, prefix)
 		if !errors.Is(err, blob.ErrOutOfScope) {
 			t.Errorf("list %s: err = %v, want ErrOutOfScope", name, err)
 		}
