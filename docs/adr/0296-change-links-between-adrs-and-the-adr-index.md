@@ -1,4 +1,4 @@
-# 288. Change links between ADRs, and the ADR index
+# 296. Change links between ADRs, and the ADR index
 
 Status: accepted · 2026-10-31. Decided by the project owner
 
@@ -51,7 +51,7 @@ The project owner decided these points:
    the earlier ADR. A part that has no number, for example "the route
    paths", goes in the note. (owner)
 6. The earlier ADR gets the reverse item in a "Changed by:" list below its
-   status line, for example "- ADR 288 extends: a short note.". This list is
+   status line, for example "- ADR 296 extends: a short note.". This list is
    the mark that ADR 1 allows. The change adds nothing else to the earlier
    ADR. The prose of its status line stays. (owner)
 7. When a later ADR supersedes all of an earlier ADR, the status line of the
