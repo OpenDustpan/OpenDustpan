@@ -6,7 +6,7 @@ Changed by:
 
 - ADR 15 extends: RFCs for open questions, no proposed status for an ADR.
 - ADR 16 changes: an exception to the no-edit rule for spelling corrections.
-- ADR 288 extends: an accepted ADR gets a "Changed by" list.
+- ADR 296 extends: an accepted ADR gets a "Changed by" list.
 
 ## Context
 

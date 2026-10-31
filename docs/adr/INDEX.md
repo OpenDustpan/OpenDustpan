@@ -14,7 +14,7 @@ that the named part applies, and the later ADR adds to it.
 
 | ADR | Title | Status | Changes | Changed by | Current rule |
 | --- | --- | --- | --- | --- | --- |
-| [1](0001-record-architecture-decisions.md) | Record architecture decisions | accepted | - | ADR 15 extends; ADR 16 changes; ADR 288 extends | this ADR, with ADR 15, 16, 288 |
+| [1](0001-record-architecture-decisions.md) | Record architecture decisions | accepted | - | ADR 15 extends; ADR 16 changes; ADR 296 extends | this ADR, with ADR 15, 16, 296 |
 | [2](0002-server-as-an-sdk-with-ports-and-adapters.md) | The server is an SDK with ports and adapters | superseded by ADR 35 | - | ADR 35 supersedes; ADR 272 changes | ADR 35 |
 | [3](0003-sql-persistence-per-dialect.md) | SQL persistence: hand-written per dialect, sqlc for fixed queries | accepted | - | ADR 274 changes | this ADR, with ADR 274 |
 | [4](0004-namespaces-regions-and-fencing.md) | Namespaces, home regions and failover-version fencing | accepted | - | ADR 38 extends; ADR 248 changes; ADR 286 changes | this ADR, with ADR 38, 248, 286 |
@@ -253,4 +253,4 @@ that the named part applies, and the later ADR adds to it.
 | [285](0285-local-users-sign-in-with-a-password-and-a-passkey.md) | Local users sign in with a password and with a passkey | accepted | changes ADR 46 decisions 1 and 2; changes ADR 55 decision 5; changes ADR 237 decision 3 | - | this ADR |
 | [286](0286-self-service-failover-and-promotion-three-renames.md) | Self-service, failover and promotion: three renames | accepted | changes ADR 4; changes ADR 100; changes ADR 110; changes ADR 111; changes ADR 112; changes ADR 113; changes ADR 114; changes ADR 115; changes ADR 116; changes ADR 117; changes ADR 128; changes ADR 144; changes ADR 160; changes ADR 166; changes ADR 181; changes ADR 199; changes ADR 200; changes ADR 201; changes ADR 203; changes ADR 204; changes ADR 205; changes ADR 207; changes ADR 210; changes ADR 211; changes ADR 213; changes ADR 218; changes ADR 220; changes ADR 222; changes ADR 224; changes ADR 225; changes ADR 226; changes ADR 228; changes ADR 229; changes ADR 230; changes ADR 248; changes ADR 271; changes ADR 273; changes ADR 280 | - | this ADR |
 | [287](0287-no-contributor-license-agreement.md) | No contributor license agreement and no copyright assignment | accepted | - | - | this ADR |
-| [288](0288-change-links-between-adrs-and-the-adr-index.md) | Change links between ADRs, and the ADR index | accepted | extends ADR 1 | - | this ADR |
+| [296](0296-change-links-between-adrs-and-the-adr-index.md) | Change links between ADRs, and the ADR index | accepted | extends ADR 1 | - | this ADR |

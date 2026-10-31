@@ -124,10 +124,10 @@ DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 # self-test are in the script.
 BANNED    := python3 -I scripts/docs-banned-words.py
 
-# The change links between ADRs and the generated docs/adr/INDEX.md. ADR 288
+# The change links between ADRs and the generated docs/adr/INDEX.md. ADR 296
 # is the first ADR with a "Changes:" list. The older ADRs have only the
 # "Changed by:" items of their links.
-ADR_INDEX := python3 -I scripts/adr-index.py --changes-from 288
+ADR_INDEX := python3 -I scripts/adr-index.py --changes-from 296
 
 docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
