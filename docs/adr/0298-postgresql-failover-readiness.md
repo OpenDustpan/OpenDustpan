@@ -166,7 +166,10 @@ Sources:
      that is earlier. The wrappers cover this full method set: `Exec`,
      `Query` and the read of its rows, `QueryRow` and its `Scan`,
      `SendBatch` and the reads of its results, `Begin`, `BeginTx`, `Commit`,
-     `Rollback` and `CopyFrom`. `guardedTx` does not give out `Conn`. The
+     `Rollback` and `CopyFrom`. `Conn` returns the raw `*pgx.Conn`, and no
+     wrapper can wrap that type. So each call of `Conn` counts as a path that
+     skips the wrappers: it is in the list of the long-path test below, and
+     it names its bound. The
      deadline of a row read ends when the rows close or the `Scan` returns,
      not when `Query` returns. The wrappers set the deadline with
      `context.WithTimeoutCause` and a sentinel cause. `classify` translates
@@ -229,13 +232,15 @@ Sources:
      The server writes, so a connection to a server that refuses writes is
      never correct.
    - The server accepts `primary` and treats it as the same value as
-     `read-write`. It does not rewrite the URL. It installs the pgx
-     `ValidateConnect` function of `read-write` for both values. libpq and
+     `read-write`. It does not rewrite the URL. For both values, it installs
+     its own pgx `ValidateConnect` function. The function reads
+     `pg_is_in_recovery()` and `transaction_read_only` in one statement, and
+     refuses the connection when either value says that the server refuses
+     writes. libpq and
      pgx define `primary` with a weaker check: a server that is not in hot
      standby, also with `default_transaction_read_only` on. Each write on
      such a server fails, so the server applies the stronger check. The
-     `read-write` check refuses a hot standby too, because a hot standby
-     reports `transaction_read_only` as `on`. The installation API shows the
+     installation API shows the
      value of the URL (`primary`), its source (`url`) and the check that
      applies (`read-write`).
    - The server sets the TCP keepalive of the dialer with Go's
@@ -283,22 +288,40 @@ Sources:
    checksum, or a lock ID. Neither CLI sends the `Idempotency-Key` header,
    so it does not count for these writes.
 
-   | Write | Today on `main` | Decision |
-   | --- | --- | --- |
-   | Pulumi checkpoint, journal batch, event, complete, renew | Success on a repeat (Context) | No change |
-   | TFE state version upload and finalize | Success on a repeat (`confirmRetry`) | No change |
-   | HTTP backend `LOCK` with the same lock ID | `lockAs` refuses any held lock with `ErrLocked`: 423, and `tofu` fails with its own lock in place | When the lock ID and the holder both match, answer success. The client chose the ID, so this is safe |
-   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | `heldBy` returns `ErrNotLocked`: 409 `workspace.not-locked` | When the workspace is free, answer success. No state changes, so no audit entry. `make e2e` checks each CLI version |
-   | TFE `actions/lock` sent again | 409 "is locked by" with the same subject. OpenTofu waits under `-lock-timeout`, then fails. The lock stays until a force-unlock | Proposed: an accepted exception, documented with the force-unlock remedy. The protocol carries no lock ID. A success for a relock by the same principal would let two runs of one principal hold the lock together. The PM decides |
-   | Pulumi `start` | `StartBy` commits a running update. The server does not store the token, so a lost answer leaves the update running for `DefaultLease` (5 minutes). The next `pulumi up` gets 409 until `pulumi cancel` | An accepted exception, documented with the `pulumi cancel` remedy. The implementation checks in the e2e records if the CLI sends `start` again after a 503 |
+   **How the Pulumi CLI retries.** The client of the Pulumi CLI, read in its
+   source at the tags v3.200.0 and v3.272.0
+   (`pkg/backend/httpstate/client/api.go` and `client.go`), retries on a 5xx
+   answer only the calls that use the policy `retryAllMethods`: the lease
+   renewal, the three checkpoint calls, the journal entries, the engine
+   events, cancel, complete, and the encrypt and decrypt calls. The other
+   calls use the default policy `retryGetMethod`, so the CLI does not send a
+   POST again after a 503. `CreateStack`, `CreateUpdate` and `StartUpdate`
+   are such POST calls. A retry waits 1 second, then doubles the wait, for at
+   most 4 retries: 1 + 2 + 4 + 8 = 15 seconds. That agrees with the retry
+   window of 13 to 14 seconds that the e2e suite measured. The e2e records
+   of the suite are files of each run and are not in the repository, and
+   step 7 meets only the calls that run during its outage. So step 9 adds a
+   check of the retry of each route: the e2e proxy answers 503 to one route
+   at a time, and the record shows if the CLI sent the request again.
 
-   - The implementation adds a 9d row (decision 12) for each lock and
-     unlock route and for `start`.
+   | Write | CLI sends it again on 503 | Today on `main` | Decision |
+   | --- | --- | --- | --- |
+   | Pulumi checkpoint, journal batch, event, complete, renew | Yes | Success on a repeat (Context) | No change |
+   | Pulumi `CreateStack` | No | The stack exists. The next `pulumi stack init` gets 409, and `pulumi up` works | No change. The guide names the case |
+   | Pulumi `CreateUpdate` | No | An update that did not start stays. The next command makes a new update | No change |
+   | Pulumi `StartUpdate` | No | `StartBy` commits a running update. The server does not store the token. The command fails at once. The next `pulumi up` gets 409 for up to `DefaultLease`, 5 minutes after the start, or until `pulumi cancel` | An accepted exception (PM). The guide gives the remedy `pulumi cancel` and the block of at most 5 minutes |
+   | TFE state version upload and finalize | Yes (OpenTofu) | Success on a repeat (`confirmRetry`) | No change |
+   | HTTP backend `LOCK` with the same lock ID | Yes (OpenTofu) | `lockAs` refuses any held lock with `ErrLocked`: 423, and `tofu` fails with its own lock in place | Success when the lock is still held, with the same lock ID and the same holder. The client chose the ID, so a match is the same request |
+   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | Yes (OpenTofu) | `heldBy` returns `ErrNotLocked`: 409 `workspace.not-locked` | The workspace row keeps a record of its last released lock: the lock ID, the holder and the time of the release. The API of the workspace shows it. On a free workspace, the HTTP backend `UNLOCK` answers success only when that record has the lock ID of the request. TFE `actions/unlock` sends no lock ID, so it answers success only when the record names the caller as the holder. In all other cases, 409 as today. No state changes, so no audit entry. `make e2e` checks each CLI version |
+   | TFE `actions/lock` sent again | Yes (OpenTofu) | 409 "is locked by" with the same subject. OpenTofu waits under `-lock-timeout`, then fails | An accepted exception (PM): the answer stays 409, and the lock fails closed. The real TFE also refuses a lock on a locked workspace. A match on the principal or the token cannot tell a retry from a second run. The lock record names the holder and the time. The guide gives the remedy: `tofu force-unlock` |
+
+   - Step 9d (decision 12) adds a row for each lock and unlock route and for
+     `StartUpdate`.
    - The guide changes its sentence "OpenTofu: ... the workspace has no
      lock": after a lost answer to a TFE lock, the lock can stay.
-10. **Replication mode.** The guarantees of decisions 8, 9 and 11 hold only
-    when a failover cannot undo a commit that the client saw succeed. That
-    needs synchronous replication to at least one standby:
+10. **Replication mode (PM).** The guarantees of decisions 8, 9 and 11 hold
+    only when a failover cannot undo a commit that the client saw succeed.
+    That needs synchronous replication to at least one standby:
     - Amazon RDS Multi-AZ DB instances replicate synchronously. Multi-AZ DB
       clusters replicate semisynchronously, with an acknowledgment from at
       least one reader.
@@ -307,14 +330,21 @@ Sources:
     - CloudNativePG: `.spec.postgresql.synchronous` with `number: 1` and
       `dataDurability: required`.
 
-    With asynchronous replication, a failover can lose commits that the
-    server acknowledged: a state version, a checkpoint, a lock release, a
-    renewal of a lease. A lost renewal can let two runners hold one claim.
-    The guide says this plainly. This decision does not change the minimum
-    topology of ADR 280 decision 5, which is an owner decision. The
-    installation API (decision 6) shows `synchronous_commit` and whether
-    `synchronous_standby_names` is empty, so an operator can see the mode.
-    The readiness probe does not fail on it.
+    Asynchronous replication stays allowed. With it, a failover can lose a
+    commit that the server acknowledged. These are the losses:
+    - A state serial or a state version that OpenTofu saw saved.
+    - A Pulumi checkpoint, journal batch or event.
+    - An unlock: the workspace is locked again after the failover.
+    - A fence promotion of a namespace.
+    - The renewal (`Extend`) of a lease. The claim then expires earlier than
+      the runner counts, and two runners can hold one claim.
+
+    The guide gives this list. There is no silent fallback: the installation
+    API (decision 6) shows the effective values of `synchronous_commit` and
+    `synchronous_standby_names` as the database reports them. When
+    `synchronous_standby_names` is empty, the start log writes a warning that
+    names the losses. The readiness probe does not fail on it. This decision
+    does not change the minimum topology of ADR 280 decision 5.
 11. **Leases and durable operations across the gap.**
     - The lease stays at 30 seconds (ADR 280 decision 8).
     - A gap shorter than the lease: the renewals fail, the step continues,
@@ -426,7 +456,11 @@ binaries are not present.
   - `TestLongPathsNameTheirBound`: the list of decision 3.
   - `TestExpiryInGapDoesNotCount`: a gap does not count, a crash does.
 - Tests in `pkg/workspace` and the HTTP adapters: the repeated lock and
-  unlock of decision 9.
+  unlock of decision 9, with one row for a matching record and one row for
+  each kind of mismatch.
+- `e2e/ha_failover_test.go`: the check of the retry of each Pulumi and
+  OpenTofu route of decision 9, with the e2e proxy that answers 503 to one
+  route at a time.
 - Tests in `pkg/dustpan`: `TestReadinessStoreReadOnly`.
 - Tests in `pkg/durable`: `TestClaimLoopBacksOffDuringOutage`,
   `TestUnavailableStepIsDeferred`, and one test for each loop of decision 11.
@@ -455,9 +489,11 @@ binaries are not present.
   in the log, and not as a request that hangs.
 - The guarantees of decisions 8 to 11 need synchronous replication. With
   asynchronous replication, a failover can lose acknowledged writes.
-- A repeated HTTP backend `LOCK` and a repeated unlock change from an error
-  to a success. A repeated TFE lock and a lost `start` answer stay errors
-  with a documented remedy, if the PM accepts the exceptions.
+- A repeated HTTP backend `LOCK` changes from an error to a success. A
+  repeated unlock changes to a success when the record of the last released
+  lock matches. The workspace row gets the columns of that record in a new
+  migration. A repeated TFE lock and a lost `StartUpdate` answer stay
+  errors, with a documented remedy.
 - Step 9 runs only on a runner with the PostgreSQL server binaries.
 - The several-instances guide gets the effective defaults, the table of
   decision 9, the replication mode, the clock bounds, the readiness check,
@@ -477,12 +513,17 @@ The PM answered the open points of the draft on 2026-10-31:
 3. The server accepts `target_session_attrs=primary` and checks it as
    `read-write` (decision 5).
 
-## Open points for the PM
+The PM answered the architecture review on 2026-10-31:
 
-1. Decision 9: the TFE relock as an accepted exception, and the lost answer
-   to Pulumi `start` as an accepted exception.
-2. Decision 10: the replication mode is a statement in the guide and a fact
-   in the API. It is not a part of the minimum topology. A change of the
-   minimum topology needs the owner.
-3. Decision 3: the server timeouts (25 seconds, 60 seconds, 5 seconds), and
-   503 for 57014.
+4. The guarantees need a synchronous standby. Asynchronous replication
+   stays allowed, with its losses in the guide and the effective values in
+   the API (decision 10).
+5. A repeated HTTP backend `LOCK` with the same lock ID and holder answers
+   success. An unlock on a free workspace answers success only when the
+   record of the last released lock matches. Otherwise it answers 409
+   (decision 9).
+6. A repeated TFE `actions/lock` keeps 409, and a lost `StartUpdate` answer
+   keeps 409 for up to 5 minutes. Both are accepted exceptions with a
+   remedy in the guide (decision 9).
+7. The server timeouts of decision 3 and the answer to 57014 are decisions
+   of this ADR.
