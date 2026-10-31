@@ -1,6 +1,6 @@
 # 298. PostgreSQL failover readiness
 
-Status: accepted · 2026-10-31. Work item W9 of milestone 7 (ADR 280). The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. Extends ADR 280 decision 4 and ADR 72. Does not change ADR 4
+Status: accepted · 2026-10-31. Work item W9 of milestone 7 (ADR 280). The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. Extends ADR 280 decision 4 and ADR 72. Does not change ADR 4 or the minimum topology of ADR 280 decision 5
 
 ## Context
 
@@ -21,31 +21,60 @@ Some of the work is already on `main`:
 - The database URL can set `target_session_attrs`, `pool_max_conn_lifetime`
   and `pool_health_check_period`. The server passes them to pgx as they are.
   The several-instances guide documents them, with no default from the server.
-- A durable operation renews its lease every 10 seconds, and stops its step
-  when no renewal succeeded before the lease ends. Lease times come from the
-  database clock (`clock_timestamp()`). The lease is 30 seconds (ADR 280
-  decision 8).
+- A durable operation renews its lease every 10 seconds. The runner counts
+  the deadline from the start of the last renewal that succeeded, on the
+  monotonic clock, minus a margin of `max(RenewEvery, Lease/4)`: 10 seconds.
+  Each renewal has the time left as its timeout. So a lost or slow renewal
+  answer makes the runner stop sooner, never later. The claim times of a
+  durable operation come from the database clock (`clock_timestamp()`). The
+  lease is 30 seconds (ADR 280 decision 8).
+- A claim that fails with an error waits for the claim backoff of the
+  durable runner: capped exponential with jitter, at most 30 seconds
+  (`DefaultClaimBackoffMax`).
+- A repeated tool write gets the answer of a success in these cases:
+  - A Pulumi checkpoint with the same sequence and digest
+    (`writeCheckpoint`, `checkSequence`).
+  - A Pulumi journal batch with the same sequence IDs and SHA-256
+    (`journalRetry`).
+  - A Pulumi event: `AppendEvent` uses `ON CONFLICT DO NOTHING` on
+    `(stack_id, update_id, sequence)`.
+  - A Pulumi complete with the same status, and a lease renewal, which gives
+    back the same token.
+  - A TFE state version upload and finalize (`confirmRetry`).
 - HA exit-test step 7 stops the database for 60 seconds, and for less than
   the retry window of the CLIs. The e2e proxy (`e2e/dbproxy.go`) cuts the
-  connections of one instance.
+  connections of one instance. The guide gives the measured retry windows:
+  13 to 14 seconds for the Pulumi CLI, more than 30 seconds for OpenTofu.
 
 ### What the services do
 
 The facts below come from the vendor pages on 2026-10-31.
 
-| Service | Failover time | Address after the failover | Old primary |
-| --- | --- | --- | --- |
-| Amazon RDS Multi-AZ | "typically 60–120 seconds" | The DNS record of the DB instance changes to the standby. "You need to re-establish any existing connections." | Not stated |
-| Patroni | With the defaults (`ttl` 30, `loop_wait` 10, `retry_timeout` 10), the failover starts after the leader key expires: up to 30 seconds | A proxy or a load balancer that uses `GET /primary` as its health check | Not stated on the configuration page |
-| CloudNativePG | `failoverDelay` is 0 seconds by default. The primary lease is 15 seconds by default | The `<cluster>-rw` service points to the primary | Shut down ("fast", then "immediate"). It restarts as a replica |
+| Service | Failover time | Replication | Address after the failover | Old primary |
+| --- | --- | --- | --- | --- |
+| Amazon RDS Multi-AZ DB instance | "typically 60–120 seconds" | "a synchronous standby replica" | The DNS record of the DB instance changes to the standby. "You need to re-establish any existing connections." | Not stated |
+| Amazon RDS Multi-AZ DB cluster | "typically under 35 seconds" | "semisynchronous replication, which requires acknowledgment from at least one reader DB instance" | The writer endpoint | Not stated |
+| Patroni | The leader key expires 20 to 30 seconds after the failure (`ttl` 30, `loop_wait` 10, `retry_timeout` 10). A replica acts at its next loop, so about 20 to 40 seconds | Asynchronous unless `synchronous_mode: true`. An asynchronous replica can lag by up to `maximum_lag_on_failover` (1 MiB by default) and still be promoted | A proxy or a load balancer that uses `GET /primary` as its health check | Patroni demotes a leader that cannot update its key for longer than `retry_timeout`. That server stays up as a read-only server |
+| CloudNativePG | `failoverDelay` is 0 seconds by default. A replica promotes only when it holds the primary lease (`.spec.primaryLease`, 15 seconds by default) | Asynchronous unless the cluster sets `.spec.postgresql.synchronous` | The `<cluster>-rw` service points to the primary | Shut down ("fast", then "immediate"). It restarts as a replica |
 
 Sources:
 
-- AWS: <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html>.
+- AWS DB instances:
+  <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html>
+  and
+  <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html>.
   AWS also recommends a DNS cache TTL of no more than 60 seconds for a JVM.
+- AWS DB clusters:
+  <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/multi-az-db-clusters-concepts.html>
+  and
+  <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/multi-az-db-clusters-concepts-failover.html>.
 - Patroni: <https://patroni.readthedocs.io/en/latest/dynamic_configuration.html>.
+  "DCS or network issues shorter than this [`retry_timeout`] will not cause
+  Patroni to demote the leader."
 - CloudNativePG: `docs/src/failover.md` and `docs/src/service_management.md`
-  in <https://github.com/cloudnative-pg/cloudnative-pg>. The pages of the
+  on the `main` branch of <https://github.com/cloudnative-pg/cloudnative-pg>.
+  The `.spec.primaryLease` table with `leaseDurationSeconds` 15 is in
+  `failover.md`, in the section "Safe primary election". The pages of the
   documentation site returned no text when we read them.
 - libpq: <https://www.postgresql.org/docs/current/libpq-connect.html>.
   `target_session_attrs=read-write` needs a server that is not in hot standby
@@ -54,10 +83,13 @@ Sources:
 - PostgreSQL error codes:
   <https://www.postgresql.org/docs/current/errcodes-appendix.html>. 25006 is
   `read_only_sql_transaction`. 08007 is `transaction_resolution_unknown`.
+  57014 is `query_canceled`.
 - pgx 5.11.0, read in the module source:
   - `pgconn.ParseConfig` accepts `target_session_attrs` with the values
     `any` (the default), `read-write`, `read-only`, `primary`, `standby` and
     `prefer-standby`. It checks the value only when it opens a connection.
+    The `read-write` check reads `transaction_read_only`. A hot standby
+    reports `on` there, so the check refuses a hot standby too.
   - `connect_timeout` has no default. With no value, only the context limits
     a dial.
   - The default dialer is a `net.Dialer` with no settings, so Go's default
@@ -67,7 +99,8 @@ Sources:
     the pool.
   - On the end of a context, the default handler sets the deadline of the
     network connection to now. The statement fails, and pgx closes the
-    connection.
+    connection. The handler sends no cancel request, so the backend on the
+    server continues until it next writes to the socket.
   - The pool pings a connection before it gives it out when the connection
     was idle for more than 1 second.
   - `Pool.Reset` closes the idle connections at once, and each connection in
@@ -78,10 +111,10 @@ Sources:
 ### The gaps
 
 1. **A stale connection to a read-only server.** After a failover, the old
-   primary can stay up as a read-only server, and a DNS cache can still give
-   its address. A pool connection that opened before the failover stays
-   open. Each write on it fails with 25006 and gets 503, until the connection
-   reaches its maximum lifetime: 1 hour by default.
+   primary can stay up as a read-only server (Patroni demotes it), and a DNS
+   cache can still give its address. A pool connection that opened before
+   the failover stays open. Each write on it fails with 25006 and gets 503,
+   until the connection reaches its maximum lifetime: 1 hour by default.
 2. **Readiness does not see a read-only server.** The store check is a ping.
    A ping works on a read-only server, so an instance stays ready while each
    write fails.
@@ -96,10 +129,20 @@ Sources:
    read-only server.
 5. **A commit with an unknown outcome.** When the connection breaks after
    the server sent `COMMIT` and before the answer came back, the store does
-   not know if the transaction committed. The API answers 503. The CLI sends
-   the same request again. Nobody checked that each write of the
-   tool-compatible APIs gives a correct answer when the first try did commit.
-6. **No test of a real promotion.** Step 7 stops the database and starts it
+   not know if the transaction committed. The API answers 503. Some writes
+   on `main` give an error to a repeated request when the first try
+   committed (decision 9).
+6. **A commit that a failover undoes.** With asynchronous replication, the
+   new primary can miss commits that the old primary acknowledged. A client
+   then got a success for a write that the database no longer holds.
+7. **A database gap counts as a failure of a durable operation.** Each
+   claim that expires in a gap adds 1 to `expiries`, and nothing resets the
+   count. `DefaultExpiryLimit` is 3. A step error that wraps
+   `ErrUnavailable` counts toward `MaxAttempts` (5), unless the `Deferred`
+   function of the runner matches it. The backup, restore and audit chain
+   runners have no `Deferred` function. A long backup or restore that meets
+   three failovers fails with `ErrExpiryLimit`.
+8. **No test of a real promotion.** Step 7 stops the database and starts it
    again. No test promotes a standby, keeps the old primary up as a
    read-only server, or drops a connection without a reset.
 
@@ -111,32 +154,58 @@ Sources:
    today, and a test keeps it.
 2. **Requests fail fast with 503.** During the gap, each request that needs
    the database gets 503 with `Retry-After: 5`, in the shape of its API (W3,
-   ADR 280 decision 4). The server does not retry a request on its own. The
-   CLIs already retry 503 (the several-instances guide gives the measured
-   windows). A second retry layer would hide the failure, and it would
-   multiply the load on a database that starts again.
-3. **Each database round trip has a deadline.** The guarded wrappers of the
-   adapter (`guardedDB`, `guardedTx`, `guardedPool`) give each statement,
-   each `BEGIN` and each `COMMIT` a deadline of 30 seconds, or the deadline of
-   the caller when that is earlier. The name of the bound is the statement
-   deadline. At the deadline, pgx closes the connection, and the adapter
-   translates the error to `storeerr.ConnectionFailed`, so the API answers
-   503. A canceled request context stays a canceled context, not an outage.
+   ADR 280 decision 4). The server does not retry a request on its own. A
+   second retry layer would hide the failure, and it would multiply the load
+   on a database that starts again. The consequence: a failover that is
+   longer than the retry window of the CLI makes the command fail
+   (Consequences).
+3. **Each database round trip has a deadline, on the client and on the
+   server.**
+   - **The client deadline.** The guarded wrappers of the adapter give each
+     round trip a deadline of 30 seconds, or the deadline of the caller when
+     that is earlier. The wrappers cover this full method set: `Exec`,
+     `Query` and the read of its rows, `QueryRow` and its `Scan`,
+     `SendBatch` and the reads of its results, `Begin`, `BeginTx`, `Commit`,
+     `Rollback` and `CopyFrom`. `guardedTx` does not give out `Conn`. The
+     deadline of a row read ends when the rows close or the `Scan` returns,
+     not when `Query` returns. The wrappers set the deadline with
+     `context.WithTimeoutCause` and a sentinel cause. `classify` translates
+     a `DeadlineExceeded` to `storeerr.ConnectionFailed` only when
+     `context.Cause` is that sentinel. The deadline of a caller stays the
+     error of the caller, as today.
+   - **The server timeouts.** Each connection of the pool sets these runtime
+     parameters: `statement_timeout` 25 seconds,
+     `idle_in_transaction_session_timeout` 60 seconds and
+     `client_connection_check_interval` 5 seconds. So a slow statement on a
+     server that answers ends on the server first, with 57014, and its locks
+     go free. The connection stays in the pool. A backend whose client went
+     away stops within 5 seconds and frees its locks. The client deadline
+     stays for the case of a dead network.
+   - The adapter translates 57014 to a new class,
+     `storeerr.StatementTimeout`. The API answers 503 with `Retry-After`,
+     and the log names the cause `statement-timeout`. A canceled context of
+     the caller stays a canceled context, not an outage.
    - A path that runs for longer, for example the migrations, the backup
-     export and import, the restore swap and the staging copy, must not use
-     the guarded wrappers with this deadline. Each such path names its own
-     bound in code. The implementation finds each path that uses the pool
-     with no wrapper, and a test lists them by name. A new path that skips
-     the wrappers fails that test until it names its bound.
-   - The statement deadline is a code rule. It goes into the catalog of code
-     rules, and the installation API shows its value (decision 6).
-4. **The pool leaves a read-only server at the first 25006.** When the
-   adapter translates an error to `storeerr.ReadOnly`, it calls
-   `pool.Reset()` once. The idle connections close at once. The connections
-   in use close when they come back. New connections then pass the
-   `target_session_attrs` check of decision 5.
-   - At most one reset in each 5 seconds, so a burst of errors does not
-     close the pool again and again.
+     export and import, the restore swap and the staging copy, names its own
+     bound in code. It sets `statement_timeout` and
+     `idle_in_transaction_session_timeout` with `SET LOCAL` in its
+     transaction, or uses a connection of its own. The implementation finds
+     each path that uses the pool with no wrapper, and a test lists them by
+     name. A new path that skips the wrappers fails that test until it names
+     its bound.
+   - These bounds are code rules. They go into the catalog of code rules,
+     and the installation API shows their values (decision 6).
+4. **The pool leaves a read-only server.** When the adapter translates an
+   error to `storeerr.ReadOnly`, it runs the write check of decision 7 on a
+   new connection. When that check also finds a read-only server, the
+   adapter calls `pool.Reset()`. The idle connections close at once. The
+   connections in use close when they come back. New connections then pass
+   the check of decision 5.
+   - A 25006 from a transaction that the store opened `READ ONLY` (the
+     inspect read, the snapshot read) is a bug, not a read-only server. The
+     write check then passes, and the pool does not reset.
+   - Decisions 4 and 7 share one limiter: at most one reset in each 5
+     seconds for each pool.
    - Each reset writes a warning log with the reason `read-only`, and
      increments the counter `dustpan_store_pool_resets_total{reason}`. The
      operator can see each reset and why it happened.
@@ -157,99 +226,151 @@ Sources:
      a value to make it valid. The error has a catalog code
      (`store.failover-setting-invalid`).
    - The server refuses `any`, `read-only`, `standby` and `prefer-standby`.
-     The server writes, so a connection to a server that refuses writes is never
-     correct.
+     The server writes, so a connection to a server that refuses writes is
+     never correct.
    - The server accepts `primary` and treats it as the same value as
-     `read-write`: each new connection gets the `read-write` check. libpq
-     and pgx define `primary` with a weaker check: a server that is not in
-     hot standby, also with `default_transaction_read_only` on. Each write
-     on such a server fails, so the server applies the stronger check. The
-     installation API shows the value of the URL (`primary`) and the check
-     that applies (`read-write`), so the operator can see the difference.
-   - The server sets the TCP keepalive of the dialer with Go's `net.KeepAliveConfig`:
-     idle 15 seconds, interval 5 seconds, 3 probes. A dead idle connection
-     then closes in about 30 seconds. Go supports this on Linux and macOS, so
-     no build tag is necessary.
+     `read-write`. It does not rewrite the URL. It installs the pgx
+     `ValidateConnect` function of `read-write` for both values. libpq and
+     pgx define `primary` with a weaker check: a server that is not in hot
+     standby, also with `default_transaction_read_only` on. Each write on
+     such a server fails, so the server applies the stronger check. The
+     `read-write` check refuses a hot standby too, because a hot standby
+     reports `transaction_read_only` as `on`. The installation API shows the
+     value of the URL (`primary`), its source (`url`) and the check that
+     applies (`read-write`).
+   - The server sets the TCP keepalive of the dialer with Go's
+     `net.KeepAliveConfig`: idle 15 seconds, interval 5 seconds, 3 probes. A
+     dead idle connection then closes in about 30 seconds. Go supports this
+     on Linux and macOS, so no build tag is necessary.
    - The PM accepted these values and the statement deadline on 2026-10-31.
      An RDS failover takes 60 to 120 seconds, so the server fails fast and
      the clients retry. Nobody measured the values against a managed
-     service. The fault test of decision 10 measures the recovery time with
+     service. The fault test of decision 12 measures the recovery time with
      them, and the guide gives the measured figure and its date (ADR 280
      decision 6).
 6. **The effective settings are visible.** The installation API returns the
    effective pool settings: each setting of decision 5, where its value came
-   from (`url` or `default`), and the statement deadline. The response never
-   holds the URL, the host, the user or the password. The start log writes
-   the same fields once.
+   from (`url` or `default`), the check that applies, the client deadline
+   and the server timeouts of decision 3. It also returns the replication
+   facts of decision 10. The response never holds the URL, the host, the
+   user or the password. The start log writes the same fields once.
 7. **Readiness checks that the database accepts writes.** The store check of
    the readiness probe changes from a ping to one statement:
    `SELECT pg_is_in_recovery(), current_setting('transaction_read_only')`.
    When either value says that the server refuses writes, the check fails
    with the name `store-read-only`, and the probe answers 503. The adapter
-   also resets the pool, as in decision 4. A store with no such check
-   (SQLite) keeps the ping. The body names the check and holds no driver
-   text.
-8. **No half writes. A retry after an unknown commit is correct.**
+   also resets the pool, under the limiter of decision 4. A store with no
+   such check (SQLite) keeps the ping. The body names the check and holds no
+   driver text.
+8. **No half writes, and no resend.**
    - A database transaction commits all its rows or none. A connection that
      breaks before `COMMIT` rolls the transaction back on the server.
    - The server does not send a transaction again after an error. It does
      not know if a `COMMIT` with an unknown outcome committed.
-   - Each write of the tool-compatible APIs must give a correct answer to a
-     request that the CLI sends again after a 503, also when the first try
-     committed. "Correct" means the answer of a success, or an answer that
-     the CLI handles as the end of the write. A 409 that stops the command
-     is not correct.
-   - The implementation lists each write of the Pulumi Cloud-compatible API,
-     the TFE-compatible API and the OpenTofu http backend in a table in the
-     several-instances guide. The table names what makes the repeated
-     request safe: a sequence number, a serial with a checksum, a lock ID, or
-     a replay record of the `Idempotency-Key` header. A write that the audit
-     finds unsafe gets a change in the same pull request, or an issue that the
-     PM accepts.
    - A blob that a request wrote before a rolled-back commit stays an
      orphan. The existing purge deletes it after its grace period. Its
      delete also waits for a running backup (ADR 280 decision 7).
-9. **Leases and durable operations across the gap.**
-   - The lease stays at 30 seconds (ADR 280 decision 8).
-   - A gap shorter than the lease: the renewals fail, the step continues,
-     and the next renewal after the gap extends the claim.
-   - A gap longer than the lease: the runner stops the step at the lease
-     deadline, as it does today. When the database answers again, any
-     instance claims the operation with a new fencing token, and the step
-     runs again. Each step can run again (ADR 280 decision 3).
-   - Lease times come from the database clock. After a failover, the clock
-     of the new primary counts. A clock skew between the primary and the
-     standby moves each expiry by that skew. The guide tells the operator to
-     keep the database hosts on NTP.
-   - The claim loop, the schedules, the heartbeat and the audit sink
-     shipping back off with jitter on `namespace.ErrUnavailable`. A test of
-     each loop checks that the number of store calls during a gap of 60
-     seconds stays below a bound, so a gap does not cause a storm of
-     connections when the database starts again.
-   - The update lease of a Pulumi update and the lock of an OpenTofu
-     workspace do not change. The guide already tells what an operator does
-     after a gap that is longer than the retry window of the CLI.
-10. **A failover fault test in `make e2e-ha`.** HA exit-test step 9,
+9. **A write after an unknown commit.** Each write of the tool-compatible
+   APIs must give a correct result in two cases, when the first try
+   committed and the client did not get its answer:
+   - (a) The CLI sends the same request again.
+   - (b) The user runs the next command.
+
+   "Correct" means the answer of a success, or an answer that the CLI
+   handles as the end of the write. A 409 or a 423 that stops the command is
+   not correct, unless this table lists it as an accepted exception. What
+   makes a repeated request safe is a sequence number, a serial with a
+   checksum, or a lock ID. Neither CLI sends the `Idempotency-Key` header,
+   so it does not count for these writes.
+
+   | Write | Today on `main` | Decision |
+   | --- | --- | --- |
+   | Pulumi checkpoint, journal batch, event, complete, renew | Success on a repeat (Context) | No change |
+   | TFE state version upload and finalize | Success on a repeat (`confirmRetry`) | No change |
+   | HTTP backend `LOCK` with the same lock ID | `lockAs` refuses any held lock with `ErrLocked`: 423, and `tofu` fails with its own lock in place | When the lock ID and the holder both match, answer success. The client chose the ID, so this is safe |
+   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | `heldBy` returns `ErrNotLocked`: 409 `workspace.not-locked` | When the workspace is free, answer success. No state changes, so no audit entry. `make e2e` checks each CLI version |
+   | TFE `actions/lock` sent again | 409 "is locked by" with the same subject. OpenTofu waits under `-lock-timeout`, then fails. The lock stays until a force-unlock | Proposed: an accepted exception, documented with the force-unlock remedy. The protocol carries no lock ID. A success for a relock by the same principal would let two runs of one principal hold the lock together. The PM decides |
+   | Pulumi `start` | `StartBy` commits a running update. The server does not store the token, so a lost answer leaves the update running for `DefaultLease` (5 minutes). The next `pulumi up` gets 409 until `pulumi cancel` | An accepted exception, documented with the `pulumi cancel` remedy. The implementation checks in the e2e records if the CLI sends `start` again after a 503 |
+
+   - The implementation adds a 9d row (decision 12) for each lock and
+     unlock route and for `start`.
+   - The guide changes its sentence "OpenTofu: ... the workspace has no
+     lock": after a lost answer to a TFE lock, the lock can stay.
+10. **Replication mode.** The guarantees of decisions 8, 9 and 11 hold only
+    when a failover cannot undo a commit that the client saw succeed. That
+    needs synchronous replication to at least one standby:
+    - Amazon RDS Multi-AZ DB instances replicate synchronously. Multi-AZ DB
+      clusters replicate semisynchronously, with an acknowledgment from at
+      least one reader.
+    - Patroni: `synchronous_mode: true`. Add `synchronous_mode_strict: true`
+      when writes must stop, not continue without a standby.
+    - CloudNativePG: `.spec.postgresql.synchronous` with `number: 1` and
+      `dataDurability: required`.
+
+    With asynchronous replication, a failover can lose commits that the
+    server acknowledged: a state version, a checkpoint, a lock release, a
+    renewal of a lease. A lost renewal can let two runners hold one claim.
+    The guide says this plainly. This decision does not change the minimum
+    topology of ADR 280 decision 5, which is an owner decision. The
+    installation API (decision 6) shows `synchronous_commit` and whether
+    `synchronous_standby_names` is empty, so an operator can see the mode.
+    The readiness probe does not fail on it.
+11. **Leases and durable operations across the gap.**
+    - The lease stays at 30 seconds (ADR 280 decision 8).
+    - A gap shorter than the lease: the renewals fail, the step continues,
+      and the next renewal after the gap extends the claim.
+    - A gap longer than the lease: the runner stops the step at the lease
+      deadline, as it does today. When the database answers again, any
+      instance claims the operation with a new fencing token, and the step
+      runs again (ADR 280 decision 3).
+    - **A database gap does not count against the limits.** The `Deferred`
+      function of every runner matches `namespace.ErrUnavailable`, so a
+      step error from a gap gives the attempt back with no count. An expiry
+      does not count when the instance that held the claim wrote a
+      heartbeat after the claim expired: a process that lived through a gap
+      did not crash. The store checks this at the takeover, and again
+      before `ErrExpiryLimit` ends an operation. The implementation tests
+      both cases: a gap does not count, a crash does.
+    - The claim times of durable operations and of audit sink leases come
+      from the database clock. After a failover, the clock of the new
+      primary counts. A skew between the old and the new primary must stay
+      below the runner margin of 10 seconds (`max(RenewEvery, Lease/4)`).
+      Above that, two holders are possible. The guide gives this bound, not
+      only "use NTP".
+    - Notification delivery leases use the clock of the instance
+      (`req.Now`). A skew between instances can give two holders and a
+      duplicate send. This ADR does not change it. The guide names it.
+    - The claim loop, the schedules, the heartbeat and the audit sink
+      shipping back off with jitter on `namespace.ErrUnavailable`. A test of
+      each loop checks that the number of store calls during a gap of 60
+      seconds stays below a bound.
+    - The update lease of a Pulumi update and the lock of an OpenTofu
+      workspace do not change.
+12. **A failover fault test in `make e2e-ha`.** HA exit-test step 9,
     "database failover", runs with three instances behind the round-robin
     proxy:
-    - The test starts a PostgreSQL primary and a streaming standby
-      (`initdb`, `pg_basebackup -R`, `pg_ctl`) from the PostgreSQL binaries
-      of the host. The environment variable `DUSTPAN_TEST_PG_BIN` names
-      their directory. Without it, the step reports a skip with the reason,
-      which names the variable, and the suite log shows it. The other steps
-      run. The pull request of the implementation also gives the install
-      step of the nightly workflow as a file that the owner can copy, as
-      the S3 benchmark does, because a change to a workflow file needs the
-      token of the owner.
+    - The test starts a PostgreSQL primary and a synchronous streaming
+      standby (`initdb`, `pg_basebackup -R`, `pg_ctl`,
+      `synchronous_standby_names`) from the PostgreSQL binaries of the host.
+      The environment variable `DUSTPAN_TEST_PG_BIN` names their directory.
+      Without it, the step calls `t.Skip` with a message that names the
+      variable, and the suite log shows it. The other steps run. The nightly
+      e2e-ha workflow sets the variable, so the step cannot skip there
+      without notice. The pull request of the implementation gives the
+      install step of the nightly workflow as a file that the owner can
+      copy, as the S3 benchmark does, because a change to a workflow file
+      needs the token of the owner.
     - The instances reach the database through the e2e database proxy. The
       proxy stands for the DNS name of the service.
-    - **9a, promotion.** While `pulumi up` and `tofu apply` run, the test
-      stops the primary with `pg_ctl stop -m immediate`, promotes the
-      standby, and points the proxy at it. Both commands complete, or fail
-      with a 503 that the guide describes. The state after the failover is
-      consistent, and the next preview and plan show no changes. The test
-      measures the time from the stop to the first write that succeeds on
-      each instance.
+    - **9a, promotion.** While `pulumi up` and `tofu apply` run, and a
+      durable operation runs, the test stops the primary with
+      `pg_ctl stop -m immediate`, promotes the standby, and points the proxy
+      at it. Each command completes, or fails with a 503 that the guide
+      describes. The state after the failover is consistent, and the next
+      preview and plan show no changes after the remedy that the guide
+      gives. The durable operation ends succeeded, with no count against
+      its limits. The test measures the time from the stop to the first
+      write that succeeds on each instance.
     - **9b, stale read-only primary.** The old primary starts again as a
       read-only server, and the proxy sends the new connections of one
       instance to it. That instance answers 503 and turns unready with
@@ -257,25 +378,29 @@ Sources:
       instance turns ready within one health check period, with no restart.
     - **9c, a connection that stops without a reset.** A new proxy mode
       holds the bytes of each connection and closes nothing. Each instance
-      turns unready, and each request ends with 503 within the statement
+      turns unready, and each request ends with 503 within the client
       deadline plus the readiness timeout. No request waits for the TCP
       timeout of the host.
     - **9d, a lost commit answer**, in the store adapter tests, not in e2e:
       a proxy that reads the frontend messages forwards a `COMMIT`, and
       closes the connection before the answer reaches the client. The test
-      checks that the store returns `namespace.ErrUnavailable`, and that the
-      same write, sent again, gives the answer of decision 8.
+      checks that the store returns `namespace.ErrUnavailable`. Then it
+      checks the result of decision 9 for each row of its table, for the
+      same request again and for the next command.
     - The proxy stays in the repository (`e2e/dbproxy.go`). Toxiproxy is not
       necessary: the modes are small, and the e2e suite then needs no other
       container.
 
 ### Ports and tests
 
-The implementation adds these names. They are not code in this pull request:
-a port with no caller fails the lint, and a test that skips is not allowed.
+The implementation adds these names. They are not Go code in this pull
+request, because a port with no caller fails the `unused` lint. Step 9 of
+decision 12 is the one test that can skip, and only when the PostgreSQL
+binaries are not present.
 
 - `pkg/store/postgres`: `FailoverSettings` (the effective settings of
   decision 6) and `(*Store).FailoverSettings() FailoverSettings`.
+- `pkg/store/internal/storeerr`: the class `StatementTimeout`.
 - `namespace.Store` gets no new method. A new optional interface in
   `pkg/dustpan`, `writeChecker` with `CheckWritable(ctx) error`, is what the
   readiness probe reads. The PostgreSQL store implements it. The error wraps
@@ -283,22 +408,41 @@ a port with no caller fails the lint, and a test that skips is not allowed.
 - `internal/errcode`: `store.failover-setting-invalid`.
 - Tests in `pkg/store/postgres`:
   - `TestFailoverSettingsAllowlist`: one row for each setting and each edge
-    of its range, and the refused values of `target_session_attrs`.
+    of its range, the refused values of `target_session_attrs`, and
+    `primary` with the `read-write` check.
   - `TestStatementDeadlineClosesStalledConnection`: a proxy that holds the
-    bytes. The call ends with `ErrUnavailable` within the deadline.
-  - `TestReadOnlyErrorResetsPool`: after one 25006, the next write uses a new
-    connection. A burst of 25006 errors gives one reset.
+    bytes. One row for each method of decision 3, including `SendBatch`,
+    `Rollback` and a row read. Each call ends with `ErrUnavailable` within
+    the deadline. A row read on a server that answers still works.
+  - `TestServerStatementTimeout`: a statement longer than
+    `statement_timeout` ends with `StatementTimeout`, and the connection
+    stays in the pool.
+  - `TestReadOnlyErrorResetsPool`: after one 25006 from a read-only server,
+    the next write uses a new connection. A burst of 25006 errors gives one
+    reset. A 25006 from a `READ ONLY` transaction gives no reset.
   - `TestCheckWritableOnReadOnlyServer`: a hot standby and a server with
     `default_transaction_read_only = on`.
-  - `TestLostCommitAnswer`: decision 10, 9d.
+  - `TestLostCommitAnswer`: decision 12, 9d.
   - `TestLongPathsNameTheirBound`: the list of decision 3.
+  - `TestExpiryInGapDoesNotCount`: a gap does not count, a crash does.
+- Tests in `pkg/workspace` and the HTTP adapters: the repeated lock and
+  unlock of decision 9.
 - Tests in `pkg/dustpan`: `TestReadinessStoreReadOnly`.
-- Tests in `pkg/durable`: `TestClaimLoopBacksOffDuringOutage`, and one for
-  each loop of decision 9.
+- Tests in `pkg/durable`: `TestClaimLoopBacksOffDuringOutage`,
+  `TestUnavailableStepIsDeferred`, and one test for each loop of decision 11.
 - `e2e/ha_failover_test.go`: steps 9a to 9c.
 
 ## Consequences
 
+- **The Pulumi CLI fails during most managed failovers.** The guide measured
+  a retry window of 13 to 14 seconds for the Pulumi CLI. A failover takes 60
+  to 120 seconds on an RDS Multi-AZ DB instance, under 35 seconds on a DB
+  cluster, and about 20 to 40 seconds on Patroni with its defaults. The
+  server does not retry (decision 2). So a `pulumi up` that runs during such
+  a failover fails, and its update stays running until its lease ends or
+  someone runs `pulumi cancel`. The guide states this, with the figure that
+  step 9 measures. OpenTofu retried for more than 30 seconds in the same
+  measurement.
 - The server sets pool settings that pgx does not set by default. A URL can
   still set each one inside its range. A URL with a value outside the range
   stops the start, also a URL that worked before. No tag shipped, so no
@@ -306,13 +450,19 @@ a port with no caller fails the lint, and a test that skips is not allowed.
 - A URL with `target_session_attrs=any`, `read-only`, `standby` or
   `prefer-standby` stops the start.
 - The readiness probe sends one more statement than a ping.
-- A statement that runs for more than 30 seconds on an API path fails with
-  503. A slow query then shows up as a 503 that names the cause in the log,
-  and not as a request that hangs.
+- A statement that runs for more than 25 seconds on an API path ends on the
+  server with 503. A slow query then shows up as a 503 that names the cause
+  in the log, and not as a request that hangs.
+- The guarantees of decisions 8 to 11 need synchronous replication. With
+  asynchronous replication, a failover can lose acknowledged writes.
+- A repeated HTTP backend `LOCK` and a repeated unlock change from an error
+  to a success. A repeated TFE lock and a lost `start` answer stay errors
+  with a documented remedy, if the PM accepts the exceptions.
 - Step 9 runs only on a runner with the PostgreSQL server binaries.
 - The several-instances guide gets the effective defaults, the table of
-  decision 8, the readiness check, the DNS advice and the measured figures
-  of step 9. The configuration reference lists the settings and their ranges.
+  decision 9, the replication mode, the clock bounds, the readiness check,
+  the DNS advice and the measured figures of step 9. The configuration
+  reference lists the settings and their ranges.
 - The roadmap gets exit-test step 9 for milestone 7.
 
 ## Answers of the PM
@@ -326,3 +476,13 @@ The PM answered the open points of the draft on 2026-10-31:
    workflow comes as a file that the owner copies.
 3. The server accepts `target_session_attrs=primary` and checks it as
    `read-write` (decision 5).
+
+## Open points for the PM
+
+1. Decision 9: the TFE relock as an accepted exception, and the lost answer
+   to Pulumi `start` as an accepted exception.
+2. Decision 10: the replication mode is a statement in the guide and a fact
+   in the API. It is not a part of the minimum topology. A change of the
+   minimum topology needs the owner.
+3. Decision 3: the server timeouts (25 seconds, 60 seconds, 5 seconds), and
+   503 for 57014.
