@@ -132,8 +132,8 @@ func maintainerActions() []identity.Action {
 		identity.ActionCollectionDelete,
 		identity.ActionCollectionCreateUnit,
 		identity.ActionNamespaceReadGitHostConnections,
-		identity.ActionNamespaceReadPlacementRules,
 		identity.ActionNamespaceUseGitHostConnection,
+		identity.ActionNamespaceReadPlacementRules,
 	)
 }
 

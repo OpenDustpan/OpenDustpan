@@ -4416,56 +4416,39 @@ SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
 
--- name: CreatePlacementRule :exec
--- The caller checks the fence in the same transaction and renumbers the list
--- after the insert.
-INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+-- name: ListSettings :many
+-- The database values of one scope, in key order.
+SELECT key, value
+FROM settings
+WHERE scope_id = sqlc.arg(scope_id)
+ORDER BY key;
 
--- name: GetPlacementRule :one
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
-FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
-WHERE r.namespace = ? AND r.id = ?;
+-- name: GetSettingsState :one
+-- The revision and the digest of the static layer of one scope. No row means
+-- a scope that never changed.
+SELECT revision, static_digest
+FROM settings_state
+WHERE scope_id = sqlc.arg(scope_id);
 
--- name: ListPlacementRules :many
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
-FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
-WHERE r.namespace = ?
-ORDER BY r.position, r.id;
+-- name: UpsertSetting :exec
+INSERT INTO settings (scope_id, key, value, updated_at_ms)
+VALUES (sqlc.arg(scope_id), sqlc.arg(key), sqlc.arg(value), sqlc.arg(updated_at_ms))
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms;
 
--- name: ListPlacementRuleIDs :many
--- The IDs of the rules of a namespace in list order.
-SELECT id
-FROM placement_rules
-WHERE namespace = ?
-ORDER BY position, id;
+-- name: DeleteSetting :exec
+DELETE FROM settings WHERE scope_id = sqlc.arg(scope_id) AND key = sqlc.arg(key);
 
--- name: UpdatePlacementRuleContent :execrows
-UPDATE placement_rules
-SET tool = ?, project = ?, stack = ?, collection_key = ?
-WHERE namespace = ? AND id = ?;
+-- name: UpsertSettingsRevision :exec
+-- Sets the revision of a scope and keeps its digest.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), '')
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision;
 
--- name: SetPlacementRulePosition :exec
-UPDATE placement_rules
-SET position = ?
-WHERE namespace = ? AND id = ?;
-
--- name: DeletePlacementRule :execrows
-DELETE FROM placement_rules
-WHERE namespace = ? AND id = ?;
-
--- name: ListPlacementRulesOfCollection :many
--- The rules that name one collection, for the audit entry of its delete.
-SELECT id, tool, project, stack
-FROM placement_rules
-WHERE namespace = ? AND collection_key = ?
-ORDER BY position, id;
-
--- name: DeletePlacementRulesOfCollection :exec
-DELETE FROM placement_rules
-WHERE namespace = ? AND collection_key = ?;
+-- name: UpsertSettingsDigest :exec
+-- Sets the digest of the static layer and the revision of the installation.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), sqlc.arg(static_digest))
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest;
 
 
 -- name: GetUnitSettings :one
@@ -4531,39 +4514,56 @@ WHERE version = CAST(sqlc.arg(expected) AS INTEGER)
   AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
 
--- name: ListSettings :many
--- The database values of one scope, in key order.
-SELECT key, value
-FROM settings
-WHERE scope_id = sqlc.arg(scope_id)
-ORDER BY key;
+-- name: CreatePlacementRule :exec
+-- The caller checks the fence in the same transaction and renumbers the list
+-- after the insert.
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- name: GetSettingsState :one
--- The revision and the digest of the static layer of one scope. No row means
--- a scope that never changed.
-SELECT revision, static_digest
-FROM settings_state
-WHERE scope_id = sqlc.arg(scope_id);
+-- name: GetPlacementRule :one
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = ? AND r.id = ?;
 
--- name: UpsertSetting :exec
-INSERT INTO settings (scope_id, key, value, updated_at_ms)
-VALUES (sqlc.arg(scope_id), sqlc.arg(key), sqlc.arg(value), sqlc.arg(updated_at_ms))
-ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms;
+-- name: ListPlacementRules :many
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = ?
+ORDER BY r.position, r.id;
 
--- name: DeleteSetting :exec
-DELETE FROM settings WHERE scope_id = sqlc.arg(scope_id) AND key = sqlc.arg(key);
+-- name: ListPlacementRuleIDs :many
+-- The IDs of the rules of a namespace in list order.
+SELECT id
+FROM placement_rules
+WHERE namespace = ?
+ORDER BY position, id;
 
--- name: UpsertSettingsRevision :exec
--- Sets the revision of a scope and keeps its digest.
-INSERT INTO settings_state (scope_id, revision, static_digest)
-VALUES (sqlc.arg(scope_id), sqlc.arg(revision), '')
-ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision;
+-- name: UpdatePlacementRuleContent :execrows
+UPDATE placement_rules
+SET tool = ?, project = ?, stack = ?, collection_key = ?
+WHERE namespace = ? AND id = ?;
 
--- name: UpsertSettingsDigest :exec
--- Sets the digest of the static layer and the revision of the installation.
-INSERT INTO settings_state (scope_id, revision, static_digest)
-VALUES (sqlc.arg(scope_id), sqlc.arg(revision), sqlc.arg(static_digest))
-ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest;
+-- name: SetPlacementRulePosition :exec
+UPDATE placement_rules
+SET position = ?
+WHERE namespace = ? AND id = ?;
+
+-- name: DeletePlacementRule :execrows
+DELETE FROM placement_rules
+WHERE namespace = ? AND id = ?;
+
+-- name: ListPlacementRulesOfCollection :many
+-- The rules that name one collection, for the audit entry of its delete.
+SELECT id, tool, project, stack
+FROM placement_rules
+WHERE namespace = ? AND collection_key = ?
+ORDER BY position, id;
+
+-- name: DeletePlacementRulesOfCollection :exec
+DELETE FROM placement_rules
+WHERE namespace = ? AND collection_key = ?;
 
 
 -- name: CreateStoreCheck :execrows
