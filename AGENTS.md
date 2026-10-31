@@ -139,7 +139,7 @@ load/                  load harness that replays recorded CLI traffic (make load
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
   githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
-docs/adr/              architecture decision records: accepted decisions only
+docs/adr/              architecture decision records: accepted decisions only; INDEX.md lists their change links
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
 GLOSSARY.md            the project's domain language: one word per concept
 ```
@@ -349,16 +349,32 @@ command as `rtk proxy <cmd>` only when its result is unusable: empty when
 output was clearly expected, contradicting its exit code, or garbled.
 <!-- /rtk-instructions -->
 
+## Decisions
+
+For a question about a decision, for example "what did we decide" or "which rule applies
+now", do these steps before you use other tools:
+
+1. Read `docs/adr/INDEX.md`. Find the ADR and the ADRs in its "Current rule" column.
+2. Run `rg` over `docs/adr` and `docs/rfc` for the subject of the question.
+3. Read each ADR in the "Current rule" column. A later ADR can change an earlier ADR.
+
+Do not use Repowise as the source for a decision.
+
+When a new ADR changes an earlier ADR, write the item in the "Changes:" list of the new ADR
+and the reverse item in the "Changed by:" list of the earlier ADR. Then run
+`make adr-index`. ADR 288 gives the form of the items.
+
 ## Repowise
 
-The Repowise MCP server gives indexed documentation, symbols, history, decisions and code
-health for this workspace. The index has no checkout. It shows pushed commits only. The
-checkout is the truth.
+The Repowise MCP server gives indexed documentation, symbols, history and code health for
+this workspace. Use it for the structure of the code, for symbols and for history. The index
+has no checkout. It shows pushed commits only. The checkout is the truth.
 
 - Call `list_repos` first. Pass `repo` (`opendustpan-opendustpan` or `opendustpan-console`)
   to limit a call to one repository. `get_symbol` always needs `repo`.
-- Call `get_answer` for a question about how, where or why. Call `search_codebase` to find
-  a symbol, a file or a concept. Call `get_context` for a summary of files.
+- Call `get_answer` for a question about how or where the code does a thing. Call
+  `search_codebase` to find a symbol, a file or a concept. Call `get_context` for a summary
+  of files.
 - `get_symbol` returns a signature, a location and graph edges. It does not return source.
   Read the file at the returned line range.
 - Call `get_risk` before you edit a hotspot. Call `get_why` before you refactor.
@@ -369,4 +385,5 @@ checkout is the truth.
 - Use `rg` to find every call site for a rename.
 
 The skills `codebase-exploration`, `pre-modification-check`, `change-review`, `code-health`,
-`dead-code-cleanup` and `architectural-decisions` in `.agents/skills/` use these tools.
+`dead-code-cleanup` and `architectural-decisions` in `.agents/skills/` use these tools. For a
+question about a decision, do the steps in "Decisions" before you use these skills.
