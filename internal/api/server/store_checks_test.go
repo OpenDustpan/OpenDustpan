@@ -64,7 +64,7 @@ func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...
 		Schema: stubSchema{migrations: nil}, Journal: nil, Principals: nil, Tokens: nil, Access: nil, Audit: st,
 		IPAllowlists: nil, Gates: nil, SessionPolicy: nil, CheckpointEpochs: nil, OnAuditFailure: nil,
 		AuditChain: nil, DeletedUnits: nil, AuditSinks: nil, SignIn: nil, DenialLimiter: nil, Instances: nil,
-		StoreChecks: svc,
+		StoreChecks: svc, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

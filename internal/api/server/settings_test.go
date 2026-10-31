@@ -78,6 +78,7 @@ func settingsConfig(
 		Schema: stubSchema{migrations: nil}, Journal: nil, Principals: nil, Tokens: nil, Access: nil, Audit: st,
 		IPAllowlists: nil, Gates: nil, SessionPolicy: nil, CheckpointEpochs: nil, OnAuditFailure: nil,
 		AuditChain: nil, DeletedUnits: nil, AuditSinks: nil, SignIn: nil, DenialLimiter: nil, Instances: nil,
+		StoreChecks: nil,
 	}
 }
 
