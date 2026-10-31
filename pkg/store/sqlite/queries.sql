@@ -2736,6 +2736,35 @@ INSERT INTO import_ledger (
 SELECT COUNT(*) FROM import_ledger
 WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
 
+-- name: InsertImportUploadCommit :execrows
+-- The commit row of one upload version, in one statement: the namespace must
+-- hold the failover version of the caller, the import must not have
+-- ended, and the attempt must have started no more than deadline_ms before
+-- the clock of the database, and no more than skew_ms ahead of it. The time of
+-- the row is the clock of the database. It inserts no row when a check fails, and the primary key
+-- refuses a second row for the version.
+INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
+SELECT n.id, i.id, sqlc.arg(unit_dir), sqlc.arg(sequence), sqlc.arg(facts), CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+FROM namespaces n
+JOIN imports i ON i.namespace_id = n.id
+WHERE n.name = sqlc.arg(namespace) AND n.failover_version = sqlc.arg(failover_version)
+  AND i.id = sqlc.arg(import_id) AND i.state NOT IN ('released', 'canceled')
+  AND sqlc.arg(started_at_ms) + sqlc.arg(deadline_ms) >= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+  AND sqlc.arg(started_at_ms) <= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + sqlc.arg(skew_ms);
+
+-- name: ListImportUploadCommits :many
+-- The commit rows of one unit directory of an import, in the order of the
+-- sequences.
+SELECT namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms
+FROM import_upload_commits
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id)
+  AND unit_dir = sqlc.arg(unit_dir)
+ORDER BY sequence;
+
+-- name: DeleteImportUploadCommits :exec
+DELETE FROM import_upload_commits
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
+
 -- name: ListImportLedger :many
 -- The ledger rows of an import unit, oldest first.
 SELECT namespace_id, import_id, import_unit_id, version, source_sha256, stored_sha256, item_tool,

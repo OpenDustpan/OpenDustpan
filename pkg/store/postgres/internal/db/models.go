@@ -391,6 +391,15 @@ type ImportUnit struct {
 	Findings     string
 }
 
+type ImportUploadCommit struct {
+	NamespaceID   string
+	ImportID      string
+	UnitDir       string
+	Sequence      int64
+	Facts         string
+	CommittedAtMs int64
+}
+
 type ImportsPurged struct {
 	NamespaceID string
 	ID          string
