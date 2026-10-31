@@ -314,44 +314,44 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 	return list, nil
 }
 
-func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
+func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.checkFence(cp.Ref, fence); err != nil {
-		return err
+		return false, err
 	}
 
 	if !m.runningUnder(cp.Update, cp.Lease) {
-		return stack.ErrWrongUpdateState
+		return false, stack.ErrWrongUpdateState
 	}
 
 	if !m.updates[cp.Update].Mutates() {
-		return stack.ErrWrongUpdateState
+		return false, stack.ErrWrongUpdateState
 	}
 
 	if m.cancelOnPut != nil {
 		m.cancelOnPut()
 
-		return context.Canceled
+		return false, context.Canceled
 	}
 
 	if cp.Sequence > 0 {
 		if last, ok := m.checkpoints[cp.Update]; ok {
 			switch {
 			case cp.Sequence < last.Sequence:
-				return stack.ErrStaleCheckpoint
+				return false, stack.ErrStaleCheckpoint
 			case cp.Sequence == last.Sequence && cp.Digest == last.Digest:
-				return nil
+				return true, nil
 			case cp.Sequence == last.Sequence:
-				return stack.ErrCheckpointConflict
+				return false, stack.ErrCheckpointConflict
 			}
 		}
 	}
 
 	m.checkpoints[cp.Update] = cp
 
-	return nil
+	return false, nil
 }
 
 func (m *memUpdates) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.Checkpoint, error) {
@@ -633,7 +633,7 @@ func newUpdates(t *testing.T) updatesFixture {
 func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
 	t.Helper()
 
-	return newUpdatesGuarded(t, clk, blobs, logger, blobguardtest.None{})
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: nil})
 }
 
 // newUpdatesGuarded is newUpdatesWith with guard as the guard of the blob
@@ -642,6 +642,35 @@ func newUpdatesGuarded(
 	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, guard blobguard.Watch,
 ) updatesFixture {
 	t.Helper()
+
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: guard, wrap: nil})
+}
+
+// newUpdatesWrapped is newUpdatesWith with a wrap of the checkpoint store: a
+// nil wrap uses the in-memory store itself.
+func newUpdatesWrapped(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, wrap func(*memUpdates) stack.CheckpointStore,
+) updatesFixture {
+	t.Helper()
+
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: wrap})
+}
+
+// updatesFixtureOptions holds the parts of the fixture that some tests set:
+// the guard of the blob deletes and the wrap of the checkpoint store. A nil
+// wrap uses the in-memory store itself.
+type updatesFixtureOptions struct {
+	guard blobguard.Watch
+	wrap  func(*memUpdates) stack.CheckpointStore
+}
+
+// newUpdatesFull builds the fixture with the guard and the wrap of opts.
+func newUpdatesFull(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, opts updatesFixtureOptions,
+) updatesFixture {
+	t.Helper()
+
+	guard, wrap := opts.guard, opts.wrap
 
 	ns := namespace.Namespace{
 		ID:                  namespace.NewID(),
@@ -668,12 +697,17 @@ func newUpdatesGuarded(
 		blobs = newMemBlob(clk)
 	}
 
+	var checkpoints stack.CheckpointStore = store
+	if wrap != nil {
+		checkpoints = wrap(store)
+	}
+
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
-		Checkpoints:        store,
+		Checkpoints:        checkpoints,
 		Events:             store,
 		Namespaces:         namespaces,
 		Stacks:             store,
@@ -1844,7 +1878,7 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 		BlobMD5:       [16]byte{},
 	}
 
-	if err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
+	if _, err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
 		t.Fatalf("store checkpoint with a missing blob: %v", err)
 	}
 
