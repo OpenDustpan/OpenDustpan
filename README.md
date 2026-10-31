@@ -367,6 +367,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Gate configuration API](docs/reference/gate-config-api.md): the routes that store,
+  read and delete gates and access limits.
 - [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the
   keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read

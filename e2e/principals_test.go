@@ -415,6 +415,13 @@ var freshAuthRules = []freshAuthRule{
 		regexp.MustCompile(`^/api/dustpan/v1/namespaces/[^/]+/approval-(?:default|rules/[^/]+)$`),
 		[]string{http.MethodPut, http.MethodDelete},
 	},
+	{
+		// A gate and an access limit of a namespace, of a collection and of a
+		// unit. The unit name keeps its percent-encoding, so it may hold a slash.
+		regexp.MustCompile(`^/api/dustpan/v1/namespaces/[^/]+/(?:collections/[^/]+/|units/by-name/.+/)?` +
+			`(?:gates|access-limits)/[^/]+$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
 }
 
 // needsFreshAuth reports whether method on path is a write that needs a

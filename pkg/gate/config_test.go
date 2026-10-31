@@ -164,7 +164,7 @@ func newConfigService(t *testing.T) (*gate.ConfigService, *recordingStore) {
 	st := &recordingStore{Store: nil, writes: nil, rule: nil, def: nil}
 
 	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: st, Namespaces: fakeNamespaces{}, Approvers: fakeGroups{}, Now: configNow,
+		Store: st, Namespaces: fakeNamespaces{}, Approvers: fakeGroups{}, Engine: nil, Now: configNow,
 	})
 	if err != nil {
 		t.Fatalf("NewConfigService() = %v", err)
@@ -402,7 +402,13 @@ func TestNewConfigServiceNeedsPorts(t *testing.T) {
 	t.Parallel()
 
 	_, err := gate.NewConfigService(
-		gate.ConfigServiceConfig{Store: nil, Namespaces: fakeNamespaces{}, Approvers: fakeGroups{}, Now: nil},
+		gate.ConfigServiceConfig{
+			Store:      nil,
+			Namespaces: fakeNamespaces{},
+			Approvers:  fakeGroups{},
+			Engine:     nil,
+			Now:        nil,
+		},
 	)
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("no store = %v, want ErrInvalid", err)
@@ -411,14 +417,14 @@ func TestNewConfigServiceNeedsPorts(t *testing.T) {
 	st := &recordingStore{Store: nil, writes: nil, rule: nil, def: nil}
 
 	_, err = gate.NewConfigService(
-		gate.ConfigServiceConfig{Store: st, Namespaces: nil, Approvers: fakeGroups{}, Now: nil},
+		gate.ConfigServiceConfig{Store: st, Namespaces: nil, Approvers: fakeGroups{}, Engine: nil, Now: nil},
 	)
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("no namespaces = %v, want ErrInvalid", err)
 	}
 
 	_, err = gate.NewConfigService(
-		gate.ConfigServiceConfig{Store: st, Namespaces: fakeNamespaces{}, Approvers: nil, Now: nil},
+		gate.ConfigServiceConfig{Store: st, Namespaces: fakeNamespaces{}, Approvers: nil, Engine: nil, Now: nil},
 	)
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("no approver directory = %v, want ErrInvalid", err)

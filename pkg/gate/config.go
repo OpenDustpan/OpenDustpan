@@ -58,8 +58,8 @@ type ApproverDirectory interface {
 	GroupByID(ctx context.Context, id string) (GroupRef, MemberCounts, error)
 }
 
-// ConfigService reads and writes the approval defaults and the approval
-// rules of the scopes that hold a namespace. It reads the fence of the
+// ConfigService reads and writes the gates, the access limits, the approval
+// defaults and the approval rules of the scopes that hold a namespace. It reads the fence of the
 // namespace, completes the audit entry of the caller, and calls the Store,
 // which checks the fence and appends the entry in the transaction of the
 // write.
@@ -70,6 +70,7 @@ type ConfigService struct {
 	store  Store
 	ns     NamespaceSource
 	groups ApproverDirectory
+	engine Engine
 	now    func() time.Time
 }
 
@@ -79,6 +80,11 @@ type ConfigServiceConfig struct {
 	Namespaces NamespaceSource
 	// Approvers reads the groups that approvers name.
 	Approvers ApproverDirectory
+	// Engine type-checks the gates and the access limits at save. With a
+	// nil Engine, a save of a gate or of an access limit fails with
+	// ErrUnavailable: the service never stores a policy that no engine
+	// checked.
+	Engine Engine
 	// Now is the clock, and time.Now when nil.
 	Now func() time.Time
 }
@@ -97,7 +103,9 @@ func NewConfigService(cfg ConfigServiceConfig) (*ConfigService, error) {
 		now = time.Now
 	}
 
-	return &ConfigService{store: cfg.Store, ns: cfg.Namespaces, groups: cfg.Approvers, now: now}, nil
+	return &ConfigService{
+		store: cfg.Store, ns: cfg.Namespaces, groups: cfg.Approvers, engine: cfg.Engine, now: now,
+	}, nil
 }
 
 // Audit actions of the writes of this service. They name the entry only. The
