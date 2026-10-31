@@ -117,6 +117,22 @@ request, so the combined rule lives in the OpenDustpan status, not in the
 GitHub rules. GitLab Premium and Ultimate can add a merge request approval
 rule through the API.
 
+**The limits of mode 1** (decided by the PM for the owner, 31 October 2026).
+Mode 1 keeps these limits, with no extra mechanism. Atlantis has the same
+limits for its "approved" apply requirement, and documents them.
+
+- A review on the Git host binds to a commit only. So it binds at L0 at most,
+  also when the scope sets L1 or L2.
+- A GitLab approval has no commit in its listing. The server cannot tell which
+  commit an approval on GitLab covers.
+- An agent that uses the personal token of a person submits a review that
+  looks like the review of that person. The server cannot detect it.
+
+The API and the wizard show these limits as text when a person chooses
+mode 1. Mode 1 stays "not recommended". The approval floor of decision 5 still
+applies in mode 1: a new delete, a new replace or an extra operation at the
+apply needs a new approval with a fresh authentication, in OpenDustpan.
+
 ### 2. The review UI in OpenDustpan
 
 - Three panes: IaC changes, comments from people, and comments from systems
@@ -683,7 +699,7 @@ reasons.
 | ADR 190 decision 9 (an apply job applies the stored plan of its plan job) | L0 and L1 plan again at the apply, under the approval floor of decision 5 |
 | ADR 190 decision 14 (an agent never creates a change order) | A review request that an agent opens creates a change order. The agent is not an author of record. The person who asked the agent is the author |
 | ADR 191 decision 5 (a person never signs a plan that they did not see) | L0 and L1 apply a new plan with the same set of operations. A new delete, replace or other operation needs a new approval (the approval floor) |
-| ADR 225 decision 5 (fresh authentication for each destroy) | Kept: the approval floor asks for a fresh authentication. The limits of a review on the Git host in mode 1 are held for the owner |
+| ADR 225 decision 5 (fresh authentication for each destroy) | Kept: the approval floor asks for a fresh authentication, also in mode 1. The limits of a review on the Git host in mode 1 are stated consequences of mode 1 |
 | ADR 225 decision 12 (signature carry-over) | Amended openly: the binding level decides when an approval carries over (decision 5) |
 | ADR 225 decisions 1 and 7 (`authorMayApprove`) | Does not apply to a review request. Mode 4 is the path for a team with no OpenDustpan approvals |
 | ADR 267 decision 14 (a push plan runs as the namespace service principal) and decision 19 ("A push from a fork starts nothing") | A plan with credentials needs linked pushers with `unit:run-plan`. A fork gets a plan with no credentials after a trusted comment |
