@@ -4,7 +4,7 @@ Status: accepted · 2026-10-08
 
 Changed by:
 
-- ADR 288 extends: an accepted ADR gets a "Changed by" list.
+- ADR 296 extends: an accepted ADR gets a "Changed by" list.
 
 ## Context
 
