@@ -14,7 +14,7 @@ that the named part applies, and the later ADR adds to it.
 
 | ADR | Title | Status | Changes | Changed by | Current rule |
 | --- | --- | --- | --- | --- | --- |
-| [1](0001-record-architecture-decisions.md) | Record architecture decisions | accepted | - | ADR 288 extends | this ADR, with ADR 288 |
+| [1](0001-record-architecture-decisions.md) | Record architecture decisions | accepted | - | ADR 296 extends | this ADR, with ADR 296 |
 | [2](0002-server-as-an-sdk-with-ports-and-adapters.md) | The server is an SDK with ports and adapters | superseded by ADR 35 | - | ADR 35 supersedes | ADR 35 |
 | [3](0003-sql-persistence-per-dialect.md) | SQL persistence: hand-written per dialect, sqlc for fixed queries | accepted | - | - | this ADR |
 | [4](0004-namespaces-regions-and-fencing.md) | Namespaces, home regions and failover-version fencing | accepted | - | - | this ADR |
@@ -253,4 +253,4 @@ that the named part applies, and the later ADR adds to it.
 | [285](0285-local-users-sign-in-with-a-password-and-a-passkey.md) | Local users sign in with a password and with a passkey | accepted | - | - | this ADR |
 | [286](0286-self-service-failover-and-promotion-three-renames.md) | Self-service, failover and promotion: three renames | accepted | - | - | this ADR |
 | [287](0287-no-contributor-license-agreement.md) | No contributor license agreement and no copyright assignment | accepted | - | - | this ADR |
-| [288](0288-change-links-between-adrs-and-the-adr-index.md) | Change links between ADRs, and the ADR index | accepted | extends ADR 1 | - | this ADR |
+| [296](0296-change-links-between-adrs-and-the-adr-index.md) | Change links between ADRs, and the ADR index | accepted | extends ADR 1 | - | this ADR |

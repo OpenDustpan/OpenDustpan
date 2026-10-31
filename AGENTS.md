@@ -362,7 +362,7 @@ Do not use Repowise as the source for a decision.
 
 When a new ADR changes an earlier ADR, write the item in the "Changes:" list of the new ADR
 and the reverse item in the "Changed by:" list of the earlier ADR. Then run
-`make adr-index`. ADR 288 gives the form of the items.
+`make adr-index`. ADR 296 gives the form of the items.
 
 ## Repowise
 
