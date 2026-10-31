@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -27,6 +28,10 @@ import (
 // restore: restore-tmp/<restore id>/<claim token>/<blob key>. No sweep, no
 // backup and no unit directory lists it.
 const tempKeyPrefix = "restore-tmp"
+
+// restoreCopyConcurrency is the count of blobs that one restore copies at the
+// same time.
+const restoreCopyConcurrency = 8
 
 // restoreInput is the input of a restore operation: the request, with the
 // pre-backup ID that Start minted.
@@ -732,10 +737,70 @@ func (s *RestoreService) copyManifestBlobs(
 		return keyErr
 	}
 
-	for _, ref := range manifest.Blobs {
-		if copyErr := s.copyBlob(ctx, in, fence, ref); copyErr != nil {
-			return fmt.Errorf("copy blobs for restore %s: %w", in.ID, copyErr)
+	if copyErr := s.copyBlobs(ctx, in, fence, manifest.Blobs); copyErr != nil {
+		return fmt.Errorf("copy blobs for restore %s: %w", in.ID, copyErr)
+	}
+
+	return nil
+}
+
+// copyBlobs copies each blob of refs with copyBlob, at most
+// restoreCopyConcurrency at a time. Each copy runs its own checks, and
+// each write to the live store has its own fence check: no check covers
+// more than one blob. The first error cancels the copies that run and stops
+// the copies that wait. A key that refs names twice is copied once, so two
+// copies never use one temporary key.
+func (s *RestoreService) copyBlobs(
+	ctx context.Context, in restoreInput, fence durable.StepFence, refs []ManifestBlob,
+) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg      sync.WaitGroup
+		once    sync.Once
+		first   error
+		seen    = make(map[string]struct{}, len(refs))
+		permits = make(chan struct{}, restoreCopyConcurrency)
+	)
+
+	for _, ref := range refs {
+		if _, dup := seen[ref.Key]; dup {
+			continue
 		}
+
+		seen[ref.Key] = struct{}{}
+
+		select {
+		case permits <- struct{}{}:
+		case <-ctx.Done():
+		}
+
+		if ctx.Err() != nil {
+			break
+		}
+
+		wg.Go(func() {
+			defer func() { <-permits }()
+
+			if err := s.copyBlob(ctx, in, fence, ref); err != nil {
+				once.Do(func() {
+					first = err
+
+					cancel()
+				})
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if first != nil {
+		return first
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("copy blobs: %w", err)
 	}
 
 	return nil
@@ -1321,10 +1386,8 @@ func (s *RestoreService) putChecked(ctx context.Context, from copyFrom, dst blob
 func (s *RestoreService) checkNamedBlobs(
 	ctx context.Context, in restoreInput, fence durable.StepFence, refs []ManifestBlob,
 ) error {
-	for _, ref := range refs {
-		if err := s.copyBlob(ctx, in, fence, ref); err != nil {
-			return fmt.Errorf("check the blobs of restore %s: %w", in.ID, err)
-		}
+	if err := s.copyBlobs(ctx, in, fence, refs); err != nil {
+		return fmt.Errorf("check the blobs of restore %s: %w", in.ID, err)
 	}
 
 	return nil
