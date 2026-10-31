@@ -10,6 +10,11 @@ import {
   decodeApprovers,
   decodeBackupCorruptError,
   decodeBackupCorruptErrorArgs,
+  decodeBulkUnitSettingsError,
+  decodeBulkUnitSettingsItem,
+  decodeBulkUnitSettingsRequest,
+  decodeBulkUnitSettingsResult,
+  decodeBulkUnitSettingsUnit,
   decodeCapabilities,
   decodeCollection,
   decodeContextAnswer,
@@ -146,6 +151,14 @@ import {
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
   decodeSchemaBinaryBelowMinimumErrorArgs,
+  decodeSetting,
+  decodeSettings,
+  decodeSettingsLockedError,
+  decodeSettingsLockedErrorArgs,
+  decodeSettingsStaticOnlyError,
+  decodeSettingsStaticOnlyErrorArgs,
+  decodeSettingsValueInvalidError,
+  decodeSettingsValueInvalidErrorArgs,
   decodeSinkTestRateLimitedError,
   decodeSinkTestRateLimitedErrorArgs,
   decodeSourceFilter,
@@ -182,16 +195,33 @@ import {
   decodeTrustRuleKeySource,
   decodeTrustRuleList,
   decodeUnit,
+  decodeUnitDefaults,
+  decodeUnitDefaultsRequest,
   decodeUnitDrift,
   decodeUnitLock,
   decodeUnitNoStateError,
   decodeUnitNoStateErrorArgs,
   decodeUnitOutputEntry,
   decodeUnitOutputs,
+  decodeUnitSettings,
+  decodeUnitSettingsBoolField,
+  decodeUnitSettingsCodeLocation,
+  decodeUnitSettingsEffective,
+  decodeUnitSettingsFields,
+  decodeUnitSettingsListField,
+  decodeUnitSettingsReviewRequests,
+  decodeUnitSettingsStep,
+  decodeUnitSettingsStepOutput,
+  decodeUnitSettingsStepsField,
+  decodeUnitSettingsStringField,
+  decodeUnitSettingsSuggestion,
+  decodeUnitSettingsSuggestions,
+  decodeUnitSettingsWriteBack,
   decodeUnitState,
   decodeUpdateContextRequest,
   decodeUpdateNamespaceIssuerRequest,
   decodeUpdatePreferencesRequest,
+  decodeUpdateSettingsRequest,
   decodeView,
   decodeViewLabel,
   decodeViewQuery,
@@ -209,6 +239,11 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BulkUnitSettingsError,
+  BulkUnitSettingsItem,
+  BulkUnitSettingsRequest,
+  BulkUnitSettingsResult,
+  BulkUnitSettingsUnit,
   Capabilities,
   Collection,
   ContextAnswer,
@@ -345,6 +380,14 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  Setting,
+  Settings,
+  SettingsLockedError,
+  SettingsLockedErrorArgs,
+  SettingsStaticOnlyError,
+  SettingsStaticOnlyErrorArgs,
+  SettingsValueInvalidError,
+  SettingsValueInvalidErrorArgs,
   SinkTestRateLimitedError,
   SinkTestRateLimitedErrorArgs,
   SourceFilter,
@@ -381,16 +424,33 @@ import type {
   TrustRuleKeySource,
   TrustRuleList,
   Unit,
+  UnitDefaults,
+  UnitDefaultsRequest,
   UnitDrift,
   UnitLock,
   UnitNoStateError,
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitSettings,
+  UnitSettingsBoolField,
+  UnitSettingsCodeLocation,
+  UnitSettingsEffective,
+  UnitSettingsFields,
+  UnitSettingsListField,
+  UnitSettingsReviewRequests,
+  UnitSettingsStep,
+  UnitSettingsStepOutput,
+  UnitSettingsStepsField,
+  UnitSettingsStringField,
+  UnitSettingsSuggestion,
+  UnitSettingsSuggestions,
+  UnitSettingsWriteBack,
   UnitState,
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
+  UpdateSettingsRequest,
   View,
   ViewLabel,
   ViewQuery,
@@ -405,6 +465,17 @@ export interface AddRegistryKeyInput {
     readonly namespace: string;
   };
   readonly body: AddRegistryKeyRequest;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation bulkReplaceUnitSettings. */
+export interface BulkReplaceUnitSettingsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: BulkUnitSettingsRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
@@ -968,6 +1039,14 @@ export interface GetNamespaceLockInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getNamespaceSettings. */
+export interface GetNamespaceSettingsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getNotificationSink. */
 export interface GetNotificationSinkInput {
   readonly path: {
@@ -1036,6 +1115,11 @@ export interface GetProviderReleaseInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getSettings. */
+export interface GetSettingsInput {
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getSourceFilter. */
 export interface GetSourceFilterInput {
   readonly path: {
@@ -1095,6 +1179,14 @@ export interface GetUnitContextInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getUnitDefaults. */
+export interface GetUnitDefaultsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getUnitDrift. */
 export interface GetUnitDriftInput {
   readonly path: {
@@ -1117,6 +1209,24 @@ export interface GetUnitGateInput {
 
 /** The input of the operation getUnitOutputs. */
 export interface GetUnitOutputsInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getUnitSettings. */
+export interface GetUnitSettingsInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getUnitSettingsSuggestions. */
+export interface GetUnitSettingsSuggestionsInput {
   readonly path: {
     readonly namespace: string;
     readonly unit_id: string;
@@ -1524,6 +1634,46 @@ export interface ReplaceTriggerInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation replaceUnitDefaults. */
+export interface ReplaceUnitDefaultsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: UnitDefaultsRequest;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation replaceUnitSettings. */
+export interface ReplaceUnitSettingsInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly body: UnitSettingsFields;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation resetUnitSettings. */
+export interface ResetUnitSettingsInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation rotateNamespaceIssuerKeys. */
 export interface RotateNamespaceIssuerKeysInput {
   readonly path: {
@@ -1735,6 +1885,17 @@ export interface UpdateNamespaceIssuerInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation updateNamespaceSettings. */
+export interface UpdateNamespaceSettingsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: UpdateSettingsRequest;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch: string;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation updatePlacementRule. */
 export interface UpdatePlacementRuleInput {
   readonly path: {
@@ -1750,6 +1911,14 @@ export interface UpdatePreferencesInput {
   readonly body: UpdatePreferencesRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation updateSettings. */
+export interface UpdateSettingsInput {
+  readonly body: UpdateSettingsRequest;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch: string;
   readonly signal?: AbortSignal;
 }
 
@@ -1781,6 +1950,23 @@ export const operations = {
       statuses: [201],
     },
     ref(() => decodeRegistryKey),
+  ),
+  bulkReplaceUnitSettings: operation<BulkUnitSettingsResult>(
+    {
+      id: "bulkReplaceUnitSettings",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/unit-settings/bulk-put",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeBulkUnitSettingsResult),
   ),
   checkGitHostConnection: operation<GitHostCheck>(
     {
@@ -2717,6 +2903,23 @@ export const operations = {
     },
     ref(() => decodeManualLock),
   ),
+  getNamespaceSettings: operation<Settings>(
+    {
+      id: "getNamespaceSettings",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/settings",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSettings),
+  ),
   getNotificationSink: operation<NotificationSink>(
     {
       id: "getNotificationSink",
@@ -2836,6 +3039,23 @@ export const operations = {
     },
     ref(() => decodeProviderRelease),
   ),
+  getSettings: operation<Settings>(
+    {
+      id: "getSettings",
+      method: "GET",
+      path: "/api/dustpan/v1/settings",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSettings),
+  ),
   getSourceFilter: operation<SourceFilter>(
     {
       id: "getSourceFilter",
@@ -2938,6 +3158,23 @@ export const operations = {
     },
     ref(() => decodeContextDocument),
   ),
+  getUnitDefaults: operation<UnitDefaults>(
+    {
+      id: "getUnitDefaults",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/settings/unit-defaults",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUnitDefaults),
+  ),
   getUnitDrift: operation<UnitDrift>(
     {
       id: "getUnitDrift",
@@ -2988,6 +3225,40 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeUnitOutputs),
+  ),
+  getUnitSettings: operation<UnitSettings>(
+    {
+      id: "getUnitSettings",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUnitSettings),
+  ),
+  getUnitSettingsSuggestions: operation<UnitSettingsSuggestions>(
+    {
+      id: "getUnitSettingsSuggestions",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings/suggestions",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUnitSettingsSuggestions),
   ),
   getView: operation<View>(
     {
@@ -3618,6 +3889,57 @@ export const operations = {
     },
     ref(() => decodeTrigger),
   ),
+  replaceUnitDefaults: operation<UnitDefaults>(
+    {
+      id: "replaceUnitDefaults",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/settings/unit-defaults",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "required",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeUnitDefaults),
+  ),
+  replaceUnitSettings: operation<UnitSettings>(
+    {
+      id: "replaceUnitSettings",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "required",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeUnitSettings),
+  ),
+  resetUnitSettings: operation<void>(
+    {
+      id: "resetUnitSettings",
+      method: "DELETE",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "required",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
   rotateNamespaceIssuerKeys: operation<NamespaceIssuerRotation>(
     {
       id: "rotateNamespaceIssuerKeys",
@@ -3958,6 +4280,23 @@ export const operations = {
     },
     ref(() => decodeIssuerSettings),
   ),
+  updateNamespaceSettings: operation<Settings>(
+    {
+      id: "updateNamespaceSettings",
+      method: "PATCH",
+      path: "/api/dustpan/v1/namespaces/{namespace}/settings",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "required",
+      requiredQueryParameters: [],
+      requestBody: "application/merge-patch+json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeSettings),
+  ),
   updatePlacementRule: operation<PlacementRule>(
     {
       id: "updatePlacementRule",
@@ -3991,6 +4330,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodePreferences),
+  ),
+  updateSettings: operation<Settings>(
+    {
+      id: "updateSettings",
+      method: "PATCH",
+      path: "/api/dustpan/v1/settings",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "required",
+      requiredQueryParameters: [],
+      requestBody: "application/merge-patch+json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeSettings),
   ),
   updateUnitContext: operation<ContextEntry>(
     {

@@ -122,11 +122,13 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
+	tables = append(tables, pgCopyUnitSettingsTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
 	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
+	tables = append(tables, pgCopySettingTables()...)
 	tables = append(tables, pgCopyCatalogTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
 
@@ -162,7 +164,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "updates",
 			columns: []string{
-				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, "revision",
+				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, pgColRevision,
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
 				"journal_records_changed",
@@ -333,7 +335,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "workspaces",
 			columns: []string{
-				"id", pgColNamespace, pgColName, "revision", "lock_id", "lock_holder",
+				"id", pgColNamespace, pgColName, pgColRevision, "lock_id", "lock_holder",
 				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, pgColUpdatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes", pgColDeletedAtMs, pgColDeletedName,
 			},
@@ -1818,10 +1820,14 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the drift results, the registry, the Git host connections,
+// of their own: the drift results, the unit settings, the registry, the Git host connections,
 // the notification sinks, the triggers, the catalog blueprints and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedUnitSettings(ctx, pool, staging); err != nil {
 		return err
 	}
 

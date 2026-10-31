@@ -5,6 +5,7 @@ import type { Answer } from "./execute.js";
 import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
+  BulkReplaceUnitSettingsInput,
   CheckGitHostConnectionInput,
   CheckNamespaceIssuerCopyInput,
   CreateCollectionInput,
@@ -60,6 +61,7 @@ import type {
   GetNamespaceContextInput,
   GetNamespaceIssuerInput,
   GetNamespaceLockInput,
+  GetNamespaceSettingsInput,
   GetNotificationSinkInput,
   GetOutputSharingInput,
   GetPlacementRuleInput,
@@ -67,15 +69,19 @@ import type {
   GetProfileInput,
   GetProfileRevisionInput,
   GetProviderReleaseInput,
+  GetSettingsInput,
   GetSourceFilterInput,
   GetStoreCheckInput,
   GetTriggerInput,
   GetTrustRuleInput,
   GetUnitAccessLimitInput,
   GetUnitContextInput,
+  GetUnitDefaultsInput,
   GetUnitDriftInput,
   GetUnitGateInput,
   GetUnitOutputsInput,
+  GetUnitSettingsInput,
+  GetUnitSettingsSuggestionsInput,
   GetViewInput,
   ListAccessLimitsInput,
   ListApprovalRulesInput,
@@ -113,6 +119,9 @@ import type {
   RemoveRegistryKeyInput,
   ReplaceNotificationSinkInput,
   ReplaceTriggerInput,
+  ReplaceUnitDefaultsInput,
+  ReplaceUnitSettingsInput,
+  ResetUnitSettingsInput,
   RotateNamespaceIssuerKeysInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
@@ -133,8 +142,10 @@ import type {
   UnlockNamespaceInput,
   UpdateNamespaceContextInput,
   UpdateNamespaceIssuerInput,
+  UpdateNamespaceSettingsInput,
   UpdatePlacementRuleInput,
   UpdatePreferencesInput,
+  UpdateSettingsInput,
   UpdateUnitContextInput,
 } from "./operations.js";
 import type { ApiTransport } from "./transport.js";
@@ -147,6 +158,11 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BulkUnitSettingsError,
+  BulkUnitSettingsItem,
+  BulkUnitSettingsRequest,
+  BulkUnitSettingsResult,
+  BulkUnitSettingsUnit,
   Capabilities,
   Collection,
   ContextAnswer,
@@ -283,6 +299,14 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  Setting,
+  Settings,
+  SettingsLockedError,
+  SettingsLockedErrorArgs,
+  SettingsStaticOnlyError,
+  SettingsStaticOnlyErrorArgs,
+  SettingsValueInvalidError,
+  SettingsValueInvalidErrorArgs,
   SinkTestRateLimitedError,
   SinkTestRateLimitedErrorArgs,
   SourceFilter,
@@ -319,16 +343,33 @@ import type {
   TrustRuleKeySource,
   TrustRuleList,
   Unit,
+  UnitDefaults,
+  UnitDefaultsRequest,
   UnitDrift,
   UnitLock,
   UnitNoStateError,
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitSettings,
+  UnitSettingsBoolField,
+  UnitSettingsCodeLocation,
+  UnitSettingsEffective,
+  UnitSettingsFields,
+  UnitSettingsListField,
+  UnitSettingsReviewRequests,
+  UnitSettingsStep,
+  UnitSettingsStepOutput,
+  UnitSettingsStepsField,
+  UnitSettingsStringField,
+  UnitSettingsSuggestion,
+  UnitSettingsSuggestions,
+  UnitSettingsWriteBack,
   UnitState,
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
+  UpdateSettingsRequest,
   View,
   ViewLabel,
   ViewQuery,
@@ -347,6 +388,10 @@ export class Client {
 
   addRegistryKey(input: AddRegistryKeyInput): Promise<Answer<RegistryKey>> {
     return execute(this.transport, operations.addRegistryKey, input);
+  }
+
+  bulkReplaceUnitSettings(input: BulkReplaceUnitSettingsInput): Promise<Answer<BulkUnitSettingsResult>> {
+    return execute(this.transport, operations.bulkReplaceUnitSettings, input);
   }
 
   checkGitHostConnection(input: CheckGitHostConnectionInput): Promise<Answer<GitHostCheck>> {
@@ -569,6 +614,10 @@ export class Client {
     return execute(this.transport, operations.getNamespaceLock, input);
   }
 
+  getNamespaceSettings(input: GetNamespaceSettingsInput): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.getNamespaceSettings, input);
+  }
+
   getNotificationSink(input: GetNotificationSinkInput): Promise<Answer<NotificationSink>> {
     return execute(this.transport, operations.getNotificationSink, input);
   }
@@ -597,6 +646,10 @@ export class Client {
     return execute(this.transport, operations.getProviderRelease, input);
   }
 
+  getSettings(input: GetSettingsInput = {}): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.getSettings, input);
+  }
+
   getSourceFilter(input: GetSourceFilterInput): Promise<Answer<SourceFilter>> {
     return execute(this.transport, operations.getSourceFilter, input);
   }
@@ -621,6 +674,10 @@ export class Client {
     return execute(this.transport, operations.getUnitContext, input);
   }
 
+  getUnitDefaults(input: GetUnitDefaultsInput): Promise<Answer<UnitDefaults>> {
+    return execute(this.transport, operations.getUnitDefaults, input);
+  }
+
   getUnitDrift(input: GetUnitDriftInput): Promise<Answer<UnitDrift>> {
     return execute(this.transport, operations.getUnitDrift, input);
   }
@@ -631,6 +688,14 @@ export class Client {
 
   getUnitOutputs(input: GetUnitOutputsInput): Promise<Answer<UnitOutputs>> {
     return execute(this.transport, operations.getUnitOutputs, input);
+  }
+
+  getUnitSettings(input: GetUnitSettingsInput): Promise<Answer<UnitSettings>> {
+    return execute(this.transport, operations.getUnitSettings, input);
+  }
+
+  getUnitSettingsSuggestions(input: GetUnitSettingsSuggestionsInput): Promise<Answer<UnitSettingsSuggestions>> {
+    return execute(this.transport, operations.getUnitSettingsSuggestions, input);
   }
 
   getView(input: GetViewInput): Promise<Answer<View>> {
@@ -781,6 +846,18 @@ export class Client {
     return execute(this.transport, operations.replaceTrigger, input);
   }
 
+  replaceUnitDefaults(input: ReplaceUnitDefaultsInput): Promise<Answer<UnitDefaults>> {
+    return execute(this.transport, operations.replaceUnitDefaults, input);
+  }
+
+  replaceUnitSettings(input: ReplaceUnitSettingsInput): Promise<Answer<UnitSettings>> {
+    return execute(this.transport, operations.replaceUnitSettings, input);
+  }
+
+  resetUnitSettings(input: ResetUnitSettingsInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.resetUnitSettings, input);
+  }
+
   rotateNamespaceIssuerKeys(input: RotateNamespaceIssuerKeysInput): Promise<Answer<NamespaceIssuerRotation>> {
     return execute(this.transport, operations.rotateNamespaceIssuerKeys, input);
   }
@@ -861,12 +938,20 @@ export class Client {
     return execute(this.transport, operations.updateNamespaceIssuer, input);
   }
 
+  updateNamespaceSettings(input: UpdateNamespaceSettingsInput): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.updateNamespaceSettings, input);
+  }
+
   updatePlacementRule(input: UpdatePlacementRuleInput): Promise<Answer<PlacementRule>> {
     return execute(this.transport, operations.updatePlacementRule, input);
   }
 
   updatePreferences(input: UpdatePreferencesInput): Promise<Answer<Preferences>> {
     return execute(this.transport, operations.updatePreferences, input);
+  }
+
+  updateSettings(input: UpdateSettingsInput): Promise<Answer<Settings>> {
+    return execute(this.transport, operations.updateSettings, input);
   }
 
   updateUnitContext(input: UpdateUnitContextInput): Promise<Answer<ContextEntry>> {

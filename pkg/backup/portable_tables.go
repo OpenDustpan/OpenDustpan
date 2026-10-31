@@ -33,6 +33,7 @@ const (
 	portColSource        = "source"
 	portColKind          = "kind"
 	portColScopeID       = "scope_id"
+	portColRevision      = "revision"
 	portColWrapperID     = "wrapper_id"
 	portColSubject       = "subject"
 	portColDeletedName   = "deleted_name"
@@ -117,7 +118,7 @@ func portableSpec() []PortableTable {
 				{Name: "dry_run", Kind: KindBool},
 				{Name: portColStatus, Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
-				{Name: "revision", Kind: KindInteger},
+				{Name: portColRevision, Kind: KindInteger},
 				{Name: "lease_digest", Kind: KindBytes},
 				{Name: "lease_expires_at_ms", Kind: KindTime},
 				{Name: portColCreatedAtMs, Kind: KindTime},
@@ -417,7 +418,7 @@ func portableSpec() []PortableTable {
 				{Name: "id", Kind: KindText},
 				{Name: portColNamespace, Kind: KindText},
 				{Name: portColName, Kind: KindText},
-				{Name: "revision", Kind: KindInteger},
+				{Name: portColRevision, Kind: KindInteger},
 				{Name: "lock_id", Kind: KindText},
 				{Name: "lock_holder", Kind: KindText},
 				{Name: "lock_reason", Kind: KindText},
@@ -736,6 +737,7 @@ func portableSpec() []PortableTable {
 		portablePreferenceTables(),
 		portableSavedViewTables(),
 		portableDriftTables(),
+		portableUnitSettingsTables(),
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),
@@ -743,6 +745,7 @@ func portableSpec() []PortableTable {
 		portableDeliveryTables(),
 		portableTriggerTables(),
 		portableItemKeyTables(),
+		portableSettingTables(),
 		portableCatalogTables(),
 		portableTrustRuleTables(),
 	)

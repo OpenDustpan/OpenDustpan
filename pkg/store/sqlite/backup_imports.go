@@ -6,7 +6,7 @@ const backupColImportID = "import_id"
 // sqliteImportBackupTables holds the backup columns of the tables of the
 // import tool, in the order of backup.Tables.
 func sqliteImportBackupTables() []sqliteBackupTable {
-	return []sqliteBackupTable{
+	return append([]sqliteBackupTable{
 		{
 			table: "imports",
 			columns: []string{
@@ -67,6 +67,22 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 				"item_id",
 				"committed_at_ms",
 			},
+		},
+	}, sqliteUploadCommits())
+}
+
+// sqliteUploadCommits holds the backup columns of
+// import_upload_commits.
+func sqliteUploadCommits() sqliteBackupTable {
+	return sqliteBackupTable{
+		table: "import_upload_commits",
+		columns: []string{
+			backupColNamespaceID,
+			backupColImportID,
+			"unit_dir",
+			"sequence",
+			"facts",
+			"committed_at_ms",
 		},
 	}
 }

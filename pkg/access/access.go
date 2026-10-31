@@ -115,7 +115,8 @@ var families = map[identity.Action]Family{
 	identity.ActionServerReadInstances:  FamilyOperator,
 	identity.ActionServerDeleteInstance: FamilyOperator,
 	identity.ActionServerReadAudit:      FamilyOperator,
-	// The installation settings (ADR 63); RFC 68 decides their API.
+	// The settings resource of the installation.
+	identity.ActionServerReadSettings:   FamilyOperator,
 	identity.ActionServerManageSettings: FamilyOperator,
 	// A change of the audit chain. Off also needs the administration
 	// action below.
@@ -157,11 +158,14 @@ var families = map[identity.Action]Family{
 	identity.ActionNamespaceManageTrustRules:      FamilyData,
 	identity.ActionNamespaceReadGates:             FamilyData,
 	identity.ActionNamespaceManageGates:           FamilyData,
+	identity.ActionNamespaceReadSettings:          FamilyData,
+	identity.ActionNamespaceManageSettings:        FamilyData,
 	// The connections of a namespace to a Git host.
 	identity.ActionNamespaceReadGitHostConnections:   FamilyData,
 	identity.ActionNamespaceManageGitHostConnections: FamilyData,
 	identity.ActionNamespaceReadPlacementRules:       FamilyData,
 	identity.ActionNamespaceManagePlacementRules:     FamilyData,
+	identity.ActionNamespaceUseGitHostConnection:     FamilyData,
 	identity.ActionCollectionRead:                    FamilyData,
 	identity.ActionCollectionCreate:                  FamilyData,
 	identity.ActionCollectionUpdate:                  FamilyData,

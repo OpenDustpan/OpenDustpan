@@ -696,8 +696,7 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 		),
 		jobStoreOptions(st),
 		savedViewStoreOptions(st),
-		trustRuleStoreOptions(st, args.issuer),
-		registryStoreOptions(st),
+		settingStoreOptions(st), trustRuleStoreOptions(st, args.issuer), registryStoreOptions(st),
 		sinkStoreOptions(st),
 		publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
@@ -1574,6 +1573,15 @@ func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIS
 func (e *Env) APIStepWithHeaders(ctx context.Context, t *testing.T, spec APIStepSpec, headers map[string]string) {
 	t.Helper()
 	e.apiStepWith(ctx, t, e.token, spec, headers)
+}
+
+// APIStepWithHeadersAs is APIStepWithHeaders for the person who owns token,
+// for example to send If-Match with the token of a person.
+func (e *Env) APIStepWithHeadersAs(
+	ctx context.Context, t *testing.T, token string, spec APIStepSpec, headers map[string]string,
+) {
+	t.Helper()
+	e.apiStepWith(ctx, t, token, spec, headers)
 }
 
 // APIStepA runs one TFE API request as principal A and records it as a step.

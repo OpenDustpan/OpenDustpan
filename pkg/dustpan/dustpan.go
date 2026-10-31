@@ -101,6 +101,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/unitsettings"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -205,8 +206,10 @@ type settings struct {
 	sinks                sinkSettings
 	jobStore             job.Store
 	triggerStore         trigger.Store
+	unitSettingsStore    unitsettings.Store
 	driftStore           drift.Store
 	savedViewStore       savedview.Store
+	settingsConfig       settingsConfig
 	gitHost              gitHostSettings
 	registry             *registrySettings
 	idempotencyStore     idempotency.Store
@@ -773,6 +776,7 @@ func defaultSettings() *settings {
 		denialLimiter:           defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
+		settingsConfig:          settingsConfig{store: nil, declarations: nil, static: nil},
 		blobGuard:               nil,
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
@@ -795,6 +799,7 @@ func defaultSettings() *settings {
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		triggerStore:            nil,
+		unitSettingsStore:       nil,
 		driftStore:              nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
@@ -1316,6 +1321,9 @@ type neutralHandlers struct {
 	// triggers is nil when no trigger store is set, or the server lacks the
 	// job service that a trigger starts a plan through.
 	triggers http.Handler
+	// unitSettings is nil when no store of unit settings is set, or the server
+	// lacks the Git host store or the runner stores that the settings check.
+	unitSettings http.Handler
 	// drift is nil when no drift store is set.
 	drift http.Handler
 	// registry is nil when no registry store is set.
@@ -1368,7 +1376,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	triggers, err := newTriggersHandler(svc, cfg, onFailure)
+	late, err := newTriggersAndSettingsHandlers(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1379,17 +1387,18 @@ func newNeutralHandlers(
 	}
 
 	return neutralHandlers{
-		inventory: units,
-		audit:     entries,
-		context:   contexts,
-		runners:   runners,
-		profiles:  profileAPI.profiles,
-		issuer:    profileAPI.issuer,
-		sinks:     profileAPI.sinkAPI,
-		jobs:      jobAPIs.jobs,
-		triggers:  triggers,
-		drift:     jobAPIs.drift,
-		registry:  registries,
+		inventory:    units,
+		audit:        entries,
+		context:      contexts,
+		runners:      runners,
+		profiles:     profileAPI.profiles,
+		issuer:       profileAPI.issuer,
+		sinks:        profileAPI.sinkAPI,
+		jobs:         jobAPIs.jobs,
+		triggers:     late.triggers,
+		unitSettings: late.unitSettings,
+		drift:        jobAPIs.drift,
+		registry:     registries,
 
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
@@ -1739,8 +1748,18 @@ func checkStoreOptions(cfg *settings) error {
 	case cfg.inventoryReader == nil:
 		return fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
 	default:
-		return checkAuditStores(cfg)
+		return checkOptionalStores(cfg)
 	}
+}
+
+// checkOptionalStores refuses a namespace store that keeps no audit entries,
+// and declarations of settings that are not valid.
+func checkOptionalStores(cfg *settings) error {
+	if err := checkAuditStores(cfg); err != nil {
+		return err
+	}
+
+	return checkSettingDeclarations(cfg)
 }
 
 // checkAuditStores refuses a namespace store that keeps no audit entries. A
@@ -3043,7 +3062,7 @@ func newServerHandler(
 		Workers:          cfg.watch,
 		SignIn:           deps.signIn,
 		Preferences:      newPreferencesService(cfg),
-
+		Settings:         newSettingService(cfg, cfg.namespaceStore),
 		InstallationKind: cfg.installationKind,
 		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
@@ -4179,8 +4198,8 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// reach their own handlers by exact path, so another area can take the
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
 	for _, h := range []http.Handler{
-		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.drift,
-		a.sourceFilter, a.trustRules,
+		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.unitSettings,
+		a.drift, a.sourceFilter, a.trustRules,
 	} {
 		mountV1(mux, h, wrapV1)
 	}

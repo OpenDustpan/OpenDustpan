@@ -6,7 +6,7 @@ const pgColImportID = "import_id"
 // pgCopyImportTables holds the COPY columns of the tables of the import tool,
 // in the order of backup.Tables.
 func pgCopyImportTables() []pgCopyTable {
-	return []pgCopyTable{
+	return append([]pgCopyTable{
 		{
 			table: "imports",
 			columns: []string{
@@ -72,5 +72,21 @@ func pgCopyImportTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColNamespaceID, pgColImportID, "import_unit_id", pgColVersion},
 		},
+	}, pgCopyUploadCommits())
+}
+
+// pgCopyUploadCommits holds the COPY columns of import_upload_commits.
+func pgCopyUploadCommits() pgCopyTable {
+	return pgCopyTable{
+		table: "import_upload_commits",
+		columns: []string{
+			pgColNamespaceID,
+			pgColImportID,
+			"unit_dir",
+			pgColSequence,
+			"facts",
+			"committed_at_ms",
+		},
+		orderBy: []string{pgColNamespaceID, pgColImportID, "unit_dir", pgColSequence},
 	}
 }

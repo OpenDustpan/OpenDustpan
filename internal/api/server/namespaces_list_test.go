@@ -384,6 +384,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -506,6 +507,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,

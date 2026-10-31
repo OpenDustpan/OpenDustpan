@@ -228,6 +228,9 @@ func (r *reloader) apply(ctx context.Context, data []byte) error {
 
 	r.current = resolved
 
+	r.flags.staticLayer().Replace(resolved)
+	r.flags.syncSettings(ctx, r.logger)
+
 	cli.LogChanges(ctx, r.logger, changes)
 	cli.LogOverrides(ctx, r.logger, resolved)
 

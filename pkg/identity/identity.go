@@ -228,15 +228,26 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionServerReadSettings allows reading the settings resource of the
+	// installation: each declared setting with its effective value and its
+	// source. Its object is ServerObject.
+	ActionServerReadSettings Action = "server:read-settings"
+
 	// ActionInstallationStoreCheck allows starting and reading the store checks
 	// of the installation: the deep check of a blob store, which writes
 	// throwaway objects under a prefix of its own. Its object is ServerObject.
 	ActionInstallationStoreCheck Action = "installation:store-check"
 	// ActionServerManageSettings allows changing the installation settings
-	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
-	// settings name it: the start entry and the entry of a reload of the
-	// configuration file. RFC 68 decides the settings API that checks it.
+	// through the settings resource. Its object is ServerObject. The audit
+	// entries of the settings name it: the start entry and the entry of a
+	// reload of the configuration file.
 	ActionServerManageSettings Action = "server:manage-settings"
+	// ActionNamespaceReadSettings allows reading the settings resource of a
+	// namespace. Its object is the namespace.
+	ActionNamespaceReadSettings Action = "namespace:read-settings"
+	// ActionNamespaceManageSettings allows changing the settings resource of
+	// a namespace. Its object is the namespace.
+	ActionNamespaceManageSettings Action = "namespace:manage-settings"
 	// ActionServerSetAuditChain allows approving a change of the audit
 	// chain to the setting of the server, on or off. A change to off also
 	// needs ActionServerDisableAuditChain. Its object is ServerObject.
@@ -579,6 +590,12 @@ const (
 	// checking a connection of a namespace to a Git host, and making one the
 	// default. Its object is the namespace.
 	ActionNamespaceManageGitHostConnections Action = "namespace:manage-git-host-connections"
+	// ActionNamespaceUseGitHostConnection allows naming a connection of a
+	// namespace to a Git host in a code location, in addition to the action on
+	// the unit. It lets the holder point a unit at the credentials of the
+	// connection, and it answers no setting or credential of the connection.
+	// Its object is the namespace that holds the connection.
+	ActionNamespaceUseGitHostConnection Action = "namespace:use-git-host-connection"
 	// ActionServerReadGitHost allows reading the registration of the GitHub
 	// App of the installation, and the map from its installations to
 	// namespaces. No read answers a key or an event secret. Its object is the
