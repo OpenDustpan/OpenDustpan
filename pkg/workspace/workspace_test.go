@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -1066,7 +1067,7 @@ func stateDirOf(ctx context.Context, t *testing.T, namespaces *namespace.Service
 func listStateBlobs(t *testing.T, blobs blob.Store, id workspace.ID) []blob.Object {
 	t.Helper()
 
-	listed, err := blobs.List(t.Context(), "namespaces/")
+	listed, err := blobtest.ListAll(t.Context(), blobs, "namespaces/")
 	if err != nil {
 		t.Fatalf("list state blobs of %s: %v", id, err)
 	}

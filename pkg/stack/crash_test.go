@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -306,7 +307,7 @@ func listUpdateBlobs(
 
 	prefix := "namespaces/" + ns.String() + "/pulumi/" + stackID.String() + "/" + id.String() + "/"
 
-	listed, err := blobs.List(t.Context(), prefix)
+	listed, err := blobtest.ListAll(t.Context(), blobs, prefix)
 	if err != nil {
 		t.Fatalf("list blobs of update %s: %v", id, err)
 	}

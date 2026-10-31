@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -120,7 +121,7 @@ func writeAt(t *testing.T, cps *audit.Checkpoints, at int64) (bool, error) {
 func checkpointCount(t *testing.T, f checkpointFixture) int {
 	t.Helper()
 
-	objects, err := f.blobs.List(t.Context(), audit.CheckpointPrefix+"/")
+	objects, err := blobtest.ListAll(t.Context(), f.blobs, audit.CheckpointPrefix+"/")
 	if err != nil {
 		t.Fatalf("list checkpoints: %v", err)
 	}

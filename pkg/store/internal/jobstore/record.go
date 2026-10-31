@@ -145,7 +145,7 @@ func (s *Store) ReserveLogChunk(
 				ns,
 				plan.Version,
 				c.Seq,
-				job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false},
+				job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false, BlobKey: ""},
 			)
 		}
 
@@ -234,51 +234,79 @@ func createLog(ctx context.Context, tx Tx, j *job.Job, lc *logCreate) error {
 }
 
 // ConfirmLogChunk implements job.RecordStore.
-func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) error {
+func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) (bool, error) {
 	// A sealed chunk is never empty. A confirm with no stored bytes would leave
 	// a counted chunk that a backup cannot copy.
 	if c.Stored.Size <= 0 {
-		return fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
+		return false, fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
 	}
 
-	return s.run.Write(ctx, pc.Fence, func(tx Tx) error {
-		return confirmChunk(ctx, tx, &pc, &c)
+	// Defense in depth: the recorder makes the key from the same parts, and the
+	// blob view checks the namespace. This check stays so that a row never
+	// names a blob that is not an attempt of its own chunk.
+	if _, err := job.ChunkBlobKey(pc.Job, c.Version, c.Seq, c.BlobKey); err != nil {
+		return false, err
+	}
+
+	won := false
+
+	err := s.run.Write(ctx, pc.Fence, func(tx Tx) error {
+		var confirmErr error
+
+		won, confirmErr = confirmChunk(ctx, tx, &pc, &c)
+
+		return confirmErr
 	})
+	if err != nil {
+		return false, err
+	}
+
+	return won, nil
 }
 
 // confirmChunk counts the chunk c in the job of pc and marks its row, with the
-// stored size and MD5, in the transaction tx.
-func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkConfirm) error {
+// blob key and the stored size and MD5, in the transaction tx. The first
+// confirm of a row wins and returns true. A row that is confirmed already
+// stays as it is, and the call returns true only when the row holds c.BlobKey:
+// the same attempt confirmed twice.
+func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkConfirm) (bool, error) {
 	j, err := claimed(ctx, tx, *pc)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	row, ok, err := tx.Chunk(ctx, pc.Fence.Namespace, c.Version, c.Seq)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if !ok {
-		return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
+		return false, fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
 	}
 
 	changed, err := job.ConfirmChunkRecord(&j, stepKey(pc, c.Step), c.Version, c.Seq, row)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	if !row.Confirmed {
-		if confirmErr := tx.ConfirmChunk(ctx, pc.Fence.Namespace, c.Version, c.Seq, c.Stored); confirmErr != nil {
-			return confirmErr
+	if row.Confirmed {
+		return row.BlobKey == c.BlobKey, nil
+	}
+
+	confirmErr := tx.ConfirmChunk(
+		ctx, pc.Fence.Namespace, c.Version, c.Seq, StoredChunk{Digest: c.Stored, BlobKey: c.BlobKey},
+	)
+	if confirmErr != nil {
+		return false, confirmErr
+	}
+
+	if changed {
+		if saveErr := save(ctx, tx, &j); saveErr != nil {
+			return false, saveErr
 		}
 	}
 
-	if !changed {
-		return nil
-	}
-
-	return save(ctx, tx, &j)
+	return true, nil
 }
 
 // gatePlan loads the job of pc and applies the rules of a plan write. For a
@@ -552,7 +580,7 @@ func (s *Store) Plan(ctx context.Context, ns namespace.Name, id string) (job.Art
 			return job.ErrNotFound
 		}
 
-		out = job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: plan, Log: nil}
+		out = job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: plan, Log: nil, ChunkKeys: nil}
 
 		return nil
 	})
@@ -587,7 +615,12 @@ func (s *Store) Log(ctx context.Context, ns namespace.Name, version string) (job
 			return fmt.Errorf("%w: log %s is not in the step record of job %s", ErrDamaged, version, j.ID)
 		}
 
-		out = job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: row.Step, Plan: nil, Log: log}
+		keys, keysErr := chunkKeysOf(ctx, tx, ns, version)
+		if keysErr != nil {
+			return keysErr
+		}
+
+		out = job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: row.Step, Plan: nil, Log: log, ChunkKeys: keys}
 
 		return nil
 	})
@@ -596,6 +629,28 @@ func (s *Store) Log(ctx context.Context, ns namespace.Name, version string) (job
 	}
 
 	return out, nil
+}
+
+// chunkKeysOf returns the blob key of each confirmed chunk of the log version,
+// by chunk number. It returns ErrDamaged for rows whose numbers are not 0, 1,
+// 2 and so on.
+func chunkKeysOf(ctx context.Context, tx Tx, ns namespace.Name, version string) ([]string, error) {
+	rows, err := tx.ChunkKeys(ctx, ns, version)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]string, 0, len(rows))
+
+	for i, r := range rows {
+		if r.Seq != i {
+			return nil, fmt.Errorf("%w: log %s holds chunk %d where chunk %d is next", ErrDamaged, version, r.Seq, i)
+		}
+
+		keys = append(keys, r.BlobKey)
+	}
+
+	return keys, nil
 }
 
 // logOfRow returns the log version of row in the step record of j, or nil.
@@ -614,13 +669,44 @@ func logOfRow(j *job.Job, row *LogRow) *job.LogRef {
 	return nil
 }
 
+// ChunkRowCheck is a stored chunk row that CheckChunkRow checks: the chunk
+// Seq of the log Log of the job Job.
+type ChunkRowCheck struct {
+	Job, Log  string
+	Seq, Size int64
+	SHA256    string
+	// Confirmed is true when the chunk counts in its log. BlobKey is the key of
+	// the blob of the attempt that won it.
+	Confirmed bool
+	BlobKey   string
+}
+
 // CheckChunkRow returns an error that wraps ErrDamaged unless a stored chunk
-// row of the log logID has the rules of a reserve: a number below
-// job.MaxLogChunks, a size from 0 to job.MaxLogChunk and a SHA-256. A restore
-// uses it on the rows of a staged backup.
-func CheckChunkRow(logID string, seq, size int64, sha string) error {
-	if seq < 0 || seq >= job.MaxLogChunks || size < 0 || size > job.MaxLogChunk || !job.ValidHash(sha) {
-		return fmt.Errorf("%w: chunk %d of log %s is not valid", ErrDamaged, seq, logID)
+// row has the rules of a reserve: a number below job.MaxLogChunks, a size from
+// 0 to job.MaxLogChunk and a SHA-256. A chunk that is confirmed has the blob
+// key of an attempt of this chunk of this log (job.ChunkBlobKey), and a chunk
+// that is not has none. A restore uses it on the rows of a staged backup.
+func CheckChunkRow(r *ChunkRowCheck) error {
+	if r.Seq < 0 || r.Seq >= job.MaxLogChunks || r.Size < 0 || r.Size > job.MaxLogChunk || !job.ValidHash(r.SHA256) {
+		return fmt.Errorf("%w: chunk %d of log %s is not valid", ErrDamaged, r.Seq, r.Log)
+	}
+
+	if !r.Confirmed {
+		if r.BlobKey != "" {
+			return fmt.Errorf("%w: chunk %d of log %s is not confirmed and has a blob key", ErrDamaged, r.Seq, r.Log)
+		}
+
+		return nil
+	}
+
+	if _, err := job.ChunkBlobKey(job.ID(r.Job), r.Log, int(r.Seq), r.BlobKey); err != nil {
+		return fmt.Errorf(
+			"%w: chunk %d of log %s has a blob key that is not its own: %w",
+			ErrDamaged,
+			r.Seq,
+			r.Log,
+			err,
+		)
 	}
 
 	return nil

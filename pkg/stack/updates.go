@@ -559,30 +559,37 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 		return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, err)
 	}
 
-	listed, err := bl.List(ctx, bl.stackPrefix(stackID))
-	if err != nil {
-		return fmt.Errorf("list checkpoint blobs of stack %s: %w", stackID, err)
-	}
-
-	if len(listed) == 0 {
-		return nil
-	}
-
 	failed := 0
 
-	for _, obj := range listed {
-		// The guard comes after the commit of the purge and after the listing,
-		// and again before each delete: a restore that starts during the loop
-		// keeps the blobs that are left. A backup or a restore that runs, or a
-		// failed read, stops the loop. The error keeps the blob purge record,
-		// and the retention sweep tries again.
-		if err := blobguard.Hold(ctx, s.guard); err != nil {
-			return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, err)
+	// The walk deletes each blob as its page arrives, so the purge never holds
+	// the keys of the whole stack. A key sorts after the cursor of the walk, so
+	// a delete does not move the walk.
+	var guardErr error
+
+	err = blob.Walk(ctx, bl, bl.stackPrefix(stackID), func(obj blob.Object) error {
+		// The guard comes after the commit of the purge and before each
+		// delete: a restore that starts during the walk keeps the blobs that
+		// are left. A backup or a restore that runs, or a failed read, stops
+		// the walk. The error keeps the blob purge record, and the retention
+		// sweep tries again.
+		if holdErr := blobguard.Hold(ctx, s.guard); holdErr != nil {
+			guardErr = holdErr
+
+			return holdErr
 		}
 
 		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
 			failed++
 		}
+
+		return nil
+	})
+	if guardErr != nil {
+		return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, guardErr)
+	}
+
+	if err != nil {
+		return fmt.Errorf("list checkpoint blobs of stack %s: %w", stackID, err)
 	}
 
 	if failed > 0 {
@@ -1288,7 +1295,7 @@ func (s *Updates) deletesHeld(ctx context.Context, deleter string, ref Ref) bool
 // never fails the save, and the rows stay for the next sweep. No log line
 // names a blob key.
 func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID, id UpdateID) {
-	listed, err := bl.List(ctx, bl.updatePrefix(stackID, id))
+	listed, err := bl.listAll(ctx, bl.updatePrefix(stackID, id))
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
 
@@ -1436,14 +1443,19 @@ func (s *Updates) sweepStackOnStart(ctx context.Context, ns namespace.ID, ref Re
 // cleanup failure never fails the start, and the blobs stay for the next
 // sweep. No log line names a blob key.
 func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID) {
-	listed, err := bl.List(ctx, bl.stackPrefix(stackID))
+	// The sweep goes page by page: each page is listed, then the keep set is
+	// read for the page, then the orphans of the page go. So the sweep never
+	// holds the blobs of the whole stack.
+	target := sweepTarget{ref: ref, stackID: stackID, update: ""}
+
+	err := blob.WalkPages(ctx, bl, bl.stackPrefix(stackID), func(page []blob.Object) error {
+		s.sweepOrphans(ctx, bl, target, page)
+
+		return nil
+	})
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
 	}
-
-	s.sweepOrphans(ctx, bl, sweepTarget{ref: ref, stackID: stackID, update: ""}, listed)
 }
 
 // resolveCheckpoint fills the deployment of a checkpoint row: it reads and

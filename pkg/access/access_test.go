@@ -1607,6 +1607,7 @@ func TestBuiltInRolesHoldTheGateActions(t *testing.T) {
 	}{
 		{access.RoleViewer, true, false},
 		{access.RoleSecretViewer, true, false},
+		{access.RolePlanner, true, false},
 		{access.RoleAuditor, true, false},
 		{access.RoleWriter, true, false},
 		{access.RoleMaintainer, true, false},
@@ -1651,6 +1652,7 @@ func TestBuiltInRolesHoldTheNotificationAction(t *testing.T) {
 	}{
 		{access.RoleViewer, false},
 		{access.RoleSecretViewer, false},
+		{access.RolePlanner, false},
 		{access.RoleAuditor, false},
 		{access.RoleWriter, false},
 		{access.RoleMaintainer, false},
@@ -1695,6 +1697,7 @@ func TestBuiltInRolesHoldTheOutputSharingActions(t *testing.T) {
 	}{
 		{access.RoleViewer, true, false},
 		{access.RoleSecretViewer, true, false},
+		{access.RolePlanner, true, false},
 		{access.RoleAuditor, true, false},
 		{access.RoleWriter, true, false},
 		{access.RoleMaintainer, true, false},
@@ -1764,5 +1767,55 @@ func TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs(t *testing.T) {
 		{payments, outputs, false},
 		{identity.NamespaceObject("acme"), read, true},
 		{identity.NamespaceObject("acme"), outputs, false},
+	})
+}
+
+// TestOnlyOperatorAndSiteAdministratorHoldStoreCheck checks that the store
+// check action, which writes to the blob store of the installation, belongs to
+// the operator family alone: the installation operator and the site
+// administrator hold it, and no other built-in role does, also with a grant on
+// the installation.
+func TestOnlyOperatorAndSiteAdministratorHoldStoreCheck(t *testing.T) {
+	t.Parallel()
+
+	roles := []struct {
+		role string
+		want bool
+	}{
+		{access.RoleInstallationOperator, true},
+		{access.RoleSiteAdministrator, true},
+		{access.RoleAccountAdministrator, false},
+		{access.RoleAdmin, false},
+		{access.RoleMaintainer, false},
+		{access.RoleWriter, false},
+		{access.RoleViewer, false},
+		{access.RoleAuditor, false},
+		{access.RoleSecretViewer, false},
+		{access.RoleTokenManager, false},
+	}
+
+	for _, tc := range roles {
+		t.Run(tc.role, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			holder := f.person(t, "holder")
+			f.grant(t, prn("holder"), tc.role, identity.ServerObject())
+
+			assertChecks(t, f.authz, holder, []check{
+				{identity.ServerObject(), identity.ActionInstallationStoreCheck, tc.want},
+			})
+		})
+	}
+
+	t.Run("a principal with no grant", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		nobody := f.person(t, "nobody")
+
+		assertChecks(t, f.authz, nobody, []check{
+			{identity.ServerObject(), identity.ActionInstallationStoreCheck, false},
+		})
 	})
 }

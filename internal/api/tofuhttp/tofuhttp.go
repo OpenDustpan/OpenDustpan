@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
@@ -314,8 +315,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		w.Header().Set("WWW-Authenticate", `Basic realm="OpenDustpan"`)
 	}
 
-	if status == http.StatusServiceUnavailable {
+	switch {
+	case status == http.StatusServiceUnavailable && errors.Is(err, namespace.ErrUnavailable):
+		problem.SetStoreRetryAfter(w)
+	case status == http.StatusServiceUnavailable:
 		bodygate.SetRetryAfterJitter(w)
+	default:
 	}
 
 	http.Error(w, message, status)

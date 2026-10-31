@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
@@ -49,7 +50,9 @@ const migrationLockID int64 = 0x6f64706e
 // Store implements namespace.Store, stack.Store and the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) on PostgreSQL.
 type Store struct {
-	pool    *pgxpool.Pool
+	pool *pgxpool.Pool
+	// txs starts the transactions of the API paths and translates their errors.
+	txs     guardedPool
 	queries *db.Queries
 	// gate serves the ports of gate.Store over this store.
 	gate *gatestore.Store
@@ -90,6 +93,9 @@ type Store struct {
 	// logger records the warnings of the store. It defaults to a discard
 	// handler; pass WithLogger to record them.
 	logger *slog.Logger
+	// tracer, when set, sees every statement, batch, prepare and copy of the
+	// pool. Nil in production.
+	tracer pgx.QueryTracer
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -131,6 +137,16 @@ func WithoutMigrate() Option {
 	return func(s *Store) { s.noMigrate = true }
 }
 
+// WithQueryTracer makes the pool report each statement, batch, prepare and
+// copy to tracer. The tracer may also implement pgx.BatchTracer,
+// pgx.PrepareTracer and pgx.CopyFromTracer, and then it sees those too. A
+// benchmark of database round trips uses it. Without it, the pool has no
+// tracer. The pool pings an idle connection with the protocol layer, which the
+// tracer does not see.
+func WithQueryTracer(tracer pgx.QueryTracer) Option {
+	return func(s *Store) { s.tracer = tracer }
+}
+
 var (
 	_ namespace.Store = (*Store)(nil)
 	_ stack.Store     = (*Store)(nil)
@@ -149,8 +165,12 @@ func liveSchemaName(searchPath string) string {
 	return "public"
 }
 
-// Open connects to the database at url and migrates it.
-func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
+// poolConfig parses the database URL into the pool configuration. It reads
+// the pool and failover settings of the URL (target_session_attrs,
+// pool_max_conn_lifetime, pool_health_check_period and the other pgxpool
+// settings) and keeps them as they are. It sets only the search path of each
+// new connection.
+func poolConfig(url string) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
@@ -173,6 +193,45 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		return nil
 	}
 
+	return cfg, nil
+}
+
+// Open connects to the database at url and migrates it.
+func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
+	cfg, err := poolConfig(url)
+	if err != nil {
+		return nil, err
+	}
+
+	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
+
+	s := &Store{
+		pool:                nil,
+		txs:                 guardedPool{pool: nil},
+		queries:             nil,
+		stagingMu:           sync.Mutex{},
+		stagingSchema:       "",
+		keepAccessHook:      nil,
+		betweenProfileReads: atomic.Pointer[func()]{},
+		snapshotBegin:       snapshotBeginQuery(live),
+		beforeLockDelete:    nil,
+		stateLockWait:       0,
+		binaryVersion:       "",
+		gate:                nil,
+		kind:                "",
+		noMigrate:           false,
+		logger:              slog.New(slog.DiscardHandler),
+		tracer:              nil,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	if s.tracer != nil {
+		cfg.ConnConfig.Tracer = s.tracer
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
@@ -184,17 +243,10 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
 	}
 
-	s := &Store{
-		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
-		beforeLockDelete: nil, stateLockWait: 0,
-		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
-	}
+	s.pool = pool
+	s.txs = guardedPool{pool: pool}
+	s.queries = db.New(guardedDB{inner: pool})
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
-
-	for _, opt := range opts {
-		opt(s)
-	}
 
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
@@ -925,7 +977,10 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // chain) must run while the installation is in maintenance mode. The control
 // path is for the writes that keep the installation able to enter, leave and
 // restore from maintenance mode, and that record what happens. Each caller is
-// a write that maintenance mode must not refuse.
+// a write that maintenance mode must not refuse. It does not check the minimum
+// binary version either, so only a write that an old binary needs to stop
+// cleanly uses it, or a write that records what happened. A write that changes
+// domain data or runs work uses inMinimumTx.
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
@@ -936,9 +991,22 @@ func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) e
 	return s.runTx(ctx, fn, nil)
 }
 
+// inMinimumTx runs fn in a control transaction that refuses a binary below the
+// minimum binary version of the schema. It reads the minimum in the same
+// transaction as fn, before fn runs, and it reads no installation state, so
+// maintenance mode does not refuse it. A control write that changes domain
+// data or runs work uses it, so a worker of an old binary, which a rolling
+// deploy leaves running, cannot claim or run an operation. A control write
+// that an old binary needs to stop cleanly uses inControlTx.
+//
+// The same rule about nested transactions as for inControlTx applies.
+func (s *Store) inMinimumTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, func(tx pgx.Tx) error { return s.checkTxMinimum(ctx, tx) })
+}
+
 // runTx runs before, when set, and then fn in one transaction.
 func (s *Store) runTx(ctx context.Context, fn func(q *db.Queries) error, before func(tx pgx.Tx) error) error {
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
 		if before != nil {
 			if err := before(tx); err != nil {
 				return err
@@ -1003,6 +1071,12 @@ func readWritable(
 	}
 
 	if err := errors.Join(lockErr, scanErr, results.Close()); err != nil {
+		// A database that does not answer is not a state that cannot be read:
+		// the write is temporary, and the client tries it again.
+		if unavailable := translate(err); storeerr.Is(unavailable) {
+			return nil, fmt.Errorf("read installation state postgres database: %w", unavailable)
+		}
+
 		return nil, fmt.Errorf("read installation state postgres database: %w", maintenance.ErrUnavailable)
 	}
 
@@ -1076,7 +1150,7 @@ func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) 
 // inSnapshotConn is inSnapshotTx for a read that also runs a hand-written
 // statement: fn gets the transaction itself.
 func (s *Store) inSnapshotConn(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), fn)
+	err := pgx.BeginTxFunc(ctx, s.txs, s.snapshotOptions(), fn)
 	if err != nil {
 		return fmt.Errorf("snapshot transaction: %w", readConflict(err))
 	}
@@ -1165,7 +1239,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
 		return migrateTx(
 			ctx,
 			tx,

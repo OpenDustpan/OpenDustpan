@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -97,7 +98,7 @@ func TestRunWritesNoWorkspaceBlobAtStartup(t *testing.T) {
 func listBlobs(t *testing.T, blobs *fs.Store) []blob.Object {
 	t.Helper()
 
-	listed, err := blobs.List(t.Context(), "namespaces/")
+	listed, err := blobtest.ListAll(t.Context(), blobs, "namespaces/")
 	if err != nil {
 		t.Fatalf("list blobs: %v", err)
 	}

@@ -755,14 +755,15 @@ func (r *blobDeleteRig) seedWorkspace(t *testing.T) (workspace.Workspace, []blob
 		t.Fatalf("unlock workspace: %v", err)
 	}
 
-	listed, err := r.live.List(ctx, "")
-	if err != nil || len(listed) == 0 {
-		t.Fatalf("state blobs after the push = %d, %v, want the pushed state", len(listed), err)
-	}
+	var keys []blob.Key
 
-	keys := make([]blob.Key, 0, len(listed))
-	for _, obj := range listed {
+	err = blob.Walk(ctx, r.live, "", func(obj blob.Object) error {
 		keys = append(keys, obj.Key)
+
+		return nil
+	})
+	if err != nil || len(keys) == 0 {
+		t.Fatalf("state blobs after the push = %d, %v, want the pushed state", len(keys), err)
 	}
 
 	return w, keys

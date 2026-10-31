@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -17,7 +18,7 @@ var errGuardRead = errors.New("registry unavailable")
 func stateBlobCount(t *testing.T, f fixture, prefix string) int {
 	t.Helper()
 
-	listed, err := f.blobs.List(t.Context(), prefix)
+	listed, err := blobtest.ListAll(t.Context(), f.blobs, prefix)
 	if err != nil {
 		t.Fatalf("list state blobs: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 				t.Fatalf("delete with %s: err = %v, want no ErrBlobsRemain", tc.name, err)
 			}
 
-			listed, listErr := f.blobs.List(t.Context(), prefix)
+			listed, listErr := blobtest.ListAll(t.Context(), f.blobs, prefix)
 			if listErr != nil || len(listed) == 0 {
 				t.Fatalf("state blobs with %s = %d, %v, want them kept", tc.name, len(listed), listErr)
 			}

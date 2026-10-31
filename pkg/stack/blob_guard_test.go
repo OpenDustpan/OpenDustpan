@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -33,7 +34,7 @@ func runningWorks() map[string]blobguard.Work {
 func updateBlobs(t *testing.T, f updatesFixture, id stack.UpdateID) []blob.Object {
 	t.Helper()
 
-	listed, err := f.blobs.List(t.Context(), f.prefix+"stk-test/"+id.String()+"/")
+	listed, err := blobtest.ListAll(t.Context(), f.blobs, f.prefix+"stk-test/"+id.String()+"/")
 	if err != nil {
 		t.Fatalf("list blobs of update %s: %v", id, err)
 	}
@@ -300,10 +301,10 @@ type orderSpy struct {
 	events []string
 }
 
-func (o *orderSpy) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (o *orderSpy) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	o.record("list")
 
-	return o.memBlob.List(ctx, prefix)
+	return o.memBlob.ListPage(ctx, req)
 }
 
 func (o *orderSpy) Delete(ctx context.Context, key blob.Key) error {

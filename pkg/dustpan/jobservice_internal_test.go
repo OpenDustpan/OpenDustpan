@@ -412,7 +412,7 @@ func TestJobPlannerRequest(t *testing.T) {
 func TestPlanSteps(t *testing.T) {
 	t.Parallel()
 
-	steps, err := planSteps("opentofu")
+	steps, err := planSteps(testUnit(t, "opentofu", "network"))
 	if err != nil || len(steps) != 2 {
 		t.Fatalf("planSteps(opentofu) = %d steps, %v; want 2", len(steps), err)
 	}
@@ -423,7 +423,7 @@ func TestPlanSteps(t *testing.T) {
 	steps[1].Args[0] = "sh"
 	steps[1].Env["TF_IN_AUTOMATION"] = "0"
 
-	again, err := planSteps("opentofu")
+	again, err := planSteps(testUnit(t, "opentofu", "network"))
 	if err != nil || again[1].Args[0] != "tofu" || again[1].Env["TF_IN_AUTOMATION"] != "1" {
 		t.Fatalf("planSteps after a change = %+v, %v; want fresh steps", again, err)
 	}
@@ -461,10 +461,165 @@ func checkStepNames(t *testing.T, steps []job.Step) {
 func TestPlanStepsRefuseOtherTools(t *testing.T) {
 	t.Parallel()
 
-	for _, tool := range []string{"pulumi", "", "terraform", "OpenTofu", "opentofu "} {
-		if _, err := planSteps(tool); !errors.Is(err, job.ErrUnsupported) {
+	for _, tool := range []string{"terraform", "Pulumi", "OpenTofu", "opentofu-x"} {
+		if _, err := planSteps(testUnit(t, tool, "network")); !errors.Is(err, job.ErrUnsupported) {
 			t.Errorf("planSteps(%q) = %v, want ErrUnsupported", tool, err)
 		}
+	}
+
+	if _, err := planSteps(identity.Object{}); !errors.Is(err, job.ErrUnsupported) {
+		t.Errorf("planSteps(no unit) = %v, want ErrUnsupported", err)
+	}
+}
+
+// testUnit returns the unit object of the tool in the namespace acme.
+func testUnit(t *testing.T, tool, name string) identity.Object {
+	t.Helper()
+
+	obj, err := identity.UnitObject(tool, "acme", name)
+	if err != nil {
+		t.Fatalf("UnitObject(%q, %q) = %v", tool, name, err)
+	}
+
+	return obj
+}
+
+func TestPlanStepsPulumi(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		unit string
+		// wantArgs is the exact argument list of a valid stack.
+		wantArgs []string
+	}{
+		{"project and stack", "web/prod", pulumiArgs("acme/web/prod")},
+		{"dots, underscores and digits", "my_proj.v2/prod-1.eu", pulumiArgs("acme/my_proj.v2/prod-1.eu")},
+		{"upper case letters", "Web/Prod", pulumiArgs("acme/Web/Prod")},
+		{"digits first", "1web/2prod", pulumiArgs("acme/1web/2prod")},
+		{"underscore first", "_web/_prod", pulumiArgs("acme/_web/_prod")},
+		{"shell word after the stack", "web/prod;rm", nil},
+		{"command substitution", "web/$(id)", nil},
+		{"backtick", "web/`id`", nil},
+		{"double quote", `web/a"b`, nil},
+		{"single quote", "web/a'b", nil},
+		{"shell word in the project", "we;b/prod", nil},
+		{"pipe", "web/a|b", nil},
+		{"ampersand", "web/a&b", nil},
+		{"redirect", "web/a>b", nil},
+		{"backslash", `web/a\b`, nil},
+		{"equals sign", "web/a=b", nil},
+		{"space", "web/a b", nil},
+		{"tab", "web/a\tb", nil},
+		{"newline in the stack", "web/pr\nod", nil},
+		{"carriage return", "web/pr\rod", nil},
+		{"NUL in the stack", "web/pr\x00od", nil},
+		{"NUL in the project", "we\x00b/prod", nil},
+		{"non-ASCII letter", "web/prod\u00e9", nil},
+		{"non-ASCII project", "w\u00e9b/prod", nil},
+		{"two dots as the project", "../prod", nil},
+		{"two dots as the stack", "web/..", nil},
+		{"one dot as the project", "./prod", nil},
+		{"one dot as the stack", "web/.", nil},
+		{"leading dot", ".web/prod", nil},
+		{"leading dash in the project", "-web/prod", nil},
+		{"leading dash in the stack", "web/-prod", nil},
+		{"flag like name", "-x/--y", nil},
+		{"no project", "prod", nil},
+		{"empty stack", "web/", nil},
+		{"empty project", "/prod", nil},
+		{"three parts", "a/b/c", nil},
+		{"stack above the length limit", "web/" + strings.Repeat("a", 101), nil},
+		{"project above the length limit", strings.Repeat("a", 101) + "/prod", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkPulumiPlanCase(t, tt.name, tt.unit, tt.wantArgs)
+		})
+	}
+}
+
+// checkPulumiPlanCase plans the Pulumi stack unit. A nil wantArgs means that
+// the step must refuse the name.
+func checkPulumiPlanCase(t *testing.T, name, ref string, wantArgs []string) {
+	t.Helper()
+
+	unit, err := identity.UnitObject("pulumi", "acme", ref)
+	if err != nil {
+		// Only a name with an empty part stops at identity.UnitObject. Each hostile
+		// name must reach the step, so the test proves the layer of the step alone.
+		if wantArgs != nil || (name != "empty stack" && name != "empty project") {
+			t.Fatalf("UnitObject(%q) = %v: the name must reach the step", ref, err)
+		}
+
+		return
+	}
+
+	steps, err := planSteps(unit)
+	if wantArgs == nil {
+		if !errors.Is(err, job.ErrInvalid) || steps != nil {
+			t.Fatalf("planSteps(%q) = %+v, %v; want ErrInvalid and no step", ref, steps, err)
+		}
+
+		return
+	}
+
+	if err != nil {
+		t.Fatalf("planSteps(%q) = %v, want one step", ref, err)
+	}
+
+	checkPulumiSteps(t, steps, wantArgs)
+}
+
+// pulumiArgs returns the argument list of the preview of the stack ref.
+func pulumiArgs(ref string) []string {
+	return []string{"pulumi", "preview", "--non-interactive", "--stack=" + ref}
+}
+
+func checkPulumiSteps(t *testing.T, steps []job.Step, wantArgs []string) {
+	t.Helper()
+
+	if len(steps) != 1 {
+		t.Fatalf("planSteps(pulumi) = %d steps, want 1", len(steps))
+	}
+
+	s := &steps[0]
+	if s.Name != "preview" || !slices.Equal(s.Args, wantArgs) || s.Role != job.RoleTool ||
+		s.Phase != job.PhasePlan || s.ChangesResources || s.AllowFailure || len(s.Outputs) != 0 ||
+		s.Env["PULUMI_SKIP_UPDATE_CHECK"] != "true" {
+		t.Errorf("step = %+v, want a plan-phase tool step named preview with args %v that changes no resource",
+			*s, wantArgs)
+	}
+
+	err := job.ValidateSteps(steps)
+	if err != nil {
+		t.Errorf("ValidateSteps = %v, want nil", err)
+	}
+
+	// A caller that changes one result must not change the next one.
+	steps[0].Args[0] = "sh"
+	steps[0].Env["PULUMI_SKIP_UPDATE_CHECK"] = "0"
+}
+
+func TestPlanStepsPulumiFresh(t *testing.T) {
+	t.Parallel()
+
+	unit := testUnit(t, "pulumi", "web/prod")
+
+	first, err := planSteps(unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first[0].Args[0] = "sh"
+	first[0].Env["PULUMI_SKIP_UPDATE_CHECK"] = "0"
+
+	again, err := planSteps(unit)
+	if err != nil || again[0].Args[0] != "pulumi" || again[0].Env["PULUMI_SKIP_UPDATE_CHECK"] != "true" {
+		t.Fatalf("planSteps after a change = %+v, %v; want fresh steps", again, err)
 	}
 }
 
@@ -853,5 +1008,62 @@ func checkDriftStep(t *testing.T, i int, s *job.Step, want []string) {
 
 	if !maps.Equal(s.Env, map[string]string{"TF_IN_AUTOMATION": "1"}) {
 		t.Errorf("step %d env = %v, want TF_IN_AUTOMATION alone", i, s.Env)
+	}
+}
+
+func TestPlanStepsPulumiRefuseHostileNamespaces(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ns   string
+	}{
+		{"semicolon", "a;b"},
+		{"leading dash", "-x"},
+		{"two dots", ".."},
+		{"one dot", "."},
+		{"slash", "a/b"},
+		{"space", "a b"},
+		{"newline", "a\nb"},
+		{"NUL", "a\x00b"},
+		{"quote", `a"b`},
+		{"command substitution", "$(id)"},
+		{"above the length limit", strings.Repeat("a", 101)},
+		{"empty", ""},
+		{"non-ASCII", "caf\u00e9"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			unit, err := identity.UnitObject("pulumi", namespace.Name(tt.ns), "web/prod")
+			if err != nil {
+				t.Fatalf("UnitObject(%q) = %v: the namespace must reach the step", tt.ns, err)
+			}
+
+			steps, err := planSteps(unit)
+			if !errors.Is(err, job.ErrInvalid) || steps != nil {
+				t.Fatalf("planSteps in the namespace %q = %+v, %v; want ErrInvalid and no step", tt.ns, steps, err)
+			}
+
+			if strings.ContainsAny(err.Error(), "\n\x00") || len(err.Error()) > 400 {
+				t.Errorf("error text %q holds a control character or is not bounded", err.Error())
+			}
+		})
+	}
+}
+
+func TestPlanStepsPulumiErrorEchoIsBounded(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("pulumi", "acme", "web/"+strings.Repeat("a;", 140))
+	if err != nil {
+		t.Fatalf("UnitObject = %v", err)
+	}
+
+	_, err = planSteps(unit)
+	if !errors.Is(err, job.ErrInvalid) || len(err.Error()) > 400 || !strings.Contains(err.Error(), "cut") {
+		t.Errorf("planSteps with a long name = %v; want ErrInvalid with a bounded text that says it is cut", err)
 	}
 }

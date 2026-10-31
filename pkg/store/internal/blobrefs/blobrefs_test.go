@@ -58,8 +58,15 @@ func part(kind, md5, size string) string {
 func chunkRow(seq int64, confirmed, shredded bool, size int64, md5 []byte) blobrefs.ChunkRow {
 	return blobrefs.ChunkRow{
 		NamespaceID: nsID, JobID: jobID, LogID: logID, Seq: seq, Confirmed: confirmed, Shredded: shredded,
-		StoredSize: size, StoredMD5: md5,
+		StoredSize: size, StoredMD5: md5, BlobKey: blobKeyOf(int(seq)),
 	}
+}
+
+// withBlobKey returns row with the blob key key.
+func withBlobKey(row blobrefs.ChunkRow, key string) blobrefs.ChunkRow {
+	row.BlobKey = key
+
+	return row
 }
 
 // planRow returns a plan row of the standard namespace and job.
@@ -88,17 +95,22 @@ func TestCollectorChunk(t *testing.T) {
 		{
 			name: "a confirmed chunk with stored values is copied",
 			row:  chunkRow(3, true, false, 9, good),
-			want: collected{keys: []string{prefix + "00000003"}, unverified: nil},
+			want: collected{keys: []string{prefix + "00000003-jla-x"}, unverified: nil},
+		},
+		{
+			name: "a chunk is copied under the key of its attempt",
+			row:  withBlobKey(chunkRow(3, true, false, 9, good), "job/"+jobID+"/log/"+logID+"/00000003-jla-abc123"),
+			want: collected{keys: []string{prefix + "00000003-jla-abc123"}, unverified: nil},
 		},
 		{
 			name: "a confirmed chunk without values is listed as not copied",
 			row:  chunkRow(0, true, false, 0, nil),
-			want: collected{keys: nil, unverified: []string{prefix + "00000000"}},
+			want: collected{keys: nil, unverified: []string{prefix + "00000000-jla-x"}},
 		},
 		{
 			name: "a confirmed chunk with a short MD5 is listed as not copied",
 			row:  chunkRow(1, true, false, 4, good[:8]),
-			want: collected{keys: nil, unverified: []string{prefix + "00000001"}},
+			want: collected{keys: nil, unverified: []string{prefix + "00000001-jla-x"}},
 		},
 		{
 			name: "a reserved chunk has no blob",
@@ -165,6 +177,16 @@ func TestCollectorChunkHostile(t *testing.T) {
 		{"an empty log ID", withLog("")},
 		{"a negative chunk number", chunkRow(-1, true, false, 1, good)},
 		{"a chunk number above the limit", chunkRow(1<<20, true, false, 1, good)},
+		{"a blob key of another chunk", withBlobKey(chunkRow(0, true, false, 1, good), blobKeyOf(1))},
+		{
+			"a blob key of another job",
+			withBlobKey(chunkRow(0, true, false, 1, good), "job/jobother/log/"+logID+"/00000000-jla-x"),
+		},
+		{"a blob key that leaves the namespace", withBlobKey(chunkRow(0, true, false, 1, good), "../../x")},
+		{
+			"a blob key with no attempt",
+			withBlobKey(chunkRow(0, true, false, 1, good), blobKeyOf(0)[:len(blobKeyOf(0))-len("-jla-x")]),
+		},
 	}
 
 	for _, tt := range tests {
@@ -181,6 +203,11 @@ func TestCollectorChunkHostile(t *testing.T) {
 			assertCollected(t, &c, collected{keys: nil, unverified: nil})
 		})
 	}
+}
+
+// blobKeyOf returns the key of an attempt of chunk seq of the standard log.
+func blobKeyOf(seq int) string {
+	return fmt.Sprintf("job/%s/log/%s/%08d-jla-x", jobID, logID, seq)
 }
 
 func TestCollectorPlan(t *testing.T) {
@@ -407,6 +434,7 @@ func collectChunks(tb testing.TB, n int) *blobrefs.Collector {
 		// Several logs, so that the keys differ in the log and in the number.
 		row := chunkRow(int64(i%60_000), true, false, 9, sum)
 		row.LogID = fmt.Sprintf("jlv-%020d", i/60_000)
+		row.BlobKey = fmt.Sprintf("job/%s/log/%s/%08d-jla-x", jobID, row.LogID, row.Seq)
 
 		if addErr := c.Chunk(row); addErr != nil {
 			tb.Fatalf("Chunk %d = %v", i, addErr)
@@ -498,5 +526,9 @@ func TestCollectorKeepsUnverifiedUnique(t *testing.T) {
 	}
 
 	prefix := "namespaces/" + nsID + "/job/" + jobID + "/log/" + logID + "/"
-	assertCollected(t, &c, collected{keys: nil, unverified: []string{prefix + "00000001", prefix + "00000002"}})
+	assertCollected(
+		t,
+		&c,
+		collected{keys: nil, unverified: []string{prefix + "00000001-jla-x", prefix + "00000002-jla-x"}},
+	)
 }
