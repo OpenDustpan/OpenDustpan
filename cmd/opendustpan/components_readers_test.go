@@ -69,6 +69,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	"allowedOrigins": {"buildMux": "all", "checkSettings": "api", "mountAPI": "api", "newSignIn": "api"},
 	"publicURL": {
 		"checkSettings":       "api",
+		"newExchanger":        "api",
 		"newInventoryHandler": "api",
 		"newIssuerService":    "api",
 		"newRunnerHandler":    "api",

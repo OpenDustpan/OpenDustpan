@@ -1,12 +1,14 @@
 package postgres_test
 
 import (
+	"errors"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -33,7 +35,10 @@ func newTrustRuleHarness(t *testing.T, s *postgres.Store) trustruletest.Harness 
 	)
 
 	return trustruletest.Harness{
-		Store: s.TrustRules(),
+		Store:            s.TrustRules(),
+		Exchanges:        s.TrustRules(),
+		Token:            trustRuleToken(s),
+		DisablePrincipal: trustRuleDisable(s),
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 
@@ -125,4 +130,34 @@ func TestTrustRuleConformance(t *testing.T) {
 	}
 
 	trustruletest.Run(t, trustRuleHarness(base))
+}
+
+// trustRuleToken reads an access token of s by its ID, and reports false
+// when no token has the ID.
+func trustRuleToken(s *postgres.Store) func(t *testing.T, id string) (accesstoken.Token, bool) {
+	return func(t *testing.T, id string) (accesstoken.Token, bool) {
+		t.Helper()
+
+		tok, err := s.GetToken(t.Context(), id)
+		if errors.Is(err, accesstoken.ErrNotFound) {
+			return tok, false
+		}
+
+		if err != nil {
+			t.Fatalf("get token %s: %v", id, err)
+		}
+
+		return tok, true
+	}
+}
+
+// trustRuleDisable disables a principal of s.
+func trustRuleDisable(s *postgres.Store) func(t *testing.T, id string) {
+	return func(t *testing.T, id string) {
+		t.Helper()
+
+		if err := s.DisablePrincipal(t.Context(), id, trustRulePrincipalEntry(audit.ServerScope, id)); err != nil {
+			t.Fatalf("disable principal %s: %v", id, err)
+		}
+	}
 }

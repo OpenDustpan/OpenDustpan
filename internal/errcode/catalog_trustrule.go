@@ -3,6 +3,12 @@ package errcode
 // The codes of the workload trust rules. A code is never removed and never
 // changes its meaning.
 const (
+	// TrustRuleAmbiguous means that more than one trust rule accepts the
+	// token of an exchange, and the request names no rule.
+	TrustRuleAmbiguous = "trust-rule.ambiguous"
+	// TrustRuleNoMatch means that no trust rule of the namespace accepts the
+	// token of an exchange.
+	TrustRuleNoMatch = "trust-rule.no-match"
 	// TrustRuleAlreadyExists means that the namespace already has a trust rule
 	// with the name.
 	TrustRuleAlreadyExists = "trust-rule.already-exists"
@@ -25,35 +31,28 @@ const (
 	TrustRuleSignInRequired = "trust-rule.sign-in-required"
 )
 
-// trustRuleSpecs are the codes of the workload trust rules.
+// trustRuleSpecs are the codes of the workload trust rules. No code of the
+// area has arguments.
 func trustRuleSpecs() []Spec {
-	return []Spec{
+	meanings := [][2]string{
 		{
-			Code:    TrustRuleAlreadyExists,
-			Meaning: "the namespace already has a trust rule with the name",
-			Args:    nil,
+			TrustRuleAmbiguous,
+			"more than one trust rule accepts the token of an exchange, and the request names no rule",
 		},
-		{Code: TrustRuleInvalid, Meaning: "the trust rule is not valid", Args: nil},
-		{
-			Code:    TrustRuleIssuerRefused,
-			Meaning: "the issuer of the trust rule is an issuer of this installation",
-			Args:    nil,
-		},
-		{
-			Code:    TrustRuleLimit,
-			Meaning: "the namespace already has the largest number of trust rules",
-			Args:    nil,
-		},
-		{Code: TrustRuleNotFound, Meaning: "the namespace has no trust rule with the ID", Args: nil},
-		{
-			Code:    TrustRulePrincipalRefused,
-			Meaning: "the principal cannot be the principal of a trust rule of the namespace",
-			Args:    nil,
-		},
-		{
-			Code:    TrustRuleSignInRequired,
-			Meaning: "an access token cannot create a trust rule, and the caller must sign in",
-			Args:    nil,
-		},
+		{TrustRuleNoMatch, "no trust rule of the namespace accepts the token of an exchange"},
+		{TrustRuleAlreadyExists, "the namespace already has a trust rule with the name"},
+		{TrustRuleInvalid, "the trust rule is not valid"},
+		{TrustRuleIssuerRefused, "the issuer of the trust rule is an issuer of this installation"},
+		{TrustRuleLimit, "the namespace already has the largest number of trust rules"},
+		{TrustRuleNotFound, "the namespace has no trust rule with the ID"},
+		{TrustRulePrincipalRefused, "the principal cannot be the principal of a trust rule of the namespace"},
+		{TrustRuleSignInRequired, "an access token cannot create a trust rule, and the caller must sign in"},
 	}
+
+	out := make([]Spec, 0, len(meanings))
+	for _, m := range meanings {
+		out = append(out, Spec{Code: m[0], Meaning: m[1], Args: nil})
+	}
+
+	return out
 }

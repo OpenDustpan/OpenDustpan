@@ -9,14 +9,27 @@ import (
 )
 
 // trustRuleStoreOptions returns the option that gives the in-process server
-// the trust rule store of st, as the binary gives it.
-func trustRuleStoreOptions(st serverStore) []dustpan.Option {
+// the trust rule store of st, as the binary gives it. With a fake issuer,
+// the reads of keys may reach the loopback and trust the fake.
+func trustRuleStoreOptions(st serverStore, issuer *OIDCIssuerFake) []dustpan.Option {
+	var opts []dustpan.Option
+
 	switch s := st.(type) {
 	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
+		opts = append(opts, dustpan.WithTrustRules(s.TrustRules()))
 	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
+		opts = append(opts, dustpan.WithTrustRules(s.TrustRules()))
 	default:
 		return nil
 	}
+
+	if issuer != nil {
+		opts = append(
+			opts,
+			dustpan.WithTrustRuleKeysLoopbackForTests(),
+			dustpan.WithTrustRuleKeysRootCAs(issuer.certPool()),
+		)
+	}
+
+	return opts
 }

@@ -115,6 +115,9 @@ type envInput struct {
 	// sinkSenders replace the built-in notification sink senders of the
 	// in-process server. The server binary has no such seam.
 	sinkSenders []notify.Sender
+	// issuer is a fake OpenID provider of a CI platform whose keys the
+	// in-process server may read, on the loopback, or nil.
+	issuer *OIDCIssuerFake
 }
 
 // backendConfig groups the settings of one backend process.

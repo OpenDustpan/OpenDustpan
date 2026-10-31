@@ -943,6 +943,7 @@ func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
 	policy := accesstoken.Policy{
 		UpdatedAt: now(), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
 		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: false,
+		ExchangeLifetime: accesstoken.DefaultExchangeLifetime,
 	}
 
 	_, err := ts.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {

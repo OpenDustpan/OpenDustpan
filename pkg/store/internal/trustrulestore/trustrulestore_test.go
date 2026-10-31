@@ -165,3 +165,32 @@ func TestCheckPrincipal(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckExchangePrincipal checks the principal of a rule as the
+// transaction of an exchange reads it. Each refused row is of the namespace
+// and not deleted, so only its kind or its disable refuses it.
+func TestCheckExchangePrincipal(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		kind       string
+		disabledAt int64
+		ok         bool
+	}{
+		{"a service principal", "service", 0, true},
+		{"a disabled service principal", "service", 1, false},
+		{"a person", "person", 0, false},
+		{"a workload", "workload", 0, false},
+		{"a kind of another version", "robot", 0, false},
+	}
+
+	for _, tc := range cases {
+		p := trustrulestore.PrincipalRow{Kind: tc.kind, Namespace: "acme", DeletedAtMs: 0, Found: true}
+
+		err := trustrulestore.CheckExchangePrincipal(p, tc.disabledAt, "acme")
+		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, trustrule.ErrPrincipal)) {
+			t.Errorf("%s: CheckExchangePrincipal = %v, want ok %v", tc.name, err, tc.ok)
+		}
+	}
+}
