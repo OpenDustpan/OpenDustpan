@@ -320,7 +320,7 @@ Sources:
    | Pulumi `StartUpdate` | No | `StartBy` commits a running update. The server does not store the token. The command fails at once. The next `pulumi up` gets 409 for up to `DefaultLease`, 5 minutes after the start, or until `pulumi cancel` | An accepted exception (PM). The guide gives the remedy `pulumi cancel` and the block of at most 5 minutes |
    | TFE state version upload and finalize | Yes (OpenTofu) | Success on a repeat (`confirmRetry`) | No change |
    | HTTP backend `LOCK` with the same lock ID | Yes (OpenTofu) | `lockAs` refuses any held lock with `ErrLocked`: 423, and `tofu` fails with its own lock in place | Success when the lock is still held, with the same lock ID and the same holder. The client chose the ID, so a match is the same request. The handler pre-check and the service both apply the rule, before the refusal of a held lock |
-   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | Yes (OpenTofu) | HTTP backend: the handler pre-check (`!ws.Lock.Locked() \|\| ws.Lock.ID != info.ID`) answers 409 with no body. Below it, `UnlockLock` runs `checkLockID` first and gives `ErrLockMismatch`. TFE: `heldBy` gives `ErrNotLocked`, 409 `workspace.not-locked` | The workspace row keeps a record of its last released lock. The record holds the lock ID, the holder, the time of the release, and the kind of release: normal or forced. The API of the workspace shows it. On a free workspace, the HTTP backend `UNLOCK` answers success only when the record has the lock ID of the request. The release must also be a normal release, not a forced one. TFE `actions/unlock` sends no lock ID. So it answers success only when the record names the caller as the holder, after a normal release. After a forced release, the original holder gets 409, so the operator and the CLI see that someone broke the lock. In all other cases, 409 as today. The record has no age bound: the workspace is free, so a late match changes nothing, and the next release replaces the record. The rule goes in the handler pre-check and in the service, ahead of `checkLockID`. No state changes, so no audit entry. `make e2e` checks each CLI version |
+   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | Yes (OpenTofu) | HTTP backend: the handler pre-check (`!ws.Lock.Locked() \|\| ws.Lock.ID != info.ID`) answers 409 with no body. Below it, `UnlockLock` runs `checkLockID` first and gives `ErrLockMismatch`. TFE: `heldBy` gives `ErrNotLocked`, 409 `workspace.not-locked` | The workspace row keeps a record of its last released lock. The record holds the lock ID, the holder, the time of the release, and the kind of release: normal or forced. The API of the workspace shows it. On a free workspace, the HTTP backend `UNLOCK` answers success only when the record has the lock ID of the request. The release must also be a normal release, not a forced one. TFE `actions/unlock` sends no lock ID. So it answers success only when the record names the caller as the holder, after a normal release. After a forced release, the original holder gets 409, so the operator and the CLI see that someone broke the lock. In all other cases, 409 as today. The record matches for 24 hours after the release, and not after that. No tool lock has a lease to use as the bound: an OpenTofu lock has none. 24 hours is far above each retry window of the CLIs: 15 seconds for the Pulumi CLI, more than 30 seconds plus `-lock-timeout` for OpenTofu. And a record cannot match an unlock from a later day. The rule goes in the handler pre-check and in the service, ahead of `checkLockID`. No state changes, so no audit entry. `make e2e` checks each CLI version |
    | TFE `actions/lock` sent again | Yes (OpenTofu) | 409 "is locked by" with the same subject. OpenTofu waits under `-lock-timeout`, then fails | An accepted exception (PM): the answer stays 409, and the lock fails closed. The real TFE also refuses a lock on a locked workspace. A match on the principal or the token cannot tell a retry from a second run. The lock record names the holder and the time. The guide gives the remedy: `tofu force-unlock` |
 
    - The record is a change of the workspace store port. Its conformance
@@ -367,9 +367,12 @@ Sources:
       value with the source `operator` or `default`, next to the reported
       facts. Another value stops the start with
       `store.failover-setting-invalid`.
-    - The start log writes a warning that names the losses only when the
-      setting is `postgres` and `synchronous_standby_names` is empty. A
-      correct `storage-sync` setup gets no false alarm.
+    - The start log writes a warning that names the losses when neither
+      source says synchronous: the facts of the database show no
+      PostgreSQL-level synchronous standby, and the setting is not
+      `storage-sync`. So a declared `async` also gets the warning. A correct
+      `storage-sync` setup gets no false alarm. The server does not try to
+      detect the host or the service.
     - The guide gives the setting for RDS and Aurora.
     - The readiness probe does not fail on the mode. This decision
     does not change the minimum topology of ADR 280 decision 5.
@@ -401,8 +404,11 @@ Sources:
       `durableOwner()` makes a new ID on each call when the instance ID is
       empty, which fails safe (each gap counts), and `auditChainOwner()`
       returns the constant `audit-chain`, which fails open (a crash never
-      counts). `NewServer` sets one instance ID for the process when the
-      embedder gives none, and every runner and the heartbeat use it.
+      counts). `NewServer` sets one random instance ID at each start of the
+      process when the embedder gives none. `durableOwner()`,
+      `auditChainOwner()`, every runner and the heartbeat use that ID.
+      `auditChainOwner()` no longer returns a shared constant, so the rule
+      fails safe.
     - **The sweep lock.** `TryLockSweep` holds a session advisory lock on one
       connection for the whole retention sweep. Advisory locks are not
       replicated. After a failover, the lock connection of instance A is
