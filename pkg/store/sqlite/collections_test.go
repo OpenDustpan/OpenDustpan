@@ -143,3 +143,13 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 		}
 	}
 }
+
+func TestPlacementConformance(t *testing.T) {
+	t.Parallel()
+
+	collectiontest.RunPlacement(t, func(t *testing.T) collectiontest.PlacementStore {
+		t.Helper()
+
+		return open(t)
+	})
+}

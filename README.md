@@ -367,6 +367,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Placement rules API](docs/reference/placement-rules-api.md): the rules that
+  choose the collection of a new stack, their patterns and their routes.
 - [Gate configuration API](docs/reference/gate-config-api.md): the routes that store,
   read and delete gates and access limits.
 - [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the

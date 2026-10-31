@@ -1,0 +1,6 @@
+placement.conflict
+placement.invalid-pattern
+placement.invalid-position
+placement.invalid-tool
+placement.rule-not-found
+placement.too-many-rules

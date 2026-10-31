@@ -96,6 +96,7 @@ func areas() []func() []Spec {
 		mfaSpecs,
 		namespaceSpecs,
 		overrideSpecs,
+		placementSpecs,
 		preferencesSpecs,
 		principalSpecs,
 		profileSpecs,

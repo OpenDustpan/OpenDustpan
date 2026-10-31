@@ -749,6 +749,9 @@ type services struct {
 	// collections is the collection service (ADR 51), or nil when the store
 	// holds no collections. NewServer sets it after newServices.
 	collections *collection.Service
+	// placements is the placement rule service, or nil when the store holds
+	// no placement rules. NewServer sets it after newServices.
+	placements *collection.PlacementService
 	// gates checks the writes of state against the access limits and the
 	// gates of state.write, or is nil when the store keeps no gates.
 	gates *gateService
@@ -896,7 +899,7 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
-	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
+	err = svc.addCollectionServices(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1966,13 +1969,8 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		updates:     updates,
 		secrets:     secrets,
 		workspaces:  workspaces,
-		tokens:      nil,
-		tempAdmins:  nil,
-		deleted:     nil,
-		access:      nil,
-		collections: nil,
-		gates:       nil,
-		issuer:      nil,
+		tokens:      nil, tempAdmins: nil, deleted: nil, access: nil, collections: nil, placements: nil, gates: nil,
+		issuer: nil,
 	}, nil
 }
 
@@ -2911,6 +2909,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Collections:   svc.collections,
+		Placements:    svc.placements,
 		Locks:         svc.manualLocks,
 		Moves:         moves,
 		Authenticator: cfg.authenticator,
@@ -3313,6 +3312,40 @@ func newCollectionService(cfg *settings) (*collection.Service, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("collection service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// addCollectionServices sets the collection service, the gate service and the
+// placement rule service. A custom store without placement rules gets no
+// placement service, so its placement routes are not served and the rest of the
+// API works as before.
+func (s *services) addCollectionServices(cfg *settings) error {
+	var err error
+
+	s.collections, s.gates, err = newCollectionAndGateServices(cfg, s.namespaces)
+	if err != nil {
+		return err
+	}
+
+	if store, ok := cfg.namespaceStore.(collection.PlacementStore); ok {
+		s.placements, err = newPlacementService(cfg, store)
+	}
+
+	return err
+}
+
+// newPlacementService builds the placement rule service on the namespace store
+// and its placement port.
+func newPlacementService(cfg *settings, store collection.PlacementStore) (*collection.PlacementService, error) {
+	svc, err := collection.NewPlacementService(collection.PlacementConfig{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("placement service: %w", err)
 	}
 
 	return svc, nil
