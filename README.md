@@ -193,7 +193,15 @@ The database and the backups hold no copy of the key-encryption key. It
 lives in `DUSTPAN_KEY_ENCRYPTION_KEY` or in a key file that only its owner
 can read.
 
-The server sends no telemetry. It connects out only to the PostgreSQL
+The server never phones home. No data about your installation, its users or
+its use goes to the project, to a vendor or to any other party that you did
+not name. This is also true with no configuration, and no setting, also no opt-in
+setting, turns it on. In OpenDustpan Cloud, the project is the operator:
+its metrics, logs and traces of the installations that it runs stay in its
+own systems.
+Metrics and logs are for you, and they stay. You scrape the Prometheus
+metrics, and the server sends logs only to the log outputs that you
+configure. It connects out only to the PostgreSQL
 database and the S3-compatible storage that you configure.
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
 check`, `opendustpan upgrade check` and `opendustpan restore` call only the
