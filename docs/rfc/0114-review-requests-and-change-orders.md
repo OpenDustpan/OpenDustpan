@@ -229,8 +229,9 @@ floor above. The binding level takes over the rules of that decision:
   entry `change` with the old and the new value.
 - the effective level shows in the API with the scope that set it.
 
-The setting `signatureCarryOver` exists in the code, and no tag shipped it. So
-the binding level replaces it with no conversion of stored values. The change
+The setting `signatureCarryOver` exists in the code, but it has no users and
+no stored data, and no tag shipped it. So the binding level replaces it, and
+the setting is deleted with no conversion. The change
 of the code follows in its own pull request.
 
 ### 6. Plan conflicts in place of unit locks
@@ -283,7 +284,8 @@ of the code follows in its own pull request.
   It checks the opener and each pusher of the head that the plan runs. When the
   check fails, the plan runs with no credentials, as for a fork. A
   `dustpan plan` or a "Plan again" by a trusted person is a trusted comment,
-  and binds to the head that it names. Each path has its own test.
+  and binds to the head that it names. Credentials never follow a trusted
+  comment alone. Each path has its own test.
 - **A plan with no credentials can never be approved.** It cannot refresh or
   read data sources, so its set of operations means nothing. To get a plan
   with credentials, a linked person with `unit:run-plan` pushes the commits to
@@ -463,7 +465,7 @@ A review request can touch units whose modes differ. To keep one answer for
 different modes to units whose code locations share one repository and one
 branch. The error names the units, the scopes, the grant that can change the
 mode of each scope (`namespace:manage-gates`) and the people who hold it. The
-wizard says so. Open question 10 asks whether the code location should be the
+wizard says so. Open question 9 asks whether the code location should be the
 scope of the mode.
 
 ### Who may set a mode, and mode 4
@@ -533,8 +535,9 @@ scope of the mode.
 ### Reset at each level
 
 The owner's reset rule ("reset only when a push changes the set of operations
-of the unit") is the rule of L1, the default. Each level binds to its own
-thing, so the reset follows it:
+of the unit") is the meaning of L1, the default. Each level resets on its own
+binding. This is the PM's reading of the owner's answer, recorded on 31
+October 2026:
 
 | Level | A push resets the approvals when |
 | --- | --- |
@@ -542,7 +545,10 @@ thing, so the reset follows it:
 | L1 | It changes the set of operations of the unit |
 | L2 | It changes the plan digest (L2 binds the exact plan) |
 
-Open question 9 asks the owner to confirm this reading.
+An approval by a principal who later becomes an author is void at once, at
+every level (S1). At L0, the approval floor still compares the plan at the
+apply with the recorded set of operations, and L0 still resets on a new
+commit.
 - Conformance fixtures cover each bot path.
 
 ### Reviews on the Git host that do not count
@@ -717,7 +723,8 @@ at sign-out.
 - When a person authorizes the OpenDustpan app on a Git host in a session, the
   server seals the user token into a cookie of its own, one for each Git host
   connection. The cookie has the attributes `__Host-`, `HttpOnly`, `Secure` and
-  `SameSite=Strict`, and a `Path` limited to the routes that use the token (on
+  `SameSite=Strict`, as the session cookies of ADR 297 have (only the cookie of
+  a sign-in request is `SameSite=Lax` there), and a `Path` limited to the routes that use the token (on
   Forgejo the token has the full power of the user). A bump of the session
   generation ends each token cookie before its expiry, so a stolen cookie stops
   working at the next sign-out or change of the session. The cookie holds the token, the connection ID, the Git host user
@@ -778,7 +785,7 @@ reasons.
 | Check at the boundary | A webhook with a bad signature has no effect. A replay of a delivery whose effect succeeded has no effect, and a replay of a delivery whose effect failed runs once. An event that says "approved" while the API answers "commented" has no effect. A review on an older commit has no effect. A check of the same name from another app has no effect. A console action with an old digest or head has no effect. |
 | Contain | The immutable user ID, never a login. A renamed account that takes the login of a linked person: no effect. The session token never reaches a log, an audit entry, a store or a runner. A comment from the Git host reaches the UI escaped. |
 | Limit | The smallest token permission. The token only in the person's request and only for the session. A fork plan gets no provider credentials, no state, no secret outputs and no outbound network. A plan of a push by a person with no link gets the same. Each has its own test. A trusted comment on head `abc` and a push of `def` before the plan starts: no plan of `def`. The request budget and the circuit breaker. |
-| Authorize at use | OpenDustpan checks its action, then the Git host checks the person. At the approval and again at the apply. An author never counts, also an author found through a bot push or an agent job. A resolve by an author does not unblock. A review on an older commit has no effect after a push that resets it (see "Reset at each level"). An approval by a principal who later pushes is void at once. A plan that starts again for a review request of an unlinked pusher runs with no credentials. A status of the name `approvals` that another account posted fails the gate. |
+| Authorize at use | OpenDustpan checks its action, then the Git host checks the person. At the approval and again at the apply. An author never counts, also an author found through a bot push or an agent job. A resolve by an author does not unblock. After a push, an approval on the older commit is void as the level says. At L0, each new commit voids it. At L1, a new set of operations voids it. At L2, a new plan digest voids it. Each case has its own test. An approval by a principal who later pushes is void at once, at every level. A plan that starts again for a review request of an unlinked pusher runs with no credentials. A status of the name `approvals` that another account posted fails the gate. |
 | Fail closed | A timeout, `null` or `checking`, an expired token, an open breaker, a Git host that says "not mergeable": no approval, no apply, and an audit entry. |
 
 ## What this changes in accepted decisions
@@ -897,21 +904,7 @@ recommendation and a plain summary.
     - Recommendation: (a).
     - Plain summary: one review request, one change order for now.
 
-9. **The reset at each level.**
-   - Context: the owner decided "approvals reset only when a push changes the
-     set of operations of the unit". L0 binds the commit and L2 binds the exact
-     plan, so the same rule at every level would make L0 and L2 bind less than
-     their names say.
-   - Options: (a) the table "Reset at each level": L0 resets on a new commit,
-     L1 on a new set of operations, L2 on a new plan digest. (b) the owner's
-     rule at every level, and L0 and L2 are described as "the set of
-     operations, plus a check at the apply".
-   - Consequences: (a) each level means what its name says. (b) L0, L1 and L2
-     differ only at the apply.
-   - Recommendation: (a).
-   - Plain summary: each level resets when the thing it binds changes.
-
-10. **The scope of the mode.**
+9. **The scope of the mode.**
     - Context: the mode is set on an installation, a namespace, a collection or
       a unit, and one repository and branch must have one mode. So the first
       scope that sets a mode for a repository can block another team in
