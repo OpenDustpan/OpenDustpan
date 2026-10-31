@@ -23,8 +23,10 @@ Three words in `GLOSSARY.md` do not fit their concepts:
 
 No tag shipped. There are no users, installations or data (ADR 73).
 
-The owner made decisions 1 to 3. The PM made decisions 4 to 7 under the
-owner's delegation. The owner-decisions file records the delegation.
+The owner made decisions 1 to 3. The product manager made decisions 4 to 7
+under the owner's delegation. The owner delegates decisions of this kind to
+the product manager, who decides by what Google, AWS, PCI DSS, SOC 2 or ISO
+27001 do and records the benchmark. The owner may overturn them.
 
 ## Decision
 
