@@ -261,8 +261,10 @@ logging with `--log-level` and `--log-format`. Check readiness at
 
 - **You need it in production now.** It is pre-alpha and has no release.
   Formats and APIs can change.
-- **You need more than one node.** The server runs on one node. High
-  availability is a plan, not a feature.
+- **You need more than one site.** One installation runs several instances on
+  one database and one object store (see
+  [High availability](docs/guides/high-availability.md)). It has no
+  replication between installations and no active-active across sites.
 - **You need users, teams or roles.** Every token signs in as an
   administrator. Single sign-on and scoped tokens do not exist yet.
 - **You need remote runs.** OpenDustpan stores state. It does not run
