@@ -110,7 +110,7 @@ effective mode of a unit shows in the API with the scope that set it.
 | 1. Merged approvals | Approvals on the Git host and in OpenDustpan both count toward the requirements. The required status of OpenDustpan enforces the result. The approval rules and code owners of the Git host stay in force. | Two places to approve, joined by a status. **Not recommended.** |
 | 2. OpenDustpan merges | The branch rules require the status of OpenDustpan. Optionally, only the OpenDustpan app can merge. The approval rules of the Git host are optional or mirrored. An apply after the merge is allowed. | One review place for the plan. The Git host keeps its code review. |
 | 3. No review requests | Change orders start from commits. OpenDustpan reads the repository to show the code diff. | No review request flow for IaC. The review is in OpenDustpan only. |
-| 4. No change orders | Like the Pulumi CLI with a backend: no change order and no approval. Deny rules and policies always apply. Runs are still recorded. Mode 4 refuses to turn on while an approval rule exists in its scope. | No approval step. Policies are the only gate. |
+| 4. No change orders | Like the Pulumi CLI with a backend: no change order and no approval. Deny rules and policies always apply. Runs are still recorded. Mode 4 refuses to turn on while an approval rule exists in its scope. Mode 4 can turn on an apply on merge (opt-in), and the apply runs only when the person who merged holds the apply grant. | No approval step. Policies are the only gate. |
 
 Notes on mode 1: GitHub has no API to add a required reviewer for one pull
 request, so the combined rule lives in the OpenDustpan status, not in the
@@ -134,9 +134,11 @@ rule through the API.
 
 The plan or preview goes to the review request as one comment, edited in
 place, with a summary and a link to OpenDustpan (the shape that Atlantis and
-Pulumi use). A team can turn off the diff in the comment, and then the comment
-holds the summary and the link only. This differs from HCP Terraform, which
-posts a status with a link and no comment.
+Pulumi use). By default, the summary holds the counts and the resource
+addresses with their kind of change, and never a value. The full diff in the
+comment is opt-in for each scope. A redaction deletes the comment and posts it
+again (decision 4). This differs from HCP Terraform, which posts a status with
+a link and no comment.
 
 ### 4. Leaks
 
@@ -175,9 +177,25 @@ A visible setting for each scope. The default is level 1.
 | L2 | The exact plan: an OpenTofu saved plan. A Pulumi update plan only when the Pulumi CLI marks update plans stable | The stored plan applies, or the apply fails as stale. |
 
 In each level, the tree of the merged commit must be the tree that was
-planned, or the server plans again. A refresh keeps the default of each tool.
-A gate "the last drift check is older than N hours" covers drift. The docs
-explain the trade-off of each level.
+planned, or the server plans again.
+
+**The approval floor.** At every level, when the plan at the apply holds a new
+`delete`, a new `replace` or any operation that the approved set does not
+hold, the apply stops. It needs a new approval with a fresh authentication.
+So no level applies a delete or a replace that no person approved.
+
+**Refresh and drift.** A refresh keeps the default of each tool. A scope can
+set plans with no refresh for OpenTofu (`-refresh=false`), so that changes
+outside the code do not creep into a plan. Drift detection covers drift, and a
+gate "the last drift check is older than N hours" can require it. The docs
+explain the trade-off of each level and of the plans with no refresh.
+
+**ADR 225 decision 12 is amended openly.** That decision voids each signature
+at a new plan by default, and carries a signature over only identical digest
+inputs, behind a setting. L1, the default, carries an approval over a new plan
+with the same set of operations. This RFC amends ADR 225 decision 12 so that
+the binding level decides when an approval carries over, with the approval
+floor above.
 
 ### 6. Plan conflicts in place of unit locks
 
@@ -197,16 +215,23 @@ explain the trade-off of each level.
 ### 7. Security rules
 
 - **S1. Authors.** Whoever opened the review request, authored a commit in it
-  or pushed to it is an author, and cannot approve it on either side. Any push
-  resets the approvals on both sides.
+  or pushed to it is an author, and cannot approve it on either side. A
+  `Co-authored-by` trailer does not make an author. There is no exception for
+  a person alone (`authorMayApprove` does not apply to a review request). A
+  team that does not want OpenDustpan approvals turns them off with mode 4.
+- **Reset.** OpenDustpan approvals reset only when a push changes the set of
+  operations of the unit. The approvals of the Git host follow the rules of the
+  Git host.
 - **Webhooks.** The server verifies each signature, refuses a replay, and never
   decides on the payload alone. It reads the current state of the review
   request through the API before each gate decision.
 - **Identity links** use the immutable user ID of the Git host, never the
   login.
-- **No user token of the Git host is stored on the backend.** An OAuth user
-  token is bound to the console session only. Background work runs as the
-  OpenDustpan app, and the record names the person for whom it runs.
+- **No user token of the Git host is stored on the backend, and no session is
+  stored on the backend.** Console sessions are sealed cookies (ADR 297, in
+  review in its own pull request). The user token of a Git host is in a sealed
+  cookie of its own. Background work runs as the OpenDustpan app, and the
+  record names the person for whom it runs.
 - **Agents never approve**, on either side.
 - **Who gets a plan with credentials.** A plan is code execution. A push to a
   review request starts a plan with credentials only when the opener and each
@@ -222,7 +247,22 @@ explain the trade-off of each level.
 
 - When the Git host says "not mergeable" or does not answer, the command
   fails with the answer of the Git host (as Atlantis does).
-- Webhooks only, no polling.
+- **Webhooks, with no polling.** Three recovery paths:
+  - a "Plan again" button in the console and the comment command
+    `dustpan plan`,
+  - one catch-up read when the server starts,
+  - manual redeliveries: the server accepts a redelivery of a delivery whose
+    effect did not succeed (GitHub keeps the same delivery ID on a
+    redelivery). A delivery whose effect succeeded changes nothing again.
+
+  Federation keeps its poll (ADR 271 decision 9), as the one listed
+  exception.
+- **A received comment command** gets a reaction at once, with an emoji that
+  the installation can set. The default is "eyes".
+- **A merge starts an apply** only when the person who merged is linked and
+  holds `unit:run-apply` (`unit:run-destroy` for a destroy) on each unit.
+  Otherwise the change order waits for a person with the grant to ask for the
+  apply.
 - **Partial applies.** No blocking and no rollback. The record says "N of M
   applied", truthfully. A one-click retry of the failed units from the same
   commit, when permissions and configuration allow it (recommended on). Under
@@ -281,7 +321,7 @@ This section proposes the details. Each part can change in review.
 | Git host approval rules | In force | Optional or mirrored | Not used | Not used |
 | `approvals` status required | Yes | Yes | Not applicable | No. `plan` status only |
 | Who merges | People on the Git host | OpenDustpan, or people, as the scope sets | No review request | People |
-| Apply | After the merge | After the merge | At the apply request | As the tool runs today |
+| Apply | After the merge | After the merge | At the apply request | As the tool runs today, or on merge when the scope turns it on |
 
 ### Mode 2: "only the OpenDustpan app merges", with no bypass
 
@@ -316,7 +356,7 @@ merge.
 ### Comments and the timeline
 
 - Code comments: the Git host is the only store. The console reads them
-  (event-driven) and writes them as the person with the session-bound token.
+  (event-driven) and writes them as the person with the token cookie of decision 7.
 - Plan comments (on a resource change): OpenDustpan is the only store (ADRs
   193 and 198, with sealing and redaction).
 - The timeline merges both, with the source of each item. The pane "comments
@@ -403,16 +443,22 @@ branch. The error names the units and the scopes. The wizard says so.
   takes a pusher from the event sender and confirms it with a read through
   the API, by immutable user ID.
 - The author and committer fields of a commit are strings that anyone can
-  write. They add an author only where the Git host verified the account. So
-  a commit cannot name an approver as an author to block the approval.
+  write. They add an author only where the Git host verified the account. A
+  `Co-authored-by` trailer never makes an author. So a commit cannot name an
+  approver as an author to block the approval, and a reviewer whose suggested
+  change the author applied can still approve.
 - A bot, an app, the "Update branch" button of the Git host or a merge queue
   that pushes does not hide the person behind it: the server records the
   person who started the action where the Git host tells it, and fails closed
   where it cannot tell.
 - While the opener or any pusher is not linked, no approval counts in modes 1
   and 2. The console names the account that is not linked.
-- The server never relies on the Git host to reset approvals. It counts a
-  review on the Git host only when its commit is the current head from a
+- The server never relies on the Git host to reset its own approvals. A push
+  that changes the set of operations of a unit voids the OpenDustpan approvals
+  of that unit. A push that does not change it keeps them.
+- In mode 1, a review on the Git host counts only while the Git host still
+  shows it as valid (not dismissed, not stale by the rules of the Git host),
+  and only when the set of operations of its commit is the current set, from a
   fresh read.
 - Conformance fixtures cover each bot path.
 
@@ -479,7 +525,7 @@ says so in each mode.
 
 ### GitLab
 
-- Until the status test of open question 5 passes, the wizard shows modes 1
+- Until the status test of open question 4 passes, the wizard shows modes 1
   and 2 on GitLab with the warning "GitLab may not enforce this".
 - Mode 1 on GitLab Premium and Ultimate creates the merge request approval
   rule through the API.
@@ -497,10 +543,11 @@ says so in each mode.
 
 ### Comment commands in each mode
 
-The server answers each comment command with a reply comment, never with
-silence. For example, `dustpan apply` in mode 2 gets "Not used in mode 2. The
+The server reacts to each received comment command at once (the emoji of
+decision 8), and answers it with a reply comment, never with silence. For example, `dustpan apply` in mode 2 gets "Not used in mode 2. The
 merge applies." The commands of ADR 271 decision 7 (`dustpan apply`,
-`dustpan unlock`) and the redact command have a row for each mode in the docs.
+`dustpan unlock`), `dustpan plan` and the redact command have a row for each
+mode in the docs.
 
 ### Webhook trust and identity
 
@@ -550,19 +597,32 @@ Review stacks (one stack for each review request) and push to deploy are out
 of the scope of this RFC. The docs say what is missing for users of Pulumi
 Deployments.
 
-### The user token, bound to the session
+### The user token in a sealed cookie
 
-- The person links a Git host account (by the immutable user ID) and, in each
-  console session, authorizes the OpenDustpan app on the Git host. The token
-  is kept for the life of that session only, with no refresh token beyond it,
-  and is deleted at sign-out or session expiry.
+ADR 297 (in review in its own pull request) makes console sessions sealed
+cookies, with no session stored on the server. The user token of a Git host
+follows it:
+
+- When a person authorizes the OpenDustpan app on a Git host in a session, the
+  server seals the user token into a cookie of its own, one for each Git host
+  connection. The cookie holds the token, the connection ID, the Git host user
+  ID, the sign-in ID, the session generation and the expiry.
+- The server never writes the token to the database, a log, an audit entry, a
+  backup, a runner or an error. It discards the refresh token of the Git host
+  at once, and never refreshes the user token. When the token expires, the
+  person authorizes again.
 - The token is used only inside the HTTP request of that person's action:
   write a code comment, mirror an approval (mode 2), approve on the Git host
-  (mode 1), merge as the person.
+  (mode 1), merge as the person. The access cookie of the same request must
+  have the same sign-in ID and generation.
+- At each use, the server checks that the Git host user ID of the cookie is the
+  account linked to the person.
 - Two layers of authorization: OpenDustpan checks its own action first, and
   the Git host checks the rights of the person.
-- With no token in the session, each control that needs one is off with the
-  reason ("Sign in to GitHub from here to comment as yourself"), never hidden.
+- With no token cookie, each control that needs one is off with the reason
+  ("Sign in to GitHub from here to comment as yourself"), never hidden. The
+  console shows the expiry of the token (2 hours on GitLab, 8 hours on
+  GitHub).
 - On Forgejo, where an OAuth2 token has the full power of the user, the
   console says so before the person authorizes it.
 
@@ -612,20 +672,22 @@ reasons.
 | --- | --- |
 | ADR 103 decision 3 ("approvals add to the forge") | Replaced by the four modes |
 | ADR 190 decision 4 (authors) | S1 |
-| ADR 190 decision 10 (apply is a request of a person) | Modes 1 and 2: the merge is the request |
+| ADR 190 decision 10 (apply is a request of a person) | Modes 1 and 2, and mode 4 with apply on merge: the merge is the request. It counts only when the person who merged is linked and holds the apply grant |
 | ADR 190 decision 12 | A close of the review request closes the change order |
 | ADR 191 decisions 4 to 6 (the digest binds the exact plan. A new plan voids each signature) | The three binding levels. L2 keeps the digest of today |
 | ADR 192, ADR 193 | Plan comments and verdicts stay in OpenDustpan. Code comments live on the Git host |
-| ADR 102 decision 8 and RFC 27 question 11 (no plan value on the Git host) | The plan comment holds the diff unless the team turns it off. Leaks are handled by decision 4 |
-| RFC 27 question 6 (a hold from the first pre-merge apply) | Plan conflicts replace unit locks for review requests. See open question 4 |
-| ADR 271 decision 4 ("each consumer that must not miss an event keeps a poll") | Webhooks only for review requests |
+| ADR 102 decision 8 and RFC 27 question 11 (no plan value on the Git host) | By default the plan comment holds counts and addresses, never a value. The full diff is opt-in. Leaks are handled by decision 4 |
+| RFC 27 question 6 (a hold from the first pre-merge apply) | Plan conflicts replace unit locks for review requests. See open question 3 |
+| ADR 271 decision 4 ("each consumer that must not miss an event keeps a poll") | Webhooks for review requests, with "Plan again", one catch-up read at start and manual redeliveries |
 | ADR 225 decision 7 ("an approver is a person in a session") | Mode 1 counts Git host reviews of linked person accounts |
-| ADR 190 decision 9 (an apply job applies the stored plan of its plan job) | L0 and L1 plan again at the apply. Held for the owner with the review findings on binding |
+| ADR 190 decision 9 (an apply job applies the stored plan of its plan job) | L0 and L1 plan again at the apply, under the approval floor of decision 5 |
 | ADR 190 decision 14 (an agent never creates a change order) | A review request that an agent opens creates a change order. The agent is not an author of record. The person who asked the agent is the author |
-| ADR 191 decision 5 (a person never signs a plan that they did not see) | Affected by L0 and L1. Held for the owner |
-| ADR 225 decision 5 (fresh authentication for each destroy) and decision 12 (signature carry-over) | Affected by the binding levels and by mode 1. Held for the owner |
+| ADR 191 decision 5 (a person never signs a plan that they did not see) | L0 and L1 apply a new plan with the same set of operations. A new delete, replace or other operation needs a new approval (the approval floor) |
+| ADR 225 decision 5 (fresh authentication for each destroy) | Kept: the approval floor asks for a fresh authentication. The limits of a review on the Git host in mode 1 are held for the owner |
+| ADR 225 decision 12 (signature carry-over) | Amended openly: the binding level decides when an approval carries over (decision 5) |
+| ADR 225 decisions 1 and 7 (`authorMayApprove`) | Does not apply to a review request. Mode 4 is the path for a team with no OpenDustpan approvals |
 | ADR 267 decision 14 (a push plan runs as the namespace service principal) and decision 19 ("A push from a fork starts nothing") | A plan with credentials needs linked pushers with `unit:run-plan`. A fork gets a plan with no credentials after a trusted comment |
-| ADR 271 decision 9 (a replica drops an event that it cannot serve, and a poll catches the change) | Webhooks only. Held for the owner with the review finding on recovery |
+| ADR 271 decision 9 (a replica drops an event that it cannot serve, and a poll catches the change) | Kept: federation keeps its poll, as the one listed exception |
 | ADR 125 (agent changes go through jobs) and ADR 103 decision 3 | A write-back review request has the gate before the commit and a change order. The modes decide which approvals count |
 
 ## Open questions
@@ -633,20 +695,7 @@ reasons.
 Each question has the context, the options, the consequences, a
 recommendation and a plain summary.
 
-1. **Where the session-bound token lives.**
-   - Context: decision 7 forbids a stored token. A server with more than one
-     instance must find the token of a session on each instance.
-   - Options: (a) in the session record, sealed, deleted with the session. (b) in the memory of one instance, with sticky sessions. (c) in the
-     browser, sent with each request.
-   - Consequences: (a) works with each instance, and the token is in the
-     database for the life of the session. (b) a restart loses it, and the
-     person signs in to the Git host again. (c) the browser holds a token that
-     can write to the Git host.
-   - Recommendation: (a), if the owner reads "not stored" as "no store beyond
-     the session".
-   - Plain summary: the token lives as long as your session and dies with it.
-
-2. **A change of mode on a scope with open change orders.**
+1. **A change of mode on a scope with open change orders.**
    - Options: (a) the mode is copied onto each change order at its creation,
      and a change applies only to new change orders. (b) the change closes
      each open change order.
@@ -655,7 +704,7 @@ recommendation and a plain summary.
    - Recommendation: (a).
    - Plain summary: a new mode applies to new changes.
 
-3. **What counts as one operation at L1.**
+2. **What counts as one operation at L1.**
    - Context: decision 5. A replace can be create-then-delete or
      delete-then-create. Pulumi has URNs and aliases.
    - Options: (a) the address (or URN) and the kind (`create`, `update`,
@@ -667,7 +716,7 @@ recommendation and a plain summary.
    - Plain summary: the approval covers "what changes and how", not each
      value.
 
-4. **Apply before the merge.**
+3. **Apply before the merge.**
    - Context: RFC 27 question 6 put a hold on the units from the first
      pre-merge apply to the merge. Decision 6 replaces unit locks with plan
      conflicts for review requests.
@@ -682,7 +731,7 @@ recommendation and a plain summary.
    - Plain summary: if you apply before you merge, the unit stays held until
      the merge.
 
-5. **The status on GitLab Free and Premium.**
+4. **The status on GitLab Free and Premium.**
    - Context: the docs do not confirm that a status from the API counts for
      "Pipelines must succeed".
    - Options: (a) test it first. If it fails, a documented CI job asks the
@@ -692,7 +741,7 @@ recommendation and a plain summary.
      the owner decides on accounts and network.
    - Plain summary: we test GitLab before we rely on it.
 
-6. **Who is a trusted person for a fork.**
+5. **Who is a trusted person for a fork.**
    - Context: the design asks for a linked principal with `unit:run-plan` on
      each unit, for a push plan with credentials and for a trusted comment.
    - Options: (a) only that. (b) that, and write access on the Git host.
@@ -701,7 +750,7 @@ recommendation and a plain summary.
    - Recommendation: (b).
    - Plain summary: a person that both OpenDustpan and the Git host trust.
 
-7. **The scope of the plan conflict check.**
+6. **The scope of the plan conflict check.**
    - Context: outputs can cross namespaces (RFC 15). A change order is in one
      namespace.
    - Options: (a) the namespace of the change order only. (b) each namespace
@@ -713,7 +762,7 @@ recommendation and a plain summary.
    - Plain summary: a change that can break a reader in another namespace
      shows as a conflict.
 
-8. **A Git host that is down.**
+7. **A Git host that is down.**
    - Context: decision 8 fails the command with the answer of the Git host.
    - Options: (a) wait. (b) a person with a new action and a fresh
      authentication moves the change to an OpenDustpan-only review, with a
@@ -722,7 +771,7 @@ recommendation and a plain summary.
    - Plain summary: in an outage, a person can move the review into
      OpenDustpan, on the record.
 
-9. **A change across many repositories.**
+8. **A change across many repositories.**
     - Options: (a) one change order for each review request now, and a later
       RFC for a group of linked review requests. (b) one change order for many
       review requests now.
