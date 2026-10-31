@@ -79,6 +79,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) testHandler {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -476,6 +477,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 
 	_, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,

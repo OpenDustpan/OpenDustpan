@@ -168,6 +168,7 @@ linters:
             - "**/pkg/outputshare/**"
             - "**/pkg/savedview/**"
             - "**/pkg/preferences/**"
+            - "**/pkg/setting/**"
             - "**/internal/stepup/**"
             - "**/pkg/registry/**"
             - "**/internal/registry/**"

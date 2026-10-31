@@ -148,6 +148,7 @@ func newRestoreFixtureWorkers(
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          workers,
@@ -615,6 +616,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 
 	denied, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -829,6 +831,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -970,6 +973,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -1102,6 +1106,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
