@@ -146,7 +146,7 @@ Sources:
 
    | Setting | Default | Allowed |
    | --- | --- | --- |
-   | `target_session_attrs` | `read-write` | `read-write` only |
+   | `target_session_attrs` | `read-write` | `read-write`, or `primary` (the server checks it as `read-write`) |
    | `connect_timeout` | `5` (seconds) | 1 to 60 |
    | `pool_max_conn_lifetime` | `30m` | 1m to 24h |
    | `pool_max_conn_lifetime_jitter` | `1m` | 0 to the lifetime |
@@ -158,13 +158,21 @@ Sources:
      (`store.failover-setting-invalid`).
    - The server refuses `any`, `read-only`, `standby` and `prefer-standby`.
      The server writes, so a connection to a server that refuses writes is never
-     correct. The server refuses `primary` too: it accepts a primary with
-     `default_transaction_read_only` on, and each write there fails.
+     correct.
+   - The server accepts `primary` and treats it as the same value as
+     `read-write`: each new connection gets the `read-write` check. libpq
+     and pgx define `primary` with a weaker check: a server that is not in
+     hot standby, also with `default_transaction_read_only` on. Each write
+     on such a server fails, so the server applies the stronger check. The
+     installation API shows the value of the URL (`primary`) and the check
+     that applies (`read-write`), so the operator can see the difference.
    - The server sets the TCP keepalive of the dialer with Go's `net.KeepAliveConfig`:
      idle 15 seconds, interval 5 seconds, 3 probes. A dead idle connection
      then closes in about 30 seconds. Go supports this on Linux and macOS, so
      no build tag is necessary.
-   - The values are proposals. Nobody measured them against a managed
+   - The PM accepted these values and the statement deadline on 2026-10-31.
+     An RDS failover takes 60 to 120 seconds, so the server fails fast and
+     the clients retry. Nobody measured the values against a managed
      service. The fault test of decision 10 measures the recovery time with
      them, and the guide gives the measured figure and its date (ADR 280
      decision 6).
@@ -227,8 +235,12 @@ Sources:
     - The test starts a PostgreSQL primary and a streaming standby
       (`initdb`, `pg_basebackup -R`, `pg_ctl`) from the PostgreSQL binaries
       of the host. The environment variable `DUSTPAN_TEST_PG_BIN` names
-      their directory. Without it, the step fails with an error that names
-      the variable. It does not skip.
+      their directory. Without it, the step reports a skip with the reason,
+      which names the variable, and the suite log shows it. The other steps
+      run. The pull request of the implementation also gives the install
+      step of the nightly workflow as a file that the owner can copy, as
+      the S3 benchmark does, because a change to a workflow file needs the
+      token of the owner.
     - The instances reach the database through the e2e database proxy. The
       proxy stands for the DNS name of the service.
     - **9a, promotion.** While `pulumi up` and `tofu apply` run, the test
@@ -291,22 +303,26 @@ a port with no caller fails the lint, and a test that skips is not allowed.
   still set each one inside its range. A URL with a value outside the range
   stops the start, also a URL that worked before. No tag shipped, so no
   upgrade path is necessary.
-- A URL with `target_session_attrs=any` or `primary` stops the start.
+- A URL with `target_session_attrs=any`, `read-only`, `standby` or
+  `prefer-standby` stops the start.
 - The readiness probe sends one more statement than a ping.
 - A statement that runs for more than 30 seconds on an API path fails with
   503. A slow query then shows up as a 503 that names the cause in the log,
   and not as a request that hangs.
-- The e2e-ha workflow needs the PostgreSQL server binaries on the runner.
+- Step 9 runs only on a runner with the PostgreSQL server binaries.
 - The several-instances guide gets the effective defaults, the table of
   decision 8, the readiness check, the DNS advice and the measured figures
   of step 9. The configuration reference lists the settings and their ranges.
 - The roadmap gets exit-test step 9 for milestone 7.
 
-## Open points for the PM
+## Answers of the PM
 
-1. The values of decision 5 and the statement deadline of 30 seconds.
-2. A CI runner for step 9 needs the PostgreSQL binaries. The nightly
-   workflow can install them, or the step can run only on a runner that has
-   them.
-3. Decision 5 refuses `primary`. An operator with a reason to use it gets an
-   error at the start.
+The PM answered the open points of the draft on 2026-10-31:
+
+1. The values of decision 5 and the statement deadline of 30 seconds are
+   accepted.
+2. Step 9 runs where `DUSTPAN_TEST_PG_BIN` names the binaries, and reports
+   a skip with its reason on other runners. The install step of the nightly
+   workflow comes as a file that the owner copies.
+3. The server accepts `target_session_attrs=primary` and checks it as
+   `read-write` (decision 5).
