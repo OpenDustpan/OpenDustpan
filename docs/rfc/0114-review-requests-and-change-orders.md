@@ -143,14 +143,26 @@ posts a status with a link and no comment.
 A value in a plan comment that should not be there is handled like any leak
 from a misconfiguration:
 
-- A comment command redacts the plan: the server edits the comment on the Git
-  host and says, in the comment, that it redacted it. A console button redacts
-  it in the UI.
+- A comment command redacts the plan: the server deletes the diff from the
+  Git host and says, in a comment, that it redacted it. A console button
+  redacts it in the UI. On GitHub, an edit keeps each earlier version in the
+  edit history, and a delete deletes that history. So on GitHub the server
+  deletes the comment and posts a new comment with the redaction notice. On
+  GitLab, Gitea and Forgejo, the behavior of the edit history is not verified,
+  and the server does the same until a test shows that an edit is enough.
 - A redaction invalidates the plan. An apply needs a new plan.
 - The UI lists the resource addresses whose values leaked, so that the team
   rotates them.
-- The history of the Git host (for example the edit history of a comment)
-  cannot be cleaned by OpenDustpan. The docs say so.
+- After a redaction, the comments of that review request hold the summary
+  only, until a person turns the diff on again. Each later comment hides the
+  redacted addresses.
+- The history of the Git host that OpenDustpan cannot reach cannot be
+  cleaned: e-mail notifications that the Git host already sent, chat
+  integrations, and the edit history where a delete does not delete it. The
+  docs say so.
+- Who can run the redact command: a linked principal that can read the unit.
+  A leak needs speed more than rank. Each run writes an audit entry. (Whether
+  the command also needs `job:read-plans` is a question for the owner.)
 
 ### 5. Approval binding: three levels
 
@@ -173,10 +185,13 @@ explain the trade-off of each level.
   code merges cleanly.
 - OpenDustpan keeps its status red when the plans conflict: the changed
   resources and their dependency closure overlap, also across units through
-  outputs. The status names the resources that collide.
-- When the server is not sure, it counts a conflict. These cases are not
-  sure: provider changes, replacements, renames through `moved` blocks or
-  aliases, data sources, deletes, and changes of a parent resource.
+  outputs. The console names the resources that collide, as far as the reader
+  can see them. The status on the Git host names no resource: it says
+  "Conflicts with another change" and links to the console.
+- "No conflict" holds only when the check proves the two closures disjoint.
+  Each other case is a conflict. These cases are never proven disjoint:
+  provider changes, replacements, renames through `moved` blocks or aliases,
+  data sources, deletes, and changes of a parent resource.
 - The check has its own conformance tests, with a fixture for each case.
 
 ### 7. Security rules
@@ -193,8 +208,15 @@ explain the trade-off of each level.
   token is bound to the console session only. Background work runs as the
   OpenDustpan app, and the record names the person for whom it runs.
 - **Agents never approve**, on either side.
+- **Who gets a plan with credentials.** A plan is code execution. A push to a
+  review request starts a plan with credentials only when the opener and each
+  pusher (by immutable user ID) are linked to a principal that holds
+  `unit:run-plan` on the unit. Otherwise the plan waits for a trusted comment,
+  as for a fork.
 - **Forks.** A review request from a fork gets a plan only after a trusted
-  person comments, and that plan runs with no credentials.
+  person comments. The trusted comment names the head commit, and binds to
+  it. A new push voids it. A fork plan gets no provider credentials, no state,
+  no secret outputs and no outbound network.
 
 ### 8. Failures
 
@@ -235,9 +257,12 @@ This section proposes the details. Each part can change in review.
   !45"), and the change order ID shows under "Provenance".
 - **Two statuses** on the head commit: `plan` and `approvals`. `approvals` is
   success only when the change order of that commit is approved and no plan
-  conflicts (decision 6). On a merge queue or merge train commit, it is
-  success only when the root tree of that commit is the tree of the approved
-  revision.
+  conflicts (decision 6). On a merge queue or merge train commit (GitHub
+  `merge_group`, a GitLab merge train), the server plans that commit and
+  posts success only when the operations of each unit in it match the
+  approval at the level of the scope. A root tree check alone would fail each
+  entry after the first one, because the queue commit holds the entries ahead
+  of it.
 - **No loop.** The server reads the rules of the Git host without its own
   statuses. So "the Git host rules are met" never waits for "OpenDustpan
   approvals", and the loop between a required apply check and `mergeable`
@@ -268,6 +293,13 @@ merge" set to the bot only, Gitea and Forgejo the merge allowlist. The server
 reads the rules and refuses this option when the app is on a bypass list or
 when the Git host cannot restrict the merger. The console says why.
 
+On GitHub, "restrict who can push" names the app as a push actor, so the app
+can push to the branch. Before each merge, the server reads the branch rules
+again and refuses to merge when they no longer require a review request and
+its status. The server pushes to the branch only through the merge API. A
+compromise of the server could push with the app identity. The docs say so,
+and the audit log of the Git host is the second record.
+
 ### Mode 3: change orders from commits
 
 A push to a branch that no review request uses starts a change order. The
@@ -275,10 +307,11 @@ server reads the commits, the diff and the files through the API of the Git
 host to show the code diff. After the approval and the apply request, the
 server merges the branch through the API (a review request as a carrier where
 the branch rules need one). Non-IaC files in the same repository keep their
-own flow on the Git host. A required status applies to each review request of
-the branch, because no Git host scopes a required status by path. So the
-server posts `approvals` = success "no OpenDustpan unit changed" on review
-requests with no unit path. While the server is down, those merges wait.
+own flow on the Git host.
+
+The wizard shows mode 3 as off, with the reason, when the branch rules require
+approving reviews on the Git host: the carrier review request could never
+merge.
 
 ### Comments and the timeline
 
@@ -294,6 +327,228 @@ requests with no unit path. While the server is down, those merges wait.
   resolved still blocks: the server reads `resolvedBy`.
 - Forgejo has no resolve API: the console shows the state and the resolve
   control is off with the reason.
+- On a desktop, the IaC pane has the focus first. In "comments from systems",
+  a filter that is off by default hides CI bots (coverage, dependency bots).
+  On a phone, the timeline is the first tab (decision 2), and it starts with
+  the items that need the reader (the verdict and the blocking threads).
+- In mode 1, or with an approval mirror, an approval needs a session on the
+  Git host. The console says so before the person approves on a phone.
+
+### The setup wizard
+
+The mode stays required, with no default (decision 1). The wizard asks it in
+the words of the Git host:
+
+1. "Must a second person approve infrastructure changes?" No: mode 4.
+2. If yes: "Where do they approve? On GitHub, and OpenDustpan enforces it
+   (mode 1). In OpenDustpan, and OpenDustpan merges (mode 2). In OpenDustpan,
+   with no pull requests (mode 3)."
+
+- Each answer shows one typical team ("one person", "a team that reviews on
+  GitHub", "an audited platform team").
+- The wizard lists mode 2, mode 3 and mode 4 before mode 1, which stays marked
+  "Not recommended". The order is not part of the decision.
+- The wizard says: "You can change this later. Open changes keep their mode."
+- Before the person confirms, the server reads the branch rules and shows
+  what will block: a merge queue, required reviews on the Git host for mode 3,
+  a status that GitLab may not enforce, and the effect of an outage of the
+  server on all merges of the repository (below).
+- A scope with no Git host connection has no mode. The field is required only
+  when a connection is attached to the scope.
+
+### One mode for each repository and branch
+
+A review request can touch units whose modes differ. To keep one answer for
+"who approves and who merges", the server refuses a mode setting that gives
+different modes to units whose code locations share one repository and one
+branch. The error names the units and the scopes. The wizard says so.
+
+### Who may set a mode, and mode 4
+
+- A change of mode needs `namespace:manage-gates` (or
+  `installation:manage-gates`), writes an audit entry `change` with the old
+  and the new value, and needs a fresh authentication when the new mode asks
+  for fewer approvals.
+- A parent scope can forbid modes below it, as with `signatureCarryOver`.
+- Mode 4 refuses to turn on while any requirement source holds at the scope or
+  at a wider scope: an approval rule that a gate names, an approval default,
+  or an ownership rule in `enforce` mode. A later save of such a source on a
+  scope that has mode 4 below it fails and names the scopes.
+
+### Plan conflicts in detail
+
+- **Direction.** The first change order that is approved (or that merges)
+  keeps a green status. A later change order that conflicts with it shows
+  red, with an actionable message: "Conflicts with Pull request #122. Merge
+  #122 first. This plan runs again when #122 merges." So two review requests
+  never block each other.
+- **Plan again.** When a conflicting review request merges, the base-branch
+  push event plans each other open review request of the unit again.
+- **Accept the overlap.** An eligible approver can accept a reported overlap
+  for one revision, with a reason. The action is on the record, and a new
+  revision voids it.
+- **A reader in another namespace.** When the check cannot see a reader of an
+  output, the message says who can clear it: "A unit in namespace `payments`
+  reads this output. A person with `unit:read` there must review it."
+- **After an apply,** the server checks again each open change order of the
+  unit.
+- The conformance fixtures also cover inline rules against separate rule
+  resources, `for_each` over a data source, `terraform_remote_state` of an
+  unmanaged unit, Pulumi dynamic providers, and drift.
+
+### Authors in detail (S1)
+
+- The authors are the opener, each pusher, and the requester of each agent or
+  write-back job behind a push (the person who started the job). The server
+  takes a pusher from the event sender and confirms it with a read through
+  the API, by immutable user ID.
+- The author and committer fields of a commit are strings that anyone can
+  write. They add an author only where the Git host verified the account. So
+  a commit cannot name an approver as an author to block the approval.
+- A bot, an app, the "Update branch" button of the Git host or a merge queue
+  that pushes does not hide the person behind it: the server records the
+  person who started the action where the Git host tells it, and fails closed
+  where it cannot tell.
+- While the opener or any pusher is not linked, no approval counts in modes 1
+  and 2. The console names the account that is not linked.
+- The server never relies on the Git host to reset approvals. It counts a
+  review on the Git host only when its commit is the current head from a
+  fresh read.
+- Conformance fixtures cover each bot path.
+
+### Reviews on the Git host that do not count
+
+When the server sees a review on the Git host that does not count, it names
+it in the summary of `approvals` and in the plan comment: "@alice approved on
+GitHub. This approval does not count: approve in OpenDustpan (link)", or
+"... the account is not linked: link it (link)". The change order shows
+"GitHub needs" and "OpenDustpan needs" side by side.
+
+### Merges and the order of applies
+
+- After a merge, an apply runs only the latest commit of the default branch
+  that changes the unit. The server supersedes an older commit and records
+  why.
+- A plan after the merge that needs a new approval puts the change order in
+  the visible state "merged, not applied", with an alert.
+- **A merge with no approval.** A merge that passed around the gate (an admin
+  override, a bypass actor, a status posted by another account) puts the
+  change order in `merged-unapproved`, starts no apply, writes an audit entry
+  and marks the unit. The next change order of that unit shows the code diff
+  from the last applied commit, not from the base of its own review request.
+  So its approvers see the code that bypassed the gate.
+- On GitLab, Gitea and Forgejo, a commit status matches by name, and a CI job
+  token can post one. The server reads the creator of each status of its own
+  name. A status that another account posted fails the gate, and the console
+  says that the gate on that Git host is advisory.
+
+### The apply result on the Git host
+
+- The server posts an `apply` status on the merge commit. It is not required.
+- It edits the plan comment: "Applied 3 of 5 units. 2 failed: `prod-db`,
+  `prod-dns`. Retry: (link)". The notification holds the same link.
+- After a partial apply, each failed unit shows a banner, and the plan comment
+  of each other open review request of that unit says: "This plan includes
+  changes from #128, which did not apply."
+
+### Retry of a partial apply
+
+- A person in a session with `unit:run-apply` (`unit:run-destroy` for a
+  destroy) on each unit asks for the retry. The app, a service principal and
+  an agent never retry.
+- A retry is allowed only while its commit is still the latest commit that
+  changes the unit. Else the retry is off with the reason ("`prod-db` changed
+  in Pull request #130 after this commit. Retry is off. Fix forward.").
+- "The same operations" means each operation of the retry plan was in the
+  approved set. A subset is the same. A new operation is not: for example,
+  OpenTofu taints a failed create, so the retry plan shows `replace`, which is
+  a new operation and needs an approval. The console shows who can approve,
+  and links the break-glass path (ADR 142).
+
+### A status for review requests with no unit
+
+In each mode where `approvals` is required, it applies to each review request
+of the branch, because no Git host scopes a required status by path. The
+server posts `approvals` = success "no OpenDustpan unit changed" only when it
+proves that no unit reads a changed file: it computes the file closure of each
+unit from its module sources and imports, and an unknown closure is not
+success. A change of `modules/network/`, a lock file, a symlink or the CI
+file that runs the units is in the closure of the units that use it. While the
+server is down, the merges of the repository wait (fail closed). The wizard
+says so in each mode.
+
+### GitLab
+
+- Until the status test of open question 5 passes, the wizard shows modes 1
+  and 2 on GitLab with the warning "GitLab may not enforce this".
+- Mode 1 on GitLab Premium and Ultimate creates the merge request approval
+  rule through the API.
+- A GitLab user token expires after 2 hours, which is shorter than a console
+  session. The console shows the expiry, so that the controls do not go off
+  in the middle of a review with no warning.
+
+### The plan comment: size and signal
+
+- A plan of 4,000 resources does not fit in one GitHub comment (65,536
+  characters). The comment then holds the summary, the counts and "N more in
+  OpenDustpan", and the server never splits it into many comments.
+- An edit does not send a notification on GitHub. The change of the status
+  carries the signal of a new plan.
+
+### Comment commands in each mode
+
+The server answers each comment command with a reply comment, never with
+silence. For example, `dustpan apply` in mode 2 gets "Not used in mode 2. The
+merge applies." The commands of ADR 271 decision 7 (`dustpan apply`,
+`dustpan unlock`) and the redact command have a row for each mode in the docs.
+
+### Webhook trust and identity
+
+- Events have no order. Each effect reads the state fresh.
+- GitLab without signing tokens sends a plain secret header. The server
+  compares it in constant time, and asks for signing tokens where the version
+  of GitLab has them.
+- A user ID is unique for one Git host connection, not across Git hosts. A
+  link is made only by an OAuth proof, never by a typed login. Two
+  connections with the same numeric user ID are two people.
+
+### Evidence for an auditor
+
+The view of the Git host is a lens, not a copy. So each gate decision record
+stores the facts that counted: the review ID on the Git host, the immutable
+user ID, the commit, the verdict and the read time, with no comment text. An
+auditor keeps the evidence when a comment changes or the repository is
+deleted.
+
+An apply at L1 records "N attributes differ from the approved plan" and links
+both plans, so that a reader sees the values that nobody read.
+
+### Audit entries
+
+| Kind | Holds |
+| --- | --- |
+| Review counted or not counted | The Git host review ID, the user ID, the commit, the reason |
+| Author set | Each author and the source of each (opener, pusher, job requester, verified commit author) |
+| Conflict decision | The two change orders, proven disjoint or not, an accepted overlap with its reason |
+| Status post | The status, the commit, the result |
+| Comment command | The command, the account, the result |
+| Use of a user token | The person, the action, the Git host object ID |
+| Mode or binding level change | The scope, the old and the new value |
+| Bypass detected | The merge commit, the merger, what the gate missed |
+
+A person can ask why an approval counted, and get the record.
+
+### L2 on a Pulumi scope
+
+Until the Pulumi CLI marks update plans stable, a save of L2 on a scope that
+holds a Pulumi unit fails, and the error gives the reason. The server never
+falls back to L1 without a record.
+
+### Pulumi users
+
+Review stacks (one stack for each review request) and push to deploy are out
+of the scope of this RFC. The docs say what is missing for users of Pulumi
+Deployments.
 
 ### The user token, bound to the session
 
@@ -347,8 +602,8 @@ reasons.
 | --- | --- |
 | Check at the boundary | These have no effect: a webhook with a bad signature, and a replayed delivery ID. An event that says "approved" while the API answers "commented" has no effect. A review on an older commit has no effect. A check of the same name from another app has no effect. A console action with an old digest or head has no effect. |
 | Contain | The immutable user ID, never a login. A renamed account that takes the login of a linked person: no effect. The session token never reaches a log, an audit entry, a store or a runner. A comment from the Git host reaches the UI escaped. |
-| Limit | The smallest token permission. The token only in the person's request and only for the session. A fork plan runs with no credentials, only after a trusted person comments. The request budget and the circuit breaker. |
-| Authorize at use | OpenDustpan checks its action, then the Git host checks the person. At the approval and again at the apply. An author never counts. A resolve by an author does not unblock. |
+| Limit | The smallest token permission. The token only in the person's request and only for the session. A fork plan gets no provider credentials, no state, no secret outputs and no outbound network. A plan of a push by a person with no link gets the same. Each has its own test. A trusted comment on head `abc` and a push of `def` before the plan starts: no plan of `def`. The request budget and the circuit breaker. |
+| Authorize at use | OpenDustpan checks its action, then the Git host checks the person. At the approval and again at the apply. An author never counts, also an author found through a bot push or an agent job. A resolve by an author does not unblock. A review on an older commit has no effect after a push. A status of the name `approvals` that another account posted fails the gate. |
 | Fail closed | A timeout, `null` or `checking`, an expired token, an open breaker, a Git host that says "not mergeable": no approval, no apply, and an audit entry. |
 
 ## What this changes in accepted decisions
@@ -365,6 +620,13 @@ reasons.
 | RFC 27 question 6 (a hold from the first pre-merge apply) | Plan conflicts replace unit locks for review requests. See open question 4 |
 | ADR 271 decision 4 ("each consumer that must not miss an event keeps a poll") | Webhooks only for review requests |
 | ADR 225 decision 7 ("an approver is a person in a session") | Mode 1 counts Git host reviews of linked person accounts |
+| ADR 190 decision 9 (an apply job applies the stored plan of its plan job) | L0 and L1 plan again at the apply. Held for the owner with the review findings on binding |
+| ADR 190 decision 14 (an agent never creates a change order) | A review request that an agent opens creates a change order. The agent is not an author of record. The person who asked the agent is the author |
+| ADR 191 decision 5 (a person never signs a plan that they did not see) | Affected by L0 and L1. Held for the owner |
+| ADR 225 decision 5 (fresh authentication for each destroy) and decision 12 (signature carry-over) | Affected by the binding levels and by mode 1. Held for the owner |
+| ADR 267 decision 14 (a push plan runs as the namespace service principal) and decision 19 ("A push from a fork starts nothing") | A plan with credentials needs linked pushers with `unit:run-plan`. A fork gets a plan with no credentials after a trusted comment |
+| ADR 271 decision 9 (a replica drops an event that it cannot serve, and a poll catches the change) | Webhooks only. Held for the owner with the review finding on recovery |
+| ADR 125 (agent changes go through jobs) and ADR 103 decision 3 | A write-back review request has the gate before the commit and a change order. The modes decide which approvals count |
 
 ## Open questions
 
@@ -431,9 +693,12 @@ recommendation and a plain summary.
    - Plain summary: we test GitLab before we rely on it.
 
 6. **Who is a trusted person for a fork.**
-   - Options: (a) a linked principal with `unit:run-plan` on each unit. (b) an
-     account with write access on the Git host. (c) both.
-   - Recommendation: (c).
+   - Context: the design asks for a linked principal with `unit:run-plan` on
+     each unit, for a push plan with credentials and for a trusted comment.
+   - Options: (a) only that. (b) that, and write access on the Git host.
+   - Consequences: (b) also stops a person who lost access on the Git host
+     but whose link stays.
+   - Recommendation: (b).
    - Plain summary: a person that both OpenDustpan and the Git host trust.
 
 7. **The scope of the plan conflict check.**
@@ -468,8 +733,10 @@ recommendation and a plain summary.
 
 - [x] Tolerates asynchronous replication between installations: the change
   order, its approvals and the snapshot of the Git host are namespace data
-  under the fence of their namespace. A read of the Git host writes only to
-  that namespace.
+  under the fence of their namespace. A repository can hold units of more than
+  one namespace. One webhook then writes to each namespace of the units that
+  it touches, and each write carries the fence of its own namespace. No write
+  waits for another namespace or installation.
 
 ## Outcome
 
