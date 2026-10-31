@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -178,7 +179,7 @@ func storedCopies(t *testing.T, blobs blob.Store, epoch, seq int64) []blob.Key {
 	dir := probe.String()[:strings.LastIndexByte(probe.String(), '/')+1]
 	name, _, _ := strings.Cut(probe.String()[len(dir):], "-")
 
-	objects, err := blobs.List(t.Context(), dir)
+	objects, err := blobtest.ListAll(t.Context(), blobs, dir)
 	if err != nil {
 		t.Fatalf("list %s: %v", dir, err)
 	}
@@ -855,7 +856,7 @@ func epochKey(t *testing.T, epoch int64) blob.Key {
 func checkpointObjects(t *testing.T, blobs blob.Store) int {
 	t.Helper()
 
-	objects, err := blobs.List(t.Context(), audit.CheckpointPrefix+"/")
+	objects, err := blobtest.ListAll(t.Context(), blobs, audit.CheckpointPrefix+"/")
 	if err != nil {
 		t.Fatalf("list checkpoints: %v", err)
 	}
@@ -1178,9 +1179,9 @@ func (s *epochSwapBlobs) Delete(ctx context.Context, key blob.Key) error {
 
 // List answers the objects under prefix. After the first list of the epoch
 // prefix, it stores epoch 1, so the next epoch read finds a new epoch.
-func (s *epochSwapBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	out, err := s.inner.List(ctx, prefix)
-	if err != nil || prefix != "audit-checkpoints/epochs/" || s.lists != 0 {
+func (s *epochSwapBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	out, err := s.inner.ListPage(ctx, req)
+	if err != nil || req.Prefix != "audit-checkpoints/epochs/" || s.lists != 0 {
 		return out, err
 	}
 

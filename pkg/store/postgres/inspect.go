@@ -17,7 +17,7 @@ import (
 func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error) {
 	//nolint:exhaustruct_v5 // A read-only inspection sets only the access mode.
 	// Isolation, deferrability and begin text stay at the pgx defaults.
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := s.txs.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("begin read-only transaction: %w", err)
 	}

@@ -528,34 +528,32 @@ func gatesAndLimitsRefuseAStart(ctx context.Context, t *testing.T, env *e2e.Env)
 
 	// An enforced gate at state.write on the unit.
 	stateWrite := newGate(unitScope, "no-plans", gate.PointStateWrite, gate.ModeEnforce)
-	if err = env.PutGate(ctx, ns, stateWrite); err != nil {
-		t.Skipf("gate writes need the in-process server: %v", err)
-	}
+	must(t, env.PutGate(ctx, t, stateWrite))
 
 	refused("a start with an enforced gate at state.write", http.StatusForbidden, "job.gate-enforced")
 	audited("an enforced gate covers the unit: no-plans")
-	must(t, env.DeleteGate(ctx, ns, unitScope, stateWrite.ID))
+	must(t, env.DeleteGate(ctx, t, unitScope, stateWrite.ID))
 
 	// An enforced gate at change.propose in the namespace.
 	propose := newGate(gate.NamespaceScope(ns), "review-first", gate.PointChangePropose, gate.ModeEnforce)
-	must(t, env.PutGate(ctx, ns, propose))
+	must(t, env.PutGate(ctx, t, propose))
 	refused("a start with an enforced gate at change.propose", http.StatusForbidden, "job.gate-enforced")
-	must(t, env.DeleteGate(ctx, ns, propose.Scope, propose.ID))
+	must(t, env.DeleteGate(ctx, t, propose.Scope, propose.ID))
 
 	// A gate in evaluate mode does not stop the start.
 	watch := newGate(unitScope, "watch-plans", gate.PointStateWrite, gate.ModeEvaluate)
-	must(t, env.PutGate(ctx, ns, watch))
+	must(t, env.PutGate(ctx, t, watch))
 	refused("a start with a gate in evaluate mode", http.StatusCreated, "")
-	must(t, env.DeleteGate(ctx, ns, unitScope, watch.ID))
+	must(t, env.DeleteGate(ctx, t, unitScope, watch.ID))
 
 	// An access limit that forbids the start action of the starter.
 	limit := gate.AccessLimit{
 		Scope: unitScope, ID: "no-plan-starts", Version: 0,
 		Policy: `forbid (principal, action == OpenDustpan::Action::"unit:run-plan", resource);`,
 	}
-	must(t, env.PutAccessLimit(ctx, ns, limit))
+	must(t, env.PutAccessLimit(ctx, t, limit))
 	refused("a start that an access limit forbids", http.StatusForbidden, "")
-	must(t, env.DeleteAccessLimit(ctx, ns, limit.Scope, limit.ID))
+	must(t, env.DeleteAccessLimit(ctx, t, limit.Scope, limit.ID))
 
 	refused("a start after the gates and the limit are gone", http.StatusCreated, "")
 }

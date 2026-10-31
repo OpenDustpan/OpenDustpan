@@ -192,6 +192,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 		Workers:          nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

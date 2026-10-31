@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
@@ -754,6 +755,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 	}
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,

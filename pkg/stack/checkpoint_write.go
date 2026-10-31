@@ -5,87 +5,86 @@ import (
 	"crypto/md5" //nolint:gosec // The backup manifest records MD5 of stored bytes, for integrity, not security.
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
 // checkpointWrite is one write of a checkpoint blob and of the fenced row
 // that names it. An ordinary save and a journal build both store through
-// writeCheckpoint, so the crash-retry protocol lives in one place: put the
-// blob, adopt a blob that a first attempt left under the key, then commit the
-// row. A row never names a missing blob, and a crash between the blob write
-// and the commit never blocks the retry.
+// writeCheckpoint, so the protocol lives in one place: put the blob under a
+// key that is unique to this attempt, then commit the row. The row decides
+// which write wins. A row never names a missing blob, and a crash between the
+// blob write and the commit leaves a blob that no row names, which the sweep
+// collects. No write replaces the blob of another attempt, so the protocol
+// does not rely on the store to refuse a second write of one key.
 type checkpointWrite struct {
 	// op names the write in error texts, for example "save checkpoint".
-	op string
-	id UpdateID
+	op  string
+	ref Ref
+	id  UpdateID
 	// blobs is the scoped blob access of the namespace of the write.
 	blobs      *scopedBlobs
+	stackID    ID
 	key        blob.Key
 	deployment []byte
-	// other answers a stored blob under the key whose bytes differ from the
-	// bytes of this write. gave is the stored gzip bytes with their size and
-	// MD5, or nil when the stored blob is over the size limit.
-	other func(ctx context.Context, gave []byte, size int64, sum [md5.Size]byte) error
 	// commit writes the row that names the blob under the key, with the size
-	// and MD5 of the stored bytes. Its error is already wrapped for the
-	// caller.
-	commit func(ctx context.Context, size int64, sum [md5.Size]byte) error
+	// and MD5 of the stored bytes. known is true when the row of the update
+	// already holds the same sequence and digest, so the row keeps the blob of
+	// the first write. Its error is already wrapped for the caller.
+	commit func(ctx context.Context, size int64, sum [md5.Size]byte) (known bool, err error)
 }
 
-// writeCheckpoint puts the blob of w, then commits its row. A blob that is
-// already under the key belongs to a first attempt whose commit never
-// landed: the retry adopts it when it holds the same bytes, and gives any
-// other blob to w.other. No error text names the key.
+// writeCheckpoint puts the blob of w, then commits its row. When the row
+// decides against this write, the blob of this attempt is garbage and the
+// write deletes it. No error text names the key.
 func (s *Updates) writeCheckpoint(ctx context.Context, w checkpointWrite) error {
 	size, sum, err := s.putCheckpointBlob(ctx, w.blobs, w.key, w.deployment)
 	if err != nil {
-		if errors.Is(err, blob.ErrExists) {
-			return s.adoptCheckpoint(ctx, w, size, sum)
-		}
-
 		return w.unavailable(ctx)
 	}
 
-	return w.commit(ctx, size, sum)
+	known, err := w.commit(ctx, size, sum)
+
+	switch {
+	case known:
+		s.discardAfterReplay(ctx, w)
+	case errors.Is(err, ErrCheckpointConflict), errors.Is(err, ErrStaleCheckpoint):
+		s.discardOwnBlob(ctx, w)
+	default:
+	}
+
+	return err
 }
 
-// adoptCheckpoint answers a blob write that met an existing key: the first
-// attempt wrote it but never committed its row. A blob with the same bytes
-// commits the row and succeeds.
+// discardAfterReplay deletes the blob of the attempt of w after the row
+// answered known. It first reads the row, and it keeps the blob when the row
+// names it.
 //
-// size with sum are the size and MD5 of the bytes this write tried to
-// store, returned with the ErrExists error. When the stored bytes match
-// them, the retry adopts without decompressing anything: gzip decodes
-// deterministically, so equal stored bytes mean equal content. That fast path
-// hashes the compressed bytes once, instead of paying a gunzip with two hash
-// passes over a large checkpoint. The same binary compresses the same
-// content to the same bytes, so stored bytes that differ hold other content
-// for an ordinary save. Across Go releases the compressed bytes may differ.
-// During a rolling upgrade, a retried save with a sequence number whose
-// first attempt ran on a binary of another release can then get
-// ErrConcurrentModification instead of an adopt. A retried save without a
-// sequence number mints the next key and succeeds.
-func (s *Updates) adoptCheckpoint(ctx context.Context, w checkpointWrite, size int64, sum [md5.Size]byte) error {
-	raw, err := w.blobs.Get(ctx, w.key)
-	if err != nil {
-		return w.unavailable(ctx)
+// Defense in depth: the store keeps the key of the first write on a replay,
+// so the row does not name this attempt's key. This read stays so that a
+// store that answers known for the key of this very attempt cannot make the
+// write delete a blob that a committed row names. It does not rely on the
+// store.
+func (s *Updates) discardAfterReplay(ctx context.Context, w checkpointWrite) {
+	current, err := s.checkpoints.CheckpointByUpdate(ctx, w.ref, w.id)
+	if err != nil || current.BlobKey == w.key {
+		return
 	}
 
-	gave, err := readStoredBlob(raw, s.storedLimit())
-	if err != nil {
-		if errors.Is(err, ErrCheckpointMismatch) {
-			return w.other(ctx, nil, 0, [md5.Size]byte{})
-		}
+	s.discardOwnBlob(ctx, w)
+}
 
-		return w.unavailable(ctx)
+// discardOwnBlob deletes the blob of the attempt of w after the row decided
+// against it. It deletes only the key of this attempt and never lists or
+// guesses another key. The delete is best effort: a failure leaves the blob
+// for the sweep.
+func (s *Updates) discardOwnBlob(ctx context.Context, w checkpointWrite) {
+	own := w.blobs.narrow(w.blobs.updatePrefix(w.stackID, w.id))
+
+	if err := s.deleteBlobRetried(ctx, own, w.key); err != nil {
+		s.logger.WarnContext(ctx, "delete checkpoint blob of a refused save", slog.String("update", w.id.String()))
 	}
-
-	if storedSize, storedSum := storedAttrs(gave); storedSize != size || storedSum != sum {
-		return w.other(ctx, gave, storedSize, storedSum)
-	}
-
-	return w.commit(ctx, size, sum)
 }
 
 // unavailable returns the error of a blob access that failed: the error of

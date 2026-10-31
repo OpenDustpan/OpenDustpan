@@ -82,6 +82,7 @@ func newSweepHandler(
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -144,6 +145,7 @@ func TestSweepDeletedUnitsAnswersTheOutcome(t *testing.T) {
 			DeletedAt: at, PurgeAfter: at, Namespace: "acme", Tool: "pulumi", UnitID: "stk-1", Name: "web/prod",
 		}},
 		Failed: 1, Skipped: 2, FinishedBlobPurges: 3, PendingBlobPurges: 4,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}}
 	handler := newSweepHandler(t, sweeper, map[identity.Action]bool{})
 
@@ -174,9 +176,11 @@ func TestSweepDeletedUnitsRefusals(t *testing.T) {
 
 	running := &recordingSweeper{mu: sync.Mutex{}, entries: nil, res: inventory.SweepResult{
 		Purged: nil, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}, err: inventory.ErrSweepRunning}
 	failing := &recordingSweeper{mu: sync.Mutex{}, entries: nil, res: inventory.SweepResult{
 		Purged: nil, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}, err: errSweepRead}
 
 	cases := []struct {

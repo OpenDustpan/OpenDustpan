@@ -290,7 +290,7 @@ func addKeepSetStack(t *testing.T, f fixture, ns namespace.Name, name string, ke
 		key := f.blobKey(t, u, 0)
 		deployment := fmt.Sprintf(`{"v":%d}`, i+1)
 
-		if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(u, key, 0, deployment), f.fence); err != nil {
+		if _, err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(u, key, 0, deployment), f.fence); err != nil {
 			t.Fatalf("put checkpoint of %s: %v", u.ID, err)
 		}
 

@@ -178,9 +178,9 @@ func legacyHostSinks() []sinkTampering {
 		{
 			"webhook host with an underscore",
 			`UPDATE notification_sinks SET kind = 'webhook', platform = '', target = 'hk_1.example.com';
-				INSERT INTO notification_sink_refs (namespace_id, ref) SELECT namespace_id, 'itm-bbbbbbbb' FROM notification_sinks;
-				INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
-					SELECT namespace_id, 'itm-bbbbbbbb', id, 1, '\x00'::bytea FROM notification_sinks`,
+				INSERT INTO notification_sink_refs (scope, ref) SELECT scope, 'itm-bbbbbbbb' FROM notification_sinks;
+				INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+					SELECT scope, 'itm-bbbbbbbb', id, 1, '\x00'::bytea FROM notification_sinks`,
 			true,
 		},
 	}
@@ -238,9 +238,19 @@ func checkServedAndNotWritten(t *testing.T, s *Store) {
 	}
 }
 
+// scopeGoneStatement returns the statement that points the rows of a sink
+// table at a scope that names no namespace.
+func scopeGoneStatement(table string) string {
+	return map[string]string{
+		"notification_sinks":        `UPDATE notification_sinks SET scope = 'gone'`,
+		"notification_sink_secrets": `UPDATE notification_sink_secrets SET scope = 'gone'`,
+		"notification_sink_refs":    `UPDATE notification_sink_refs SET scope = 'gone'`,
+	}[table]
+}
+
 // TestCheckStagedSinksRefusesAMissingNamespace proves that a sink, a secret
-// item and a held ref whose namespace the backup does not hold are corrupt. An
-// inner join would skip such a row, and the restore would bring it in.
+// item and a held ref whose scope names no namespace of the backup are
+// corrupt, so the restore never brings in a row that no namespace owns.
 func TestCheckStagedSinksRefusesAMissingNamespace(t *testing.T) {
 	t.Parallel()
 
@@ -251,18 +261,13 @@ func TestCheckStagedSinksRefusesAMissingNamespace(t *testing.T) {
 			s := openForSavedViews(t)
 			seedSink(t, s)
 
-			// The foreign key refuses this change, so the test drops the key in its
-			// own schema first.
-			for _, stmt := range []string{
-				`ALTER TABLE ` + table + ` DROP CONSTRAINT ` + table + `_namespace_id_fkey`,
-				`UPDATE ` + table + ` SET namespace_id = 'ns-gone'`,
-			} {
-				if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
-					t.Fatalf("%s: %v", stmt, execErr)
-				}
+			stmt := scopeGoneStatement(table)
+			if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
+				t.Fatalf("%s: %v", stmt, execErr)
 			}
 
-			if err := checkStagedSinks(t.Context(), s.pool, currentSchema(t, s)); !errors.Is(err, backup.ErrCorrupt) {
+			err := checkStagedNotifications(t.Context(), s.pool, currentSchema(t, s))
+			if !errors.Is(err, backup.ErrCorrupt) {
 				t.Fatalf("check = %v, want ErrCorrupt", err)
 			}
 		})
@@ -304,5 +309,29 @@ func TestSinkSecretIsSealedInTheDatabase(t *testing.T) {
 	values, err := notifytest.Sealer().Open(t.Context(), sinks[0], sealed)
 	if err != nil || string(values[0]) != sinkPlain {
 		t.Fatalf("Open = %q, %v; want the plaintext back", values, err)
+	}
+}
+
+// TestCheckStagedSinksRefusesASecretOfAnotherScope proves that a secret item in
+// one scope that names a sink of another scope is corrupt, so a restore never
+// brings in a value that the sink of another scope would open.
+func TestCheckStagedSinksRefusesASecretOfAnotherScope(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedSink(t, s)
+
+	for _, stmt := range []string{
+		`INSERT INTO notification_sink_refs (scope, ref) VALUES ('@server', 'itm-zzzzzzzz')`,
+		`INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+			VALUES ('@server', 'itm-zzzzzzzz', 'snk-aaaaaaaa', 0, '\x00'::bytea)`,
+	} {
+		if _, err := s.pool.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("plant the row: %v", err)
+		}
+	}
+
+	if err := checkStagedSinks(t.Context(), s.pool, currentSchema(t, s)); !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
 	}
 }

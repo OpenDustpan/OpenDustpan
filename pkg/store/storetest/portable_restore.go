@@ -339,7 +339,7 @@ func testRestoreStagingKeepsCheckpointBlobs(t *testing.T, newStore RestoreFactor
 	st := mustGetStack(t, ps.src, f.ref)
 
 	key, err := blob.ParseKey(
-		stackBlobPrefix(t, ps.src, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/0",
+		stackBlobPrefix(t, ps.src, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/0-" + defaultAttempt,
 	)
 	if err != nil {
 		t.Fatalf("parse blob key: %v", err)
@@ -347,7 +347,7 @@ func testRestoreStagingKeepsCheckpointBlobs(t *testing.T, newStore RestoreFactor
 
 	want := newBlobCheckpoint(u, key, 0, `{"v":1}`)
 
-	if putErr := ps.src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
+	if _, putErr := ps.src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
 		t.Fatalf("put checkpoint: %v", putErr)
 	}
 
@@ -423,6 +423,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	checkImportRowCounts(t, ps.src, sum)
 	checkBlameRowCounts(t, ps.src, sum)
 	checkProfileRowCounts(t, ps.src, sum)
+	checkIssuerRowCounts(t, ps.src, sum)
 	checkRunnerRowCounts(t, ps.src, sum)
 	requireSeededGate(t, ps.src, sum)
 
@@ -440,6 +441,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 		ns: seed.acme, w: seed.net, first: seed.current.ID.String(), second: seed.pending.ID.String(),
 	})
 	checkRestoredProfiles(t, ps.dst, seed.acme, seed.profiles)
+	checkRestoredIssuer(t, ps.dst, seed.acme, seed.issuer)
 	checkRestoredRunners(t, ps.dst, seed.acme.Name, seed.runners)
 	checkRunnerControlRowsAbsent(t, ps.dst)
 

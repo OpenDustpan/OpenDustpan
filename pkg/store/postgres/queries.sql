@@ -419,7 +419,11 @@ JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
 WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND u.version = @version;
 
--- name: PutCheckpoint :exec
+-- name: PutCheckpoint :execrows
+-- The row of the update decides which write wins. The conflict update runs only
+-- for a write without a sequence number, or for a sequence above the stored one,
+-- and the database checks that against the latest committed row, so two writers
+-- of one sequence cannot both land. Zero rows mean that the write lost.
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, saved_at_ms,
@@ -436,7 +440,8 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_key = excluded.blob_key,
     size = excluded.size,
     blob_size = excluded.blob_size,
-    blob_md5 = excluded.blob_md5;
+    blob_md5 = excluded.blob_md5
+WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence;
 
 -- name: ListReferencedBlobKeys :many
 -- Every blob key that a row of one live stack names, ordered, without
@@ -608,27 +613,36 @@ FROM inventory_labels
 WHERE namespace = $1
 ORDER BY unit_id, label_key;
 
--- name: NextInventoryChangeSeq :one
--- Takes the next number of the change log of one namespace. The statement runs
--- last in the transaction of the write, after every other row lock, so the
--- order of the numbers is the order of the commits of the namespace.
-INSERT INTO inventory_change_heads (namespace_id, last_seq)
-VALUES ($1, 1)
-ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
-RETURNING last_seq;
-
--- name: InsertInventoryChange :exec
+-- name: AppendInventoryChange :one
+-- Appends one row to the change log of the namespace that has the name now, in
+-- one statement: it resolves the namespace, takes the next number of the log,
+-- and writes the row with the name of the collection that holds the unit. No
+-- row comes back when the namespace does not exist. The statement runs last in
+-- the transaction of the write, after every other row lock, so the order of the
+-- numbers is the order of the commits of the namespace.
+WITH ns AS (
+    SELECT id FROM namespaces WHERE namespaces.name = sqlc.arg(namespace_name)
+), head AS (
+    INSERT INTO inventory_change_heads (namespace_id, last_seq)
+    SELECT id, 1 FROM ns
+    ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+    RETURNING namespace_id, last_seq
+)
 INSERT INTO inventory_changes (
     namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
-
--- name: GetUnitCollectionName :one
--- The name of the collection that holds the unit, for a change log row.
-SELECT c.name
-FROM collection_members AS m
-JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
-WHERE m.unit_id = $1;
+SELECT
+    head.namespace_id, head.last_seq, sqlc.arg(at_ms)::bigint, sqlc.arg(tool)::text, sqlc.arg(unit_id)::text,
+    sqlc.arg(unit_name)::text, sqlc.arg(display_name)::text, sqlc.arg(status)::text,
+    COALESCE((
+        SELECT c.name
+        FROM collection_members AS m
+        JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+        WHERE m.unit_id = sqlc.arg(unit_id)::text
+    ), '')::text,
+    sqlc.arg(kind)::text, NULL
+FROM head
+RETURNING seq;
 
 -- name: ListInventoryChanges :many
 -- One page of the change log of a namespace in the order of the sequence.
@@ -1041,6 +1055,20 @@ ON CONFLICT DO NOTHING;
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups
 WHERE id = $1;
+
+-- name: RunningWork :one
+-- Reads one backup in the running state, or else one restore in the checking
+-- or applying state, in one statement. The guard of the blob deletes uses it.
+-- A backup comes first, and the smaller ID comes first, so the answer is the
+-- same for the same rows.
+SELECT kind, id
+FROM (
+    SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+    UNION ALL
+    SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+) AS running_work
+ORDER BY kind, id
+LIMIT 1;
 
 -- name: ListBackups :many
 SELECT id, state, started_at_ms, ended_at_ms, target, error
@@ -1957,7 +1985,8 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
   ), 0))::bigint AS principal_active_at_ms,
   ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
   ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
-  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms,
+  ap.exchange_lifetime_ms AS policy_exchange_lifetime_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
@@ -2265,14 +2294,16 @@ RETURNING claim_token, claim_expires_at_ms;
 -- Token policy and the inactivity disable (ADR 53).
 
 -- name: GetAccessTokenPolicy :one
-SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms
+SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms,
+  exchange_lifetime_ms
 FROM access_token_policy WHERE id = 1;
 
 -- name: SetAccessTokenPolicy :execrows
 UPDATE access_token_policy
 SET max_lifetime_ms = sqlc.arg('max_lifetime_ms')::bigint, inactivity_ms = sqlc.arg('inactivity_ms')::bigint,
   disable_tokens = sqlc.arg('disable_tokens')::boolean, disable_accounts = sqlc.arg('disable_accounts')::boolean,
-  disable_break_glass = sqlc.arg('disable_break_glass')::boolean, updated_at_ms = sqlc.arg('updated_at_ms')::bigint
+  disable_break_glass = sqlc.arg('disable_break_glass')::boolean, updated_at_ms = sqlc.arg('updated_at_ms')::bigint,
+  exchange_lifetime_ms = sqlc.arg('exchange_lifetime_ms')::bigint
 WHERE id = 1;
 
 -- name: DatabaseNowMs :one
@@ -4271,34 +4302,31 @@ DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
 
 -- name: GetNotificationSink :one
--- The caller compares the namespace of the row with the scope of the request.
-SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
-FROM notification_sinks AS k
-JOIN namespaces AS n ON n.id = k.namespace_id
-WHERE k.id = sqlc.arg(id);
+-- The caller compares the scope of the row with the scope of the request.
+SELECT id, scope AS namespace, kind, name, platform, target, created_by, version
+FROM notification_sinks
+WHERE id = sqlc.arg(id);
 
 -- name: ListNotificationSinks :many
-SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
-FROM notification_sinks AS k
-JOIN namespaces AS n ON n.id = k.namespace_id
-WHERE n.name = sqlc.arg(namespace)
-ORDER BY k.id COLLATE "C";
+SELECT id, scope AS namespace, kind, name, platform, target, created_by, version
+FROM notification_sinks
+WHERE scope = sqlc.arg(namespace)
+ORDER BY id COLLATE "C";
 
 -- name: ListNotificationSinkRefs :many
--- The secret refs of every sink of a namespace, in the order of each sink.
-SELECT s.sink_id, s.ref
-FROM notification_sink_secrets AS s
-JOIN namespaces AS n ON n.id = s.namespace_id
-WHERE n.name = sqlc.arg(namespace)
-ORDER BY s.sink_id COLLATE "C", s.position;
+-- The secret refs of every sink of a scope, in the order of each sink.
+SELECT sink_id, ref
+FROM notification_sink_secrets
+WHERE scope = sqlc.arg(namespace)
+ORDER BY sink_id COLLATE "C", position;
 
 -- name: InsertNotificationSink :execrows
 -- The caller checks the fence in the same transaction. A sink with the same
 -- ID is not written.
-INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+INSERT INTO notification_sinks (id, scope, kind, name, platform, target, created_by, version)
 VALUES (
-    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(kind), sqlc.arg(name), sqlc.arg(platform), sqlc.arg(target), sqlc.arg(created_by), 1
+    sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(platform), sqlc.arg(target),
+    sqlc.arg(created_by), 1
 )
 ON CONFLICT (id) DO NOTHING;
 
@@ -4308,48 +4336,232 @@ ON CONFLICT (id) DO NOTHING;
 UPDATE notification_sinks
 SET name = sqlc.arg(name), target = sqlc.arg(target), version = notification_sinks.version + 1
 WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.version = sqlc.arg(version)
-  AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+  AND notification_sinks.scope = sqlc.arg(namespace);
 
 -- name: DeleteNotificationSink :execrows
 DELETE FROM notification_sinks
-WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.scope = sqlc.arg(namespace);
 
 -- name: ClaimNotificationSinkRef :execrows
--- Records that the namespace holds the ref. It writes nothing, and the caller
--- refuses the new value, when the namespace held the ref before.
-INSERT INTO notification_sink_refs (namespace_id, ref)
-VALUES ((SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref))
-ON CONFLICT (namespace_id, ref) DO NOTHING;
+-- Records that the scope holds the ref. It writes nothing, and the caller
+-- refuses the new value, when the scope held the ref before.
+INSERT INTO notification_sink_refs (scope, ref)
+VALUES (sqlc.arg(namespace), sqlc.arg(ref))
+ON CONFLICT (scope, ref) DO NOTHING;
 
 -- name: InsertNotificationSinkSecret :exec
-INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
-VALUES (
-    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref), sqlc.arg(sink_id),
-    sqlc.arg(position), sqlc.arg(ciphertext)
-);
+INSERT INTO notification_sink_secrets (scope, ref, sink_id, position, ciphertext)
+VALUES (sqlc.arg(namespace), sqlc.arg(ref), sqlc.arg(sink_id), sqlc.arg(position), sqlc.arg(ciphertext));
 
 -- name: ListNotificationSinkSecrets :many
-SELECT s.ref, s.ciphertext
-FROM notification_sink_secrets AS s
-JOIN namespaces AS n ON n.id = s.namespace_id
-WHERE n.name = sqlc.arg(namespace) AND s.sink_id = sqlc.arg(sink_id)
-ORDER BY s.position;
+SELECT ref, ciphertext
+FROM notification_sink_secrets
+WHERE scope = sqlc.arg(namespace) AND sink_id = sqlc.arg(sink_id)
+ORDER BY position;
 
 -- name: MoveNotificationSinkSecret :exec
 UPDATE notification_sink_secrets
 SET position = sqlc.arg(position)
 WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+  AND notification_sink_secrets.scope = sqlc.arg(namespace);
 
 -- name: DeleteNotificationSinkSecret :exec
 DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+  AND notification_sink_secrets.scope = sqlc.arg(namespace);
 
 -- name: DeleteNotificationSinkSecrets :exec
 DELETE FROM notification_sink_secrets
-WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
-  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id) AND notification_sink_secrets.scope = sqlc.arg(namespace);
+
+-- name: EnsureNotificationSequence :exec
+-- Makes the counter row of a scope. A PostgreSQL adapter locks this row to
+-- order the appends of the scope.
+INSERT INTO notification_sequences (scope, last_sequence)
+VALUES (sqlc.arg(scope), 0)
+ON CONFLICT (scope) DO NOTHING;
+
+-- name: GetNotificationSequence :one
+-- Locks the counter row until the commit, so the appends of a scope wait for
+-- each other and a later sequence never becomes visible before an earlier one.
+SELECT last_sequence FROM notification_sequences WHERE scope = sqlc.arg(scope) FOR UPDATE;
+
+-- name: SetNotificationSequence :exec
+UPDATE notification_sequences SET last_sequence = sqlc.arg(last_sequence) WHERE scope = sqlc.arg(scope);
+
+-- name: GetNotificationIDByDedupe :one
+SELECT id FROM notifications WHERE scope = sqlc.arg(scope) AND dedupe_key = sqlc.arg(dedupe_key);
+
+-- name: CountNotificationsByID :one
+SELECT COUNT(*) FROM notifications WHERE id = sqlc.arg(id);
+
+-- name: GetNotificationScopeByID :one
+SELECT scope FROM notifications WHERE id = sqlc.arg(id);
+
+-- name: InsertNotification :exec
+INSERT INTO notifications (
+    scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links, attributes, recipients,
+    dedupe_key, at_ms
+) VALUES (
+    sqlc.arg(scope), sqlc.arg(sequence), sqlc.arg(id), sqlc.arg(type), sqlc.arg(object), sqlc.arg(object_id),
+    sqlc.arg(subject), sqlc.arg(agent), sqlc.arg(severity), sqlc.arg(summary), sqlc.arg(links),
+    sqlc.arg(attributes), sqlc.arg(recipients), sqlc.arg(dedupe_key), sqlc.arg(at_ms)
+);
+
+-- name: ListNotificationsAfter :many
+SELECT scope, sequence, id, type, object, object_id, subject, agent, severity, summary, links, attributes,
+       recipients, dedupe_key, at_ms
+FROM notifications
+WHERE scope = sqlc.arg(scope) AND sequence > sqlc.arg(after)
+ORDER BY sequence
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListNotificationScopesAbove :many
+-- The scopes that hold a notification above the cursor of the dispatcher.
+SELECT s.scope
+FROM notification_sequences AS s
+LEFT JOIN notification_cursors AS c ON c.scope = s.scope AND c.name = sqlc.arg(name)
+WHERE EXISTS (
+    SELECT 1 FROM notifications AS n WHERE n.scope = s.scope AND n.sequence > COALESCE(c.sequence, 0)
+)
+ORDER BY s.scope COLLATE "C";
+
+-- name: GetNotificationCursor :one
+SELECT sequence FROM notification_cursors WHERE name = sqlc.arg(name) AND scope = sqlc.arg(scope);
+
+-- name: EnsureNotificationCursor :exec
+INSERT INTO notification_cursors (name, scope, sequence)
+VALUES (sqlc.arg(name), sqlc.arg(scope), 0)
+ON CONFLICT (name, scope) DO NOTHING;
+
+-- name: MoveNotificationCursor :execrows
+UPDATE notification_cursors
+SET sequence = sqlc.arg(to_sequence)
+WHERE name = sqlc.arg(name) AND scope = sqlc.arg(scope) AND sequence = sqlc.arg(from_sequence);
+
+-- name: GetNotificationSubscription :one
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE id = sqlc.arg(id);
+
+-- name: ListNotificationSubscriptions :many
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE scope = sqlc.arg(scope)
+ORDER BY id COLLATE "C";
+
+-- name: ListNotificationSubscriptionsOfSink :many
+SELECT id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+FROM notification_subscriptions
+WHERE scope = sqlc.arg(scope) AND sink_id = sqlc.arg(sink_id)
+ORDER BY id COLLATE "C";
+
+-- name: InsertNotificationSubscription :execrows
+-- A subscription with the same ID is not written.
+INSERT INTO notification_subscriptions (
+    id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version
+) VALUES (
+    sqlc.arg(id), sqlc.arg(scope), sqlc.arg(sink_id), sqlc.arg(types), sqlc.arg(objects), sqlc.arg(min_severity),
+    sqlc.arg(state), sqlc.arg(reason), sqlc.arg(created_by), 1
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: UpdateNotificationSubscription :execrows
+-- The sink, the creator and the filter of a replace are the new values. The
+-- version guards the replace.
+UPDATE notification_subscriptions
+SET sink_id = sqlc.arg(sink_id), types = sqlc.arg(types), objects = sqlc.arg(objects),
+    min_severity = sqlc.arg(min_severity), state = sqlc.arg(state), reason = sqlc.arg(reason),
+    created_by = sqlc.arg(created_by), version = notification_subscriptions.version + 1
+WHERE notification_subscriptions.id = sqlc.arg(id) AND notification_subscriptions.scope = sqlc.arg(scope)
+  AND notification_subscriptions.version = sqlc.arg(version);
+
+-- name: SuspendNotificationSubscription :exec
+UPDATE notification_subscriptions
+SET state = 'suspended', reason = sqlc.arg(reason), version = notification_subscriptions.version + 1
+WHERE notification_subscriptions.id = sqlc.arg(id) AND notification_subscriptions.scope = sqlc.arg(scope);
+
+-- name: DeleteNotificationSubscription :execrows
+DELETE FROM notification_subscriptions
+WHERE notification_subscriptions.id = sqlc.arg(id) AND notification_subscriptions.scope = sqlc.arg(scope);
+
+-- name: DeletePendingNotificationDeliveriesOfSubscription :exec
+DELETE FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
+
+-- name: SkipPendingNotificationDeliveriesOfSubscription :exec
+UPDATE notification_deliveries
+SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
+
+-- name: GetNotificationDelivery :one
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE id = sqlc.arg(id);
+
+-- name: CountNotificationDeliveryRoute :one
+SELECT COUNT(*) FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
+  AND subscription_id = sqlc.arg(subscription_id) AND contact = sqlc.arg(contact);
+
+-- name: InsertNotificationDelivery :exec
+INSERT INTO notification_deliveries (
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    last_error, delivered_at_ms, owner, lease_until_ms, version
+) VALUES (
+    sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+);
+
+-- name: ListDueNotificationDeliveryScopes :many
+SELECT scope
+FROM notification_deliveries
+WHERE state = 'pending' AND next_at_ms <= sqlc.arg(now_ms) AND lease_until_ms <= sqlc.arg(now_ms)
+GROUP BY scope
+ORDER BY scope COLLATE "C";
+
+-- name: ClaimNotificationDeliveries :many
+-- Takes at most max_rows pending deliveries of the scope that are due and that
+-- no live claim holds, oldest first. The caller runs it in a write transaction.
+UPDATE notification_deliveries
+SET owner = sqlc.arg(owner), lease_until_ms = sqlc.arg(lease_until_ms), version = notification_deliveries.version + 1
+WHERE notification_deliveries.id IN (
+    SELECT d.id FROM notification_deliveries AS d
+    WHERE d.scope = sqlc.arg(scope) AND d.state = 'pending' AND d.next_at_ms <= sqlc.arg(now_ms)
+      AND d.lease_until_ms <= sqlc.arg(now_ms)
+    ORDER BY d.next_at_ms, d.id COLLATE "C"
+    LIMIT sqlc.arg(max_rows)
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+          last_error, delivered_at_ms, owner, lease_until_ms, version;
+
+-- name: RecordNotificationAttempt :execrows
+-- Stores the result for the live claim only: the owner and the version of the
+-- stored claim, and a lease that has not passed at now_ms.
+UPDATE notification_deliveries
+SET state = sqlc.arg(state), attempts = sqlc.arg(attempts), next_at_ms = sqlc.arg(next_at_ms),
+    last_error = sqlc.arg(last_error), delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '',
+    lease_until_ms = 0, version = notification_deliveries.version + 1
+WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
+  AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
+  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
+
+-- name: ListNotificationDeliveriesOfSubscription :many
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg(max_rows);
+
+-- name: RedeliverNotificationDelivery :execrows
+UPDATE notification_deliveries
+SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
+WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
+  AND notification_deliveries.state <> 'pending';
 
 -- name: UpsertTrigger :execrows
 -- The caller checks the fence in the same transaction. A row that exists keeps
@@ -4527,16 +4739,26 @@ VALUES (
 ON CONFLICT (log_id, seq) DO NOTHING;
 
 -- name: GetJobLogChunk :one
-SELECT c.sha256, c.size, c.confirmed
+SELECT c.sha256, c.size, c.confirmed, c.blob_key
 FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.seq = sqlc.arg(seq);
 
 -- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
-SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5)
+SET confirmed = 1, stored_size = sqlc.arg(stored_size), stored_md5 = sqlc.arg(stored_md5),
+    blob_key = sqlc.arg(blob_key)
 WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
   AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListJobLogChunkKeys :many
+-- The blob key of each confirmed chunk of one log version, in the order of the
+-- chunk numbers.
+SELECT c.seq, c.blob_key
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.confirmed = 1
+ORDER BY c.seq;
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is
@@ -4591,3 +4813,250 @@ ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision;
 INSERT INTO settings_state (scope_id, revision, static_digest)
 VALUES (sqlc.arg(scope_id), sqlc.arg(revision), sqlc.arg(static_digest))
 ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest;
+
+
+-- name: CreateStoreCheck :execrows
+INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
+VALUES ($1, $2, 'running', $3, $4, NULL, '', '')
+ON CONFLICT DO NOTHING;
+
+-- name: GetStoreCheck :one
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+WHERE id = $1;
+
+-- name: ListStoreChecks :many
+SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report
+FROM store_checks
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishStoreCheck :execrows
+UPDATE store_checks
+SET state = $1, error = $2, report = $3, ended_at_ms = $4
+WHERE id = $5 AND state = 'running';
+
+-- name: CountStoreChecksEndedSince :one
+-- The checks of one target that ended after the given time. A running check
+-- has no end time and is not counted.
+SELECT count(*)
+FROM store_checks
+WHERE target = $1 AND state <> 'running' AND ended_at_ms > $2;
+
+-- name: FailEndedStoreChecks :execrows
+-- Marks failed each running check whose operation ended failed or canceled
+-- without a finish write. The error text is a fixed text of the caller: the
+-- last error of the operation never reaches the row.
+UPDATE store_checks AS c
+SET state = 'failed',
+    error = sqlc.arg('error')::text,
+    ended_at_ms = sqlc.arg('ended_at_ms')
+FROM durable_operations AS o
+WHERE c.state = 'running'
+  AND o.start_key = sqlc.arg('prefix')::text || c.id
+  AND o.kind = sqlc.arg('kind')
+  AND o.state IN ('failed', 'canceled');
+
+-- name: InsertCatalogBlueprint :execrows
+-- The caller checks the fence in the same transaction. A blueprint of the same
+-- name in the namespace is not written.
+INSERT INTO catalog_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), 1, sqlc.arg(draft_json), sqlc.arg(draft_updated_at_ms)
+)
+ON CONFLICT (namespace_id, name) DO NOTHING;
+
+-- name: UpdateCatalogBlueprintDraft :execrows
+-- The draft changes only at the version that the caller read.
+UPDATE catalog_blueprints
+SET draft_version = draft_version + 1, draft_json = sqlc.arg(draft_json), draft_updated_at_ms = sqlc.arg(draft_updated_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprints.name = sqlc.arg(name) AND draft_version = sqlc.arg(draft_version);
+
+-- name: CountCatalogBlueprints :one
+SELECT COUNT(*) FROM catalog_blueprints
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetCatalogBlueprintDraft :one
+SELECT b.draft_version, b.draft_json
+FROM catalog_blueprints AS b
+JOIN namespaces AS n ON n.id = b.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND b.name = sqlc.arg(name);
+
+-- name: GetCatalogBlueprintVersionOfDraft :one
+-- The number of the version that published a draft version. No row means the
+-- draft version has no version.
+SELECT v.number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.draft_version = sqlc.arg(draft_version);
+
+-- name: LastCatalogBlueprintVersion :one
+-- The last published number of a blueprint, 0 for none. The caller holds the
+-- write lock of the namespace, so the next number is exact.
+SELECT CAST(COALESCE(MAX(v.number), 0) AS BIGINT) AS number
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name);
+
+-- name: InsertCatalogBlueprintVersion :exec
+INSERT INTO catalog_blueprint_versions (
+    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(name), sqlc.arg(number), sqlc.arg(draft_version), sqlc.arg(document_json), sqlc.arg(expr_version),
+    sqlc.arg(published_by), sqlc.arg(published_at_ms), 0
+);
+
+-- name: GetCatalogBlueprintVersion :one
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.number = sqlc.arg(number);
+
+-- name: ListCatalogBlueprintLatest :many
+-- The newest published version of each blueprint of a namespace, by name.
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM catalog_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+  AND v.number = (
+      SELECT MAX(w.number) FROM catalog_blueprint_versions AS w
+      WHERE w.namespace_id = v.namespace_id AND w.name = v.name
+  )
+ORDER BY v.name;
+
+-- name: RetireCatalogBlueprintVersion :execrows
+-- A retire of a retired version matches the row and changes nothing.
+UPDATE catalog_blueprint_versions
+SET retired = 1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: SetCatalogBlueprintExprVersion :execrows
+UPDATE catalog_blueprint_versions
+SET expr_version = sqlc.arg(expr_version)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: GetNamespaceByID :one
+-- The namespace with the stable ID id.
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+FROM namespaces
+WHERE id = sqlc.arg(id);
+
+-- name: ListIssuerKeys :many
+-- Every key of the issuer of a namespace, also the deleted keys, oldest first.
+SELECT id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+FROM issuer_keys
+WHERE namespace_id = sqlc.arg(namespace_id)
+ORDER BY created_at_ms, id;
+
+-- name: InsertIssuerKey :exec
+INSERT INTO issuer_keys (
+    namespace_id, id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(state), sqlc.arg(public_key), sqlc.arg(sealed),
+    sqlc.arg(created_at_ms), sqlc.arg(activated_at_ms), sqlc.arg(retired_at_ms), sqlc.arg(deleted_at_ms)
+);
+
+-- name: UpdateIssuerKey :execrows
+-- The new state, times and sealed key of one key. The caller checked the move.
+UPDATE issuer_keys
+SET state = sqlc.arg(state), sealed = sqlc.arg(sealed), activated_at_ms = sqlc.arg(activated_at_ms),
+    retired_at_ms = sqlc.arg(retired_at_ms), deleted_at_ms = sqlc.arg(deleted_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND state = sqlc.arg(from_state);
+
+-- name: GetIssuerSettings :one
+SELECT issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms, updated_by,
+    copy_check
+FROM issuer_settings
+WHERE namespace_id = sqlc.arg(namespace_id);
+
+-- name: UpsertIssuerSettings :execrows
+-- Stores the settings at the version new_version when the stored version is
+-- the one before it. A namespace with no row has version 0. It keeps the
+-- stored copy check when the issuer URL stays, and clears it when the URL
+-- changes: a check of one address says nothing about another.
+INSERT INTO issuer_settings (
+    namespace_id, issuer_url, subject_template, allow_block_subjects, include_actor_name, version, updated_at_ms,
+    updated_by, copy_check
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(issuer_url), sqlc.arg(subject_template), sqlc.arg(allow_block_subjects),
+    sqlc.arg(include_actor_name), sqlc.arg(new_version), sqlc.arg(updated_at_ms), sqlc.arg(updated_by), ''
+)
+ON CONFLICT (namespace_id) DO UPDATE SET
+    issuer_url = excluded.issuer_url, subject_template = excluded.subject_template,
+    allow_block_subjects = excluded.allow_block_subjects, include_actor_name = excluded.include_actor_name,
+    version = excluded.version, updated_at_ms = excluded.updated_at_ms, updated_by = excluded.updated_by,
+    copy_check = CASE WHEN issuer_settings.issuer_url = excluded.issuer_url THEN issuer_settings.copy_check ELSE '' END
+WHERE issuer_settings.version = excluded.version - 1;
+
+-- name: ListIssuerURLs :many
+-- Every issuer URL that a namespace sets, ordered. The server compares them
+-- with the issuer of a trust rule.
+SELECT DISTINCT issuer_url FROM issuer_settings WHERE issuer_url <> '' ORDER BY issuer_url;
+
+-- name: UpdateIssuerCopyCheck :execrows
+-- Stores the last copy check when the issuer URL that it checked is the stored
+-- one. It keeps the version, so a copy check never changes the entity tag of
+-- the settings. No row, or another URL, writes nothing.
+UPDATE issuer_settings SET copy_check = sqlc.arg(copy_check)
+WHERE namespace_id = sqlc.arg(namespace_id) AND issuer_url = sqlc.arg(issuer_url);
+
+-- name: InsertTrustRule :execrows
+-- The caller checks the fence and the principal in the same transaction. A
+-- rule with a taken ID, or with a name that the namespace has, is not written.
+INSERT INTO trust_rules (
+    id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+)
+VALUES (
+    sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(name), sqlc.arg(issuer), sqlc.arg(audience),
+    sqlc.arg(key_source), sqlc.arg(static_keys), sqlc.arg(conditions_json), sqlc.arg(principal_id),
+    sqlc.arg(created_by), sqlc.arg(created_at_ms)
+)
+ON CONFLICT DO NOTHING;
+
+-- name: CountTrustRulesInNamespace :one
+SELECT COUNT(*) FROM trust_rules WHERE namespace = sqlc.arg(namespace);
+
+-- name: GetTrustRulePrincipal :one
+-- Reads the principal of a new rule in the transaction of the create, so a
+-- delete of the principal cannot pass between the check and the insert.
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms
+FROM principals
+WHERE id = sqlc.arg(id)
+FOR SHARE;
+
+-- name: GetTrustRule :one
+-- The namespace is part of the key: a rule of another namespace reads as no
+-- row.
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+-- name: ListTrustRulesOfNamespace :many
+SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
+    created_by, created_at_ms
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace)
+ORDER BY name COLLATE "C", id COLLATE "C";
+
+-- name: DeleteTrustRule :execrows
+DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+-- name: GetExchangePrincipal :one
+-- Reads the principal of a token exchange in its transaction, so a delete or
+-- a disable of the principal cannot pass between the check and the insert of
+-- the token.
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms, COALESCE(disabled_at_ms, 0) AS disabled_at_ms
+FROM principals
+WHERE id = sqlc.arg(id)
+FOR SHARE;
+
+

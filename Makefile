@@ -38,8 +38,15 @@ ANALYSIS_TAGS := e2e,upgrade,soak
 NILAWAY       := go run go.uber.org/nilaway/cmd/nilaway@v0.0.0-20260918162853-acb8859b9031
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
+# nilaway holds the whole program in memory. With the default GOGC it grew to
+# 13.9 GB and the kernel killed it in a 15 GB container. A lower GOGC and a
+# soft memory limit keep it inside such a container, at some extra CPU time.
+# Set NILAWAY_GOGC or NILAWAY_GOMEMLIMIT to change them.
+NILAWAY_GOGC      ?= 25
+NILAWAY_GOMEMLIMIT ?= 12GiB
+
 nilaway: ## Nil-panic analysis of our packages; dependencies are read but not reported.
-	GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
+	GOGC=$(NILAWAY_GOGC) GOMEMLIMIT=$(NILAWAY_GOMEMLIMIT) GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
 
 vuln: ## Known vulnerabilities in the code paths we call (reads the database at vuln.go.dev).
 	$(GOVULNCHECK) -tags $(ANALYSIS_TAGS) ./...
@@ -94,8 +101,9 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
 # Today it holds one vendored agent skill, where a Markdown link that names a
-# file looks like a credential to a detector, and six test files whose fake
-# URLs with a user name and a password test the masking of credentials.
+# file looks like a credential to a detector, two API reference pages, and
+# twelve test files whose fake URLs with a user name and a password test the
+# refusal or the masking of credentials.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
@@ -128,6 +136,16 @@ chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubecon
 # on a CI runner with 4 cores. GO_TEST_TIMEOUT is the limit for each package.
 GO_TEST_TIMEOUT := 20m
 
+# TEST_TIMEOUT is the limit for each package in test, test-nocache,
+# test-postgres, journal-test, bench and test-s3: each target that runs whole
+# packages. A target that runs one named test keeps the go test default. The
+# first three targets run the store packages together with all other
+# packages. In a session container with 4 CPUs and 15 GB, pkg/dustpan took
+# 1371 s, pkg/store/sqlite 1721 s and pkg/store/postgres 1405 s, each one
+# alone, so 20m failed every run. The CI targets keep GO_TEST_TIMEOUT and
+# STORE_TEST_TIMEOUT. Set TEST_TIMEOUT to change the limit.
+TEST_TIMEOUT ?= 45m
+
 # With -race the compiler also adds checkptr checks to every package. In the
 # SQLite engine, which is C translated to Go with much unsafe pointer
 # arithmetic, these checks took about 30% of the CPU of the SQLite store
@@ -141,10 +159,10 @@ GO_TEST_TIMEOUT := 20m
 RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
-	go test $(RACE_TEST_FLAGS) -timeout $(GO_TEST_TIMEOUT) ./...
+	go test $(RACE_TEST_FLAGS) -timeout $(TEST_TIMEOUT) ./...
 
 test-nocache: ## Go tests as in test, but every package runs again. CI does the same on main every 2 hours, with test-ci-other and test-ci-store, to find flaky tests.
-	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # CI runs the two store packages in jobs of their own, one for each package, so
 # that they do not share the 4 cores of a runner with each other or with the
@@ -156,7 +174,7 @@ GO_TEST_COUNT ?=
 # STORE_TEST_TIMEOUT is the limit of test-ci-store only, sized for one store
 # package on a CI runner: pkg/store/postgres alone took more than 20 minutes
 # there. It is not a fix of that time, and GO_TEST_TIMEOUT stays the limit of
-# every other target.
+# test-ci-other.
 STORE_TEST_TIMEOUT := 30m
 
 test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
@@ -169,10 +187,10 @@ test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres;
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
-	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
-	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
+	go test -run '^$$' -bench . -benchtime 1x -timeout $(TEST_TIMEOUT) ./pkg/stack/ ./pkg/store/sqlite/
 
 load: ## Run the load harness against a self-started server and write load-report.json (SQLite default; set DUSTPAN_TEST_POSTGRES_URL for PostgreSQL). Not part of check.
 	go run ./load -out load-report.json
@@ -182,7 +200,7 @@ bench-s3: ## S3 latency benchmark: MinIO, Garage, PostgreSQL 18 and Toxiproxy in
 
 test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs DUSTPAN_TEST_S3_*).
 	@test -n "$$DUSTPAN_TEST_S3_ENDPOINT" && test -n "$$DUSTPAN_TEST_S3_BUCKET" && test -n "$$DUSTPAN_TEST_S3_ACCESS_KEY" && test -n "$$DUSTPAN_TEST_S3_SECRET_KEY" || (echo "set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY" && exit 1)
-	go test $(RACE_TEST_FLAGS) -count=1 ./pkg/blob/s3/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/blob/s3/...
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
@@ -231,7 +249,7 @@ SOAK_TOFU ?= 4
 SOAK_REPORT_DIR ?= soak-reports
 
 CONSOLE_REPO ?= https://github.com/OpenDustpan/console
-CONSOLE_REF ?= b86703e174223d12fb211ad65b5f5ed0d71b896d
+CONSOLE_REF ?= b56450ef862edfbe90af91e62117e22bea3ff0c5
 DEMO_PORT ?= 8080
 
 soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one server binary for SOAK_DURATION (default 30m; SOAK_DURATION=60s for a smoke check), with SOAK_PULUMI and SOAK_TOFU workers each (default 4) writing CSV and Markdown reports to SOAK_REPORT_DIR (SQLite default; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check; see docs/guides/soak.md.
@@ -249,7 +267,7 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations,
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
 
 journal-test: ## Journal route tests of the recording build. No CLI download; part of check.
-	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 ./internal/api/pulumi/ ./pkg/dustpan/
+	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./internal/api/pulumi/ ./pkg/dustpan/
 
 journal-guard: ## Refuse a release build that uses the journalrecording tag (ADR 43, work item 9).
 	@if grep -rq journalrecording Dockerfile .github/workflows scripts 2>/dev/null || \

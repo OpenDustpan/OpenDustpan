@@ -817,7 +817,8 @@ func TestPreferencesUnavailable(t *testing.T) {
 		Version: "test", Schema: nil, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: newTestAudit(),
 		OnAuditFailure: nil, DeletedUnits: nil, AuditChain: nil, AuditSinks: nil, IPAllowlists: nil, Gates: nil,
 		SessionPolicy: nil, SignIn: nil, CheckpointEpochs: nil, DenialLimiter: nil,
-		Instances: nil,
+		Instances:   nil,
+		StoreChecks: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

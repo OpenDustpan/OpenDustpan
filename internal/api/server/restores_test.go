@@ -181,6 +181,7 @@ func newRestoreFixtureWorkers(
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -377,8 +378,8 @@ func (g *gatedRestoreTarget) Delete(ctx context.Context, key blob.Key) error {
 	return g.inner.Delete(ctx, key)
 }
 
-func (g *gatedRestoreTarget) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return g.inner.List(ctx, prefix)
+func (g *gatedRestoreTarget) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return g.inner.ListPage(ctx, req)
 }
 
 func (g *gatedRestoreTarget) Ping(ctx context.Context) error {
@@ -650,6 +651,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -862,6 +864,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1003,6 +1006,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		SessionPolicy:    nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1135,6 +1139,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		SessionPolicy:    nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

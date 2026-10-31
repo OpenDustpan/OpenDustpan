@@ -6,6 +6,7 @@ import "slices"
 // constant.
 const (
 	portColName          = "name"
+	portColIssuer        = "issuer"
 	portColNameKey       = "name_key"
 	portColCreatedAtMs   = "created_at_ms"
 	portColDisplayName   = "display_name"
@@ -48,6 +49,7 @@ const (
 	portColAtMs          = "at_ms"
 	portColScopeKey      = "scope_key"
 	portColSeq           = "seq"
+	portColBlobKey       = "blob_key"
 	portColSHA256Text    = "sha256"
 	portColOwner         = "owner"
 	portColJobID         = "job_id"
@@ -141,7 +143,7 @@ func portableSpec() []PortableTable {
 				{Name: "invalid", Kind: KindBool},
 				{Name: "features", Kind: KindJSON},
 				{Name: "saved_at_ms", Kind: KindTime},
-				{Name: "blob_key", Kind: KindText},
+				{Name: portColBlobKey, Kind: KindText},
 				{Name: portColSize, Kind: KindInteger},
 				{Name: "blob_size", Kind: KindInteger},
 				{Name: "blob_md5", Kind: KindBytes},
@@ -165,7 +167,7 @@ func portableSpec() []PortableTable {
 				{Name: portColStackID, Kind: KindText},
 				{Name: portColUpdateID, Kind: KindText},
 				{Name: portColArrival, Kind: KindInteger},
-				{Name: "blob_key", Kind: KindText},
+				{Name: portColBlobKey, Kind: KindText},
 				{Name: portColSHA256, Kind: KindBytes},
 				{Name: "md5", Kind: KindBytes},
 				{Name: portColSize, Kind: KindInteger},
@@ -587,7 +589,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColProviderID},
 			Columns: []Column{
 				{Name: portColProviderID, Kind: KindText},
-				{Name: "issuer", Kind: KindText},
+				{Name: portColIssuer, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
 		},
@@ -606,7 +608,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColProviderID},
 			Columns: []Column{
 				{Name: portColProviderID, Kind: KindText},
-				{Name: "issuer", Kind: KindText},
+				{Name: portColIssuer, Kind: KindText},
 				{Name: portColDisplayName, Kind: KindText},
 				{Name: "client_id", Kind: KindText},
 				{Name: "client_secret", Kind: KindBytes},
@@ -614,7 +616,7 @@ func portableSpec() []PortableTable {
 				{Name: "auto_create", Kind: KindBool},
 				{Name: "enabled", Kind: KindBool},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "updated_at_ms", Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: "version", Kind: KindInteger},
 				{Name: "mode", Kind: KindText},
 				{Name: "authorization_url", Kind: KindText},
@@ -690,6 +692,7 @@ func portableSpec() []PortableTable {
 				{Name: "disable_accounts", Kind: KindBool},
 				{Name: "disable_break_glass", Kind: KindBool},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: "exchange_lifetime_ms", Kind: KindInteger},
 			},
 		},
 		{
@@ -720,8 +723,12 @@ func portableSpec() []PortableTable {
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),
+		portableOutboxTables(),
+		portableDeliveryTables(),
 		portableTriggerTables(),
 		portableItemKeyTables(),
 		portableSettingTables(),
+		portableCatalogTables(),
+		portableTrustRuleTables(),
 	)
 }

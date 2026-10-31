@@ -118,6 +118,18 @@ linters:
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
             - pkg: github.com/jackc/pgx
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
+        githubfake:
+          # The fake GitHub host is test infrastructure. No file of the binary
+          # (cmd/, pkg/ and internal/) imports it, except a test file, so the
+          # binary never links it.
+          files:
+            - "**/cmd/**"
+            - "**/pkg/**"
+            - "**/internal/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/e2e/githubfake
+              desc: The fake GitHub host is for tests; the binary never links it.
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package
@@ -394,6 +406,12 @@ linters:
         - empty
         - stdlib
         - generic
+        # The error translation of the PostgreSQL store wraps the pool and its
+        # transactions. sqlc's DBTX interface and the pgx transaction
+        # starters require these return types.
+        - github.com/jackc/pgx/v5.Rows
+        - github.com/jackc/pgx/v5.Row
+        - github.com/jackc/pgx/v5.Tx
 
     misspell:
       locale: US
@@ -524,7 +542,7 @@ linters:
       # adapters of the tool-neutral REST API and the helpers that they call.
       # The tool-compatible APIs and the runner protocol keep their own wire
       # formats, and apidesc is the one place that reads the raw request.
-      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|route|server|sourcefilter|triggers)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
+      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|server|sourcefilter|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
         linters:
           - forbidigo
         text: through apidesc

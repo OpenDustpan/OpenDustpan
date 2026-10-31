@@ -67,6 +67,17 @@ func Run(t *testing.T, newStore Factory) {
 		{"a write whose record is gone changes nothing", testCompletionLost},
 	}
 
+	runCases(t, newStore, cases)
+}
+
+// runCases runs each case as a parallel subtest on a fresh store.
+func runCases[S any](t *testing.T, newStore func(t *testing.T) S, cases []struct {
+	name string
+	test func(t *testing.T, s S)
+},
+) {
+	t.Helper()
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

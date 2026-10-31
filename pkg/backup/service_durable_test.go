@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
@@ -343,7 +344,7 @@ func assertCompleteBackup(t *testing.T, target *memStore, id backup.ID) {
 		t.Fatalf("check backup %s: %v", id, err)
 	}
 
-	objects, err := target.List(t.Context(), "backups/"+id.String())
+	objects, err := blobtest.ListAll(t.Context(), target, "backups/"+id.String())
 	if err != nil {
 		t.Fatalf("list backup %s: %v", id, err)
 	}

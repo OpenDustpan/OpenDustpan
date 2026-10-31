@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
@@ -1552,7 +1553,7 @@ func (exportPanicsStore) CheckpointByVersion(
 // PutCheckpoint panics: the delete route never writes state.
 func (exportPanicsStore) PutCheckpoint(
 	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
-) error {
+) (bool, error) {
 	panic("delete must not write a checkpoint")
 }
 
@@ -1623,6 +1624,7 @@ func newDeleteHandlerWithAudit(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Tokens:             nil,
@@ -1992,6 +1994,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 	stores := unusedUpdateStores{UpdateStore: nil, CheckpointStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,
@@ -2030,7 +2033,7 @@ func (emptyCheckpointStore) ActiveUpdate(_ context.Context, _ stack.Ref) (stack.
 
 func (emptyCheckpointStore) PutCheckpoint(
 	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
-) error {
+) (bool, error) {
 	panic("PutCheckpoint is not used by the delete route")
 }
 
@@ -2066,6 +2069,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 	stores := emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,

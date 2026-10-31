@@ -88,7 +88,7 @@ func newGroupService(t *testing.T, dir gate.ApproverDirectory) (*gate.ConfigServ
 	st := &recordingStore{Store: nil, writes: nil, rule: nil, def: nil}
 
 	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: st, Namespaces: fakeNamespaces{}, Approvers: dir, Now: configNow,
+		Store: st, Namespaces: fakeNamespaces{}, Approvers: dir, Engine: nil, Now: configNow,
 	})
 	if err != nil {
 		t.Fatalf("NewConfigService() = %v", err)
