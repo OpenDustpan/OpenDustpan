@@ -321,8 +321,8 @@ The report holds these fields:
 | `machine` | CPU count and model, memory, operating system, architecture and Go version of the host |
 | `instances`, `clients`, `thinkMs`, `units` | The settings of the run |
 | `steady` | The requests that began in the measurement window: `requests`, `errors`, `errorRate`, `requestsPerSec`, `errorStatuses` and one entry in `routes` for each route |
-| `resources` | CPU in cores, averaged over the window, for the server processes, PostgreSQL and the object store; the harness CPU; the client connections to PostgreSQL (mean and maximum); the transactions each second; and the CPU cost of 1000 requests in core-milliseconds |
-| `restart` | With `-restart`: the stop time and the start time of the instance, and the requests `during` the restart (from the SIGTERM to the ready instance) and `after` it |
+| `resources` | The CPU in cores, averaged over the window, of the server processes, PostgreSQL, the object store and the harness. Also the client connections to PostgreSQL (mean and maximum), the transactions each second, and the CPU cost of 1000 requests in core-milliseconds |
+| `restart` | With `-restart`: the stop time and the start time of the instance. Also the requests `during` the restart (SIGTERM to ready) and `after` it |
 | `clientErrors` | The client calls that failed, over the whole run |
 
 Each entry of `routes` holds `requests`, `errors`, `p50Ms`, `p95Ms`, `p99Ms` and `maxMs`.
