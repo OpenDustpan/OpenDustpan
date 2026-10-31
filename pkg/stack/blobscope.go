@@ -140,33 +140,44 @@ func (b *scopedBlobs) Delete(ctx context.Context, key blob.Key) error {
 	return b.refuse(ctx, "delete", err)
 }
 
-// List implements blob.Store. It returns blob.ErrOutOfScope when prefix is not
-// a directory inside the directory of the stack, and when the store returns a
-// key outside that directory. In the second case it returns no key, so a
-// caller that deletes what it lists deletes nothing.
+// ListPage implements blob.Store. It returns blob.ErrOutOfScope when the
+// prefix is not a directory inside the directory of the stack, and when the
+// store returns a key outside that directory. In the second case it returns no
+// key, so a caller that deletes what it lists deletes nothing.
 //
 // Defense in depth: the store lists by prefix. This check stays so that a
 // fault of an adapter that lists more than the prefix never reaches the delete
 // of a sweep, and it does not rely on the adapter.
-func (b *scopedBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	dir := strings.TrimSuffix(prefix, "/") + "/"
+func (b *scopedBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	dir := strings.TrimSuffix(req.Prefix, "/") + "/"
 
 	if !strings.HasPrefix(dir, b.allowed) {
-		return nil, b.refusePrefix(ctx, prefix)
+		return blob.Page{}, b.refusePrefix(ctx, req.Prefix)
 	}
 
-	objects, err := b.view.List(ctx, prefix)
+	// Defense in depth: the view checks the position too. This check stays so
+	// that a list never starts from a key outside the directory of the stack,
+	// whatever the view and the store under it do.
+	if req.After != "" && !strings.HasPrefix(req.After.String(), b.allowed) {
+		return blob.Page{}, b.record(ctx, "list", b.whereOf(req.After))
+	}
+
+	page, err := b.view.ListPage(ctx, req)
 	if err != nil {
-		return nil, b.refuse(ctx, "list", err)
+		return blob.Page{}, b.refuse(ctx, "list", err)
 	}
 
-	for i := range objects {
-		if !strings.HasPrefix(objects[i].Key.String(), b.allowed) {
-			return nil, b.record(ctx, "list", b.whereOf(objects[i].Key))
+	if page.Next != "" && !strings.HasPrefix(page.Next.String(), b.allowed) {
+		return blob.Page{}, b.record(ctx, "list", b.whereOf(page.Next))
+	}
+
+	for i := range page.Objects {
+		if !strings.HasPrefix(page.Objects[i].Key.String(), b.allowed) {
+			return blob.Page{}, b.record(ctx, "list", b.whereOf(page.Objects[i].Key))
 		}
 	}
 
-	return objects, nil
+	return page, nil
 }
 
 // Ping implements blob.Store. It takes no key, so the scope does not apply.
@@ -176,6 +187,26 @@ func (b *scopedBlobs) Ping(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// listAll walks every page under prefix and returns the objects. Only a
+// caller that lists the directory of one update uses it: that directory holds
+// the saves and the journal batches of one update, and the sweep that runs
+// after each save keeps it small. A caller that lists a stack acts on each page
+// as it arrives with blob.WalkPages.
+func (b *scopedBlobs) listAll(ctx context.Context, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, b, prefix, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }
 
 // narrow returns the access that is limited to the directory prefix inside the

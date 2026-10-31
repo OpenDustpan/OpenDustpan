@@ -52,22 +52,22 @@ type wideListStore struct {
 	extra []string
 }
 
-func (w *wideListStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	objects, err := w.memStore.List(ctx, prefix)
+func (w *wideListStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := w.memStore.ListPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
 	for _, name := range w.extra {
 		key, parseErr := blob.ParseKey(name)
 		if parseErr != nil {
-			return nil, parseErr
+			return blob.Page{}, parseErr
 		}
 
-		objects = append(objects, blob.Object{ModifiedAt: time.Time{}, Key: key})
+		page.Objects = append(page.Objects, blob.Object{ModifiedAt: time.Time{}, Key: key})
 	}
 
-	return objects, nil
+	return page, nil
 }
 
 func TestClearPartialRefusesAKeyOfAnotherBackup(t *testing.T) {

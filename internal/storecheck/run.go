@@ -123,10 +123,10 @@ func (m *meter) Delete(ctx context.Context, key blob.Key) error {
 	return m.see(m.inner.Delete(ctx, key))
 }
 
-func (m *meter) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	objects, err := m.inner.List(ctx, prefix)
+func (m *meter) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := m.inner.ListPage(ctx, req)
 
-	return objects, m.see(err)
+	return page, m.see(err)
 }
 
 func (m *meter) Ping(ctx context.Context) error {
@@ -276,32 +276,40 @@ func (r *run) finishPrefix(ctx context.Context, report *Report) (int, error) {
 	return remaining, err
 }
 
-// deletePrefix deletes each object under prefix with one Delete call, then
-// lists the prefix again. It returns the count that the second listing shows
-// and the first delete error. A caller passes the view of the prefix or the
-// meter around it, so the store refuses a key outside the prefix. A delete
-// that fails once is not tried again here: the prefix reaper deletes what
-// stays.
+// deletePrefix deletes the objects under prefix one page at a time, with one
+// Delete call for each object, then walks the prefix again. It returns the
+// count that the second walk shows and the first delete error. A caller passes
+// the view of the prefix or the meter around it, so the store refuses a key
+// outside the prefix. A delete that fails once is not tried again here: the
+// prefix reaper deletes what stays.
 func deletePrefix(ctx context.Context, st blob.Store, prefix string) (int, error) {
-	objects, err := st.List(ctx, prefix)
+	var first error
+
+	err := blob.WalkPages(ctx, st, prefix, func(page []blob.Object) error {
+		for _, obj := range page {
+			if delErr := st.Delete(ctx, obj.Key); delErr != nil && first == nil {
+				first = delErr
+			}
+		}
+
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("list the prefix: %w", err)
 	}
 
-	var first error
+	left := 0
 
-	for _, obj := range objects {
-		if delErr := st.Delete(ctx, obj.Key); delErr != nil && first == nil {
-			first = delErr
-		}
-	}
+	err = blob.WalkPages(ctx, st, prefix, func(page []blob.Object) error {
+		left += len(page)
 
-	left, err := st.List(ctx, prefix)
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("list the prefix again: %w", err)
 	}
 
-	return len(left), first
+	return left, first
 }
 
 // payload returns n bytes that depend on label, so two labels give two
@@ -571,8 +579,13 @@ func caseFailedPut(ctx context.Context, r *run, dir string) error {
 	return nil
 }
 
+// listPageLimit is the page size of the paging case. It is below the number
+// of objects that the case writes, so the case needs three pages. The check
+// budget keeps the case from writing more than one full page of the port.
+const listPageLimit = 2
+
 func caseList(ctx context.Context, r *run, dir string) error {
-	names := []string{"c", "a", "b"}
+	names := []string{"c", "a", "e", "b", "d"}
 	for _, name := range names {
 		key, keyErr := r.key(dir, name)
 		if keyErr != nil {
@@ -584,31 +597,106 @@ func caseList(ctx context.Context, r *run, dir string) error {
 		}
 	}
 
-	objects, err := r.m.List(ctx, dir)
+	want := []string{dir + "a", dir + "b", dir + "c", dir + "d", dir + "e"}
+
+	got, err := pageThrough(ctx, r, dir, len(want))
 	if err != nil {
 		return err
 	}
 
-	got := make([]string, 0, len(objects))
-	for _, obj := range objects {
-		got = append(got, obj.Key.String())
+	if !slices.Equal(got, want) {
+		return failure("the list pages are not the written keys in key order")
 	}
 
-	want := []string{dir + "a", dir + "b", dir + "c"}
-	if !slices.Equal(got, want) {
-		return failure("the list is not the written keys in key order")
+	return caseListAfter(ctx, r, dir, want)
+}
+
+// pageThrough lists dir with a limit below the count of objects: each page
+// holds at most the limit, and Next is the last key of the page. It returns
+// the keys of all pages, and stops with a failure when the pages do not end
+// within count pages.
+func pageThrough(ctx context.Context, r *run, dir string, count int) ([]string, error) {
+	var (
+		got   []string
+		after blob.Key
+	)
+
+	for range count + 1 {
+		page, err := r.m.ListPage(ctx, blob.PageRequest{Prefix: dir, After: after, Limit: listPageLimit})
+		if err != nil {
+			return nil, err
+		}
+
+		if len(page.Objects) > listPageLimit {
+			return nil, failure("a list page holds more objects than its limit")
+		}
+
+		for _, obj := range page.Objects {
+			got = append(got, obj.Key.String())
+		}
+
+		if page.Next == "" {
+			return got, nil
+		}
+
+		if len(page.Objects) == 0 || page.Next != page.Objects[len(page.Objects)-1].Key {
+			return nil, failure("the next key of a list page is not its last key")
+		}
+
+		after = page.Next
+	}
+
+	return nil, failure("the list did not end")
+}
+
+// caseListAfter checks that After starts the page at the first key after it,
+// and that the walk over the same prefix gives the same keys.
+func caseListAfter(ctx context.Context, r *run, dir string, want []string) error {
+	page, err := r.m.ListPage(ctx, blob.PageRequest{
+		Prefix: dir, After: blob.Key(want[1]), Limit: blob.MaxPageLimit,
+	})
+	if err != nil {
+		return err
+	}
+
+	after := make([]string, 0, len(page.Objects))
+	for _, obj := range page.Objects {
+		after = append(after, obj.Key.String())
+	}
+
+	if !slices.Equal(after, want[2:]) || page.Next != "" {
+		return failure("a list after a key does not start at the next key")
+	}
+
+	var walked []string
+
+	walkErr := blob.Walk(ctx, r.m, dir, func(o blob.Object) error {
+		walked = append(walked, o.Key.String())
+
+		return nil
+	})
+	if walkErr != nil {
+		if errors.Is(walkErr, blob.ErrInvalidPage) {
+			return failure("the list pages of the store break the rules of the port")
+		}
+
+		return walkErr
+	}
+
+	if !slices.Equal(walked, want) {
+		return failure("the walk is not the written keys in key order")
 	}
 
 	return nil
 }
 
 func caseListMissing(ctx context.Context, r *run, dir string) error {
-	objects, err := r.m.List(ctx, dir+"none/")
+	page, err := r.m.ListPage(ctx, blob.PageRequest{Prefix: dir + "none/", After: "", Limit: blob.MaxPageLimit})
 	if err != nil {
 		return err
 	}
 
-	if len(objects) != 0 {
+	if len(page.Objects) != 0 || page.Next != "" {
 		return failure("the list of a missing prefix is not empty")
 	}
 

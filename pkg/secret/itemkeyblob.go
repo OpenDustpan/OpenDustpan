@@ -240,7 +240,13 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 		return nil, err
 	}
 
-	objects, err := v.List(ctx, v.Prefix()+itemKeyDir+string(id)+"/")
+	var objects []blob.Object
+
+	err = blob.Walk(ctx, v, v.Prefix()+itemKeyDir+string(id)+"/", func(o blob.Object) error {
+		objects = append(objects, o)
+
+		return nil
+	})
 	if err != nil {
 		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), scopeaudit.OutsideNamespace)
 	}
