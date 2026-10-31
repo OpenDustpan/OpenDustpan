@@ -71,6 +71,8 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   access/              domain: roles, grants and the decision of what a principal can do on an object
   accesstoken/         domain: the access tokens that the server issues to principals
   session/             domain: the console sessions that the server issues after a sign-in
+  localuser/           domain: local users, their passwords, reset codes and the demo user of a dev installation
+  mfa/                 domain: the built-in factors of a person: passkeys, recovery codes, pending sign-ins, the MFA policy
   tempadmin/           domain: temporary administrators of an installation
   ipallow/             domain: per-namespace IP allowlists
   audit/               domain: the tool-neutral audit log, with a hash chain for each namespace
