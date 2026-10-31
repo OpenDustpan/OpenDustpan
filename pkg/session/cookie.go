@@ -13,8 +13,9 @@ import (
 // server does not store. A session lives in two sealed cookies: the access
 // cookie, which authenticates each request for at most AccessLifetime, and
 // the refresh cookie, which only the refresh route opens. A refresh needs a
-// proof that the refresh key of the browser signs. One valid-after time for
-// each principal ends every session of that principal.
+// proof that the refresh key of the browser signs, with a server nonce. One
+// session generation for each principal ends every session of that
+// principal.
 //
 // The types and the ports come first. The implementation replaces Store and
 // its session rows: no adapter implements these ports yet, and the cases of
@@ -27,11 +28,18 @@ const (
 	// Path other than "/".
 	AccessCookie = "__Host-dustpan_access"
 	// RefreshCookie is the name of the refresh cookie. The prefix __Secure-
-	// allows the narrow path RefreshPath, so that the browser sends the
-	// cookie to the refresh route only.
+	// allows the narrow path RefreshCookiePath, so that the browser sends the
+	// cookie to the session routes only.
 	RefreshCookie = "__Secure-dustpan_refresh"
-	// RefreshPath is the path of the refresh route and of the refresh cookie.
-	RefreshPath = "/api/server/session/refresh"
+	// RefreshCookiePath is the path of the refresh cookie. Only RefreshRoute
+	// and SignOutRoute open the cookie.
+	RefreshCookiePath = "/api/server/session/"
+	// RefreshRoute is the path of the refresh route.
+	RefreshRoute = "/api/server/session/refresh"
+	// SignOutRoute is the path of the sign-out route.
+	SignOutRoute = "/api/server/session/sign-out"
+	// NonceHeader is the header that carries a server nonce to the browser.
+	NonceHeader = "DPoP-Nonce"
 	// ForgeCookiePrefix starts the name of each cookie that holds the token of
 	// a Git host user. The connection ID follows it.
 	ForgeCookiePrefix = "__Host-dustpan_forge_"
@@ -41,11 +49,13 @@ const (
 const (
 	// AccessLifetime is the longest life of an access cookie.
 	AccessLifetime = 5 * time.Minute
-	// ProofMaxAge is how old the iat of a refresh proof can be.
-	ProofMaxAge = 25 * time.Second
-	// ProofMaxSkew is how far in the future the iat of a refresh proof can
-	// be. ProofMaxAge plus ProofMaxSkew is the window of a proof: 30 seconds.
-	ProofMaxSkew = 5 * time.Second
+	// NonceWindow is how old the server time in the nonce of a proof can
+	// be. It is the window of a proof, measured with the clock of the
+	// server only.
+	NonceWindow = 30 * time.Second
+	// ProofIATTolerance is how far the iat of a proof can be from the time
+	// of the server. It refuses a proof from a device with a clock far off.
+	ProofIATTolerance = 24 * time.Hour
 	// MaxCookieValue is the longest cookie value, in bytes, that an open
 	// reads. A longer value is refused before the open.
 	MaxCookieValue = 4096
@@ -57,9 +67,25 @@ const (
 	// MaxForgeCookies is the largest number of Git host token cookies that a
 	// request can carry.
 	MaxForgeCookies = 4
+	// MaxRefreshCookies is the largest number of refresh cookies that a
+	// request can carry. A sibling host can set a second one.
+	MaxRefreshCookies = 2
 	// DefaultKeyRotation is the default period between two session key
 	// versions.
 	DefaultKeyRotation = 30 * 24 * time.Hour
+	// KeyReloadInterval is how often each replica reads the key ring again.
+	// It is also the bound on the time that a retired version still opens.
+	KeyReloadInterval = time.Minute
+	// KeyOnDemandReloadEvery is the shortest time between two reads of the
+	// ring for a cookie that names a key ID that the replica does not hold.
+	KeyOnDemandReloadEvery = 10 * time.Second
+	// KeySealDelay is the time between the creation of a version and its
+	// first seal, more than four reload intervals.
+	KeySealDelay = 5 * time.Minute
+	// KeySealCountRotate is the count of seals of one version on one replica
+	// that makes the replica add a new version. With random 96-bit nonces,
+	// a key allows 2^32 seals, so the limit holds for up to 16 replicas.
+	KeySealCountRotate = 1 << 28
 )
 
 // Prefixes of the IDs of this file. An ID is opaque: never parse it.
@@ -85,6 +111,13 @@ var (
 	// ErrCookieExpired reports an access cookie or a Git host token cookie
 	// after its expiry.
 	ErrCookieExpired = errors.New("session cookie expired")
+	// ErrNonceStale reports a server nonce older than NonceWindow, or one
+	// whose time is after the time of the server.
+	ErrNonceStale = errors.New("server nonce is outside its window")
+	// ErrEnrollmentRequired reports a request of an enroll-only session to
+	// a route that does not enroll a factor, read the session, refresh or
+	// sign out.
+	ErrEnrollmentRequired = errors.New("the session can only enroll a factor")
 )
 
 // Errors of a refresh proof.
@@ -96,8 +129,12 @@ var (
 	// ErrProofSignature reports a proof whose signature does not verify with
 	// the key in its jwk header.
 	ErrProofSignature = errors.New("refresh proof signature is not valid")
-	// ErrProofStale reports a proof whose iat is outside the window.
-	ErrProofStale = errors.New("refresh proof is outside its time window")
+	// ErrProofStale reports a proof whose iat is further than
+	// ProofIATTolerance from the time of the server.
+	ErrProofStale = errors.New("refresh proof time is far from the server time")
+	// ErrProofNonce reports a proof with no nonce claim. The caller opens the
+	// nonce and returns ErrNonceStale for an old one.
+	ErrProofNonce = errors.New("refresh proof has no server nonce")
 	// ErrProofTarget reports a proof whose htm or htu is not the method or
 	// the public URL of the refresh route.
 	ErrProofTarget = errors.New("refresh proof names another request")
@@ -134,12 +171,42 @@ func (CSRF) GoString() string {
 	return "[csrf value]"
 }
 
+// FreshKind names how the last fresh authentication happened.
+type FreshKind string
+
+// Kinds of a fresh authentication.
+const (
+	// FreshNone is no fresh authentication.
+	FreshNone FreshKind = ""
+	// FreshPasskey is a passkey with user verification.
+	FreshPasskey FreshKind = "passkey"
+	// FreshMFA is a password and a second factor.
+	FreshMFA FreshKind = "mfa"
+	// FreshPassword is a password alone, for a person with no factor where
+	// no SSO provider exists and MFA is not required.
+	FreshPassword FreshKind = "password"
+	// FreshSSO is a new authentication at the SSO identity provider.
+	FreshSSO FreshKind = "sso"
+)
+
+// Restriction limits what a session can do.
+type Restriction string
+
+// Restrictions of a session.
+const (
+	// RestrictionNone is a session with no restriction.
+	RestrictionNone Restriction = ""
+	// RestrictionEnrollOnly is a session that can only enroll a factor,
+	// read the session, refresh and sign out.
+	RestrictionEnrollOnly Restriction = "enroll-only"
+)
+
 // Claims are the fields that the access cookie and the refresh cookie share.
-// A zero MFAAt or FreshAt is no MFA step or no fresh authentication.
+// A zero MFAAt or FreshAt is no MFA step or no fresh authentication. The
+// issuer computes each deadline from its own clock.
 type Claims struct {
-	// SignInAt is the time of the sign-in, or of the last change that kept
-	// the session (a password change by the person). A session
-	// authenticates only while SignInAt is after the valid-after time.
+	// SignInAt is the time of the sign-in. It never changes for the life of
+	// the sign-in.
 	SignInAt time.Time
 	// AuthTime is the time of the authentication at the identity provider.
 	AuthTime time.Time
@@ -157,7 +224,16 @@ type Claims struct {
 	SignInID string
 	// Provider names the sign-in method.
 	Provider string
-	// RefreshKey is the thumbprint of the refresh key of the browser.
+	// FreshKind is the kind of the last fresh authentication.
+	FreshKind FreshKind
+	// Restriction limits the session.
+	Restriction Restriction
+	// Generation is the session generation of the principal that the issue
+	// read. The cookie works only while it equals the stored generation.
+	Generation uint64
+	// RefreshKey is the thumbprint of the refresh key of the browser. Each
+	// issue after the first copies it, and never reads a key from the
+	// request.
 	RefreshKey Thumbprint
 	// CSRF is the CSRF value of the sign-in.
 	CSRF CSRF
@@ -217,8 +293,6 @@ func (ForgeToken) GoString() string {
 // only in a request whose access cookie has the same sign-in ID and
 // authenticates.
 type ForgeClaims struct {
-	// SignInAt is the sign-in time of the session that got the token.
-	SignInAt time.Time
 	// ExpiresAt is the earlier of the expiry of the token and the absolute
 	// deadline of the session.
 	ExpiresAt time.Time
@@ -230,6 +304,9 @@ type ForgeClaims struct {
 	SignInID string
 	// KeyID names the session key version that sealed the cookie.
 	KeyID string
+	// Generation is the session generation of the session that got the
+	// token. Each bump ends the cookie.
+	Generation uint64
 	// Token is the user token. It is never refreshed.
 	Token ForgeToken
 }
@@ -260,13 +337,22 @@ type Sealer interface {
 	// OpenForge returns the claims of the Git host token cookie raw of the
 	// connection connectionID at now.
 	OpenForge(ctx context.Context, raw, connectionID string, now time.Time) (ForgeClaims, error)
+	// SealNonce returns a server nonce with the time at.
+	SealNonce(ctx context.Context, at time.Time) (string, error)
+	// OpenNonce returns the time of the server nonce raw. It returns
+	// ErrNonceStale when that time is more than NonceWindow before now, or
+	// after now.
+	OpenNonce(ctx context.Context, raw string, now time.Time) (time.Time, error)
 }
 
 // WrappedKey is one session key version as SQL keeps it: wrapped by the
-// key-encryption key, never in plain form. SealsUntil is zero while the
-// version is the newest. RetiredAt is zero while the version can open.
+// key-encryption key, never in plain form. A version opens from its
+// creation, and seals from SealsFrom, so that each replica loads it before
+// the first cookie that names it. SealsUntil is zero while no newer version
+// exists. RetiredAt is zero while the version can open.
 type WrappedKey struct {
 	CreatedAt  time.Time
+	SealsFrom  time.Time
 	SealsUntil time.Time
 	RetiredAt  time.Time
 	// ID has the prefix KeyIDPrefix.
@@ -286,9 +372,9 @@ type WrappedKey struct {
 // validation.
 type KeyStore interface {
 	// AddKey stores k as the newest version, sets SealsUntil of the version
-	// that was the newest to k.CreatedAt, and appends e. It returns
-	// ErrInvalid when k fails validation, and ErrAlreadyExists when the ID
-	// is taken.
+	// that was the newest to k.SealsFrom, and appends e. It returns
+	// ErrInvalid when k fails validation or k.SealsFrom is before
+	// k.CreatedAt, and ErrAlreadyExists when the ID is taken.
 	AddKey(ctx context.Context, k WrappedKey, e audit.Entry) error
 	// ListKeys returns each version that is not retired, newest first.
 	ListKeys(ctx context.Context) ([]WrappedKey, error)
@@ -299,7 +385,7 @@ type KeyStore interface {
 	RetireKeys(ctx context.Context, ids []string, at time.Time, e audit.Entry) error
 }
 
-// BumpCause names why the valid-after time of a principal moved.
+// BumpCause names why the session generation of a principal moved.
 type BumpCause string
 
 // Causes of a bump.
@@ -319,29 +405,29 @@ const (
 )
 
 // PrincipalState is what each request with an access cookie, and each
-// refresh, reads about the person of the session: the owner, its
-// valid-after time, and the policies of the installation, from one read.
-// ValidAfter is zero when no bump happened.
+// refresh, reads about the person of the session: the owner, its session
+// generation, and the policies of the installation, from one read. The
+// generation is at least 1.
 type PrincipalState struct {
-	ValidAfter time.Time
 	Owner      Owner
 	Policy     Policy
 	Accounts   AccountPolicy
+	Generation uint64
 }
 
-// PrincipalStateStore reads and bumps the valid-after time of principals.
+// PrincipalStateStore reads and bumps the session generation of principals.
 type PrincipalStateStore interface {
 	// PrincipalState returns the state of the principal id. It returns
 	// ErrPrincipalNotFound when the principal does not exist, was deleted,
 	// or is not a person. A disabled principal comes back with its disable
 	// time: the caller decides.
 	PrincipalState(ctx context.Context, id string) (PrincipalState, error)
-	// BumpValidAfter sets the valid-after time of the principal id to at,
-	// unless it holds a later time, and appends e, in one transaction. It
-	// returns the stored time. It returns ErrInvalid for a cause that
-	// ValidBumpCause refuses, ErrPrincipalNotFound as PrincipalState does,
-	// and audit.ErrInvalidEntry for an entry that fails validation.
-	BumpValidAfter(ctx context.Context, id string, at time.Time, cause BumpCause, e audit.Entry) (time.Time, error)
+	// BumpGeneration adds 1 to the session generation of the principal id
+	// and appends e, in one transaction, and returns the new generation. It
+	// needs no clock. It returns ErrInvalid for a cause that ValidBumpCause
+	// refuses, ErrPrincipalNotFound as PrincipalState does, and
+	// audit.ErrInvalidEntry for an entry that fails validation.
+	BumpGeneration(ctx context.Context, id string, cause BumpCause, e audit.Entry) (uint64, error)
 }
 
 // ProofTarget is the request that a refresh proof must name: the method and
@@ -351,15 +437,23 @@ type ProofTarget struct {
 	URL    string
 }
 
+// VerifiedProof is what a good proof gives: the RFC 7638 thumbprint of its
+// key (over crv, kty, x and y only) and its nonce claim, still sealed.
+type VerifiedProof struct {
+	Nonce      string
+	Thumbprint Thumbprint
+}
+
 // ProofVerifier checks a refresh proof. It keeps no list of used proofs: the
-// window of ProofMaxAge and ProofMaxSkew limits a replay.
+// nonce window limits a replay. It never opens a URL from the proof, and it
+// compares htu with the configured public URL, never with the Host header.
 type ProofVerifier interface {
-	// Verify checks the proof raw for the request want at now, and returns
-	// the thumbprint of its key. It returns ErrProofMalformed,
-	// ErrProofSignature, ErrProofStale or ErrProofTarget. The caller
-	// compares the thumbprint with the cookie, in constant time, and
-	// returns ErrProofKey on a difference.
-	Verify(ctx context.Context, raw string, want ProofTarget, now time.Time) (Thumbprint, error)
+	// Verify checks the proof raw for the request want at now. It returns
+	// ErrProofMalformed, ErrProofSignature, ErrProofStale, ErrProofTarget or
+	// ErrProofNonce. The caller opens the nonce with Sealer.OpenNonce,
+	// compares the thumbprint with the cookie in constant time, and returns
+	// ErrProofKey on a difference.
+	Verify(ctx context.Context, raw string, want ProofTarget, now time.Time) (VerifiedProof, error)
 }
 
 // Refusal names the step of a refresh that refused it. The audit entry of
@@ -372,7 +466,7 @@ const (
 	RefusalCookie     Refusal = "cookie"
 	RefusalProof      Refusal = "proof"
 	RefusalPrincipal  Refusal = "principal"
-	RefusalValidAfter Refusal = "valid-after"
+	RefusalGeneration Refusal = "generation"
 	RefusalIdle       Refusal = "idle"
 	RefusalAbsolute   Refusal = "absolute"
 	RefusalSubject    Refusal = "subject"
@@ -382,8 +476,10 @@ const (
 // HTTP adapter copies each value and checks none of them: the service
 // checks each one.
 type RefreshRequest struct {
-	Now          time.Time
-	Cookie       string
+	Now time.Time
+	// Cookies holds each refresh cookie of the request, in the order of the
+	// Cookie header. More than MaxRefreshCookies is refused.
+	Cookies      []string
 	Proof        string
 	Origin       string
 	SecFetchSite string
@@ -392,10 +488,11 @@ type RefreshRequest struct {
 }
 
 // Issued is the answer of a good refresh or sign-in: the values of the two
-// cookies and the claims of the access cookie.
+// cookies, a new server nonce, and the claims of the access cookie.
 type Issued struct {
 	Access       string
 	Refresh      string
+	Nonce        string
 	AccessClaims AccessClaims
 }
 
@@ -408,6 +505,22 @@ type AccessRequest struct {
 	CSRFHeader   string
 	Origin       string
 	SecFetchSite string
+	// EnrollRoute reports a route that an enroll-only session can call.
+	EnrollRoute bool
+}
+
+// SignOutRequest is what the sign-out route reads from the request. It
+// needs an access cookie or a refresh cookie that opens, also after its
+// expiry, and no valid generation, because a sign-out only ends things.
+type SignOutRequest struct {
+	Now            time.Time
+	AccessCookie   string
+	RefreshCookies []string
+	CSRFHeader     string
+	Origin         string
+	SecFetchSite   string
+	SourceIP       string
+	UserAgent      string
 }
 
 // CookieSessions is the port that the HTTP adapters call to check and to
@@ -415,14 +528,22 @@ type AccessRequest struct {
 type CookieSessions interface {
 	// Authenticate checks the access cookie of r: the origin, the seal, the
 	// expiry, the CSRF value for a method that can change state, the
-	// principal state, the valid-after time and the deadlines under the
-	// current policy. It returns ErrUnauthenticated, wrapped with the cause,
-	// on any refusal.
+	// principal state, the generation, the deadlines under the current
+	// policy, and the restriction. It returns ErrUnauthenticated, wrapped
+	// with the cause, on any refusal, and ErrEnrollmentRequired for an
+	// enroll-only session on another route.
 	Authenticate(ctx context.Context, r AccessRequest) (AccessClaims, PrincipalState, error)
 	// Refresh runs the steps of a refresh in the order of the Refusal
 	// constants. A refusal returns ErrUnauthenticated, wrapped with the
-	// cause, sets no cookie, and appends a refusal entry.
+	// cause, sets no cookie, and appends a refusal entry. A proof with no
+	// nonce or an old one returns ErrNonceStale with a new nonce in Issued,
+	// and appends no entry.
 	Refresh(ctx context.Context, r RefreshRequest) (Issued, error)
+	// SignOut ends each run of the sign-in of the cookie that opens, and
+	// appends the entry. It returns ErrUnauthenticated when no cookie opens
+	// or the origin or the CSRF value is wrong. The adapter expires each
+	// session cookie either way.
+	SignOut(ctx context.Context, r SignOutRequest) error
 }
 
 // ValidBumpCause returns ErrInvalid when c is not a cause of a bump.
