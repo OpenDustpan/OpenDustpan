@@ -192,10 +192,18 @@ Sources:
      export and import, the restore swap and the staging copy, names its own
      bound in code. It sets `statement_timeout` and
      `idle_in_transaction_session_timeout` with `SET LOCAL` in its
-     transaction, or uses a connection of its own. The implementation finds
-     each path that uses the pool with no wrapper, and a test lists them by
-     name. A new path that skips the wrappers fails that test until it names
-     its bound.
+     transaction, or uses a connection of its own. On `main` these paths
+     are `pool.Acquire` in `inBackupTx`, `TryLockSweep`, and the direct
+     `s.pool.Query` and `s.pool.Exec` calls of the backup code.
+   - `TestLongPathsNameTheirBound` finds these paths with a static check: it
+     parses the files of `pkg/store/postgres` with `go/ast` and finds each
+     call of `Acquire`, `Hijack` and `Conn`, and each direct call on
+     `s.pool`. A list kept by hand would drift. Each path that the check
+     finds must be in the allowlist of the test, and the test checks that
+     the path sets both `statement_timeout` and
+     `idle_in_transaction_session_timeout`, not only that the allowlist
+     names it. A
+     new path fails the test until it names its bounds.
    - These bounds are code rules. They go into the catalog of code rules,
      and the installation API shows their values (decision 6).
 4. **The pool leaves a read-only server.** When the adapter translates an
@@ -301,8 +309,8 @@ Sources:
    window of 13 to 14 seconds that the e2e suite measured. The e2e records
    of the suite are files of each run and are not in the repository, and
    step 7 meets only the calls that run during its outage. So step 9 adds a
-   check of the retry of each route: the e2e proxy answers 503 to one route
-   at a time, and the record shows if the CLI sent the request again.
+   check of the retry of each route: the round-robin HTTP proxy of
+   `HACluster` (`e2e/ha.go`) answers 503 to one route at a time, and the record shows if the CLI sent the request again.
 
    | Write | CLI sends it again on 503 | Today on `main` | Decision |
    | --- | --- | --- | --- |
@@ -311,10 +319,14 @@ Sources:
    | Pulumi `CreateUpdate` | No | An update that did not start stays. The next command makes a new update | No change |
    | Pulumi `StartUpdate` | No | `StartBy` commits a running update. The server does not store the token. The command fails at once. The next `pulumi up` gets 409 for up to `DefaultLease`, 5 minutes after the start, or until `pulumi cancel` | An accepted exception (PM). The guide gives the remedy `pulumi cancel` and the block of at most 5 minutes |
    | TFE state version upload and finalize | Yes (OpenTofu) | Success on a repeat (`confirmRetry`) | No change |
-   | HTTP backend `LOCK` with the same lock ID | Yes (OpenTofu) | `lockAs` refuses any held lock with `ErrLocked`: 423, and `tofu` fails with its own lock in place | Success when the lock is still held, with the same lock ID and the same holder. The client chose the ID, so a match is the same request |
-   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | Yes (OpenTofu) | `heldBy` returns `ErrNotLocked`: 409 `workspace.not-locked` | The workspace row keeps a record of its last released lock: the lock ID, the holder and the time of the release. The API of the workspace shows it. On a free workspace, the HTTP backend `UNLOCK` answers success only when that record has the lock ID of the request. TFE `actions/unlock` sends no lock ID, so it answers success only when the record names the caller as the holder. In all other cases, 409 as today. No state changes, so no audit entry. `make e2e` checks each CLI version |
+   | HTTP backend `LOCK` with the same lock ID | Yes (OpenTofu) | `lockAs` refuses any held lock with `ErrLocked`: 423, and `tofu` fails with its own lock in place | Success when the lock is still held, with the same lock ID and the same holder. The client chose the ID, so a match is the same request. The handler pre-check and the service both apply the rule, before the refusal of a held lock |
+   | HTTP backend `UNLOCK`, TFE `actions/unlock`, after a committed unlock | Yes (OpenTofu) | HTTP backend: the handler pre-check (`!ws.Lock.Locked() \|\| ws.Lock.ID != info.ID`) answers 409 with no body. Below it, `UnlockLock` runs `checkLockID` first and gives `ErrLockMismatch`. TFE: `heldBy` gives `ErrNotLocked`, 409 `workspace.not-locked` | The workspace row keeps a record of its last released lock. The record holds the lock ID, the holder, the time of the release, and the kind of release: normal or forced. The API of the workspace shows it. On a free workspace, the HTTP backend `UNLOCK` answers success only when the record has the lock ID of the request. The release must also be a normal release, not a forced one. TFE `actions/unlock` sends no lock ID. So it answers success only when the record names the caller as the holder, after a normal release. After a forced release, the original holder gets 409, so the operator and the CLI see that someone broke the lock. In all other cases, 409 as today. The record has no age bound: the workspace is free, so a late match changes nothing, and the next release replaces the record. The rule goes in the handler pre-check and in the service, ahead of `checkLockID`. No state changes, so no audit entry. `make e2e` checks each CLI version |
    | TFE `actions/lock` sent again | Yes (OpenTofu) | 409 "is locked by" with the same subject. OpenTofu waits under `-lock-timeout`, then fails | An accepted exception (PM): the answer stays 409, and the lock fails closed. The real TFE also refuses a lock on a locked workspace. A match on the principal or the token cannot tell a retry from a second run. The lock record names the holder and the time. The guide gives the remedy: `tofu force-unlock` |
 
+   - The record is a change of the workspace store port. Its conformance
+     rows come first, before either adapter implements it. SQLite and
+     PostgreSQL both get the migration. The backup table list holds the new
+     columns, so `backup_coverage_test` passes.
    - Step 9d (decision 12) adds a row for each lock and unlock route and for
      `StartUpdate`.
    - The guide changes its sentence "OpenTofu: ... the workspace has no
@@ -339,11 +351,27 @@ Sources:
     - The renewal (`Extend`) of a lease. The claim then expires earlier than
       the runner counts, and two runners can hold one claim.
 
-    The guide gives this list. There is no silent fallback: the installation
-    API (decision 6) shows the effective values of `synchronous_commit` and
-    `synchronous_standby_names` as the database reports them. When
-    `synchronous_standby_names` is empty, the start log writes a warning that
-    names the losses. The readiness probe does not fail on it. This decision
+    The guide gives this list. There is no silent fallback:
+    - The installation API (decision 6) shows the values of
+      `synchronous_commit` and `synchronous_standby_names` as the database
+      reports them, under the name "PostgreSQL-level synchronous
+      replication". The API text says that storage-level replication is not
+      visible to the server. An RDS Multi-AZ DB instance and Aurora
+      replicate at the storage level, and there `synchronous_standby_names`
+      is empty.
+    - The setting `database-replication` lets the operator declare the mode:
+      `postgres` (the default: the server reads the facts above),
+      `storage-sync` (the service replicates synchronously at the storage
+      level, for example RDS Multi-AZ DB instances and Aurora) or `async`
+      (the operator accepts the losses above). The API shows the declared
+      value with the source `operator` or `default`, next to the reported
+      facts. Another value stops the start with
+      `store.failover-setting-invalid`.
+    - The start log writes a warning that names the losses only when the
+      setting is `postgres` and `synchronous_standby_names` is empty. A
+      correct `storage-sync` setup gets no false alarm.
+    - The guide gives the setting for RDS and Aurora.
+    - The readiness probe does not fail on the mode. This decision
     does not change the minimum topology of ADR 280 decision 5.
 11. **Leases and durable operations across the gap.**
     - The lease stays at 30 seconds (ADR 280 decision 8).
@@ -354,13 +382,36 @@ Sources:
       instance claims the operation with a new fencing token, and the step
       runs again (ADR 280 decision 3).
     - **A database gap does not count against the limits.** The `Deferred`
-      function of every runner matches `namespace.ErrUnavailable`, so a
-      step error from a gap gives the attempt back with no count. An expiry
+      function of every runner matches only the classes that mean that the
+      database cannot be reached: `ConnectionFailed`, `Shutdown` and
+      `ReadOnly`. A new domain sentinel, `namespace.ErrUnreachable`, wraps
+      these three classes. Each `storeerr.Error` still wraps
+      `namespace.ErrUnavailable` too, so the HTTP answer stays 503. A step
+      error from a gap gives the attempt back with no count.
+      `StatementTimeout` and `Capacity` count as normal failures: a step
+      whose statement always takes longer than the server timeout then
+      reaches `MaxAttempts` and fails, and it does not loop for ever. An
+      expiry
       does not count when the instance that held the claim wrote a
       heartbeat after the claim expired: a process that lived through a gap
       did not crash. The store checks this at the takeover, and again
       before `ErrExpiryLimit` ends an operation. The implementation tests
       both cases: a gap does not count, a crash does.
+    - The rule needs one stable owner for each process. Today
+      `durableOwner()` makes a new ID on each call when the instance ID is
+      empty, which fails safe (each gap counts), and `auditChainOwner()`
+      returns the constant `audit-chain`, which fails open (a crash never
+      counts). `NewServer` sets one instance ID for the process when the
+      embedder gives none, and every runner and the heartbeat use it.
+    - **The sweep lock.** `TryLockSweep` holds a session advisory lock on one
+      connection for the whole retention sweep. Advisory locks are not
+      replicated. After a failover, the lock connection of instance A is
+      dead, but its sweep can continue, and instance B can take the lock on
+      the new primary and start a second sweep. So the sweep checks its lock
+      connection with `SELECT 1` before each batch, and stops on an error.
+      The window shrinks to one batch. Each delete of a batch must be safe
+      to run twice. A test runs two sweeps at the same time and checks the
+      result. `TryLockSweep` is in the list of decision 3, with its bounds.
     - The claim times of durable operations and of audit sink leases come
       from the database clock. After a failover, the clock of the new
       primary counts. A skew between the old and the new primary must stay
@@ -430,7 +481,9 @@ binaries are not present.
 
 - `pkg/store/postgres`: `FailoverSettings` (the effective settings of
   decision 6) and `(*Store).FailoverSettings() FailoverSettings`.
-- `pkg/store/internal/storeerr`: the class `StatementTimeout`.
+- `pkg/store/internal/storeerr`: the class `StatementTimeout`, and the
+  wrap of `namespace.ErrUnreachable` for the classes `ConnectionFailed`,
+  `Shutdown` and `ReadOnly`.
 - `namespace.Store` gets no new method. A new optional interface in
   `pkg/dustpan`, `writeChecker` with `CheckWritable(ctx) error`, is what the
   readiness probe reads. The PostgreSQL store implements it. The error wraps
@@ -459,11 +512,19 @@ binaries are not present.
   unlock of decision 9, with one row for a matching record and one row for
   each kind of mismatch.
 - `e2e/ha_failover_test.go`: the check of the retry of each Pulumi and
-  OpenTofu route of decision 9, with the e2e proxy that answers 503 to one
-  route at a time.
+  OpenTofu route of decision 9, with the round-robin HTTP proxy of
+  `HACluster` that answers 503 to one route at a time.
 - Tests in `pkg/dustpan`: `TestReadinessStoreReadOnly`.
 - Tests in `pkg/durable`: `TestClaimLoopBacksOffDuringOutage`,
-  `TestUnavailableStepIsDeferred`, and one test for each loop of decision 11.
+  `TestUnavailableStepIsDeferred` (one row for each class: the three
+  classes of `ErrUnreachable` are deferred, `StatementTimeout` and
+  `Capacity` count), and one test for each loop of decision 11.
+- `pkg/namespace`: the sentinel `ErrUnreachable`.
+- Tests in `pkg/dustpan`: `TestOneOwnerForEachProcess`.
+- Tests of the retention sweep: `TestSweepStopsWhenLockConnectionDies`
+  and `TestTwoSweepsAtOnce`.
+- Tests of the settings: `database-replication` with each allowed value and
+  one value that is not allowed.
 - `e2e/ha_failover_test.go`: steps 9a to 9c.
 
 ## Consequences
@@ -527,3 +588,9 @@ The PM answered the architecture review on 2026-10-31:
    remedy in the guide (decision 9).
 7. The server timeouts of decision 3 and the answer to 57014 are decisions
    of this ADR.
+
+The architecture review of round 2 (2026-10-31) changed decisions 3, 9, 10
+and 11: the static check of the long paths, the record check in the handler
+and the service, the forced release, the declared replication mode, the
+classes that `Deferred` matches, the stable owner of a process, and the
+sweep lock.
