@@ -16,8 +16,9 @@ One ADR gives one entry:
   Repowise has no relation for a change in part, so the sentence keeps the
   ADR numbers.
 - reason: the start of the "Context" section, at most REASON_MAX characters.
-- scope: the repository paths that the ADR names in code spans. When the ADR
-  names no path, the scope is the ADR file.
+- scope: the repository paths that the ADR names in code spans and that
+  exist in the repository. When the ADR names no such path, the scope is
+  the ADR file.
 - currency: "superseded" when the status line starts with "superseded by
   ADR N", with superseded_by set to that ADR. Else "active".
 - accepted_at: the date of the status line.
@@ -28,8 +29,10 @@ cannot know the hash of the commit that adds the ADR to main, because a
 squash merge makes a new commit. A hash in the file would make the check
 fail on main after each merge of an ADR.
 
-The output depends only on the ADR files, so that the check gives the same
-result on each machine and in a shallow clone.
+The output depends only on the ADR files and on which named paths exist in
+the tree, so that the check gives the same result on each machine and in a
+shallow clone. When a change removes a path that an ADR names, the check
+fails until `make adr-decisions` runs again.
 
 Usage:
     adr-decisions.py             write .repowise/decisions.yaml
@@ -191,13 +194,17 @@ def scope(text):
         token = span.strip()
         if token.endswith("/..."):
             token = token[: -len("/...")]
-        if token in ROOT_FILES:
+        if token in ROOT_FILES and (ROOT / token).exists():
             found.add(token)
             continue
         if not PATH.match(token) or ".." in token.split("/"):
             continue
         token = token.rstrip("/")
         if token.startswith(NOT_SCOPE):
+            continue
+        # An ADR can name a path of another project, for example of the
+        # Pulumi CLI. A path that this repository does not hold is not scope.
+        if not (ROOT / token).exists():
             continue
         found.add(token)
     return sorted(found)
@@ -328,7 +335,8 @@ Teams need a [sample](x.md). It is short.
 ## Decision
 
 - Put the code in `pkg/sample/` and `internal/api/<tool>/`.
-- Use `Makefile` and `pkg/store/...`, not `docs/adr/0001-x.md`
+- Use `Makefile` and `pkg/store/...`, not `docs/adr/0001-x.md`,
+  `pkg/backend/httpstate/client/console.go`
   or `../etc/passwd`.
 
 ## Consequences
@@ -341,7 +349,8 @@ def selftest():
     e = parse("0007-sample.md", SAMPLE)
     assert e["id"] == "adr-0007", e["id"]
     assert e["title"] == "ADR 7: A sample decision", e["title"]
-    assert e["scope"] == ["Makefile", "pkg/sample", "pkg/store"], e["scope"]
+    # pkg/sample and the Pulumi CLI path do not exist in this repository.
+    assert e["scope"] == ["Makefile", "pkg/store"], e["scope"]
     assert e["reason"] == "Teams need a sample. It is short.", e["reason"]
     assert e["currency"] == "active" and e["partial"], e
     assert "superseded in part by ADR 9. Extended by ADR 10." in e["decision"], e["decision"]
