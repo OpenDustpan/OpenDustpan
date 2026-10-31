@@ -747,7 +747,10 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		{"pulumi update cycle", 57, func(h *rtHarness) {
+		// The budget is 58 because the second save reads the blob guard after
+		// the commit that replaces the previous checkpoint blob, so that a
+		// backup that started before the commit cannot lose the blob.
+		{"pulumi update cycle", 58, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()

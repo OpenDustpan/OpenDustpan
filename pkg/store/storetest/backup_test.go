@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
@@ -2131,6 +2132,41 @@ func (s *fakeBackupStore) ListBackups(_ context.Context) ([]backup.Record, error
 	})
 
 	return out, nil
+}
+
+// Running implements blobguard.Watch: a running backup first, else a checking
+// or applying restore, the smallest ID first.
+func (s *fakeBackupStore) Running(_ context.Context) (blobguard.Work, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return blobguard.Work{Kind: "", ID: ""}, false, errFakeClosed
+	}
+
+	var ids []string
+
+	for id, r := range s.data.backups {
+		if r.State == backup.StateRunning {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) > 0 {
+		return blobguard.Work{Kind: blobguard.Backup, ID: slices.Min(ids)}, true, nil
+	}
+
+	for id := range s.data.restores {
+		if r := s.data.restores[id]; r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) > 0 {
+		return blobguard.Work{Kind: blobguard.Restore, ID: slices.Min(ids)}, true, nil
+	}
+
+	return blobguard.Work{Kind: "", ID: ""}, false, nil
 }
 
 // FailEndedBackups implements backup.Registry. The noopFailEnded knob leaves
