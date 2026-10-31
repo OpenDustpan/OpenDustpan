@@ -207,6 +207,20 @@ explain the trade-off of each level.
   L1, the retry needs no new approval when the operations are the same. After
   that, a team fixes forward or reverts, and each is a new review request.
 
+### 9. Marks of Git hosts
+
+The console shows a mark of a Git host only where it names the integration.
+
+- **GitHub:** the GitHub mark, unchanged, in black or white, smaller than the
+  OpenDustpan mark. The GitHub logo policy allows the mark to link to GitHub
+  and to show an integration.
+- **Forgejo:** the Forgejo logo, under its license CC BY-SA 4.0, with the
+  attribution.
+- **GitLab and Gitea:** the name in text, with a generic "opens another site"
+  icon. The GitLab trademark guidelines generally refuse its logo in the UI of
+  an integration. We found no logo policy for Gitea.
+- The console never uses the colors of a Git host.
+
 ## Design that follows from the decisions
 
 This section proposes the details. Each part can change in review.
@@ -319,18 +333,6 @@ an instance.
 8. A circuit breaker for each connection, which honors `Retry-After`. While it
    is open, gates fail closed and the console shows its state.
 9. Conditional requests on GitHub, whose `304` answers do not count.
-
-### Marks of Git hosts
-
-The console names the Git host in text ("Pull request #123 on GitHub") with a
-generic "opens another site" icon. It never uses the colors of a Git host.
-GitHub allows its logo to link to GitHub and to show an integration,
-unaltered, in black or white, and less prominent than our own marks. The same
-policy asks for written permission in places. GitLab allows its name with a
-trademark statement and generally refuses its logo in integration UIs.
-Forgejo has a CC BY-SA 4.0 logo and no trademark policy. We found no policy
-for Gitea. A mark appears only after the owner confirms the reading of its
-policy.
 
 ### Off states
 
@@ -446,13 +448,7 @@ recommendation and a plain summary.
    - Plain summary: a change that can break a reader in another namespace
      shows as a conflict.
 
-8. **Marks of Git hosts.**
-   - Options: (a) text and a generic icon only. (b) the monochrome GitHub mark
-     and the Forgejo logo with attribution, where the policies allow it.
-   - Recommendation: (a) now. (b) after the owner confirms the policies.
-   - Plain summary: we name the Git host in words.
-
-9. **A Git host that is down.**
+8. **A Git host that is down.**
    - Context: decision 8 fails the command with the answer of the Git host.
    - Options: (a) wait. (b) a person with a new action and a fresh
      authentication moves the change to an OpenDustpan-only review, with a
@@ -461,7 +457,7 @@ recommendation and a plain summary.
    - Plain summary: in an outage, a person can move the review into
      OpenDustpan, on the record.
 
-10. **A change across many repositories.**
+9. **A change across many repositories.**
     - Options: (a) one change order for each review request now, and a later
       RFC for a group of linked review requests. (b) one change order for many
       review requests now.
