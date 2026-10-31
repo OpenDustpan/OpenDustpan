@@ -24,13 +24,14 @@ type AccessToken struct {
 }
 
 type AccessTokenPolicy struct {
-	ID                int64
-	MaxLifetimeMs     int64
-	InactivityMs      int64
-	DisableTokens     bool
-	DisableAccounts   bool
-	DisableBreakGlass bool
-	UpdatedAtMs       int64
+	ID                 int64
+	MaxLifetimeMs      int64
+	InactivityMs       int64
+	DisableTokens      bool
+	DisableAccounts    bool
+	DisableBreakGlass  bool
+	UpdatedAtMs        int64
+	ExchangeLifetimeMs int64
 }
 
 type AuditChainCheck struct {

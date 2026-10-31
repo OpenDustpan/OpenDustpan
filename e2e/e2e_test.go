@@ -4720,7 +4720,7 @@ func tofuRemoteScenario(t *testing.T, env *e2e.Env) {
 		env.RemoteStep(ctx, t, s)
 	}
 
-	for _, s := range tofuSoftDeleteSteps(ctx, env) {
+	for _, s := range tofuSoftDeleteSteps(ctx, t, env) {
 		env.RemoteStep(ctx, t, s)
 	}
 }
@@ -4734,7 +4734,9 @@ const remoteProdName = e2e.RemotePrefix + e2e.RemoteProd
 // leaves the CLI list, the TFE-compatible lists and the inventory, its old ID
 // answers 404, and its name is free at once for a new workspace with empty
 // state.
-func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
+func tofuSoftDeleteSteps(ctx context.Context, tb testing.TB, env *e2e.Env) []e2e.StepSpec {
+	tb.Helper()
+
 	var removedID string
 
 	// existedAt is a time when the workspace still existed: the inventory at
@@ -4772,7 +4774,7 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 		}, "workspace", "list", "-no-color"),
 		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
 		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
-	}, tofuRestoreSteps(ctx, env, &removedID, existedAt)...)
+	}, tofuRestoreSteps(ctx, tb, env, &removedID, existedAt)...)
 }
 
 // deletedGateCollection is the collection that holds the prod workspace when

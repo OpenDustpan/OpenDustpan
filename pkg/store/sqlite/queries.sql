@@ -1756,7 +1756,8 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
   ), 0)) AS INTEGER) AS principal_active_at_ms,
   ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
   ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
-  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms,
+  ap.exchange_lifetime_ms AS policy_exchange_lifetime_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
@@ -2055,14 +2056,16 @@ WHERE excluded.sequence > audit_sink_cursors.sequence;
 -- Token policy and the inactivity disable (ADR 53).
 
 -- name: GetAccessTokenPolicy :one
-SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms
+SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms,
+  exchange_lifetime_ms
 FROM access_token_policy WHERE id = 1;
 
 -- name: SetAccessTokenPolicy :execrows
 UPDATE access_token_policy
 SET max_lifetime_ms = CAST(sqlc.arg('max_lifetime_ms') AS INTEGER), inactivity_ms = CAST(sqlc.arg('inactivity_ms') AS INTEGER),
   disable_tokens = sqlc.arg('disable_tokens'), disable_accounts = sqlc.arg('disable_accounts'),
-  disable_break_glass = sqlc.arg('disable_break_glass'), updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER)
+  disable_break_glass = sqlc.arg('disable_break_glass'), updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER),
+  exchange_lifetime_ms = CAST(sqlc.arg('exchange_lifetime_ms') AS INTEGER)
 WHERE id = 1;
 
 -- name: DatabaseNowMs :one
@@ -4611,4 +4614,11 @@ ORDER BY name, id;
 -- name: DeleteTrustRule :execrows
 DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
 
+-- name: GetExchangePrincipal :one
+-- Reads the principal of a token exchange in its transaction, so a delete or
+-- a disable of the principal cannot pass between the check and the insert of
+-- the token.
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms, COALESCE(disabled_at_ms, 0) AS disabled_at_ms
+FROM principals
+WHERE id = sqlc.arg(id);
 

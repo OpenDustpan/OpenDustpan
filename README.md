@@ -367,6 +367,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Gate configuration API](docs/reference/gate-config-api.md): the routes that store,
+  read and delete gates and access limits.
 - [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the
   keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
@@ -504,7 +506,9 @@ S3-compatible server.
 With the race detector, one run of `pkg/store/sqlite` or `pkg/store/postgres`
 can take more than 10 minutes, the default limit of `go test`. On a
 4-core CI runner, `pkg/store/postgres` alone took more than 20 minutes. `make
-test` sets `-timeout 20m`, and `make test-ci-store` sets `-timeout 30m`. When
+test` sets `-timeout 45m` (set `TEST_TIMEOUT` to change it). The CI targets
+keep their own limits: `make test-ci-other` sets `-timeout 20m`, and
+`make test-ci-store` sets `-timeout 30m`. When
 you run a store package with `go test -race` directly, pass `-timeout 60m`.
 
 `make checks-agent` syncs the current branch with `main`, then runs
