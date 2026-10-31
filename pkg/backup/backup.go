@@ -182,6 +182,8 @@ var Tables = []string{
 	"notification_deliveries",
 	"triggers",
 	"item_keys",
+	"settings",
+	"settings_state",
 	"catalog_blueprints",
 	"catalog_blueprint_versions",
 	TableTrustRules,
