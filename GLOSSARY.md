@@ -438,6 +438,34 @@ _Avoid_: Login, cookie (the cookie only carries the session)
 **Session policy**:
 The administrator settings of the console sessions for the installation: the period with no use after which a session ends, and its maximum length. Only a site administrator can change them.
 
+**Local user**:
+A person principal that signs in to the console with no identity provider. It signs in with a user name and a password, with a passkey, or with both. One local user record and the passkeys of the person name the same principal, so both credentials sign in the same person. The provider of its sessions is `local`.
+_Avoid_: Local account, built-in user, basic auth user
+
+**Passkey**:
+A WebAuthn credential of a person. For a local user it is a sign-in of its own, with user verification. After a password it is a second factor.
+_Avoid_: Security key (a security key is one kind of authenticator that holds a passkey), FIDO key
+
+**Pending sign-in**:
+The state after a first method, such as a password, and before the second factor. It holds no rights, lives 300 seconds, and becomes void after 5 wrong factors.
+_Avoid_: Half session, partial login
+
+**Recovery code**:
+A one-use code for a sign-in when a person lost each factor. The server shows a set of 10 one time and stores only their digests.
+_Avoid_: Backup code
+
+**Reset code**:
+A one-use code that an administrator makes for a local user, to set up or reset the password. The server shows it once to the administrator and stores only its digest. It ends after 1 hour by default.
+_Avoid_: Temporary password, reset token
+
+**Lockout by name**:
+The lock of a user name after 10 wrong passwords in a row, for 30 minutes or until an administrator unlocks it. Every instance shares one count, and an unknown name locks the same as a known one.
+_Avoid_: Account lock (the principal stays enabled)
+
+**Demo user**:
+The person `dev:demo` that `opendustpan dev --demo` makes, with a password that the sign-in page shows. It exists only on an installation of the kind dev, and its credentials cannot change.
+_Avoid_: Guest user, test user
+
 **Personal token**:
 An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).
 _Avoid_: PAT, user token
