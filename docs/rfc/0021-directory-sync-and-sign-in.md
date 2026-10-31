@@ -547,6 +547,10 @@ of 2026-10-11 as a promise of local passwords in milestone 4, the answer is
 "no", and B becomes a work item of its own (a password store with a
 memory-hard hash, the reset flow and the rules of PCI DSS 8.3.6).
 
+**Answered on 2026-10-31: "no" (option B).** The owner chose user name and
+password support next to passkeys. [ADR 285](../adr/0285-local-users-sign-in-with-a-password-and-a-passkey.md)
+records the decision and the design.
+
 **Open question 2: does "require MFA" apply to the bootstrap admin token?**
 Lead proposal: no.
 
@@ -1285,7 +1289,7 @@ Each question has a yes or no answer. "Yes" accepts the recommendation.
 
 | ID | Question | Recommendation |
 | --- | --- | --- |
-| O1 | Is a passkey the only sign-in of a local user in milestone 4, with no local password (P7)? Your direction of 2026-10-11 names "username+password" as an install with no identity provider. With "yes", a person with no SSO, no LDAP and no device that can hold a passkey cannot sign in. | Yes |
+| O1 (answered "no" on 2026-10-31, ADR 285) | Is a passkey the only sign-in of a local user in milestone 4, with no local password (P7)? Your direction of 2026-10-11 names "username+password" as an install with no identity provider. With "yes", a person with no SSO, no LDAP and no device that can hold a passkey cannot sign in. | Yes |
 | O2 | Plain OAuth 2.0 and trusted-header sign-in cannot prove a recent authentication. For these two methods, does a built-in factor (WebAuthn or TOTP) give the fresh authentication of ADR 227? This amends ADR 46 decision 2 and ADR 55 decision 10, for these two methods only. A person with no factor enrolls one in the window after the sign-in (P1). | Yes |
 | O3 | Does the server refuse an LDAP or SMTP connection with no TLS, except to a loopback address (P2, P11)? | Yes |
 | O4 | Does SAML accept only a sign-in that OpenDustpan starts, and refuse a sign-in that the identity provider starts (P3)? | Yes |
@@ -1309,7 +1313,7 @@ the recommendation.
   (not fetched). AWS accepts passkeys as a factor (fetched). No product has a
   passkey as the only local sign-in. Cost of "no": a password store, a reset
   flow, a hash function and password rules (PCI DSS 8.3.6, 12 characters, not
-  fetched) come into milestone 4.
+  fetched) come into milestone 4. Answered "no" on 2026-10-31: see ADR 285.
 - **O2, a built-in factor for a fresh step after plain OAuth 2.0 or a trusted
   header (amends ADR 46 decision 2 and ADR 55 decision 10).** Precedent: GitHub sudo mode accepts a passkey, a security key or
   TOTP for a sensitive action (fetched). OAuth 2.0 and the signed IAP header
