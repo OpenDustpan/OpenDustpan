@@ -1567,6 +1567,16 @@ _Avoid_: Legacy error, untyped error
 
 ### Operations
 
+**Phone-home**:
+Data about an installation, its use or its users that leaves the installation for a destination that the operator did not name (ADR 74). Examples of such destinations are the project, a vendor and any other third party. Examples are usage counts, feature use, crash reports, install pings and version checks that send data to a project server. The test is the destination: who chose it, and does data leave before the operator names it. Opt-in, opt-out and off by default are all phone-home. The server has no phone-home and no code for it.
+_Avoid_: Telemetry (alone: OpenTelemetry uses the same word for metrics, logs and traces), analytics, usage data (alone), tracking
+_Copy says_: "phone-home" or "usage reporting".
+
+**Observability**:
+The metrics, logs, traces, probes and audit log of an installation, for its operator (ADR 74 decision 4). Observability data goes only to a destination that the operator configures, for example a Prometheus scrape, an OpenTelemetry collector or a log sink. Or it stays in the server, for example the run data of jobs, and the operator reads it there. It is not phone-home.
+_Avoid_: Telemetry (alone), monitoring data, diagnostics
+_Copy says_: "metrics", "logs" or "traces", with the destination that the operator configures.
+
 **Incident**:
 An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.
 _Avoid_: Ticket, outage, alert
