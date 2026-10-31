@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -193,13 +194,13 @@ func (m *memUpdateStore) ListUpdates(_ context.Context, ref stack.Ref, _ stack.P
 	return list, nil
 }
 
-func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) error {
+func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.checkpoints[cp.Update] = cp
 
-	return nil
+	return false, nil
 }
 
 // StateAt implements stack.StateAtReader for the one stack that the fixture
@@ -597,6 +598,7 @@ func newUpdateFixtureWithAuthenticator(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        opts.manual,
 		Updates:            mem,
 		Checkpoints:        mem,
@@ -2828,6 +2830,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            mem,
 		Checkpoints:        mem,

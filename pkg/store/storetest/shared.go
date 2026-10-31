@@ -46,6 +46,7 @@ func RunShared(t *testing.T, newPair PairFactory) {
 			name: "a backup and a restore started on both handles at once give one running row each",
 			test: testSharedOneRunning,
 		},
+		{name: "a backup started on one handle is running for the other handle", test: testSharedRunning},
 		{name: "the sweep lock of one handle refuses the other handle", test: testSharedSweepLock},
 	}
 

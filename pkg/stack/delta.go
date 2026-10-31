@@ -264,7 +264,7 @@ func (s *Updates) applyDelta(ctx context.Context, pending deltaPending) ([]byte,
 		return nil, nil, fmt.Errorf("%w: checkpoint hash %q", ErrInvalidDelta, pending.in.Hash)
 	}
 
-	key, err := checkpointBlobKey(pending.blobs, pending.stackID, pending.id, pending.in.Sequence, pending.prev)
+	key, err := checkpointBlobKey(pending.blobs, pending.stackID, pending.id, pending.in.Sequence)
 	if err != nil {
 		return nil, nil, fmt.Errorf("save checkpoint delta of update %s: %w", pending.id, err)
 	}

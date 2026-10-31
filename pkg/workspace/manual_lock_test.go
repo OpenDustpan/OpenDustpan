@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -122,6 +123,7 @@ func withManualLocks(t *testing.T, f fixture, locks workspace.ManualLocks) *work
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        locks,
 		Workspaces:         f.store,
 		States:             f.store,
@@ -602,6 +604,7 @@ func TestDeleteFailsClosedWhenTheWorkspaceCannotBeRead(t *testing.T) {
 	f := newFixture(t)
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        failing(manuallock.ErrNotLocked),
 		Workspaces:         getFailingStore{f.store},
 		States:             f.store,

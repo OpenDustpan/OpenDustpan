@@ -170,7 +170,7 @@ func testPurgeStack(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 

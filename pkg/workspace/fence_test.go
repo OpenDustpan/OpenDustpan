@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -255,6 +256,7 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 	failing := &failPutBlobs{Store: f.blobs, mu: sync.Mutex{}, keys: nil}
 
 	failingSvc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,

@@ -419,7 +419,11 @@ JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
 WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND u.version = @version;
 
--- name: PutCheckpoint :exec
+-- name: PutCheckpoint :execrows
+-- The row of the update decides which write wins. The conflict update runs only
+-- for a write without a sequence number, or for a sequence above the stored one,
+-- and the database checks that against the latest committed row, so two writers
+-- of one sequence cannot both land. Zero rows mean that the write lost.
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, saved_at_ms,
@@ -436,7 +440,8 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_key = excluded.blob_key,
     size = excluded.size,
     blob_size = excluded.blob_size,
-    blob_md5 = excluded.blob_md5;
+    blob_md5 = excluded.blob_md5
+WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence;
 
 -- name: ListReferencedBlobKeys :many
 -- Every blob key that a row of one live stack names, ordered, without
@@ -1050,6 +1055,20 @@ ON CONFLICT DO NOTHING;
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups
 WHERE id = $1;
+
+-- name: RunningWork :one
+-- Reads one backup in the running state, or else one restore in the checking
+-- or applying state, in one statement. The guard of the blob deletes uses it.
+-- A backup comes first, and the smaller ID comes first, so the answer is the
+-- same for the same rows.
+SELECT kind, id
+FROM (
+    SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+    UNION ALL
+    SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+) AS running_work
+ORDER BY kind, id
+LIMIT 1;
 
 -- name: ListBackups :many
 SELECT id, state, started_at_ms, ended_at_ms, target, error

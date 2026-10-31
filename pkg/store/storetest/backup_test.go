@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
@@ -728,25 +729,25 @@ func (s *fakeBackupStore) ListUpdates(
 // PutCheckpoint implements stack.CheckpointStore.
 func (s *fakeBackupStore) PutCheckpoint(
 	_ context.Context, cp stack.Checkpoint, fence namespace.Fence,
-) error {
+) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return errFakeClosed
+		return false, errFakeClosed
 	}
 
 	if err := s.checkFence(fence); err != nil {
-		return err
+		return false, err
 	}
 
 	if err := s.checkRunningUpdate(cp.Ref, cp.Update, cp.Lease); err != nil {
-		return err
+		return false, err
 	}
 
 	stackID, err := s.stackIDOf(cp.Ref)
 	if err != nil {
-		return stack.ErrNoState
+		return false, stack.ErrNoState
 	}
 
 	byStack, ok := s.data.checkpoints[stackID]
@@ -756,9 +757,9 @@ func (s *fakeBackupStore) PutCheckpoint(
 	}
 
 	if retried, err := checkCheckpointSequence(byStack, cp); err != nil {
-		return err
+		return false, err
 	} else if retried {
-		return nil
+		return true, nil
 	}
 
 	if cp.BlobKey != "" {
@@ -769,7 +770,7 @@ func (s *fakeBackupStore) PutCheckpoint(
 
 	byStack[cp.Update.String()] = cp
 
-	return nil
+	return false, nil
 }
 
 // checkCheckpointSequence applies the sequence rules of PutCheckpoint to cp
@@ -2131,6 +2132,41 @@ func (s *fakeBackupStore) ListBackups(_ context.Context) ([]backup.Record, error
 	})
 
 	return out, nil
+}
+
+// Running implements blobguard.Watch: a running backup first, else a checking
+// or applying restore, the smallest ID first.
+func (s *fakeBackupStore) Running(_ context.Context) (blobguard.Work, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return blobguard.Work{Kind: "", ID: ""}, false, errFakeClosed
+	}
+
+	var ids []string
+
+	for id, r := range s.data.backups {
+		if r.State == backup.StateRunning {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) > 0 {
+		return blobguard.Work{Kind: blobguard.Backup, ID: slices.Min(ids)}, true, nil
+	}
+
+	for id := range s.data.restores {
+		if r := s.data.restores[id]; r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) > 0 {
+		return blobguard.Work{Kind: blobguard.Restore, ID: slices.Min(ids)}, true, nil
+	}
+
+	return blobguard.Work{Kind: "", ID: ""}, false, nil
 }
 
 // FailEndedBackups implements backup.Registry. The noopFailEnded knob leaves

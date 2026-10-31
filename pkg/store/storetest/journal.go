@@ -997,7 +997,7 @@ func testJournalBuildRefusals(t *testing.T, f fixture) {
 		t.Fatalf("batch: %v", err)
 	}
 
-	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 5, "{}"), f.fence); err != nil {
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 5, "{}"), f.fence); err != nil {
 		t.Fatalf("checkpoint at sequence 5: %v", err)
 	}
 
@@ -1099,7 +1099,7 @@ func testReferencedBlobKeysJournal(t *testing.T, f fixture) {
 	plainKey := f.blobKey(t, plain, 0)
 
 	cp := newBlobCheckpoint(plain, plainKey, 0, `{"v":1}`)
-	if putErr := f.s.PutCheckpoint(t.Context(), cp, f.fence); putErr != nil {
+	if _, putErr := f.s.PutCheckpoint(t.Context(), cp, f.fence); putErr != nil {
 		t.Fatalf("put checkpoint of u2: %v", putErr)
 	}
 
