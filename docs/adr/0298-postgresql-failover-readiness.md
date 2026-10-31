@@ -203,9 +203,19 @@ Sources:
      - A connection that the path keeps for a session (the sweep lock): the
        path changes no session value, so its statements run under the
        start-up values of the pool. When a path must change a session
-       value, it ends the connection with `Hijack` and a close. As a second
-       layer, the pool runs `RESET ALL` in its `AfterRelease` function, so
-       no session value of one path reaches the next request.
+       value, it ends the connection with `Hijack` and a close.
+     - A second layer: each long path gets its connection from one helper
+       of the store, and the helper marks that connection. The
+       `AfterRelease` function of the pool runs `RESET ALL` only on a marked
+       connection. So no session value of a long path reaches the next
+       request. The statements of the API paths do not use the helper, so
+       their releases get no extra round trip, and the benchmark of
+       database round trips for each flow does not change.
+     - `AfterRelease` gets no context, so the `RESET ALL` runs under its own
+       deadline of 2 seconds. On any error, or at the deadline,
+       `AfterRelease` returns `false`, and the pool destroys the connection.
+       A connection that stops answering then holds its pool slot for at
+       most 2 seconds, not for the TCP timeout of the host.
 
      On `main` these paths
      are `pool.Acquire` in `inBackupTx`, `TryLockSweep`, and the direct
@@ -217,7 +227,11 @@ Sources:
      finds must be in the allowlist of the test. The test checks that the
      path uses one of the allowed forms above, not only that the allowlist
      names it. It fails on a session `SET` (a `SET` with no `LOCAL`) in a
-     path that releases its connection to the pool. A new path fails the
+     path that releases its connection to the pool, and on
+     `set_config(..., false)`, which is a session `SET` with no `SET`
+     keyword. The store uses only `set_config(..., true)` today. It also
+     fails on a long path that does not get its connection from the
+     helper. A new path fails the
      test until it names its bounds.
    - These bounds are code rules. They go into the catalog of code rules,
      and the installation API shows their values (decision 6).
@@ -519,7 +533,10 @@ binaries are not present.
   - `TestStatementDeadlineClosesStalledConnection`: a proxy that holds the
     bytes. One row for each method of decision 3, including `SendBatch`,
     `Rollback` and a row read. Each call ends with `ErrUnavailable` within
-    the deadline. A row read on a server that answers still works.
+    the deadline. A row read on a server that answers still works. One more
+    row: the release of a marked connection while the proxy holds the
+    bytes. `AfterRelease` returns `false` within 2 seconds, and the pool
+    has a free slot again.
   - `TestServerStatementTimeout`: a statement longer than
     `statement_timeout` ends with `StatementTimeout`, and the connection
     stays in the pool.
@@ -614,7 +631,10 @@ The PM answered the architecture review on 2026-10-31:
 7. The server timeouts of decision 3 and the answer to 57014 are decisions
    of this ADR.
 
-The architecture review of round 3 (2026-10-31) changed decisions 3 and 9:
+The check of the changes after round 3 (2026-10-31) changed decision 3: the
+`RESET ALL` of `AfterRelease` runs only on a marked connection, under a
+deadline of 2 seconds. The architecture review of round 3 changed
+decisions 3 and 9:
 the allowed forms of the server timeouts on the long paths, and a repeated
 force-unlock. The architecture review of round 2 changed decisions 3, 9, 10
 and 11: the static check of the long paths, the record check in the handler
