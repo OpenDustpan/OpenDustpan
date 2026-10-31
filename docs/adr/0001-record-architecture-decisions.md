@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-08
 
+Changed by:
+
+- ADR 288 extends: an accepted ADR gets a "Changed by" list.
+
 ## Context
 
 OpenDustpan is built partly with AI coding agents and, later, outside
