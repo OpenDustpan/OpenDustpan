@@ -2,7 +2,7 @@
 
 This guide gives the rules for several `opendustpan serve` processes on one PostgreSQL database and one S3-compatible bucket.
 
-This layout is not supported yet. The README gives the current status: the server runs on one node. The [architecture guide](architecture-and-sizing.md) shows the target design. Use this guide to prepare an installation for that design. Do not use several instances in an installation yet.
+The [high availability guide](high-availability.md) gives the supported layout and what the server does when a part stops. Use this guide for the settings and the details. The [architecture guide](architecture-and-sizing.md) shows the design.
 
 ## What each instance shares
 
