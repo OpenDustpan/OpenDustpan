@@ -275,6 +275,66 @@ Each flow entry holds `samples`, `p50Ms`, `p99Ms`, `maxMs`, `errors` and `firstE
 The S3 latency benchmark (`make bench-s3`) runs this mode for each network profile.
 See [S3 latency benchmark](../reference/s3-latency-benchmark.md).
 
+## Measure several instances
+
+The scale mode runs real `opendustpan serve` processes, not in-process servers.
+It starts `-instances` processes of one installation on one PostgreSQL database and one S3-compatible bucket.
+It puts a round-robin balancer in front of them.
+The balancer checks `/health/ready` of each instance every 250 ms, sends each request to the next healthy instance, and never retries a request.
+It answers 503 with `Retry-After: 1` when no instance is healthy.
+
+```sh
+go build -o /tmp/opendustpan ./cmd/opendustpan
+DUSTPAN_TEST_POSTGRES_URL='postgres://<user>:<password>@localhost:5432/<empty database>' \
+DUSTPAN_TEST_S3_ENDPOINT=http://127.0.0.1:9000 DUSTPAN_TEST_S3_BUCKET=<bucket> \
+DUSTPAN_TEST_S3_ACCESS_KEY=<key> DUSTPAN_TEST_S3_SECRET_KEY=<secret> \
+go run ./load -flows scale -binary /tmp/opendustpan -instances 3 -clients 32 -units 500 -out scale-report.json
+```
+
+Use a new, empty database for each run.
+The mode makes the namespace, seeds `-units` units, and makes one workspace for each client.
+Each client then repeats one cycle until the run stops:
+
+1. Create a stack, then run one Pulumi update on it: create, start, one checkpoint save, complete.
+2. Run one OpenTofu apply on its own workspace: lock, declare a state version, upload the state, unlock.
+3. Read one page of 100 workspaces, and read the inventory.
+
+These flags change the mode:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-binary` | (none) | The path of the `opendustpan` binary. Required |
+| `-instances` | `1` | The number of server processes |
+| `-clients` | `16` | The number of simulated users |
+| `-warmup` | `10s` | The time of load before the measurement |
+| `-duration` | `60s` | The time of the measurement |
+| `-think` | `0` | The wait of each client between two cycles. With `0` the clients run as fast as they can |
+| `-restart` | `false` | After the measurement, stop instance 0 with SIGTERM, start it again, and keep the load for `-restart-tail` |
+| `-restart-tail` | `20s` | The time of load after the restarted instance is ready |
+| `-store-pid` | `0` | The process ID of the object store, to measure its CPU |
+| `-units` | `10000` | The units to seed. Use a smaller number, for example 500 |
+
+The report holds these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `machine` | CPU count and model, memory, operating system, architecture and Go version of the host |
+| `instances`, `clients`, `thinkMs`, `units` | The settings of the run |
+| `steady` | The requests that began in the measurement window: `requests`, `errors`, `errorRate`, `requestsPerSec`, `errorStatuses` and one entry in `routes` for each route |
+| `resources` | CPU in cores, averaged over the window, for the server processes, PostgreSQL and the object store; the harness CPU; the client connections to PostgreSQL (mean and maximum); the transactions each second; and the CPU cost of 1000 requests in core-milliseconds |
+| `restart` | With `-restart`: the stop time and the start time of the instance, and the requests `during` the restart (from the SIGTERM to the ready instance) and `after` it |
+| `clientErrors` | The client calls that failed, over the whole run |
+
+Each entry of `routes` holds `requests`, `errors`, `p50Ms`, `p95Ms`, `p99Ms` and `maxMs`.
+A request is an error when the connection fails or the status is 400 or above.
+The times run from the start of the request to the response headers.
+The harness groups the requests by what the server does, for example `tofu lock` and `pulumi checkpoint save`, not by the name of a unit.
+
+The mode reads the CPU time of the processes from `/proc`, so it runs on Linux only.
+The harness, the balancer, the server processes, PostgreSQL and the object store share the CPUs of one host.
+So the numbers depend on that host.
+The [measured sizing page](measured-sizing.md) shows a run and its limits.
+
 ## What this guide does not cover
 
 These items are not part of the harness:
