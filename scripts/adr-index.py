@@ -346,6 +346,15 @@ def build(adr_dir, changes_from):
     return render(adrs, links(adrs, changes_from))
 
 
+def index_is_current(adr_dir, changes_from):
+    """Return True when INDEX.md in adr_dir is the same as a new output."""
+    text = build(adr_dir, changes_from)
+    index = adr_dir / INDEX_NAME
+    if index.is_symlink() or not index.is_file():
+        return False
+    return index.read_text(encoding="utf-8") == text
+
+
 def selftest():
     def adr(number, title, status="accepted · 2026-10-31", area=""):
         return f"# {number}. {title}\n\nStatus: {status}\n{area}\n## Context\n\nText.\n"
@@ -451,6 +460,38 @@ def selftest():
     assert "| [2](0002-two.md) | Two | accepted | changes ADR 1 decision 1 | - | this ADR |" in text, text
     fails(old, "has no item 'changes ADR 1 decision 1'", changes_from=2)
 
+    bad = dict(good)
+    bad["0003-three.md"] = adr(3, "Three", area="\nChanges:\n\n- Changes ADR 2 decisions 1, 4 and 9.\n- Changes ADR 5.\n")
+    bad["0005-five.md"] = adr(5, "Five", area="\nChanges:\n\n- None.\n\nChanged by:\n\n- ADR 3 changes.\n")
+    fails(bad, "0003-three.md: a link to ADR 5, which is not an earlier ADR")
+
+    bad = dict(good)
+    bad["0002-two.md"] = good["0002-two.md"].replace(
+        "- ADR 4 extends decision 2.\n", "- ADR 4 extends decision 2.\n- ADR 4 extends decision 2.\n"
+    )
+    fails(bad, "0002-two.md: two 'Changed by:' items for ADR 4")
+
+    bad = dict(good)
+    bad["0004-four.md"] = adr(
+        4, "Four", area="\nChanges:\n\n- Extends ADR 2 decision 2: more.\n- Extends ADR 2 decision 2: again.\n"
+    )
+    fails(bad, "0004-four.md: two 'Changes:' items for ADR 2")
+
+    # The check of INDEX.md: current, stale and missing.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp)
+        for name, content in good.items():
+            if name != INDEX_NAME:
+                (path / name).write_text(content, encoding="utf-8")
+        assert not index_is_current(path, 3), "a missing INDEX.md is current"
+        (path / INDEX_NAME).write_text(build(path, 3), encoding="utf-8")
+        assert index_is_current(path, 3), "a new INDEX.md is not current"
+        (path / INDEX_NAME).write_text(build(path, 3) + "| [9](x.md) | edited |\n", encoding="utf-8")
+        assert not index_is_current(path, 3), "an edited INDEX.md is current"
+        (path / INDEX_NAME).write_text(build(path, 3), encoding="utf-8")
+        (path / "0005-five.md").write_text(adr(5, "Five again", area="\nChanges:\n\n- None.\n"), encoding="utf-8")
+        assert not index_is_current(path, 3), "INDEX.md is current after a change of an ADR"
+
     # The current rule follows a chain of whole supersessions.
     chain = {
         "0001-one.md": adr(1, "One", "superseded by ADR 2", "\nChanged by:\n\n- ADR 2 supersedes.\n"),
@@ -475,11 +516,12 @@ def main(argv):
     index = ADR_DIR / INDEX_NAME
     try:
         text = build(ADR_DIR, changes_from)
+        current = index_is_current(ADR_DIR, changes_from)
     except ADRError as err:
         print(f"adr-index: {err}", file=sys.stderr)
         return 1
     if check:
-        if not index.is_file() or index.read_text(encoding="utf-8") != text:
+        if not current:
             print(f"adr-index: {index.relative_to(ROOT)} is not current. Run `make adr-index`.", file=sys.stderr)
             return 1
         print(f"adr-index: {len(text.splitlines()) - HEADER.count(chr(10))} ADRs, the links and the index are correct")
