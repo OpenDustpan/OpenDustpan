@@ -1536,6 +1536,7 @@ func (coverageGateConfig) PutAccessLimit(
 func (coverageGateConfig) DeleteAccessLimit(context.Context, gate.ObjectRef, audit.Entry) error {
 	return gate.ErrNotFound
 }
+
 // coverageStoreCheckRecords holds no store check row: the route table needs a
 // store check service to mount the routes, and the coverage gate never serves
 // a request.
