@@ -64,6 +64,10 @@ var (
 	ErrLastBreakGlass = errors.New(
 		"cannot remove the last enabled break-glass account: keep a second enabled break-glass account first",
 	)
+	// ErrBreakGlassPassword reports a write that sets the break-glass flag on
+	// a person who has a local password. A break-glass account signs in with
+	// a passkey or a hardware key only, so the password goes first.
+	ErrBreakGlassPassword = errors.New("break-glass account must have no local password: remove the password first")
 	// ErrDisabled reports a principal that is disabled.
 	ErrDisabled = errors.New("principal is disabled")
 	// ErrNotSignInTarget reports a principal that a sign-in through an
