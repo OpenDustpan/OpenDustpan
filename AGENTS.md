@@ -300,7 +300,11 @@ skill (ADR 14):
 ## Working in this repo
 
 - Ask before adding a dependency. Prefer the standard library.
-- Never add telemetry code, also not code that is off by default (ADR 74).
+- Never add phone-home code (ADR 74). Phone-home sends data about an installation, its use
+  or its users to a destination that the operator did not name. This rule applies also
+  to code that is opt-in or off by default. Metrics, logs, traces and run data are
+  observability, and the project wants them. Send them only to a destination that the
+  operator configures, or keep them in the server.
 - AI-assisted changes follow `CONTRIBUTING.md` (ADR 76): disclose the tool,
   sign off each commit, understand all of it, and pass `make check`. Until
   the push ends on 2026-10-22, an agent signs off with its own commit author
