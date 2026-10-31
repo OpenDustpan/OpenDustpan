@@ -16,13 +16,17 @@ The paths in this guide start with `/api/dustpan/v1`. The pages in
 
 This release can register the app, assign installations, make connections and
 check them. A check shows the GitHub account of the installation and the
-capabilities of the connection.
+capabilities of the connection. A connection can read the head of a branch or
+a tag, and a file at a commit, in the repositories of the account of the
+installation. A file is at most 2 MiB. The capability `files` is in the list
+only when the installation has the permission to read the contents. A
+connection with the auth kind `token` always lists it.
 
-This release does not read files, write commits, open review requests, take
-webhooks or give tokens to runners. The capabilities list of a check is empty
-for that reason. The answer still names, for each feature, the capabilities
-that the feature needs and the connection does not have. GitLab is not
-supported yet.
+This release does not write commits, compare commits, open review requests,
+take webhooks or give tokens to runners. The capabilities list of a check holds
+no other capability for that reason. The answer still names, for each feature, the
+capabilities that the feature needs and the connection does not have. GitLab is
+not supported yet.
 
 ## One app for the installation, or one for each namespace
 

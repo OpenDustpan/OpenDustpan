@@ -281,6 +281,12 @@ func (wr Writer) Problem(err error) Problem {
 		return wr.denied(err)
 	}
 
+	// A database that does not answer is the same for every API, and no class
+	// of a domain may turn it into another answer.
+	if errors.Is(err, namespace.ErrUnavailable) {
+		return StoreUnavailable()
+	}
+
 	if wr.Classify != nil {
 		if p, ok := wr.Classify(err); ok {
 			return p
@@ -307,6 +313,26 @@ func (wr Writer) denied(err error) Problem {
 	}
 
 	return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden")
+}
+
+// StoreRetryAfter is the wait that every API names in Retry-After when the
+// database does not answer.
+const StoreRetryAfter = 5 * time.Second
+
+// StoreUnavailable returns the answer to a database that does not answer: 503
+// with the wait StoreRetryAfter and the code namespace.unavailable.
+func StoreUnavailable() Problem {
+	p := answer(http.StatusServiceUnavailable, errcode.NamespaceUnavailable,
+		namespace.ErrUnavailable.Error()+": try again after the Retry-After time")
+	p.RetryAfter = StoreRetryAfter
+
+	return p
+}
+
+// SetStoreRetryAfter sets the Retry-After header of the answer to a database
+// that does not answer.
+func SetStoreRetryAfter(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", strconv.FormatInt(RetryAfterSeconds(StoreRetryAfter), 10))
 }
 
 // Internal returns the answer to an error that no class knows.

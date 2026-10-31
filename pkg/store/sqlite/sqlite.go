@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -519,7 +520,7 @@ func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, e
 
 	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
 
-	conn, err := sql.Open("sqlite", dsn)
+	conn, err := openGuarded(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -1254,7 +1255,10 @@ func (s *Store) holdWrite(ctx context.Context) (func(), error) {
 // chain) must run while the installation is in maintenance mode. The control
 // path is for the writes that keep the installation able to enter, leave and
 // restore from maintenance mode, and that record what happens. Each caller is
-// a write that maintenance mode must not refuse.
+// a write that maintenance mode must not refuse. It does not check the minimum
+// binary version either, so only a write that an old binary needs to stop
+// cleanly uses it, or a write that records what happened. A write that changes
+// domain data or runs work uses inMinimumTx.
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
@@ -1263,6 +1267,33 @@ func (s *Store) holdWrite(ctx context.Context) (func(), error) {
 // Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, nil)
+}
+
+// inMinimumTx runs fn in a control transaction that refuses a binary below the
+// minimum binary version of the schema. It reads the minimum in the same
+// transaction as fn, before fn runs, and it reads no installation state, so
+// maintenance mode does not refuse it. A control write that changes domain
+// data or runs work uses it, so a worker of an old binary, which a rolling
+// deploy leaves running, cannot claim or run an operation. A control write
+// that an old binary needs to stop cleanly uses inControlTx.
+//
+// The same rule about nested transactions as for inControlTx applies.
+func (s *Store) inMinimumTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, s.checkMinimum)
+}
+
+// checkMinimum reads the minimum binary versions of the schema in the
+// transaction of q and returns a *schema.MinimumError when the binary of the
+// store is below the highest one. It reads the installation state in the same
+// statement and ignores its value, but it fails closed with
+// maintenance.ErrUnavailable when the read fails.
+func (s *Store) checkMinimum(ctx context.Context, q *db.Queries) error {
+	row, err := q.GetWriteState(ctx)
+	if err != nil {
+		return fmt.Errorf("read schema minimum sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	return checkWriteMinimum(row.Minimums, s.binaryVersion)
 }
 
 // runTx runs before, when set, and then fn in one transaction.
@@ -1301,6 +1332,11 @@ func (s *Store) runTx(
 // missing or the stored value is unknown: a write never passes on a read error.
 func (s *Store) checkWritable(ctx context.Context, q *db.Queries) error {
 	row, err := q.GetWriteState(ctx)
+	if storeerr.Is(err) {
+		// A database that does not answer is temporary: the client tries again.
+		return fmt.Errorf("read installation state sqlite database: %w", err)
+	}
+
 	if err != nil {
 		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
 	}
@@ -1373,6 +1409,12 @@ func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q
 // maintenance mode while it runs.
 func (s *Store) inControlFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
 	return s.fencedTx(ctx, fence, fn, s.inControlTx)
+}
+
+// inMinimumFencedTx runs fn as inControlFencedTx does, and refuses a binary
+// below the minimum binary version of the schema, as inMinimumTx does.
+func (s *Store) inMinimumFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
+	return s.fencedTx(ctx, fence, fn, s.inMinimumTx)
 }
 
 // fencedTx checks fence in the transaction that begin starts, and then runs fn.

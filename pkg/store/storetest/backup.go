@@ -156,6 +156,7 @@ type backupSeed struct {
 	audit      []audit.Entry
 	imports    *seededImports
 	profiles   *seededProfiles
+	issuer     *seededIssuer
 	runners    *seededRunners
 }
 
@@ -285,6 +286,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	imports := seedBackupImports(t, s, acme)
 	seedBlameRows(t, s, blameSeed{ns: acme, w: net, first: current.ID.String(), second: pending.ID.String()})
 	profiles := seedBackupProfiles(t, s, acme)
+	issuer := seedBackupIssuer(t, s, acme)
 	runners := seedBackupRunners(t, s, acme)
 	seedBackupGate(t, s, acme)
 	seedBackupSavedViews(t, s, acme)
@@ -313,6 +315,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		audit:      entries,
 		imports:    imports,
 		profiles:   profiles,
+		issuer:     issuer,
 		runners:    runners,
 	}
 }

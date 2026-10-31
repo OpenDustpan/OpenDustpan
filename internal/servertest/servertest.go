@@ -76,6 +76,7 @@ type Cluster struct {
 	client    *http.Client
 	transport *http.Transport
 	opts      []dustpan.Option
+	storeOpts []postgres.Option
 	sets      []dustpan.Components
 	schemaURL string
 	blobDir   string
@@ -103,7 +104,15 @@ type instance struct {
 func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 	t.Helper()
 
-	return startCluster(t, make([]dustpan.Components, n), opts)
+	return startCluster(t, make([]dustpan.Components, n), nil, opts)
+}
+
+// StartWithStore is Start with options for the store of every server. A test
+// of database round trips uses it to give the store a query tracer.
+func StartWithStore(t *testing.T, n int, storeOpts []postgres.Option, opts ...dustpan.Option) *Cluster {
+	t.Helper()
+
+	return startCluster(t, make([]dustpan.Components, n), storeOpts, opts)
 }
 
 // StartSplit runs one server for each entry of sets, on one fresh schema,
@@ -113,12 +122,14 @@ func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 func StartSplit(t *testing.T, sets []dustpan.Components, opts ...dustpan.Option) *Cluster {
 	t.Helper()
 
-	return startCluster(t, sets, opts)
+	return startCluster(t, sets, nil, opts)
 }
 
 // startCluster starts one server for each entry of sets. A zero entry runs
 // every component.
-func startCluster(t *testing.T, sets []dustpan.Components, opts []dustpan.Option) *Cluster {
+func startCluster(
+	t *testing.T, sets []dustpan.Components, storeOpts []postgres.Option, opts []dustpan.Option,
+) *Cluster {
 	t.Helper()
 
 	n := len(sets)
@@ -134,6 +145,7 @@ func startCluster(t *testing.T, sets []dustpan.Components, opts []dustpan.Option
 		client:    &http.Client{Transport: transport, Timeout: waitLimit},
 		transport: transport,
 		opts:      opts,
+		storeOpts: storeOpts,
 		sets:      sets,
 		schemaURL: "",
 		blobDir:   filepath.Join(t.TempDir(), "blobs"),
@@ -211,6 +223,15 @@ func (c *Cluster) BlobDir() string {
 func (c *Cluster) Do(t *testing.T, i int, method, path, body string) (int, string) {
 	t.Helper()
 
+	status, _, data := c.DoHeader(t, i, method, path, body)
+
+	return status, data
+}
+
+// DoHeader is Do with the response header in the result.
+func (c *Cluster) DoHeader(t *testing.T, i int, method, path, body string) (int, http.Header, string) {
+	t.Helper()
+
 	req, err := http.NewRequestWithContext(t.Context(), method, c.URL(i)+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -236,7 +257,24 @@ func (c *Cluster) Do(t *testing.T, i int, method, path, body string) (int, strin
 		t.Fatalf("read body: %v", readErr)
 	}
 
-	return resp.StatusCode, string(data)
+	return resp.StatusCode, resp.Header, string(data)
+}
+
+// CutDatabase closes every database connection of server i and refuses its
+// new ones until RestoreDatabase, as a database that fails over does. The
+// server keeps running. CutDatabase fails the test when server i does not run.
+func (c *Cluster) CutDatabase(t *testing.T, i int) {
+	t.Helper()
+
+	c.instance(t, i, "cut the database of").db.cut()
+}
+
+// RestoreDatabase lets server i reach the database again after CutDatabase.
+// It does not restart the server.
+func (c *Cluster) RestoreDatabase(t *testing.T, i int) {
+	t.Helper()
+
+	c.instance(t, i, "restore the database of").db.resume()
 }
 
 // authScheme returns the Authorization scheme of the API that serves path.
@@ -375,6 +413,22 @@ func (c *Cluster) Restart(t *testing.T, i int) {
 	c.mu.Unlock()
 }
 
+// instance returns the running server i, and fails the test with action when
+// it does not run.
+func (c *Cluster) instance(t *testing.T, i int, action string) *instance {
+	t.Helper()
+
+	c.mu.Lock()
+	in := c.instances[i]
+	c.mu.Unlock()
+
+	if in == nil {
+		t.Fatalf("%s server %d: the server does not run", action, i)
+	}
+
+	return in
+}
+
 // start opens the handles of server i, runs it and waits until it answers
 // ready.
 func (c *Cluster) start(t *testing.T, i int) *instance {
@@ -382,7 +436,7 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 
 	db := startProxy(t, c.schemaURL)
 
-	store, err := postgres.Open(t.Context(), db.url)
+	store, err := postgres.Open(t.Context(), db.url, c.storeOpts...)
 	if err != nil {
 		db.close()
 		t.Fatalf("open store of server %d: %v", i, err)
@@ -481,6 +535,7 @@ func serverOptions(
 		// The job, trigger and drift routes need their stores, as the binary gives them.
 		dustpan.WithRunners(store.Runners()),
 		dustpan.WithSourceFilters(store.SourceFilters()),
+		dustpan.WithTrustRules(store.TrustRules()),
 		dustpan.WithJobStore(store.Jobs()),
 		dustpan.WithJobClaimer(job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store)),
 		dustpan.WithTriggerStore(store.Triggers()),

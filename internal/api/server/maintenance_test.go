@@ -111,6 +111,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) testHandler {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -507,6 +508,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err == nil {
 		t.Fatal("NewHandler without maintenance succeeded")

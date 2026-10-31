@@ -150,8 +150,10 @@ no Pulumi CLI and no OpenTofu CLI.
 
 The command builds the web console, starts the server on
 `http://127.0.0.1:8080`, and seeds two namespaces with demo stacks, update
-history and one backup. It prints the URL and the sign-in token. Use the
-token on the sign-in page.
+history and one backup. It then reads two routes that the console calls. A
+404 on either route means that the console at `CONSOLE_REF` calls a route
+that this server does not serve, and the command stops. It prints the URL and
+the sign-in token. Use the token on the sign-in page.
 
 The server uses port 8080 by default. Set another port with
 `make demo DEMO_PORT=<port>`.
@@ -191,7 +193,15 @@ The database and the backups hold no copy of the key-encryption key. It
 lives in `DUSTPAN_KEY_ENCRYPTION_KEY` or in a key file that only its owner
 can read.
 
-The server sends no telemetry. It connects out only to the PostgreSQL
+The server never phones home. No data about your installation, its users or
+its use goes to the project, to a vendor or to any other party that you did
+not name. This is also true with no configuration, and no setting, also no opt-in
+setting, turns it on. In OpenDustpan Cloud, the project is the operator:
+its metrics, logs and traces of the installations that it runs stay in its
+own systems.
+Metrics and logs are for you, and they stay. You scrape the Prometheus
+metrics, and the server sends logs only to the log outputs that you
+configure. It connects out only to the PostgreSQL
 database and the S3-compatible storage that you configure.
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
 check`, `opendustpan upgrade check` and `opendustpan restore` call only the
@@ -228,8 +238,8 @@ Restore a Pulumi checkpoint with
 The restore answers 400 when the stored checkpoint of that version is not a deployment that the Pulumi CLI can read. It writes no new version.
 
 `opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
-`opendustpan upgrade check` and `opendustpan namespace create` are API
-clients. Each takes `--server` and `--ca-file`, and reads the token from
+`opendustpan upgrade check`, `opendustpan store check` and
+`opendustpan namespace create` are API clients. Each takes `--server` and `--ca-file`, and reads the token from
 `DUSTPAN_ADMIN_TOKEN`. `opendustpan restore` runs through the API in
 maintenance mode, with `--backup`, `--check-only` and `--force`. The
 [backup guide](docs/guides/backup-restore-upgrade.md) shows each command
@@ -323,6 +333,8 @@ How-to guides:
   of an OpenTofu workspace and read its latest drift result.
 - [Run triggers](docs/guides/run-triggers.md): save a trigger on a stack or a
   workspace, fire it by hand, and see what the server checks.
+- [The planner role](docs/guides/planner-role.md): what a planner can do, what
+  it cannot do, and the limit of the role on a workstation.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.
@@ -355,6 +367,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the
+  keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the

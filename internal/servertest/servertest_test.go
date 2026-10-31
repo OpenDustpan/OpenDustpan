@@ -264,3 +264,50 @@ func send(t *testing.T, c *servertest.Cluster, requests ...request) {
 		}
 	}
 }
+
+// TestWritesRecoverAfterTheDatabaseConnectionsAreCut proves that a server
+// answers 503 with Retry-After while every connection to its database is cut,
+// and that its writes work again when the connections return, with no restart.
+func TestWritesRecoverAfterTheDatabaseConnectionsAreCut(t *testing.T) {
+	t.Parallel()
+
+	c := servertest.Start(t, 1)
+
+	send(t, c, request{
+		server: 0, method: http.MethodPost, path: "/api/server/namespaces", body: `{"name":"before"}`,
+		want: http.StatusCreated,
+	})
+
+	c.CutDatabase(t, 0)
+
+	// The pool may hold a dead connection. The first write that meets it, and
+	// each later write, must answer 503 and not 500.
+	for range 3 {
+		status, header, body := c.DoHeader(
+			t, 0, http.MethodPost, "/api/server/namespaces", `{"name":"during"}`,
+		)
+		if status != http.StatusServiceUnavailable {
+			t.Fatalf("write while the connections are cut: status %d, want 503, body %s", status, body)
+		}
+
+		if got := header.Get("Retry-After"); got != "5" {
+			t.Fatalf("write while the connections are cut: Retry-After %q, want 5", got)
+		}
+
+		if !strings.Contains(body, "namespace.unavailable") {
+			t.Fatalf("write while the connections are cut: body %s does not name namespace.unavailable", body)
+		}
+	}
+
+	c.RestoreDatabase(t, 0)
+
+	waitForStatus(t, c, request{
+		server: 0, method: http.MethodPost, path: "/api/server/namespaces", body: `{"name":"after"}`,
+		want: http.StatusCreated,
+	})
+
+	status, body := c.Do(t, 0, http.MethodGet, "/api/server/namespaces", "")
+	if status != http.StatusOK || !strings.Contains(body, `"before"`) || !strings.Contains(body, `"after"`) {
+		t.Fatalf("list after the recovery: status %d, body %s, want 200 with both namespaces", status, body)
+	}
+}

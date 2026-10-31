@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/e2e"
 )
@@ -314,21 +315,24 @@ func largeRun(tool string, store e2e.Store, version, marker, stderr string) e2e.
 	requests := make([]e2e.Entry, 0, reportEntriesPerRun)
 	for i := range reportEntriesPerRun {
 		requests = append(requests, e2e.Entry{
-			Step:          "deploy",
-			Method:        "GET",
-			Host:          "",
-			Path:          "/api/stacks/acme/project/dev",
-			Query:         "",
-			UserAgent:     "",
-			Backend:       "",
-			Accept:        "application/json",
-			ContentType:   "",
-			RequestBody:   "",
-			ResponseBody:  "",
-			Seq:           i + 1,
-			Status:        200,
-			RequestBytes:  0,
-			ResponseBytes: 0,
+			Step:            "deploy",
+			At:              time.Time{},
+			Method:          "GET",
+			Host:            "",
+			Path:            "/api/stacks/acme/project/dev",
+			Query:           "",
+			UserAgent:       "",
+			Backend:         "",
+			Accept:          "application/json",
+			ContentType:     "",
+			RequestBody:     "",
+			ResponseBody:    "",
+			ResponseHeaders: nil,
+			ResponseCut:     false,
+			Seq:             i + 1,
+			Status:          200,
+			RequestBytes:    0,
+			ResponseBytes:   0,
 		})
 	}
 

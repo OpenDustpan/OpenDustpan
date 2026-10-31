@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -31,42 +30,25 @@ func appendInventoryChange(ctx context.Context, q *db.Queries, c inventory.Chang
 }
 
 // insertInventoryChange is appendInventoryChange that also returns the
-// sequence it took.
+// sequence it took. It is one statement: it resolves the namespace, takes the
+// sequence from the counter row and writes the row.
 func insertInventoryChange(ctx context.Context, q *db.Queries, c inventory.Change) (int64, error) {
-	nsID, err := q.GetNamespaceID(ctx, c.Namespace.String())
+	seq, err := q.AppendInventoryChange(ctx, db.AppendInventoryChangeParams{
+		NamespaceName: c.Namespace.String(),
+		AtMs:          codec.Millis(c.At),
+		Tool:          c.Tool,
+		UnitID:        c.UnitID,
+		UnitName:      c.Name,
+		DisplayName:   c.DisplayName,
+		Status:        c.Status,
+		Kind:          string(c.Kind),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, namespace.ErrNotFound
 	}
 
 	if err != nil {
-		return 0, fmt.Errorf("select namespace ID: %w", err)
-	}
-
-	collection, err := q.GetUnitCollectionName(ctx, c.UnitID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("select collection of unit: %w", err)
-	}
-
-	seq, err := q.NextInventoryChangeSeq(ctx, nsID)
-	if err != nil {
-		return 0, fmt.Errorf("take change log sequence: %w", err)
-	}
-
-	err = q.InsertInventoryChange(ctx, db.InsertInventoryChangeParams{
-		NamespaceID:   nsID,
-		Seq:           seq,
-		AtMs:          codec.Millis(c.At),
-		Tool:          c.Tool,
-		UnitID:        c.UnitID,
-		Name:          c.Name,
-		DisplayName:   c.DisplayName,
-		Status:        c.Status,
-		Collection:    collection,
-		Kind:          string(c.Kind),
-		ResourceCount: pgtype.Int8{Int64: 0, Valid: false},
-	})
-	if err != nil {
-		return 0, fmt.Errorf("insert inventory change: %w", err)
+		return 0, fmt.Errorf("append inventory change: %w", err)
 	}
 
 	return seq, nil
