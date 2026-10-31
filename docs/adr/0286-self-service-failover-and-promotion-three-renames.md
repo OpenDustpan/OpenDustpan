@@ -1,6 +1,6 @@
 # 286. Self-service, failover and promotion: three renames
 
-Status: accepted · 2026-10-31. Decisions 1 to 3 are owner decisions of 31 October 2026. Decisions 4 to 7 are the design of the author, and follow from them. Changes the words of ADRs 4, 100, 110 to 117, 128, 144, 160, 166 and 181. Changes the words of ADRs 199 to 201, 203 to 205, 207, 210, 211, 213 and 218. Changes the words of ADRs 220, 222, 224 to 226, 228 to 230, 248, 271, 273 and 280. Changes the words of RFC 55
+Status: accepted · 2026-10-31. Decisions 1 to 3 are owner decisions of 31 October 2026. Decisions 4 to 7 are PM decisions under the owner's delegation, of 31 October 2026, and follow from decisions 1 to 3. Changes the words of ADRs 4, 100, 110 to 117, 128, 144, 160, 166 and 181. Changes the words of ADRs 199 to 201, 203 to 205, 207, 210, 211, 213 and 218. Changes the words of ADRs 220, 222, 224 to 226, 228 to 230, 248, 271, 273 and 280. Changes the words of RFC 55
 
 ## Context
 
@@ -23,6 +23,9 @@ Three words in `GLOSSARY.md` do not fit their concepts:
 
 No tag shipped. There are no users, installations or data (ADR 73).
 
+The owner made decisions 1 to 3. The PM made decisions 4 to 7 under the
+owner's delegation. The owner-decisions file records the delegation.
+
 ## Decision
 
 1. **Catalog becomes Self-service (owner).** The request gateway is
@@ -40,13 +43,13 @@ No tag shipped. There are no users, installations or data (ADR 73).
    - **Comparison**: the difference between two steps.
 
    The owner rejects the word "Lane". "Advance" goes with it.
-4. **Every layer takes the new words, with no alias.** Code, API paths, actions, wire
+4. **Every layer takes the new words, with no alias (PM decision under the owner's delegation).** Code, API paths, actions, wire
    values, SQL tables, file and package names, docs and the console take the
    new words. No alias, no shim and no data conversion keeps an old word
    (ADR 73). ADR 73 freezes the SQL migration that made the tables of
    blueprints, so a new numbered migration in each dialect renames the tables.
    The collapse before the next tag merges it.
-5. **The spellings in code.** Go identifiers cannot hold a hyphen, so each
+5. **The spellings in code (PM decision under the owner's delegation).** Go identifiers cannot hold a hyphen, so each
    layer has one spelling:
 
    | Layer | Old | New |
@@ -57,12 +60,12 @@ No tag shipped. There are no users, installations or data (ADR 73).
    | Go names of the failover | `Promote`, `promotion` | `Failover`, `failover` |
    | Promotion paths (RFC 55) | `lane`, `Lane`, `lan-`, `advance` | `promotion`, `promotion.Path`, `pph-`, `promote` |
 
-6. **Other uses of "catalog" stay.** "Catalog" stays a common noun for a
+6. **Other uses of "catalog" stay (PM decision under the owner's delegation).** "Catalog" stays a common noun for a
    fixed list: the catalog of error codes, the tool catalog, the role
    catalog, the catalog of event types, the section catalog, the action
    catalog and the catalog of code rules. It is no longer the name of a
    feature. The Software Catalog of Backstage (ADR 247) keeps its own name.
-7. **Other uses of "promote" in the code change.** The word now belongs to
+7. **Other uses of "promote" in the code change (PM decision under the owner's delegation).** The word now belongs to
    promotion paths, so the code does not use it for other things:
    - The rotation of the signing keys of an issuer (ADR 204) makes a `next`
      key the `active` key. The code calls this "promote" and the rotate
@@ -94,6 +97,8 @@ route in `openapi.json`, no metric and no error code yet.
 | Store code | `pkg/store/internal/catalogstore/`, `pkg/store/{sqlite,postgres}/catalog_blueprints*.go`, `backup_catalog.go`, `pkg/backup/portable_catalog.go` | 25 files in `pkg/store`, 659 lines |
 | SQL tables | `catalog_blueprints`, `catalog_blueprint_versions` | 36 and 61 lines |
 | Frozen migrations | `pkg/store/{sqlite,postgres}/migrations/0153_catalog_blueprints.sql`, `postgres/migrations/0100_baseline.sql` | 3 files |
+| Migration records and hashes | The name record `pkg/store/schema/migrations/0153_catalog_blueprints.sql` and the file `0153_catalog_blueprints.sql.sha256` in each dialect. They stay with the frozen file. The new migration gets its own record and hashes. | 3 files |
+| Agent instructions | The layout line of `CLAUDE.md` and `AGENTS.md` that names `catalog/` under `internal/` | 2 lines |
 | Actions | `catalog:request`, `catalog:render`, `catalog:read`, `catalog:read-options` | 17, 14, 8 and 3 lines |
 | Durable operation kinds | `catalog.start`, `catalog.quota`, `catalog.expire` | 3 |
 | Wire values | `job.SourceCatalog` (`catalog`), `gate.SourceCatalog` (`catalog`), `forge.ConsumerCatalog` (`catalog`), `gate.ChangeCatalogRevision` (`catalog-revision`), `policy.KindCatalogRequest` (`catalog.request`), `catalog.GitRoot` (`catalog`) | 6 |
@@ -103,7 +108,7 @@ route in `openapi.json`, no metric and no error code yet.
 | Accepted ADRs from 200 | 200, 201, 203, 205, 207, 210, 211, 213, 218, 220, 222, 224 to 226, 228 to 230, 271, 273 | 19 files |
 | RFCs | Open: 5, 12, 16, 43, 55, 56, 82, 111. Accepted or decided: 14, 23, 74, 88, 89, 103. | 14 files, 77 lines |
 | User docs | `docs/reference/jobs-api.md` (`catalog` source), `docs/reference/git-host-api.md` (`catalog` consumer) | 2 lines |
-| Roadmap | `docs/roadmap.md` | 1 line |
+| Roadmap | `docs/roadmap.md`: the console step that opens the catalog, the console row of blueprints ("catalog and create form") and the row of the shared job model | 3 lines |
 | Glossary | **Catalog**, **Catalog request**, **Job source kind**, **Storage limit**, **Author (change order)**, **Message file**, the flagged ambiguities | 9 lines |
 
 These uses stay (decision 6): `internal/errcode` (30 files, 95 lines),
@@ -149,14 +154,20 @@ changes no behavior.
 | --- | --- | --- | --- |
 | R0 | This ADR, `GLOSSARY.md`, RFC 55 and its line in the RFC index | `glossary` | none |
 | R1 | The status lines of the ADRs that this ADR lists | `adr-status` | R0 |
-| R2 | Self-service in code. Move `internal/catalog` to `internal/selfservice`. Rename the store files and the backup table list. Add a migration in each dialect that renames the two tables. Rename the four actions, the durable kinds, the six wire values and the Git directory, with the tests and e2e. | `catalog-core`, `store-migrations`, `identity-actions` | R0. Rebase or merge the open pull request of the Expr evaluator in `internal/catalog` first |
-| R3 | Failover and the other uses of "promote" in code. Change the comments and `queries.sql`, then run `make generate`. Rename the issuer key rotation and the field `activated`, then run `make clients-generate`. Rename the function of the registry service. | `issuer`, `api-description` | R0 |
-| R4 | Docs: the open RFCs, `docs/reference/`, `docs/guides/`, `docs/roadmap.md` | `docs` | R2, R3 |
-| R5 | The console (`OpenDustpan/console`): labels, routes and the menu item "Self-service" next to "Registry" | console | R2 |
+| R2 | Self-service in code. Move `internal/catalog` to `internal/selfservice`. Rename the store files and the backup table list. Add a migration in each dialect that renames the two tables, with its name record and hashes. Rename the four actions, the durable kinds, the six wire values and the Git directory, with the tests and e2e. Change the layout line of `CLAUDE.md` and `AGENTS.md`. Change `docs/reference/jobs-api.md` and `docs/reference/git-host-api.md` for the new values. | `catalog-core`, `store-migrations`, `identity-actions` | R0. Rebase or merge the open pull request of the Expr evaluator in `internal/catalog` first |
+| R3 | Failover and the other uses of "promote" in code. Change the comments and `queries.sql`, then run `make generate`. Rename the issuer key rotation and the field `activated`, then run `make clients-generate`. Rename the function of the registry service. Change `docs/reference/issuer-api.md`, `docs/guides/oidc-issuer.md`, `docs/guides/connect-github.md` and `docs/guides/several-instances.md`. | `issuer`, `api-description` | R0 |
+| R4 | Docs: the open RFCs and `docs/roadmap.md` | `docs` | R2, R3 |
+| R5 | The console (`OpenDustpan/console`): labels, routes, the issuer field `activated` and the menu item "Self-service" next to "Registry" | console | R2, R3 |
 
-R2 and R3 touch different files, so they can run in parallel. R4 comes after
-them, so that the docs name the code that exists. R1 can merge at any time
-after R0.
+R2 and R3 touch different files, so they can run in parallel. Each of them
+changes the user docs of the values that it renames, in the same pull
+request (ADR 214). R4 comes after them, so that the RFCs name the code that
+exists. R1 can merge at any time after R0. R5 needs R2 and R3, because the
+console reads the new values of both.
+
+This pull request and the open pull request of ADR 285 both change
+`GLOSSARY.md`. After that pull request merges, merge `main` into this
+branch and fix the conflict. Do not rebase.
 
 ## Consequences
 

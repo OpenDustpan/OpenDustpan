@@ -1220,6 +1220,7 @@ _Avoid_: Open request
 
 **Issuer**:
 The OIDC issuer of one namespace, at `https://<issuer host>/oidc/<namespace ID>`, with its own signing keys (ADR 204). The issuer host comes from the installation setting `issuerBaseURL`, else from `publicURL`. When the namespace sets `issuerURL`, `iss` is that URL, and the server signs only with a key that the copy check found at that URL. Its paths `/oidc/<namespace ID>/...` are outside the versioned API. Clouds and other systems trust it.
+A rotation of the signing keys of the issuer **activates** the `next` key: the `next` key becomes the `active` key (ADR 286). The rotate answer says it in the field `activated`.
 _Avoid_: Identity provider (an identity provider signs in people), OIDC provider (alone)
 
 **Issued token**:
