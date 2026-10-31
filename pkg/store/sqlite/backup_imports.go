@@ -37,7 +37,7 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 				backupColNamespaceID,
 				backupColImportID,
 				"id",
-				"position",
+				backupColPosition,
 				"source_tool",
 				"source_name",
 				"target_name",

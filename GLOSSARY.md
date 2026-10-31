@@ -58,7 +58,7 @@ _Avoid_: Group (that is a set of principals), project, folder, system
 _Copy says_: "collection", with the things it holds: "a collection of stacks and workspaces". Do not use "collection" as a plain word for any other set.
 
 **Placement rule**:
-A rule of a namespace that matches a Pulumi project and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61).
+A rule of a namespace that matches a Pulumi project pattern and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61). The rules of a namespace are an ordered list, and the first rule that matches wins. A pattern is a glob with `*`, never a regular expression.
 _Avoid_: Routing rule, assignment rule
 
 **Sharing rule**:

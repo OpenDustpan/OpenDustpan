@@ -245,6 +245,7 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,

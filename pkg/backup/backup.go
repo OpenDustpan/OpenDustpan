@@ -117,6 +117,7 @@ var Tables = []string{
 	"inventory_changes",
 	"collections",
 	"collection_members",
+	"placement_rules",
 	"object_context",
 	"object_context_owners",
 	"gate_objects",

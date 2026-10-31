@@ -38,6 +38,8 @@ const (
 	portColSubject       = "subject"
 	portColDeletedName   = "deleted_name"
 	portColTool          = "tool"
+	portColPosition      = "position"
+	portColProject       = "project"
 	portColUnitID        = "unit_id"
 	portColPrincipalID   = "principal_id"
 	portColDigest        = "digest"
@@ -84,10 +86,10 @@ func portableSpec() []PortableTable {
 		},
 		{
 			Table:   "stacks",
-			OrderBy: []string{portColNamespace, "project", portColName},
+			OrderBy: []string{portColNamespace, portColProject, portColName},
 			Columns: []Column{
 				{Name: portColNamespace, Kind: KindText},
-				{Name: "project", Kind: KindText},
+				{Name: portColProject, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
 				{Name: portColCreatedAtMs, Kind: KindTime},
@@ -293,6 +295,21 @@ func portableSpec() []PortableTable {
 				{Name: portColNamespace, Kind: KindText},
 				{Name: "collection_key", Kind: KindText},
 				{Name: "assigned_at_ms", Kind: KindTime},
+			},
+		},
+		{
+			Table:   "placement_rules",
+			OrderBy: []string{portColNamespace, portColPosition, "id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColPosition, Kind: KindInteger},
+				{Name: portColTool, Kind: KindText},
+				{Name: portColProject, Kind: KindText},
+				{Name: "stack", Kind: KindText},
+				{Name: "collection_key", Kind: KindText},
+				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
 		},
 		{

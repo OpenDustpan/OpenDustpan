@@ -378,6 +378,15 @@ const (
 	// moving a unit into it. Its object is the collection. A placement rule
 	// never grants it (ADR 61, decision 4).
 	ActionCollectionCreateUnit Action = "collection:create-unit"
+	// ActionNamespaceReadPlacementRules allows listing and reading the placement
+	// rules of a namespace. Its object is the namespace.
+	ActionNamespaceReadPlacementRules Action = "namespace:read-placement-rules"
+	// ActionNamespaceManagePlacementRules allows making, changing, ordering and
+	// deleting the placement rules of a namespace. A rule only names a
+	// collection for a new unit. It never grants collection:create-unit, so the
+	// caller who makes the unit still needs that right on the collection. Its
+	// object is the namespace.
+	ActionNamespaceManagePlacementRules Action = "namespace:manage-placement-rules"
 	// ActionUnitMove allows moving a unit to another collection. A move needs
 	// exactly these checks: unit:move on the unit (the route), unit:manage-access
 	// on the unit, collection:create-unit on the target, collection:manage-access

@@ -71,6 +71,8 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
+	pgColPosition    = "position"
+	pgColProject     = "project"
 	pgColJobID       = "job_id"
 	pgColObjectKind  = "object_kind"
 	pgColObjectID    = "object_id"
@@ -149,10 +151,10 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "stacks",
 			columns: []string{
-				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs,
+				pgColNamespace, pgColProject, pgColName, "id", pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs, pgColDeletedName,
 			},
-			orderBy: []string{pgColNamespace, "project", pgColName},
+			orderBy: []string{pgColNamespace, pgColProject, pgColName},
 		},
 		{
 			table:   "stack_tags",
@@ -275,6 +277,14 @@ func pgCopyCollectionTables() []pgCopyTable {
 				pgColUnitID, pgColNamespace, "collection_key", "assigned_at_ms",
 			},
 			orderBy: []string{pgColUnitID},
+		},
+		{
+			table: "placement_rules",
+			columns: []string{
+				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_key",
+				"created_by", pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, pgColPosition, "id"},
 		},
 		{
 			table: "object_context",

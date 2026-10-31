@@ -133,6 +133,7 @@ func maintainerActions() []identity.Action {
 		identity.ActionCollectionCreateUnit,
 		identity.ActionNamespaceReadGitHostConnections,
 		identity.ActionNamespaceUseGitHostConnection,
+		identity.ActionNamespaceReadPlacementRules,
 	)
 }
 

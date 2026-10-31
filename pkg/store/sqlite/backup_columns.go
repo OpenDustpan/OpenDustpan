@@ -41,6 +41,8 @@ const (
 	backupColSubject     = "subject"
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"
+	backupColPosition    = "position"
+	backupColProject     = "project"
 	backupColObjectKind  = "object_kind"
 	backupColObjectID    = "object_id"
 	backupColAtMs        = "at_ms"
@@ -89,7 +91,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "stacks",
 			columns: []string{
 				backupColNamespace,
-				"project",
+				backupColProject,
 				backupColName,
 				backupColVersion,
 				backupColCreatedAtMs,
@@ -422,9 +424,23 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteTriggerBackupTables(),
 		sqliteItemKeyBackupTables(),
 		sqliteSettingBackupTables(),
+		sqlitePlacementBackupTables(),
 		sqliteCatalogBackupTables(),
 		sqliteTrustRuleBackupTables(),
 	)
+}
+
+// sqlitePlacementBackupTables lists the column list of the placement rules.
+func sqlitePlacementBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: "placement_rules",
+			columns: []string{
+				"id", backupColNamespace, backupColPosition, backupColTool, backupColProject, "stack",
+				"collection_key", "created_by", backupColCreatedAtMs,
+			},
+		},
+	}
 }
 
 // sqliteControlTables lists the column list of every table of

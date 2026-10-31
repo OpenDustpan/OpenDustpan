@@ -57,7 +57,7 @@ func portableImportUnits() []PortableTable {
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: portColImportID, Kind: KindText},
 				{Name: "id", Kind: KindText},
-				{Name: "position", Kind: KindInteger},
+				{Name: portColPosition, Kind: KindInteger},
 				{Name: "source_tool", Kind: KindText},
 				{Name: "source_name", Kind: KindText},
 				{Name: "target_name", Kind: KindText},
