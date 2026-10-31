@@ -16,11 +16,21 @@ func TestErrorsAreDistinct(t *testing.T) {
 	t.Parallel()
 
 	all := []error{
-		localuser.ErrNotFound, localuser.ErrAlreadyExists, localuser.ErrInvalid,
-		localuser.ErrPasswordTooShort, localuser.ErrPasswordTooLong, localuser.ErrPasswordForm,
-		localuser.ErrPasswordBlocked, localuser.ErrWrongPassword, localuser.ErrSignInFailed,
-		localuser.ErrCurrentPasswordRequired, localuser.ErrLastCredential, localuser.ErrDemoOnly,
-		localuser.ErrDemoFixed, localuser.ErrUnavailable,
+		localuser.ErrNotFound,
+		localuser.ErrAlreadyExists,
+		localuser.ErrInvalid,
+		localuser.ErrPasswordTooShort,
+		localuser.ErrPasswordTooLong,
+		localuser.ErrPasswordForm,
+		localuser.ErrPasswordBlocked,
+		localuser.ErrPasswordLettersAndDigits,
+		localuser.ErrWrongPassword,
+		localuser.ErrSignInFailed,
+		localuser.ErrCurrentPasswordRequired,
+		localuser.ErrLastCredential,
+		localuser.ErrDemoOnly,
+		localuser.ErrDemoFixed,
+		localuser.ErrUnavailable,
 	}
 
 	for i, a := range all {

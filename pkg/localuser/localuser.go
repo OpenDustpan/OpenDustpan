@@ -107,6 +107,10 @@ var (
 	// of the email, or the product name), or that is one character repeated
 	// or a sequence.
 	ErrPasswordBlocked = errors.New("password is too common")
+	// ErrPasswordLettersAndDigits reports a password with no letter or no
+	// digit, when the installation setting that asks for both is on. The
+	// setting is off by default.
+	ErrPasswordLettersAndDigits = errors.New("password needs a letter and a digit")
 	// ErrWrongPassword reports a password that does not match the hash. The
 	// service never sends it to a client: a client gets ErrSignInFailed.
 	ErrWrongPassword = errors.New("password does not match")
@@ -270,15 +274,18 @@ const (
 // Reset is one stored reset code, without its secret. ID has the prefix
 // "lpr-". The store keeps only the SHA-256 digest of the secret. CreatedBy
 // is the subject of the administrator, and Reason is the reason that the
-// administrator typed.
+// administrator typed. RevokeAccessTokens is the choice of the
+// administrator to revoke the access tokens of the person too. It is false
+// by default, and the audit entry of the reset records it.
 type Reset struct {
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	ID        string
-	UserID    string
-	CreatedBy string
-	Reason    string
-	Purpose   Purpose
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	ID                 string
+	UserID             string
+	CreatedBy          string
+	Reason             string
+	Purpose            Purpose
+	RevokeAccessTokens bool
 }
 
 // Digest is the SHA-256 digest of a reset code.
@@ -334,7 +341,9 @@ type Store interface {
 type ResetStore interface {
 	// CreateReset stores r, keyed by the digest d of its secret, deletes
 	// every earlier reset code of the same user, and appends e, in one
-	// transaction. It returns ErrInvalid for a value that fails a check,
+	// transaction. For PurposeReset, the same transaction ends every
+	// session of the person, and revokes each access token of the person
+	// when r.RevokeAccessTokens is set. It returns ErrInvalid for a value that fails a check,
 	// ErrNotFound for no such user, ErrAlreadyExists when the digest is
 	// taken, and ErrDemoFixed for the demo person.
 	CreateReset(ctx context.Context, r Reset, d Digest, e audit.Entry) error

@@ -47,7 +47,8 @@ Facts on `main` at a50ab96:
 Each decision of the product manager has the label "(product manager)" and a
 "Benchmark:" line. The marks "(fetched)" and "(not fetched)" have the meaning
 of RFC 21: "(fetched)" means that the author fetched the source page on
-2026-10-31. "(not fetched)" means that the fact comes from RFC 21 or the
+2026-10-31. "From a summary" means that the fact comes from a summary of a
+fetched page, not from a word-for-word read, so this ADR does not quote it. "(not fetched)" means that the fact comes from RFC 21 or the
 research note `docs/research/m4-identity-defaults.md`, and a reviewer must
 check it before a guide quotes it. This ADR never says that OpenDustpan
 complies with a standard. It says "designed against".
@@ -102,17 +103,23 @@ complies with a standard. It says "designed against".
    Benchmark: the OWASP Password Storage Cheat Sheet (fetched): "Use
    Argon2id with a minimum configuration of 19 MiB of memory, an iteration
    count of 2, and 1 degree of parallelism." Keycloak uses Argon2 by default
-   outside FIPS mode (fetched, from a summary of the server admin guide).
+   outside FIPS mode (from a summary of the server admin guide, not a quote).
    GitLab uses bcrypt with a cost of 10, and PBKDF2-SHA512 in FIPS mode
    (fetched). bcrypt reads at most 72 bytes of a password, so it does not
    meet decision 10.
+
+   The server adds no pepper to the hash (product manager). A pepper from
+   the key-encryption key makes each rotation of that key reset each
+   password. Benchmark: OWASP Password Storage (fetched) says "Consider using a
+   pepper", and that "alone, it provides no additional secure
+   characteristics".
 7. **The parameters (product manager).** The defaults are 19456 KiB of
    memory, 2 iterations, 1 lane, a salt of 16 bytes from `crypto/rand` and a
    key of 32 bytes. These are the second minimum configuration of OWASP, with
    the lowest memory that has 2 iterations.
    Benchmark: OWASP (fetched) lists five configurations of equal strength,
    from 46 MiB and 1 iteration to 7 MiB and 5 iterations. NIST SP 800-63B-4
-   asks for a salt of at least 32 bits (fetched, from a summary).
+   asks for a salt of at least 32 bits (from a summary, not a quote).
 8. **The stored form records its parameters (product manager).** The store
    keeps each hash as a PHC string, for example
    `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<key>`. So a later change of the
@@ -157,6 +164,14 @@ complies with a standard. It says "designed against".
     12 with uppercase, lowercase, digits and symbols when its password policy
     is on (fetched). MFA is off by default (ADR 46 decision 5), so a password
     is the only factor by default, and 15 applies.
+
+    An opt-in setting, `password.requireLettersAndDigits`, makes each new
+    password hold at least one letter (Unicode category L) and one digit
+    (Unicode category Nd). It is off by default, and the API shows its
+    effective value. A change from on to off is a weaker setting. It applies
+    to new passwords only. It is for a team that designs against PCI DSS
+    v4.0.1 requirement 8.3.6, which asks for letters and digits (not
+    fetched). The default stays the rule of NIST.
 11. **A blocklist in the binary (product manager).** The server refuses a
     password that is on a list of common and breached passwords. The list is
     a file in the binary. A check never calls a service outside the
@@ -172,10 +187,20 @@ complies with a standard. It says "designed against".
     word (for example, gitlab or devops)". OWASP (fetched) names an online
     breach service. OpenDustpan sends no data out, so the list ships with
     the binary.
+
+    The list is `Passwords/Common-Credentials/xato-net-10-million-passwords-100000.txt`
+    of SecLists (`github.com/danielmiessler/SecLists`), under the MIT
+    license (fetched). Its name gives 100,000 passwords. The work item
+    counts the lines of the file that it adds, pins the commit of SecLists,
+    and ships the MIT license text with the file, so that `make licenses`
+    and `make trivy` see it. A new version of the list is a reviewed change,
+    as for a module.
 12. **One error text for each rule.** The API answers a refused password
     with `400` and one code for each rule (`password.too-short`,
     `password.too-long`, `password.form`, `password.blocked`). The text
     names the rule and the number, for example "Use 15 characters or more."
+    With `password.requireLettersAndDigits` on, the code
+    `password.letters-and-digits` names that rule.
     It never shows the password.
 
 ### Sign-in, rate limits and lockout
@@ -204,8 +229,8 @@ complies with a standard. It says "designed against".
     be written, the sign-in fails closed.
     Benchmark: PCI DSS v4.0.1 requirement 8.3.4: a lockout after not more
     than 10 attempts, for at least 30 minutes or until a person checks the
-    identity (not fetched, quoted by RFC 21 P1). NIST SP 800-63B-4 (fetched,
-    from a summary): no more than 100 failures in a row. RFC 21 P1 gives the
+    identity (not fetched, quoted by RFC 21 P1). NIST SP 800-63B-4 (from a
+    summary, not a quote): no more than 100 failures in a row. RFC 21 P1 gives the
     same numbers to LDAP, so one rule covers both password methods.
 15. **A limit by source as well (product manager).** The password sign-in
     has its own scope in the source budget of `authgate` (`password`), apart
@@ -229,15 +254,20 @@ complies with a standard. It says "designed against".
     its SHA-256 digest. The administrator gives the code to the person on
     another channel. The code works once. It ends after 1 hour by default.
     The setting `password.resetLifetime` takes 10 minutes to 24 hours. A new
-    code replaces the earlier code of the same person. The use of the code
-    ends every session of the person. Factors, recovery codes and access
-    tokens stay. The reset needs `installation:manage-sign-in`, a fresh
+    code replaces the earlier code of the same person. The start of the
+    reset always ends every session of the person. Factors and recovery
+    codes stay. Access tokens stay by default. The reset request has the
+    option `revokeAccessTokens`, false by default, which also revokes each
+    access token of the person in the same transaction. The audit entry of
+    the reset records the choice. The reset needs `installation:manage-sign-in`, a fresh
     authentication, a reason, and a reach that covers the reach of the
     person (ADR 70 decision 22). The server refuses a reset of the own
     account.
-    Benchmark: NIST SP 800-63B-4 (fetched, from a summary): a recovery
+    Benchmark: NIST SP 800-63B-4 (from a summary, not a quote): a recovery
     secret has at least 64 bits and the store keeps it hashed. The code has
     256 bits. RFC 21 P7 gives the same rights and checks to an MFA reset.
+    GitHub keeps the personal access tokens at a password reset (not
+    fetched).
 18. **Email only with a mail sender (product manager).** When the
     installation has a mail sender (the SMTP settings of ADR 53 and ADR
     212), the administrator can send the reset link to the email of the
@@ -295,8 +325,15 @@ complies with a standard. It says "designed against".
     `opendustpan dev` takes a new flag, `--demo`. This amends ADR 237
     decision 3. With `--demo`, `dev` makes the person `dev:demo` at the
     first start, with the local user name `demo`, a password of 4 random
-    words from `crypto/rand`, and a stored grant of `site-administrator`
-    with the creator `system` and the reason "demo user of opendustpan dev".
+    words from `crypto/rand`, and these stored grants, each with the
+    creator `system` and the reason "demo user of opendustpan dev":
+    - `admin` (the namespace administrator role) on each namespace that
+      `dev` and the demo seed make, for example `dev`.
+    - `viewer` on the installation, so that the person reads the
+      installation and changes no installation setting.
+
+    The demo person never holds `site-administrator` or
+    `account-administrator`.
     The sign-in page of the console shows the user name and the password,
     from the public route `GET /api/dustpan/v1/sign-in/demo`. The banner of
     `dev` prints them too. A visitor signs in as a person, so each feature
@@ -304,7 +341,8 @@ complies with a standard. It says "designed against".
     --demo`.
     Benchmark: Grafana `admin`/`admin` and the demo of Vault `-dev` show
     the first credential to the person who started the server (not fetched).
-    ADR 237 decision 12 shows a one-time code for the dev admin.
+    ADR 237 decision 12 shows a one-time code for the dev admin. The public
+    demo of Grafana gives its visitors a limited role (not fetched).
 25. **The demo person cannot change its credentials.** The server refuses a
     change of the password, the user name, the passkeys and the factors of
     the demo person (`localuser.ErrDemoFixed`). The lockout by name does not
@@ -361,25 +399,6 @@ complies with a standard. It says "designed against".
     decision 11, with the name of ADR 210). A person changes the own
     password and factors with `sign-in:manage-own`. The constants land with
     the routes, so that each action has a route in the route test.
-
-## Not decided here
-
-- A pepper. OWASP (fetched) says "Consider using a pepper". A pepper from
-  the key-encryption key makes a rotation of that key reset each password.
-  The product manager keeps it out of milestone 4 and asks the owner.
-- PCI DSS v4.0.1 requirement 8.3.6 also asks for letters and digits (not
-  fetched). Decision 10 follows NIST and sets no composition rule. Whether
-  an opt-in setting for that rule exists is open.
-- The source and the license of the blocklist file. A list of 100,000
-  passwords from a breach corpus under a license that `make licenses` and
-  `make trivy` accept is the proposal. The work item names the file before
-  it lands.
-- Whether an administrator reset also revokes the access tokens of the
-  person. Decision 17 keeps them, as ADR 46 decision 8 keeps tokens as
-  bearer tokens.
-- The role of the demo person. `site-administrator` lets a visitor change
-  the settings of the demo installation. A public demo may need a smaller
-  role.
 
 ## Consequences
 
