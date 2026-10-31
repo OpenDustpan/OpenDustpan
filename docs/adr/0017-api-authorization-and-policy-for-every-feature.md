@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-10. The policy check superseded in part by ADR 224
 
+Changed by:
+
+- ADR 30 changes: an offline restore command as an exception to the API rule.
+- ADR 210 extends: the prefix and shape of the tool-neutral API.
+- ADR 222 changes: the policy check on every change.
+- ADR 224 changes: the policy check on every change.
+- ADR 266 extends: the saved view API.
+
 ## Context
 
 RFCs 5 to 56 propose many features: profiles, runners, approvals,

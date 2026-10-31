@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-13 · the home region amended by ADR 248 (primary installation)
 
+Changed by:
+
+- ADR 61 extends decision 5: how a CLI names the collection of a new unit.
+- ADR 248 changes decision 2: a collection has no primary installation of its
+  own.
+
 ## Context
 
 [RFC 4](../rfc/0004-what-sits-under-a-namespace.md) asks what sits under a

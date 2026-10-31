@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18. Adds to ADR 58. Route paths superseded in part by ADR 210. Decision 11 extended by ADR 212 and ADR 235. Decision 13 time format superseded by ADR 210 decision 10.
 
+Changed by:
+
+- ADR 181 extends decision 13: six new fields in the preferences document.
+- ADR 210 changes decision 13: the route paths and the time format.
+- ADR 212 extends decision 11: the branding preset as an installation setting.
+- ADR 235 extends decision 11: the product name, logo, accent and agent name.
+
 ## Context
 
 The console has one look today: the design system of the console

@@ -2,6 +2,16 @@
 
 Status: accepted · 2026-10-10 · gate extended by ADR 33 · the API rules of "Version" superseded in part by ADR 73. "When" superseded by ADR 279
 
+Changed by:
+
+- ADR 27 extends: the details of the image, the binaries and TLS.
+- ADR 33 extends: the gate of the first release gets the schema check.
+- ADR 73 changes: the API rules of the Version section.
+- ADR 75 extends: the release cadence and the support policy.
+- ADR 279 changes: the When decision, the first release after milestone 2.
+- ADR 279 extends: the release gate gets the exit tests of milestones 1 to 7.
+- ADR 283 extends: the release gate gets the release workflow item.
+
 ## Context
 
 OpenDustpan has no release process. The repository has no git tag, no

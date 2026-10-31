@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-11 · supersedes ADR 2 · decision 1 superseded in part by ADR 272
 
+Changed by:
+
+- ADR 272 changes decision 1: the built-in adapters and the domain packages
+  leave the SDK.
+
 ## Context
 
 ADR 2 makes the server an SDK with ports and adapters. It puts the SDK entry

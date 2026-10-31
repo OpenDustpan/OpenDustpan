@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18 · part of ADR 200
 
+Changed by:
+
+- ADR 273 changes decision 7: the attachment authority needs
+  unit:read-outputs.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The project owner decided on 18 October 2026 (owner):

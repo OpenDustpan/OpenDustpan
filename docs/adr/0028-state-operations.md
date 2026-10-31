@@ -2,6 +2,18 @@
 
 Status: accepted · 2026-10-11. Decision 3 superseded in part by ADR 151. Route paths of decisions 3 and 5 superseded in part by ADR 210. Decision 6 superseded in part by ADR 239: the OpenTofu force-release needs `unit:write-forced`
 
+Changed by:
+
+- ADR 41 changes decisions 3 and 9: the server never reads state and the diff
+  needs RFC 39.
+- ADR 151 changes decision 3: the OpenTofu restore opens and seals with a new
+  item key.
+- ADR 153 extends: a restore brings back the record of a resource that a run removed.
+- ADR 210 changes decisions 3 and 5: the route paths of the two restore
+  routes.
+- ADR 239 changes decision 6: the OpenTofu force-release needs
+  unit:write-forced.
+
 ## Context
 
 [RFC 18](../rfc/0018-state-operations.md) asks for the first recovery tools

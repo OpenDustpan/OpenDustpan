@@ -2,6 +2,19 @@
 
 Status: accepted · 2026-10-11. Extended by ADR 213 decision 10. Decisions 1 and 3 superseded in part by ADR 254. Decision 6 superseded in part by ADR 239: a force-unlock needs `unit:write-forced`
 
+Changed by:
+
+- ADR 35 changes decision 2: the package path of the TFE adapter.
+- ADR 41 changes decision 6: the state download needs unit:read-secrets.
+- ADR 44 changes decision 6: a forced state write needs unit:write-forced.
+- ADR 153 extends decision 5: the safe-delete routes and the can-force-delete
+  permission.
+- ADR 213 extends: a manual lock blocks an OpenTofu lock.
+- ADR 239 changes decision 6: force-unlock needs unit:write-forced, not
+  unit:manage.
+- ADR 254 changes decisions 1 and 3: no remote plans, operations false and
+  execution-mode local.
+
 ## Context
 
 [RFC 1](../rfc/0001-opentofu-via-the-tfe-compatible-api.md) proposes to

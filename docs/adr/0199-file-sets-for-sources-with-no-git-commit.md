@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · adds to ADR 135 · changes ADR 134, 150 and 152
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 [ADR 135](0135-the-source-pipeline.md) gives a runner job its code only as

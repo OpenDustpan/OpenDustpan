@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-17. Decision 22 superseded in part by ADR 128. Decisions 3, 7 and 20 superseded in part, and stop reasons added, by ADR 129. Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 128 changes decision 22: sealed transcript results that hold history
+  items.
+- ADR 129 changes decisions 3, 7 and 20: the connection, its routes, the
+  status answer and the ledger rows.
+- ADR 129 extends: the stop reasons of a run.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 [RFC 73](../rfc/0073-ai-agent-for-infrastructure.md) asks whether

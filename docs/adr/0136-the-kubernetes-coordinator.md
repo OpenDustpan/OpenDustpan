@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · adds to RFC 31 phase 2
 
+Changed by:
+
+- ADR 139 extends decision 9: client-go and the separate dustpan-runner
+  binary.
+
 ## Context
 
 [RFC 31](../rfc/0031-kubernetes.md) phase 2 proposes a Kubernetes runner:

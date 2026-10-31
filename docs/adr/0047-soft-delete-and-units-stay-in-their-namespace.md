@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-12 · the final delete superseded in part by ADR 151
 
+Changed by:
+
+- ADR 151 changes decision 3: the final delete also shreds item keys and
+  writes a tombstone.
+- ADR 153 extends decisions 1 and 3: dependents check, purge confirmation and
+  reads of deleted units.
+
 ## Context
 
 [RFC 17](../rfc/0017-unit-lifecycle.md) found that HCP Terraform cannot undo a
