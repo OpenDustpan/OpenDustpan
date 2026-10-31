@@ -12,6 +12,7 @@ Changed by:
 - ADR 222 supersedes decisions 2 and 3: one fresh-authentication window.
 - ADR 227 supersedes decisions 2 and 3: one window replaces the two MFA
   windows.
+- ADR 227 changes decision 4: the window can be only 0 or 60 to 900 seconds.
 
 ## Context
 
