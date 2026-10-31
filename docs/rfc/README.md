@@ -103,7 +103,7 @@ both together.
 | [52](0052-console-core.md) | Console core views and navigation | draft; the console reads the capabilities document (ADR 211) |
 | [53](0053-terraform-cli.md) | Terraform CLI support | draft |
 | [54](0054-sources-beyond-git.md) | Sources other than git | draft |
-| [55](0055-environment-promotion.md) | Environment promotion and comparison | discussing; proposal of 2026-10-30 |
+| [55](0055-environment-promotion.md) | Environment promotion and comparison | discussing; proposal of 2026-10-30; words decided by ADR 286 |
 | [56](0056-upgrade-pull-requests.md) | Upgrade pull requests for providers, modules and blueprints | discussing; proposal of 2026-10-30 |
 | [57](0057-documentation.md) | Documentation, examples and agent skills as a product | draft; docs in the same pull request accepted (ADR 214) |
 | [58](0058-large-request-limits.md) | Bound memory of large request bodies | accepted |
