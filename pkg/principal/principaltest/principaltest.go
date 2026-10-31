@@ -86,6 +86,10 @@ func Run(t *testing.T, newStore Factory) {
 			name: "a disable and a delete of the last two break-glass accounts leave one",
 			test: testBreakGlassParallelDelete,
 		},
+		{
+			name: "a break-glass flag on a person with a local password fails with ErrBreakGlassPassword",
+			test: testBreakGlassPasswordRefused,
+		},
 	}
 
 	for _, tc := range cases {
