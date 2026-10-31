@@ -214,13 +214,27 @@ credential.
        (ADR 70): the sign-in request itself.
 
      The step that issues the first cookies takes the thumbprint from that
-     record, never from its own request.
+     record, never from its own request. The factor step of an MFA sign-in
+     also needs a proof whose key has the thumbprint of the pending sign-in.
+   - **The callback of an identity provider is the one accepted gap.** It is
+     a navigation from another site, so the browser cannot send a proof with
+     it. The callback takes the thumbprint that the start kept, after a
+     proof with a server nonce. The bound: a person who steals both the
+     callback URL (the code and the state) and the sign-in request, inside
+     its 10 minutes and before the browser of the victim uses the code,
+     gets cookies bound to the key of the victim. Their access cookie works
+     for at most 5 minutes, and their refresh cookie cannot refresh without
+     the private key. The identity provider gives each code once, and PKCE
+     binds the code to the verifier of the start.
    - **Each route that issues cookies again copies the thumbprint and the
      sign-in ID** from the access cookie or from the record of the sign-in.
      It never reads a key or a thumbprint from the request. These routes
      are the fresh step, a change that keeps the session (decision 12), the
-     completion of an enrollment, and the refresh. So a person who holds a
-     stolen access cookie and the password cannot bind a key of their own.
+     completion of an enrollment, and the refresh. The fresh step, the
+     completion of an enrollment and the refresh also need a proof whose
+     key has that thumbprint. So a person who holds a stolen access cookie
+     and the password cannot bind a key of their own, and cannot make a
+     fresh step or finish an enrollment without the private key.
    - The audit entry `session:sign-in` records the thumbprint, so that a
      reader can compare the keys of the sign-ins of a person.
 7. **Each refresh carries a proof.** The proof has the shape of a DPoP proof
@@ -539,7 +553,7 @@ credential.
     | Access cookie | length at most 4096, form `v1.<key ID>.<base64url>`, key ID pattern, strict JSON, kind | AEAD with the cookie name and the key ID in the associated data. The value never reaches a log | 5-minute expiry, idle and absolute deadlines, `HttpOnly`, `SameSite=Strict`, `__Host-` | principal read at each request: person, enabled, generation, policy, dev subject, restriction | any error is `401`. A refused dev subject writes a denial entry |
     | Refresh cookie | as the access cookie, kind `refresh`, at most 2 of the name | AEAD. `Path` of the session routes only | opens only at the refresh and the sign-out routes. Makes only cookies | the same principal read as the access cookie, and the proof | each refusal writes `session:refresh-refused` |
     | Proof at a refresh | at most 2048 bytes, compact JWS only, `typ`, `alg` `ES256` only, EC P-256 key on the curve with no private part, no `crit`, no duplicate keys | the thumbprint compared in constant time. `htu` compared with the configured URL, never the `Host` header. The proof never reaches a log | the nonce window of 30 seconds, which the verifier and the caller each check. `iat` within 24 hours. No URL opened | the key thumbprint of the cookie | a bad proof refuses the refresh and writes the entry |
-    | Proof and public key at a sign-in | as the proof at a refresh | the thumbprint goes to the short record of the sign-in, never to a log | the nonce window. One key for each sign-in | the step that issues the cookies reads the thumbprint from the record, never from its request | a sign-in with no good proof issues no cookie and writes `sign-in.failed` |
+    | Proof and public key at a sign-in | as the proof at a refresh | the thumbprint goes to the short record of the sign-in, never to a log | the nonce window. One key for each sign-in | the step that issues the cookies reads the thumbprint from the record, never from its request. The factor step, the fresh step and the completion of an enrollment need a proof of that key. The callback of an identity provider is the one gap (decision 6) | a sign-in with no good proof issues no cookie and writes `sign-in.failed` |
     | Nonce | form and length as a cookie, kind `dpop-nonce` | AEAD with `dpop-nonce` in the associated data | 30 seconds back and 5 seconds ahead. One nonce each 5 seconds on each replica | not applicable: a nonce authorizes nothing | an old nonce gets `use_dpop_nonce`, which the source budget counts |
     | `X-Dustpan-Csrf` header | 43 characters of base64url | compared in constant time with the value in the cookie | one value for each sign-in | the value of the cookie of the same request | a missing or wrong value is `403` |
     | `Origin` and `Sec-Fetch-Site` | allowlist of origins. Exact values of `Sec-Fetch-Site` | never written to a header. Logged with CR and LF taken out | not applicable | a change needs `same-origin` or an allowed origin | a refusal is `403` and a log record |
@@ -686,8 +700,13 @@ The options:
   pending sign-in stays exact. The cost: the database holds a record of a
   sign-in in progress for up to 10 minutes. It is not a session.
 - **(b) Sealed cookies.** The sign-in request and the pending sign-in go
-  into sealed cookies with the attributes of the access cookie, and the
-  server stores nothing for them. The count of wrong factors moves to the
+  into sealed cookies, and the server stores nothing for them. Both are
+  `__Host-`, `Secure` and `HttpOnly`, with `Path=/`. The sign-in request
+  cookie is `SameSite=Lax`, because the callback of the identity provider is
+  a navigation from another site, and a `Strict` cookie would not reach it.
+  The sign-in cookie on `main` is `Lax` for the same reason. The pending
+  sign-in cookie is `SameSite=Strict`, because the second factor is a
+  request from the console. The count of wrong factors moves to the
   factor lock of the person that exists already (ADR 285 decision 14: 10
   wrong factors in a row lock the factors of the person for 30 minutes,
   in a count that each instance shares). The costs: a cookie cannot work
