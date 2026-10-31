@@ -29,6 +29,7 @@ import (
 type Harness struct {
 	Store      unitimport.Store
 	Units      unitimport.UnitStore
+	Uploads    unitimport.UploadStore
 	Namespace  func(t *testing.T, name string) namespace.Fence
 	SeedLedger func(ctx context.Context, ns namespace.Name, row unitimport.LedgerRow) error
 	SetTarget  func(ctx context.Context, ns namespace.Name, key unitimport.UnitKey, target history.Unit) error
@@ -266,4 +267,17 @@ func seedLedger(t *testing.T, h Harness, row unitimport.LedgerRow) {
 	if err := h.SeedLedger(t.Context(), "acme", row); err != nil {
 		t.Fatalf("seed ledger row: %v", err)
 	}
+}
+
+// UploadImportFixture returns a valid new import of the source kind upload in
+// the namespace ns, for the tests of a store adapter that reach its commit
+// statement directly.
+func UploadImportFixture(ns namespace.Name, id string) unitimport.Import {
+	return newUploadImport(ns, id)
+}
+
+// EntryFixture returns the audit entry of a write with the action in the
+// namespace ns.
+func EntryFixture(ns namespace.Name, action string) audit.Entry {
+	return entry(ns, action)
 }
