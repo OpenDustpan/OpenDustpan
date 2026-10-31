@@ -123,7 +123,9 @@ var Settings = []*Setting{
 		referenceNone,
 	),
 	stringSetting(
-		"database", "DUSTPAN_DATABASE", "",
+		"database",
+		"DUSTPAN_DATABASE",
+		"",
 		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
 		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
 	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
