@@ -82,6 +82,9 @@ complies with a standard. It says "designed against".
    SSO change that turns the effective value from off to on, for example
    the removal of the last SSO provider, goes through the check of a weaker
    setting: it needs a fresh authentication, as an explicit change does.
+   One function computes the effective value from the stored setting and
+   the SSO configuration. The setting route and each SSO change call that
+   function, so the two paths cannot give different values.
    While it is off, the password sign-in, the set-up page and a reset
    answer `localuser.ErrPasswordSignInOff`. The passkey sign-in of a local
    user does not depend on it. While an SSO provider exists and the setting
@@ -124,7 +127,9 @@ complies with a standard. It says "designed against".
    principal. The reverse holds too: the principal store refuses to set the
    break-glass flag on a person who has a password
    (`principal.ErrBreakGlassPassword`), under the same row lock of the
-   principal. The administrator deletes the password first. So a break-glass account keeps the phishing-resistant sign-in
+   principal. Today only the create of a principal sets the flag, so this
+   check guards a later write that sets it on an existing person. The
+   administrator deletes the password first. So a break-glass account keeps the phishing-resistant sign-in
    of ADR 70 decision 23, and no lockout by name can apply to it (RFC 21
    P1). Each write that changes the credentials of a person locks the row of
    the person principal first, in the local user store and in the passkey
