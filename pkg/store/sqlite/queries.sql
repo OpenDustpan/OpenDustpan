@@ -1197,6 +1197,11 @@ SELECT blob_key FROM update_journal
 WHERE stack_id = ? AND update_id = ?
 ORDER BY arrival;
 
+-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;
+
 -- name: DeleteJournalSequences :exec
 DELETE FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ?;
