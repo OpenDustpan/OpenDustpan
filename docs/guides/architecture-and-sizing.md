@@ -33,11 +33,11 @@ Back up this layout the same way as any installation. The [backup guide](backup-
 
 ## Several instances behind a load balancer with PostgreSQL and S3-compatible storage
 
-This layout is the target design. It is not supported yet. The README gives the current status: the server runs on one node. Do not use this layout in an installation yet. The plan is that several `opendustpan serve` processes form one installation. A load balancer receives each request. It passes each request to one healthy instance. All instances share one PostgreSQL database, one S3-compatible bucket, one key-encryption key, and one backup target.
+This layout is supported. The [high availability guide](high-availability.md) gives the supported layout and its limits. Several `opendustpan serve` processes form one installation. A load balancer receives each request. It passes each request to one healthy instance. All instances share one PostgreSQL database, one S3-compatible bucket, one key-encryption key, and one backup target.
 
 ### What runs where
 
-In the target design:
+In this design:
 
 - Each instance would run the same server binary with the same flags. Each instance would serve every API.
 - The load balancer would receive each request. It would pass each request to one healthy instance.
@@ -52,7 +52,7 @@ In the target design, each instance would share the SQL store, the blob store, t
 
 ### What stops when one part stops
 
-In the target design:
+In this design:
 
 - If one instance stopped, the load balancer would pass requests to the healthy instances. Requests in flight to the stopped instance would fail.
 - If PostgreSQL stopped, all reads and writes would fail on each instance.
