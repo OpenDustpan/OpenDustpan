@@ -42,6 +42,21 @@ func RunSealer(t *testing.T, _ func(t *testing.T) session.Sealer) {
 		"ARetiredKeyIsUnknown",
 		"AnUnknownKeyIsUnknown",
 		"TwoSealsOfTheSameClaimsDiffer",
+		// Two-phase rotation and the reload of the ring.
+		"AVersionBeforeItsSealsFromOpensButDoesNotSeal",
+		"AVersionSealsFromItsSealsFrom",
+		"ARetiredVersionStopsOpeningWithinOneReloadInterval",
+		"AnUnknownKeyIDOfTheRightFormReloadsTheRingOnce",
+		"OnDemandReloadsAreAtMostOneEach10Seconds",
+		"ASealCountOverTheLimitAddsAVersion",
+		"AVersionThatDoesNotUnwrapStopsTheStart",
+		"TheKeyRingIsReachableOnlyThroughTheSealer",
+		// The server nonce.
+		"NonceRoundTrip",
+		"ANonceOlderThanTheWindowIsStale",
+		"ANonceAfterTheServerTimeIsStale",
+		"ANonceDoesNotOpenAsACookie",
+		"ACookieDoesNotOpenAsANonce",
 		// Boundary: the form and the length, before any open.
 		"AValueLongerThanTheLimitIsMalformedBeforeTheOpen",
 		"AValueWithNoVersionIsMalformed",
@@ -77,7 +92,8 @@ func RunKeyStore(t *testing.T, _ func(t *testing.T) session.KeyStore) {
 
 	skipCases(t, []string{
 		"AddThenListNewestFirst",
-		"AddEndsTheSealOfTheEarlierNewest",
+		"AddEndsTheSealOfTheEarlierNewestAtSealsFrom",
+		"AddWithSealsFromBeforeTheCreationIsInvalid",
 		"AddOfATakenIDIsAlreadyExists",
 		"AddOfAnInvalidKeyIsInvalid",
 		"AddOfAnIDOutsideThePatternIsInvalid",
@@ -105,16 +121,17 @@ func RunPrincipalStateStore(t *testing.T, _ func(t *testing.T) session.Principal
 		"ADeletedPrincipalIsNotFound",
 		"AServicePrincipalIsNotFound",
 		"ADisabledPrincipalComesBackWithItsDisableTime",
-		"ANewPrincipalHasAZeroValidAfterTime",
+		"ANewPrincipalHasGenerationOne",
 		"TheStateHoldsThePoliciesFromTheSameRead",
-		"BumpSetsTheValidAfterTime",
-		"BumpNeverMovesTheTimeBack",
-		"BumpReturnsTheStoredTime",
+		"BumpAddsOne",
+		"BumpReturnsTheNewGeneration",
+		"BumpNeedsNoClock",
+		"AZeroGenerationFromAnotherVersionIsRefused",
 		"BumpOfAnUnknownCauseIsInvalid",
 		"BumpOfAnUnknownPrincipalIsNotFound",
 		"BumpWithABadAuditEntryChangesNothing",
 		"BumpAppendsTheEntryInTheSameTransaction",
-		"ConcurrentBumpsKeepTheLatestTime",
+		"ConcurrentBumpsEachAddOne",
 	})
 }
 
@@ -125,6 +142,8 @@ func RunProofVerifier(t *testing.T, _ func(t *testing.T) session.ProofVerifier) 
 
 	skipCases(t, []string{
 		"AGoodProofGivesTheRFC7638Thumbprint",
+		"TheThumbprintUsesCrvKtyXAndYOnly",
+		"AGoodProofGivesItsNonce",
 		// Boundary: the form, the type and the algorithm.
 		"AProofLongerThanTheLimitIsMalformed",
 		"AProofThatIsNotACompactJWSIsMalformed",
@@ -133,21 +152,37 @@ func RunProofVerifier(t *testing.T, _ func(t *testing.T) session.ProofVerifier) 
 		"AProofWithAnHMACAlgorithmIsMalformed",
 		"AProofWithAnRSAAlgorithmIsMalformed",
 		"AProofWithAPrivateKeyInItsJWKIsMalformed",
+		"AProofWithAKeyTypeOtherThanECIsMalformed",
+		"AProofWithACurveOtherThanP256IsMalformed",
+		"AProofWithAPointNotOnTheCurveIsMalformed",
+		"AProofWithXOrYNotOf32BytesIsMalformed",
+		"AProofWithKidJkuX5uOrX5cIgnoresThemAndOpensNoURL",
+		"AProofWithACritHeaderIsMalformed",
+		"AProofWithB64FalseIsMalformed",
+		"AProofInJSONSerializationIsMalformed",
+		"AProofWithADuplicateHeaderKeyIsMalformed",
+		"AProofWithADuplicateClaimIsMalformed",
+		"AProofWithADERSignatureIsMalformed",
+		"AProofWithNoNonceHasNoNonce",
 		"AProofWithNoJTIIsMalformed",
 		"AProofWithAJTIOfLessThan128BitsIsMalformed",
 		"AProofWithNoIATIsMalformed",
 		// The signature.
 		"AProofWithAChangedClaimHasABadSignature",
 		"AProofSignedByAnotherKeyHasABadSignature",
-		// Limit: the window.
-		"AProofOlderThan25SecondsIsStale",
-		"AProofMoreThan5SecondsAheadIsStale",
-		"AProofAtTheEdgesOfTheWindowPasses",
+		// Limit: the time. The nonce gives the window, the iat a far bound.
+		"AProofWithAnIATMoreThan24HoursOffIsStale",
+		"AProofWithAnIATTwoMinutesOffPasses",
 		// The request that the proof names.
 		"AProofForAnotherMethodNamesAnotherRequest",
 		"AProofForAnotherPathNamesAnotherRequest",
 		"AProofForAnotherOriginNamesAnotherRequest",
 		"AProofWithAQueryNamesAnotherRequest",
+		"AProofWithATrailingSlashNamesAnotherRequest",
+		"AProofWithAnUpperCaseSchemeOrHostMatches",
+		"TheHostHeaderNeverChangesTheExpectedURL",
+		// Containment: the proof never reaches a log.
+		"AnErrorHoldsNoPartOfTheProof",
 		// The accepted risk: no list of used proofs.
 		"TheSameProofPassesTwiceInsideItsWindow",
 	})
@@ -173,14 +208,18 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"AChangeWithNoFetchMetadataAndNoOriginIsRefused",
 			"AChangeWithNoCSRFValueIsRefused",
 			"AChangeWithAWrongCSRFValueIsRefused",
+			"ACSRFValueOfTheWrongLengthIsRefused",
 			"AReadNeedsNoCSRFValue",
+			"AnOriginWithCROrLFIsRefusedAndLoggedWithoutThem",
 			// Authorize at use: the principal read of each request.
 			"AnUnknownPrincipalIsUnauthenticated",
 			"ADisabledPrincipalIsUnauthenticated",
 			"APrincipalThatIsNotAPersonIsUnauthenticated",
-			"ASignInAtTheValidAfterTimeIsUnauthenticated",
-			"ASignInJustAfterTheValidAfterTimeAuthenticates",
+			"AnOlderGenerationIsUnauthenticated",
+			"ANewerGenerationIsUnauthenticated",
 			"ABumpEndsTheNextRequest",
+			"AnIssueThatRacesABumpFailsAtTheNextRequest",
+			"AReplicaClockAheadCannotKeepASessionAfterABump",
 			"AnIdleDeadlineThatPassedIsUnauthenticated",
 			"AnAbsoluteDeadlineThatPassedIsUnauthenticated",
 			"AShorterMaximumLengthAppliesAtTheNextRequest",
@@ -188,6 +227,9 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"ADevSubjectOnAServerThatIsNotDevIsRefusedAndRecorded",
 			"TheNamespaceServicePrincipalIsRefused",
 			"ARequestNeverExtendsADeadline",
+			"AnEnrollOnlySessionCannotCallOtherRoutes",
+			"AnEnrollOnlySessionCanEnrollReadRefreshAndSignOut",
+			"NoRequestValueReachesALogWithCROrLF",
 			"AStoreErrorFailsClosed",
 		})
 	})
@@ -199,6 +241,15 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"ARefreshMovesTheIdleDeadlineToNowPlusTheIdleLimit",
 			"ARefreshNeverMovesTheAbsoluteDeadline",
 			"ARefreshKeepsTheSignInIDTheKeyAndTheCSRFValue",
+			"ARefreshKeepsTheRestriction",
+			"ARefreshKeepsTheFreshTimeAndKind",
+			"ARefreshSendsANewNonce",
+			"AProofFromABrowserWithAClockTwoMinutesOffRefreshes",
+			"AProofWithNoNonceGetsUseDPoPNonceAndNoEntry",
+			"AProofWithAnOldNonceGetsUseDPoPNonceAndNoEntry",
+			"UseDPoPNonceAnswersCountInTheSourceBudget",
+			"TwoRefreshCookiesUseTheFirstThatOpensAndMatches",
+			"MoreThanTwoRefreshCookiesAreRefused",
 			"TheAccessExpiryIsTheEarliestOfFiveMinutesAndTheDeadlines",
 			"TheEarlierRefreshCookieStaysValidUntilItsIdleDeadline",
 			// Each step, in order, refuses, sets no cookie and records.
@@ -209,7 +260,7 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"AProofOfAnotherKeyIsRefused",
 			"AnUnknownPrincipalIsRefused",
 			"ADisabledPrincipalIsRefused",
-			"ASignInAtTheValidAfterTimeIsRefused",
+			"AnOlderGenerationIsRefused",
 			"AnIdleDeadlineThatPassedIsRefused",
 			"AnAbsoluteDeadlineThatPassedIsRefused",
 			"TheSignInTimePlusTheCurrentMaximumLengthIsRefused",
@@ -223,8 +274,87 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"AStoreErrorFailsClosed",
 			// Limit.
 			"ARefreshUpdatesTheActivityTimeAtMostOnceAnHour",
-			"ARefreshNeverIssuesASignInTimeAtOrBeforeTheValidAfterTime",
+			"ARefreshNeverMovesTheSignInTime",
 			"ARefreshWithTheAccessCookieOnlyIsRefused",
+			"TheSourceBudgetRefusesARefreshFlood",
+			"TheProofNeverReachesALog",
+		})
+	})
+
+	t.Run("KeyBinding", func(t *testing.T) {
+		t.Parallel()
+		skipCases(t, []string{
+			"AnIdentityProviderSignInBindsTheKeyOfItsStart",
+			"APasswordSignInBindsTheKeyOfItsRequest",
+			"APasswordSignInWithMFABindsTheKeyOfThePendingSignIn",
+			"APasskeySignInBindsTheKeyOfItsChallenge",
+			"TheDemoSignInBindsTheKeyOfItsRequest",
+			"ABreakGlassSignInBindsTheKeyOfItsRequest",
+			"ASignInWithNoProofIssuesNoCookie",
+			"ASignInWithAnOldNonceIssuesNoCookie",
+			"TheCallbackNeverReadsAKeyFromItsRequest",
+			"AFreshStepWithANewKeyKeepsTheOldThumbprint",
+			"AChangeThatKeepsTheSessionKeepsTheThumbprint",
+			"AnEnrollmentKeepsTheThumbprint",
+			"AStolenAccessCookieAndThePasswordCannotBindANewKey",
+			"TheSignInEntryRecordsTheThumbprint",
+		})
+	})
+
+	t.Run("Restriction", func(t *testing.T) {
+		t.Parallel()
+		skipCases(t, []string{
+			"APersonWithNoFactorAfterTheGraceGetsAnEnrollOnlySession",
+			"AnEnrollmentBumpsAndIssuesCookiesWithNoRestriction",
+			"TheFreshKindIsThePathOfTheStep",
+		})
+	})
+
+	t.Run("SignOut", func(t *testing.T) {
+		t.Parallel()
+		skipCases(t, []string{
+			"AnExpiredAccessCookieSignsOutAndEndsTheRuns",
+			"ARefreshCookieAloneSignsOutAndEndsTheRuns",
+			"AnOlderGenerationStillSignsOut",
+			"ADisabledPrincipalCanStillSignOut",
+			"NoCookieThatOpensEndsNothing",
+			"AnotherOriginEndsNothing",
+			"AWrongCSRFValueEndsNothing",
+			"ASignOutEndsOnlyTheRunsOfItsSignIn",
+			"EachCookieExpiresAtItsNameAndPath",
+			"TheAnswerNeverClearsTheCookiesOfOtherHosts",
+			"ASignOutDoesNotBumpTheGeneration",
+		})
+	})
+
+	t.Run("Runs", func(t *testing.T) {
+		t.Parallel()
+		skipCases(t, []string{
+			"ARunEndsAtItsIdleDeadline",
+			"AReadOfTheRunMovesItsIdleDeadline",
+			"TheIdleDeadlineOfARunMovesAtMostOnceAMinute",
+			"ARequestOfAnotherSignInDoesNotMoveTheIdleDeadline",
+			"ARunEndsAtTheAbsoluteDeadline",
+			"ARunEndsAtABump",
+			"ARunEndsAtASignOutOfItsSignIn",
+			"ARunRecordWithAZeroDeadlineEndsTheRun",
+			"ARunRecordWithASignInIDOfTheWrongFormEndsTheRun",
+		})
+	})
+
+	t.Run("Administration", func(t *testing.T) {
+		t.Parallel()
+		skipCases(t, []string{
+			"EndSessionsNeedsPrincipalManageAReasonAndAFreshAuthentication",
+			"EndSessionsBumpsAndWritesTheEntry",
+			"AReasonLongerThan512BytesIsRefused",
+			"AReasonThatIsNotValidUTF8IsRefused",
+			"ABodyWithAnUnknownFieldIsRefused",
+			"RetireAllThatIsNotABooleanIsRefused",
+			"RetireAllNeedsInstallationManageSignInAndAFreshAuthentication",
+			"RetireAllEndsEverySession",
+			"SignOutEverywhereBumpsOnlyTheOwnGeneration",
+			"ARefusedAdministrationWritesADenialEntry",
 		})
 	})
 
@@ -235,6 +365,9 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"TheTokenIsRefusedWithAnAccessCookieOfAnotherSignIn",
 			"TheTokenIsRefusedWithNoAccessCookie",
 			"TheTokenIsRefusedAfterABump",
+			"AChangeThatKeepsTheSessionEndsTheTokenCookies",
+			"TheTokenIsRefusedForAnAccountThatIsNotTheLinkedAccount",
+			"ARefusedTokenCookieIsClearedAndTheActionIsOffWithTheReason",
 			"TheTokenIsRefusedAfterItsExpiry",
 			"TheTokenCookieEndsAtTheAbsoluteDeadline",
 			"TheRefreshTokenOfTheGitHostIsDiscarded",
@@ -256,6 +389,7 @@ func RunNoSessionAtRest(t *testing.T, _ func(t *testing.T) session.CookieSession
 		"ADatabaseDumpHoldsNoGitHostToken",
 		"ADatabaseDumpHoldsNoUnwrappedSessionKey",
 		"ADatabaseDumpHoldsNoSessionRow",
+		"ADatabaseDumpHoldsNoNonce",
 		"ABackupHoldsNoSessionKey",
 		"ABackupHoldsNoCookieValueAndNoGitHostToken",
 		"ARestoreMakesANewKeyRingAndEndsEverySession",

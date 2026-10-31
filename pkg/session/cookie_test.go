@@ -21,8 +21,8 @@ func TestForgeTokenRedacted(t *testing.T) {
 	}
 
 	c := session.ForgeClaims{
-		SignInAt: time.UnixMilli(1).UTC(), ExpiresAt: time.UnixMilli(2).UTC(), ConnectionID: "fc-1", ForgeUserID: "42",
-		SignInID: "sin-1", KeyID: "sk-1", Token: tok,
+		ExpiresAt: time.UnixMilli(2).UTC(), ConnectionID: "fc-1", ForgeUserID: "42",
+		SignInID: "sin-1", KeyID: "sk-1", Generation: 1, Token: tok,
 	}
 
 	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
