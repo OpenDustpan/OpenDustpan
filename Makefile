@@ -134,7 +134,7 @@ ADR_DECISIONS := python3 -I scripts/adr-decisions.py
 # "Changed by:" items of their links.
 ADR_INDEX := python3 -I scripts/adr-index.py --changes-from 296
 
-docs-lint: ## ASD-STE100 structural rules, banned words, the change links of the ADRs and the Repowise decisions file, for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
+docs-lint: ## ASD-STE100 structural rules, banned words, the change links of the ADRs, the Repowise decisions file and the self-test of the Repowise sync, for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
@@ -142,6 +142,7 @@ docs-lint: ## ASD-STE100 structural rules, banned words, the change links of the
 	$(ADR_INDEX) --check
 	$(ADR_DECISIONS) --selftest
 	$(ADR_DECISIONS) --check
+	python3 -I scripts/repowise-sync.py --selftest
 
 # With no VERSION there is no tag to check, so the target runs the cases that
 # exist without one: the script against an empty record, a record of another

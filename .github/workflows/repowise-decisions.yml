@@ -1,0 +1,43 @@
+# After a merge to main that changes an ADR, makes the hosted Repowise index
+# hold each ADR as an accepted decision (scripts/repowise-sync.py).
+# The job needs the repository secret REPOWISE_API_KEY: a Repowise API key
+# with the read and write scopes. Without the secret the job fails, so that a
+# missing sync shows. The key goes only to https://api.repowise.dev. The job
+# runs no code from a pull request: it runs on main only.
+name: repowise-decisions
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "docs/adr/**"
+      - "scripts/adr-decisions.py"
+      - "scripts/repowise-sync.py"
+  # A maintainer can start a run by hand, for example after the index lost
+  # records.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One sync at a time. A second run waits, so that two runs do not propose the
+# same ADR.
+concurrency:
+  group: repowise-decisions
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The evidence of a record is the commit that added the ADR.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Sync the ADRs to Repowise
+        env:
+          REPOWISE_API_KEY: ${{ secrets.REPOWISE_API_KEY }}
+        run: python3 -I scripts/repowise-sync.py --repo "$GITHUB_REPOSITORY"
