@@ -1,6 +1,6 @@
 # 285. Local users sign in with a password and with a passkey
 
-Status: accepted · 2026-10-31. Decided by the project owner on 31 October 2026, with the decisions of the PM under the owner's delegation marked below. Answers question O1 of [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) with "no" (option B). Amends ADR 55 (decision 5), ADR 46 (decisions 1 and 2) and ADR 237 (decision 3)
+Status: accepted · 2026-10-31. Decided by the project owner on 31 October 2026, with the decisions of the PM under the owner's delegation marked below. Answers question O1 of [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) with "no" (option B). Amends ADR 55 (decision 5), ADR 46 (decisions 1 and 2) and ADR 237 (decision 3). Decisions 5, 17, 19 and 20 changed by ADR 297: "end every session" is a bump of the valid-after time. A good second factor sets cookies
 
 ## Context
 
