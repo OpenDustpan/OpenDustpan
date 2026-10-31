@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/servertest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -97,12 +98,12 @@ func eventually(t *testing.T, what string, cond func() bool) {
 func scopeObjects(t *testing.T, store *fs.Store, scope namespace.Name) int {
 	t.Helper()
 
-	key, err := audit.CheckpointKey(0, scope, 1)
+	key, err := audit.CheckpointKey(0, scope, 1, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
 
-	objects, err := store.List(t.Context(), key.String()[:strings.LastIndex(key.String(), "/")+1])
+	objects, err := blobtest.ListAll(t.Context(), store, key.String()[:strings.LastIndex(key.String(), "/")+1])
 	if err != nil {
 		t.Fatalf("list checkpoints of %s: %v", scope, err)
 	}
@@ -115,7 +116,7 @@ func scopeObjects(t *testing.T, store *fs.Store, scope namespace.Name) int {
 func checkpointObjects(t *testing.T, store *fs.Store) int {
 	t.Helper()
 
-	key, err := audit.CheckpointKey(0, "acme", 1)
+	key, err := audit.CheckpointKey(0, "acme", 1, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
@@ -123,7 +124,7 @@ func checkpointObjects(t *testing.T, store *fs.Store) int {
 	// The key names the epoch, the scope in hexadecimal and the sequence.
 	epochDir := key.String()[:strings.Index(key.String(), "/")+10]
 
-	objects, err := store.List(t.Context(), epochDir)
+	objects, err := blobtest.ListAll(t.Context(), store, epochDir)
 	if err != nil {
 		t.Fatalf("list checkpoints: %v", err)
 	}
@@ -194,7 +195,7 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 
 	// Both servers stay live. A checkpoint above the end of the log is a cut
 	// log: whichever server checks first finds it and stores the mark.
-	badKey, err := audit.CheckpointKey(0, "acme", 999_999)
+	badKey, err := audit.CheckpointKey(0, "acme", 999_999, strings.Repeat("0", 32))
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}

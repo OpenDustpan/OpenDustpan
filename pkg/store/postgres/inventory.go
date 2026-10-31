@@ -276,7 +276,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 
 	// One REPEATABLE READ snapshot for the count and the page, so the total
 	// agrees with the rows.
-	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.txs, s.snapshotOptions(), func(tx pgx.Tx) error {
 		var readErr error
 
 		page, readErr = queryDeletedPage(ctx, tx, q)
@@ -630,7 +630,7 @@ func (s *Store) GetDeletedUnitFacts(
 ) (inventory.DeletedFacts, error) {
 	// One snapshot, so that the entry, the collection and the labels come from
 	// the same state of the database.
-	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
+	tx, err := s.txs.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
 		return inventory.DeletedFacts{}, fmt.Errorf("begin read transaction: %w", err)
 	}

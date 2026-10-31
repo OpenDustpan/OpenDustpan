@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -78,7 +77,7 @@ var _ jobstore.Runner = jobRunner{s: nil}
 // take the same row, so a lock that committed before is seen by the dispatch,
 // and a lock write that starts later waits for the dispatch.
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {
-	err := pgx.BeginFunc(ctx, r.s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, r.s.txs, func(tx pgx.Tx) error {
 		if _, err := readWritable(ctx, tx, readStateSQL, nil, r.s.binaryVersion); err != nil {
 			return err
 		}
@@ -99,7 +98,7 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 
 // Read implements jobstore.Runner.
 func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
-	err := pgx.BeginTxFunc(ctx, r.s.pool, r.s.snapshotOptions(), func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, r.s.txs, r.s.snapshotOptions(), func(tx pgx.Tx) error {
 		return fn(&jobTx{tx: tx, q: r.s.queries.WithTx(tx)})
 	})
 	if err != nil {
@@ -661,14 +660,24 @@ func (t *jobTx) Log(ctx context.Context, ns namespace.Name, id string) (jobstore
 func (t *jobTx) Chunk(ctx context.Context, ns namespace.Name, log string, seq int) (job.ChunkRow, bool, error) {
 	row, err := t.q.GetJobLogChunk(ctx, db.GetJobLogChunkParams{Namespace: ns.String(), LogID: log, Seq: int64(seq)})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false}, false, nil
+		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false, BlobKey: ""}, false, nil
 	}
 
 	if err != nil {
-		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false}, false, fmt.Errorf("select log chunk: %w", err)
+		return job.ChunkRow{
+			SHA256:    "",
+			Size:      0,
+			Confirmed: false,
+			BlobKey:   "",
+		}, false, fmt.Errorf(
+			"select log chunk: %w",
+			err,
+		)
 	}
 
-	return job.ChunkRow{SHA256: row.Sha256, Size: row.Size, Confirmed: row.Confirmed == 1}, true, nil
+	return job.ChunkRow{
+		SHA256: row.Sha256, Size: row.Size, Confirmed: row.Confirmed == 1, BlobKey: row.BlobKey,
+	}, true, nil
 }
 
 // InsertChunk implements jobstore.Tx.
@@ -685,12 +694,17 @@ func (t *jobTx) InsertChunk(ctx context.Context, ns namespace.Name, log string, 
 
 // ConfirmChunk implements jobstore.Tx.
 func (t *jobTx) ConfirmChunk(
-	ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest,
+	ctx context.Context, ns namespace.Name, log string, seq int, stored jobstore.StoredChunk,
 ) error {
 	n, err := t.q.ConfirmJobLogChunk(
 		ctx,
 		db.ConfirmJobLogChunkParams{
-			LogID: log, Seq: int64(seq), Namespace: ns.String(), StoredSize: stored.Size, StoredMd5: stored.MD5[:],
+			LogID:      log,
+			Seq:        int64(seq),
+			Namespace:  ns.String(),
+			StoredSize: stored.Digest.Size,
+			StoredMd5:  stored.Digest.MD5[:],
+			BlobKey:    stored.BlobKey,
 		},
 	)
 	if err != nil {
@@ -702,4 +716,19 @@ func (t *jobTx) ConfirmChunk(
 	}
 
 	return nil
+}
+
+// ChunkKeys implements jobstore.Tx.
+func (t *jobTx) ChunkKeys(ctx context.Context, ns namespace.Name, log string) ([]jobstore.ChunkKey, error) {
+	rows, err := t.q.ListJobLogChunkKeys(ctx, db.ListJobLogChunkKeysParams{Namespace: ns.String(), LogID: log})
+	if err != nil {
+		return nil, fmt.Errorf("select log chunk keys: %w", err)
+	}
+
+	out := make([]jobstore.ChunkKey, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, jobstore.ChunkKey{Seq: int(r.Seq), BlobKey: r.BlobKey})
+	}
+
+	return out, nil
 }

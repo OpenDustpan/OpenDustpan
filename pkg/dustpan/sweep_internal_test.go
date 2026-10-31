@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -196,7 +197,7 @@ func (f sweepFixture) putBlob(ctx context.Context, t *testing.T, key string) {
 func (f sweepFixture) blobCount(t *testing.T, prefix string) int {
 	t.Helper()
 
-	listed, err := f.blobs.List(t.Context(), prefix)
+	listed, err := blobtest.ListAll(t.Context(), f.blobs, prefix)
 	if err != nil {
 		t.Fatalf("list blobs %s: %v", prefix, err)
 	}

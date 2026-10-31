@@ -11,7 +11,7 @@ the same list.
 | Flag | Environment | File key | Default |
 | --- | --- | --- | --- |
 | `--config` | `DUSTPAN_CONFIG` | (none) | (none) |
-| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later |
+| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
 | `--installation` | `DUSTPAN_INSTALLATION` | `installation` | `local` |
 | `--components` | `DUSTPAN_COMPONENTS` | `components` | `all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts durable operations, but never claims one. `worker` runs the durable operations, the schedules, the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 on each route except the probes and the metrics route. An unknown name stops the start. See the several instances guide (docs/guides/several-instances.md) |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
@@ -24,6 +24,7 @@ the same list.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
+| `--issuer-base-url` | `DUSTPAN_ISSUER_BASE_URL` | `issuer-base-url` | (none: the issuer uses `--public-url`. With neither setting, the issuer is off) |
 | `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | `trusted-proxies` | (none: the server uses the address of the TCP peer only) |
 | `--trusted-proxy-header` | `DUSTPAN_TRUSTED_PROXY_HEADER` | `trusted-proxy-header` | `x-forwarded-for` (or `forwarded`) |
 | `--ip-allowlists` | `DUSTPAN_IP_ALLOWLISTS` | `ip-allowlists` | (none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, or every client reads as the address of the proxy. See Recovery in docs/explanation/security-model.md for the recovery path. |
@@ -216,6 +217,7 @@ Each client command takes only the flags in its row:
 | `opendustpan backup` | `--server`, `--ca-file` |
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
+| `opendustpan store check --target <blobs|backup>` | `--server`, `--ca-file`, `--target` |
 | `opendustpan upgrade check` | `--server`, `--ca-file` |
 | `opendustpan audit-chain status` | `--server`, `--ca-file` |
 | `opendustpan audit-chain approve` | (none) |

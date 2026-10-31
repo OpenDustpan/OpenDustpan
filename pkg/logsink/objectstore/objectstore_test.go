@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/logsinktest"
@@ -63,7 +64,7 @@ func TestKeyHoldsTheDateAndTheTimeRange(t *testing.T) {
 		t.Fatalf("write: %v", writeErr)
 	}
 
-	objs, err := store.List(t.Context(), "logs/app")
+	objs, err := blobtest.ListAll(t.Context(), store, "logs/app")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestAPartitionSplitsTheBatchByScope(t *testing.T) {
 		t.Fatalf("write: %v", writeErr)
 	}
 
-	objs, err := store.List(t.Context(), "audit")
+	objs, err := blobtest.ListAll(t.Context(), store, "audit")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -149,7 +150,7 @@ func openStore(t *testing.T) *fs.Store {
 func readAll(t *testing.T, store blob.Store, prefix string) [][]byte {
 	t.Helper()
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

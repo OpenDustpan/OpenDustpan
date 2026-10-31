@@ -75,7 +75,26 @@ func (s *callCountingStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (s *callCountingStore) List(_ context.Context, prefix string) ([]blob.Object, error) {
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (s *callCountingStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := s.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
+}
+
+func (s *callCountingStore) Ping(context.Context) error { return nil }
+
+func (s *callCountingStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -91,8 +110,6 @@ func (s *callCountingStore) List(_ context.Context, prefix string) ([]blob.Objec
 
 	return out, nil
 }
-
-func (s *callCountingStore) Ping(context.Context) error { return nil }
 
 func (s *callCountingStore) callCount() int {
 	s.mu.Lock()
@@ -312,7 +329,7 @@ func TestStateBlobsListRefusesHostileWorkspaces(t *testing.T) {
 
 			b, store, refusals := newScopeBlobs(t)
 
-			_, err := b.list(context.Background(), acmeID, ws)
+			_, err := listState(context.Background(), b, acmeID, ws)
 			if !errors.Is(err, blob.ErrOutOfScope) {
 				t.Fatalf("err = %v, want blob.ErrOutOfScope", err)
 			}
@@ -337,7 +354,7 @@ func TestStateBlobsListRefusesNoWorkspace(t *testing.T) {
 
 	b, store, refusals := newScopeBlobs(t)
 
-	listed, err := b.list(t.Context(), acmeID, "")
+	listed, err := listState(t.Context(), b, acmeID, "")
 	if !errors.Is(err, blob.ErrOutOfScope) || len(listed) != 0 {
 		t.Fatalf("list = %v, %v, want no blobs and %v", listed, err, blob.ErrOutOfScope)
 	}
@@ -371,12 +388,12 @@ func TestStateBlobsInScope(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 
-	listed, err := b.list(ctx, acmeID, testWS)
+	listed, err := listState(ctx, b, acmeID, testWS)
 	if err != nil || len(listed) != 1 || listed[0].Key != key {
 		t.Fatalf("list = %v, %v, want only %q", listed, err, key)
 	}
 
-	if other, listErr := b.list(ctx, otherID, testWS); listErr != nil || len(other) != 0 {
+	if other, listErr := listState(ctx, b, otherID, testWS); listErr != nil || len(other) != 0 {
 		t.Fatalf("list of other = %v, %v, want none", other, listErr)
 	}
 
@@ -591,7 +608,7 @@ func TestStateBlobsDeleteEveryShapeInTheDirectory(t *testing.T) {
 		}
 	}
 
-	listed, err := b.list(ctx, acmeID, testWS)
+	listed, err := listState(ctx, b, acmeID, testWS)
 	if err != nil || len(listed) != 4 {
 		t.Fatalf("list = %d, %v, want 4", len(listed), err)
 	}
@@ -602,11 +619,24 @@ func TestStateBlobsDeleteEveryShapeInTheDirectory(t *testing.T) {
 		}
 	}
 
-	if left, listErr := b.list(ctx, acmeID, testWS); listErr != nil || len(left) != 0 {
+	if left, listErr := listState(ctx, b, acmeID, testWS); listErr != nil || len(left) != 0 {
 		t.Fatalf("list after the delete = %d, %v, want none", len(left), listErr)
 	}
 
 	if got := refusals.all(); len(got) != 0 {
 		t.Fatalf("refusals = %v, want none", got)
 	}
+}
+
+// listState collects every blob of the workspace ws in a test.
+func listState(ctx context.Context, b *stateBlobs, ns namespace.ID, ws ID) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := b.walk(ctx, ns, ws, func(page []blob.Object) error {
+		out = append(out, page...)
+
+		return nil
+	})
+
+	return out, err
 }
