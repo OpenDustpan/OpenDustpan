@@ -25,6 +25,13 @@ func NameLockCaseNames() []string {
 		"every instance on one database shares one count",
 		"a prune deletes old counts and keeps a lock that holds",
 		"a write that fails is an error that is not ErrNameLocked",
+		"a lock time of 0 holds until a clear",
+		"a scope with a character other than a to z, an empty key, a limit below 1 or a negative lock time fails with ErrInvalidLock",
+		"a good password with a wrong factor does not clear the name count",
+		"factor failures across pending sign-ins lock the person",
+		"the lock of one name and one source prefix does not lock the name from another prefix",
+		"the global count of a name locks the name from every prefix",
+		"two IPv6 addresses in one /64 share one count",
 	}
 }
 

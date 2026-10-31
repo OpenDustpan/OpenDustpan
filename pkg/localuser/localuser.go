@@ -132,6 +132,13 @@ var (
 	// ErrDemoFixed reports a change of the password, the user name or the
 	// factors of the demo person. The server sets them.
 	ErrDemoFixed = errors.New("the credentials of the demo user cannot change")
+	// ErrBreakGlass reports a password, a set-up code or a reset for a
+	// break-glass person. A break-glass person signs in with a passkey or a
+	// hardware key only.
+	ErrBreakGlass = errors.New("a break-glass account signs in with a passkey or a hardware key only")
+	// ErrPasswordSignInOff reports a password sign-in while the installation
+	// setting for local password sign-in is off.
+	ErrPasswordSignInOff = errors.New("password sign-in is off on this installation")
 	// ErrUnavailable reports that the store or the hasher cannot answer.
 	// The sign-in fails closed on it.
 	ErrUnavailable = errors.New("local user store unavailable")
@@ -197,14 +204,40 @@ const (
 // unbounded memory or time.
 const (
 	MinMemoryKiB   = 7168
-	MaxMemoryKiB   = 262144
+	MaxMemoryKiB   = 65536
 	MinIterations  = 1
 	MaxIterations  = 16
+	MinParallelism = 1
 	MaxParallelism = 4
 	MinSaltBytes   = 16
 	MaxSaltBytes   = 64
 	MinKeyBytes    = 32
 	MaxKeyBytes    = 64
+)
+
+// Defaults of the limit on hash work. Each hash takes its MemoryKiB from a
+// memory budget of the instance, so a stored hash with a high memory cost
+// takes more of the budget than a default hash. The budget is never below
+// MaxMemoryKiB, so one hash of any valid hash always fits.
+const (
+	// DefaultHashMemoryBudgetKiB is the memory that the password hashes of
+	// one instance can use at the same time: 80 MiB, four default hashes.
+	DefaultHashMemoryBudgetKiB = 81920
+	// MinHashMemoryBudgetKiB is the lowest value of the budget setting.
+	MinHashMemoryBudgetKiB = MaxMemoryKiB
+	// HashWait is the longest time that a hash waits for the budget. After
+	// it, the sign-in answers that the server is busy.
+	HashWait = 2 * time.Second
+)
+
+// Demo password. The seed makes a new password at each start of the dev
+// server, from crypto/rand, in groups of letters and digits joined by
+// hyphens. The password stays in the memory of the process only.
+const (
+	// DemoPasswordGroups is the count of groups of the demo password.
+	DemoPasswordGroups = 5
+	// DemoPasswordGroupLength is the count of characters in each group.
+	DemoPasswordGroupLength = 4
 )
 
 // DefaultHashParams returns the default cost parameters.
@@ -245,7 +278,8 @@ type PasswordHasher interface {
 	// key, and compares the parameters of h with current. It returns
 	// ErrWrongPassword for a password that does not match, and ErrInvalid
 	// for a hash that does not parse or whose parameters are out of the
-	// bounds. It never panics on a malformed hash.
+	// bounds (a parallelism of 0 included), before any work. It never
+	// panics on a malformed hash.
 	Verify(ctx context.Context, password string, h PasswordHash, current HashParams) (Verdict, error)
 }
 
@@ -302,13 +336,23 @@ type PasswordChange struct {
 	KeepSession string
 }
 
-// Store is the persistence port of local users.
+// Store is the persistence port of the records of local users.
+//
+// Each write that changes the credentials of a person locks the row of the
+// person principal in its transaction, before it reads the passwords and the
+// passkeys of the person. So two removals at the same time cannot leave a
+// person with no credential. The passkey store takes the same lock.
+//
+// Each write that stores a password hash for a person reads the break-glass
+// flag of the principal in its own transaction, and returns ErrBreakGlass for
+// a break-glass person. The service checks this too.
 type Store interface {
 	// CreateUser stores u and appends e, in one transaction. h is empty for
 	// a user with no password yet. It returns ErrInvalid for a value that
 	// fails a check of this package, ErrAlreadyExists when the user name
-	// or the principal has a record, and principal.ErrNotFound when the
-	// principal does not exist or is not a person.
+	// or the principal has a record, principal.ErrNotFound when the
+	// principal does not exist or is not a person, and ErrBreakGlass for a
+	// hash of a break-glass person.
 	CreateUser(ctx context.Context, u User, h PasswordHash, e audit.Entry) error
 	// UserByName returns the user whose stored user name is name, and its
 	// hash, or ErrNotFound. The hash is empty for a user with no password.
@@ -316,11 +360,32 @@ type Store interface {
 	// UserByPrincipal returns the user of the principal principalID, or
 	// ErrNotFound.
 	UserByPrincipal(ctx context.Context, principalID string) (User, error)
+	// RenameUser sets the user name of the user userID to name and appends
+	// e, in one transaction. The subject of the principal does not change.
+	// It returns ErrInvalid for a name that does not match UserNamePattern,
+	// ErrAlreadyExists when another user has the name, ErrNotFound for no
+	// such user, and ErrDemoFixed for the demo person.
+	RenameUser(ctx context.Context, userID, name string, e audit.Entry) error
+	// DeleteUser deletes the record of the user userID and every reset code
+	// of the user, and appends e, in one transaction. The principal stays.
+	// It returns ErrNotFound for no such user.
+	DeleteUser(ctx context.Context, userID string, e audit.Entry) error
+}
+
+// PasswordStore is the persistence port of the passwords of local users. It
+// takes the principal lock and the break-glass check that Store describes.
+type PasswordStore interface {
 	// SetPassword stores h as the password of the user userID, sets
 	// PasswordSetAt to e.At, applies c, ends the sessions of the person that
 	// c names, and appends e, in one transaction. It returns ErrNotFound for
-	// no such user, and ErrDemoFixed for the demo person.
+	// no such user, ErrDemoFixed for the demo person, and ErrBreakGlass for a
+	// break-glass person.
 	SetPassword(ctx context.Context, userID string, h PasswordHash, c PasswordChange, e audit.Entry) error
+	// SetChangeRequired sets or clears the flag that asks the person for a
+	// new password at the next sign-in, and appends e, in one transaction.
+	// It returns ErrNotFound for no such user or a user with no password,
+	// and ErrDemoFixed for the demo person.
+	SetChangeRequired(ctx context.Context, userID string, required bool, e audit.Entry) error
 	// RehashPassword replaces the hash old of the user userID with h and
 	// appends e, in one transaction, only when the stored hash is still
 	// old. It returns ErrNotFound when the user has no such hash, so that a
@@ -331,10 +396,13 @@ type Store interface {
 	// no passkey, ErrNotFound for no such user, and ErrDemoFixed for the
 	// demo person.
 	RemovePassword(ctx context.Context, userID string, e audit.Entry) error
-	// DeleteUser deletes the record of the user userID and every reset code
-	// of the user, and appends e, in one transaction. The principal stays.
-	// It returns ErrNotFound for no such user.
-	DeleteUser(ctx context.Context, userID string, e audit.Entry) error
+	// SeedDemoPassword stores h as the password of the demo person and
+	// appends e, in one transaction. It makes the demo user record when it
+	// does not exist. The store reads the installation kind from its own
+	// database in the same transaction, and returns ErrDemoOnly when the
+	// kind is not dev or cannot be read. It takes no kind from the caller.
+	// Only the seed of the dev server calls it.
+	SeedDemoPassword(ctx context.Context, h PasswordHash, e audit.Entry) error
 }
 
 // ResetStore is the persistence port of reset codes.
@@ -343,15 +411,28 @@ type ResetStore interface {
 	// every earlier reset code of the same user, and appends e, in one
 	// transaction. For PurposeReset, the same transaction ends every
 	// session of the person, and revokes each access token of the person
-	// when r.RevokeAccessTokens is set. It returns ErrInvalid for a value that fails a check,
-	// ErrNotFound for no such user, ErrAlreadyExists when the digest is
-	// taken, and ErrDemoFixed for the demo person.
+	// when r.RevokeAccessTokens is set. It returns ErrInvalid for a value
+	// that fails a check, ErrNotFound for no such user, ErrAlreadyExists
+	// when the digest is taken, ErrDemoFixed for the demo person, and
+	// ErrBreakGlass for a break-glass person.
 	CreateReset(ctx context.Context, r Reset, d Digest, e audit.Entry) error
-	// TakeReset deletes the reset code with the digest d and returns it, so
-	// that a code works once. It returns ErrNotFound when no code has the
-	// digest, or when the code expired at or before at. It deletes an
-	// expired code too.
-	TakeReset(ctx context.Context, d Digest, at time.Time) (Reset, error)
+	// RedeemReset uses the reset code with the digest d, in one
+	// transaction: it checks that the code exists and did not expire at or
+	// before at, deletes it, stores h as the password of its user, applies
+	// c, ends the sessions that c names, and appends e. The service checks
+	// the password rules before it calls, so a refused password never uses
+	// up a code. It returns ErrNotFound when no code has the digest or when
+	// the code expired, and deletes an expired code then. It returns
+	// ErrBreakGlass for a break-glass person and changes nothing. Of two
+	// calls at the same time with one code, one wins.
+	RedeemReset(
+		ctx context.Context,
+		d Digest,
+		at time.Time,
+		h PasswordHash,
+		c PasswordChange,
+		e audit.Entry,
+	) (Reset, error)
 	// PruneResets deletes the reset codes that expired at or before at, and
 	// returns how many it deleted.
 	PruneResets(ctx context.Context, at time.Time) (int64, error)

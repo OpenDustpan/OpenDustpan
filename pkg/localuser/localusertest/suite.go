@@ -21,6 +21,7 @@ import (
 // Store is every persistence port the suite exercises.
 type Store interface {
 	localuser.Store
+	localuser.PasswordStore
 	localuser.ResetStore
 	audit.Store
 }
@@ -56,12 +57,28 @@ func CaseNames() []string {
 		"a password remove for a person with a passkey deletes the hash and appends one entry",
 		"a password set, a remove and a reset code for the demo person fail with ErrDemoFixed",
 		"a user delete keeps the principal and deletes the reset codes",
+		"a rename stores the new name, keeps the subject and appends one entry",
+		"a rename to a name that another user has fails with ErrAlreadyExists",
+		"a rename to a name that does not match the pattern fails with ErrInvalid",
+		"a rename of the demo person fails with ErrDemoFixed",
+		"a change-required set and clear read back and each appends one entry",
+		"a change-required set for a user with no password fails with ErrNotFound",
+		"a user with a hash for a break-glass person fails with ErrBreakGlass and stores nothing",
+		"a password set for a break-glass person fails with ErrBreakGlass and changes nothing",
+		"a password remove and a remove of the last passkey at the same time: one wins and the person keeps a credential",
+		"a demo seed on a dev installation stores the hash and appends one entry",
+		"a demo seed makes the demo user record when it does not exist",
+		"a demo seed on a production installation fails with ErrDemoOnly and stores nothing",
+		"a demo seed when the installation kind cannot be read fails with ErrDemoOnly",
 		"a change with an entry of another scope fails with audit.ErrInvalidEntry and changes nothing",
 		"a change whose audit append fails changes nothing",
 		// ResetStore.
-		"a created reset code reads back once by its digest",
-		"a second take of a reset code fails with ErrNotFound",
-		"a take after the expiry fails with ErrNotFound and deletes the code",
+		"a redeem sets the password, deletes the code, ends the sessions and appends one entry in one transaction",
+		"a second redeem of a reset code fails with ErrNotFound and changes nothing",
+		"a redeem after the expiry fails with ErrNotFound, deletes the code and sets no password",
+		"a redeem whose audit append fails keeps the code and sets no password",
+		"a redeem for a break-glass person fails with ErrBreakGlass and changes nothing",
+		"a reset code for a break-glass person fails with ErrBreakGlass and stores nothing",
 		"a new reset code deletes the earlier code of the same user",
 		"a reset ends every session of the person in the same transaction",
 		"a reset keeps the access tokens of the person by default",
@@ -69,7 +86,7 @@ func CaseNames() []string {
 		"the audit entry of a reset records whether it revoked the access tokens",
 		"a set-up code ends no session and revokes no token",
 		"a reset code for an unknown user fails with ErrNotFound",
-		"two takes at the same time: one wins",
+		"two redeems of one code at the same time: one wins",
 		"a prune deletes the expired codes only",
 		"the store keeps the digest of a reset code, never the code",
 	}
@@ -89,6 +106,8 @@ func HasherCaseNames() []string {
 		"a password above MaxBytes fails with ErrPasswordTooLong",
 		"a password that differs in its last byte does not verify",
 		"a malformed hash fails with ErrInvalid and does not panic",
+		"a hash with p=0 fails with ErrInvalid and does not panic",
+		"a hash with a memory cost above MaxMemoryKiB fails with ErrInvalid before any work",
 		"a hash of another algorithm fails with ErrInvalid",
 	}
 }

@@ -30,6 +30,8 @@ func TestErrorsAreDistinct(t *testing.T) {
 		localuser.ErrLastCredential,
 		localuser.ErrDemoOnly,
 		localuser.ErrDemoFixed,
+		localuser.ErrBreakGlass,
+		localuser.ErrPasswordSignInOff,
 		localuser.ErrUnavailable,
 	}
 
@@ -59,7 +61,7 @@ func TestDefaultHashParamsAreInBounds(t *testing.T) {
 	}{
 		{name: "memory", value: p.MemoryKiB, lo: localuser.MinMemoryKiB, hi: localuser.MaxMemoryKiB},
 		{name: "iterations", value: p.Iterations, lo: localuser.MinIterations, hi: localuser.MaxIterations},
-		{name: "parallelism", value: uint32(p.Parallelism), lo: 1, hi: localuser.MaxParallelism},
+		{name: "parallelism", value: uint32(p.Parallelism), lo: localuser.MinParallelism, hi: localuser.MaxParallelism},
 		{name: "salt", value: p.SaltBytes, lo: localuser.MinSaltBytes, hi: localuser.MaxSaltBytes},
 		{name: "key", value: p.KeyBytes, lo: localuser.MinKeyBytes, hi: localuser.MaxKeyBytes},
 	}

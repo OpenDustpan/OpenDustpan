@@ -1,6 +1,6 @@
 # 285. Local users sign in with a password and with a passkey
 
-Status: accepted · 2026-10-31. Decided by the project owner on 31 October 2026, with the product manager decisions marked below. Answers question O1 of [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) with "no" (option B). Amends ADR 55 (decision 5), ADR 46 (decision 1) and ADR 237 (decision 3)
+Status: accepted · 2026-10-31. Decided by the project owner on 31 October 2026, with the decisions of the PM under the owner's delegation marked below. Answers question O1 of [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) with "no" (option B). Amends ADR 55 (decision 5), ADR 46 (decisions 1 and 2) and ADR 237 (decision 3)
 
 ## Context
 
@@ -44,8 +44,9 @@ Facts on `main` at a50ab96:
   kind `production` refuses each principal whose subject starts with `dev:`
   (ADR 253 decision 13).
 
-Each decision of the product manager has the label "(product manager)" and a
-"Benchmark:" line. The marks "(fetched)" and "(not fetched)" have the meaning
+The owner delegates the decisions of detail in this theme to the product
+manager (PM). Each such decision has the label "(PM decision under the owner's
+delegation)" and a "Benchmark:" line. The marks "(fetched)" and "(not fetched)" have the meaning
 of RFC 21: "(fetched)" means that the author fetched the source page on
 2026-10-31. "From a summary" means that the fact comes from a summary of a
 fetched page, not from a word-for-word read, so this ADR does not quote it. "(not fetched)" means that the fact comes from RFC 21 or the
@@ -64,14 +65,33 @@ complies with a standard. It says "designed against".
    the password and the same person who signs in with a passkey are one
    local user: both credentials name the same principal ID. The server never
    links two records by a user name or an email (ADR 70 decision 22).
-2. **The provider ID `local` (product manager).** Each session of a local
+
+   The installation setting `signIn.localPassword.enabled` turns the
+   password sign-in on or off. When an operator does not set it, its value
+   comes from the configuration: on when no SSO identity provider is
+   configured, and off when one is. The API shows the effective value and
+   where it comes from (`default` or `set`). Each change writes an audit
+   entry, and a change from off to on is a weaker setting (ADR 212 decision
+   3). While it is off, the password sign-in, the set-up page and a reset
+   answer `localuser.ErrPasswordSignInOff`. The passkey sign-in of a local
+   user does not depend on it. When it is on next to an SSO provider,
+   built-in MFA applies to each local user (decision 21). This amends ADR 46
+   decision 1, which covers installs with no SSO provider only, and ADR 46
+   decision 2, which now covers the persons who sign in through the SSO
+   provider only. So a local password account cannot skip the MFA of the
+   installation because an SSO provider exists.
+   Benchmark: the review of this design found that a local password next to
+   SSO skips the MFA and the offboarding of the identity provider (ADR 70
+   decision 19). GitLab and Grafana have a switch for the password form
+   (`disable_login_form` in Grafana, fetched).
+2. **The provider ID `local` (PM decision under the owner's delegation).** Each session of a local
    user sign-in records the provider `local`. No configured identity
    provider can take that ID. The subject of a local user is
    `local:<record ID>`, and the record ID never changes. The API refuses
    each other subject that starts with `local:`. So a change of the
    user name changes no subject, no grant and no audit reference.
    Benchmark: ADR 70 decision 22 (no link by an attribute that can change).
-3. **The user name (product manager).** A user name has 1 to 64 characters
+3. **The user name (PM decision under the owner's delegation).** A user name has 1 to 64 characters
    that match `^[a-z0-9][a-z0-9._-]{0,63}$`. The API refuses each other
    value at create time. It does not change a value to make it valid. A
    sign-in compares the name after an ASCII lowercase fold. A change of the
@@ -84,11 +104,25 @@ complies with a standard. It says "designed against".
    enabled local user with no password and no passkey
    (`localuser.ErrLastCredential`). An administrator who wants to stop the
    sign-in of a person disables the principal.
-5. **The first password comes from a set-up code (product manager).** An
+
+   A break-glass person never has a password. The service refuses a
+   password, a set-up code and a reset for a break-glass person
+   (`localuser.ErrBreakGlass`), and the store refuses the same writes again
+   in its own transaction, after it reads the break-glass flag of the
+   principal. So a break-glass account keeps the phishing-resistant sign-in
+   of ADR 70 decision 23, and no lockout by name can apply to it (RFC 21
+   P1). Each write that changes the credentials of a person locks the row of
+   the person principal first, in the local user store and in the passkey
+   store. So a removal of the password and a removal of the last passkey at
+   the same time cannot both pass.
+5. **The first password comes from a set-up code (PM decision under the owner's delegation).** An
    administrator who makes a local user receives a one-use set-up code, not a
    password field. The person opens the set-up page with the code and
-   chooses the password, or adds a passkey. So no administrator ever knows
-   the password of a person.
+   chooses the password, or adds a passkey. So no administrator chooses or
+   sees the password of a person. The administrator who holds a set-up code
+   or a reset code can use it until it is used or ends, so the server tells
+   the person about each set-up and reset: by email when a mail sender
+   exists, and on the page of the sessions of the person.
    Benchmark: OWASP Authentication Cheat Sheet (fetched): the application
    verifies the current password, or the person is "authenticated with an
    active session", before a password change. A password that an
@@ -96,7 +130,7 @@ complies with a standard. It says "designed against".
 
 ### Password storage
 
-6. **Argon2id (product manager).** The server hashes each password with
+6. **Argon2id (PM decision under the owner's delegation).** The server hashes each password with
    Argon2id (RFC 9106) from `golang.org/x/crypto/argon2`. The module is in
    `go.mod` already. The change makes it a direct requirement. The server
    uses no other password hash function.
@@ -108,19 +142,19 @@ complies with a standard. It says "designed against".
    (fetched). bcrypt reads at most 72 bytes of a password, so it does not
    meet decision 10.
 
-   The server adds no pepper to the hash (product manager). A pepper from
+   The server adds no pepper to the hash (PM decision under the owner's delegation). A pepper from
    the key-encryption key makes each rotation of that key reset each
    password. Benchmark: OWASP Password Storage (fetched) says "Consider using a
    pepper", and that "alone, it provides no additional secure
    characteristics".
-7. **The parameters (product manager).** The defaults are 19456 KiB of
+7. **The parameters (PM decision under the owner's delegation).** The defaults are 19456 KiB of
    memory, 2 iterations, 1 lane, a salt of 16 bytes from `crypto/rand` and a
    key of 32 bytes. These are the second minimum configuration of OWASP, with
    the lowest memory that has 2 iterations.
    Benchmark: OWASP (fetched) lists five configurations of equal strength,
    from 46 MiB and 1 iteration to 7 MiB and 5 iterations. NIST SP 800-63B-4
    asks for a salt of at least 32 bits (from a summary, not a quote).
-8. **The stored form records its parameters (product manager).** The store
+8. **The stored form records its parameters (PM decision under the owner's delegation).** The store
    keeps each hash as a PHC string, for example
    `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<key>`. So a later change of the
    defaults applies to each new hash. At each good sign-in, the server
@@ -128,22 +162,29 @@ complies with a standard. It says "designed against".
    they differ, it stores a new hash of the same password, with a
    compare-and-swap on the old hash and an audit entry. The server reads a
    stored hash as untrusted input: it refuses a hash whose parameters are
-   outside fixed bounds (7 MiB to 256 MiB, 1 to 16 iterations, 1 to 4
-   lanes), so that a changed row cannot make the server spend unbounded
+   outside fixed bounds (7 MiB to 64 MiB, 1 to 16 iterations, 1 to 4
+   lanes, so a parallelism of 0 is refused before any work), so that a changed row cannot make the server spend unbounded
    memory or time.
    Benchmark: OWASP (fetched): "wait until the user next authenticates,
    then re-hash their password with the new work factor."
-9. **A limit on hash work (product manager).** Each instance runs at most 4
-   password hashes at the same time. A request over that limit waits at
-   most 2 seconds and then receives `429`. With the defaults, 4 hashes use about
-   76 MiB. The setting `password.maxConcurrentHashes` holds the limit.
+9. **A limit on hash work (PM decision under the owner's delegation).** The
+   password hashes of one instance share a memory budget of 80 MiB by
+   default. Each hash takes its own memory cost from the budget, so four
+   default hashes fit, and one hash at the bound of 64 MiB takes most of
+   it. A request that finds no room waits at most 2 seconds and then
+   receives `429`. The setting `password.hashMemoryBudgetKiB` holds the
+   budget, at least 64 MiB, so one valid hash always fits. The source budget
+   of decision 15 runs before the hash, so one source cannot fill the
+   budget. A distributed attacker can still fill it, and then each password
+   sign-in answers `429` for a time. The passkey sign-in needs no hash, so
+   it stays available. The guide states this limit.
    Benchmark: OWASP (fetched) warns that a memory-hard hash with a high cost
    lets an attacker use the sign-in to exhaust the memory of the server.
-   The value is a product manager decision with no outside number.
+   The value is a PM decision with no outside number.
 
 ### Password rules
 
-10. **Length, not composition (product manager).** A password has at least
+10. **Length, not composition (PM decision under the owner's delegation).** A password has at least
     15 characters by default, and at most 256. The server counts Unicode
     code points after the NFC form, and hashes the NFC form. It refuses a
     password that is not valid UTF-8, that holds a control character, or
@@ -172,7 +213,7 @@ complies with a standard. It says "designed against".
     to new passwords only. It is for a team that designs against PCI DSS
     v4.0.1 requirement 8.3.6, which asks for letters and digits (not
     fetched). The default stays the rule of NIST.
-11. **A blocklist in the binary (product manager).** The server refuses a
+11. **A blocklist in the binary (PM decision under the owner's delegation).** The server refuses a
     password that is on a list of common and breached passwords. The list is
     a file in the binary. A check never calls a service outside the
     installation (ADR 74). The server compares after NFC and a lowercase
@@ -205,34 +246,56 @@ complies with a standard. It says "designed against".
 
 ### Sign-in, rate limits and lockout
 
-13. **One answer for each failure (product manager).** A password sign-in
+13. **One answer for each failure (PM decision under the owner's delegation).** A password sign-in
     answers `401` with one code and one text, "The user name or the password
     is wrong.", for an unknown user name, a wrong password, a locked
     name, a disabled principal and a user with no password. For an unknown
     name and a user with no password, the server checks the password against
     a fixed hash of the current parameters, so that the time of the answer
-    is the same. The audit entry of the failure records the real reason.
+    is the same. The server checks the state of the principal (disabled,
+    locked) only after a full check of the password, so that the time does
+    not tell that state either. The audit entry of the failure records the
+    real reason.
     The response of the account set-up and of a reset never tells that a
     user name exists.
     Benchmark: OWASP Authentication (fetched): "respond with a generic error
     message regardless of whether" the user ID or the password is wrong,
     the account does not exist, or the account is locked or disabled.
-14. **A lockout by name, shared by each instance (product manager).** 10
-    wrong passwords in a row lock a user name for 30 minutes, or until an
-    administrator unlocks it. The count lives in the database, behind the
-    new port `authgate.NameLockCounter`, so every instance counts in one
-    count. The key is an HMAC-SHA-256 of the folded user name under a key of
-    the installation. So the table holds no user name, and an unknown name
-    locks the same as a known name. The server adds the failure before it
-    checks the password, and clears the count after a good password. So of
-    attempts at the same time, no more than 10 pass. When the count cannot
-    be written, the sign-in fails closed.
+14. **A lockout by name, shared by each instance (PM decision under the owner's delegation).**
+    The counts live in the database, behind the new port
+    `authgate.NameLockCounter`, so every instance counts in one count. Three
+    counts apply:
+    - **Name and source.** 10 wrong passwords in a row for one user name
+      from one source prefix (an IPv4 address, or the /64 of an IPv6
+      address) lock that pair for 30 minutes (scope `password`). So a guess
+      from one network cannot lock the person out from another network.
+    - **Name from every source.** 100 wrong passwords in a row for one user
+      name, from any source, lock the name for every source until an
+      administrator unlocks it (scope `passwordname`). This is the ceiling of
+      NIST, and it stops a distributed guess.
+    - **Second factor of the person.** 10 wrong second factors in a row for
+      one person, across every pending sign-in, lock the factors of the
+      person for 30 minutes (scope `factor`, keyed by the principal ID).
+      So a known password does not give unlimited guesses of a TOTP code.
+
+    The key of a name count is an HMAC-SHA-256 of the folded user name under
+    a key of the installation. So the table holds no user name, and an
+    unknown name locks the same as a known name. The server adds each
+    failure before it checks the credential. It clears the name counts and
+    the factor count only at the end of the full sign-in, after the second
+    factor when one is needed. A good password alone clears nothing. So of
+    attempts at the same time, no more than the limit pass. When a count
+    cannot be written, the sign-in fails closed. The passkey sign-in never
+    reads a name lock, so a person with a passkey can always sign in while
+    a guess locks the name.
     Benchmark: PCI DSS v4.0.1 requirement 8.3.4: a lockout after not more
     than 10 attempts, for at least 30 minutes or until a person checks the
     identity (not fetched, quoted by RFC 21 P1). NIST SP 800-63B-4 (from a
-    summary, not a quote): no more than 100 failures in a row. RFC 21 P1 gives the
-    same numbers to LDAP, so one rule covers both password methods.
-15. **A limit by source as well (product manager).** The password sign-in
+    summary, not a quote): no more than 100 failures in a row. RFC 21 P1
+    counts a factor after a password "on the pending sign-in and on the
+    person, with the same limit". RFC 21 P1 gives the same numbers to LDAP,
+    so one rule covers both password methods.
+15. **A limit by source as well (PM decision under the owner's delegation).** The password sign-in
     has its own scope in the source budget of `authgate` (`password`), apart
     from the token lookups. A lockout by name alone lets one source try one
     password against many names. The source budget stops that.
@@ -242,13 +305,14 @@ complies with a standard. It says "designed against".
 16. **A lock is visible and ends with a record.** An administrator sees the
     lock state of a local user in the API, and can unlock it with a reason.
     The lock, the unlock and the end of a lock each write an audit entry.
-    A lock by name also writes an alert to the administrators at most once
-    for each name in each hour, so that a lockout attack against a person is
+    A lock by name or by factor also writes an alert to the administrators
+    at most once for each name in each hour, and the global lock of a name
+    writes an alert at once, so that a lockout attack against a person is
     visible.
 
 ### Reset and change
 
-17. **A reset code that an administrator makes (product manager).** An
+17. **A reset code that an administrator makes (PM decision under the owner's delegation).** An
     administrator starts a reset for a local user. The server makes a code
     of 32 random bytes, shows it once to the administrator, and stores only
     its SHA-256 digest. The administrator gives the code to the person on
@@ -259,7 +323,14 @@ complies with a standard. It says "designed against".
     codes stay. Access tokens stay by default. The reset request has the
     option `revokeAccessTokens`, false by default, which also revokes each
     access token of the person in the same transaction. The audit entry of
-    the reset records the choice. The reset needs `installation:manage-sign-in`, a fresh
+    the reset records the choice. The API shows the count of live access
+    tokens of the person next to the option. The use of a code is one
+    transaction: the store checks the expiry, deletes the code, sets the
+    password, ends the sessions and appends the audit entry
+    (`localuser.ResetStore.RedeemReset`). The service checks the password
+    rules before that call, so a refused password never uses up a code. The
+    server refuses a reset and a set-up code for a break-glass person
+    (decision 4). The reset needs `installation:manage-sign-in`, a fresh
     authentication, a reason, and a reach that covers the reach of the
     person (ADR 70 decision 22). The server refuses a reset of the own
     account.
@@ -268,13 +339,21 @@ complies with a standard. It says "designed against".
     256 bits. RFC 21 P7 gives the same rights and checks to an MFA reset.
     GitHub keeps the personal access tokens at a password reset (not
     fetched).
-18. **Email only with a mail sender (product manager).** When the
+18. **Email only with a mail sender (PM decision under the owner's delegation).** When the
     installation has a mail sender (the SMTP settings of ADR 53 and ADR
     212), the administrator can send the reset link to the email of the
     person. A self-service reset ("forgot password") exists only with a mail
     sender. Its answer is the same for each user name, and it counts in the
-    source budget of decision 15. Without a mail sender, only the
-    administrator path exists.
+    source budget of decision 15. The server sends the email in a durable
+    operation after the answer, so the time of the answer does not tell that
+    a name exists. Without a mail sender, only the administrator path
+    exists.
+
+    A reset link holds the code in the URL fragment, never in the path or
+    the query, as the one-time code of ADR 237 decision 12 does. The set-up
+    page sends the code in the body of a POST. The page has
+    `Referrer-Policy: no-referrer`, and the server never logs a fragment or
+    a body of these routes.
 19. **A change needs the current password or a fresh authentication.** A
     person changes the own password with the current password, or in a
     session with a fresh authentication (ADR 227). A wrong current password
@@ -292,6 +371,14 @@ complies with a standard. It says "designed against".
     discoverable credential and user verification `required` is a sign-in
     of its own and needs no password. The server records it as a sign-in
     with two factors.
+
+    Each wrong factor counts on the pending sign-in (5 make it void) and on
+    the person (decision 14). A good factor turns the pending sign-in into a
+    session in one transaction: the store deletes the pending sign-in,
+    stores the session and appends the audit entry
+    (`mfa.PendingStore.CompletePending`). So a failed session write leaves
+    the pending sign-in as it was, and one pending sign-in makes one
+    session only.
     Benchmark: NIST SP 800-63B-4 counts a multi-factor cryptographic
     authenticator as two factors (not fetched). RFC 21 P7 gives the same
     user verification values.
@@ -301,6 +388,13 @@ complies with a standard. It says "designed against".
     that can only enroll a factor and sign out, after the grace of
     `mfa.enrollmentGraceDays`. A passkey sign-in meets the setting alone.
     The bootstrap admin token stays outside the setting (RFC 21 O12).
+
+    A fresh authentication (ADR 227) of a local user is a passkey, or a
+    password and a second factor. A password alone is never a fresh
+    authentication when `mfa.requireForAll` is on, or when the person has a
+    factor. Only a person with no factor, in an installation where MFA is not
+    required, receives a fresh authentication from the password alone, because
+    no other step exists for that person.
 22. **A shorter minimum with MFA stays a choice.** NIST allows 8 characters
     for a password that is only part of MFA. The server does not lower the
     minimum on its own when `mfa.requireForAll` is on, because the setting
@@ -312,20 +406,21 @@ complies with a standard. It says "designed against".
 23. **Each step writes an audit entry, in the transaction of the change.**
     The entries are `local-user.created`, `local-user.deleted`,
     `local-user.renamed`, `password.set`, `password.changed`,
-    `password.removed`, `password.rehashed`, `password.reset-created`,
+    `local-user.change-required`, `password.removed`, `password.rehashed`,
+    `password.demo-seeded`, `password.reset-created`,
     `password.reset-used`, `password.reset-sent`, `sign-in.password-failed`
     (with the real reason), `sign-in.name-locked`, `sign-in.name-unlocked`,
+    `sign-in.factor-locked`, `sign-in.local-password-setting-changed`,
     `passkey.added`, `passkey.removed`, `passkey.suspended` and
     `sign-in.succeeded` (with the provider `local`, the factors and the
     times). No entry holds a password, a hash, a reset code or a key.
 
 ### Demo sign-in
 
-24. **A demo person, only on a dev installation (owner, product manager).**
+24. **A demo person, only on a dev installation (owner, and PM decision under the owner's delegation).**
     `opendustpan dev` takes a new flag, `--demo`. This amends ADR 237
     decision 3. With `--demo`, `dev` makes the person `dev:demo` at the
-    first start, with the local user name `demo`, a password of 4 random
-    words from `crypto/rand`, and these stored grants, each with the
+    first start, with the local user name `demo`, and these stored grants, each with the
     creator `system` and the reason "demo user of opendustpan dev":
     - `admin` (the namespace administrator role) on each namespace that
       `dev` and the demo seed make, for example `dev`.
@@ -334,9 +429,19 @@ complies with a standard. It says "designed against".
 
     The demo person never holds `site-administrator` or
     `account-administrator`.
-    The sign-in page of the console shows the user name and the password,
-    from the public route `GET /api/dustpan/v1/sign-in/demo`. The banner of
-    `dev` prints them too. A visitor signs in as a person, so each feature
+    At each start, the seed makes a new demo password from `crypto/rand`: 5
+    groups of 4 lowercase letters and digits, joined by hyphens (24
+    characters). The seed checks it against the rules of decisions 10 and
+    11, and makes a new one when a rule refuses it. It stores only the hash,
+    through `localuser.PasswordStore.SeedDemoPassword`, which reads the
+    installation kind from its own database in the same transaction and
+    refuses another kind. The password stays in the memory of the process
+    only. No file and no database row holds it. The sign-in page of the
+    console shows the user name and the password, from the public route
+    `GET /api/dustpan/v1/sign-in/demo`, which reads the memory of the
+    process. The banner of `dev` writes them to the terminal writer, never
+    to `slog` or a log sink. A test checks that the demo password is in no
+    log record and no audit entry. A visitor signs in as a person, so each feature
     that needs a person works. `make demo` changes to `opendustpan dev
     --demo`.
     Benchmark: Grafana `admin`/`admin` and the demo of Vault `-dev` show
@@ -345,7 +450,8 @@ complies with a standard. It says "designed against".
     demo of Grafana gives its visitors a limited role (not fetched).
 25. **The demo person cannot change its credentials.** The server refuses a
     change of the password, the user name, the passkeys and the factors of
-    the demo person (`localuser.ErrDemoFixed`). The lockout by name does not
+    the demo person (`localuser.ErrDemoFixed`). Only the seed sets its
+    password, at each start of `dev`. The lockouts by name do not
     apply to it, so one visitor cannot lock out the others. The source
     budget of decision 15 still applies. This is a rule of the code. The
     catalog of code rules lists it.
@@ -361,7 +467,9 @@ complies with a standard. It says "designed against".
       each call, and refuse with `localuser.ErrDemoOnly` on another kind.
     - The demo person has a `dev:` subject. A server of the kind
       `production` refuses to authenticate it (ADR 253 decision 13), and a
-      restore into production removes it (ADR 253 decision 6).
+      restore into production deletes it with its local user record (ADR
+      253 decision 6). The coverage test of ADR 253 lists the local user
+      table.
     - The local user service refuses a password sign-in for a record with
       `Demo` set, or for a principal with a `dev:` subject, on an
       installation that is not of the kind `dev`.
@@ -376,18 +484,20 @@ complies with a standard. It says "designed against".
 
     | Input | 1. Boundary | 2. Encode or contain | 3. Limit | 4. Authorization at use | 5. Fail closed |
     | --- | --- | --- | --- | --- | --- |
-    | User name | pattern, 64 characters, strict JSON decoder | SQL placeholders, HMAC key for the lock table, CR and LF removed in logs | lockout by name, source budget | the record belongs to the person of the session | unknown name answers as a wrong password |
-    | Password | valid UTF-8, no control character, 1024 bytes, 256 code points | NFC, never logged, never in an audit entry | hash limit of decision 9, lockout | the hash belongs to the record of the user name | hasher error refuses the sign-in |
+    | User name | pattern, 64 characters, strict JSON decoder | SQL placeholders, HMAC key for the lock table, no CR and no LF in logs | name and source lock, global name lock, source budget | the record belongs to the person of the session | unknown name answers as a wrong password |
+    | Password | valid UTF-8, no control character, 1024 bytes, 256 code points | NFC, never logged, never in an audit entry | hash memory budget of decision 9, lockouts of decision 14 | the hash belongs to the record of the user name | hasher error refuses the sign-in |
     | Stored hash (a database row) | PHC parse, algorithm allowlist | constant-time compare of the key | parameter bounds of decision 8 | the hash row of the record that the name found | parse error refuses, with an audit entry |
-    | Reset code | 43 base64url characters | stored digest only | one use, 1 hour, source budget | the code names one record, and the reset does not change another | unknown or expired code refuses |
+    | Reset code | 43 base64url characters, in the fragment and the body only | stored digest only, `no-referrer` | one use, 1 hour, source budget | the code names one record, and not a break-glass person | unknown or expired code refuses, and the redeem is one transaction |
+    | Second factor after a password | 6 digits, 16 base32 characters, ceremony JSON | stored digests, sealed secret | 5 on the pending sign-in, 10 on the person | the factor belongs to the person of the pending sign-in | store error refuses |
     | Passkey ceremony | as RFC 21 P7 | origin and RP ID from the server URL | 300 seconds, one use, 20 passkeys | the passkey belongs to the person of the ceremony | counter regression suspends |
-    | Demo option | a flag of `dev` only | no setting, no variable | `dev:` subject | kind check at start and at each call | another kind refuses to start |
+    | Demo option | a flag of `dev` only | no setting, no variable, password in memory only and never in a log | `dev:` subject, no installation right but `viewer` | kind check at start, at each call and in the seed transaction | another kind refuses to start |
     | Blocklist file | fixed in the binary | compared after NFC and fold | none needed | none needed | a list that cannot load refuses each new password |
 
 ### Ports
 
-28. **The ports of this ADR.** `pkg/localuser` holds `Store`, `ResetStore`,
-    `PasswordHasher` and `Blocklist`, with their errors and defaults.
+28. **The ports of this ADR.** `pkg/localuser` holds `Store`,
+    `PasswordStore`, `ResetStore`, `PasswordHasher` and `Blocklist`, with
+    their errors and defaults.
     `pkg/mfa` holds `PasskeyStore`, `RecoveryCodeStore`, `PendingStore` and
     the MFA policy. `internal/authgate` holds `NameLockCounter`. The TOTP
     factor stays in `internal/stepup` (`TOTPStore`), shared with the CLI
@@ -404,9 +514,11 @@ complies with a standard. It says "designed against".
 
 - ADR 55 decision 5 now reads: a local user signs in with a passkey alone,
   with a user name and a password, or with both. ADR 46 decision 1 covers
-  local users with a password.
+  each local user, also next to an SSO provider. ADR 46 decision 2 covers
+  the persons who sign in through the SSO provider only.
 - ADR 237 decision 3 adds `--demo` to the flags of `dev`.
-- The question O1 of RFC 21 closes with "no". The work item for local
+- The question O1 of RFC 21 closes with "no". This change marks it so in
+  the RFC. The work item for local
   passwords joins the work items of RFC 21: the store migrations of both
   dialects, the Argon2id hasher, the blocklist, the routes, the console
   pages, the e2e step and the user documentation page.

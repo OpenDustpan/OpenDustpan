@@ -450,6 +450,10 @@ _Avoid_: Security key (a security key is one kind of authenticator that holds a 
 The state after a first method, such as a password, and before the second factor. It holds no rights, lives 300 seconds, and becomes void after 5 wrong factors.
 _Avoid_: Half session, partial login
 
+**Factor lockout**:
+The lock of the second factors of a person after 10 wrong factors in a row, across every pending sign-in, for 30 minutes. A good password does not end it.
+_Avoid_: MFA lock, TOTP lock
+
 **Recovery code**:
 A one-use code for a sign-in when a person lost each factor. The server shows a set of 10 one time and stores only their digests.
 _Avoid_: Backup code
@@ -459,11 +463,11 @@ A one-use code that an administrator makes for a local user, to set up or reset 
 _Avoid_: Temporary password, reset token
 
 **Lockout by name**:
-The lock of a user name after 10 wrong passwords in a row, for 30 minutes or until an administrator unlocks it. Every instance shares one count, and an unknown name locks the same as a known one.
+The lock of a user name after wrong passwords in a row. 10 from one source prefix lock the name from that prefix for 30 minutes. 100 from every source lock the name for every source until an administrator unlocks it. Every instance shares the counts, and an unknown name locks the same as a known one. A passkey sign-in never reads the lock.
 _Avoid_: Account lock (the principal stays enabled)
 
 **Demo user**:
-The person `dev:demo` that `opendustpan dev --demo` makes, with a password that the sign-in page shows. It exists only on an installation of the kind dev, and its credentials cannot change.
+The person `dev:demo` that `opendustpan dev --demo` makes. At each start the server makes a new password for it, keeps the password in memory only, and shows it on the sign-in page. It exists only on an installation of the kind dev, and a person cannot change its credentials.
 _Avoid_: Guest user, test user
 
 **Personal token**:

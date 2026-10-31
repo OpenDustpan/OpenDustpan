@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // Defaults and limits of the factors.
@@ -142,6 +143,11 @@ type PasskeyUse struct {
 }
 
 // PasskeyStore is the persistence port of passkeys and ceremonies.
+//
+// AddPasskey and RemovePasskey lock the row of the person principal in their
+// transaction, before they read the passkeys and the password of the
+// person, as the local user store does. So a removal of the password and a
+// removal of the last passkey at the same time cannot both pass.
 type PasskeyStore interface {
 	// AddPasskey stores p and appends e, in one transaction. It returns
 	// ErrInvalid for an empty field or a name that the rules of a principal
@@ -235,10 +241,22 @@ type PendingStore interface {
 	// ErrNotFound and ErrVoid as PendingByDigest does, and counts nothing
 	// then.
 	FailPending(ctx context.Context, d Digest, at time.Time) (int, error)
-	// TakePending deletes the pending sign-in d and returns it, so that a
-	// good factor turns it into one session only. It returns the errors of
-	// PendingByDigest.
-	TakePending(ctx context.Context, d Digest, at time.Time) (Pending, error)
+	// CompletePending turns the pending sign-in d into the session s, in
+	// one transaction: it checks that the pending sign-in exists, did not
+	// expire at or before at and is not void, deletes it, stores s with the
+	// digest sd of its secret, sets the last sign-in time of the person, and
+	// appends e. So a good factor makes one session only, and a failed
+	// session write leaves the pending sign-in as it was. It returns the
+	// errors of PendingByDigest, ErrInvalid when s names another person than
+	// the pending sign-in, and the errors of session.Store.CreateSession.
+	CompletePending(
+		ctx context.Context,
+		d Digest,
+		at time.Time,
+		s session.Session,
+		sd session.Digest,
+		e audit.Entry,
+	) (Pending, error)
 	// PrunePending deletes the pending sign-ins that expired at or before
 	// at, and returns how many it deleted.
 	PrunePending(ctx context.Context, at time.Time) (int64, error)
