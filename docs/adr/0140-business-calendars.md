@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18. Decisions 1 and 18 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 149 changes decision 1: the server makes calendar IDs.
+- ADR 149 extends decision 18: a calendar of another scope is 404.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 On 17 October 2026 the project owner decided these points for operations:

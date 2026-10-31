@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18
 
+Changed by:
+
+- ADR 273 changes decision 12: a sharing rule needs no acceptance of both
+  namespaces.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 ADR 215 makes OpenDustpan Cloud multitenant, with the namespace as the

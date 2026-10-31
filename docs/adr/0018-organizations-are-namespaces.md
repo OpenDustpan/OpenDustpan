@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-10 · the standby region amended by ADR 248 (replica installation)
 
+Changed by:
+
+- ADR 248 changes: a standby region listing reads as a replica installation.
+
 ## Context
 
 ADR 4 says that a Pulumi Cloud organization is a namespace here. The Pulumi

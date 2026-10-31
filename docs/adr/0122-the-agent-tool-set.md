@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-17. Decision 1 (the row `cancel_change`) narrowed by ADR 128. The `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 128 changes decision 1: the row cancel_change.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 ADR 120 records the built-in agent, Dusty. The project owner decided on

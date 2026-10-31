@@ -2,6 +2,18 @@
 
 Status: accepted · 2026-10-18. Answers part of RFC 45 and RFC 67. Decision 15 superseded in part by ADR 149. Route paths superseded in part by ADR 210. Decision 14 superseded by ADR 226. Decision 5 ordered by ADR 259
 
+Changed by:
+
+- ADR 149 extends decision 15: a budget, status or estimate of another scope
+  is 404.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 222 supersedes decision 14: a cost gate at change.planned.
+- ADR 224 extends decision 14: change.planned is the later decision on cost.
+- ADR 226 supersedes decision 14: a cost gate at change.planned.
+- ADR 259 extends decision 5: the order of the two ways in.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 [RFC 45](../rfc/0045-cost-estimation.md) asks which estimator gives a cost

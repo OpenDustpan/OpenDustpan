@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18. ADRs 223 to 230 give the parts. Supersedes parts of ADRs 17, 52, 56, 71, 103, 110 and 112 to 117. Supersedes parts of ADRs 128, 135, 142, 144, 190 to 194, 196, 197 and 200 to 203. Amends ADR 191 decision 6. Extends ADR 54 decision 5 and ADR 70 decisions 16, 17 and 23. See "What this ADR set replaces". Accepts RFC 77.
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Many ADRs answer the same three questions in different ways: "may this

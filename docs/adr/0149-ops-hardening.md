@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18. Supersedes part of ADRs 140 to 147 (see "What this ADR replaces"). Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 ADRs 140 to 147 add business calendars, freeze schedules, break-glass

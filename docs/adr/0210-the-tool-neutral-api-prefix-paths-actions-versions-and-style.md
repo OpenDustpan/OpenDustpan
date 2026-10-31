@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18. Accepts RFC 59. Supersedes in part the route paths and the `server:` action names of earlier ADRs (see "What this ADR replaces"). ADR 247 extends decision 3
 
+Changed by:
+
+- ADR 247 extends decision 3: the label and reference filters of the unit
+  list.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Decided by the project manager under the owner's decision rule, 2026-10-18.

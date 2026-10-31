@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-17 · supersedes the "Input schema" and the "Validation" sections of RFC 14. Decisions 6 and 7 superseded by ADR 224. The builtin list of decision 12 superseded by ADR 228
 
+Changed by:
+
+- ADR 222 supersedes decisions 6 and 7: blueprint rules become gates.
+- ADR 222 changes decision 12: one builtin set.
+- ADR 224 supersedes decisions 6 and 7: blueprint rules become gates.
+- ADR 228 changes decision 12: the builtin list becomes one builtin set.
+- ADR 228 extends decisions 9 and 11: one Expr package and one version pin for
+  both uses.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 [RFC 14](../rfc/0014-blueprints.md) proposes blueprints with an input

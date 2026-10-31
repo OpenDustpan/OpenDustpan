@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-17. ADR 199 changes decision 4 for the kind `file-set`. The `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 199 changes decision 4: the expiry of a file set grows with its jobs.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 A job (ADR 100) makes two kinds of content that the server did not keep

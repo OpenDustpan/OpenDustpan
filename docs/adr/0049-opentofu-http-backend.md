@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-13. Decision 6 extended by ADR 239
 
+Changed by:
+
+- ADR 239 extends decision 6: the same action on the TFE-compatible route.
+
 ## Context
 
 [RFC 65](../rfc/0065-opentofu-http-backend.md) found that the
