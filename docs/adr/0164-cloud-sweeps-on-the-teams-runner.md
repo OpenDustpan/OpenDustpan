@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-17. Adds to ADR 101 (runner pools and the runner protocol). Decisions 14, 15 and 19 superseded in part by ADR 166. Route paths superseded in part by ADR 210
 
+Changed by:
+
+- ADR 166 changes decisions 14, 15 and 19: the match waits while the index is
+  not ready, the built-in roles.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 The owner named the feature **Sweep** (ADR 163). The kind **not in any

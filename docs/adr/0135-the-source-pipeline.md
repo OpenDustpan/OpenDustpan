@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18 · supersedes the "Source" item of RFC 6 · adds to ADR 100 decision 5 · ADR 199 adds file sets. Decision 6 extended by ADR 213 decision 2. The name of decision 6 superseded by ADR 226: the source policy is the source filter
 
+Changed by:
+
+- ADR 199 extends decision 1: file sets as a second kind of snapshot.
+- ADR 213 extends decision 6: protectedBranches in the source policy.
+- ADR 220 changes decision 9: the snapshot blob prefix gets a namespace
+  prefix.
+- ADR 222 changes decision 6: the name source filter.
+- ADR 226 changes decision 6: the name source policy becomes source filter.
+
 ## Context
 
 [RFC 6](../rfc/0006-runners-and-remote-runs.md) proposes that the runner

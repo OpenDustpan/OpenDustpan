@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-13
 
+Changed by:
+
+- ADR 180 extends decisions 5 and 9: themes, color schemes and contrast rules
+  on top of the tokens.
+- ADR 183 extends decision 9: the WCAG 2.2 AA target, the axe gate and manual
+  checks.
+
 ## Context
 
 ADR 5 and ADR 8 put the console in its own repository and let it talk to the

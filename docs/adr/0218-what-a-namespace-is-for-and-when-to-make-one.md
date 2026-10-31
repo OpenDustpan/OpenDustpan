@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18 · decides the backup of one namespace that ADR 30 decision 1 left out. The region of decisions 1, 2 and 5 amended by ADR 248 (primary installation)
 
+Changed by:
+
+- ADR 248 changes decisions 1, 2 and 5: region reads primary installation.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The project owner asked on 2026-10-18 what a namespace is for on a

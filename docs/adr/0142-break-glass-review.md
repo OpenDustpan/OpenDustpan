@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-18. Supersedes ADR 70 decision 26 in part (see "Superseded decisions"). Decisions 12 and 15 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210. The age of decision 9 superseded by ADR 227
 
+Changed by:
+
+- ADR 149 extends decisions 12 and 15: a review of another scope is 404 and
+  the suite covers it.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 222 changes decision 9: the age of the fresh step.
+- ADR 227 changes decision 9: the age of a break-glass review authentication.
+
 ## Context
 
 Two features of OpenDustpan let a person act past a normal control:

@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-17. Decision 12 superseded in part by ADR 128. Route paths and `server:` action names superseded in part by ADR 210. Decision 6 superseded in part by ADR 216: the opt-in is `namespace:accept-agent-secret-access` on one namespace
 
+Changed by:
+
+- ADR 128 changes decision 12: the job model refuses a start after a reveal.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 216 changes decision 6: the opt-in is a namespace action.
+
 ## Context
 
 ADR 41 makes the server read state and mask each secret value. ADR 120

@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18
 
+Changed by:
+
+- ADR 139 extends decision 4: go-containerregistry to get and unpack images.
+
 ## Context
 
 Some teams run no Kubernetes, or want a kernel boundary around each phase.

@@ -2,6 +2,23 @@
 
 Status: accepted · 2026-10-18. Accepts RFC 11. Adds to ADR 180. Route paths superseded in part by ADR 210. Decision 1 superseded in part by ADR 231. Decisions 18 and 19 superseded in part by ADR 232. Extended by ADRs 231 to 234
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 231 changes decision 1: Afrikaans, 33 languages.
+- ADR 231 extends decisions 16 and 26: the font and the switcher entry of
+  Afrikaans.
+- ADR 232 changes decisions 18 and 19: a draft term list and the translation
+  agents.
+- ADR 232 extends decisions 12, 20 and 21: statuses, the review order and new
+  strings in releases.
+- ADR 233 extends decisions 7, 10, 11, 13 and 17: the checks of terms,
+  arguments, plurals and formats.
+- ADR 234 changes: the consequence that email and chat stay in English.
+- ADR 234 extends decision 8: the preferences field resolvedLanguage.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The console is English only, and it formats dates and numbers in English.

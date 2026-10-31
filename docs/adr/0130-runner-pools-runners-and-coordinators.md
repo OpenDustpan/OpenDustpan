@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · adds to ADR 101 decisions 12 and 14. Decision 5 superseded in part by ADR 164
 
+Changed by:
+
+- ADR 164 changes decision 5: a sweep pool uses only the workload identity of
+  its hosts.
+
 ## Context
 
 [ADR 101](0101-two-executors-write-back-and-runners.md) decides that a

@@ -5,6 +5,7 @@ Status: superseded by ADR 35 · accepted 2026-10-08
 Changed by:
 
 - ADR 35 supersedes.
+- ADR 272 changes: the rule of a small public service per domain.
 
 ## Context
 

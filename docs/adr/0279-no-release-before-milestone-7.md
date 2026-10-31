@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-27. Decided by the project owner. Supersedes the "When" decision of ADR 21
 
+Changed by:
+
+- ADR 280 extends decision 1: milestone 7 joins the release gate.
+
 ## Context
 
 ADR 21 put the first tagged release, `v0.1.0`, after milestone 2: the Pulumi

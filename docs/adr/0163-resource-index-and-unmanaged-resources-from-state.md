@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-17. Decisions 5 and 11 superseded in part by ADR 166. Route paths and `server:` action names superseded in part by ADR 210. Decision 9 superseded in part by ADR 216: a link needs the acceptance of each namespace
 
+Changed by:
+
+- ADR 166 changes decisions 5 and 11: start key, daily offset, index port,
+  expire route, identity.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 216 changes decision 9: a link needs the acceptance of each namespace.
+
 ## Context
 
 On 17 October 2026 the project owner decided:

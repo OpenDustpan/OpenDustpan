@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18. Supersedes part of ADRs 150 and 151 (see "What this ADR replaces"). Route paths superseded in part by ADR 210. Decision 10 superseded in part by ADR 238
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 238 changes decision 10: the escape hatch flag and its warning go.
+
 ## Context
 
 ADRs 150 to 153 decide the history model: blame, the point-in-time views,

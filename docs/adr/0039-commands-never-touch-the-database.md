@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-11 · decisions 1 and 4 superseded in part by ADRs 237, 238 and 245
 
+Changed by:
+
+- ADR 237 changes decisions 1 and 4: dev may open the store too.
+- ADR 238 changes decisions 1 and 4: key generate writes a key file and doctor
+  reads settings.
+- ADR 245 changes decisions 1 and 4: host create-temp-admin opens the
+  database.
+
 ## Context
 
 Some `opendustpan` commands open the database or the blob store directly:
