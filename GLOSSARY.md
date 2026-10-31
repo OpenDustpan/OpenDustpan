@@ -467,6 +467,10 @@ _Avoid_: API key, robot token, machine token
 A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets: a service principal of that namespace (ADR 54).
 _Avoid_: Trust policy, federation rule
 
+**Token exchange**:
+A request of a workload to a namespace. The workload sends a JWT of its issuer. It gets an access token of the kind `trust` for the principal of the one trust rule that accepts the JWT. The access token lives the exchange lifetime of the token policy, one hour by default (ADR 54, ADR 69).
+_Avoid_: Token swap, federation login, OIDC login
+
 **Group**:
 A named set of principals of one principal home: the installation or one namespace. A group of a namespace holds principals of that namespace only. A principal can be a member of more than one group of its home (ADR 52, ADR 215).
 _Avoid_: Team (except when naming a tool's own protocol field), collection

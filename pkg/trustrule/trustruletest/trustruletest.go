@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -21,13 +22,19 @@ import (
 // oldest first. Principal makes a principal of the given kind and returns its
 // ID: a principal of the namespace ns, or of the installation when ns is
 // empty. The namespace exists already. DeletePrincipal deletes the principal
-// with the ID id.
+// with the ID id, and DisablePrincipal disables it.
+//
+// Exchanges is the exchange store of the adapter, and Token reads an access
+// token by its ID, or reports false when no token has the ID.
 type Harness struct {
-	Store           trustrule.Store
-	Namespace       func(t *testing.T, name string) namespace.Fence
-	Audit           func(t *testing.T, ns string) []audit.Entry
-	Principal       func(t *testing.T, ns namespace.Name, kind principal.Kind) string
-	DeletePrincipal func(t *testing.T, id string)
+	Store            trustrule.Store
+	Exchanges        trustrule.ExchangeStore
+	Namespace        func(t *testing.T, name string) namespace.Fence
+	Audit            func(t *testing.T, ns string) []audit.Entry
+	Principal        func(t *testing.T, ns namespace.Name, kind principal.Kind) string
+	DeletePrincipal  func(t *testing.T, id string)
+	DisablePrincipal func(t *testing.T, id string)
+	Token            func(t *testing.T, id string) (accesstoken.Token, bool)
 }
 
 // Factory returns a fresh harness for one subtest.
@@ -75,5 +82,8 @@ func cases() []suiteCase {
 		// A write carries the fence and the audit entry of the change, and a
 		// failure changes nothing.
 		writeCases(),
+		// An exchange stores its token only for a rule and a principal that
+		// still accept it, in the transaction of its audit entry.
+		exchangeCases(),
 	)
 }

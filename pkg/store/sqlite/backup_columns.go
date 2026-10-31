@@ -761,6 +761,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"disable_accounts",
 				"disable_break_glass",
 				backupColUpdatedAtMs,
+				"exchange_lifetime_ms",
 			},
 		},
 		{

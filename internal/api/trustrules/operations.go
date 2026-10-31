@@ -33,16 +33,31 @@ func operationLabels() map[string]apidesc.Label {
 		apidesc.Pattern(http.MethodDelete, RulePath): apidesc.Name("deleteTrustRule", tag).
 			On(apidesc.KindNamespace).
 			WithBodies(apidesc.NoBody, apidesc.NoBody),
+		apidesc.Pattern(http.MethodPost, ExchangePath): apidesc.Name("exchangeWorkloadToken", tag).
+			On(apidesc.KindNamespace).
+			WithBodies(apidesc.Typed[exchangeRequest]("ExchangeWorkloadTokenRequest"),
+				apidesc.Typed[exchangeDocument]("WorkloadToken")),
 	}
 }
 
 // Operations returns the routes of this adapter for the description of the
-// tool-neutral REST API. Each row lists namespace:read first, which the wrapper
-// checks before the action of the route.
+// tool-neutral REST API. Each authorized row lists namespace:read first,
+// which the wrapper checks before the action of the route. The exchange is
+// public.
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
 	for _, rt := range h.routes {
+		if rt.Scope == route.ScopePublic {
+			// The exchange needs no sign-in, so it checks no action.
+			rows = append(rows, apidesc.Row{
+				Method: rt.Method, Path: rt.Path, Actions: nil, NamespaceActions: nil, Public: true,
+				IdempotencyKey: false,
+			})
+
+			continue
+		}
+
 		actions := make([]string, 0, 1+len(rt.Actions))
 		actions = append(actions, "namespace:read")
 
@@ -52,7 +67,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 
 		rows = append(rows, apidesc.Row{
 			Method: rt.Method, Path: rt.Path, Actions: actions, NamespaceActions: []string{"namespace:read"},
-			Public: rt.Scope == route.ScopePublic, IdempotencyKey: false,
+			Public: false, IdempotencyKey: false,
 		})
 	}
 

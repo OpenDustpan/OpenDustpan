@@ -35,8 +35,11 @@ const openAPIPath = "/api/dustpan/v1/openapi.json"
 
 // publicOperations returns the operations of the description that need no
 // sign-in. A new public route needs a reason, so it needs this list to change.
+//
+// exchangeWorkloadToken is public because the JWT of the workload in its body
+// is the credential: the exchange checks it against the trust rules.
 func publicOperations() []string {
-	return []string{"getApiDescription", "getCapabilities"}
+	return []string{"exchangeWorkloadToken", "getApiDescription", "getCapabilities"}
 }
 
 // TestAPIDescriptionGolden proves that the checked-in description is what the

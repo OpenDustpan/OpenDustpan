@@ -43,7 +43,9 @@ type Config struct {
 	// Namespaces gives the namespace of a request and its current fence.
 	Namespaces *namespace.Service
 	// Rules is the service of the trust rules.
-	Rules         *trustrulesvc.Service
+	Rules *trustrulesvc.Service
+	// Exchanger serves the token exchange. Nil serves no exchange route.
+	Exchanger     *trustrulesvc.Exchanger
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses.
@@ -87,6 +89,7 @@ func (cfg Config) validate() error {
 type Handler struct {
 	namespaces *namespace.Service
 	rules      *trustrulesvc.Service
+	exchanger  *trustrulesvc.Exchanger
 	authn      identity.Authenticator
 	sessions   *sessionauth.Checker
 	guard      *refusal.Recorder
@@ -125,6 +128,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		rules:      cfg.Rules,
+		exchanger:  cfg.Exchanger,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("trustrules"),
@@ -172,7 +176,7 @@ func (h *Handler) buildRoutes() []Route {
 	read := []identity.Action{identity.ActionNamespaceReadAccess}
 	manage := []identity.Action{identity.ActionNamespaceManageTrustRules}
 
-	return []Route{
+	routes := []Route{
 		{
 			Method: http.MethodGet, Path: RulesPath, Scope: route.ScopeAuthorized,
 			Actions: read, Resolve: resolveNamespace, Serve: h.list,
@@ -190,6 +194,18 @@ func (h *Handler) buildRoutes() []Route {
 			Actions: manage, Resolve: resolveNamespace, Serve: h.delete,
 		},
 	}
+
+	if h.exchanger != nil {
+		// The exchange needs no sign-in: the token of the workload is the
+		// credential, and the exchanger checks it. It is on the public list
+		// of the route test.
+		routes = append(routes, Route{
+			Method: http.MethodPost, Path: ExchangePath, Scope: route.ScopePublic,
+			Actions: nil, Resolve: resolveNamespace, Serve: h.exchange,
+		})
+	}
+
+	return routes
 }
 
 // resolveNamespace returns the namespace object of the path. A name that no
