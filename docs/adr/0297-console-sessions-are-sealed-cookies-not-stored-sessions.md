@@ -682,14 +682,17 @@ The options:
   lock of the person stops it, so the limit of 5 for each pending sign-in
   goes away.
 
-**Recommendation: (a).** Neither record is a session or a credential that
-authenticates a request. Option (a) keeps "a sign-in request works once"
-and the limit of 5 wrong factors for each pending sign-in. Option (b)
-loses them both. It keeps the factor count of the person,
-which is a record on the server too.
+**Recommendation of the PM: (b).** No table holds the state of a sign-in,
+which follows the direction of the owner. The identity provider gives each
+authorization code once, so a copied sign-in request cookie cannot finish a
+second sign-in with the same code. The factor lock of the person (10 wrong
+factors, 30 minutes, shared by each instance) stays the limit on guesses.
+The costs of (b) above stay: no "works once" for the cookie itself, and no
+limit of 5 wrong factors for each pending sign-in. The owner decides.
 
-**Plain summary:** the server keeps a few minutes of state while a sign-in
-is in progress, and nothing after it.
+**Plain summary:** the PM recommends that the browser carries the few
+minutes of state of a sign-in in sealed cookies, and that the server keeps
+only its existing lock on wrong factors.
 
 ### 2. A cache of proof IDs on each replica
 
