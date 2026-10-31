@@ -11,7 +11,7 @@ The owner decided that mode 2 may run over the network. The server then needs a 
 ## Decision
 
 1. **The route is allowed (owner).** Mode 2 may run over the network. A route in the server accepts a signed recovery request. The route makes a temporary administrator. This amends ADR 245 decision 12 for this route only. The test of that decision names the route as the one other caller. (owner)
-2. **The risk statement (owner).** The documentation and the setting say this: "A theft of the private key alone gives a bounded remote temporary administrator." The bound is the expiry. The limits of a temporary administrator in ADR 245 also apply. (owner)
+2. **The risk statement (owner).** The documentation states the risk in these words. "A theft of the private key alone gives a bounded remote temporary administrator." The bound is the expiry. The limits of a temporary administrator in ADR 245 also apply. (owner)
 3. **The nonce is a unique-key insert.** The server inserts the nonce of a request with a unique key. The insert is in the same transaction that makes the temporary administrator. A second request with the same nonce fails the insert. The transaction fails with it. (owner)
 4. **A shared rate limit.** The database holds the counter of the rate limit, so all instances share it. An IPv6 address counts as its /64 group. (owner)
 5. **One answer for every refusal.** Every refusal gives the same answer: the same status, the same body and the same shape. A caller cannot tell the reason of a refusal. A bad signature, an old time, a used nonce, a rate limit and a wrong mode look the same. The audit entry holds the real reason. (owner)
