@@ -166,8 +166,58 @@ func checkViewRefuses(t *testing.T, view blob.Store, hostile string) {
 		t.Errorf("Delete err = %v, want ErrOutOfScope", err)
 	}
 
-	if _, err := view.List(t.Context(), hostile); !errors.Is(err, blob.ErrOutOfScope) {
-		t.Errorf("List(%q) err = %v, want ErrOutOfScope", hostile, err)
+	// A hostile Prefix: the scope check of the view refuses it.
+	req := blob.PageRequest{Prefix: hostile, After: "", Limit: 10}
+
+	if page, err := view.ListPage(t.Context(), req); !errors.Is(err, blob.ErrOutOfScope) || len(page.Objects) != 0 {
+		t.Errorf("ListPage(prefix %q) = %v, %v; want no objects and ErrOutOfScope", hostile, page, err)
+	}
+}
+
+// checkViewRefusesAfter sends the hostile key as the After of a page request
+// with a valid Prefix, the prefix of the view. The check of the request and the
+// scope check of the view each refuse it: ErrInvalidKey from the first,
+// ErrOutOfScope from the second.
+func checkViewRefusesAfter(t *testing.T, view blob.Store, prefix, hostile string) {
+	t.Helper()
+
+	req := blob.PageRequest{Prefix: prefix, After: blob.Key(hostile + "x"), Limit: 10}
+
+	page, err := view.ListPage(t.Context(), req)
+	if !errors.Is(err, blob.ErrOutOfScope) && !errors.Is(err, blob.ErrInvalidKey) {
+		t.Errorf("ListPage(after %q) err = %v, want ErrOutOfScope or ErrInvalidKey", req.After, err)
+	}
+
+	if len(page.Objects) != 0 || page.Next != "" {
+		t.Errorf("ListPage(after %q) = %v, want an empty page", req.After, page)
+	}
+}
+
+func TestScopedViewStopsAHostileAfterKey(t *testing.T) {
+	t.Parallel()
+
+	for _, prefix := range hostilePrefixes() {
+		t.Run(prefix, func(t *testing.T) {
+			t.Parallel()
+
+			f := withForeign(t)
+			r, a, b := f.rig, f.ended, f.running
+
+			view, err := r.svc.Scope(t.Context(), storecheck.TargetBlobs, a, a.Prefix())
+			if err != nil {
+				t.Fatalf("Scope: %v", err)
+			}
+
+			r.blobs.seed(a.Prefix()+"left", b.Prefix()+"x")
+
+			before := r.blobs.callCount()
+
+			checkViewRefusesAfter(t, view, a.Prefix(), concrete(prefix, b))
+
+			if got := r.blobs.callCount(); got != before {
+				t.Fatalf("the store got %d calls for an After key outside the prefix", got-before)
+			}
+		})
 	}
 }
 

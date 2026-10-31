@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
@@ -254,6 +255,44 @@ func TestStateGuardThatCannotDecideRefuses(t *testing.T) {
 	}
 }
 
+// TestStateGuardOnALostStoreAnswers503WithRetryAfter proves that a guard that
+// fails because the database does not answer gives 503 with Retry-After 5 and
+// the code namespace.unavailable, not the gate refusal, on each guarded route.
+func TestStateGuardOnALostStoreAnswers503WithRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	causes := []struct {
+		name string
+		err  error
+	}{
+		{"sentinel", namespace.ErrUnavailable},
+		{"wrapped sentinel", fmt.Errorf("read fence: %w", namespace.ErrUnavailable)},
+		{"connection failed", fmt.Errorf("%w: connection failed: %w", namespace.ErrUnavailable, syscall.ECONNREFUSED)},
+		{"busy", fmt.Errorf("%w: database is busy", namespace.ErrUnavailable)},
+		{"in a refusal", &gate.RefusalError{
+			Err: fmt.Errorf("%w: %w", gate.ErrUnavailable, namespace.ErrUnavailable), Record: "", Messages: nil,
+		}},
+	}
+
+	for _, rt := range guardRoutes() {
+		for _, tc := range causes {
+			t.Run(rt.name+" "+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				f := guardedFixture(t, newRecordingGuard(tc.err))
+
+				rec := serveRoute(t, f, rt)
+				if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" ||
+					len(f.pulumi.calls) != 0 || !strings.Contains(rec.Body.String(), errcode.NamespaceUnavailable) {
+					t.Fatalf("%s answers %d with Retry-After %q and %d calls, want 503, 5 and none with %s: %s",
+						rt.name, rec.Code, rec.Header().Get("Retry-After"), len(f.pulumi.calls),
+						errcode.NamespaceUnavailable, rec.Body)
+				}
+			})
+		}
+	}
+}
+
 // storeFaultCase is a guard error that the store causes and the text that the
 // 503 body holds.
 type storeFaultCase struct {
@@ -279,8 +318,8 @@ func storeFaultCases() []storeFaultCase {
 	return []storeFaultCase{
 		{"minimum error", below, belowText},
 		{"minimum error in a refusal", wrapped(below), belowText},
-		{"store lost", namespace.ErrUnavailable, []string{"gate.unavailable"}},
-		{"store lost in a refusal", wrapped(namespace.ErrUnavailable), []string{"gate.unavailable"}},
+		{"store lost", namespace.ErrUnavailable, []string{errcode.NamespaceUnavailable}},
+		{"store lost in a refusal", wrapped(namespace.ErrUnavailable), []string{errcode.NamespaceUnavailable}},
 		{"other failure in a refusal", wrapped(errGuardDown), []string{"gate.unavailable"}},
 	}
 }

@@ -116,6 +116,12 @@ func classifyProtocol(err error) (int, protocol.Error) {
 		return status, protocol.Error{Code: code, Message: sentenceOf(err, sentinels), Supported: ""}
 	}
 
+	// A database that does not answer comes first: the runner tries again
+	// after the Retry-After time, whatever else the error wraps.
+	if errors.Is(err, namespace.ErrUnavailable) {
+		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrUnavailable)
+	}
+
 	switch {
 	case errors.Is(err, runner.ErrBadProof), errors.Is(err, runner.ErrReplay):
 		return mk(http.StatusUnauthorized, protocol.ErrorBadProof, runner.ErrBadProof, runner.ErrReplay)

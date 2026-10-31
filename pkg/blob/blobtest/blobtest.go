@@ -96,11 +96,12 @@ func Run(t *testing.T, newStore Factory) {
 		testPing(t, newStore(t))
 	})
 
+	runPages(t, newStore)
 	runScope(t, newStore)
 	runPending(t)
 }
 
-// pendingCases returns the cases of the new Put contract and of the paged list.
+// pendingCases returns the cases of the new Put contract and of the batch delete.
 // Each one skips until its adapter work lands. The first two replace "second
 // put on one key fails with ErrExists" and "parallel put on one key gives one
 // success" when the port change lands: a store can then replace an object,
@@ -111,13 +112,6 @@ func pendingCases() []string {
 		"parallel put on one key leaves one whole object",
 		"get during a replace returns the whole old or the whole new object",
 		"failed replace leaves the old object",
-		"list page holds at most the limit ordered by key",
-		"list pages walk every object once",
-		"list page of a missing prefix is empty",
-		"list page with a limit out of range is ErrInvalidPage",
-		"list page with an invalid after key is ErrInvalidKey",
-		"list page stays inside its prefix",
-		"list page with an after key outside the prefix is ErrInvalidKey",
 		"delete many removes every key and backs off on ErrThrottled",
 	}
 }
@@ -333,7 +327,7 @@ func testList(t *testing.T, s blob.Store) {
 	after := time.Now().UTC().Add(time.Minute)
 
 	for _, prefix := range []string{"tofu/ws-1/", "tofu/ws-1"} {
-		got, err := s.List(t.Context(), prefix)
+		got, err := ListAll(t.Context(), s, prefix)
 		if err != nil {
 			t.Fatalf("list %q: %v", prefix, err)
 		}
@@ -369,16 +363,30 @@ func testListMissing(t *testing.T, s blob.Store) {
 
 	put(t, s, mustKey(t, "tofu/ws-1/sv-1/a1"), []byte("x"))
 
-	if got, err := s.List(t.Context(), "tofu/ghost/"); err != nil || len(got) != 0 {
+	if got, err := ListAll(t.Context(), s, "tofu/ghost/"); err != nil || len(got) != 0 {
 		t.Fatalf("list of a missing prefix = %v, %v; want empty", objectKeys(got), err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := s.List(ctx, "tofu/ws-1/"); err == nil {
+	if _, err := ListAll(ctx, s, "tofu/ws-1/"); err == nil {
 		t.Fatal("list with canceled context = nil, want error")
 	}
+}
+
+// ListAll walks every page under prefix and returns the objects. Test code that
+// needs the whole listing of a prefix uses it.
+func ListAll(ctx context.Context, s blob.Store, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, s, prefix, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+
+	return out, err
 }
 
 // objectKeys returns the key strings of objects in order.

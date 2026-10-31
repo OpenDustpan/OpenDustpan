@@ -20,7 +20,7 @@ var _ stack.StateAtReader = (*Store)(nil)
 func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.StateAt, error) {
 	// One snapshot, so that the update, the running update and the first
 	// end time come from the same state of the database.
-	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
+	tx, err := s.txs.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
 		return stack.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
 	}

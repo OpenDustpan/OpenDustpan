@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/servertest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -102,7 +103,7 @@ func scopeObjects(t *testing.T, store *fs.Store, scope namespace.Name) int {
 		t.Fatalf("checkpoint key: %v", err)
 	}
 
-	objects, err := store.List(t.Context(), key.String()[:strings.LastIndex(key.String(), "/")+1])
+	objects, err := blobtest.ListAll(t.Context(), store, key.String()[:strings.LastIndex(key.String(), "/")+1])
 	if err != nil {
 		t.Fatalf("list checkpoints of %s: %v", scope, err)
 	}
@@ -123,7 +124,7 @@ func checkpointObjects(t *testing.T, store *fs.Store) int {
 	// The key names the epoch, the scope in hexadecimal and the sequence.
 	epochDir := key.String()[:strings.Index(key.String(), "/")+10]
 
-	objects, err := store.List(t.Context(), epochDir)
+	objects, err := blobtest.ListAll(t.Context(), store, epochDir)
 	if err != nil {
 		t.Fatalf("list checkpoints: %v", err)
 	}
