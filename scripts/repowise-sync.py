@@ -65,6 +65,12 @@ ELIDE = " [...]"
 RESPONSE_MAX = 8 << 20
 TIMEOUT = 120
 PROPOSE_PAUSE = 2.2
+# The REST routes accept 60 requests in a minute. Each request waits for this
+# interval after the one before it. A refusal for the rate (HTTP 429) waits
+# RETRY_PAUSE and tries again, at most RETRIES times, and then fails.
+REQUEST_INTERVAL = 1.1
+RETRY_PAUSE = 30
+RETRIES = 3
 PAGE = 200
 
 REPO = re.compile(r"^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$")
@@ -113,19 +119,31 @@ def check_url(url):
     return url
 
 
+_last_request = [0.0]
+
+
 def request(key, method, path, body=None, accept="application/json"):
     url = check_url(API + path)
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers={
         "Content-Type": "application/json", "Accept": accept,
         "Authorization": "Bearer " + check_key(key)})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            raw = resp.read(RESPONSE_MAX + 1)
-    except urllib.error.HTTPError as err:
-        raise SyncError(f"{method} {clean(path)}: HTTP {err.code}") from None
-    except (urllib.error.URLError, TimeoutError) as err:
-        raise SyncError(f"{method} {clean(path)}: {clean(err)}") from None
+    for attempt in range(RETRIES + 1):
+        wait = _last_request[0] + REQUEST_INTERVAL - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_request[0] = time.monotonic()
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                raw = resp.read(RESPONSE_MAX + 1)
+            break
+        except urllib.error.HTTPError as err:
+            if err.code == 429 and attempt < RETRIES:
+                time.sleep(RETRY_PAUSE)
+                continue
+            raise SyncError(f"{method} {clean(path)}: HTTP {err.code}") from None
+        except (urllib.error.URLError, TimeoutError) as err:
+            raise SyncError(f"{method} {clean(path)}: {clean(err)}") from None
     if len(raw) > RESPONSE_MAX:
         raise SyncError(f"{method} {clean(path)}: the response is larger than {RESPONSE_MAX} bytes")
     text = raw.decode("utf-8")
