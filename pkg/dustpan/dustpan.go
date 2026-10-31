@@ -1382,13 +1382,13 @@ func newNeutralHandlers(
 	}
 
 	return neutralHandlers{
-		inventory: units,
-		audit:     entries,
-		context:   contexts,
-		runners:   runners,
-		profiles:  profileAPI.profiles,
-		issuer:    profileAPI.issuer,
-		sinks:     profileAPI.sinkAPI,
+		inventory:    units,
+		audit:        entries,
+		context:      contexts,
+		runners:      runners,
+		profiles:     profileAPI.profiles,
+		issuer:       profileAPI.issuer,
+		sinks:        profileAPI.sinkAPI,
 		jobs:         jobAPIs.jobs,
 		triggers:     late.triggers,
 		unitSettings: late.unitSettings,
