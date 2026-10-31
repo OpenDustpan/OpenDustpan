@@ -2,6 +2,10 @@
 
 Status: superseded by ADR 35 · accepted 2026-10-08
 
+Changed by:
+
+- ADR 35 supersedes.
+
 ## Context
 
 Operators range from a solo developer (SQLite, local disk) to enterprises with
