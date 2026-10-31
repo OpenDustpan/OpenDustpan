@@ -553,6 +553,7 @@ func TestCheckActiveRefusesADisabledPrincipal(t *testing.T) {
 	// not its token.
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+		ExchangeLifetime: nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)
@@ -1152,6 +1153,7 @@ func TestPolicyBoundsLifetime(t *testing.T) {
 	p, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: new(time.Hour), Inactivity: nil, DisableTokens: nil, DisableAccounts: nil,
 		DisableBreakGlass: nil,
+		ExchangeLifetime:  nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)
@@ -1175,20 +1177,23 @@ func TestPolicyBoundsLifetime(t *testing.T) {
 	}
 
 	for _, c := range []accesstoken.PolicyChange{
-		{MaxLifetime: new(time.Duration(0)), Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: nil},
+		{MaxLifetime: new(time.Duration(0)), Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: nil, ExchangeLifetime: nil},
 		{
 			MaxLifetime: nil, Inactivity: new(time.Millisecond), DisableTokens: nil, DisableAccounts: nil,
 			DisableBreakGlass: nil,
+			ExchangeLifetime:  nil,
 		},
 		{
 			MaxLifetime: nil, Inactivity: new(accesstoken.MinInactivity - time.Minute), DisableTokens: nil,
 			DisableAccounts: nil, DisableBreakGlass: nil,
+			ExchangeLifetime: nil,
 		},
 		{
 			MaxLifetime: new(accesstoken.MaxPolicyDuration + time.Hour), Inactivity: nil, DisableTokens: nil,
 			DisableAccounts: nil, DisableBreakGlass: nil,
+			ExchangeLifetime: nil,
 		},
-		{MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true)},
+		{MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true), ExchangeLifetime: nil},
 	} {
 		if _, err := f.svc.SetPolicy(ctx, caller(), c); !errors.Is(err, accesstoken.ErrInvalid) {
 			t.Errorf("set policy %+v: err = %v, want ErrInvalid", c, err)
@@ -1322,9 +1327,11 @@ func TestSweepFollowsThePolicy(t *testing.T) {
 		DisableTokens:     nil,
 		DisableAccounts:   nil,
 		DisableBreakGlass: nil,
+		ExchangeLifetime:  nil,
 	}
 	tokensOnly := accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: new(false), DisableBreakGlass: nil,
+		ExchangeLifetime: nil,
 	}
 
 	cases := []struct {
@@ -1428,6 +1435,7 @@ func TestBreakGlassDisableIsRefused(t *testing.T) {
 
 	_, err := f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true),
+		ExchangeLifetime: nil,
 	})
 	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "no longer supported") {
 		t.Fatalf("err = %v, want ErrInvalid that says the setting is no longer supported", err)
@@ -1435,6 +1443,7 @@ func TestBreakGlassDisableIsRefused(t *testing.T) {
 
 	_, err = f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(false),
+		ExchangeLifetime: nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy with the deprecated field false: %v", err)
@@ -1471,6 +1480,7 @@ func TestInactiveTokenIsRefusedBeforeTheSweep(t *testing.T) {
 	// through the Service drops the cached policy.
 	_, err = f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+		ExchangeLifetime: nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)
@@ -1496,6 +1506,7 @@ func TestPolicyChangeOfAnotherInstanceAppliesAtOnce(t *testing.T) {
 
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+		ExchangeLifetime: nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)
@@ -1573,6 +1584,7 @@ func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	// Only the account disable is on, so the token rule refuses nothing.
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+		ExchangeLifetime: nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)
@@ -1858,6 +1870,7 @@ func TestSetPolicyRecordsChanges(t *testing.T) {
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: new(lifetime), Inactivity: nil, DisableTokens: new(disabled), DisableAccounts: nil,
 		DisableBreakGlass: nil,
+		ExchangeLifetime:  nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)
@@ -1876,6 +1889,7 @@ func TestSetPolicyRecordsChanges(t *testing.T) {
 	_, err = f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: new(lifetime), Inactivity: new(hour), DisableTokens: nil, DisableAccounts: nil,
 		DisableBreakGlass: nil,
+		ExchangeLifetime:  nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)

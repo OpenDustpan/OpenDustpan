@@ -81,6 +81,7 @@ func TestEnforceActions(t *testing.T) {
 			h := &Handler{
 				namespaces: nil,
 				rules:      nil,
+				exchanger:  nil,
 				authn:      enforceTokens{},
 				sessions:   nil,
 				guard:      refusals,

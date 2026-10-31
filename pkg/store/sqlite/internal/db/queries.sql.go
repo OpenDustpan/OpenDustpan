@@ -4175,7 +4175,8 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
   ), 0)) AS INTEGER) AS principal_active_at_ms,
   ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
   ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
-  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms,
+  ap.exchange_lifetime_ms AS policy_exchange_lifetime_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
@@ -4183,30 +4184,31 @@ WHERE t.digest = ? AND p.deleted_at_ms IS NULL AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
-	ID                      string
-	PrincipalID             string
-	Name                    string
-	Kind                    string
-	Digest                  string
-	CreatedAtMs             int64
-	ExpiresAtMs             int64
-	LastUsedAtMs            sql.NullInt64
-	RevokedAtMs             sql.NullInt64
-	ReplacedBy              sql.NullString
-	CreatedBy               string
-	DisabledAtMs            sql.NullInt64
-	Subject                 string
-	DisplayName             string
-	PrincipalKind           string
-	PrincipalDisabledAtMs   sql.NullInt64
-	PrincipalBreakGlass     bool
-	PrincipalActiveAtMs     int64
-	PolicyMaxLifetimeMs     int64
-	PolicyInactivityMs      int64
-	PolicyDisableTokens     bool
-	PolicyDisableAccounts   bool
-	PolicyDisableBreakGlass bool
-	PolicyUpdatedAtMs       int64
+	ID                       string
+	PrincipalID              string
+	Name                     string
+	Kind                     string
+	Digest                   string
+	CreatedAtMs              int64
+	ExpiresAtMs              int64
+	LastUsedAtMs             sql.NullInt64
+	RevokedAtMs              sql.NullInt64
+	ReplacedBy               sql.NullString
+	CreatedBy                string
+	DisabledAtMs             sql.NullInt64
+	Subject                  string
+	DisplayName              string
+	PrincipalKind            string
+	PrincipalDisabledAtMs    sql.NullInt64
+	PrincipalBreakGlass      bool
+	PrincipalActiveAtMs      int64
+	PolicyMaxLifetimeMs      int64
+	PolicyInactivityMs       int64
+	PolicyDisableTokens      bool
+	PolicyDisableAccounts    bool
+	PolicyDisableBreakGlass  bool
+	PolicyUpdatedAtMs        int64
+	PolicyExchangeLifetimeMs int64
 }
 
 // The token, its owner and the token policy of the installation in one read,
@@ -4239,23 +4241,26 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.PolicyDisableAccounts,
 		&i.PolicyDisableBreakGlass,
 		&i.PolicyUpdatedAtMs,
+		&i.PolicyExchangeLifetimeMs,
 	)
 	return i, err
 }
 
 const getAccessTokenPolicy = `-- name: GetAccessTokenPolicy :one
 
-SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms
+SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms,
+  exchange_lifetime_ms
 FROM access_token_policy WHERE id = 1
 `
 
 type GetAccessTokenPolicyRow struct {
-	MaxLifetimeMs     int64
-	InactivityMs      int64
-	DisableTokens     bool
-	DisableAccounts   bool
-	DisableBreakGlass bool
-	UpdatedAtMs       int64
+	MaxLifetimeMs      int64
+	InactivityMs       int64
+	DisableTokens      bool
+	DisableAccounts    bool
+	DisableBreakGlass  bool
+	UpdatedAtMs        int64
+	ExchangeLifetimeMs int64
 }
 
 // Token policy and the inactivity disable (ADR 53).
@@ -4269,6 +4274,7 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 		&i.DisableAccounts,
 		&i.DisableBreakGlass,
 		&i.UpdatedAtMs,
+		&i.ExchangeLifetimeMs,
 	)
 	return i, err
 }
@@ -5023,6 +5029,34 @@ func (q *Queries) GetDurableSchedule(ctx context.Context, name string) (DurableS
 		&i.IntervalMs,
 		&i.NextRunAtMs,
 		&i.LastClaimedAtMs,
+	)
+	return i, err
+}
+
+const getExchangePrincipal = `-- name: GetExchangePrincipal :one
+SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms, COALESCE(disabled_at_ms, 0) AS disabled_at_ms
+FROM principals
+WHERE id = ?1
+`
+
+type GetExchangePrincipalRow struct {
+	Kind         string
+	Namespace    string
+	DeletedAtMs  int64
+	DisabledAtMs int64
+}
+
+// Reads the principal of a token exchange in its transaction, so a delete or
+// a disable of the principal cannot pass between the check and the insert of
+// the token.
+func (q *Queries) GetExchangePrincipal(ctx context.Context, id string) (GetExchangePrincipalRow, error) {
+	row := q.db.QueryRowContext(ctx, getExchangePrincipal, id)
+	var i GetExchangePrincipalRow
+	err := row.Scan(
+		&i.Kind,
+		&i.Namespace,
+		&i.DeletedAtMs,
+		&i.DisabledAtMs,
 	)
 	return i, err
 }
@@ -17400,17 +17434,19 @@ const setAccessTokenPolicy = `-- name: SetAccessTokenPolicy :execrows
 UPDATE access_token_policy
 SET max_lifetime_ms = CAST(?1 AS INTEGER), inactivity_ms = CAST(?2 AS INTEGER),
   disable_tokens = ?3, disable_accounts = ?4,
-  disable_break_glass = ?5, updated_at_ms = CAST(?6 AS INTEGER)
+  disable_break_glass = ?5, updated_at_ms = CAST(?6 AS INTEGER),
+  exchange_lifetime_ms = CAST(?7 AS INTEGER)
 WHERE id = 1
 `
 
 type SetAccessTokenPolicyParams struct {
-	MaxLifetimeMs     int64
-	InactivityMs      int64
-	DisableTokens     bool
-	DisableAccounts   bool
-	DisableBreakGlass bool
-	UpdatedAtMs       int64
+	MaxLifetimeMs      int64
+	InactivityMs       int64
+	DisableTokens      bool
+	DisableAccounts    bool
+	DisableBreakGlass  bool
+	UpdatedAtMs        int64
+	ExchangeLifetimeMs int64
 }
 
 func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPolicyParams) (int64, error) {
@@ -17421,6 +17457,7 @@ func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPo
 		arg.DisableAccounts,
 		arg.DisableBreakGlass,
 		arg.UpdatedAtMs,
+		arg.ExchangeLifetimeMs,
 	)
 	if err != nil {
 		return 0, err
