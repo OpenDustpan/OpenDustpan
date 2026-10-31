@@ -3259,6 +3259,20 @@ func (q *Queries) DeleteSecretKeysOfStack(ctx context.Context, stackID string) e
 	return err
 }
 
+const deleteSetting = `-- name: DeleteSetting :exec
+DELETE FROM settings WHERE scope_id = ?1 AND key = ?2
+`
+
+type DeleteSettingParams struct {
+	ScopeID string
+	Key     string
+}
+
+func (q *Queries) DeleteSetting(ctx context.Context, arg DeleteSettingParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSetting, arg.ScopeID, arg.Key)
+	return err
+}
+
 const deleteSignInProvider = `-- name: DeleteSignInProvider :execrows
 DELETE FROM sign_in_providers WHERE provider_id = ?
 `
@@ -7210,6 +7224,26 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 	return i, err
 }
 
+const getSettingsState = `-- name: GetSettingsState :one
+SELECT revision, static_digest
+FROM settings_state
+WHERE scope_id = ?1
+`
+
+type GetSettingsStateRow struct {
+	Revision     int64
+	StaticDigest string
+}
+
+// The revision and the digest of the static layer of one scope. No row means
+// a scope that never changed.
+func (q *Queries) GetSettingsState(ctx context.Context, scopeID string) (GetSettingsStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getSettingsState, scopeID)
+	var i GetSettingsStateRow
+	err := row.Scan(&i.Revision, &i.StaticDigest)
+	return i, err
+}
+
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
     created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
@@ -10172,6 +10206,46 @@ func (q *Queries) InsertWorkspaceResourceChange(ctx context.Context, arg InsertW
 		arg.LineageChanged,
 	)
 	return err
+}
+
+const journalBatchRefs = `-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival
+`
+
+type JournalBatchRefsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+type JournalBatchRefsRow struct {
+	BlobKey string
+	Sha256  []byte
+	Size    int64
+}
+
+func (q *Queries) JournalBatchRefs(ctx context.Context, arg JournalBatchRefsParams) ([]JournalBatchRefsRow, error) {
+	rows, err := q.db.QueryContext(ctx, journalBatchRefs, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JournalBatchRefsRow
+	for rows.Next() {
+		var i JournalBatchRefsRow
+		if err := rows.Scan(&i.BlobKey, &i.Sha256, &i.Size); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const journalBlobKeys = `-- name: JournalBlobKeys :many
@@ -14520,6 +14594,42 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		items = append(items, wrapper_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSettings = `-- name: ListSettings :many
+SELECT key, value
+FROM settings
+WHERE scope_id = ?1
+ORDER BY key
+`
+
+type ListSettingsRow struct {
+	Key   string
+	Value string
+}
+
+// The database values of one scope, in key order.
+func (q *Queries) ListSettings(ctx context.Context, scopeID string) ([]ListSettingsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSettings, scopeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSettingsRow
+	for rows.Next() {
+		var i ListSettingsRow
+		if err := rows.Scan(&i.Key, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -19567,6 +19677,64 @@ type UpsertPersonPreferencesParams struct {
 
 func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonPreferencesParams) error {
 	_, err := q.db.ExecContext(ctx, upsertPersonPreferences, arg.PrincipalID, arg.Document, arg.UpdatedAtMs)
+	return err
+}
+
+const upsertSetting = `-- name: UpsertSetting :exec
+INSERT INTO settings (scope_id, key, value, updated_at_ms)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms
+`
+
+type UpsertSettingParams struct {
+	ScopeID     string
+	Key         string
+	Value       string
+	UpdatedAtMs int64
+}
+
+func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSetting,
+		arg.ScopeID,
+		arg.Key,
+		arg.Value,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const upsertSettingsDigest = `-- name: UpsertSettingsDigest :exec
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (?1, ?2, ?3)
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest
+`
+
+type UpsertSettingsDigestParams struct {
+	ScopeID      string
+	Revision     int64
+	StaticDigest string
+}
+
+// Sets the digest of the static layer and the revision of the installation.
+func (q *Queries) UpsertSettingsDigest(ctx context.Context, arg UpsertSettingsDigestParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSettingsDigest, arg.ScopeID, arg.Revision, arg.StaticDigest)
+	return err
+}
+
+const upsertSettingsRevision = `-- name: UpsertSettingsRevision :exec
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (?1, ?2, '')
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision
+`
+
+type UpsertSettingsRevisionParams struct {
+	ScopeID  string
+	Revision int64
+}
+
+// Sets the revision of a scope and keeps its digest.
+func (q *Queries) UpsertSettingsRevision(ctx context.Context, arg UpsertSettingsRevisionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSettingsRevision, arg.ScopeID, arg.Revision)
 	return err
 }
 

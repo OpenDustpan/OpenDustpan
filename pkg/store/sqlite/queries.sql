@@ -1197,6 +1197,11 @@ SELECT blob_key FROM update_journal
 WHERE stack_id = ? AND update_id = ?
 ORDER BY arrival;
 
+-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;
+
 -- name: DeleteJournalSequences :exec
 DELETE FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ?;
@@ -4411,6 +4416,41 @@ SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
 
+-- name: ListSettings :many
+-- The database values of one scope, in key order.
+SELECT key, value
+FROM settings
+WHERE scope_id = sqlc.arg(scope_id)
+ORDER BY key;
+
+-- name: GetSettingsState :one
+-- The revision and the digest of the static layer of one scope. No row means
+-- a scope that never changed.
+SELECT revision, static_digest
+FROM settings_state
+WHERE scope_id = sqlc.arg(scope_id);
+
+-- name: UpsertSetting :exec
+INSERT INTO settings (scope_id, key, value, updated_at_ms)
+VALUES (sqlc.arg(scope_id), sqlc.arg(key), sqlc.arg(value), sqlc.arg(updated_at_ms))
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms;
+
+-- name: DeleteSetting :exec
+DELETE FROM settings WHERE scope_id = sqlc.arg(scope_id) AND key = sqlc.arg(key);
+
+-- name: UpsertSettingsRevision :exec
+-- Sets the revision of a scope and keeps its digest.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), '')
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision;
+
+-- name: UpsertSettingsDigest :exec
+-- Sets the digest of the static layer and the revision of the installation.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), sqlc.arg(static_digest))
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest;
+
+
 -- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
 VALUES (?, ?, 'running', ?, ?, 0, '', '')
@@ -4655,4 +4695,5 @@ DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(
 SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms, COALESCE(disabled_at_ms, 0) AS disabled_at_ms
 FROM principals
 WHERE id = sqlc.arg(id);
+
 

@@ -207,6 +207,7 @@ type settings struct {
 	triggerStore         trigger.Store
 	driftStore           drift.Store
 	savedViewStore       savedview.Store
+	settingsConfig       settingsConfig
 	gitHost              gitHostSettings
 	registry             *registrySettings
 	idempotencyStore     idempotency.Store
@@ -770,6 +771,7 @@ func defaultSettings() *settings {
 		denialLimiter:           defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
+		settingsConfig:          settingsConfig{store: nil, declarations: nil, static: nil},
 		blobGuard:               nil,
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
@@ -1736,8 +1738,18 @@ func checkStoreOptions(cfg *settings) error {
 	case cfg.inventoryReader == nil:
 		return fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
 	default:
-		return checkAuditStores(cfg)
+		return checkOptionalStores(cfg)
 	}
+}
+
+// checkOptionalStores refuses a namespace store that keeps no audit entries,
+// and declarations of settings that are not valid.
+func checkOptionalStores(cfg *settings) error {
+	if err := checkAuditStores(cfg); err != nil {
+		return err
+	}
+
+	return checkSettingDeclarations(cfg)
 }
 
 // checkAuditStores refuses a namespace store that keeps no audit entries. A
@@ -3044,7 +3056,7 @@ func newServerHandler(
 		Workers:          cfg.watch,
 		SignIn:           deps.signIn,
 		Preferences:      newPreferencesService(cfg),
-
+		Settings:         newSettingService(cfg, cfg.namespaceStore),
 		InstallationKind: cfg.installationKind,
 		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
