@@ -1,6 +1,6 @@
 # 235. Operator branding: the product name, the logo, the colors and the agent's name
 
-Status: accepted · 2026-10-18. Extends ADR 180 decision 11. Supersedes in part ADR 212 decision 6. Accepts part of RFC 9
+Status: accepted · 2026-10-18. Extends ADR 180 decision 11. Supersedes in part ADR 212 decision 6. Accepts part of RFC 9. Changed by [ADR 288](0288-the-sign-in-page-looks-the-same-on-every-installation.md)
 
 ## Context
 
