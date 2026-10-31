@@ -186,7 +186,11 @@ credential.
    end between 10 and 15 minutes after the last request. The idle limit is
    never longer than the setting. The console makes a refresh only when it
    must send a request and its access cookie expired or will expire in less
-   than 30 seconds. It never makes a refresh on a timer.
+   than 30 seconds. It never makes a refresh on a timer. A background poll,
+   for example of a running job or a run of Dusty, never starts a refresh.
+   When the access cookie expired, the console stops each poll until the
+   person acts. So the idle limit of the session and of a run ends as it
+   should while a tab stays open. The console has a test for this rule.
 
    Benchmark: OWASP Session Management Cheat Sheet (see "Benchmarks"):
    idle timeouts of 15 to 30 minutes for most applications, 2 to 5 minutes
@@ -238,8 +242,11 @@ credential.
      the route, compared after the scheme and the host are lower case and
      with no trailing slash added. The `Host` header of the request is never
      used,
-   - the nonce (below), and that `iat` is within 24 hours of the time of the
-     server,
+   - the nonce (below): the verifier opens it and refuses an old one by
+     itself, and the caller opens it again as a defense-in-depth layer that
+     does not rely on the verifier. So a new caller that forgets the nonce
+     still cannot accept a proof outside the window,
+   - that `iat` is within 24 hours of the time of the server,
    - that the thumbprint of the key is the thumbprint of the cookie, in
      constant time.
 
@@ -247,7 +254,11 @@ credential.
    value that the session key ring seals: the time of the server and 128
    random bits, with the associated data `dpop-nonce`. The server stores no
    nonce. A proof is in its window when the time in its nonce is not more
-   than 30 seconds before the time of the server. A browser with a clock
+   than 30 seconds before the time of the server, and not more than 5
+   seconds after it. The 5 seconds allow for the clocks of replicas, which
+   the operator keeps within 5 seconds of each other with NTP. A nonce does
+   not need to be unique: each replica seals one nonce and sends it again
+   for 5 seconds, so the nonces use few seals of the key. A browser with a clock
    that is 2 minutes off still refreshes, because the server reads only its
    own time. `iat` must still be within 24 hours, so a proof made on a
    device with a clock far off is refused. The server sends a new nonce with
@@ -301,10 +312,14 @@ credential.
 
    NIST SP 800-38D limits a key with random 96-bit nonces to 2^32 seals.
    Each replica counts its seals with each key version in memory. When its
-   count passes 2^28, it adds a new version at once (decision 11). So the
-   limit holds for up to 16 replicas that each reach the count. The time of
-   30 days alone would allow about 1,650 seals each second. An installation
-   with more than 16 replicas sets a shorter rotation period.
+   count passes 2^27, it adds a new version at once (decision 11). The
+   budget: 16 replicas that each reach 2^27 make 2^31 seals, half of the
+   limit. The other half covers the seals that each replica still makes
+   with the old version for the 5 minutes before the new version seals
+   (decision 11). Nonces add at most one seal each 5 seconds on each replica
+   (decision 7), so a client that asks for nonces cannot use up the budget.
+   The time of 30 days alone would allow about 1,650 seals each second. An
+   installation with more than 16 replicas sets a shorter rotation period.
 10. **The session key ring.** A session key version is a random 256-bit key,
     with an ID with the prefix `sk-`. The key-encryption key wraps each
     version (ADR 217), and SQL keeps the wrapped version
@@ -523,9 +538,9 @@ credential.
     | --- | --- | --- | --- | --- | --- |
     | Access cookie | length at most 4096, form `v1.<key ID>.<base64url>`, key ID pattern, strict JSON, kind | AEAD with the cookie name and the key ID in the associated data. The value never reaches a log | 5-minute expiry, idle and absolute deadlines, `HttpOnly`, `SameSite=Strict`, `__Host-` | principal read at each request: person, enabled, generation, policy, dev subject, restriction | any error is `401`. A refused dev subject writes a denial entry |
     | Refresh cookie | as the access cookie, kind `refresh`, at most 2 of the name | AEAD. `Path` of the session routes only | opens only at the refresh and the sign-out routes. Makes only cookies | the same principal read as the access cookie, and the proof | each refusal writes `session:refresh-refused` |
-    | Proof at a refresh | at most 2048 bytes, compact JWS only, `typ`, `alg` `ES256` only, EC P-256 key on the curve with no private part, no `crit`, no duplicate keys | the thumbprint compared in constant time. `htu` compared with the configured URL, never the `Host` header. The proof never reaches a log | the nonce window of 30 seconds. `iat` within 24 hours. No URL opened | the key thumbprint of the cookie | a bad proof refuses the refresh and writes the entry |
+    | Proof at a refresh | at most 2048 bytes, compact JWS only, `typ`, `alg` `ES256` only, EC P-256 key on the curve with no private part, no `crit`, no duplicate keys | the thumbprint compared in constant time. `htu` compared with the configured URL, never the `Host` header. The proof never reaches a log | the nonce window of 30 seconds, which the verifier and the caller each check. `iat` within 24 hours. No URL opened | the key thumbprint of the cookie | a bad proof refuses the refresh and writes the entry |
     | Proof and public key at a sign-in | as the proof at a refresh | the thumbprint goes to the short record of the sign-in, never to a log | the nonce window. One key for each sign-in | the step that issues the cookies reads the thumbprint from the record, never from its request | a sign-in with no good proof issues no cookie and writes `sign-in.failed` |
-    | Nonce | form and length as a cookie, kind `dpop-nonce` | AEAD with `dpop-nonce` in the associated data | 30 seconds | not applicable: a nonce authorizes nothing | an old nonce gets `use_dpop_nonce`, which the source budget counts |
+    | Nonce | form and length as a cookie, kind `dpop-nonce` | AEAD with `dpop-nonce` in the associated data | 30 seconds back and 5 seconds ahead. One nonce each 5 seconds on each replica | not applicable: a nonce authorizes nothing | an old nonce gets `use_dpop_nonce`, which the source budget counts |
     | `X-Dustpan-Csrf` header | 43 characters of base64url | compared in constant time with the value in the cookie | one value for each sign-in | the value of the cookie of the same request | a missing or wrong value is `403` |
     | `Origin` and `Sec-Fetch-Site` | allowlist of origins. Exact values of `Sec-Fetch-Site` | never written to a header. Logged with CR and LF taken out | not applicable | a change needs `same-origin` or an allowed origin | a refusal is `403` and a log record |
     | Refresh request | `POST` only, no body | no request value reaches a header or a log with CR or LF | a source budget in `internal/authgate` | the steps of decision 5, in order | as the refresh cookie |
@@ -578,7 +593,7 @@ that day.
     client and holds no cleartext. It is not a random string.
   - Session secrets end at a sign-out (section 5.1). A sign-out
     here clears the cookies in the browser, but a copy of the access cookie
-    stays valid for at most 5 minutes (open point 1).
+    stays valid for at most 5 minutes (Decisions of the PM, item 1).
   The refresh cookie uses `__Secure-` and a narrow path, not `__Host-`
   (decision 3).
 - **RFC 9449 (DPoP).** See decision 7.
@@ -647,9 +662,9 @@ delegation:
    parses and verifies the JWS of the refresh proof (decision 7). The binary
    links it already through `go-oidc`. The project uses no parser of its own
    for a JWS.
-4. **A run of Dusty ends at the absolute deadline, at a bump, or at a
-   sign-out of its sign-in** (decision 19). It does not follow the idle
-   limit, because that needs a record of each refresh.
+4. **A run of Dusty ends at its idle deadline, at the absolute deadline, at
+   a bump, or at a sign-out of its sign-in** (decision 19). The run record
+   keeps its own idle deadline, so this needs no record of each refresh.
 
 ## Open questions for the owner (held)
 

@@ -53,6 +53,14 @@ const (
 	// be. It is the window of a proof, measured with the clock of the
 	// server only.
 	NonceWindow = 30 * time.Second
+	// NonceFutureTolerance is how far after the time of the server the time
+	// in a nonce can be. It allows for replicas whose clocks differ by up to
+	// 5 seconds.
+	NonceFutureTolerance = 5 * time.Second
+	// NonceReuse is how long each replica sends the same nonce again. A
+	// nonce does not need to be unique, and the reuse limits the seals of
+	// the key.
+	NonceReuse = 5 * time.Second
 	// ProofIATTolerance is how far the iat of a proof can be from the time
 	// of the server. It refuses a proof from a device with a clock far off.
 	ProofIATTolerance = 24 * time.Hour
@@ -83,9 +91,11 @@ const (
 	// first seal, more than four reload intervals.
 	KeySealDelay = 5 * time.Minute
 	// KeySealCountRotate is the count of seals of one version on one replica
-	// that makes the replica add a new version. With random 96-bit nonces,
-	// a key allows 2^32 seals, so the limit holds for up to 16 replicas.
-	KeySealCountRotate = 1 << 28
+	// that makes the replica add a new version. With random 96-bit nonces, a
+	// key allows 2^32 seals. 16 replicas at this count make 2^31, and the
+	// other half covers the seals with the old version until the new one
+	// seals.
+	KeySealCountRotate = 1 << 27
 )
 
 // Prefixes of the IDs of this file. An ID is opaque: never parse it.
@@ -112,7 +122,8 @@ var (
 	// after its expiry.
 	ErrCookieExpired = errors.New("session cookie expired")
 	// ErrNonceStale reports a server nonce older than NonceWindow, or one
-	// whose time is after the time of the server.
+	// whose time is more than NonceFutureTolerance after the time of the
+	// server.
 	ErrNonceStale = errors.New("server nonce is outside its window")
 	// ErrEnrollmentRequired reports a request of an enroll-only session to
 	// a route that does not enroll a factor, read the session, refresh or
@@ -132,9 +143,9 @@ var (
 	// ErrProofStale reports a proof whose iat is further than
 	// ProofIATTolerance from the time of the server.
 	ErrProofStale = errors.New("refresh proof time is far from the server time")
-	// ErrProofNonce reports a proof with no nonce claim. The caller opens the
-	// nonce and returns ErrNonceStale for an old one.
-	ErrProofNonce = errors.New("refresh proof has no server nonce")
+	// ErrProofNonce reports a proof with no nonce claim, or a nonce that does
+	// not open.
+	ErrProofNonce = errors.New("refresh proof has no valid server nonce")
 	// ErrProofTarget reports a proof whose htm or htu is not the method or
 	// the public URL of the refresh route.
 	ErrProofTarget = errors.New("refresh proof names another request")
@@ -341,7 +352,7 @@ type Sealer interface {
 	SealNonce(ctx context.Context, at time.Time) (string, error)
 	// OpenNonce returns the time of the server nonce raw. It returns
 	// ErrNonceStale when that time is more than NonceWindow before now, or
-	// after now.
+	// more than NonceFutureTolerance after now.
 	OpenNonce(ctx context.Context, raw string, now time.Time) (time.Time, error)
 }
 
@@ -438,8 +449,10 @@ type ProofTarget struct {
 }
 
 // VerifiedProof is what a good proof gives: the RFC 7638 thumbprint of its
-// key (over crv, kty, x and y only) and its nonce claim, still sealed.
+// key (over crv, kty, x and y only), its nonce claim, still sealed, and the
+// server time in that nonce.
 type VerifiedProof struct {
+	NonceAt    time.Time
 	Nonce      string
 	Thumbprint Thumbprint
 }
@@ -447,12 +460,15 @@ type VerifiedProof struct {
 // ProofVerifier checks a refresh proof. It keeps no list of used proofs: the
 // nonce window limits a replay. It never opens a URL from the proof, and it
 // compares htu with the configured public URL, never with the Host header.
+// An implementation opens the nonce with a Sealer, so that it refuses a
+// proof outside the window by itself.
 type ProofVerifier interface {
-	// Verify checks the proof raw for the request want at now. It returns
-	// ErrProofMalformed, ErrProofSignature, ErrProofStale, ErrProofTarget or
-	// ErrProofNonce. The caller opens the nonce with Sealer.OpenNonce,
-	// compares the thumbprint with the cookie in constant time, and returns
-	// ErrProofKey on a difference.
+	// Verify checks the proof raw for the request want at now, its nonce
+	// included. It returns ErrProofMalformed, ErrProofSignature,
+	// ErrProofStale, ErrProofTarget, ErrProofNonce or ErrNonceStale. The
+	// caller opens the nonce again as a defense-in-depth layer, compares the
+	// thumbprint with the cookie in constant time, and returns ErrProofKey
+	// on a difference.
 	Verify(ctx context.Context, raw string, want ProofTarget, now time.Time) (VerifiedProof, error)
 }
 
