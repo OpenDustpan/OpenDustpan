@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -45,10 +46,10 @@ func (s *spyBlobs) Delete(ctx context.Context, key blob.Key) error {
 	return s.Store.Delete(ctx, key)
 }
 
-func (s *spyBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (s *spyBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	s.count()
 
-	return s.Store.List(ctx, prefix)
+	return s.Store.ListPage(ctx, req)
 }
 
 // total returns the calls that reached the store.
@@ -141,11 +142,11 @@ func TestStateContentLivesUnderTheNamespacePrefix(t *testing.T) {
 		t.Fatalf("attempt segment = %q, want one non-empty segment", attempt)
 	}
 
-	if listed, err := e.blobs.List(t.Context(), "tofu/"); err != nil || len(listed) != 0 {
+	if listed, err := blobtest.ListAll(t.Context(), e.blobs, "tofu/"); err != nil || len(listed) != 0 {
 		t.Fatalf("blobs under the old layout = %d, %v, want none", len(listed), err)
 	}
 
-	listed, err := e.blobs.List(t.Context(), "namespaces/")
+	listed, err := blobtest.ListAll(t.Context(), e.blobs, "namespaces/")
 	if err != nil || len(listed) != 1 || listed[0].Key != e.sv.Content {
 		t.Fatalf("blobs under namespaces/ = %v, %v, want only %q", listed, err, e.sv.Content)
 	}

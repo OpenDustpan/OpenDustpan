@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -39,7 +40,7 @@ func purgedWorkspace(t *testing.T, f fixture) string {
 
 	prefix := f.stateDir(t, f.ws.ID)
 
-	listed, err := f.blobs.List(t.Context(), prefix)
+	listed, err := blobtest.ListAll(t.Context(), f.blobs, prefix)
 	if err != nil || len(listed) == 0 {
 		t.Fatalf("state blobs after the purge of the rows = %d, %v, want the pushed state", len(listed), err)
 	}
@@ -63,7 +64,7 @@ func TestDeletePurgedBlobsRemovesTheState(t *testing.T) {
 		t.Fatalf("delete purged blobs: %v", err)
 	}
 
-	listed, err := f.blobs.List(t.Context(), prefix)
+	listed, err := blobtest.ListAll(t.Context(), f.blobs, prefix)
 	if err != nil || len(listed) != 0 {
 		t.Fatalf("state blobs after the delete = %d, %v, want none", len(listed), err)
 	}
@@ -98,7 +99,7 @@ func TestDeletePurgedBlobsReportsARemainingBlob(t *testing.T) {
 		t.Fatalf("second delete of purged blobs: %v", err)
 	}
 
-	listed, err := f.blobs.List(t.Context(), prefix)
+	listed, err := blobtest.ListAll(t.Context(), f.blobs, prefix)
 	if err != nil || len(listed) != 0 {
 		t.Fatalf("state blobs after the second delete = %d, %v, want none", len(listed), err)
 	}

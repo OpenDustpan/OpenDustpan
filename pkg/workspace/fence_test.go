@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
@@ -427,7 +428,7 @@ func sweepUnnamedBlobs(t *testing.T, f fixture, blobs blob.Store) {
 
 	ctx := t.Context()
 
-	listed, err := blobs.List(ctx, f.stateDir(t, f.ws.ID))
+	listed, err := blobtest.ListAll(ctx, blobs, f.stateDir(t, f.ws.ID))
 	if err != nil {
 		t.Errorf("list blobs: %v", err)
 

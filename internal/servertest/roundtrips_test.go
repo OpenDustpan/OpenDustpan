@@ -30,10 +30,26 @@ import (
 // budget bounds each count from above, so a change that adds a round trip
 // fails. For a request flow the budget also bounds the count from below, so a
 // change that removes round trips must lower the budget, and the budgets only
-// go down. A backup and a restore have only the upper bound, because their
-// count changes from run to run with the timing of the operation. The test log
-// shows the measured count of each flow. Each flow runs on its own server, in a
-// parallel subtest.
+// go down. The test log shows the measured count of each flow. Each flow runs
+// on its own server, in a parallel subtest.
+//
+// The test runs on PostgreSQL only: the tracer is a pgx tracer. It does not see
+// a loop inside the SQLite adapter.
+//
+// A backup and a restore have two checks, and neither one needs an edit when a
+// migration adds a table. The ceiling is a function of the table lists of
+// pkg/backup and of the number of migrations (see costModel). The growth check
+// runs the flow with a small and a large data set and requires that no
+// statement grows with the rows, except the statements that backupGrowthAllowance
+// names. The tracer does not count the loops whose turn count follows the
+// clock (see stackFacts), so a run on a slow machine counts the same as a run
+// on a fast one.
+//
+// The growth rule sees a statement that grows with the stacks, the workspaces,
+// and the rows that the seed makes for each one: updates, checkpoints, events,
+// history, state versions, locks and audit entries. It does not see a statement
+// that grows with a row that the seed does not make, such as outputs or
+// secrets. Add the row to seedUnits when a new table needs a check.
 
 // budgetSlack is the number of round trips that a count of a request flow may
 // be below its budget before the test asks for a lower budget.
@@ -73,6 +89,7 @@ const (
 	serveFrame      = "net/http.(*conn).serve"
 	backupFrame     = "/pkg/backup."
 	storeFrame      = "/pkg/store/postgres."
+	awaitSuffix     = ".Await"
 	maxTraceFrames  = 96
 	maxStatementLen = 110
 )
@@ -220,6 +237,10 @@ func (*roundTripTracer) TraceCopyFromEnd(context.Context, *pgx.Conn, pgx.TraceCo
 type stackFacts struct {
 	serving bool
 	backing bool
+	// polling is true for a round trip of a loop whose turn count follows the
+	// clock: a claim attempt or a heartbeat of the durable runner, and a read
+	// of Service.Await itself.
+	polling bool
 	caller  string
 }
 
@@ -232,21 +253,52 @@ func inspectStack() stackFacts {
 
 	var facts stackFacts
 
+	// The first pkg/backup frame, from the innermost frame, is the function
+	// of pkg/backup that makes the call.
+	innermostBackup := ""
+
 	for {
 		frame, more := frames.Next()
 
 		facts.serving = facts.serving || strings.HasPrefix(frame.Function, serveFrame)
 		facts.backing = facts.backing || strings.Contains(frame.Function, backupFrame)
+		facts.polling = facts.polling || isTimerLoopFrame(frame.Function)
+
+		if innermostBackup == "" && strings.Contains(frame.Function, backupFrame) {
+			innermostBackup = frame.Function
+		}
 
 		if facts.caller == "" && strings.Contains(frame.Function, storeFrame) {
 			facts.caller = fmt.Sprintf("%s:%d", frame.Function[strings.LastIndex(frame.Function, "/")+1:], frame.Line)
 		}
 
 		if !more {
+			// Service.Await reads the row of the backup in a loop. A read that
+			// the loop makes itself is a turn of the loop. The work that the
+			// loop runs through the runner has a deeper pkg/backup frame.
+			facts.polling = facts.polling || strings.HasSuffix(innermostBackup, awaitSuffix)
+
 			return facts
 		}
 	}
 }
+
+// isTimerLoopFrame reports whether a function of a stack is a store function
+// of a loop that follows the clock. A claim attempt of the runner of durable
+// operations runs on a timer, and it also races with Service.Await for the
+// operation. A heartbeat also runs on a timer. The number of attempts and of
+// beats is the length of the run, so each of them, and the transaction around
+// it, do not count.
+//
+// The match is exact: Claim and Beat, and the closures inside them. A method
+// whose name only starts with Claim, such as ClaimTick, is work that counts.
+func isTimerLoopFrame(function string) bool {
+	return strings.Contains(function, storeFrame) && timerLoopMethod.MatchString(function)
+}
+
+// timerLoopMethod finds the end of the name of a function that is Claim or Beat
+// of the durable operations of the store, or a closure in one of them.
+var timerLoopMethod = regexp.MustCompile(`\)\.(?:Claim|Beat)(?:\.func\d+(?:\.\d+)*)?$`)
 
 // accepts reports whether a round trip with the facts counts in the mode.
 func (m traceMode) accepts(facts stackFacts) bool {
@@ -254,7 +306,7 @@ func (m traceMode) accepts(facts stackFacts) bool {
 	case traceRequest:
 		return facts.serving
 	case traceBackup:
-		return facts.backing && !facts.serving
+		return facts.backing && !facts.serving && !facts.polling
 	case traceOff:
 		return false
 	}
@@ -323,22 +375,6 @@ func checkBudget(t *testing.T, name string, trips []roundTrip, budget int) {
 	}
 }
 
-// checkCeiling fails the test when the count is above the budget. A count below
-// the budget passes, and the log shows it. The budget is the highest count of
-// repeated runs under load plus 4.
-func checkCeiling(t *testing.T, name string, trips []roundTrip, budget int) {
-	t.Helper()
-
-	got := len(trips)
-	if got > budget {
-		t.Errorf("%s: %d round trips, budget %d\n%s", name, got, budget, listTrips(trips))
-
-		return
-	}
-
-	t.Logf("%s: %d round trips, budget %d", name, got, budget)
-}
-
 // withoutPrepares returns the round trips that are not a prepare. A prepare
 // happens once for each statement on each connection of the pool. Under load
 // the pool serves a request on a connection that the warm-up did not use, and
@@ -350,7 +386,9 @@ func withoutPrepares(trips []roundTrip) []roundTrip {
 
 // withoutTimerReads returns the round trips that are not one of four
 // statements whose count follows the clock and not the work of the flow. The
-// statement list keeps them.
+// statement list keeps them. The ceiling uses this list. The growth rule uses
+// withoutTimerLoops, which keeps the two cache reads, so a read of either one
+// for each row shows.
 //
 //   - ClaimDurableOperation and EndExpiredCanceledDurableOperations: the runner
 //     of durable operations claims on a timer. A backup or a restore holds a
@@ -361,14 +399,17 @@ func withoutPrepares(trips []roundTrip) []roundTrip {
 //     or step of an operation, after the limit passes reads the state again. The
 //     number of reads is the number of times the limit passed in the run.
 func withoutTimerReads(trips []roundTrip) []roundTrip {
+	return filterTrips(withoutTimerLoops(trips), func(trip roundTrip) bool {
+		return trip.sql != "GetAuditChainState" && trip.sql != "GetInstallationState"
+	})
+}
+
+// withoutTimerLoops returns the round trips that are not a statement of a loop
+// that only polls the clock: the claim and the cleanup of the runner of durable
+// operations. No row count changes the number of these statements.
+func withoutTimerLoops(trips []roundTrip) []roundTrip {
 	return filterTrips(trips, func(trip roundTrip) bool {
-		switch trip.sql {
-		case "ClaimDurableOperation", "EndExpiredCanceledDurableOperations", "GetAuditChainState",
-			"GetInstallationState":
-			return false
-		default:
-			return true
-		}
+		return trip.sql != "ClaimDurableOperation" && trip.sql != "EndExpiredCanceledDurableOperations"
 	})
 }
 
@@ -750,13 +791,28 @@ func TestRoundTripsOfRequests(t *testing.T) {
 }
 
 // seedUnits creates stacks and workspaces until the namespace holds count of
-// each.
+// each. Each stack gets one finished update with one checkpoint, and each
+// workspace gets one locked and unlocked state version, so that the tables of
+// updates, checkpoints, events, history, state versions and audit entries hold
+// rows that grow with the count, and not only the tables of the units.
 func (h *rtHarness) seedUnits(count int) {
 	h.t.Helper()
 
 	for ; h.nextStack < count; h.nextStack++ {
-		h.createStack("s" + strconv.Itoa(h.nextStack))
-		h.createWorkspace("w" + strconv.Itoa(h.nextStack))
+		name := "s" + strconv.Itoa(h.nextStack)
+		h.createStack(name)
+
+		h.stack = name
+		run := h.startUpdate()
+		h.save(run, 1)
+		h.complete(run)
+
+		h.workspace = h.createWorkspace("w" + strconv.Itoa(h.nextStack))
+		h.serial = 0
+
+		h.lock()
+		h.upload()
+		h.unlock()
 	}
 }
 
@@ -798,6 +854,14 @@ type backupRun struct {
 	restore []roundTrip
 }
 
+// measuredRun holds the round trips of a backup and of a restore in two lists.
+// The ceiling counts the first list. The growth rule reads the second, which
+// keeps the cache reads, so that a read for each row shows.
+type measuredRun struct {
+	backup, restore             []roundTrip
+	backupGrowth, restoreGrowth []roundTrip
+}
+
 // runBackupAndRestore runs a backup, then a restore of it.
 func (h *rtHarness) runBackupAndRestore() backupRun {
 	h.t.Helper()
@@ -830,20 +894,42 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 	return out
 }
 
+// backupSizes are the data sets of the backup flow. The large set is ten
+// times the small one, so a statement for each row shows in the growth check.
+func backupSizes() []backupSize {
+	return []backupSize{
+		{name: "3 stacks and 3 workspaces", units: 3},
+		{name: "30 stacks and 30 workspaces", units: 30},
+	}
+}
+
+// backupSize is one data set of the backup flow: units stacks and units
+// workspaces.
+type backupSize struct {
+	name  string
+	units int
+}
+
 // TestRoundTripsOfBackup counts the round trips of a backup and of a restore
-// of 3 stacks and 3 workspaces, and of 30 stacks and 30 workspaces, so that a
-// term that grows with the data shows. Each size has its own server.
+// of two data sets, and checks them against the ceiling of the cost model and
+// against the growth rule. Each size has its own server.
 func TestRoundTripsOfBackup(t *testing.T) {
 	t.Parallel()
 
-	for _, size := range []struct {
-		name                        string
-		units                       int
-		backupBudget, restoreBudget int
-	}{
-		{"3 stacks and 3 workspaces", 3, 318, 1067},
-		{"30 stacks and 30 workspaces", 30, 318, 1181},
-	} {
+	sizes := backupSizes()
+	runs := make([]measuredRun, len(sizes))
+
+	// The parallel subtests end before the cleanup functions of this test
+	// run, so the checks read the runs after every write.
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+
+		checkBackupRuns(t, sizes, runs)
+	})
+
+	for i, size := range sizes {
 		t.Run(size.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -856,14 +942,263 @@ func TestRoundTripsOfBackup(t *testing.T) {
 			h.seedUnits(size.units)
 
 			run := h.runBackupAndRestore()
-
-			checkCeiling(t, "backup of "+size.name, withoutTimerReads(withoutPrepares(run.backup)), size.backupBudget)
-			checkCeiling(
-				t,
-				"restore of "+size.name,
-				withoutTimerReads(withoutPrepares(run.restore)),
-				size.restoreBudget,
-			)
+			runs[i] = measuredRun{
+				backup:        counted(run.backup),
+				restore:       counted(run.restore),
+				backupGrowth:  withoutTimerLoops(withoutPrepares(run.backup)),
+				restoreGrowth: withoutTimerLoops(withoutPrepares(run.restore)),
+			}
 		})
 	}
+}
+
+// checkBackupRuns checks the counted runs of each size against the ceilings of
+// the cost models and against the growth rule.
+func checkBackupRuns(t *testing.T, sizes []backupSize, runs []measuredRun) {
+	t.Helper()
+
+	for i, size := range sizes {
+		schema := currentSchemaCounts(t, size.units)
+
+		checkCeiling(t, "backup of "+size.name, runs[i].backup, backupModel().ceiling(schema))
+		checkCeiling(t, "restore of "+size.name, runs[i].restore, restoreModel().ceiling(schema))
+	}
+
+	small, large := runs[0], runs[len(runs)-1]
+	extraUnits := sizes[len(sizes)-1].units - sizes[0].units
+
+	reportGrowth(t, "backup", small.backupGrowth, large.backupGrowth, backupGrowthAllowance(extraUnits))
+	reportGrowth(t, "restore", small.restoreGrowth, large.restoreGrowth, restoreGrowthAllowance(extraUnits))
+
+	// Mutation check on the measured runs: a statement for each stack and for
+	// each workspace, added to the large run, must fail the growth rule. The
+	// two cache reads are in the check, because the ceiling does not count them.
+	for _, flow := range []struct {
+		name         string
+		small, large []roundTrip
+		allowance    map[string]int
+	}{
+		{"backup", small.backupGrowth, large.backupGrowth, backupGrowthAllowance(extraUnits)},
+		{"restore", small.restoreGrowth, large.restoreGrowth, restoreGrowthAllowance(extraUnits)},
+	} {
+		for _, statement := range []string{"ReadOneUnit", "GetAuditChainState", "GetInstallationState"} {
+			mutated := slices.Concat(flow.large, perRowTrips(statement, 2*sizes[len(sizes)-1].units))
+			if len(growthProblems(flow.small, mutated, flow.allowance)) == 0 {
+				t.Errorf("%s: the growth rule did not catch %s for each row", flow.name, statement)
+			}
+		}
+	}
+}
+
+// counted returns the round trips of a backup or a restore that depend on its
+// work and not on the clock.
+func counted(trips []roundTrip) []roundTrip {
+	return withoutTimerReads(withoutPrepares(trips))
+}
+
+// schemaCounts holds the sizes that the cost of a backup and of a restore
+// follow.
+type schemaCounts struct {
+	// tables is the number of tables that a backup exports.
+	tables int
+	// otherTables is the number of tables that a backup leaves out: the control
+	// tables and the emptied tables.
+	otherTables int
+	// migrations is the number of migrations that the binary embeds.
+	migrations int
+	// units is the number of stacks, which is also the number of workspaces,
+	// in the data set. Each workspace holds one state version.
+	units int
+}
+
+// currentSchemaCounts reads the sizes from the lists that a new table must
+// join: the table lists of pkg/backup and the embedded migrations.
+func currentSchemaCounts(t *testing.T, units int) schemaCounts {
+	t.Helper()
+
+	names, _, err := postgres.EmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("list embedded migrations: %v", err)
+	}
+
+	return schemaCounts{
+		tables:      len(backup.Tables),
+		otherTables: len(backup.ControlTables) + len(backup.EmptiedTables),
+		migrations:  len(names),
+		units:       units,
+	}
+}
+
+// costModel is the cost of a flow in round trips, as a function of the schema.
+// The coefficients are the measured cost of one more table, one more
+// control table, one more migration and one more unit. The restore checks the columns of
+// each table and counts its rows, and it applies each migration to a staging
+// schema. The fixed part holds the rest of the flow. The margin is above the
+// spread that a run under load shows after the tracer drops the loops that
+// follow the clock.
+//
+// A table with the usual cost needs no edit here. A table that costs more
+// than its coefficient uses the margin, and a table that costs much more
+// fails the ceiling: change its coefficient and say why.
+type costModel struct {
+	fixed        int
+	perTable     int
+	perOther     int
+	perMigration int
+	perUnit      int
+	margin       int
+}
+
+// ceiling returns the highest count that the flow may show.
+func (m costModel) ceiling(c schemaCounts) int {
+	return m.fixed + m.perTable*c.tables + m.perOther*c.otherTables + m.perMigration*c.migrations +
+		m.perUnit*c.units + m.margin
+}
+
+// backupModel is the cost model of a backup. It was fitted to three commits
+// that differ in tables, control tables and migrations, and a fourth commit
+// checks it (see TestCostModelFitsMeasuredHistory). The margin is above the
+// largest spread that 50 runs under load showed, which is 1 round trip.
+func backupModel() costModel {
+	return costModel{fixed: 46, perTable: 3, perOther: 1, perMigration: 0, perUnit: stateVersionReads, margin: 10}
+}
+
+// restoreModel is the cost model of a restore, fitted the same way. The cost of
+// a migration (2) and of a unit (the maintenance scans and the state version
+// reads) come from the statement counts of a run, and the commits fit the
+// rest. The margin holds the restore step that the held-out commit adds (5
+// round trips), the handover of the operation (up to 12), and a retried step
+// that a run under load showed once in 29 runs (24 round trips).
+func restoreModel() costModel {
+	return costModel{
+		fixed:        319,
+		perTable:     7,
+		perOther:     2,
+		perMigration: 2,
+		perUnit:      maintenanceScans + stateVersionReads,
+		margin:       40,
+	}
+}
+
+// checkCeiling fails the test when the count is above the ceiling of the model.
+// A count below the ceiling passes, and the log shows it.
+func checkCeiling(t *testing.T, name string, trips []roundTrip, ceiling int) {
+	t.Helper()
+
+	got := len(trips)
+	if got > ceiling {
+		t.Errorf("%s: %d round trips, ceiling %d\n%s", name, got, ceiling, listTrips(trips))
+
+		return
+	}
+
+	t.Logf("%s: %d round trips, ceiling %d", name, got, ceiling)
+}
+
+// growthSlack is the number of round trips by which one statement may differ
+// between the small and the large run. The two runs hand an operation from the
+// worker to the waiter at different times, and a handover repeats a few
+// statements of the operation. A statement for each row adds at least the
+// difference of the data sets, which is far above this number.
+const growthSlack = 4
+
+// maintenanceScans is the number of times that a restore reads the active work
+// of the installation: when it enters maintenance mode, and when it leaves.
+// Each scan reads the active update of each stack with one statement, so the
+// restore makes this many reads for each stack.
+const maintenanceScans = 2
+
+// stateVersionReads is the number of statements that a backup, and the restore
+// that holds one, makes for each state version: the read of the state version,
+// of its workspace and of the secret key of its scope.
+const stateVersionReads = 3
+
+// backupGrowthAllowance names the statements of a backup that grow with the rows, and
+// by how much. The two allowances are known reads for each row:
+//
+//   - A backup reads each state version, its workspace and its secret key with
+//     one statement each (stateVersionReads in all). A restore holds a backup, so
+//     it makes the same reads.
+//   - Each maintenance scan of a restore reads the active update of each stack
+//     with one statement.
+//
+// A batch read removes the allowance and the perUnit term of the cost model.
+// extraUnits is the difference of units between the two runs.
+func backupGrowthAllowance(extraUnits int) map[string]int {
+	return map[string]int{
+		"query GetStateVersion":   extraUnits,
+		"query ReadWorkspaceByID": extraUnits,
+		"query GetSecretKey":      extraUnits,
+	}
+}
+
+// restoreGrowthAllowance is the allowance of a restore: the reads of the backup
+// that it holds, and the reads of the maintenance scans.
+func restoreGrowthAllowance(extraUnits int) map[string]int {
+	out := backupGrowthAllowance(extraUnits)
+	out["query ActiveUpdate"] = maintenanceScans * extraUnits
+
+	return out
+}
+
+// quotedName finds a quoted identifier, which may be cut at the end of a
+// shortened statement.
+var quotedName = regexp.MustCompile(`"[^"]*("|$)`)
+
+// growthLabel names a statement for the growth rule. The restore makes
+// schemas with random names, so the label hides each quoted identifier.
+func growthLabel(trip roundTrip) string {
+	return trip.kind + " " + quotedName.ReplaceAllString(trip.sql, `"?"`)
+}
+
+// growthProblems compares the small run and the large run, statement by
+// statement. It returns one line for each statement that grew by more than
+// growthSlack plus its allowance.
+func growthProblems(small, large []roundTrip, allowance map[string]int) []string {
+	counts := map[string][2]int{}
+
+	for _, trip := range small {
+		c := counts[growthLabel(trip)]
+		c[0]++
+		counts[growthLabel(trip)] = c
+	}
+
+	for _, trip := range large {
+		c := counts[growthLabel(trip)]
+		c[1]++
+		counts[growthLabel(trip)] = c
+	}
+
+	var out []string
+
+	for label, c := range counts {
+		if grown := c[1] - c[0]; grown > growthSlack+allowance[label] {
+			out = append(out, fmt.Sprintf("%s: %d in the small run, %d in the large run, allowed growth %d",
+				label, c[0], c[1], growthSlack+allowance[label]))
+		}
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// reportGrowth fails the test for each statement that grows with the rows.
+func reportGrowth(t *testing.T, name string, small, large []roundTrip, allowance map[string]int) {
+	t.Helper()
+
+	for _, problem := range growthProblems(small, large, allowance) {
+		t.Errorf("%s grows with the rows: %s", name, problem)
+	}
+}
+
+// perRowTrips returns n round trips of one statement. A test uses it to model a
+// loop that queries once for each row.
+func perRowTrips(statement string, n int) []roundTrip {
+	out := make([]roundTrip, n)
+	for i := range out {
+		out[i] = roundTrip{kind: "query", sql: statement, frame: "test"}
+	}
+
+	return out
 }

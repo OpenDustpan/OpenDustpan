@@ -33,6 +33,10 @@ type memBlobs struct {
 	deleteErr error
 	// putFail, when it is not nil, can fail a Put before it stores.
 	putFail func(key blob.Key) error
+	// pageFault, when it is not nil, builds the page of ListPage from the
+	// ordered objects of the prefix, so that a test makes a store break the
+	// rules of the port.
+	pageFault func(req blob.PageRequest, all []blob.Object) blob.Page
 }
 
 func newMemBlobs(enforce bool) *memBlobs {
@@ -43,7 +47,7 @@ func newMemBlobs(enforce bool) *memBlobs {
 		enforce:   enforce,
 		getErr:    nil,
 		deleteErr: nil,
-		putFail:   nil,
+		putFail:   nil, pageFault: nil,
 	}
 }
 
@@ -106,23 +110,33 @@ func (m *memBlobs) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (m *memBlobs) List(_ context.Context, prefix string) ([]blob.Object, error) {
+func (m *memBlobs) ListPage(_ context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, fmt.Errorf("validate the request: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.note("list", blob.Key(prefix))
+	m.note("list", blob.Key(req.Prefix))
+
+	dir := req.Dir()
 
 	var out []blob.Object
 
 	for key := range m.objects {
-		if strings.HasPrefix(key.String(), prefix) {
+		if strings.HasPrefix(key.String(), dir) {
 			out = append(out, blob.Object{ModifiedAt: time.Time{}, Key: key})
 		}
 	}
 
 	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 
-	return out, nil
+	if m.pageFault != nil {
+		return m.pageFault(req, out), nil
+	}
+
+	return blob.PageOf(out, req), nil
 }
 
 func (m *memBlobs) Ping(context.Context) error { return nil }
