@@ -597,17 +597,22 @@ func (s *Service) PurgeExpired(
 // when a blob may remain, so the caller keeps the blob purge record for the
 // sweep. No log line and no error names a blob key.
 func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID) error {
-	listed, err := s.blobs.list(ctx, ns, id)
-	if err != nil {
-		return fmt.Errorf("list state blobs of workspace %s: %w", id, err)
-	}
-
 	failed := 0
 
-	for _, obj := range listed {
-		if deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key); deleteErr != nil {
-			failed++
+	// The walk deletes each blob as its page arrives, so the purge never holds
+	// the keys of the whole workspace. A key sorts after the cursor of the
+	// walk, so a delete does not move the walk.
+	err := s.blobs.walk(ctx, ns, id, func(page []blob.Object) error {
+		for _, obj := range page {
+			if deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key); deleteErr != nil {
+				failed++
+			}
 		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("list state blobs of workspace %s: %w", id, err)
 	}
 
 	if failed > 0 {
@@ -2309,20 +2314,33 @@ func (s *Service) deleteExpiredBlobs(ctx context.Context, w Workspace, expired [
 // set is read by the workspace ID that the listing used. A read failure
 // deletes nothing, also when the workspace row is gone.
 func (s *Service) sweepUnreferenced(ctx context.Context, w Workspace) error {
-	listed, err := s.blobs.list(ctx, w.NamespaceID, w.ID)
+	var cleanupErr error
+
+	// The sweep goes page by page: it lists a page, keeps the candidates of the
+	// page, reads the referenced keys after that listing, and deletes. So it
+	// never holds the blobs of the whole workspace, and each read of the
+	// referenced keys comes after the listing that it filters.
+	err := s.blobs.walk(ctx, w.NamespaceID, w.ID, func(page []blob.Object) error {
+		cleanupErr = errors.Join(cleanupErr, s.sweepPage(ctx, w, page))
+
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("list state content of %s: %w", w.Ref, err)
 	}
 
-	if len(listed) == 0 {
-		return nil
-	}
+	return cleanupErr
+}
 
+// sweepPage deletes the blobs of one page of the listing of w that no version
+// names and that are older than the grace period. It reads the referenced keys
+// only when old candidates remain. A read failure deletes nothing.
+func (s *Service) sweepPage(ctx context.Context, w Workspace, page []blob.Object) error {
 	now := s.clock()
 
-	candidates := make([]blob.Object, 0, len(listed))
+	candidates := make([]blob.Object, 0, len(page))
 
-	for _, obj := range listed {
+	for _, obj := range page {
 		if now.Sub(obj.ModifiedAt) >= SweepGracePeriod {
 			candidates = append(candidates, obj)
 		}

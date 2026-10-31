@@ -796,10 +796,23 @@ func blobsUnder(t *testing.T, h RecorderHarness, ns namespace.Name) []blob.Objec
 		t.Fatalf("GetNamespace(%s) = %v", ns, err)
 	}
 
-	objects, err := h.Blobs.List(t.Context(), "namespaces/"+n.ID.String()+"/job/")
+	objects, err := listBlobs(t.Context(), h.Blobs, "namespaces/"+n.ID.String()+"/job/")
 	if err != nil {
 		t.Fatalf("list the plan and log blobs: %v", err)
 	}
 
 	return objects
+}
+
+// listBlobs walks every page under prefix and returns the objects.
+func listBlobs(ctx context.Context, store blob.Store, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, store, prefix, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+
+	return out, err
 }
