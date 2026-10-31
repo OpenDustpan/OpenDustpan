@@ -539,6 +539,7 @@ func serverOptions(
 		dustpan.WithJobStore(store.Jobs()),
 		dustpan.WithJobClaimer(job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store)),
 		dustpan.WithTriggerStore(store.Triggers()),
+		dustpan.WithUnitSettingsStore(store.UnitSettings()),
 		dustpan.WithDriftStore(store.DriftResults()),
 		dustpan.WithInstanceID(InstanceID(i)),
 		dustpan.WithInstallationKindStore(store),

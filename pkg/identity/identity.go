@@ -581,6 +581,12 @@ const (
 	// checking a connection of a namespace to a Git host, and making one the
 	// default. Its object is the namespace.
 	ActionNamespaceManageGitHostConnections Action = "namespace:manage-git-host-connections"
+	// ActionNamespaceUseGitHostConnection allows naming a connection of a
+	// namespace to a Git host in a code location, in addition to the action on
+	// the unit. It lets the holder point a unit at the credentials of the
+	// connection, and it answers no setting or credential of the connection.
+	// Its object is the namespace that holds the connection.
+	ActionNamespaceUseGitHostConnection Action = "namespace:use-git-host-connection"
 	// ActionServerReadGitHost allows reading the registration of the GitHub
 	// App of the installation, and the map from its installations to
 	// namespaces. No read answers a key or an event secret. Its object is the

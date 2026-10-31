@@ -1099,6 +1099,13 @@ type TrustRule struct {
 	CreatedAtMs    int64
 }
 
+type UnitDefault struct {
+	NamespaceID string
+	Pool        string
+	Version     int64
+	UpdatedAtMs int64
+}
+
 type UnitFinalVersion struct {
 	UnitID      string
 	NamespaceID string
@@ -1106,6 +1113,14 @@ type UnitFinalVersion struct {
 	CommitID    string
 	JobID       string
 	AtMs        int64
+}
+
+type UnitSetting struct {
+	UnitID      string
+	NamespaceID string
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
 }
 
 type UnitStateVersion struct {
