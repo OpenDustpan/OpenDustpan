@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-13 · decisions 1 to 3 and 5 to 11 superseded by ADR 72. The reconciliation between regions amended by ADR 248 (no reconciliation, a divergent tail)
 
+Changed by:
+
+- ADR 72 supersedes decisions 1, 2, 3, 5, 6, 7, 8, 9, 10 and 11: the instance
+  registry and calls to each instance.
+- ADR 72 changes decision 4: a binary supports a schema by its minimum
+  version.
+- ADR 248 changes: no reconciliation between installations, a divergent tail.
+
 ## Context
 
 ADR 38 decision 4 keeps the installation state in the database. Each

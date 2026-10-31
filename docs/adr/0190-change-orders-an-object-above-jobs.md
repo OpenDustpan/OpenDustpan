@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · ADRs 191 to 198 give the parts · supersedes parts of ADRs 100, 102, 103, 128 and 147. Decisions 6 and 7 superseded in part by ADR 225
 
+Changed by:
+
+- ADR 222 changes decisions 6 and 7: approval defaults replace MinApprovals.
+- ADR 225 changes decisions 6 and 7: approval defaults replace MinApprovals.
+
 ## Context
 
 The job model (ADRs 100 to 103) puts approvals on the gates of one job, and

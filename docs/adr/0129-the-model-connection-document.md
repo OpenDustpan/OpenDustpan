@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18. Supersedes parts of ADRs 120 and 121 (see "What this ADR replaces"). Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 ADR 120 decision 3 lets an administrator connect one model for the

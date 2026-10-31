@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-09. Amends the repository layout in ADR 5. The version handshake decided by ADR 211
 
+Changed by:
+
+- ADR 211 extends: the version handshake of the console.
+
 ## Context
 
 ADR 5 decoupled the console's build and hosting from the server but kept it in

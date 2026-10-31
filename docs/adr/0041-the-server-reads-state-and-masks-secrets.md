@@ -2,6 +2,20 @@
 
 Status: accepted · 2026-10-11 · decision 10 superseded in part by ADR 151. Decision 13 superseded in part by ADR 103. Decision 12 superseded in part by ADR 238. Decisions 9 and 13 superseded in part, and decision 5 extended, by ADR 240
 
+Changed by:
+
+- ADR 60 changes decisions 5 and 13: the audit switch, new kinds and an opt-in
+  hash chain.
+- ADR 103 changes decision 13: the audit entry gets the field Agent.
+- ADR 146 extends decision 13: the audit channel gets the value chat.
+- ADR 151 changes decision 10: the item key seals OpenTofu state in place of
+  the workspace key.
+- ADR 238 changes decision 12: no default key file, no prompt, no generate
+  flag.
+- ADR 240 changes decisions 9 and 13: a state download by a person writes
+  reveal.
+- ADR 240 extends decision 5: fail closed for the reveal entry of a download.
+
 ## Context
 
 [RFC 39](../rfc/0039-reading-state.md) asks if the server may read the
