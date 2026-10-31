@@ -407,7 +407,15 @@ through each API and check that the log and the metrics do not hold them.
 
 ## Outbound connections
 
-The server sends no telemetry. It connects only to the PostgreSQL database
+The server never phones home. No data about your installation, its users or
+its use goes to the project, to a vendor or to any other party that you did
+not name. This is also true with no configuration, and no setting, also no opt-in
+setting, turns it on. In OpenDustpan Cloud, the project is the operator:
+its metrics, logs and traces of the installations that it runs stay in its
+own systems.
+Metrics and logs are for you, and they stay. You scrape the Prometheus
+metrics, and the server sends logs only to the log outputs that you
+configure. It connects only to the PostgreSQL database
 and the S3-compatible storage that you configure. The commands
 `namespace create`, `backup`, `backup check`, `upgrade check` and `restore`
 call only the server in `--server`. `health` calls only the listen address of the local
