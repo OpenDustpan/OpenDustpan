@@ -10698,6 +10698,43 @@ func (q *Queries) InsertWorkspaceResourceChange(ctx context.Context, arg InsertW
 	return err
 }
 
+const journalBatchRefs = `-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival
+`
+
+type JournalBatchRefsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+type JournalBatchRefsRow struct {
+	BlobKey string
+	Sha256  []byte
+	Size    int64
+}
+
+func (q *Queries) JournalBatchRefs(ctx context.Context, arg JournalBatchRefsParams) ([]JournalBatchRefsRow, error) {
+	rows, err := q.db.Query(ctx, journalBatchRefs, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JournalBatchRefsRow
+	for rows.Next() {
+		var i JournalBatchRefsRow
+		if err := rows.Scan(&i.BlobKey, &i.Sha256, &i.Size); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const journalBlobKeys = `-- name: JournalBlobKeys :many
 SELECT blob_key FROM update_journal
 WHERE stack_id = $1 AND update_id = $2

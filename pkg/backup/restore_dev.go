@@ -304,7 +304,15 @@ func (s *RestoreService) startDevCheck(ctx context.Context, id ID) ([]RestoreWar
 
 	run, err := s.devKinds(
 		ctx,
-		pinnedManifest{sqlSize: 0, sqlSHA: "", schema: 0, dialect: "", kind: manifest.InstallationKind, wrappers: nil},
+		pinnedManifest{
+			sqlSize:  0,
+			sqlSHA:   "",
+			schema:   0,
+			dialect:  "",
+			kind:     manifest.InstallationKind,
+			wrappers: nil,
+			digest:   "",
+		},
 	)
 	if err != nil {
 		return nil, err
