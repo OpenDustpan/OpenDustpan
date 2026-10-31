@@ -15,7 +15,7 @@ import (
 
 // pulumiDir is the directory of the stack blobs inside the blob scope of a
 // namespace: checkpoints and journal batches. The full keys are
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence> and
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID> and
 // namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
 // sequence ID>.
 const pulumiDir = "pulumi/"
@@ -343,8 +343,8 @@ func CheckCheckpointBlobKey(ns namespace.ID, stackID ID, update UpdateID, key bl
 		return fmt.Errorf("%w: key is not a save of the update in the namespace", ErrCheckpointKey)
 	}
 
-	if _, err := strconv.ParseUint(num, 10, 63); err != nil {
-		return fmt.Errorf("%w: key does not end in a number", ErrCheckpointKey)
+	if _, ok := parseCheckpointName(num); !ok {
+		return fmt.Errorf("%w: key does not end in a number and an attempt ID", ErrCheckpointKey)
 	}
 
 	if _, err := blob.ParseKey(key.String()); err != nil {
@@ -352,6 +352,46 @@ func CheckCheckpointBlobKey(ns namespace.ID, stackID ID, update UpdateID, key bl
 	}
 
 	return nil
+}
+
+// Attempt ID bounds of a checkpoint key name.
+const (
+	minAttemptIDLength = 8
+	maxAttemptIDLength = 64
+)
+
+// checkpointName is the last part of a checkpoint blob key:
+// "<n>-<attempt ID>", a sequence number and the ID of the write attempt.
+type checkpointName struct {
+	number  uint64
+	attempt string
+}
+
+// parseCheckpointName splits the last part of a checkpoint blob key. It
+// accepts only decimal digits for the number and lowercase letters and
+// digits for the attempt ID, and it reports false for any other text,
+// also for a name without an attempt ID.
+func parseCheckpointName(name string) (checkpointName, bool) {
+	none := checkpointName{number: 0, attempt: ""}
+
+	numPart, attempt, hasAttempt := strings.Cut(name, "-")
+
+	number, err := strconv.ParseUint(numPart, 10, 63)
+	if err != nil || strconv.FormatUint(number, 10) != numPart || !hasAttempt {
+		return none, false
+	}
+
+	if len(attempt) < minAttemptIDLength || len(attempt) > maxAttemptIDLength {
+		return none, false
+	}
+
+	for _, r := range attempt {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return none, false
+		}
+	}
+
+	return checkpointName{number: number, attempt: attempt}, true
 }
 
 // CheckJournalBlobKey returns nil when key is the blob key of a journal batch

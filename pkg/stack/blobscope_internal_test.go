@@ -490,7 +490,10 @@ const scopeOther2 = namespace.ID(scopeOther)
 func TestCheckCheckpointBlobKey(t *testing.T) {
 	t.Parallel()
 
-	const good = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3"
+	const (
+		stem = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/"
+		good = stem + "3-k3j9x0a1b2c3d4e5f6g7"
+	)
 
 	tests := []struct {
 		name string
@@ -499,19 +502,31 @@ func TestCheckCheckpointBlobKey(t *testing.T) {
 		ok   bool
 	}{
 		{"a save of the update", scopeNS, good, true},
-		{"the first save", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/0", true},
+		{"the first save", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/0-abcdefgh", true},
+		{"a save without an attempt ID", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3", false},
+		{"an attempt ID that is too short", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3-abc", false},
+		{"an attempt ID that is too long", scopeNS, stem + "3-" + strings.Repeat("a", 65), false},
+		{"an attempt ID with a capital letter", scopeNS, stem + "3-ABCDEFGHIJ", false},
+		{"an attempt ID with a dot", scopeNS, stem + "3-abcdefgh.ij", false},
+		{"an empty attempt ID", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3-", false},
+		{"a second dash", scopeNS, stem + "3-abcdefgh-ijklmnop", false},
+		{"a leading zero", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/03-abcdefgh", false},
+		{"a sign", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/+3-abcdefgh", false},
 		{"another namespace", scopeOther2, good, false},
-		{"same namespace, another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/3", false},
-		{"same namespace, stack ID as a string prefix", scopeNS, "namespaces/ns-scope-a/pulumi/stk-10/upd-1/3", false},
-		{"same namespace, another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/3", false},
-		{"old layout", scopeNS, "pulumi/stk-1/upd-1/3", false},
+		{"same namespace, another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/3-abcdefgh", false},
+		{
+			"same namespace, stack ID as a string prefix",
+			scopeNS, "namespaces/ns-scope-a/pulumi/stk-10/upd-1/3-abcdefgh", false,
+		},
+		{"same namespace, another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/3-abcdefgh", false},
+		{"old layout", scopeNS, "pulumi/stk-1/upd-1/3-abcdefgh", false},
 		{"a journal key", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/3", false},
 		{"no number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/", false},
 		{"not a number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/x", false},
 		{"negative number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/-1", false},
-		{"nested", scopeNS, good + "/4", false},
-		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/3", false},
-		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/../3", false},
+		{"nested", scopeNS, good + "/4-abcdefgh", false},
+		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/3-abcdefgh", false},
+		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/../3-abcdefgh", false},
 		{"empty key", scopeNS, "", false},
 		{"invalid namespace ID", "acme", good, false},
 		{"empty namespace ID", "", good, false},

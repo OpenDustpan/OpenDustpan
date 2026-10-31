@@ -729,25 +729,25 @@ func (s *fakeBackupStore) ListUpdates(
 // PutCheckpoint implements stack.CheckpointStore.
 func (s *fakeBackupStore) PutCheckpoint(
 	_ context.Context, cp stack.Checkpoint, fence namespace.Fence,
-) error {
+) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return errFakeClosed
+		return false, errFakeClosed
 	}
 
 	if err := s.checkFence(fence); err != nil {
-		return err
+		return false, err
 	}
 
 	if err := s.checkRunningUpdate(cp.Ref, cp.Update, cp.Lease); err != nil {
-		return err
+		return false, err
 	}
 
 	stackID, err := s.stackIDOf(cp.Ref)
 	if err != nil {
-		return stack.ErrNoState
+		return false, stack.ErrNoState
 	}
 
 	byStack, ok := s.data.checkpoints[stackID]
@@ -757,9 +757,9 @@ func (s *fakeBackupStore) PutCheckpoint(
 	}
 
 	if retried, err := checkCheckpointSequence(byStack, cp); err != nil {
-		return err
+		return false, err
 	} else if retried {
-		return nil
+		return true, nil
 	}
 
 	if cp.BlobKey != "" {
@@ -770,7 +770,7 @@ func (s *fakeBackupStore) PutCheckpoint(
 
 	byStack[cp.Update.String()] = cp
 
-	return nil
+	return false, nil
 }
 
 // checkCheckpointSequence applies the sequence rules of PutCheckpoint to cp

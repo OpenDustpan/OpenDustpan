@@ -265,8 +265,8 @@ func (*fakeUpdates) ListUpdates(context.Context, stack.Ref, stack.Page) ([]stack
 // fakeCheckpoints answers no checkpoint. The cancel path writes none.
 type fakeCheckpoints struct{}
 
-func (fakeCheckpoints) PutCheckpoint(context.Context, stack.Checkpoint, namespace.Fence) error {
-	return nil
+func (fakeCheckpoints) PutCheckpoint(context.Context, stack.Checkpoint, namespace.Fence) (bool, error) {
+	return false, nil
 }
 
 func (fakeCheckpoints) LatestCheckpoint(context.Context, stack.Ref) (stack.Checkpoint, error) {
