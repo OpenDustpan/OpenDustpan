@@ -47,6 +47,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 	scenarios := approvalScenarios()
 	maps.Copy(scenarios, preferenceScenarios())
+	maps.Copy(scenarios, gateObjectScenarios())
 
 	_, h := newGateHandler(t, adminGates())
 
@@ -141,4 +142,60 @@ func preferenceScenarios() map[string]headertest.Scenario {
 		"getPreferences":    scenario(http.MethodGet, ""),
 		"updatePreferences": scenario(http.MethodPatch, `{"theme":"terminal"}`),
 	}
+}
+
+// gateObjectScenarios returns the scenarios of the gate and access limit
+// operations of the three scope levels.
+func gateObjectScenarios() map[string]headertest.Scenario {
+	const (
+		gateDoc = `{"decisionPoint":"state.write","condition":"context.operation.kind == \"write\"",` +
+			`"outcome":"deny","message":"Writes are frozen","mode":"enforce"}`
+		limitDoc = `{"policy":"forbid (principal, action == OpenDustpan::Action::\"unit:write\", resource);"}`
+	)
+
+	scopes := []struct{ infix, base string }{
+		{"", gateBase + "acme"},
+		{"Collection", gateBase + "acme/collections/payments"},
+		{"Unit", gateBase + "acme/units/by-name/opentofu/net"},
+	}
+
+	out := map[string]headertest.Scenario{}
+
+	for _, sc := range scopes {
+		for _, res := range []struct{ plural, singular, segment, doc string }{
+			{"Gates", "Gate", "gates", gateDoc},
+			{"AccessLimits", "AccessLimit", "access-limits", limitDoc},
+		} {
+			list := sc.base + "/" + res.segment
+			item := list + "/seed"
+
+			scenario := func(method, target, body string) headertest.Scenario {
+				return func(t *testing.T) headertest.Probe {
+					t.Helper()
+
+					_, h := newGateHandler(t, adminGates())
+
+					put := serveGate(t, h, gateCall{http.MethodPut, item, res.doc, ""})
+					wantStatus(t, put, http.StatusOK)
+
+					return headertest.Probe{
+						ETag: put.Header().Get("ETag"),
+						Send: func(headers map[string]string) headertest.Answer {
+							rec := serveGate(t, h, gateCall{method, target, body, headers["If-Match"]})
+
+							return headertest.Answer{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
+						},
+						Replayed: nil,
+					}
+				}
+			}
+
+			out["list"+sc.infix+res.plural] = scenario(http.MethodGet, list, "")
+			out["get"+sc.infix+res.singular] = scenario(http.MethodGet, item, "")
+			out["set"+sc.infix+res.singular] = scenario(http.MethodPut, item, res.doc)
+			out["delete"+sc.infix+res.singular] = scenario(http.MethodDelete, item, "")
+		}
+	}
+
+	return out
 }

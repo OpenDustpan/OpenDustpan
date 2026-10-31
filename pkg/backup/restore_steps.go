@@ -357,7 +357,7 @@ func (s *RestoreService) deleteOwnTempKeys(ctx context.Context, id RestoreID, to
 
 	prefix := tempKeyPrefix + "/" + id.String() + "/" + strconv.FormatInt(token, 10) + "/"
 
-	objects, err := s.blobs.List(ctx, prefix)
+	objects, err := listObjects(ctx, s.blobs, prefix)
 	if err != nil {
 		return fmt.Errorf("list the temporary blobs of restore %s: %w", id, err)
 	}
@@ -420,6 +420,10 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 		return nil, keyErr
 	}
 
+	if dropErr := s.dropIssuerKeys(ctx, sc, in, area); dropErr != nil {
+		return nil, dropErr
+	}
+
 	if stage.Strip {
 		dev.report = report
 	}
@@ -446,6 +450,31 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 	}
 
 	return out, nil
+}
+
+// dropIssuerKeys removes the issuer keys of the staged namespaces that belong
+// to another installation, and records each drop. The decision is for each
+// namespace, by the primary installation that the staged data names. A check
+// only run records nothing.
+func (s *RestoreService) dropIssuerKeys(
+	ctx context.Context, sc durable.StepContext, in restoreInput, area StagingArea,
+) error {
+	dropped, err := s.live.DropStagedIssuerKeys(ctx, area, s.installation)
+	if err != nil {
+		return fmt.Errorf("drop the issuer keys of other installations for restore %s: %w", in.ID, err)
+	}
+
+	if in.CheckOnly {
+		return nil
+	}
+
+	for _, d := range dropped {
+		if recErr := s.recordKeysDropped(ctx, sc, in, d); recErr != nil {
+			return recErr
+		}
+	}
+
+	return nil
 }
 
 // stageInput verifies the SQL part of the backup, and returns the staging
@@ -495,6 +524,27 @@ func (s *RestoreService) stageInput(
 	}
 
 	return area, stage, nil
+}
+
+// recordKeysDropped records, as an audit event of the restore and in the log,
+// that the restore did not restore the signing keys of the issuer of one
+// namespace.
+func (s *RestoreService) recordKeysDropped(
+	ctx context.Context, sc durable.StepContext, in restoreInput, d IssuerKeysDropped,
+) error {
+	object := fmt.Sprintf("restore %s did not restore the signing keys of the OIDC issuer of namespace %s "+
+		"(%d keys): backup %s holds the namespace of another installation, so the namespace gets new keys",
+		in.ID, d.Namespace, d.Keys, in.BackupID)
+
+	if err := s.live.RecordRestoreEvent(ctx, sc.Fence, in.ID, object); err != nil {
+		return fmt.Errorf("record the drop of the issuer keys for restore %s: %w", in.ID, err)
+	}
+
+	s.logger.WarnContext(ctx, "the restore does not restore the signing keys of the OIDC issuer of a namespace",
+		slog.String("restore_id", in.ID.String()), slog.String("backup_id", in.BackupID.String()),
+		slog.String("namespace", d.Namespace), slog.Int64("keys", d.Keys))
+
+	return nil
 }
 
 // stepCheck checks the key and the blobs of the backup against the pinned
@@ -1284,7 +1334,7 @@ func (s *RestoreService) checkNamedBlobs(
 // restore whose row ended. The keys of a restore with no row stay: another
 // installation can share the store.
 func (s *RestoreService) deleteTempKeys(ctx context.Context, id RestoreID) error {
-	objects, err := s.blobs.List(ctx, tempKeyPrefix)
+	objects, err := listObjects(ctx, s.blobs, tempKeyPrefix)
 	if err != nil {
 		return fmt.Errorf("list the temporary blobs of restore %s: %w", id, err)
 	}

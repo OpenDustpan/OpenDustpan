@@ -596,7 +596,7 @@ func (s *Service) stepWrite(ctx context.Context, sc durable.StepContext) ([]byte
 // complete. The copies under blobs/ stay: the copy keeps the first copy of a
 // blob and checks it against the live bytes.
 func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key) error {
-	left, err := s.target.List(ctx, "backups/"+id.String())
+	left, err := listObjects(ctx, s.target, "backups/"+id.String())
 	if err != nil {
 		return fmt.Errorf("list objects of backup %s: %w", id, err)
 	}
@@ -692,7 +692,7 @@ func (s *Service) checkPresent(ctx context.Context, id ID) error {
 		return err
 	}
 
-	listed, err := s.target.List(ctx, "backups/"+id.String())
+	listed, err := listObjects(ctx, s.target, "backups/"+id.String())
 	if err != nil {
 		return fmt.Errorf("list objects of backup %s: %w", id, err)
 	}

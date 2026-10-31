@@ -12,7 +12,9 @@ import (
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
@@ -48,10 +50,10 @@ func (c *countingBlob) Delete(ctx context.Context, key blob.Key) error {
 	return c.memBlob.Delete(ctx, key)
 }
 
-func (c *countingBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (c *countingBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	c.bump()
 
-	return c.memBlob.List(ctx, prefix)
+	return c.memBlob.ListPage(ctx, req)
 }
 
 // bump counts one call.
@@ -147,7 +149,9 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 		BlobMD5:       [16]byte{},
 	}
 
-	if err := f.store.PutCheckpoint(t.Context(), row, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
+	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	if _, err := f.store.PutCheckpoint(t.Context(), row, fence); err != nil {
 		t.Fatalf("store the checkpoint row: %v", err)
 	}
 }
@@ -156,7 +160,7 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 func blobKeysOf(t *testing.T, store blob.Store) []string {
 	t.Helper()
 
-	all, err := store.List(t.Context(), "")
+	all, err := blobtest.ListAll(t.Context(), store, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -172,8 +176,8 @@ func blobKeysOf(t *testing.T, store blob.Store) []string {
 
 // TestStackBlobsLiveUnderTheNamespacePrefix saves each kind of checkpoint and
 // checks the layout: every blob key is
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>, and the
-// blob store holds no key outside the prefix of the namespace.
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>,
+// and the blob store holds no key outside the prefix of the namespace.
 func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 	t.Parallel()
 
@@ -185,7 +189,7 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 		{"one sequenced save", "1", []int64{1}},
 		{"a sequenced save replaces the one before", "2", []int64{1, 2}},
 		{"an unsequenced save", "0", []int64{0}},
-		{"unsequenced saves mint the next key", "1", []int64{0, 0}},
+		{"unsequenced saves keep one blob", "0", []int64{0, 0}},
 	}
 
 	for _, tc := range tests {
@@ -202,13 +206,22 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 				}
 			}
 
-			got := blobKeysOf(t, f.blobs)
-			want := f.prefix + "stk-test/" + s.Update.ID.String() + "/" + tc.tail
-
-			if len(got) != 1 || got[0] != want {
-				t.Fatalf("blob keys = %v, want [%s]", got, want)
-			}
+			wantAttemptKey(t, blobKeysOf(t, f.blobs), f.prefix+"stk-test/"+s.Update.ID.String()+"/"+tc.tail+"-")
 		})
+	}
+}
+
+// attemptIDLength is the length of the attempt ID that a save writes in its key.
+const attemptIDLength = 20
+
+// wantAttemptKey fails the test unless keys holds one key that is head
+// followed by an attempt ID.
+func wantAttemptKey(t *testing.T, keys []string, head string) {
+	t.Helper()
+
+	if len(keys) != 1 || !strings.HasPrefix(keys[0], head) ||
+		len(strings.TrimPrefix(keys[0], head)) != attemptIDLength {
+		t.Fatalf("blob keys = %v, want one key that starts with %s and ends in an attempt ID", keys, head)
 	}
 }
 
@@ -482,6 +495,7 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 // stores of f with the given blob store and recorder.
 func updatesConfigFor(f updatesFixture, blobs blob.Store, refusals scopeaudit.Recorder) stack.UpdatesConfig {
 	return stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		Updates:            f.store,
 		Checkpoints:        f.store,
 		Events:             f.store,

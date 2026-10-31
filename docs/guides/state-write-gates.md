@@ -133,8 +133,9 @@ keeps a count.
 
 ## Limits of this version
 
-- No route stores gates or access limits yet. The server reads the gates that
-  the store holds. A route to configure them is planned.
+- The [gate configuration API](../reference/gate-config-api.md) stores gates and
+  access limits for a namespace, a collection and a unit. It has no route for
+  ownership rules or path sets yet.
 - No route reads decision records yet.
 - The server knows no group of a principal and no time of the last
   authentication. A gate or a limit that reads a group does not match. A limit

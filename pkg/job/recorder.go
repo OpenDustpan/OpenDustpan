@@ -151,8 +151,12 @@ func stepRecordOf(j *Job, c PhaseClaim, name string) (*StepRecord, bool) {
 
 // AppendLog implements Recorder. A chunk costs one read of the job, one write
 // that reserves the chunk, one blob and one write that counts it. The
-// reserve decides every conflict, so two writers of one chunk with different
-// content never both store a blob.
+// reserve decides every conflict about the content of the chunk. Each attempt
+// writes the blob under a key of its own, so two attempts of one chunk never
+// write one key, also on a blob store that replaces an object. The write that
+// counts the chunk decides which attempt wins: the row names the blob of the
+// first attempt that commits, and an attempt that loses deletes only its own
+// blob.
 func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step string, seq int, chunk io.Reader) error {
 	if err := checkStepName(step); err != nil {
 		return err
@@ -192,16 +196,7 @@ func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step stri
 		return nil
 	}
 
-	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: plan.Version, Seq: seq}
-
-	stored, storeErr := r.storeChunk(ctx, c, &j, ref, data)
-	if storeErr != nil {
-		return storeErr
-	}
-
-	return r.store.ConfirmLogChunk(
-		ctx, c, ChunkConfirm{Step: step, Version: plan.Version, Seq: seq, Stored: stored},
-	)
+	return r.writeChunk(ctx, c, &j, &chunkWrite{step: step, version: plan.Version, seq: seq, data: data})
 }
 
 // readChunk reads a chunk of at most MaxLogChunk bytes, and returns it with
@@ -248,7 +243,7 @@ func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []Pla
 	}
 
 	planID := ident.NewID(PlanIDPrefix)
-	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil}
+	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil, ChunkKeys: nil}
 
 	ref, err := itemRef(&art, secret.ItemKindPlan, planID)
 	if err != nil {
@@ -387,6 +382,61 @@ func (r *DurableRecorder) Delivered(ctx context.Context, c PhaseClaim, d Deliver
 	)
 }
 
+// chunkWrite is one attempt to write the chunk seq of the log version of the
+// step.
+type chunkWrite struct {
+	step    string
+	version string
+	seq     int
+	data    []byte
+}
+
+// writeChunk stores the blob of one attempt of a chunk under a key of its own,
+// and counts the chunk. If another attempt counted the chunk first, it deletes
+// the blob of this attempt.
+func (r *DurableRecorder) writeChunk(ctx context.Context, c PhaseClaim, j *Job, w *chunkWrite) error {
+	key, err := LogChunkAttemptKey(j.ID, w.version, w.seq, ident.NewID(LogAttemptIDPrefix))
+	if err != nil {
+		return err
+	}
+
+	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: w.version, Seq: w.seq, BlobKey: key.String()}
+
+	stored, err := r.storeChunk(ctx, c, j, &ref, w.data)
+	if err != nil {
+		return err
+	}
+
+	won, err := r.store.ConfirmLogChunk(
+		ctx, c, ChunkConfirm{Step: w.step, Version: w.version, Seq: w.seq, Stored: stored, BlobKey: ref.BlobKey},
+	)
+	if err != nil {
+		// An error that does not prove a rollback, such as a failed COMMIT,
+		// can follow a commit: the row may name the blob, so the blob stays.
+		// If the commit did not happen, the orphan cleanup deletes it.
+		if provesRollback(err) {
+			r.deleteChunk(ctx, &ref)
+		}
+
+		return err
+	}
+
+	if !won {
+		// Another attempt of the chunk committed first, and its row names its
+		// own blob. The blob of this attempt is named by no row.
+		r.deleteChunk(ctx, &ref)
+	}
+
+	return nil
+}
+
+// deleteChunk deletes the blob of the attempt ref, which no row names. It does
+// not stop when the context ends, and it ignores a failure: the orphan cleanup
+// deletes what stays. It deletes only the key of its own attempt.
+func (r *DurableRecorder) deleteChunk(ctx context.Context, ref *LogChunkRef) {
+	_ = r.blobs.DeleteLogChunk(context.WithoutCancel(ctx), *ref) //nolint:errcheck // See above.
+}
+
 // deliveryEntry returns the audit entry of a delivery. It holds the commit and
 // the review request, and no secret.
 func deliveryEntry(j *Job, unit identity.Object, d *DeliveryResult, c PhaseClaim, at time.Time) audit.Entry {
@@ -419,7 +469,21 @@ func (r *DurableRecorder) closeLog(ctx context.Context, c PhaseClaim, name strin
 		return nil, err
 	}
 
-	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: name, Plan: nil, Log: rec.Log}
+	// The keys of the chunks come from the store: the job record counts the
+	// chunks, and the chunk rows name their blobs.
+	stored, err := r.store.Log(ctx, c.Fence.Namespace, rec.Log.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read log %s: %w", rec.Log.ID, err)
+	}
+
+	art := ArtifactRecord{
+		Job:       j.ID,
+		Unit:      j.Spec.Unit,
+		Step:      name,
+		Plan:      nil,
+		Log:       rec.Log,
+		ChunkKeys: stored.ChunkKeys,
+	}
 
 	rc, err := openLogVersion(ctx, r.blobs, r.sealer, nsID, &art)
 	if err != nil {
@@ -474,7 +538,7 @@ func (r *DurableRecorder) newLogVersion(j *Job, c PhaseClaim, step string, seq i
 
 	version := ident.NewID(LogVersionIDPrefix)
 
-	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: step, Plan: nil, Log: nil}
+	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: step, Plan: nil, Log: nil, ChunkKeys: nil}
 
 	ref, err := itemRef(&art, secret.ItemKindJobLog, version)
 	if err != nil {
@@ -494,23 +558,22 @@ func (r *DurableRecorder) newLogVersion(j *Job, c PhaseClaim, step string, seq i
 	}, nil
 }
 
-// storeChunk seals the chunk ref and stores its blob, and returns the size and
-// the MD5 of the bytes that the blob store holds. A blob that exists already
-// is the one that an earlier attempt of the same chunk stored: the reserve
-// proved that the plain content is the same, but the seal of this attempt
-// differs from the seal of the earlier one. The digest then comes from the
-// stored blob. ref.Namespace is set here.
+// storeChunk seals the chunk ref and stores its blob under ref.BlobKey, and
+// returns the size and the MD5 of the bytes that the blob store holds. The key
+// belongs to this attempt alone, so a blob store that refuses a second write
+// of a key (blob.ErrExists) does not refuse this one. ref.Namespace is set
+// here.
 func (r *DurableRecorder) storeChunk(
-	ctx context.Context, c PhaseClaim, j *Job, ref LogChunkRef, data []byte,
+	ctx context.Context, c PhaseClaim, j *Job, ref *LogChunkRef, data []byte,
 ) (blob.Digest, error) {
-	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil}
+	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil, ChunkKeys: nil}
 
 	item, err := itemRef(&art, secret.ItemKindJobLog, ref.Version)
 	if err != nil {
 		return blob.Digest{}, err
 	}
 
-	binding, err := chunkBinding(j.ID, ref.Version, ref.Seq)
+	binding, err := chunkBinding(j.ID, ref.Version, ref.Seq, ref.BlobKey)
 	if err != nil {
 		return blob.Digest{}, err
 	}
@@ -527,34 +590,14 @@ func (r *DurableRecorder) storeChunk(
 
 	measured := blob.NewDigestReader(sealed)
 
-	putErr := r.blobs.PutLogChunk(ctx, ref, measured)
-	if errors.Is(putErr, blob.ErrExists) {
-		return r.digestOfChunk(ctx, ref)
-	}
+	if putErr := r.blobs.PutLogChunk(ctx, *ref, measured); putErr != nil {
+		// The write may have stored a part of the blob. No row names it.
+		r.deleteChunk(ctx, ref)
 
-	if putErr != nil {
 		return blob.Digest{}, fmt.Errorf("store log chunk: %w", putErr)
 	}
 
 	return measured.Digest(), nil
-}
-
-// digestOfChunk reads the stored blob of the chunk ref and returns its size
-// and MD5.
-func (r *DurableRecorder) digestOfChunk(ctx context.Context, ref LogChunkRef) (blob.Digest, error) {
-	rc, err := r.blobs.OpenLogChunk(ctx, ref)
-	if err != nil {
-		return blob.Digest{}, fmt.Errorf("read the stored log chunk: %w", err)
-	}
-
-	digest, digestErr := blob.DigestOf(rc)
-	closeErr := rc.Close()
-
-	if digestErr != nil || closeErr != nil {
-		return blob.Digest{}, fmt.Errorf("read the stored log chunk: %w", errors.Join(digestErr, closeErr))
-	}
-
-	return digest, nil
 }
 
 // planAt names the plan whose parts the recorder stores: the namespace and the

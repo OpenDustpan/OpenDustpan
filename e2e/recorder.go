@@ -6,9 +6,11 @@ import (
 	"cmp"
 	"context"
 	"io"
+	"mime"
 	"net/http"
 	"slices"
 	"sync"
+	"time"
 )
 
 // maxCapturedBody bounds the request and response bytes kept per entry.
@@ -29,15 +31,25 @@ type Entry struct {
 	UserAgent string `json:"userAgent,omitempty"`
 	// Backend names the server instance that served the request, when more
 	// than one instance runs behind the proxy. It is empty for one server.
-	Backend       string `json:"backend,omitempty"`
-	Accept        string `json:"accept,omitempty"`
-	ContentType   string `json:"contentType,omitempty"`
-	RequestBody   string `json:"requestBody,omitempty"`
-	ResponseBody  string `json:"responseBody,omitempty"`
-	Seq           int    `json:"seq"`
-	Status        int    `json:"status"`
-	RequestBytes  int64  `json:"requestBytes"`
-	ResponseBytes int64  `json:"responseBytes"`
+	Backend      string `json:"backend,omitempty"`
+	Accept       string `json:"accept,omitempty"`
+	ContentType  string `json:"contentType,omitempty"`
+	RequestBody  string `json:"requestBody,omitempty"`
+	ResponseBody string `json:"responseBody,omitempty"`
+	// ResponseHeaders holds the names of the response headers, in sorted
+	// order, and "Content-Type: <media type>" for the content type. It never
+	// holds a header value besides the media type, so a secret in a header
+	// cannot reach a report.
+	ResponseHeaders []string `json:"responseHeaders,omitempty"`
+	// ResponseCut is true when the answer was longer than the bytes that
+	// ResponseBody keeps, so ResponseBody is the start of the answer.
+	ResponseCut bool `json:"responseCut,omitempty"`
+	Seq         int  `json:"seq"`
+	// At is the time the answer ended. It is not part of the report.
+	At            time.Time `json:"-"`
+	Status        int       `json:"status"`
+	RequestBytes  int64     `json:"requestBytes"`
+	ResponseBytes int64     `json:"responseBytes"`
 }
 
 // Recorder logs every request that passes through its middleware.
@@ -140,21 +152,24 @@ func (r *Recorder) record(seq int, step string, req *http.Request, in *capture, 
 	defer r.mu.Unlock()
 
 	r.entries = append(r.entries, Entry{
-		Step:          step,
-		Method:        req.Method,
-		Host:          req.Host,
-		Path:          req.URL.Path,
-		Query:         req.URL.RawQuery,
-		UserAgent:     req.UserAgent(),
-		Backend:       backendOf(req),
-		Accept:        req.Header.Get("Accept"),
-		ContentType:   req.Header.Get("Content-Type"),
-		RequestBody:   string(in.kept),
-		ResponseBody:  string(out.kept),
-		Seq:           seq,
-		Status:        out.status,
-		RequestBytes:  in.n,
-		ResponseBytes: out.n,
+		Step:            step,
+		Method:          req.Method,
+		Host:            req.Host,
+		Path:            req.URL.Path,
+		Query:           req.URL.RawQuery,
+		UserAgent:       req.UserAgent(),
+		Backend:         backendOf(req),
+		At:              time.Now(),
+		Accept:          req.Header.Get("Accept"),
+		ContentType:     req.Header.Get("Content-Type"),
+		RequestBody:     string(in.kept),
+		ResponseBody:    string(out.kept),
+		ResponseHeaders: headerNames(out.Header()),
+		ResponseCut:     out.n > int64(len(out.kept)),
+		Seq:             seq,
+		Status:          out.status,
+		RequestBytes:    in.n,
+		ResponseBytes:   out.n,
 	})
 }
 
@@ -221,4 +236,43 @@ func keep(dst, p []byte) []byte {
 	}
 
 	return dst
+}
+
+// volatileHeader reports whether the response header name differs from answer
+// to answer by design, so a list of header names does not hold it.
+func volatileHeader(name string) bool {
+	switch name {
+	case "Date", "Content-Length", "Connection", "Keep-Alive", "Transfer-Encoding":
+		return true
+	default:
+		return false
+	}
+}
+
+// headerNames returns the sorted names of the headers in h, without the
+// volatile ones, with the media type for Content-Type and no other value.
+func headerNames(h http.Header) []string {
+	out := make([]string, 0, len(h))
+
+	for name := range h {
+		name = http.CanonicalHeaderKey(name)
+		if volatileHeader(name) {
+			continue
+		}
+
+		if name == "Content-Type" {
+			mediaType, _, err := mime.ParseMediaType(h.Get(name))
+			if err != nil {
+				mediaType = ""
+			}
+
+			name += ": " + mediaType
+		}
+
+		out = append(out, name)
+	}
+
+	slices.Sort(out)
+
+	return out
 }

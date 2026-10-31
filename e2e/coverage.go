@@ -16,6 +16,7 @@ import (
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	issuerapi "opendustpan.org/opendustpan/internal/api/issuer"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
@@ -27,15 +28,22 @@ import (
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
+	trustrulesapi "opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
+	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/drift"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -60,6 +68,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/trustrule"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -99,17 +108,33 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
+	issuerRoutes := coverageIssuerRoutes(tb)
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
 	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	sourceFilterRoutes := coverageSourceFilterRoutes(tb, namespaces)
+	trustRuleRoutes := coverageTrustRuleRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
-		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, server,
+		pulumi,
+		tfe,
+		tofuHTTP,
+		inventory,
+		auditRoutes,
+		contextRoutes,
+		profileRoutes,
+		issuerRoutes,
+		sinkRoutes,
+		jobRoutes,
+		driftRoutes,
+		triggerRoutes,
+		registryRoutes,
+		sourceFilterRoutes,
+		trustRuleRoutes,
+		server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -223,6 +248,8 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		ManualLocks: nil,
+		// The updates service never deletes a blob here, so it has no guard.
+		BlobGuard: nil,
 		// The store never serves a request: only ActiveUpdate runs, and it
 		// answers not found. The embedded stores stay nil on purpose.
 		Updates:            coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
@@ -366,12 +393,29 @@ func (coverageBlobs) Delete(_ context.Context, _ blob.Key) error {
 	return nil
 }
 
-func (coverageBlobs) List(_ context.Context, _ string) ([]blob.Object, error) {
-	return nil, nil
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (x coverageBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := x.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
 }
 
 func (coverageBlobs) Ping(_ context.Context) error {
 	return nil
+}
+
+func (coverageBlobs) list(_ context.Context, _ string) ([]blob.Object, error) {
+	return nil, nil
 }
 
 // coverageUpdateStore answers no update and no state. It exists only to
@@ -904,6 +948,57 @@ func coverageSourceFilterRoutes(tb testing.TB, namespaces *namespace.Service) []
 	return out
 }
 
+// coverageTrustRuleRoutes returns the trust rule adapter's route table.
+func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
+		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
+		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("trust rule service: %v", err)
+	}
+
+	exchanger, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
+		Rules: struct{ trustrule.Store }{nil}, Exchanges: struct{ trustrule.ExchangeStore }{nil},
+		Namespaces: namespaces, Principals: struct{ trustrulesvc.Principals }{nil},
+		Tokens: struct{ trustrulesvc.TokenIssuer }{nil}, Audit: coverageAuditStore{},
+		ServerAudit: struct{ audit.ServerStore }{nil}, Refusals: nil, Keys: nil, InstallationURLs: nil,
+		OwnIssuer: nil, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("token exchange: %v", err)
+	}
+
+	handler, err := trustrulesapi.NewHandler(trustrulesapi.Config{
+		Exchanger:      exchanger,
+		Namespaces:     namespaces,
+		Rules:          rules,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		Now:            nil,
+	})
+	if err != nil {
+		tb.Fatalf("trust rule handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // coverageTriggerRoutes returns the trigger adapter's route table.
 func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
@@ -965,6 +1060,53 @@ func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 	})
 	if err != nil {
 		tb.Fatalf("drift handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageIssuerRoutes returns the routes of the issuer. The stores are empty
+// shells: they exist only to build a Handler for its route table.
+func coverageIssuerRoutes(tb testing.TB) []RouteRef {
+	tb.Helper()
+
+	svc, err := issuersvc.NewService(issuersvc.Config{
+		Store:         struct{ profile.IssuerStore }{nil},
+		Namespaces:    coverageNamespaceStore{},
+		Sealer:        struct{ profile.Sealer }{nil},
+		Authorizer:    coverageAuthorizer{},
+		Notifier:      nil,
+		Fetcher:       nil,
+		IssuerBaseURL: "",
+		PublicURL:     "",
+		Now:           nil,
+		Log:           nil,
+	})
+	if err != nil {
+		tb.Fatalf("issuer service: %v", err)
+	}
+
+	handler, err := issuerapi.NewHandler(issuerapi.Config{
+		Issuer:         svc,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("issuer handler: %v", err)
 	}
 
 	routes := handler.Routes()
@@ -1338,7 +1480,7 @@ func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
 	return svc
 }
 
-// coverageGateConfig holds no approval default and no approval rule: the route
+// coverageGateConfig holds no gate, no access limit, no approval default and no approval rule: the route
 // table needs a gate configuration service, and the coverage gate never
 // serves a request.
 type coverageGateConfig struct{}
@@ -1373,6 +1515,97 @@ func (coverageGateConfig) PutApprovalRule(
 
 func (coverageGateConfig) DeleteApprovalRule(context.Context, gate.ObjectRef, audit.Entry) error {
 	return gate.ErrNotFound
+}
+
+func (coverageGateConfig) Gates(context.Context, gate.Scope) ([]gate.Gate, error) {
+	return nil, nil
+}
+
+func (coverageGateConfig) Gate(context.Context, gate.Scope, gate.ID) (gate.Gate, error) {
+	return gate.Gate{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutGate(context.Context, gate.Gate, int64, string, audit.Entry) (gate.Gate, error) {
+	return gate.Gate{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteGate(context.Context, gate.ObjectRef, string, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
+func (coverageGateConfig) AccessLimits(context.Context, gate.Scope) ([]gate.AccessLimit, error) {
+	return nil, nil
+}
+
+func (coverageGateConfig) AccessLimit(context.Context, gate.Scope, gate.ID) (gate.AccessLimit, error) {
+	return gate.AccessLimit{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutAccessLimit(
+	context.Context, gate.AccessLimit, int64, audit.Entry,
+) (gate.AccessLimit, error) {
+	return gate.AccessLimit{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteAccessLimit(context.Context, gate.ObjectRef, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
+// coverageStoreCheckRecords holds no store check row: the route table needs a
+// store check service to mount the routes, and the coverage gate never serves
+// a request.
+type coverageStoreCheckRecords struct{}
+
+func (coverageStoreCheckRecords) StartCheck(
+	context.Context, storecheck.Record, durable.StartRequest, time.Time,
+) error {
+	return storecheck.ErrRunning
+}
+
+func (coverageStoreCheckRecords) GetCheck(context.Context, storecheck.ID) (storecheck.Record, error) {
+	return storecheck.Record{}, storecheck.ErrNotFound
+}
+
+func (coverageStoreCheckRecords) ListChecks(context.Context) ([]storecheck.Record, error) {
+	return nil, nil
+}
+
+func (coverageStoreCheckRecords) FinishCheck(
+	context.Context, durable.StepFence, storecheck.ID, storecheck.Finish,
+) error {
+	return storecheck.ErrNotFound
+}
+
+func (coverageStoreCheckRecords) FailEndedChecks(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
+
+// coverageStoreChecks returns the store check service of the route table.
+func coverageStoreChecks(tb testing.TB) *storecheck.Service {
+	tb.Helper()
+
+	blobs, err := blobfs.Open(tb.TempDir())
+	if err != nil {
+		tb.Fatalf("blob store: %v", err)
+	}
+
+	tb.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			tb.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	svc, err := storecheck.NewService(storecheck.Config{
+		Records: coverageStoreCheckRecords{}, Operations: durabletest.NewMem().Store(), Blobs: blobs, Backup: nil,
+		Audit: coverageAuditStore{}, Admit: nil,
+		Limits: storecheck.Limits{MaxObjects: 0, MaxTotalBytes: 0, MaxObjectBytes: 0, Timeout: 0, Cooldown: 0},
+		Now:    nil, Owner: "", Lease: 0, Logger: nil,
+	})
+	if err != nil {
+		tb.Fatalf("store check service: %v", err)
+	}
+
+	return svc
 }
 
 // coverageSessionPolicyStore holds the default session policy: the route
@@ -1415,6 +1648,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		GitHost:          coverageGitHost(tb),
 		Idempotency:      nil,
 		Instances:        nil,
+		StoreChecks:      coverageStoreChecks(tb),
 		Workers:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},
@@ -1536,6 +1770,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditReadAllowEntries(),
 		deletedUnitAllowEntries(),
 		backupAllowEntries(),
+		storeCheckAllowEntries(),
 		namespaceAllowEntries(),
 		maintenanceAllowEntries(),
 		auditChainAllowEntries(),
@@ -1556,6 +1791,7 @@ func CoverageAllowlist() []AllowEntry {
 		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),
 		approvalRuleAllowEntries(),
+		gateObjectAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
@@ -1571,8 +1807,42 @@ func CoverageAllowlist() []AllowEntry {
 		savedViewAllowEntries(),
 		sinkAllowEntries(),
 		sourceFilterAllowEntries(),
+		trustRuleAllowEntries(),
 		apiDescriptionAllowEntries(),
+		issuerAllowEntries(),
 	)
+}
+
+// issuerAllowEntries covers the routes of the OIDC issuer. No CLI calls them:
+// a relying party reads the two protocol routes, and the console and the
+// client of the API call the management routes. The steps of TestIssuerAPI
+// make the keys, read the documents with no credential, rotate, check the
+// copy, change the settings and export, against the real server.
+func issuerAllowEntries() []AllowEntry {
+	const (
+		base   = "/api/dustpan/v1/namespaces/{namespace}/issuer"
+		reason = "Client route: no CLI calls the issuer. The steps of TestIssuerAPI call it against the real server."
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, base},
+		{http.MethodPatch, base},
+		{http.MethodGet, base + "/export"},
+		{http.MethodPost, base + "/keys"},
+		{http.MethodPost, base + "/keys/rotate"},
+		{http.MethodPost, base + "/keys/check-copy"},
+		{http.MethodGet, "/oidc/{nsid}/.well-known/openid-configuration"},
+		{http.MethodGet, "/oidc/{nsid}/jwks"},
+	}
+
+	entries := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		entries = append(entries, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestIssuerAPI", Reason: reason,
+		})
+	}
+
+	return entries
 }
 
 // apiDescriptionAllowEntries covers the route of the description of the API.
@@ -2007,6 +2277,47 @@ func approvalRuleAllowEntries() []AllowEntry {
 	return out
 }
 
+// gateObjectCoveringTest names the test that proves the gate and access limit
+// routes instead of a CLI: no CLI sets a gate.
+const gateObjectCoveringTest = "TestGateRoutes"
+
+// gateObjectAllowEntries returns the routes of the gates and the access limits
+// of a namespace, of a collection and of a unit. The steps of
+// gateObjectCoveringTest drive each one through the real server on each store.
+func gateObjectAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages gates or access limits. " +
+		"The harness step calls it through the real server and checks the answer."
+
+	const namespacePath = "/api/dustpan/v1/namespaces/{namespace}"
+
+	bases := []string{
+		namespacePath,
+		namespacePath + "/collections/{collection}",
+		namespacePath + "/units/by-name/{tool}/{name}",
+	}
+
+	const item = "/{id}"
+
+	out := make([]AllowEntry, 0, 2*4*len(bases))
+
+	for _, base := range bases {
+		for _, kind := range []string{"/gates", "/access-limits"} {
+			for _, r := range []struct{ method, suffix string }{
+				{http.MethodGet, ""}, {http.MethodGet, item}, {http.MethodPut, item}, {http.MethodDelete, item},
+			} {
+				out = append(out, AllowEntry{
+					Method:       r.method,
+					Path:         base + kind + r.suffix,
+					CoveringTest: gateObjectCoveringTest,
+					Reason:       reason,
+				})
+			}
+		}
+	}
+
+	return out
+}
+
 // tofuHTTPAllowEntries returns the allowlist rows of the OpenTofu http
 // backend. The real CLI reaches all four routes in TestTofuHTTPBackend, on
 // every store and every OpenTofu version. That test writes no matrix report,
@@ -2379,6 +2690,37 @@ func backupAllowEntries() []AllowEntry {
 	}
 }
 
+// storeCheckCoveringTest names the test that proves the store check routes
+// with the binary command: no CLI of the matrix calls them.
+const storeCheckCoveringTest = "TestStoreCheck"
+
+// storeCheckAllowEntries returns the store check routes. The opendustpan
+// store check binary calls them with Go-http-client, which never counts as CLI
+// traffic, so the steps of storeCheckCoveringTest drive them.
+func storeCheckAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/store-checks",
+			CoveringTest: storeCheckCoveringTest,
+			Reason: "Operator route: no CLI of the matrix starts a store check. The opendustpan store " +
+				"check binary starts one, and the harness steps check the cooldown and the refusal of a target " +
+				"that is not on the list.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/store-checks",
+			CoveringTest: storeCheckCoveringTest,
+			Reason: "Operator route: no CLI of the matrix lists store checks. The harness step lists them " +
+				"newest first.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/store-checks/{id}",
+			CoveringTest: storeCheckCoveringTest,
+			Reason: "Operator route: no CLI of the matrix reads a store check. The opendustpan store check " +
+				"binary polls it until the check ends, and the harness step reads the report.",
+		},
+	}
+}
+
 // maintenanceCoveringTest names the test that proves the maintenance routes
 // instead of a CLI: no CLI version in the matrix calls them.
 const maintenanceCoveringTest = "TestMaintenance"
@@ -2742,6 +3084,31 @@ func sourceFilterAllowEntries() []AllowEntry {
 	}
 }
 
+// trustRuleAllowEntries covers the routes of the workload trust rules of a
+// namespace. No CLI calls them: the console and the clients of the API do.
+// The steps of TestTrustRuleAPI call each of them with the token of an
+// administrator.
+func trustRuleAllowEntries() []AllowEntry {
+	const (
+		rules = "/api/dustpan/v1/namespaces/{namespace}/trust-rules"
+		rule  = rules + "/{rule_id}"
+		test  = "TestTrustRuleAPI"
+		why   = "Console and client route: no CLI calls it. The steps of TestTrustRuleAPI call it through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: rules, CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: rules, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: rule, CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: rule, CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodPost, Path: rules + "/exchange", CoveringTest: "TestWorkloadTokenExchange",
+			Reason: "Workload route: a CI job calls it with the token of its platform. The steps of " +
+				"TestWorkloadTokenExchange call it with tokens of a fake issuer.",
+		},
+	}
+}
+
 // savedViewAllowEntries covers the routes of the saved views. No CLI calls
 // them: the console and the clients of the API do. The steps of
 // TestSavedViewsAPI call each of them with the personal token of a person.
@@ -2873,6 +3240,24 @@ func (coverageRegistryService) OpenFile(
 	return 0, nil, registry.ErrNotFound
 }
 
+func (coverageRegistryService) ModuleReleases(
+	context.Context, registry.Address,
+) ([]registry.Release, error) {
+	return nil, registry.ErrNotFound
+}
+
+func (coverageRegistryService) ModuleRelease(
+	context.Context, namespace.Name, string, string, string,
+) (registry.Release, error) {
+	return registry.Release{}, registry.ErrNotFound
+}
+
+func (coverageRegistryService) OpenModuleFile(
+	context.Context, registry.Address, string, string,
+) (int64, io.ReadCloser, error) {
+	return 0, nil, registry.ErrNotFound
+}
+
 // coverageRegistryRoutes returns the route table of the registry API. The
 // service is an empty shell: it exists only to build a Handler.
 func coverageRegistryRoutes(tb testing.TB) []RouteRef {
@@ -2888,6 +3273,7 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 	svc, err := registryservice.New(registryservice.Config{
 		Store: store, Keys: keys, Verifier: verifier, Inspector: verifier, Blobs: struct{ blob.Store }{nil},
 		Namespaces: coverageRegistryNamespaces{}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
+		MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		tb.Fatalf("registry service: %v", err)
@@ -2936,6 +3322,12 @@ func registryAllowEntries() []AllowEntry {
 		test = "TestRegistryTofuInit"
 		why  = "Client route: no CLI calls it. The steps of TestRegistryTofuInit call it, and OpenTofu installs what it published."
 
+		moduleTest = "TestRegistryModuleTofuInit"
+		moduleWhy  = "Client route: no CLI calls it. The steps of TestRegistryModuleTofuInit call it, and OpenTofu downloads what it published."
+
+		moduleProtocol    = "/v1/modules/{namespace}/{name}/{system}"
+		moduleProtocolWhy = "OpenTofu calls it on init, but only on the registry host. The steps of TestRegistryModuleTofuInit run the real CLI against it."
+
 		protocol    = "/v1/providers/{namespace}/{type}"
 		protocolWhy = "OpenTofu calls it on init, but only on the registry host. The steps of TestRegistryTofuInit run the real CLI against it."
 	)
@@ -2946,6 +3338,25 @@ func registryAllowEntries() []AllowEntry {
 		{Method: http.MethodGet, Path: base + "/providers", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
+		{
+			Method:       http.MethodPut,
+			Path:         base + "/modules/{name}/{system}/versions/{version}",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
+		{Method: http.MethodGet, Path: base + "/modules", CoveringTest: moduleTest, Reason: moduleWhy},
+		{
+			Method:       http.MethodGet,
+			Path:         base + "/modules/{name}/{system}/versions",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         base + "/modules/{name}/{system}/versions/{version}",
+			CoveringTest: moduleTest,
+			Reason:       moduleWhy,
+		},
 		{Method: http.MethodPost, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: base + "/keys/{fingerprint}", CoveringTest: test, Reason: why},
@@ -2957,5 +3368,23 @@ func registryAllowEntries() []AllowEntry {
 			Reason:       protocolWhy,
 		},
 		{Method: http.MethodGet, Path: protocol + "/{version}/files/{sha256}", CoveringTest: test, Reason: protocolWhy},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/versions",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/{version}/download",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
+		{
+			Method:       http.MethodGet,
+			Path:         moduleProtocol + "/{version}/files/{sha256}",
+			CoveringTest: moduleTest,
+			Reason:       moduleProtocolWhy,
+		},
 	}
 }

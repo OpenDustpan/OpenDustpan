@@ -274,6 +274,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 	return envInput{
 		deltaCutoff:       0,
 		sinkSenders:       nil,
+		issuer:            nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -357,6 +358,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 	return envInput{
 		deltaCutoff:       0,
 		sinkSenders:       nil,
+		issuer:            nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -416,6 +418,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	in := envInput{
 		deltaCutoff:       cutoff,
 		sinkSenders:       nil,
+		issuer:            nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -477,6 +480,7 @@ func startInprocessServer(
 		signIn:            signIn,
 		publicURL:         inprocessPublicURL(in, ts),
 		sinkSenders:       in.sinkSenders,
+		issuer:            in.issuer,
 	})
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
@@ -641,6 +645,9 @@ type serverArgs struct {
 	// publicURL is the external URL of the in-process server, or empty. The
 	// provider registry protocol compares each request with its host.
 	publicURL string
+	// issuer is a fake OpenID provider whose keys the server may read on the
+	// loopback, or nil.
+	issuer *OIDCIssuerFake
 }
 
 // profileStoreOptions returns the option that gives the in-process server the
@@ -650,11 +657,13 @@ func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Optio
 	case *sqlite.Store:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	case *postgres.Store:
 		return []dustpan.Option{
 			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIssuerStore(s.Issuer()),
 			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
 		}
 	default:
@@ -681,8 +690,16 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 // stores of st and the public URL.
 func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
 	return slices.Concat(
-		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
-		registryStoreOptions(st), sinkStoreOptions(st), publicURLOptions(args.publicURL),
+		profileStoreOptions(
+			st,
+			wrapper,
+		),
+		jobStoreOptions(st),
+		savedViewStoreOptions(st),
+		trustRuleStoreOptions(st, args.issuer),
+		registryStoreOptions(st),
+		sinkStoreOptions(st),
+		publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
 	)
 }
@@ -2662,11 +2679,15 @@ func (e *Env) tfeStatusAs(ctx context.Context, token string, call tfeCall) (int,
 		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
 	}
 
-	if call.scheme == authSchemeToken {
+	// An empty token sends no credential, for a route that needs none.
+	switch {
+	case token == "":
+	case call.scheme == authSchemeToken:
 		req.Header.Set("Authorization", "token "+token)
-	} else {
+	default:
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+
 	if body != "" {
 		req.Header.Set("Content-Type", "application/vnd.api+json")
 	}

@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/e2e"
 )
@@ -38,21 +39,24 @@ func TestCoverageAllowlistEntriesAreServed(t *testing.T) {
 // them.
 func cliEntry(method, path, userAgent string, status int) e2e.Entry {
 	return e2e.Entry{
-		Step:          "",
-		Method:        method,
-		Path:          path,
-		Host:          "",
-		Query:         "",
-		UserAgent:     userAgent,
-		Backend:       "",
-		Accept:        "",
-		ContentType:   "",
-		RequestBody:   "",
-		ResponseBody:  "",
-		Seq:           0,
-		Status:        status,
-		RequestBytes:  0,
-		ResponseBytes: 0,
+		Step:            "",
+		At:              time.Time{},
+		Method:          method,
+		Path:            path,
+		Host:            "",
+		Query:           "",
+		UserAgent:       userAgent,
+		Backend:         "",
+		Accept:          "",
+		ContentType:     "",
+		RequestBody:     "",
+		ResponseBody:    "",
+		ResponseHeaders: nil,
+		ResponseCut:     false,
+		Seq:             0,
+		Status:          status,
+		RequestBytes:    0,
+		ResponseBytes:   0,
 	}
 }
 

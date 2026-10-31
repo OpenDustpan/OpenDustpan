@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -39,7 +40,10 @@ func (s *Store) RegisterInstance(ctx context.Context, inst installation.Instance
 	}
 
 	if err != nil {
-		return fmt.Errorf("write instance version sqlite database: %w", installation.ErrUnavailable)
+		return fmt.Errorf(
+			"write instance version sqlite database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	return nil
@@ -61,7 +65,10 @@ func (s *Store) UnregisterInstance(ctx context.Context, id string) error {
 		return execErr
 	})
 	if err != nil {
-		return fmt.Errorf("delete instance version sqlite database: %w", installation.ErrUnavailable)
+		return fmt.Errorf(
+			"delete instance version sqlite database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	return nil
@@ -74,7 +81,10 @@ func (s *Store) ListInstances(ctx context.Context) ([]installation.Instance, err
 
 	rows, err := s.queries.ListInstanceVersions(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("select instance versions sqlite database: %w", installation.ErrUnavailable)
+		return nil, fmt.Errorf(
+			"select instance versions sqlite database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	out := make([]installation.Instance, 0, len(rows))
@@ -109,7 +119,10 @@ func (s *Store) DeleteInstance(ctx context.Context, id string) error {
 		return execErr
 	})
 	if err != nil {
-		return fmt.Errorf("delete instance version sqlite database: %w", installation.ErrUnavailable)
+		return fmt.Errorf(
+			"delete instance version sqlite database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	if deleted == 0 {
