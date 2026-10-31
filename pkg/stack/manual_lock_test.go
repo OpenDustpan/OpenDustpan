@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -101,6 +102,7 @@ func withManualLocks(t *testing.T, f updatesFixture, locks stack.ManualLocks) *s
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        locks,
 		Updates:            f.store,
 		Tokens:             nil,

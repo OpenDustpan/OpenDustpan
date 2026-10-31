@@ -118,6 +118,18 @@ linters:
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
             - pkg: github.com/jackc/pgx
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
+        githubfake:
+          # The fake GitHub host is test infrastructure. No file of the binary
+          # (cmd/, pkg/ and internal/) imports it, except a test file, so the
+          # binary never links it.
+          files:
+            - "**/cmd/**"
+            - "**/pkg/**"
+            - "**/internal/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/e2e/githubfake
+              desc: The fake GitHub host is for tests; the binary never links it.
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package
@@ -138,6 +150,8 @@ linters:
             - "**/pkg/access/**"
             - "**/pkg/accesstoken/**"
             - "**/pkg/session/**"
+            - "**/pkg/localuser/**"
+            - "**/pkg/mfa/**"
             - "**/pkg/backup/**"
             - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
@@ -393,6 +407,12 @@ linters:
         - empty
         - stdlib
         - generic
+        # The error translation of the PostgreSQL store wraps the pool and its
+        # transactions. sqlc's DBTX interface and the pgx transaction
+        # starters require these return types.
+        - github.com/jackc/pgx/v5.Rows
+        - github.com/jackc/pgx/v5.Row
+        - github.com/jackc/pgx/v5.Tx
 
     misspell:
       locale: US
@@ -513,7 +533,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^internal/history/historytest/|^pkg/inventory/inventorytest/|^internal/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^internal/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^internal/breakglass/breakglasstest/|^internal/oncall/oncalltest/|^internal/cost/costtest/|^pkg/notify/notifytest/|^internal/chatops/chatopstest/|^internal/incident/incidenttest/|^internal/catalog/catalogtest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^internal/history/historytest/|^pkg/inventory/inventorytest/|^internal/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^internal/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^internal/breakglass/breakglasstest/|^internal/oncall/oncalltest/|^internal/cost/costtest/|^pkg/notify/notifytest/|^internal/chatops/chatopstest/|^internal/incident/incidenttest/|^internal/catalog/catalogtest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/|^pkg/localuser/localusertest/|^pkg/mfa/mfatest/)
         linters:
           - mnd
           - funlen
@@ -523,7 +543,7 @@ linters:
       # adapters of the tool-neutral REST API and the helpers that they call.
       # The tool-compatible APIs and the runner protocol keep their own wire
       # formats, and apidesc is the one place that reads the raw request.
-      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|route|server|sourcefilter|triggers)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
+      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|server|sourcefilter|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
         linters:
           - forbidigo
         text: through apidesc

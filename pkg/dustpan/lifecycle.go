@@ -9,6 +9,7 @@ import (
 
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -48,6 +49,14 @@ func (b blobPurger) deleteBlobs(
 	defer cancel()
 
 	if err := deleteUnitBlobs(detached); err != nil {
+		if wait, isWait := errors.AsType[*blobguard.WaitError](err); isWait {
+			b.logger.InfoContext(ctx, "blobs of a purged unit wait for a running backup or restore",
+				slog.String("tool", tool), slog.String("unit_id", unitID),
+				slog.String("running", wait.Work.String()))
+
+			return
+		}
+
 		b.logger.WarnContext(ctx, "blobs of a purged unit remain for the sweep",
 			slog.String("tool", tool), slog.String("unit_id", unitID))
 	}

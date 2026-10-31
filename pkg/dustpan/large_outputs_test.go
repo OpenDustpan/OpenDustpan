@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -252,7 +253,7 @@ func putStateUpload(
 func blobTotal(t *testing.T, f largeOutputsFixture, ws workspace.Workspace) int {
 	t.Helper()
 
-	listed, err := f.blobs.List(t.Context(), "namespaces/")
+	listed, err := blobtest.ListAll(t.Context(), f.blobs, "namespaces/")
 	if err != nil {
 		t.Fatalf("list blobs: %v", err)
 	}

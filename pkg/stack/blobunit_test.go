@@ -78,17 +78,17 @@ type listingFault struct {
 	extra []blob.Key
 }
 
-func (l *listingFault) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	objects, err := l.Store.List(ctx, prefix)
+func (l *listingFault) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := l.Store.ListPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
 	for _, key := range l.extra {
-		objects = append(objects, blob.Object{Key: key, ModifiedAt: time.Time{}})
+		page.Objects = append(page.Objects, blob.Object{Key: key, ModifiedAt: time.Time{}})
 	}
 
-	return objects, nil
+	return page, nil
 }
 
 // listingRun is a call that lists the blobs of a stack and deletes what the

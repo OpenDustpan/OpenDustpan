@@ -12,10 +12,11 @@ approval for any change.
 The routes below store, read and remove the objects. The server records each
 write in the audit log of the namespace.
 
-The server does not start jobs yet, because it has no job store. Until the
-server has a job store, no job waits for approval, and no Pulumi update or OpenTofu
-run waits for it. A named approval rule has no effect until a gate names it, and
-the routes of gates are not part of this version.
+A job that changes something waits for approval when an approval default covers
+it. A plan job changes nothing, so it needs no approval. A Pulumi update or an
+OpenTofu run that a person starts with the CLI of the tool waits for no approval,
+because the CLI cannot wait. A named approval rule has no effect until a gate
+names it. Store the gate with the [gate configuration API](../reference/gate-config-api.md).
 
 When the server has a job store, an approval default gives the phase that changes
 something (apply, destroy, refresh or deliver) a gate. This rule holds for the
@@ -154,7 +155,7 @@ A namespace holds at most 64 approval rules. The 65th answers 422.
 
 | Step | Action | Object | Roles |
 | --- | --- | --- | --- |
-| Read a default or a rule | `namespace:read-gates` | The namespace | `viewer`, `secret-viewer`, `auditor`, `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
+| Read a default or a rule | `namespace:read-gates` | The namespace | `viewer`, `secret-viewer`, `auditor`, `planner`, `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
 | Set or remove a default or a rule | `namespace:manage-gates` | The namespace | `admin`, `account-administrator`, `site-administrator` |
 
 Only the `admin` role among the namespace roles can set or remove. A person

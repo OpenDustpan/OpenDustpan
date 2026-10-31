@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/unitimport/upload"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 )
 
@@ -194,7 +195,7 @@ func checkUnchanged(t *testing.T, s *upload.Source, store *blobfs.Store, want in
 		t.Errorf("versions after a refused put = %v, %v, want %d", versions, err, want)
 	}
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil {
 		t.Fatalf("list blobs: %v", err)
 	}
@@ -219,7 +220,7 @@ func TestPutIgnoresACrashedUpload(t *testing.T) {
 	put(t, s, unit(), 1, []byte("one"))
 
 	// A body that no facts file names is a crash between the two writes.
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil || len(objs) == 0 {
 		t.Fatalf("list = %v, %v, want the files of the first version", objs, err)
 	}
@@ -348,7 +349,7 @@ func TestPutKeepsTheFactsWithinTheLimit(t *testing.T) {
 		t.Fatalf("put with a long tool: error = %v, want ErrSourceInvalid", err)
 	}
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil || len(objs) != 3 {
 		t.Errorf("objects = %d, %v, want the 3 files of the one version", len(objs), err)
 	}
@@ -445,7 +446,7 @@ func TestDeleteRemovesEachObject(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	objs, err := store.List(t.Context(), prefix)
+	objs, err := blobtest.ListAll(t.Context(), store, prefix)
 	if err != nil || len(objs) != 0 {
 		t.Fatalf("list after delete = %v, %v, want none", objs, err)
 	}
@@ -459,10 +460,12 @@ type wideList struct {
 	extra blob.Key
 }
 
-func (w wideList) List(ctx context.Context, p string) ([]blob.Object, error) {
-	objs, err := w.Store.List(ctx, p)
+func (w wideList) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := w.Store.ListPage(ctx, req)
 
-	return append(objs, blob.Object{ModifiedAt: time.Time{}, Key: w.extra}), err
+	page.Objects = append(page.Objects, blob.Object{ModifiedAt: time.Time{}, Key: w.extra})
+
+	return page, err
 }
 
 // TestDeleteKeepsAuditCheckpointCopies sends an audit checkpoint copy

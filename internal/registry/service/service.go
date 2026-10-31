@@ -48,6 +48,9 @@ const (
 	maxStagedPerSweep = 1000
 )
 
+// errSweepBound stops the walk of a sweep that reached maxStagedPerSweep files.
+var errSweepBound = errors.New("the sweep reached its bound")
+
 // Sentinel errors of the use cases.
 var (
 	// ErrMissingDependency reports a Config without a required port.
@@ -88,6 +91,8 @@ type Config struct {
 	// MaxArchiveBytes and MaxReleaseBytes override the defaults when above zero.
 	MaxArchiveBytes int64
 	MaxReleaseBytes int64
+	// MaxModuleArchiveBytes overrides DefaultMaxModuleArchiveBytes when above zero.
+	MaxModuleArchiveBytes int64
 }
 
 // Service implements the use cases of the registry.
@@ -101,6 +106,7 @@ type Service struct {
 	now        func() time.Time
 	maxFile    int64
 	maxRelease int64
+	maxModule  int64
 }
 
 // New returns a Service. It returns ErrMissingDependency when a port is nil.
@@ -123,6 +129,7 @@ func New(cfg Config) (*Service, error) {
 	s := &Service{
 		store: cfg.Store, keys: cfg.Keys, verifier: cfg.Verifier, inspector: cfg.Inspector, blobs: cfg.Blobs,
 		namespaces: cfg.Namespaces, now: cfg.Now, maxFile: cfg.MaxArchiveBytes, maxRelease: cfg.MaxReleaseBytes,
+		maxModule: cfg.MaxModuleArchiveBytes,
 	}
 
 	if s.now == nil {
@@ -135,6 +142,10 @@ func New(cfg Config) (*Service, error) {
 
 	if s.maxRelease <= 0 {
 		s.maxRelease = DefaultMaxReleaseBytes
+	}
+
+	if s.maxModule <= 0 {
+		s.maxModule = DefaultMaxModuleArchiveBytes
 	}
 
 	return s, nil

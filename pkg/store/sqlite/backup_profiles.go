@@ -24,5 +24,26 @@ func sqliteProfileBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs, backupColReason,
 			},
 		},
+		{
+			table: "issuer_keys",
+			columns: []string{
+				backupColNamespaceID,
+				"id",
+				backupColState,
+				"public_key",
+				"sealed",
+				backupColCreatedAtMs,
+				"activated_at_ms",
+				"retired_at_ms",
+				"deleted_at_ms",
+			},
+		},
+		{
+			table: "issuer_settings",
+			columns: []string{
+				backupColNamespaceID, "issuer_url", "subject_template", "allow_block_subjects", "include_actor_name",
+				"version", backupColUpdatedAtMs, "updated_by", "copy_check",
+			},
+		},
 	}
 }

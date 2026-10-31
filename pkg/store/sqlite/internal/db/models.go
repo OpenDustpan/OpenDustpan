@@ -24,13 +24,14 @@ type AccessToken struct {
 }
 
 type AccessTokenPolicy struct {
-	ID                int64
-	MaxLifetimeMs     int64
-	InactivityMs      int64
-	DisableTokens     bool
-	DisableAccounts   bool
-	DisableBreakGlass bool
-	UpdatedAtMs       int64
+	ID                 int64
+	MaxLifetimeMs      int64
+	InactivityMs       int64
+	DisableTokens      bool
+	DisableAccounts    bool
+	DisableBreakGlass  bool
+	UpdatedAtMs        int64
+	ExchangeLifetimeMs int64
 }
 
 type AuditChainCheck struct {
@@ -112,6 +113,26 @@ type BlobPurge struct {
 	UnitID      string
 	PurgedAtMs  int64
 	NamespaceID string
+}
+
+type CatalogBlueprint struct {
+	NamespaceID      string
+	Name             string
+	DraftVersion     int64
+	DraftJson        string
+	DraftUpdatedAtMs int64
+}
+
+type CatalogBlueprintVersion struct {
+	NamespaceID   string
+	Name          string
+	Number        int64
+	DraftVersion  int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
 }
 
 type Checkpoint struct {
@@ -444,6 +465,30 @@ type InventoryLabel struct {
 	LabelValue string
 }
 
+type IssuerKey struct {
+	NamespaceID   string
+	ID            string
+	State         string
+	PublicKey     []byte
+	Sealed        []byte
+	CreatedAtMs   int64
+	ActivatedAtMs int64
+	RetiredAtMs   int64
+	DeletedAtMs   int64
+}
+
+type IssuerSetting struct {
+	NamespaceID        string
+	IssuerUrl          string
+	SubjectTemplate    string
+	AllowBlockSubjects int64
+	IncludeActorName   int64
+	Version            int64
+	UpdatedAtMs        int64
+	UpdatedBy          string
+	CopyCheck          string
+}
+
 type ItemKey struct {
 	ID           string
 	NamespaceID  string
@@ -505,6 +550,7 @@ type JobLogChunk struct {
 	Confirmed   int64
 	StoredSize  int64
 	StoredMd5   []byte
+	BlobKey     string
 }
 
 type JobPlan struct {
@@ -547,28 +593,88 @@ type Namespace struct {
 	SourceFilter         string
 }
 
+type Notification struct {
+	Scope      string
+	Sequence   int64
+	ID         string
+	Type       string
+	Object     string
+	ObjectID   string
+	Subject    string
+	Agent      string
+	Severity   int64
+	Summary    string
+	Links      string
+	Attributes string
+	Recipients string
+	DedupeKey  string
+	AtMs       int64
+}
+
+type NotificationCursor struct {
+	Name     string
+	Scope    string
+	Sequence int64
+}
+
+type NotificationDelivery struct {
+	ID             string
+	Scope          string
+	NotificationID string
+	SubscriptionID string
+	SinkID         string
+	Contact        string
+	Principal      string
+	State          string
+	Attempts       int64
+	NextAtMs       int64
+	LastError      string
+	DeliveredAtMs  int64
+	Owner          string
+	LeaseUntilMs   int64
+	Version        int64
+}
+
+type NotificationSequence struct {
+	Scope        string
+	LastSequence int64
+}
+
 type NotificationSink struct {
-	ID          string
-	NamespaceID string
-	Kind        string
-	Name        string
-	Platform    string
-	Target      string
-	CreatedBy   string
-	Version     int64
+	ID        string
+	Scope     string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+	Version   int64
 }
 
 type NotificationSinkRef struct {
-	NamespaceID string
-	Ref         string
+	Scope string
+	Ref   string
 }
 
 type NotificationSinkSecret struct {
-	NamespaceID string
-	Ref         string
+	Scope      string
+	Ref        string
+	SinkID     string
+	Position   int64
+	Ciphertext []byte
+}
+
+type NotificationSubscription struct {
+	ID          string
+	Scope       string
 	SinkID      string
-	Position    int64
-	Ciphertext  []byte
+	Types       string
+	Objects     string
+	MinSeverity int64
+	State       string
+	Reason      string
+	CreatedBy   string
+	Version     int64
 }
 
 type ObjectContext struct {
@@ -929,6 +1035,17 @@ type StateVersion struct {
 	UnlockedWrite     bool
 }
 
+type StoreCheck struct {
+	ID          string
+	Target      string
+	State       string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   int64
+	Error       string
+	Report      string
+}
+
 type TempAdmin struct {
 	PrincipalID      string
 	Subject          string
@@ -956,6 +1073,20 @@ type Trigger struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+}
+
+type TrustRule struct {
+	ID             string
+	Namespace      string
+	Name           string
+	Issuer         string
+	Audience       string
+	KeySource      string
+	StaticKeys     string
+	ConditionsJson string
+	PrincipalID    string
+	CreatedBy      string
+	CreatedAtMs    int64
 }
 
 type UnitFinalVersion struct {

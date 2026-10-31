@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -312,44 +314,44 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 	return list, nil
 }
 
-func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
+func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.checkFence(cp.Ref, fence); err != nil {
-		return err
+		return false, err
 	}
 
 	if !m.runningUnder(cp.Update, cp.Lease) {
-		return stack.ErrWrongUpdateState
+		return false, stack.ErrWrongUpdateState
 	}
 
 	if !m.updates[cp.Update].Mutates() {
-		return stack.ErrWrongUpdateState
+		return false, stack.ErrWrongUpdateState
 	}
 
 	if m.cancelOnPut != nil {
 		m.cancelOnPut()
 
-		return context.Canceled
+		return false, context.Canceled
 	}
 
 	if cp.Sequence > 0 {
 		if last, ok := m.checkpoints[cp.Update]; ok {
 			switch {
 			case cp.Sequence < last.Sequence:
-				return stack.ErrStaleCheckpoint
+				return false, stack.ErrStaleCheckpoint
 			case cp.Sequence == last.Sequence && cp.Digest == last.Digest:
-				return nil
+				return true, nil
 			case cp.Sequence == last.Sequence:
-				return stack.ErrCheckpointConflict
+				return false, stack.ErrCheckpointConflict
 			}
 		}
 	}
 
 	m.checkpoints[cp.Update] = cp
 
-	return nil
+	return false, nil
 }
 
 func (m *memUpdates) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.Checkpoint, error) {
@@ -551,7 +553,28 @@ func (m *memBlob) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (m *memBlob) List(_ context.Context, prefix string) ([]blob.Object, error) {
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (m *memBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := m.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
+}
+
+func (m *memBlob) Ping(context.Context) error {
+	return nil
+}
+
+func (m *memBlob) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -566,10 +589,6 @@ func (m *memBlob) List(_ context.Context, prefix string) ([]blob.Object, error) 
 	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 
 	return out, nil
-}
-
-func (m *memBlob) Ping(context.Context) error {
-	return nil
 }
 
 // ageAll moves every stored modification time back by d, so tests prove the
@@ -614,6 +633,45 @@ func newUpdates(t *testing.T) updatesFixture {
 func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
 	t.Helper()
 
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: nil})
+}
+
+// newUpdatesGuarded is newUpdatesWith with guard as the guard of the blob
+// deletes.
+func newUpdatesGuarded(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, guard blobguard.Watch,
+) updatesFixture {
+	t.Helper()
+
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: guard, wrap: nil})
+}
+
+// newUpdatesWrapped is newUpdatesWith with a wrap of the checkpoint store: a
+// nil wrap uses the in-memory store itself.
+func newUpdatesWrapped(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, wrap func(*memUpdates) stack.CheckpointStore,
+) updatesFixture {
+	t.Helper()
+
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: wrap})
+}
+
+// updatesFixtureOptions holds the parts of the fixture that some tests set:
+// the guard of the blob deletes and the wrap of the checkpoint store. A nil
+// wrap uses the in-memory store itself.
+type updatesFixtureOptions struct {
+	guard blobguard.Watch
+	wrap  func(*memUpdates) stack.CheckpointStore
+}
+
+// newUpdatesFull builds the fixture with the guard and the wrap of opts.
+func newUpdatesFull(
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, opts updatesFixtureOptions,
+) updatesFixture {
+	t.Helper()
+
+	guard, wrap := opts.guard, opts.wrap
+
 	ns := namespace.Namespace{
 		ID:                  namespace.NewID(),
 		CreatedAt:           clk.now,
@@ -639,11 +697,17 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 		blobs = newMemBlob(clk)
 	}
 
+	var checkpoints stack.CheckpointStore = store
+	if wrap != nil {
+		checkpoints = wrap(store)
+	}
+
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
-		Checkpoints:        store,
+		Checkpoints:        checkpoints,
 		Events:             store,
 		Namespaces:         namespaces,
 		Stacks:             store,
@@ -1814,7 +1878,7 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 		BlobMD5:       [16]byte{},
 	}
 
-	if err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
+	if _, err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
 		t.Fatalf("store checkpoint with a missing blob: %v", err)
 	}
 
@@ -1858,11 +1922,11 @@ type recordBlob struct {
 	listed []string
 }
 
-// List implements blob.Store, recording prefix.
-func (m *recordBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	m.listed = append(m.listed, prefix)
+// ListPage implements blob.Store, recording the prefix of each request.
+func (m *recordBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	m.listed = append(m.listed, req.Prefix)
 
-	return m.memBlob.List(ctx, prefix)
+	return m.memBlob.ListPage(ctx, req)
 }
 
 // failBlob fails listings and deletes, to prove sweep failures stay out of
@@ -1875,12 +1939,12 @@ type failBlob struct {
 }
 
 // List implements blob.Store.
-func (m *failBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (m *failBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	if m.listErr != nil {
-		return nil, m.listErr
+		return blob.Page{}, m.listErr
 	}
 
-	return m.memBlob.List(ctx, prefix)
+	return m.memBlob.ListPage(ctx, req)
 }
 
 // Delete implements blob.Store.
@@ -2077,6 +2141,27 @@ func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Upda
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:   blobguardtest.None{},
+		ManualLocks: nil, Updates: f.store, Tokens: nil,
+		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
+		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
+		Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
+		Journal: nil, Replayer: nil, Refusals: f.refusals,
+	})
+	if err != nil {
+		t.Fatalf("new updates: %v", err)
+	}
+
+	return svc
+}
+
+// withKeepSetHookAndGuard is withKeepSetHook with guard as the guard of the
+// blob deletes.
+func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Watch, before func()) *stack.Updates {
+	t.Helper()
+
+	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		BlobGuard:   guard,
 		ManualLocks: nil, Updates: f.store, Tokens: nil,
 		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
 		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,

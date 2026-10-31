@@ -141,11 +141,121 @@ The request needs a running instance. A binary below the minimum cannot write. W
 These checks use the minimum:
 
 - **Writes.** Each write of an instance compares the version of its binary with the highest minimum in the schema. A binary below the minimum fails the write in its own transaction. The Pulumi CLI, OpenTofu and the API get 503. The error code is `schema.binary-below-minimum`, and the text names both versions: `binary version v0.3.0 is below v0.4.0, the minimum binary version of the database schema, so this instance cannot write: stop this instance and run version v0.4.0 or later`. Reads still work. The row delete at a clean stop still works.
+- **Background work.** An instance with a binary below the minimum does not claim or run background work. These calls fail with the same error:
+  - the start, the claim, the renewal, the steps and the end of a durable operation.
+  - the schedules and their ticks, and the heartbeat.
+  - the start and the end of a backup.
+  - the change of the installation state.
+  - the audit chain and the shipping of an audit sink.
+  - the registration of the instance.
+  - the count of sign-in failures.
+
+  A refused claim leaves the operation unclaimed, so an instance of a new binary takes it. These calls stay open, so an old instance can stop cleanly. It deletes its own row, hands back its claims and the lease of an audit sink, and appends audit entries. The revocation of a token, a session or a grant stays open too.
 - **Migrations.** A migration that sets a new minimum does not run while a row below that minimum exists. The new instance fails to start with an error that names the migration, the new minimum and each row: `migration 0200_example.sql sets the minimum binary version v0.4.0 while 1 instance rows are below it: ins-4q2n7xk5b6d3m1p0a8wz (v0.3.0): stop these instances, or delete the row of an instance that no longer runs (DELETE /api/server/instances/{id}), and start again`. Stop the old instances, or delete the rows of the instances that no longer run, and start the new instance again.
 - **Readiness.** An instance with a binary below the minimum answers 503 on the readiness probe. The `failed` list names the check `binary-minimum`, so a load balancer takes the instance out of the pool. The body holds no version text.
 - **Restore.** A restore on a binary below the minimum fails when it starts and again in the swap. The error names both versions. The live data and the minimum stay as they were. Start the restore on an instance of the new binary.
 
 A dev build passes every minimum check: the write check, the migration check, the readiness check and the restore check. A restore never replaces the rows, and a backup does not hold them.
+
+## When the database does not answer
+
+The database can stop, restart or fail over to a replica. While an instance cannot reach the database, it does these things:
+
+- `/health/ready` answers 503. A load balancer with a health check on this route takes the instance out of its pool.
+- Each API answers a request that needs the database with 503 and the header `Retry-After: 5`, not 500. The Pulumi Cloud-compatible API answers `{"code": 503, "message": "..."}`. The TFE-compatible API answers a JSON:API error. The other APIs answer their usual error body. The error code is `namespace.unavailable`.
+- The instance does not restart. When the database answers again, `/health/ready` answers 200 and the instance serves requests again.
+
+The adapters treat these failures as a database that does not answer:
+
+- A failed connection.
+- The SQLSTATE codes 08000, 08001, 08003, 08004, 08006 and 08007 (a connection exception).
+- The SQLSTATE codes 57P01, 57P02 and 57P03 (the database server stops, crashes or does not accept connections yet).
+- The SQLSTATE code 25006 (a read-only database, for example after a failover to a replica).
+- The SQLSTATE code 53300 (too many connections). A session that ends frees a connection, so a new try can work.
+- A SQLite database that stays busy after its busy timeout.
+
+Other errors of the database stay errors with status 500. For example, 08P01 (protocol violation) is a bug. The codes 53200 (out of memory) and 53100 (disk full) are server faults. A new try is likely to meet them again.
+
+### How long a CLI command retries
+
+The Pulumi CLI and OpenTofu retry a request that gets 503. The retry has a limit. A database outage that is longer than the limit makes the running command fail. The command fails with a message that has the status 503.
+
+The e2e suite measured these times on 2026-10-28. For each version, the time is how long the CLI sent the same write again before the command failed. The suite measured them through its own proxy. The proxy answers 503 with `Retry-After: 1` when no instance is ready. The times are measurements. They are not a guarantee, and they may differ for another version, another proxy or another load.
+
+| CLI version | Time that it retried one write |
+| --- | --- |
+| Pulumi 3.200.0 | 14 s |
+| Pulumi 3.250.0 | 13 s |
+| Pulumi 3.272.0 | 14 s |
+| OpenTofu 1.11.14 | More than 30 s. The command did not fail in an outage of 60 s. It completed 6 s after the database came back. |
+| OpenTofu 1.12.7 | More than 30 s. The command did not fail in an outage of 60 s. It completed 7 s after the database came back. |
+| OpenTofu 1.13.2 | More than 30 s. The command did not fail in an outage of 60 s. It completed 6 s after the database came back. |
+
+In the same suite, an outage of 7 s to 8 s did not stop `pulumi up` or `tofu apply`. Both commands completed with exit 0.
+
+A database failover that is longer than these times makes running CLI commands fail. A command that failed leaves the state as it was before the write:
+
+- OpenTofu: no state version stays pending, and the workspace has no lock.
+- Pulumi: the update that the CLI could not complete stays running until its lease ends. A new `pulumi up` then answers 409 and names `pulumi cancel`. Run `pulumi cancel`, and run the command again. It completes.
+
+Run the same command again after the database answers. The next `pulumi preview` and `tofu plan` show no changes.
+
+## Database settings for a failover
+
+After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. Settings in the `DUSTPAN_DATABASE` URL help the pool to leave such a connection:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `target_session_attrs=read-write` | (none) | A new connection must reach a server that accepts writes. The driver closes a connection to a read-only server and does not give it to the pool. Without it, a new connection can reach a read-only server. |
+| `pool_max_conn_lifetime=<duration>` | `1h` | The pool closes a connection when it is older than this time, and opens a new one. A short time limits how long a connection to an old primary can live. |
+| `pool_health_check_period=<duration>` | `1m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
+
+A duration is a number with a unit, for example `5m` or `30s`. The server passes the three settings to the driver as the URL gives them. A value that is not valid stops the start of the server. Example:
+
+```
+DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&target_session_attrs=read-write&pool_max_conn_lifetime=5m&pool_health_check_period=10s'
+```
+
+The values `5m` and `10s` are examples. Nobody measured them against a managed database.
+
+The driver checks `target_session_attrs` only when it opens a connection. A connection that turns read-only after it opened stays in the pool until it reaches `pool_max_conn_lifetime`, which is 1 hour by default. Writes on that connection fail with 503 until then. Set `pool_max_conn_lifetime` lower, for example `5m`, for a faster recovery.
+
+### What was tested
+
+The tests ran on 2026-10-30 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
+
+- The settings above reach the pool as the URL gives them. A value that is not valid is refused.
+- The server answers 503 with `Retry-After: 5` and the error code `namespace.unavailable` for each write while a proxy cuts all its database connections. After the proxy lets the connections through again, the same server accepts writes. Nobody restarted it.
+- A session that the database ended (`pg_terminate_backend`) gives the same 503 answer.
+- A database with `default_transaction_read_only = on` gives the SQLSTATE code 25006 to each write on a new session. A write then gets the same 503 answer. A read still works.
+- With `target_session_attrs=read-write`, the server does not open against that read-only database. It opens against the same database when the database accepts writes.
+
+### What should work, and was not tested
+
+No test ran on these systems:
+
+- A managed database service.
+- A real promotion of a standby.
+- A proxy that pools connections.
+- A URL with more than one host.
+
+The notes below follow from how the services are documented to work. They are not results. Read the documentation of your service for the failover time, and test a failover before you rely on it.
+
+A URL can name more than one host, separated by commas. With `target_session_attrs=read-write`, the driver should try the hosts in order and use the first one that accepts writes. This is how the driver documents it. Nobody tested it here. Use this form only when the database service does not give one address that always names the primary.
+
+| Service | Address to use | What the vendor page says | Vendor page |
+| --- | --- | --- | --- |
+| Amazon RDS Multi-AZ | The endpoint name of the DB instance | The failover changes the DNS record of the DB instance to point to the standby. You must open the existing connections again. | [Failover process for Multi-AZ DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html) |
+| Google Cloud SQL, high availability | The IP address or the connection string of the instance | The standby shares the static IP address of the primary. The failover closes the existing connections. | [High availability](https://docs.cloud.google.com/sql/docs/postgres/high-availability) |
+| Azure Database for PostgreSQL flexible server, zone-redundant high availability | The server host name | Clients connect to the host name of the primary server. The failover updates the DNS record of that name to the IP address of the standby. | [High availability](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/concepts-high-availability) |
+| Patroni | The address of a proxy or a load balancer that sends traffic only to the leader. Use `GET /primary` of the Patroni REST API as its health check. | `GET /primary` answers 200 only on the node that runs as the primary with the leader lock. The page does not say what happens to open connections. | [REST API](https://patroni.readthedocs.io/en/latest/rest_api.html) |
+| CloudNativePG | The `rw` service of the cluster. Its name is `<cluster name>-rw`. | The `rw` service points to the primary instance. The `ro` service points to the replicas. The `r` service points to any instance of the cluster, the primary included. Use `rw`. Not checked against the vendor page on the documentation site: the check read the source file of the documentation in the project repository. | [Service management (source file)](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/docs/src/service_management.md) |
+
+The "What the vendor page says" column is a summary of the page on 2026-10-30. It is not a test result. Do not use the address of one node or a read-only service.
+
+For each service, set `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
+
+During the failover, the instances answer 503 on the readiness probe. They also answer 503 on each request that needs the database. Section "When the database does not answer" describes this. This guide makes no claim about the failover time or about data loss. Both depend on the service and on its settings for synchronous replication.
 
 ## Settings that stay on one host
 

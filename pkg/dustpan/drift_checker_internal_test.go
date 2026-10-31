@@ -178,7 +178,7 @@ func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *drif
 	// The job service reads the namespace service and the gate service only.
 	svc := services{
 		namespaces: namespaces, stacks: nil, updates: nil, secrets: nil, workspaces: nil, manualLocks: nil,
-		tokens: nil, collections: nil, placements: nil, gates: gates, deleted: nil, access: nil, tempAdmins: nil,
+		tokens: nil, collections: nil, placements: nil, gates: gates, deleted: nil, access: nil, tempAdmins: nil, issuer: nil,
 	}
 
 	starter, err := newJobService(svc, cfg)

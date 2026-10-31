@@ -123,9 +123,11 @@ var Settings = []*Setting{
 		referenceNone,
 	),
 	stringSetting(
-		"database", "DUSTPAN_DATABASE", "",
+		"database",
+		"DUSTPAN_DATABASE",
+		"",
 		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
-		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later",
+		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
 	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
 		"installation", "DUSTPAN_INSTALLATION", "local",
@@ -204,6 +206,12 @@ var Settings = []*Setting{
 		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
 		referenceNone,
 	).WithFile("public-url").WithURL(),
+	stringSetting(
+		"issuer-base-url", "DUSTPAN_ISSUER_BASE_URL", "",
+		"host of the OIDC issuer URL of each namespace, for example https://issuer.example.com; "+
+			"empty means --public-url (DUSTPAN_ISSUER_BASE_URL)",
+		"(none: the issuer uses `--public-url`. With neither setting, the issuer is off)",
+	).WithFile("issuer-base-url").WithURL(),
 	stringSetting(
 		"trusted-proxies", "DUSTPAN_TRUSTED_PROXIES", "",
 		"comma-separated CIDRs of trusted proxies, "+
@@ -455,6 +463,12 @@ var Settings = []*Setting{
 	stringSetting(
 		"backup", "", "",
 		"backup ID to check or restore, for example bkp-aaa",
+		referenceNone,
+	),
+	stringSetting(
+		"target", "", "",
+		"store to check: blobs for the live blob store, backup for the backup target. The server reads its own "+
+			"store; the command never takes an address",
 		referenceNone,
 	),
 	boolSetting(

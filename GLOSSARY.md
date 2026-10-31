@@ -108,7 +108,7 @@ The protocol that a source adapter speaks: `tfe-api`, `pulumi-service`, `s3`, `o
 _Avoid_: Source type, provider (that is a block of a profile or a plugin of a tool)
 
 **Job source kind**:
-Where the start of a job came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` (`job.SourceKind`). The server sets it from the caller of `job.Service.Start`. A request to the REST API always starts a job with `api`, and no field of the request changes it.
+Where the start of a job came from: `api`, `agent`, `self-service`, `forge`, `schedule` or `trigger` (`job.SourceKind`). The server sets it from the caller of `job.Service.Start`. A request to the REST API always starts a job with `api`, and no field of the request changes it.
 _Avoid_: Job origin, source type
 
 **Upload source**:
@@ -190,7 +190,7 @@ A source of the value of a setting: `flag`, `env`, `file`, `database` or `defaul
 _Avoid_: Level, tier
 
 **Optional module**:
-A feature outside the core that has its own routes, its own schedules or both, for example the Catalog or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 211). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
+A feature outside the core that has its own routes, its own schedules or both, for example Self-service or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 211). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
 _Avoid_: Feature flag, plugin, add-on, module (alone)
 
 **Capabilities document**:
@@ -273,6 +273,10 @@ _Avoid_: Export format, dump format
 The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28). It is also not the restore of a deleted unit (ADR 47).
 _Avoid_: Recovery, load, import
 
+**Store check**:
+The user-run deep check of a blob store (ADR 281). The server writes throwaway objects under `store-checks/<check ID>/` of the live blob store or of the backup target. It runs the blob conformance cases on them. It measures the latency, the throughput and the delete rate, reports the store capabilities, and deletes the objects. It is a durable operation with a fixed budget. The report says what one run measured on one store. It is not a service level.
+_Avoid_: Benchmark, probe, health check
+
 **Control table**:
 A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
 
@@ -351,7 +355,7 @@ The name that an operator gives an installation with `--installation` (`DUSTPAN_
 _Avoid_: Region, installation ID, server name
 
 **Primary installation**:
-The one installation that owns a namespace and accepts its writes. The namespace row names it. A namespace gets the installation that creates it, and only a promotion changes it (ADR 248).
+The one installation that owns a namespace and accepts its writes. The namespace row names it. A namespace gets the installation that creates it, and only a failover changes it (ADR 248).
 _Avoid_: Home region, home installation, home instance, owning installation, active installation, region (of a namespace)
 
 **Replica installation**:
@@ -370,18 +374,19 @@ _Avoid_: Shard, cell, pod, node
 The optional federation behavior in which a member sends a request for a namespace to its primary installation and streams the answer back. It makes one hop only. The primary installation checks the token and the authorization again. It refuses a request with a token that another installation made for its own installation principal.
 _Avoid_: Proxying (alone), redirect
 
-**Promotion**:
-The operator action that makes a replica installation the primary installation of a namespace. A planned promotion first demotes the old primary installation and loses no change. A forced promotion does not wait for the old primary installation. The server never promotes on its own. The unit of a promotion is the namespace.
-_Avoid_: Failover (as the name of the action), switchover, automatic failover
+**Failover**:
+The operator action that makes a replica installation the primary installation of a namespace (ADR 248, ADR 286). A **planned failover** first demotes the old primary installation and loses no change. A **forced failover** does not wait for the old primary installation. The server never fails over on its own: an operator starts each failover. The unit of a failover is the namespace.
+_Avoid_: Promotion (that is a step along a promotion path), switchover, automatic failover
+_Copy says_: "planned failover" and "forced failover". Say that an operator starts it, and that the server never fails over on its own.
 
 **Divergent tail**:
-The changes that a former primary installation wrote to a namespace after its last replicated change and before it applied a forced promotion. The former primary installation keeps them readable for an export. The server never merges them into the new primary installation.
+The changes that a former primary installation wrote to a namespace after its last replicated change and before it applied a forced failover. The former primary installation keeps them readable for an export. The server never merges them into the new primary installation.
 _Avoid_: Conflict, lost writes, split brain (as a name of the data)
 
 **Failover version**:
-A number that increases by one at each promotion of a namespace, and at each restore.
+A number that increases by one at each failover of a namespace, and at each restore.
 _Avoid_: Epoch, generation
-_Copy says_: no name. Say the effect and the one next step: "The namespace changed while this write ran. Run the command again." Where a name is needed, write "the number of changes of the namespace by a promotion or a restore".
+_Copy says_: no name. Say the effect and the one next step: "The namespace changed while this write ran. Run the command again." Where a name is needed, write "the number of changes of the namespace by a failover or a restore".
 
 **Fence**:
 The namespace and failover version that a write carries. A store rejects the write when the failover version is no longer current.
@@ -396,7 +401,7 @@ _Avoid_: User (when the caller can be a machine), actor
 _Copy says_: "principal", explained once where it first shows: "a person, a service or a workload".
 
 **Principal kind**:
-What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload`. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
+What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `service`. A trust rule names a service principal of its namespace, as a cloud maps a workload identity to a service account. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
 _Avoid_: Principal type, account type, token kind (a token kind is `personal` or `service`)
 
 **Principal of a namespace**:
@@ -434,6 +439,38 @@ _Avoid_: Login, cookie (the cookie only carries the session)
 **Session policy**:
 The administrator settings of the console sessions for the installation: the period with no use after which a session ends, and its maximum length. Only a site administrator can change them.
 
+**Local user**:
+A person principal that signs in to the console with no identity provider. It signs in with a user name and a password, with a passkey, or with both. One local user record and the passkeys of the person name the same principal, so both credentials sign in the same person. The provider of its sessions is `local`.
+_Avoid_: Local account, built-in user, basic auth user
+
+**Passkey**:
+A WebAuthn credential of a person. For a local user it is a sign-in of its own, with user verification. After a password it is a second factor.
+_Avoid_: Security key (a security key is one kind of authenticator that holds a passkey), FIDO key
+
+**Pending sign-in**:
+The state after a first method, such as a password, and before the second factor. It holds no rights, lives 300 seconds, and becomes void after 5 wrong factors.
+_Avoid_: Half session, partial login
+
+**Factor lockout**:
+The lock of the second factors of a person after 10 wrong factors in a row, across every pending sign-in, for 30 minutes. A good password does not end it.
+_Avoid_: MFA lock, TOTP lock
+
+**Recovery code**:
+A one-use code for a sign-in when a person lost each factor. The server shows a set of 10 one time and stores only their digests.
+_Avoid_: Backup code
+
+**Reset code**:
+A one-use code that an administrator makes for a local user, to set up or reset the password. The server shows it once to the administrator and stores only its digest. It ends after 1 hour by default.
+_Avoid_: Temporary password, reset token
+
+**Lockout by name**:
+The lock of a user name after wrong passwords in a row. 10 from one source prefix lock the name from that prefix for 30 minutes. 100 from every source lock the name for every source for 30 minutes, doubling for each new lock up to 24 hours. Every instance shares the counts, and an unknown name locks the same as a known one. A passkey sign-in never reads the lock.
+_Avoid_: Account lock (the principal stays enabled)
+
+**Demo user**:
+The person `dev:demo` that `opendustpan dev --demo` makes. At each start the server makes a new password for it, keeps the password in memory only, and shows it on the sign-in page. It exists only on an installation of the kind dev, and a person cannot change its credentials.
+_Avoid_: Guest user, test user
+
 **Personal token**:
 An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).
 _Avoid_: PAT, user token
@@ -460,8 +497,12 @@ An access token that belongs to a principal that is not a person, for a machine 
 _Avoid_: API key, robot token, machine token
 
 **Trust rule**:
-A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets (ADR 54).
+A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets: a service principal of that namespace (ADR 54).
 _Avoid_: Trust policy, federation rule
+
+**Token exchange**:
+A request of a workload to a namespace. The workload sends a JWT of its issuer. It gets an access token of the kind `trust` for the principal of the one trust rule that accepts the JWT. The access token lives the exchange lifetime of the token policy, one hour by default (ADR 54, ADR 69).
+_Avoid_: Token swap, federation login, OIDC login
 
 **Group**:
 A named set of principals of one principal home: the installation or one namespace. A group of a namespace holds principals of that namespace only. A principal can be a member of more than one group of its home (ADR 52, ADR 215).
@@ -736,7 +777,7 @@ _Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edi
 
 **Storage limit**:
 The fair-use limit on the stored bytes of a namespace (ADR 220 decision 13). Its setting is `limits.storageBytes`. At the limit, the server refuses the start of new work, never work in progress.
-_Avoid_: Quota (the catalog quota is another concept), storage quota
+_Avoid_: Quota (the self-service quota is another concept), storage quota
 
 ### Resources and self-service
 
@@ -781,7 +822,7 @@ A trigger of the kind `follows`. It names a source unit. After the source applie
 _Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
 
 **Registry release**:
-One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101). A module release holds one archive and no signature.
 _Avoid_: Package, artifact (that is a plan or a log of a job)
 
 **Registry address**:
@@ -796,17 +837,30 @@ _Avoid_: Signing certificate, GPG key (the format is OpenPGP), trusted publisher
 A file of an upload that the server holds under a staging key until a publish moves it. It is not readable through the registry. A publish measures it again, checks it, and copies it to its content key. A staged file that no publish moved is deleted after 24 hours.
 _Avoid_: Temporary file, pending upload
 
-**Catalog**:
-The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
-_Avoid_: Service catalog, marketplace, portal, inventory
+**Self-service**:
+The request gateway of OpenDustpan, with its routes under `/api/dustpan/v1/self-service/` (ADR 210, ADR 286). A principal sends a self-service request to it, for example for a unit from a blueprint. Write it with a capital S as the name of the feature and the menu item. The private registry is a separate feature with its own menu item, **Registry**.
+_Avoid_: Catalog (as the name of the feature), service catalog, marketplace, portal, inventory, registry (that is the private registry)
 
-**Catalog request**:
-A declarative JSON document that a principal sends to the Catalog. It states the result that the principal wants, not the steps to get it.
-_Avoid_: Order, ticket, form
+**Self-service request**:
+A declarative JSON document that a principal sends to Self-service. It states the result that the principal wants, not the steps to get it.
+_Avoid_: Catalog request, order, ticket, form
 
 **Blueprint**:
 A program that a platform team offers for self-service, with an input schema, platform values and a version. Units made from it are normal stacks or workspaces.
 _Avoid_: Template (Pulumi templates copy code), no-code module, product, offering, golden path
+
+**Promotion path**:
+An ordered list of 2 to 10 units of one namespace, from dev to prod, along which a change moves (RFC 55, ADR 286). A unit is in at most one promotion path.
+_Avoid_: Lane, environment (that is a profile of the Pulumi CLI), pipeline, stage
+
+**Promote**:
+To move a change one step along a promotion path. The change copies the blueprint version and the marked answers of one unit to the next unit of the path, or the applied commit. It is a normal change of the next unit, with all its gates. One such change is a **promotion**. The server never promotes on its own.
+_Avoid_: Advance, deploy, sync
+_Copy says_: "promote" for a step along a promotion path only. For an installation, write "failover". For a signing key, write "activate".
+
+**Comparison**:
+The side-by-side read of two units, for example two steps of a promotion path (RFC 55). It stores nothing. The server marks each part that the caller cannot read `hidden`.
+_Avoid_: Diff (a state diff compares two versions of one unit), delta
 
 ### Jobs and runners
 
@@ -871,7 +925,7 @@ The first of the two writes that store a plan (`job.RecordStore.ReservePlan`). I
 _Avoid_: Draft plan, pending plan
 
 **Chunk reserve and `confirm`**:
-The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Another hash for a reserved sequence number is a conflict.
+The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Each write attempt stores its blob under a key of its own, `<sequence number>-<attempt ID>`, and the second write records that key in the row. The attempt whose second write commits first wins. An attempt that loses deletes only its own blob. Another hash for a reserved sequence number is a conflict.
 _Avoid_: Two-phase commit (the blob store is not part of a transaction), staging
 
 **Step key**:
@@ -1056,7 +1110,7 @@ _Avoid_: Deploy job, run (alone)
 
 **Author (change order)**:
 The principal that created a change order, or that attached a plan revision to it (ADR 190 decision 4). An author never approves, requests changes, rejects, opens a blocking thread or resolves one, also when the author holds `changeorder:approve`. An agent is never an author.
-_Avoid_: Owner (that is a context field), requester (that is of a Catalog request)
+_Avoid_: Owner (that is a context field), requester (that is of a self-service request)
 
 **Signature**:
 The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A principal has at most one signature on each revision. A new revision voids it, with the cause `new-plan`, unless signature carry-over holds. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
@@ -1169,7 +1223,7 @@ A link from a profile to a namespace, a collection or a unit. The jobs of each u
 _Avoid_: Binding, assignment (an assignment is a runner term)
 
 **Attachment authority**:
-The principal whose actions an open uses. For a direct open, it is the caller. For a job open, it is the principal who made the attachment. For an attachment of the Catalog, it is the person who published the blueprint version. The server checks the full set of the attach checks again at each open of a job. These are the job start, each step, each token renewal and each read of a session. A person who passes the attach checks can re-authorize an attachment (ADR 203 decision 4).
+The principal whose actions an open uses. For a direct open, it is the caller. For a job open, it is the principal who made the attachment. For an attachment of Self-service, it is the person who published the blueprint version. The server checks the full set of the attach checks again at each open of a job. These are the job start, each step, each token renewal and each read of a session. A person who passes the attach checks can re-authorize an attachment (ADR 203 decision 4).
 _Avoid_: Attachment owner, run-as
 
 **Change rule**:
@@ -1198,11 +1252,16 @@ _Avoid_: Open request
 
 **Issuer**:
 The OIDC issuer of one namespace, at `https://<issuer host>/oidc/<namespace ID>`, with its own signing keys (ADR 204). The issuer host comes from the installation setting `issuerBaseURL`, else from `publicURL`. When the namespace sets `issuerURL`, `iss` is that URL, and the server signs only with a key that the copy check found at that URL. Its paths `/oidc/<namespace ID>/...` are outside the versioned API. Clouds and other systems trust it.
+A rotation of the signing keys of the issuer **activates** the `next` key: the `next` key becomes the `active` key (ADR 286). The rotate answer says it in the field `activated`.
 _Avoid_: Identity provider (an identity provider signs in people), OIDC provider (alone)
 
 **Issued token**:
 A JWT that the issuer of a namespace signs, with the claims of ADR 205. Its `purpose` is `login` or `adapter`. It lives at most 60 minutes.
 _Avoid_: ID token, access token (an access token authenticates to OpenDustpan)
+
+**Copy check**:
+The check of the two files at the `issuerURL` of a namespace. The discovery document must name the issuer and the JWKS address. The JWKS must hold the key ID of the active key, and of the next key before its activation (ADR 204 decision 3). The server signs only with a key that a copy check found.
+_Avoid_: Sync check, key check
 
 **Subject template**:
 The list of keys that make the `sub` of an issued token, for example `namespace`, `collection`, `tool`, `unit` and `access` (ADR 205 decision 6).
@@ -1515,7 +1574,7 @@ _Avoid_: Language (for formats), region
 
 **Message file**:
 The file that holds the messages of one language in ICU MessageFormat (ADR 181). The console has one for each language, and the server has one for each language of its emails and chat notices (ADR 234). It marks each high-stakes message, which needs native review before it ships. Each translated message carries its translation status and the hash of its English source (ADR 232).
-_Avoid_: Catalog (that is the self-service gateway), translation table
+_Avoid_: Catalog (a common noun for a fixed list), translation table
 
 **Term list**:
 The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). It adds to the shared term list, which holds the names of tools and projects, commands and CLI flags for every language (ADR 233). A check fails a translation that changes a term. A language can ship with a draft list. An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
@@ -1555,6 +1614,16 @@ _Avoid_: Legacy error, untyped error
 
 ### Operations
 
+**Phone-home**:
+Data about an installation, its use or its users that leaves the installation for a destination that the operator did not name (ADR 74). Examples of such destinations are the project, a vendor and any other third party. Examples are usage counts, feature use, crash reports, install pings and version checks that send data to a project server. The test is the destination: who chose it, and does data leave before the operator names it. Opt-in, opt-out and off by default are all phone-home. The server has no phone-home and no code for it.
+_Avoid_: Telemetry (alone: OpenTelemetry uses the same word for metrics, logs and traces), analytics, usage data (alone), tracking
+_Copy says_: "phone-home" or "usage reporting".
+
+**Observability**:
+The metrics, logs, traces, probes and audit log of an installation, for its operator (ADR 74 decision 4). Observability data goes only to a destination that the operator configures, for example a Prometheus scrape, an OpenTelemetry collector or a log sink. Or it stays in the server, for example the run data of jobs, and the operator reads it there. It is not phone-home.
+_Avoid_: Telemetry (alone), monitoring data, diagnostics
+_Copy says_: "metrics", "logs" or "traces", with the destination that the operator configures.
+
 **Incident**:
 An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.
 _Avoid_: Ticket, outage, alert
@@ -1583,7 +1652,8 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
 - **Lease** names the update lease of the Pulumi CLI, the rotation lease of a rotator block, and a lease of Vault (ADR 207). Name which one.
 - **Orphan** means a stored file, for example a blob that no row names. For a cloud resource that no unit manages, or that two units manage, write "unmanaged resource" and name its kind.
-- **Catalog** is the self-service gateway only. The list of all units is the inventory.
+- **Catalog** is a common noun for a fixed list, for example the catalog of error codes or the tool catalog of the agent. It is not the name of a feature. The request gateway is Self-service (ADR 286). The list of all units is the inventory.
+- **Promotion** is a step along a promotion path only. The action that makes a replica installation the primary installation is a failover. A `next` signing key becomes the active key by an activation (ADR 286).
 - **Job** and **operation** are different. A job is work that OpenDustpan asks an executor to do on one unit. Each phase of a job is one durable operation (ADR 100). The operation of a job is `plan`, `apply`, `destroy` or `refresh`. Name which one.
 - **Migration** means a SQL schema migration only. For the move of a unit into OpenDustpan, write "import".
 - **Restore** has three meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). A restore of a deleted unit brings the unit back before its purge (ADR 47). Name which one.

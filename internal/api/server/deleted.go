@@ -48,6 +48,8 @@ type deletedSweepResponse struct {
 	Skipped            int                 `json:"skipped"`
 	FinishedBlobPurges int                 `json:"finishedBlobPurges"`
 	PendingBlobPurges  int                 `json:"pendingBlobPurges"`
+	WaitingBlobPurges  int                 `json:"waitingBlobPurges"`
+	WaitingFor         string              `json:"waitingFor"`
 }
 
 // sweepRunningMessage is the answer of the sweep route while another sweep
@@ -115,6 +117,8 @@ func (h *Handler) sweepDeletedUnits(w http.ResponseWriter, r *http.Request, p id
 		Skipped:            res.Skipped,
 		FinishedBlobPurges: res.FinishedBlobPurges,
 		PendingBlobPurges:  res.PendingBlobPurges,
+		WaitingBlobPurges:  res.WaitingBlobPurges,
+		WaitingFor:         res.WaitingFor,
 	}
 
 	for _, d := range res.Purged {
