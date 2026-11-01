@@ -71,7 +71,10 @@ type memUpdateStore struct {
 	journal      map[stack.UpdateID][]stack.JournalBatchRef
 	refusals     map[stack.UpdateID][]stack.JournalRefusal
 	seqs         map[stack.UpdateID][]int64
-	mu           sync.Mutex
+	// stacks resolves the stack ID of the item key of a new update, as the
+	// Stacks of the update service does.
+	stacks stack.CheckpointStacks
+	mu     sync.Mutex
 }
 
 func newMemUpdateStore() *memUpdateStore {
@@ -83,6 +86,7 @@ func newMemUpdateStore() *memUpdateStore {
 		journal:      map[stack.UpdateID][]stack.JournalBatchRef{},
 		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
 		seqs:         map[stack.UpdateID][]int64{},
+		stacks:       nil,
 		mu:           sync.Mutex{},
 	}
 }
@@ -90,8 +94,18 @@ func newMemUpdateStore() *memUpdateStore {
 func (m *memUpdateStore) CreateUpdate(
 	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
 ) error {
+	st, err := m.stacks.GetStack(ctx, u.Ref)
+	if err != nil {
+		return err
+	}
+
+	item, err := key.RefFor(u.Ref.Namespace, st.ID, u.ID)
+	if err != nil {
+		return err
+	}
+
 	// The fake has no transaction: a sealer of the tests needs none.
-	if _, err := key.NewKey(ctx, nil, key.Ref, fence); err != nil {
+	if _, err := key.NewKey(ctx, nil, item, fence); err != nil {
 		return err
 	}
 
@@ -422,6 +436,13 @@ func (m *memUpdateStore) ListEvents(
 	return out, nil
 }
 
+// resolving sets the stack resolver of m and returns m.
+func (m *memUpdateStore) resolving(stacks stack.CheckpointStacks) *memUpdateStore {
+	m.stacks = stacks
+
+	return m
+}
+
 // memBlob is an in-memory blob.Store. Writes are write-once, as the port
 // requires: Put on an existing key fails with ErrExists.
 type memBlob struct {
@@ -611,7 +632,7 @@ func newUpdateFixtureWithAuthenticator(
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        opts.manual,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
@@ -2844,7 +2865,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,

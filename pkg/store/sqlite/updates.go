@@ -37,11 +37,11 @@ func (s *Store) CreateUpdate(
 			return err
 		}
 
-		// Defense in depth: Updates.Create builds the key for the stack that
-		// it resolved. This check stays so that the key record of an update
-		// always names the stack of the row, also after a rename between
-		// that resolve and this transaction, or for a new caller.
-		if keyErr := stack.CheckUpdateKey(key, u.Ref.Namespace, stack.ID(stackID), u.ID); keyErr != nil {
+		// The reference names the stack that this transaction resolved, so
+		// a rename of the stack cannot give the key of the update to
+		// another stack.
+		item, keyErr := key.RefFor(u.Ref.Namespace, stack.ID(stackID), u.ID)
+		if keyErr != nil {
 			return keyErr
 		}
 
@@ -78,7 +78,7 @@ func (s *Store) CreateUpdate(
 
 		// The record of the item key commits with the update row: a failed
 		// key write rolls the update back.
-		if _, err := key.NewKey(ctx, itemKeyTx{q: q, fence: fence}, key.Ref, fence); err != nil {
+		if _, err := key.NewKey(ctx, itemKeyTx{q: q, fence: fence}, item, fence); err != nil {
 			return fmt.Errorf("item key of update %s: %w", u.ID, err)
 		}
 
