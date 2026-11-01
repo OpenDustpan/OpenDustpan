@@ -129,6 +129,13 @@ func (s *Store) DeleteCollection(
 
 		e.Changes = append(e.Changes, removed...)
 
+		rules, ruleErr := purgePlacementRules(ctx, q, ref, audit.MaxChanges-len(e.Changes))
+		if ruleErr != nil {
+			return ruleErr
+		}
+
+		e.Changes = append(e.Changes, rules...)
+
 		return removeCollection(ctx, q, ref)
 	})
 }

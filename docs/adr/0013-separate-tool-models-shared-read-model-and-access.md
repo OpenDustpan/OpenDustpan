@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-10 · the rebuild of the inventory superseded in part by ADR 150 · extended by ADR 247 (labels and `consoleUrl` on the inventory entry)
 
+Changed by:
+
+- ADR 19 extends: the unit ID in its own inventory column.
+- ADR 41 changes: the words opaque state.
+- ADR 150 changes: the rebuild of the inventory.
+- ADR 247 extends: labels and consoleUrl on the inventory entry.
+- ADR 265 extends: a set of unit states replaces the one status.
+
 ## Context
 
 ADR 12 makes OpenDustpan a backend for several infrastructure-as-code tools.

@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-27. Decided by the project owner. Accepts RFC 105 (option 3). Extends ADR 72 (the restore operation and the lease period). Adds milestone 7 to the release gate of ADR 279
 
+Changed by:
+
+- ADR 281 extends decision 5: how the server works with any S3-compatible
+  store.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+- ADR 298 extends decision 4: what each instance does while the
+  PostgreSQL primary fails over.
+
 ## Context
 
 ADR 72 accepted RFC 36: several instances of one installation on one

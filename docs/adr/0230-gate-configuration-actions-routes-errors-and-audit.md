@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 117 decisions 2, 5, 6 and 7. Supersedes in part ADR 196 decisions 1 and 5, and ADR 197 decisions 5 and 6. Decision 3 amended by ADR 268
 
+Changed by:
+
+- ADR 268 changes decision 3: the route DELETE of the approval default.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 ADR 117 gives `namespace:manage-policy` and a route

@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-12
 
+Changed by:
+
+- ADR 62 changes decision 2: the reservation of the outputs document and its
+  seal.
+
 ## Context
 
 [RFC 58](../rfc/0058-large-request-limits.md) found that large request

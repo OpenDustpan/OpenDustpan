@@ -101,6 +101,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/trigger"
+	"opendustpan.org/opendustpan/pkg/unitsettings"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -205,8 +206,10 @@ type settings struct {
 	sinks                sinkSettings
 	jobStore             job.Store
 	triggerStore         trigger.Store
+	unitSettingsStore    unitsettings.Store
 	driftStore           drift.Store
 	savedViewStore       savedview.Store
+	settingsConfig       settingsConfig
 	gitHost              gitHostSettings
 	registry             *registrySettings
 	idempotencyStore     idempotency.Store
@@ -746,6 +749,9 @@ type services struct {
 	// collections is the collection service (ADR 51), or nil when the store
 	// holds no collections. NewServer sets it after newServices.
 	collections *collection.Service
+	// placements is the placement rule service, or nil when the store holds
+	// no placement rules. NewServer sets it after newServices.
+	placements *collection.PlacementService
 	// gates checks the writes of state against the access limits and the
 	// gates of state.write, or is nil when the store keeps no gates.
 	gates *gateService
@@ -770,6 +776,7 @@ func defaultSettings() *settings {
 		denialLimiter:           defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
+		settingsConfig:          settingsConfig{store: nil, declarations: nil, static: nil},
 		blobGuard:               nil,
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
@@ -792,6 +799,7 @@ func defaultSettings() *settings {
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		triggerStore:            nil,
+		unitSettingsStore:       nil,
 		driftStore:              nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
@@ -891,7 +899,7 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
-	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
+	err = svc.addCollectionServices(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1313,6 +1321,9 @@ type neutralHandlers struct {
 	// triggers is nil when no trigger store is set, or the server lacks the
 	// job service that a trigger starts a plan through.
 	triggers http.Handler
+	// unitSettings is nil when no store of unit settings is set, or the server
+	// lacks the Git host store or the runner stores that the settings check.
+	unitSettings http.Handler
 	// drift is nil when no drift store is set.
 	drift http.Handler
 	// registry is nil when no registry store is set.
@@ -1365,7 +1376,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	triggers, err := newTriggersHandler(svc, cfg, onFailure)
+	late, err := newTriggersAndSettingsHandlers(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1376,17 +1387,18 @@ func newNeutralHandlers(
 	}
 
 	return neutralHandlers{
-		inventory: units,
-		audit:     entries,
-		context:   contexts,
-		runners:   runners,
-		profiles:  profileAPI.profiles,
-		issuer:    profileAPI.issuer,
-		sinks:     profileAPI.sinkAPI,
-		jobs:      jobAPIs.jobs,
-		triggers:  triggers,
-		drift:     jobAPIs.drift,
-		registry:  registries,
+		inventory:    units,
+		audit:        entries,
+		context:      contexts,
+		runners:      runners,
+		profiles:     profileAPI.profiles,
+		issuer:       profileAPI.issuer,
+		sinks:        profileAPI.sinkAPI,
+		jobs:         jobAPIs.jobs,
+		triggers:     late.triggers,
+		unitSettings: late.unitSettings,
+		drift:        jobAPIs.drift,
+		registry:     registries,
 
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
@@ -1743,8 +1755,18 @@ func checkStoreOptions(cfg *settings) error {
 	case cfg.inventoryReader == nil:
 		return fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
 	default:
-		return checkAuditStores(cfg)
+		return checkOptionalStores(cfg)
 	}
+}
+
+// checkOptionalStores refuses a namespace store that keeps no audit entries,
+// and declarations of settings that are not valid.
+func checkOptionalStores(cfg *settings) error {
+	if err := checkAuditStores(cfg); err != nil {
+		return err
+	}
+
+	return checkSettingDeclarations(cfg)
 }
 
 // checkAuditStores refuses a namespace store that keeps no audit entries. A
@@ -1954,13 +1976,8 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		updates:     updates,
 		secrets:     secrets,
 		workspaces:  workspaces,
-		tokens:      nil,
-		tempAdmins:  nil,
-		deleted:     nil,
-		access:      nil,
-		collections: nil,
-		gates:       nil,
-		issuer:      nil,
+		tokens:      nil, tempAdmins: nil, deleted: nil, access: nil, collections: nil, placements: nil, gates: nil,
+		issuer: nil,
 	}, nil
 }
 
@@ -2899,6 +2916,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Collections:   svc.collections,
+		Placements:    svc.placements,
 		Locks:         svc.manualLocks,
 		Moves:         moves,
 		Authenticator: cfg.authenticator,
@@ -3051,7 +3069,7 @@ func newServerHandler(
 		Workers:          cfg.watch,
 		SignIn:           deps.signIn,
 		Preferences:      newPreferencesService(cfg),
-
+		Settings:         newSettingService(cfg, cfg.namespaceStore),
 		InstallationKind: cfg.installationKind,
 		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
@@ -3301,6 +3319,40 @@ func newCollectionService(cfg *settings) (*collection.Service, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("collection service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// addCollectionServices sets the collection service, the gate service and the
+// placement rule service. A custom store without placement rules gets no
+// placement service, so its placement routes are not served and the rest of the
+// API works as before.
+func (s *services) addCollectionServices(cfg *settings) error {
+	var err error
+
+	s.collections, s.gates, err = newCollectionAndGateServices(cfg, s.namespaces)
+	if err != nil {
+		return err
+	}
+
+	if store, ok := cfg.namespaceStore.(collection.PlacementStore); ok {
+		s.placements, err = newPlacementService(cfg, store)
+	}
+
+	return err
+}
+
+// newPlacementService builds the placement rule service on the namespace store
+// and its placement port.
+func newPlacementService(cfg *settings, store collection.PlacementStore) (*collection.PlacementService, error) {
+	svc, err := collection.NewPlacementService(collection.PlacementConfig{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("placement service: %w", err)
 	}
 
 	return svc, nil
@@ -4153,8 +4205,8 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// reach their own handlers by exact path, so another area can take the
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
 	for _, h := range []http.Handler{
-		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.drift,
-		a.sourceFilter, a.trustRules,
+		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.unitSettings,
+		a.drift, a.sourceFilter, a.trustRules,
 	} {
 		mountV1(mux, h, wrapV1)
 	}

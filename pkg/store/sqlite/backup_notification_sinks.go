@@ -33,7 +33,7 @@ func sqliteSinkBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "notification_sink_secrets",
-			columns: []string{sinkColScope, sinkColRef, sinkColSinkID, "position", sinkColCiphertext},
+			columns: []string{sinkColScope, sinkColRef, sinkColSinkID, backupColPosition, sinkColCiphertext},
 		},
 		{
 			table:   "notification_sink_refs",

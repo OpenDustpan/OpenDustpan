@@ -241,6 +241,7 @@ func newMoveFixtureFull(
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,

@@ -2,6 +2,23 @@
 
 Status: accepted · 2026-10-13. The built-in planner role added by ADR 212. Decisions 1 and 2 superseded in part by ADR 215: a principal and a group can belong to one namespace, by a setting. Decision 5 superseded in part by ADR 216: a setting decides whether a grant on the installation reaches a namespace. Decision 9 superseded by ADR 223
 
+Changed by:
+
+- ADR 67 changes decisions 1, 3 and 4: principals of a namespace.
+- ADR 67 extends decision 10: the export lists who holds
+  principal:manage-tokens.
+- ADR 70 changes: the consequence on groups from an identity provider.
+- ADR 203 extends decision 10: attachments with an invalid authority in the
+  access-review export.
+- ADR 212 extends decision 6: the built-in planner role.
+- ADR 215 changes decisions 1 and 2: principals and groups can belong to one
+  namespace.
+- ADR 216 changes decision 5: a setting decides if installation grants reach a
+  namespace.
+- ADR 222 supersedes decision 9: attribute conditions on grants.
+- ADR 223 supersedes decision 9: attribute conditions are access limits.
+- ADR 223 extends decision 10: the access-review export lists the limits.
+
 ## Context
 
 ADR 6 leaves users, teams and roles as "next identity work". Today one static

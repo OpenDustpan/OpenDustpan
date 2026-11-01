@@ -1197,6 +1197,11 @@ SELECT blob_key FROM update_journal
 WHERE stack_id = ? AND update_id = ?
 ORDER BY arrival;
 
+-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;
+
 -- name: DeleteJournalSequences :exec
 DELETE FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ?;
@@ -2729,6 +2734,35 @@ INSERT INTO import_ledger (
 -- The number of committed versions of an import. An import that has one
 -- cannot plan again.
 SELECT COUNT(*) FROM import_ledger
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
+
+-- name: InsertImportUploadCommit :execrows
+-- The commit row of one upload version, in one statement: the namespace must
+-- hold the failover version of the caller, the import must not have
+-- ended, and the attempt must have started no more than deadline_ms before
+-- the clock of the database, and no more than skew_ms ahead of it. The time of
+-- the row is the clock of the database. It inserts no row when a check fails, and the primary key
+-- refuses a second row for the version.
+INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
+SELECT n.id, i.id, sqlc.arg(unit_dir), sqlc.arg(sequence), sqlc.arg(facts), CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+FROM namespaces n
+JOIN imports i ON i.namespace_id = n.id
+WHERE n.name = sqlc.arg(namespace) AND n.failover_version = sqlc.arg(failover_version)
+  AND i.id = sqlc.arg(import_id) AND i.state NOT IN ('released', 'canceled')
+  AND sqlc.arg(started_at_ms) + sqlc.arg(deadline_ms) >= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+  AND sqlc.arg(started_at_ms) <= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + sqlc.arg(skew_ms);
+
+-- name: ListImportUploadCommits :many
+-- The commit rows of one unit directory of an import, in the order of the
+-- sequences.
+SELECT namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms
+FROM import_upload_commits
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id)
+  AND unit_dir = sqlc.arg(unit_dir)
+ORDER BY sequence;
+
+-- name: DeleteImportUploadCommits :exec
+DELETE FROM import_upload_commits
 WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
 
 -- name: ListImportLedger :many
@@ -4382,6 +4416,156 @@ SELECT id, binary_version, started_at_ms
 FROM instance_versions
 ORDER BY started_at_ms, id;
 
+-- name: ListSettings :many
+-- The database values of one scope, in key order.
+SELECT key, value
+FROM settings
+WHERE scope_id = sqlc.arg(scope_id)
+ORDER BY key;
+
+-- name: GetSettingsState :one
+-- The revision and the digest of the static layer of one scope. No row means
+-- a scope that never changed.
+SELECT revision, static_digest
+FROM settings_state
+WHERE scope_id = sqlc.arg(scope_id);
+
+-- name: UpsertSetting :exec
+INSERT INTO settings (scope_id, key, value, updated_at_ms)
+VALUES (sqlc.arg(scope_id), sqlc.arg(key), sqlc.arg(value), sqlc.arg(updated_at_ms))
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms;
+
+-- name: DeleteSetting :exec
+DELETE FROM settings WHERE scope_id = sqlc.arg(scope_id) AND key = sqlc.arg(key);
+
+-- name: UpsertSettingsRevision :exec
+-- Sets the revision of a scope and keeps its digest.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), '')
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision;
+
+-- name: UpsertSettingsDigest :exec
+-- Sets the digest of the static layer and the revision of the installation.
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES (sqlc.arg(scope_id), sqlc.arg(revision), sqlc.arg(static_digest))
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest;
+
+
+-- name: GetUnitSettings :one
+-- The namespace is part of the key: a row of the same unit ID in another
+-- namespace reads as no row.
+SELECT s.unit_id, n.name AS namespace, s.version, s.body, s.updated_at_ms
+FROM unit_settings AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND s.unit_id = sqlc.arg(unit_id);
+
+-- name: InsertUnitSettings :execrows
+-- The caller checks the fence in the same transaction. A row that exists for
+-- the unit is not written: the count is 0.
+INSERT INTO unit_settings (unit_id, namespace_id, version, body, updated_at_ms)
+VALUES (
+    sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), 1,
+    sqlc.arg(body), sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (unit_id) DO NOTHING;
+
+-- name: UpdateUnitSettings :execrows
+-- Replaces the row that the caller read: the version must be the one that the
+-- caller read, and the namespace must match. It sets the version one above.
+UPDATE unit_settings
+SET body = sqlc.arg(body), version = CAST(sqlc.arg(expected) AS INTEGER) + 1, updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE unit_id = sqlc.arg(unit_id) AND version = CAST(sqlc.arg(expected) AS INTEGER)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteUnitSettings :execrows
+-- Deletes the row that the caller read, and no other row.
+DELETE FROM unit_settings
+WHERE unit_id = sqlc.arg(unit_id) AND version = CAST(sqlc.arg(expected) AS INTEGER)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteUnitSettingsOfUnit :exec
+-- Removes the settings of a purged unit, in the same transaction as the purge.
+DELETE FROM unit_settings
+WHERE unit_id = sqlc.arg(unit_id)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetUnitDefaults :one
+SELECT n.name AS namespace, d.pool, d.version, d.updated_at_ms
+FROM unit_defaults AS d
+JOIN namespaces AS n ON n.id = d.namespace_id
+WHERE n.name = sqlc.arg(namespace);
+
+-- name: InsertUnitDefaults :execrows
+-- The caller checks the fence in the same transaction. A row that exists is
+-- not written: the count is 0.
+INSERT INTO unit_defaults (namespace_id, pool, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(pool), 1,
+    sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (namespace_id) DO NOTHING;
+
+-- name: UpdateUnitDefaults :execrows
+-- Replaces the row that the caller read: the version must be the one that the
+-- caller read. It sets the version one above.
+UPDATE unit_defaults
+SET pool = sqlc.arg(pool), version = CAST(sqlc.arg(expected) AS INTEGER) + 1, updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE version = CAST(sqlc.arg(expected) AS INTEGER)
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+
+-- name: CreatePlacementRule :exec
+-- The caller checks the fence in the same transaction and renumbers the list
+-- after the insert.
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetPlacementRule :one
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = ? AND r.id = ?;
+
+-- name: ListPlacementRules :many
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = ?
+ORDER BY r.position, r.id;
+
+-- name: ListPlacementRuleIDs :many
+-- The IDs of the rules of a namespace in list order.
+SELECT id
+FROM placement_rules
+WHERE namespace = ?
+ORDER BY position, id;
+
+-- name: UpdatePlacementRuleContent :execrows
+UPDATE placement_rules
+SET tool = ?, project = ?, stack = ?, collection_key = ?
+WHERE namespace = ? AND id = ?;
+
+-- name: SetPlacementRulePosition :exec
+UPDATE placement_rules
+SET position = ?
+WHERE namespace = ? AND id = ?;
+
+-- name: DeletePlacementRule :execrows
+DELETE FROM placement_rules
+WHERE namespace = ? AND id = ?;
+
+-- name: ListPlacementRulesOfCollection :many
+-- The rules that name one collection, for the audit entry of its delete.
+SELECT id, tool, project, stack
+FROM placement_rules
+WHERE namespace = ? AND collection_key = ?
+ORDER BY position, id;
+
+-- name: DeletePlacementRulesOfCollection :exec
+DELETE FROM placement_rules
+WHERE namespace = ? AND collection_key = ?;
+
+
 -- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
 VALUES (?, ?, 'running', ?, ?, 0, '', '')
@@ -4626,4 +4810,5 @@ DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(
 SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms, COALESCE(disabled_at_ms, 0) AS disabled_at_ms
 FROM principals
 WHERE id = sqlc.arg(id);
+
 

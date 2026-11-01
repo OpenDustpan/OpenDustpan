@@ -1,0 +1,6 @@
+unit-settings.bulk-size
+unit-settings.connection-lacks-capability
+unit-settings.connection-unknown
+unit-settings.invalid
+unit-settings.not-found
+unit-settings.pool-unknown

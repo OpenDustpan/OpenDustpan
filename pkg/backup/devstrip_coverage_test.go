@@ -115,6 +115,7 @@ var devColumnDecisions = map[string]devDecision{
 	},
 	"job_freezes.created_by":        {strip: false, reason: "history text of who made the freeze"},
 	"notification_sinks.created_by": {strip: false, reason: "history text of who made the sink"},
+	"placement_rules.created_by":    {strip: false, reason: "history text of who made the placement rule"},
 	"notifications.subject":         {strip: false, reason: "history text of who caused the notification"},
 	"notification_subscriptions.created_by": {
 		strip: false,

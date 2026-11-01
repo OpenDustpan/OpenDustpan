@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18 · accepts RFC 33 · supersedes in part ADR 23 (decision 8) and ADR 151 (decision 2)
 
+Changed by:
+
+- ADR 220 changes decision 18: the item key blob name gets a namespace prefix.
+
 ## Context
 
 The project owner decided on 2026-10-18, as the project manager relayed:

@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-08
 
+Changed by:
+
+- ADR 17 changes: the authorizer takes an object reference, not only a
+  namespace.
+- ADR 52 extends: groups, roles and grants.
+- ADR 53 extends: token kinds, lifetimes, inactivity and retiring the
+  bootstrap token.
+- ADR 237 changes: the bootstrap admin token of dev comes from other sources.
+
 ## Context
 
 Operators want any SSO standard (OIDC, SAML, CAS, LDAP, local users). The

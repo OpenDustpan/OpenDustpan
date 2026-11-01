@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · supersedes in part ADRs 52, 65, 70, 124 and 163 (see decisions 3, 7, 8, 11 and 17)
 
+Changed by:
+
+- ADR 273 changes decision 8: a sharing rule needs no acceptance of both
+  namespaces.
+
 ## Context
 
 ADR 215 makes the namespace the tenant of OpenDustpan Cloud. The project

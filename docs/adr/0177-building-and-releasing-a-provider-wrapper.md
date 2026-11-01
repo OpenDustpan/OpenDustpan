@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18 · part of ADR 170. Open question answered in part by ADR 257
 
+Changed by:
+
+- ADR 257 extends: the second open question.
+
 ## Context
 
 A team owns its provider wrappers. It builds them from a declaration, or

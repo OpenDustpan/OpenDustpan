@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-12 · decisions 6.1 and 10.3 superseded in part by ADR 151
 
+Changed by:
+
+- ADR 151 changes decisions 6 and 10: items 6.1 and 10.3, sealed batches and
+  cancel after a failed replay.
+- ADR 220 changes decision 6: the journal blob key gets a namespace prefix.
+
 ## Context
 
 With journaling, the Pulumi CLI sends one small journal entry for each

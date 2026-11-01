@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18 · part of ADR 200 · decision 4 amended by ADR 248 (planned and forced promotions between installations)
 
+Changed by:
+
+- ADR 248 changes decision 4: planned and forced promotions between
+  installations.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The project owner decided on 18 October 2026 that OpenDustpan becomes an

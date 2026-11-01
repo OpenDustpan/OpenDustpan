@@ -329,6 +329,7 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          svc,
 		Idempotency:      mw,
 		Workers:          nil,
