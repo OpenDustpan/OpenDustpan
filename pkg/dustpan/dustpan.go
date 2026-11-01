@@ -1556,6 +1556,7 @@ func newTofuHTTPHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
+		StateGuard:    tofuHTTPGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
