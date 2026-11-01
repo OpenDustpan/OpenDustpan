@@ -160,6 +160,54 @@ func (m *MemorySealer) OpenContent(
 	return bytes.NewReader(plain), nil
 }
 
+// SealContents implements secret.ItemSealer: it seals each part as
+// SealContent does.
+func (m *MemorySealer) SealContents(
+	ctx context.Context, ref secret.ItemRef, parts []secret.ContentPart,
+) ([][]byte, error) {
+	out := make([][]byte, 0, len(parts))
+
+	for i := range parts {
+		r, err := m.SealContent(ctx, ref, parts[i].Binding, bytes.NewReader(parts[i].Data))
+		if err != nil {
+			return nil, err
+		}
+
+		sealed, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("read sealed part %d: %w", i, err)
+		}
+
+		out = append(out, sealed)
+	}
+
+	return out, nil
+}
+
+// OpenContents implements secret.ItemSealer: it opens each part as
+// OpenContent does.
+func (m *MemorySealer) OpenContents(
+	ctx context.Context, ref secret.ItemRef, parts []secret.ContentPart,
+) ([][]byte, error) {
+	out := make([][]byte, 0, len(parts))
+
+	for i := range parts {
+		r, err := m.OpenContent(ctx, ref, parts[i].Binding, bytes.NewReader(parts[i].Data))
+		if err != nil {
+			return nil, err
+		}
+
+		plain, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("read opened part %d: %w", i, err)
+		}
+
+		out = append(out, plain)
+	}
+
+	return out, nil
+}
+
 // key returns the item key of ref, with the errors of the port.
 func (m *MemorySealer) key(ref secret.ItemRef) (cipher.AEAD, error) {
 	m.mu.Lock()

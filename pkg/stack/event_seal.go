@@ -1,11 +1,9 @@
 package stack
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strconv"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -63,6 +61,22 @@ func (k UpdateKey) RefFor(ns namespace.Name, stackID ID, id UpdateID) (secret.It
 	return ref, nil
 }
 
+// ErrItemKeyUnavailable reports an update whose item key is shredded or
+// missing, so the server cannot seal or open the payloads of its events. It
+// wraps secret.ErrShredded or secret.ErrKeyNotFound. The server fails closed:
+// it stores no event and answers none.
+var ErrItemKeyUnavailable = errors.New("the item key of the update is shredded or missing")
+
+// keyUnavailable wraps err in ErrItemKeyUnavailable when the item key is
+// shredded or missing, and returns err as it is otherwise.
+func keyUnavailable(err error) error {
+	if errors.Is(err, secret.ErrShredded) || errors.Is(err, secret.ErrKeyNotFound) {
+		return fmt.Errorf("%w: %w", ErrItemKeyUnavailable, err)
+	}
+
+	return err
+}
+
 // eventBindingLabel starts the binding of a sealed event payload.
 const eventBindingLabel = "opendustpan/pulumi/update-event/v1"
 
@@ -72,50 +86,59 @@ func eventBinding(id UpdateID, sequence int64) []byte {
 	return []byte(eventBindingLabel + "\x00" + id.String() + "\x00" + strconv.FormatInt(sequence, 10))
 }
 
+// eventParts returns the content parts of events, with the payloads and
+// the bindings of the events.
+func eventParts(id UpdateID, events []Event) []secret.ContentPart {
+	parts := make([]secret.ContentPart, 0, len(events))
+	for i := range events {
+		parts = append(parts, secret.ContentPart{
+			Binding: eventBinding(id, events[i].Sequence), Data: events[i].Payload,
+		})
+	}
+
+	return parts
+}
+
 // sealEvents returns a copy of events with each payload sealed under the
-// item key ref. It never changes events.
+// item key ref. It opens the key one time for the batch, and never changes
+// events.
 func sealEvents(
 	ctx context.Context, sealer secret.ItemSealer, ref secret.ItemRef, id UpdateID, events []Event,
 ) ([]Event, error) {
+	sealed, err := sealer.SealContents(ctx, ref, eventParts(id, events))
+	if err != nil {
+		return nil, fmt.Errorf("seal events: %w", keyUnavailable(err))
+	}
+
+	if len(sealed) != len(events) {
+		return nil, fmt.Errorf("%w: %d sealed payloads for %d events", secret.ErrDecrypt, len(sealed), len(events))
+	}
+
 	out := make([]Event, 0, len(events))
-
-	for _, e := range events {
-		r, err := sealer.SealContent(ctx, ref, eventBinding(id, e.Sequence), bytes.NewReader(e.Payload))
-		if err != nil {
-			return nil, fmt.Errorf("seal event %d: %w", e.Sequence, err)
-		}
-
-		sealed, err := io.ReadAll(r)
-		if err != nil {
-			return nil, fmt.Errorf("seal event %d: %w", e.Sequence, err)
-		}
-
-		out = append(out, Event{Timestamp: e.Timestamp, Payload: sealed, Sequence: e.Sequence})
+	for i := range events {
+		out = append(out, Event{Timestamp: events[i].Timestamp, Payload: sealed[i], Sequence: events[i].Sequence})
 	}
 
 	return out, nil
 }
 
-// openEvents opens the payload of each stored event in place. It fails on
-// the first payload that does not open, so a read never answers a payload that
-// the item key did not seal.
+// openEvents opens the payload of each stored event in place. It opens the
+// key one time for the batch, and fails when a payload does not open, so a
+// read never answers a payload that the item key did not seal.
 func openEvents(
 	ctx context.Context, sealer secret.ItemSealer, ref secret.ItemRef, id UpdateID, events []Event,
 ) error {
+	plain, err := sealer.OpenContents(ctx, ref, eventParts(id, events))
+	if err != nil {
+		return fmt.Errorf("open events: %w", keyUnavailable(err))
+	}
+
+	if len(plain) != len(events) {
+		return fmt.Errorf("%w: %d opened payloads for %d events", secret.ErrDecrypt, len(plain), len(events))
+	}
+
 	for i := range events {
-		e := &events[i]
-
-		r, err := sealer.OpenContent(ctx, ref, eventBinding(id, e.Sequence), bytes.NewReader(e.Payload))
-		if err != nil {
-			return fmt.Errorf("open event %d: %w", e.Sequence, err)
-		}
-
-		plain, err := io.ReadAll(r)
-		if err != nil {
-			return fmt.Errorf("open event %d: %w", e.Sequence, err)
-		}
-
-		e.Payload = plain
+		events[i].Payload = plain[i]
 	}
 
 	return nil

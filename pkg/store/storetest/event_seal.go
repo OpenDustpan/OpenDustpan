@@ -63,6 +63,8 @@ func RunEventSealing(t *testing.T, newStore EventSealFactory) {
 		{name: "the key names the update and the stack that the store resolved", test: testUpdateKeyNamesTheStack},
 		{name: "a payload moved to another sequence does not open", test: testEventSwapSequence},
 		{name: "a payload moved to another update does not open", test: testEventSwapUpdate},
+		{name: "a payload moved to an update of another stack does not open", test: testEventSwapStack},
+		{name: "a shredded key refuses the write and the read of events", test: testEventsShredded},
 	}
 
 	for _, tc := range cases {
@@ -386,5 +388,90 @@ func testEventSwapUpdate(t *testing.T, r *sealRig) {
 		if _, err := r.updates.Events(t.Context(), r.ref, id, -1, 10); !errors.Is(err, secret.ErrDecrypt) {
 			t.Fatalf("read moved event of %s: err = %v, want ErrDecrypt", id, err)
 		}
+	}
+}
+
+// startOn creates and starts an update with plan on the stack ref of the rig.
+func (r *sealRig) startOn(t *testing.T, ref stack.Ref, plan stack.Plan) stack.Started {
+	t.Helper()
+
+	u, err := r.updates.Create(t.Context(), ref, plan)
+	if err != nil {
+		t.Fatalf("create update of %s: %v", ref, err)
+	}
+
+	started, err := r.updates.Start(t.Context(), ref, u.ID)
+	if err != nil {
+		t.Fatalf("start update of %s: %v", ref, err)
+	}
+
+	return started
+}
+
+func testEventSwapStack(t *testing.T, r *sealRig) {
+	t.Helper()
+
+	other := newStack(r.ref.Namespace, "web", "staging")
+	if err := r.store.CreateStack(t.Context(), other, r.fence); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	first := r.start(t, preview())
+	r.appendDiagnostics(t, first, "of this stack")
+
+	second := r.startOn(t, other.Ref, preview())
+
+	events := []stack.Event{
+		{Timestamp: time.UnixMilli(1000).UTC(), Payload: diagnostic(0, "of the other stack"), Sequence: 0},
+	}
+	if err := r.updates.AppendEvents(t.Context(), other.Ref, second.Update.ID, second.Token, events); err != nil {
+		t.Fatalf("append events: %v", err)
+	}
+
+	if err := r.store.SwapEventPayloads(t.Context(), first.Update.ID, 0, second.Update.ID, 0); err != nil {
+		t.Fatalf("swap event rows: %v", err)
+	}
+
+	if _, err := r.updates.Events(t.Context(), r.ref, first.Update.ID, -1, 10); !errors.Is(err, secret.ErrDecrypt) {
+		t.Fatalf("read a payload of another stack: err = %v, want ErrDecrypt", err)
+	}
+
+	_, err := r.updates.Events(t.Context(), other.Ref, second.Update.ID, -1, 10)
+	if !errors.Is(err, secret.ErrDecrypt) {
+		t.Fatalf("read a payload of this stack on the other stack: err = %v, want ErrDecrypt", err)
+	}
+}
+
+func testEventsShredded(t *testing.T, r *sealRig) {
+	t.Helper()
+
+	s := r.start(t, mutating())
+	r.appendDiagnostics(t, s, "before the shred "+eventCanary)
+
+	if _, err := r.store.ShredItemKey(t.Context(), r.itemOf(t, s.Update.ID), now(), r.fence); err != nil {
+		t.Fatalf("shred: %v", err)
+	}
+
+	more := []stack.Event{
+		{Timestamp: time.UnixMilli(2000).UTC(), Payload: diagnostic(1, "after the shred"), Sequence: 1},
+	}
+
+	err := r.updates.AppendEvents(t.Context(), r.ref, s.Update.ID, s.Token, more)
+	if !errors.Is(err, stack.ErrItemKeyUnavailable) || !errors.Is(err, secret.ErrShredded) {
+		t.Fatalf("append after a shred: err = %v, want ErrItemKeyUnavailable and ErrShredded", err)
+	}
+
+	got, err := r.updates.Events(t.Context(), r.ref, s.Update.ID, -1, 10)
+	if !errors.Is(err, stack.ErrItemKeyUnavailable) || !errors.Is(err, secret.ErrShredded) || got != nil {
+		t.Fatalf("read after a shred = %d events, %v; want none, ErrItemKeyUnavailable and ErrShredded", len(got), err)
+	}
+
+	rows, err := r.store.EventPayloads(t.Context())
+	if err != nil {
+		t.Fatalf("read event rows: %v", err)
+	}
+
+	if len(rows) != 1 || bytes.Contains(rows[0], []byte(eventCanary)) {
+		t.Fatalf("event rows after a shred = %d, want the one sealed row of before the shred", len(rows))
 	}
 }

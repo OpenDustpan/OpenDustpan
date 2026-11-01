@@ -1200,7 +1200,7 @@ func classifyUpdate(err error) failure {
 		}
 	}
 
-	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal} {
+	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal, classifyItemKey} {
 		if f, ok := try(err); ok {
 			return f
 		}
@@ -1232,6 +1232,21 @@ func classifyUpdate(err error) failure {
 	default:
 		return coded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
+}
+
+// itemKeyUnavailableText is the answer to a request of an update whose item
+// key is shredded or missing. It names no key and no value.
+const itemKeyUnavailableText = "The item key of this update is shredded or missing, so the server cannot " +
+	"write or read its events. Run the update again."
+
+// classifyItemKey maps the refusal of an update whose item key is shredded
+// or missing. ok is false for any other error.
+func classifyItemKey(err error) (failure, bool) {
+	if errors.Is(err, stack.ErrItemKeyUnavailable) {
+		return coded(http.StatusConflict, itemKeyUnavailableText, errcode.UpdateItemKeyUnavailable), true
+	}
+
+	return unmatched(), false
 }
 
 // classifyUpdateState maps the errors of an update that another update
