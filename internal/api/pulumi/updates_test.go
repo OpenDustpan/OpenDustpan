@@ -540,6 +540,10 @@ type updateFixture struct {
 	// mem is the update store of the fixture, or nil for a fixture that
 	// builds its own store.
 	mem *memUpdateStore
+	// sealer and audit are the item sealer and the audit log of the fixture,
+	// or nil for a fixture that builds its own.
+	sealer *secrettest.MemorySealer
+	audit  *testAudit
 }
 
 // newUpdateFixture builds a Handler whose update routes work end to end.
@@ -627,9 +631,11 @@ func newUpdateFixtureWithAuthenticator(
 
 	mem := newMemUpdateStore()
 	blobs := newMemBlob()
+	sealer := secrettest.NewMemorySealer()
+	auditLog := newTestAudit()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Sealer:             secrettest.NewMemorySealer(),
+		Sealer:             sealer,
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        opts.manual,
 		Updates:            mem.resolving(stacks),
@@ -665,7 +671,7 @@ func newUpdateFixtureWithAuthenticator(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   newTestAudit(),
+		Audit:                   auditLog,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
 		DenialLimiter:           nil,
@@ -679,7 +685,7 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem, sealer: sealer, audit: auditLog}
 }
 
 // allowAll authorizes every action.
