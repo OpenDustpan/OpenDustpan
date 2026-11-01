@@ -9,6 +9,8 @@ Changed by:
   translationFeedbackLinks.
 - ADR 235 changes decision 6: the sign-in answer holds the branding, not the
   preset only.
+- ADR 301 extends decision 2: the SMTP sender of the installation also sends
+  the one-time code of the first enrollment of a factor.
 
 ## Context
 

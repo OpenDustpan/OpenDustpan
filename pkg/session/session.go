@@ -208,7 +208,9 @@ type AccountPolicy struct {
 // callback. ReturnPath is where the browser goes after the sign-in: a path
 // of this server. MaxAge is the max_age that the start sent to the provider,
 // when HasMaxAge is true: the callback refuses an authentication older
-// than it. A request expires at ExpiresAt and works once.
+// than it. A request expires at ExpiresAt. A stored request works once. A
+// request in a sealed sign-in request cookie works until ExpiresAt, and the
+// identity provider gives each code once.
 type Request struct {
 	CreatedAt  time.Time
 	ExpiresAt  time.Time

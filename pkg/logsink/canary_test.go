@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
 	"opendustpan.org/opendustpan/pkg/logsink/objectstore"
+	"opendustpan.org/opendustpan/pkg/logsink/otlp"
 	"opendustpan.org/opendustpan/pkg/logsink/slogsink"
 	"opendustpan.org/opendustpan/pkg/logsink/syslog"
 	"opendustpan.org/opendustpan/pkg/logsink/webhook"
@@ -142,6 +143,7 @@ func TestCanaryNoAdapterLeaksSecrets(t *testing.T) {
 		{name: "syslog udp", run: canarySyslogUDP},
 		{name: "syslog tcp", run: canarySyslogTCP},
 		{name: "webhook", run: canaryWebhook},
+		{name: "otlp", run: canaryOTLP},
 		{name: "objectstore", run: canaryObjectStore},
 		{name: "slogsink", run: canarySlogsink},
 	}
@@ -498,6 +500,98 @@ func canaryWebhook(t *testing.T) {
 	}
 
 	requireNoCanary(t, "webhook refusal error", canaryErrText(writeErr))
+}
+
+// canaryOTLP posts a benign batch with the credential canary as the value of
+// the authorization header, then posts to a receiver that refuses with a
+// body that holds every canary, and to a dead receiver whose URL holds a
+// canary in its query. The shipped body holds no canary: the header value
+// goes in the header only. Neither the refusal error nor the dial error
+// holds any canary.
+func canaryOTLP(t *testing.T) {
+	t.Helper()
+
+	headers := map[string]string{"Authorization": "Bearer " + canaryCred}
+
+	r := newCanaryReceiver(t, http.StatusOK)
+
+	s, err := otlp.New(otlp.Config{
+		URL: r.srv.URL, Headers: headers, Client: r.srv.Client(), ServiceName: "", Timeout: 0,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close sink: %v", closeErr)
+		}
+	})
+
+	if writeErr := s.Write(t.Context(), []logsink.Record{benignRecord()}); writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
+	}
+
+	bodies, _ := r.received(t)
+	if len(bodies) != 1 {
+		t.Fatalf("received bodies = %d, want 1", len(bodies))
+	}
+
+	requireNoCanary(t, "shipped OTLP body", string(bodies[0]))
+
+	if !bytes.Contains(bodies[0], []byte(`"stringValue":"audit entry"`)) {
+		t.Fatalf("shipped OTLP body lacks the benign record: %q", bodies[0])
+	}
+
+	refusing := newCanaryReceiver(t, http.StatusServiceUnavailable)
+
+	bad, badErr := otlp.New(otlp.Config{
+		URL: refusing.srv.URL + "?token=" + canaryBody, Headers: headers, Client: refusing.srv.Client(),
+		ServiceName: "", Timeout: 0,
+	})
+	if badErr != nil {
+		t.Fatalf("new refusing sink: %v", badErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := bad.Close(); closeErr != nil {
+			t.Errorf("close refusing sink: %v", closeErr)
+		}
+	})
+
+	writeErr := bad.Write(t.Context(), []logsink.Record{benignRecord()})
+	if !errors.Is(writeErr, otlp.ErrRefused) {
+		t.Fatalf("write to a refusing receiver: got %v, want ErrRefused", writeErr)
+	}
+
+	requireNoCanary(t, "OTLP refusal error", canaryErrText(writeErr))
+
+	// A dead receiver: the dial error of the HTTP client repeats the URL,
+	// which holds the body canary in its query.
+	dead := newCanaryReceiver(t, http.StatusOK)
+	deadURL, deadClient := dead.srv.URL, dead.srv.Client()
+
+	dead.srv.Close()
+
+	gone, goneErr := otlp.New(otlp.Config{
+		URL: deadURL + "?token=" + canaryBody, Headers: headers, Client: deadClient, ServiceName: "", Timeout: 0,
+	})
+	if goneErr != nil {
+		t.Fatalf("new dead sink: %v", goneErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := gone.Close(); closeErr != nil {
+			t.Errorf("close dead sink: %v", closeErr)
+		}
+	})
+
+	dialErr := gone.Write(t.Context(), []logsink.Record{benignRecord()})
+	if dialErr == nil {
+		t.Fatal("write to a dead receiver: got nil error")
+	}
+
+	requireNoCanary(t, "OTLP dial error", canaryErrText(dialErr))
 }
 
 // canaryObjectStore writes a benign record through a sink backed by an S3
