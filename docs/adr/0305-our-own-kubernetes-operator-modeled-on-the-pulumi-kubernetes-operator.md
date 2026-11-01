@@ -35,6 +35,8 @@ On 1 November 2026 the project owner decided this, in these words:
 - "our own operator for applying IaC tool agnostic would be better. Modelled
   around this thing ofc." Here "this thing" is the Pulumi Kubernetes
   Operator.
+- "It's primary use case would be for applying blueprints but I don't see why
+  individual units couldn't work."
 
 The project owner approved every decision of this ADR. The label "(owner)"
 names a decision that these words state.
@@ -49,6 +51,15 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
    is tool-neutral. One set of resources declares units for every supported
    tool: the Pulumi CLI and OpenTofu today. Each tool keeps its own model
    below the resources (ADR 12, ADR 13). The operator merges no tool model.
+   The operator has two kinds of resource (owner):
+   - The primary resource applies a blueprint. The resource names the
+     blueprint and gives its answers. OpenDustpan creates and updates the
+     units of the rollout.
+   - A second resource declares one unit directly, for a team that does not
+     use blueprints. The `Stack` resource of the Pulumi Kubernetes Operator is
+     its model (decision 2).
+   - Both kinds go through the same jobs, gates and history (decision 4).
+   - This ADR leaves the names of the resources to RFC 31.
 2. **The model is the Pulumi Kubernetes Operator version 2
    (owner).** The operator takes these shapes:
    - A resource for a unit, with its own `spec` and `status`. The `Stack`
@@ -95,6 +106,11 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
 7. **The open points stay in RFC 31 phases 3 and 4.** This ADR decides none
    of them:
    - The names of the resources and of the API group.
+   - How a resource that applies a blueprint relates to the open questions of
+     [RFC 111](../rfc/0111-blueprint-rollouts-and-the-migration-of-answers.md):
+     a rollout of a new blueprint version to many requests, and who migrates
+     the answers when a version renames, deletes or adds an input. The
+     resource might overlap with both.
    - A namespace-scoped install of the operator.
    - How a Kubernetes namespace maps to an OpenDustpan namespace and to a
      collection. Decision 10 of ADR 51 stays in force: the operator does not
@@ -127,7 +143,8 @@ that test it. This note decides nothing.
   stay open.
 - The model of phase 4 is no longer Crossplane. The text "This is
   Crossplane's model" in RFC 31 describes the earlier proposal. A blueprint
-  as a resource uses the same operator.
+  as a resource is the primary use of the operator, and a unit as a resource
+  is the second.
 - The operator needs an API that already exists in full. The REST API of
   units, jobs, gates and tokens must cover every action of the operator
   before the operator starts (ADR 17).
