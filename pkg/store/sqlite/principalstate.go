@@ -38,10 +38,25 @@ func (t generationTx) PrincipalKind(ctx context.Context, id string) (string, err
 	return p.Kind, nil
 }
 
-func (t generationTx) BumpGeneration(ctx context.Context, id string) (int64, error) {
-	n, err := t.q.BumpSessionGeneration(ctx, id)
+// BumpGeneration updates the row of the principal, or writes its first row,
+// in two statements of the one transaction. SQLite keeps one writer at a
+// time, and the update takes the write lock, so no other bump runs between
+// the two.
+func (t generationTx) BumpGeneration(ctx context.Context, id string, expected int64) (int64, error) {
+	n, err := t.q.BumpSessionGeneration(ctx, db.BumpSessionGenerationParams{PrincipalID: id, Expected: expected})
 	if err != nil {
 		return 0, fmt.Errorf("bump session generation: %w", err)
+	}
+
+	// A principal with no row has the generation 1: only an expected
+	// generation of 0 or 1 writes its first row.
+	if n == 1 || (expected != 0 && expected != 1) {
+		return n, nil
+	}
+
+	n, err = t.q.InsertFirstSessionGeneration(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("write first session generation: %w", err)
 	}
 
 	return n, nil
@@ -114,7 +129,7 @@ func (s *Store) PrincipalState(ctx context.Context, id string) (session.Principa
 // BumpGeneration implements session.PrincipalStateStore. The bump, its
 // checks and the append of e run in one transaction.
 func (s *Store) BumpGeneration(
-	ctx context.Context, id string, cause session.BumpCause, e audit.Entry,
+	ctx context.Context, id string, cause session.BumpCause, expected uint64, e audit.Entry,
 ) (uint64, error) {
 	if err := session.ValidBumpCause(cause); err != nil {
 		return 0, err
@@ -130,7 +145,12 @@ func (s *Store) BumpGeneration(
 	var g uint64
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		next, bumpErr := generationstore.Bump(ctx, generationTx{q: q}, id, cause, e)
+		next, bumpErr := generationstore.Bump(
+			ctx,
+			generationTx{q: q},
+			generationstore.Request{ID: id, Cause: cause, Expected: expected},
+			e,
+		)
 		g = next
 
 		return bumpErr
@@ -142,15 +162,13 @@ func (s *Store) BumpGeneration(
 	return g, nil
 }
 
-// bumpFor bumps the session generation of the principal id for cause, in the
-// transaction of q, with the entry session:generation-bumped of the change
-// with the entry change. A nil change fails closed.
-func bumpFor(ctx context.Context, q *db.Queries, id string, cause session.BumpCause, change *audit.Entry) error {
+// bumpFor runs the bump r in the transaction of q, with the entry
+// session:generation-bumped of the change with the entry change, and returns
+// the new generation. A nil change fails closed.
+func bumpFor(ctx context.Context, q *db.Queries, r generationstore.Request, change *audit.Entry) (uint64, error) {
 	if change == nil {
-		return errNoBumpEntry
+		return 0, errNoBumpEntry
 	}
 
-	_, err := generationstore.Bump(ctx, generationTx{q: q}, id, cause, generationstore.EntryOf(*change, id))
-
-	return err
+	return generationstore.Bump(ctx, generationTx{q: q}, r, generationstore.EntryOf(*change, r.ID))
 }

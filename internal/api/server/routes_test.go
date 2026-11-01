@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -351,6 +352,7 @@ func newServiceBackedHandlerOf(
 		SignIn: &apiserver.SignIn{
 			OnDevRefused: nil,
 			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
+			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
 			Providers: []apiserver.SignInProvider{
 				{
 					Client:      stubOIDC{},
@@ -1958,7 +1960,11 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 
 	svc, err := localusersvc.New(localusersvc.Config{
 		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
-		Settings: nil, SSO: nil, Kind: installation.KindProduction, Now: nil,
+		Settings: nil, SSO: nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+		},
+		Kind: installation.KindProduction, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("local user service: %v", err)
