@@ -514,7 +514,9 @@ the words of the Git host:
 ### The order of strictness, and the errors of decision 10
 
 - For decision 10, the order of the modes from the strictest is: mode 3, mode
-  2, mode 1, mode 4. Mode 3 has no review request flow of its own. So a review
+  2, mode 1, mode 4 (a decision of the PM for the owner, 1 November 2026). The
+  reason: where rules overlap, the most restrictive rule wins, as with an
+  explicit deny in AWS IAM and the layers of GitHub rulesets. Mode 3 has no review request flow of its own. So a review
   request that touches a unit in mode 3 follows the rules of mode 2 (the
   review in OpenDustpan, and OpenDustpan merges), and the review request says
   so.
