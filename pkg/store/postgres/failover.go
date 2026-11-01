@@ -92,6 +92,14 @@ type FailoverSettings struct {
 	ConnectCheck string
 	// StatementDeadline bounds each round trip of the API paths.
 	StatementDeadline time.Duration
+	// ServerStatementTimeout is the statement_timeout of each connection.
+	ServerStatementTimeout time.Duration
+	// ServerIdleInTransactionTimeout is the
+	// idle_in_transaction_session_timeout of each connection.
+	ServerIdleInTransactionTimeout time.Duration
+	// ClientConnectionCheckInterval is the client_connection_check_interval
+	// of each connection.
+	ClientConnectionCheckInterval time.Duration
 }
 
 // failoverPlan is the result of the check of the failover settings: the
@@ -124,9 +132,12 @@ func readFailoverSettings(raw string) (failoverPlan, error) {
 		jitter:         defaultLifetimeJitter,
 		healthCheck:    defaultHealthCheckPeriod,
 		report: FailoverSettings{
-			Settings:          make([]FailoverSetting, 0, failoverSettingCount),
-			ConnectCheck:      ConnectCheckReadWrite,
-			StatementDeadline: statementDeadline,
+			Settings:                       make([]FailoverSetting, 0, failoverSettingCount),
+			ConnectCheck:                   ConnectCheckReadWrite,
+			StatementDeadline:              statementDeadline,
+			ServerStatementTimeout:         serverStatementTimeout,
+			ServerIdleInTransactionTimeout: serverIdleInTxTimeout,
+			ClientConnectionCheckInterval:  clientCheckInterval,
 		},
 	}
 

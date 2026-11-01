@@ -233,6 +233,30 @@ The server also does these things to leave a read-only server:
 
 The server also sets the TCP keepalive of each connection. It sends a keepalive after 15 seconds without traffic, then every 5 seconds. After 3 keepalives with no answer, the connection closes. So an idle connection to a host that stopped answering closes in about 30 seconds.
 
+### Server timeouts
+
+The server sets these values on each connection to the database:
+
+| Setting of the database session | Value | What it does |
+| --- | --- | --- |
+| `statement_timeout` | 25 seconds | The database ends a statement that runs for longer. The request gets 503 with `Retry-After: 5`, and the log names the cause. The connection stays in the pool. |
+| `idle_in_transaction_session_timeout` | 60 seconds | The database ends a session that stays in a transaction with no statement for longer, and frees its locks. |
+| `client_connection_check_interval` | 5 seconds | The database checks that the client is still there while a statement runs, and stops the statement of a client that went away. |
+
+The URL cannot change these values. They act before the 30-second limit of each round trip. So a slow statement on a database that answers ends on the database, and its locks go free.
+
+Some work runs for longer than these values. It has its own limit for each statement, and for the time in a transaction with no statement:
+
+| Work | Statement limit | Limit with no statement |
+| --- | --- | --- |
+| A backup, a restore, and the copy of the rows of a backup | 1 hour | 15 minutes |
+| The migrations at the start | 15 minutes | 15 minutes |
+| The creation and the removal of a staging schema | 10 minutes | 1 minute |
+
+This work sets its limits for its own transaction only. The work then gives its connection back to the pool. The server resets the session of that connection (`RESET ALL`). So the next request gets the values of the table above. The reset has a limit of 2 seconds. When the reset fails, the server closes the connection.
+
+When a connection breaks, the driver closes it in the background. It first sends a cancel request on a new connection, which `connect_timeout` limits. A request can meet the 30-second limit. Its connection can then keep its slot of the pool for up to 15 seconds longer, while the driver closes the connection.
+
 ### What was tested
 
 The tests ran on 2026-11-01 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
@@ -243,6 +267,9 @@ The tests ran on 2026-11-01 against PostgreSQL 18.6 on one host, with pgx 5.11.0
 - When the database turns read-only (`default_transaction_read_only = on`) and its sessions end, the server does not open a new read-only session. Reads and writes then answer 503 until the database accepts writes.
 - With the default settings, the server does not open against a read-only database. It opens against the same database when the database accepts writes.
 - A proxy held all bytes of a connection and closed nothing. Each kind of round trip then ended with 503 within the 30-second limit. The kinds are a statement, a read of rows, a batch, a copy, a savepoint, a commit and a rollback. The test used a shorter limit to run fast.
+- A statement that runs for longer than the statement timeout of the database answers 503, and the next statement on the same connection works.
+- Work with its own limits gets them inside its transaction. The next request on the same connection gets the values of the server again. A value that the work set for its session does not stay.
+- The reset of a connection to a host that stopped answering ended in about 2 seconds, and the pool had a free slot again.
 - A pool whose idle sessions are read-only closes its connections after one write fails with 25006. A burst of such failures closes it only one time. A write in a read-only transaction of the server does not close a pool of writable connections.
 
 ### What should work, and was not tested

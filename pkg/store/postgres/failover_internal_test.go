@@ -46,7 +46,8 @@ func testURL(t *testing.T) string {
 
 // holdProxy is a TCP proxy to PostgreSQL that can stop forwarding bytes in
 // both directions while it keeps every connection open, like a network path
-// to a host that stopped answering.
+// to a host that stopped answering. While it holds, it also closes each new
+// connection at once, as a dial to such a host fails.
 type holdProxy struct {
 	listener net.Listener
 	target   string
@@ -94,6 +95,16 @@ func (p *holdProxy) accept() {
 		client, err := p.listener.Accept()
 		if err != nil {
 			return
+		}
+
+		p.mu.Lock()
+		held := p.held
+		p.mu.Unlock()
+
+		if held {
+			closeQuietly(client)
+
+			continue
 		}
 
 		var dialer net.Dialer
