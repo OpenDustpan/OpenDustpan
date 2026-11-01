@@ -1588,7 +1588,7 @@ func openS3Store(ctx context.Context, cfg s3StoreConfig, logger *slog.Logger) (b
 		Now:         nil,
 	}
 
-	store, err := blobs3.Open(ctx, signer, prefix, nil)
+	store, err := blobs3.Open(ctx, signer, prefix, nil, blobs3.WithLogger(logger))
 	if err != nil {
 		return nil, err
 	}
