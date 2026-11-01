@@ -147,7 +147,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		tempAdmins:       nil,
 		reconciler:       nil,
 		artifactSweeper:  nil,
-		nameLocks:        nil,
+		nameLocks:        nameLockPrune{locks: nil},
 		issuer:           nil,
 		handler:          nil,
 		started:          nil,
@@ -573,7 +573,7 @@ func TestJobScheduleNameLockPruneRuns(t *testing.T) {
 	})
 
 	srv := testServer(store.DurableOperations(), "a")
-	srv.nameLocks = store
+	srv.nameLocks = nameLockPrune{locks: store}
 	srv.now = time.Now
 
 	var found *durable.ScheduleSpec
@@ -588,6 +588,18 @@ func TestJobScheduleNameLockPruneRuns(t *testing.T) {
 		t.Fatalf("schedules = %+v, want %s every %s", srv.jobSchedules(), nameLockPruneScheduleName,
 			localusersvc.Prune().Interval)
 	}
+
+	runNameLockPruneStep(t, srv)
+
+	if runs := pruneEntries(t, store); runs != 1 {
+		t.Fatalf("entries of the prune = %d, want 1", runs)
+	}
+}
+
+// runNameLockPruneStep runs the step of the kind of the prune of srv, and
+// checks that its output is the result of a run.
+func runNameLockPruneStep(t *testing.T, srv *Server) {
+	t.Helper()
 
 	var kind *durable.KindSpec
 
@@ -612,6 +624,11 @@ func TestJobScheduleNameLockPruneRuns(t *testing.T) {
 	if decodeErr := json.Unmarshal(out, &res); decodeErr != nil || res.MaxRows != localusersvc.Prune().MaxRows {
 		t.Fatalf("step output = %s; want the result of a run", out)
 	}
+}
+
+// pruneEntries returns the count of the audit entries of the prune in store.
+func pruneEntries(t *testing.T, store *sqlite.Store) int {
+	t.Helper()
 
 	page, err := store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 50})
 	if err != nil {
@@ -626,9 +643,7 @@ func TestJobScheduleNameLockPruneRuns(t *testing.T) {
 		}
 	}
 
-	if runs != 1 {
-		t.Fatalf("entries of the prune = %d, want 1", runs)
-	}
+	return runs
 }
 
 // TestNoNameLockPruneWithoutCounts proves that a server whose store keeps no
