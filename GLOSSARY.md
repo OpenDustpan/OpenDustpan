@@ -445,11 +445,43 @@ The step in which a sign-in method, such as an identity provider, proves who a p
 _Avoid_: Login, log-in (as a noun). The verb is "sign in".
 
 **Session**:
-The proof of a sign-in that the console sends back in a cookie. A session belongs to one person. It ends at a sign-out, when an administrator ends it, after a period with no use, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
-_Avoid_: Login, cookie (the cookie only carries the session)
+The proof of a sign-in that the console holds in two sealed cookies: the access cookie and the refresh cookie (ADR 297). The server keeps no record of a session. A session belongs to one person. It ends at a sign-out in that browser and at a bump of the session generation of the person. It also ends after a period with no refresh, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
+_Avoid_: Login, cookie (the cookies only carry the session), session record (none exists)
+
+**Access cookie**:
+The sealed cookie `__Host-dustpan_access` that authenticates each request of a session. It lives for at most 5 minutes. It holds the principal, the sign-in ID and the deadlines of the session. It also holds the session generation, the restriction, and the time of the sign-in, of the last MFA step and of the last fresh authentication. The thumbprint of the refresh key and the CSRF value are in it too (ADR 297).
+_Avoid_: Session cookie, JWT, bearer token
+
+**Refresh cookie**:
+The sealed cookie `__Secure-dustpan_refresh` that only the refresh route and the sign-out route open. With a refresh proof, it makes a new access cookie and a new refresh cookie. At a sign-out, it ends the runs of its sign-in. It does nothing else (ADR 297).
+_Avoid_: Refresh token (for the cookie of a session), remember-me cookie
+
+**Refresh key**:
+The ECDSA P-256 key pair that the console makes with WebCrypto at a sign-in. The private key is non-extractable. The refresh cookie holds the thumbprint of the public key (ADR 297).
+_Avoid_: Device key, session key (a session key seals cookies)
+
+**Refresh proof**:
+The signed statement, in the shape of a DPoP proof (RFC 9449), that the console sends with each refresh. It names the method, the URL, the time and a server nonce, and the refresh key signs it. The server accepts it for 30 seconds from the time of the nonce, and keeps no list of used proofs (ADR 297).
+_Avoid_: DPoP token, signature (alone)
+
+**Sign-in ID**:
+The random ID, with the prefix `sin-`, that names one sign-in. The cookies of the session and each audit entry of the session carry it. It binds step-up challenges, WebAuthn ceremonies, runs of Dusty and break-glass reviews. It cannot authenticate a request (ADR 297).
+_Avoid_: Session ID
+
+**Session generation**:
+A count, one for each principal, that starts at 1. Each cookie of a session carries the generation that its issue read, and works only while it equals the stored count. A sign-out everywhere and an end of the sessions by an administrator add 1 to it. A disable and a change of a password or a factor do the same (ADR 297).
+_Avoid_: Valid-after time, revocation list, token epoch
+
+**Server nonce**:
+A value that the session keys seal: the time of the server and random bits. A refresh proof carries one, and the server measures the window of the proof from its time, not from the clock of the browser. The server stores no nonce (ADR 297).
+_Avoid_: DPoP nonce (in code, `DPoP-Nonce` is the header name only)
+
+**Session key**:
+A random 256-bit key version, with the prefix `sk-`, that seals the cookies of sessions. The key-encryption key wraps each version. A backup holds none, so a restore makes new session keys and ends every session (ADR 297).
+_Avoid_: Cookie secret, signing key
 
 **Session policy**:
-The administrator settings of the console sessions for the installation: the period with no use after which a session ends, and its maximum length. Only a site administrator can change them.
+The administrator settings of the console sessions for the installation. They are the period with no refresh after which a session ends, the maximum length and the rotation period of the session keys. Only a site administrator can change them.
 
 **Local user**:
 A person principal that signs in to the console with no identity provider. It signs in with a user name and a password, with a passkey, or with both. One local user record and the passkeys of the person name the same principal, so both credentials sign in the same person. The provider of its sessions is `local`.

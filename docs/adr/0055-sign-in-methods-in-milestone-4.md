@@ -1,6 +1,6 @@
 # 55. Sign-in and provisioning methods in milestone 4
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13. Decision 9 changed by ADR 297: a removal disables the person, and the server keeps no session for review
 
 Changed by:
 
@@ -8,6 +8,7 @@ Changed by:
   sign-in settings action.
 - ADR 285 changes decision 5: a local user signs in with a passkey, a password
   or both.
+- ADR 297 changes decision 9: the server disables the person and keeps no session.
 
 ## Context
 
