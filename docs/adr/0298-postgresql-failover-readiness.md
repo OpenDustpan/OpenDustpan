@@ -99,8 +99,12 @@ Sources:
     the pool.
   - On the end of a context, the default handler sets the deadline of the
     network connection to now. The statement fails, and pgx closes the
-    connection. The handler sends no cancel request, so the backend on the
-    server continues until it next writes to the socket.
+    connection. The handler sends no cancel request.
+  - pgx then closes the broken connection in the background. That close
+    sends a cancel request on a new connection, which `connect_timeout`
+    bounds. Then it reads the old socket until the server closes it, for up
+    to 15 seconds. The pool keeps the slot of the connection until the close
+    ends.
   - The pool pings a connection before it gives it out when the connection
     was idle for more than 1 second.
   - `Pool.Reset` closes the idle connections at once, and each connection in
@@ -214,8 +218,24 @@ Sources:
      - `AfterRelease` gets no context, so the `RESET ALL` runs under its own
        deadline of 2 seconds. On any error, or at the deadline,
        `AfterRelease` returns `false`, and the pool destroys the connection.
-       A connection that stops answering then holds its pool slot for at
-       most 2 seconds, not for the TCP timeout of the host.
+       When the reset fails, `AfterRelease` also closes the network
+       connection, so the background close of pgx does not wait 15 seconds
+       on the old socket. A connection that stops answering then holds its
+       pool slot for about 2 seconds plus the dial of the cancel request,
+       which `connect_timeout` bounds. It does not hold the slot for the TCP
+       timeout of the host.
+     - After the statement deadline of an API path, the request ends at 30
+       seconds, but the background close of pgx can keep the slot of its
+       connection for up to 15 seconds longer. The guide states this. The
+       server timeouts stay as a defense: they end a slow statement on a
+       server that answers before the client deadline, and pgx then keeps
+       the connection.
+
+     - The migrations have their own named bound: 15 minutes for each round
+       trip on the client, and `SET LOCAL` of 15 minutes for both server
+       timeouts. Their first round trip waits for the migration lock while
+       another instance migrates, and a migration of a large table can run
+       for minutes.
 
      On `main` these paths
      are `pool.Acquire` in `inBackupTx`, `TryLockSweep`, and the direct
@@ -631,7 +651,11 @@ The PM answered the architecture review on 2026-10-31:
 7. The server timeouts of decision 3 and the answer to 57014 are decisions
    of this ADR.
 
-The check of the changes after round 3 (2026-10-31) changed decision 3: the
+The implementation (2026-11-01) corrected decision 3: the bound of a
+stalled release includes the dial of the cancel request of pgx, the
+background close of pgx can keep the slot of a connection after the
+statement deadline, and the migrations have their own bound. The check of
+the changes after round 3 (2026-10-31) changed decision 3: the
 `RESET ALL` of `AfterRelease` runs only on a marked connection, under a
 deadline of 2 seconds. The architecture review of round 3 changed
 decisions 3 and 9:
