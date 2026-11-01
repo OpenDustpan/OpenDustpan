@@ -98,6 +98,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
   outputshare/         domain: sharing rules, the output sharing setting of a namespace and the read check of outputs (RFC 15)
   savedview/           domain: saved views, a named query of the unit list (RFC 100)
+  unitsettings/        domain: the settings of each unit: code location, executor, pool, write-back options, steps; the unit defaults of a namespace
   preferences/         domain: the preferences of a person (theme, language, formats, time zone), the merge patch and its checks
   registry/            domain: the private registry: the address, the release and the store port; registry/pgpverify checks signatures
   gate/                domain: gates, access limits, approval rules, facts and decision records
@@ -181,7 +182,7 @@ The platform must be observable and intuitive. A user must be able to see and ex
 
 - Domain packages (the `pkg/` packages that the `domain` rule of `.golangci.yml` lists, for example
   `namespace`, `stack`, `secret`, `workspace`, `identity`, `backup`, `history`, `job`, `runner`,
-  `objectcontext`, `graph`, `drift`, `trigger`, `outputshare`, `savedview`, `registry`, `preferences`,
+  `objectcontext`, `graph`, `drift`, `trigger`, `outputshare`, `savedview`, `unitsettings`, `registry`, `preferences`,
   `gate`, `forge`, and the ones in `internal/` that the rule lists, for example `agent`, `dependency`,
   `launcher`, `source`, `stepup`, `unmanaged`, `unitimport`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.

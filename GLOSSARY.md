@@ -58,7 +58,7 @@ _Avoid_: Group (that is a set of principals), project, folder, system
 _Copy says_: "collection", with the things it holds: "a collection of stacks and workspaces". Do not use "collection" as a plain word for any other set.
 
 **Placement rule**:
-A rule of a namespace that matches a Pulumi project and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61).
+A rule of a namespace that matches a Pulumi project pattern and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61). The rules of a namespace are an ordered list, and the first rule that matches wins. A pattern is a glob with `*`, never a regular expression.
 _Avoid_: Routing rule, assignment rule
 
 **Sharing rule**:
@@ -81,6 +81,18 @@ _Avoid_: Sharing policy, default visibility
 **Label**:
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters from the same ASCII set: no space and no other character, as a Kubernetes label value. The label filter of the unit list, the labels of a saved view and every label write accept only this form. A Pulumi stack tag outside this form still shows in the list as a label. Text outside labels, such as documentation and the input of a blueprint web form, can hold any Unicode character.
 _Avoid_: Tag (except when naming a tool's own field), attribute
+
+**Unit settings**:
+The one record of a unit that holds what a job reads at its start. It holds the code location, the executor, the runner pool, the write-back options, the pull request automation switch and the custom steps. A unit has at most one record, kept by the stable unit ID. A namespace has defaults for the runner pool only, and the default Git host connection belongs to the Git host connections. There is no merge by field across levels. A write names the version that the person read. The settings are not kept in the repository.
+_Avoid_: Unit config, unit configuration, unit profile
+
+**Effective value**:
+The value of one field of the unit settings that a job uses. It comes from the record of the unit, the defaults of the namespace or the built-in values. Each answer of the unit settings API shows it with its origin.
+_Avoid_: Resolved value, final value
+
+**Origin of a value**:
+The level that gave an effective value: `unit`, `namespace-default` or `built-in-default`. It answers the question why a job uses a value.
+_Avoid_: Source of a value, scope of a value
 
 **Unit state**:
 One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The server derives `locked` at read time from the unit lock, which stays the only source (ADR 265 decision 5). The drift statuses are three of the states.

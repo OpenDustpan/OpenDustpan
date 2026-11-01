@@ -128,6 +128,10 @@ func (h *Handler) optionalRoutes() []Route {
 		routes = append(routes, h.collectionRoutes()...)
 	}
 
+	if h.placements != nil {
+		routes = append(routes, h.placementRoutes()...)
+	}
+
 	if h.locks != nil {
 		routes = append(routes, h.lockRoutes()...)
 	}

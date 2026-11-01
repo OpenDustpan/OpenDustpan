@@ -67,7 +67,7 @@ type memUpdateStore struct {
 	stackVersion map[stack.Ref]int64
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
-	journal      map[stack.UpdateID][]blob.Key
+	journal      map[stack.UpdateID][]stack.JournalBatchRef
 	refusals     map[stack.UpdateID][]stack.JournalRefusal
 	seqs         map[stack.UpdateID][]int64
 	mu           sync.Mutex
@@ -79,7 +79,7 @@ func newMemUpdateStore() *memUpdateStore {
 		stackVersion: map[stack.Ref]int64{},
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
-		journal:      map[stack.UpdateID][]blob.Key{},
+		journal:      map[stack.UpdateID][]stack.JournalBatchRef{},
 		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
 		seqs:         map[stack.UpdateID][]int64{},
 		mu:           sync.Mutex{},
@@ -357,8 +357,10 @@ func (m *memUpdateStore) ReferencedBlobKeys(
 		}
 	}
 
-	for _, keys := range m.journal {
-		out = append(out, keys...)
+	for _, refs := range m.journal {
+		for i := range refs {
+			out = append(out, refs[i].Key)
+		}
 	}
 
 	slices.Sort(out)

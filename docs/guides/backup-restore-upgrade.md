@@ -262,6 +262,24 @@ The restore never deletes a live blob. When a live blob has bytes that differ
 from the backup, the restore writes the bytes of the backup, logs a warning and
 writes an audit entry.
 
+### Blob keys that a restore refuses
+
+A restore writes only blob keys of the form `namespaces/<namespace ID>/...`.
+The manifest of a backup is not signed, so a person who can write to the
+backup target could name another key. The restore refuses a manifest that names
+a key under `audit-checkpoints/`, `store-checks/` or `restore-tmp/`, and any
+other key outside `namespaces/<namespace ID>/`. It makes these checks before it
+stages or writes anything. The restore ends failed with the text "backup names
+a blob key that a restore does not write", and writes an audit entry that names
+the key. To find the cause, compare the manifest of the backup with a copy that
+you trust.
+
+The backup itself makes the same check. When a row of the data names a blob
+under such a prefix, the backup fails with a text that names the key and tells
+you to delete the row that names it. No backup is written that a restore would
+refuse. A restore also pins the whole manifest when it stages the backup, and it
+refuses a manifest that changed in the target after that.
+
 ### Revocations in maintenance mode
 
 A write that only reduces access runs in maintenance mode. You can end a

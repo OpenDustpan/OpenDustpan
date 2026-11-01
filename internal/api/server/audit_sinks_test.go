@@ -43,6 +43,7 @@ func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) testHan
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,

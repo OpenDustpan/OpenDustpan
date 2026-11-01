@@ -17,7 +17,7 @@ func sqliteItemKeyBackupTables() []sqliteBackupTable {
 		{
 			table: "item_keys",
 			columns: []string{
-				"id", backupColNamespaceID, "scope_id", backupColKind, "item", backupColWrapperID,
+				"id", backupColNamespaceID, backupColScopeID, backupColKind, "item", backupColWrapperID,
 				backupColCreatedAtMs, "shredded_at_ms", "blob_version", "blob_size", "blob_md5",
 			},
 		},
