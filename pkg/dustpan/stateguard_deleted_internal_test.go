@@ -47,10 +47,17 @@ func seedDeletedWorkspace(t *testing.T, st *sqlite.Store, n namespace.Namespace)
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
-		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:   workspace.ID(ident.NewID("ws-")), NamespaceID: n.ID, Ref: workspace.Ref{Namespace: "acme", Name: name},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID: workspace.ID(
+			ident.NewID("ws-"),
+		),
+		NamespaceID: n.ID,
+		Ref:         workspace.Ref{Namespace: "acme", Name: name},
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:    1,
 	}
 	if err = st.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)

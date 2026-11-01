@@ -55,6 +55,11 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 			AllowUnlockedWrites:   row.AllowUnlockedWrites,
 			CreatedAtMs:           row.CreatedAtMs,
 			UpdatedAtMs:           row.UpdatedAtMs,
+			LastReleaseLockID:     row.LastReleaseLockID,
+			LastReleaseHolder:     row.LastReleaseHolder,
+			LastReleaseBy:         row.LastReleaseBy,
+			LastReleaseKind:       row.LastReleaseKind,
+			LastReleaseAtMs:       row.LastReleaseAtMs,
 		})
 		if err != nil {
 			return fmt.Errorf("insert workspace: %w", err)
@@ -670,6 +675,11 @@ func fenceAndUnlockInTx(
 		ExpectedRevision:    released.Revision - 1,
 		AllowForcedWrites:   released.AllowForcedWrites,
 		AllowUnlockedWrites: released.AllowUnlockedWrites,
+		LastReleaseLockID:   released.LastReleaseLockID,
+		LastReleaseHolder:   released.LastReleaseHolder,
+		LastReleaseBy:       released.LastReleaseBy,
+		LastReleaseKind:     released.LastReleaseKind,
+		LastReleaseAtMs:     released.LastReleaseAtMs,
 	})
 	if err != nil {
 		return fmt.Errorf("release workspace lock: %w", err)
@@ -1087,6 +1097,11 @@ func workspaceFromRow(row db.Workspace, namespaceID string) workspace.Workspace 
 		LockedAtMs:          row.LockedAtMs,
 		CreatedAtMs:         row.CreatedAtMs,
 		UpdatedAtMs:         row.UpdatedAtMs,
+		LastReleaseLockID:   row.LastReleaseLockID,
+		LastReleaseHolder:   row.LastReleaseHolder,
+		LastReleaseBy:       row.LastReleaseBy,
+		LastReleaseKind:     row.LastReleaseKind,
+		LastReleaseAtMs:     row.LastReleaseAtMs,
 	})
 }
 
@@ -1232,6 +1247,11 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 		ID:                  row.ID,
 		AllowForcedWrites:   row.AllowForcedWrites,
 		AllowUnlockedWrites: row.AllowUnlockedWrites,
+		LastReleaseLockID:   row.LastReleaseLockID,
+		LastReleaseHolder:   row.LastReleaseHolder,
+		LastReleaseBy:       row.LastReleaseBy,
+		LastReleaseKind:     row.LastReleaseKind,
+		LastReleaseAtMs:     row.LastReleaseAtMs,
 		ExpectedRevision:    row.Revision - 1,
 	})
 	if err != nil {

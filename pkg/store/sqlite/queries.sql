@@ -680,28 +680,32 @@ ORDER BY label_key;
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
     locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms,
-    allow_forced_writes, allow_unlocked_writes
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    allow_forced_writes, allow_unlocked_writes, last_release_lock_id, last_release_holder,
+    last_release_by, last_release_kind, last_release_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE namespace = ? AND name = ? AND deleted_at_ms IS NULL;
 
 -- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE namespace = ? AND deleted_at_ms IS NULL
 ORDER BY name;
@@ -759,7 +763,10 @@ ORDER BY page.name;
 UPDATE workspaces
 SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
     lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms,
-    allow_forced_writes = @allow_forced_writes, allow_unlocked_writes = @allow_unlocked_writes
+    allow_forced_writes = @allow_forced_writes, allow_unlocked_writes = @allow_unlocked_writes,
+    last_release_lock_id = @last_release_lock_id, last_release_holder = @last_release_holder,
+    last_release_by = @last_release_by, last_release_kind = @last_release_kind,
+    last_release_at_ms = @last_release_at_ms
 WHERE id = @id AND revision = @expected_revision;
 
 -- name: SoftDeleteWorkspace :execrows

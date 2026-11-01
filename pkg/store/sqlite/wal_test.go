@@ -249,6 +249,7 @@ func createWALWorkspace(
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
 		Revision:    1,
