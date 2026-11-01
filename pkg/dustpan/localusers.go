@@ -6,6 +6,7 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/localuser"
@@ -89,15 +90,41 @@ func newLocalUserService(
 		settingsPort = settingsSvc
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return none, err
+	}
+
 	svc, err := localusersvc.New(localusersvc.Config{
 		Store: store, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: entries,
-		Settings: settingsPort, SSO: identityProviders(cfg, signIn), Kind: cfg.installationKind, Now: cfg.now,
+		Settings: settingsPort, SSO: identityProviders(cfg, signIn), Reach: reach, Kind: cfg.installationKind,
+		Now: cfg.now,
 	})
 	if err != nil {
 		return none, fmt.Errorf("local users: %w", err)
 	}
 
 	return localUserWiring{service: svc}, nil
+}
+
+// reachConfig returns the reach config of the store. A store that keeps no
+// grants gives an empty config, and each reset then fails closed.
+func reachConfig(cfg *settings) (access.ReachConfig, error) {
+	none := access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil}
+
+	stores, ok := cfg.namespaceStore.(accessStores)
+	if !ok {
+		return none, nil
+	}
+
+	collections, err := unitCollections(cfg)
+	if err != nil {
+		return none, err
+	}
+
+	return access.ReachConfig{
+		Grants: stores, Roles: stores, Callers: stores, Principals: stores, Collections: collections, Units: stores,
+	}, nil
 }
 
 // identityProviders returns the function that tells whether the installation

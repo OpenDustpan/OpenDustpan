@@ -26,8 +26,10 @@ type Tx interface {
 	// deleted), or returns ErrNoRow.
 	PrincipalKind(ctx context.Context, id string) (string, error)
 	// BumpGeneration adds 1 to the stored generation of the principal id and
-	// returns the count of rows that it wrote.
-	BumpGeneration(ctx context.Context, id string) (int64, error)
+	// returns the count of rows that it wrote. An expected generation other
+	// than 0 makes the write a compare-and-swap in the one statement: it
+	// writes no row when the stored generation is another one.
+	BumpGeneration(ctx context.Context, id string, expected int64) (int64, error)
 	// Generation reads the stored generation of the principal id: 1 when it
 	// has no row.
 	Generation(ctx context.Context, id string) (int64, error)
@@ -35,40 +37,54 @@ type Tx interface {
 	Append(ctx context.Context, e audit.Entry) error
 }
 
-// Bump adds 1 to the session generation of the person id for cause, in the
-// transaction of tx, and appends e with the cause and the new generation as
-// its changes. It returns the new generation. It returns session.ErrInvalid
-// for a cause that session.ValidBumpCause refuses,
-// session.ErrPrincipalNotFound for a principal that does not exist or is not
-// a person, and audit.ErrInvalidEntry for an entry that fails validation.
-func Bump(ctx context.Context, tx Tx, id string, cause session.BumpCause, e audit.Entry) (uint64, error) {
-	if err := session.ValidBumpCause(cause); err != nil {
+// Request names one bump: the principal, the cause, and the generation that
+// the bump expects. An expected generation other than 0 makes the bump a
+// compare-and-swap.
+type Request struct {
+	ID       string
+	Cause    session.BumpCause
+	Expected uint64
+}
+
+// Bump adds 1 to the session generation of the person r.ID for r.Cause, in
+// the transaction of tx, and appends e with the cause and the new generation
+// as its changes. It returns the new generation. An r.Expected other than 0
+// makes the bump a compare-and-swap: when the stored generation is another
+// one, it returns session.ErrGenerationChanged and writes nothing. It
+// returns session.ErrInvalid for a cause that session.ValidBumpCause
+// refuses, session.ErrPrincipalNotFound for a principal that does not exist
+// or is not a person, and audit.ErrInvalidEntry for an entry that fails
+// validation.
+func Bump(ctx context.Context, tx Tx, r Request, e audit.Entry) (uint64, error) {
+	if err := session.ValidBumpCause(r.Cause); err != nil {
 		return 0, err
 	}
 
-	kind, err := tx.PrincipalKind(ctx, id)
-	if errors.Is(err, ErrNoRow) {
-		return 0, fmt.Errorf("%w: %s", session.ErrPrincipalNotFound, id)
-	}
-
+	want, err := ToRow(r.Expected)
 	if err != nil {
-		return 0, fmt.Errorf("read the principal: %w", err)
+		return 0, err
 	}
 
-	if kind != string(principal.KindPerson) {
-		return 0, fmt.Errorf("%w: the principal is a %s", session.ErrPrincipalNotFound, kind)
+	if personErr := checkPerson(ctx, tx, r.ID); personErr != nil {
+		return 0, personErr
 	}
 
-	n, err := tx.BumpGeneration(ctx, id)
+	n, err := tx.BumpGeneration(ctx, r.ID, want)
 	if err != nil {
 		return 0, fmt.Errorf("bump the session generation: %w", err)
+	}
+
+	if n != 1 && r.Expected != 0 {
+		// The principal exists: checkPerson found it in this transaction.
+		// So no row means another generation.
+		return 0, fmt.Errorf("bump the session generation from %d: %w", r.Expected, session.ErrGenerationChanged)
 	}
 
 	if n != 1 {
 		return 0, fmt.Errorf("bump the session generation: %w", session.ErrPrincipalNotFound)
 	}
 
-	stored, err := tx.Generation(ctx, id)
+	stored, err := tx.Generation(ctx, r.ID)
 	if err != nil {
 		return 0, fmt.Errorf("read the session generation: %w", err)
 	}
@@ -79,7 +95,7 @@ func Bump(ctx context.Context, tx Tx, id string, cause session.BumpCause, e audi
 	}
 
 	e.Changes = append(append([]audit.Change{}, e.Changes...),
-		audit.Change{Key: "cause", Old: nil, New: string(cause), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "cause", Old: nil, New: string(r.Cause), Layer: "", TakesEffect: ""},
 		audit.Change{Key: "generation", Old: nil, New: strconv.FormatUint(g, 10), Layer: "", TakesEffect: ""},
 	)
 
@@ -88,6 +104,25 @@ func Bump(ctx context.Context, tx Tx, id string, cause session.BumpCause, e audi
 	}
 
 	return g, nil
+}
+
+// checkPerson returns nil when the principal id exists and is a person, and
+// session.ErrPrincipalNotFound otherwise.
+func checkPerson(ctx context.Context, tx Tx, id string) error {
+	kind, err := tx.PrincipalKind(ctx, id)
+	if errors.Is(err, ErrNoRow) {
+		return fmt.Errorf("%w: %s", session.ErrPrincipalNotFound, id)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read the principal: %w", err)
+	}
+
+	if kind != string(principal.KindPerson) {
+		return fmt.Errorf("%w: the principal is a %s", session.ErrPrincipalNotFound, kind)
+	}
+
+	return nil
 }
 
 // EntryOf returns the entry session:generation-bumped of a bump of the

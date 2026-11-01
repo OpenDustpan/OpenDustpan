@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -36,6 +38,7 @@ type fixture struct {
 	principals *principal.Service
 	svc        *localusersvc.Service
 	settings   *fakeSettings
+	hasher     localuser.PasswordHasher
 	sso        bool
 }
 
@@ -108,21 +111,31 @@ func newFixture(t *testing.T) *fixture {
 
 	f := &fixture{
 		store: st, principals: principals, svc: nil, settings: &fakeSettings{values: map[string]string{}, err: nil},
-		sso: false,
+		hasher: hasher, sso: false,
 	}
 
+	f.svc = f.serviceWith(t, access.ReachConfig{
+		Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+	})
+
+	return f
+}
+
+// serviceWith returns a service over the store of the fixture that reads
+// the reach of a principal through reach.
+func (f *fixture) serviceWith(t *testing.T, reach access.ReachConfig) *localusersvc.Service {
+	t.Helper()
+
 	svc, err := localusersvc.New(localusersvc.Config{
-		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
-		Settings: f.settings, SSO: func(context.Context) (bool, error) { return f.sso, nil },
+		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(), Audit: f.store,
+		Settings: f.settings, SSO: func(context.Context) (bool, error) { return f.sso, nil }, Reach: reach,
 		Kind: installation.KindProduction, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
 
-	f.svc = svc
-
-	return f
+	return svc
 }
 
 // base returns the entry of a caller with subject.
@@ -605,6 +618,7 @@ func TestChangePassword(t *testing.T) {
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
 	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+	g := f.generation(t, c.Principal.ID)
 
 	refusals := []struct {
 		want error
@@ -613,54 +627,130 @@ func TestChangePassword(t *testing.T) {
 	}{
 		{
 			name: "no current password and no fresh step", want: localuser.ErrCurrentPasswordRequired,
-			in: localusersvc.ChangeInput{Current: "", New: otherPassword, Fresh: false},
+			in: localusersvc.ChangeInput{Current: "", New: otherPassword, Generation: g, Fresh: false},
 		},
 		{
 			name: "wrong current password", want: localuser.ErrWrongPassword,
-			in: localusersvc.ChangeInput{Current: otherPassword, New: otherPassword, Fresh: true},
+			in: localusersvc.ChangeInput{Current: otherPassword, New: otherPassword, Generation: g, Fresh: true},
 		},
 		{
 			name: "hostile current password", want: localuser.ErrWrongPassword,
-			in: localusersvc.ChangeInput{Current: "\xff\x00", New: otherPassword, Fresh: false},
+			in: localusersvc.ChangeInput{Current: "\xff\x00", New: otherPassword, Generation: g, Fresh: false},
 		},
 		{
 			name: "new password too short", want: localuser.ErrPasswordTooShort,
-			in: localusersvc.ChangeInput{Current: goodPassword, New: "short", Fresh: false},
+			in: localusersvc.ChangeInput{Current: goodPassword, New: "short", Generation: g, Fresh: false},
+		},
+		{
+			name: "no session generation", want: localuser.ErrGenerationChanged,
+			in: localusersvc.ChangeInput{Current: goodPassword, New: otherPassword, Generation: 0, Fresh: true},
+		},
+		{
+			name: "a session generation that is not the stored one", want: localuser.ErrGenerationChanged,
+			in: localusersvc.ChangeInput{Current: goodPassword, New: otherPassword, Generation: g + 5, Fresh: true},
 		},
 	}
 
 	for _, tc := range refusals {
-		if err := f.svc.ChangePassword(t.Context(), me, tc.in); !errors.Is(err, tc.want) {
+		if _, err := f.svc.ChangePassword(t.Context(), me, tc.in); !errors.Is(err, tc.want) {
 			t.Fatalf("%s: change = %v, want %v", tc.name, err, tc.want)
 		}
 	}
 
-	before := f.generation(t, c.Principal.ID)
+	if after := f.generation(t, c.Principal.ID); after != g {
+		t.Fatalf("generation after the refusals = %d, want %d", after, g)
+	}
 
-	err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
-		Current: goodPassword, New: otherPassword, Fresh: false,
+	next, err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+		Current: goodPassword, New: otherPassword, Generation: g, Fresh: false,
 	})
 	if err != nil {
 		t.Fatalf("change: %v", err)
 	}
 
-	if after := f.generation(t, c.Principal.ID); after != before+1 {
-		t.Fatalf("generation after a change = %d, want %d", after, before+1)
+	if after := f.generation(t, c.Principal.ID); after != g+1 || next != after {
+		t.Fatalf("generation after a change = %d, returned %d, want %d", after, next, g+1)
 	}
 
-	err = f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{Current: "", New: goodPassword, Fresh: true})
+	// The session of the first change ended: its generation cannot change
+	// the password again.
+	_, err = f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+		Current: "", New: goodPassword, Generation: g, Fresh: true,
+	})
+	if !errors.Is(err, localuser.ErrGenerationChanged) {
+		t.Fatalf("change from an ended session = %v, want ErrGenerationChanged", err)
+	}
+
+	_, err = f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+		Current: "", New: goodPassword, Generation: next, Fresh: true,
+	})
 	if err != nil {
 		t.Fatalf("change with a fresh step: %v", err)
 	}
 
 	stranger := localusersvc.Actor{Entry: base("corp:bob"), PrincipalID: "prn-nobody"}
-	err = f.svc.ChangePassword(
-		t.Context(),
-		stranger,
-		localusersvc.ChangeInput{Current: goodPassword, New: otherPassword, Fresh: true},
-	)
+
+	_, err = f.svc.ChangePassword(t.Context(), stranger, localusersvc.ChangeInput{
+		Current: goodPassword, New: otherPassword, Generation: 1, Fresh: true,
+	})
 	if !errors.Is(err, localuser.ErrNotFound) {
 		t.Fatalf("change of a person with no local user = %v, want ErrNotFound", err)
+	}
+}
+
+// TestConcurrentChangesFromOneSessionPassOnce proves that two changes from
+// one session never both pass: the first ends the session, and the store
+// refuses each other change with ErrGenerationChanged.
+func TestConcurrentChangesFromOneSessionPassOnce(t *testing.T) {
+	t.Parallel()
+
+	const changes = 6
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", goodPassword)
+	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+	g := f.generation(t, c.Principal.ID)
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		passed  int
+		changed int
+		errs    []error
+	)
+
+	for range changes {
+		wg.Go(func() {
+			_, err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+				Current: "", New: otherPassword, Generation: g, Fresh: true,
+			})
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				passed++
+			case errors.Is(err, localuser.ErrGenerationChanged):
+				changed++
+			default:
+				errs = append(errs, err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("a change failed: %v", err)
+	}
+
+	if passed != 1 || changed != changes-1 {
+		t.Fatalf("%d changes passed and %d were refused, want 1 and %d", passed, changed, changes-1)
+	}
+
+	if after := f.generation(t, c.Principal.ID); after != g+1 {
+		t.Fatalf("generation = %d, want %d", after, g+1)
 	}
 }
 

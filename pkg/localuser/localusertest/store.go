@@ -1,6 +1,7 @@
 package localusertest
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"slices"
@@ -87,6 +88,10 @@ func passwordCases() []storeCase {
 			testSetPasswordBumps),
 		runCase("a password set records its bump with the cause password and the action of the change",
 			testSetPasswordRecordsBump),
+		runCase("a password set from the stored generation returns the next generation", testSetPasswordFrom),
+		runCase("a password set from another generation fails with ErrGenerationChanged and changes nothing",
+			testSetPasswordStale),
+		runCase("concurrent password sets from one generation pass once", testSetPasswordFromConcurrent),
 		runCase("a password set with a hash that the hasher does not read fails with ErrInvalid and changes nothing",
 			testSetPasswordBadHash),
 		runCase("a password set with ChangeRequired reads back with the flag", testSetPasswordChangeRequired),
@@ -283,8 +288,15 @@ func mustUser(t *testing.T, s Store, n int) localuser.User {
 func mustPassword(t *testing.T, s Store, u localuser.User, n int) {
 	t.Helper()
 
-	err := s.SetPassword(t.Context(), u.ID, hash(n), localuser.PasswordChange{ChangeRequired: false},
-		entry("local-user:"+u.ID, at(2)))
+	err := passwords{
+		s,
+	}.set(
+		t.Context(),
+		u.ID,
+		hash(n),
+		localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		entry("local-user:"+u.ID, at(2)),
+	)
 	if err != nil {
 		t.Fatalf("set password of %s: %v", u.ID, err)
 	}
@@ -568,8 +580,15 @@ func testOtherScope(t *testing.T, s Store) {
 	u := mustUser(t, s, 1)
 	g := generation(t, s, u.PrincipalID)
 
-	err := s.SetPassword(t.Context(), u.ID, hash(1), localuser.PasswordChange{ChangeRequired: false},
-		otherScope("local-user:lus-1", at(3)))
+	err := passwords{
+		s,
+	}.set(
+		t.Context(),
+		u.ID,
+		hash(1),
+		localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		otherScope("local-user:lus-1", at(3)),
+	)
 	wantErr(t, "set password with an entry of a namespace", err, audit.ErrInvalidEntry)
 
 	mustPrincipal(t, s, "prn-2", "local:lus-2", principal.KindPerson)
@@ -598,13 +617,16 @@ func testAppendFails(t *testing.T, s Store) {
 
 	g := generation(t, s, u.PrincipalID)
 	ctx := t.Context()
-	keep := localuser.PasswordChange{ChangeRequired: false}
+	keep := localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0}
 
 	checks := []struct {
 		call func(e audit.Entry) error
 		name string
 	}{
-		{name: "set password", call: func(e audit.Entry) error { return s.SetPassword(ctx, u.ID, hash(2), keep, e) }},
+		{
+			name: "set password",
+			call: func(e audit.Entry) error { return passwords{s}.set(ctx, u.ID, hash(2), keep, e) },
+		},
 		{name: "rehash", call: func(e audit.Entry) error { return s.RehashPassword(ctx, u.ID, hash(1), hash(3), e) }},
 		{name: "rename", call: func(e audit.Entry) error { return s.RenameUser(ctx, u.ID, "renamed", e) }},
 		{name: "change required", call: func(e audit.Entry) error { return s.SetChangeRequired(ctx, u.ID, true, e) }},
@@ -652,8 +674,15 @@ func testSetPassword(t *testing.T, s Store) {
 
 	u := mustUser(t, s, 1)
 
-	err := s.SetPassword(t.Context(), u.ID, hash(1), localuser.PasswordChange{ChangeRequired: false},
-		entry("local-user:lus-1", at(7)))
+	err := passwords{
+		s,
+	}.set(
+		t.Context(),
+		u.ID,
+		hash(1),
+		localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		entry("local-user:lus-1", at(7)),
+	)
 	if err != nil {
 		t.Fatalf("set password: %v", err)
 	}
@@ -669,8 +698,15 @@ func testSetPassword(t *testing.T, s Store) {
 
 	wantEntries(t, s, "local-user:lus-1", 2)
 
-	err = s.SetPassword(t.Context(), "lus-none", hash(1), localuser.PasswordChange{ChangeRequired: false},
-		entry("local-user:lus-none", at(7)))
+	err = passwords{
+		s,
+	}.set(
+		t.Context(),
+		"lus-none",
+		hash(1),
+		localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		entry("local-user:lus-none", at(7)),
+	)
 	wantErr(t, "set password of an unknown user", err, localuser.ErrNotFound)
 }
 
@@ -705,8 +741,15 @@ func testSetPasswordBadHash(t *testing.T, s Store) {
 		"$argon2id$v=19$m=19456,t=2,p=0$AAAAAAAAAAAAAAAAAAAAAA$" + localuser.PasswordHash(strings.Repeat("A", 43)),
 		hash(1) + "\n",
 	} {
-		err := s.SetPassword(t.Context(), u.ID, h, localuser.PasswordChange{ChangeRequired: false},
-			entry("local-user:lus-1", at(3)))
+		err := passwords{
+			s,
+		}.set(
+			t.Context(),
+			u.ID,
+			h,
+			localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+			entry("local-user:lus-1", at(3)),
+		)
 		wantErr(t, "set the hash "+strconv.Quote(string(h)), err, localuser.ErrInvalid)
 	}
 
@@ -724,8 +767,15 @@ func testSetPasswordChangeRequired(t *testing.T, s Store) {
 
 	u := mustUser(t, s, 1)
 
-	err := s.SetPassword(t.Context(), u.ID, hash(1), localuser.PasswordChange{ChangeRequired: true},
-		entry("local-user:lus-1", at(3)))
+	err := passwords{
+		s,
+	}.set(
+		t.Context(),
+		u.ID,
+		hash(1),
+		localuser.PasswordChange{ChangeRequired: true, FromGeneration: 0},
+		entry("local-user:lus-1", at(3)),
+	)
 	if err != nil {
 		t.Fatalf("set password: %v", err)
 	}
@@ -884,8 +934,15 @@ func testSetPasswordBreakGlass(t *testing.T, s Store) {
 
 	u := mustBreakGlassUser(t, s)
 
-	err := s.SetPassword(t.Context(), u.ID, hash(1), localuser.PasswordChange{ChangeRequired: false},
-		entry("local-user:lus-bg", at(3)))
+	err := passwords{
+		s,
+	}.set(
+		t.Context(),
+		u.ID,
+		hash(1),
+		localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		entry("local-user:lus-bg", at(3)),
+	)
 	wantErr(t, "set password of a break-glass person", err, localuser.ErrBreakGlass)
 
 	if h := storedHash(t, s, "breakglass"); h != "" {
@@ -931,9 +988,9 @@ func testDemoFixed(t *testing.T, s Store) {
 
 	ctx := t.Context()
 	e := entry("local-user:demo", at(3))
-	keep := localuser.PasswordChange{ChangeRequired: false}
+	keep := localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0}
 
-	wantErr(t, "set the demo password", s.SetPassword(ctx, u.ID, hash(2), keep, e), localuser.ErrDemoFixed)
+	wantErr(t, "set the demo password", passwords{s}.set(ctx, u.ID, hash(2), keep, e), localuser.ErrDemoFixed)
 	wantErr(t, "remove the demo password", s.RemovePassword(ctx, u.ID, e), localuser.ErrDemoFixed)
 	wantErr(t, "change required of the demo user", s.SetChangeRequired(ctx, u.ID, true, e), localuser.ErrDemoFixed)
 	wantErr(t, "a reset code for the demo user",
@@ -1097,7 +1154,12 @@ func redeem(t *testing.T, s Store, d localuser.Digest, when time.Time, h localus
 
 // redeemOf returns the use of the code d at when with the hash h.
 func redeemOf(d localuser.Digest, when time.Time, h localuser.PasswordHash) localuser.Redeem {
-	return localuser.Redeem{At: when, Hash: h, Change: localuser.PasswordChange{ChangeRequired: false}, Digest: d}
+	return localuser.Redeem{
+		At:     when,
+		Hash:   h,
+		Change: localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		Digest: d,
+	}
 }
 
 func testRedeem(t *testing.T, s Store) {
@@ -1633,7 +1695,15 @@ func testSetPasswordRecordsBump(t *testing.T, s Store) {
 	e := entry("local-user:"+u.ID, at(4))
 	e.Action = "password.changed"
 
-	err := s.SetPassword(t.Context(), u.ID, hash(2), localuser.PasswordChange{ChangeRequired: false}, e)
+	err := passwords{
+		s,
+	}.set(
+		t.Context(),
+		u.ID,
+		hash(2),
+		localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		e,
+	)
 	if err != nil {
 		t.Fatalf("set password: %v", err)
 	}
@@ -1658,5 +1728,121 @@ func testSetPasswordRecordsBump(t *testing.T, s Store) {
 
 	if !found {
 		t.Fatalf("entries of %s = %+v, want the bump with the cause password", u.PrincipalID, bumps)
+	}
+}
+
+// passwords drops the new generation of SetPassword, for the cases that
+// check another part of it.
+type passwords struct {
+	localuser.PasswordStore
+}
+
+// set stores h with the change c and returns only the error.
+func (p passwords) set(
+	ctx context.Context, userID string, h localuser.PasswordHash, c localuser.PasswordChange, e audit.Entry,
+) error {
+	_, err := p.SetPassword(ctx, userID, h, c, e)
+
+	return err
+}
+
+// from returns the change from the session generation g.
+func from(g uint64) localuser.PasswordChange {
+	return localuser.PasswordChange{ChangeRequired: false, FromGeneration: g}
+}
+
+func testSetPasswordFrom(t *testing.T, s Store) {
+	t.Helper()
+
+	u := mustUser(t, s, 1)
+
+	for i, expected := range []uint64{1, 2} {
+		g, err := s.SetPassword(t.Context(), u.ID, hash(i+1), from(expected), entry("local-user:"+u.ID, at(3)))
+		if err != nil || g != expected+1 {
+			t.Fatalf("set password from %d = %d, %v, want %d", expected, g, err, expected+1)
+		}
+
+		if got := generation(t, s, u.PrincipalID); got != g {
+			t.Fatalf("stored generation = %d, want %d", got, g)
+		}
+	}
+}
+
+func testSetPasswordStale(t *testing.T, s Store) {
+	t.Helper()
+
+	u := mustUser(t, s, 1)
+	mustPassword(t, s, u, 1)
+
+	want := generation(t, s, u.PrincipalID)
+	before := len(entries(t, s, principal.Ref(u.PrincipalID)))
+
+	for _, expected := range []uint64{1, want + 1, want + 100} {
+		_, err := s.SetPassword(t.Context(), u.ID, hash(2), from(expected), entry("local-user:"+u.ID, at(4)))
+		wantErr(t, "set password from "+strconv.FormatUint(expected, 10), err, localuser.ErrGenerationChanged)
+	}
+
+	if got := generation(t, s, u.PrincipalID); got != want {
+		t.Fatalf("generation after refused sets = %d, want %d", got, want)
+	}
+
+	if got := len(entries(t, s, principal.Ref(u.PrincipalID))); got != before {
+		t.Fatalf("entries after refused sets = %d, want %d", got, before)
+	}
+
+	cred, err := s.UserByName(t.Context(), u.UserName)
+	if err != nil || cred.Hash != hash(1) {
+		t.Fatalf("hash after refused sets = %v, want the first hash", err)
+	}
+}
+
+func testSetPasswordFromConcurrent(t *testing.T, s Store) {
+	t.Helper()
+
+	const sets = 8
+
+	u := mustUser(t, s, 1)
+	mustPassword(t, s, u, 1)
+
+	expected := generation(t, s, u.PrincipalID)
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		passed  int
+		changed int
+		errs    []error
+	)
+
+	for i := range sets {
+		wg.Go(func() {
+			_, err := s.SetPassword(t.Context(), u.ID, hash(10+i), from(expected), entry("local-user:"+u.ID, at(5)))
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				passed++
+			case errors.Is(err, localuser.ErrGenerationChanged):
+				changed++
+			default:
+				errs = append(errs, err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("a concurrent set failed: %v", err)
+	}
+
+	if passed != 1 || changed != sets-1 {
+		t.Fatalf("%d sets passed and %d were refused, want 1 and %d", passed, changed, sets-1)
+	}
+
+	if got := generation(t, s, u.PrincipalID); got != expected+1 {
+		t.Fatalf("generation = %d, want %d", got, expected+1)
 	}
 }

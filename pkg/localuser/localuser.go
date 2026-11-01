@@ -167,6 +167,13 @@ var (
 	// account by an administrator. A person changes the own password with
 	// the change route.
 	ErrOwnAccount = errors.New("an administrator cannot reset or remove the own password")
+	// ErrGenerationChanged reports a change from a session whose session
+	// generation is no longer the stored one: another change ended the
+	// session.
+	ErrGenerationChanged = errors.New("the session ended: sign in again")
+	// ErrOutsideReach reports a reset by an administrator whose reach does
+	// not cover the reach of the person.
+	ErrOutsideReach = errors.New("the reach of the administrator does not cover the reach of the person")
 	// ErrReasonRequired reports an administrator change with no reason, or a
 	// reason that is not valid.
 	ErrReasonRequired = errors.New("the change needs a reason")
@@ -615,6 +622,11 @@ type PasswordChange struct {
 	// ChangeRequired sets the flag that asks the person for a new password
 	// at the next sign-in.
 	ChangeRequired bool
+	// FromGeneration is the session generation that the change expects: the
+	// generation of the session of the change. Other than 0, the write is a
+	// compare-and-swap on it. 0 sets the password whatever the generation
+	// is, for a change that no session makes (a reset code, a set-up code).
+	FromGeneration uint64
 }
 
 // Store is the persistence port of the records of local users.
@@ -668,11 +680,16 @@ type Store interface {
 type PasswordStore interface {
 	// SetPassword stores h as the password of the user userID, sets
 	// PasswordSetAt to e.At, applies c, adds 1 to the session generation of
-	// the person, and appends e, in one transaction. It returns ErrInvalid
+	// the person, and appends e, in one transaction, and returns the new
+	// session generation. A c.FromGeneration other than 0 makes the write a
+	// compare-and-swap: when the stored generation is another one, it
+	// returns ErrGenerationChanged and writes nothing, so that a session
+	// that another change ended cannot set the password. Two writes from the
+	// same generation never both pass. It returns ErrInvalid
 	// for a hash that the hasher does not read, ErrNotFound for no such
 	// user, ErrDemoFixed for the demo person, and ErrBreakGlass for a
 	// break-glass person.
-	SetPassword(ctx context.Context, userID string, h PasswordHash, c PasswordChange, e audit.Entry) error
+	SetPassword(ctx context.Context, userID string, h PasswordHash, c PasswordChange, e audit.Entry) (uint64, error)
 	// SetChangeRequired sets or clears the flag that asks the person for a
 	// new password at the next sign-in, and appends e, in one transaction.
 	// It returns ErrNotFound for no such user or a user with no password,
