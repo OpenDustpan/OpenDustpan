@@ -6023,7 +6023,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.28.0"
+    "version": "0.29.0"
   },
   "openapi": "3.1.0",
   "paths": {
