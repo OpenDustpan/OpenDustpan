@@ -47,11 +47,11 @@ func (s *Service) CreateUser(ctx context.Context, a Actor, in CreateInput) (Crea
 	// The user name is checked as it came: the server never changes a name
 	// to make it valid.
 	if err := localuser.ValidateUserName(in.UserName); err != nil {
-		return Created{}, s.refuse(ctx, a.Entry, ActionUserCreated, unknownObject, "user name not valid", err)
+		return Created{}, s.refuse(ctx, a.Entry, on(ActionUserCreated, unknownObject), "user name not valid", err)
 	}
 
 	if err := validReason(in.Reason); err != nil {
-		return Created{}, s.refuse(ctx, a.Entry, ActionUserCreated, unknownObject, "no reason", err)
+		return Created{}, s.refuse(ctx, a.Entry, on(ActionUserCreated, unknownObject), "no reason", err)
 	}
 
 	p, err := s.Policy(ctx)
@@ -83,11 +83,13 @@ func (s *Service) CreateUser(ctx context.Context, a Actor, in CreateInput) (Crea
 		{Key: "principal", Old: nil, New: person.ID, Layer: "", TakesEffect: ""},
 	}
 
-	if err := s.store.CreateUser(ctx, u, ue); err != nil {
-		return Created{}, fmt.Errorf("create the local user: %w", err)
+	if createErr := s.store.CreateUser(ctx, u, ue); createErr != nil {
+		return Created{}, fmt.Errorf("create the local user: %w", createErr)
 	}
 
-	code, err := s.createCode(ctx, a, u, localuser.PurposeSetUp, in.Reason, false, p.ResetLifetime)
+	code, err := s.createCode(ctx, a, codeRequest{
+		user: u, purpose: localuser.PurposeSetUp, reason: in.Reason, lifetime: p.ResetLifetime, revoke: false,
+	})
 	if err != nil {
 		return Created{}, err
 	}
@@ -119,32 +121,45 @@ func (s *Service) StartReset(ctx context.Context, a Actor, principalID string, i
 
 	p, err := s.requireEnabled(ctx)
 	if err != nil {
-		return Code{}, s.refuse(ctx, a.Entry, ActionResetCreated, object, "password sign-in is off", err)
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "password sign-in is off", err)
 	}
 
 	// Defense in depth: the route refuses a reset of the own account too.
 	// This check stays so that a new caller of the service cannot skip it.
 	if a.PrincipalID == "" || a.PrincipalID == principalID {
-		return Code{}, s.refuse(ctx, a.Entry, ActionResetCreated, object, "own account", localuser.ErrOwnAccount)
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "own account", localuser.ErrOwnAccount)
 	}
 
-	if err := validReason(in.Reason); err != nil {
-		return Code{}, s.refuse(ctx, a.Entry, ActionResetCreated, object, "no reason", err)
+	if reasonErr := validReason(in.Reason); reasonErr != nil {
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "no reason", reasonErr)
 	}
 
 	u, err := s.store.UserByPrincipal(ctx, principalID)
 	if err != nil {
-		return Code{}, s.refuse(ctx, a.Entry, ActionResetCreated, object, "no local user", err)
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "no local user", err)
 	}
 
-	return s.createCode(ctx, a, u, localuser.PurposeReset, in.Reason, in.RevokeAccessTokens, p.ResetLifetime)
+	return s.createCode(ctx, a, codeRequest{
+		user: u, purpose: localuser.PurposeReset, reason: in.Reason, lifetime: p.ResetLifetime,
+		revoke: in.RevokeAccessTokens,
+	})
 }
 
-// createCode stores a new code of purpose for u and returns it.
-func (s *Service) createCode(
-	ctx context.Context, a Actor, u localuser.User, purpose localuser.Purpose, reason string, revoke bool,
-	lifetime time.Duration,
-) (Code, error) {
+// codeRequest names a new code: its user, its purpose, the reason of the
+// administrator, whether a reset revokes the access tokens, and its
+// lifetime.
+type codeRequest struct {
+	user     localuser.User
+	purpose  localuser.Purpose
+	reason   string
+	lifetime time.Duration
+	revoke   bool
+}
+
+// createCode stores a new code of in for its user and returns it.
+func (s *Service) createCode(ctx context.Context, a Actor, in codeRequest) (Code, error) {
+	u, purpose, reason, revoke, lifetime := in.user, in.purpose, in.reason, in.revoke, in.lifetime
+
 	text, err := newCode()
 	if err != nil {
 		return Code{}, err
@@ -164,12 +179,13 @@ func (s *Service) createCode(
 	object := UserObject(u.ID)
 	e := s.entry(a.Entry, ActionResetCreated, object, audit.OutcomeSuccess, reason)
 
-	if err := s.store.CreateReset(ctx, r, localuser.DigestOf(text), e); err != nil {
-		if errors.Is(err, localuser.ErrBreakGlass) || errors.Is(err, localuser.ErrDemoFixed) {
-			return Code{}, s.refuse(ctx, a.Entry, ActionResetCreated, object, "account cannot have a password", err)
+	if createErr := s.store.CreateReset(ctx, r, localuser.DigestOf(text), e); createErr != nil {
+		if errors.Is(createErr, localuser.ErrBreakGlass) || errors.Is(createErr, localuser.ErrDemoFixed) {
+			return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "account cannot have a password",
+				createErr)
 		}
 
-		return Code{}, fmt.Errorf("create the reset code: %w", err)
+		return Code{}, fmt.Errorf("create the reset code: %w", createErr)
 	}
 
 	return Code{ExpiresAt: r.ExpiresAt, Text: text}, nil
@@ -190,18 +206,18 @@ func (s *Service) Redeem(ctx context.Context, base audit.Entry, code, password s
 
 	p, err := s.requireEnabled(ctx)
 	if err != nil {
-		return s.refuse(ctx, base, ActionResetRefused, unknownObject, "password sign-in is off", err)
+		return s.refuse(ctx, base, on(ActionResetRefused, unknownObject), "password sign-in is off", err)
 	}
 
 	if !validCode(code) {
-		return s.refuse(ctx, base, ActionResetRefused, unknownObject, "code not valid", localuser.ErrNotFound)
+		return s.refuse(ctx, base, on(ActionResetRefused, unknownObject), "code not valid", localuser.ErrNotFound)
 	}
 
 	d := localuser.DigestOf(code)
 
 	u, err := s.store.UserOfReset(ctx, d, s.Now())
 	if err != nil {
-		return s.refuse(ctx, base, ActionResetRefused, unknownObject, "code unknown, used or expired", err)
+		return s.refuse(ctx, base, on(ActionResetRefused, unknownObject), "code unknown, used or expired", err)
 	}
 
 	object := UserObject(u.ID)
@@ -214,19 +230,19 @@ func (s *Service) Redeem(ctx context.Context, base audit.Entry, code, password s
 
 	nfc, err := s.checkNew(ctx, password, p, words)
 	if err != nil {
-		return s.refuse(ctx, base, ActionResetRefused, object, "password refused by a rule", err)
+		return s.refuse(ctx, base, on(ActionResetRefused, object), "password refused by a rule", err)
 	}
 
 	h, err := s.hasher.Hash(ctx, nfc, localuser.DefaultHashParams())
 	if err != nil {
-		return s.refuse(ctx, base, ActionResetRefused, object, "hasher cannot answer", hashError(err))
+		return s.refuse(ctx, base, on(ActionResetRefused, object), "hasher cannot answer", hashError(err))
 	}
 
 	e := s.entry(base, ActionResetUsed, object, audit.OutcomeSuccess, "")
 	rd := localuser.Redeem{At: s.Now(), Hash: h, Change: localuser.PasswordChange{ChangeRequired: false}, Digest: d}
 
-	if _, err := s.store.RedeemReset(ctx, rd, e); err != nil {
-		return s.refuse(ctx, base, ActionResetRefused, object, "redeem refused", err)
+	if _, redeemErr := s.store.RedeemReset(ctx, rd, e); redeemErr != nil {
+		return s.refuse(ctx, base, on(ActionResetRefused, object), "redeem refused", redeemErr)
 	}
 
 	return nil
@@ -266,13 +282,13 @@ func (s *Service) ChangePassword(ctx context.Context, a Actor, in ChangeInput) e
 
 	u, err := s.store.UserByPrincipal(ctx, a.PrincipalID)
 	if err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, "no local user", err)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no local user", err)
 	}
 
 	object = UserObject(u.ID)
 
 	if u.Demo {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, "demo user", localuser.ErrDemoFixed)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "demo user", localuser.ErrDemoFixed)
 	}
 
 	p, err := s.Policy(ctx)
@@ -280,8 +296,8 @@ func (s *Service) ChangePassword(ctx context.Context, a Actor, in ChangeInput) e
 		return err
 	}
 
-	if err := s.checkCurrent(ctx, a, u, in); err != nil {
-		return err
+	if currentErr := s.checkCurrent(ctx, a, u, in); currentErr != nil {
+		return currentErr
 	}
 
 	words := []string{u.UserName}
@@ -291,17 +307,18 @@ func (s *Service) ChangePassword(ctx context.Context, a Actor, in ChangeInput) e
 
 	nfc, err := s.checkNew(ctx, in.New, p, words)
 	if err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, "password refused by a rule", err)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "password refused by a rule", err)
 	}
 
 	h, err := s.hasher.Hash(ctx, nfc, localuser.DefaultHashParams())
 	if err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, "hasher cannot answer", hashError(err))
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "hasher cannot answer", hashError(err))
 	}
 
 	e := s.entry(a.Entry, ActionPasswordChanged, object, audit.OutcomeSuccess, "")
-	if err := s.store.SetPassword(ctx, u.ID, h, localuser.PasswordChange{ChangeRequired: false}, e); err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, "store refused the password", err)
+	setErr := s.store.SetPassword(ctx, u.ID, h, localuser.PasswordChange{ChangeRequired: false}, e)
+	if setErr != nil {
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "store refused the password", setErr)
 	}
 
 	return nil
@@ -317,33 +334,39 @@ func (s *Service) checkCurrent(ctx context.Context, a Actor, u localuser.User, i
 			return nil
 		}
 
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, "no current password",
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no current password",
 			localuser.ErrCurrentPasswordRequired)
 	}
 
 	nfc, err := checkForm(in.Current)
 	if err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, ReasonPasswordForm, localuser.ErrWrongPassword)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), ReasonPasswordForm, localuser.ErrWrongPassword)
 	}
 
 	cred, err := s.store.UserByName(ctx, u.UserName)
 	if err != nil || cred.User.ID != u.ID || cred.Hash == "" {
 		// A user with no password has no current password to check: only a
 		// fresh authentication can set the first one.
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, ReasonNoPassword,
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), ReasonNoPassword,
 			localuser.ErrCurrentPasswordRequired)
 	}
 
 	res, err := s.hasher.Reserve(ctx, cred.Hash)
 	if err != nil || res == nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, "hasher cannot answer", hashError(err))
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "hasher cannot answer", hashError(err))
 	}
 
 	_, err = res.Verify(nfc, localuser.DefaultHashParams())
 	res.Release()
 
 	if err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRefused, object, ReasonWrongPassword, localuser.ErrWrongPassword)
+		return s.refuse(
+			ctx,
+			a.Entry,
+			on(ActionPasswordRefused, object),
+			ReasonWrongPassword,
+			localuser.ErrWrongPassword,
+		)
 	}
 
 	return nil
@@ -360,23 +383,23 @@ func (s *Service) RemovePassword(ctx context.Context, a Actor, principalID, reas
 	// Defense in depth: the route refuses the own account too. This check
 	// stays so that a new caller of the service cannot skip it.
 	if a.PrincipalID == "" || a.PrincipalID == principalID {
-		return s.refuse(ctx, a.Entry, ActionPasswordRemoved, object, "own account", localuser.ErrOwnAccount)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "own account", localuser.ErrOwnAccount)
 	}
 
 	if err := validReason(reason); err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRemoved, object, "no reason", err)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "no reason", err)
 	}
 
 	u, err := s.store.UserByPrincipal(ctx, principalID)
 	if err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRemoved, object, "no local user", err)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "no local user", err)
 	}
 
 	object = UserObject(u.ID)
 	e := s.entry(a.Entry, ActionPasswordRemoved, object, audit.OutcomeSuccess, reason)
 
 	if err := s.store.RemovePassword(ctx, u.ID, e); err != nil {
-		return s.refuse(ctx, a.Entry, ActionPasswordRemoved, object, "store refused the removal", err)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "store refused the removal", err)
 	}
 
 	return nil

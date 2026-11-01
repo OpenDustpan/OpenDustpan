@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -39,10 +40,22 @@ func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, passwo
 
 	p, err := s.requireEnabled(ctx)
 	if err != nil {
-		return SignedIn{}, s.refuse(ctx, base, ActionSignInPasswordFails, unknownObject, "password sign-in is off", err)
+		return SignedIn{}, s.refuse(
+			ctx,
+			base,
+			on(ActionSignInPasswordFails, unknownObject),
+			"password sign-in is off",
+			err,
+		)
 	}
 
-	in := attempt{base: base, object: unknownObject, reason: "", hash: "", cred: localuser.Credential{}}
+	in := &attempt{
+		base: base, object: unknownObject, reason: "", hash: "",
+		cred: localuser.Credential{User: localuser.User{
+			CreatedAt: time.Time{}, PasswordSetAt: time.Time{}, ID: "", PrincipalID: "", UserName: "", CreatedBy: "",
+			ChangeRequired: false, Demo: false,
+		}, Hash: "", SessionGeneration: 0},
+	}
 
 	nfc, formErr := checkForm(password)
 	name := localuser.FoldUserName(userName)
@@ -51,14 +64,13 @@ func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, passwo
 	case formErr != nil:
 		// The hasher refuses such a password too, so no hash runs. The
 		// timing of this answer tells nothing about a user.
-		return SignedIn{}, s.refuse(ctx, base, ActionSignInPasswordFails, unknownObject, ReasonPasswordForm,
+		return SignedIn{}, s.refuse(ctx, base, on(ActionSignInPasswordFails, unknownObject), ReasonPasswordForm,
 			localuser.ErrSignInFailed)
 	case localuser.ValidateUserName(name) != nil:
 		in.reason = ReasonNameForm
 	default:
-		in, err = s.readCredential(ctx, in, name)
-		if err != nil {
-			return SignedIn{}, err
+		if readErr := s.readCredential(ctx, in, name); readErr != nil {
+			return SignedIn{}, readErr
 		}
 	}
 
@@ -77,17 +89,17 @@ type attempt struct {
 	cred   localuser.Credential
 }
 
-// readCredential reads the credential of the folded user name name. An
-// unknown name or a user with no password sets the reason of the failure, and
-// the check of the password then runs against the fixed hash.
-func (s *Service) readCredential(ctx context.Context, in attempt, name string) (attempt, error) {
+// readCredential reads the credential of the folded user name into in.
+// An unknown name or a user with no password sets the reason of the failure,
+// and the check of the password then runs against the fixed hash.
+func (s *Service) readCredential(ctx context.Context, in *attempt, name string) error {
 	cred, err := s.store.UserByName(ctx, name)
 
 	switch {
 	case errors.Is(err, localuser.ErrNotFound):
 		in.reason = ReasonUnknownName
 	case err != nil:
-		return in, s.refuse(ctx, in.base, ActionSignInPasswordFails, unknownObject, "store cannot answer",
+		return s.refuse(ctx, in.base, on(ActionSignInPasswordFails, unknownObject), "store cannot answer",
 			fmt.Errorf("%w: read the local user", localuser.ErrUnavailable))
 	case cred.Hash == "":
 		in.cred, in.object, in.reason = cred, UserObject(cred.User.ID), ReasonNoPassword
@@ -95,19 +107,51 @@ func (s *Service) readCredential(ctx context.Context, in attempt, name string) (
 		in.cred, in.object, in.hash = cred, UserObject(cred.User.ID), cred.Hash
 	}
 
-	return in, nil
+	return nil
 }
 
 // verify checks the password nfc against the hash of in, or against the fixed
 // hash when in has a reason already, so that the time of the answer is the
 // same. It checks the state of the principal only after a full check of the
 // password.
-func (s *Service) verify(ctx context.Context, in attempt, nfc string, p Policy) (SignedIn, error) {
+func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy) (SignedIn, error) {
+	res, err := s.reserve(ctx, in)
+	if err != nil {
+		return SignedIn{}, err
+	}
+
+	verdict, err := res.Verify(nfc, localuser.DefaultHashParams())
+	res.Release()
+
+	if refusal := s.compareRefusal(ctx, in, err); refusal != nil {
+		return SignedIn{}, refusal
+	}
+
+	if reason := s.principalRefusal(ctx, in.cred, p); reason != "" {
+		return SignedIn{}, s.refuse(ctx, in.base, on(ActionSignInPasswordFails, in.object), reason,
+			signInErrorFor(reason))
+	}
+
+	if verdict.NeedsRehash {
+		s.rehash(ctx, in, nfc)
+	}
+
+	return SignedIn{
+		PrincipalID: in.cred.User.PrincipalID, UserID: in.cred.User.ID,
+		SessionGeneration: in.cred.SessionGeneration, ChangeRequired: in.cred.User.ChangeRequired,
+	}, nil
+}
+
+// reserve takes the memory of the hash of in, or of the fixed hash when in
+// has a reason already, from the budget of the instance.
+func (s *Service) reserve(ctx context.Context, in *attempt) (*localuser.Reservation, error) {
+	tg := on(ActionSignInPasswordFails, in.object)
+
 	h := in.hash
 	if in.reason != "" {
 		dummy, err := s.dummyHash(ctx)
 		if err != nil {
-			return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, "hasher cannot answer", err)
+			return nil, s.refuse(ctx, in.base, tg, "hasher cannot answer", err)
 		}
 
 		h = dummy
@@ -120,49 +164,38 @@ func (s *Service) verify(ctx context.Context, in attempt, nfc string, p Policy) 
 		// A full budget counts no failure: the sign-in never reached the
 		// compare, so an attacker who fills the budget adds no failure to the
 		// name of a person.
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, "hash budget full",
-			localuser.ErrHashBusy)
+		return nil, s.refuse(ctx, in.base, tg, "hash budget full", localuser.ErrHashBusy)
 	case errors.Is(err, localuser.ErrInvalid):
 		// Fail closed: a stored hash that does not parse, or whose parameters
 		// are outside the bounds, never signs a person in.
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, ReasonStoredHash,
-			localuser.ErrSignInFailed)
+		return nil, s.refuse(ctx, in.base, tg, ReasonStoredHash, localuser.ErrSignInFailed)
 	case err != nil || res == nil:
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, "hasher cannot answer",
+		return nil, s.refuse(ctx, in.base, tg, "hasher cannot answer",
 			fmt.Errorf("%w: reserve the hash", localuser.ErrUnavailable))
+	default:
+		return res, nil
 	}
+}
 
-	verdict, err := res.Verify(nfc, localuser.DefaultHashParams())
-	res.Release()
+// compareRefusal returns the refusal of a compare that failed with err, or of
+// an attempt that had a reason before the compare, or nil for a good
+// password.
+func (s *Service) compareRefusal(ctx context.Context, in *attempt, err error) error {
+	tg := on(ActionSignInPasswordFails, in.object)
 
 	switch {
 	case in.reason != "":
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, in.reason,
-			localuser.ErrSignInFailed)
+		return s.refuse(ctx, in.base, tg, in.reason, localuser.ErrSignInFailed)
 	case errors.Is(err, localuser.ErrWrongPassword):
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, ReasonWrongPassword,
-			localuser.ErrSignInFailed)
+		return s.refuse(ctx, in.base, tg, ReasonWrongPassword, localuser.ErrSignInFailed)
 	case errors.Is(err, localuser.ErrInvalid):
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, ReasonStoredHash,
-			localuser.ErrSignInFailed)
+		return s.refuse(ctx, in.base, tg, ReasonStoredHash, localuser.ErrSignInFailed)
 	case err != nil:
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, "hasher cannot answer",
+		return s.refuse(ctx, in.base, tg, "hasher cannot answer",
 			fmt.Errorf("%w: check the password", localuser.ErrUnavailable))
+	default:
+		return nil
 	}
-
-	if reason := s.principalRefusal(ctx, in.cred, p); reason != "" {
-		return SignedIn{}, s.refuse(ctx, in.base, ActionSignInPasswordFails, in.object, reason,
-			signInErrorFor(reason))
-	}
-
-	if verdict.NeedsRehash {
-		s.rehash(ctx, in, nfc)
-	}
-
-	return SignedIn{
-		PrincipalID: in.cred.User.PrincipalID, UserID: in.cred.User.ID,
-		SessionGeneration: in.cred.SessionGeneration, ChangeRequired: in.cred.User.ChangeRequired,
-	}, nil
 }
 
 // signInErrorFor returns the answer of a refusal of the state of the
@@ -208,7 +241,7 @@ func (s *Service) principalRefusal(ctx context.Context, cred localuser.Credentia
 // rehash stores a new hash of the password with the current parameters, with
 // a compare-and-swap on the old hash. A failure leaves the old hash, which
 // still works: the next good sign-in tries again.
-func (s *Service) rehash(ctx context.Context, in attempt, nfc string) {
+func (s *Service) rehash(ctx context.Context, in *attempt, nfc string) {
 	h, err := s.hasher.Hash(ctx, nfc, localuser.DefaultHashParams())
 	if err != nil {
 		return

@@ -46,29 +46,44 @@ func testGenerationRules(t *testing.T, s Store) {
 		}
 
 		if tc.want != nil {
-			if _, getErr := s.GetSession(ctx, tc.id); !errors.Is(getErr, session.ErrNotFound) {
-				t.Fatalf("%s: get after a refused create = %v, want ErrNotFound", tc.name, getErr)
-			}
+			wantNoSession(t, s, tc.name, tc.id)
 
 			continue
 		}
 
-		got, err := s.GetSession(ctx, tc.id)
-		if err != nil {
-			t.Fatalf("%s: get: %v", tc.name, err)
-		}
+		wantGenerationOne(t, s, tc.name, tc.id, digest(tc.digest))
+	}
+}
 
-		if got.Generation != 1 {
-			t.Fatalf("%s: stored generation = %d, want 1", tc.name, got.Generation)
-		}
+// wantNoSession fails unless the session id does not exist.
+func wantNoSession(t *testing.T, s Store, name, id string) {
+	t.Helper()
 
-		m, err := s.GetSessionByDigest(ctx, digest(tc.digest))
-		if err != nil {
-			t.Fatalf("%s: get by digest: %v", tc.name, err)
-		}
+	if _, err := s.GetSession(t.Context(), id); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("%s: get after a refused create = %v, want ErrNotFound", name, err)
+	}
+}
 
-		if m.Session.Generation != 1 || m.Generation != 1 {
-			t.Fatalf("%s: lookup generations = %d and %d, want 1 and 1", tc.name, m.Session.Generation, m.Generation)
-		}
+// wantGenerationOne fails unless the session id and the lookup of the digest
+// d answer the generation 1 for the session and for its owner.
+func wantGenerationOne(t *testing.T, s Store, name, id string, d session.Digest) {
+	t.Helper()
+
+	got, err := s.GetSession(t.Context(), id)
+	if err != nil {
+		t.Fatalf("%s: get: %v", name, err)
+	}
+
+	if got.Generation != 1 {
+		t.Fatalf("%s: stored generation = %d, want 1", name, got.Generation)
+	}
+
+	m, err := s.GetSessionByDigest(t.Context(), d)
+	if err != nil {
+		t.Fatalf("%s: get by digest: %v", name, err)
+	}
+
+	if m.Session.Generation != 1 || m.Generation != 1 {
+		t.Fatalf("%s: lookup generations = %d and %d, want 1 and 1", name, m.Session.Generation, m.Generation)
 	}
 }
