@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // Store is every persistence port the suite exercises: the ports of
@@ -28,7 +29,7 @@ type Store interface {
 	localuser.ResetStore
 	audit.Store
 	principal.RecordStore
-	principal.SessionGenerationStore
+	session.PrincipalStateStore
 	accesstoken.Store
 	installation.KindStore
 }
