@@ -182,16 +182,6 @@ func (m *memUpdates) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, er
 func (m *memUpdates) CreateUpdate(
 	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
 ) error {
-	// The fake has no transaction: it creates the key first, and a failed key
-	// stores no update. A sealer of the tests needs no transaction.
-	if key.NewKey == nil {
-		return stack.ErrInvalidUpdateKey
-	}
-
-	if _, err := key.NewKey(ctx, nil, key.Ref, fence); err != nil {
-		return err
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -199,10 +189,20 @@ func (m *memUpdates) CreateUpdate(
 		return err
 	}
 
-	if _, ok := m.namespaces[u.Ref.Namespace]; ok {
-		if _, ok := m.stacks[u.Ref]; !ok {
-			return stack.ErrNotFound
-		}
+	st, ok := m.stacks[u.Ref]
+	if !ok {
+		return stack.ErrNotFound
+	}
+
+	item, err := key.RefFor(u.Ref.Namespace, st.ID, u.ID)
+	if err != nil {
+		return err
+	}
+
+	// The fake has no transaction: a failed key stores no update. A sealer of
+	// the tests needs no transaction.
+	if _, err := key.NewKey(ctx, nil, item, fence); err != nil {
+		return err
 	}
 
 	m.updates[u.ID] = u
