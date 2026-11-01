@@ -293,6 +293,11 @@ of the code follows in its own pull request.
   - Only a bot whose pushes no user of the repository controls can be linked:
     for example the Dependabot app or the Renovate app. The server identifies
     the bot by the app ID of the Git host, never by its login.
+  - A self-hosted Renovate can run commands from its configuration
+    (`postUpgradeTasks`). So a linked self-hosted Renovate must have
+    `postUpgradeTasks` off, or read its configuration only from the default
+    branch. The server cannot check this. The link form states the rule, and
+    the person who links the bot confirms it.
   - The server refuses to link `github-actions[bot]` or any bot that pushes on
     the request of a user (a workflow, a comment command, a chat bot). The
     error says why: "This bot pushes for the users who start it, so its pushes
@@ -658,8 +663,10 @@ unit reads a changed file.
   declared paths shows as a warning on the unit and counts as changed.
 - **Unknown closure.** A unit whose closure the server cannot compute keeps the
   status pending, also with declared paths. A person with `unit:manage`
-  can record an acceptance with a reason. The acceptance writes an audit entry,
-  and the unit then shows "closure not proven". The acceptance is recorded one
+  can record an acceptance with a reason and a fresh authentication. The
+  acceptance writes an audit entry, and the unit then shows "closure not
+  proven". Each `approvals` success that rests on the acceptance also shows
+  "closure not proven". The acceptance is recorded one
   time for each unit. It stays until the closure becomes provable or the
   declared paths change, and each change of the declared paths voids it. After
   the acceptance, the declared paths decide "no OpenDustpan unit changed" for
