@@ -8,7 +8,7 @@ Changes:
 
 ## Context
 
-The project owner made these decisions in the owner decision file of 18 October 2026. A check on 1 November 2026 found no ADR that states them. ADR 110 does not decide them.
+The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 1 November 2026 found no ADR that states them. ADR 110 does not decide them.
 
 This ADR writes the words of the owner. It adds no decision of its own.
 
