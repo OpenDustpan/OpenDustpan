@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -154,6 +155,14 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 	if err != nil {
 		h.writeFirstRefusal(ctx, w, err, h.writeLockError)
 
+		return
+	}
+
+	// The gates run at the lock, before any plan or apply: a refusal of the
+	// state version after the apply would leave resources that no stored state
+	// records. The workspace must exist first, because the gates read its
+	// facts.
+	if !h.guardStateWrite(ctx, w, c, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
 		return
 	}
 
