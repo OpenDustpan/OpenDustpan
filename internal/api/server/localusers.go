@@ -402,17 +402,18 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// localUserActor returns the actor of a change by p. The principal ID is the
+// localUserActor returns the actor of a change by p, with the action
+// server:manage-sign-in that each route of an administrator needs. The principal ID is the
 // owner of the console session of the request, and empty for a request with
 // an access token: the service then refuses each change that compares it
 // with the target, which fails closed.
-func localUserActor(r *http.Request, p identity.Principal, action identity.Action) localusersvc.Actor {
+func localUserActor(r *http.Request, p identity.Principal) localusersvc.Actor {
 	id := ""
 	if s, ok := sessionFromRequest(r); ok {
 		id = s.Match.Owner.ID
 	}
 
-	return localusersvc.Actor{Entry: callerEntry(r, p, action), PrincipalID: id}
+	return localusersvc.Actor{Entry: callerEntry(r, p, identity.ActionServerManageSignIn), PrincipalID: id}
 }
 
 // createLocalUser makes a local user and answers 201 with its set-up code.
@@ -428,7 +429,7 @@ func (h *Handler) createLocalUser(w http.ResponseWriter, r *http.Request, p iden
 		return
 	}
 
-	c, err := h.localUsers.CreateUser(ctx, localUserActor(r, p, identity.ActionServerManageSignIn),
+	c, err := h.localUsers.CreateUser(ctx, localUserActor(r, p),
 		localusersvc.CreateInput{UserName: req.UserName, DisplayName: req.DisplayName, Reason: req.Reason})
 	if err != nil {
 		h.writeError(ctx, w, localUserError(err))
@@ -485,7 +486,7 @@ func (h *Handler) resetLocalUser(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	code, err := h.localUsers.StartReset(ctx, localUserActor(r, p, identity.ActionServerManageSignIn),
+	code, err := h.localUsers.StartReset(ctx, localUserActor(r, p),
 		req.PrincipalID, localusersvc.ResetInput{Reason: req.Reason, RevokeAccessTokens: req.RevokeAccessTokens})
 	if err != nil {
 		h.writeError(ctx, w, localUserError(err))
@@ -515,7 +516,7 @@ func (h *Handler) unlockLocalUser(w http.ResponseWriter, r *http.Request, p iden
 		return
 	}
 
-	n, err := h.localUsers.Unlock(ctx, localUserActor(r, p, identity.ActionServerManageSignIn), req.Principal,
+	n, err := h.localUsers.Unlock(ctx, localUserActor(r, p), req.Principal,
 		req.Reason)
 	if err != nil {
 		h.writeError(ctx, w, localUserError(err))
@@ -538,7 +539,7 @@ func (h *Handler) getLocalUserLocks(w http.ResponseWriter, r *http.Request, p id
 		return
 	}
 
-	locks, err := h.localUsers.Locks(ctx, localUserActor(r, p, identity.ActionServerManageSignIn), id)
+	locks, err := h.localUsers.Locks(ctx, localUserActor(r, p), id)
 	if err != nil {
 		h.writeError(ctx, w, localUserError(err))
 
