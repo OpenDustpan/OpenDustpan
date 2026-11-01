@@ -43,7 +43,7 @@ func (f *fixture) lockedPerson(t *testing.T, adminRole string) (string, localuse
 
 	f.fail(t, authgate.DefaultNameLimit, "alice")
 
-	return c.Principal.ID, localusersvc.Actor{Entry: base("local:bob"), PrincipalID: holder.Principal.ID}
+	return c.Principal.ID, localusersvc.Actor{Entry: base("local:bob"), PrincipalID: holder.Principal.ID, Admin: false}
 }
 
 // TestUnlockNeedsTheReachOfThePerson proves that an administrator whose
@@ -139,7 +139,7 @@ func TestUnlockFailsClosedWithNoReach(t *testing.T) {
 	}
 
 	// An actor with no principal ID fails closed too.
-	anonymous := localusersvc.Actor{Entry: base("corp:admin"), PrincipalID: ""}
+	anonymous := localusersvc.Actor{Entry: base("corp:admin"), PrincipalID: "", Admin: false}
 	if _, err := f.svc.Unlock(t.Context(), anonymous, c.Principal.ID, "the person called"); !errors.Is(
 		err, localuser.ErrOutsideReach,
 	) {
@@ -155,7 +155,7 @@ func TestGoodCurrentPasswordClearsTheCounts(t *testing.T) {
 
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
-	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID, Admin: false}
 
 	wrong := func() {
 		t.Helper()
@@ -226,6 +226,7 @@ func (f *fixture) demoService(t *testing.T, kind installation.Kind) *localusersv
 		Store: demoFlag{Stores: f.store}, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: f.store, Keys: f.store, Settings: f.settings,
 		SSO: func(context.Context) (bool, error) { return false, nil }, Reach: f.storeReach(), Kind: kind, Now: nil,
+		Subjects: f.store,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -379,4 +380,98 @@ func TestPruneLocksFailsClosed(t *testing.T) {
 	) {
 		t.Fatalf("prune with a failing store = %v, want its error", err)
 	}
+}
+
+// TestUnlockByAnAccessToken sends an unlock with no console session, as an
+// access token does, directly to the reach check: the principal of the
+// subject of the token must cover the person, an unknown subject or a
+// service with no resolver of subjects fails closed, and an administrator of
+// the identity layer covers each person.
+func TestUnlockByAnAccessToken(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		want     error
+		name     string
+		subject  string
+		role     string
+		admin    bool
+		resolver bool
+	}{
+		{
+			name: "a site administrator by its subject", subject: "", role: access.RoleSiteAdministrator,
+			admin: false, resolver: true, want: nil,
+		},
+		{
+			name: "an account administrator by its subject", subject: "", role: access.RoleAccountAdministrator,
+			admin: false, resolver: true, want: localuser.ErrOutsideReach,
+		},
+		{
+			name: "an unknown subject", subject: "corp:nobody", role: "", admin: false, resolver: true,
+			want: localuser.ErrOutsideReach,
+		},
+		{
+			name: "a service with no resolver of subjects", subject: "", role: access.RoleSiteAdministrator,
+			admin: false, resolver: false, want: localuser.ErrOutsideReach,
+		},
+		{
+			name: "an administrator of the identity layer", subject: "corp:root", role: "", admin: true,
+			resolver: true, want: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			person, holder := f.lockedPerson(t, tc.role)
+
+			subject := tc.subject
+			if subject == "" {
+				subject = f.subjectOf(t, holder.PrincipalID)
+			}
+
+			svc := f.svc
+			if !tc.resolver {
+				svc = f.serviceWithSubjects(t, nil)
+			}
+
+			token := localusersvc.Actor{Entry: base(subject), PrincipalID: "", Admin: tc.admin}
+
+			if _, err := svc.Unlock(t.Context(), token, person, "the person called"); !errors.Is(err, tc.want) {
+				t.Fatalf("unlock = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// subjectOf returns the subject of the principal id.
+func (f *fixture) subjectOf(t *testing.T, id string) string {
+	t.Helper()
+
+	p, err := f.principals.GetPrincipal(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get principal %s: %v", id, err)
+	}
+
+	return p.Subject
+}
+
+// serviceWithSubjects returns a service over the store of f that finds the
+// principal of a subject with subjects.
+func (f *fixture) serviceWithSubjects(t *testing.T, subjects localusersvc.Subjects) *localusersvc.Service {
+	t.Helper()
+
+	svc, err := localusersvc.New(localusersvc.Config{
+		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
+		Audit: f.store, Locks: f.store, Keys: f.store, Settings: f.settings,
+		SSO: func(context.Context) (bool, error) { return false, nil }, Reach: f.storeReach(),
+		Kind: installation.KindProduction, Now: nil, Subjects: subjects,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	return svc
 }

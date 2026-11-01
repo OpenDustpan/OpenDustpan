@@ -87,6 +87,14 @@ func newLocalUserService(
 		return none, nil
 	}
 
+	// A store that cannot find a principal by its subject leaves Subjects
+	// nil: the unlock and the read of the counts then refuse each caller
+	// with an access token, which fails closed.
+	var subjects localusersvc.Subjects
+	if found, isSubjects := cfg.namespaceStore.(localusersvc.Subjects); isSubjects {
+		subjects = found
+	}
+
 	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
 	if err != nil {
 		return none, fmt.Errorf("password hash budget: %w", err)
@@ -116,7 +124,7 @@ func newLocalUserService(
 		Locks:      locks,
 		Keys:       keys,
 		Settings:   settingsPort,
-		SSO:        identityProviders(cfg, signIn), Reach: reach,
+		SSO:        identityProviders(cfg, signIn), Reach: reach, Subjects: subjects,
 		Kind: cfg.installationKind,
 		Now:  cfg.now,
 	})
