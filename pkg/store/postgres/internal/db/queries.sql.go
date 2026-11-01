@@ -17651,7 +17651,7 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 	return result.RowsAffected(), nil
 }
 
-const putCheckpoint = `-- name: PutCheckpoint :execrows
+const putCheckpoint = `-- name: PutCheckpoint :one
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, saved_at_ms,
@@ -17670,6 +17670,7 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_size = excluded.blob_size,
     blob_md5 = excluded.blob_md5
 WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence
+RETURNING FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
 `
 
 type PutCheckpointParams struct {
@@ -17691,9 +17692,12 @@ type PutCheckpointParams struct {
 // The row of the update decides which write wins. The conflict update runs only
 // for a write without a sequence number, or for a sequence above the stored one,
 // and the database checks that against the latest committed row, so two writers
-// of one sequence cannot both land. Zero rows mean that the write lost.
+// of one sequence cannot both land. No row means that the write lost.
+// The row that the write returns holds the time of the database clock after the
+// write, and so after every lock wait of the statement. The caller checks the
+// attempt window with it, so the check needs no round trip of its own.
 func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) (int64, error) {
-	result, err := q.db.Exec(ctx, putCheckpoint,
+	row := q.db.QueryRow(ctx, putCheckpoint,
 		arg.StackID,
 		arg.UpdateID,
 		arg.LeaseDigest,
@@ -17708,10 +17712,9 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) (i
 		arg.BlobSize,
 		arg.BlobMd5,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	var now_ms int64
+	err := row.Scan(&now_ms)
+	return now_ms, err
 }
 
 const putUnitFinalVersion = `-- name: PutUnitFinalVersion :exec
