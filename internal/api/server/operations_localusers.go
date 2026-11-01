@@ -23,7 +23,9 @@ func localUserOperationLabels() map[string]apidesc.Label {
 			),
 		apidesc.Pattern(http.MethodGet, localUserPolicyPath): apidesc.Name("getLocalUserPolicy", tagLocalUsers).
 			On(apidesc.KindServer).
-			WithBodies(apidesc.NoBody, apidesc.Typed[localUserPolicyResponse]("LocalUserPolicy")),
+			WithBodies(apidesc.NoBody, apidesc.Typed[localUserPolicyResponse](
+				"LocalUserPolicy", apidesc.Named[localUserLockPruneBody]("LocalUserLockPrune"),
+			)),
 		apidesc.Pattern(http.MethodPost, localUserResetPath): apidesc.Name("resetLocalUserPassword", tagLocalUsers).
 			WithStatus(http.StatusCreated).
 			On(apidesc.KindServer).

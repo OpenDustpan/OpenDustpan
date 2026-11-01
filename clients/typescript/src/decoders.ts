@@ -124,6 +124,7 @@ import type {
   ListUnitsResponse,
   ListViewsResponse,
   LocalUserLock,
+  LocalUserLockPrune,
   LocalUserLocks,
   LocalUserPolicy,
   LockLockedError,
@@ -1086,6 +1087,13 @@ export const decodeLocalUserLock: Decoder<LocalUserLock> = object<LocalUserLock>
   source: string,
 });
 
+/** The validator of LocalUserLockPrune. */
+export const decodeLocalUserLockPrune: Decoder<LocalUserLockPrune> = object<LocalUserLockPrune>("LocalUserLockPrune", {
+  ageSeconds: int64,
+  intervalSeconds: int64,
+  maxRows: int64,
+});
+
 /** The validator of LocalUserLocks. */
 export const decodeLocalUserLocks: Decoder<LocalUserLocks> = object<LocalUserLocks>("LocalUserLocks", {
   locks: array(ref(() => decodeLocalUserLock)),
@@ -1096,6 +1104,7 @@ export const decodeLocalUserPolicy: Decoder<LocalUserPolicy> = object<LocalUserP
   enabled: boolean,
   enabledSource: string,
   identityProvider: boolean,
+  lockPrune: ref(() => decodeLocalUserLockPrune),
   maxLength: int64,
   minLength: int64,
   requireLettersAndDigits: boolean,

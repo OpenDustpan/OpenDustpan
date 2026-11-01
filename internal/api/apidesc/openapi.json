@@ -2919,6 +2919,28 @@
         ],
         "type": "object"
       },
+      "LocalUserLockPrune": {
+        "properties": {
+          "ageSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "intervalSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "maxRows": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ageSeconds",
+          "intervalSeconds",
+          "maxRows"
+        ],
+        "type": "object"
+      },
       "LocalUserLocks": {
         "properties": {
           "locks": {
@@ -2944,6 +2966,9 @@
           "identityProvider": {
             "type": "boolean"
           },
+          "lockPrune": {
+            "$ref": "#/components/schemas/LocalUserLockPrune"
+          },
           "maxLength": {
             "format": "int64",
             "type": "integer"
@@ -2964,6 +2989,7 @@
           "enabled",
           "enabledSource",
           "identityProvider",
+          "lockPrune",
           "maxLength",
           "minLength",
           "requireLettersAndDigits",

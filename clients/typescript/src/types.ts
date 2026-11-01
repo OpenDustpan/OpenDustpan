@@ -744,6 +744,12 @@ export interface LocalUserLock {
   readonly source: string;
 }
 
+export interface LocalUserLockPrune {
+  readonly ageSeconds: number;
+  readonly intervalSeconds: number;
+  readonly maxRows: number;
+}
+
 export interface LocalUserLocks {
   readonly locks: ReadonlyArray<LocalUserLock>;
 }
@@ -752,6 +758,7 @@ export interface LocalUserPolicy {
   readonly enabled: boolean;
   readonly enabledSource: string;
   readonly identityProvider: boolean;
+  readonly lockPrune: LocalUserLockPrune;
   readonly maxLength: number;
   readonly minLength: number;
   readonly requireLettersAndDigits: boolean;
