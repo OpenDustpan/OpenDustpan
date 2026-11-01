@@ -206,6 +206,7 @@ Each target is `[<name>=]<target>`:
 | A file of JSON lines | `file:/var/log/dustpan/server.jsonl` |
 | Syslog (RFC 5424) over UDP, TCP or TLS | `syslog+tls://logs.example:6514` |
 | A signed HTTPS webhook | `webhook:https://logs.example/hooks/dustpan` |
+| OTLP logs over HTTPS | `otlp:https://collector.example:4318` |
 
 ```sh
 opendustpan serve --log-sink stderr --log-sink 'syslog+tls://logs.example:6514'
@@ -224,7 +225,9 @@ The sink refuses a line above the cap and never sends it.
 A refused line is skipped and counted in `dustpan_log_sink_dropped_total`.
 The audit log guide states the full guarantee for audit entries.
 A webhook target signs each request with the key in `DUSTPAN_LOG_WEBHOOK_SECRET`, or in a file that `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` names.
-The audit log guide describes the record format, the syslog format and the webhook signature.
+An OTLP target sends the lines to `<URL>/v1/logs` as OTLP/HTTP with the JSON encoding.
+Set the headers of the target, for example an API key, in `DUSTPAN_LOG_OTLP_HEADERS`, or in a file that `DUSTPAN_LOG_OTLP_HEADERS_FILE` names.
+The audit log guide describes the record format, the syslog format, the webhook signature and the OTLP format.
 Object storage is a target of the audit log only.
 
 A target other than a stream is best effort.
@@ -232,7 +235,7 @@ The server puts each line in a queue of 4,096 lines and never waits for the targ
 It writes the queue in batches, at least once a second.
 When the queue is full or a write fails, the server drops the lines.
 `dustpan_log_sink_dropped_total{sink="<name>"}` counts them.
-Without a name, the kind is the name: `file`, `syslog` or `webhook`.
+Without a name, the kind is the name: `file`, `syslog`, `webhook` or `otlp`.
 The server opens a file target again on `SIGHUP`, as it does for the audit log.
 
 ## Request IDs
