@@ -71,6 +71,8 @@ type outputShareStore interface {
 	stack.JournalStore
 	stack.CheckpointStore
 	workspace.StateStore
+	// The update store is also the index of the item keys of the updates.
+	secret.ItemKeyIndex
 	// OutputSharingSettings returns the port of the setting.
 	OutputSharingSettings() outputshare.Settings
 }
@@ -163,7 +165,7 @@ func newOutputShareRig(t *testing.T, dialect string) *outputShareRig {
 
 	race := &readRace{mu: sync.Mutex{}, armed: false, left: 0, fired: false, hook: nil}
 	opts = append(opts,
-		dustpan.WithUpdateStore(raceUpdates{UpdateStore: st, JournalStore: st, race: race}),
+		dustpan.WithUpdateStore(raceUpdates{UpdateStore: st, JournalStore: st, ItemKeyIndex: st, race: race}),
 		dustpan.WithCheckpointStore(raceCheckpoints{CheckpointStore: st, race: race}),
 		dustpan.WithStateStore(raceStates{StateStore: st, race: race}),
 	)
@@ -608,6 +610,7 @@ func (c *readRace) read() {
 type raceUpdates struct {
 	stack.UpdateStore
 	stack.JournalStore
+	secret.ItemKeyIndex
 
 	race *readRace
 }
