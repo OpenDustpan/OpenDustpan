@@ -562,7 +562,8 @@ scope is: the change to decision 3 of ADR 26 (the server assigns the serial
 under a claim); a parent pointer and a claim ID for each state version; a
 fence for each claim; one principal for each job on the TFE-compatible path;
 and the change of the rule of ADR 299 that a replacement is never disjoint
-(the RFC proposes a closure test). ADR 302 does not decide these points.
+(the RFC proposes a closure test); and the retry interval and the timeout
+of the local wrapper. ADR 302 does not decide these points.
 
 **Scope.**
 
@@ -615,7 +616,7 @@ fact that it names.
 2. **Concurrent applies.** Both applies run. Pass: the provider log shows
    that the two apply periods overlap in time, the final state has the
    change of A and the change of B, and the history shows two new state
-   versions, each with its own claim ID. Fail: a resource of A or B is
+   versions, and the history shows the claim of each state version. Fail: a resource of A or B is
    lost or reverted.
 3. **A runner job with an overlapping claim is refused.** While the apply
    of A runs, team C starts a runner job that changes the resource of A.
@@ -628,15 +629,17 @@ fact that it names.
    the history names the case.
 5. **A local run, two cases.** A person runs `dustpan` with the wrapper
    around `tofu apply` from a laptop.
-   - The change overlaps a running claim: pass when the wrapper waits and
-     the provider log has no call from it until the time that the blocking
-     claim ends. After that, it applies on the new state version. The claim
-     record of the local run shows a start time after the end time of the
-     blocking claim.
+   - The change overlaps a running claim: the server refuses the claim, and
+     the wrapper tries it again until the blocking claim ends, or until a
+     timeout. Pass when the provider log has no call from the wrapper until
+     the blocking claim ends. After that, the wrapper applies on the new
+     state version. The claim record of the local run shows a start time
+     after the end time of the blocking claim. If the timeout ends first,
+     the wrapper exits with an error and makes no provider call.
    - The change does not overlap any running claim: pass when its claim
      is accepted, its apply period overlaps the running apply in the
-     provider log, and the state serials show two merged versions with no
-     lost resource.
+     provider log, and the history shows the claim of each state version
+     with no lost resource.
 6. **A local run without the wrapper.** A person runs plain `tofu apply` on
    the same workspace. Pass: it takes the whole-unit lock, and a runner job
    that starts meanwhile waits for it. The history shows the lock holder.
