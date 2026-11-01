@@ -9,8 +9,8 @@ func pgCopySettingTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
 			table:   "settings",
-			columns: []string{pgColScopeID, "key", "value", pgColUpdatedAtMs},
-			orderBy: []string{pgColScopeID, "key"},
+			columns: []string{pgColScopeID, pgColKey, "value", pgColUpdatedAtMs},
+			orderBy: []string{pgColScopeID, pgColKey},
 		},
 		{
 			table:   "settings_state",
