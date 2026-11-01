@@ -10,7 +10,7 @@ import (
 // sign-in in the description.
 func localUserOperationLabels() map[string]apidesc.Label {
 	return map[string]apidesc.Label{
-		apidesc.Pattern(http.MethodPost, passwordSignInPath): apidesc.Name("signInWithPassword", tagLocalUsers).
+		apidesc.Pattern(http.MethodPost, localSignInPath): apidesc.Name("signInWithPassword", tagLocalUsers).
 			WithBodies(apidesc.Typed[passwordSignInRequest]("PasswordSignInRequest"), apidesc.NoBody),
 		apidesc.Pattern(http.MethodPost, localUserRedeemPath): apidesc.Name("redeemLocalUserCode", tagLocalUsers).
 			WithBodies(apidesc.Typed[redeemRequest]("RedeemLocalUserCodeRequest"), apidesc.NoBody),
@@ -31,7 +31,7 @@ func localUserOperationLabels() map[string]apidesc.Label {
 				apidesc.Typed[resetLocalUserRequest]("ResetLocalUserPasswordRequest"),
 				apidesc.Typed[resetLocalUserResponse]("ResetLocalUserPasswordResponse"),
 			),
-		apidesc.Pattern(http.MethodPost, ownPasswordPath): apidesc.Name("changeOwnPassword", tagLocalUsers).
+		apidesc.Pattern(http.MethodPost, ownSignInChangePath): apidesc.Name("changeOwnPassword", tagLocalUsers).
 			On(apidesc.KindCaller).
 			WithBodies(apidesc.Typed[changeOwnPasswordRequest]("ChangeOwnPasswordRequest"), apidesc.NoBody),
 	}

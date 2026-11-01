@@ -7,10 +7,10 @@ const (
 	LocalUserBreakGlass = "local-user.break-glass"
 	// LocalUserCodeInvalid means that the set-up code or the reset code is not valid, was used or expired.
 	LocalUserCodeInvalid = "local-user.code-invalid"
-	// LocalUserCurrentPasswordRequired means that the change needs the current password or a fresh authentication.
-	LocalUserCurrentPasswordRequired = "local-user.current-password-required"
-	// LocalUserCurrentPasswordWrong means that the current password of the change is wrong.
-	LocalUserCurrentPasswordWrong = "local-user.current-password-wrong"
+	// LocalUserCurrentRequired means that the change needs the current password or a fresh authentication.
+	LocalUserCurrentRequired = "local-user.current-password-required"
+	// LocalUserCurrentWrong means that the current password of the change is wrong.
+	LocalUserCurrentWrong = "local-user.current-password-wrong"
 	// LocalUserDemoFixed means that the credentials of the demo user cannot change.
 	LocalUserDemoFixed = "local-user.demo-fixed"
 	// LocalUserExists means that another local user has the user name.
@@ -48,11 +48,11 @@ func localUserSpecs() []Spec {
 			Args:    nil,
 		},
 		{
-			Code:    LocalUserCurrentPasswordRequired,
+			Code:    LocalUserCurrentRequired,
 			Meaning: "the change needs the current password or a fresh authentication",
 			Args:    nil,
 		},
-		{Code: LocalUserCurrentPasswordWrong, Meaning: "the current password of the change is wrong", Args: nil},
+		{Code: LocalUserCurrentWrong, Meaning: "the current password of the change is wrong", Args: nil},
 		{Code: LocalUserDemoFixed, Meaning: "the credentials of the demo user cannot change", Args: nil},
 		{Code: LocalUserExists, Meaning: "another local user has the user name", Args: nil},
 		{Code: LocalUserHashBusy, Meaning: "the password hash budget of the server is full", Args: nil},

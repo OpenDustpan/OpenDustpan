@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -34,12 +35,12 @@ import (
 
 // Paths of the local user routes.
 const (
-	passwordSignInPath       = "/api/dustpan/v1/sign-in/password"
+	localSignInPath          = "/api/dustpan/v1/sign-in/password"
 	localUsersPath           = "/api/dustpan/v1/local-users"
 	localUserRedeemPath      = "/api/dustpan/v1/local-users/redeem"
 	localUserPolicyPath      = "/api/dustpan/v1/local-users/policy"
 	localUserResetPath       = "/api/dustpan/v1/local-users/reset"
-	ownPasswordPath          = "/api/dustpan/v1/me/password"
+	ownSignInChangePath      = "/api/dustpan/v1/me/password"
 	maxLocalUserBody         = 8 * 1024
 	tagLocalUsers            = "local-users"
 	passwordSignInAuditActor = "sign-in:" + localuser.ProviderID
@@ -69,8 +70,8 @@ type createLocalUserRequest struct {
 //
 // Contract: never remove or rename these fields.
 type createLocalUserResponse struct {
-	PrincipalID    string `json:"principalId"`
-	UserID         string `json:"userId"`
+	PrincipalID    string `json:"principalID"`
+	UserID         string `json:"userID"`
 	UserName       string `json:"userName"`
 	Subject        string `json:"subject"`
 	SetUpCode      string `json:"setUpCode"`
@@ -79,7 +80,7 @@ type createLocalUserResponse struct {
 
 // resetLocalUserRequest is the body of a reset of a password.
 type resetLocalUserRequest struct {
-	PrincipalID        string `json:"principalId"`
+	PrincipalID        string `json:"principalID"`
 	Reason             string `json:"reason"`
 	RevokeAccessTokens bool   `json:"revokeAccessTokens"`
 }
@@ -156,14 +157,14 @@ func (h *Handler) localUserRoutes() []Route {
 			Serve: h.fresh(identity.ActionServerManageSignIn, h.resetLocalUser),
 		},
 		{
-			Method: http.MethodPost, Path: ownPasswordPath, Scope: ScopeAuthorized, Actions: own,
+			Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
 			Resolve: resolveCaller, ActionsFor: nil, Serve: h.changeOwnPassword,
 		},
 	}
 
 	if h.signIn != nil {
 		routes = append(routes, Route{
-			Method: http.MethodPost, Path: passwordSignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
+			Method: http.MethodPost, Path: localSignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, Serve: h.passwordSignIn,
 		})
 	}
@@ -293,7 +294,7 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 
 			// One answer for a code that is not valid, unknown, used or
 			// expired, so the answer tells nothing about a code.
-			h.writeError(ctx, w, codeError)
+			h.writeError(ctx, w, errCodeInvalid)
 
 			return
 		}
@@ -499,54 +500,102 @@ type localUserMapping struct {
 // of the check. The texts name the rule and never a password, a hash or a
 // code.
 func localUserErrors() []localUserMapping {
+	return slices.Concat([]localUserMapping{
+		{
+			localuser.ErrSignInFailed, errcode.LocalUserSignInFailed, "the user name or the password is wrong",
+			http.StatusUnauthorized,
+		},
+		{
+			localuser.ErrPasswordSignInOff, errcode.LocalUserPasswordSignInOff,
+			"password sign-in is off on this installation", http.StatusForbidden,
+		},
+		{
+			localuser.ErrSecondFactorRequired, errcode.LocalUserSecondFactorRequired,
+			"the password sign-in needs a second factor: sign in with the identity provider", http.StatusForbidden,
+		},
+		{
+			localuser.ErrHashBusy, errcode.LocalUserHashBusy, "the server is busy: try again in a few seconds",
+			http.StatusTooManyRequests,
+		},
+	}, credentialErrors())
+}
+
+// credentialErrors returns the answers of the errors of the password rules,
+// of the credential checks and of the local user records, in the order of
+// the check. ErrNotFound comes last.
+func credentialErrors() []localUserMapping {
 	return []localUserMapping{
-		{localuser.ErrSignInFailed, errcode.LocalUserSignInFailed, "the user name or the password is wrong",
-			http.StatusUnauthorized},
-		{localuser.ErrPasswordSignInOff, errcode.LocalUserPasswordSignInOff,
-			"password sign-in is off on this installation", http.StatusForbidden},
-		{localuser.ErrSecondFactorRequired, errcode.LocalUserSecondFactorRequired,
-			"the password sign-in needs a second factor: sign in with the identity provider", http.StatusForbidden},
-		{localuser.ErrHashBusy, errcode.LocalUserHashBusy, "the server is busy: try again in a few seconds",
-			http.StatusTooManyRequests},
-		{localuser.ErrPasswordTooLong, errcode.PasswordTooLong, "the password is too long: use 256 characters or fewer",
-			http.StatusBadRequest},
-		{localuser.ErrPasswordForm, errcode.PasswordForm,
-			"the password holds a character that is not allowed: remove control characters", http.StatusBadRequest},
-		{localuser.ErrPasswordLettersAndDigits, errcode.PasswordLettersAndDigits,
-			"the password needs a letter and a digit", http.StatusBadRequest},
-		{localuser.ErrPasswordBlocked, errcode.PasswordBlocked,
-			"the password is too common or holds a name: choose another password", http.StatusBadRequest},
-		{localuser.ErrCurrentPasswordRequired, errcode.LocalUserCurrentPasswordRequired,
-			"the change needs the current password or a recent sign-in", http.StatusForbidden},
-		{localuser.ErrWrongPassword, errcode.LocalUserCurrentPasswordWrong, "the current password is wrong",
-			http.StatusForbidden},
-		{localuser.ErrOwnAccount, errcode.LocalUserOwnAccount,
+		{
+			localuser.ErrPasswordTooLong,
+			errcode.PasswordTooLong,
+			"the password is too long: use 256 characters or fewer",
+			http.StatusBadRequest,
+		},
+		{
+			localuser.ErrPasswordForm, errcode.PasswordForm,
+			"the password holds a character that is not allowed: remove control characters", http.StatusBadRequest,
+		},
+		{
+			localuser.ErrPasswordLettersAndDigits, errcode.PasswordLettersAndDigits,
+			"the password needs a letter and a digit", http.StatusBadRequest,
+		},
+		{
+			localuser.ErrPasswordBlocked, errcode.PasswordBlocked,
+			"the password is too common or holds a name: choose another password", http.StatusBadRequest,
+		},
+		{
+			localuser.ErrCurrentPasswordRequired, errcode.LocalUserCurrentRequired,
+			"the change needs the current password or a recent sign-in", http.StatusForbidden,
+		},
+		{
+			localuser.ErrWrongPassword, errcode.LocalUserCurrentWrong, "the current password is wrong",
+			http.StatusForbidden,
+		},
+		{
+			localuser.ErrOwnAccount, errcode.LocalUserOwnAccount,
 			"an administrator cannot reset or remove the own password: use POST /api/dustpan/v1/me/password",
-			http.StatusForbidden},
-		{localuser.ErrReasonRequired, errcode.LocalUserReasonRequired, "the change needs a reason",
-			http.StatusBadRequest},
-		{localuser.ErrLastCredential, errcode.LocalUserLastCredential,
-			"the change removes the last sign-in credential of the person", http.StatusConflict},
-		{localuser.ErrBreakGlass, errcode.LocalUserBreakGlass,
-			"a break-glass account signs in with a passkey or a hardware key only", http.StatusConflict},
-		{localuser.ErrDemoFixed, errcode.LocalUserDemoFixed, "the credentials of the demo user cannot change",
-			http.StatusConflict},
-		{localuser.ErrAlreadyExists, errcode.LocalUserExists, "another local user has the user name",
-			http.StatusConflict},
-		{localuser.ErrInvalid, errcode.LocalUserNameInvalid,
+			http.StatusForbidden,
+		},
+		{
+			localuser.ErrReasonRequired, errcode.LocalUserReasonRequired, "the change needs a reason",
+			http.StatusBadRequest,
+		},
+		{
+			localuser.ErrLastCredential, errcode.LocalUserLastCredential,
+			"the change removes the last sign-in credential of the person", http.StatusConflict,
+		},
+		{
+			localuser.ErrBreakGlass, errcode.LocalUserBreakGlass,
+			"a break-glass account signs in with a passkey or a hardware key only", http.StatusConflict,
+		},
+		{
+			localuser.ErrDemoFixed, errcode.LocalUserDemoFixed, "the credentials of the demo user cannot change",
+			http.StatusConflict,
+		},
+		{
+			localuser.ErrAlreadyExists, errcode.LocalUserExists, "another local user has the user name",
+			http.StatusConflict,
+		},
+		{
+			localuser.ErrInvalid, errcode.LocalUserNameInvalid,
 			"the user name is not valid: use 1 to 64 lowercase letters, digits, '.', '_' and '-'",
-			http.StatusBadRequest},
-		{localuser.ErrUnavailable, errcode.LocalUserUnavailable, "the local users cannot answer: try again later",
-			http.StatusServiceUnavailable},
-		{principal.ErrReservedSubject, errcode.LocalUserNameInvalid, "the user name is not valid",
-			http.StatusBadRequest},
+			http.StatusBadRequest,
+		},
+		{
+			localuser.ErrUnavailable, errcode.LocalUserUnavailable, "the local users cannot answer: try again later",
+			http.StatusServiceUnavailable,
+		},
+		{
+			principal.ErrReservedSubject, errcode.LocalUserNameInvalid, "the user name is not valid",
+			http.StatusBadRequest,
+		},
 		{localuser.ErrNotFound, errcode.LocalUserNotFound, "no such local user or code", http.StatusNotFound},
 	}
 }
 
-// codeError is the answer of a redeem whose code is not valid, used or
+// errCodeInvalid is the answer of a redeem whose code is not valid, used or
 // expired: one text for each case.
-var codeError = &codedError{
+var errCodeInvalid = &codedError{
 	status: http.StatusBadRequest, code: errcode.LocalUserCodeInvalid, args: nil,
 	message: "the code is not valid, was used or expired: ask an administrator for a new code",
 }
