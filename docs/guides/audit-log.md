@@ -70,9 +70,14 @@ Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
 asOf=<time>`, or `history <from>-<to>`, in Unix milliseconds, followed by
-the subject filter and `expand=members` when the request has them. The export of a namespace or
+the subject filter and `expand=members` when the request has them. The export of a namespace, a collection or
 a unit writes its entry in that namespace, and the export of the
-installation in `@server`. A failed append answers 500 with no rows.
+installation in `@server`.
+The export of a collection holds the grants on the collection, the grants on
+each unit in it now (a deleted unit that is not purged has the state
+`deleted`), and the grants on the namespace and the installation that give
+access to it. It holds no grant on another collection or on a unit of another
+collection. A collection that does not exist answers 404. A failed append answers 500 with no rows.
 
 An entry holds these fields:
 

@@ -2907,7 +2907,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,
 		},
-		ReadScope:     deletedReadScope{authz: cfg.authorizer},
+		ReadScope:     newDeletedReadScope(cfg.authorizer, svc.collections),
 		Collections:   svc.collections,
 		Placements:    svc.placements,
 		Locks:         svc.manualLocks,

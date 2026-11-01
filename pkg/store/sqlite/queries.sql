@@ -1592,6 +1592,7 @@ WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
     OR (CAST(sqlc.arg('namespace') AS TEXT) <> '' AND g.namespace = CAST(sqlc.arg('namespace') AS TEXT)
       AND g.object_kind <> 'installation')
     OR g.target = CAST(sqlc.arg('target') AS TEXT)
+    OR g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('inside_targets') AS TEXT)))
     OR (g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('containers') AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('container_roles') AS TEXT)))
         OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
@@ -1631,6 +1632,7 @@ WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
     OR (CAST(sqlc.arg('namespace') AS TEXT) <> '' AND g.namespace = CAST(sqlc.arg('namespace') AS TEXT)
       AND g.object_kind <> 'installation')
     OR g.target = CAST(sqlc.arg('target') AS TEXT)
+    OR g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('inside_targets') AS TEXT)))
     OR (g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('containers') AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('container_roles') AS TEXT)))
         OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
@@ -1835,6 +1837,16 @@ SELECT COUNT(*)
 FROM collection_members AS m
 JOIN inventory AS i ON i.unit_id = m.unit_id
 WHERE m.namespace = ? AND m.collection_key = ?;
+
+-- name: ListCollectionUnitIDs :many
+-- The stable IDs of the units in one collection, ordered. The membership of a
+-- unit that was deleted stays until the collection is deleted, so these units
+-- are in the list too. The namespace is part of the key: a collection of
+-- another namespace with the same name gives nothing.
+SELECT m.unit_id
+FROM collection_members AS m
+WHERE m.namespace = ? AND m.collection_key = ?
+ORDER BY m.unit_id;
 
 -- name: DeleteCollectionMembers :exec
 -- Removes the memberships of a collection. The caller removes them only after
