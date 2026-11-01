@@ -286,6 +286,18 @@ of the code follows in its own pull request.
   `dustpan plan` or a "Plan again" by a trusted person is a trusted comment,
   and binds to the head that it names. Credentials never follow a trusted
   comment alone. Each path has its own test.
+- **Bot accounts.** A bot account of the Git host can be linked to a service
+  principal that holds a stored, visible and revocable grant of
+  `unit:run-plan`. Its review requests then plan with credentials. An approval
+  still needs a person. (The benchmarks: Atlantis and Spacelift give bots their
+  own identity, and GitHub Actions gives Dependabot runs fewer secrets.)
+- **"Plan with credentials as me".** For a review request from the same
+  repository, never from a fork, a trusted person with `unit:run-plan` can
+  choose this action for the current head. The plan binds to that head, writes
+  an audit entry, and a new push voids it. The person becomes an author under
+  S1, and the button says so before the press.
+- **The docs give one row for each kind of opener:** a linked person, a linked
+  bot, an unlinked account, and a fork.
 - **A plan with no credentials can never be approved.** It cannot refresh or
   read data sources, so its set of operations means nothing. To get a plan
   with credentials, a linked person with `unit:run-plan` pushes the commits to
@@ -570,6 +582,12 @@ GitHub. This approval does not count: approve in OpenDustpan (link)", or
   #123" in its comment and its `apply` status. The approval floor still stops
   any operation that no merged change order approved. So two quick merges that
   do not conflict apply together with no second approval.
+- The union never holds the set of a change order that was not approved. A unit
+  marked `merged-unapproved` applies nothing until a change order is approved
+  whose plan starts from the last applied commit and holds the bypassed commit.
+  A conformance fixture covers this case: a bypassed merge changes an IAM
+  policy to `"Action": "*"`, a later approved change order of the same unit
+  holds other operations only, and the apply stops.
 - A plan after the merge that needs a new approval puts the change order in
   the visible state "merged, not applied", with an alert.
 - **The person who merged** (decision 8): for a direct merge on the Git host,
@@ -621,14 +639,18 @@ unit reads a changed file.
 - **Declared paths.** Each unit has visible, declared paths: its directory and
   any extra paths (the benchmarks are Atlantis `when_modified` and the
   Spacelift project root with additional paths).
-- **The computed closure is a check.** The server computes the file closure of
-  each unit from its module sources and imports, and compares it with the
-  declared paths. A computed file outside the declared paths shows as a
-  warning on the unit and counts as changed.
-- **Unknown closure.** A unit whose closure the server cannot compute and that
-  has no declared paths keeps the status pending. The status names the unit and
-  the grant that can declare its paths (`unit:manage`). The wizard shows the
-  count of such units before the person confirms. A change of `modules/network/`, a lock file, a symlink or the CI
+- **Declared paths only add.** The server computes the file closure of each
+  unit from its module sources and imports. The declared paths add files to
+  that closure and never take files out of it. A computed file outside the
+  declared paths shows as a warning on the unit and counts as changed.
+- **Unknown closure.** A unit whose closure the server cannot compute keeps the
+  status pending, also with declared paths. A person with `unit:manage`
+  can record an acceptance with a reason. The acceptance writes an audit entry,
+  and the unit then shows "closure not proven". The status names the unit and
+  the grant. The wizard shows the count of such units before the person
+  confirms.
+- Each change of the declared paths writes an audit entry `change` with the old
+  and the new value. A change of `modules/network/`, a lock file, a symlink or the CI
 file that runs the units is in the closure of the units that use it. While the
 server is down, the merges of the repository wait (fail closed). The wizard
 says so in each mode.
@@ -739,6 +761,17 @@ at sign-out.
   have the same sign-in ID and generation.
 - At each use, the server checks that the Git host user ID of the cookie is the
   account linked to the person.
+- **The OAuth flow.** The callback of the Git host is a cross-site navigation,
+  so a `SameSite=Strict` cookie does not come with it. The server keeps the
+  state of the flow in a `__Host-` cookie with `SameSite=Lax`, as the
+  sign-in request cookie of ADR 297 does. The callback page checks that state,
+  then sends a same-site post-back that carries the Strict session cookies.
+  Only that post-back binds the token into its cookie. A test covers each case
+  of `SameSite` (the callback with no Strict cookie, the post-back with them,
+  and a post-back from another site, which fails).
+- **The first click from a plan comment link** is also a cross-site navigation.
+  It lands on a page that needs no Strict cookie to show the sign-in prompt.
+  The page then loads the change with a same-site request.
 - Two layers of authorization: OpenDustpan checks its own action first, and
   the Git host checks the rights of the person.
 - With no token cookie, each control that needs one is off with the reason
