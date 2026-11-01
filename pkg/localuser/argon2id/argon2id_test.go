@@ -393,3 +393,107 @@ func FuzzDecode(f *testing.F) {
 		}
 	})
 }
+
+// TestReserveOrderOfASignIn shows the order of a password sign-in on the
+// port: the failure of the name counts after the hash has its budget and
+// before the compare. With no room, Reserve fails with ErrHashBusy and the
+// sign-in counts nothing. With room, the count happens while the
+// reservation holds the memory, before Verify.
+func TestReserveOrderOfASignIn(t *testing.T) {
+	t.Parallel()
+
+	b, err := argon2id.NewBudgetWithWait(localuser.MinHashMemoryBudgetKiB, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("new budget: %v", err)
+	}
+
+	h, err := argon2id.New(b)
+	if err != nil {
+		t.Fatalf("new hasher: %v", err)
+	}
+
+	p := localuser.HashParams{
+		Algorithm: localuser.AlgorithmArgon2id, MemoryKiB: localuser.MinMemoryKiB, Iterations: 1, Parallelism: 1,
+		SaltBytes: 16, KeyBytes: 32,
+	}
+
+	stored, err := h.Hash(t.Context(), "a password", p)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+
+	failures := 0
+	signIn := func(password string) error {
+		r, reserveErr := h.Reserve(t.Context(), stored)
+		if reserveErr != nil {
+			return reserveErr
+		}
+		defer r.Release()
+
+		if got := b.InUse(); got != localuser.MinMemoryKiB {
+			t.Errorf("in use when the failure counts = %d KiB, want %d: the hash holds its budget", got,
+				localuser.MinMemoryKiB)
+		}
+
+		failures++
+
+		_, verifyErr := r.Verify(password, p)
+
+		return verifyErr
+	}
+
+	full, err := b.Acquire(t.Context(), localuser.MaxMemoryKiB)
+	if err != nil {
+		t.Fatalf("fill the budget: %v", err)
+	}
+
+	if err := signIn("a password"); !errors.Is(err, localuser.ErrHashBusy) {
+		t.Fatalf("sign-in on a full budget: err = %v, want ErrHashBusy", err)
+	}
+
+	if failures != 0 {
+		t.Fatalf("failures after ErrHashBusy = %d, want 0", failures)
+	}
+
+	full()
+
+	if err := signIn("a wrong password"); !errors.Is(err, localuser.ErrWrongPassword) {
+		t.Fatalf("sign-in with a wrong password: err = %v, want ErrWrongPassword", err)
+	}
+
+	if failures != 1 {
+		t.Fatalf("failures after one wrong password = %d, want 1", failures)
+	}
+
+	if got := b.InUse(); got != 0 {
+		t.Fatalf("in use after the sign-in = %d KiB, want 0", got)
+	}
+}
+
+// TestReserveTakesNoBudgetForAMalformedHash checks that Reserve parses the
+// hash before it waits for the budget.
+func TestReserveTakesNoBudgetForAMalformedHash(t *testing.T) {
+	t.Parallel()
+
+	b, err := argon2id.NewBudgetWithWait(localuser.MinHashMemoryBudgetKiB, time.Hour)
+	if err != nil {
+		t.Fatalf("new budget: %v", err)
+	}
+
+	h, err := argon2id.New(b)
+	if err != nil {
+		t.Fatalf("new hasher: %v", err)
+	}
+
+	full, err := b.Acquire(t.Context(), localuser.MaxMemoryKiB)
+	if err != nil {
+		t.Fatalf("fill the budget: %v", err)
+	}
+	defer full()
+
+	// With a wait of one hour, a Reserve that waited for the budget would
+	// not answer within the test.
+	if _, err := h.Reserve(t.Context(), "$argon2id$v=19$bad"); !errors.Is(err, localuser.ErrInvalid) {
+		t.Fatalf("reserve a malformed hash on a full budget: err = %v, want ErrInvalid", err)
+	}
+}

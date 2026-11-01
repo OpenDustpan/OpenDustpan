@@ -175,3 +175,50 @@ func TestServiceRules(t *testing.T) {
 		})
 	}
 }
+
+// TestReservationWorksOnce checks that a reservation calls the verify of its
+// adapter at most once and its release at most once, and refuses a verify
+// after the release, whatever the adapter does.
+func TestReservationWorksOnce(t *testing.T) {
+	t.Parallel()
+
+	verifies, releases := 0, 0
+	verify := func(string, localuser.HashParams) (localuser.Verdict, error) {
+		verifies++
+
+		return localuser.Verdict{NeedsRehash: false}, nil
+	}
+	release := func() { releases++ }
+
+	if localuser.NewReservation(nil, release) != nil || localuser.NewReservation(verify, nil) != nil {
+		t.Fatal("a reservation with a nil function is not nil")
+	}
+
+	r := localuser.NewReservation(verify, release)
+
+	if _, err := r.Verify("pw", localuser.DefaultHashParams()); err != nil {
+		t.Fatalf("first verify: %v", err)
+	}
+
+	if _, err := r.Verify("pw", localuser.DefaultHashParams()); !errors.Is(err, localuser.ErrInvalid) {
+		t.Fatalf("second verify: err = %v, want ErrInvalid", err)
+	}
+
+	r.Release()
+	r.Release()
+
+	if verifies != 1 || releases != 1 {
+		t.Fatalf("verifies = %d, releases = %d; want 1 and 1", verifies, releases)
+	}
+
+	unused := localuser.NewReservation(verify, release)
+	unused.Release()
+
+	if _, err := unused.Verify("pw", localuser.DefaultHashParams()); !errors.Is(err, localuser.ErrInvalid) {
+		t.Fatalf("verify after release: err = %v, want ErrInvalid", err)
+	}
+
+	if verifies != 1 {
+		t.Fatalf("verifies after a refused verify = %d, want 1", verifies)
+	}
+}

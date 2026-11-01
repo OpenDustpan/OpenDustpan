@@ -5228,8 +5228,15 @@ SELECT COUNT(*) FROM local_users
 WHERE id = sqlc.arg('id') OR principal_id = sqlc.arg('principal_id') OR user_name = sqlc.arg('user_name');
 
 -- name: GetLocalUserByName :one
-SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
-FROM local_users WHERE user_name = $1;
+-- The user, its hash and the session generation of its person, in one read:
+-- a sign-in seals this generation, so a write that bumps the generation after
+-- this read ends the session that the sign-in makes. A person with no row of
+-- generation has the generation 1.
+SELECT u.id, u.principal_id, u.user_name, u.password_hash, u.password_set_at_ms, u.change_required, u.demo,
+  u.created_by, u.created_at_ms,
+  CAST(COALESCE(g.generation, 1) AS bigint) AS session_generation
+FROM local_users u LEFT JOIN principal_session_generations g ON g.principal_id = u.principal_id
+WHERE u.user_name = $1;
 
 -- name: GetLocalUserByPrincipal :one
 SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms

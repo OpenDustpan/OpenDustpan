@@ -36,7 +36,7 @@ func (s *Store) CreateUser(ctx context.Context, u localuser.User, e audit.Entry)
 }
 
 // UserByName implements localuser.Store.
-func (s *Store) UserByName(ctx context.Context, name string) (localuser.User, localuser.PasswordHash, error) {
+func (s *Store) UserByName(ctx context.Context, name string) (localuser.Credential, error) {
 	return localuserstore.ByName(ctx, localUserTx{q: s.queries}, name)
 }
 
@@ -252,15 +252,16 @@ func (t localUserTx) CountUserConflicts(ctx context.Context, id, principalID, us
 // userRow returns the shared row of a local user row.
 func userRow(r db.LocalUser) localuserstore.User {
 	return localuserstore.User{
-		ID:              r.ID,
-		PrincipalID:     r.PrincipalID,
-		UserName:        r.UserName,
-		PasswordHash:    r.PasswordHash,
-		CreatedBy:       r.CreatedBy,
-		PasswordSetAtMs: r.PasswordSetAtMs,
-		CreatedAtMs:     r.CreatedAtMs,
-		ChangeRequired:  r.ChangeRequired,
-		Demo:            r.Demo,
+		ID:                r.ID,
+		PrincipalID:       r.PrincipalID,
+		UserName:          r.UserName,
+		PasswordHash:      r.PasswordHash,
+		CreatedBy:         r.CreatedBy,
+		PasswordSetAtMs:   r.PasswordSetAtMs,
+		CreatedAtMs:       r.CreatedAtMs,
+		ChangeRequired:    r.ChangeRequired,
+		Demo:              r.Demo,
+		SessionGeneration: 0,
 	}
 }
 
@@ -279,7 +280,20 @@ func (t localUserTx) UserByName(ctx context.Context, name string) (localuserstor
 		return localuserstore.User{}, localUserReadErr(err)
 	}
 
-	return userRow(r), nil
+	u := userRow(db.LocalUser{
+		ID:              r.ID,
+		PrincipalID:     r.PrincipalID,
+		UserName:        r.UserName,
+		PasswordHash:    r.PasswordHash,
+		PasswordSetAtMs: r.PasswordSetAtMs,
+		ChangeRequired:  r.ChangeRequired,
+		Demo:            r.Demo,
+		CreatedBy:       r.CreatedBy,
+		CreatedAtMs:     r.CreatedAtMs,
+	})
+	u.SessionGeneration = r.SessionGeneration
+
+	return u, nil
 }
 
 func (t localUserTx) UserByPrincipal(ctx context.Context, principalID string) (localuserstore.User, error) {
