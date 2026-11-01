@@ -1867,14 +1867,18 @@ var openStore = func(
 // once at the start: each value and where it came from. The record holds no
 // host, user or password.
 func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings postgres.FailoverSettings) {
-	attrs := make([]any, 0, len(settings.Settings)+1)
+	// One group for each setting, then the check and the deadline.
+	const extraAttrs = 2
+
+	attrs := make([]any, 0, len(settings.Settings)+extraAttrs)
 
 	for _, setting := range settings.Settings {
 		attrs = append(attrs, slog.Group(setting.Name,
 			slog.String("value", setting.Value), slog.String("from", setting.Source)))
 	}
 
-	attrs = append(attrs, slog.String("connect_check", settings.ConnectCheck))
+	attrs = append(attrs, slog.String("connect_check", settings.ConnectCheck),
+		slog.Duration("statement_deadline", settings.StatementDeadline))
 
 	logger.InfoContext(ctx, "database failover settings", attrs...)
 }
