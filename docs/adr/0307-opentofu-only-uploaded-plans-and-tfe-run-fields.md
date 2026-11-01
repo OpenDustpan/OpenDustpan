@@ -12,7 +12,7 @@ Changes:
 
 The project owner made these decisions in the owner decision file of 18 October 2026. A check on 1 November 2026 found no ADR that states them.
 
-ADR 25 says that the Terraform CLI stays untested. ADR 267 decision 8 puts the TFE-compatible view of run triggers in a separate issue. ADR 102 binds a runner plan to a plan hash.
+ADR 25 says that the Terraform CLI stays untested. ADR 254 makes the execution mode of a workspace settable. It says also that the TFE agent pool API is not served. ADR 267 decision 8 puts the TFE-compatible view of run triggers in a separate issue. ADR 102 binds a runner plan to a plan hash.
 
 This ADR writes the words of the owner. It adds no decision of its own.
 
@@ -20,10 +20,11 @@ This ADR writes the words of the owner. It adds no decision of its own.
 
 1. **The Terraform CLI is not supported (owner, 2026-10-18).** OpenDustpan supports and tests OpenTofu. The owner said: "only OpenTofu is supported and tested".
 2. **Own-CI teams may upload plans (owner, 2026-10-18).** The owner said: "Own-CI teams: accept uploaded plans". The owner said also: "the apply must present the same plan hash". The owner said also: "weaker than a runner plan, and marked so in the change order".
-3. **Run triggers are a view of our triggers (owner, 2026-10-18).** The owner said: "TFE `run-triggers`: served, as a view of our unit-follows-unit triggers".
+3. **The execution mode and agent pool fields are writable (owner, 2026-10-18).** The owner said: "TFE workspace execution mode and agent pool fields: writable". The owner said also: "same authorization as the tool-neutral route". The owner said also: "both map to one rule".
+4. **Run triggers are a view of our triggers (owner, 2026-10-18).** The owner said: "TFE `run-triggers`: served, as a view of our unit-follows-unit triggers".
 
 ## Consequences
 
 - ADR 25, ADR 102 and ADR 267 get a pointer to this ADR.
-- The endpoint of decision 3 lands with its e2e step first, against the real OpenTofu CLI.
-- The row D-018 (workspace execution mode and agent pool fields writable, owner 2026-10-18) is MOOT. ADR 254 (accepted 2026-10-20) is later and decides the execution mode. This ADR does not record the row.
+- Each endpoint of decisions 3 and 4 lands with its e2e step first, against the real OpenTofu CLI.
+- Open conflict: decision 3 conflicts with ADR 254, a PM decision of 2026-10-20. The owner decides. This ADR does not amend ADR 254 and adds no link to it.
