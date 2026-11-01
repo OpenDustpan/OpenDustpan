@@ -19,9 +19,10 @@ type StackGetter interface {
 const missingStackID stack.ID = "missing-stack"
 
 // UpdateKeyFor returns the item key of the new update u: the reference that
-// stack.UpdateItem gives for the stack of u in s, and RecordingKey(nil). For a
-// stack that s does not hold, the reference names the stack ID
-// "missing-stack".
+// stack.UpdateItem gives for the stack of u in s, and a key function that
+// writes no record, so the suites that list the rows or the blobs of a store
+// see no item key. RunEventSealing checks the records. For a stack that s does
+// not hold, the reference names the stack ID "missing-stack".
 func UpdateKeyFor(ctx context.Context, s StackGetter, u stack.Update) stack.UpdateKey {
 	id := missingStackID
 	if st, err := s.GetStack(ctx, u.Ref); err == nil {
@@ -33,7 +34,14 @@ func UpdateKeyFor(ctx context.Context, s StackGetter, u stack.Update) stack.Upda
 		return stack.UpdateKey{Ref: emptyItemRef(), NewKey: RecordingKey(err)}
 	}
 
-	return stack.UpdateKey{Ref: ref, NewKey: RecordingKey(nil)}
+	return stack.UpdateKey{Ref: ref, NewKey: unrecordedKey}
+}
+
+// unrecordedKey is an item key function that writes no record and no blob.
+func unrecordedKey(
+	ctx context.Context, _ secret.ItemKeyTx, ref secret.ItemRef, fence namespace.Fence,
+) (secret.ItemKey, error) {
+	return RecordingKey(nil)(ctx, nil, ref, fence)
 }
 
 // RecordingKey returns an item key function that stores a record of ref
