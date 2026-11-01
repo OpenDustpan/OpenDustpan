@@ -195,6 +195,20 @@ func placementRulesRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 		http.StatusBadRequest,
 	}, "placement.invalid-position")
 
+	// A replace of a rule that the namespace does not hold answers 404 and
+	// stores nothing.
+	placementCall(ctx, t, env, principalStep{
+		http.MethodPut, placementRules + "/plr-missing",
+		`{"tool":"pulumi","project":"payments","stack":"dev","collection":"payments"}`,
+		http.StatusNotFound,
+	}, "placement.rule-not-found")
+
+	// An ID with a leading dash has no valid form, so the server refuses it
+	// before it reads the store.
+	placementCall(ctx, t, env, principalStep{
+		http.MethodGet, placementRules + "/-bad", "", http.StatusBadRequest,
+	})
+
 	if rules := placementList(ctx, t, env); len(rules) != 2 {
 		t.Fatalf("refused writes changed the list: %d rules, want 2", len(rules))
 	}
@@ -221,6 +235,32 @@ func placementRulesMoveAndDelete(ctx context.Context, t *testing.T, env *e2e.Env
 		`{"tool":"pulumi","project":"payments","stack":"*","collection":"payments","position":1}`,
 		http.StatusConflict,
 	}, "placement.conflict")
+
+	// A third rule on another project overlaps no rule of payments. A PUT with
+	// a position moves it to the front, and the list shows the new order.
+	other := placementRuleOf(t, placementCall(ctx, t, env, principalStep{
+		http.MethodPost, placementRules,
+		`{"tool":"pulumi","project":"billing","stack":"*","collection":"payments"}`,
+		http.StatusCreated,
+	}, `"position":3`))
+
+	moved := placementCall(ctx, t, env, principalStep{
+		http.MethodPut, placementRules + "/" + other.ID,
+		`{"tool":"pulumi","project":"billing","stack":"*","collection":"payments","position":1}`,
+		http.StatusOK,
+	}, `"position":1`)
+	if got := placementRuleOf(t, moved); got.ID != other.ID {
+		t.Fatalf("the move answers rule %s, want %s", got.ID, other.ID)
+	}
+
+	rules = placementList(ctx, t, env)
+	if len(rules) != 3 || rules[0].ID != other.ID || rules[1].ID != narrow || rules[2].ID != wide {
+		t.Fatalf("after the move the list is %+v, want billing, narrow, wide", rules)
+	}
+
+	placementCall(ctx, t, env, principalStep{
+		http.MethodDelete, placementRules + "/" + other.ID, "", http.StatusNoContent,
+	})
 
 	placementCall(ctx, t, env, principalStep{
 		http.MethodDelete, placementRules + "/" + narrow, "", http.StatusNoContent,
@@ -280,10 +320,16 @@ func placementRulesDenied(ctx context.Context, t *testing.T, env *e2e.Env) {
 		{method: http.MethodPut, path: placementRules + "/" + seedID, body: denied, want: http.StatusForbidden},
 		{method: http.MethodDelete, path: placementRules + "/" + seedID, body: "", want: http.StatusForbidden},
 	} {
-		status, body, err := env.ServerAPIStatusAs(ctx, token.Secret, s.method, s.path, s.body)
-		if err != nil || status != s.want {
-			t.Fatalf("maintainer %s %s = %d, %v (%s); want %d", s.method, s.path, status, err, body, s.want)
+		got, resp, callErr := env.ServerAPIStatusAs(ctx, token.Secret, s.method, s.path, s.body)
+		if callErr != nil || got != s.want {
+			t.Fatalf("maintainer %s %s = %d, %v (%s); want %d", s.method, s.path, got, callErr, resp, s.want)
 		}
+	}
+
+	// A request with no credentials is refused before the route runs.
+	status, body, err = env.ServerAPIStatusBare(ctx, http.MethodGet, placementRules)
+	if err != nil || status != http.StatusUnauthorized {
+		t.Fatalf("GET the rules with no token = %d, %v (%s); want 401", status, err, body)
 	}
 
 	// The refused writes left the seed rule in place.
