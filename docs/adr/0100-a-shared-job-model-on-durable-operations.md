@@ -22,6 +22,7 @@ Changed by:
 - ADR 263 extends decision 4: the phase table row of drift detection.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 299 changes decisions 12 and 15: the `job.review-watch` poll ends.
 
 ## Context
 

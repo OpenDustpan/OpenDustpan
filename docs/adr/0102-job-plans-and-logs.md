@@ -10,6 +10,8 @@ Changed by:
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 220 changes decisions 3 and 4: the plan, log and item key blob keys get
   a namespace prefix.
+- ADR 299 changes decision 8: the plan comment on a review request holds
+  counts and resource addresses by default.
 
 ## Context
 

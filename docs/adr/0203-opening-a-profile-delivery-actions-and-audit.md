@@ -12,6 +12,7 @@ Changed by:
 - ADR 241 extends decision 1: the consumer import.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 300 changes decision 5: a job of a unit with an open rule waits. It does not fail.
 
 ## Context
 

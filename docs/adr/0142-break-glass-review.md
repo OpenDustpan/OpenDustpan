@@ -1,6 +1,6 @@
 # 142. A second-person review of each break-glass by the next business day
 
-Status: accepted · 2026-10-18. Supersedes ADR 70 decision 26 in part (see "Superseded decisions"). Decisions 12 and 15 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210. The age of decision 9 superseded by ADR 227
+Status: accepted · 2026-10-18. Supersedes ADR 70 decision 26 in part (see "Superseded decisions"). Decisions 12 and 15 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210. The age of decision 9 superseded by ADR 227. Decisions 1, 3 and 9 changed by ADR 297: a session use names the sign-in ID. Its time limit is the absolute deadline
 
 Changed by:
 
@@ -9,6 +9,7 @@ Changed by:
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 222 changes decision 9: the age of the fresh step.
 - ADR 227 changes decision 9: the age of a break-glass review authentication.
+- ADR 297 changes decisions 1, 3 and 9: a session use names the sign-in ID.
 
 ## Context
 

@@ -12,6 +12,8 @@ Changed by:
   step.
 - ADR 285 changes decisions 1 and 2: local password users need MFA also next
   to an SSO provider.
+- ADR 301 changes decision 2: for a plain OAuth 2.0 provider or a trusted
+  header, OpenDustpan asks for its own factor at the fresh step.
 
 ## Context
 
