@@ -1485,6 +1485,7 @@
           "unit.no-state",
           "unit.not-found",
           "unit.state-moved",
+          "update.attempt-expired",
           "update.checkpoint-conflict",
           "update.checkpoint-stale",
           "update.concurrent-modification",

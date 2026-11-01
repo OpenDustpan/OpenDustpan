@@ -710,6 +710,7 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 			CreatedAt:   at,
 			UpdatedAt:   at,
 			Lock:        tc.lock,
+			LastRelease: workspace.NoRelease(),
 			ID:          workspace.ID(tc.id),
 			Ref:         workspace.Ref{Namespace: ns, Name: name},
 			Revision:    1,

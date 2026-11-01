@@ -419,11 +419,14 @@ JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
 WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND u.version = @version;
 
--- name: PutCheckpoint :execrows
+-- name: PutCheckpoint :one
 -- The row of the update decides which write wins. The conflict update runs only
 -- for a write without a sequence number, or for a sequence above the stored one,
 -- and the database checks that against the latest committed row, so two writers
--- of one sequence cannot both land. Zero rows mean that the write lost.
+-- of one sequence cannot both land. No row means that the write lost.
+-- The row that the write returns holds the time of the database clock after the
+-- write, and so after every lock wait of the statement. The caller checks the
+-- attempt window with it, so the check needs no round trip of its own.
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, saved_at_ms,
@@ -441,7 +444,8 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     size = excluded.size,
     blob_size = excluded.blob_size,
     blob_md5 = excluded.blob_md5
-WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence;
+WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence
+RETURNING FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms;
 
 -- name: ListReferencedBlobKeys :many
 -- Every blob key that a row of one live stack names, ordered, without
@@ -766,14 +770,16 @@ ORDER BY label_key;
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
     locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms,
-    allow_forced_writes, allow_unlocked_writes
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    allow_forced_writes, allow_unlocked_writes, last_release_lock_id, last_release_holder,
+    last_release_by, last_release_kind, last_release_at_ms
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 ON CONFLICT DO NOTHING;
 
 -- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL;
 
@@ -783,7 +789,8 @@ WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL;
 -- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE id = $1 AND num_nulls(deleted_at_ms) = 1;
 
@@ -847,7 +854,8 @@ ORDER BY w.name;
 -- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE;
@@ -855,7 +863,8 @@ FOR UPDATE;
 -- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE namespace = $1 AND deleted_at_ms IS NULL
 ORDER BY name;
@@ -866,7 +875,10 @@ ORDER BY name;
 UPDATE workspaces
 SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
     lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms,
-    allow_forced_writes = @allow_forced_writes, allow_unlocked_writes = @allow_unlocked_writes
+    allow_forced_writes = @allow_forced_writes, allow_unlocked_writes = @allow_unlocked_writes,
+    last_release_lock_id = @last_release_lock_id, last_release_holder = @last_release_holder,
+    last_release_by = @last_release_by, last_release_kind = @last_release_kind,
+    last_release_at_ms = @last_release_at_ms
 WHERE id = @id AND revision = @expected_revision;
 
 -- name: WorkspaceExists :one
@@ -972,7 +984,8 @@ WHERE workspace_id = $1 AND status = 'pending';
 -- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE;
@@ -4819,6 +4832,26 @@ FROM job_log_chunks AS c
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.confirmed = 1
 ORDER BY c.seq;
+
+-- name: ListJobPlanIDs :many
+-- The ID of each plan row of one job: a stored plan, a plan that a replan
+-- cleared and a reserved plan. The sweep of the artifact blobs keeps every
+-- part of each of these plans.
+SELECT p.id
+FROM job_plans AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND p.job_id = sqlc.arg(job_id)
+ORDER BY p.id;
+
+-- name: ListJobChunkBlobKeys :many
+-- The blob key of each confirmed chunk of each log version of one job. The
+-- sweep of the artifact blobs keeps these blobs.
+SELECT c.blob_key
+FROM job_log_chunks AS c
+JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND l.job_id = sqlc.arg(job_id) AND c.confirmed = 1
+ORDER BY c.blob_key;
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is

@@ -420,6 +420,8 @@ func newBuildFixtureGuarded(
 	t.Helper()
 
 	store := newJournalMemStore()
+	// The database runs on the clock of the test, as the service does.
+	store.dbNow = clk.Now
 
 	var checkpoints stack.CheckpointStore = store
 	if wrap != nil {

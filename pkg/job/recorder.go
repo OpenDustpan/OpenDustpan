@@ -47,9 +47,9 @@ type RecorderConfig struct {
 // that stores the plan or the log version, so the record of the key never
 // exists without its item. The sealed content comes after that, because the
 // sealer reads the committed record, and the record that counts the content
-// comes last. A write that fails after its blobs leaves orphan blobs, which the
-// orphan cleanup deletes after a grace period. PutPlan also deletes them at
-// once.
+// comes last. A write that fails after its blobs leaves orphan blobs, which
+// the artifact sweep (ArtifactSweeper) deletes after a grace period. PutPlan
+// also deletes them at once.
 type DurableRecorder struct {
 	store      RecordStore
 	jobs       Store
@@ -304,6 +304,7 @@ func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []Pla
 func provesRollback(err error) bool {
 	for _, target := range []error{
 		ErrPlanStale, ErrConflict, ErrClaimLost, namespace.ErrFenced, ErrNotFound, ErrInvalid,
+		blob.ErrAttemptExpired,
 	} {
 		if errors.Is(err, target) {
 			return true
@@ -402,18 +403,24 @@ func (r *DurableRecorder) writeChunk(ctx context.Context, c PhaseClaim, j *Job, 
 
 	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: w.version, Seq: w.seq, BlobKey: key.String()}
 
+	// The attempt starts before the blob write. The store refuses a confirm
+	// after the attempt deadline, so the artifact sweep, which waits longer
+	// than the deadline, never deletes a blob that a later confirm names.
+	started := r.now().UTC()
+
 	stored, err := r.storeChunk(ctx, c, j, &ref, w.data)
 	if err != nil {
 		return err
 	}
 
-	won, err := r.store.ConfirmLogChunk(
-		ctx, c, ChunkConfirm{Step: w.step, Version: w.version, Seq: w.seq, Stored: stored, BlobKey: ref.BlobKey},
-	)
+	won, err := r.store.ConfirmLogChunk(ctx, c, ChunkConfirm{
+		Step: w.step, Version: w.version, Seq: w.seq, Stored: stored, BlobKey: ref.BlobKey,
+		AttemptStartedAt: started,
+	})
 	if err != nil {
 		// An error that does not prove a rollback, such as a failed COMMIT,
 		// can follow a commit: the row may name the blob, so the blob stays.
-		// If the commit did not happen, the orphan cleanup deletes it.
+		// If the commit did not happen, the artifact sweep deletes it.
 		if provesRollback(err) {
 			r.deleteChunk(ctx, &ref)
 		}
@@ -431,7 +438,7 @@ func (r *DurableRecorder) writeChunk(ctx context.Context, c PhaseClaim, j *Job, 
 }
 
 // deleteChunk deletes the blob of the attempt ref, which no row names. It does
-// not stop when the context ends, and it ignores a failure: the orphan cleanup
+// not stop when the context ends, and it ignores a failure: the artifact sweep
 // deletes what stays. It deletes only the key of its own attempt.
 func (r *DurableRecorder) deleteChunk(ctx context.Context, ref *LogChunkRef) {
 	_ = r.blobs.DeleteLogChunk(context.WithoutCancel(ctx), *ref) //nolint:errcheck // See above.
@@ -664,7 +671,7 @@ func (r *DurableRecorder) putPart(
 
 // deleteParts deletes the blobs of the stored parts of a plan that was not
 // stored. It does not stop when the context ends, and it ignores a failure:
-// the orphan cleanup deletes what stays.
+// the artifact sweep deletes what stays.
 func (r *DurableRecorder) deleteParts(ctx context.Context, at *planAt, parts []PlanPart) {
 	ctx = context.WithoutCancel(ctx)
 

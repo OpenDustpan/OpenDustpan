@@ -197,10 +197,27 @@ In the same suite, an outage of 7 s to 8 s did not stop `pulumi up` or `tofu app
 
 A database failover that is longer than these times makes running CLI commands fail. A command that failed leaves the state as it was before the write:
 
-- OpenTofu: no state version stays pending, and the workspace has no lock.
+- OpenTofu: no state version stays pending, and the workspace has no lock. The one exception is a lost answer to a lock through the TFE-compatible API. See the next section.
 - Pulumi: the update that the CLI could not complete stays running until its lease ends. A new `pulumi up` then answers 409 and names `pulumi cancel`. Run `pulumi cancel`, and run the command again. It completes.
 
 Run the same command again after the database answers. The next `pulumi preview` and `tofu plan` show no changes.
+
+### A lost answer to an OpenTofu lock request
+
+A write can commit while its answer does not get to the CLI. OpenTofu then sends the same request again. The server keeps a record of the last released lock of each workspace. The record holds the lock ID, the holder and the principal that released the lock. It also holds the time of the release and the kind of release: normal or forced. The server uses the record for 24 hours after the release.
+
+These repeated requests succeed and change nothing:
+
+- A `LOCK` of the HTTP backend with the same lock ID from the same holder, while the holder still has that lock.
+- An `UNLOCK` of the HTTP backend with the lock ID of the record, from the holder, after a normal release.
+- An unlock through the TFE-compatible API (`actions/unlock`) from the holder of the record, after a normal release.
+- A force-unlock from the principal that forced the release of the record. For the HTTP backend, this is an `UNLOCK` with the lock ID of the record. For the TFE-compatible API, this is `actions/force-unlock`.
+
+A repeated request writes no audit entry, because nothing changes.
+
+After a forced release, an unlock from the original holder gets 409. The holder and the CLI see that another principal released the lock.
+
+One case stays 409. A lock through the TFE-compatible API (`actions/lock`) that OpenTofu sends again gets 409, because the workspace has a lock. That protocol sends no lock ID, so the server cannot tell a repeat from a second run. OpenTofu waits for the time of `-lock-timeout`, and then the command fails. The lock stays. The workspace shows the holder and the time of the lock. Make sure that no other run uses the workspace, and then run `tofu force-unlock <lock id>`.
 
 ## Database settings for a failover
 

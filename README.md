@@ -381,6 +381,8 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Write attempts](docs/reference/write-attempts.md): the attempt deadline of
+  the writes that store a blob, and the grace period of the sweep.
 - [Placement rules API](docs/reference/placement-rules-api.md): the rules that
   choose the collection of a new stack, their patterns and their routes.
 - [Gate configuration API](docs/reference/gate-config-api.md): the routes that store,

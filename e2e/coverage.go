@@ -565,6 +565,10 @@ func (coverageTofuHTTPWorkspaces) UnlockLock(
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
+func (coverageTofuHTTPWorkspaces) RepeatsRelease(_ workspace.Workspace, _ workspace.ReleaseRepeat) bool {
+	return false
+}
+
 //
 //nolint:revive // The port takes the lock ID beside the caller, the allowance and the audit record.
 //nolint:revive // The signature of the workspace port that the handler reads.

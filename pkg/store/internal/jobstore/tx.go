@@ -104,6 +104,9 @@ type Query struct {
 	// StateChangedBeforeMs selects the jobs whose state last changed before
 	// this time. 0 selects every job.
 	StateChangedBeforeMs int64
+	// StateChangedAfterMs selects the jobs whose state last changed after
+	// this time. 0 selects every job.
+	StateChangedAfterMs int64
 }
 
 // Tx reads and writes the rows of one transaction. An adapter implements it
@@ -273,6 +276,12 @@ type ChunkTx interface {
 	// ChunkKeys returns the blob key of each confirmed chunk of the log
 	// version, in the order of the chunk numbers.
 	ChunkKeys(ctx context.Context, ns namespace.Name, log string) ([]ChunkKey, error)
+	// JobPlanIDs returns the ID of each plan row of the job of the namespace
+	// ns, also of a reserved plan.
+	JobPlanIDs(ctx context.Context, ns namespace.Name, id job.ID) ([]string, error)
+	// JobChunkKeys returns the blob key of each confirmed chunk of each log
+	// version of the job of the namespace ns.
+	JobChunkKeys(ctx context.Context, ns namespace.Name, id job.ID) ([]string, error)
 }
 
 // StoredChunk is what the attempt that won a chunk stored: the size and the
