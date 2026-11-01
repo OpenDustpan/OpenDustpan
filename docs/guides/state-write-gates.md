@@ -53,6 +53,12 @@ writes to a unit of its own job with no gate. Each other phase takes only the
 lock of its plan. Each other write with a job token is denied, also a write to a
 unit that the job does not hold. The access limits still hold for a job token.
 
+The server cannot evaluate a gate for a job yet. So an enforced gate at
+`state.write` refuses the start of a job on its unit, and it also refuses each
+claim of a phase of a job that started before someone saved the gate. The refused
+claim fails the job, with a reason that names the gate, and writes a denied
+`runner:claim` audit entry. A gate in evaluate mode refuses neither.
+
 ## What a gate reads
 
 A gate at `state.write` is a Cedar policy over these facts:

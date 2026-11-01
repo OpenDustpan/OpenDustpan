@@ -61,6 +61,10 @@ The job service does these checks in this order, and fails closed at each one:
    The server cannot evaluate these gates for a job yet, so it refuses the
    start with 403 and the code `job.gate-enforced`, and never skips a gate. The
    message names the gate. A gate in evaluate mode does not stop the start.
+   The server checks these gates again at each claim of a phase by a runner,
+   also at a takeover. A gate saved after the start fails the job at the
+   claim, with a reason that names the gate (see the poll in
+   [the runner API](runner-api.md)).
 5. The approval defaults of the namespace, the collection and the workspace.
    A plan changes nothing, so it gets no approval gate.
 6. The change freezes, the manual locks and the limits of open jobs. A manual

@@ -192,6 +192,9 @@ type Env struct {
 	backupDir string
 	// signIn is the console sign-in of an env from NewEnvWithSignIn, or nil.
 	signIn *signInSetup
+	// claimers keeps the job claimer of the in-process server, or is nil for
+	// the binary server.
+	claimers *claimerSlot
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -246,6 +249,8 @@ type serverBuild struct {
 	dbURL string
 	// backupDir is the directory of the dir: backup target the server writes.
 	backupDir string
+	// claimers keeps the job claimer of the server, or is nil.
+	claimers *claimerSlot
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -470,6 +475,7 @@ func startInprocessServer(
 
 	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
 	// in-process mode uses the equivalent server option.
+	claimers := newClaimerSlot()
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -481,7 +487,9 @@ func startInprocessServer(
 		publicURL:         inprocessPublicURL(in, ts),
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
+		claimers:          claimers,
 	})
+	build.claimers = claimers
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
 
@@ -516,6 +524,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		store:         in.store,
 		client:        client,
 		inprocess:     build.store,
+		claimers:      build.claimers,
 		blobs:         build.blobs,
 		blobName:      blobNameOf(tb),
 		s3Endpoint:    s3EndpointOf(tb),
@@ -648,6 +657,9 @@ type serverArgs struct {
 	// issuer is a fake OpenID provider whose keys the server may read on the
 	// loopback, or nil.
 	issuer *OIDCIssuerFake
+	// claimers keeps the job claimer that the in-process server builds, or
+	// is nil.
+	claimers *claimerSlot
 }
 
 // profileStoreOptions returns the option that gives the in-process server the
@@ -695,6 +707,7 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 			wrapper,
 		),
 		jobStoreOptions(st),
+		claimerOptions(st, args.claimers),
 		savedViewStoreOptions(st),
 		settingStoreOptions(st), trustRuleStoreOptions(st, args.issuer), registryStoreOptions(st),
 		sinkStoreOptions(st),
@@ -785,12 +798,12 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	startServing(ctx, tb, srv)
 
 	return serverBuild{
-		handler:   srv.Handler(),
-		store:     st,
+		handler: srv.Handler(), store: st,
 		blobs:     blobs,
 		dbProxy:   dbProxy,
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
+		claimers:  nil,
 	}
 }
 
