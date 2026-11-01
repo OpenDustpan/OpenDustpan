@@ -27,7 +27,9 @@ package server
 // bootstrap admin token, inside the limit. A cursor holds a binding of its
 // export (object, mode, window, subject and expand), and a cursor of
 // another export answers 400.
-// The export of a collection answers 501 until collections are wired.
+// The export of a collection holds the grants on the collection, and the
+// grants on each unit that is in it now (deleted units that are not purged
+// included). It answers 501 on a server that holds no collections.
 //
 // Each export request writes one audit entry of the kind read-access (ADR
 // 52, decision 13): in the namespace of a namespace or unit export, in

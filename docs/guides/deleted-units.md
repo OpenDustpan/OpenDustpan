@@ -31,7 +31,10 @@ It needs the action `namespace:read` on the namespace. The list holds only
 the units that you can read: a grant of `unit:read` on the installation or
 on the namespace shows every deleted unit of the namespace. A grant on one
 unit shows nothing after the unit is deleted, because a grant on a unit
-follows a unit that exists.
+follows a unit that exists. A grant of `unit:read` on a collection shows
+each deleted unit of that collection in the namespace, because a deleted unit
+keeps its collection until the collection is deleted. A grant on a collection
+of another namespace shows nothing.
 
 These query values filter and page the list:
 
