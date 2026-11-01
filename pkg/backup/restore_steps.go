@@ -748,11 +748,28 @@ func (s *RestoreService) copyManifestBlobs(
 // restoreCopyConcurrency at a time. Each copy runs its own checks, and
 // each write to the live store has its own fence check: no check covers
 // more than one blob. The first error cancels the copies that run and stops
-// the copies that wait. A key that refs names twice is copied once, so two
-// copies never use one temporary key.
+// the copies that wait.
+//
+// A key that refs names twice is copied once, so two copies never use one
+// temporary key. The entries must agree: a key with two different sizes,
+// checksums or seal flags fails the restore before any copy, as ErrCorrupt.
 func (s *RestoreService) copyBlobs(
 	ctx context.Context, in restoreInput, fence durable.StepFence, refs []ManifestBlob,
 ) error {
+	unique, err := s.uniqueBlobs(ctx, fence, in, refs)
+	if err != nil {
+		return err
+	}
+
+	return runBounded(ctx, unique, restoreCopyConcurrency, func(ctx context.Context, ref ManifestBlob) error {
+		return s.copyBlob(ctx, in, fence, ref)
+	})
+}
+
+// runBounded runs do for each item of items, at most limit at a time. The
+// first error cancels the context of the runs that go on, stops the items that
+// wait, and is the result. It returns only after every run ended.
+func runBounded[T any](ctx context.Context, items []T, limit int, do func(context.Context, T) error) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -760,17 +777,10 @@ func (s *RestoreService) copyBlobs(
 		wg      sync.WaitGroup
 		once    sync.Once
 		first   error
-		seen    = make(map[string]struct{}, len(refs))
-		permits = make(chan struct{}, restoreCopyConcurrency)
+		permits = make(chan struct{}, limit)
 	)
 
-	for _, ref := range refs {
-		if _, dup := seen[ref.Key]; dup {
-			continue
-		}
-
-		seen[ref.Key] = struct{}{}
-
+	for _, item := range items {
 		select {
 		case permits <- struct{}{}:
 		case <-ctx.Done():
@@ -783,7 +793,7 @@ func (s *RestoreService) copyBlobs(
 		wg.Go(func() {
 			defer func() { <-permits }()
 
-			if err := s.copyBlob(ctx, in, fence, ref); err != nil {
+			if err := do(ctx, item); err != nil {
 				once.Do(func() {
 					first = err
 

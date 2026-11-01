@@ -5,14 +5,15 @@ import (
 	"io"
 	"sync"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
-// overlapStore holds each Put until a second Put is in flight, or until
-// wait passes. It records the most Puts that were in flight together.
+// overlapStore holds each Put until a second Put is in flight. It is a
+// barrier, not a timer: a restore that copies one blob at a time never lets
+// a second Put start, so the test does not end until the test timeout. It
+// records the most Puts that were in flight together.
 type overlapStore struct {
 	blob.Store
 
@@ -21,7 +22,6 @@ type overlapStore struct {
 	inflight int
 	maxSeen  int
 	once     sync.Once
-	wait     time.Duration
 }
 
 func (o *overlapStore) Put(ctx context.Context, key blob.Key, r io.Reader) error {
@@ -37,7 +37,6 @@ func (o *overlapStore) Put(ctx context.Context, key blob.Key, r io.Reader) error
 
 	select {
 	case <-o.arrived:
-	case <-time.After(o.wait):
 	case <-ctx.Done():
 	}
 
@@ -68,7 +67,6 @@ func TestRestoreCopiesBlobsAtTheSameTime(t *testing.T) {
 		inflight: 0,
 		maxSeen:  0,
 		once:     sync.Once{},
-		wait:     3 * time.Second,
 	}
 
 	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
