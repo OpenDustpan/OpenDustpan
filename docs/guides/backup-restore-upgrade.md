@@ -54,7 +54,7 @@ A backup is a set of objects under the target:
 
 - `backups/<id>/manifest.json` describes the backup. It is the last object that the server writes. A backup without it is not complete.
 - `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
-- `blobs/<key>` holds each blob that the SQL data names. Examples are OpenTofu state versions and Pulumi checkpoints. Other examples are job plan parts, job log chunks and registry release files.
+- `blobs/<key>` holds each blob that the SQL data names. Examples are OpenTofu state versions and Pulumi checkpoints. Other examples are job plan parts and job log chunks.
 
 The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the primary installations and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
@@ -65,6 +65,8 @@ The server copies a blob only when the SQL data holds its size and its MD5. It c
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
 The table files use one encoding for both databases. A backup of SQLite restores into PostgreSQL, and a backup of PostgreSQL restores into SQLite.
+
+The backup does not copy the files of registry releases. The SQL data holds only their names and checksums, so a restore into another blob store gives releases whose files do not exist. The backup applies no size limit to registry files, because it does not copy them. The publish path limits each file of an upload to 512 MiB by default. It limits the sum of the files of one release to 2 GiB by default. The installation can set other limits.
 
 ## Check a backup
 
