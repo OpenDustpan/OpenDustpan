@@ -78,6 +78,7 @@ The caller needs these actions:
 
 | Action | On |
 | --- | --- |
+| `unit:move` | The unit |
 | `unit:manage-access` | The unit |
 | `collection:create-unit` | The target collection |
 | `collection:manage-access` | The target collection |
