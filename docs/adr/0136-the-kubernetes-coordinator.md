@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 139 extends decision 9: client-go and the separate dustpan-runner
   binary.
+- ADR 305 extends: the Kubernetes runner runs the jobs of the operator.
 
 ## Context
 
