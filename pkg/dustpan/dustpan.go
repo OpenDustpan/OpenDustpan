@@ -267,6 +267,11 @@ type settings struct {
 	// with gate; nil means no limit. Each gate keeps its own LRU of sources,
 	// so the gate memory of one process is at most 2 x 10,000 buckets.
 	signInGate *authgate.Gate
+	// passwordGate is the per-address limit of the routes that check a
+	// password or a one-time code of a local user. It has its own budget, so
+	// a guess of a password never slows another sign-in. wireTokens sets it
+	// with gate; nil mounts no such route.
+	passwordGate *authgate.Gate
 	// sessionCookies checks the console session cookie on the inventory,
 	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
 	// means no console sign-in.
@@ -823,6 +828,7 @@ func defaultSettings() *settings {
 		signInHTTPClient:        nil,
 		gate:                    nil,
 		signInGate:              nil,
+		passwordGate:            nil,
 		sessionCookies:          nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
@@ -3526,12 +3532,27 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 
 	cfg.signInGate = signInGate
 
+	passwordGate, err := authgate.New(authgate.Config{
+		Next: refuseAll{}, Charge: nil, Logger: cfg.logger, Now: cfg.now,
+		Failures: failures, Window: 0, CounterErrors: nil, Scope: passwordGateScope,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("password gate: %w", err)
+	}
+
+	cfg.passwordGate = passwordGate
+
 	return identity.Chain{cfg.authenticator, gate}, nil
 }
 
 // signInGateScope names the budget of the sign-in routes in the shared
 // count.
 const signInGateScope = "signin"
+
+// passwordGateScope names the budget of the routes that check a password or
+// a one-time code of a local user in the shared count.
+const passwordGateScope = "password"
 
 // refuseAll is the Next of the sign-in gate. The sign-in routes never look
 // up a token through that gate; if one does, it gets no principal.

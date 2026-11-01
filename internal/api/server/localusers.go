@@ -128,8 +128,9 @@ var errLocalUserBody = &codedError{
 }
 
 // localUserRoutes returns the rows of the local user routes. A handler with no
-// local user service mounts none. The password sign-in needs the console
-// sign-in too, for its session.
+// local user service mounts none. The routes that check a password or a
+// one-time code need the console sign-in, for its session, and its password
+// budget: with either one missing, they are not mounted.
 func (h *Handler) localUserRoutes() []Route {
 	if h.localUsers == nil {
 		return nil
@@ -138,11 +139,8 @@ func (h *Handler) localUserRoutes() []Route {
 	manage := []identity.Action{identity.ActionServerManageSignIn}
 	own := []identity.Action{identity.ActionCallerManageSignIn}
 
-	routes := []Route{
-		{
-			Method: http.MethodPost, Path: localUserRedeemPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.redeemLocalUserCode,
-		},
+	routes := make([]Route, 0, localUserRouteCount)
+	routes = append(routes, []Route{
 		{
 			Method: http.MethodPost, Path: localUsersPath, Scope: ScopeAuthorized, Actions: manage,
 			Resolve: resolveServer, ActionsFor: nil, Serve: h.createLocalUser,
@@ -156,20 +154,53 @@ func (h *Handler) localUserRoutes() []Route {
 			Resolve: resolveServer, ActionsFor: nil,
 			Serve: h.fresh(identity.ActionServerManageSignIn, h.resetLocalUser),
 		},
-		{
+	}...)
+
+	if h.signIn == nil || h.signIn.passwords == nil {
+		return routes
+	}
+
+	return append(routes,
+		Route{
+			Method: http.MethodPost, Path: localUserRedeemPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
+			ActionsFor: nil, Serve: h.redeemLocalUserCode,
+		},
+		Route{
 			Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
 			Resolve: resolveCaller, ActionsFor: nil, Serve: h.changeOwnPassword,
 		},
-	}
-
-	if h.signIn != nil {
-		routes = append(routes, Route{
+		Route{
 			Method: http.MethodPost, Path: localSignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, Serve: h.passwordSignIn,
-		})
+		},
+	)
+}
+
+// localUserRouteCount is the count of the local user routes: three to
+// manage the local users and three that check a password or a code.
+const localUserRouteCount = 6
+
+// admitPassword waits or refuses as the password budget of the address of
+// the request says. A handler with no password budget refuses: it fails
+// closed.
+//
+// Defense in depth: localUserRoutes mounts no password route without the
+// budget. This check stays so that a change to the route table never serves
+// a password check with no limit.
+func (h *Handler) admitPassword(ctx context.Context) error {
+	if h.signIn == nil || h.signIn.passwords == nil {
+		return errLocalUsersUnavailable
 	}
 
-	return routes
+	return h.signIn.passwords.Admit(ctx)
+}
+
+// failPassword spends one unit of the password budget of the address of the
+// request.
+func (h *Handler) failPassword(ctx context.Context) {
+	if h.signIn != nil && h.signIn.passwords != nil {
+		h.signIn.passwords.Fail(ctx)
+	}
 }
 
 // noReferrer keeps the browser from sending the URL of a page with a code to
@@ -207,7 +238,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	if err := h.admitSignIn(ctx); err != nil {
+	if err := h.admitPassword(ctx); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -215,7 +246,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 
 	var req passwordSignInRequest
 	if err := decodeLocalUserBody(w, r, &req); err != nil {
-		h.failSignIn(ctx)
+		h.failPassword(ctx)
 		h.writeError(ctx, w, err)
 
 		return
@@ -226,7 +257,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 	in, err := h.localUsers.SignIn(ctx, base, req.UserName, req.Password)
 	if err != nil {
 		if errors.Is(err, localuser.ErrSignInFailed) {
-			h.failSignIn(ctx)
+			h.failPassword(ctx)
 		}
 
 		h.writeError(ctx, w, localUserError(err))
@@ -246,7 +277,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		// closed with the answer of a wrong password.
 		if errors.Is(err, session.ErrGenerationChanged) || errors.Is(err, session.ErrPrincipalDisabled) ||
 			errors.Is(err, session.ErrPrincipalNotFound) {
-			h.failSignIn(ctx)
+			h.failPassword(ctx)
 			h.writeError(ctx, w, localUserError(localuser.ErrSignInFailed))
 
 			return
@@ -269,12 +300,10 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 
 	noReferrer(w)
 
-	if h.signIn != nil {
-		if err := h.admitSignIn(ctx); err != nil {
-			h.writeError(ctx, w, err)
+	if err := h.admitPassword(ctx); err != nil {
+		h.writeError(ctx, w, err)
 
-			return
-		}
+		return
 	}
 
 	var req redeemRequest
@@ -288,9 +317,7 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 
 	if err := h.localUsers.Redeem(ctx, base, req.OneTimeCode, req.Password); err != nil {
 		if errors.Is(err, localuser.ErrNotFound) {
-			if h.signIn != nil {
-				h.failSignIn(ctx)
-			}
+			h.failPassword(ctx)
 
 			// One answer for a code that is not valid, unknown, used or
 			// expired, so the answer tells nothing about a code.
@@ -415,6 +442,15 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 		return
 	}
 
+	// The check of a current password spends the password budget of the
+	// address as a sign-in does, so a stolen session cannot guess the
+	// password of its person at the speed of the server.
+	if err := h.admitPassword(ctx); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	var req changeOwnPasswordRequest
 	if err := decodeLocalUserBody(w, r, &req); err != nil {
 		h.writeError(ctx, w, err)
@@ -427,25 +463,36 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 		Entry: callerEntry(r, p, identity.ActionCallerManageSignIn), PrincipalID: caller.Match.Owner.ID,
 	}
 
-	err := h.localUsers.ChangePassword(ctx, actor, localusersvc.ChangeInput{
-		Current: req.CurrentPassword, New: req.NewPassword, Fresh: fresh,
+	g, err := h.localUsers.ChangePassword(ctx, actor, localusersvc.ChangeInput{
+		Current: req.CurrentPassword, New: req.NewPassword, Generation: caller.Match.Session.Generation,
+		Fresh: fresh,
 	})
 	if err != nil {
+		if errors.Is(err, localuser.ErrWrongPassword) {
+			h.failPassword(ctx)
+		}
+
 		h.writeError(ctx, w, localUserError(err))
 
 		return
 	}
 
-	h.renewSession(ctx, w, r, caller)
+	h.renewSession(ctx, w, r, caller, g)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // renewSession starts a new session for the caller of a password change,
-// with the new session generation, and sets its cookie. The sign-in time of
-// the old session stays. A failure leaves the browser signed out, which is the
-// safe direction: the password changed.
-func (h *Handler) renewSession(ctx context.Context, w http.ResponseWriter, r *http.Request, caller sessionCaller) {
-	if h.signIn == nil {
+// with the session generation g that the change wrote, and sets its cookie.
+// The sign-in time of the old session stays. The store refuses the session
+// when another change bumped the generation after g. A failure leaves the
+// browser signed out, which is the safe direction: the password changed.
+func (h *Handler) renewSession(
+	ctx context.Context, w http.ResponseWriter, r *http.Request, caller sessionCaller, g uint64,
+) {
+	// Defense in depth: the service returns the generation of its write and
+	// never 0. This check stays so that a renewal never starts a session that
+	// takes the stored generation, whatever change wrote it.
+	if h.signIn == nil || g == 0 {
 		return
 	}
 
@@ -454,7 +501,7 @@ func (h *Handler) renewSession(ctx context.Context, w http.ResponseWriter, r *ht
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
 		AuthTime: old.AuthTime, PrincipalID: old.PrincipalID, Provider: old.Provider, SourceIP: e.SourceIP,
-		UserAgent: e.UserAgent, Generation: 0, Stored: false,
+		UserAgent: e.UserAgent, Generation: g, Stored: false,
 	})
 	if err != nil {
 		return
@@ -535,7 +582,24 @@ func localUserErrors() []localUserMapping {
 				message: "the server is busy: try again in a few seconds",
 			},
 		},
-	}, credentialErrors())
+	}, changeErrors(), credentialErrors())
+}
+
+// changeErrors returns the answers of the refusals of a change that the
+// state of the session or of the grants decides.
+func changeErrors() []localUserMapping {
+	return []localUserMapping{
+		{localuser.ErrGenerationChanged, &codedError{
+			status: http.StatusUnauthorized, code: errcode.LocalUserSessionEnded, args: nil,
+			message: "the session ended because another change ended it: sign in again",
+		}},
+		{localuser.ErrOutsideReach, &codedError{
+			status:  http.StatusForbidden,
+			code:    errcode.LocalUserOutsideReach,
+			args:    nil,
+			message: "the reset needs a reach that covers each grant of the person: ask an administrator who holds them",
+		}},
+	}
 }
 
 // credentialErrors returns the answers of the errors of the password rules,

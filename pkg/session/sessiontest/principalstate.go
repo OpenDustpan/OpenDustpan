@@ -50,6 +50,9 @@ func stateCases() []stateCase {
 		{name: "BumpWithABadAuditEntryChangesNothing", test: testBumpBadEntry},
 		{name: "BumpAppendsTheEntryInTheSameTransaction", test: testBumpAppends},
 		{name: "ConcurrentBumpsEachAddOne", test: testBumpConcurrent},
+		{name: "BumpWithTheStoredGenerationPasses", test: testBumpExpectedPasses},
+		{name: "BumpWithAnotherGenerationIsRefusedAndChangesNothing", test: testBumpExpectedRefused},
+		{name: "ConcurrentBumpsWithOneExpectedGenerationPassOnce", test: testBumpExpectedConcurrent},
 	}
 }
 
@@ -85,7 +88,7 @@ func bumpEntry(id string, when time.Time) audit.Entry {
 func bumpOne(t *testing.T, s StateStore) uint64 {
 	t.Helper()
 
-	g, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, bumpEntry("prn-1", at(1)))
+	g, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, 0, bumpEntry("prn-1", at(1)))
 	if err != nil {
 		t.Fatalf("bump prn-1: %v", err)
 	}
@@ -156,7 +159,7 @@ func testStateService(t *testing.T, s StateStore) {
 	_, err := s.PrincipalState(t.Context(), "prn-svc")
 	wantErr(t, "state of a service principal", err, session.ErrPrincipalNotFound)
 
-	_, err = s.BumpGeneration(t.Context(), "prn-svc", session.BumpPassword, bumpEntry("prn-svc", at(1)))
+	_, err = s.BumpGeneration(t.Context(), "prn-svc", session.BumpPassword, 0, bumpEntry("prn-svc", at(1)))
 	wantErr(t, "bump of a service principal", err, session.ErrPrincipalNotFound)
 }
 
@@ -242,7 +245,7 @@ func testBumpNoClock(t *testing.T, s StateStore) {
 	// The entries of the bumps go back in time: a bump reads no clock, so
 	// each one still adds 1.
 	for i := 3; i > 0; i-- {
-		_, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpAdministrator, bumpEntry("prn-1", at(i)))
+		_, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpAdministrator, 0, bumpEntry("prn-1", at(i)))
 		if err != nil {
 			t.Fatalf("bump at minute %d: %v", i, err)
 		}
@@ -279,7 +282,7 @@ func testBumpUnknownCause(t *testing.T, s StateStore) {
 	mustPerson(t, s, "prn-1")
 
 	for _, cause := range []session.BumpCause{"", "PASSWORD", "password\n", "reboot"} {
-		_, err := s.BumpGeneration(t.Context(), "prn-1", cause, bumpEntry("prn-1", at(1)))
+		_, err := s.BumpGeneration(t.Context(), "prn-1", cause, 0, bumpEntry("prn-1", at(1)))
 		wantErr(t, "bump with the cause "+strconv.Quote(string(cause)), err, session.ErrInvalid)
 	}
 
@@ -291,7 +294,7 @@ func testBumpUnknownCause(t *testing.T, s StateStore) {
 func testBumpUnknownPrincipal(t *testing.T, s StateStore) {
 	t.Helper()
 
-	_, err := s.BumpGeneration(t.Context(), "prn-missing", session.BumpPassword, bumpEntry("prn-missing", at(1)))
+	_, err := s.BumpGeneration(t.Context(), "prn-missing", session.BumpPassword, 0, bumpEntry("prn-missing", at(1)))
 	wantErr(t, "bump of an unknown principal", err, session.ErrPrincipalNotFound)
 
 	if len(bumpEntries(t, s)) != 0 {
@@ -307,7 +310,7 @@ func testBumpBadEntry(t *testing.T, s StateStore) {
 	bad := bumpEntry("prn-1", at(1))
 	bad.Subject = ""
 
-	_, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, bad)
+	_, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, 0, bad)
 	wantErr(t, "bump with a bad entry", err, audit.ErrInvalidEntry)
 
 	if got := stateOf(t, s, "prn-1").Generation; got != 1 || len(bumpEntries(t, s)) != 0 {
@@ -350,7 +353,7 @@ func testBumpConcurrent(t *testing.T, s StateStore) {
 
 	for range concurrentBumps {
 		wg.Go(func() {
-			g, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, bumpEntry("prn-1", at(1)))
+			g, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, 0, bumpEntry("prn-1", at(1)))
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -374,5 +377,120 @@ func testBumpConcurrent(t *testing.T, s StateStore) {
 	if got := stateOf(t, s, "prn-1").Generation; got != 1+concurrentBumps || len(seen) != concurrentBumps {
 		t.Fatalf("generation = %d with %d distinct answers, want %d and %d", got, len(seen), 1+concurrentBumps,
 			concurrentBumps)
+	}
+}
+
+func testBumpExpectedPasses(t *testing.T, s StateStore) {
+	t.Helper()
+
+	mustPerson(t, s, "prn-1")
+
+	// The first bump with an expected generation writes the first row; the
+	// second updates it.
+	for _, expected := range []uint64{1, 2} {
+		g, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, expected, bumpEntry("prn-1", at(1)))
+		if err != nil || g != expected+1 {
+			t.Fatalf("bump from %d = %d, %v, want %d", expected, g, err, expected+1)
+		}
+	}
+}
+
+func testBumpExpectedRefused(t *testing.T, s StateStore) {
+	t.Helper()
+
+	mustPerson(t, s, "prn-1")
+
+	cases := []struct {
+		name     string
+		expected uint64
+		before   int
+	}{
+		{name: "a generation above the first with no row", expected: 5, before: 0},
+		{name: "the first generation after a bump", expected: 1, before: 1},
+		{name: "a generation above the stored one", expected: 9, before: 1},
+	}
+
+	bumps := 0
+
+	for _, tc := range cases {
+		for ; bumps < tc.before; bumps++ {
+			bumpOne(t, s)
+		}
+
+		want := stateOf(t, s, "prn-1").Generation
+		entries := len(bumpEntries(t, s))
+
+		_, err := s.BumpGeneration(t.Context(), "prn-1", session.BumpPassword, tc.expected,
+			bumpEntry("prn-1", at(2)))
+		if !errors.Is(err, session.ErrGenerationChanged) {
+			t.Fatalf("%s: bump = %v, want ErrGenerationChanged", tc.name, err)
+		}
+
+		if got := stateOf(t, s, "prn-1").Generation; got != want {
+			t.Fatalf("%s: generation after a refused bump = %d, want %d", tc.name, got, want)
+		}
+
+		if got := len(bumpEntries(t, s)); got != entries {
+			t.Fatalf("%s: bump entries after a refused bump = %d, want %d", tc.name, got, entries)
+		}
+	}
+}
+
+func testBumpExpectedConcurrent(t *testing.T, s StateStore) {
+	t.Helper()
+
+	mustPerson(t, s, "prn-1")
+	mustPerson(t, s, "prn-2")
+
+	// prn-1 has no row, so the race is on the first insert; prn-2 has a
+	// row, so the race is on the update.
+	_, err := s.BumpGeneration(t.Context(), "prn-2", session.BumpPassword, 0, bumpEntry("prn-2", at(1)))
+	if err != nil {
+		t.Fatalf("bump prn-2: %v", err)
+	}
+
+	for _, id := range []string{"prn-1", "prn-2"} {
+		expected := stateOf(t, s, id).Generation
+
+		var (
+			wg      sync.WaitGroup
+			mu      sync.Mutex
+			passed  int
+			changed int
+			errs    []error
+		)
+
+		for range concurrentBumps {
+			wg.Go(func() {
+				_, err := s.BumpGeneration(t.Context(), id, session.BumpPassword, expected, bumpEntry(id, at(2)))
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				switch {
+				case err == nil:
+					passed++
+				case errors.Is(err, session.ErrGenerationChanged):
+					changed++
+				default:
+					errs = append(errs, err)
+				}
+			})
+		}
+
+		wg.Wait()
+
+		if err := errors.Join(errs...); err != nil {
+			t.Fatalf("%s: a concurrent bump failed: %v", id, err)
+		}
+
+		if passed != 1 || changed != concurrentBumps-1 {
+			t.Fatalf("%s: %d bumps passed and %d were refused, want 1 and %d", id, passed, changed,
+				concurrentBumps-1)
+		}
+
+		if got := stateOf(t, s, id).Generation; got != expected+1 {
+			t.Fatalf("%s: generation = %d, want %d", id, got, expected+1)
+		}
 	}
 }

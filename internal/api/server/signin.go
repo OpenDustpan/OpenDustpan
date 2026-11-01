@@ -140,6 +140,12 @@ type SignIn struct {
 	Admin     *session.ProviderAdmin
 	Providers []SignInProvider
 	Origins   []string
+	// PasswordLimiter is the per-address budget of the routes that check a
+	// password or a one-time code of a local user: the password sign-in, the
+	// redeem of a code and the change of the own password. It is a budget of
+	// its own, so these routes never spend the budget of the other sign-ins.
+	// Nil mounts none of these routes.
+	PasswordLimiter SignInLimiter
 	// DevCode is the one-time code of opendustpan dev. With it, the handler
 	// mounts the route that signs a browser in as the dev administrator.
 	// Nil mounts no such route.
@@ -165,6 +171,7 @@ type StoredProviders interface {
 type signInState struct {
 	sessions  *session.Sessions
 	limiter   SignInLimiter
+	passwords SignInLimiter
 	stored    StoredProviders
 	admin     *session.ProviderAdmin
 	providers map[string]SignInProvider
@@ -230,8 +237,15 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 	}
 
 	return &signInState{
-		sessions: cfg.Sessions, limiter: cfg.Limiter, stored: cfg.Stored, admin: cfg.Admin, providers: providers,
-		checker: checker, devCode: cfg.DevCode, devAdmin: cfg.DevAdmin,
+		sessions:  cfg.Sessions,
+		limiter:   cfg.Limiter,
+		passwords: cfg.PasswordLimiter,
+		stored:    cfg.Stored,
+		admin:     cfg.Admin,
+		providers: providers,
+		checker:   checker,
+		devCode:   cfg.DevCode,
+		devAdmin:  cfg.DevAdmin,
 	}, nil
 }
 
