@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 236 extends decisions 1, 2 and 3: an axe gate in the console checks and
   for every language.
+- ADR 311 extends: the on-call view at phone width.
 
 ## Context
 
