@@ -6,24 +6,31 @@
 //		localusertest.Run(t, func(t *testing.T) localusertest.Store { return newMyStore(t) })
 //	}
 //
-// The suite holds the names of its cases only. Each case skips until an
-// adapter implements the ports, so that the names are the contract that the
-// first adapter meets.
+// A case that needs a port that no store has yet skips, with the reason.
 package localusertest
 
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
-// Store is every persistence port the suite exercises.
+// Store is every persistence port the suite exercises: the ports of
+// localuser, and the ports that make the principals, the access tokens and
+// the installation kind of the cases and read their state.
 type Store interface {
 	localuser.Store
 	localuser.PasswordStore
 	localuser.ResetStore
 	audit.Store
+	principal.RecordStore
+	principal.SessionGenerationStore
+	accesstoken.Store
+	installation.KindStore
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -38,59 +45,14 @@ type BlocklistFactory func(t *testing.T) localuser.Blocklist
 // CaseNames returns the names of the cases of the store suite, in the order
 // of the run.
 func CaseNames() []string {
-	return []string{
-		// Store.
-		"a created user reads back by name and by principal with its audit entry",
-		"a created user has no password and reads back with an empty hash",
-		"a user name that does not match the pattern fails with ErrInvalid and stores nothing",
-		"a second user with the same name fails with ErrAlreadyExists",
-		"a second user for the same principal fails with ErrAlreadyExists",
-		"a user for a principal that is not a person fails with principal.ErrNotFound",
-		"an unknown name is ErrNotFound",
-		"a password set stores the hash, sets the time and appends one entry",
-		"a password set ends every other session of the person in the same transaction",
-		"a password set keeps the session that the change names",
-		"a password set with ChangeRequired reads back with the flag",
-		"a rehash replaces the hash only while the stored hash is the old one",
-		"a rehash after a password change fails with ErrNotFound and changes nothing",
-		"a password remove for a person with no passkey fails with ErrLastCredential",
-		"a password remove for a person with a passkey deletes the hash and appends one entry",
-		"a password set, a remove and a reset code for the demo person fail with ErrDemoFixed",
-		"a user delete keeps the principal and deletes the reset codes",
-		"a rename stores the new name, keeps the subject and appends one entry",
-		"a rename to a name that another user has fails with ErrAlreadyExists",
-		"a rename to a name that does not match the pattern fails with ErrInvalid",
-		"a rename of the demo person fails with ErrDemoFixed",
-		"a change-required set and clear read back and each appends one entry",
-		"a change-required set for a user with no password fails with ErrNotFound",
-		"a set-up code redeemed for a break-glass person fails with ErrBreakGlass and stores no hash",
-		"a break-glass flag on a person with a password fails with principal.ErrBreakGlassPassword",
-		"a password set for a break-glass person fails with ErrBreakGlass and changes nothing",
-		"a password remove and a remove of the last passkey at the same time: one wins and the person keeps a credential",
-		"a demo seed on a dev installation stores the hash and appends one entry",
-		"a demo seed makes the demo user record when it does not exist",
-		"a demo seed on a production installation fails with ErrDemoOnly and stores nothing",
-		"a demo seed when the installation kind cannot be read fails with ErrDemoOnly",
-		"a change with an entry of another scope fails with audit.ErrInvalidEntry and changes nothing",
-		"a change whose audit append fails changes nothing",
-		// ResetStore.
-		"a redeem sets the password, deletes the code, ends the sessions and appends one entry in one transaction",
-		"a second redeem of a reset code fails with ErrNotFound and changes nothing",
-		"a redeem after the expiry fails with ErrNotFound, deletes the code and sets no password",
-		"a redeem whose audit append fails keeps the code and sets no password",
-		"a redeem for a break-glass person fails with ErrBreakGlass and changes nothing",
-		"a reset code for a break-glass person fails with ErrBreakGlass and stores nothing",
-		"a new reset code deletes the earlier code of the same user",
-		"a reset ends every session of the person in the same transaction",
-		"a reset keeps the access tokens of the person by default",
-		"a reset with RevokeAccessTokens revokes each access token of the person in the same transaction",
-		"the audit entry of a reset records whether it revoked the access tokens",
-		"a set-up code ends no session and revokes no token",
-		"a reset code for an unknown user fails with ErrNotFound",
-		"two redeems of one code at the same time: one wins",
-		"a prune deletes the expired codes only",
-		"the store keeps the digest of a reset code, never the code",
+	cases := storeCases()
+	names := make([]string, 0, len(cases))
+
+	for _, c := range cases {
+		names = append(names, c.name)
 	}
+
+	return names
 }
 
 // HasherCaseNames returns the names of the cases of the PasswordHasher
@@ -128,7 +90,17 @@ func Run(t *testing.T, newStore Factory) {
 		t.Fatal("localusertest.Run needs a store factory")
 	}
 
-	skipCases(t, CaseNames())
+	for _, c := range storeCases() {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			if c.skip != "" {
+				t.Skip(c.skip)
+			}
+
+			c.test(t, newStore(t))
+		})
+	}
 }
 
 // RunHasher runs every case of the PasswordHasher suite against the hashers
@@ -161,19 +133,6 @@ func RunBlocklist(t *testing.T, newList BlocklistFactory) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			c.test(t, newList(t))
-		})
-	}
-}
-
-// skipCases runs one subtest for each name. Each case skips until an
-// adapter implements the ports.
-func skipCases(t *testing.T, names []string) {
-	t.Helper()
-
-	for _, name := range names {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			t.Skip("no adapter implements the localuser ports yet")
 		})
 	}
 }
