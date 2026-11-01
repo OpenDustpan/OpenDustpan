@@ -8,8 +8,10 @@ import (
 	"time"
 
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -221,18 +223,24 @@ func lifecycleError(err, notFound, taken error) error {
 
 // deletedReadScope implements inventoryapi.DeletedReadScope with the scope
 // of unit:read that the authorizer lists.
+//
+// units lists the units of a collection. It is nil on a server that holds no
+// collections: a grant on a collection then covers no deleted unit.
 type deletedReadScope struct {
 	authz identity.Authorizer
+	units access.CollectionUnits
 }
 
-var _ inventoryapi.DeletedReadScope = deletedReadScope{authz: nil}
+var _ inventoryapi.DeletedReadScope = deletedReadScope{authz: nil, units: nil}
 
 // ReadableUnits implements inventoryapi.DeletedReadScope. A grant of
 // unit:read on the installation or on ns covers every deleted unit of ns. A
 // grant on a unit covers that unit while it exists, so it gives nothing on a
 // deleted unit here: ListObjects leaves out the units that do not exist.
-// Collections (#478) are not wired yet, so a grant on a collection covers
-// no deleted unit.
+// A grant on a collection of ns covers each deleted unit whose last
+// collection it was: the membership of a deleted unit stays until the
+// collection is deleted. A grant on a collection of another namespace
+// covers nothing here.
 func (s deletedReadScope) ReadableUnits(
 	ctx context.Context, p identity.Principal, ns namespace.Name,
 ) (bool, []string, error) {
@@ -261,5 +269,66 @@ func (s deletedReadScope) ReadableUnits(
 		}
 	}
 
+	ids, err = s.collectionUnits(ctx, scope.Collections, ns, ids)
+	if err != nil {
+		return false, nil, err
+	}
+
 	return false, ids, nil
+}
+
+// collectionUnits adds to ids the units of each collection of cols that is in
+// ns, without a repeat. It fails closed: a collection of another namespace, a
+// collection that no longer exists and a server with no collection port add
+// nothing, and a store failure returns an error so that the list is refused.
+func (s deletedReadScope) collectionUnits(
+	ctx context.Context, cols []identity.Object, ns namespace.Name, ids []string,
+) ([]string, error) {
+	if s.units == nil {
+		return ids, nil
+	}
+
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+
+	for i := range cols {
+		col := cols[i]
+		// Defense in depth: the store query keys the collection by namespace
+		// too; this check stays so that a scope of another namespace never
+		// reaches the store.
+		if col.Namespace() != ns {
+			continue
+		}
+
+		members, err := s.units.CollectionUnitIDs(ctx, col)
+		if errors.Is(err, collection.ErrNotFound) {
+			continue
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("list units of collection: %w", err)
+		}
+
+		for _, id := range members {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+
+	return ids, nil
+}
+
+// newDeletedReadScope returns the read scope of the deleted-units list. A nil
+// collection service gives a scope with no collection port, not an interface
+// that holds a nil pointer, so that a grant on a collection covers nothing.
+func newDeletedReadScope(authz identity.Authorizer, collections *collection.Service) deletedReadScope {
+	if collections == nil {
+		return deletedReadScope{authz: authz, units: nil}
+	}
+
+	return deletedReadScope{authz: authz, units: collections}
 }

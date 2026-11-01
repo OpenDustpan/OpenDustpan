@@ -46,6 +46,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -1268,12 +1269,16 @@ func jobStoreOption(st store) []dustpan.Option {
 	case sqliteStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	case postgresStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	default:
 		return nil
@@ -1587,7 +1592,7 @@ func openS3Store(ctx context.Context, cfg s3StoreConfig, logger *slog.Logger) (b
 		Now:         nil,
 	}
 
-	store, err := blobs3.Open(ctx, signer, prefix, nil)
+	store, err := blobs3.Open(ctx, signer, prefix, nil, blobs3.WithLogger(logger))
 	if err != nil {
 		return nil, err
 	}
@@ -1845,16 +1850,45 @@ var openStore = func(
 		}
 
 		s, err := postgres.Open(ctx, database, opts...)
+		if errors.Is(err, postgres.ErrFailoverSetting) {
+			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreFailoverSettingInvalid, err)
+		}
+
 		if err != nil {
 			return nil, fmt.Errorf("open postgres store: %w", err)
 		}
 
 		warnDevBuild(ctx, logger, s)
+		logFailoverSettings(ctx, logger, s.FailoverSettings())
 
 		return postgresStore{s}, nil
 	default:
 		return nil, errUnknownBackend
 	}
+}
+
+// logFailoverSettings writes the effective failover settings of the pool
+// once at the start: each value and where it came from. The record holds no
+// host, user or password.
+func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings postgres.FailoverSettings) {
+	// One group for each setting, then the check, the deadline and the three
+	// server timeouts.
+	const extraAttrs = 5
+
+	attrs := make([]any, 0, len(settings.Settings)+extraAttrs)
+
+	for _, setting := range settings.Settings {
+		attrs = append(attrs, slog.Group(setting.Name,
+			slog.String("value", setting.Value), slog.String("from", setting.Source)))
+	}
+
+	attrs = append(attrs, slog.String("connect_check", settings.ConnectCheck),
+		slog.Duration("statement_deadline", settings.StatementDeadline),
+		slog.Duration("statement_timeout", settings.ServerStatementTimeout),
+		slog.Duration("idle_in_transaction_session_timeout", settings.ServerIdleInTransactionTimeout),
+		slog.Duration("client_connection_check_interval", settings.ClientConnectionCheckInterval))
+
+	logger.InfoContext(ctx, "database failover settings", attrs...)
 }
 
 // appliedMigrationsReader reads the applied migrations of an open store.

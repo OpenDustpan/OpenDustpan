@@ -1828,6 +1828,7 @@ LEFT JOIN principals mp ON mp.id = m.principal_id
 WHERE (@all_grants::boolean
     OR (@namespace::text <> '' AND g.namespace = @namespace::text AND g.object_kind <> 'installation')
     OR g.target = @target::text
+    OR g.target = ANY(@inside_targets::text[])
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
@@ -1865,6 +1866,7 @@ LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject
 WHERE (@all_grants::boolean
     OR (@namespace::text <> '' AND g.namespace = @namespace::text AND g.object_kind <> 'installation')
     OR g.target = @target::text
+    OR g.target = ANY(@inside_targets::text[])
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
@@ -2066,6 +2068,18 @@ SELECT COUNT(*)
 FROM collection_members AS m
 JOIN inventory AS i ON i.unit_id = m.unit_id
 WHERE m.namespace = $1 AND m.collection_key = $2;
+
+-- name: ListCollectionUnitIDs :many
+-- The stable IDs of the units in one collection, ordered. The membership of a
+-- unit that was deleted stays until the collection is deleted, so these units
+-- are in the list too. The collection is selected by its namespace, its name
+-- and its stable ID together: a collection that was deleted and created again
+-- under the same name has another ID and gives nothing.
+SELECT m.unit_id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE c.namespace = $1 AND c.name_key = $2 AND c.id = $3
+ORDER BY m.unit_id COLLATE "C";
 
 -- name: DeleteCollectionMembers :exec
 -- Removes the memberships of a collection. The caller removes them only after

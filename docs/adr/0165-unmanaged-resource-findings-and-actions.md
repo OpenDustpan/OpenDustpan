@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-17. Decision 15 superseded in part by ADR 166. Route paths superseded in part by ADR 210
 
+Changed by:
+
+- ADR 166 changes decision 15: the built-in roles of the unmanaged actions.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 On 17 October 2026 the project owner listed the actions on a finding:

@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18. Extends ADR 180 decision 11. Supersedes in part ADR 212 decision 6. Accepts part of RFC 9. Changed by [ADR 288](0288-the-sign-in-page-looks-the-same-on-every-installation.md)
 
+Changed by:
+
+- ADR 288 changes decisions 9 and 10: no logo and no accent before sign-in.
+
 ## Context
 
 ADR 212 decision 6 makes the branding preset an installation setting. RFC

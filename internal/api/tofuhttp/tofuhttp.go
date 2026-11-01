@@ -101,6 +101,10 @@ type Config struct {
 	// gives every adapter the same limiter, so its bound on keys holds for all
 	// of them. Nil means a limiter of this handler only.
 	DenialLimiter *denylimit.Limiter
+	// StateGuard checks each LOCK, each force-unlock and each state version
+	// with no lock against the access limits and the gates of state.write.
+	// Nil means that the server keeps no gates, and no write is checked.
+	StateGuard StateGuard
 }
 
 // Handler serves the http backend under /tofu/state/.
@@ -120,6 +124,8 @@ type Handler struct {
 	routes []Route
 	// onAuditFailure counts a download whose audit entry was lost. It may be nil.
 	onAuditFailure func()
+	// stateGuard is nil when the server keeps no gates.
+	stateGuard StateGuard
 }
 
 // call is the authorized request that a route handler serves.
@@ -176,6 +182,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		routes:     nil,
 
 		onAuditFailure: cfg.OnAuditFailure,
+		stateGuard:     cfg.StateGuard,
 	}
 
 	if h.gate == nil {

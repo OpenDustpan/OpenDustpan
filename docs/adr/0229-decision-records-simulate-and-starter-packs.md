@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 114 decision 11, ADR 197 decision 6 for the "Policy decisions stored" entry. Accepts part of RFC 50
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 ADR 114 decision 11 stores for each engine and each point the effect, the

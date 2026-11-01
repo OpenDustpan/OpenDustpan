@@ -368,6 +368,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -842,6 +843,7 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 		Workspaces: newFakeUnits(true), Namespaces: fakeNamespaces{}, Audit: store,
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -885,6 +887,7 @@ func TestOverrideRefusalsAreAudited(t *testing.T) {
 		Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -963,6 +966,7 @@ func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
 				Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
 				Gate: nil, OnAuditFailure: nil,
 				DenialLimiter: nil,
+				StateGuard:    nil,
 			})
 			if err != nil {
 				t.Fatalf("new handler: %v", err)

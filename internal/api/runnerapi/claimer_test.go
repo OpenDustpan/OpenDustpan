@@ -1,7 +1,10 @@
 package runnerapi_test
 
 import (
+	"context"
 	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/job/jobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -175,6 +179,84 @@ func newJobEnv(t *testing.T, open func(t *testing.T) stores) *env {
 	t.Helper()
 
 	return newEnvWith(t, open, func(s stores) job.Claimer {
-		return job.NewClaimer(s.jobs, s.operations, s.namespaces)
+		return job.NewClaimer(s.jobs, s.operations, s.namespaces, jobtest.NoGates{})
 	})
+}
+
+// fixedGates is a job.GateGuard that answers with the gates that a case sets.
+type fixedGates struct {
+	mu       sync.Mutex
+	enforced []job.EnforcedGate
+}
+
+// Enforced implements job.GateGuard.
+func (g *fixedGates) Enforced(context.Context, identity.Object) ([]job.EnforcedGate, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.enforced, nil
+}
+
+// set makes enforced the next answer.
+func (g *fixedGates) set(enforced []job.EnforcedGate) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.enforced = enforced
+}
+
+// TestPollMeetsTheGatesOfTheUnit proves, through the runner protocol, that a
+// gate saved after a job was dispatched stops the claim of its phase: the
+// poll finds no work, the job fails with the name of the gate, and the phase
+// has no claim. The poll after the gate is gone takes the next job.
+func TestPollMeetsTheGatesOfTheUnit(t *testing.T) {
+	t.Parallel()
+
+	for _, b := range backends() {
+		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
+
+			pollMeetsGates(t, b.open)
+		})
+	}
+}
+
+func pollMeetsGates(t *testing.T, open func(t *testing.T) stores) {
+	t.Helper()
+
+	guard := &fixedGates{mu: sync.Mutex{}, enforced: nil}
+	e := newEnvWith(t, open, func(s stores) job.Claimer {
+		return job.NewClaimer(s.jobs, s.operations, s.namespaces, guard)
+	})
+	pool := e.createPool()
+	r := e.newRunner("builder-1")
+
+	if status, body := r.join(pool, e.joinToken(pool)); status != http.StatusOK {
+		t.Fatalf("join = %d %s, want 200", status, body)
+	}
+
+	unit := unitOf(t, e.store, e.fence, "network")
+	j := dispatchPlan(t, e, pool, unit)
+
+	// The gate comes after the dispatch, before the poll.
+	guard.set([]job.EnforcedGate{{Scope: "unit", ID: "no-plans", Point: "state.write"}})
+
+	if work := r.poll(0); work != nil {
+		t.Fatalf("poll with an enforced gate = %+v, want 204", work)
+	}
+
+	got, err := e.store.jobs.Get(t.Context(), j.ID)
+	if err != nil || got.State != job.StateFailed || got.Phases[0].Claims != 0 ||
+		!strings.Contains(got.Reason, "no-plans at state.write") {
+		t.Fatalf("job after the refused poll = %s, %d claims, reason %q, %v; want failed by the gate no-plans",
+			got.State, got.Phases[0].Claims, got.Reason, err)
+	}
+
+	guard.set(nil)
+
+	next := dispatchPlan(t, e, pool, unit)
+
+	if work := r.poll(2 * time.Second); work == nil || work.Job != string(next.ID) {
+		t.Fatalf("poll with no gate = %+v, want the phase of job %s", work, next.ID)
+	}
 }

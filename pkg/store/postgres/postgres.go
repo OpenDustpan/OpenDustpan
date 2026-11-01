@@ -96,6 +96,17 @@ type Store struct {
 	// tracer, when set, sees every statement, batch, prepare and copy of the
 	// pool. Nil in production.
 	tracer pgx.QueryTracer
+	// failover holds the effective failover settings of the pool.
+	failover FailoverSettings
+	// guard resets the pool when it holds a connection to a server that
+	// refuses writes.
+	guard *poolGuard
+	// marks holds the connections of the long paths, which the pool resets
+	// at their release.
+	marks *longMarks
+	// reads runs the short catalog reads of the backup and restore code with
+	// the bounds of the API paths.
+	reads guardedDB
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -165,40 +176,49 @@ func liveSchemaName(searchPath string) string {
 	return "public"
 }
 
-// poolConfig parses the database URL into the pool configuration. It reads
-// the pool and failover settings of the URL (target_session_attrs,
-// pool_max_conn_lifetime, pool_health_check_period and the other pgxpool
-// settings) and keeps them as they are. It sets only the search path of each
-// new connection.
-func poolConfig(url string) (*pgxpool.Config, error) {
+// poolConfig parses the database URL into the pool configuration. It checks
+// the failover settings of the URL against their allowlist and sets the
+// default of each setting that the URL does not name (see
+// readFailoverSettings). It also sets the search path of each new connection.
+// The other pgxpool settings of the URL stay as the URL gives them.
+func poolConfig(url string) (*pgxpool.Config, FailoverSettings, error) {
+	plan, err := readFailoverSettings(url)
+	if err != nil {
+		return nil, FailoverSettings{}, fmt.Errorf("open postgres pool: %w", err)
+	}
+
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres pool: %w", err)
+		return nil, FailoverSettings{}, fmt.Errorf("open postgres pool: %w", err)
 	}
+
+	plan.apply(cfg)
 
 	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
 
 	// Defense in depth: pgIdent still doubles the quotes of this name, so a
 	// name that this check misses still cannot end the quoted identifier.
 	if identErr := checkIdent(live); identErr != nil {
-		return nil, fmt.Errorf("open postgres store: schema %q of the search path: %w", live, identErr)
+		return nil, FailoverSettings{}, fmt.Errorf(
+			"open postgres store: schema %q of the search path: %w",
+			live,
+			identErr,
+		)
 	}
 
+	// The search path and the server timeouts are start-up parameters, not
+	// a SET after the connect: RESET ALL then goes back to them, so the reset
+	// of a released long-path connection keeps them.
 	ctl := live + "_control"
-	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
-			return fmt.Errorf("set postgres search path: %w", execErr)
-		}
+	cfg.ConnConfig.RuntimeParams["search_path"] = pgIdent(live) + ", " + pgIdent(ctl)
+	maps.Copy(cfg.ConnConfig.RuntimeParams, serverTimeoutParams())
 
-		return nil
-	}
-
-	return cfg, nil
+	return cfg, plan.report, nil
 }
 
 // Open connects to the database at url and migrates it.
 func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
-	cfg, err := poolConfig(url)
+	cfg, failover, err := poolConfig(url)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +227,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool:                nil,
-		txs:                 guardedPool{pool: nil},
+		txs:                 guardedPool{pool: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
 		queries:             nil,
 		stagingMu:           sync.Mutex{},
 		stagingSchema:       "",
@@ -222,6 +242,10 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		noMigrate:           false,
 		logger:              slog.New(slog.DiscardHandler),
 		tracer:              nil,
+		failover:            failover,
+		guard:               nil,
+		marks:               newLongMarks(),
+		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
 	}
 
 	for _, opt := range opts {
@@ -231,6 +255,9 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	if s.tracer != nil {
 		cfg.ConnConfig.Tracer = s.tracer
 	}
+
+	cfg.AfterRelease = s.marks.afterRelease
+	cfg.BeforeClose = s.marks.beforeClose
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -244,11 +271,16 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	}
 
 	s.pool = pool
-	s.txs = guardedPool{pool: pool}
-	s.queries = db.New(guardedDB{inner: pool})
+	s.guard = newPoolGuard(pool, s.logger)
+	s.txs = guardedPool{pool: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
+	s.reads = guardedDB{inner: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
+	s.queries = db.New(s.reads)
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	if err := s.migrate(ctx); err != nil {
+		// A read-only check can start during the migration: close the guard
+		// first, so it does not outlive Open.
+		s.guard.close()
 		pool.Close()
 
 		return nil, err
@@ -278,6 +310,7 @@ func (s *Store) CloseContext(ctx context.Context) {
 		_ = s.dropStagingSchema(context.WithoutCancel(ctx), staging) //nolint:errcheck // Best-effort cleanup.
 	}
 
+	s.guard.close()
 	s.pool.Close()
 }
 
@@ -289,6 +322,30 @@ func (s *Store) Ping(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// CheckWritable reports whether the database accepts writes. It reads
+// pg_is_in_recovery() and transaction_read_only on one connection of the
+// pool. It returns false for a server that refuses writes, and then resets the
+// pool, at most once in each resetInterval. It returns an error that wraps
+// namespace.ErrUnavailable, with no driver text, when the check cannot run.
+func (s *Store) CheckWritable(ctx context.Context) (bool, error) {
+	return s.guard.checkWritable(ctx)
+}
+
+// FailoverSettings returns the effective failover settings of the pool. They
+// hold no part of the URL besides the values of the settings.
+func (s *Store) FailoverSettings() FailoverSettings {
+	out := s.failover
+	out.Settings = slices.Clone(s.failover.Settings)
+
+	return out
+}
+
+// PoolResets returns how many times the store reset its pool because a
+// connection reached a server that refuses writes.
+func (s *Store) PoolResets() uint64 {
+	return s.guard.resets.Load()
 }
 
 // CreateNamespace implements namespace.Store.
@@ -1233,13 +1290,25 @@ func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q
 	})
 }
 
+// migrationDeadline bounds each round trip of the migration transaction. It
+// replaces the statement deadline of the API paths there: the first round
+// trip waits for the migration lock while another instance migrates, and a
+// migration of a large table can run for minutes.
+const migrationDeadline = 15 * time.Minute
+
 func (s *Store) migrate(ctx context.Context) error {
 	all, err := migrate.Load(migrations, "migrations")
 	if err != nil {
 		return err
 	}
 
-	err = pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
+	starter := guardedPool{pool: s.pool, rt: roundTrip{deadline: migrationDeadline, watch: s.guard, readOnlyTx: false}}
+
+	err = pgx.BeginFunc(ctx, starter, func(tx pgx.Tx) error {
+		if boundErr := setLocalBounds(ctx, tx, migrationBound()); boundErr != nil {
+			return boundErr
+		}
+
 		return migrateTx(
 			ctx,
 			tx,

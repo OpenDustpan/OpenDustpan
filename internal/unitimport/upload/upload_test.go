@@ -508,6 +508,141 @@ func TestPutAfterALostResponseKeepsTheBody(t *testing.T) {
 	}
 }
 
+// countingStore counts the writes to each key.
+type countingStore struct {
+	blob.Store
+
+	mu   sync.Mutex
+	puts map[string]int
+}
+
+func (c *countingStore) Put(ctx context.Context, k blob.Key, r io.Reader) error {
+	c.mu.Lock()
+	c.puts[k.String()]++
+	c.mu.Unlock()
+
+	return c.Store.Put(ctx, k, r)
+}
+
+// failFactsOnce fails the first write of a facts file, and passes every other
+// write. A facts file is a key that ends in .json and is not the unit file.
+type failFactsOnce struct {
+	blob.Store
+
+	failed atomic.Bool
+}
+
+var errFactsDown = errors.New("facts write failed")
+
+func (f *failFactsOnce) Put(ctx context.Context, k blob.Key, r io.Reader) error {
+	name := k.String()
+	if strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, "/unit.json") &&
+		f.failed.CompareAndSwap(false, true) {
+		return errFactsDown
+	}
+
+	return f.Store.Put(ctx, k, r)
+}
+
+// TestPutOfTheFirstVersionAfterAFailedAttempt proves that a failed first
+// attempt does not lose the unit file: the retry of sequence 1 makes the unit
+// file, and the versions after it write it never.
+func TestPutOfTheFirstVersionAfterAFailedAttempt(t *testing.T) {
+	t.Parallel()
+
+	inner, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	counted := &countingStore{
+		Store: &failFactsOnce{Store: inner, failed: atomic.Bool{}},
+		mu:    sync.Mutex{},
+		puts:  map[string]int{},
+	}
+
+	s, err := upload.New(counted, commitsFor(newCommits()), prefix, maxBytes, clock)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	_, putErr := s.Put(t.Context(), unit(), 1, claims(1), bytes.NewReader([]byte("body")))
+	if !errors.Is(putErr, errFactsDown) {
+		t.Fatalf("first attempt: err = %v, want the facts write error", putErr)
+	}
+
+	put(t, s, unit(), 1, []byte("body"))
+
+	unitWrites := func() int {
+		counted.mu.Lock()
+		defer counted.mu.Unlock()
+
+		n := 0
+
+		for k, c := range counted.puts {
+			if strings.HasSuffix(k, "/unit.json") {
+				n += c
+			}
+		}
+
+		return n
+	}
+
+	afterFirst := unitWrites()
+	if afterFirst < 1 {
+		t.Fatalf("unit file writes after the first version = %d, want 1 or more", afterFirst)
+	}
+
+	put(t, s, unit(), 2, []byte("body"))
+	put(t, s, unit(), 3, []byte("body"))
+
+	if got := unitWrites(); got != afterFirst {
+		t.Errorf("unit file writes after three versions = %d, want %d", got, afterFirst)
+	}
+
+	if _, err := s.Head(t.Context(), unitimport.Credential{}, unit()); err != nil {
+		t.Errorf("head: %v", err)
+	}
+}
+
+func TestPutWritesTheUnitFileOnce(t *testing.T) {
+	t.Parallel()
+
+	inner, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	counted := &countingStore{Store: inner, mu: sync.Mutex{}, puts: map[string]int{}}
+
+	s, err := upload.New(counted, commitsFor(newCommits()), prefix, maxBytes, clock)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	for _, seq := range []int{1, 2, 3} {
+		put(t, s, unit(), seq, []byte("body"))
+	}
+
+	unitKeys := 0
+
+	for k, n := range counted.puts {
+		if !strings.HasSuffix(k, "/unit.json") {
+			continue
+		}
+
+		unitKeys++
+
+		if n != 1 {
+			t.Errorf("writes to %s = %d, want 1", k, n)
+		}
+	}
+
+	if unitKeys != 1 {
+		t.Errorf("unit files written = %d, want 1", unitKeys)
+	}
+}
+
 func TestPutAfterAnUnknownCommitErrorKeepsTheFiles(t *testing.T) {
 	t.Parallel()
 

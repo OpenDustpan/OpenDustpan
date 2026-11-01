@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-11. Decisions 3 and 4 superseded by ADR 281
 
+Changed by:
+
+- ADR 35 changes decision 1: the package path of the S3 adapter.
+- ADR 221 extends decision 1: no bucket for each namespace.
+- ADR 281 supersedes decisions 3 and 4: write-once by the store and the
+  open-time probe.
+- ADR 281 changes decision 7: the blobtest case of one winner for a parallel
+  put.
+
 ## Context
 
 [RFC 32](../rfc/0032-object-storage.md) asks for object storage adapters. The

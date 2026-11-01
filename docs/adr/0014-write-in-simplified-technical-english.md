@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-10
 
+Changed by:
+
+- ADR 214 extends: docs-lint also checks guides, reference and explanations.
+- ADR 251 extends: the words that copy uses.
+
 ## Context
 
 Agents write most of the prose in this repository: documentation, ADRs, error

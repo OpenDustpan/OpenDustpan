@@ -126,7 +126,7 @@ func (s *Store) stripSchema(
 
 	var report backup.DevStripReport
 
-	err := inBackupTx(ctx, s.pool, readWriteOpts(), func(tx pgx.Tx) error {
+	err := s.inLongTx(ctx, backupBound(), readWriteOpts(), func(tx pgx.Tx) error {
 		if _, err := setSearchPath(ctx, tx, staging); err != nil {
 			return err
 		}

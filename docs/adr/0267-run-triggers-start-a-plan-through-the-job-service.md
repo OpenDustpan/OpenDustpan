@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-20. Records decisions 24.1, 24.3 and 6.1 of the owner, and the scope and the acceptance criteria that the owner wrote in issue 909. Decisions 9 to 23 are decided by the product manager under the owner's delegation of 20 October 2026. Accepts RFC 24 and answers its questions 1 to 12. Uses ADR 153 decisions 2 and 5, ADR 213 decision 1, ADR 258 decision 3 and ADR 263 decisions 14 and 15. Decision 1 of ADR 213 extended by decision 14
 
+Changed by:
+
+- ADR 307 extends decision 8: the TFE-compatible view of run triggers.
+- ADR 273 changes decision 14: the last saver needs unit:read-outputs.
+- ADR 299 changes decisions 14 and 19: one credential rule for every start of
+  a plan.
+
 ## Context
 
 [RFC 24](../rfc/0024-run-triggers-and-orchestration.md) proposes that runs

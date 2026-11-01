@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-14. The `server:` action names superseded in part by ADR 210. The operator or namespace scope of each installation action given by ADR 216
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 216 changes: the operator or namespace scope of installation actions.
+
 ## Context
 
 [ADR 60](0060-audit-log-port-and-log-sinks.md) decision 7 adds the action

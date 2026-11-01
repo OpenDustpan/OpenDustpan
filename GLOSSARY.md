@@ -234,7 +234,7 @@ The credentials that let the server use one forge for a namespace. With them, th
 _Avoid_: VCS integration, VCS provider, app (alone)
 
 **Review request**:
-A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. OpenDustpan approvals add to the approvals of the review request. They never replace them (ADR 103).
+A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. One change order carries each review request. The review mode of its units decides which approvals count and who merges (ADR 299).
 _Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
 
 **Forge capability**:
@@ -250,8 +250,36 @@ A signed request that a forge sends to the server: a push, a change of a review 
 _Avoid_: Webhook (that is the setting on the forge, or a sink of notifications), callback, hook (alone)
 
 **Comment command**:
-A command that a person writes in a comment of a review request, for example `plan`, `dustpan apply` or `unlock` (RFC 27). The commands include a command that starts a plan or shows a status. `dustpan apply` applies the plan of the current head, and refuses when the head moved since the plan. A comment command never approves a change.
+A command that a person writes in a comment of a review request, for example `dustpan plan`, `dustpan apply`, `dustpan unlock` or the redact command (RFC 27, ADR 299). The server reacts to each received command with an emoji that the installation sets, and answers it with a reply comment. `dustpan apply` applies the plan of the current head, and refuses when the head moved since the plan. A comment command never approves a change, and credentials never follow a comment alone.
 _Avoid_: Chat command, slash command, bot command
+
+**Review mode**:
+The setting of a unit that says where people review a change of the unit and who merges (ADR 299). Its values are merged approvals, OpenDustpan merges, no review requests, and no change orders. It has no default. It cascades from the installation to the namespace, the collection and the unit, and a level can force a value. A review request that touches units with different modes uses the strictest mode.
+_Avoid_: Review place, integration mode, workflow
+
+**Binding level**:
+What an approval binds to (ADR 299): L0 the commit, L1 the set of operations, L2 the exact plan. The default is L1. Each level resets on what it binds to. A parent scope can forbid weaker levels below it.
+_Avoid_: Approval level, signature carry-over (the code deletes that setting)
+
+**Set of operations**:
+The resource addresses of a plan of one unit, each with its kind of change (ADR 299). A kind is create, update, delete, or one of the two orders of a replace. Each approval records the set of operations of the revision that the approver saw.
+_Avoid_: Change set, operation list
+
+**Approval floor**:
+A rule of every binding level (ADR 299). A new delete, a new replace or any operation that no approval holds stops the apply. The apply then needs a new approval with a fresh authentication.
+_Avoid_: Minimum approval, safety net
+
+**Plan conflict**:
+Two plans whose changed resources and dependency closures the server cannot prove disjoint (ADR 299). It keeps the status of the later change order red. It replaces unit locks for review requests. An eligible approver can accept an overlap, with a reason.
+_Avoid_: Lock conflict, merge conflict (that is of the code)
+
+**Declared paths**:
+The paths of a unit that a person declares in addition to the file closure that the server computes (ADR 299). They only add files. A unit whose closure is unknown stays pending until a person records an acceptance.
+_Avoid_: Watch paths, trigger paths
+
+**Plan comment**:
+The one comment of the server on a review request, with a summary of the plan and a link (ADR 299). The server edits it in place. By default it holds counts and resource addresses, never a value. The full diff is opt-in.
+_Avoid_: Summary comment, plan output
 
 **Sensitive setting**:
 A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
@@ -445,11 +473,43 @@ The step in which a sign-in method, such as an identity provider, proves who a p
 _Avoid_: Login, log-in (as a noun). The verb is "sign in".
 
 **Session**:
-The proof of a sign-in that the console sends back in a cookie. A session belongs to one person. It ends at a sign-out, when an administrator ends it, after a period with no use, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
-_Avoid_: Login, cookie (the cookie only carries the session)
+The proof of a sign-in that the console holds in two sealed cookies: the access cookie and the refresh cookie (ADR 297). The server keeps no record of a session. A session belongs to one person. It ends at a sign-out in that browser and at a bump of the session generation of the person. It also ends after a period with no refresh, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
+_Avoid_: Login, cookie (the cookies only carry the session), session record (none exists)
+
+**Access cookie**:
+The sealed cookie `__Host-dustpan_access` that authenticates each request of a session. It lives for at most 5 minutes. It holds the principal, the sign-in ID and the deadlines of the session. It also holds the session generation, the restriction, and the time of the sign-in, of the last MFA step and of the last fresh authentication. The thumbprint of the refresh key and the CSRF value are in it too (ADR 297).
+_Avoid_: Session cookie, JWT, bearer token
+
+**Refresh cookie**:
+The sealed cookie `__Secure-dustpan_refresh` that only the refresh route and the sign-out route open. With a refresh proof, it makes a new access cookie and a new refresh cookie. At a sign-out, it ends the runs of its sign-in. It does nothing else (ADR 297).
+_Avoid_: Refresh token (for the cookie of a session), remember-me cookie
+
+**Refresh key**:
+The ECDSA P-256 key pair that the console makes with WebCrypto at a sign-in. The private key is non-extractable. The refresh cookie holds the thumbprint of the public key (ADR 297).
+_Avoid_: Device key, session key (a session key seals cookies)
+
+**Refresh proof**:
+The signed statement, in the shape of a DPoP proof (RFC 9449), that the console sends with each refresh. It names the method, the URL, the time and a server nonce, and the refresh key signs it. The server accepts it for 30 seconds from the time of the nonce, and keeps no list of used proofs (ADR 297).
+_Avoid_: DPoP token, signature (alone)
+
+**Sign-in ID**:
+The random ID, with the prefix `sin-`, that names one sign-in. The cookies of the session and each audit entry of the session carry it. It binds step-up challenges, WebAuthn ceremonies, runs of Dusty and break-glass reviews. It cannot authenticate a request (ADR 297).
+_Avoid_: Session ID
+
+**Session generation**:
+A count, one for each principal, that starts at 1. Each cookie of a session carries the generation that its issue read, and works only while it equals the stored count. A sign-out everywhere and an end of the sessions by an administrator add 1 to it. A disable and a change of a password or a factor do the same (ADR 297).
+_Avoid_: Valid-after time, revocation list, token epoch
+
+**Server nonce**:
+A value that the session keys seal: the time of the server and random bits. A refresh proof carries one, and the server measures the window of the proof from its time, not from the clock of the browser. The server stores no nonce (ADR 297).
+_Avoid_: DPoP nonce (in code, `DPoP-Nonce` is the header name only)
+
+**Session key**:
+A random 256-bit key version, with the prefix `sk-`, that seals the cookies of sessions. The key-encryption key wraps each version. A backup holds none, so a restore makes new session keys and ends every session (ADR 297).
+_Avoid_: Cookie secret, signing key
 
 **Session policy**:
-The administrator settings of the console sessions for the installation: the period with no use after which a session ends, and its maximum length. Only a site administrator can change them.
+The administrator settings of the console sessions for the installation. They are the period with no refresh after which a session ends, the maximum length and the rotation period of the session keys. Only a site administrator can change them.
 
 **Local user**:
 A person principal that signs in to the console with no identity provider. It signs in with a user name and a password, with a passkey, or with both. One local user record and the passkeys of the person name the same principal, so both credentials sign in the same person. The provider of its sessions is `local`.
@@ -1099,7 +1159,7 @@ The setting that lets a signature of a change order carry over to a new plan rev
 _Avoid_: Sticky approval, stale approval
 
 **Fresh authentication**:
-A built-in MFA step or a new authentication at the SSO identity provider, no older than the window `freshAuthSeconds` (ADR 227). The default window is 900 seconds. A window of 0 asks for a fresh authentication at each step. A namespace or an approval rule can only set a shorter window.
+A built-in MFA step, or a new authentication at the SSO identity provider. It is no older than the window `freshAuthSeconds` (ADR 227). A person can sign in with a plain OAuth 2.0 provider or a trusted header. For that person, it is a passkey, a TOTP code or an SSH signature. The person enrolled it with OpenDustpan (ADR 301). The step belongs to one session. A recovery code never gives it. The default window is 900 seconds. A window of 0 asks for a fresh authentication at each step. A namespace or an approval rule can only set a shorter window.
 _Avoid_: Token freshness, re-auth, step-up (alone)
 
 ### Change orders

@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-11. Probe paths superseded by ADR 34. Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 34 changes decisions 3 and 8: the probe paths.
+- ADR 60 changes decisions 1 and 6: OTLP logs and the request log to sinks.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 [RFC 34](../rfc/0034-server-observability.md) asks how an operator watches an

@@ -302,9 +302,9 @@ type settings struct {
 	// trustRules keeps the workload trust rules of each namespace, or nil
 	// without them. See WithTrustRules.
 	trustRules trustRuleSettings
-	// jobClaimer claims the phases of runner jobs for the runners of the
-	// protocol, or is nil. See WithJobClaimer.
-	jobClaimer job.Claimer
+	// jobClaimer builds the claimer of the phases of runner jobs for the
+	// runners of the protocol, or is nil. See WithJobClaimer.
+	jobClaimer JobClaimerFunc
 	// components are the components this process runs. See WithComponents.
 	components Components
 	// operationLease is the lease period of a claim on a durable operation,
@@ -1513,6 +1513,12 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		minimum = checker
 	}
 
+	// A store without the write check leaves writable nil: the probe skips it.
+	var writable writeChecker
+	if checker, ok := cfg.namespaceStore.(writeChecker); ok {
+		writable = checker
+	}
+
 	return newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		store:       cfg.namespaceStore,
@@ -1520,6 +1526,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		watch:       cfg.watch,
 		chainAdmits: admits,
 		minimum:     minimum,
+		writable:    writable,
 		timeout:     readinessTimeout,
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
@@ -1549,6 +1556,7 @@ func newTofuHTTPHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
+		StateGuard:    tofuHTTPGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -2907,7 +2915,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,
 		},
-		ReadScope:     deletedReadScope{authz: cfg.authorizer},
+		ReadScope:     newDeletedReadScope(cfg.authorizer, svc.collections),
 		Collections:   svc.collections,
 		Placements:    svc.placements,
 		Locks:         svc.manualLocks,

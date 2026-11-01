@@ -1323,13 +1323,14 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
     OR (CAST(?8 AS TEXT) <> '' AND g.namespace = CAST(?8 AS TEXT)
       AND g.object_kind <> 'installation')
     OR g.target = CAST(?9 AS TEXT)
-    OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
-      AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+    OR g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
+    OR (g.target IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+      AND (g.role IN (SELECT value FROM json_each(CAST(?12 AS TEXT)))
         OR (CAST(?3 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
-    OR (CAST(?12 AS TEXT) <> '' AND g.target = CAST(?12 AS TEXT)
-      AND (g.role IN (SELECT value FROM json_each(CAST(?13 AS TEXT)))
+    OR (CAST(?13 AS TEXT) <> '' AND g.target = CAST(?13 AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(?14 AS TEXT)))
         OR (CAST(?3 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND (CAST(?14 AS TEXT) = '' OR g.subject = CAST(?14 AS TEXT)
+  AND (CAST(?15 AS TEXT) = '' OR g.subject = CAST(?15 AS TEXT)
     OR (CAST(?1 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
     g.created_at_ms < CAST(?4 AS INTEGER)
@@ -1347,6 +1348,7 @@ type CountReviewGrantsParams struct {
 	AllGrants           bool
 	Namespace           string
 	Target              string
+	InsideTargets       string
 	Containers          string
 	ContainerRoles      string
 	TokenNamespace      string
@@ -1365,6 +1367,7 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 		arg.AllGrants,
 		arg.Namespace,
 		arg.Target,
+		arg.InsideTargets,
 		arg.Containers,
 		arg.ContainerRoles,
 		arg.TokenNamespace,
@@ -11290,6 +11293,48 @@ func (q *Queries) ListCatalogBlueprintLatest(ctx context.Context, namespace stri
 	return items, nil
 }
 
+const listCollectionUnitIDs = `-- name: ListCollectionUnitIDs :many
+SELECT m.unit_id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE c.namespace = ? AND c.name_key = ? AND c.id = ?
+ORDER BY m.unit_id
+`
+
+type ListCollectionUnitIDsParams struct {
+	Namespace string
+	NameKey   string
+	ID        string
+}
+
+// The stable IDs of the units in one collection, ordered. The membership of a
+// unit that was deleted stays until the collection is deleted, so these units
+// are in the list too. The collection is selected by its namespace, its name
+// and its stable ID together: a collection that was deleted and created again
+// under the same name has another ID and gives nothing.
+func (q *Queries) ListCollectionUnitIDs(ctx context.Context, arg ListCollectionUnitIDsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listCollectionUnitIDs, arg.Namespace, arg.NameKey, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var unit_id string
+		if err := rows.Scan(&unit_id); err != nil {
+			return nil, err
+		}
+		items = append(items, unit_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCollections = `-- name: ListCollections :many
 SELECT id, namespace, name, created_at_ms
 FROM collections
@@ -17448,27 +17493,28 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
     OR (CAST(?8 AS TEXT) <> '' AND g.namespace = CAST(?8 AS TEXT)
       AND g.object_kind <> 'installation')
     OR g.target = CAST(?9 AS TEXT)
-    OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
-      AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+    OR g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
+    OR (g.target IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+      AND (g.role IN (SELECT value FROM json_each(CAST(?12 AS TEXT)))
         OR (CAST(?4 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
-    OR (CAST(?12 AS TEXT) <> '' AND g.target = CAST(?12 AS TEXT)
-      AND (g.role IN (SELECT value FROM json_each(CAST(?13 AS TEXT)))
+    OR (CAST(?13 AS TEXT) <> '' AND g.target = CAST(?13 AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(?14 AS TEXT)))
         OR (CAST(?4 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND (CAST(?14 AS TEXT) = '' OR g.subject = CAST(?14 AS TEXT)
+  AND (CAST(?15 AS TEXT) = '' OR g.subject = CAST(?15 AS TEXT)
     OR (CAST(?2 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
     g.created_at_ms < CAST(?5 AS INTEGER)
     AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
   ELSE g.created_at_ms <= CAST(?1 AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER) END
-  AND (g.created_at_ms > CAST(?15 AS INTEGER)
-    OR (g.created_at_ms = CAST(?15 AS INTEGER)
-      AND (g.id > CAST(?16 AS TEXT)
-        OR (g.id = CAST(?16 AS TEXT)
-          AND (COALESCE(m.added_at_ms, 0) > CAST(?17 AS INTEGER)
-            OR (COALESCE(m.added_at_ms, 0) = CAST(?17 AS INTEGER)
-              AND COALESCE(m.principal_id, '') > CAST(?18 AS TEXT)))))))
+  AND (g.created_at_ms > CAST(?16 AS INTEGER)
+    OR (g.created_at_ms = CAST(?16 AS INTEGER)
+      AND (g.id > CAST(?17 AS TEXT)
+        OR (g.id = CAST(?17 AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(?18 AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(?18 AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(?19 AS TEXT)))))))
 ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
-LIMIT ?19
+LIMIT ?20
 `
 
 type ReviewGrantsParams struct {
@@ -17481,6 +17527,7 @@ type ReviewGrantsParams struct {
 	AllGrants           bool
 	Namespace           string
 	Target              string
+	InsideTargets       string
 	Containers          string
 	ContainerRoles      string
 	TokenNamespace      string
@@ -17532,6 +17579,7 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 		arg.AllGrants,
 		arg.Namespace,
 		arg.Target,
+		arg.InsideTargets,
 		arg.Containers,
 		arg.ContainerRoles,
 		arg.TokenNamespace,

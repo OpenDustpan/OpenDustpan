@@ -30,7 +30,7 @@ func (s *Store) ExportPortable(
 
 	// The export reads every table in one snapshot, so it takes the swap lock
 	// before the snapshot like every other snapshot read.
-	err := inBackupTx(ctx, s.pool, s.snapshotOptions(), func(tx pgx.Tx) error {
+	err := s.inLongTx(ctx, backupBound(), s.snapshotOptions(), func(tx pgx.Tx) error {
 		var counts map[string]int64
 
 		var err error

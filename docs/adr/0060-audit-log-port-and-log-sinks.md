@@ -2,6 +2,25 @@
 
 Status: accepted · 2026-10-13. The optional hash fields of decision 5 superseded by ADR 72. Route paths and `server:` action names superseded in part by ADR 210. Decision 4 superseded in part by ADR 240
 
+Changed by:
+
+- ADR 63 extends decision 5: an optional field for changed setting keys.
+- ADR 64 supersedes decision 19: an installation with chained entries keeps
+  the chain on.
+- ADR 64 changes decision 17: the default of the chain and how a change of it
+  works.
+- ADR 64 extends decision 5: the optional hash field fence_version.
+- ADR 65 changes decision 7: which administrator holds server:read-audit.
+- ADR 68 extends decision 21: retention of audit entries, forever by default.
+- ADR 72 changes decision 5: a new field is optional in the hash encoding.
+- ADR 126 changes decision 3: plain reads of agents write an entry.
+- ADR 126 extends decisions 4, 5, 8 and 9: the agent-tool kind, agent fields,
+  channel filters and CEF keys.
+- ADR 151 extends decision 5: the audit entry gets the field reason.
+- ADR 210 changes decision 8: route paths, action names, query times and
+  paging.
+- ADR 240 changes decision 4: the download route writes one of two kinds.
+
 ## Context
 
 [RFC 22](../rfc/0022-audit-log.md) asks for one audit log for every action

@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-18 · ADRs 191 to 198 give the parts · supersedes parts of ADRs 100, 102, 103, 128 and 147. Decisions 6 and 7 superseded in part by ADR 225
 
+Changed by:
+
+- ADR 222 changes decisions 6 and 7: approval defaults replace MinApprovals.
+- ADR 225 changes decisions 6 and 7: approval defaults replace MinApprovals.
+- ADR 299 changes decisions 4, 9, 10, 12 and 14: authors, the apply after a
+  merge, and review requests.
+- ADR 300 changes decision 10: a merge queue entry is a request to apply, and the account that queued it is the requester.
+
 ## Context
 
 The job model (ADRs 100 to 103) puts approvals on the gates of one job, and

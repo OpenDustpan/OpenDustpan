@@ -510,6 +510,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)
@@ -762,6 +763,8 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("collection service: %v", err)
 	}
 
+	placements := coveragePlacements(tb)
+
 	locks, err := manuallock.NewService(manuallock.Config{
 		Store:      coverageLockStore{},
 		Namespaces: coverageNamespaceStore{},
@@ -791,7 +794,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Placements:    nil,
+		Placements:    placements,
 		OutputSharing: sharing,
 		Outputs:       outputs,
 		Views:         coverageViews(tb),
@@ -1336,8 +1339,66 @@ func (coverageCollectionStore) SetUnitCollection(
 	return nil
 }
 
+func (coverageCollectionStore) ListCollectionUnitIDs(_ context.Context, _ collection.Ref, _ string) ([]string, error) {
+	return nil, nil
+}
+
 func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.UnitRef) (collection.Ref, error) {
 	return collection.Ref{Namespace: "", Name: ""}, nil
+}
+
+// coveragePlacements returns a placement rule service over the stub store. It
+// exists only so that the inventory handler serves the placement rule routes in
+// the route table.
+func coveragePlacements(tb testing.TB) *collection.PlacementService {
+	tb.Helper()
+
+	placements, err := collection.NewPlacementService(collection.PlacementConfig{
+		Store:      coveragePlacementStore{},
+		Namespaces: coverageNamespaceStore{},
+		Now:        nil,
+	})
+	if err != nil {
+		tb.Fatalf("placement service: %v", err)
+	}
+
+	return placements
+}
+
+// coveragePlacementStore holds no placement rule. It exists only so that the
+// inventory handler serves its placement rule routes in the route table; no
+// request is ever served.
+type coveragePlacementStore struct{}
+
+func (coveragePlacementStore) CreatePlacementRule(
+	_ context.Context, _ collection.Rule, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coveragePlacementStore) UpdatePlacementRule(
+	_ context.Context, _ collection.Rule, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coveragePlacementStore) DeletePlacementRule(
+	_ context.Context, _ namespace.Name, _ string, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coveragePlacementStore) GetPlacementRule(
+	_ context.Context, _ namespace.Name, _ string,
+) (collection.Rule, error) {
+	return collection.Rule{
+		CreatedAt: time.Time{}, ID: "", Namespace: "", Tool: "", Project: "", Stack: "", Collection: "",
+		CreatedBy: "", Position: 0,
+	}, nil
+}
+
+func (coveragePlacementStore) ListPlacementRules(_ context.Context, _ namespace.Name) ([]collection.Rule, error) {
+	return nil, nil
 }
 
 // coverageLockStore holds no manual lock. It exists only so that the inventory
@@ -1865,6 +1926,7 @@ func CoverageAllowlist() []AllowEntry {
 		driftAllowEntries(),
 		triggerAllowEntries(),
 		unitSettingsAllowEntries(),
+		placementAllowEntries(),
 		outputSharingAllowEntries(),
 		preferencesAllowEntries(),
 		settingsAllowEntries(),
@@ -3096,6 +3158,27 @@ func unitSettingsAllowEntries() []AllowEntry {
 		RouteRef{Method: http.MethodGet, Path: base + "/settings/unit-defaults"},
 		RouteRef{Method: http.MethodPut, Path: base + "/settings/unit-defaults"},
 		RouteRef{Method: http.MethodPost, Path: base + "/unit-settings/bulk-put"},
+	)
+}
+
+// placementAllowEntries returns the routes of the placement rules of a
+// namespace. No CLI reads or writes a rule: the console and the clients of the
+// API do. The steps of TestPlacementRuleAPI call each of them with the token of
+// a person, and a denial step proves the action that each route needs.
+func placementAllowEntries() []AllowEntry {
+	const (
+		rules = "/api/dustpan/v1/namespaces/{namespace}/placement-rules"
+		one   = rules + "/{rule}"
+	)
+
+	return allowRoutes(
+		"TestPlacementRuleAPI",
+		"Console and client route: no CLI manages placement rules. The steps of TestPlacementRuleAPI call it with the token of a person.",
+		RouteRef{Method: http.MethodGet, Path: rules},
+		RouteRef{Method: http.MethodPost, Path: rules},
+		RouteRef{Method: http.MethodGet, Path: one},
+		RouteRef{Method: http.MethodPut, Path: one},
+		RouteRef{Method: http.MethodDelete, Path: one},
 	)
 }
 

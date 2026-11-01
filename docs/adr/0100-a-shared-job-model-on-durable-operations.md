@@ -2,6 +2,32 @@
 
 Status: accepted · 2026-10-17. An open question superseded by ADR 125. Decision 4 extended by ADR 148, ADR 258 and ADR 263. Decision 17 superseded in part by ADR 128. Decision 4 superseded in part by ADR 190. Decision 20 superseded in part by ADR 213
 
+Changed by:
+
+- ADR 304 changes decision 2: a discovery job is a namespace-scoped job
+  kind with no unit.
+- ADR 304 changes decision 20: the job token of a discovery job is limited to
+  the namespace, with one stored grant.
+- ADR 110 extends decision 17: a Catalog origin on a start request and a
+  precondition port.
+- ADR 125 changes: the open question on what Dusty is.
+- ADR 128 changes decision 17: the agent reference and the credential of
+  job.Actor.
+- ADR 130 extends: answers the open question on the default runner lease.
+- ADR 135 extends decision 5: the source snapshot of the commit of a job.
+- ADR 139 extends decision 5: the job spec records the resolved image digest.
+- ADR 144 changes decision 20: the job token holds job:write-cost.
+- ADR 145 extends: answers the open question on the events of outgoing
+  webhooks.
+- ADR 148 extends decision 4: the `verify` phase kind.
+- ADR 190 changes decision 4: a phase row for an apply job with job.Spec.Plan.
+- ADR 213 changes decision 20: output reads of the job token.
+- ADR 258 extends decision 4: a plan phase for a scheduled refresh job.
+- ADR 263 extends decision 4: the phase table row of drift detection.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+- ADR 299 changes decisions 12 and 15: the `job.review-watch` poll ends.
+
 ## Context
 
 The project owner decided that two executors come in parallel, on one job

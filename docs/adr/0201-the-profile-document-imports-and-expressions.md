@@ -2,6 +2,18 @@
 
 Status: accepted · 2026-10-18 · part of ADR 200. Decisions 4, 8 and 11 superseded in part by ADRs 224 and 228. Decision 5 superseded in part by ADR 226. Decision 7 extended by ADR 241
 
+Changed by:
+
+- ADR 222 changes decisions 4, 8 and 11: profile checks become gates, one Expr
+  package.
+- ADR 224 supersedes decision 11: profile checks become gates.
+- ADR 226 changes decision 5: the typed context facts in a Cedar schema.
+- ADR 228 changes decisions 4 and 8: Expr computes values only with one
+  builtin set.
+- ADR 241 extends decision 7: the login block key sourceHost.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The project owner decided on 18 October 2026 that profiles get complete

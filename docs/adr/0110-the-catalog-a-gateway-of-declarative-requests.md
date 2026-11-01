@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-17. Supersedes parts of RFC 14 and RFC 13 (see "Superseded proposals"). Route paths superseded in part by ADR 210. Decision 9 and item 5 of the changes to the job model superseded by ADR 225
 
+Changed by:
+
+- ADR 305 extends: a resource of the Kubernetes operator that applies a
+  blueprint is a Catalog request.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 218 extends: the open question on blueprints of other namespaces.
+- ADR 222 supersedes decision 9: and item 5 of the changes to the job model.
+- ADR 225 changes decision 9: also item 5 of the changes to the job model.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 [RFC 14](../rfc/0014-blueprints.md) proposes blueprints: a program that a
