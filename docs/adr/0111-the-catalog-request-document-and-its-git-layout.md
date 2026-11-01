@@ -4,6 +4,8 @@ Status: accepted · 2026-10-17. Extended by ADR 213 decisions 7 and 8
 
 Changed by:
 
+- ADR 305 extends: a resource of the Kubernetes operator carries the request
+  document.
 - ADR 213 extends decision 1: many forge connections with one default, sealed
   credentials.
 - ADR 286 changes: the words catalog and promotion become self-service and

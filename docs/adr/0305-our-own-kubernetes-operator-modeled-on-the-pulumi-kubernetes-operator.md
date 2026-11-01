@@ -1,11 +1,15 @@
 # 305. Our own Kubernetes operator, modeled on the Pulumi Kubernetes Operator
 
-Status: accepted · 2026-11-01. Decided by the project owner. Decides the role of the operator in RFC 31 phases 3 and 4. The resource names and the other open points stay in RFC 31
+Status: accepted · 2026-11-01. Decided by the project owner on 2026-11-01 and on 2026-10-18. Decides the role of the operator in RFC 31 phases 3 and 4. The resource names and the other open points stay in RFC 31
 
 Changes:
 
 - Extends ADR 136: the Kubernetes runner of ADR 136 runs the jobs that the
-  operator requests.
+  operator requests, and the operator ships in the chart and the binary of
+  the coordinator.
+- Extends ADR 110: a resource of the operator that applies a blueprint is a
+  Catalog request.
+- Extends ADR 111: that resource carries the request document of the Catalog.
 - Extends ADR 12: the operator is a tool-neutral client with one tool model
   below it for each tool.
 - Extends ADR 17: the operator uses only the REST API.
@@ -38,8 +42,24 @@ On 1 November 2026 the project owner decided this, in these words:
 - "It's primary use case would be for applying blueprints but I don't see why
   individual units couldn't work."
 
+The project owner decided parts of the operator on 18 October 2026. These
+decisions never reached an ADR before this one. The answers to RFC 31
+questions 31.1, 31.6 and 31.8 is this text of the decisions record:
+
+```text
+Operator: after the Catalog ships, sharing the coordinator's chart and
+binary (ADR 136). CRDs are kstatus-compliant from v1 (status.observedGeneration;
+Reconciling, Stalled, Ready conditions), so Flux health checks work as is; a
+generic Argo CD Lua health check lives in our repo and is offered upstream at
+beta. Phase 1 e2e steps now.
+```
+
+The answer to question 42.3 of the same date is: "Kubernetes operators as
+import sources: not now."
+
 The project owner approved every decision of this ADR. The label "(owner)"
-names a decision that these words state.
+names a decision that the words of 1 November 2026 or of 18 October 2026
+state.
 
 The shapes below come from a read of the Pulumi Kubernetes Operator version
 2.10.0: its README, its `docs/migration.md` and its API reference
@@ -54,7 +74,11 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
    The operator has two kinds of resource (owner):
    - The primary resource applies a blueprint. The resource names the
      blueprint and gives its answers. OpenDustpan creates and updates the
-     units of the rollout.
+     unit of the resource. The resource is a Catalog request (ADR 110). It
+     carries the request document of ADR 111, with a blueprint version, the
+     answers to its inputs, and whether the unit is present or absent. The
+     document never holds tool code. One resource asks for one unit
+     (ADR 110 decision 2), so a change to many units is many resources.
    - A second resource declares one unit directly, for a team that does not
      use blueprints. The `Stack` resource of the Pulumi Kubernetes Operator is
      its model (decision 2).
@@ -103,15 +127,19 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
    - A composition has no plan-and-approve step before a change.
 
    A team that uses Crossplane moves to the operator. A tool for this move
-   is a later task. RFC 42 holds the migration questions.
-6. **The place in the order (owner).** The operator comes after runners
-   scoped to namespaces. The order of the owner is: milestones 4 to 6, the
-   wireframes, runners scoped to namespaces, then the backlog. This ADR
-   gives the operator no milestone number. The roadmap lists it as not yet
-   placed in a milestone.
+   is a later task. RFC 42 holds the migration questions. Decision 11 holds
+   for operators as import sources.
+6. **The place in the order (owner).** The operator comes after the Catalog
+   ships (owner, 18 October 2026). The Catalog is the blueprint feature of
+   ADR 110. The current order of the owner (1 November 2026) puts the
+   operator after runners scoped to namespaces. That order is: milestones 4
+   to 6, the wireframes, runners scoped to namespaces, then the backlog. This
+   ADR gives the operator no milestone number. The roadmap lists it as not
+   yet placed in a milestone.
 7. **The open points stay in RFC 31 phases 3 and 4.** This ADR decides none
    of them:
    - The names of the resources and of the API group.
+   - The versions of the resources, and the conditions that fit decision 10.
    - How a resource that applies a blueprint relates to the open questions of
      [RFC 111](../rfc/0111-blueprint-rollouts-and-the-migration-of-answers.md):
      a rollout of a new blueprint version to many requests, and who migrates
@@ -128,9 +156,29 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
    The proposals of RFC 31, for example orphan as the default deletion policy
    (31.10), stay proposals.
 8. **The other rules of RFC 31 stay as proposals.** They are the sign-in per
-   Kubernetes namespace, one home for each value, plan before apply, drift as
-   a scheduled plan, and the repository of the operator. The next ADR about
-   the operator decides each of them.
+   Kubernetes namespace, one home for each value, plan before apply, and
+   drift as a scheduled plan. The next ADR about the operator decides each of
+   them.
+9. **The operator ships with the coordinator (owner, 18 October 2026).** The
+   operator shares the chart and the binary of the Kubernetes coordinator
+   (ADR 136, ADR 139). It has no repository of its own. This answers the
+   open question of ADR 136 and replaces the proposal of RFC 31 for a
+   separate repository. The core server binary does not carry the operator.
+10. **Every resource reports status in the kstatus form (owner, 18 October
+    2026).** From the first version, each resource has `status.observedGeneration`
+    and the conditions `Reconciling`, `Stalled` and `Ready`. So Flux health
+    checks work with no change. A generic Argo CD Lua health check lives in
+    our repository. We offer it upstream when the resource reaches beta. The
+    conditions of RFC 31 (`Planned`, `WaitingForApproval`, `Applied`,
+    `Failed`) are open: they must fit this form.
+11. **Import from other operators is not in scope now (owner, 18 October
+    2026).** A Kubernetes operator is not an import source. This holds for
+    the `Stack` resources of the Pulumi Kubernetes Operator. A team keeps its
+    operator and moves only its state (RFC 31 phase 1), or it declares new
+    resources.
+12. **The phase 1 e2e steps start now (owner, 18 October 2026).** They run
+    the Pulumi Kubernetes Operator, tofu-controller and Burrito against
+    OpenDustpan. This is the test that the interoperation note below needs.
 
 ## Interoperation note
 
@@ -139,8 +187,8 @@ today. The `spec.backend` field of its `Stack` resource takes the URL of a
 self-managed Pulumi Cloud-compatible service. The `spec.envRefs` field can
 give `PULUMI_ACCESS_TOKEN` from a Secret. The ESC environments of that
 operator, and the registration of an OIDC issuer in Pulumi Cloud, do not
-apply to OpenDustpan. This is not tested. RFC 31 phase 1 plans the e2e steps
-that test it. This note decides nothing.
+apply to OpenDustpan. This is not tested. The e2e steps of decision 12 test
+it. This note decides nothing.
 
 ## Consequences
 
@@ -156,8 +204,10 @@ that test it. This note decides nothing.
   before the operator starts (ADR 17).
 - A team that wants Kubernetes resources before the operator exists can use
   phase 1: keep its operator and use OpenDustpan as the backend.
-- The roadmap lists the operator in the table "Later". A later ADR gives it
-  a milestone.
+- The roadmap lists the operator in the table "Later", with the Catalog as
+  the thing it waits on. A later ADR gives it a milestone.
+- The operator needs the Catalog, so it can start only after the blueprint
+  feature of ADR 110 ships.
 
 ## Not decided here
 
