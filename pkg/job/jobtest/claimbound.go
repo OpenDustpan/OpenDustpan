@@ -254,7 +254,13 @@ func testClaimClock(t *testing.T, h Harness) {
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationRefresh, steps: changeSteps()})
 	at := time.Date(2031, time.March, 4, 5, 6, 7, 0, time.UTC)
 
-	c := job.NewClaimer(h.Jobs, h.Durable, h.Namespaces, job.WithClaimerClock(func() time.Time { return at }))
+	c := job.NewClaimer(
+		h.Jobs,
+		h.Durable,
+		h.Namespaces,
+		NoGates{},
+		job.WithClaimerClock(func() time.Time { return at }),
+	)
 
 	if _, err := c.Claim(t.Context(), request(runnerOne, time.Minute, runnerKind(&j))); err != nil {
 		t.Fatalf("Claim = %v", err)
