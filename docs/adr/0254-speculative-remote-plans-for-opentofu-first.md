@@ -5,7 +5,6 @@ Status: accepted · 2026-10-20. Decided by the product manager under the owner's
 Changed by:
 
 - ADR 300 changes decision 6: the log read of OpenTofu uses a signed URL for each job, phase and principal.
-- ADR 307 extends decision 2: the execution mode and agent pool fields are writable.
 
 ## Context
 

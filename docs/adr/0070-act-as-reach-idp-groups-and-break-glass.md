@@ -6,7 +6,7 @@ Changed by:
 
 - ADR 306 extends decision 21: the limit and the window of the mass-suspension alert.
 - ADR 306 extends decision 24: a site admin may disable a break-glass principal.
-- ADR 306 extends decision 25: the time limit of the elevated session.
+- ADR 306 changes decision 25: the time limit of the elevated session, and a disable by a site admin.
 - ADR 142 changes decision 26: the review after use of a break-glass session.
 - ADR 142 extends decision 13: server:review-break-glass is a sensitive
   action.
