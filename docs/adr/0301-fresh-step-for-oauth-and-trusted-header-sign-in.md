@@ -14,6 +14,9 @@ Changes:
 - Extends ADR 227 decision 1: a passkey, TOTP or an SSH signature is a fresh authentication for these two methods.
 - Extends ADR 285 decision 1: the same narrowing of ADR 46 decision 2 for two more methods.
 
+RFC 102 D6 must follow: decision 15 widens the rule for the first SSH key.
+When RFC 102 becomes an ADR, it must adopt decision 15.
+
 ## Context
 
 ADR 227 decision 1 says that a fresh authentication is a built-in MFA step
@@ -66,8 +69,9 @@ November 2026.
 4. **No factor, no fresh step (owner).** A person of these methods who has
    enrolled no factor cannot do a step that needs a fresh authentication.
    The refusal is `403` with the error code `mfa.fresh-step-required`
-   (ADR 227 decision 6). Its text names the enrollment page of passkeys and
-   TOTP. The server does not skip the step. This is the fail-closed rule.
+   (ADR 227 decision 6). Its text names the enrollment page and each way to
+   enroll the first factor: the email code, a key that the Git host lists,
+   and the code of an administrator (decisions 14 and 15). The server does not skip the step. This is the fail-closed rule.
 5. **One code path.** The passkey and TOTP code is the code of the local-user
    MFA, and the SSH code is the code of the CLI step-up. The enrollment, the check, the recovery codes and the audit entries
    are the same.
@@ -84,7 +88,11 @@ November 2026.
    enrollment code again.
 8. **A change of a factor needs a fresh step (PM).** When a person has a
    factor, adding or removing a factor needs a fresh step with a factor
-   that exists.
+   that exists. Adding or revoking an SSH key needs a factor of the key
+   level: a passkey or an existing SSH key. TOTP adds no key. This is the
+   rule of RFC 102 D5. The first SSH key follows decision 15, which widens
+   RFC 102 D6. The fresh step of the console otherwise accepts any of the
+   three factors.
 9. **A recovery code gives no fresh step (PM).** A recovery code lets the
    person enroll one replacement factor, one time, and the server writes an
    audit entry. It never passes a fresh step. Benchmark: GitHub sudo mode
@@ -96,14 +104,15 @@ November 2026.
 11. **The step belongs to one session (PM).** The server records the fresh
     step on the session that did it, and on no other session. It lasts for
     `freshAuthSeconds` or until that session ends. The audit entry of the
-    step names the session. The session model is the model of ADR 297.
+    step names the session. The session model is the model of ADR 297, which is in review in
+    PR #2147 and not on `main` yet.
 12. **Only when MFA is on (PM).** ADR 56 decision 5 holds. On an
     installation with MFA off, the server asks for no fresh step, as for
     every other method. The rules of this ADR apply when MFA is on.
 13. **The refusal names the factor step (PM).** For a person who has a
     factor, the `403` of decision 4 names the factor step. It does not name
     a new sign-in. For a person with no factor, it names the enrollment page
-    (decision 4) and the enrollment code (decision 6).
+    and each way of decision 4.
 
 14. **The enrollment code (PM).** Benchmark: Microsoft Entra Temporary
     Access Pass, with a default life time of 1 hour that an administrator
@@ -118,6 +127,11 @@ November 2026.
       code, list the status of the code and revoke the code. The action is
       `principal:issue-enrollment-code`. The admin role has it by default
       as a stored grant, like each other grant.
+    - An administrator cannot issue a code for their own account. An issue
+      has the checks of an MFA reset (ADR 285 decision 17): a fresh step of
+      the issuer with their own factor, a reason, and a reach that covers
+      the person. Benchmark: separation of duties, as an administrator
+      cannot approve their own access.
     - Each issue, use, revoke and expiry writes an audit entry.
     - A wrong code counts in the factor lock of the person.
 
@@ -125,16 +139,21 @@ November 2026.
     refined decision 6 on 1 November 2026. A stolen session does not hold
     either of these two proofs.
     - **Email code.** The server sends a one-time code to the verified
-      address of the person. It needs the SMTP sender of the installation
+      address of the person. The address comes from the identity provider or
+      the directory, never from the session. A session alone cannot change
+      it. A change needs a fresh step with an existing factor, or an
+      administrator with the checks of an MFA reset. The channel needs the SMTP sender of the installation
       (ADR 212 decision 2). The code is short-lived, works one time and is
       stored only as a hash. A wrong code counts in the factor lock. It
       enrolls a passkey or a TOTP device, or it registers an SSH key with
       the proof of possession of the next item.
     - **An SSH key that the Git host lists.** A person who signed in with
       GitHub can register as an SSH factor a public key that the Git host
-      lists for that account. The server reads the list through the Git host
-      API when the person registers, and only from the Git host that the
-      operator configured. The key must be in that list at that time. The
+      lists for that account. The list is bound to the immutable account ID of
+      the sign-in (for GitHub, the numeric user ID), never to the login. The
+      server reads the list through the API of the Git host of the sign-in
+      provider when the person registers, and never through a forge
+      connection. The key must be in that list at that time. The
       person proves that they hold the private key with a signature of the
       key-add challenge (`ssh-keygen -Y sign`, the key-add namespace of RFC
       102). The server verifies with the key of the list and never with the
@@ -166,19 +185,21 @@ November 2026.
 ## Consequences
 
 - An operator who uses GitHub as a sign-in provider, or a proxy header, can
-  use all steps that need a fresh authentication. Each person gets an
-  enrollment code from an administrator and enrolls one passkey, one TOTP
-  device or one SSH key first.
+  use all steps that need a fresh authentication. Each person enrolls
+  one passkey, one TOTP device or one SSH key first. The first proof is an
+  email code or, for a GitHub sign-in, a key that the Git host lists. An
+  administrator code is the fallback.
 - A person of these two methods who enrolls no factor still signs in, and
   can still do each action that needs no fresh step.
 - The enrollment page must be reachable for a person of these methods. The
-  first enrollment needs the enrollment code, not a fresh step, because the
-  person has no factor yet. Later specs M4-32 and M4-38 depend on this ADR.
+  first enrollment needs one proof of decision 15 or the administrator code
+  of decision 14, not a fresh step, because the person has no factor yet. Later specs M4-32 and M4-38 depend on this ADR.
 - The code of local-user MFA (M4-29 WebAuthn and M4-31 TOTP) is shared. A
   change to it applies to these two methods too.
 - The email code needs the SMTP sender. The SSH factor and the key-add proof
   need the verifier of the signature format (package `internal/sshsig`),
   which the CLI step-up uses too. There is one SSH factor. The step-up ADR
-  of RFC 102 and this ADR must use the same words for it.
+  of RFC 102 and this ADR must use the same words for it. RFC 102 D6 must
+  adopt decision 15 when it becomes an ADR.
 - The enrollment code is a new object. Decision 14 gives its API, its
   action, its life time and its limit.
