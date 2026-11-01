@@ -7,6 +7,7 @@ Changed by:
 - ADR 61 extends decision 5: how a CLI names the collection of a new unit.
 - ADR 248 changes decision 2: a collection has no primary installation of its
   own.
+- ADR 311 extends: the first screen of a namespace.
 
 ## Context
 
