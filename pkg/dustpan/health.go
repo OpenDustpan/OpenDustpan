@@ -60,6 +60,7 @@ const (
 	checkBlob         = "blob"
 	checkClaimLoop    = "claim-loop"
 	checkMinimum      = "binary-minimum"
+	checkReadOnly     = "store-read-only"
 	checkDraining     = "draining"
 	infoAuditChain    = "audit-chain"
 	chainAdmits       = "admits"
@@ -101,7 +102,10 @@ type readinessSettings struct {
 	chainAdmits func(context.Context) bool
 	// minimum checks the binary version against the minimum of the schema, or
 	// is nil for a store without the check.
-	minimum  minimumChecker
+	minimum minimumChecker
+	// writable checks that the database accepts writes, or is nil for a
+	// store without the check.
+	writable writeChecker
 	timeout  time.Duration
 	failures *metrics.Counter
 	logger   *slog.Logger
@@ -147,8 +151,10 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 	if cfg.components.Has(ComponentAPI) {
 		part := componentChecks{
 			name: ComponentAPI,
-			pings: append([]readinessCheck{{name: checkStore, ping: cfg.store}, {name: checkBlob, ping: cfg.blobs}},
-				minimumChecks(cfg.minimum)...),
+			pings: slices.Concat(
+				[]readinessCheck{{name: checkStore, ping: cfg.store}, {name: checkBlob, ping: cfg.blobs}},
+				minimumChecks(cfg.minimum), writableChecks(cfg.writable),
+			),
 			tests: nil,
 			infos: nil,
 		}
@@ -167,8 +173,9 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 
 	if cfg.components.Has(ComponentWorker) {
 		rd.parts = append(rd.parts, componentChecks{
-			name:  ComponentWorker,
-			pings: append([]readinessCheck{{name: checkStore, ping: cfg.store}}, minimumChecks(cfg.minimum)...),
+			name: ComponentWorker,
+			pings: slices.Concat([]readinessCheck{{name: checkStore, ping: cfg.store}},
+				minimumChecks(cfg.minimum), writableChecks(cfg.writable)),
 			tests: []stateCheck{
 				{name: checkClaimLoop, ok: func(context.Context) bool { return cfg.watch.claimLoopRan() }},
 			},
@@ -209,6 +216,46 @@ func minimumChecks(checker minimumChecker) []readinessCheck {
 	}
 
 	return []readinessCheck{{name: checkMinimum, ping: minimumPing{checker: checker}}}
+}
+
+// writeChecker checks that the database accepts writes. It returns false for
+// a server that refuses writes, for example an old primary after a failover,
+// and an error when the check cannot run.
+type writeChecker interface {
+	CheckWritable(ctx context.Context) (bool, error)
+}
+
+// writablePing makes the write check of the database a readiness ping.
+type writablePing struct {
+	checker writeChecker
+}
+
+// errStoreReadOnly is the failure of the write check: the database answers,
+// and it refuses writes.
+var errStoreReadOnly = errors.New("the database refuses writes")
+
+// Ping returns an error only when the database answers that it refuses
+// writes. Such a process cannot write, so the probe answers 503 and a load
+// balancer takes it out of the pool. When the check cannot run, it does not
+// fail: the check of the store already reports that cause, and one cause
+// gives one entry in the failed list.
+func (p writablePing) Ping(ctx context.Context) error {
+	ok, err := p.checker.CheckWritable(ctx)
+	if err == nil && !ok {
+		return errStoreReadOnly
+	}
+
+	return nil
+}
+
+// writableChecks returns the readiness check of writes, or none for a store
+// without the check.
+func writableChecks(checker writeChecker) []readinessCheck {
+	if checker == nil {
+		return nil
+	}
+
+	return []readinessCheck{{name: checkReadOnly, ping: writablePing{checker: checker}}}
 }
 
 // ServeHTTP implements http.Handler.

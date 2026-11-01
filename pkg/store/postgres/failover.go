@@ -90,6 +90,8 @@ type FailoverSettings struct {
 	// ConnectCheck is the check that each new connection passes. It is
 	// ConnectCheckReadWrite for both allowed values of target_session_attrs.
 	ConnectCheck string
+	// StatementDeadline bounds each round trip of the API paths.
+	StatementDeadline time.Duration
 }
 
 // failoverPlan is the result of the check of the failover settings: the
@@ -132,8 +134,9 @@ func readFailoverSettings(raw string) (failoverPlan, error) {
 		jitter:         defaultLifetimeJitter,
 		healthCheck:    defaultHealthCheckPeriod,
 		report: FailoverSettings{
-			Settings:     make([]FailoverSetting, 0, failoverSettingCount),
-			ConnectCheck: ConnectCheckReadWrite,
+			Settings:          make([]FailoverSetting, 0, failoverSettingCount),
+			ConnectCheck:      ConnectCheckReadWrite,
+			StatementDeadline: statementDeadline,
 		},
 	}
 
