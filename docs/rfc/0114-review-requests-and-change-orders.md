@@ -289,7 +289,20 @@ of the code follows in its own pull request.
 - **Bot accounts.** A bot account of the Git host can be linked to a service
   principal that holds a stored, visible and revocable grant of
   `unit:run-plan`. Its review requests then plan with credentials. An approval
-  still needs a person. (The benchmarks: Atlantis and Spacelift give bots their
+  still needs a person.
+  - Only a bot whose pushes no user of the repository controls can be linked:
+    for example the Dependabot app or the Renovate app. The server identifies
+    the bot by the app ID of the Git host, never by its login.
+  - The server refuses to link `github-actions[bot]` or any bot that pushes on
+    the request of a user (a workflow, a comment command, a chat bot). The
+    error says why: "This bot pushes for the users who start it, so its pushes
+    cannot plan with credentials."
+  - For each push by a bot, the credential rule checks the person behind it with
+    the logic of S1. When the Git host cannot tell who is behind the push, the
+    plan runs with no credentials.
+  - A conformance fixture covers a workflow that a contributor changes so that
+    `github-actions[bot]` pushes their code: the plan runs with no
+    credentials. (The benchmarks: Atlantis and Spacelift give bots their
   own identity, and GitHub Actions gives Dependabot runs fewer secrets.)
 - **"Plan with credentials as me".** For a review request from the same
   repository, never from a fork, a trusted person with `unit:run-plan` can
@@ -646,7 +659,11 @@ unit reads a changed file.
 - **Unknown closure.** A unit whose closure the server cannot compute keeps the
   status pending, also with declared paths. A person with `unit:manage`
   can record an acceptance with a reason. The acceptance writes an audit entry,
-  and the unit then shows "closure not proven". The status names the unit and
+  and the unit then shows "closure not proven". The acceptance is recorded one
+  time for each unit. It stays until the closure becomes provable or the
+  declared paths change, and each change of the declared paths voids it. After
+  the acceptance, the declared paths decide "no OpenDustpan unit changed" for
+  that unit. The status names the unit and
   the grant. The wizard shows the count of such units before the person
   confirms.
 - Each change of the declared paths writes an audit entry `change` with the old
