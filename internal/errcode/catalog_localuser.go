@@ -23,6 +23,8 @@ const (
 	LocalUserNameInvalid = "local-user.name-invalid"
 	// LocalUserNotFound means that the person has no local user.
 	LocalUserNotFound = "local-user.not-found"
+	// LocalUserOutsideReach means that the reach of the administrator does not cover the reach of the person.
+	LocalUserOutsideReach = "local-user.outside-reach"
 	// LocalUserOwnAccount means that an administrator cannot reset or remove the own password.
 	LocalUserOwnAccount = "local-user.own-account"
 	// LocalUserPasswordSignInOff means that the password sign-in is off on the installation.
@@ -31,6 +33,8 @@ const (
 	LocalUserReasonRequired = "local-user.reason-required"
 	// LocalUserSecondFactorRequired means that the password sign-in needs a second factor.
 	LocalUserSecondFactorRequired = "local-user.second-factor-required"
+	// LocalUserSessionEnded means that another change ended the session of the change.
+	LocalUserSessionEnded = "local-user.session-ended"
 	// LocalUserSignInFailed means that the user name or the password is wrong.
 	LocalUserSignInFailed = "local-user.sign-in-failed"
 	// LocalUserUnavailable means that the server keeps no local users, or a store of the local users cannot answer.
@@ -63,10 +67,16 @@ func localUserSpecs() []Spec {
 		},
 		{Code: LocalUserNameInvalid, Meaning: "the user name does not match the pattern of a user name", Args: nil},
 		{Code: LocalUserNotFound, Meaning: "the person has no local user", Args: nil},
+		{
+			Code:    LocalUserOutsideReach,
+			Meaning: "the reach of the administrator does not cover the reach of the person",
+			Args:    nil,
+		},
 		{Code: LocalUserOwnAccount, Meaning: "an administrator cannot reset or remove the own password", Args: nil},
 		{Code: LocalUserPasswordSignInOff, Meaning: "the password sign-in is off on the installation", Args: nil},
 		{Code: LocalUserReasonRequired, Meaning: "the change needs a reason", Args: nil},
 		{Code: LocalUserSecondFactorRequired, Meaning: "the password sign-in needs a second factor", Args: nil},
+		{Code: LocalUserSessionEnded, Meaning: "another change ended the session of the change", Args: nil},
 		{Code: LocalUserSignInFailed, Meaning: "the user name or the password is wrong", Args: nil},
 		{
 			Code:    LocalUserUnavailable,
