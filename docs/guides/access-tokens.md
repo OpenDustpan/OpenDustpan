@@ -11,6 +11,10 @@ It shows the secret once, when the token is made or rotated.
 
 The examples use `$TOKEN` for a token and the host `dustpan.example.com`.
 
+A console session is the cookie `__Host-dustpan_session`, and a change sends the
+`X-Dustpan-CSRF` header with it. The console sends both. A script that holds only an
+access token cannot make or rotate a token, or change the token policy.
+
 ## The kinds of token
 
 | Kind | Who holds it | Made by | Routes |
@@ -29,14 +33,14 @@ A token of one kind cannot be used on a route for the other kind. The answer is
 
 A person makes a personal token for itself. The create needs a fresh sign-in
 in the console. A token cannot make another token. The answer is `403` with the
-code `token.requires-sign-in`.
+code `mfa.fresh-step-required`.
 
-```sh
-curl -s -X POST -H "Authorization: Bearer $CONSOLE_SESSION" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"laptop-cli","expiresAt":"2027-06-30T00:00:00Z"}' \
-  https://dustpan.example.com/api/server/caller/tokens
+Make the token in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
+
+```json
+{"name":"laptop-cli","expiresAt":"2027-06-30T00:00:00Z"}
 ```
+
 
 The answer is `201` with the new token and its `secret`. Copy the secret now.
 Later reads show no secret.
@@ -85,24 +89,23 @@ An administrator reads one token with `GET /api/server/tokens/{id}`.
 
 ## Make a service token
 
-A caller with `principal:manage-tokens` on the service principal makes its token:
+A caller with `principal:manage-tokens` on the service principal makes its token in the
+console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the service-token create is:
 
-```sh
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"principalID":"prn-...","name":"ci-deploy","expiresAt":"2027-06-30T00:00:00Z"}' \
-  https://dustpan.example.com/api/server/service-tokens
+```json
+{"principalID":"prn-...","name":"ci-deploy","expiresAt":"2027-06-30T00:00:00Z"}
 ```
+
 
 The principal must be a service principal. For another kind, the answer is `400`.
 Use the same body for the route under the principal, without `principalID`:
 
-```sh
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"ci-deploy"}' \
-  https://dustpan.example.com/api/server/principals/prn-.../tokens
+The principal token create uses the same fresh sign-in. The body is:
+
+```json
+{"name":"ci-deploy"}
 ```
+
 
 Both routes answer `201` with the secret.
 
@@ -125,12 +128,8 @@ A person cannot revoke another person's token on its own routes. The answer is
 
 A rotation makes a new token, and it sets an end time for the old one.
 
-```sh
-curl -s -X POST -H "Authorization: Bearer $CONSOLE_SESSION" \
-  -H "Content-Type: application/json" \
-  -d '{}' \
-  https://dustpan.example.com/api/server/caller/tokens/tok-.../rotate
-```
+Rotate the token in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. Rotation of a service token or a principal token has the same rule.
+
 
 The routes are `POST /api/server/caller/tokens/{id}/rotate` for a personal token,
 `POST /api/server/service-tokens/{id}/rotate` for a service token, and
@@ -217,14 +216,13 @@ The policy has these fields. A `PATCH` takes any subset of them:
 
 The field `disableBreakGlass` is no longer accepted. A value of `true` gets `400`.
 
-Change the policy. The change needs a fresh sign-in:
+Change the policy in the console. The change needs a fresh sign-in, so a stored access token
+gets `403`. The body is:
 
-```sh
-curl -s -X PATCH -H "Authorization: Bearer $CONSOLE_SESSION" \
-  -H "Content-Type: application/json" \
-  -d '{"maxLifetimeSeconds":15552000,"inactivitySeconds":5184000}' \
-  https://dustpan.example.com/api/server/token-policy
+```json
+{"maxLifetimeSeconds":15552000,"inactivitySeconds":5184000}
 ```
+
 
 The server runs the inactivity rule once an hour. To run it now, post to the
 sweep route:
@@ -253,7 +251,7 @@ change is 900 seconds by default. Set the window to `0` to turn the check off.
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `auth.unauthenticated` | `401` | The token is unknown, expired, revoked, disabled or replaced. |
-| `token.requires-sign-in` | `403` | A token cannot make or rotate a token. A fresh console sign-in is needed. |
+| `mfa.fresh-step-required` | `403` | A create or a rotation of a token, or a change of the token policy, needs a fresh console sign-in. An access token gets this answer. |
 | `token.caller-not-person` | `403` | The caller has no person record. |
 | `token.not-found` | `404` | The token is unknown, or it belongs to another person. |
 | `token.ended` | `409` | The token is revoked, replaced or not active. |

@@ -12,6 +12,8 @@ The examples use a token in `$TOKEN` and the host `dustpan.example.com`. The
 caller needs the action that each step names. Each route needs a sign-in, see
 [Access tokens](access-tokens.md) for how to make a token.
 
+A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The group changes below need a fresh sign-in, and each one names the console path.
+
 ## Principal kinds
 
 | Kind | What it is |
@@ -100,7 +102,7 @@ A principal has these fields:
 | `displayName` | The name that people see. |
 | `kind` | `person`, `service` or `workload`. |
 | `source` | Where the principal came from, for example `local`. |
-| `createdAt`, `updatedAt` | The times, in Unix milliseconds. |
+| `createdAt`, `updatedAt` | The times, as RFC 3339 strings in UTC. |
 | `disabledAt` | The time of the disable, or `null` when the principal is enabled. |
 | `namespace` | The namespace of a namespace principal. Empty for an installation principal. |
 | `groupCount` | The number of groups the principal is in. |
@@ -194,7 +196,7 @@ A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
 
 A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code
-`mfa.fresh-step-required`. Sign in again and retry.
+`mfa.fresh-step-required`. Sign in again and retry. A stored access token always gets this answer, so make these changes in the console.
 
 ## Manage group members
 
@@ -206,14 +208,14 @@ A member is a principal. The routes are these:
 | `POST /api/server/groups/{id}/members` | `server:manage-groups`, with a fresh sign-in | `201` with the member |
 | `DELETE /api/server/groups/{id}/members/{principal}` | `server:manage-groups`, with a fresh sign-in | `204` |
 
-Add a member with the principal ID:
+Add a member:
 
-```sh
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"principalID":"prn-..."}' \
-  https://dustpan.example.com/api/server/groups/grp-.../members
+Add a member in the console. The add needs a fresh sign-in. The body holds the principal ID:
+
+```json
+{"principalID":"prn-..."}
 ```
+
 
 | Case | Status | Code |
 | --- | --- | --- |
