@@ -37,7 +37,7 @@ func putInCollection(ctx context.Context, t *testing.T, env *e2e.Env, collection
 // contains it, and no grant on another collection, on a unit of another
 // collection, or on a unit with no collection. An unknown collection answers
 // 404.
-func checkCollectionReview(ctx context.Context, t *testing.T, env *e2e.Env, f reviewFixture) {
+func checkCollectionReview(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	createStack(ctx, t, env, "review/api/stage")
@@ -46,16 +46,23 @@ func checkCollectionReview(ctx context.Context, t *testing.T, env *e2e.Env, f re
 	putInCollection(ctx, t, env, "payments", "api/stage")
 	putInCollection(ctx, t, env, "platform", "web/other")
 
+	// A new principal, so that the later steps of the test see no new grant of carol.
+	var erin e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("review-collection") + `","kind":"person"}`, http.StatusCreated,
+	}, &erin)
+
 	grant := func(path, role string) {
 		principalCall(ctx, t, env, principalStep{
-			http.MethodPost, path, `{"subject":"` + f.carolRef + `","role":"` + role + `"}`, http.StatusCreated,
+			http.MethodPost, path, `{"subject":"principal:` + erin.ID + `","role":"` + role + `"}`, http.StatusCreated,
 		}, nil)
 	}
 
 	grant("/api/server/namespaces/review/collections/payments/grants", "viewer")
 	grant("/api/server/namespaces/review/unit-grants?tool=pulumi&unit=api%2Fstage", "maintainer")
-	grant("/api/server/namespaces/review/collections/platform/grants", "planner")
-	grant("/api/server/namespaces/review/unit-grants?tool=pulumi&unit=web%2Fother", "writer")
+	grant("/api/server/namespaces/review/collections/platform/grants", "writer")
+	grant("/api/server/namespaces/review/unit-grants?tool=pulumi&unit=web%2Fother", "maintainer")
 	grant("/api/server/namespaces/review/unit-grants?tool=pulumi&unit=db%2Floose", "auditor")
 
 	rows := reviewOf(ctx, t, env, "/api/server/namespaces/review/collections/payments/access-review", url.Values{})
@@ -68,7 +75,7 @@ func checkCollectionReview(ctx context.Context, t *testing.T, env *e2e.Env, f re
 
 	slices.Sort(got)
 
-	for _, want := range []string{"viewer@collection:", "operator@pulumi:review/api/stage"} {
+	for _, want := range []string{"viewer@review/payments", "maintainer@pulumi:review/api/stage"} {
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.HasPrefix(g, want) }) {
 			t.Fatalf("collection export = %q, want a row %q", got, want)
 		}
@@ -131,7 +138,12 @@ func TestDeletedUnits(t *testing.T) {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), e2e.Pulumi().Versions()[0])
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
 	if err != nil {
 		t.Fatalf("install %s: %v", e2e.Pulumi().Name, err)
 	}
@@ -177,6 +189,16 @@ func checkCollectionGrantReads(t *testing.T, cli e2e.Install, store e2e.Store) {
 	putInCollection(ctx, t, env, "payments", "api/stage")
 	putInCollection(ctx, t, env, "platform", "web/other")
 
+	// The list needs namespace:read on the namespace. This role gives no
+	// unit:read, so only the grant on the collection reads a unit.
+	var role e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles", `{"name":"ns-reader","actions":["namespace:read"]}`, http.StatusCreated,
+	}, &role)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/review/grants",
+		`{"subject":"principal:` + dana.ID + `","role":"` + role.ID + `"}`, http.StatusCreated,
+	}, nil)
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/namespaces/review/collections/payments/grants",
 		`{"subject":"principal:` + dana.ID + `","role":"viewer"}`, http.StatusCreated,
@@ -195,7 +217,7 @@ func checkCollectionGrantReads(t *testing.T, cli e2e.Install, store e2e.Store) {
 		}
 	}
 
-	if got := deletedNames(ctx, t, env, secret, "review"); !slices.Equal(got, []string{"stage"}) {
+	if got := deletedNames(ctx, t, env, secret, "review"); !slices.Equal(got, []string{"api/stage"}) {
 		t.Fatalf("deleted units of a collection grant = %q, want only the stack of payments", got)
 	}
 }
