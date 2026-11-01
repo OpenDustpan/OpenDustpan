@@ -326,6 +326,8 @@ import type {
   StoreCheckCase,
   StoreCheckLatency,
   StoreCheckReport,
+  StoreFailoverSettingInvalidError,
+  StoreFailoverSettingInvalidErrorArgs,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,

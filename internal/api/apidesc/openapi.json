@@ -1063,6 +1063,7 @@
             "stack.no-state-at-time": "#/components/schemas/StackNoStateAtTimeError",
             "stack.reveal-path-too-long": "#/components/schemas/StackRevealPathTooLongError",
             "state-version.reveal-path-too-long": "#/components/schemas/StateVersionRevealPathTooLongError",
+            "store.failover-setting-invalid": "#/components/schemas/StoreFailoverSettingInvalidError",
             "unit.no-state": "#/components/schemas/UnitNoStateError",
             "workspace.no-state-at": "#/components/schemas/WorkspaceNoStateAtError"
           },
@@ -1125,6 +1126,9 @@
           },
           {
             "$ref": "#/components/schemas/StateVersionRevealPathTooLongError"
+          },
+          {
+            "$ref": "#/components/schemas/StoreFailoverSettingInvalidError"
           },
           {
             "$ref": "#/components/schemas/UnitNoStateError"
@@ -1343,6 +1347,7 @@
           "state-version.stale-serial",
           "state-version.too-large",
           "state-version.upload-denied",
+          "store.failover-setting-invalid",
           "storecheck.cooldown",
           "storecheck.invalid-target",
           "storecheck.no-target",
@@ -4754,6 +4759,47 @@
           "putLatency",
           "startedAt",
           "throttlingSeen"
+        ],
+        "type": "object"
+      },
+      "StoreFailoverSettingInvalidError": {
+        "description": "The error answer with the code store.failover-setting-invalid.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/StoreFailoverSettingInvalidErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "store.failover-setting-invalid"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "StoreFailoverSettingInvalidErrorArgs": {
+        "description": "The arguments of the text of the error with the code store.failover-setting-invalid.",
+        "properties": {
+          "setting": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "setting"
         ],
         "type": "object"
       },

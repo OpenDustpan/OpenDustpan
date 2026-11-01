@@ -230,12 +230,12 @@ func makeDatabaseReadOnly(tb testing.TB, schemaURL string) {
 	}
 }
 
-// TestStoreLostWhenDatabaseIsReadOnly proves that a write on a read-only
-// session (SQLSTATE 25006, as on a demoted primary) returns an error that
-// wraps namespace.ErrUnavailable, and that the API answers 503 with
-// Retry-After. The read on the same session still works. The store first
-// holds sessions that were writable, and the test ends them, so the pool
-// opens new sessions that are read-only, as a pool does after a failover.
+// TestStoreLostWhenDatabaseIsReadOnly proves that the store does not use a
+// read-only session, as on a demoted primary. The store first holds sessions
+// that were writable, and the test ends them, so the pool must open new
+// sessions. The read-write check of each new connection refuses them, so a
+// read and a write both return an error that wraps namespace.ErrUnavailable,
+// and the API answers 503 with Retry-After.
 func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
 	t.Parallel()
 
@@ -260,18 +260,8 @@ func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
 	makeDatabaseReadOnly(t, schemaURL)
 	terminateSessions(t.Context(), t, base, app)
 
-	// A read that meets a pool connection which the kill ended fails once
-	// and drops that connection. The next read opens a read-only session.
-	var readErr error
-
-	for range 3 {
-		if _, readErr = s.GetNamespace(t.Context(), "acme"); !errors.Is(readErr, namespace.ErrUnavailable) {
-			break
-		}
-	}
-
-	if !errors.Is(readErr, namespace.ErrNotFound) {
-		t.Fatalf("read on a read-only session: err = %v, want namespace.ErrNotFound", readErr)
+	if _, err := s.GetNamespace(t.Context(), "acme"); !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("read on a read-only database: err = %v, want namespace.ErrUnavailable", err)
 	}
 
 	err := s.CreateNamespace(t.Context(), namespace.Namespace{
@@ -279,7 +269,7 @@ func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 0,
 	})
 	if err == nil || !errors.Is(err, namespace.ErrUnavailable) {
-		t.Fatalf("write on a read-only session: err = %v, want it to wrap namespace.ErrUnavailable", err)
+		t.Fatalf("write on a read-only database: err = %v, want it to wrap namespace.ErrUnavailable", err)
 	}
 
 	checkAPIAnswers503(t, err)

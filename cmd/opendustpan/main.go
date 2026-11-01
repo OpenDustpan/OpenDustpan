@@ -46,6 +46,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -1845,16 +1846,37 @@ var openStore = func(
 		}
 
 		s, err := postgres.Open(ctx, database, opts...)
+		if errors.Is(err, postgres.ErrFailoverSetting) {
+			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreFailoverSettingInvalid, err)
+		}
+
 		if err != nil {
 			return nil, fmt.Errorf("open postgres store: %w", err)
 		}
 
 		warnDevBuild(ctx, logger, s)
+		logFailoverSettings(ctx, logger, s.FailoverSettings())
 
 		return postgresStore{s}, nil
 	default:
 		return nil, errUnknownBackend
 	}
+}
+
+// logFailoverSettings writes the effective failover settings of the pool
+// once at the start: each value and where it came from. The record holds no
+// host, user or password.
+func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings postgres.FailoverSettings) {
+	attrs := make([]any, 0, len(settings.Settings)+1)
+
+	for _, setting := range settings.Settings {
+		attrs = append(attrs, slog.Group(setting.Name,
+			slog.String("value", setting.Value), slog.String("from", setting.Source)))
+	}
+
+	attrs = append(attrs, slog.String("connect_check", settings.ConnectCheck))
+
+	logger.InfoContext(ctx, "database failover settings", attrs...)
 }
 
 // appliedMigrationsReader reads the applied migrations of an open store.
