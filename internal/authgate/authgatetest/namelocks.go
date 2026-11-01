@@ -2,6 +2,7 @@ package authgatetest
 
 import (
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -104,8 +105,19 @@ func nameCases() []nameCase {
 		{name: "the lock time comes from the clock of the store", test: testStoreClock},
 		{name: "every instance on one database shares one count", test: testShared},
 		{
-			name: "a prune deletes old counts and keeps a lock that holds and a level that has not reset",
+			name: "a prune deletes old counts, keeps a lock that holds, a level that has not reset and a recent " +
+				"count, and appends its entry with the count",
 			test: testPrune,
+		},
+		{name: "a prune deletes no more than its limit and the next prune deletes the rest", test: testPruneBound},
+		{
+			name: "a prune with an age of 0 or less, or a limit below 1 or above the maximum, fails with " +
+				"ErrInvalidLock and changes nothing",
+			test: testPruneInvalid,
+		},
+		{
+			name: "a prune with an entry that fails validation fails with audit.ErrInvalidEntry and changes nothing",
+			test: testPruneBadEntry,
 		},
 		{name: "a write that fails is an error that is not ErrNameLocked", test: testBroken},
 		{
@@ -613,22 +625,172 @@ func testPrune(t *testing.T, h NameLockHarness) {
 
 	pause(t, doubleLock)
 
-	n, err := c.PruneNameLocks(t.Context(), shortLock)
+	// A count with a failure inside the age stays.
+	add(t, c, key(authgate.ScopePassword, "recent", "s"), rule(limitFive, longLock), nil)
+
+	before := len(h.Entries(t))
+
+	n, err := c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, pruneEntry())
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1", n, err)
 	}
 
-	for _, name := range []string{"locked", "level"} {
-		scope := authgate.ScopePassword
-		if name == "level" {
-			scope = authgate.ScopePasswordName
-		}
+	kept := []struct{ scope, name string }{
+		{scope: authgate.ScopePassword, name: "locked"},
+		{scope: authgate.ScopePasswordName, name: "level"},
+		{scope: authgate.ScopePassword, name: "recent"},
+	}
 
-		locks, listErr := c.NameLocks(t.Context(), scope, name)
+	for _, k := range kept {
+		locks, listErr := c.NameLocks(t.Context(), k.scope, k.name)
 		if listErr != nil || len(locks) != 1 {
-			t.Fatalf("count %s after a prune = %+v, %v; want it kept", name, locks, listErr)
+			t.Fatalf("count %s after a prune = %+v, %v; want it kept", k.name, locks, listErr)
 		}
 	}
+
+	gone, err := c.NameLocks(t.Context(), authgate.ScopePassword, "old")
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("count old after a prune = %+v, %v; want it deleted", gone, err)
+	}
+
+	entries := h.Entries(t)
+	if len(entries) != before+1 {
+		t.Fatalf("entries after a prune = %d, want %d", len(entries), before+1)
+	}
+
+	if got := prunedCounts(entries); len(got) != 1 || got[0] != "1" {
+		t.Fatalf("pruned counts of the entries of the prune = %v, want [1]", got)
+	}
+}
+
+// pruneRows is the count of old counts of the case of the bound.
+const pruneRows = 5
+
+func testPruneBound(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	for i := range pruneRows {
+		add(t, c, key(authgate.ScopePassword, "n"+strconv.Itoa(i), "s"), rule(limitFive, longLock), nil)
+	}
+
+	pause(t, doubleLock)
+
+	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, pruneEntry())
+	if err != nil || n != limitTwo {
+		t.Fatalf("prune with a limit of 2 = %d, %v; want 2", n, err)
+	}
+
+	n, err = c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, pruneEntry())
+	if err != nil || n != pruneRows-limitTwo {
+		t.Fatalf("second prune = %d, %v; want %d", n, err, pruneRows-limitTwo)
+	}
+
+	got := prunedCounts(h.Entries(t))
+	slices.Sort(got)
+
+	if len(got) != limitTwo || got[0] != "2" || got[1] != "3" {
+		t.Fatalf("pruned counts of the entries = %v, want one 2 and one 3", got)
+	}
+}
+
+func testPruneInvalid(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, key(authgate.ScopePassword, "old", "s"), rule(limitFive, longLock), nil)
+
+	pause(t, doubleLock)
+
+	before := len(h.Entries(t))
+
+	cases := []struct {
+		name  string
+		age   time.Duration
+		limit int
+	}{
+		{name: "an age of 0", age: 0, limit: 1},
+		{name: "a negative age", age: -longLock, limit: 1},
+		{name: "a limit of 0", age: shortLock, limit: 0},
+		{name: "a negative limit", age: shortLock, limit: -1},
+		{name: "a limit above the maximum", age: shortLock, limit: authgate.MaxNamePruneRows + 1},
+	}
+
+	for _, tc := range cases {
+		if _, err := c.PruneNameLocks(t.Context(), tc.age, tc.limit, pruneEntry()); !errors.Is(
+			err, authgate.ErrInvalidLock,
+		) {
+			t.Fatalf("%s: prune = %v, want ErrInvalidLock", tc.name, err)
+		}
+	}
+
+	locks, err := c.NameLocks(t.Context(), authgate.ScopePassword, "old")
+	if err != nil || len(locks) != 1 {
+		t.Fatalf("count after refused prunes = %+v, %v; want it kept", locks, err)
+	}
+
+	if got := len(h.Entries(t)); got != before {
+		t.Fatalf("entries after refused prunes = %d, want %d", got, before)
+	}
+}
+
+func testPruneBadEntry(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, key(authgate.ScopePassword, "old", "s"), rule(limitFive, longLock), nil)
+
+	pause(t, doubleLock)
+
+	before := len(h.Entries(t))
+
+	bad := pruneEntry()
+	bad.Namespace = "acme"
+
+	if _, err := c.PruneNameLocks(t.Context(), shortLock, 1, bad); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("prune with an entry of a namespace = %v, want audit.ErrInvalidEntry", err)
+	}
+
+	locks, err := c.NameLocks(t.Context(), authgate.ScopePassword, "old")
+	if err != nil || len(locks) != 1 {
+		t.Fatalf("count after a refused prune = %+v, %v; want it kept", locks, err)
+	}
+
+	if got := len(h.Entries(t)); got != before {
+		t.Fatalf("entries after a refused prune = %d, want %d", got, before)
+	}
+}
+
+// pruneAction is the action of the entry of a prune in the suite.
+const pruneAction = "sign-in.name-locks-pruned"
+
+// pruneEntry returns a valid entry of the installation for a prune.
+func pruneEntry() audit.Entry {
+	e := clearEntry()
+	e.Subject, e.Action, e.Object, e.SourceIP, e.UserAgent = "server", pruneAction, "name-locks", "", ""
+	e.Channel, e.PrincipalKind, e.Reason = audit.ChannelAPI, audit.PrincipalKindService, "counts past their age"
+
+	return e
+}
+
+// prunedCounts returns the change "pruned" of each entry of a prune, in the
+// order of the append.
+func prunedCounts(entries []audit.Entry) []string {
+	var out []string
+
+	for i := range entries {
+		if entries[i].Action != pruneAction {
+			continue
+		}
+
+		for _, ch := range entries[i].Changes {
+			if ch.Key == "pruned" {
+				out = append(out, ch.New)
+			}
+		}
+	}
+
+	return out
 }
 
 func testBroken(t *testing.T, h NameLockHarness) {

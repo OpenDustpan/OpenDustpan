@@ -171,8 +171,17 @@ func (s *Store) NameLocks(ctx context.Context, scope, name string) ([]authgate.N
 }
 
 // PruneNameLocks implements authgate.NameLockCounter. It reads the time from
-// the clock of the store.
-func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration) (int64, error) {
+// the clock of the store. The delete and the append of e run in one
+// transaction.
+func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int, e audit.Entry) (int64, error) {
+	if err := authgate.CheckPruneRequest(age, limit); err != nil {
+		return 0, err
+	}
+
+	if err := validServerEntry(e); err != nil {
+		return 0, err
+	}
+
 	var n int64
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -181,9 +190,18 @@ func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration) (int64, e
 			return fmt.Errorf("read the clock of the store: %w", err)
 		}
 
-		deleted, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{BeforeMs: now - age.Milliseconds(), NowMs: now})
+		deleted, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{
+			BeforeMs: now - age.Milliseconds(), NowMs: now, MaxRows: int64(limit),
+		})
 		if err != nil {
 			return fmt.Errorf("prune name counts: %w", err)
+		}
+
+		entry := e
+		entry.Changes = append(append([]audit.Change{}, e.Changes...), authgate.PrunedChange(deleted))
+
+		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+			return fmt.Errorf("append the entry of the prune: %w", err)
 		}
 
 		n = deleted

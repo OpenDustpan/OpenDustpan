@@ -6058,6 +6058,28 @@
         ],
         "type": "object"
       },
+      "LocalUserLockPrune": {
+        "properties": {
+          "ageSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "intervalSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "maxRows": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ageSeconds",
+          "intervalSeconds",
+          "maxRows"
+        ],
+        "type": "object"
+      },
       "WorkspaceNoStateAtErrorArgs": {
         "description": "The arguments of the text of the error with the code workspace.no-state-at.",
         "properties": {

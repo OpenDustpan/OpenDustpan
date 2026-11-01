@@ -162,7 +162,9 @@ records the reason. An unknown user name counts and locks as a known name
 does, so a lock tells nothing about a user. The table of the counts holds an
 HMAC of the user name, never the name.
 
-A wrong current password of a change of the own password counts too.
+A wrong current password of a change of the own password counts too. A good
+current password clears the counts of its name, as a full sign-in does, so
+only failures in a row lock the name.
 
 A sign-in that answers `429` because the hash budget of the server is full
 counts no failure. The server adds the failure only after the hash has its
@@ -190,7 +192,25 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 ```
 
 The answer gives the count of the counts that the unlock cleared. Both routes
-need `server:manage-sign-in`.
+need `server:manage-sign-in`. Each action of the person must also be an
+action of the administrator, as for a reset. Otherwise both routes answer
+`403` with the code `local-user.outside-reach`, and the audit log records the
+denial.
+
+### Prune of old counts
+
+Each failed attempt for a new user name adds a count, also for an unknown
+name. Every hour, the server deletes at most 10000 counts whose last failure
+is 48 hours old or older (the longest lock and the reset time), whose lock
+ended and whose level is past its reset time. The next run deletes the rest.
+Each run writes the audit entry `sign-in.name-locks-pruned` with the number
+of counts, in the transaction of the delete. `GET
+/api/dustpan/v1/local-users/policy` shows the effective values in
+`lockPrune`:
+
+```json
+{"lockPrune": {"intervalSeconds": 3600, "ageSeconds": 172800, "maxRows": 10000}}
+```
 
 ## Change the own password
 
@@ -277,7 +297,10 @@ value and the source of each one.
 | `password.rehashed` | A sign-in stores a new hash with the current parameters. |
 | `sign-in.password-failed` | A password sign-in fails. The changes record the real reason. |
 | `sign-in.name-locked` | A count locks a user name. The changes record the scope, the end of the lock and the level. |
-| `sign-in.name-unlocked` | An administrator ends the counts and locks of a user name, with a reason. |
+| `sign-in.name-unlocked` | An administrator ends the counts and locks of a user name, with a reason. A refused unlock writes a denied entry with the cause. |
+| `sign-in.name-locks-read` | The server refuses a read of the counts of a user name. The changes record the cause. |
+| `sign-in.name-counts-kept` | A good current password could not clear the counts of its name. The counts stay. |
+| `sign-in.name-locks-pruned` | A run of the prune deletes old counts. The subject is the server, and the change `pruned` records the number of counts. |
 | `session:sign-in` | A password sign-in starts a session, with the provider `local`. |
 
 No entry holds a password, a hash or a code.

@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -21,6 +22,12 @@ import (
 const (
 	ActionNameLocked   = "sign-in.name-locked"
 	ActionNameUnlocked = "sign-in.name-unlocked"
+	// ActionNameLocksRead is the action of the denied entry of a refused
+	// read of the counts of a name. A read that passes writes no entry.
+	ActionNameLocksRead = "sign-in.name-locks-read"
+	// ActionNameCountsKept is the action of the failure entry of a good
+	// current password whose counts could not be cleared.
+	ActionNameCountsKept = "sign-in.name-counts-kept"
 )
 
 // ReasonNameLocked is the reason of a refused sign-in or a refused current
@@ -175,12 +182,23 @@ type Lock struct {
 }
 
 // Locks returns the state of each count of the name of the local user of the
-// person principalID, in both scopes of the password. It returns
-// localuser.ErrNotFound for a person with no local user.
-func (s *Service) Locks(ctx context.Context, principalID string) ([]Lock, error) {
+// person principalID, in both scopes of the password, to the administrator
+// a. It returns localuser.ErrNotFound for a person with no local user, and
+// localuser.ErrOutsideReach when the reach of a does not cover the reach of
+// the person. A refusal writes a denied audit entry.
+func (s *Service) Locks(ctx context.Context, a Actor, principalID string) ([]Lock, error) {
+	tg := on(ActionNameLocksRead, principal.Ref(principalID))
+
 	u, err := s.store.UserByPrincipal(ctx, principalID)
 	if err != nil {
-		return nil, fmt.Errorf("read the local user: %w", err)
+		return nil, s.refuse(ctx, a.Entry, tg, "no local user", fmt.Errorf("read the local user: %w", err))
+	}
+
+	// Defense in depth: the route needs server:manage-sign-in too. This check
+	// stays because that action does not cover the reach of the person, and
+	// so that a new caller of the service cannot skip it.
+	if reachErr := s.checkReach(ctx, a.PrincipalID, principalID); reachErr != nil {
+		return nil, s.refuse(ctx, a.Entry, on(ActionNameLocksRead, UserObject(u.ID)), "outside the reach", reachErr)
 	}
 
 	name, err := s.nameDigest(ctx, u.UserName)
@@ -209,7 +227,9 @@ func (s *Service) Locks(ctx context.Context, principalID string) ([]Lock, error)
 // Unlock ends every count and lock of the name of the local user of the
 // person principalID, in both scopes, and writes the audit entry with the
 // reason. It returns how many counts it cleared, localuser.ErrReasonRequired
-// for no reason, and localuser.ErrNotFound for a person with no local user.
+// for no reason, localuser.ErrNotFound for a person with no local user, and
+// localuser.ErrOutsideReach when the reach of a does not cover the reach of
+// the person: an unlock lets more guesses reach the password of the person.
 func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason string) (int64, error) {
 	object := principal.Ref(principalID)
 
@@ -223,6 +243,13 @@ func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason strin
 	}
 
 	object = UserObject(u.ID)
+
+	// Defense in depth: the route needs server:manage-sign-in too. This check
+	// stays because that action does not cover the reach of the person, and
+	// so that a new caller of the service cannot skip it.
+	if reachErr := s.checkReach(ctx, a.PrincipalID, principalID); reachErr != nil {
+		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), "outside the reach", reachErr)
+	}
 
 	name, err := s.nameDigest(ctx, u.UserName)
 	if err != nil {
@@ -240,4 +267,78 @@ func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason strin
 	}
 
 	return total, nil
+}
+
+// The audit entry of each run of the prune of the name counts.
+const (
+	// ActionNameLocksPruned is the action of the entry of each run of the
+	// prune.
+	ActionNameLocksPruned = "sign-in.name-locks-pruned"
+	// NameLocksObject is the object of the entry of a prune: the counts of
+	// the lockout by name.
+	NameLocksObject = "name-locks"
+	// ReasonNameLocksPruned is the reason of the entry of a prune.
+	ReasonNameLocksPruned = "scheduled prune of the name counts whose last failure is older than the prune age, " +
+		"whose lock ended and whose level is past its reset time"
+)
+
+// PruneSettings is the effective schedule of the prune of the name counts:
+// the time between two runs, the age past the last failure of a count that
+// can go, and the most counts that one run deletes.
+type PruneSettings struct {
+	Interval time.Duration
+	Age      time.Duration
+	MaxRows  int
+}
+
+// Prune returns the effective schedule of the prune of the name counts, as
+// the server runs it.
+func Prune() PruneSettings {
+	return PruneSettings{
+		Interval: authgate.NamePruneInterval, Age: authgate.NamePruneAge, MaxRows: authgate.MaxNamePruneRows,
+	}
+}
+
+// PruneResult is what one run of the prune did. The durable step of the
+// schedule stores it, in JSON, as its output.
+type PruneResult struct {
+	// Deleted is the count of the name counts that the run deleted.
+	Deleted int64 `json:"deleted"`
+	// AgeSeconds is the age of the run: a count goes only when its last
+	// failure is this old or older.
+	AgeSeconds int64 `json:"ageSeconds"`
+	// MaxRows is the most counts that the run could delete.
+	MaxRows int `json:"maxRows"`
+}
+
+// PruneLocks runs one prune of the name counts of locks at the time at: it
+// deletes at most the MaxRows of Prune counts whose last failure is the Age
+// of Prune or older, whose lock ended and whose level is past its reset
+// time. The store appends the audit entry of the run, with the server as the
+// subject, the reason and the count that it deleted, in the transaction of
+// the delete. So each run has its entry, also a run that deletes nothing.
+func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Time) (PruneResult, error) {
+	p := Prune()
+	res := PruneResult{Deleted: 0, AgeSeconds: int64(p.Age / time.Second), MaxRows: p.MaxRows}
+
+	if locks == nil {
+		return res, fmt.Errorf("%w: name locks", ErrMissingDependency)
+	}
+
+	e := audit.Entry{
+		At: at.UTC(), Namespace: audit.ServerScope, Subject: history.ServerSubject, IDPSubject: "", TokenID: "",
+		Action: ActionNameLocksPruned, Object: NameLocksObject, Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelFrom(ctx), Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: "", Reason: ReasonNameLocksPruned,
+	}
+
+	n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, e)
+	if err != nil {
+		return res, fmt.Errorf("prune the name counts: %w", err)
+	}
+
+	res.Deleted = n
+
+	return res, nil
 }

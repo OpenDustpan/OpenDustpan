@@ -148,6 +148,21 @@ type localUserPolicyResponse struct {
 	MaxLength               int    `json:"maxLength"`
 	RequireLettersAndDigits bool   `json:"requireLettersAndDigits"`
 	ResetLifetimeSeconds    int64  `json:"resetLifetimeSeconds"`
+	// LockPrune is the effective schedule of the prune of the counts of the
+	// lockout by name.
+	LockPrune localUserLockPruneBody `json:"lockPrune"`
+}
+
+// localUserLockPruneBody is the effective schedule of the prune of the
+// counts of the lockout by name: the time between two runs, the age past the
+// last failure of a count that a run can delete, and the most counts that
+// one run deletes.
+//
+// Contract: never remove or rename these fields.
+type localUserLockPruneBody struct {
+	IntervalSeconds int64 `json:"intervalSeconds"`
+	AgeSeconds      int64 `json:"ageSeconds"`
+	MaxRows         int   `json:"maxRows"`
 }
 
 // errLocalUsersUnavailable is the answer of a local user route on a server
@@ -438,10 +453,16 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 		return
 	}
 
+	prune := localusersvc.Prune()
+
 	h.writeJSON(ctx, w, http.StatusOK, localUserPolicyResponse{
 		Enabled: p.Enabled, EnabledSource: string(p.EnabledSource), IdentityProvider: p.SSO, MinLength: p.MinLength,
 		MaxLength: localuser.MaxLength, RequireLettersAndDigits: p.RequireLettersAndDigits,
 		ResetLifetimeSeconds: int64(p.ResetLifetime / time.Second),
+		LockPrune: localUserLockPruneBody{
+			IntervalSeconds: int64(prune.Interval / time.Second), AgeSeconds: int64(prune.Age / time.Second),
+			MaxRows: prune.MaxRows,
+		},
 	})
 }
 
@@ -507,7 +528,7 @@ func (h *Handler) unlockLocalUser(w http.ResponseWriter, r *http.Request, p iden
 
 // getLocalUserLocks answers the state of each count of the name of the local
 // user that the query parameter principal names.
-func (h *Handler) getLocalUserLocks(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) getLocalUserLocks(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	id := queryOf(r).Get("principal")
@@ -517,7 +538,7 @@ func (h *Handler) getLocalUserLocks(w http.ResponseWriter, r *http.Request, _ id
 		return
 	}
 
-	locks, err := h.localUsers.Locks(ctx, id)
+	locks, err := h.localUsers.Locks(ctx, localUserActor(r, p, identity.ActionServerManageSignIn), id)
 	if err != nil {
 		h.writeError(ctx, w, localUserError(err))
 
