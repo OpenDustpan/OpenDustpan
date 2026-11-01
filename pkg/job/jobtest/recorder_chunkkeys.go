@@ -20,13 +20,19 @@ func chunkKeyCases() []recorderCase {
 		{"chunk keys: a confirm with a key that is not an attempt of the chunk is ErrInvalid", testChunkConfirmBadKey},
 		{"chunk keys: a chunk the recorder stores has the key of its attempt", testChunkAttemptKey},
 		{"chunk keys: a confirm of an attempt outside its time window is refused", testChunkConfirmAttemptWindow},
+		{
+			"chunk keys: a late repeat of a committed confirm succeeds and keeps the blob",
+			testChunkLateRepeatKeepsTheBlob,
+		},
 	}
 }
 
 // reserveFirstChunk reserves chunk 0 of the step prepare with a new log version
 // and returns the version.
-func reserveFirstChunk(t *testing.T, h RecorderHarness, a *job.Assignment, content string) string {
+func reserveFirstChunk(t *testing.T, h RecorderHarness, a *job.Assignment) string {
 	t.Helper()
+
+	const content = "x"
 
 	nl := newLogFor(t, h, a, h.Sealer.NewItemKey)
 
@@ -90,7 +96,7 @@ func testChunkConfirmFirstWins(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	a := logCaseStep(t, h)
-	version := reserveFirstChunk(t, h, a, "x")
+	version := reserveFirstChunk(t, h, a)
 
 	first := attemptKey(t, a, version, 0, "first")
 	second := attemptKey(t, a, version, 0, "second")
@@ -127,7 +133,7 @@ func testChunkConfirmBadKey(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	a := logCaseStep(t, h)
-	version := reserveFirstChunk(t, h, a, "x")
+	version := reserveFirstChunk(t, h, a)
 
 	good := attemptKey(t, a, version, 0, "good")
 	base := strings.TrimSuffix(good, "-"+job.LogAttemptIDPrefix+"good")
@@ -211,7 +217,7 @@ func testChunkConfirmAttemptWindow(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	a := logCaseStep(t, h)
-	version := reserveFirstChunk(t, h, a, "x")
+	version := reserveFirstChunk(t, h, a)
 	at := chunkAt{version, 0}
 
 	const margin = time.Minute
@@ -243,12 +249,59 @@ func testChunkConfirmAttemptWindow(t *testing.T, h RecorderHarness) {
 		t.Fatalf("fresh confirm = %v, %v; want true, nil", won, err)
 	}
 
-	late := chunkAttempt{at: at, key: good, started: time.Now().Add(-blob.UnnamedGracePeriod)}
-	if won, err := confirmStarted(t, h, a, late); won || !errors.Is(err, blob.ErrAttemptExpired) {
-		t.Errorf("late repeat of the confirm = %v, %v; want false, ErrAttemptExpired", won, err)
+	// A late attempt with another key, after the chunk is counted, is refused.
+	other := chunkAttempt{
+		at:      at,
+		key:     attemptKey(t, a, version, 0, "other"),
+		started: time.Now().Add(-blob.UnnamedGracePeriod),
+	}
+	if won, err := confirmStarted(t, h, a, other); won || !errors.Is(err, blob.ErrAttemptExpired) {
+		t.Errorf("late confirm of another attempt = %v, %v; want false, ErrAttemptExpired", won, err)
 	}
 
 	requireChunkKeys(t, h, a, version, []string{good})
+}
+
+// testChunkLateRepeatKeepsTheBlob checks that a late repeat of a confirm that
+// committed with the same blob key answers true, at any age, so the recorder
+// keeps the blob that the row names. The row and the blob stay.
+func testChunkLateRepeatKeepsTheBlob(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	a := logCaseStep(t, h)
+	version := reserveFirstChunk(t, h, a)
+	at := chunkAt{version, 0}
+	good := attemptKey(t, a, version, 0, "good")
+
+	ns, err := h.Namespaces.GetNamespace(t.Context(), a.Claim.Fence.Namespace)
+	if err != nil {
+		t.Fatalf("GetNamespace = %v", err)
+	}
+
+	full := blob.Key("namespaces/" + ns.ID.String() + "/" + good)
+	if putErr := h.Blobs.Put(t.Context(), full, strings.NewReader("sealed")); putErr != nil {
+		t.Fatalf("Put = %v", putErr)
+	}
+
+	if won, freshErr := confirmWith(t, h, a, at, good); freshErr != nil || !won {
+		t.Fatalf("fresh confirm = %v, %v; want true, nil", won, freshErr)
+	}
+
+	late := chunkAttempt{at: at, key: good, started: time.Now().Add(-blob.UnnamedGracePeriod - time.Hour)}
+	if won, lateErr := confirmStarted(t, h, a, late); lateErr != nil || !won {
+		t.Fatalf("late repeat of the committed confirm = %v, %v; want true, nil", won, lateErr)
+	}
+
+	requireChunkKeys(t, h, a, version, []string{good})
+
+	rc, err := h.Blobs.Get(t.Context(), full)
+	if err != nil {
+		t.Fatalf("the blob that the row names is gone: %v", err)
+	}
+
+	if closeErr := rc.Close(); closeErr != nil {
+		t.Errorf("close the blob: %v", closeErr)
+	}
 }
 
 // requireChunkKeys checks that the log version holds exactly the confirmed

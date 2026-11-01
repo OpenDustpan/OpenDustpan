@@ -176,7 +176,9 @@ type RecordStore interface {
 	// for a c.BlobKey that is empty or is not the key of an attempt of this
 	// chunk. It returns blob.ErrAttemptExpired, and changes nothing, for a
 	// c.AttemptStartedAt that fails blob.CheckAttempt against the clock of the
-	// store, also for a chunk that is counted already.
+	// store, also for a chunk that another attempt counted. A repeat of a
+	// confirm that the row holds with c.BlobKey returns true at any age, so the
+	// caller never deletes a blob that a row names.
 	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, c ChunkConfirm) (bool, error)
 	// ReservePlan records the plan np before its parts exist, with its item key
 	// in the same transaction, and returns it. A reserved plan has no part and

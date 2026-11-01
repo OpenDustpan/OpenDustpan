@@ -460,10 +460,6 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 		return false, fmt.Errorf("confirm log chunk: %w", err)
 	}
 
-	if err := blob.CheckAttempt(c.AttemptStartedAt, time.Now()); err != nil {
-		return false, fmt.Errorf("confirm log chunk: %w", err)
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -482,8 +478,18 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 		return false, fmt.Errorf("confirm log chunk: %w", err)
 	}
 
+	// A repeat of a confirm that the row holds with the same key answers true
+	// at any age.
+	if row.Confirmed && row.BlobKey == c.BlobKey {
+		return true, nil
+	}
+
+	if err := blob.CheckAttempt(c.AttemptStartedAt, time.Now()); err != nil {
+		return false, fmt.Errorf("confirm log chunk: %w", err)
+	}
+
 	if row.Confirmed {
-		return row.BlobKey == c.BlobKey, nil
+		return false, nil
 	}
 
 	row.Confirmed = true

@@ -252,17 +252,20 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 	won := false
 
 	err := s.run.Write(ctx, pc.Fence, func(tx Tx) error {
-		var confirmErr error
+		outcome, confirmErr := confirmChunk(ctx, tx, &pc, &c)
+		won = outcome.won
 
-		won, confirmErr = confirmChunk(ctx, tx, &pc, &c)
-		if confirmErr != nil {
+		if confirmErr != nil || outcome.repeat {
+			// A repeat of a confirm that committed with the same blob key
+			// writes nothing and answers true at any age: the row names the
+			// blob, so the caller must keep it.
 			return confirmErr
 		}
 
 		// The attempt window is checked after every read and write of the
 		// transaction, so a lock wait that holds the confirm past the deadline
 		// is refused. The error rolls the transaction back: a late attempt
-		// changes nothing, also when it repeats a confirm that committed.
+		// changes nothing.
 		return checkChunkAttempt(ctx, tx, &c)
 	})
 	if err != nil {
@@ -276,45 +279,56 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 // blob key and the stored size and MD5, in the transaction tx. The first
 // confirm of a row wins and returns true. A row that is confirmed already
 // stays as it is, and the call returns true only when the row holds c.BlobKey:
-// the same attempt confirmed twice.
-func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkConfirm) (bool, error) {
+// the same attempt confirmed twice. The outcome marks that repeat, which
+// writes nothing.
+func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkConfirm) (chunkOutcome, error) {
 	j, err := claimed(ctx, tx, *pc)
 	if err != nil {
-		return false, err
+		return chunkOutcome{won: false, repeat: false}, err
 	}
 
 	row, ok, err := tx.Chunk(ctx, pc.Fence.Namespace, c.Version, c.Seq)
 	if err != nil {
-		return false, err
+		return chunkOutcome{won: false, repeat: false}, err
 	}
 
 	if !ok {
-		return false, fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
+		return chunkOutcome{
+			won:    false,
+			repeat: false,
+		}, fmt.Errorf(
+			"%w: chunk %d of log %s was not reserved",
+			job.ErrInvalid,
+			c.Seq,
+			c.Version,
+		)
 	}
 
 	changed, err := job.ConfirmChunkRecord(&j, stepKey(pc, c.Step), c.Version, c.Seq, row)
 	if err != nil {
-		return false, err
+		return chunkOutcome{won: false, repeat: false}, err
 	}
 
 	if row.Confirmed {
-		return row.BlobKey == c.BlobKey, nil
+		same := row.BlobKey == c.BlobKey
+
+		return chunkOutcome{won: same, repeat: same}, nil
 	}
 
 	confirmErr := tx.ConfirmChunk(
 		ctx, pc.Fence.Namespace, c.Version, c.Seq, StoredChunk{Digest: c.Stored, BlobKey: c.BlobKey},
 	)
 	if confirmErr != nil {
-		return false, confirmErr
+		return chunkOutcome{won: false, repeat: false}, confirmErr
 	}
 
 	if changed {
 		if saveErr := save(ctx, tx, &j); saveErr != nil {
-			return false, saveErr
+			return chunkOutcome{won: false, repeat: false}, saveErr
 		}
 	}
 
-	return true, nil
+	return chunkOutcome{won: true, repeat: false}, nil
 }
 
 // gatePlan loads the job of pc and applies the rules of a plan write. For a
@@ -759,6 +773,14 @@ func CheckPlanBody(id, body string) error {
 	}
 
 	return nil
+}
+
+// chunkOutcome is the answer of confirmChunk: won is the answer of the
+// confirm, and repeat is true for a repeat of a confirm that the row holds
+// with the same blob key.
+type chunkOutcome struct {
+	won    bool
+	repeat bool
 }
 
 // checkChunkAttempt returns blob.ErrAttemptExpired when the attempt of c is
