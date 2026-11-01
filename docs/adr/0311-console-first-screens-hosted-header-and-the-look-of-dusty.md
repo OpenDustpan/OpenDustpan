@@ -21,7 +21,7 @@ This ADR writes the words of the owner. It adds no decision of its own.
 2. **A namespace switcher in the top bar (owner, 2026-10-17).** The owner said: "Namespace switcher in the top bar". The owner said also: "the URL carries the namespace".
 3. **No friendly locale (owner, 2026-10-17).** The owner said: "No friendly locale".
 4. **No achievements (owner, 2026-10-18).** The owner said: "No achievements". The owner said also: "This replaces the earlier 'achievements such as Night owl' idea".
-5. **The header of OpenDustpan Cloud (owner, 2026-10-17).** The owner said of the OpenDustpan Cloud preset: "a Cloud tag and the region in the header". The region is a placement detail of OpenDustpan Cloud. The server does not read, store or show a region (ADR 248 decision 2).
+5. **The header of OpenDustpan Cloud (owner, 2026-10-17).** The owner said of the OpenDustpan Cloud preset: "a Cloud tag and the region in the header". (PM, for the owner): the region is a placement detail of OpenDustpan Cloud. The server does not read, store or show a region (ADR 248 decision 2).
 6. **The account switcher (owner, 2026-10-17).** The owner said: "The account switcher appears only for members of several accounts".
 7. **The landing page (owner, 2026-10-17).** The owner said: "The landing page after sign-in is a personal standup ("Home"), not the timeline". The owner said also: "The timeline stays as its own view". (PM, for the owner) ADR 13 and the no-magic rule apply to Home.
 8. **The order of Home (owner, 2026-10-18).** The owner said: "Home order: failed runs first, then approvals waiting on me". The owner said also: "locks I hold, changes since my last visit".
