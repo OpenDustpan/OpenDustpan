@@ -245,7 +245,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		failover:            failover,
 		guard:               nil,
 		marks:               newLongMarks(),
-		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil}},
+		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
 	}
 
 	for _, opt := range opts {

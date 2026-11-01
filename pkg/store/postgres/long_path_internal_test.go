@@ -282,7 +282,7 @@ func TestServerStatementTimeout(t *testing.T) {
 	t.Parallel()
 
 	s := longTestStore(t, testURL(t), map[string]string{"statement_timeout": "200"})
-	g := guardedDB{inner: s.pool, rt: roundTrip{deadline: time.Minute, watch: nil}}
+	g := guardedDB{inner: s.pool, rt: roundTrip{deadline: time.Minute, watch: nil, readOnlyTx: false}}
 
 	_, err := g.Exec(t.Context(), "SELECT pg_sleep(5)")
 
