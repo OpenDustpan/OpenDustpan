@@ -561,13 +561,13 @@ scope of the mode.
 - In mode 1, a review on the Git host counts only while the Git host still
   shows it as valid (not dismissed, not stale by the rules of the Git host),
   and only while the reset rule of the level keeps it, from a fresh read.
+- Conformance fixtures cover each bot path.
 
 ### Reset at each level
 
-The owner's reset rule ("reset only when a push changes the set of operations
-of the unit") is the meaning of L1, the default. Each level resets on its own
-binding. This is the PM's reading of the owner's answer, recorded on 31
-October 2026:
+Decided by the project owner on 1 November 2026: each level resets on what it
+binds to. The owner's earlier rule ("reset only when a push changes the set of
+operations of the unit") is the rule of L1, the default.
 
 | Level | A push resets the approvals when |
 | --- | --- |
@@ -579,7 +579,6 @@ An approval by a principal who later becomes an author is void at once, at
 every level (S1). At L0, the approval floor still compares the plan at the
 apply with the recorded set of operations, and L0 still resets on a new
 commit.
-- Conformance fixtures cover each bot path.
 
 ### Reviews on the Git host that do not count
 
