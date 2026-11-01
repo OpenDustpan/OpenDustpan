@@ -20,8 +20,8 @@ This ADR writes the words of the owner. It adds no decision of its own.
 
 ## Decision
 
-1. **Run order (owner, 2026-10-18).** The owner said: "Run order: declared AND inferred edges order runs". (PM, for the owner): the graph RFC decides the source of inferred edges. See "Not decided here".
-2. **Run options (owner, 2026-10-18).** The owner said: "Run options: target, replace and refresh-only are all allowed". The owner said also: "Each still makes a plan, shows in the change order and passes approval rules". The owner said also: "targeted runs are marked in the change order and audit, and an approval rule can treat target or replace as dangerous". (PM, for the owner): the run options are tool-neutral: target, replace and refresh only. Each tool adapter maps them to the flags of its tool.
+1. **Run order (owner, 2026-10-18).** The owner said: "Run order: declared AND inferred edges order runs". (PM, for the owner): the source of inferred edges is an open point. See "Not decided here".
+2. **Run options (owner, 2026-10-18).** The owner said: "Run options: target, replace and refresh-only are all allowed". The owner said also: "Each still makes a plan, shows in the change order and passes approval rules". The owner said also: "targeted runs are marked in the change order and audit, and an approval rule can treat target or replace as dangerous". (PM, for the owner): the run options are tool-neutral: target, replace and refresh-only. Each tool adapter maps them to the flags of its tool.
 3. **Per-run values (owner, 2026-10-18).** The owner said: "Per-run values: allowed, secrets too (sealed for the run only, never shown)".
 4. **Sources without git (owner, 2026-10-18).** The owner said: "Non-git sources: API upload, then OCI (compare Pulumi no-code stacks)".
 5. **Units without git (owner, 2026-10-18).** The owner said: "Non-git units: teams upload their stacks/workspaces (code), and the variables/inputs come from profiles, like Pulumi no-code stacks". The owner said also: "Write-back to the uploaded code: no (option A)". The owner said also: "Dusty and Catalog upgrades may update the inputs/variables (profile values), through the normal profile change rules". (PM, for the owner): each automatic update of a profile value by Dusty or by a Catalog upgrade writes a record. The record names the actor and the reason. The update follows the normal profile change rules.
@@ -29,7 +29,7 @@ This ADR writes the words of the owner. It adds no decision of its own.
 
 ## Not decided here
 
-- The source of the inferred edges of the run order. The graph RFC decides it.
+- The source of the inferred edges of the run order is an open point.
 
 ## Consequences
 
