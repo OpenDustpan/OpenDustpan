@@ -545,6 +545,82 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
   ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
 
+## Milestone 8. Concurrent applies on one state
+
+**Goal.** Two teams can apply to disjoint parts of one workspace at the same
+time, through OpenDustpan runners, and the result is the same as if they had
+applied one after the other. A person who runs the `dustpan` CLI on a laptop
+can take part in the same rules. OpenDustpan builds this feature itself. It
+does not implement the protocol of any other product
+([ADR 302](adr/0302-milestone-8-concurrent-applies-on-one-state.md)).
+
+Milestone 8 comes after milestone 7. It is not in the gate of the first
+release ([ADR 279](adr/0279-no-release-before-milestone-7.md)).
+
+**Design first.** An RFC for concurrent applies comes before any code. Its
+scope is: the change to decision 3 of ADR 26 (the server assigns the serial
+under a claim); a parent pointer and a claim ID for each state version; a
+fence for each claim; one principal for each job on the TFE-compatible path;
+and the change of the rule of ADR 299 that a replacement is never disjoint
+(the RFC proposes a closure test). ADR 302 does not decide these points.
+
+**Scope.**
+
+- A job registers its saved plan as a claim before the apply. The server
+  refuses overlapping claims before anything runs.
+- The server serves each job the state version that its plan was made from,
+  and merges each upload one resource instance at a time.
+- Work that is not provably disjoint takes turns. In the first design these cases keep
+  the whole-unit lock: data sources, providers configured from resources,
+  root outputs, client-encrypted state, a version or lineage mismatch, and a
+  local CLI run without the wrapper.
+- OpenTofu first. The Pulumi CLI follows after its own spike.
+- The local CLI wrapper: `dustpan` wraps the real `tofu` or `pulumi` CLI on
+  the machine of the user, as the runner wrapper does.
+- Splitting a plan with `-target` comes later, as a speed feature only, on
+  top of the claim model.
+
+**Work items.**
+
+- C1. The inventory: a list of each feature that works only inside
+  OpenDustpan runners today because it needs the CLI wrapper. Each entry
+  names the feature, why it needs the wrapper and what a local run lacks
+  now. This is the first task. It can end milestone 7 as an exit task or
+  start milestone 8 as a pre-flight. The owner picks one in the pull request
+  that does it.
+- C2. The RFC for concurrent applies, then the ADR that accepts it.
+- C3. The claim model and the strict disjointness rules, for OpenTofu.
+- C4. The merge of an upload, one resource instance at a time.
+- C5. The local CLI wrapper for OpenTofu, with claims.
+- C6. The port of each feature in the inventory (C1) to the local wrapper.
+- C7. A spike with the Pulumi CLI, then its claim model if the spike passes.
+- C8. Docs: a guide for the wrapper, and an explanation page of the cases
+  that keep the whole-unit lock.
+
+C1, then C2, then C3 is the critical path.
+
+**Exit test.** For a real person: a platform lead has one workspace that
+two teams change. On Linux, on PostgreSQL, with real OpenTofu in OpenDustpan
+runners, the e2e suite does these steps:
+
+1. Team A and team B each change a different part of the same workspace. Both
+   jobs plan, and both register a claim. The server accepts both claims.
+2. Both applies run at the same time. The state after both has the changes of
+   A and of B, and no resource of A or B is lost or reverted. The history
+   shows two state versions with their claims.
+3. A third change overlaps the claim of team A. The server refuses the claim
+   before any call to the cloud provider. The refusal names the claim that
+   blocks it.
+4. A change that uses a case of the strict rules (for example a root output)
+   waits for the whole-unit lock, and the history says why.
+5. A person runs the third change from a laptop with the `dustpan` CLI
+   wrapper. The run waits or joins, as the rules say, and the history shows
+   the claim of the local run.
+6. A local run with the plain `tofu` CLI and no wrapper keeps the whole-unit
+   lock, and a concurrent job waits for it.
+7. A feature from the inventory (C1) works in a local run through the
+   wrapper, with the same result as in a runner.
+
 ## Accepted designs that wait for adapters
 
 The owner accepted these designs on 17 and 18 October 2026. Each has its

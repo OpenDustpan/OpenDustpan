@@ -10,6 +10,8 @@ Changed by:
   failover.
 - ADR 298 extends decision 4: what each instance does while the
   PostgreSQL primary fails over.
+- ADR 302 extends: milestone 8 follows milestone 7 and uses its model of
+  several instances on one database.
 
 ## Context
 
