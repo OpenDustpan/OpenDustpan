@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -118,7 +119,7 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
-	if s.nameLocks != nil {
+	if s.nameLocks.locks != nil {
 		specs = append(specs, durable.ScheduleSpec{
 			Name: nameLockPruneScheduleName, Kind: kindNameLockPrune, Version: jobScheduleVersion,
 			Interval: localusersvc.Prune().Interval, Input: nil,
@@ -164,7 +165,7 @@ func (s *Server) jobKinds() []durable.KindSpec {
 		kinds = append(kinds, s.reconcileKind())
 	}
 
-	if s.nameLocks != nil {
+	if s.nameLocks.locks != nil {
 		kinds = append(kinds, s.nameLockPruneKind())
 	}
 
@@ -246,7 +247,7 @@ func (s *Server) nameLockPruneKind() durable.KindSpec {
 		MinVersion: jobScheduleVersion,
 		Steps: []durable.Step{
 			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-				res, err := localusersvc.PruneLocks(ctx, s.nameLocks, s.now())
+				res, err := localusersvc.PruneLocks(ctx, s.nameLocks.locks, s.now())
 				if err != nil {
 					return nil, fmt.Errorf("name lock prune: %w", err)
 				}
@@ -264,6 +265,23 @@ func (s *Server) nameLockPruneKind() durable.KindSpec {
 			}},
 		},
 	}
+}
+
+// nameLockPrune holds the counts of the lockout by name that the schedule
+// name-lock-prune prunes. A nil counter runs no prune.
+type nameLockPrune struct {
+	locks authgate.NameLockCounter
+}
+
+// nameLocksOf returns the counts of the lockout by name of the store of cfg.
+// A store that keeps no such counts gives a nil counter, and the server runs
+// no prune of them.
+func nameLocksOf(cfg *settings) nameLockPrune {
+	if locks, ok := cfg.namespaceStore.(authgate.NameLockCounter); ok {
+		return nameLockPrune{locks: locks}
+	}
+
+	return nameLockPrune{locks: nil}
 }
 
 // jobKind returns the runner kind of a job with one step that runs body.
