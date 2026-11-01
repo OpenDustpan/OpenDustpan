@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/generationstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
@@ -77,6 +78,11 @@ func checkProviderEnabled(ctx context.Context, q *db.Queries, id string) error {
 // insertSession inserts ss with the digest d and sets the last sign-in of
 // its principal, in the transaction of q.
 func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d session.Digest) error {
+	gen, err := generationstore.ToRow(ss.Generation)
+	if err != nil {
+		return err
+	}
+
 	n, err := q.CreateSession(ctx, db.CreateSessionParams{
 		ID:          ss.ID,
 		Digest:      d.String(),
@@ -86,14 +92,14 @@ func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d ses
 		SourceIp:    ss.SourceIP,
 		UserAgent:   ss.UserAgent,
 		PrincipalID: ss.PrincipalID,
-		Generation:  ss.Generation,
+		Generation:  gen,
 	})
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
 	}
 
 	if n != 1 {
-		return refusedSession(ctx, q, ss.PrincipalID, ss.Generation)
+		return refusedSession(ctx, q, ss.PrincipalID, gen)
 	}
 
 	last := db.SetLastSignInParams{AtMs: codec.Millis(ss.CreatedAt), ID: ss.PrincipalID}
@@ -155,7 +161,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (session.Session, err
 		EndReason:   session.EndReason(row.EndReason),
 		SourceIP:    row.SourceIp,
 		UserAgent:   row.UserAgent,
-		Generation:  row.Generation,
+		Generation:  generationstore.OfSession(row.Generation),
 	}, nil
 }
 
@@ -178,6 +184,11 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 		return session.Match{}, fmt.Errorf("session %q: stored digest: %w", row.ID, err)
 	}
 
+	ownerGeneration, err := generationstore.FromRow(row.PrincipalGeneration)
+	if err != nil {
+		return session.Match{}, err
+	}
+
 	return session.Match{
 		Session: session.Session{
 			CreatedAt:   codec.FromMillis(row.CreatedAtMs),
@@ -190,7 +201,7 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			EndReason:   session.EndReason(row.EndReason),
 			SourceIP:    row.SourceIp,
 			UserAgent:   row.UserAgent,
-			Generation:  row.Generation,
+			Generation:  generationstore.OfSession(row.Generation),
 		},
 		Owner: session.Owner{
 			ActiveAt:    codec.FromMillis(row.PrincipalActiveAtMs),
@@ -207,7 +218,7 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			TokenFreshnessMs: row.PolicyTokenFreshnessMs.Int64, TokenFreshnessSet: row.PolicyTokenFreshnessMs.Valid,
 		}),
 		Accounts:   codec.FromSessionAccountsRow(row.AccountsInactivityMs, row.AccountsDisable),
-		Generation: row.PrincipalGeneration,
+		Generation: ownerGeneration,
 	}, nil
 }
 

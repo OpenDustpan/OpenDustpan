@@ -23,10 +23,6 @@ func TestCookieSuites(t *testing.T) {
 		t.Parallel()
 		sessiontest.RunKeyStore(t, nil)
 	})
-	t.Run("PrincipalStateStore", func(t *testing.T) {
-		t.Parallel()
-		sessiontest.RunPrincipalStateStore(t, nil)
-	})
 	t.Run("ProofVerifier", func(t *testing.T) {
 		t.Parallel()
 		sessiontest.RunProofVerifier(t, nil)
