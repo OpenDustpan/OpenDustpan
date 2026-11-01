@@ -84,10 +84,11 @@ func (conflictWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace
 			Holder:   "alice",
 			Reason:   "apply",
 		},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: ns, Name: name},
-		Revision:  2,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns, Name: name},
+		Revision:    2,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -328,10 +329,11 @@ func (r *raceWorkspaces) lockedWorkspace(holder string) workspace.Workspace {
 			Holder:   holder,
 			Reason:   "",
 		},
-		ID:        workspace.ID("ws-test123"),
-		Ref:       workspace.Ref{Namespace: ns, Name: name},
-		Revision:  2,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID("ws-test123"),
+		Ref:         workspace.Ref{Namespace: ns, Name: name},
+		Revision:    2,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 

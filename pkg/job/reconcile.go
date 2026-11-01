@@ -459,7 +459,13 @@ func reconcileAction(j *Job) (identity.Action, error) {
 // before, or every job in s when before is the zero time.
 func stateFilter(s State, before time.Time) Filter {
 	return Filter{
-		Namespace: "", UnitID: "", States: []State{s}, Limit: 0, After: "", StateChangedBefore: before,
+		Namespace:          "",
+		UnitID:             "",
+		States:             []State{s},
+		Limit:              0,
+		After:              "",
+		StateChangedBefore: before,
+		StateChangedAfter:  time.Time{},
 	}
 }
 

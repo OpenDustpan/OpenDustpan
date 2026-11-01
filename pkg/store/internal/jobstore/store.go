@@ -152,6 +152,7 @@ func (s *Store) List(ctx context.Context, f job.Filter) ([]job.Job, error) {
 		rows, err := tx.List(ctx, Query{
 			Namespace: f.Namespace, UnitID: f.UnitID, States: f.States, Limit: limit, After: f.After,
 			StateChangedBeforeMs: millisOrZero(f.StateChangedBefore),
+			StateChangedAfterMs:  millisOrZero(f.StateChangedAfter),
 		})
 		if err != nil {
 			return err

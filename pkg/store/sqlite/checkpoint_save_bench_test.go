@@ -253,6 +253,8 @@ func (f *benchSaveFixture) benchCheckpoint(
 		BlobKey:       key,
 		BlobSize:      0,
 		BlobMD5:       [md5.Size]byte{},
+
+		AttemptStartedAt: time.Now().UTC(),
 	}
 }
 

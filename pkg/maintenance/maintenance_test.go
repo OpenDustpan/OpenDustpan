@@ -705,10 +705,11 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 			Holder:   "admin",
 			Reason:   "apply",
 		},
-		ID:        "ws-1",
-		Ref:       workspace.Ref{Namespace: testNamespace, Name: parsed},
-		Revision:  2,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          "ws-1",
+		Ref:         workspace.Ref{Namespace: testNamespace, Name: parsed},
+		Revision:    2,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	f.workspaces.workspaces[w.ID] = w
 }

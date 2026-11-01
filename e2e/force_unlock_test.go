@@ -280,7 +280,8 @@ func (r *forceUnlockRun) checkMismatch(t *testing.T, body string) {
 
 // checkAllowed proves that an admin releases the lock with the CLI, which sends
 // no body, and with the API, with a reason and the lock that the caller saw; and
-// that a force-unlock of an unlocked workspace answers 409 with its code.
+// that a repeat by the releaser succeeds with no change, and that a force-unlock
+// of an unlocked workspace that names another lock answers 409 with its code.
 func (r *forceUnlockRun) checkAllowed(t *testing.T) {
 	t.Helper()
 
@@ -306,9 +307,23 @@ func (r *forceUnlockRun) checkAllowed(t *testing.T) {
 		t.Fatalf("lock after the API force-unlock is %+v, want none", still)
 	}
 
+	// The admin repeats the force-unlock, as OpenTofu does when it loses the
+	// answer: the repeat succeeds and changes nothing.
 	status, respBody = r.forceUnlock(t, r.admin, "")
+	if status != http.StatusOK {
+		t.Fatalf("repeat of the force-unlock by the releaser answers %d %q, want 200", status, respBody)
+	}
+
+	if still := r.current(t); still.id != "" {
+		t.Fatalf("lock after the repeated force-unlock is %+v, want none", still)
+	}
+
+	// A force-unlock that names another lock is not a repeat: it answers 409.
+	other := `{"data":{"attributes":{"lock-id":"lock-other","lock-holder":"` + held.holder + `"}}}`
+
+	status, respBody = r.forceUnlock(t, r.admin, other)
 	if status != http.StatusConflict || errorCode(t, respBody) != "workspace.not-locked" {
-		t.Fatalf("force-unlock of an unlocked workspace answers %d %q, want 409 workspace.not-locked", status, respBody)
+		t.Fatalf("force-unlock that names another lock answers %d %q, want 409 workspace.not-locked", status, respBody)
 	}
 }
 

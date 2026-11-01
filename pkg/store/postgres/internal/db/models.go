@@ -1247,6 +1247,11 @@ type Workspace struct {
 	AllowUnlockedWrites   bool
 	DeletedAtMs           pgtype.Int8
 	DeletedName           pgtype.Text
+	LastReleaseLockID     string
+	LastReleaseHolder     string
+	LastReleaseBy         string
+	LastReleaseKind       string
+	LastReleaseAtMs       int64
 }
 
 type WorkspaceBlameCursor struct {
