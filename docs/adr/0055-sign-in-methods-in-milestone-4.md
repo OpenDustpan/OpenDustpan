@@ -9,6 +9,8 @@ Changed by:
 - ADR 285 changes decision 5: a local user signs in with a passkey, a password
   or both.
 - ADR 297 changes decision 9: the server disables the person and keeps no session.
+- ADR 301 extends decisions 6 and 7: a passkey or TOTP gives the fresh step
+  to a person of the trusted header or a plain OAuth 2.0 provider.
 
 ## Context
 
