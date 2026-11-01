@@ -119,6 +119,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyProfileTables()...)
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
+	tables = append(tables, pgCopyLocalUserTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
 	tables = append(tables, pgCopyUnitSettingsTables()...)
@@ -484,6 +485,11 @@ func pgEmptiedTables() []pgCopyTable {
 			columns: []string{pgColOwner, pgColAtMs, "lease_ms"},
 			orderBy: []string{pgColOwner},
 		},
+		{
+			table:   backup.TableLocalUserResets,
+			columns: pgLocalUserResetColumns(),
+			orderBy: []string{"id"},
+		},
 	}
 }
 
@@ -536,7 +542,7 @@ func pgCopyPrincipalsTable() pgCopyTable {
 		columns: []string{
 			"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 			pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
-			"break_glass",
+			"break_glass", "session_generation",
 		},
 		orderBy: []string{"id"},
 	}

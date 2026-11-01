@@ -62,6 +62,7 @@ const (
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
 	TableDurableHeartbeats    = "durable_heartbeats"
+	TableLocalUserResets      = "local_user_resets"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides
@@ -167,6 +168,7 @@ var Tables = []string{
 	"issuer_settings",
 	"manual_locks",
 	TablePersonPreferences,
+	TableLocalUsers,
 	"saved_views",
 	"drift_results",
 	"unit_settings",
