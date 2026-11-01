@@ -32,8 +32,7 @@ list above names each change.
    requester. The requester must be linked to a principal (ADR 146), and the
    principal must hold the apply grant on each unit of the revision. The store
    checks the digest of the current revision as it does for any other request.
-   This replaces the earlier answer that auto-merge and merge queues never
-   count. Benchmark: GitHub merge queue records the account that enqueued each
+   Benchmark: GitHub merge queue records the account that enqueued each
    pull request.
 
 2. **A job of a unit with an open rule waits.** A job of a unit whose profile
