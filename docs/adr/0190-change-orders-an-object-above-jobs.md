@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 222 changes decisions 6 and 7: approval defaults replace MinApprovals.
 - ADR 225 changes decisions 6 and 7: approval defaults replace MinApprovals.
+- ADR 300 changes decision 10: a merge queue entry is a request to apply, and the account that queued it is the requester.
 
 ## Context
 
