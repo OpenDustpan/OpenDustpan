@@ -125,6 +125,7 @@ func newAuditedPrincipalHandler(
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -998,6 +999,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -1089,6 +1091,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
