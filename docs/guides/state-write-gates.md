@@ -21,17 +21,31 @@ the write, and before the OpenTofu CLI changes any resource.
 | The removal of a workspace | `DELETE /api/v2/organizations/{organization}/workspaces/{workspace}` | `delete` |
 | The restore of a deleted unit | `POST /api/inventory/deleted-units/{tool}/{unitID}/restore` | `rollback` |
 | The final delete of a deleted unit | `DELETE /api/inventory/deleted-units/{tool}/{unitID}` | `delete` |
+| The lock of the OpenTofu HTTP backend | `LOCK /tofu/state/{namespace}/{workspace}` | `lock` |
+| A force-unlock on the HTTP backend: an `UNLOCK` by a principal that does not hold the lock | `UNLOCK /tofu/state/{namespace}/{workspace}` | `unlock` |
+| A state version with no lock on the HTTP backend (no `?ID=`, through the unlocked override) | `POST /tofu/state/{namespace}/{workspace}` | `unlocked-write` |
 
 OpenTofu writes a state version after it changed the resources. A refusal at
 that time would leave resources that no stored state records. So the server
 checks the lock, before any plan or apply. The lock request does not say if a
 plan or an apply follows, so a gate at `state.write` stops both. The server
 never refuses a state version of a client that holds a lock which passed the
-check.
+check. A state version that names the lock, also a forced write, does not meet
+the check again. An `UNLOCK` of the HTTP backend by the holder of the lock ends
+its own lock and does not meet the check.
+
+A state version with no lock on the HTTP backend holds no lock that met the
+check, so the server checks it before its write. OpenTofu sends it after the
+apply, so a refusal can leave resources that no stored state records. The
+refusal says so.
+
+The first `LOCK` of a workspace that does not exist creates the workspace
+before the check, because a gate reads the facts of a unit that exists. A
+refused first lock leaves the workspace with no state and no lock.
 
 The server does not check these writes yet: a Pulumi update, stack import,
-rename or removal, the OpenTofu HTTP backend, and a state version that a client
-sends with no lock. They keep their earlier behavior.
+rename or removal, and a state version with no lock through the TFE-compatible
+API. They keep their earlier behavior.
 
 A write with the token of a job passes the gates only in two cases. The job
 decided the change before it started, so a phase that passed the apply decision
@@ -96,6 +110,29 @@ Error message: forbidden
 Writes to opentofu are frozen. (error gate.denied, decision record
 gdr-yzimt6xg4xkiu4ewx7ng)
 ```
+
+The OpenTofu HTTP backend answers 403 with the same text as a plain-text body:
+
+```text
+Writes to opentofu are frozen. (error gate.denied, decision record gdr-yzimt6xg4xkiu4ewx7ng)
+```
+
+A refused state version with no lock starts with this sentence: "The server
+refused this state version, so resources may exist that no stored state
+records."
+
+OpenTofu does not print the body of a 403 from the HTTP backend. It prints one
+of these texts:
+
+| Command | Text |
+| --- | --- |
+| `tofu plan`, `tofu apply` (the lock) | `Error acquiring the state lock` and `HTTP remote state endpoint invalid auth` |
+| `tofu state push -lock=false` | `Failed to persist state: HTTP error: 403` |
+| `tofu force-unlock` | `Failed to unlock state: Unexpected HTTP response code 403` |
+
+The server log has the line `state write refused` with the unit, the error
+code and the ID of the decision record. The audit log has a `denied` entry
+with the action of the write and the unit (see the [audit log](audit-log.md)).
 
 The tool-neutral inventory API answers `{"code": <status>, "message": "..."}`
 with the same message text. It answers 403 for a deny or an access limit, 409 for

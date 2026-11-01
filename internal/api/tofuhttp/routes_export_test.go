@@ -22,6 +22,7 @@ func TestRoutesReturnsACopy(t *testing.T) {
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
