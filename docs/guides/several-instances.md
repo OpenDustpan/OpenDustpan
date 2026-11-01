@@ -228,8 +228,9 @@ The defaults are values that the project chose. Nobody measured them against a m
 
 The server also does these things to leave a read-only server:
 
-- **A write that fails with 25006.** The server checks its idle connections. When a connection reaches a server that refuses writes, the server closes all connections of the pool. A connection in use closes when its request ends. New connections must pass the check of `target_session_attrs`. The server closes the pool at most one time in 5 seconds. Each time, it writes a warning to its log with the reason `read-only`. A 25006 from a transaction that the server opened as read-only does not close the pool.
-- **The readiness probe.** The probe checks that the database accepts writes. When it does not, the probe answers 503 with the check `store-read-only`, and the server closes the connections of the pool in the same way.
+- **A write that fails with 25006.** The connection reached a server that refuses writes. So the server closes all connections of the pool. A connection in use closes when its request ends. New connections must pass the check of `target_session_attrs`. The server closes the pool at most one time in 5 seconds. Each time, it writes a warning to its log with the reason `read-only`.
+- **A 25006 in a read-only transaction of the server.** This can be a defect of the server, not a read-only database. So the server first checks its idle connections. It closes the pool only when one of them reaches a server that refuses writes.
+- **The readiness probe.** The check of the store reads whether the database accepts writes, in one statement. When the database refuses writes, the probe answers 503 with the check `store-read-only`. The server then closes the connections of the pool in the same way. When the check cannot run, the probe answers 503 with the check `store`.
 
 The server also sets the TCP keepalive of each connection. It sends a keepalive after 15 seconds without traffic, then every 5 seconds. After 3 keepalives with no answer, the connection closes. So an idle connection to a host that stopped answering closes in about 30 seconds.
 
@@ -243,7 +244,7 @@ The tests ran on 2026-11-01 against PostgreSQL 18.6 on one host, with pgx 5.11.0
 - When the database turns read-only (`default_transaction_read_only = on`) and its sessions end, the server does not open a new read-only session. Reads and writes then answer 503 until the database accepts writes.
 - With the default settings, the server does not open against a read-only database. It opens against the same database when the database accepts writes.
 - A proxy held all bytes of a connection and closed nothing. Each kind of round trip then ended with 503 within the 30-second limit. The kinds are a statement, a read of rows, a batch, a copy, a savepoint, a commit and a rollback. The test used a shorter limit to run fast.
-- A pool whose idle sessions are read-only closes its connections after one write fails with 25006. A burst of such failures closes it only one time. A write in a read-only transaction of the server does not close a pool of writable connections.
+- A pool whose sessions are read-only closes its connections after one write fails with 25006. This is also true for a pool of one connection that the failed request still holds. A burst of such failures closes it only one time. A write in a read-only transaction of the server does not close a pool of writable connections.
 
 ### What should work, and was not tested
 
