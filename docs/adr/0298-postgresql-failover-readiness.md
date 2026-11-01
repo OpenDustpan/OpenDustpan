@@ -549,9 +549,13 @@ binaries are not present.
   wrap of `namespace.ErrUnreachable` for the classes `ConnectionFailed`,
   `Shutdown` and `ReadOnly`.
 - `namespace.Store` gets no new method. A new optional interface in
-  `pkg/dustpan`, `writeChecker` with `CheckWritable(ctx) error`, is what the
-  readiness probe reads. The PostgreSQL store implements it. The error wraps
-  `namespace.ErrUnavailable`.
+  `pkg/dustpan`, `writeChecker` with `CheckWritable(ctx) (bool, error)`, is
+  what the readiness probe reads, in place of the ping of the store. The
+  PostgreSQL store implements it. It returns false when the database answers
+  that it refuses writes, and the probe then names the check
+  `store-read-only`. It returns an error that wraps `namespace.ErrUnavailable`
+  when the check cannot run, and the probe then fails closed with the check
+  `store`.
 - `internal/errcode`: `store.failover-setting-invalid`.
 - Tests in `pkg/store/postgres`:
   - `TestFailoverSettingsAllowlist`: one row for each setting and each edge
