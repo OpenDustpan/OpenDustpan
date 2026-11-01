@@ -8,6 +8,7 @@ Changed by:
 - ADR 213 extends decision 4: an edge for each job output read.
 - ADR 248 changes decision 4: the home region of the source reads primary
   installation.
+- ADR 309 extends decision 9: a delete of a unit that has resources.
 
 ## Context
 

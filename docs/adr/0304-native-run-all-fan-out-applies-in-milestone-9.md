@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-01. Decided by the project owner on 1 November 2026
 
+Changed by:
+
+- ADR 310 changes decision 8: `state rm` and `state mv` as jobs.
+
 Changes:
 
 - Changes ADR 100 decision 2: a discovery job is the only job kind with no unit.
