@@ -161,6 +161,7 @@ linters:
             - "**/pkg/history/**"
             - "**/internal/dependency/**"
             - "**/pkg/graph/**"
+            - "**/pkg/reviewrequest/**"
             - "**/pkg/objectcontext/**"
             - "**/internal/unmanaged/**"
             - "**/pkg/drift/**"

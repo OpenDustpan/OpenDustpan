@@ -1,15 +1,16 @@
 ---
 rfc: 114
 title: Review requests and change orders, one integration with the Git host
-status: discussing
+status: accepted
+adr: 299
 created: 2026-10-31
 ---
 
 # RFC 114. Review requests and change orders, one integration with the Git host
 
-Status: discussing. The project owner decided the parts under "Decisions of
-the owner" on 31 October 2026. An ADR records them when the open questions
-close (ADR 15). This RFC amends the open parts of RFC 27 (questions 1, 4, 5,
+Status: accepted (ADR 299). The project owner decided the parts under
+"Decisions of the owner" on 31 October and 1 November 2026. ADR 299 records
+them and takes the recommendation of each open question. This RFC amends the open parts of RFC 27 (questions 1, 4, 5,
 6 and 11).
 
 ## Problem
@@ -999,4 +1000,5 @@ recommendation and a plain summary.
 
 ## Outcome
 
-None yet.
+Accepted. [ADR 299](../adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md)
+records the decisions.
