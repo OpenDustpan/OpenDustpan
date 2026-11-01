@@ -1977,8 +1977,8 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
-		Kind:       installation.KindProduction,
-		Now:        nil,
+		Kind: installation.KindProduction,
+		Now:  nil,
 	})
 	if err != nil {
 		t.Fatalf("local user service: %v", err)
