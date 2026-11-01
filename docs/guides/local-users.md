@@ -145,8 +145,52 @@ own password spend it: a wrong password, a code that is not valid and a
 wrong current password each spend one unit. When the budget of an address is
 empty, these routes answer `429` until it refills.
 
-The server has no lockout by user name yet. Until it has one, the password
-budget of the source address is the only limit on guesses.
+## Lockout by user name
+
+Each instance on one database shares the counts of failed attempts. The
+server adds a failure before it compares the password, and only a full
+sign-in clears the counts of its name. Two counts apply to each user name:
+
+| Count | Lock |
+| --- | --- |
+| 10 wrong passwords in a row for one user name from one source (an IPv4 address, or the /64 of an IPv6 address) | that name from that source, for 30 minutes |
+| 100 wrong passwords in a row for one user name from every source | that name from every source. The first lock lasts 30 minutes, and each new lock of the name doubles the time, up to 24 hours. After 24 hours with no lock, the next lock lasts 30 minutes again. |
+
+A locked name answers `401` with the same error code as a wrong password,
+`local-user.sign-in-failed`. The audit entry `sign-in.password-failed`
+records the reason. An unknown user name counts and locks as a known name
+does, so a lock tells nothing about a user. The table of the counts holds an
+HMAC of the user name, never the name.
+
+A wrong current password of a change of the own password counts too.
+
+A sign-in that answers `429` because the hash budget of the server is full
+counts no failure. The server adds the failure only after the hash has its
+budget, so an attacker who fills the budget cannot lock the name of a person.
+
+An attacker with 10 or more networks can keep a person out of the password
+sign-in for up to 24 hours at a time. An administrator can end each lock.
+Read the counts of a local user:
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://dustpan.example/api/dustpan/v1/local-users/locks?principal=prn-..."
+```
+
+```json
+{"locks": [{"scope": "password", "source": "192.0.2.1", "lockedUntil": "2026-11-01T12:30:00Z", "failures": 10, "level": 1}]}
+```
+
+End every count and lock of the name, with a reason:
+
+```sh
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"principal":"prn-...","reason":"the person called the help desk"}' \
+  https://dustpan.example/api/dustpan/v1/local-users/unlock
+```
+
+The answer gives the count of the counts that the unlock cleared. Both routes
+need `server:manage-sign-in`.
 
 ## Change the own password
 
@@ -232,6 +276,8 @@ value and the source of each one.
 | `password.change-refused` | The server refuses a change of the own password. |
 | `password.rehashed` | A sign-in stores a new hash with the current parameters. |
 | `sign-in.password-failed` | A password sign-in fails. The changes record the real reason. |
+| `sign-in.name-locked` | A count locks a user name. The changes record the scope, the end of the lock and the level. |
+| `sign-in.name-unlocked` | An administrator ends the counts and locks of a user name, with a reason. |
 | `session:sign-in` | A password sign-in starts a session, with the provider `local`. |
 
 No entry holds a password, a hash or a code.

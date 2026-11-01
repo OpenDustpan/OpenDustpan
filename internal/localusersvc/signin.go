@@ -52,7 +52,7 @@ func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, passwo
 	}
 
 	in := &attempt{
-		base: base, object: unknownObject, reason: "", hash: "",
+		base: base, object: unknownObject, reason: "", name: "", hash: "",
 		cred: localuser.Credential{User: localuser.User{
 			CreatedAt: time.Time{}, PasswordSetAt: time.Time{}, ID: "", PrincipalID: "", UserName: "", CreatedBy: "",
 			ChangeRequired: false, Demo: false,

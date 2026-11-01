@@ -486,17 +486,6 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{"source", "window_end_ms", "count"},
 		},
 		{
-			table: backup.TableNameLocks,
-			columns: []string{
-				"scope", "name", "sub", "failures", "locked_until_ms", "level", "last_failure_ms", "last_lock_end_ms",
-				"reset_after_ms",
-			},
-		},
-		{
-			table:   backup.TableNameLockKey,
-			columns: []string{"id", "key"},
-		},
-		{
 			table:   backup.TableAuditChainCheck,
 			columns: []string{"id", "checked_at_ms", "invalid"},
 		},
@@ -541,7 +530,27 @@ func sqliteControlTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(core, sqliteRevocationControlTables(), sqliteRunnerControlTables())
+	return slices.Concat(
+		core, sqliteRevocationControlTables(), sqliteRunnerControlTables(), sqliteNameLockControlTables(),
+	)
+}
+
+// sqliteNameLockControlTables lists the columns of the counts of the lockout
+// by name and of the key of their names.
+func sqliteNameLockControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				"scope", backupColName, "sub", "failures", "locked_until_ms", "level", "last_failure_ms",
+				"last_lock_end_ms", "reset_after_ms",
+			},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", "key"},
+		},
+	}
 }
 
 // sqliteRevocationControlTables lists the column list of the control table that

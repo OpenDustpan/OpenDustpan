@@ -1,6 +1,7 @@
 package sqlite_test
 
 import (
+	"bytes"
 	"path/filepath"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestNameLockKey(t *testing.T) {
 	}
 
 	second, err := s.NameLockKey(t.Context())
-	if err != nil || string(second) != string(first) {
+	if err != nil || !bytes.Equal(second, first) {
 		t.Fatalf("second key differs or fails: %v", err)
 	}
 }

@@ -46,17 +46,26 @@ type Tx interface {
 	Set(ctx context.Context, scope, name string, r Row) error
 }
 
-// Add adds one failure to the count of name and sub in scope under rule, in
+// Key names one count: its scope, its name and its sub-key.
+type Key struct {
+	Scope string
+	Name  string
+	Sub   string
+}
+
+// Add adds one failure to the count of k under rule, in
 // the transaction of tx. An add while the lock holds counts nothing and
 // returns authgate.ErrNameLocked. An add after the lock ended starts a new
 // count at 1. A level past the reset time of its rule goes back to 0. The add
 // that takes the count to the limit sets the lock and passes.
-func Add(ctx context.Context, tx Tx, scope, name, sub string, rule authgate.LockRule) (authgate.NameLock, error) {
+func Add(ctx context.Context, tx Tx, k Key, rule authgate.LockRule) (authgate.NameLock, error) {
+	scope, name, sub := k.Scope, k.Name, k.Sub
+
 	// Defense in depth: the service checks the request too. This check stays
 	// so that no caller writes a row with a scope, a name or a rule that the
 	// port refuses.
-	if err := authgate.CheckLockRequest(scope, name, sub, rule); err != nil {
-		return authgate.NameLock{}, err
+	if checkErr := authgate.CheckLockRequest(scope, name, sub, rule); checkErr != nil {
+		return authgate.NameLock{}, checkErr
 	}
 
 	now, err := tx.NowMs(ctx)
@@ -64,8 +73,8 @@ func Add(ctx context.Context, tx Tx, scope, name, sub string, rule authgate.Lock
 		return authgate.NameLock{}, fmt.Errorf("read the clock of the store: %w", err)
 	}
 
-	if err := tx.Ensure(ctx, scope, name, sub); err != nil {
-		return authgate.NameLock{}, fmt.Errorf("make the name count: %w", err)
+	if ensureErr := tx.Ensure(ctx, scope, name, sub); ensureErr != nil {
+		return authgate.NameLock{}, fmt.Errorf("make the name count: %w", ensureErr)
 	}
 
 	r, err := tx.Get(ctx, scope, name, sub)
@@ -79,8 +88,8 @@ func Add(ctx context.Context, tx Tx, scope, name, sub string, rule authgate.Lock
 
 	next := step(r, now, rule)
 
-	if err := tx.Set(ctx, scope, name, next); err != nil {
-		return authgate.NameLock{}, fmt.Errorf("write the name count: %w", err)
+	if setErr := tx.Set(ctx, scope, name, next); setErr != nil {
+		return authgate.NameLock{}, fmt.Errorf("write the name count: %w", setErr)
 	}
 
 	return Lock(next), nil
