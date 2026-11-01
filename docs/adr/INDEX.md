@@ -22,12 +22,12 @@ that the named part applies, and the later ADR adds to it.
 | [6](0006-identity-tokens-and-sso.md) | Identity: OpenDustpan issues tokens; SSO only signs humans in | accepted | - | ADR 17 changes; ADR 52 extends; ADR 53 extends; ADR 237 changes | this ADR, with ADR 17, 52, 53, 237 |
 | [7](0007-strict-linting-as-a-gate.md) | Strict linting is the first gate | accepted | - | ADR 275 changes | this ADR, with ADR 275 |
 | [8](0008-separate-server-and-console-repositories.md) | Server and console live in separate repositories | accepted | changes ADR 5 | ADR 211 extends | this ADR, with ADR 211 |
-| [12](0012-a-backend-for-many-iac-tools.md) | A backend for many infrastructure-as-code tools | accepted | - | ADR 13 extends; ADR 15 extends; ADR 35 changes; ADR 209 changes; ADR 248 changes | this ADR, with ADR 13, 15, 35, 209, 248 |
+| [12](0012-a-backend-for-many-iac-tools.md) | A backend for many infrastructure-as-code tools | accepted | - | ADR 13 extends; ADR 15 extends; ADR 35 changes; ADR 209 changes; ADR 248 changes; ADR 305 extends | this ADR, with ADR 13, 15, 35, 209, 248, 305 |
 | [13](0013-separate-tool-models-shared-read-model-and-access.md) | Separate tool models; shared access control and inventory | accepted | extends ADR 12 | ADR 19 extends; ADR 41 changes; ADR 150 changes; ADR 247 extends; ADR 265 extends | this ADR, with ADR 19, 41, 150, 247, 265 |
 | [14](0014-write-in-simplified-technical-english.md) | Write in Simplified Technical English | accepted | - | ADR 214 extends; ADR 251 extends | this ADR, with ADR 214, 251 |
 | [15](0015-rfcs-for-questions-adrs-for-decisions.md) | RFCs for open questions, ADRs for decisions | accepted | extends ADR 1; extends ADR 12 | - | this ADR |
 | [16](0016-us-spelling.md) | US spelling for English text | accepted | changes ADR 1 | - | this ADR |
-| [17](0017-api-authorization-and-policy-for-every-feature.md) | Every feature has a REST API, authorization and policy | accepted | changes ADR 5; changes ADR 6 | ADR 30 changes; ADR 210 extends; ADR 222 changes; ADR 224 changes; ADR 266 extends | this ADR, with ADR 30, 210, 222, 224, 266 |
+| [17](0017-api-authorization-and-policy-for-every-feature.md) | Every feature has a REST API, authorization and policy | accepted | changes ADR 5; changes ADR 6 | ADR 30 changes; ADR 210 extends; ADR 222 changes; ADR 224 changes; ADR 266 extends; ADR 305 extends | this ADR, with ADR 30, 210, 222, 224, 266, 305 |
 | [18](0018-organizations-are-namespaces.md) | Organizations are namespaces | accepted | - | ADR 248 changes | this ADR, with ADR 248 |
 | [19](0019-a-stack-has-a-stable-id.md) | A stack has a stable ID | accepted | extends ADR 13 | ADR 47 extends; ADR 248 changes | this ADR, with ADR 47, 248 |
 | [20](0020-the-pulumi-update-cycle.md) | The Pulumi update cycle | accepted | - | ADR 24 extends decision 6; ADR 28 extends decision 1; ADR 37 changes decision 5; ADR 43 changes decision 5; ADR 151 changes; ADR 213 extends | this ADR, with ADR 24, 28, 37, 43, 151, 213 |
@@ -116,7 +116,7 @@ that the named part applies, and the later ADR adds to it.
 | [133](0133-runner-identities-and-tokens.md) | Runner identities, join tokens, handoff tokens and job sessions | accepted | changes ADR 101 decision 10; extends ADR 101 | ADR 204 extends | this ADR, with ADR 204 |
 | [134](0134-the-launcher-contract.md) | The launcher contract | accepted | extends ADR 101 decisions 7, 10 and 13 | ADR 199 changes decisions 4 and 6 | this ADR, with ADR 199 |
 | [135](0135-the-source-pipeline.md) | The source pipeline: snapshots of git packs | accepted | extends ADR 100 decision 5 | ADR 199 extends decision 1; ADR 213 extends decision 6; ADR 220 changes decision 9; ADR 222 changes decision 6; ADR 226 changes decision 6 | this ADR, with ADR 199, 213, 220, 222, 226 |
-| [136](0136-the-kubernetes-coordinator.md) | The Kubernetes coordinator | accepted | - | ADR 139 extends decision 9 | this ADR, with ADR 139 |
+| [136](0136-the-kubernetes-coordinator.md) | The Kubernetes coordinator | accepted | - | ADR 139 extends decision 9; ADR 305 extends | this ADR, with ADR 139, 305 |
 | [137](0137-the-machine-coordinator.md) | The machine coordinator | accepted | - | ADR 139 extends decision 4 | this ADR, with ADR 139 |
 | [138](0138-runner-actions-audit-and-api.md) | Runner actions, audit entries and the REST API | accepted | extends ADR 103 decisions 8 and 9 | ADR 210 changes | this ADR, with ADR 210 |
 | [139](0139-runner-dependencies-and-the-runner-module.md) | Runner dependencies and the runner module | accepted | extends ADR 100 decision 5; extends ADR 131 decision 6; extends ADR 136 decision 9; extends ADR 137 decision 4 | ADR 282 supersedes decision 4 | this ADR, with ADR 282 |
@@ -270,3 +270,4 @@ that the named part applies, and the later ADR adds to it.
 | [302](0302-milestone-8-concurrent-applies-on-one-state.md) | Milestone 8: concurrent applies on one state | accepted | extends ADR 280 | - | this ADR |
 | [303](0303-scope-limits-ansible-cdktf-and-git-hosting.md) | Scope limits: no Ansible stack, no CDKTF, and not a Git host | accepted | extends ADR 271 decision 11 | - | this ADR |
 | [304](0304-native-run-all-fan-out-applies-in-milestone-9.md) | Native run-all: fan-out applies in milestone 9 | accepted | changes ADR 100 decision 2; changes ADR 100 decision 20; changes ADR 282 decision 5 | - | this ADR |
+| [305](0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md) | Our own Kubernetes operator, modeled on the Pulumi Kubernetes Operator | accepted | extends ADR 12; extends ADR 17; extends ADR 136 | - | this ADR |
