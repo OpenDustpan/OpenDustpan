@@ -4,7 +4,7 @@ Status: accepted · 2026-10-17
 
 Changed by:
 
-- ADR 314 extends decision 6: no visit counting on the docs site.
+- ADR 315 extends decision 6: no visit counting on the docs site.
 
 ## Context
 

@@ -4,7 +4,7 @@ Status: accepted · 2026-10-18. Accepts RFC 75 with ADR 237. Supersedes in part 
 
 Changed by:
 
-- ADR 314 extends: the quickstart.
+- ADR 315 extends: the quickstart.
 
 ## Context
 

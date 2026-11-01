@@ -12,7 +12,7 @@ Changed by:
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 297 changes decisions 13 and 14: a run resolves the sign-in that it records.
 - ADR 311 extends: the mark and the avatar of Dusty.
-- ADR 313 extends: the stream of an answer of Dusty.
+- ADR 314 extends: the stream of an answer of Dusty.
 
 ## Context
 
