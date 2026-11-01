@@ -127,9 +127,17 @@ func (f *fixture) serviceWith(t *testing.T, reach access.ReachConfig) *localuser
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(), Audit: f.store,
-		Settings: f.settings, SSO: func(context.Context) (bool, error) { return f.sso, nil }, Reach: reach,
-		Kind: installation.KindProduction, Now: nil,
+		Store:      f.store,
+		Principals: f.principals,
+		Hasher:     f.hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      f.store,
+		Locks:      st,
+		Keys:       st,
+		Settings:   f.settings,
+		SSO:        func(context.Context) (bool, error) { return f.sso, nil }, Reach: reach,
+		Kind:       installation.KindProduction,
+		Now:        nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

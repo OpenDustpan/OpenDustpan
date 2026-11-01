@@ -31,6 +31,18 @@ func localUserOperationLabels() map[string]apidesc.Label {
 				apidesc.Typed[resetLocalUserRequest]("ResetLocalUserPasswordRequest"),
 				apidesc.Typed[resetLocalUserResponse]("ResetLocalUserPasswordResponse"),
 			),
+		apidesc.Pattern(http.MethodPost, localUserUnlockPath): apidesc.Name("unlockLocalUser", tagLocalUsers).
+			On(apidesc.KindServer).
+			WithBodies(
+				apidesc.Typed[unlockLocalUserRequest]("UnlockLocalUserRequest"),
+				apidesc.Typed[unlockLocalUserResponse]("UnlockLocalUserResponse"),
+			),
+		apidesc.Pattern(http.MethodGet, localUserLocksPath): apidesc.Name("getLocalUserLocks", tagLocalUsers).
+			On(apidesc.KindServer).
+			WithQuery(apidesc.StringParam("principal", "The principal ID of the local user.")).
+			WithBodies(apidesc.NoBody, apidesc.Typed[localUserLocksResponse](
+				"LocalUserLocks", apidesc.Named[localUserLockBody]("LocalUserLock"),
+			)),
 		apidesc.Pattern(http.MethodPost, ownSignInChangePath): apidesc.Name("changeOwnPassword", tagLocalUsers).
 			On(apidesc.KindCaller).
 			WithBodies(apidesc.Typed[changeOwnPasswordRequest]("ChangeOwnPasswordRequest"), apidesc.NoBody),

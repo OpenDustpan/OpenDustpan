@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -724,6 +725,7 @@ var routeBodies = map[string]string{
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
 	"POST /api/dustpan/v1/store-checks":                        `{"target":"blobs"}`,
 	"POST /api/dustpan/v1/local-users":                         `{"userName":"routeuser","displayName":"","reason":"route test"}`,
+	"POST /api/dustpan/v1/local-users/unlock":                  `{"principal":"` + testPrincipalID + `","reason":"route test"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
 	) + `"}`,
@@ -1194,6 +1196,8 @@ func routeQuery(path string) string {
 		return "?tool=pulumi&unit=" + url.QueryEscape(testUnitName)
 	case path == "/api/server/caller/access":
 		return "?object=" + testNamespace
+	case path == "/api/dustpan/v1/local-users/locks":
+		return "?principal=" + testPrincipalID
 	default:
 		return ""
 	}
@@ -1958,17 +1962,54 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 		t.Fatalf("hasher: %v", err)
 	}
 
+	seedRouteLocalUser(t, st)
+
 	svc, err := localusersvc.New(localusersvc.Config{
-		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
-		Settings: nil, SSO: nil,
+		Store:      st,
+		Principals: principals,
+		Hasher:     hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      st,
+		Locks:      st,
+		Keys:       st,
+		Settings:   nil,
+		SSO:        nil,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
-		Kind: installation.KindProduction, Now: nil,
+		Kind:       installation.KindProduction,
+		Now:        nil,
 	})
 	if err != nil {
 		t.Fatalf("local user service: %v", err)
 	}
 
 	return svc
+}
+
+// seedRouteLocalUser gives the seeded person testPrincipalID a local user
+// record with no password, when the store holds that person, so the routes
+// that read or unlock the counts of a local user find one.
+func seedRouteLocalUser(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	u := localuser.User{
+		CreatedAt: at, PasswordSetAt: time.Time{}, ID: "lus-route", PrincipalID: testPrincipalID,
+		UserName: "routealice", CreatedBy: "seed", ChangeRequired: false, Demo: false,
+	}
+	e := audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "seed", IDPSubject: "", TokenID: "",
+		Action: "local-user.created", Object: "local-user:lus-route", Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+	}
+
+	// A store of another fixture holds no person testPrincipalID: it gets no
+	// local user record.
+	err := st.CreateUser(t.Context(), u, e)
+	if err != nil && !errors.Is(err, localuser.ErrAlreadyExists) && !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("seed the local user: %v", err)
+	}
 }

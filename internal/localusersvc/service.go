@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
@@ -114,7 +115,12 @@ type Config struct {
 	Hasher     localuser.PasswordHasher
 	Blocklist  localuser.Blocklist
 	Audit      Auditor
-	Settings   Settings
+	// Locks counts the failures of each user name, so every instance on one
+	// database shares one lockout by name.
+	Locks authgate.NameLockCounter
+	// Keys reads the key of the digests of the user names in Locks.
+	Keys     NameKeys
+	Settings Settings
 	// SSO reports whether the installation has an identity provider: a
 	// provider of the configuration or an enabled stored provider.
 	SSO func(ctx context.Context) (bool, error)
@@ -136,6 +142,8 @@ type Service struct {
 	hasher     localuser.PasswordHasher
 	blocklist  localuser.Blocklist
 	audit      Auditor
+	locks      authgate.NameLockCounter
+	keys       NameKeys
 	settings   Settings
 	sso        func(ctx context.Context) (bool, error)
 	reach      access.ReachConfig
@@ -160,6 +168,10 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: blocklist", ErrMissingDependency)
 	case cfg.Audit == nil:
 		return nil, fmt.Errorf("%w: audit", ErrMissingDependency)
+	case cfg.Locks == nil:
+		return nil, fmt.Errorf("%w: name locks", ErrMissingDependency)
+	case cfg.Keys == nil:
+		return nil, fmt.Errorf("%w: name lock key", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -168,9 +180,19 @@ func New(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, principals: cfg.Principals, hasher: cfg.Hasher, blocklist: cfg.Blocklist,
-		audit: cfg.Audit, settings: cfg.Settings, sso: cfg.SSO, reach: cfg.Reach, now: now, kind: cfg.Kind,
-		dummyMu: sync.Mutex{}, dummy: "",
+		store:      cfg.Store,
+		principals: cfg.Principals,
+		hasher:     cfg.Hasher,
+		blocklist:  cfg.Blocklist,
+		audit:      cfg.Audit,
+		locks:      cfg.Locks,
+		keys:       cfg.Keys,
+		settings:   cfg.Settings,
+		sso:        cfg.SSO, reach: cfg.Reach,
+		now:        now,
+		kind:       cfg.Kind,
+		dummyMu:    sync.Mutex{},
+		dummy:      "",
 	}, nil
 }
 
