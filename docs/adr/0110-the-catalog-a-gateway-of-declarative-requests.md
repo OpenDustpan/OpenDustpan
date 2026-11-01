@@ -12,6 +12,7 @@ Changed by:
 - ADR 225 changes decision 9: also item 5 of the changes to the job model.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 308 extends: adoption of existing units, no move of a request, and git drift.
 
 ## Context
 

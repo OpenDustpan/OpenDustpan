@@ -19,6 +19,7 @@ Changed by:
   failover.
 - ADR 300 changes decision 2: a plan that starts from the Git host never gets the secrets of the first bullet.
 - ADR 300 changes decision 10: a manual lock can cover the whole installation.
+- ADR 309 extends decision 5: the batch record and the first bulk actions.
 
 ## Context
 
