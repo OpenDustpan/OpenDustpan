@@ -121,6 +121,14 @@ func (m *memCollections) SetUnitCollection(
 	return nil
 }
 
+func (m *memCollections) ListCollectionUnitIDs(_ context.Context, ref collection.Ref) ([]string, error) {
+	if _, ok := m.collections[collectionKey(ref.Namespace, ref.Name)]; !ok {
+		return nil, collection.ErrNotFound
+	}
+
+	return []string{}, nil
+}
+
 func (m *memCollections) UnitCollection(_ context.Context, unit collection.UnitRef) (collection.Ref, error) {
 	if !m.units[unit] {
 		return collection.Ref{}, collection.ErrUnitNotFound

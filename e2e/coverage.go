@@ -1335,6 +1335,10 @@ func (coverageCollectionStore) SetUnitCollection(
 	return nil
 }
 
+func (coverageCollectionStore) ListCollectionUnitIDs(_ context.Context, _ collection.Ref) ([]string, error) {
+	return nil, nil
+}
+
 func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.UnitRef) (collection.Ref, error) {
 	return collection.Ref{Namespace: "", Name: ""}, nil
 }

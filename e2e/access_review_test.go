@@ -384,12 +384,9 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 		checkReviewRow(t, f, &rows[i])
 	}
 
-	// The export of a collection must hold the grants on its units, which
-	// the server cannot read until collections are wired (#478).
-	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, "/api/server/namespaces/review/collections/payments/access-review", "",
-		http.StatusNotImplemented,
-	}, nil)
+	t.Run("collection", func(t *testing.T) {
+		checkCollectionReview(ctx, t, env, f)
+	})
 }
 
 // checkReviewRow checks the fields of one current row of the seed.
