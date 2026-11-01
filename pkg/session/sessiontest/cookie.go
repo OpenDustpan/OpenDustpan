@@ -80,9 +80,16 @@ func RunSealer(t *testing.T, _ func(t *testing.T) session.Sealer) {
 	})
 }
 
+// Sealers is the full set of sealers over one key ring, so that a case can
+// seal a value of one kind and open it as another.
+type Sealers struct {
+	Cookies session.Sealer
+	State   session.StateSealer
+}
+
 // RunStateSealer runs the conformance suite of a session.StateSealer. The
-// factory returns a sealer over a fresh key ring.
-func RunStateSealer(t *testing.T, _ func(t *testing.T) session.StateSealer) {
+// factory returns both sealers over one fresh key ring.
+func RunStateSealer(t *testing.T, _ func(t *testing.T) Sealers) {
 	t.Helper()
 
 	skipCases(t, []string{
@@ -91,17 +98,53 @@ func RunStateSealer(t *testing.T, _ func(t *testing.T) session.StateSealer) {
 		"ANonceOlderThanTheWindowIsStale",
 		"ANonceUpTo5SecondsAheadOpens",
 		"ANonceMoreThan5SecondsAheadIsStale",
-		"ANonceDoesNotOpenAsACookie",
-		"ACookieDoesNotOpenAsANonce",
 		// The sealed state of a sign-in.
 		"SignInRequestRoundTrip",
 		"PendingRoundTrip",
 		"ASignInRequestAfterItsExpiryIsExpired",
 		"APendingSignInAfterItsExpiryIsExpired",
-		"ASignInRequestDoesNotOpenAsAPendingSignIn",
-		"APendingSignInDoesNotOpenAsAnAccessCookie",
-		"AnAccessCookieDoesNotOpenAsASignInRequest",
+		"TheSealedRequestHoldsTheStateDigestNotThePlainState",
 		"TheSealedRequestHoldsNoPlainNonceOrVerifier",
+		// Boundary, for each of OpenRequest, OpenPending and OpenNonce: the
+		// length, the form and the key ID, before any open.
+		"OpenRequestRefusesAValueLongerThanTheLimit",
+		"OpenRequestRefusesAValueOfTheWrongForm",
+		"OpenRequestRefusesAKeyIDOutsideThePattern",
+		"OpenRequestRefusesAnUnknownKeyID",
+		"OpenPendingRefusesAValueLongerThanTheLimit",
+		"OpenPendingRefusesAValueOfTheWrongForm",
+		"OpenPendingRefusesAKeyIDOutsideThePattern",
+		"OpenPendingRefusesAnUnknownKeyID",
+		"OpenNonceRefusesAValueLongerThanTheLimit",
+		"OpenNonceRefusesAValueOfTheWrongForm",
+		"OpenNonceRefusesAKeyIDOutsideThePattern",
+		"OpenNonceRefusesAnUnknownKeyID",
+		// Containment: a changed value does not open.
+		"OpenRequestRefusesOneChangedByte",
+		"OpenPendingRefusesOneChangedByte",
+		"OpenNonceRefusesOneChangedByte",
+		"OpenRequestRefusesAnotherKeyIDInTheText",
+		"OpenPendingRefusesAnotherKeyIDInTheText",
+		"OpenNonceRefusesAnotherKeyIDInTheText",
+		"OpenRequestRefusesAPlaintextWithAnUnknownField",
+		"OpenPendingRefusesAPlaintextWithAnUnknownField",
+		// Containment: a value of one kind never opens as another.
+		"ARequestDoesNotOpenAsAPending",
+		"APendingDoesNotOpenAsARequest",
+		"ARequestDoesNotOpenAsANonce",
+		"APendingDoesNotOpenAsANonce",
+		"ANonceDoesNotOpenAsARequest",
+		"ANonceDoesNotOpenAsAPending",
+		"ARefreshCookieDoesNotOpenAsARequestOrAPending",
+		"AForgeCookieDoesNotOpenAsARequestOrAPending",
+		"APendingDoesNotOpenAsAnAccessCookie",
+		"ARequestDoesNotOpenAsAnAccessCookie",
+		"AnAccessCookieDoesNotOpenAsARequest",
+		"AnAccessCookieDoesNotOpenAsAPending",
+		"ANonceDoesNotOpenAsAnAccessRefreshOrForgeCookie",
+		"AnAccessRefreshOrForgeCookieDoesNotOpenAsANonce",
+		// Containment: no secret in an error.
+		"AnErrorHoldsNoPartOfTheValue",
 	})
 }
 
@@ -329,6 +372,10 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"AGoodFactorExpiresThePendingCookie",
 			"ACopiedSignInRequestCookieCannotUseACodeTwice",
 			"TheCallbackExpiresTheSignInRequestCookie",
+			"TheCallbackRefusesAStateThatDoesNotMatchTheCookie",
+			"TheCallbackRefusesAMissingState",
+			"TheCallbackComparesTheStateDigestInConstantTime",
+			"ACopiedPendingCookieAfterAGoodFactorStillNeedsTheKey",
 			"AFactorStepWithNoProofIsRefused",
 			"AFactorStepWithAProofOfAnotherKeyIsRefused",
 			"APasskeySignInFinishWithNoProofIsRefused",
