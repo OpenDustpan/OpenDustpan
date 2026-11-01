@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -50,14 +51,27 @@ type Status struct {
 // GitHost is the narrow port of the review requests over the Forge port.
 // Each method reads or writes through the API of the Git host as the
 // OpenDustpan app. An action as a person uses the user token of that person
-// and is not part of this port. Each method returns ErrUnavailable for a Git
-// host that does not answer, and the caller fails closed.
+// and is not part of this port. GitHost returns Git host account IDs only,
+// never principals.
+//
+// Each method returns ErrInvalid for a reference, a commit, an account ID, an
+// emoji, a merge method or a comment body that fails validation, before it
+// calls the Git host. Each method returns ErrUnavailable for a Git host that
+// does not answer, and the caller fails closed.
 type GitHost interface {
-	// Read returns a fresh snapshot of ref. It returns ErrNotFound for an
-	// unknown review request, and ErrUnknown when the Git host has not
+	// Read returns a fresh snapshot of ref, with the creator of each status,
+	// the merger, the queuer and the merge commit. It returns ErrNotFound
+	// for an unknown review request, and ErrUnknown when the Git host has not
 	// computed the merge state yet. It never asks the Git host to compute
 	// the merge state again.
 	Read(ctx context.Context, ref Ref) (Snapshot, error)
+	// Rules returns the rules of the target branch of ref, with the bypass
+	// list. It returns ErrUnknown when the app cannot read them, and the
+	// caller fails closed.
+	Rules(ctx context.Context, ref Ref) (BranchRules, error)
+	// Permission returns the permission of the account accountID on the
+	// repository of ref. An unknown account has PermissionNone.
+	Permission(ctx context.Context, ref Ref, accountID string) (Permission, error)
 	// PostStatus sets the status s on the commit of ref. A second call with
 	// the same name replaces it. It returns ErrNotFound for an unknown
 	// commit.
@@ -69,36 +83,45 @@ type GitHost interface {
 	DeleteComment(ctx context.Context, ref Ref, id string) error
 	// React adds the reaction emoji to the comment id of ref.
 	React(ctx context.Context, ref Ref, id, emoji string) error
-	// Merge merges ref when its head is head. It returns ErrHeadMoved when
-	// the head is another commit, and an error that wraps ErrNotMergeable,
-	// with the answer of the Git host, when the Git host refuses. It never
-	// uses a bypass of the branch rules.
+	// Merge reads the branch rules of ref, then merges ref when its head is
+	// head. It returns ErrBypass, and merges nothing, when the app can bypass
+	// the rules or the rules no longer require the review request and its
+	// status. It returns ErrHeadMoved when the head is another commit, and an
+	// error that wraps ErrNotMergeable, with the answer of the Git host, when
+	// the Git host refuses. It returns the merge commit.
 	Merge(ctx context.Context, ref Ref, head, method string) (string, error)
 }
 
-// Closure is the set of files that a unit reads, at one commit. Known is
-// false when the server cannot compute it. Declared paths only add files to
-// it.
+// Closure is the set of files that a unit reads, at one commit, as paths
+// relative to the root of the repository. Known is false when the server
+// cannot compute it. Declared paths only add files to it.
 type Closure struct {
 	Files []string
 	Known bool
 }
 
-// ClosureResolver computes the file closure of a unit.
+// ClosureResolver computes the file closure of a unit. It reads untrusted
+// files of the repository, so it never reads outside the repository: a path
+// that leaves the repository, an absolute path, a symlink that leaves the
+// repository, a symlink loop, or a closure above its size or depth limit
+// gives a closure with Known false.
 type ClosureResolver interface {
-	// Closure returns the closure of the unit at commit. It returns a
-	// closure with Known false, and no error, when the closure cannot be
-	// computed. It returns ErrInvalid for a unit or a commit that fails
-	// validation.
-	Closure(ctx context.Context, unit, commit string) (Closure, error)
+	// Closure returns the closure of unit at commit. It returns a closure
+	// with Known false, and no error, when the closure cannot be computed.
+	// It returns ErrInvalid for a reference that is not a unit, or a commit
+	// that fails validation.
+	Closure(ctx context.Context, unit identity.Object, commit string) (Closure, error)
 }
 
 // PlanClosure is the set of changed resources of one plan of one unit and
 // their dependency closure, also across units through outputs.
+// UnseenReaders counts the readers of an output of the unit that the reader
+// of the check cannot see.
 type PlanClosure struct {
-	Unit       string
-	Operations []Operation
-	Closure    []string
+	Unit          identity.Object
+	Operations    []Operation
+	Closure       []string
+	UnseenReaders int
 }
 
 // ConflictResult is the result of one conflict check. Disjoint is true only
@@ -115,7 +138,8 @@ type ConflictChecker interface {
 	// Check compares a and b. Each case that the checker cannot prove
 	// disjoint is a conflict: provider changes, replacements, renames,
 	// data sources, deletes and changes of a parent resource are never
-	// proven disjoint. It returns ErrInvalid for a plan that fails
-	// validation.
+	// proven disjoint, and an unseen reader is a conflict. It returns
+	// ErrInvalid for a plan with no unit or no operations, and the caller
+	// treats the error as a conflict.
 	Check(ctx context.Context, a, b PlanClosure) (ConflictResult, error)
 }

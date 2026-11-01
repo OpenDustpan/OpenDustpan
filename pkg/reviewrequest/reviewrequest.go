@@ -42,6 +42,10 @@ var (
 	// example a merge state that is still being checked. A gate treats it as
 	// a denial.
 	ErrUnknown = errors.New("reviewrequest: value not known yet")
+	// ErrBypass reports a merge that the server refused because the app of
+	// the connection can bypass the branch rules, or because the branch rules
+	// no longer require the review request and its status.
+	ErrBypass = errors.New("reviewrequest: the app can bypass the branch rules")
 )
 
 // Mode is the review mode of a unit. The mode is a unit setting with the
@@ -204,12 +208,16 @@ const (
 )
 
 // Author is one author of a review request, with the source that made it an
-// author. AccountID is the immutable user ID on the Git host. Principal is
-// empty when the account is not linked.
+// author, as the Git host gives it. AccountID is the immutable user ID on the
+// Git host. BotAppID is the app ID of a bot account, and is empty for a
+// person. PersonUnknown is true when the Git host cannot tell which person is
+// behind a push of a bot. The service, never the adapter, looks up the link
+// of an account to a principal.
 type Author struct {
-	AccountID string
-	Principal string
-	Source    AuthorSource
+	AccountID     string
+	BotAppID      string
+	PersonUnknown bool
+	Source        AuthorSource
 }
 
 // Review is a review on the Git host, as a fresh read through the API gives
@@ -224,8 +232,21 @@ type Review struct {
 	SubmittedAt time.Time
 }
 
+// StatusRead is one status of a commit as the Git host gives it, with its
+// creator. CreatorID is the account ID of a person or the app ID of an app,
+// and CreatorIsApp tells which. A status matches an OpenDustpan status only
+// when its creator is the app of the connection, never by its name alone.
+type StatusRead struct {
+	Name         string
+	State        string
+	Commit       string
+	CreatorID    string
+	CreatorIsApp bool
+}
+
 // Snapshot is what the server read of one review request at one time. The
-// console shows ReadAt.
+// console shows ReadAt. MergedBy and QueuedBy are immutable account IDs, and
+// are empty when no person merged or queued the review request.
 type Snapshot struct {
 	Ref          Ref
 	Open         bool
@@ -233,15 +254,56 @@ type Snapshot struct {
 	Head         string
 	Base         string
 	HeadRepoID   string
+	MergeCommit  string
+	MergedBy     string
+	QueuedBy     string
 	Authors      []Author
 	Reviews      []Review
+	Statuses     []StatusRead
 	Requirements []Requirement
 	ReadAt       time.Time
 }
 
-// Requirement is one merge requirement of the Git host, in its own terms,
-// with no requirement that OpenDustpan posts itself.
+// Requirement is one merge requirement of the Git host, in its own terms.
+// It leaves out each requirement that the app of the connection fills with
+// its own status, matched by creator.
 type Requirement struct {
 	Name string
 	Met  bool
 }
+
+// RequiredStatus is a status that the branch rules require, with the app
+// that must post it when the rules name one.
+type RequiredStatus struct {
+	Name         string
+	CreatorAppID string
+}
+
+// BranchRules are the rules of the target branch of a review request, as the
+// Git host gives them to the app of the connection.
+type BranchRules struct {
+	RequiredStatuses  []RequiredStatus
+	RequiredApprovals int
+	CodeOwnerReview   bool
+	RequireReview     bool
+	// AppCanBypass is true when the app of the connection is on a bypass
+	// list, has an admin override, or can force a merge.
+	AppCanBypass bool
+	// BypassActors names each actor of a bypass list, as the Git host gives
+	// it.
+	BypassActors []string
+	// Mergers names the accounts or apps that may merge when the branch
+	// restricts who merges, and is empty when it does not.
+	Mergers []string
+}
+
+// Permission is the access of an account on a repository.
+type Permission string
+
+// The permissions that the service tells apart.
+const (
+	PermissionNone  Permission = "none"
+	PermissionRead  Permission = "read"
+	PermissionWrite Permission = "write"
+	PermissionAdmin Permission = "admin"
+)

@@ -10,6 +10,8 @@ Changed by:
   requirements.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 299 changes decision 9: in modes 1 and 2, the approvals of a change in
+  git follow the review mode of its units.
 
 ## Context
 
