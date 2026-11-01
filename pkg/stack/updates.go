@@ -50,10 +50,11 @@ const (
 // namespace.ErrFenced if it is stale.
 type UpdateStore interface {
 	// CreateUpdate persists a new, not-started u with its CreatedBy and
-	// RestoredFrom as given, and calls key.NewKey in the same transaction, so
-	// the record of the item key of u commits with the update row. It returns
-	// ErrNotFound if the stack does not exist, ErrInvalidUpdateKey when
-	// CheckUpdateKey refuses key for the stack and u, and the error of
+	// RestoredFrom as given, and calls key.NewKey in the same transaction with
+	// the reference that key.RefFor builds from the stack ID that the
+	// transaction resolves, so the record of the item key of u commits with the
+	// update row. It returns ErrNotFound if the stack does not exist,
+	// ErrInvalidUpdateKey when key.RefFor refuses key, and the error of
 	// key.NewKey. On every error it stores nothing.
 	CreateUpdate(ctx context.Context, u Update, key UpdateKey, fence namespace.Fence) error
 	// GetUpdate returns the update with its CreatedBy, RestoredFrom and
@@ -375,17 +376,7 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		CheckpointBytes: 0,
 	}
 
-	st, err := s.stacks.GetStack(ctx, ref)
-	if err != nil {
-		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
-	}
-
-	item, err := UpdateItem(ref.Namespace, st.ID, u.ID)
-	if err != nil {
-		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
-	}
-
-	key := UpdateKey{Ref: item, NewKey: s.sealer.NewItemKey}
+	key := UpdateKey{NewKey: s.sealer.NewItemKey}
 	if err := s.updates.CreateUpdate(ctx, u, key, fence); err != nil {
 		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
 	}

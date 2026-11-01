@@ -217,9 +217,14 @@ type fakeUpdates struct {
 }
 
 func (*fakeUpdates) CreateUpdate(
-	ctx context.Context, _ stack.Update, key stack.UpdateKey, fence namespace.Fence,
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
 ) error {
-	_, err := key.NewKey(ctx, nil, key.Ref, fence)
+	item, err := key.RefFor(u.Ref.Namespace, "stk-maintenance", u.ID)
+	if err != nil {
+		return err
+	}
+
+	_, err = key.NewKey(ctx, nil, item, fence)
 
 	return err
 }

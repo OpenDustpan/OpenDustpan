@@ -203,80 +203,49 @@ func TestNewUpdatesNeedsASealer(t *testing.T) {
 	}
 }
 
-// TestCheckUpdateKey sends keys that do not name the update to the check of
-// the stores directly.
-func TestCheckUpdateKey(t *testing.T) {
+// TestUpdateKeyRefFor sends keys and parts that are not valid to the
+// reference that the stores build.
+func TestUpdateKeyRefFor(t *testing.T) {
 	t.Parallel()
-
-	good, err := stack.UpdateItem("acme", "stk-1", "u1")
-	if err != nil {
-		t.Fatalf("item: %v", err)
-	}
 
 	mk := stack.NewItemKeyFunc(func(
 		context.Context, secret.ItemKeyTx, secret.ItemRef, namespace.Fence,
 	) (secret.ItemKey, error) {
 		return secret.ItemKey{
-			CreatedAt: time.Time{}, ShreddedAt: time.Time{}, Ref: good, ID: "", WrapperID: "",
-			Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0},
+			CreatedAt: time.Time{}, ShreddedAt: time.Time{},
+			Ref: secret.ItemRef{Scope: secret.Scope{Namespace: "", ID: ""}, Kind: "", Item: ""}, ID: "",
+			WrapperID: "", Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0},
 		}, nil
 	})
 
-	other := func(mutate func(*secret.ItemRef)) secret.ItemRef {
-		r := good
-		mutate(&r)
-
-		return r
+	want, err := stack.UpdateItem("acme", "stk-1", "u1")
+	if err != nil {
+		t.Fatalf("item: %v", err)
 	}
 
-	cases := map[string]struct {
+	if got, err := (stack.UpdateKey{NewKey: mk}).RefFor("acme", "stk-1", "u1"); err != nil || got != want {
+		t.Fatalf("RefFor = %s, %v; want %s", got, err, want)
+	}
+
+	if want.Kind != secret.ItemKindState || want.Item != "u1" || want.Scope.ID != "stk-1" {
+		t.Fatalf("reference = %s, want the state item u1 of stk-1", want)
+	}
+
+	for name, tc := range map[string]struct {
 		key stack.UpdateKey
-		ok  bool
+		ns  namespace.Name
+		id  stack.ID
+		upd stack.UpdateID
 	}{
-		"the key of the update": {stack.UpdateKey{Ref: good, NewKey: mk}, true},
-		"no key function":       {stack.UpdateKey{Ref: good, NewKey: nil}, false},
-		"an empty reference": {
-			stack.UpdateKey{
-				Ref: secret.ItemRef{Scope: secret.Scope{Namespace: "", ID: ""}, Kind: "", Item: ""}, NewKey: mk,
-			},
-			false,
-		},
-		"another update": {
-			stack.UpdateKey{Ref: other(func(r *secret.ItemRef) { r.Item = "u2" }), NewKey: mk}, false,
-		},
-		"another stack": {
-			stack.UpdateKey{Ref: other(func(r *secret.ItemRef) { r.Scope.ID = "stk-2" }), NewKey: mk}, false,
-		},
-		"another namespace": {
-			stack.UpdateKey{Ref: other(func(r *secret.ItemRef) { r.Scope.Namespace = "other" }), NewKey: mk}, false,
-		},
-		"another kind": {
-			stack.UpdateKey{Ref: other(func(r *secret.ItemRef) { r.Kind = secret.ItemKindPlan }), NewKey: mk}, false,
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			err := stack.CheckUpdateKey(tc.key, "acme", "stk-1", "u1")
-			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, stack.ErrInvalidUpdateKey)) {
-				t.Fatalf("CheckUpdateKey = %v, want ok %v", err, tc.ok)
-			}
-		})
-	}
-
-	for name, args := range map[string]struct {
-		ns namespace.Name
-		id stack.ID
-	}{
-		"a bad namespace": {"", "stk-1"},
-		"a bad stack ID":  {"acme", "stk 1"},
+		"no key function": {stack.UpdateKey{NewKey: nil}, "acme", "stk-1", "u1"},
+		"a bad namespace": {stack.UpdateKey{NewKey: mk}, "", "stk-1", "u1"},
+		"a bad stack ID":  {stack.UpdateKey{NewKey: mk}, "acme", "stk 1", "u1"},
+		"an empty stack":  {stack.UpdateKey{NewKey: mk}, "acme", "", "u1"},
+		"a bad update ID": {stack.UpdateKey{NewKey: mk}, "acme", "stk-1", "u/1"},
+		"an empty update": {stack.UpdateKey{NewKey: mk}, "acme", "stk-1", ""},
 	} {
-		if err := stack.CheckUpdateKey(stack.UpdateKey{Ref: good, NewKey: mk}, args.ns, args.id, "u1"); !errors.Is(
-			err, stack.ErrInvalidUpdateKey,
-		) {
-			t.Errorf("CheckUpdateKey with %s = %v, want ErrInvalidUpdateKey", name, err)
+		if _, err := tc.key.RefFor(tc.ns, tc.id, tc.upd); !errors.Is(err, stack.ErrInvalidUpdateKey) {
+			t.Errorf("RefFor with %s = %v, want ErrInvalidUpdateKey", name, err)
 		}
 	}
 }
