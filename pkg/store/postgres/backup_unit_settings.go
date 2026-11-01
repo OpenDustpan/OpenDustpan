@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/unitsettings"
 )
@@ -35,7 +33,7 @@ func pgCopyUnitSettingsTables() []pgCopyTable {
 // Defense in depth: the store checks a row again when it reads it, and the
 // portable reader checks each value. This check stays so that a bad row fails
 // the restore and does not wait for a reader.
-func checkStagedUnitSettings(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedUnitSettings(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT s.unit_id, n.name, s.version, s.body FROM " + stagingTable(staging, "unit_settings") +
 		" AS s LEFT JOIN " + stagingTable(staging, "namespaces") + " AS n ON n.id = s.namespace_id"
 
@@ -78,7 +76,7 @@ func checkStagedUnitSettings(ctx context.Context, pool *pgxpool.Pool, staging st
 }
 
 // checkStagedUnitDefaults checks each unit defaults row of a staged backup.
-func checkStagedUnitDefaults(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedUnitDefaults(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT n.name, d.pool, d.version FROM " + stagingTable(staging, "unit_defaults") +
 		" AS d LEFT JOIN " + stagingTable(staging, "namespaces") + " AS n ON n.id = d.namespace_id"
 
