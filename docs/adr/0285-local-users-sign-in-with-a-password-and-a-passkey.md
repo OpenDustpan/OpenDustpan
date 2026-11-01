@@ -5,6 +5,8 @@ Status: accepted · 2026-10-31. Decided by the project owner on 31 October 2026,
 Changed by:
 
 - ADR 297 changes decisions 5, 17, 19, 20 and 21: sealed cookies, not a stored session.
+- ADR 301 extends decision 1: the same narrowing of ADR 46 decision 2 for two
+  more methods.
 
 ## Context
 

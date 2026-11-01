@@ -4,12 +4,15 @@ Status: accepted · 2026-10-17. Decisions 2, 7 and 8 superseded in part by ADR 1
 
 Changed by:
 
+- ADR 307 extends: a plan that a team uploads from its own CI.
 - ADR 190 changes decisions 2, 7 and 8: the plan reader and a stale plan of an
   apply job.
 - ADR 194 extends decision 2: a third part kind policy-report.
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 220 changes decisions 3 and 4: the plan, log and item key blob keys get
   a namespace prefix.
+- ADR 299 changes decision 8: the plan comment on a review request holds
+  counts and resource addresses by default.
 
 ## Context
 

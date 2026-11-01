@@ -6,6 +6,12 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 299 changes decision 4: webhooks with three recovery paths.
+- ADR 299 extends decision 7: more comment commands and a reaction.
+- ADR 299 extends decision 2: new operations of the Forge port.
+- ADR 300 changes decision 7: a third comment command, `dustpan plan`.
+- ADR 303 extends decision 11: OpenDustpan is not a Git host. The Forge port
+  connects to Git hosts for repositories, pull requests and statuses.
 
 ## Context
 

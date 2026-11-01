@@ -87,8 +87,8 @@ Some flags matter to the `api` component only. For example, `--console-dir`, `--
 
 `/health/ready` answers for the components of the process and lists each one with its state in the field `components`. The fields `status` and `failed` keep their meaning: `failed` names each check that failed, and is absent when none failed. `/health/ready/api` and `/health/ready/worker` answer for one component. A component that the process does not run answers 404.
 
-- `api` is ready when the store and the blob store answer.
-- `worker` is ready when the store answers and its claim loop ran in the last 2 claim intervals. A claim interval is the longer of the poll period and the lease period.
+- `api` is ready when the store and the blob store answer, and the PostgreSQL database accepts writes.
+- `worker` is ready when the store answers, the PostgreSQL database accepts writes, and its claim loop ran in the last 2 claim intervals. A claim interval is the longer of the poll period and the lease period.
 
 The state of the audit chain is information only. While a change of the audit chain waits for approval, the body of the `api` component shows `"audit-chain": "waiting"` in the field `info`. The probe still answers 200. The approval needs the `api` processes in the pool of the Service. The Helm chart probes `/health/ready`.
 
@@ -161,7 +161,7 @@ A dev build passes every minimum check: the write check, the migration check, th
 
 The database can stop, restart or fail over to a replica. While an instance cannot reach the database, it does these things:
 
-- `/health/ready` answers 503. A load balancer with a health check on this route takes the instance out of its pool.
+- `/health/ready` answers 503. A load balancer with a health check on this route takes the instance out of its pool. When the database answers but refuses writes, for example an old primary after a failover, the `failed` list names the check `store-read-only`.
 - Each API answers a request that needs the database with 503 and the header `Retry-After: 5`, not 500. The Pulumi Cloud-compatible API answers `{"code": 503, "message": "..."}`. The TFE-compatible API answers a JSON:API error. The other APIs answer their usual error body. The error code is `namespace.unavailable`.
 - The instance does not restart. When the database answers again, `/health/ready` answers 200 and the instance serves requests again.
 
@@ -171,6 +171,8 @@ The adapters treat these failures as a database that does not answer:
 - The SQLSTATE codes 08000, 08001, 08003, 08004, 08006 and 08007 (a connection exception).
 - The SQLSTATE codes 57P01, 57P02 and 57P03 (the database server stops, crashes or does not accept connections yet).
 - The SQLSTATE code 25006 (a read-only database, for example after a failover to a replica).
+- The SQLSTATE code 57014 (the server ended a statement, for example at its statement timeout).
+- A round trip to the database that takes longer than 30 seconds. The server then closes the connection. A host can stop answering and keep the connection open. The request then ends after 30 seconds, not after the TCP timeout of the host.
 - The SQLSTATE code 53300 (too many connections). A session that ends frees a connection, so a new try can work.
 - A SQLite database that stays busy after its busy timeout.
 
@@ -202,33 +204,47 @@ Run the same command again after the database answers. The next `pulumi preview`
 
 ## Database settings for a failover
 
-After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. Settings in the `DUSTPAN_DATABASE` URL help the pool to leave such a connection:
+After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. The server uses these settings of the `DUSTPAN_DATABASE` URL. When the URL does not name a setting, the server sets the default below:
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `target_session_attrs=read-write` | (none) | A new connection must reach a server that accepts writes. The driver closes a connection to a read-only server and does not give it to the pool. Without it, a new connection can reach a read-only server. |
-| `pool_max_conn_lifetime=<duration>` | `1h` | The pool closes a connection when it is older than this time, and opens a new one. A short time limits how long a connection to an old primary can live. |
-| `pool_health_check_period=<duration>` | `1m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
+| Setting | Default | Allowed values | What it does |
+| --- | --- | --- | --- |
+| `target_session_attrs` | `read-write` | `read-write`, `primary` | A new connection must reach a server that is not in recovery and whose transactions are not read-only. The server applies this check for both values: `primary` gets the same check as `read-write`. |
+| `connect_timeout` | `5` | Whole seconds from 1 to 60 | The time limit to open one connection. |
+| `pool_max_conn_lifetime` | `30m` | `1m` to `24h` | The pool closes a connection when it is older than this time, and opens a new one. |
+| `pool_max_conn_lifetime_jitter` | `1m` | `0s` to the lifetime | A random part of the lifetime, so the instances do not open their connections again at the same time. |
+| `pool_health_check_period` | `10s` | `1s` to `10m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
 
-A duration is a number with a unit, for example `5m` or `30s`. The server passes the three settings to the driver as the URL gives them. A value that is not valid stops the start of the server. Example:
+A duration is a number with a unit, for example `5m` or `30s`. A value outside the allowed values stops the start of the server with the error code `store.failover-setting-invalid`. The error names the setting and the allowed values. The server does not change a value to make it valid. A setting that appears two times in the URL also stops the start. The variables `PGTARGETSESSIONATTRS` and `PGCONNECT_TIMEOUT` of the environment do not apply: the URL or the default decides.
+
+At the start, the server writes the effective value of each setting to its log, with the word `url` or `default` for where the value came from. The log also gives the 30-second limit of each round trip.
+
+Example:
 
 ```
-DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&target_session_attrs=read-write&pool_max_conn_lifetime=5m&pool_health_check_period=10s'
+DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&pool_max_conn_lifetime=10m'
 ```
 
-The values `5m` and `10s` are examples. Nobody measured them against a managed database.
+The defaults are values that the project chose. Nobody measured them against a managed database.
 
-The driver checks `target_session_attrs` only when it opens a connection. A connection that turns read-only after it opened stays in the pool until it reaches `pool_max_conn_lifetime`, which is 1 hour by default. Writes on that connection fail with 503 until then. Set `pool_max_conn_lifetime` lower, for example `5m`, for a faster recovery.
+The server also does these things to leave a read-only server:
+
+- **A write that fails with 25006.** The connection reached a server that refuses writes. So the server closes all connections of the pool. A connection in use closes when its request ends. New connections must pass the check of `target_session_attrs`. The server closes the pool at most one time in 5 seconds. Each time, it writes a warning to its log with the reason `read-only`.
+- **A 25006 in a read-only transaction of the server.** This can be a defect of the server, not a read-only database. So the server first checks its idle connections. It closes the pool only when one of them reaches a server that refuses writes.
+- **The readiness probe.** The check of the store reads whether the database accepts writes, in one statement. When the database refuses writes, the probe answers 503 with the check `store-read-only`. The server then closes the connections of the pool in the same way. When the check cannot run, the probe answers 503 with the check `store`.
+
+The server also sets the TCP keepalive of each connection. It sends a keepalive after 15 seconds without traffic, then every 5 seconds. After 3 keepalives with no answer, the connection closes. So an idle connection to a host that stopped answering closes in about 30 seconds.
 
 ### What was tested
 
-The tests ran on 2026-10-30 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
+The tests ran on 2026-11-01 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
 
-- The settings above reach the pool as the URL gives them. A value that is not valid is refused.
+- Each setting above gets its default when the URL does not name it. It gets the value of the URL when the value is inside its range. A value outside its range stops the start, and the error holds no part of the URL besides the value.
 - The server answers 503 with `Retry-After: 5` and the error code `namespace.unavailable` for each write while a proxy cuts all its database connections. After the proxy lets the connections through again, the same server accepts writes. Nobody restarted it.
 - A session that the database ended (`pg_terminate_backend`) gives the same 503 answer.
-- A database with `default_transaction_read_only = on` gives the SQLSTATE code 25006 to each write on a new session. A write then gets the same 503 answer. A read still works.
-- With `target_session_attrs=read-write`, the server does not open against that read-only database. It opens against the same database when the database accepts writes.
+- When the database turns read-only (`default_transaction_read_only = on`) and its sessions end, the server does not open a new read-only session. Reads and writes then answer 503 until the database accepts writes.
+- With the default settings, the server does not open against a read-only database. It opens against the same database when the database accepts writes.
+- A proxy held all bytes of a connection and closed nothing. Each kind of round trip then ended with 503 within the 30-second limit. The kinds are a statement, a read of rows, a batch, a copy, a savepoint, a commit and a rollback. The test used a shorter limit to run fast.
+- A pool whose sessions are read-only closes its connections after one write fails with 25006. This is also true for a pool of one connection that the failed request still holds. A burst of such failures closes it only one time. A write in a read-only transaction of the server does not close a pool of writable connections.
 
 ### What should work, and was not tested
 
@@ -253,7 +269,7 @@ A URL can name more than one host, separated by commas. With `target_session_att
 
 The "What the vendor page says" column is a summary of the page on 2026-10-30. It is not a test result. Do not use the address of one node or a read-only service.
 
-For each service, set `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
+For each service, keep the default `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
 
 During the failover, the instances answer 503 on the readiness probe. They also answer 503 on each request that needs the database. Section "When the database does not answer" describes this. This guide makes no claim about the failover time or about data loss. Both depend on the service and on its settings for synchronous replication.
 
