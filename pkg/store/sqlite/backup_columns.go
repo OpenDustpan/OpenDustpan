@@ -471,6 +471,17 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{"source", "window_end_ms", "count"},
 		},
 		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				"scope", "name", "sub", "failures", "locked_until_ms", "level", "last_failure_ms", "last_lock_end_ms",
+				"reset_after_ms",
+			},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", "key"},
+		},
+		{
 			table:   backup.TableAuditChainCheck,
 			columns: []string{"id", "checked_at_ms", "invalid"},
 		},

@@ -406,6 +406,19 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{"source", "window_end_ms"},
 		},
 		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				"scope", "name", "sub", "failures", "locked_until_ms", "level", "last_failure_ms", "last_lock_end_ms",
+				"reset_after_ms",
+			},
+			orderBy: []string{"scope", "name", "sub"},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", "key"},
+			orderBy: []string{"id"},
+		},
+		{
 			table:   backup.TableAuditChainCheck,
 			columns: []string{"id", "checked_at_ms", "invalid"},
 			orderBy: []string{"id"},

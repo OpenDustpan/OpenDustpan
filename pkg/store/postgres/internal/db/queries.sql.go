@@ -891,6 +891,40 @@ func (q *Queries) ClearMaintenanceRevocationsOnEnter(ctx context.Context) error 
 	return err
 }
 
+const clearNameLockSub = `-- name: ClearNameLockSub :exec
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = $1 AND name = $2 AND sub = $3
+`
+
+type ClearNameLockSubParams struct {
+	Scope string
+	Name  string
+	Sub   string
+}
+
+// Sets the count to 0 and ends the lock. The level stays.
+func (q *Queries) ClearNameLockSub(ctx context.Context, arg ClearNameLockSubParams) error {
+	_, err := q.db.Exec(ctx, clearNameLockSub, arg.Scope, arg.Name, arg.Sub)
+	return err
+}
+
+const clearNameLocks = `-- name: ClearNameLocks :execrows
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = $1 AND name = $2
+`
+
+type ClearNameLocksParams struct {
+	Scope string
+	Name  string
+}
+
+// Sets the count of each sub-key of a name to 0 and ends each lock.
+func (q *Queries) ClearNameLocks(ctx context.Context, arg ClearNameLocksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearNameLocks, arg.Scope, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2
@@ -4530,6 +4564,23 @@ func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int
 	return result.RowsAffected(), nil
 }
 
+const ensureNameLock = `-- name: EnsureNameLock :exec
+INSERT INTO name_locks (scope, name, sub) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
+`
+
+type EnsureNameLockParams struct {
+	Scope string
+	Name  string
+	Sub   string
+}
+
+// Makes the count of a name and a sub-key in a scope when it does not exist,
+// so the locked read that follows finds a row.
+func (q *Queries) EnsureNameLock(ctx context.Context, arg EnsureNameLockParams) error {
+	_, err := q.db.Exec(ctx, ensureNameLock, arg.Scope, arg.Name, arg.Sub)
+	return err
+}
+
 const ensureNotificationCursor = `-- name: EnsureNotificationCursor :exec
 INSERT INTO notification_cursors (name, scope, sequence)
 VALUES ($1, $2, 0)
@@ -7144,6 +7195,55 @@ func (q *Queries) GetManualLockForUpdate(ctx context.Context, arg GetManualLockF
 	var i GetManualLockForUpdateRow
 	err := row.Scan(&i.Holder, &i.Reason, &i.SinceMs)
 	return i, err
+}
+
+const getNameLockForUpdate = `-- name: GetNameLockForUpdate :one
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = $1 AND name = $2 AND sub = $3 FOR UPDATE
+`
+
+type GetNameLockForUpdateParams struct {
+	Scope string
+	Name  string
+	Sub   string
+}
+
+type GetNameLockForUpdateRow struct {
+	Sub           string
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+}
+
+// Locks the row until the end of the transaction, so concurrent failures of
+// one name count one after the other.
+func (q *Queries) GetNameLockForUpdate(ctx context.Context, arg GetNameLockForUpdateParams) (GetNameLockForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getNameLockForUpdate, arg.Scope, arg.Name, arg.Sub)
+	var i GetNameLockForUpdateRow
+	err := row.Scan(
+		&i.Sub,
+		&i.Failures,
+		&i.LockedUntilMs,
+		&i.Level,
+		&i.LastFailureMs,
+		&i.LastLockEndMs,
+		&i.ResetAfterMs,
+	)
+	return i, err
+}
+
+const getNameLockKey = `-- name: GetNameLockKey :one
+SELECT key FROM name_lock_key WHERE id = 1
+`
+
+func (q *Queries) GetNameLockKey(ctx context.Context) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getNameLockKey)
+	var key []byte
+	err := row.Scan(&key)
+	return key, err
 }
 
 const getNamespace = `-- name: GetNamespace :one
@@ -10545,6 +10645,15 @@ func (q *Queries) InsertManualLock(ctx context.Context, arg InsertManualLockPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertNameLockKey = `-- name: InsertNameLockKey :exec
+INSERT INTO name_lock_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING
+`
+
+func (q *Queries) InsertNameLockKey(ctx context.Context, key []byte) error {
+	_, err := q.db.Exec(ctx, insertNameLockKey, key)
+	return err
 }
 
 const insertNotification = `-- name: InsertNotification :exec
@@ -14301,6 +14410,54 @@ func (q *Queries) ListLiveProfiles(ctx context.Context, arg ListLiveProfilesPara
 	return items, nil
 }
 
+const listNameLocks = `-- name: ListNameLocks :many
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = $1 AND name = $2 ORDER BY sub
+`
+
+type ListNameLocksParams struct {
+	Scope string
+	Name  string
+}
+
+type ListNameLocksRow struct {
+	Sub           string
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+}
+
+func (q *Queries) ListNameLocks(ctx context.Context, arg ListNameLocksParams) ([]ListNameLocksRow, error) {
+	rows, err := q.db.Query(ctx, listNameLocks, arg.Scope, arg.Name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNameLocksRow
+	for rows.Next() {
+		var i ListNameLocksRow
+		if err := rows.Scan(
+			&i.Sub,
+			&i.Failures,
+			&i.LockedUntilMs,
+			&i.Level,
+			&i.LastFailureMs,
+			&i.LastLockEndMs,
+			&i.ResetAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNamespaces = `-- name: ListNamespaces :many
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
@@ -17587,6 +17744,27 @@ func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (
 	return result.RowsAffected(), nil
 }
 
+const pruneNameLocks = `-- name: PruneNameLocks :execrows
+DELETE FROM name_locks
+WHERE last_failure_ms <= $1::bigint AND locked_until_ms <= $2::bigint
+  AND (level = 0 OR last_lock_end_ms + reset_after_ms <= $2::bigint)
+`
+
+type PruneNameLocksParams struct {
+	BeforeMs int64
+	NowMs    int64
+}
+
+// Deletes each count whose last failure is at or before before_ms, whose lock
+// ended at now_ms, and whose level is 0 or past its reset time.
+func (q *Queries) PruneNameLocks(ctx context.Context, arg PruneNameLocksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneNameLocks, arg.BeforeMs, arg.NowMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
 DELETE FROM sign_in_failures
 WHERE window_end_ms <= (
@@ -19459,6 +19637,40 @@ SELECT set_config('lock_timeout', $1::text, true)
 // The timeout is a PostgreSQL duration text, for example 10000ms.
 func (q *Queries) SetLockTimeout(ctx context.Context, timeout string) error {
 	_, err := q.db.Exec(ctx, setLockTimeout, timeout)
+	return err
+}
+
+const setNameLock = `-- name: SetNameLock :exec
+UPDATE name_locks SET failures = $1, locked_until_ms = $2,
+  level = $3, last_failure_ms = $4,
+  last_lock_end_ms = $5, reset_after_ms = $6
+WHERE scope = $7 AND name = $8 AND sub = $9
+`
+
+type SetNameLockParams struct {
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+	Scope         string
+	Name          string
+	Sub           string
+}
+
+func (q *Queries) SetNameLock(ctx context.Context, arg SetNameLockParams) error {
+	_, err := q.db.Exec(ctx, setNameLock,
+		arg.Failures,
+		arg.LockedUntilMs,
+		arg.Level,
+		arg.LastFailureMs,
+		arg.LastLockEndMs,
+		arg.ResetAfterMs,
+		arg.Scope,
+		arg.Name,
+		arg.Sub,
+	)
 	return err
 }
 
