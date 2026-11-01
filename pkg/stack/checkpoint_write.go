@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 )
@@ -29,27 +30,35 @@ type checkpointWrite struct {
 	key        blob.Key
 	deployment []byte
 	// commit writes the row that names the blob under the key, with the size
-	// and MD5 of the stored bytes. known is true when the row of the update
-	// already holds the same sequence and digest, so the row keeps the blob of
-	// the first write. Its error is already wrapped for the caller.
-	commit func(ctx context.Context, size int64, sum [md5.Size]byte) (known bool, err error)
+	// and MD5 of the stored bytes and the start of the attempt, which the
+	// store checks against the attempt deadline. known is true when the row of
+	// the update already holds the same sequence and digest, so the row keeps
+	// the blob of the first write. Its error is already wrapped for the caller.
+	commit func(ctx context.Context, size int64, sum [md5.Size]byte, started time.Time) (known bool, err error)
 }
 
 // writeCheckpoint puts the blob of w, then commits its row. When the row
 // decides against this write, the blob of this attempt is garbage and the
 // write deletes it. No error text names the key.
+//
+// The attempt starts before the blob write. The store refuses a commit after
+// the attempt deadline with blob.ErrAttemptExpired, so the sweep, which waits
+// longer than the deadline, never deletes a blob that a later commit names.
 func (s *Updates) writeCheckpoint(ctx context.Context, w checkpointWrite) error {
+	started := s.clock()
+
 	size, sum, err := s.putCheckpointBlob(ctx, w.blobs, w.key, w.deployment)
 	if err != nil {
 		return w.unavailable(ctx)
 	}
 
-	known, err := w.commit(ctx, size, sum)
+	known, err := w.commit(ctx, size, sum, started)
 
 	switch {
 	case known:
 		s.discardAfterReplay(ctx, w)
-	case errors.Is(err, ErrCheckpointConflict), errors.Is(err, ErrStaleCheckpoint):
+	case errors.Is(err, ErrCheckpointConflict), errors.Is(err, ErrStaleCheckpoint),
+		errors.Is(err, blob.ErrAttemptExpired):
 		s.discardOwnBlob(ctx, w)
 	default:
 	}

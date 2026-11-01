@@ -400,6 +400,12 @@ func checkCheckpointKey(ctx context.Context, q *db.Queries, stackID string, cp s
 func writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) (bool, error) {
+	// The attempt window comes first, so a late attempt writes nothing, also
+	// when it repeats a committed checkpoint.
+	if attemptErr := checkAttempt(ctx, q, cp.AttemptStartedAt); attemptErr != nil {
+		return false, attemptErr
+	}
+
 	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
 		return false, keyErr
 	}

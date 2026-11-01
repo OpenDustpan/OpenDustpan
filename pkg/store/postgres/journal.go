@@ -110,11 +110,18 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 }
 
 // checkJournalRow runs the checks of a batch that the write needs before its retry
-// check: the blob key, the lease, the update kind, a journaled update, and an open
+// check: the attempt window, the blob key, the lease, the update kind, a
+// journaled update, and an open
 // journal. A version 0 update saves checkpoints, so it refuses every batch with
 // ErrNotJournaled. A closed journal refuses every batch, so no batch can land
 // after the build.
 func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
+	// The caller locked the update row first, so a wait for the lock counts
+	// in the attempt window.
+	if err := checkAttempt(ctx, q, row.AttemptStartedAt); err != nil {
+		return err
+	}
+
 	if err := checkJournalKey(ctx, q, stackID, row); err != nil {
 		return err
 	}

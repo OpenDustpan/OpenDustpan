@@ -304,6 +304,7 @@ func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []Pla
 func provesRollback(err error) bool {
 	for _, target := range []error{
 		ErrPlanStale, ErrConflict, ErrClaimLost, namespace.ErrFenced, ErrNotFound, ErrInvalid,
+		blob.ErrAttemptExpired,
 	} {
 		if errors.Is(err, target) {
 			return true
@@ -402,14 +403,20 @@ func (r *DurableRecorder) writeChunk(ctx context.Context, c PhaseClaim, j *Job, 
 
 	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: w.version, Seq: w.seq, BlobKey: key.String()}
 
+	// The attempt starts before the blob write. The store refuses a confirm
+	// after the attempt deadline, so the orphan cleanup, which waits longer
+	// than the deadline, never deletes a blob that a later confirm names.
+	started := r.now().UTC()
+
 	stored, err := r.storeChunk(ctx, c, j, &ref, w.data)
 	if err != nil {
 		return err
 	}
 
-	won, err := r.store.ConfirmLogChunk(
-		ctx, c, ChunkConfirm{Step: w.step, Version: w.version, Seq: w.seq, Stored: stored, BlobKey: ref.BlobKey},
-	)
+	won, err := r.store.ConfirmLogChunk(ctx, c, ChunkConfirm{
+		Step: w.step, Version: w.version, Seq: w.seq, Stored: stored, BlobKey: ref.BlobKey,
+		AttemptStartedAt: started,
+	})
 	if err != nil {
 		// An error that does not prove a rollback, such as a failed COMMIT,
 		// can follow a commit: the row may name the blob, so the blob stays.

@@ -3,6 +3,10 @@ package errcode
 // The codes of the updates of the Pulumi Cloud-compatible API. A code is
 // never removed and never changes its meaning.
 const (
+	// UpdateAttemptExpired is a write of a checkpoint or of a journal batch
+	// whose attempt ran past its deadline before its commit. The attempt does
+	// not count, and a new attempt can succeed.
+	UpdateAttemptExpired = "update.attempt-expired"
 	// UpdateCheckpointConflict is a checkpoint that differs from the one saved
 	// with the same sequence number.
 	UpdateCheckpointConflict = "update.checkpoint-conflict"
@@ -42,6 +46,10 @@ const (
 // No code of the area has an argument yet.
 func updateSpecs() []Spec {
 	return []Spec{
+		updateSpec(
+			UpdateAttemptExpired,
+			"the write attempt ran past its deadline before its commit: send the request again",
+		),
 		updateSpec(UpdateCheckpointConflict, "the checkpoint differs from the one saved with the same sequence number"),
 		updateSpec(UpdateCheckpointStale, "the checkpoint is older than the last one saved"),
 		updateSpec(UpdateConcurrentModification, "the update changed while the request ran"),
