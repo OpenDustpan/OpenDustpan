@@ -10,6 +10,7 @@ Changes:
   OpenDustpan.
 - Extends ADR 55 decision 10: the rule "MFA is the job of the provider" has a narrow exception for the fresh step.
 - Extends ADR 56 decision 5: the rule applies when MFA is on, as for every other method.
+- Extends ADR 297 decision 1: the kinds of fresh authentication in the access cookie gain `totp` and `ssh-signature`.
 - Extends ADR 212 decision 2: the SMTP sender of the installation also sends the one-time code of the first enrollment.
 - Extends ADR 227 decision 1: a passkey, TOTP or an SSH signature is a fresh authentication for these two methods.
 - Extends ADR 285 decision 1: the same narrowing of ADR 46 decision 2 for two more methods.
@@ -99,13 +100,17 @@ November 2026.
    does not accept recovery codes.
 10. **Each change of a factor tells the person (PM).** An enrollment, a
     removal and a reset each write an audit entry and send a notice to the
-    notification channel of the person. Each one also ends the other
-    sessions of the person. The session that did the change stays.
-11. **The step belongs to one session (PM).** The server records the fresh
-    step on the session that did it, and on no other session. It lasts for
-    `freshAuthSeconds` or until that session ends. The audit entry of the
-    step names the session. The session model is the model of ADR 297, which is in review in
-    PR #2147 and not on `main` yet.
+    notification channel of the person. Each one also adds 1 to the session
+    generation of the person (ADR 297 decision 12), which ends the other
+    sign-ins. The sign-in that made the change gets new cookies with the new
+    generation (ADR 297 decision 12).
+11. **The step belongs to one sign-in (PM).** The server records the fresh
+    step in the sealed access cookie of the sign-in that did it, and in no
+    other sign-in. The kind of the step is one of the kinds of ADR 297
+    decision 1 (`passkey`, `mfa`, `password` and `sso`) and two more kinds
+    that this ADR adds: `totp` and `ssh-signature`. The step lasts for
+    `freshAuthSeconds` or until that sign-in ends. The audit entry of the
+    step names the sign-in ID.
 12. **Only when MFA is on (PM).** ADR 56 decision 5 holds. On an
     installation with MFA off, the server asks for no fresh step, as for
     every other method. The rules of this ADR apply when MFA is on.

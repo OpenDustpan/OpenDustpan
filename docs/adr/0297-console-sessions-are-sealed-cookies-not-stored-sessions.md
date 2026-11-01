@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-31. The project owner set the direction on 31 October 2026. The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. The owner decided the two held questions on 1 November 2026. The state of a sign-in is in sealed cookies. No replica keeps a cache of proof IDs. The "Changes" list names the ADRs that this ADR changes
 
+Changed by:
+
+- ADR 301 extends decision 1: the kinds of fresh authentication in the access
+  cookie gain `totp` and `ssh-signature`.
+
 Changes:
 
 - Changes ADR 69 decision 4: the idle limit and the maximum length stay. The server checks them from sealed cookies at each request and at each refresh, not from a stored session.
