@@ -10,6 +10,7 @@ Changed by:
 - ADR 227 changes decision 9: the ChatOps approval uses the one window, not 15
   minutes.
 - ADR 262 extends: the open question on the first chat tools.
+- ADR 297 changes decision 9: the server fills chatops.Auth from the access cookie.
 
 ## Context
 

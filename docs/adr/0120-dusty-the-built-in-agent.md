@@ -10,6 +10,7 @@ Changed by:
   status answer and the ledger rows.
 - ADR 129 extends: the stop reasons of a run.
 - ADR 210 changes: the route paths and the server: action names.
+- ADR 297 changes decisions 13 and 14: a run resolves the sign-in that it records.
 
 ## Context
 
