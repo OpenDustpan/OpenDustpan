@@ -405,6 +405,15 @@ func TestSplitHTTPS(t *testing.T) {
 		{"localhost host", "https://localhost/a", "", "", false},
 		{"name under localhost", "https://git.localhost/a", "", "", false},
 		{"name that holds an address", "https://127.0.0.1.example.com/a", "127.0.0.1.example.com", "a", true},
+		{"private IPv4 host", "https://10.0.0.5/a", "", "", false},
+		{"link-local IPv4 host", "https://169.254.1.1/a", "", "", false},
+		{"unique local IPv6 host", "https://[fd00::1]/a", "", "", false},
+		{"IPv6 host with a zone", "https://[fe80::1%25eth0]/a", "", "", false},
+		{"IPv4-mapped IPv6 host", "https://[::ffff:127.0.0.1]/a", "", "", false},
+		{"octal host", "https://0177.0.0.1/a", "", "", false},
+		{"short host", "https://127.1/a", "", "", false},
+		{"mixed form host", "https://0x7f.0.0.0x1/a", "", "", false},
+		{"upper case localhost", "https://LOCALHOST/a", "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -459,6 +468,58 @@ func TestURLPatternValidateNamesTheHostRule(t *testing.T) {
 
 			if got := strings.Contains(err.Error(), hostSentence); got != tc.wantHost {
 				t.Errorf("Validate(%q) = %q, names the host rule = %v, want %v", tc.in, err, got, tc.wantHost)
+			}
+		})
+	}
+}
+
+// TestAllowedHost sends hostile hosts to AllowedHost directly, as a caller that
+// parsed the URL with net/url gives them: the host with no port.
+func TestAllowedHost(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		host string
+		ok   bool
+	}{
+		{"git.example.com", true},
+		{"xn--gt-9ja.example.com", true},
+		{"127.0.0.1.example.com", true},
+		{"", false},
+		{"10.0.0.5", false},
+		{"127.0.0.1", false},
+		{"93.184.216.34", false},
+		{"169.254.169.254", false},
+		{"169.254.1.1", false},
+		{"0.0.0.0", false},
+		{"::1", false},
+		{"fd00::1", false},
+		{"fe80::1", false},
+		{"fe80::1%eth0", false},
+		{"::ffff:127.0.0.1", false},
+		{"::ffff:a9fe:a9fe", false},
+		{"fd00:ec2::254", false},
+		{"[::1]", false},
+		{"2130706433", false},
+		{"0x7f000001", false},
+		{"0X7F000001", false},
+		{"0177.0.0.1", false},
+		{"127.1", false},
+		{"0x7f.0.0.0x1", false},
+		{"127.0.0.1.", false},
+		{"localhost", false},
+		{"LocalHost", false},
+		{"localhost.", false},
+		{"git.localhost", false},
+		{"git.example.com:443", false},
+		{"git_x.example.com", false},
+		{"gіt.example.com", false},
+	} {
+		t.Run(tc.host, func(t *testing.T) {
+			t.Parallel()
+
+			if got := source.AllowedHost(tc.host); got != tc.ok {
+				t.Errorf("AllowedHost(%q) = %v, want %v", tc.host, got, tc.ok)
 			}
 		})
 	}
