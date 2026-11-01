@@ -39,7 +39,7 @@ authentication time.
 
 ## Decision
 
-Rules 1 to 5 are from the first review round. Rules 6 to 13 record the
+Rules 1 to 5 are from the first review round. Rules 6 to 14 record the
 decisions of the project manager (PM) for the open points of that review,
 under the owner's delegation.
 
@@ -98,6 +98,22 @@ under the owner's delegation.
     a new sign-in. For a person with no factor, it names the enrollment page
     (decision 4) and the enrollment code (decision 6).
 
+14. **The enrollment code (PM).** Benchmark: Microsoft Entra Temporary
+    Access Pass, with a default life time of 1 hour that an administrator
+    can configure.
+    - A code has 128 bits of randomness. The server shows it one time and
+      stores only its hash.
+    - A code works one time.
+    - The default life time is 1 hour. An administrator can set a value from
+      10 minutes to 7 days.
+    - A person has at most one open code. A new code revokes the old one.
+    - The REST API is under the principal of the person. It can issue a
+      code, list the status of the code and revoke the code. The action is
+      `principal:issue-enrollment-code`. The admin role has it by default
+      as a stored grant, like each other grant.
+    - Each issue, use, revoke and expiry writes an audit entry.
+    - A wrong code counts in the factor lock of the person.
+
 ## Consequences
 
 - An operator who uses GitHub as a sign-in provider, or a proxy header, can
@@ -111,6 +127,5 @@ under the owner's delegation.
   person has no factor yet. Later specs M4-32 and M4-38 depend on this ADR.
 - The code of local-user MFA (M4-29 WebAuthn and M4-31 TOTP) is shared. A
   change to it applies to these two methods too.
-- The enrollment code is a new object with a REST API and an action
-  (ADR 17). The spec of the code covers its length, its life time and its
-  limit.
+- The enrollment code is a new object. Decision 14 gives its API, its
+  action, its life time and its limit.
