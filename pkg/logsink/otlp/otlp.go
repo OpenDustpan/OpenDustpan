@@ -6,7 +6,8 @@
 // batch. One resource holds all records. Its attribute service.name names
 // the sender. One LogRecord stands for one record:
 //
-//   - timeUnixNano is the time of the record.
+//   - timeUnixNano is the time of the record. A zero time, or a time outside
+//     the range of int64 nanoseconds, becomes the time the sink got the batch.
 //   - severityNumber and severityText follow the level (debug 5, info 9,
 //     warn 13, error 17).
 //   - body holds the message as a stringValue.
@@ -103,6 +104,7 @@ type Sink struct {
 	headers map[string]string
 	url     string
 	service string
+	now     func() time.Time
 	mu      sync.RWMutex
 	closed  bool
 }
@@ -138,6 +140,7 @@ func New(cfg Config) (*Sink, error) {
 		headers: headers,
 		url:     endpoint,
 		service: service,
+		now:     time.Now,
 		mu:      sync.RWMutex{},
 		closed:  false,
 	}, nil
@@ -273,7 +276,7 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 		return nil
 	}
 
-	body, err := encode(s.service, records)
+	body, err := encode(s.service, s.now(), records)
 	if err != nil {
 		return err
 	}
