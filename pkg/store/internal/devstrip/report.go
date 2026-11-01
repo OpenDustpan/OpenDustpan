@@ -238,6 +238,7 @@ func (r *reporter) dangling(ctx context.Context, q Querier) error {
 		{table: "access_tokens", where: "principal_id " + missing},
 		{table: "person_preferences", where: "principal_id " + missing},
 		{table: backup.TableTrustRules, where: "principal_id " + missing},
+		{table: backup.TableLocalUsers, where: "principal_id " + missing},
 	} {
 		n, err := q.Exec(ctx, "DELETE FROM "+step.table+" WHERE "+step.where)
 		if err != nil {

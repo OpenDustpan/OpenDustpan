@@ -88,6 +88,18 @@ type RecordStore interface {
 	DisablePrincipal(ctx context.Context, id string, e audit.Entry) error
 }
 
+// SessionGenerationStore reads the session generation of a principal. The
+// generation is a count that starts at 1. Each console session carries the
+// generation that its issue read and works only while it is the stored
+// generation. A write that must end every session of the person adds 1 to
+// it in its own transaction, for example a password write of package
+// localuser.
+type SessionGenerationStore interface {
+	// SessionGeneration returns the session generation of the principal id,
+	// or ErrNotFound when no such principal exists or it was deleted.
+	SessionGeneration(ctx context.Context, id string) (int64, error)
+}
+
 // NamespaceRecordStore keeps the records of the principals of a namespace.
 //
 // Each write takes the fence of the namespace of the principal and checks it

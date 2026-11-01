@@ -507,6 +507,7 @@ func portableSpec() []PortableTable {
 				{Name: "last_sign_in_at_ms", Kind: KindTime},
 				{Name: "namespace", Kind: KindText},
 				{Name: "break_glass", Kind: KindBool},
+				{Name: "session_generation", Kind: KindInteger},
 			},
 		},
 		{
@@ -735,6 +736,7 @@ func portableSpec() []PortableTable {
 		portableProfileTables(),
 		portableManualLockTables(),
 		portablePreferenceTables(),
+		portableLocalUserTables(),
 		portableSavedViewTables(),
 		portableDriftTables(),
 		portableUnitSettingsTables(),
