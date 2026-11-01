@@ -771,6 +771,7 @@ var storedRestoreSentinels = []error{
 	ErrRestoreRunning,
 	ErrRestoreAccessMismatch,
 	ErrProtectedKey,
+	ErrConflictingBlob,
 	ErrCorrupt,
 	ErrSchemaBeforeBaseline,
 	ErrSchemaMismatch,
