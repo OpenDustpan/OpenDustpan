@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
@@ -165,9 +166,11 @@ func TestWrongCurrentPasswordCounts(t *testing.T) {
 	c := f.mustCreate(t, "alice", goodPassword)
 	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
 
+	g := f.generation(t, c.Principal.ID)
+
 	for range authgate.DefaultNameLimit {
-		err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
-			Current: otherPassword, New: otherPassword, Fresh: false,
+		_, err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+			Current: otherPassword, New: otherPassword, Generation: g, Fresh: false,
 		})
 		if !errors.Is(err, localuser.ErrWrongPassword) {
 			t.Fatalf("wrong current password = %v, want ErrWrongPassword", err)
@@ -240,6 +243,7 @@ func TestLockLimits(t *testing.T) {
 		svc, newErr := localusersvc.New(localusersvc.Config{
 			Store: f.store, Principals: f.principals, Hasher: tc.hasher, Blocklist: blocklist.Embedded(),
 			Audit: f.store, Locks: tc.locks, Keys: f.store, Settings: f.settings, SSO: nil, Kind: "", Now: nil,
+			Reach: noReach(),
 		})
 		if newErr != nil {
 			t.Fatalf("service: %v", newErr)
@@ -279,5 +283,58 @@ func TestSourcePrefix(t *testing.T) {
 		if got := localusersvc.SourcePrefix(tc.in); got != tc.want {
 			t.Fatalf("prefix of %q = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// noReach returns a reach config with no store: each reset fails closed.
+func noReach() access.ReachConfig {
+	return access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil}
+}
+
+// brokenClear is a counter whose clear of a name fails.
+type brokenClear struct {
+	authgate.NameLockCounter
+}
+
+func (brokenClear) ClearName(context.Context, []string, string, audit.Entry) (int64, error) {
+	return 0, errDiskOnFire
+}
+
+// TestUnlockThatCannotClearChangesNothing proves that an unlock whose clear
+// fails answers ErrUnavailable, writes no entry of a done unlock, and keeps
+// the lock.
+func TestUnlockThatCannotClearChangesNothing(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", goodPassword)
+
+	f.fail(t, authgate.DefaultNameLimit, "alice")
+
+	svc, err := localusersvc.New(localusersvc.Config{
+		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
+		Audit: f.store, Locks: brokenClear{NameLockCounter: f.store}, Keys: f.store, Settings: f.settings,
+		SSO: nil, Kind: "", Now: nil, Reach: noReach(),
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if _, unlockErr := svc.Unlock(t.Context(), admin(), c.Principal.ID, "the person called"); !errors.Is(
+		unlockErr, localuser.ErrUnavailable,
+	) {
+		t.Fatalf("unlock with a failed clear = %v, want ErrUnavailable", unlockErr)
+	}
+
+	for _, e := range f.entriesWith(t, localusersvc.ActionNameUnlocked) {
+		if e.Outcome == audit.OutcomeSuccess {
+			t.Fatalf("entry of a done unlock after a failed clear: %+v", e.Changes)
+		}
+	}
+
+	if _, signErr := f.svc.SignIn(t.Context(), from("192.0.2.1"), "alice", goodPassword); !errors.Is(
+		signErr, localuser.ErrSignInFailed,
+	) {
+		t.Fatalf("sign in after a failed unlock = %v, want ErrSignInFailed", signErr)
 	}
 }

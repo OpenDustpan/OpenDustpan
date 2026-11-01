@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
 )
 
 // Scopes of the lockout by name. A scope holds the letters a to z only.
@@ -108,10 +111,15 @@ type NameLockCounter interface {
 	// ends its lock. The level stays, so a lock soon after still doubles. A
 	// count that does not exist is no error.
 	ClearNameFailures(ctx context.Context, scope, name, sub string) error
-	// ClearName ends every count and lock of name in scope, for each
-	// sub-key, and returns how many it cleared. An unlock by an
-	// administrator calls it.
-	ClearName(ctx context.Context, scope, name string) (int64, error)
+	// ClearName ends every count and lock of name in each scope of scopes,
+	// for each sub-key, and appends e with the change "cleared", the count
+	// of the counts that it ended, in one transaction, and returns that
+	// count. An unlock by an administrator calls it, so the unlock and its
+	// audit entry commit together or not at all. It returns ErrInvalidLock
+	// for a request that CheckClearRequest refuses, and
+	// audit.ErrInvalidEntry for an entry that fails validation; both change
+	// nothing.
+	ClearName(ctx context.Context, scopes []string, name string, e audit.Entry) (int64, error)
 	// NameLocks returns every count of name in scope, one for each sub-key,
 	// in the order of the sub-key. A name with no count returns no entry.
 	NameLocks(ctx context.Context, scope, name string) ([]NameLock, error)
@@ -144,6 +152,30 @@ func CheckLockRequest(scope, name, sub string, rule LockRule) error {
 	default:
 		return rule.Validate()
 	}
+}
+
+// CheckClearRequest returns ErrInvalidLock for a clear of a name with no
+// scope, a scope that CheckLockRequest refuses, or a name that it refuses.
+// Each adapter of NameLockCounter calls it before ClearName writes, so a
+// request that it refuses changes nothing.
+func CheckClearRequest(scopes []string, name string) error {
+	if len(scopes) == 0 {
+		return fmt.Errorf("%w: a clear with no scope", ErrInvalidLock)
+	}
+
+	for _, scope := range scopes {
+		if err := CheckLockRequest(scope, name, "", PasswordRule()); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ClearedChange returns the change of the entry of a clear of a name: the
+// count of the counts that the clear ended.
+func ClearedChange(n int64) audit.Change {
+	return audit.Change{Key: "cleared", Old: nil, New: strconv.FormatInt(n, 10), Layer: "", TakesEffect: ""}
 }
 
 // Validate returns ErrInvalidLock for a limit below 1, a lock time of 0 or

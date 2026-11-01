@@ -132,12 +132,12 @@ func (f *fixture) serviceWith(t *testing.T, reach access.ReachConfig) *localuser
 		Hasher:     f.hasher,
 		Blocklist:  blocklist.Embedded(),
 		Audit:      f.store,
-		Locks:      st,
-		Keys:       st,
+		Locks:      f.store,
+		Keys:       f.store,
 		Settings:   f.settings,
 		SSO:        func(context.Context) (bool, error) { return f.sso, nil }, Reach: reach,
-		Kind:       installation.KindProduction,
-		Now:        nil,
+		Kind: installation.KindProduction,
+		Now:  nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
