@@ -7,6 +7,7 @@ Changed by:
 - ADR 222 changes decision 6: a signature can carry over, as an opt-in.
 - ADR 225 changes decision 6: a signature can carry over to an identical plan.
 - ADR 227 extends: answers the open question on fresh authentication.
+- ADR 300 extends: after a merge, a stored plan applies only when the tree is the same.
 
 ## Context
 

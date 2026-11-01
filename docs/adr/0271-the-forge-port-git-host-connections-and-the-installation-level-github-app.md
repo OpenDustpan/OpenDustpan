@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 300 changes decision 7: a third comment command, `dustpan plan`.
 
 ## Context
 
