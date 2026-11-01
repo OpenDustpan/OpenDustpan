@@ -4988,6 +4988,46 @@ DELETE FROM local_user_resets WHERE digest = sqlc.arg('digest') AND expires_at_m
 -- name: PruneLocalUserResets :execrows
 DELETE FROM local_user_resets WHERE expires_at_ms <= ?;
 
+-- name: EnsureNameLock :exec
+-- Makes the count of a name and a sub-key in a scope when it does not exist,
+-- so the read that follows finds a row.
+INSERT INTO name_locks (scope, name, sub) VALUES (?, ?, ?) ON CONFLICT DO NOTHING;
+
+-- name: GetNameLock :one
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = ? AND name = ? AND sub = ?;
+
+-- name: SetNameLock :exec
+UPDATE name_locks SET failures = sqlc.arg('failures'), locked_until_ms = sqlc.arg('locked_until_ms'),
+  level = sqlc.arg('level'), last_failure_ms = sqlc.arg('last_failure_ms'),
+  last_lock_end_ms = sqlc.arg('last_lock_end_ms'), reset_after_ms = sqlc.arg('reset_after_ms')
+WHERE scope = sqlc.arg('scope') AND name = sqlc.arg('name') AND sub = sqlc.arg('sub');
+
+-- name: ClearNameLockSub :exec
+-- Sets the count to 0 and ends the lock. The level stays.
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = ? AND name = ? AND sub = ?;
+
+-- name: ClearNameLocks :execrows
+-- Sets the count of each sub-key of a name to 0 and ends each lock.
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = ? AND name = ?;
+
+-- name: ListNameLocks :many
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = ? AND name = ? ORDER BY sub;
+
+-- name: PruneNameLocks :execrows
+-- Deletes each count whose last failure is at or before before_ms, whose lock
+-- ended at now_ms, and whose level is 0 or past its reset time.
+DELETE FROM name_locks
+WHERE last_failure_ms <= sqlc.arg('before_ms') AND locked_until_ms <= sqlc.arg('now_ms')
+  AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms'));
+
+-- name: InsertNameLockKey :exec
+INSERT INTO name_lock_key (id, key) VALUES (1, ?) ON CONFLICT DO NOTHING;
+
+-- name: GetNameLockKey :one
+SELECT key FROM name_lock_key WHERE id = 1;
+
 -- name: GetPrincipalState :one
 -- The state of a principal that each request with an access cookie reads:
 -- the owner, its activity by the account rule of the inactivity disable, the
