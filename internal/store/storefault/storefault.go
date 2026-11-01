@@ -109,6 +109,7 @@ type Inner interface {
 	inventory.BlobPurgeCounter
 	inventory.SweepLocker
 	maintenance.Store
+	blob.DatabaseClock
 
 	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 }
@@ -350,6 +351,15 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 	}
 
 	return s.inner.ListUpdates(ctx, ref, page)
+}
+
+// DatabaseNow returns the clock of the database, unless a fault fires first.
+func (s *Store) DatabaseNow(ctx context.Context) (time.Time, error) {
+	if err := s.before(ctx, "DatabaseNow"); err != nil {
+		return time.Time{}, err
+	}
+
+	return s.inner.DatabaseNow(ctx)
 }
 
 // PutCheckpoint saves cp as the state of its update, unless a fault fires first.

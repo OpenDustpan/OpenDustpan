@@ -255,8 +255,15 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 		var confirmErr error
 
 		won, confirmErr = confirmChunk(ctx, tx, &pc, &c)
+		if confirmErr != nil {
+			return confirmErr
+		}
 
-		return confirmErr
+		// The attempt window is checked after every read and write of the
+		// transaction, so a lock wait that holds the confirm past the deadline
+		// is refused. The error rolls the transaction back: a late attempt
+		// changes nothing, also when it repeats a confirm that committed.
+		return checkChunkAttempt(ctx, tx, &c)
 	})
 	if err != nil {
 		return false, err
@@ -270,19 +277,7 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 // confirm of a row wins and returns true. A row that is confirmed already
 // stays as it is, and the call returns true only when the row holds c.BlobKey:
 // the same attempt confirmed twice.
-//
-// The attempt window comes first, so a late attempt changes nothing, also when
-// it repeats a confirm that committed.
 func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkConfirm) (bool, error) {
-	now, err := tx.Now(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	if attemptErr := blob.CheckAttempt(c.AttemptStartedAt, now); attemptErr != nil {
-		return false, fmt.Errorf("confirm chunk %d of log %s: %w", c.Seq, c.Version, attemptErr)
-	}
-
 	j, err := claimed(ctx, tx, *pc)
 	if err != nil {
 		return false, err
@@ -761,6 +756,21 @@ func CheckPlanBody(id, body string) error {
 
 	if err := job.CheckPlanParts(p.Parts); err != nil {
 		return fmt.Errorf("%w: plan %s has parts that are not valid: %w", ErrDamaged, id, err)
+	}
+
+	return nil
+}
+
+// checkChunkAttempt returns blob.ErrAttemptExpired when the attempt of c is
+// outside its time window by the clock of the database.
+func checkChunkAttempt(ctx context.Context, tx Tx, c *job.ChunkConfirm) error {
+	now, err := tx.Now(ctx)
+	if err != nil {
+		return err
+	}
+
+	if attemptErr := blob.CheckAttempt(c.AttemptStartedAt, now); attemptErr != nil {
+		return fmt.Errorf("confirm chunk %d of log %s: %w", c.Seq, c.Version, attemptErr)
 	}
 
 	return nil

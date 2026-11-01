@@ -1,6 +1,7 @@
 package blob_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -62,5 +63,85 @@ func TestUnnamedGracePeriodCoversTheAttempt(t *testing.T) {
 
 	if blob.UnnamedGracePeriod <= blob.AttemptDeadline+blob.AttemptSkew {
 		t.Errorf("UnnamedGracePeriod = %s, want more than the deadline and the skew", blob.UnnamedGracePeriod)
+	}
+}
+
+// fixedClock is a DatabaseClock with a fixed answer.
+type fixedClock struct {
+	now time.Time
+	err error
+}
+
+func (c fixedClock) DatabaseNow(context.Context) (time.Time, error) { return c.now, c.err }
+
+// errClockRead is the failure of a read of the clock in the cases.
+var errClockRead = errors.New("read of the clock failed")
+
+func TestSweepNow(t *testing.T) {
+	t.Parallel()
+
+	db := time.UnixMilli(1_790_000_000_000).UTC()
+
+	tests := []struct {
+		name     string
+		clock    blob.DatabaseClock
+		instance time.Time
+		want     error
+	}{
+		{name: "the clocks agree", clock: fixedClock{now: db, err: nil}, instance: db.Add(time.Second), want: nil},
+		{
+			name:     "a fast instance at the skew",
+			clock:    fixedClock{now: db, err: nil},
+			instance: db.Add(blob.AttemptSkew),
+			want:     nil,
+		},
+		{
+			name: "an instance that runs fast", clock: fixedClock{now: db, err: nil},
+			instance: db.Add(blob.AttemptSkew + time.Second), want: blob.ErrClockSkew,
+		},
+		{
+			name: "an instance that runs slow", clock: fixedClock{now: db, err: nil},
+			instance: db.Add(-blob.AttemptSkew - time.Second), want: blob.ErrClockSkew,
+		},
+		{name: "a failed read", clock: fixedClock{now: db, err: errClockRead}, instance: db, want: blob.ErrClockSkew},
+		{name: "no clock", clock: nil, instance: db, want: blob.ErrClockSkew},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := blob.SweepNow(t.Context(), tc.clock, tc.instance)
+
+			switch {
+			case tc.want != nil && !errors.Is(err, tc.want):
+				t.Errorf("SweepNow = %v, %v; want %v", got, err, tc.want)
+			case tc.want == nil && (err != nil || !got.Equal(db)):
+				t.Errorf("SweepNow = %v, %v; want the clock of the database %v", got, err, db)
+			default:
+			}
+		})
+	}
+}
+
+func TestOldEnough(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_790_000_000_000).UTC()
+
+	tests := []struct {
+		name     string
+		modified time.Time
+		want     bool
+	}{
+		{name: "older than the grace period", modified: now.Add(-blob.UnnamedGracePeriod), want: true},
+		{name: "younger than the grace period", modified: now.Add(-blob.UnnamedGracePeriod + time.Second), want: false},
+		{name: "no modification time", modified: time.Time{}, want: false},
+	}
+
+	for _, tc := range tests {
+		if got := blob.OldEnough(tc.modified, now); got != tc.want {
+			t.Errorf("%s: OldEnough = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

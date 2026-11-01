@@ -53,6 +53,27 @@ func (s *stallingCheckpoints) PutCheckpoint(
 	return known, nil
 }
 
+// errNoClock reports a wrapped store that does not read the clock of the
+// database.
+var errNoClock = errors.New("the wrapped store does not read the clock of the database")
+
+// DatabaseNow forwards to the wrapped store, whose method the embedded
+// CheckpointStore interface hides, so the sweeps of the case read the clock
+// of the database.
+func (s *stallingCheckpoints) DatabaseNow(ctx context.Context) (time.Time, error) {
+	clock, ok := s.CheckpointStore.(blob.DatabaseClock)
+	if !ok {
+		return time.Time{}, errNoClock
+	}
+
+	now, err := clock.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("database now: %w", err)
+	}
+
+	return now, nil
+}
+
 // testStalledSaveAfterSweep runs the race between a sweep and a save whose
 // commit stalls. The save writes its blob and stalls before its commit. The
 // blob gets older than the grace period, and a second save sweeps the update
