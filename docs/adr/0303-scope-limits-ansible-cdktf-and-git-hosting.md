@@ -22,8 +22,8 @@ updates it.
 
 ## Decision
 
-1. **OpenDustpan has no Ansible stack type and no Ansible runner.** Ansible
-   work is covered by AWX and the AWX provider. An apply can start an AWX job
+1. **OpenDustpan has no Ansible stack type and no Ansible runner.** AWX and the AWX provider cover Ansible
+   work. An apply can start an AWX job
    template as a follow-up. The follow-ups after an apply are an open question
    in [RFC 96](../rfc/0096-follow-ups-after-an-apply.md). This ADR does not
    decide RFC 96. A later ADR that accepts RFC 96 decides the details.
@@ -45,8 +45,8 @@ updates it.
 
 - A request to add an Ansible stack type, an Ansible runner, CDKTF support or
   Git repository hosting is out of scope under this ADR.
-- The AWX follow-up uses the AWX job template as the target. It does not add
-  an Ansible engine to OpenDustpan.
+- The AWX follow-up may use the AWX job template as the target, as RFC 96
+  decides. It does not add an Ansible engine to OpenDustpan.
 - Documentation and console text say "Git host" for the service, as ADR 271
   decision 11 requires. The text does not say that OpenDustpan hosts code.
 
