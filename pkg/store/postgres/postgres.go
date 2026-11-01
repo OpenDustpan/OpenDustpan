@@ -101,6 +101,12 @@ type Store struct {
 	// guard resets the pool when it holds a connection to a server that
 	// refuses writes.
 	guard *poolGuard
+	// marks holds the connections of the long paths, which the pool resets
+	// at their release.
+	marks *longMarks
+	// reads runs the short catalog reads of the backup and restore code with
+	// the bounds of the API paths.
+	reads guardedDB
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -200,14 +206,12 @@ func poolConfig(url string) (*pgxpool.Config, FailoverSettings, error) {
 		)
 	}
 
+	// The search path and the server timeouts are start-up parameters, not
+	// a SET after the connect: RESET ALL then goes back to them, so the reset
+	// of a released long-path connection keeps them.
 	ctl := live + "_control"
-	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
-			return fmt.Errorf("set postgres search path: %w", execErr)
-		}
-
-		return nil
-	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = pgIdent(live) + ", " + pgIdent(ctl)
+	maps.Copy(cfg.ConnConfig.RuntimeParams, serverTimeoutParams())
 
 	return cfg, plan.report, nil
 }
@@ -240,6 +244,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		tracer:              nil,
 		failover:            failover,
 		guard:               nil,
+		marks:               newLongMarks(),
+		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil}},
 	}
 
 	for _, opt := range opts {
@@ -249,6 +255,9 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	if s.tracer != nil {
 		cfg.ConnConfig.Tracer = s.tracer
 	}
+
+	cfg.AfterRelease = s.marks.afterRelease
+	cfg.BeforeClose = s.marks.beforeClose
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -264,9 +273,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	s.pool = pool
 	s.guard = newPoolGuard(pool, s.logger)
 	s.txs = guardedPool{pool: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
-	s.queries = db.New(
-		guardedDB{inner: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}},
-	)
+	s.reads = guardedDB{inner: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
+	s.queries = db.New(s.reads)
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	if err := s.migrate(ctx); err != nil {
@@ -1297,6 +1305,10 @@ func (s *Store) migrate(ctx context.Context) error {
 	starter := guardedPool{pool: s.pool, rt: roundTrip{deadline: migrationDeadline, watch: s.guard, readOnlyTx: false}}
 
 	err = pgx.BeginFunc(ctx, starter, func(tx pgx.Tx) error {
+		if boundErr := setLocalBounds(ctx, tx, migrationBound()); boundErr != nil {
+			return boundErr
+		}
+
 		return migrateTx(
 			ctx,
 			tx,

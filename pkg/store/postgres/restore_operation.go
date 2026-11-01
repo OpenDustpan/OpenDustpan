@@ -843,7 +843,7 @@ func (s *Store) ApplyRestoreArea(
 func (s *Store) schemaExists(ctx context.Context, name string) (bool, error) {
 	var n int
 
-	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_namespace WHERE nspname = $1", name).Scan(&n); err != nil {
+	if err := s.reads.QueryRow(ctx, "SELECT count(*) FROM pg_namespace WHERE nspname = $1", name).Scan(&n); err != nil {
 		return false, fmt.Errorf("read schema %q: %w", name, err)
 	}
 
@@ -880,7 +880,7 @@ func (s *Store) CleanRestoreAreas(
 		return nil, err
 	}
 
-	err = inBackupTx(ctx, s.pool, readWriteOpts(), func(tx pgx.Tx) error {
+	err = s.inLongTx(ctx, backupBound(), readWriteOpts(), func(tx pgx.Tx) error {
 		// The fence comes before the first drop, and the record of the step
 		// commits with the drops.
 		if fenceErr := recordedRestore(ctx, s.queries.WithTx(tx), f, id); fenceErr != nil {
@@ -981,7 +981,7 @@ func cleanPlan(
 // schemasWithPrefix returns the names of the schemas of this database that
 // start with prefix, in order.
 func (s *Store) schemasWithPrefix(ctx context.Context, prefix string) ([]string, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.reads.Query(ctx,
 		"SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1) ORDER BY nspname", prefix)
 	if err != nil {
 		return nil, fmt.Errorf("list schemas: %w", err)

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/registrystore"
 )
@@ -44,7 +42,7 @@ func pgCopyRegistryTables() []pgCopyTable {
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedRegistryReleases(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedRegistryReleases(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT n.name, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file, " +
 		"r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms, r.stored_files_json FROM " +
 		stagingTable(staging, "registry_releases") + " AS r LEFT JOIN " + stagingTable(staging, "namespaces") +
@@ -110,7 +108,7 @@ func checkStagedRegistryReleases(ctx context.Context, pool *pgxpool.Pool, stagin
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedRegistryKeys(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedRegistryKeys(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT n.name, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms FROM " +
 		stagingTable(staging, "registry_keys") + " AS k LEFT JOIN " + stagingTable(staging, "namespaces") +
 		" AS n ON n.id = k.namespace_id"
@@ -160,7 +158,7 @@ func checkStagedRegistryKeys(ctx context.Context, pool *pgxpool.Pool, staging st
 
 // checkStagedRegistry checks the release rows and the key rows of a staged
 // backup.
-func checkStagedRegistry(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedRegistry(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedRegistryReleases(ctx, pool, staging); err != nil {
 		return err
 	}
