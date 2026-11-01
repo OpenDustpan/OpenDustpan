@@ -19,6 +19,11 @@ import (
 // before it writes anything for that key. It wraps ErrCorrupt.
 var ErrProtectedKey = fmt.Errorf("backup names a blob key that a restore does not write: %w", ErrCorrupt)
 
+// ErrConflictingBlob means that the manifest of a backup names one blob key
+// twice with different sizes, checksums or seal flags. The restore ends failed
+// before it copies any blob. It wraps ErrCorrupt.
+var ErrConflictingBlob = fmt.Errorf("backup names one blob key twice with different bytes: %w", ErrCorrupt)
+
 // storeCheckPrefix is the first segment of the keys that a store check writes.
 const storeCheckPrefix = "store-checks"
 
@@ -161,4 +166,57 @@ func checkExportKeys(id ID, refs []BlobRef) error {
 	}
 
 	return nil
+}
+
+// conflictingBlobAuditObject names the refusal of a key that the manifest of
+// the backup of the restore in names twice with different bytes, for its audit
+// entry. The key is quoted, so it holds no carriage return and no line feed.
+func conflictingBlobAuditObject(in restoreInput, key string) string {
+	return "restore " + in.ID.String() + " refused blob key " + strconv.Quote(truncateKey(key)) +
+		" of backup " + in.BackupID.String() + ": the manifest names it twice with different bytes"
+}
+
+// uniqueBlobs returns refs with each key once, in the order of first
+// appearance. An entry that repeats a key with the same size, checksum and
+// seal flag is dropped. An entry that repeats a key with other values fails the
+// restore with ErrConflictingBlob, and its audit event is stored under the
+// fence first. It fails closed: when the event cannot be stored, the restore
+// is refused all the same, and the error of the store is joined to the refusal.
+// Defense in depth: the export refuses a duplicate key too, and the digest of
+// the pinned manifest stops a swapped manifest. This check stays so that the
+// copy does not depend on them.
+func (s *RestoreService) uniqueBlobs(
+	ctx context.Context, fence durable.StepFence, in restoreInput, refs []ManifestBlob,
+) ([]ManifestBlob, error) {
+	seen := make(map[string]ManifestBlob, len(refs))
+	unique := make([]ManifestBlob, 0, len(refs))
+
+	for _, ref := range refs {
+		first, dup := seen[ref.Key]
+		if !dup {
+			seen[ref.Key] = ref
+			unique = append(unique, ref)
+
+			continue
+		}
+
+		if first == ref {
+			continue
+		}
+
+		conflict := fmt.Errorf("%w: %q", ErrConflictingBlob, truncateKey(ref.Key))
+
+		recordErr := s.live.RecordRestoreEvent(ctx, fence, in.ID, conflictingBlobAuditObject(in, ref.Key))
+		if recordErr != nil {
+			if errors.Is(recordErr, durable.ErrClaimLost) || errors.Is(recordErr, durable.ErrCanceled) {
+				return nil, recordErr
+			}
+
+			return nil, errors.Join(conflict, fmt.Errorf("record the refusal of a blob key: %w", recordErr))
+		}
+
+		return nil, conflict
+	}
+
+	return unique, nil
 }
