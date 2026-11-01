@@ -321,52 +321,9 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"purged_at_ms",
 			},
 		},
-		{
-			table: "workspaces",
-			columns: []string{
-				"id",
-				backupColNamespace,
-				backupColName,
-				backupColRevision,
-				"lock_id",
-				"lock_holder",
-				"lock_reason",
-				"locked_at_ms",
-				"current_state_version_id",
-				backupColCreatedAtMs,
-				backupColUpdatedAtMs,
-				"allow_forced_writes",
-				"allow_unlocked_writes",
-				backupColDeletedAtMs,
-				backupColDeletedName,
-			},
-		},
-		{
-			table: "state_versions",
-			columns: []string{
-				"id",
-				backupColWorkspaceID,
-				backupColStatus,
-				"serial",
-				"lineage",
-				"md5",
-				backupColSize,
-				"content_key",
-				"outputs",
-				"force",
-				"upload_digest",
-				"upload_expires_at_ms",
-				"holder",
-				"lock_id",
-				backupColCreatedAtMs,
-				"finalized_at_ms",
-				"restored_from",
-				"sealed",
-				"sensitive_marks",
-				"fenced_by",
-				"unlocked_write",
-			},
-		},
+	}
+
+	audit := []sqliteBackupTable{
 		{
 			table: "audit_entries",
 			columns: []string{
@@ -399,7 +356,65 @@ func sqliteBackupTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(base, sqliteLaterBackupTables())
+	return slices.Concat(base, sqliteWorkspaceBackupTables(), audit, sqliteLaterBackupTables())
+}
+
+// sqliteWorkspaceBackupTables lists the column lists of the workspace tables,
+// in the order of backup.Tables.
+func sqliteWorkspaceBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: "workspaces",
+			columns: []string{
+				"id",
+				backupColNamespace,
+				backupColName,
+				backupColRevision,
+				"lock_id",
+				"lock_holder",
+				"lock_reason",
+				"locked_at_ms",
+				"current_state_version_id",
+				backupColCreatedAtMs,
+				backupColUpdatedAtMs,
+				"allow_forced_writes",
+				"allow_unlocked_writes",
+				backupColDeletedAtMs,
+				backupColDeletedName,
+				"last_release_lock_id",
+				"last_release_holder",
+				"last_release_by",
+				"last_release_kind",
+				"last_release_at_ms",
+			},
+		},
+		{
+			table: "state_versions",
+			columns: []string{
+				"id",
+				backupColWorkspaceID,
+				backupColStatus,
+				"serial",
+				"lineage",
+				"md5",
+				backupColSize,
+				"content_key",
+				"outputs",
+				"force",
+				"upload_digest",
+				"upload_expires_at_ms",
+				"holder",
+				"lock_id",
+				backupColCreatedAtMs,
+				"finalized_at_ms",
+				"restored_from",
+				"sealed",
+				"sensitive_marks",
+				"fenced_by",
+				"unlocked_write",
+			},
+		},
+	}
 }
 
 // sqliteLaterBackupTables lists the column lists of the tables that follow the

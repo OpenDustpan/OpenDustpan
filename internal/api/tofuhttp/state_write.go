@@ -138,7 +138,14 @@ func contentMD5(r *http.Request) (string, error) {
 // lock: a force-unlock (ADR 49, decision 6). It needs unit:write-forced. The
 // unlock writes the fence version of a unit with state; a client-encrypted state
 // unlocks unfenced only while the forced-write switches are on (ADR 44).
-func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace) {
+//
+// expect is the lock that the release must end: the lock that the caller read
+// on a locked workspace, or the lock of the record of the last release on a
+// free workspace. On a free workspace the service answers success only for a
+// repeat of the forced release of the caller, and changes nothing.
+func (h *Handler) forceUnlockWorkspace(
+	w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace, expect workspace.Lock,
+) {
 	ctx := r.Context()
 
 	obj, err := unitObject(c.ref)
@@ -170,11 +177,12 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 	}
 
 	// The lock the caller saw is the one that must still be held: its ID and its
-	// holder come from the same read (ADR 49, decision 6).
+	// holder come from the same read. On a free workspace, expect names the lock
+	// of the record of the last release, which a repeat must match.
 	_, _, err = h.ws.ForceUnlockLock(
 		ctx,
 		ws.ID,
-		ws.Lock,
+		expect,
 		c.principal.Subject,
 		allow,
 		record,

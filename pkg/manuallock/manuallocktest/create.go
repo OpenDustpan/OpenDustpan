@@ -22,6 +22,7 @@ func newWorkspaceValue(t *testing.T, ns namespace.Namespace, name string) worksp
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, name)},
 		Revision:    1,

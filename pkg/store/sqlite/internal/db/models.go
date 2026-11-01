@@ -1217,6 +1217,11 @@ type Workspace struct {
 	AllowUnlockedWrites   bool
 	DeletedAtMs           sql.NullInt64
 	DeletedName           sql.NullString
+	LastReleaseLockID     string
+	LastReleaseHolder     string
+	LastReleaseBy         string
+	LastReleaseKind       string
+	LastReleaseAtMs       int64
 }
 
 type WorkspaceBlameCursor struct {

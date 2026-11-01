@@ -124,6 +124,7 @@ func makeWorkspace(t *testing.T, s Store, f namespace.Fence, id workspace.ID) {
 		CreatedAt:   suiteTime(),
 		UpdatedAt:   suiteTime(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          id,
 		Ref:         workspace.Ref{Namespace: f.Namespace, Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},

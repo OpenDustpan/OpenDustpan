@@ -646,6 +646,10 @@ _Avoid_: Preview (for OpenTofu), dry run, diff (a diff compares two state versio
 The lock that one principal holds on a workspace while it changes the state of the workspace. The lock stays until the principal or an administrator releases it.
 _Avoid_: Lease
 
+**Last release**:
+The record of the last released lock of a workspace. It holds the lock ID, the holder, the releaser, the time of the release and the kind of release. The kind is "normal" when the holder released the lock, and "forced" after a force-unlock. For 24 hours after the release, the record lets an unlock or a force-unlock that OpenTofu sends again succeed with no change.
+_Avoid_: Unlock history, lock log
+
 **Override switch**:
 A setting of a namespace or of a unit that allows an override (ADR 44, decision 6). Both settings are off by default. A unit setting only narrows the setting of its namespace.
 _Avoid_: Flag, toggle

@@ -327,7 +327,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		},
 	}
 
-	for _, tc := range slices.Concat(cases, releaseAuditCases(), workspacePageCases()) {
+	for _, tc := range slices.Concat(cases, releaseAuditCases(), lastReleaseCases(), workspacePageCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -370,6 +370,7 @@ func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Wor
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 		Lock:        clearedLock(),
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
 		NamespaceID: ns.ID,
@@ -525,11 +526,22 @@ func assertWorkspace(t *testing.T, got, want workspace.Workspace) {
 	same := got.Ref == want.Ref && got.NamespaceID == want.NamespaceID && got.ID == want.ID &&
 		got.Revision == want.Revision && got.Overrides == want.Overrides &&
 		got.CreatedAt.Equal(want.CreatedAt) && got.UpdatedAt.Equal(want.UpdatedAt) &&
-		got.Lock.ID == want.Lock.ID && got.Lock.Holder == want.Lock.Holder &&
-		got.Lock.Reason == want.Lock.Reason && got.Lock.LockedAt.Equal(want.Lock.LockedAt)
+		sameLock(got.Lock, want.Lock) && sameRelease(got.LastRelease, want.LastRelease)
 	if !same {
 		t.Fatalf("workspace = %+v, want %+v", got, want)
 	}
+}
+
+// sameLock reports whether two locks are the same.
+func sameLock(got, want workspace.Lock) bool {
+	return got.ID == want.ID && got.Holder == want.Holder && got.Reason == want.Reason &&
+		got.LockedAt.Equal(want.LockedAt)
+}
+
+// sameRelease reports whether two records of a release are the same.
+func sameRelease(got, want workspace.Release) bool {
+	return got.At.Equal(want.At) && got.LockID == want.LockID && got.Holder == want.Holder &&
+		got.By == want.By && got.Kind == want.Kind
 }
 
 func sameStateReference(got, want workspace.StateVersion) bool {

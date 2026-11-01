@@ -802,6 +802,7 @@ func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRe
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         ref,
 		Revision:    1,

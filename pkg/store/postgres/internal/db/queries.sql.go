@@ -2712,8 +2712,9 @@ const createWorkspace = `-- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
     locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms,
-    allow_forced_writes, allow_unlocked_writes
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    allow_forced_writes, allow_unlocked_writes, last_release_lock_id, last_release_holder,
+    last_release_by, last_release_kind, last_release_at_ms
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 ON CONFLICT DO NOTHING
 `
 
@@ -2731,6 +2732,11 @@ type CreateWorkspaceParams struct {
 	UpdatedAtMs           int64
 	AllowForcedWrites     bool
 	AllowUnlockedWrites   bool
+	LastReleaseLockID     string
+	LastReleaseHolder     string
+	LastReleaseBy         string
+	LastReleaseKind       string
+	LastReleaseAtMs       int64
 }
 
 func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (int64, error) {
@@ -2748,6 +2754,11 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		arg.UpdatedAtMs,
 		arg.AllowForcedWrites,
 		arg.AllowUnlockedWrites,
+		arg.LastReleaseLockID,
+		arg.LastReleaseHolder,
+		arg.LastReleaseBy,
+		arg.LastReleaseKind,
+		arg.LastReleaseAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -8679,7 +8690,8 @@ func (q *Queries) GetUpdateLeaseForShare(ctx context.Context, arg GetUpdateLease
 const getWorkspace = `-- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL
 `
@@ -8708,6 +8720,11 @@ func (q *Queries) GetWorkspace(ctx context.Context, arg GetWorkspaceParams) (Wor
 		&i.AllowUnlockedWrites,
 		&i.DeletedAtMs,
 		&i.DeletedName,
+		&i.LastReleaseLockID,
+		&i.LastReleaseHolder,
+		&i.LastReleaseBy,
+		&i.LastReleaseKind,
+		&i.LastReleaseAtMs,
 	)
 	return i, err
 }
@@ -8756,7 +8773,8 @@ func (q *Queries) GetWorkspaceBlameItem(ctx context.Context, arg GetWorkspaceBla
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 `
@@ -8783,6 +8801,11 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.AllowUnlockedWrites,
 		&i.DeletedAtMs,
 		&i.DeletedName,
+		&i.LastReleaseLockID,
+		&i.LastReleaseHolder,
+		&i.LastReleaseBy,
+		&i.LastReleaseKind,
+		&i.LastReleaseAtMs,
 	)
 	return i, err
 }
@@ -16433,7 +16456,8 @@ func (q *Queries) ListWorkspaceResourceHistory(ctx context.Context, arg ListWork
 const listWorkspaces = `-- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE namespace = $1 AND deleted_at_ms IS NULL
 ORDER BY name
@@ -16464,6 +16488,11 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 			&i.AllowUnlockedWrites,
 			&i.DeletedAtMs,
 			&i.DeletedName,
+			&i.LastReleaseLockID,
+			&i.LastReleaseHolder,
+			&i.LastReleaseBy,
+			&i.LastReleaseKind,
+			&i.LastReleaseAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -16673,7 +16702,8 @@ func (q *Queries) LockUpdateForJournal(ctx context.Context, arg LockUpdateForJou
 const lockWorkspaceForDeclare = `-- name: LockWorkspaceForDeclare :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE
@@ -16703,6 +16733,11 @@ func (q *Queries) LockWorkspaceForDeclare(ctx context.Context, id string) (Works
 		&i.AllowUnlockedWrites,
 		&i.DeletedAtMs,
 		&i.DeletedName,
+		&i.LastReleaseLockID,
+		&i.LastReleaseHolder,
+		&i.LastReleaseBy,
+		&i.LastReleaseKind,
+		&i.LastReleaseAtMs,
 	)
 	return i, err
 }
@@ -16710,7 +16745,8 @@ func (q *Queries) LockWorkspaceForDeclare(ctx context.Context, id string) (Works
 const lockWorkspaceForFinalize = `-- name: LockWorkspaceForFinalize :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
-       deleted_at_ms, deleted_name
+       deleted_at_ms, deleted_name,
+       last_release_lock_id, last_release_holder, last_release_by, last_release_kind, last_release_at_ms
 FROM workspaces
 WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE
@@ -16740,6 +16776,11 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 		&i.AllowUnlockedWrites,
 		&i.DeletedAtMs,
 		&i.DeletedName,
+		&i.LastReleaseLockID,
+		&i.LastReleaseHolder,
+		&i.LastReleaseBy,
+		&i.LastReleaseKind,
+		&i.LastReleaseAtMs,
 	)
 	return i, err
 }
@@ -17421,7 +17462,7 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 }
 
 const readWorkspace = `-- name: ReadWorkspace :one
-SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.name = $2 AND w.deleted_at_ms IS NULL
@@ -17458,13 +17499,18 @@ func (q *Queries) ReadWorkspace(ctx context.Context, arg ReadWorkspaceParams) (R
 		&i.Workspace.AllowUnlockedWrites,
 		&i.Workspace.DeletedAtMs,
 		&i.Workspace.DeletedName,
+		&i.Workspace.LastReleaseLockID,
+		&i.Workspace.LastReleaseHolder,
+		&i.Workspace.LastReleaseBy,
+		&i.Workspace.LastReleaseKind,
+		&i.Workspace.LastReleaseAtMs,
 		&i.NamespaceID,
 	)
 	return i, err
 }
 
 const readWorkspaceByID = `-- name: ReadWorkspaceByID :one
-SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.id = $1 AND num_nulls(w.deleted_at_ms) = 1
@@ -17497,13 +17543,18 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 		&i.Workspace.AllowUnlockedWrites,
 		&i.Workspace.DeletedAtMs,
 		&i.Workspace.DeletedName,
+		&i.Workspace.LastReleaseLockID,
+		&i.Workspace.LastReleaseHolder,
+		&i.Workspace.LastReleaseBy,
+		&i.Workspace.LastReleaseKind,
+		&i.Workspace.LastReleaseAtMs,
 		&i.NamespaceID,
 	)
 	return i, err
 }
 
 const readWorkspacePage = `-- name: ReadWorkspacePage :many
-SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
@@ -17566,6 +17617,11 @@ func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePagePa
 			&i.Workspace.AllowUnlockedWrites,
 			&i.Workspace.DeletedAtMs,
 			&i.Workspace.DeletedName,
+			&i.Workspace.LastReleaseLockID,
+			&i.Workspace.LastReleaseHolder,
+			&i.Workspace.LastReleaseBy,
+			&i.Workspace.LastReleaseKind,
+			&i.Workspace.LastReleaseAtMs,
 			&i.NamespaceID,
 		); err != nil {
 			return nil, err
@@ -17579,7 +17635,7 @@ func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePagePa
 }
 
 const readWorkspaces = `-- name: ReadWorkspaces :many
-SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
@@ -17616,6 +17672,11 @@ func (q *Queries) ReadWorkspaces(ctx context.Context, namespace string) ([]ReadW
 			&i.Workspace.AllowUnlockedWrites,
 			&i.Workspace.DeletedAtMs,
 			&i.Workspace.DeletedName,
+			&i.Workspace.LastReleaseLockID,
+			&i.Workspace.LastReleaseHolder,
+			&i.Workspace.LastReleaseBy,
+			&i.Workspace.LastReleaseKind,
+			&i.Workspace.LastReleaseAtMs,
 			&i.NamespaceID,
 		); err != nil {
 			return nil, err
@@ -18542,8 +18603,11 @@ const saveWorkspace = `-- name: SaveWorkspace :execrows
 UPDATE workspaces
 SET revision = $1, lock_id = $2, lock_holder = $3,
     lock_reason = $4, locked_at_ms = $5, updated_at_ms = $6,
-    allow_forced_writes = $7, allow_unlocked_writes = $8
-WHERE id = $9 AND revision = $10
+    allow_forced_writes = $7, allow_unlocked_writes = $8,
+    last_release_lock_id = $9, last_release_holder = $10,
+    last_release_by = $11, last_release_kind = $12,
+    last_release_at_ms = $13
+WHERE id = $14 AND revision = $15
 `
 
 type SaveWorkspaceParams struct {
@@ -18555,6 +18619,11 @@ type SaveWorkspaceParams struct {
 	UpdatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	LastReleaseLockID   string
+	LastReleaseHolder   string
+	LastReleaseBy       string
+	LastReleaseKind     string
+	LastReleaseAtMs     int64
 	ID                  string
 	ExpectedRevision    int64
 }
@@ -18571,6 +18640,11 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 		arg.UpdatedAtMs,
 		arg.AllowForcedWrites,
 		arg.AllowUnlockedWrites,
+		arg.LastReleaseLockID,
+		arg.LastReleaseHolder,
+		arg.LastReleaseBy,
+		arg.LastReleaseKind,
+		arg.LastReleaseAtMs,
 		arg.ID,
 		arg.ExpectedRevision,
 	)

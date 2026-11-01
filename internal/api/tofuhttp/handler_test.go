@@ -74,6 +74,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 			CreatedAt:   time.Time{},
 			UpdatedAt:   time.Time{},
 			Lock:        unlockedLock(),
+			LastRelease: workspace.NoRelease(),
 			Revision:    0,
 			Overrides:   on,
 		},
@@ -180,6 +181,11 @@ func (f *fakeUnits) UnlockLock(_ context.Context, _ workspace.ID, lockID, holder
 	f.ws.Lock = unlockedLock()
 
 	return f.ws, nil
+}
+
+// RepeatsRelease applies the rule of the domain with the wall clock.
+func (f *fakeUnits) RepeatsRelease(w workspace.Workspace, q workspace.ReleaseRepeat) bool {
+	return w.RepeatsRelease(time.Now().UTC(), q)
 }
 
 // ForceUnlockLock releases the lock whoever holds it, when lockID is the lock.
