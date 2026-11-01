@@ -98,6 +98,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.ownTokenRoutes()...)
 	routes = append(routes, h.tokenPolicyRoutes()...)
 	routes = append(routes, h.sessionPolicyRoutes()...)
+	routes = append(routes, h.localUserRoutes()...)
 	routes = append(routes, h.auditSinkRoutes()...)
 	routes = append(routes, h.checkpointRoutes()...)
 	routes = append(routes, h.instanceRoutes()...)

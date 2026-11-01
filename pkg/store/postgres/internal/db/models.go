@@ -983,6 +983,7 @@ type Session struct {
 	EndReason    string
 	SourceIp     string
 	UserAgent    string
+	Generation   int64
 }
 
 type SessionPolicy struct {

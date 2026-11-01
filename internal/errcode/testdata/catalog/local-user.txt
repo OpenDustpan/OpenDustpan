@@ -1,0 +1,16 @@
+local-user.break-glass
+local-user.code-invalid
+local-user.current-password-required
+local-user.current-password-wrong
+local-user.demo-fixed
+local-user.exists
+local-user.hash-busy
+local-user.last-credential
+local-user.name-invalid
+local-user.not-found
+local-user.own-account
+local-user.password-sign-in-off
+local-user.reason-required
+local-user.second-factor-required
+local-user.sign-in-failed
+local-user.unavailable

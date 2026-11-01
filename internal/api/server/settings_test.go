@@ -71,6 +71,7 @@ func settingsConfig(
 	st *sqlite.Store, namespaces *namespace.Service, authz identity.Authorizer, svc *setting.Service,
 ) apiserver.Config {
 	return apiserver.Config{
+		LocalUsers:  nil,
 		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
 		TempAdmins: nil, Now: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil, Restores: nil,

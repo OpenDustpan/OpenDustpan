@@ -227,6 +227,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,
@@ -1123,6 +1124,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,

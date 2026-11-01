@@ -592,6 +592,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"end_reason",
 				"source_ip",
 				"user_agent",
+				"generation",
 			},
 		},
 		{

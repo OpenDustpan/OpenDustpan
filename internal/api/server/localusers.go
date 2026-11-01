@@ -1,0 +1,552 @@
+package server
+
+// The routes of the local users and of the password sign-in:
+//
+//   - POST /api/dustpan/v1/sign-in/password signs a browser in with a user
+//     name and a password. It is public, and it spends the sign-in budget of
+//     the source address on each failure.
+//   - POST /api/dustpan/v1/local-users/redeem sets a password with a set-up
+//     code or a reset code. It is public: the code is the credential.
+//   - POST /api/dustpan/v1/local-users makes a local user and its set-up
+//     code (server:manage-sign-in).
+//   - GET /api/dustpan/v1/local-users/policy answers the effective password
+//     policy (server:manage-sign-in).
+//   - POST /api/dustpan/v1/local-users/reset makes a reset code
+//     (server:manage-sign-in, a fresh authentication).
+//   - POST /api/dustpan/v1/me/password changes the own password
+//     (caller:manage-sign-in).
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/textbody"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
+)
+
+// Paths of the local user routes.
+const (
+	passwordSignInPath       = "/api/dustpan/v1/sign-in/password"
+	localUsersPath           = "/api/dustpan/v1/local-users"
+	localUserRedeemPath      = "/api/dustpan/v1/local-users/redeem"
+	localUserPolicyPath      = "/api/dustpan/v1/local-users/policy"
+	localUserResetPath       = "/api/dustpan/v1/local-users/reset"
+	ownPasswordPath          = "/api/dustpan/v1/me/password"
+	maxLocalUserBody         = 8 * 1024
+	tagLocalUsers            = "local-users"
+	passwordSignInAuditActor = "sign-in:" + localuser.ProviderID
+)
+
+// passwordSignInRequest is the body of a password sign-in.
+type passwordSignInRequest struct {
+	UserName string `json:"userName"`
+	Password string `json:"password"`
+}
+
+// redeemRequest is the body of the use of a set-up code or a reset code.
+type redeemRequest struct {
+	Code     string `json:"code"`
+	Password string `json:"password"`
+}
+
+// createLocalUserRequest is the body of a new local user.
+type createLocalUserRequest struct {
+	UserName    string `json:"userName"`
+	DisplayName string `json:"displayName"`
+	Reason      string `json:"reason"`
+}
+
+// createLocalUserResponse is a new local user with its set-up code. The
+// server shows the code once.
+//
+// Contract: never remove or rename these fields.
+type createLocalUserResponse struct {
+	PrincipalID    string `json:"principalId"`
+	UserID         string `json:"userId"`
+	UserName       string `json:"userName"`
+	Subject        string `json:"subject"`
+	SetUpCode      string `json:"setUpCode"`
+	SetUpExpiresAt string `json:"setUpExpiresAt"`
+}
+
+// resetLocalUserRequest is the body of a reset of a password.
+type resetLocalUserRequest struct {
+	PrincipalID        string `json:"principalId"`
+	Reason             string `json:"reason"`
+	RevokeAccessTokens bool   `json:"revokeAccessTokens"`
+}
+
+// resetLocalUserResponse is a new reset code. The server shows it once.
+//
+// Contract: never remove or rename these fields.
+type resetLocalUserResponse struct {
+	ResetCode string `json:"resetCode"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// changeOwnPasswordRequest is the body of a change of the own password. An
+// empty current password needs a session with a fresh authentication.
+type changeOwnPasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// localUserPolicyResponse is the effective password policy.
+//
+// Contract: never remove or rename these fields.
+type localUserPolicyResponse struct {
+	Enabled                 bool   `json:"enabled"`
+	EnabledSource           string `json:"enabledSource"`
+	IdentityProvider        bool   `json:"identityProvider"`
+	MinLength               int    `json:"minLength"`
+	MaxLength               int    `json:"maxLength"`
+	RequireLettersAndDigits bool   `json:"requireLettersAndDigits"`
+	ResetLifetimeSeconds    int64  `json:"resetLifetimeSeconds"`
+}
+
+// errLocalUsersUnavailable is the answer of a local user route on a server
+// that keeps no local users.
+var errLocalUsersUnavailable = &codedError{
+	status: http.StatusNotImplemented, code: errcode.LocalUserUnavailable, args: nil,
+	message: "this server keeps no local users",
+}
+
+// errLocalUserBody is the answer of a body that is not the JSON object of the
+// route.
+var errLocalUserBody = &codedError{
+	status: http.StatusBadRequest, code: errcode.RequestBodyInvalid, args: nil,
+	message: "the request body is not a valid JSON object of this route",
+}
+
+// localUserRoutes returns the rows of the local user routes. A handler with no
+// local user service mounts none. The password sign-in needs the console
+// sign-in too, for its session.
+func (h *Handler) localUserRoutes() []Route {
+	if h.localUsers == nil {
+		return nil
+	}
+
+	manage := []identity.Action{identity.ActionServerManageSignIn}
+	own := []identity.Action{identity.ActionCallerManageSignIn}
+
+	routes := []Route{
+		{
+			Method: http.MethodPost, Path: localUserRedeemPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
+			ActionsFor: nil, Serve: h.redeemLocalUserCode,
+		},
+		{
+			Method: http.MethodPost, Path: localUsersPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveServer, ActionsFor: nil, Serve: h.createLocalUser,
+		},
+		{
+			Method: http.MethodGet, Path: localUserPolicyPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveServer, ActionsFor: nil, Serve: h.getLocalUserPolicy,
+		},
+		{
+			Method: http.MethodPost, Path: localUserResetPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.fresh(identity.ActionServerManageSignIn, h.resetLocalUser),
+		},
+		{
+			Method: http.MethodPost, Path: ownPasswordPath, Scope: ScopeAuthorized, Actions: own,
+			Resolve: resolveCaller, ActionsFor: nil, Serve: h.changeOwnPassword,
+		},
+	}
+
+	if h.signIn != nil {
+		routes = append(routes, Route{
+			Method: http.MethodPost, Path: passwordSignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
+			ActionsFor: nil, Serve: h.passwordSignIn,
+		})
+	}
+
+	return routes
+}
+
+// noReferrer keeps the browser from sending the URL of a page with a code to
+// another site, and keeps a proxy from storing the answer.
+func noReferrer(w http.ResponseWriter) {
+	noStore(w)
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
+// decodeLocalUserBody decodes the strict JSON body of r into v. A body that
+// is not one JSON object with the fields of v answers errLocalUserBody, and
+// never echoes the body: it may hold a password or a code.
+func decodeLocalUserBody(w http.ResponseWriter, r *http.Request, v any) error {
+	if err := textbody.Decode(w, r, maxLocalUserBody, v); err != nil {
+		return errLocalUserBody
+	}
+
+	return nil
+}
+
+// passwordSignIn signs a browser in with a user name and a password. It
+// answers 204 with the session cookie. Each failure spends one unit of the
+// sign-in budget of the source address and answers 401 with one text.
+func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	noReferrer(w)
+
+	// Defense in depth: localUserRoutes mounts this route only with a console
+	// sign-in and a local user service. This check stays so that a change to
+	// the route table never serves a sign-in with no session service.
+	if h.signIn == nil || h.localUsers == nil {
+		h.writeError(ctx, w, errLocalUsersUnavailable)
+
+		return
+	}
+
+	if err := h.admitSignIn(ctx); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	var req passwordSignInRequest
+	if err := decodeLocalUserBody(w, r, &req); err != nil {
+		h.failSignIn(ctx)
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	base := signInEntry(r, passwordSignInAuditActor, "", session.ActionSignIn)
+
+	in, err := h.localUsers.SignIn(ctx, base, req.UserName, req.Password)
+	if err != nil {
+		if errors.Is(err, localuser.ErrSignInFailed) {
+			h.failSignIn(ctx)
+		}
+
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	e := signInEntry(r, principal.LocalSubjectPrefix+in.UserID, "", session.ActionSignIn)
+
+	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
+		AuthTime: h.signIn.sessions.Now(), PrincipalID: in.PrincipalID, Provider: localuser.ProviderID,
+		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: in.SessionGeneration, Stored: false,
+	})
+	if err != nil {
+		// A reset, a password change or a disable after the check of the
+		// password changed the generation or the principal: the sign-in fails
+		// closed with the answer of a wrong password.
+		if errors.Is(err, session.ErrGenerationChanged) || errors.Is(err, session.ErrPrincipalDisabled) ||
+			errors.Is(err, session.ErrPrincipalNotFound) {
+			h.failSignIn(ctx)
+			h.writeError(ctx, w, localUserError(localuser.ErrSignInFailed))
+
+			return
+		}
+
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// redeemLocalUserCode sets a password with a set-up code or a reset code. It
+// answers 204. A code that is not valid spends one unit of the sign-in budget
+// of the source address.
+func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	noReferrer(w)
+
+	if h.signIn != nil {
+		if err := h.admitSignIn(ctx); err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+	}
+
+	var req redeemRequest
+	if err := decodeLocalUserBody(w, r, &req); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	base := signInEntry(r, passwordSignInAuditActor, "", session.ActionSignIn)
+
+	if err := h.localUsers.Redeem(ctx, base, req.Code, req.Password); err != nil {
+		if errors.Is(err, localuser.ErrNotFound) {
+			if h.signIn != nil {
+				h.failSignIn(ctx)
+			}
+
+			// One answer for a code that is not valid, unknown, used or
+			// expired, so the answer tells nothing about a code.
+			h.writeError(ctx, w, codeError)
+
+			return
+		}
+
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// localUserActor returns the actor of a change by p. The principal ID is the
+// owner of the console session of the request, and empty for a request with
+// an access token: the service then refuses each change that compares it
+// with the target, which fails closed.
+func localUserActor(r *http.Request, p identity.Principal, action identity.Action) localusersvc.Actor {
+	id := ""
+	if s, ok := sessionFromRequest(r); ok {
+		id = s.Match.Owner.ID
+	}
+
+	return localusersvc.Actor{Entry: callerEntry(r, p, action), PrincipalID: id}
+}
+
+// createLocalUser makes a local user and answers 201 with its set-up code.
+func (h *Handler) createLocalUser(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	noStore(w)
+
+	var req createLocalUserRequest
+	if err := decodeLocalUserBody(w, r, &req); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	c, err := h.localUsers.CreateUser(ctx, localUserActor(r, p, identity.ActionServerManageSignIn),
+		localusersvc.CreateInput{UserName: req.UserName, DisplayName: req.DisplayName, Reason: req.Reason})
+	if err != nil {
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusCreated, createLocalUserResponse{
+		PrincipalID: c.Principal.ID, UserID: c.User.ID, UserName: c.User.UserName, Subject: c.Principal.Subject,
+		SetUpCode: c.SetUp.Text, SetUpExpiresAt: c.SetUp.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// getLocalUserPolicy answers the effective password policy.
+func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	p, err := h.localUsers.Policy(ctx)
+	if err != nil {
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, localUserPolicyResponse{
+		Enabled: p.Enabled, EnabledSource: string(p.EnabledSource), IdentityProvider: p.SSO, MinLength: p.MinLength,
+		MaxLength: localuser.MaxLength, RequireLettersAndDigits: p.RequireLettersAndDigits,
+		ResetLifetimeSeconds: int64(p.ResetLifetime / time.Second),
+	})
+}
+
+// resetLocalUser makes a reset code and answers 201 with it.
+func (h *Handler) resetLocalUser(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	noReferrer(w)
+
+	var req resetLocalUserRequest
+	if err := decodeLocalUserBody(w, r, &req); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if _, err := identity.ParsePrincipalObject(req.PrincipalID); err != nil {
+		h.writeError(ctx, w, localUserError(localuser.ErrNotFound))
+
+		return
+	}
+
+	code, err := h.localUsers.StartReset(ctx, localUserActor(r, p, identity.ActionServerManageSignIn),
+		req.PrincipalID, localusersvc.ResetInput{Reason: req.Reason, RevokeAccessTokens: req.RevokeAccessTokens})
+	if err != nil {
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusCreated, resetLocalUserResponse{
+		ResetCode: code.Text, ExpiresAt: code.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// changeOwnPassword changes the password of the caller. The change ends every
+// session of the person; a request with a console session gets a new session
+// cookie, so the browser of the change stays signed in.
+func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	noStore(w)
+
+	caller, isSession := sessionFromRequest(r)
+	if !isSession {
+		// Only a person in a console session changes the own password: an
+		// access token never stands for a fresh authentication or for the
+		// password of a person.
+		h.writeError(ctx, w, errFreshStepRequired)
+
+		return
+	}
+
+	var req changeOwnPasswordRequest
+	if err := decodeLocalUserBody(w, r, &req); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	fresh := req.CurrentPassword == "" && h.checkTokenFreshness(r) == nil
+	actor := localusersvc.Actor{
+		Entry: callerEntry(r, p, identity.ActionCallerManageSignIn), PrincipalID: caller.Match.Owner.ID,
+	}
+
+	err := h.localUsers.ChangePassword(ctx, actor, localusersvc.ChangeInput{
+		Current: req.CurrentPassword, New: req.NewPassword, Fresh: fresh,
+	})
+	if err != nil {
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	h.renewSession(ctx, w, r, caller)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// renewSession starts a new session for the caller of a password change,
+// with the new session generation, and sets its cookie. The sign-in time of
+// the old session stays. A failure leaves the browser signed out, which is the
+// safe direction: the password changed.
+func (h *Handler) renewSession(ctx context.Context, w http.ResponseWriter, r *http.Request, caller sessionCaller) {
+	if h.signIn == nil {
+		return
+	}
+
+	old := caller.Match.Session
+	e := signInEntry(r, caller.Match.Owner.Subject, "", session.ActionSignIn)
+
+	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
+		AuthTime: old.AuthTime, PrincipalID: old.PrincipalID, Provider: old.Provider, SourceIP: e.SourceIP,
+		UserAgent: e.UserAgent, Generation: 0, Stored: false,
+	})
+	if err != nil {
+		return
+	}
+
+	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
+}
+
+// localUserError returns the coded answer of an error of the local user
+// service. An error that this table does not name passes as it is, and the
+// writer answers it as an internal error with no detail.
+func localUserError(err error) error {
+	if minLength, ok := localusersvc.MinLengthOf(err); ok {
+		return &codedError{
+			status: http.StatusBadRequest, code: errcode.PasswordTooShort,
+			args: []errcode.Value{errcode.Quantity("minLength", int64(minLength))}, message: shortMessage(minLength),
+		}
+	}
+
+	for _, m := range localUserErrors() {
+		if errors.Is(err, m.err) {
+			return &codedError{status: m.status, code: m.code, args: nil, message: m.message}
+		}
+	}
+
+	return err
+}
+
+// shortMessage is the text of a password below the minimum length.
+func shortMessage(minLength int) string {
+	return "the password is too short: use " + strconv.Itoa(minLength) + " characters or more"
+}
+
+// localUserMapping is one row of the answers of the local user errors.
+type localUserMapping struct {
+	err     error
+	code    string
+	message string
+	status  int
+}
+
+// localUserErrors returns the answers of the local user errors, in the order
+// of the check. The texts name the rule and never a password, a hash or a
+// code.
+func localUserErrors() []localUserMapping {
+	return []localUserMapping{
+		{localuser.ErrSignInFailed, errcode.LocalUserSignInFailed, "the user name or the password is wrong",
+			http.StatusUnauthorized},
+		{localuser.ErrPasswordSignInOff, errcode.LocalUserPasswordSignInOff,
+			"password sign-in is off on this installation", http.StatusForbidden},
+		{localuser.ErrSecondFactorRequired, errcode.LocalUserSecondFactorRequired,
+			"the password sign-in needs a second factor: sign in with the identity provider", http.StatusForbidden},
+		{localuser.ErrHashBusy, errcode.LocalUserHashBusy, "the server is busy: try again in a few seconds",
+			http.StatusTooManyRequests},
+		{localuser.ErrPasswordTooLong, errcode.PasswordTooLong, "the password is too long: use 256 characters or fewer",
+			http.StatusBadRequest},
+		{localuser.ErrPasswordForm, errcode.PasswordForm,
+			"the password holds a character that is not allowed: remove control characters", http.StatusBadRequest},
+		{localuser.ErrPasswordLettersAndDigits, errcode.PasswordLettersAndDigits,
+			"the password needs a letter and a digit", http.StatusBadRequest},
+		{localuser.ErrPasswordBlocked, errcode.PasswordBlocked,
+			"the password is too common or holds a name: choose another password", http.StatusBadRequest},
+		{localuser.ErrCurrentPasswordRequired, errcode.LocalUserCurrentPasswordRequired,
+			"the change needs the current password or a recent sign-in", http.StatusForbidden},
+		{localuser.ErrWrongPassword, errcode.LocalUserCurrentPasswordWrong, "the current password is wrong",
+			http.StatusForbidden},
+		{localuser.ErrOwnAccount, errcode.LocalUserOwnAccount,
+			"an administrator cannot reset or remove the own password: use POST /api/dustpan/v1/me/password",
+			http.StatusForbidden},
+		{localuser.ErrReasonRequired, errcode.LocalUserReasonRequired, "the change needs a reason",
+			http.StatusBadRequest},
+		{localuser.ErrLastCredential, errcode.LocalUserLastCredential,
+			"the change removes the last sign-in credential of the person", http.StatusConflict},
+		{localuser.ErrBreakGlass, errcode.LocalUserBreakGlass,
+			"a break-glass account signs in with a passkey or a hardware key only", http.StatusConflict},
+		{localuser.ErrDemoFixed, errcode.LocalUserDemoFixed, "the credentials of the demo user cannot change",
+			http.StatusConflict},
+		{localuser.ErrAlreadyExists, errcode.LocalUserExists, "another local user has the user name",
+			http.StatusConflict},
+		{localuser.ErrInvalid, errcode.LocalUserNameInvalid,
+			"the user name is not valid: use 1 to 64 lowercase letters, digits, '.', '_' and '-'",
+			http.StatusBadRequest},
+		{localuser.ErrUnavailable, errcode.LocalUserUnavailable, "the local users cannot answer: try again later",
+			http.StatusServiceUnavailable},
+		{principal.ErrReservedSubject, errcode.LocalUserNameInvalid, "the user name is not valid",
+			http.StatusBadRequest},
+		{localuser.ErrNotFound, errcode.LocalUserNotFound, "no such local user or code", http.StatusNotFound},
+	}
+}
+
+// codeError is the answer of a redeem whose code is not valid, used or
+// expired: one text for each case.
+var codeError = &codedError{
+	status: http.StatusBadRequest, code: errcode.LocalUserCodeInvalid, args: nil,
+	message: "the code is not valid, was used or expired: ask an administrator for a new code",
+}

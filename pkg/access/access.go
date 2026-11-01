@@ -210,6 +210,7 @@ var families = map[identity.Action]Family{
 	identity.ActionRoleRead:                FamilySelf,
 	identity.ActionTokenManageOwn:          FamilySelf,
 	identity.ActionCallerManagePreferences: FamilySelf,
+	identity.ActionCallerManageSignIn:      FamilySelf,
 }
 
 // FamilyOf returns the family of action, and false when the core does not

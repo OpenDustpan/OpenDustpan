@@ -231,6 +231,7 @@ func revMustSession(t *testing.T, s RevocationStore, id, principalID string, n i
 		EndReason:   "",
 		SourceIP:    "192.0.2.10",
 		UserAgent:   "storetest",
+		Generation:  1,
 	}
 
 	e := revEntry(session.FullRef(principalID, id), created)
@@ -1028,6 +1029,7 @@ func testGrantsRefused(t *testing.T, s RevocationStore) {
 					CreatedAt: revAt(20), LastSeenAt: revAt(20), AuthTime: revAt(19), EndedAt: time.Time{},
 					ID: "ses-new", PrincipalID: revPerson, Provider: "corp-idp", EndReason: "",
 					SourceIP: "192.0.2.10", UserAgent: "storetest",
+					Generation: 1,
 				}
 
 				return s.CreateSession(

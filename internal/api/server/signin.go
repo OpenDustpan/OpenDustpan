@@ -495,7 +495,7 @@ func (h *Handler) startSession(
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
 		AuthTime: id.AuthTime, PrincipalID: p.ID, Provider: provider.ID, SourceIP: e.SourceIP, UserAgent: e.UserAgent,
-		Stored: provider.Stored,
+		Generation: 0, Stored: provider.Stored,
 	})
 
 	switch {
