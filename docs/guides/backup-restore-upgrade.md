@@ -112,6 +112,8 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
+The restore copies a blob only when its key is absent from the blob store of the server. A key that holds the bytes of the manifest stays as it is. A key that holds other bytes stops the restore. The restore never writes over it, on any blob store, and it does not rely on the conditional writes of the store. The restore fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key. Before each write of a blob, the restore checks that its worker still holds the claim on the restore.
+
 During a rolling deploy, a worker that runs a binary below the minimum binary
 version of the schema fails the check step of a restore, and the step is
 retried. A worker on a new binary can take the retry and continue the

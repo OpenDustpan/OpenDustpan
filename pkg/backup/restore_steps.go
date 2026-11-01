@@ -891,7 +891,7 @@ func (s *RestoreService) afterApplyChecks(ctx context.Context, sc durable.StepCo
 
 // afterApplyEntries returns the audit entries of the restore of op: its own
 // entry, the entries of its audit events (the work that its enter canceled
-// and the live blobs that it repaired), which the swap removed with the old
+// and the live blobs that it refused to overwrite), which the swap removed with the old
 // audit log, and the entries of the dev data report.
 func (s *RestoreService) afterApplyEntries(
 	ctx context.Context, op durable.Operation, in restoreInput,
@@ -1137,12 +1137,12 @@ func (s *RestoreService) logCanceled(ctx context.Context, in restoreInput, fence
 		slog.Int64("token", fence.Token), slog.Int("units", len(units)))
 }
 
-// repairAuditObject names the repair of the live key by restore in, for its
-// audit entry: the live key holds other bytes than the backup, and the
-// restore writes the checked bytes of the backup over them.
-func repairAuditObject(in restoreInput, key string) string {
-	return "restore " + in.ID.String() + " repaired blob " + strconv.Quote(key) +
-		" with the checked bytes of backup " + in.BackupID.String()
+// differingBlobAuditObject names the refusal to overwrite the live key by
+// restore in, for its audit entry: the live key holds other bytes than the
+// backup, and the restore stops with ErrCorrupt and writes nothing over them.
+func differingBlobAuditObject(in restoreInput, key string) string {
+	return "restore " + in.ID.String() + " refused to overwrite live blob " + strconv.Quote(truncateKey(key)) +
+		" whose bytes differ from backup " + in.BackupID.String()
 }
 
 // canceledAuditObject names the cancel of one unit of active work by the
@@ -1231,17 +1231,22 @@ func (s *RestoreService) copyBlob(
 	return s.copyCheckedKey(ctx, in, fence, ref)
 }
 
-// copyBlob copies one blob of the backup into the live store with checked
-// bytes, with no conditional write and no delete of a live key:
+// copyCheckedKey copies one blob of the backup into the live store with
+// checked bytes. It never replaces a live key and never deletes one:
 //
 //  1. A live key that holds the bytes of the manifest stays.
-//  2. The bytes of the backup go to a temporary key of this restore and
-//     token, with the check of the size and the checksum. A failed check
-//     deletes only the temporary key.
-//  3. The checked bytes go to the live key. A live key with other bytes is
-//     a repair: the restore overwrites it, and writes a log line and an
-//     audit entry. A store that refuses the overwrite fails the copy with
-//     ErrCorrupt.
+//  2. A live key with other bytes stops the restore with ErrCorrupt. The audit
+//     event of the refusal is stored under the fence, and nothing is written.
+//  3. For an absent live key, the bytes of the backup go to a temporary key
+//     of this restore and token, with the check of the size and the checksum.
+//     A failed check deletes only the temporary key.
+//  4. The claim is checked again, then the checked bytes go to the live key.
+//     A store that refuses the write because the key exists is not trusted:
+//     the live key is read again, and it must hold the bytes of the manifest.
+//
+// Defense in depth: the restore does not rely on a conditional write of the
+// store. A store that ignores If-None-Match gives the same result, because
+// steps 1 and 2 read the live key first and step 4 reads it again.
 func (s *RestoreService) copyCheckedKey(
 	ctx context.Context,
 	in restoreInput,
@@ -1258,7 +1263,9 @@ func (s *RestoreService) copyCheckedKey(
 	switch {
 	case verifyErr == nil:
 		return nil
-	case isNotFound(verifyErr), errors.Is(verifyErr, ErrCorrupt):
+	case isNotFound(verifyErr):
+	case errors.Is(verifyErr, ErrCorrupt):
+		return s.refuseDifferingBlob(ctx, in, fence, ref, verifyErr)
 	default:
 		return verifyErr
 	}
@@ -1268,27 +1275,21 @@ func (s *RestoreService) copyCheckedKey(
 		return err
 	}
 
-	// A live key with other bytes is a repair. Its audit event is stored
-	// under the fence before the overwrite, so a holder that stops after the
-	// overwrite leaves the record.
-	differs := !isNotFound(verifyErr)
-	if differs {
-		if recordErr := s.live.RecordRestoreEvent(ctx, fence, in.ID, repairAuditObject(in, ref.Key)); recordErr != nil {
-			return errors.Join(
-				fmt.Errorf("record the repair of blob %q: %w", ref.Key, recordErr),
-				s.blobs.Delete(ctx, tmp),
-			)
+	// The write changes a store that the fence does not guard, so the claim
+	// is checked just before it. A holder that lost its claim writes nothing.
+	if fenceErr := s.live.CheckRestoreFence(ctx, fence, in.ID); fenceErr != nil {
+		return errors.Join(
+			fmt.Errorf("check the claim before the write of blob %q: %w", ref.Key, fenceErr),
+			s.blobs.Delete(ctx, tmp),
+		)
+	}
+
+	if _, placeErr := s.placeChecked(ctx, tmp, live, ref); placeErr != nil {
+		if errors.Is(placeErr, ErrCorrupt) {
+			return errors.Join(s.refuseDifferingBlob(ctx, in, fence, ref, placeErr), s.blobs.Delete(ctx, tmp))
 		}
-	}
 
-	wrote, err := s.placeChecked(ctx, tmp, live, ref)
-	if err != nil {
-		return err
-	}
-
-	if wrote && differs {
-		s.logger.WarnContext(ctx, "restore overwrote a live blob whose bytes differed from the backup",
-			slog.String("restore_id", in.ID.String()), slog.String("blob", ref.Key))
+		return placeErr
 	}
 
 	// The temporary key has done its work. A failed delete leaves it to the
@@ -1298,6 +1299,32 @@ func (s *RestoreService) copyCheckedKey(
 	}
 
 	return nil
+}
+
+// refuseDifferingBlob stores the audit event of a live key whose bytes differ
+// from the manifest, under the fence, and returns ErrCorrupt with the cause. It
+// fails closed: when the event cannot be stored, the restore is refused all
+// the same, and the error of the store is joined. A lost claim or a cancel
+// stops the step instead.
+func (s *RestoreService) refuseDifferingBlob(
+	ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob, cause error,
+) error {
+	refusal := fmt.Errorf("live blob %q differs from backup %s and the restore does not overwrite it: %w: %w",
+		truncateKey(ref.Key), in.BackupID, ErrCorrupt, cause)
+
+	recordErr := s.live.RecordRestoreEvent(ctx, fence, in.ID, differingBlobAuditObject(in, ref.Key))
+	if recordErr == nil {
+		return refusal
+	}
+
+	if errors.Is(recordErr, durable.ErrClaimLost) || errors.Is(recordErr, durable.ErrCanceled) {
+		return recordErr
+	}
+
+	return errors.Join(
+		refusal,
+		fmt.Errorf("record the refusal to overwrite blob %q: %w", truncateKey(ref.Key), recordErr),
+	)
 }
 
 // stageTemp copies the object of ref from the backup to the temporary key of
