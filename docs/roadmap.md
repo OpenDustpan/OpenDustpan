@@ -579,7 +579,7 @@ place here is not a scope cut of milestone 5.
 | [RFC 25](rfc/0025-drift-detection.md) Drift detection                                              | runs (milestone 5)                                              |
 | [RFC 29](rfc/0029-existing-ci.md) Existing CI as the executor                                      | runs (milestone 5)                                              |
 | [RFC 31](rfc/0031-kubernetes.md) Kubernetes                                                        | runners (RFC 6)                                                 |
-| [ADR 305](adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md) The Kubernetes operator (RFC 31 phases 3 and 4) | runners scoped to namespaces; not yet placed in a milestone |
+| [ADR 305](adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md) The Kubernetes operator (RFC 31 phases 3 and 4) | the Catalog (blueprints); not yet placed in a milestone. The current order of the owner puts it after runners scoped to namespaces |
 | [RFC 33](rfc/0033-customer-managed-keys.md) Customer-managed keys                                  | secrets (RFC 3, part 2)                                         |
 | [RFC 37](rfc/0037-federation.md) Namespace placement and routing                                   | installation settings (RFC 68); replication (ADR 4) for installations |
 | [RFC 39](rfc/0039-reading-state.md) Reading state contents                                         | accepted (ADR 41); a milestone to place it in                   |
