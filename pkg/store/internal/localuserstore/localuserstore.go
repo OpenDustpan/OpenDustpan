@@ -121,8 +121,11 @@ type ResetWrites interface {
 	DeleteResetsOfUser(ctx context.Context, userID string) error
 	// BumpGeneration adds 1 to the session generation of the principal
 	// with cause, through generationstore.Bump, and appends the entry of the
-	// bump that names the change of this transaction.
-	BumpGeneration(ctx context.Context, principalID string, cause session.BumpCause) error
+	// bump that names the change of this transaction. It returns the new
+	// generation. An expected generation other than 0 makes the bump a
+	// compare-and-swap that returns session.ErrGenerationChanged when the
+	// stored generation is another one.
+	BumpGeneration(ctx context.Context, principalID string, cause session.BumpCause, expected uint64) (uint64, error)
 	RevokeAccessTokens(ctx context.Context, principalID string, atMs int64) (int64, error)
 }
 
@@ -132,11 +135,16 @@ type Write struct {
 	Hash           string
 	SetAtMs        int64
 	ChangeRequired bool
+	// FromGeneration is the session generation that the write expects, or 0
+	// for no condition.
+	FromGeneration uint64
 }
 
 // PasswordWrite returns the Write of h and c at at.
 func PasswordWrite(h localuser.PasswordHash, c localuser.PasswordChange, at time.Time) Write {
-	return Write{Hash: string(h), SetAtMs: codec.Millis(at), ChangeRequired: c.ChangeRequired}
+	return Write{
+		Hash: string(h), SetAtMs: codec.Millis(at), ChangeRequired: c.ChangeRequired, FromGeneration: c.FromGeneration,
+	}
 }
 
 // UserOf returns the domain record of a row.
@@ -409,7 +417,9 @@ func Delete(ctx context.Context, tx Tx, userID string) error {
 		return localuser.ErrNotFound
 	}
 
-	return bump(ctx, tx, u.PrincipalID)
+	_, err = bump(ctx, tx, u.PrincipalID, 0)
+
+	return err
 }
 
 // credentialChecks returns the error of a password write for u and p: the
@@ -431,49 +441,57 @@ func credentialChecks(u User, p Principal) error {
 }
 
 // storePassword applies w to u, and adds 1 to the session generation of the
-// person, so that each session ends.
-func storePassword(ctx context.Context, tx Tx, u User, w Write) error {
+// person, so that each session ends. It returns the new generation. A
+// w.FromGeneration other than 0 makes the bump a compare-and-swap.
+func storePassword(ctx context.Context, tx Tx, u User, w Write) (uint64, error) {
 	n, err := tx.SetPassword(ctx, u.ID, w)
 	if err != nil {
-		return fmt.Errorf("set local user password: %w", err)
+		return 0, fmt.Errorf("set local user password: %w", err)
 	}
 
 	if n != 1 {
-		return localuser.ErrNotFound
+		return 0, localuser.ErrNotFound
 	}
 
-	return bump(ctx, tx, u.PrincipalID)
+	return bump(ctx, tx, u.PrincipalID, w.FromGeneration)
 }
 
 // bump adds 1 to the session generation of the principal with the cause
 // session.BumpPassword, through the one bump of the session generation: the
 // adapter appends the entry session:generation-bumped that names the change
-// of this transaction.
-func bump(ctx context.Context, tx Tx, principalID string) error {
-	if err := tx.BumpGeneration(ctx, principalID, session.BumpPassword); err != nil {
-		if errors.Is(err, session.ErrPrincipalNotFound) {
-			return fmt.Errorf("bump session generation: %w", principal.ErrNotFound)
-		}
+// of this transaction. It returns the new generation. A generation other
+// than expected, when expected is not 0, fails with
+// localuser.ErrGenerationChanged.
+func bump(ctx context.Context, tx Tx, principalID string, expected uint64) (uint64, error) {
+	g, err := tx.BumpGeneration(ctx, principalID, session.BumpPassword, expected)
 
-		return fmt.Errorf("bump session generation: %w", err)
+	switch {
+	case errors.Is(err, session.ErrPrincipalNotFound):
+		return 0, fmt.Errorf("bump session generation: %w", principal.ErrNotFound)
+	case errors.Is(err, session.ErrGenerationChanged):
+		return 0, fmt.Errorf("bump session generation: %w: %w", localuser.ErrGenerationChanged, err)
+	case err != nil:
+		return 0, fmt.Errorf("bump session generation: %w", err)
+	default:
+		return g, nil
 	}
-
-	return nil
 }
 
-// SetPassword applies the password write w to the user userID.
-func SetPassword(ctx context.Context, tx Tx, userID string, w Write) error {
+// SetPassword applies the password write w to the user userID and returns
+// the new session generation. A w.FromGeneration other than 0 makes the
+// write a compare-and-swap on the session generation.
+func SetPassword(ctx context.Context, tx Tx, userID string, w Write) (uint64, error) {
 	if err := CheckHash(localuser.PasswordHash(w.Hash)); err != nil {
-		return err
+		return 0, err
 	}
 
 	u, p, err := lockedUser(ctx, tx, userID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if err := credentialChecks(u, p); err != nil {
-		return err
+		return 0, err
 	}
 
 	return storePassword(ctx, tx, u, w)
@@ -600,7 +618,14 @@ func SeedDemoPassword(ctx context.Context, tx Tx, h localuser.PasswordHash, at t
 		return err
 	}
 
-	return storePassword(ctx, tx, u, PasswordWrite(h, localuser.PasswordChange{ChangeRequired: false}, at))
+	_, err = storePassword(
+		ctx,
+		tx,
+		u,
+		PasswordWrite(h, localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0}, at),
+	)
+
+	return err
 }
 
 // demoUser returns the demo user record of the principal, and makes it when
@@ -720,7 +745,7 @@ func insertReset(ctx context.Context, tx Tx, r localuser.Reset, d localuser.Dige
 		return 0, nil
 	}
 
-	if bumpErr := bump(ctx, tx, u.PrincipalID); bumpErr != nil {
+	if _, bumpErr := bump(ctx, tx, u.PrincipalID, 0); bumpErr != nil {
 		return 0, bumpErr
 	}
 
@@ -779,7 +804,7 @@ func RedeemReset(ctx context.Context, tx Tx, rd localuser.Redeem) (localuser.Res
 		return localuser.Reset{}, localuser.ErrNotFound
 	}
 
-	if storeErr := storePassword(ctx, tx, u, PasswordWrite(rd.Hash, rd.Change, rd.At)); storeErr != nil {
+	if _, storeErr := storePassword(ctx, tx, u, PasswordWrite(rd.Hash, rd.Change, rd.At)); storeErr != nil {
 		return localuser.Reset{}, storeErr
 	}
 

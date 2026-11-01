@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
@@ -117,6 +118,9 @@ type Config struct {
 	// SSO reports whether the installation has an identity provider: a
 	// provider of the configuration or an enabled stored provider.
 	SSO func(ctx context.Context) (bool, error)
+	// Reach reads the reach of a principal for the check of a reset. A
+	// config with a nil field makes each reset fail closed.
+	Reach access.ReachConfig
 	// Kind is the installation kind of the server.
 	Kind installation.Kind
 	Now  func() time.Time
@@ -134,6 +138,7 @@ type Service struct {
 	audit      Auditor
 	settings   Settings
 	sso        func(ctx context.Context) (bool, error)
+	reach      access.ReachConfig
 	now        func() time.Time
 	kind       installation.Kind
 
@@ -164,7 +169,7 @@ func New(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, hasher: cfg.Hasher, blocklist: cfg.Blocklist,
-		audit: cfg.Audit, settings: cfg.Settings, sso: cfg.SSO, now: now, kind: cfg.Kind,
+		audit: cfg.Audit, settings: cfg.Settings, sso: cfg.SSO, reach: cfg.Reach, now: now, kind: cfg.Kind,
 		dummyMu: sync.Mutex{}, dummy: "",
 	}, nil
 }

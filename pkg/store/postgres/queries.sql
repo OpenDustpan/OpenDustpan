@@ -5345,6 +5345,22 @@ INSERT INTO principal_session_generations (principal_id, generation)
 VALUES ($1, 2)
 ON CONFLICT (principal_id) DO UPDATE SET generation = principal_session_generations.generation + 1;
 
+-- name: BumpSessionGenerationFrom :execrows
+-- Adds 1 to the stored session generation of a principal only while it is
+-- the expected one: a compare-and-swap. The update locks the row and checks
+-- the condition again on its latest version, so two bumps from one
+-- generation never both pass. A principal with no row writes no row here.
+UPDATE principal_session_generations SET generation = generation + 1
+WHERE principal_id = sqlc.arg('principal_id') AND generation = sqlc.arg('expected')::bigint;
+
+-- name: InsertFirstSessionGeneration :execrows
+-- Writes the generation 2 for a principal with no row, which has the
+-- generation 1: the compare-and-swap from the generation 1. A row that
+-- exists, or that a concurrent bump wrote first, writes nothing.
+INSERT INTO principal_session_generations (principal_id, generation)
+VALUES ($1, 2)
+ON CONFLICT (principal_id) DO NOTHING;
+
 -- name: GetSessionGeneration :one
 -- The session generation of a principal that exists: 1 when it has no row.
 SELECT CAST(COALESCE(g.generation, 1) AS bigint) AS generation
