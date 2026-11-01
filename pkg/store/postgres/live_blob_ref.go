@@ -15,7 +15,7 @@ var _ backup.LiveBlobReader = (*Store)(nil)
 // of the live data in one snapshot, as a backup reads them, and returns the
 // one of key. It wraps backup.ErrNotFound when no live row names key.
 func (s *Store) LiveBlobRef(ctx context.Context, key string) (backup.BlobRef, error) {
-	var refs []backup.BlobRef
+	refs := []backup.BlobRef{}
 
 	err := s.inSnapshotConn(ctx, func(tx pgx.Tx) error {
 		attrs, err := backupAttrs(ctx, s.queries.WithTx(tx), tx)
