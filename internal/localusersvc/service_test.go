@@ -269,7 +269,7 @@ func TestSignInFailsWithOneAnswer(t *testing.T) {
 			t.Fatalf("%s: sign in = %v, want ErrSignInFailed", tc.name, err)
 		}
 
-		if strings.Contains(err.Error(), tc.password) || strings.Contains(err.Error(), "alice") {
+		if err != nil && (strings.Contains(err.Error(), tc.password) || strings.Contains(err.Error(), "alice")) {
 			t.Fatalf("%s: the error holds the password or the name: %q", tc.name, err)
 		}
 	}
@@ -474,7 +474,7 @@ func TestRedeemRules(t *testing.T) {
 			t.Fatalf("%s: redeem = %v, want %v", tc.name, err, tc.want)
 		}
 
-		if strings.Contains(err.Error(), tc.candidate) {
+		if err != nil && strings.Contains(err.Error(), tc.candidate) {
 			t.Fatalf("%s: the error holds the password", tc.name)
 		}
 	}
