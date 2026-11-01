@@ -762,20 +762,19 @@ type PlacementRule struct {
 }
 
 type Principal struct {
-	ID                string
-	Subject           string
-	DisplayName       string
-	Kind              string
-	Source            string
-	CreatedAtMs       int64
-	UpdatedAtMs       int64
-	DeletedAtMs       pgtype.Int8
-	DisabledAtMs      pgtype.Int8
-	LastActiveAtMs    int64
-	LastSignInAtMs    pgtype.Int8
-	Namespace         string
-	BreakGlass        bool
-	SessionGeneration int64
+	ID             string
+	Subject        string
+	DisplayName    string
+	Kind           string
+	Source         string
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+	DeletedAtMs    pgtype.Int8
+	DisabledAtMs   pgtype.Int8
+	LastActiveAtMs int64
+	LastSignInAtMs pgtype.Int8
+	Namespace      string
+	BreakGlass     bool
 }
 
 type PrincipalGroup struct {
@@ -787,6 +786,11 @@ type PrincipalGroup struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	DeletedAtMs pgtype.Int8
+}
+
+type PrincipalSessionGeneration struct {
+	PrincipalID string
+	Generation  int64
 }
 
 type Profile struct {

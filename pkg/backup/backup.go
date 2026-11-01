@@ -169,6 +169,7 @@ var Tables = []string{
 	"manual_locks",
 	TablePersonPreferences,
 	TableLocalUsers,
+	TableSessionGenerations,
 	"saved_views",
 	"drift_results",
 	"unit_settings",
