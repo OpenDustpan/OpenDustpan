@@ -39,6 +39,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 const (
@@ -1731,6 +1732,7 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 
 	env.WritePulumiProject(t, maskedStateProgram(org, "hello-again"))
 	env.Step(ctx, t, step("up masked 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	checkStoredEventsSealed(ctx, t, env, org, maskedStateSecret)
 	env.Step(ctx, t, step(
 		"masked state read",
 		checkMaskedState(ctx, env, org, maskedStateSecret),
@@ -1754,6 +1756,48 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		"stack", "--show-name", "--stack", qualified,
 	))
 	env.Step(ctx, t, step("stack rm masked", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// checkStoredEventsSealed proves that the engine events of the masked stack
+// are stored sealed: no stored payload is the JSON that the CLI sent, and
+// none holds the config secret or the plain output greeting. It reads the
+// rows of the in-process server, and records a skipped step on a binary
+// server.
+func checkStoredEventsSealed(ctx context.Context, t *testing.T, env *e2e.Env, org, secretValue string) {
+	t.Helper()
+
+	const name = "stored events are sealed"
+
+	if !env.InProcess() {
+		env.SkipStep(name, "the binary server holds its database open")
+
+		return
+	}
+
+	ref, err := stack.ParseRef(org, e2e.Project, "masked")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	payloads, err := env.StoredEventPayloads(ctx, ref)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+
+	if len(payloads) == 0 {
+		t.Fatalf("%s: the updates of the masked stack stored no event", name)
+	}
+
+	for i, p := range payloads {
+		if json.Valid(p) || bytes.Contains(p, []byte(secretValue)) || bytes.Contains(p, []byte("hello-again")) ||
+			bytes.Contains(p, []byte("resOutputsEvent")) {
+			t.Fatalf("%s: stored event %d is not sealed", name, i)
+		}
+	}
+
+	env.AddStep(e2e.StepResult{
+		Name: name, Command: name, Failure: "", Stderr: "", ExitCode: 0, Passed: true, Skipped: false,
+	})
 }
 
 // diffSecretV1 and diffSecretV2 are the config secret values of the two diff

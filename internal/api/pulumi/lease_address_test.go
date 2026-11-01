@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -66,6 +67,7 @@ func newUpdateFixtureWithAddressGate(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Tokens:             nil,
@@ -251,6 +253,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Tokens:             nil,

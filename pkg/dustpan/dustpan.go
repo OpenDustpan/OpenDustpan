@@ -1855,6 +1855,11 @@ func newUpdateService(
 
 	attachBlobGuard(cfg)
 
+	sealer, err := newItemSealer(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
@@ -1871,6 +1876,7 @@ func newUpdateService(
 		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		Sealer:             sealer,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
