@@ -201,10 +201,12 @@ type Service struct {
 // reaches the backup target.
 type StateOpener interface {
 	// OpenStateBlob returns the plain content of the sealed blob under key.
-	// The caller closes it. Sealed bytes that do not open, and plain bytes
-	// that do not match the row of the blob, wrap ErrLiveBlobDamaged, at the
-	// open or at a read. A missing blob wraps blob.ErrNotFound. Any other
-	// error stops the backup. No error names a key, a scope or content.
+	// The caller closes it. Plain bytes that do not match the size and the
+	// MD5 of the row of the blob wrap ErrLiveBlobDamaged, at the open or at a
+	// read. Sealed bytes that do not open, for example after a key or a key
+	// provider fails, must not wrap it: that cause is not clear, so the
+	// backup stops. A missing blob wraps blob.ErrNotFound. Any other error
+	// stops the backup. No error names a key, a scope or content.
 	OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error)
 }
 
@@ -1208,7 +1210,9 @@ func (s *Service) copySealedBlob(
 	}
 
 	if size != ref.Size || !bytes.Equal(sum, ref.MD5[:]) {
-		return ManifestBlob{}, s.sealedDamage(ctx, source, ref, corruptBlobError(ref.Key, size, sum, ref))
+		mismatch := fmt.Errorf("%w: %w", ErrLiveBlobDamaged, corruptBlobError(ref.Key, size, sum, ref))
+
+		return ManifestBlob{}, s.sealedDamage(ctx, source, ref, mismatch)
 	}
 
 	copied, err := s.streamCopy(ctx, dest, source, ref)
@@ -1225,17 +1229,18 @@ func (s *Service) copySealedBlob(
 }
 
 // sealedDamage classifies the error of the check of one sealed blob. A
-// missing live object is missing damage. Sealed bytes that do not open, or
-// whose plain bytes do not match the row, are damaged: the entry names the
-// size and the MD5 of the stored sealed bytes, read again here. Any other
-// error, for example a row that cannot be read, returns as it is: the code
+// missing live object is missing damage. Plain bytes that opened and do not
+// match the size or the MD5 of the row are damaged: the error wraps
+// ErrLiveBlobDamaged, and the entry names the size and the MD5 of the stored
+// sealed bytes, read again here. Any other error, for example sealed bytes
+// that do not open or a row that cannot be read, returns as it is: the code
 // cannot tell damage from it, so the backup stops.
 func (s *Service) sealedDamage(ctx context.Context, source blob.Key, ref BlobRef, cause error) error {
 	if sourceMissing(cause) {
 		return missingDamage(ref.Key, cause)
 	}
 
-	if !errors.Is(cause, ErrLiveBlobDamaged) && !errors.Is(cause, ErrCorrupt) {
+	if !errors.Is(cause, ErrLiveBlobDamaged) {
 		return cause
 	}
 

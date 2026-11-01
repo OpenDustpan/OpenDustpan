@@ -47,7 +47,7 @@ func keyService(live RestoreLive) *RestoreService {
 func keyInput() restoreInput {
 	return restoreInput{
 		ID: MintRestoreID(), BackupID: "bkp-1", PreBackupID: "", CheckOnly: false, Force: false,
-		RequestedBy: "", KeepAccessTables: false,
+		RequestedBy: "", KeepAccessTables: false, evidence: preBackupResult{Digest: "", Damaged: 0, Created: false},
 	}
 }
 

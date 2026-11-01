@@ -442,8 +442,9 @@ type RestoreOperations interface {
 	) (entered bool, err error)
 
 	// MarkRestoreApplying moves the restore id from checking to applying,
-	// records the pre-backup ID and the step of f.
-	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id RestoreID, preBackupID ID) error
+	// records the pre-backup ID and the step of f with result, in one
+	// transaction. A nil result records the step with no result.
+	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id RestoreID, preBackupID ID, result []byte) error
 
 	// AppendRestoreAudit appends entries, in order, to the audit log of the
 	// installation and records the step of f, in one transaction, so the

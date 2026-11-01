@@ -3,6 +3,7 @@ package storetest
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,15 @@ func restoreDamagedCases() []restoreCase {
 			name: "a restore with force never replaces a live blob that matched its record and differs from the backup",
 			test: testWorkerChangedLiveBlob,
 		},
+		{
+			name: "a restore refuses a damaged entry from a manifest that changed after the backup before the restore",
+			test: testWorkerSwappedPreManifest,
+		},
+		{
+			name: "a restore refuses a damaged entry from a backup before the restore that it did not start",
+			test: testWorkerReusedPreBackup,
+		},
+		{name: "the live row of a blob reads as a backup reads it", test: testLiveBlobRef},
 	}
 }
 
@@ -145,7 +155,13 @@ func testWorkerDamagedLiveBlob(t *testing.T, newStore RestoreFactory) {
 
 	r.mustRepaired(t, row, "damaged")
 
-	replaced := "restore " + id.String() + " replaced damaged live blob " + strconv.Quote(r.seed.liveBlob.String())
+	copyKey := "backups/" + row.PreBackupID.String() + "/damaged/" + r.seed.liveBlob.String()
+	if got := readBlob(t, r.target, copyKey); !bytes.Equal(got, damaged) {
+		t.Fatalf("target copy of the damaged bytes = %q, want %q", got, damaged)
+	}
+
+	replaced := "restore " + id.String() + " replaced damaged live blob " + strconv.Quote(r.seed.liveBlob.String()) +
+		": live bytes did not match their record, damaged bytes copied to " + strconv.Quote(copyKey)
 	if n := r.restoreEntries(t, replaced); n != 1 {
 		t.Fatalf("audit entries of the replacement = %d, want 1", n)
 	}
@@ -232,5 +248,137 @@ func testWorkerChangedLiveBlob(t *testing.T, newStore RestoreFactory) {
 	refusal := "restore " + id.String() + " refused to overwrite live blob " + strconv.Quote(r.seed.liveBlob.String())
 	if n := r.restoreEntries(t, refusal); n != 1 {
 		t.Fatalf("audit entries of the refusal = %d, want 1", n)
+	}
+}
+
+// mustRefusedDamage checks that restore row failed as corrupt, that the live
+// key keeps damaged, and that the audit log holds the refusal and no
+// replacement.
+func (r *workerRig) mustRefusedDamage(t *testing.T, row backup.RestoreRecord, damaged []byte) {
+	t.Helper()
+
+	if row.State != backup.RestoreFailed || !strings.Contains(row.Error, "corrupt") {
+		t.Fatalf("restore %s = %q %q, want failed as corrupt", row.ID, row.State, row.Error)
+	}
+
+	if got := r.liveBlobBytes(t); !bytes.Equal(got, damaged) {
+		t.Fatalf("live key = %q, want the damaged bytes that it held", got)
+	}
+
+	refusal := "restore " + row.ID.String() + " refused to overwrite live blob " +
+		strconv.Quote(r.seed.liveBlob.String())
+	if n := r.restoreEntries(t, refusal); n != 1 {
+		t.Fatalf("audit entries of the refusal = %d, want 1", n)
+	}
+
+	if n := r.restoreEntries(t, "restore "+row.ID.String()+" replaced damaged live blob"); n != 0 {
+		t.Fatalf("audit entries of a replacement = %d, want 0", n)
+	}
+}
+
+func testWorkerSwappedPreManifest(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+	damaged := []byte("tampered")
+	putBlob(t, r.live.Store, r.seed.liveBlob, damaged)
+
+	gate := newStepGate(t, r, backup.RestoreStepCopyBlobs, gatePauseLive)
+	a := r.service(t, workerService{
+		owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
+	})
+
+	id := r.start(t, a, false, false)
+	aDone := runAsync(t, a, gate)
+	waitReached(t, gate, aDone)
+
+	// The manifest of the backup before the restore changes in the target
+	// after the pre-backup step stored its digest. Its damaged entry still
+	// names the live bytes, so only the digest stops the repair.
+	running, err := a.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get restore %s: %v", id, err)
+	}
+
+	key := mustBlobKey(t, "backups/"+running.PreBackupID.String()+"/manifest.json")
+	forged := bytes.Replace(readBlob(t, r.target, key.String()), []byte(`"version":"test"`),
+		[]byte(`"version":"forged"`), 1)
+	putBlob(t, r.target, key, forged)
+
+	gate.open()
+	<-aDone
+
+	r.mustRefusedDamage(t, r.driveToEnd(t, a, id), damaged)
+}
+
+func testWorkerReusedPreBackup(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+	damaged := []byte("tampered")
+	putBlob(t, r.live.Store, r.seed.liveBlob, damaged)
+
+	a := r.service(t, workerService{
+		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
+	})
+
+	first := r.driveToEnd(t, a, r.start(t, a, false, false))
+	if first.State != backup.RestoreSucceeded {
+		t.Fatalf("first restore = %q (%s), want succeeded", first.State, first.Error)
+	}
+
+	// The same damage again. A second restore names the backup before the
+	// first restore as its own: that backup records the same damaged bytes,
+	// but this restore did not start it.
+	putBlob(t, r.live.Store, r.seed.liveBlob, damaged)
+
+	id := backup.MintRestoreID()
+	req := backup.RestoreRequest{
+		BackupID: r.backupID, PreBackupID: first.PreBackupID, CheckOnly: false, Force: false,
+		RequestedBy: "tester", KeepAccessTables: false,
+	}
+
+	if err := a.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+
+	r.mustRefusedDamage(t, r.driveToEnd(t, a, id), damaged)
+}
+
+func testLiveBlobRef(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+
+	reader, ok := any(r.st).(backup.LiveBlobReader)
+	if !ok {
+		t.Fatal("the store does not read the live row of a blob")
+	}
+
+	manifest, err := r.backups.ReadManifest(t.Context(), r.backupID)
+	if err != nil {
+		t.Fatalf("read the manifest: %v", err)
+	}
+
+	idx := slices.IndexFunc(
+		manifest.Blobs,
+		func(b backup.ManifestBlob) bool { return b.Key == r.seed.liveBlob.String() },
+	)
+	if idx < 0 {
+		t.Fatalf("the backup does not hold %s", r.seed.liveBlob)
+	}
+
+	got, err := reader.LiveBlobRef(t.Context(), r.seed.liveBlob.String())
+	if err != nil {
+		t.Fatalf("LiveBlobRef: %v", err)
+	}
+
+	want := manifest.Blobs[idx]
+	if got.Key != want.Key || got.Size != want.Size || hex.EncodeToString(got.MD5[:]) != want.MD5 || got.Sealed {
+		t.Fatalf("LiveBlobRef = %+v, want the row of %+v", got, want)
+	}
+
+	if _, err := reader.LiveBlobRef(t.Context(), r.seed.liveBlob.String()+"x"); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("LiveBlobRef of a key that no row names = %v, want ErrNotFound", err)
 	}
 }

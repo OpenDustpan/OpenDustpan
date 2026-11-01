@@ -2848,10 +2848,12 @@ type uncachedStateOpener struct {
 	workspaces *workspace.Service
 }
 
-// OpenStateBlob implements backup.StateOpener. Sealed bytes that do not
-// open, and plain bytes that do not match the row of their version, wrap
-// backup.ErrLiveBlobDamaged, at the open and at each read. Every other error
-// keeps its own class, so the backup cannot take a read error for damage.
+// OpenStateBlob implements backup.StateOpener. Plain bytes that do not match
+// the size and the MD5 of the row of their version wrap
+// backup.ErrLiveBlobDamaged, at the open and at each read. Sealed bytes that
+// do not open are not damage: a key or a key provider can cause that, so the
+// error keeps its own class and the backup stops. Every other error keeps its
+// own class too.
 func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	reader, err := o.workspaces.OpenStateBlob(blobcache.WithoutCache(ctx), key)
 	if err != nil {
@@ -2862,10 +2864,12 @@ func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (i
 }
 
 // stateDamage wraps err with backup.ErrLiveBlobDamaged when err says that the
-// stored state does not match its record, and returns any other error as it
-// is.
+// plain state does not match the size and the MD5 of its row, and returns any
+// other error as it is. An error that also says that the sealed content does
+// not open, or that a key failed, is not damage: the cause is not clear.
 func stateDamage(err error) error {
-	if errors.Is(err, workspace.ErrSealedContent) || errors.Is(err, workspace.ErrStoredContentMismatch) {
+	if errors.Is(err, workspace.ErrStoredContentMismatch) && !errors.Is(err, workspace.ErrSealedContent) &&
+		!errors.Is(err, secret.ErrDecrypt) {
 		return fmt.Errorf("%w: %w", backup.ErrLiveBlobDamaged, err)
 	}
 
