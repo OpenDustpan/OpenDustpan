@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,6 +58,7 @@ const (
 // Errors of the scale run.
 var (
 	errScaleNeedsPostgres = errors.New("-flows scale needs DUSTPAN_TEST_POSTGRES_URL")
+	errScaleNeedsProc     = errors.New("-flows scale needs /proc (Linux)")
 	errScaleBadFlags      = errors.New("-binary, -instances, -clients and -duration must be set")
 	errScaleNamespace     = errors.New("create the namespace: unexpected status")
 )
@@ -90,25 +92,29 @@ type MachineInfo struct {
 // ResourceStats holds what the run used, averaged over the steady window.
 type ResourceStats struct {
 	// InstanceCores is the CPU of all server processes together.
-	InstanceCores float64 `json:"instanceCores"`
+	InstanceCores *float64 `json:"instanceCores,omitempty"`
 	// PostgresCores is the CPU of the postmaster and its children. It is
-	// absent when the harness could not find the postmaster.
+	// absent when the harness could not find the postmaster or could not
+	// read its CPU.
 	PostgresCores *float64 `json:"postgresCores,omitempty"`
 	// StoreCores is the CPU of the object store process. It is absent
-	// when -store-pid is not set.
+	// when -store-pid is not set or the harness could not read its CPU.
 	StoreCores *float64 `json:"storeCores,omitempty"`
 	// HarnessCores is the CPU of clients, balancer and sampler.
-	HarnessCores float64 `json:"harnessCores"`
+	HarnessCores *float64 `json:"harnessCores,omitempty"`
 	// DBConnectionsMean and DBConnectionsMax count client connections.
-	DBConnectionsMean float64 `json:"dbConnectionsMean"`
-	DBConnectionsMax  int     `json:"dbConnectionsMax"`
-	// DBTransactionsPerSec counts commits and rollbacks of the database.
-	DBTransactionsPerSec float64 `json:"dbTransactionsPerSec"`
+	// They are absent when the window held no sample.
+	DBConnectionsMean *float64 `json:"dbConnectionsMean,omitempty"`
+	DBConnectionsMax  *int     `json:"dbConnectionsMax,omitempty"`
+	// DBTransactionsPerSec counts commits and rollbacks of the database. It
+	// is absent when a read of the count failed.
+	DBTransactionsPerSec *float64 `json:"dbTransactionsPerSec,omitempty"`
 	// InstanceCoreMsPer1k and PostgresCoreMsPer1k are the CPU cost of 1000
 	// requests, in core-milliseconds.
-	InstanceCoreMsPer1k float64  `json:"instanceCoreMsPer1kRequests"`
+	InstanceCoreMsPer1k *float64 `json:"instanceCoreMsPer1kRequests,omitempty"`
 	PostgresCoreMsPer1k *float64 `json:"postgresCoreMsPer1kRequests,omitempty"`
-	// Unmeasured names the fields that nobody measured in this run.
+	// Unmeasured names the fields that nobody measured in this run. A field
+	// that is absent is always in this list.
 	Unmeasured []string `json:"unmeasured,omitempty"`
 }
 
@@ -163,6 +169,12 @@ func executeScale(ctx context.Context, logger *slog.Logger, f harnessFlags, dir 
 	sf := f.scale
 	if sf.binary == "" || sf.instances < 1 || sf.clients < 1 || sf.duration <= 0 {
 		return ScaleReport{}, errScaleBadFlags
+	}
+
+	// The mode reads the CPU time from /proc. Without it every CPU figure
+	// would be missing, so the run stops before it starts a process.
+	if _, err := procCPUSeconds(os.Getpid()); err != nil {
+		return ScaleReport{}, fmt.Errorf("%w: %w", errScaleNeedsProc, err)
 	}
 
 	pgURL := os.Getenv(postgresURLEnv)
@@ -495,7 +507,15 @@ func (r *scaleRun) restartOne(ctx context.Context, logger *slog.Logger) *Restart
 
 	stopTook, stopErr := proc.stop()
 	startBegan := time.Now()
-	startErr := proc.start(ctx)
+
+	var startErr error
+
+	if restartMayStart(stopErr, proc.pid() != 0) {
+		startErr = proc.start(ctx)
+	} else {
+		startErr = errRestartSkipped
+	}
+
 	startTook := time.Since(startBegan)
 	ready := r.rec.since()
 
@@ -522,6 +542,18 @@ func (r *scaleRun) restartOne(ctx context.Context, logger *slog.Logger) *Restart
 	}
 
 	return out
+}
+
+// errRestartSkipped is the start error of a restart that did not start the
+// new process, because the old process may still run.
+var errRestartSkipped = errors.New("the new process was not started because the stop failed")
+
+// restartMayStart says whether a restart may start the new process. After a
+// stop error the old process can still hold the port, and a start then fails
+// on the bind with a second error for one cause. A process that was killed,
+// or that ended with an error, is gone, so the start goes on.
+func restartMayStart(stopErr error, stillRunning bool) bool {
+	return stopErr == nil || errors.Is(stopErr, errKilled) || !stillRunning
 }
 
 // sleep waits for d or until ctx ends.
@@ -630,6 +662,7 @@ type monitor struct {
 	startedAt time.Time
 	cpu       cpuMark
 	txBegin   int64
+	txBeginOK bool
 
 	mu      sync.Mutex
 	counts  []int
@@ -637,9 +670,23 @@ type monitor struct {
 	sampled sync.WaitGroup
 }
 
-// cpuMark is the CPU time of the groups at one moment.
+// cpuMark is the CPU time of the groups at one moment. Each group has a flag
+// that says the read worked. A group whose read failed has no time.
 type cpuMark struct {
-	instances, postgres, store, harness float64
+	instances, postgres, store, harness         float64
+	instancesOK, postgresOK, storeOK, harnessOK bool
+}
+
+// blankMonitor answers a monitor that has not begun a window.
+func blankMonitor(conn *pgx.Conn, procs []*serverProc, storePID int) *monitor {
+	return &monitor{
+		conn: conn, procs: procs, storePID: storePID, pgRoot: 0, startedAt: time.Time{},
+		cpu: cpuMark{
+			instances: 0, postgres: 0, store: 0, harness: 0,
+			instancesOK: false, postgresOK: false, storeOK: false, harnessOK: false,
+		},
+		txBegin: 0, txBeginOK: false, mu: sync.Mutex{}, counts: nil, cancel: nil, sampled: sync.WaitGroup{},
+	}
 }
 
 // newMonitor connects to the database and finds the postmaster.
@@ -656,20 +703,7 @@ func newMonitor(ctx context.Context, pgURL string, procs []*serverProc, storePID
 		return nil, fmt.Errorf("connect the sampler: %w", err)
 	}
 
-	mon := &monitor{
-		conn:      conn,
-		procs:     procs,
-		storePID:  storePID,
-		pgRoot:    0,
-		startedAt: time.Time{},
-		cpu:       cpuMark{instances: 0, postgres: 0, store: 0, harness: 0},
-		txBegin:   0,
-		mu:        sync.Mutex{},
-		counts:    nil,
-		cancel:    nil,
-		sampled:   sync.WaitGroup{},
-	}
-
+	mon := blankMonitor(conn, procs, storePID)
 	mon.pgRoot = postmasterPID(ctx, conn)
 
 	return mon, nil
@@ -699,53 +733,67 @@ func postmasterPID(ctx context.Context, conn *pgx.Conn) int {
 	return pid
 }
 
-// marks answers the CPU time of the groups now.
+// marks answers the CPU time of the groups now. A read that failed leaves
+// the flag of its group false: the group is then not measured.
 func (m *monitor) marks() cpuMark {
 	var out cpuMark
 
+	out.instancesOK = len(m.procs) > 0
+
 	for _, proc := range m.procs {
-		if pid := proc.pid(); pid != 0 {
-			if seconds, err := procCPUSeconds(pid); err == nil {
-				out.instances += seconds
-			}
+		pid := proc.pid()
+		if pid == 0 {
+			out.instancesOK = false
+
+			continue
 		}
+
+		seconds, err := procCPUSeconds(pid)
+		if err != nil {
+			out.instancesOK = false
+
+			continue
+		}
+
+		out.instances += seconds
 	}
 
 	if m.pgRoot != 0 {
-		if seconds, err := treeCPUSeconds(m.pgRoot); err == nil {
-			out.postgres = seconds
-		}
+		out.postgres, out.postgresOK = okSeconds(treeCPUSeconds(m.pgRoot))
 	}
 
 	if m.storePID != 0 {
-		if seconds, err := procCPUSeconds(m.storePID); err == nil {
-			out.store = seconds
-		}
+		out.store, out.storeOK = okSeconds(procCPUSeconds(m.storePID))
 	}
 
-	out.harness = selfCPUSeconds()
+	out.harness, out.harnessOK = okSeconds(selfCPUSeconds())
 
 	return out
 }
 
+// okSeconds answers seconds with true when err is nil.
+func okSeconds(seconds float64, err error) (float64, bool) {
+	return seconds, err == nil
+}
+
 // transactions answers the commits and rollbacks of the database so far.
-func (m *monitor) transactions(ctx context.Context) int64 {
+func (m *monitor) transactions(ctx context.Context) (int64, bool) {
 	var total int64
 
 	err := m.conn.QueryRow(ctx,
 		"SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()").Scan(&total)
 	if err != nil {
-		return 0
+		return 0, false
 	}
 
-	return total
+	return total, true
 }
 
 // begin starts the samples.
 func (m *monitor) begin(ctx context.Context) {
 	m.startedAt = time.Now()
 	m.cpu = m.marks()
-	m.txBegin = m.transactions(ctx)
+	m.txBegin, m.txBeginOK = m.transactions(ctx)
 
 	sampleCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	m.cancel = cancel
@@ -776,18 +824,20 @@ func (m *monitor) begin(ctx context.Context) {
 
 // end stops the samples and answers the resources of the window.
 func (m *monitor) end(ctx context.Context, window time.Duration, requests int) ResourceStats {
-	now := m.marks()
-	tx := m.transactions(ctx)
-
+	// The sampler and the transaction read share one connection, and a
+	// connection serves one query at a time. Stop the sampler first.
 	m.cancel()
 	m.sampled.Wait()
+
+	now := m.marks()
+	tx, txOK := m.transactions(ctx)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return resourcesOf(resourceInput{
-		begin: m.cpu, end: now, txBegin: m.txBegin, txEnd: tx, window: window, requests: requests,
-		counts: m.counts, postgres: m.pgRoot != 0, store: m.storePID != 0,
+		begin: m.cpu, end: now, txBegin: m.txBegin, txEnd: tx, txOK: m.txBeginOK && txOK,
+		window: window, requests: requests, counts: m.counts,
 	})
 }
 
@@ -796,64 +846,104 @@ type resourceInput struct {
 	begin, end cpuMark
 	txBegin    int64
 	txEnd      int64
-	window     time.Duration
-	requests   int
+	// txOK says that both reads of the transaction count worked.
+	txOK     bool
+	window   time.Duration
+	requests int
 	// counts are the samples of the client connections.
 	counts []int
-	// postgres and store say that the CPU of the part was measured.
-	postgres bool
-	store    bool
 }
 
 // resourcesOf answers the resources of one window. A part that nobody
-// measured has no value, not the value 0, and the report names it.
+// measured, or whose read failed at the begin or the end of the window, has
+// no value, not the value 0, and the report names it in Unmeasured.
 func resourcesOf(in resourceInput) ResourceStats {
+	var out ResourceStats
+
 	seconds := in.window.Seconds()
+	note := func(name string) { out.Unmeasured = append(out.Unmeasured, name) }
+	cores := func(name string, ok bool, from, to float64) *float64 {
+		if !ok || seconds <= 0 {
+			note(name)
 
-	out := ResourceStats{
-		InstanceCores:        (in.end.instances - in.begin.instances) / seconds,
-		HarnessCores:         (in.end.harness - in.begin.harness) / seconds,
-		DBTransactionsPerSec: float64(in.txEnd-in.txBegin) / seconds,
-		InstanceCoreMsPer1k:  0, PostgresCores: nil, StoreCores: nil, PostgresCoreMsPer1k: nil,
-		DBConnectionsMean: 0, DBConnectionsMax: 0, Unmeasured: nil,
+			return nil
+		}
+
+		value := (to - from) / seconds
+
+		return &value
 	}
 
-	if in.postgres {
-		cores := (in.end.postgres - in.begin.postgres) / seconds
-		out.PostgresCores = &cores
-	} else {
-		out.Unmeasured = append(out.Unmeasured, "postgresCores")
-	}
+	out.InstanceCores = cores("instanceCores", in.begin.instancesOK && in.end.instancesOK,
+		in.begin.instances, in.end.instances)
+	out.PostgresCores = cores("postgresCores", in.begin.postgresOK && in.end.postgresOK,
+		in.begin.postgres, in.end.postgres)
+	out.StoreCores = cores("storeCores", in.begin.storeOK && in.end.storeOK, in.begin.store, in.end.store)
+	out.HarnessCores = cores("harnessCores", in.begin.harnessOK && in.end.harnessOK,
+		in.begin.harness, in.end.harness)
 
-	if in.store {
-		cores := (in.end.store - in.begin.store) / seconds
-		out.StoreCores = &cores
-	} else {
-		out.Unmeasured = append(out.Unmeasured, "storeCores")
-	}
+	out.DBTransactionsPerSec = transactionRate(in, seconds)
+	out.DBConnectionsMean, out.DBConnectionsMax = connectionStats(in.counts)
+	out.InstanceCoreMsPer1k = costPer1k(in.requests, out.InstanceCores, seconds)
+	out.PostgresCoreMsPer1k = costPer1k(in.requests, out.PostgresCores, seconds)
 
-	sum := 0
-
-	for _, count := range in.counts {
-		sum += count
-		out.DBConnectionsMax = max(out.DBConnectionsMax, count)
-	}
-
-	if len(in.counts) > 0 {
-		out.DBConnectionsMean = float64(sum) / float64(len(in.counts))
-	}
-
-	if in.requests > 0 {
-		perRequest := perThousand / float64(in.requests)
-		out.InstanceCoreMsPer1k = (in.end.instances - in.begin.instances) * perThousand * perRequest
-
-		if in.postgres {
-			cost := (in.end.postgres - in.begin.postgres) * perThousand * perRequest
-			out.PostgresCoreMsPer1k = &cost
+	for name, missing := range map[string]bool{
+		"dbTransactionsPerSec":        out.DBTransactionsPerSec == nil,
+		"dbConnections":               out.DBConnectionsMean == nil,
+		"instanceCoreMsPer1kRequests": out.InstanceCoreMsPer1k == nil,
+		"postgresCoreMsPer1kRequests": out.PostgresCoreMsPer1k == nil,
+	} {
+		if missing {
+			note(name)
 		}
 	}
 
+	slices.Sort(out.Unmeasured)
+
 	return out
+}
+
+// transactionRate answers the transactions each second, or nil when a read
+// of the count failed or the count went down.
+func transactionRate(in resourceInput, seconds float64) *float64 {
+	if !in.txOK || in.txEnd < in.txBegin || seconds <= 0 {
+		return nil
+	}
+
+	rate := float64(in.txEnd-in.txBegin) / seconds
+
+	return &rate
+}
+
+// connectionStats answers the mean and the maximum of the samples, or nil
+// without a sample.
+func connectionStats(counts []int) (*float64, *int) {
+	if len(counts) == 0 {
+		return nil, nil
+	}
+
+	sum, peak := 0, 0
+
+	for _, count := range counts {
+		sum += count
+		peak = max(peak, count)
+	}
+
+	mean := float64(sum) / float64(len(counts))
+
+	return &mean, &peak
+}
+
+// costPer1k answers the core-milliseconds for 1000 requests of a part that
+// used cores over seconds, or nil when the CPU or the requests are missing.
+func costPer1k(requests int, cores *float64, seconds float64) *float64 {
+	if cores == nil || requests <= 0 {
+		return nil
+	}
+
+	cost := *cores * seconds * perThousand * perThousand / float64(requests)
+
+	return &cost
 }
 
 // close ends the database connection.

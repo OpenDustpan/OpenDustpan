@@ -55,13 +55,19 @@ type serverProc struct {
 
 	healthy atomic.Bool
 
-	mu      sync.Mutex
-	port    int
-	runs    int
-	logPath string
-	cmd     *exec.Cmd
-	done    chan struct{}
-	exitErr error
+	mu   sync.Mutex
+	port int
+	// gen counts the changes of state by start and stop. A probe may set the
+	// health only if gen did not change since the probe began. stopping is
+	// true from the start of a stop until the next start: no probe may set
+	// the health then.
+	gen      uint64
+	stopping bool
+	runs     int
+	logPath  string
+	cmd      *exec.Cmd
+	done     chan struct{}
+	exitErr  error
 }
 
 // procSpec says how to run one server process. A port of 0 lets the kernel
@@ -82,7 +88,7 @@ func newServerProc(spec procSpec) *serverProc {
 	return &serverProc{
 		index: spec.index, bin: spec.bin, args: spec.args, env: spec.env, dir: spec.dir,
 		startTimeout: spec.startTimeout, stopTimeout: spec.stopTimeout,
-		healthy: atomic.Bool{}, mu: sync.Mutex{}, port: spec.port, runs: 0, logPath: "",
+		healthy: atomic.Bool{}, mu: sync.Mutex{}, port: spec.port, gen: 0, stopping: false, runs: 0, logPath: "",
 		cmd: nil, done: nil, exitErr: nil,
 	}
 }
@@ -113,6 +119,7 @@ func (p *serverProc) pid() int {
 func (p *serverProc) begin(ctx context.Context) (*exec.Cmd, chan struct{}, error) {
 	p.mu.Lock()
 	p.runs++
+	p.gen++
 	p.exitErr = nil
 	p.logPath = filepath.Join(p.dir, "server-"+strconv.Itoa(p.index)+"-"+strconv.Itoa(p.runs)+".log")
 	listen := "127.0.0.1:" + strconv.Itoa(p.port)
@@ -190,7 +197,7 @@ func (p *serverProc) waitReady(ctx context.Context, done <-chan struct{}) error 
 
 	for time.Now().Before(deadline) {
 		if port, bound := portFromLog(p.logTail(logWindow)); bound && p.accept(port) && probeReady(ctx, p.url()) {
-			p.healthy.Store(true)
+			p.markReady()
 
 			return nil
 		}
@@ -205,6 +212,39 @@ func (p *serverProc) waitReady(ctx context.Context, done <-chan struct{}) error 
 	}
 
 	return fmt.Errorf("%w: server %d\n%s", errProcTimeout, p.index, p.logTail(logWindow))
+}
+
+// markReady sets the process healthy after a start and ends the stopping
+// state.
+func (p *serverProc) markReady() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.stopping = false
+	p.gen++
+	p.healthy.Store(true)
+}
+
+// generation answers the count of state changes, for setHealthyIf.
+func (p *serverProc) generation() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.gen
+}
+
+// setHealthyIf sets the health from a probe, but only if the process did not
+// change state since the probe began and does not stop. A probe that began
+// before a stop must not put a stopped process back in the pool.
+func (p *serverProc) setHealthyIf(gen uint64, healthy bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.stopping || p.gen != gen {
+		return
+	}
+
+	p.healthy.Store(healthy)
 }
 
 // accept sets the port of the process at its first start. At a restart the
@@ -261,9 +301,10 @@ func signalGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 func (p *serverProc) stop() (time.Duration, error) {
 	p.mu.Lock()
 	cmd, done, exitErr := p.cmd, p.done, p.exitErr
-	p.mu.Unlock()
-
+	p.stopping = true
+	p.gen++
 	p.healthy.Store(false)
+	p.mu.Unlock()
 
 	if cmd == nil || done == nil {
 		if exitErr != nil {
@@ -313,31 +354,41 @@ func (p *serverProc) logTail(n int) string {
 }
 
 // portFromLog answers the port in the listening line that the server writes
-// after it binds: a JSON field "addr" with a host and a port.
+// after it binds. Only the line with the message "listening" counts: other
+// lines may have an "addr" field, for example the warning about plain HTTP
+// or a line about the database.
 func portFromLog(logs string) (int, bool) {
-	const prefix = `"addr":"`
+	const (
+		message = `"msg":"listening"`
+		prefix  = `"addr":"`
+	)
 
-	_, after, found := strings.Cut(logs, prefix)
-	if !found {
-		return 0, false
+	for line := range strings.SplitSeq(logs, "\n") {
+		if !strings.Contains(line, message) {
+			continue
+		}
+
+		_, after, found := strings.Cut(line, prefix)
+		if !found {
+			continue
+		}
+
+		addr, _, found := strings.Cut(after, `"`)
+		if !found {
+			continue
+		}
+
+		_, portText, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+
+		if port, convErr := strconv.Atoi(portText); convErr == nil && port > 0 {
+			return port, true
+		}
 	}
 
-	addr, _, found := strings.Cut(after, `"`)
-	if !found {
-		return 0, false
-	}
-
-	_, portText, err := net.SplitHostPort(addr)
-	if err != nil {
-		return 0, false
-	}
-
-	port, err := strconv.Atoi(portText)
-	if err != nil || port <= 0 {
-		return 0, false
-	}
-
-	return port, true
+	return 0, false
 }
 
 // probeReady reports whether base answers 200 on /health/ready.
@@ -473,7 +524,8 @@ func (b *balancer) watch(ctx context.Context) {
 					// A process that is stopped or starting keeps the state
 					// that start and stop set; only a running process is checked.
 					if proc.pid() != 0 {
-						proc.healthy.Store(probeReady(ctx, proc.url()))
+						gen := proc.generation()
+						proc.setHealthyIf(gen, probeReady(ctx, proc.url()))
 					}
 				})
 			}
@@ -579,15 +631,15 @@ func treeCPUSeconds(root int) (float64, error) {
 }
 
 // selfCPUSeconds answers the CPU time of the harness process.
-func selfCPUSeconds() float64 {
+func selfCPUSeconds() (float64, error) {
 	var usage syscall.Rusage
 
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
-		return 0
+		return 0, fmt.Errorf("read the CPU time of the harness: %w", err)
 	}
 
 	return float64(usage.Utime.Sec) + float64(usage.Utime.Usec)/1e6 +
-		float64(usage.Stime.Sec) + float64(usage.Stime.Usec)/1e6
+		float64(usage.Stime.Sec) + float64(usage.Stime.Usec)/1e6, nil
 }
 
 // newTransport answers an HTTP transport that keeps many idle connections,

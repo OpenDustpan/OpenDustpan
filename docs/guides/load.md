@@ -331,7 +331,7 @@ The times run from the start of the request to the response headers.
 The harness groups the requests by what the server does, for example `tofu lock` and `pulumi checkpoint save`, not by the name of a unit.
 
 The mode reads the CPU time of the processes from `/proc`, so it runs on Linux only.
-A field that nobody measured is absent from `resources`, and `resources.unmeasured` names it. The PostgreSQL CPU needs a readable `postmaster.pid` in the data directory that the database reports. The object store CPU needs `-store-pid`.
+A field that nobody measured is absent from `resources`. A field whose read failed at the start or at the end of the window is absent too. `resources.unmeasured` names each absent field. A value of 0 is a measured 0. The PostgreSQL CPU needs two things. The data directory that the database reports must hold a readable `postmaster.pid`. The database must also run in the process namespace of the harness. The object store CPU needs `-store-pid`. The mode stops at the start when it cannot read `/proc`.
 The mode starts each server process as the leader of its own process group, and a stop sends SIGTERM to the group. Known limit: if you send SIGKILL to the harness, the server processes stay running and you must stop them yourself. A SIGINT or a SIGTERM to the harness stops them.
 The harness, the balancer, the server processes, PostgreSQL and the object store share the CPUs of one host.
 So the numbers depend on that host.
