@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 )
 
 // resetInterval is the shortest time between two resets of the pool. The
@@ -91,6 +90,15 @@ func (g *poolGuard) suspectReadOnly() {
 	})
 }
 
+// confirmReadOnly resets the pool under the limiter. A read-only error of a
+// round trip outside a READ ONLY transaction of the store shows a session that
+// refuses writes. The connection of that round trip is still in use then, so a
+// check of the idle connections can miss it; the reset needs no check. The
+// pool closes that connection when its request gives it back.
+func (g *poolGuard) confirmReadOnly() {
+	g.reset(context.Background())
+}
+
 // recentReset reports whether the last reset is less than resetInterval ago.
 // The caller holds mu.
 func (g *poolGuard) recentReset() bool {
@@ -152,9 +160,15 @@ func (g *poolGuard) close() {
 // of an unexpected shape counts as a server that refuses writes.
 func (g *poolGuard) checkWritable(ctx context.Context) (bool, error) {
 	conn, err := g.pool.Acquire(ctx)
+	if errors.Is(err, errNotWritable) {
+		// After a reset, each new connection to a server that refuses writes
+		// fails the read-write check of the pool, so the answer is the same.
+		return false, nil
+	}
+
 	if err != nil {
-		return false, fmt.Errorf("check that the database accepts writes: %w",
-			storeerr.New(storeerr.ConnectionFailed, err))
+		// A deadline or a cancel of the caller stays the error of the caller.
+		return false, fmt.Errorf("check that the database accepts writes: %w", translate(err))
 	}
 
 	results, err := conn.Conn().PgConn().Exec(ctx, writableQuery).ReadAll()

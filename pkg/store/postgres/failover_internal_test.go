@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -334,7 +333,7 @@ func TestStatementDeadlineClosesStalledConnection(t *testing.T) {
 
 			proxy, proxied := startHoldProxy(t, base)
 			pool := testPool(t, proxied, nil, withCheck)
-			g := guardedPool{pool: pool, rt: roundTrip{deadline: shortDeadline, watch: nil}}
+			g := guardedPool{pool: pool, rt: roundTrip{deadline: shortDeadline, watch: nil, readOnlyTx: false}}
 			ctx := context.WithoutCancel(t.Context())
 
 			tx := tc.prepare(ctx, t, g)
@@ -367,7 +366,7 @@ func TestStatementDeadlineKeepsCallerDeadline(t *testing.T) {
 	t.Parallel()
 
 	pool := testPool(t, testURL(t), nil, withCheck)
-	g := guardedDB{inner: pool, rt: roundTrip{deadline: time.Minute, watch: nil}}
+	g := guardedDB{inner: pool, rt: roundTrip{deadline: time.Minute, watch: nil, readOnlyTx: false}}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
@@ -388,7 +387,7 @@ func TestStatementDeadlineAllowsLongRowRead(t *testing.T) {
 	t.Parallel()
 
 	pool := testPool(t, testURL(t), nil, withCheck)
-	g := guardedDB{inner: pool, rt: roundTrip{deadline: time.Minute, watch: nil}}
+	g := guardedDB{inner: pool, rt: roundTrip{deadline: time.Minute, watch: nil, readOnlyTx: false}}
 
 	rows, err := g.Query(t.Context(), "SELECT n FROM generate_series(1, 1000) AS n")
 	if err != nil {
@@ -421,6 +420,14 @@ func failWrite(t *testing.T, g guardedPool, opts pgx.TxOptions) {
 	})
 	if !errors.Is(err, namespace.ErrUnreachable) {
 		t.Fatalf("write = %v, want a read-only error that wraps ErrUnreachable", err)
+	}
+}
+
+// beginReadOnly returns the options of a transaction that names READ ONLY in
+// its own begin statement only, as the snapshot read of the store does.
+func beginReadOnly() pgx.TxOptions {
+	return pgx.TxOptions{
+		IsoLevel: "", AccessMode: "", DeferrableMode: "", BeginQuery: "BEGIN READ ONLY", CommitQuery: "",
 	}
 }
 
@@ -461,10 +468,12 @@ func warmPool(t *testing.T, pool *pgxpool.Pool, n int) {
 }
 
 // TestReadOnlyErrorResetsPool proves that a write that fails with SQLSTATE
-// 25006 resets the pool when an idle connection reaches a server that
-// refuses writes, that a burst of such errors resets it once, and that a
-// 25006 from a transaction that the store opened READ ONLY does not reset a
-// pool of writable connections.
+// 25006 in a transaction that the store did not open READ ONLY resets the
+// pool at once, also with one connection that the failed request still
+// holds, and that a burst of such errors resets it once. A 25006 from a
+// transaction that the store opened READ ONLY, in the access mode or in its
+// own begin statement, starts a check of the idle connections instead, and
+// does not reset a pool of writable connections.
 func TestReadOnlyErrorResetsPool(t *testing.T) {
 	t.Parallel()
 
@@ -475,12 +484,16 @@ func TestReadOnlyErrorResetsPool(t *testing.T) {
 		name      string
 		params    map[string]string
 		txOptions pgx.TxOptions
+		warm      int
 		errors    int
 		want      uint64
 	}{
-		{"read-only server", readOnlyParams(), txOptions(defaultAccess), 1, 1},
-		{"burst of errors", readOnlyParams(), txOptions(defaultAccess), 20, 1},
-		{"read only transaction of the store", nil, txOptions(pgx.ReadOnly), 3, 0},
+		{"read-only server", readOnlyParams(), txOptions(defaultAccess), 3, 1, 1},
+		{"one connection in use", readOnlyParams(), txOptions(defaultAccess), 1, 1, 1},
+		{"one connection, ten errors", readOnlyParams(), txOptions(defaultAccess), 1, 10, 1},
+		{"burst of errors", readOnlyParams(), txOptions(defaultAccess), 3, 20, 1},
+		{"read only transaction of the store", nil, txOptions(pgx.ReadOnly), 3, 3, 0},
+		{"read only begin statement of the store", nil, beginReadOnly(), 3, 3, 0},
 	}
 
 	for _, tc := range tests {
@@ -488,13 +501,14 @@ func TestReadOnlyErrorResetsPool(t *testing.T) {
 			t.Parallel()
 
 			pool := testPool(t, base, tc.params, withoutCheck)
-			warmPool(t, pool, 3)
+			warmPool(t, pool, tc.warm)
 
 			guard := newPoolGuard(pool, logger)
-			g := guardedPool{pool: pool, rt: roundTrip{deadline: time.Minute, watch: guard}}
+			g := guardedPool{pool: pool, rt: roundTrip{deadline: time.Minute, watch: guard, readOnlyTx: false}}
 
 			for range tc.errors {
 				failWrite(t, g, tc.txOptions)
+				guard.wg.Wait()
 			}
 
 			// Wait for the running check. A close would stop the reset.
@@ -548,6 +562,40 @@ func TestCheckWritable(t *testing.T) {
 	}
 }
 
+// TestCheckWritableAfterReset proves that the write check still answers
+// false, not an error, when each new connection fails the read-write check of
+// the pool, as after a reset on a server that refuses writes. The probe then
+// names store-read-only, not store.
+func TestCheckWritableAfterReset(t *testing.T) {
+	t.Parallel()
+
+	guard := newPoolGuard(testPool(t, testURL(t), readOnlyParams(), withCheck), slog.New(slog.DiscardHandler))
+	defer guard.close()
+
+	ok, err := guard.checkWritable(t.Context())
+	if err != nil || ok {
+		t.Fatalf("checkWritable = %t, %v, want false and no error", ok, err)
+	}
+}
+
+// TestCheckWritableKeepsCallerContext proves that a canceled context of the
+// caller stays the error of the caller: the check does not report it as a
+// lost connection.
+func TestCheckWritableKeepsCallerContext(t *testing.T) {
+	t.Parallel()
+
+	guard := newPoolGuard(testPool(t, testURL(t), nil, withCheck), slog.New(slog.DiscardHandler))
+	defer guard.close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	ok, err := guard.checkWritable(ctx)
+	if ok || !errors.Is(err, context.Canceled) || errors.Is(err, namespace.ErrUnreachable) {
+		t.Fatalf("checkWritable = %t, %v, want false and the cancel of the caller", ok, err)
+	}
+}
+
 // TestCheckWritableFailsWhenTheServerIsGone proves that a check that cannot
 // run gives an error that wraps namespace.ErrUnavailable and holds no driver
 // text, and does not answer false: the probe then names the store, not a
@@ -573,50 +621,6 @@ func TestCheckWritableFailsWhenTheServerIsGone(t *testing.T) {
 
 	if err.Error() != "check that the database accepts writes: database unavailable: connection failed" {
 		t.Errorf("error text %q, want no driver text", err)
-	}
-}
-
-// TestWritableAnswerFailsClosed proves that an answer of an unexpected shape
-// or value counts as a server that refuses writes.
-func TestWritableAnswerFailsClosed(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		rows [][][]byte
-		want error
-	}{
-		{"writable", [][][]byte{{[]byte("f"), []byte("off")}}, nil},
-		{"in recovery", [][][]byte{{[]byte("t"), []byte("on")}}, errNotWritable},
-		{"read-only default", [][][]byte{{[]byte("f"), []byte("on")}}, errNotWritable},
-		{"no row", nil, errNotWritable},
-		{"two rows", [][][]byte{{[]byte("f"), []byte("off")}, {[]byte("f"), []byte("off")}}, errNotWritable},
-		{"one column", [][][]byte{{[]byte("f")}}, errNotWritable},
-		{"unknown value", [][][]byte{{[]byte("maybe"), []byte("off")}}, errNotWritable},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := new(pgconn.Result)
-			result.Rows = tc.rows
-
-			err := writableAnswer([]*pgconn.Result{result})
-			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
-				t.Fatalf("writableAnswer = %v, want %v", err, tc.want)
-			}
-		})
-	}
-}
-
-// TestWritableAnswerRefusesNoResult proves that an answer with no result
-// counts as a server that refuses writes.
-func TestWritableAnswerRefusesNoResult(t *testing.T) {
-	t.Parallel()
-
-	if err := writableAnswer(nil); !errors.Is(err, errNotWritable) {
-		t.Fatalf("writableAnswer(nil) = %v, want errNotWritable", err)
 	}
 }
 

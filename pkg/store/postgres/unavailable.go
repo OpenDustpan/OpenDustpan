@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"syscall"
 	"time"
 
@@ -129,6 +130,11 @@ type roundTrip struct {
 	deadline time.Duration
 	// watch is told about each read-only error. Nil watches nothing.
 	watch readOnlyWatch
+	// readOnlyTx is true in a transaction that the store opened READ ONLY. A
+	// read-only error there can be a bug of the store, so the watch checks
+	// the idle connections. In any other round trip, a read-only error shows
+	// a session that refuses writes, so the watch resets the pool at once.
+	readOnlyTx bool
 }
 
 // bound returns ctx bounded by the statement deadline. When ctx has an
@@ -148,8 +154,14 @@ func (rt roundTrip) report(cause func() error, err error) error {
 	out := translateIn(cause, err)
 
 	var unavailable *storeerr.Error
-	if rt.watch != nil && errors.As(out, &unavailable) && unavailable.Class() == storeerr.ReadOnly {
+	if rt.watch == nil || !errors.As(out, &unavailable) || unavailable.Class() != storeerr.ReadOnly {
+		return out
+	}
+
+	if rt.readOnlyTx {
 		rt.watch.suspectReadOnly()
+	} else {
+		rt.watch.confirmReadOnly()
 	}
 
 	return out
@@ -177,10 +189,23 @@ func translateIn(cause func() error, err error) error {
 	return translate(err)
 }
 
-// readOnlyWatch is told about each error of the class ReadOnly. The store
-// checks the pool then (see poolGuard). Nil watches nothing.
+// readOnlyWatch is told about each error of the class ReadOnly (see
+// poolGuard). Nil watches nothing.
 type readOnlyWatch interface {
+	// suspectReadOnly starts a check of the idle connections: the error came
+	// from a transaction that the store opened READ ONLY.
 	suspectReadOnly()
+	// confirmReadOnly resets the pool under the limiter: the error came from
+	// a session that refuses writes.
+	confirmReadOnly()
+}
+
+// readOnlyAccess reports whether opts open a READ ONLY transaction, in the
+// access mode or in a begin statement of its own. An unknown begin statement
+// that names READ ONLY counts too, so the store never resets the pool for the
+// error of its own read-only transaction.
+func readOnlyAccess(opts pgx.TxOptions) bool {
+	return opts.AccessMode == pgx.ReadOnly || strings.Contains(strings.ToUpper(opts.BeginQuery), "READ ONLY")
 }
 
 // guardedDB is the db.DBTX of the store pool. It bounds each statement by the
@@ -298,7 +323,10 @@ func (g guardedPool) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, e
 		return nil, g.rt.report(causeOf(bounded), err)
 	}
 
-	return guardedTx{Tx: tx, rt: g.rt}, nil
+	rt := g.rt
+	rt.readOnlyTx = readOnlyAccess(opts)
+
+	return guardedTx{Tx: tx, rt: rt}, nil
 }
 
 // guardedTx bounds and translates each round trip of a transaction: the

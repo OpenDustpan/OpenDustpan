@@ -13,8 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 )
 
-// errWriteCheck stands for a write check that cannot run because the store is
-// not available.
+// errWriteCheck stands for a write check that cannot run.
 var errWriteCheck = errors.New("write check cannot run")
 
 // stubWritable is a writeChecker that answers ok and err.
@@ -28,60 +27,61 @@ func (s stubWritable) CheckWritable(context.Context) (bool, error) {
 	return s.ok, s.err
 }
 
-// TestReadinessStoreReadOnly proves that the probe of a process whose
-// database answers that it refuses writes answers 503 and names the check
-// store-read-only. A database that
-// accepts writes, or a store without the check, answers 200. A check that
-// cannot run does not fail on its own: the store check reports that cause,
-// and one cause gives one entry in the failed list.
-func TestReadinessStoreReadOnly(t *testing.T) {
-	t.Parallel()
+// writableCase is one store and write check, and the answer of the probe.
+type writableCase struct {
+	name       string
+	store      stubPinger
+	writable   writeChecker
+	wantStatus int
+	wantBody   string
+}
 
-	tests := []struct {
-		name       string
-		components Components
-		store      stubPinger
-		writable   writeChecker
-		wantStatus int
-		wantBody   string
-	}{
+// writableCases returns the table of TestReadinessStoreReadOnly.
+func writableCases() []writableCase {
+	up := stubPinger{err: nil, block: false}
+	down := stubPinger{err: errProbeStoreCanary, block: false}
+
+	return []writableCase{
 		{
-			"api, read-only",
-			Components{api: true, worker: false},
-			stubPinger{err: nil, block: false},
+			"read-only",
+			up,
 			stubWritable{ok: false, err: nil},
-			http.StatusServiceUnavailable, `"failed":["store-read-only"]`,
+			http.StatusServiceUnavailable,
+			`"failed":["store-read-only"]`,
 		},
+		{"writable", up, stubWritable{ok: true, err: nil}, http.StatusOK, ""},
 		{
-			"writable",
-			Components{api: true, worker: false},
-			stubPinger{err: nil, block: false},
-			stubWritable{ok: true, err: nil},
-			http.StatusOK, "",
-		},
-		{
-			"store without the check",
-			Components{api: true, worker: false},
-			stubPinger{err: nil, block: false},
-			nil, http.StatusOK, "",
-		},
-		{
-			"store down, check cannot run",
-			Components{api: true, worker: false},
-			stubPinger{err: errProbeStoreCanary, block: false},
+			"check cannot run, ping would pass", up,
 			stubWritable{ok: false, err: errWriteCheck},
 			http.StatusServiceUnavailable, `"failed":["store"]`,
 		},
+		{
+			"store down, check cannot run", down,
+			stubWritable{ok: false, err: errWriteCheck},
+			http.StatusServiceUnavailable, `"failed":["store"]`,
+		},
+		{"store without the check", up, nil, http.StatusOK, ""},
+		{"store without the check, store down", down, nil, http.StatusServiceUnavailable, `"failed":["store"]`},
 	}
+}
 
-	for _, tt := range tests {
+// TestReadinessStoreReadOnly proves that the write check replaces the ping of
+// the store and fails closed. A database that answers that it refuses writes
+// gives 503 with the check store-read-only. A write check that cannot run
+// gives 503 with the check store, also when the ping of the store would pass.
+// A database that accepts writes, or a store without the check whose ping
+// passes, answers 200.
+func TestReadinessStoreReadOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range writableCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			rd := newComponentReadiness(readinessSettings{
-				components: tt.components, store: tt.store, blobs: stubPinger{err: nil, block: false},
-				watch: nil, chainAdmits: nil, minimum: nil, writable: tt.writable,
-				timeout:  50 * time.Millisecond,
+				components: Components{api: true, worker: false}, store: tt.store,
+				blobs: stubPinger{err: nil, block: false}, watch: nil, chainAdmits: nil, minimum: nil,
+				writable: tt.writable, timeout: 50 * time.Millisecond,
 				failures: metrics.NewRegistry().NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
 				logger:   slog.New(slog.DiscardHandler),
 			})
@@ -95,13 +95,17 @@ func TestReadinessStoreReadOnly(t *testing.T) {
 			if rec.Code != tt.wantStatus || !strings.Contains(body, tt.wantBody) {
 				t.Fatalf("probe = %d %s, want %d with %s", rec.Code, body, tt.wantStatus, tt.wantBody)
 			}
+
+			if strings.Contains(body, errWriteCheck.Error()) {
+				t.Errorf("probe body %s holds the text of the check error", body)
+			}
 		})
 	}
 }
 
-// TestReadinessChecksWritesInEachComponent proves that the api and the worker
-// component both run the write check, so a worker process on a read-only
-// database also leaves the pool of its Service.
+// TestReadinessChecksWritesInEachComponent proves that the store check of the
+// api and of the worker component is the write check, so a worker process on
+// a read-only database also leaves the pool of its Service.
 func TestReadinessChecksWritesInEachComponent(t *testing.T) {
 	t.Parallel()
 
@@ -113,19 +117,21 @@ func TestReadinessChecksWritesInEachComponent(t *testing.T) {
 		logger:   slog.New(slog.DiscardHandler),
 	})
 
+	if len(rd.parts) != 2 {
+		t.Fatalf("readiness has %d components, want 2", len(rd.parts))
+	}
+
 	for _, part := range rd.parts {
 		found := false
 
 		for _, check := range part.pings {
-			found = found || check.name == checkReadOnly
+			if _, ok := check.ping.(writablePing); ok && check.name == checkStore {
+				found = true
+			}
 		}
 
 		if !found {
-			t.Errorf("component %s has no %s check", part.name, checkReadOnly)
+			t.Errorf("component %s has no write check as its store check", part.name)
 		}
-	}
-
-	if len(rd.parts) != 2 {
-		t.Fatalf("readiness has %d components, want 2", len(rd.parts))
 	}
 }

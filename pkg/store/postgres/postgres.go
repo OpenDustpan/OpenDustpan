@@ -227,7 +227,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool:                nil,
-		txs:                 guardedPool{pool: nil, rt: roundTrip{deadline: 0, watch: nil}},
+		txs:                 guardedPool{pool: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
 		queries:             nil,
 		stagingMu:           sync.Mutex{},
 		stagingSchema:       "",
@@ -245,7 +245,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		failover:            failover,
 		guard:               nil,
 		marks:               newLongMarks(),
-		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil}},
+		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
 	}
 
 	for _, opt := range opts {
@@ -272,12 +272,15 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s.pool = pool
 	s.guard = newPoolGuard(pool, s.logger)
-	s.txs = guardedPool{pool: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard}}
-	s.reads = guardedDB{inner: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard}}
+	s.txs = guardedPool{pool: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
+	s.reads = guardedDB{inner: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
 	s.queries = db.New(s.reads)
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	if err := s.migrate(ctx); err != nil {
+		// A read-only check can start during the migration: close the guard
+		// first, so it does not outlive Open.
+		s.guard.close()
 		pool.Close()
 
 		return nil, err
@@ -1299,7 +1302,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 
-	starter := guardedPool{pool: s.pool, rt: roundTrip{deadline: migrationDeadline, watch: s.guard}}
+	starter := guardedPool{pool: s.pool, rt: roundTrip{deadline: migrationDeadline, watch: s.guard, readOnlyTx: false}}
 
 	err = pgx.BeginFunc(ctx, starter, func(tx pgx.Tx) error {
 		if boundErr := setLocalBounds(ctx, tx, migrationBound()); boundErr != nil {

@@ -152,8 +152,8 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 		part := componentChecks{
 			name: ComponentAPI,
 			pings: slices.Concat(
-				[]readinessCheck{{name: checkStore, ping: cfg.store}, {name: checkBlob, ping: cfg.blobs}},
-				minimumChecks(cfg.minimum), writableChecks(cfg.writable),
+				[]readinessCheck{storeCheck(cfg.store, cfg.writable), {name: checkBlob, ping: cfg.blobs}},
+				minimumChecks(cfg.minimum),
 			),
 			tests: nil,
 			infos: nil,
@@ -174,8 +174,8 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 	if cfg.components.Has(ComponentWorker) {
 		rd.parts = append(rd.parts, componentChecks{
 			name: ComponentWorker,
-			pings: slices.Concat([]readinessCheck{{name: checkStore, ping: cfg.store}},
-				minimumChecks(cfg.minimum), writableChecks(cfg.writable)),
+			pings: slices.Concat([]readinessCheck{storeCheck(cfg.store, cfg.writable)},
+				minimumChecks(cfg.minimum)),
 			tests: []stateCheck{
 				{name: checkClaimLoop, ok: func(context.Context) bool { return cfg.watch.claimLoopRan() }},
 			},
@@ -225,37 +225,50 @@ type writeChecker interface {
 	CheckWritable(ctx context.Context) (bool, error)
 }
 
-// writablePing makes the write check of the database a readiness ping.
+// writablePing is the store check of a store with a write check. It replaces
+// the ping of the store: one statement both reaches the database and reads
+// whether it accepts writes.
 type writablePing struct {
 	checker writeChecker
 }
 
-// errStoreReadOnly is the failure of the write check: the database answers,
-// and it refuses writes.
-var errStoreReadOnly = errors.New("the database refuses writes")
+// renamedFailureError is a failure of a readiness check that the probe lists under
+// another name than the name of the check.
+type renamedFailureError struct {
+	name string
+}
 
-// Ping returns an error only when the database answers that it refuses
-// writes. Such a process cannot write, so the probe answers 503 and a load
-// balancer takes it out of the pool. When the check cannot run, it does not
-// fail: the check of the store already reports that cause, and one cause
-// gives one entry in the failed list.
+func (f *renamedFailureError) Error() string { return "readiness check failed: " + f.name }
+
+// errStoreCheck is the failure of the write check when it cannot run.
+var errStoreCheck = errors.New("the store check cannot run")
+
+// Ping fails closed. When the check cannot run, it fails as the store check:
+// the probe cannot know that the database accepts writes. When the database
+// answers that it refuses writes, it fails under the name store-read-only.
+// Either way the probe answers 503, and a load balancer takes the process
+// out of the pool.
 func (p writablePing) Ping(ctx context.Context) error {
 	ok, err := p.checker.CheckWritable(ctx)
-	if err == nil && !ok {
-		return errStoreReadOnly
+	if err != nil {
+		return fmt.Errorf("%w: %w", errStoreCheck, err)
+	}
+
+	if !ok {
+		return &renamedFailureError{name: checkReadOnly}
 	}
 
 	return nil
 }
 
-// writableChecks returns the readiness check of writes, or none for a store
-// without the check.
-func writableChecks(checker writeChecker) []readinessCheck {
-	if checker == nil {
-		return nil
+// storeCheck returns the store check: the write check when the store has
+// one, and the ping of the store otherwise.
+func storeCheck(store pinger, writable writeChecker) readinessCheck {
+	if writable != nil {
+		return readinessCheck{name: checkStore, ping: writablePing{checker: writable}}
 	}
 
-	return []readinessCheck{{name: checkReadOnly, ping: writablePing{checker: checker}}}
+	return readinessCheck{name: checkStore, ping: store}
 }
 
 // ServeHTTP implements http.Handler.
@@ -433,9 +446,17 @@ func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration
 	var failed []string
 
 	for i := range checks {
-		if errs[i] != nil {
-			failed = append(failed, checks[i].name)
+		if errs[i] == nil {
+			continue
 		}
+
+		name := checks[i].name
+
+		if renamed, ok := errors.AsType[*renamedFailureError](errs[i]); ok && renamed != nil {
+			name = renamed.name
+		}
+
+		failed = append(failed, name)
 	}
 
 	return failed
