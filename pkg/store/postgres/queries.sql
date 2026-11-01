@@ -5441,6 +5441,7 @@ INSERT INTO name_lock_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING;
 -- name: GetNameLockKey :one
 SELECT key FROM name_lock_key WHERE id = 1;
 
+
 -- name: GetPrincipalState :one
 -- The state of a principal that each request with an access cookie reads:
 -- the owner, its activity by the account rule of the inactivity disable, the
@@ -5463,3 +5464,4 @@ LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE p.id = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
+
