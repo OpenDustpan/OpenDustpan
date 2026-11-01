@@ -98,6 +98,18 @@ func hostileCases() []hostileCase {
 			func(s *unitsettings.Settings) { s.CodeLocation.Repository = "https://u:p@host/a/b" },
 		},
 		{
+			"repository with a metadata address host",
+			func(s *unitsettings.Settings) { s.CodeLocation.Repository = "https://169.254.169.254/a/b" },
+		},
+		{
+			"repository with an IPv6 host",
+			func(s *unitsettings.Settings) { s.CodeLocation.Repository = "https://[fd00::1]/a/b" },
+		},
+		{
+			"repository with a localhost host",
+			func(s *unitsettings.Settings) { s.CodeLocation.Repository = "https://localhost/a/b" },
+		},
+		{
 			"repository that is an scp address",
 			func(s *unitsettings.Settings) { s.CodeLocation.Repository = "git@host:a/b" },
 		},

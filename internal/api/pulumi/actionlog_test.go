@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -59,9 +60,10 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,
@@ -110,7 +112,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil, sealer: nil, audit: nil}
 }
 
 // decodeActionLog proves buf holds exactly one log line and returns it.

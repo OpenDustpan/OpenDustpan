@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -70,7 +71,10 @@ type memUpdateStore struct {
 	journal      map[stack.UpdateID][]stack.JournalBatchRef
 	refusals     map[stack.UpdateID][]stack.JournalRefusal
 	seqs         map[stack.UpdateID][]int64
-	mu           sync.Mutex
+	// stacks resolves the stack ID of the item key of a new update, as the
+	// Stacks of the update service does.
+	stacks stack.CheckpointStacks
+	mu     sync.Mutex
 }
 
 func newMemUpdateStore() *memUpdateStore {
@@ -82,11 +86,29 @@ func newMemUpdateStore() *memUpdateStore {
 		journal:      map[stack.UpdateID][]stack.JournalBatchRef{},
 		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
 		seqs:         map[stack.UpdateID][]int64{},
+		stacks:       nil,
 		mu:           sync.Mutex{},
 	}
 }
 
-func (m *memUpdateStore) CreateUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+func (m *memUpdateStore) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
+	st, err := m.stacks.GetStack(ctx, u.Ref)
+	if err != nil {
+		return err
+	}
+
+	item, err := key.RefFor(u.Ref.Namespace, st.ID, u.ID)
+	if err != nil {
+		return err
+	}
+
+	// The fake has no transaction: a sealer of the tests needs none.
+	if _, err := key.NewKey(ctx, nil, item, fence); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -414,6 +436,13 @@ func (m *memUpdateStore) ListEvents(
 	return out, nil
 }
 
+// resolving sets the stack resolver of m and returns m.
+func (m *memUpdateStore) resolving(stacks stack.CheckpointStacks) *memUpdateStore {
+	m.stacks = stacks
+
+	return m
+}
+
 // memBlob is an in-memory blob.Store. Writes are write-once, as the port
 // requires: Put on an existing key fails with ErrExists.
 type memBlob struct {
@@ -511,6 +540,10 @@ type updateFixture struct {
 	// mem is the update store of the fixture, or nil for a fixture that
 	// builds its own store.
 	mem *memUpdateStore
+	// sealer and audit are the item sealer and the audit log of the fixture,
+	// or nil for a fixture that builds its own.
+	sealer *secrettest.MemorySealer
+	audit  *testAudit
 }
 
 // newUpdateFixture builds a Handler whose update routes work end to end.
@@ -598,11 +631,14 @@ func newUpdateFixtureWithAuthenticator(
 
 	mem := newMemUpdateStore()
 	blobs := newMemBlob()
+	sealer := secrettest.NewMemorySealer()
+	auditLog := newTestAudit()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             sealer,
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        opts.manual,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
@@ -635,7 +671,7 @@ func newUpdateFixtureWithAuthenticator(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   newTestAudit(),
+		Audit:                   auditLog,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
 		DenialLimiter:           nil,
@@ -649,7 +685,7 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem, sealer: sealer, audit: auditLog}
 }
 
 // allowAll authorizes every action.
@@ -2832,9 +2868,10 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,

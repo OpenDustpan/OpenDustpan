@@ -65,6 +65,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/source"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -253,6 +254,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:      secrettest.NewMemorySealer(),
 		ManualLocks: nil,
 		// The updates service never deletes a blob here, so it has no guard.
 		BlobGuard: nil,

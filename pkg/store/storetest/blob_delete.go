@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -231,6 +232,7 @@ func (r *blobDeleteRig) buildServices(t *testing.T, nsSvc *namespace.Service) {
 	}
 
 	r.updates, err = stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:    secrettest.NewMemorySealer(),
 		BlobGuard: r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: r.store, Events: r.store,
 		Namespaces: nsSvc, Stacks: r.store, Blobs: r.live, Refusals: refusals, Now: nil, Logger: nil,
 		MaxCheckpointBytes: 1 << 20, Journal: journal, Replayer: pulumijournal.NewReplayer(time.Now, ""),
