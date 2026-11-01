@@ -40,12 +40,14 @@ has the label "(owner)".
    - The server serves each job the state version that the plan used
      as its base.
    - The server merges each upload one resource instance at a time.
-   - Work that the server cannot prove disjoint takes turns. These cases
-     keep the whole-unit lock in the first design: data sources, providers that are
-     configured from resources, root outputs, client-encrypted state,
-     a version or lineage mismatch, and a local CLI run without the wrapper
-     of decision 4. The rules are strict in the first design. A later decision can
-     make them less strict.
+   - Work that the server cannot prove disjoint takes turns. The research
+     gives six cases that keep the whole-unit lock: data sources, providers
+     that take their settings from resources, root outputs, client-encrypted
+     state, a version or lineage mismatch, and a local CLI run without the
+     wrapper of decision 4. These six cases are the starting set under the
+     owner's rule that the rules are strict in the first design. The RFC of decision 6
+     may add a case. It may not remove one without a decision of the
+     project owner.
 3. **The order of tools (owner).** OpenTofu is first. The Pulumi CLI follows
    after its own spike. Splitting a plan with `-target` comes later. It is a
    speed feature only, on top of the claim model. It is not part of the
@@ -55,13 +57,16 @@ has the label "(owner)".
    wrapper does. A local run can then take part: it registers claims, and it
    can use the other features that today work only in OpenDustpan runners.
 5. **Milestone 8 (owner).** These decisions form milestone 8, after
-   milestone 7. The first task of milestone 8 is an inventory of each
-   feature that works only inside OpenDustpan runners today, because it
-   needs the CLI wrapper. Milestone 8 ports each of these features to the
-   local wrapper. This ADR does not change the release gate of ADR 279.
+   milestone 7. The first task of milestone 8 is a pre-flight: an
+   inventory of each feature that works only inside OpenDustpan runners
+   today, because it needs the CLI wrapper. Milestone 8 ports each of
+   these features to the local wrapper. The inventory can mark an entry that
+   cannot be ported, with the reason. The project owner decides what
+   happens to such an entry. This ADR does not change the release gate of
+   ADR 279.
 6. **The design order (owner).** An RFC for concurrent applies comes first.
-   The code of milestone 8 follows the project owner accepts that RFC
-   as an ADR. The scope of the RFC is:
+   The code of milestone 8 comes after the project owner accepts that
+   RFC as an ADR. The scope of the RFC is:
    - A change to decision 3 of ADR 26: under a claim, the server assigns the
      serial of a state version, not the client.
    - A parent pointer and a claim ID for each state version.
