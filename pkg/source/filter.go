@@ -356,8 +356,8 @@ func validHost(h string) bool {
 // (2130706433, 0x7f000001 or 0177.0.0.1), localhost, a name under localhost,
 // and a host with a port, a bracket or a character other than an ASCII
 // letter, a digit, '.' or '-'. A caller that parses a URL with net/url gives
-// it the host with no port, from url.URL.Hostname. The connection still
-// checks the resolved address of each dial.
+// it the host with no port, from url.URL.Hostname. It checks the name only:
+// the code that connects must check the resolved address of each dial.
 func AllowedHost(h string) bool {
 	return h != "" && validHost(h)
 }
