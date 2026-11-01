@@ -53,7 +53,7 @@ of each part. Where this ADR and the RFC differ, this ADR holds.
 ## Decision
 
 The owner decisions of 31 October 2026 are in RFC 114, "Decisions of the
-owner". The owner decisions of 1 November 2026 (decisions 4, 5, 6 and 13
+owner". The owner decisions of 1 November 2026 (decisions 4, 5, 6 and 11
 below) are recorded in RFC 114 by pull request #2159, and in the record of
 owner decisions that the PM keeps. RFC 114 had nine open questions. The owner
 answered question 9, the scope of the mode, with decisions 4 to 6. Decisions
@@ -147,7 +147,7 @@ answered question 9, the scope of the mode, with decisions 4 to 6. Decisions
     authentication, and writes an audit entry `change`. The setting
     `signatureCarryOver` has no users and no stored data. It is deleted with
     no conversion.
-13. **Refresh and drift (owner, 1 November 2026).** A refresh keeps the
+13. **Refresh and drift (owner, 31 October 2026).** A refresh keeps the
     default of each tool. A scope can set plans with no refresh for OpenTofu
     (`-refresh=false`). Drift detection covers drift, and a gate can require
     a recent drift check.
