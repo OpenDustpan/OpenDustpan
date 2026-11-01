@@ -45,6 +45,7 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
 	pgColName        = "name"
+	pgColKey         = "key"
 	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
@@ -408,19 +409,6 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{"source", "window_end_ms"},
 		},
 		{
-			table: backup.TableNameLocks,
-			columns: []string{
-				"scope", "name", "sub", "failures", "locked_until_ms", "level", "last_failure_ms", "last_lock_end_ms",
-				"reset_after_ms",
-			},
-			orderBy: []string{"scope", "name", "sub"},
-		},
-		{
-			table:   backup.TableNameLockKey,
-			columns: []string{"id", "key"},
-			orderBy: []string{"id"},
-		},
-		{
 			table:   backup.TableAuditChainCheck,
 			columns: []string{"id", "checked_at_ms", "invalid"},
 			orderBy: []string{"id"},
@@ -460,7 +448,27 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables())
+	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables(), pgNameLockControlTables())
+}
+
+// pgNameLockControlTables holds the COPY columns of the counts of the
+// lockout by name and of the key of their names.
+func pgNameLockControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				sinkColScope, pgColName, "sub", "failures", "locked_until_ms", "level", "last_failure_ms",
+				"last_lock_end_ms", "reset_after_ms",
+			},
+			orderBy: []string{sinkColScope, pgColName, "sub"},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", pgColKey},
+			orderBy: []string{"id"},
+		},
+	}
 }
 
 // pgStoreCheckControlTables lists the column list of the store check rows,

@@ -22,13 +22,16 @@ func from(addr string) audit.Entry {
 	return e
 }
 
-// fail sends n wrong passwords for name from addr, and fails the test unless
-// each one answers ErrSignInFailed.
-func (f *fixture) fail(t *testing.T, n int, name, addr string) {
+// lockedSource is the source address of the wrong passwords of the cases.
+const lockedSource = "192.0.2.1"
+
+// fail sends n wrong passwords for name from lockedSource, and fails the
+// test unless each one answers ErrSignInFailed.
+func (f *fixture) fail(t *testing.T, n int, name string) {
 	t.Helper()
 
 	for i := range n {
-		if _, err := f.svc.SignIn(t.Context(), from(addr), name, otherPassword); !errors.Is(
+		if _, err := f.svc.SignIn(t.Context(), from(lockedSource), name, otherPassword); !errors.Is(
 			err, localuser.ErrSignInFailed,
 		) {
 			t.Fatalf("wrong password %d = %v, want ErrSignInFailed", i+1, err)
@@ -42,8 +45,9 @@ func (f *fixture) reasons(t *testing.T) map[string]int {
 
 	out := map[string]int{}
 
-	for _, e := range f.entriesWith(t, localusersvc.ActionSignInPasswordFails) {
-		for _, c := range e.Changes {
+	entries := f.entriesWith(t, localusersvc.ActionSignInPasswordFails)
+	for i := range entries {
+		for _, c := range entries[i].Changes {
 			out[c.New]++
 		}
 	}
@@ -61,7 +65,7 @@ func TestLockoutByNameAndSource(t *testing.T) {
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
 
-	f.fail(t, authgate.DefaultNameLimit, "alice", "192.0.2.1")
+	f.fail(t, authgate.DefaultNameLimit, "alice")
 
 	if _, err := f.svc.SignIn(t.Context(), from("192.0.2.1"), "alice", goodPassword); !errors.Is(
 		err, localuser.ErrSignInFailed,
@@ -112,8 +116,8 @@ func TestUnknownNameLocksAsAKnownName(t *testing.T) {
 
 	f := newFixture(t)
 
-	f.fail(t, authgate.DefaultNameLimit, "nobody", "192.0.2.1")
-	f.fail(t, 1, "nobody", "192.0.2.1")
+	f.fail(t, authgate.DefaultNameLimit, "nobody")
+	f.fail(t, 1, "nobody")
 
 	if got := f.reasons(t); got[localusersvc.ReasonNameLocked] != 1 ||
 		got[localusersvc.ReasonUnknownName] != authgate.DefaultNameLimit {
@@ -130,7 +134,7 @@ func TestUnlockClearsEveryCount(t *testing.T) {
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
 
-	f.fail(t, authgate.DefaultNameLimit, "alice", "192.0.2.1")
+	f.fail(t, authgate.DefaultNameLimit, "alice")
 
 	if _, err := f.svc.Unlock(t.Context(), admin(), c.Principal.ID, " "); !errors.Is(
 		err, localuser.ErrReasonRequired,
