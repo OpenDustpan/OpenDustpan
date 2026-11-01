@@ -60,6 +60,8 @@ const (
 	probeRandSize = 16
 	// probeNamePrefix starts every probe key.
 	probeNamePrefix = "probe-"
+	// firstTry is the try count of a request that needed no retry.
+	firstTry = 1
 	// probeAttempts caps first-write tries when a probe key already exists.
 	probeAttempts = 3
 	// probeBody is the content of each probe object.
@@ -361,12 +363,16 @@ func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
 			return "", fmt.Errorf("s3: open store at %s: %w", s.describe(), err)
 		}
 
-		err = s.probePut(ctx, key)
+		tries, err := s.probePut(ctx, key)
 		if err == nil {
 			return key, nil
 		}
 
 		if errors.Is(err, blob.ErrExists) {
+			if cleanupErr := s.deleteOrphan(ctx, key, tries); cleanupErr != nil {
+				return "", cleanupErr
+			}
+
 			continue
 		}
 
@@ -383,11 +389,28 @@ func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
 	return "", fmt.Errorf("s3: open store at %s: probe key exists: %w", s.describe(), blob.ErrExists)
 }
 
+// deleteOrphan deletes the probe object of a key that a retried write found
+// in place. A write that the store got, but whose answer was lost, makes the
+// retry of the same key fail with ErrExists. The object is ours, so it must
+// not stay behind when the probe goes on with a new key. A write that was
+// not retried found a key of another start: that object stays.
+func (s *Store) deleteOrphan(ctx context.Context, key blob.Key, tries int) error {
+	if tries <= firstTry {
+		return nil
+	}
+
+	if err := s.probeDelete(ctx, key); err != nil {
+		return fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), err)
+	}
+
+	return nil
+}
+
 // checkSecondProbe writes the probe a second time and deletes it. A second
 // write that succeeds means the store ignores conditional writes. It deletes
 // the probe on every path, so no probe object stays behind.
 func (s *Store) checkSecondProbe(ctx context.Context, key blob.Key) error {
-	secondErr := s.probePut(ctx, key)
+	_, secondErr := s.probePut(ctx, key)
 	cleanupErr := s.probeDelete(ctx, key)
 
 	switch {
@@ -490,7 +513,7 @@ func (e *missingError) Error() string {
 	return fmt.Sprintf("status %d code %s", e.status, e.code)
 }
 
-// retryableError marks a 5xx, 429 or SlowDown answer.
+// retryableError marks a 500, 502, 503, 504, 429 or SlowDown answer.
 type retryableError struct {
 	status int
 	code   string
@@ -775,7 +798,8 @@ func (s *Store) wait(ctx context.Context, attempt int) error {
 	return s.sleep(ctx, s.backoff(attempt))
 }
 
-// shouldRetry reports whether status and code allow another try.
+// shouldRetry reports whether status and code allow another try: 500, 502,
+// 503, 504, 429 and SlowDown. The other 5xx answers, 501 for example, are final.
 func shouldRetry(status int, code string) bool {
 	if code == slowDownCode {
 		return true
@@ -785,7 +809,13 @@ func shouldRetry(status int, code string) bool {
 		return true
 	}
 
-	return status >= 500 && status <= 599
+	switch status {
+	case http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 // readCode parses the S3 XML error code from r. It returns "" when the body
