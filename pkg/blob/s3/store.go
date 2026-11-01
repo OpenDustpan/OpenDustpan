@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -119,6 +120,9 @@ type Store struct {
 	backoff     func(attempt int) time.Duration
 	sleep       func(ctx context.Context, d time.Duration) error
 	maxSize     int64
+
+	probeDeadline time.Duration
+	logger        *slog.Logger
 }
 
 var _ blob.Store = (*Store)(nil)
@@ -144,13 +148,15 @@ func New(signer *Signer, prefix string, client *http.Client, opts ...Option) (*S
 	}
 
 	s := &Store{
-		signer:      signer,
-		prefix:      strings.Trim(prefix, "/"),
-		client:      client,
-		maxAttempts: defaultMaxAttempts,
-		backoff:     defaultBackoff,
-		sleep:       defaultSleep,
-		maxSize:     defaultMaxObjectSize,
+		signer:        signer,
+		prefix:        strings.Trim(prefix, "/"),
+		client:        client,
+		maxAttempts:   defaultMaxAttempts,
+		backoff:       defaultBackoff,
+		probeDeadline: defaultProbeDeadline,
+		logger:        slog.New(slog.DiscardHandler),
+		sleep:         defaultSleep,
+		maxSize:       defaultMaxObjectSize,
 	}
 
 	for _, opt := range opts {
@@ -183,12 +189,15 @@ func Open(
 		return nil, err
 	}
 
-	key, err := store.writeFirstProbe(ctx)
+	probeCtx, cancel := context.WithTimeout(ctx, store.probeDeadline)
+	defer cancel()
+
+	key, err := store.writeFirstProbe(probeCtx)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := store.checkSecondProbe(ctx, key); err != nil {
+	if err := store.checkSecondProbe(probeCtx, key); err != nil {
 		return nil, err
 	}
 
@@ -346,15 +355,13 @@ func (s *Store) Ping(ctx context.Context) error {
 // already exists belongs to another start, so it tries the next key. Any
 // other failure deletes the probe and reports the failure.
 func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
-	cleanupCtx := context.WithoutCancel(ctx)
-
 	for range probeAttempts {
 		key, err := newProbeKey()
 		if err != nil {
 			return "", fmt.Errorf("s3: open store at %s: %w", s.describe(), err)
 		}
 
-		err = s.Put(ctx, key, bytes.NewReader([]byte(probeBody)))
+		err = s.probePut(ctx, key)
 		if err == nil {
 			return key, nil
 		}
@@ -363,7 +370,7 @@ func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
 			continue
 		}
 
-		if cleanupErr := s.Delete(cleanupCtx, key); cleanupErr != nil {
+		if cleanupErr := s.probeDelete(ctx, key); cleanupErr != nil {
 			return "", errors.Join(
 				fmt.Errorf("s3: open store at %s: probe first write: %w", s.describe(), err),
 				fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), cleanupErr),
@@ -380,10 +387,8 @@ func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
 // write that succeeds means the store ignores conditional writes. It deletes
 // the probe on every path, so no probe object stays behind.
 func (s *Store) checkSecondProbe(ctx context.Context, key blob.Key) error {
-	cleanupCtx := context.WithoutCancel(ctx)
-
-	secondErr := s.Put(ctx, key, bytes.NewReader([]byte(probeBody)))
-	cleanupErr := s.Delete(cleanupCtx, key)
+	secondErr := s.probePut(ctx, key)
+	cleanupErr := s.probeDelete(ctx, key)
 
 	switch {
 	case secondErr == nil:
