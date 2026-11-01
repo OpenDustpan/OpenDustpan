@@ -179,7 +179,7 @@ func (s storeSessions) seedTester(t *testing.T) {
 func (s storeSessions) signIn() *apiserver.SignIn {
 	return &apiserver.SignIn{
 		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: s.svc, Limiter: nil,
-		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil,
+		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: nil,
 	}
 }
 

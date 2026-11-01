@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -140,10 +141,46 @@ func (s *Service) StartReset(ctx context.Context, a Actor, principalID string, i
 		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "no local user", err)
 	}
 
+	if reachErr := s.checkReach(ctx, a.PrincipalID, principalID); reachErr != nil {
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "outside the reach", reachErr)
+	}
+
 	return s.createCode(ctx, a, codeRequest{
 		user: u, purpose: localuser.PurposeReset, reason: in.Reason, lifetime: p.ResetLifetime,
 		revoke: in.RevokeAccessTokens,
 	})
+}
+
+// checkReach returns nil only when the reach of the administrator with the
+// principal ID actor covers the reach of the person with the principal ID
+// target. A reset lets the administrator sign in as the person, so the
+// administrator must already hold each action that the person holds. A
+// reach that cannot be read fails closed with localuser.ErrOutsideReach.
+func (s *Service) checkReach(ctx context.Context, actor, target string) error {
+	if actor == "" || target == "" {
+		return localuser.ErrOutsideReach
+	}
+
+	holder, err := access.ReachOf(ctx, s.reach, actor)
+	if err != nil {
+		return fmt.Errorf("%w: read the reach of the administrator: %w", localuser.ErrOutsideReach, err)
+	}
+
+	person, err := access.ReachOf(ctx, s.reach, target)
+	if err != nil {
+		return fmt.Errorf("%w: read the reach of the person: %w", localuser.ErrOutsideReach, err)
+	}
+
+	covers, err := holder.Covers(ctx, person)
+	if err != nil {
+		return fmt.Errorf("%w: compare the reaches: %w", localuser.ErrOutsideReach, err)
+	}
+
+	if !covers {
+		return localuser.ErrOutsideReach
+	}
+
+	return nil
 }
 
 // codeRequest names a new code: its user, its purpose, the reason of the
@@ -240,7 +277,12 @@ func (s *Service) Redeem(ctx context.Context, base audit.Entry, code, password s
 	}
 
 	e := s.entry(base, ActionResetUsed, object, audit.OutcomeSuccess, "")
-	rd := localuser.Redeem{At: s.Now(), Hash: h, Change: localuser.PasswordChange{ChangeRequired: false}, Digest: d}
+	rd := localuser.Redeem{
+		At:     s.Now(),
+		Hash:   h,
+		Change: localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		Digest: d,
+	}
 
 	if _, redeemErr := s.store.RedeemReset(ctx, rd, e); redeemErr != nil {
 		return s.refuse(ctx, base, on(ActionResetRefused, object), "redeem refused", redeemErr)
@@ -260,45 +302,63 @@ func hashError(err error) error {
 }
 
 // ChangeInput names a change of the own password: the current password, or
-// a session with a fresh authentication, and the new password.
+// a session with a fresh authentication, the new password, and the session
+// generation of the session of the change.
 type ChangeInput struct {
 	Current string
 	New     string
+	// Generation is the session generation of the session of the change.
+	// The change is a compare-and-swap on it: a session that another
+	// change ended cannot set the password. 0 fails closed.
+	Generation uint64
 	// Fresh reports that the session of the change has a fresh
 	// authentication. With it, the change needs no current password.
 	Fresh bool
 }
 
-// ChangePassword changes the password of the local user of the caller. It
-// ends every session of the person; the HTTP adapter then starts a new
-// session for the caller.
+// ChangePassword changes the password of the local user of the caller, and
+// returns the new session generation. It ends every session of the person;
+// the HTTP adapter then starts a new session for the caller with the new
+// generation.
 //
 // It returns localuser.ErrNotFound for a caller with no local user,
 // localuser.ErrDemoFixed for the demo person,
-// localuser.ErrCurrentPasswordRequired with no current password and no fresh
-// authentication, localuser.ErrWrongPassword for a wrong current password,
-// and the error of the rule that refuses the new password.
-func (s *Service) ChangePassword(ctx context.Context, a Actor, in ChangeInput) error {
+// localuser.ErrGenerationChanged for a session whose generation is not the
+// stored one, localuser.ErrCurrentPasswordRequired with no current password
+// and no fresh authentication, localuser.ErrWrongPassword for a wrong
+// current password, localuser.ErrHashBusy or localuser.ErrUnavailable when
+// the hasher cannot answer, and the error of the rule that refuses the new
+// password.
+func (s *Service) ChangePassword(ctx context.Context, a Actor, in ChangeInput) (uint64, error) {
 	object := principal.Ref(a.PrincipalID)
+
+	// Defense in depth: the HTTP adapter passes the generation of the
+	// authenticated session, and the store does the compare-and-swap. This
+	// check stays so that a caller with no generation never makes an
+	// unconditional write.
+	if in.Generation == 0 {
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no session generation",
+			localuser.ErrGenerationChanged)
+	}
 
 	u, err := s.store.UserByPrincipal(ctx, a.PrincipalID)
 	if err != nil {
-		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no local user", err)
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no local user", err)
 	}
 
 	object = UserObject(u.ID)
 
 	if u.Demo {
-		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "demo user", localuser.ErrDemoFixed)
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "demo user", localuser.ErrDemoFixed)
 	}
 
 	p, err := s.Policy(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if currentErr := s.checkCurrent(ctx, a, u, in); currentErr != nil {
-		return currentErr
+		return 0, currentErr
 	}
 
 	words := []string{u.UserName}
@@ -308,21 +368,24 @@ func (s *Service) ChangePassword(ctx context.Context, a Actor, in ChangeInput) e
 
 	nfc, err := s.checkNew(ctx, in.New, p, words)
 	if err != nil {
-		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "password refused by a rule", err)
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "password refused by a rule", err)
 	}
 
 	h, err := s.hasher.Hash(ctx, nfc, localuser.DefaultHashParams())
 	if err != nil {
-		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "hasher cannot answer", hashError(err))
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "hasher cannot answer", hashError(err))
 	}
 
 	e := s.entry(a.Entry, ActionPasswordChanged, object, audit.OutcomeSuccess, "")
-	setErr := s.store.SetPassword(ctx, u.ID, h, localuser.PasswordChange{ChangeRequired: false}, e)
+
+	change := localuser.PasswordChange{ChangeRequired: false, FromGeneration: in.Generation}
+
+	g, setErr := s.store.SetPassword(ctx, u.ID, h, change, e)
 	if setErr != nil {
-		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "store refused the password", setErr)
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "store refused the password", setErr)
 	}
 
-	return nil
+	return g, nil
 }
 
 // checkCurrent checks the current password of the change in, unless the
@@ -368,17 +431,27 @@ func (s *Service) checkCurrent(ctx context.Context, a Actor, u localuser.User, i
 	_, err = res.Verify(nfc, localuser.DefaultHashParams())
 	res.Release()
 
-	if err != nil {
-		return s.refuse(
-			ctx,
-			a.Entry,
-			on(ActionPasswordRefused, object),
-			ReasonWrongPassword,
-			localuser.ErrWrongPassword,
-		)
-	}
+	return s.currentRefusal(ctx, a, object, err)
+}
 
-	return nil
+// currentRefusal returns the answer of the check of a current password that
+// ended with err. Only a password that does not match, a password over the
+// maximum length and a stored hash that does not parse are a wrong password.
+// Any other error of the hasher answers that it cannot answer, so that a
+// person never reads a busy server as a wrong password.
+func (s *Service) currentRefusal(ctx context.Context, a Actor, object string, err error) error {
+	tg := on(ActionPasswordRefused, object)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, localuser.ErrWrongPassword), errors.Is(err, localuser.ErrPasswordTooLong):
+		return s.refuse(ctx, a.Entry, tg, ReasonWrongPassword, localuser.ErrWrongPassword)
+	case errors.Is(err, localuser.ErrInvalid):
+		return s.refuse(ctx, a.Entry, tg, ReasonStoredHash, localuser.ErrWrongPassword)
+	default:
+		return s.refuse(ctx, a.Entry, tg, "hasher cannot answer", hashError(err))
+	}
 }
 
 // RemovePassword removes the password of the local user of the person

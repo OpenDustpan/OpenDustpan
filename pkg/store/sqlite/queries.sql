@@ -4907,12 +4907,26 @@ VALUES (?, ?, ?, '', 0, 0, 1, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: BumpSessionGeneration :execrows
--- Adds 1 to the session generation of a principal, so that each console
--- session of the principal ends. A principal with no row has the generation
--- 1, so the first bump writes 2.
+-- Adds 1 to the stored session generation of a principal, so that each
+-- console session of the principal ends. An expected generation other than
+-- 0 is a compare-and-swap: the write happens only while the stored
+-- generation is the expected one. A principal with no row writes no row
+-- here: InsertFirstSessionGeneration writes it in the same transaction.
+UPDATE principal_session_generations SET generation = generation + 1
+WHERE principal_id = sqlc.arg('principal_id')
+  AND (CAST(sqlc.arg('expected') AS INTEGER) = 0 OR generation = CAST(sqlc.arg('expected') AS INTEGER));
+
+-- name: InsertFirstSessionGeneration :execrows
+-- Writes the generation 2 for a principal with no row, which has the
+-- generation 1. A principal with a row writes nothing. The caller runs it
+-- only for an expected generation of 0 or 1. The write lock of the update
+-- before it in the same transaction keeps another writer out between the
+-- two statements.
 INSERT INTO principal_session_generations (principal_id, generation)
-VALUES (?, 2)
-ON CONFLICT (principal_id) DO UPDATE SET generation = principal_session_generations.generation + 1;
+SELECT CAST(sqlc.arg('principal_id') AS TEXT), 2
+WHERE NOT EXISTS (
+    SELECT 1 FROM principal_session_generations g WHERE g.principal_id = CAST(sqlc.arg('principal_id') AS TEXT)
+  );
 
 -- name: GetSessionGeneration :one
 -- The session generation of a principal that exists: 1 when it has no row.

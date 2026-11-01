@@ -243,16 +243,23 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 }
 
 const bumpSessionGeneration = `-- name: BumpSessionGeneration :execrows
-INSERT INTO principal_session_generations (principal_id, generation)
-VALUES (?, 2)
-ON CONFLICT (principal_id) DO UPDATE SET generation = principal_session_generations.generation + 1
+UPDATE principal_session_generations SET generation = generation + 1
+WHERE principal_id = ?1
+  AND (CAST(?2 AS INTEGER) = 0 OR generation = CAST(?2 AS INTEGER))
 `
 
-// Adds 1 to the session generation of a principal, so that each console
-// session of the principal ends. A principal with no row has the generation
-// 1, so the first bump writes 2.
-func (q *Queries) BumpSessionGeneration(ctx context.Context, principalID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bumpSessionGeneration, principalID)
+type BumpSessionGenerationParams struct {
+	PrincipalID string
+	Expected    int64
+}
+
+// Adds 1 to the stored session generation of a principal, so that each
+// console session of the principal ends. An expected generation other than
+// 0 is a compare-and-swap: the write happens only while the stored
+// generation is the expected one. A principal with no row writes no row
+// here: InsertFirstSessionGeneration writes it in the same transaction.
+func (q *Queries) BumpSessionGeneration(ctx context.Context, arg BumpSessionGenerationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bumpSessionGeneration, arg.PrincipalID, arg.Expected)
 	if err != nil {
 		return 0, err
 	}
@@ -9260,6 +9267,27 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 		arg.DoneAtMs,
 	)
 	return err
+}
+
+const insertFirstSessionGeneration = `-- name: InsertFirstSessionGeneration :execrows
+INSERT INTO principal_session_generations (principal_id, generation)
+SELECT CAST(?1 AS TEXT), 2
+WHERE NOT EXISTS (
+    SELECT 1 FROM principal_session_generations g WHERE g.principal_id = CAST(?1 AS TEXT)
+  )
+`
+
+// Writes the generation 2 for a principal with no row, which has the
+// generation 1. A principal with a row writes nothing. The caller runs it
+// only for an expected generation of 0 or 1. The write lock of the update
+// before it in the same transaction keeps another writer out between the
+// two statements.
+func (q *Queries) InsertFirstSessionGeneration(ctx context.Context, principalID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertFirstSessionGeneration, principalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertGateObject = `-- name: InsertGateObject :exec

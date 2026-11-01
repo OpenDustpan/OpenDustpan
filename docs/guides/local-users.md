@@ -136,8 +136,14 @@ Each failure answers `401` with the error code `local-user.sign-in-failed`
 and the text "the user name or the password is wrong": for an unknown user
 name, a wrong password, a user with no password and a disabled person. The
 answer does not tell which. The audit entry `sign-in.password-failed`
-records the real reason. Each failure spends one unit of the sign-in budget
+records the real reason. Each failure spends one unit of the password budget
 of the source address.
+
+The password budget is separate from the budget of the other sign-ins. The
+password sign-in, the use of a set-up or reset code, and the change of the
+own password spend it: a wrong password, a code that is not valid and a
+wrong current password each spend one unit. When the budget of an address is
+empty, these routes answer `429` until it refills.
 
 ## Lockout by user name
 
@@ -199,6 +205,17 @@ Send it to `POST /api/dustpan/v1/me/password`. A session with a recent
 sign-in can leave `currentPassword` empty. The change ends every other
 session of the person. The browser of the change gets a new session cookie.
 
+A wrong current password answers `403` with the error code
+`local-user.current-password-wrong`. When the server has no memory for the
+check, the change answers `429` with `local-user.hash-busy`, never a wrong
+password. A change from a session that another change already ended answers
+`401` with `local-user.session-ended`: sign in again. Of two changes from
+one session at the same time, one passes and the other gets that answer.
+
+A change that needs a recent sign-in, from a session of the password sign-in
+with an old sign-in, answers `401` with no `reauthenticate` link. Sign in
+again with the password, and then make the change.
+
 ## Reset a password
 
 An administrator makes a reset code for a person who lost the password. The
@@ -215,6 +232,13 @@ reset code, which the person uses as a set-up code. The reset ends every
 session of the person at once. A new code replaces the earlier code of the
 same person. An administrator cannot reset the own password: use the change
 route.
+
+The reset lets the administrator set a password that signs in as the
+person. So the administrator must hold each action that the person holds,
+directly, through a group or through a service principal that the
+administrator can act as. Otherwise the reset answers `403` with the error
+code `local-user.outside-reach`, and the audit log records the refusal. Ask
+an administrator who holds each grant of the person.
 
 A break-glass account never has a password. The server refuses a set-up code
 and a reset for it with the error code `local-user.break-glass`.

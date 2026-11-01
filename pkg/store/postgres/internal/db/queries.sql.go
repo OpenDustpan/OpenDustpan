@@ -449,6 +449,28 @@ func (q *Queries) BumpSessionGeneration(ctx context.Context, principalID string)
 	return result.RowsAffected(), nil
 }
 
+const bumpSessionGenerationFrom = `-- name: BumpSessionGenerationFrom :execrows
+UPDATE principal_session_generations SET generation = generation + 1
+WHERE principal_id = $1 AND generation = $2::bigint
+`
+
+type BumpSessionGenerationFromParams struct {
+	PrincipalID string
+	Expected    int64
+}
+
+// Adds 1 to the stored session generation of a principal only while it is
+// the expected one: a compare-and-swap. The update locks the row and checks
+// the condition again on its latest version, so two bumps from one
+// generation never both pass. A principal with no row writes no row here.
+func (q *Queries) BumpSessionGenerationFrom(ctx context.Context, arg BumpSessionGenerationFromParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bumpSessionGenerationFrom, arg.PrincipalID, arg.Expected)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const callerGrants = `-- name: CallerGrants :many
 WITH holders (kind, id) AS (
   SELECT 'principal'::text, $2::text
@@ -9855,6 +9877,23 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 		arg.NowMs,
 	)
 	return err
+}
+
+const insertFirstSessionGeneration = `-- name: InsertFirstSessionGeneration :execrows
+INSERT INTO principal_session_generations (principal_id, generation)
+VALUES ($1, 2)
+ON CONFLICT (principal_id) DO NOTHING
+`
+
+// Writes the generation 2 for a principal with no row, which has the
+// generation 1: the compare-and-swap from the generation 1. A row that
+// exists, or that a concurrent bump wrote first, writes nothing.
+func (q *Queries) InsertFirstSessionGeneration(ctx context.Context, principalID string) (int64, error) {
+	result, err := q.db.Exec(ctx, insertFirstSessionGeneration, principalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertGateObject = `-- name: InsertGateObject :exec

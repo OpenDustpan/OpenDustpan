@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -22,15 +23,33 @@ var errReauthenticate = errors.New("the sign-in of this console session is too o
 // reauthenticateError is the refusal of a token change from a console
 // session whose sign-in is older than window. URL starts a sign-in that
 // asks the identity provider for a new authentication. The console adds
-// the query parameter return.
+// the query parameter return. A session of the password sign-in has no
+// such URL: the person signs in again with the password, through POST
+// /api/dustpan/v1/sign-in/password, which is no page to open.
 type reauthenticateError struct {
 	url    string
 	window time.Duration
 }
 
 func (e reauthenticateError) Error() string {
+	if e.url == "" {
+		return fmt.Sprintf("the sign-in of this console session is older than %s, so sign in again with the "+
+			"password before this change", e.window)
+	}
+
 	return fmt.Sprintf("the sign-in of this console session is older than %s, so sign in again at the identity "+
 		"provider before this change", e.window)
+}
+
+// reauthenticateURL returns the URL that starts a new authentication at the
+// identity provider of a session, and empty for the password sign-in: its
+// provider has no start route.
+func reauthenticateURL(provider string) string {
+	if provider == localuser.ProviderID {
+		return ""
+	}
+
+	return sessionauth.SignInStartPrefix + url.PathEscape(provider) + "?fresh=1"
 }
 
 // Unwrap returns errReauthenticate.
@@ -120,7 +139,7 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	}
 
 	return reauthenticateError{
-		url:    sessionauth.SignInStartPrefix + url.PathEscape(caller.Match.Session.Provider) + "?fresh=1",
+		url:    reauthenticateURL(caller.Match.Session.Provider),
 		window: window,
 	}
 }

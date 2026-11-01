@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/generationstore"
 	"opendustpan.org/opendustpan/pkg/store/internal/localuserstore"
 	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -61,15 +62,22 @@ func (s *Store) DeleteUser(ctx context.Context, userID string, e audit.Entry) er
 // SetPassword implements localuser.PasswordStore.
 func (s *Store) SetPassword(
 	ctx context.Context, userID string, h localuser.PasswordHash, c localuser.PasswordChange, e audit.Entry,
-) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.SetPassword(
-			ctx,
-			localUserTx{q: q, entry: &e},
-			userID,
-			localuserstore.PasswordWrite(h, c, e.At),
+) (uint64, error) {
+	var g uint64
+
+	err := s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		next, setErr := localuserstore.SetPassword(
+			ctx, localUserTx{q: q, entry: &e}, userID, localuserstore.PasswordWrite(h, c, e.At),
 		)
+		g = next
+
+		return setErr
 	})
+	if err != nil {
+		return 0, err
+	}
+
+	return g, nil
 }
 
 // SetChangeRequired implements localuser.PasswordStore.
@@ -349,8 +357,10 @@ func (t localUserTx) RehashPassword(ctx context.Context, id, oldHash, newHash st
 	return n, localUserReadErr(err)
 }
 
-func (t localUserTx) BumpGeneration(ctx context.Context, principalID string, cause session.BumpCause) error {
-	return bumpFor(ctx, t.q, principalID, cause, t.entry)
+func (t localUserTx) BumpGeneration(
+	ctx context.Context, principalID string, cause session.BumpCause, expected uint64,
+) (uint64, error) {
+	return bumpFor(ctx, t.q, generationstore.Request{ID: principalID, Cause: cause, Expected: expected}, t.entry)
 }
 
 func (t localUserTx) RevokeAccessTokens(ctx context.Context, principalID string, atMs int64) (int64, error) {
