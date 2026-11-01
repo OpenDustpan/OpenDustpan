@@ -51,6 +51,12 @@ import (
 var (
 	// ErrNotFound reports a role or a grant that does not exist.
 	ErrNotFound = errors.New("not found")
+	// ErrCollectionMissing reports that the collection of a grant check or a
+	// move does not exist. It always comes with ErrNotFound.
+	ErrCollectionMissing = errors.New("collection missing")
+	// ErrUnitMissing reports that the unit of a grant check or a move does not
+	// exist. It always comes with ErrNotFound.
+	ErrUnitMissing = errors.New("unit missing")
 	// ErrAlreadyExists reports a role name or a grant that exists.
 	ErrAlreadyExists = errors.New("already exists")
 	// ErrInvalid reports a role or a grant that fails validation.
