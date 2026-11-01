@@ -1,6 +1,6 @@
 # 120. Dusty, the built-in agent, runs on durable operations
 
-Status: accepted · 2026-10-17. Decision 22 superseded in part by ADR 128. Decisions 3, 7 and 20 superseded in part, and stop reasons added, by ADR 129. Route paths and `server:` action names superseded in part by ADR 210
+Status: accepted · 2026-10-17. Decision 22 superseded in part by ADR 128. Decisions 3, 7 and 20 superseded in part, and stop reasons added, by ADR 129. Route paths and `server:` action names superseded in part by ADR 210. Decisions 13 and 14 changed by ADR 297: a run resolves the sign-in that it records, not a stored session
 
 Changed by:
 
@@ -10,6 +10,7 @@ Changed by:
   status answer and the ledger rows.
 - ADR 129 extends: the stop reasons of a run.
 - ADR 210 changes: the route paths and the server: action names.
+- ADR 297 changes decisions 13 and 14: a run resolves the sign-in that it records.
 
 ## Context
 
