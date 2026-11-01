@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 )
@@ -40,6 +41,14 @@ func restoreDamagedCases() []restoreCase {
 		{
 			name: "a restore refuses a damaged entry from a backup before the restore that it did not start",
 			test: testWorkerReusedPreBackup,
+		},
+		{
+			name: "a takeover that finds the backup that its restore started before the restore still repairs",
+			test: testWorkerTakeoverKeepsEvidence,
+		},
+		{
+			name: "a restore refuses a damaged entry from a backup before the restore that another restore started",
+			test: testWorkerForeignPreBackup,
 		},
 		{name: "the live row of a blob reads as a backup reads it", test: testLiveBlobRef},
 	}
@@ -381,4 +390,67 @@ func testLiveBlobRef(t *testing.T, newStore RestoreFactory) {
 	if _, err := reader.LiveBlobRef(t.Context(), r.seed.liveBlob.String()+"x"); !errors.Is(err, backup.ErrNotFound) {
 		t.Fatalf("LiveBlobRef of a key that no row names = %v, want ErrNotFound", err)
 	}
+}
+
+// startWithPreBackup starts the backup before restore id on r with the
+// restore ID owner, as an earlier try of a pre-backup step does, and then
+// starts restore id with that pre-backup ID. The pre-backup step of the
+// restore finds the backup there.
+func (r *workerRig) startWithPreBackup(
+	t *testing.T, restores *backup.RestoreService, id, owner backup.RestoreID,
+) {
+	t.Helper()
+
+	pre := backup.ID(ident.NewID("bkp-"))
+	if err := r.backups.StartBeforeRestore(t.Context(), pre, owner); err != nil {
+		t.Fatalf("start the backup before the restore: %v", err)
+	}
+
+	req := backup.RestoreRequest{
+		BackupID: r.backupID, PreBackupID: pre, CheckOnly: false, Force: false, RequestedBy: "tester",
+		KeepAccessTables: false,
+	}
+
+	if err := restores.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+}
+
+func testWorkerTakeoverKeepsEvidence(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+	damaged := []byte("tampered")
+	putBlob(t, r.live.Store, r.seed.liveBlob, damaged)
+
+	a := r.service(t, workerService{
+		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
+	})
+
+	// An earlier holder of the pre-backup step started the backup and
+	// stopped. The holder after the takeover finds the backup, and its
+	// operation names this restore.
+	id := backup.MintRestoreID()
+	r.startWithPreBackup(t, a, id, id)
+
+	row := r.driveToEnd(t, a, id)
+	r.mustDamaged(t, r.preBackupOf(t, row), backup.DamageMismatch)
+	r.mustRepaired(t, row, "damaged")
+}
+
+func testWorkerForeignPreBackup(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+	damaged := []byte("tampered")
+	putBlob(t, r.live.Store, r.seed.liveBlob, damaged)
+
+	a := r.service(t, workerService{
+		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
+	})
+
+	id := backup.MintRestoreID()
+	r.startWithPreBackup(t, a, id, backup.MintRestoreID())
+
+	r.mustRefusedDamage(t, r.driveToEnd(t, a, id), damaged)
 }
