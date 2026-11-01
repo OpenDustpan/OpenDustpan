@@ -27,6 +27,7 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		AllGrants:           rq.Scope.All,
 		Namespace:           rq.Scope.Namespace,
 		Target:              scopeTarget(rq.Scope.Object),
+		InsideTargets:       nonNil(rq.Scope.Inside),
 		Containers:          nonNil(rq.Scope.Containers),
 		ContainerRoles:      nonNil(rq.Scope.ContainerRoles),
 		TokenNamespace:      rq.Scope.TokenNamespace,
@@ -61,10 +62,21 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		}
 
 		total, err = q.CountReviewGrants(ctx, db.CountReviewGrantsParams{
-			Principal: p.Principal, Expand: p.Expand, History: p.History, ToMs: p.ToMs, FromMs: p.FromMs,
-			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target,
-			Containers: p.Containers, ContainerRoles: p.ContainerRoles, TokenNamespace: p.TokenNamespace,
-			TokenNamespaceRoles: p.TokenNamespaceRoles, Subject: p.Subject,
+			Principal:           p.Principal,
+			Expand:              p.Expand,
+			History:             p.History,
+			ToMs:                p.ToMs,
+			FromMs:              p.FromMs,
+			AsOfMs:              p.AsOfMs,
+			AllGrants:           p.AllGrants,
+			Namespace:           p.Namespace,
+			Target:              p.Target,
+			InsideTargets:       p.InsideTargets,
+			Containers:          p.Containers,
+			ContainerRoles:      p.ContainerRoles,
+			TokenNamespace:      p.TokenNamespace,
+			TokenNamespaceRoles: p.TokenNamespaceRoles,
+			Subject:             p.Subject,
 		})
 		if err != nil {
 			return fmt.Errorf("count review rows: %w", err)

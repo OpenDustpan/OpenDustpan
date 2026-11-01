@@ -61,8 +61,12 @@ func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob
 
 	return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
-			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Namespaces: db,
-			Domain: db,
+			Jobs:       db,
+			Durable:    db.durable,
+			Freezes:    db,
+			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
+			Namespaces: db,
+			Domain:     db,
 		},
 		Records:  db,
 		ItemKeys: keys,

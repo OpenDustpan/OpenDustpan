@@ -419,11 +419,14 @@ JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
 WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND u.version = @version;
 
--- name: PutCheckpoint :execrows
+-- name: PutCheckpoint :one
 -- The row of the update decides which write wins. The conflict update runs only
 -- for a write without a sequence number, or for a sequence above the stored one,
 -- and the database checks that against the latest committed row, so two writers
--- of one sequence cannot both land. Zero rows mean that the write lost.
+-- of one sequence cannot both land. No row means that the write lost.
+-- The row that the write returns holds the time of the database clock after the
+-- write, and so after every lock wait of the statement. The caller checks the
+-- attempt window with it, so the check needs no round trip of its own.
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, saved_at_ms,
@@ -441,7 +444,8 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     size = excluded.size,
     blob_size = excluded.blob_size,
     blob_md5 = excluded.blob_md5
-WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence;
+WHERE excluded.sequence = 0 OR checkpoints.sequence < excluded.sequence
+RETURNING FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms;
 
 -- name: ListReferencedBlobKeys :many
 -- Every blob key that a row of one live stack names, ordered, without
@@ -1819,6 +1823,7 @@ LEFT JOIN principals mp ON mp.id = m.principal_id
 WHERE (@all_grants::boolean
     OR (@namespace::text <> '' AND g.namespace = @namespace::text AND g.object_kind <> 'installation')
     OR g.target = @target::text
+    OR g.target = ANY(@inside_targets::text[])
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
@@ -1856,6 +1861,7 @@ LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject
 WHERE (@all_grants::boolean
     OR (@namespace::text <> '' AND g.namespace = @namespace::text AND g.object_kind <> 'installation')
     OR g.target = @target::text
+    OR g.target = ANY(@inside_targets::text[])
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
@@ -2057,6 +2063,18 @@ SELECT COUNT(*)
 FROM collection_members AS m
 JOIN inventory AS i ON i.unit_id = m.unit_id
 WHERE m.namespace = $1 AND m.collection_key = $2;
+
+-- name: ListCollectionUnitIDs :many
+-- The stable IDs of the units in one collection, ordered. The membership of a
+-- unit that was deleted stays until the collection is deleted, so these units
+-- are in the list too. The collection is selected by its namespace, its name
+-- and its stable ID together: a collection that was deleted and created again
+-- under the same name has another ID and gives nothing.
+SELECT m.unit_id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE c.namespace = $1 AND c.name_key = $2 AND c.id = $3
+ORDER BY m.unit_id COLLATE "C";
 
 -- name: DeleteCollectionMembers :exec
 -- Removes the memberships of a collection. The caller removes them only after
@@ -5229,3 +5247,108 @@ WHERE id = sqlc.arg(id)
 FOR SHARE;
 
 
+
+-- name: GetLocalUserPrincipal :one
+-- The kind, the break-glass flag and the subject of a principal that exists,
+-- for the checks of a local user write. The row stays locked until the end of
+-- the transaction, so two writes that change the credentials of one person
+-- run one after the other.
+SELECT kind, break_glass, subject FROM principals WHERE id = $1 AND deleted_at_ms IS NULL FOR UPDATE;
+
+-- name: CreateLocalUser :execrows
+INSERT INTO local_users (id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms)
+VALUES ($1, $2, $3, '', 0, false, false, $4, $5)
+ON CONFLICT DO NOTHING;
+
+-- name: CountLocalUserConflicts :one
+-- The local users that hold the ID, the principal or the user name.
+SELECT COUNT(*) FROM local_users
+WHERE id = sqlc.arg('id') OR principal_id = sqlc.arg('principal_id') OR user_name = sqlc.arg('user_name');
+
+-- name: GetLocalUserByName :one
+-- The user, its hash and the session generation of its person, in one read:
+-- a sign-in seals this generation, so a write that bumps the generation after
+-- this read ends the session that the sign-in makes. A person with no row of
+-- generation has the generation 1.
+SELECT u.id, u.principal_id, u.user_name, u.password_hash, u.password_set_at_ms, u.change_required, u.demo,
+  u.created_by, u.created_at_ms,
+  CAST(COALESCE(g.generation, 1) AS bigint) AS session_generation
+FROM local_users u LEFT JOIN principal_session_generations g ON g.principal_id = u.principal_id
+WHERE u.user_name = $1;
+
+-- name: GetLocalUserByPrincipal :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE principal_id = $1;
+
+-- name: GetLocalUser :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE id = $1;
+
+-- name: CountLocalUserName :one
+-- The other local users that hold the user name.
+SELECT COUNT(*) FROM local_users WHERE user_name = sqlc.arg('user_name') AND id <> sqlc.arg('id');
+
+-- name: RenameLocalUser :execrows
+UPDATE local_users SET user_name = $1 WHERE id = $2;
+
+-- name: DeleteLocalUser :execrows
+DELETE FROM local_users WHERE id = $1;
+
+-- name: DeleteLocalUserResets :exec
+DELETE FROM local_user_resets WHERE user_id = $1;
+
+-- name: SetLocalUserPassword :execrows
+UPDATE local_users
+SET password_hash = sqlc.arg('password_hash'), password_set_at_ms = sqlc.arg('set_at_ms'),
+  change_required = sqlc.arg('change_required')
+WHERE id = sqlc.arg('id');
+
+-- name: SetLocalUserChangeRequired :execrows
+UPDATE local_users SET change_required = $1 WHERE id = $2 AND password_hash <> '';
+
+-- name: RehashLocalUserPassword :execrows
+-- Replaces the hash only while the stored hash is still the old one.
+UPDATE local_users SET password_hash = sqlc.arg('new_hash')
+WHERE id = sqlc.arg('id') AND password_hash = sqlc.arg('old_hash') AND password_hash <> '';
+
+-- name: CreateDemoLocalUser :execrows
+INSERT INTO local_users (id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms)
+VALUES ($1, $2, $3, '', 0, false, true, $4, $5)
+ON CONFLICT DO NOTHING;
+
+-- name: BumpSessionGeneration :execrows
+-- Adds 1 to the session generation of a principal, so that each console
+-- session of the principal ends. A principal with no row has the generation
+-- 1, so the first bump writes 2.
+INSERT INTO principal_session_generations (principal_id, generation)
+VALUES ($1, 2)
+ON CONFLICT (principal_id) DO UPDATE SET generation = principal_session_generations.generation + 1;
+
+-- name: GetSessionGeneration :one
+-- The session generation of a principal that exists: 1 when it has no row.
+SELECT CAST(COALESCE(g.generation, 1) AS bigint) AS generation
+FROM principals p LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+WHERE p.id = $1 AND p.deleted_at_ms IS NULL;
+
+-- name: RevokePrincipalAccessTokens :execrows
+-- Ends every live access token of a principal.
+UPDATE access_tokens SET revoked_at_ms = sqlc.arg('revoked_at_ms')::bigint
+WHERE principal_id = sqlc.arg('principal_id') AND revoked_at_ms IS NULL;
+
+-- name: CreateLocalUserReset :execrows
+INSERT INTO local_user_resets (id, user_id, principal_id, digest, purpose, created_by, reason, revoke_access_tokens, created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT DO NOTHING;
+
+-- name: GetLocalUserResetByDigest :one
+SELECT id, user_id, principal_id, digest, purpose, created_by, reason, revoke_access_tokens, created_at_ms, expires_at_ms
+FROM local_user_resets WHERE digest = $1;
+
+-- name: DeleteLocalUserReset :execrows
+DELETE FROM local_user_resets WHERE id = $1;
+
+-- name: DeleteExpiredLocalUserReset :execrows
+DELETE FROM local_user_resets WHERE digest = sqlc.arg('digest') AND expires_at_ms <= sqlc.arg('at_ms');
+
+-- name: PruneLocalUserResets :execrows
+DELETE FROM local_user_resets WHERE expires_at_ms <= $1;

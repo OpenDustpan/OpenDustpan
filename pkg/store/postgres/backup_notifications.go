@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/notifystore"
@@ -21,7 +20,7 @@ import (
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedNotifications(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedNotifications(ctx context.Context, pool pgQuerier, staging string) error {
 	for _, check := range stagedNotificationChecks(staging) {
 		var scope string
 
@@ -111,7 +110,7 @@ func stagedNotificationChecks(staging string) []stagedCheck {
 	}
 }
 
-func checkStagedNotificationRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedNotificationRows(ctx context.Context, pool pgQuerier, staging string) error {
 	return runStaged[notifystore.NotificationRow](
 		ctx,
 		pool,
@@ -123,7 +122,7 @@ func checkStagedNotificationRows(ctx context.Context, pool *pgxpool.Pool, stagin
 	)
 }
 
-func checkStagedSubscriptionRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedSubscriptionRows(ctx context.Context, pool pgQuerier, staging string) error {
 	return runStaged[notifystore.SubscriptionRow](
 		ctx,
 		pool,
@@ -135,7 +134,7 @@ func checkStagedSubscriptionRows(ctx context.Context, pool *pgxpool.Pool, stagin
 	)
 }
 
-func checkStagedDeliveryRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedDeliveryRows(ctx context.Context, pool pgQuerier, staging string) error {
 	return runStaged[notifystore.DeliveryRow](
 		ctx,
 		pool,
@@ -151,7 +150,7 @@ func checkStagedDeliveryRows(ctx context.Context, pool *pgxpool.Pool, staging st
 func runStaged[R any, P interface {
 	*R
 	notifystore.StagedRow
-}](ctx context.Context, pool *pgxpool.Pool, what, query string) error {
+}](ctx context.Context, pool pgQuerier, what, query string) error {
 	return eachStaged(ctx, pool, stagedQuery{what: what, sql: query}, func(rows pgx.Rows) error {
 		var r R
 
@@ -178,7 +177,7 @@ type stagedQuery struct {
 
 // eachStaged runs q and calls check for each row. It stops at the first error
 // of check, and closes the rows.
-func eachStaged(ctx context.Context, pool *pgxpool.Pool, q stagedQuery, check func(rows pgx.Rows) error) error {
+func eachStaged(ctx context.Context, pool pgQuerier, q stagedQuery, check func(rows pgx.Rows) error) error {
 	rows, err := pool.Query(ctx, q.sql)
 	if err != nil {
 		return fmt.Errorf("read staged %s: %w", q.what, backup.ErrExportRead)

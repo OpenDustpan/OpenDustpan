@@ -26,6 +26,9 @@ const (
 	// UpdateInvalid is an update ID or a stack version in the path that is not
 	// valid, or an update request that is not valid.
 	UpdateInvalid = "update.invalid"
+	// UpdateItemKeyUnavailable is an update whose item key is shredded or
+	// missing, so the server cannot write or read its events.
+	UpdateItemKeyUnavailable = "update.item-key-unavailable"
 	// UpdateLeaseExpired is a lease token of an update that expired.
 	UpdateLeaseExpired = "update.lease-expired"
 	// UpdateLeaseInvalid is a lease token of an update that is not valid.
@@ -54,6 +57,10 @@ func updateSpecs() []Spec {
 		updateSpec(UpdateConsoleSession, "a console session cannot start an update: the request needs an access token"),
 		updateSpec(UpdateDeltaInvalid, "the checkpoint delta does not apply to the saved checkpoint"),
 		updateSpec(UpdateInvalid, "the update request, the update ID or the stack version is not valid"),
+		updateSpec(
+			UpdateItemKeyUnavailable,
+			"the item key of the update is shredded or missing: the server cannot write or read its events",
+		),
 		updateSpec(UpdateLeaseExpired, "the lease of the update expired"),
 		updateSpec(UpdateLeaseInvalid, "the lease token of the update is not valid"),
 		updateSpec(UpdateNotFound, "the update does not exist"),

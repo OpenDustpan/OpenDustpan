@@ -25,7 +25,10 @@ const sweepUnlockTimeout = 10 * time.Second
 // until the release, so every server process on the same database sees it. If
 // the connection or the server process dies, PostgreSQL gives up the lock.
 func (s *Store) TryLockSweep(ctx context.Context) (func(), error) {
-	conn, err := s.pool.Acquire(ctx)
+	// The lock connection comes from the long-path helper: it holds no
+	// session value, so its statements run under the start-up values of the
+	// pool, and its release resets it all the same.
+	conn, err := s.longConn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire sweep lock connection: %w", err)
 	}
@@ -55,6 +58,8 @@ func (s *Store) TryLockSweep(ctx context.Context) (func(), error) {
 			// A connection that holds a lock it cannot unlock must not return
 			// to the pool. Closing it makes PostgreSQL give up the lock, so a close
 			// error has no effect on the lock.
+			s.unmarkForHijack(conn)
+
 			if closeErr := conn.Hijack().Close(unlockCtx); closeErr != nil {
 				s.logger.WarnContext(unlockCtx, "sweep lock connection did not close cleanly")
 			}

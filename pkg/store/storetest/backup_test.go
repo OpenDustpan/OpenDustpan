@@ -505,7 +505,9 @@ func (s *fakeBackupStore) RenameStack(
 }
 
 // CreateUpdate implements stack.UpdateStore.
-func (s *fakeBackupStore) CreateUpdate(_ context.Context, u stack.Update, fence namespace.Fence) error {
+func (s *fakeBackupStore) CreateUpdate(
+	_ context.Context, u stack.Update, _ stack.UpdateKey, fence namespace.Fence,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

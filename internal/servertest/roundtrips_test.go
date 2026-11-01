@@ -55,6 +55,10 @@ import (
 // be below its budget before the test asks for a lower budget.
 const budgetSlack = 3
 
+// eventBatchSize is the number of events in the batch of the event flow: the
+// largest batch that the server takes.
+const eventBatchSize = 1000
+
 // warmCycles is the number of runs of a request flow before the measured run,
 // so that the statement cache of each connection does not change the count.
 const warmCycles = 3
@@ -688,6 +692,32 @@ func (h *rtHarness) save(run updateRun, seq int) {
 	}
 }
 
+// events posts one batch of n engine events, with the sequences 0 to n-1.
+func (h *rtHarness) events(run updateRun, n int) {
+	h.t.Helper()
+
+	var b strings.Builder
+
+	b.WriteString(`{"events":[`)
+
+	for i := range n {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+
+		b.WriteString(`{"sequence":` + strconv.Itoa(i) + `,"timestamp":1,"diagnosticEvent":{"message":"line ` +
+			strconv.Itoa(i) + `","severity":"info"}}`)
+	}
+
+	b.WriteString(`]}`)
+
+	status, answer := h.send(http.MethodPost, h.cluster.URL(0)+run.path+"/events/batch",
+		"update-token "+run.lease, b.String())
+	if status != http.StatusOK {
+		h.t.Fatalf("event batch of %d = %d %s, want %d", n, status, answer, http.StatusOK)
+	}
+}
+
 // complete ends the update.
 func (h *rtHarness) complete(run updateRun) {
 	h.t.Helper()
@@ -747,10 +777,13 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 58 because the second save reads the blob guard after
-		// the commit that replaces the previous checkpoint blob, so that a
-		// backup that started before the commit cannot lose the blob.
-		{"pulumi update cycle", 58, func(h *rtHarness) {
+		// The budget is 62. The second save reads the blob guard after the
+		// commit that replaces the previous checkpoint blob, so that a backup
+		// that started before the commit cannot lose the blob. The
+		// transaction of the create writes the record of the item key of the
+		// update, which seals its event payloads at rest: a read of the
+		// record, a read of the namespace, the insert and a read back.
+		{"pulumi update cycle", 62, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -758,6 +791,17 @@ func requestFlows() []requestFlow {
 				h.save(run, 2)
 				h.complete(run)
 			})
+		}},
+		// The budget is 1010. The batch opens the item key of the update one
+		// time for all its events: a read of the key record and a read of
+		// the namespace, then one seal for each event in memory. The store
+		// writes each event with its own insert, so 1000 of the round trips
+		// are the inserts of the rows.
+		{"pulumi event batch of 1000 events", 1010, func(h *rtHarness) {
+			h.newStack()
+			run := h.startUpdate()
+			h.measure(func() { h.events(run, eventBatchSize) })
+			h.complete(run)
 		}},
 	}
 }

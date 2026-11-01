@@ -570,6 +570,31 @@ type JobPlan struct {
 	CreatedAtMs int64
 }
 
+type LocalUser struct {
+	ID              string
+	PrincipalID     string
+	UserName        string
+	PasswordHash    string
+	PasswordSetAtMs int64
+	ChangeRequired  bool
+	Demo            bool
+	CreatedBy       string
+	CreatedAtMs     int64
+}
+
+type LocalUserReset struct {
+	ID                 string
+	UserID             string
+	PrincipalID        string
+	Digest             string
+	Purpose            string
+	CreatedBy          string
+	Reason             string
+	RevokeAccessTokens bool
+	CreatedAtMs        int64
+	ExpiresAtMs        int64
+}
+
 type MaintenanceRevocation struct {
 	ID        int64
 	Kind      string
@@ -761,6 +786,11 @@ type PrincipalGroup struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	DeletedAtMs pgtype.Int8
+}
+
+type PrincipalSessionGeneration struct {
+	PrincipalID string
+	Generation  int64
 }
 
 type Profile struct {

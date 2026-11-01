@@ -1269,12 +1269,16 @@ func jobStoreOption(st store) []dustpan.Option {
 	case sqliteStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	case postgresStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	default:
 		return nil
@@ -1867,8 +1871,9 @@ var openStore = func(
 // once at the start: each value and where it came from. The record holds no
 // host, user or password.
 func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings postgres.FailoverSettings) {
-	// One group for each setting, then the check and the deadline.
-	const extraAttrs = 2
+	// One group for each setting, then the check, the deadline and the three
+	// server timeouts.
+	const extraAttrs = 5
 
 	attrs := make([]any, 0, len(settings.Settings)+extraAttrs)
 
@@ -1878,7 +1883,10 @@ func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings post
 	}
 
 	attrs = append(attrs, slog.String("connect_check", settings.ConnectCheck),
-		slog.Duration("statement_deadline", settings.StatementDeadline))
+		slog.Duration("statement_deadline", settings.StatementDeadline),
+		slog.Duration("statement_timeout", settings.ServerStatementTimeout),
+		slog.Duration("idle_in_transaction_session_timeout", settings.ServerIdleInTransactionTimeout),
+		slog.Duration("client_connection_check_interval", settings.ClientConnectionCheckInterval))
 
 	logger.InfoContext(ctx, "database failover settings", attrs...)
 }

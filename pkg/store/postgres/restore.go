@@ -157,7 +157,7 @@ func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (int64, error) {
 
 	var dropped int64
 
-	err := inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	err := s.inLongTx(ctx, backupBound(), opts, func(tx pgx.Tx) error {
 		return s.swapTx(ctx, tx, plan, &dropped)
 	})
 

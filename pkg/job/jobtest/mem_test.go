@@ -31,8 +31,12 @@ func TestMemConformance(t *testing.T) {
 		db := newMemDB()
 
 		return jobtest.Harness{
-			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Namespaces: db,
-			Domain: db,
+			Jobs:       db,
+			Durable:    db.durable,
+			Freezes:    db,
+			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
+			Namespaces: db,
+			Domain:     db,
 		}
 	})
 }

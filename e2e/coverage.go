@@ -65,6 +65,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/source"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -253,6 +254,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:      secrettest.NewMemorySealer(),
 		ManualLocks: nil,
 		// The updates service never deletes a blob here, so it has no guard.
 		BlobGuard: nil,
@@ -510,6 +512,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)
@@ -1332,6 +1335,10 @@ func (coverageCollectionStore) SetUnitCollection(
 	_ context.Context, _ collection.Move, _ namespace.Fence, _ audit.Entry,
 ) error {
 	return nil
+}
+
+func (coverageCollectionStore) ListCollectionUnitIDs(_ context.Context, _ collection.Ref, _ string) ([]string, error) {
+	return nil, nil
 }
 
 func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.UnitRef) (collection.Ref, error) {

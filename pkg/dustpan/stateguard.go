@@ -11,6 +11,7 @@ import (
 
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/tfe"
+	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -324,6 +325,17 @@ func stateGuardOf(svc *gateService) tfe.StateGuard {
 //
 //nolint:ireturn // The adapter takes the port, and nil must stay an untyped nil.
 func inventoryGuardOf(svc *gateService) inventoryapi.StateGuard {
+	if svc == nil {
+		return nil
+	}
+
+	return svc
+}
+
+// tofuHTTPGuardOf is stateGuardOf for the OpenTofu http backend.
+//
+//nolint:ireturn // The adapter takes the port, and nil must stay an untyped nil.
+func tofuHTTPGuardOf(svc *gateService) tofuhttp.StateGuard {
 	if svc == nil {
 		return nil
 	}

@@ -6,6 +6,8 @@ import (
 	"path"
 	"strings"
 	"unicode"
+
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // Limits of a code location, in bytes. They bound the job record.
@@ -79,8 +81,11 @@ func (l Location) validateDirectory() error {
 // CheckRepository returns an error that wraps ErrInvalid for a repository of a
 // code location that is neither a path, such as acme/infra, nor an https URL
 // (the scheme in lower case) with a host and no user name, password, query or
-// fragment. A path holds no ':' and no '@', so that it is not a URL of another
-// scheme or an scp-like address with a user name. The credentials that fetch
+// fragment. The host is a DNS name that source.AllowedHost accepts: not an IP
+// address in any form, not a number that a resolver reads as an IPv4
+// address, and not localhost or a name under it. A port is allowed. A path
+// holds no ':' and no '@', so that it is not a URL of another scheme or an
+// scp-like address with a user name. The credentials that fetch
 // the code come from the credential helper of the runner pool, never from the
 // repository, so a job record and its answers never hold them. The error never
 // holds the repository.
@@ -111,6 +116,16 @@ func checkRepositoryURL(r string) error {
 	case u.RawQuery != "" || u.ForceQuery || strings.Contains(r, "#"):
 		return fmt.Errorf("%w: the repository URL of the code location cannot have a query or a fragment",
 			ErrInvalid)
+	// Defense in depth: the API handlers, the unit settings and the catalog
+	// documents call CheckRepository on input, and Location.Validate calls it
+	// again when a job starts. This check stays so that a stored location
+	// never names an IP address, a number or localhost, also for a new caller.
+	// It checks the name only. The server never connects to the repository:
+	// the runner fetches it, and the runner must check the resolved address of
+	// each connection itself.
+	case !source.AllowedHost(u.Hostname()):
+		return fmt.Errorf("%w: the host of the repository URL of the code location must be a DNS name, not an "+
+			"IP address, a number or localhost", ErrInvalid)
 	default:
 		return nil
 	}

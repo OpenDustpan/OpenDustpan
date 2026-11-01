@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/githoststore"
 )
@@ -54,7 +52,7 @@ func pgCopyGitHostTables() []pgCopyTable {
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedGitHost(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedGitHost(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedRegistrations(ctx, pool, staging); err != nil {
 		return err
 	}
@@ -66,7 +64,7 @@ func checkStagedGitHost(ctx context.Context, pool *pgxpool.Pool, staging string)
 	return checkStagedConnections(ctx, pool, staging)
 }
 
-func checkStagedRegistrations(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedRegistrations(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, " +
 		"sealed_event_secret, event_secret_set_id, event_secret_created_at_ms, address_digest, version, " +
 		"created_at_ms, updated_at_ms FROM " + stagingTable(staging, backup.TableGitHostAppRegistrations)
@@ -107,7 +105,7 @@ func checkStagedRegistrations(ctx context.Context, pool *pgxpool.Pool, staging s
 	return nil
 }
 
-func checkStagedAssignments(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedAssignments(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT i.installation_id, n.name, i.version, i.created_at_ms, i.updated_at_ms FROM " +
 		stagingTable(staging, backup.TableGitHostInstallations) + " AS i LEFT JOIN " +
 		stagingTable(staging, "namespaces") + " AS n ON n.id = i.namespace_id"
@@ -161,7 +159,7 @@ func checkStagedAssignments(ctx context.Context, pool *pgxpool.Pool, staging str
 	return nil
 }
 
-func checkStagedConnections(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedConnections(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT n.name, c.id, c.kind, c.auth, c.app_scope, c.installation_id, c.push, c.is_default, " +
 		"c.version, c.created_at_ms, c.updated_at_ms FROM " + stagingTable(staging, "git_host_connections") +
 		" AS c LEFT JOIN " + stagingTable(staging, "namespaces") + " AS n ON n.id = c.namespace_id"

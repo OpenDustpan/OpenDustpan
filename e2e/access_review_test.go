@@ -165,6 +165,10 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReviewRefusals(ctx, t, env)
 	checkCallerAccess(ctx, t, env)
 	checkCallerAccessRoles(ctx, t, env)
+
+	t.Run("collection", func(t *testing.T) {
+		checkCollectionReview(ctx, t, env)
+	})
 }
 
 // seedReview makes a principal in a group, a namespace and five grants:
@@ -383,13 +387,6 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 
 		checkReviewRow(t, f, &rows[i])
 	}
-
-	// The export of a collection must hold the grants on its units, which
-	// the server cannot read until collections are wired (#478).
-	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, "/api/server/namespaces/review/collections/payments/access-review", "",
-		http.StatusNotImplemented,
-	}, nil)
 }
 
 // checkReviewRow checks the fields of one current row of the seed.

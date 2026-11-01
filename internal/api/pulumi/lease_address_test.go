@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -66,10 +67,11 @@ func newUpdateFixtureWithAddressGate(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Tokens:             nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
@@ -115,7 +117,7 @@ func newUpdateFixtureWithAddressGate(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil, sealer: nil, audit: nil}
 }
 
 // TestLeaseAddressGateDenies proves a denying address gate answers 403 on a
@@ -251,10 +253,11 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Tokens:             nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
@@ -308,7 +311,7 @@ func newSharedLeaseFixture(t *testing.T, setup sharedLeaseSetup, gate pulumi.Add
 		t.Fatalf("handler: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: setup.updates, ref: setup.ref, mem: nil}
+	return updateFixture{handler: handler, updates: setup.updates, ref: setup.ref, mem: nil, sealer: nil, audit: nil}
 }
 
 // TestLeaseTokenBeforeAddressGate proves the token check runs before the
