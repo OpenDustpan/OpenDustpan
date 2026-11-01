@@ -15,6 +15,7 @@ Changed by:
 - ADR 134 extends decisions 7, 10 and 13: the launcher contract.
 - ADR 164 extends decisions 7, 10, 14 and 15: pool purpose, sweep claims,
   credential flag rule and argument masks.
+- ADR 300 changes decision 1: a job with no profile is valid. It runs with no cloud credentials.
 
 ## Context
 

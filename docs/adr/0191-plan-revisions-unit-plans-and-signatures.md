@@ -8,6 +8,7 @@ Changed by:
 - ADR 225 changes decision 6: a signature can carry over to an identical plan.
 - ADR 227 extends: answers the open question on fresh authentication.
 - ADR 299 changes decisions 4, 5 and 6: the three binding levels.
+- ADR 300 extends: after a merge, a stored plan applies only when the tree is the same.
 
 ## Context
 
