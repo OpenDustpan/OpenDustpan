@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/localuserstore"
 )
 
@@ -108,8 +109,10 @@ func (f *fakeTx) RehashPassword(context.Context, string, string, string) (int64,
 	return f.write("rehash")
 }
 
-func (f *fakeTx) BumpSessionGeneration(context.Context, string) (int64, error) {
-	return f.write("bump")
+func (f *fakeTx) BumpGeneration(context.Context, string, session.BumpCause) error {
+	_, err := f.write("bump")
+
+	return err
 }
 
 func (f *fakeTx) RevokeAccessTokens(context.Context, string, int64) (int64, error) {

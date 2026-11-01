@@ -14,8 +14,8 @@ import (
 type generationStore struct {
 	*sqlite.Store
 
-	sessionGeneration int64
-	storedGeneration  int64
+	sessionGeneration uint64
+	storedGeneration  uint64
 }
 
 func (g generationStore) GetSessionByDigest(ctx context.Context, d session.Digest) (session.Match, error) {
@@ -39,14 +39,13 @@ func TestAuthenticateRefusesAnotherGeneration(t *testing.T) {
 
 	cases := []struct {
 		name            string
-		session, stored int64
+		session, stored uint64
 		wantErr         bool
 	}{
 		{name: "same generation", session: 3, stored: 3, wantErr: false},
 		{name: "older session", session: 2, stored: 3, wantErr: true},
 		{name: "newer session", session: 4, stored: 3, wantErr: true},
 		{name: "zero on both sides", session: 0, stored: 0, wantErr: true},
-		{name: "negative on both sides", session: -1, stored: -1, wantErr: true},
 		{name: "zero session from before the column", session: 0, stored: 1, wantErr: true},
 	}
 

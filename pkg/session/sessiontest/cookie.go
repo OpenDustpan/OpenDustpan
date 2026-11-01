@@ -173,31 +173,6 @@ func RunKeyStore(t *testing.T, _ func(t *testing.T) session.KeyStore) {
 	})
 }
 
-// RunPrincipalStateStore runs the conformance suite of a
-// session.PrincipalStateStore. The factory returns a store with the
-// principals of the suite.
-func RunPrincipalStateStore(t *testing.T, _ func(t *testing.T) session.PrincipalStateStore) {
-	t.Helper()
-
-	skipCases(t, []string{
-		"AnUnknownPrincipalIsNotFound",
-		"ADeletedPrincipalIsNotFound",
-		"AServicePrincipalIsNotFound",
-		"ADisabledPrincipalComesBackWithItsDisableTime",
-		"ANewPrincipalHasGenerationOne",
-		"TheStateHoldsThePoliciesFromTheSameRead",
-		"BumpAddsOne",
-		"BumpReturnsTheNewGeneration",
-		"BumpNeedsNoClock",
-		"AZeroGenerationFromAnotherVersionIsRefused",
-		"BumpOfAnUnknownCauseIsInvalid",
-		"BumpOfAnUnknownPrincipalIsNotFound",
-		"BumpWithABadAuditEntryChangesNothing",
-		"BumpAppendsTheEntryInTheSameTransaction",
-		"ConcurrentBumpsEachAddOne",
-	})
-}
-
 // RunProofVerifier runs the conformance suite of a session.ProofVerifier.
 // The factory returns a verifier.
 func RunProofVerifier(t *testing.T, _ func(t *testing.T) session.ProofVerifier) {

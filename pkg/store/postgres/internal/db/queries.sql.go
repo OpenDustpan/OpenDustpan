@@ -7619,6 +7619,69 @@ func (q *Queries) GetPrincipalNamespace(ctx context.Context, id string) (string,
 	return namespace, err
 }
 
+const getPrincipalState = `-- name: GetPrincipalState :one
+SELECT p.id, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0))::bigint AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable,
+  COALESCE(g.generation, 1)::bigint AS principal_generation
+FROM principals p
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE p.id = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1
+`
+
+type GetPrincipalStateRow struct {
+	ID                     string
+	Subject                string
+	DisplayName            string
+	PrincipalKind          string
+	PrincipalDisabledAtMs  pgtype.Int8
+	PrincipalBreakGlass    bool
+	PrincipalActiveAtMs    int64
+	PolicyIdleMs           int64
+	PolicyMaxLengthMs      int64
+	PolicyUpdatedAtMs      int64
+	PolicyTokenFreshnessMs pgtype.Int8
+	AccountsInactivityMs   int64
+	AccountsDisable        bool
+	PrincipalGeneration    int64
+}
+
+// The state of a principal that each request with an access cookie reads:
+// the owner, its activity by the account rule of the inactivity disable, the
+// policies, and the session generation, from one read. A principal with no
+// row of principal_session_generations has the generation 1.
+// The live check is num_nulls(p.deleted_at_ms) = 1, as in GetSessionByDigest.
+func (q *Queries) GetPrincipalState(ctx context.Context, id string) (GetPrincipalStateRow, error) {
+	row := q.db.QueryRow(ctx, getPrincipalState, id)
+	var i GetPrincipalStateRow
+	err := row.Scan(
+		&i.ID,
+		&i.Subject,
+		&i.DisplayName,
+		&i.PrincipalKind,
+		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
+		&i.PrincipalActiveAtMs,
+		&i.PolicyIdleMs,
+		&i.PolicyMaxLengthMs,
+		&i.PolicyUpdatedAtMs,
+		&i.PolicyTokenFreshnessMs,
+		&i.AccountsInactivityMs,
+		&i.AccountsDisable,
+		&i.PrincipalGeneration,
+	)
+	return i, err
+}
+
 const getProfileRevision = `-- name: GetProfileRevision :one
 SELECT namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
 FROM profile_revisions

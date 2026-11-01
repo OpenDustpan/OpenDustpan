@@ -9,7 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
-	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/localuserstore"
 	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
@@ -17,10 +17,9 @@ import (
 )
 
 var (
-	_ localuser.Store                  = (*Store)(nil)
-	_ localuser.PasswordStore          = (*Store)(nil)
-	_ localuser.ResetStore             = (*Store)(nil)
-	_ principal.SessionGenerationStore = (*Store)(nil)
+	_ localuser.Store         = (*Store)(nil)
+	_ localuser.PasswordStore = (*Store)(nil)
+	_ localuser.ResetStore    = (*Store)(nil)
 )
 
 // CreateUser implements localuser.Store.
@@ -33,7 +32,7 @@ func (s *Store) CreateUser(ctx context.Context, u localuser.User, e audit.Entry)
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.CreateUser(ctx, localUserTx{q: q}, u)
+		return localuserstore.CreateUser(ctx, localUserTx{q: q, entry: &e}, u)
 	})
 }
 
@@ -42,7 +41,7 @@ func (s *Store) UserByName(ctx context.Context, name string) (localuser.Credenti
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return localuserstore.ByName(ctx, localUserTx{q: s.queries}, name)
+	return localuserstore.ByName(ctx, localUserTx{q: s.queries, entry: nil}, name)
 }
 
 // UserByPrincipal implements localuser.Store.
@@ -50,7 +49,7 @@ func (s *Store) UserByPrincipal(ctx context.Context, principalID string) (localu
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return localuserstore.ByPrincipal(ctx, localUserTx{q: s.queries}, principalID)
+	return localuserstore.ByPrincipal(ctx, localUserTx{q: s.queries, entry: nil}, principalID)
 }
 
 // RenameUser implements localuser.Store.
@@ -59,7 +58,7 @@ func (s *Store) RenameUser(ctx context.Context, userID, name string, e audit.Ent
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.Rename(ctx, localUserTx{q: q}, userID, name)
+		return localuserstore.Rename(ctx, localUserTx{q: q, entry: &e}, userID, name)
 	})
 }
 
@@ -69,7 +68,7 @@ func (s *Store) DeleteUser(ctx context.Context, userID string, e audit.Entry) er
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.Delete(ctx, localUserTx{q: q}, userID)
+		return localuserstore.Delete(ctx, localUserTx{q: q, entry: &e}, userID)
 	})
 }
 
@@ -81,7 +80,12 @@ func (s *Store) SetPassword(
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.SetPassword(ctx, localUserTx{q: q}, userID, localuserstore.PasswordWrite(h, c, e.At))
+		return localuserstore.SetPassword(
+			ctx,
+			localUserTx{q: q, entry: &e},
+			userID,
+			localuserstore.PasswordWrite(h, c, e.At),
+		)
 	})
 }
 
@@ -91,7 +95,7 @@ func (s *Store) SetChangeRequired(ctx context.Context, userID string, required b
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.SetChangeRequired(ctx, localUserTx{q: q}, userID, required)
+		return localuserstore.SetChangeRequired(ctx, localUserTx{q: q, entry: &e}, userID, required)
 	})
 }
 
@@ -101,7 +105,7 @@ func (s *Store) RehashPassword(ctx context.Context, userID string, old, h localu
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.Rehash(ctx, localUserTx{q: q}, userID, old, h)
+		return localuserstore.Rehash(ctx, localUserTx{q: q, entry: &e}, userID, old, h)
 	})
 }
 
@@ -111,7 +115,7 @@ func (s *Store) RemovePassword(ctx context.Context, userID string, e audit.Entry
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.RemovePassword(ctx, localUserTx{q: q}, userID)
+		return localuserstore.RemovePassword(ctx, localUserTx{q: q, entry: &e}, userID)
 	})
 }
 
@@ -121,7 +125,7 @@ func (s *Store) SeedDemoPassword(ctx context.Context, h localuser.PasswordHash, 
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.SeedDemoPassword(ctx, localUserTx{q: q}, h, e.At)
+		return localuserstore.SeedDemoPassword(ctx, localUserTx{q: q, entry: &e}, h, e.At)
 	})
 }
 
@@ -135,7 +139,7 @@ func (s *Store) CreateReset(ctx context.Context, r localuser.Reset, d localuser.
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
-		return localuserstore.CreateReset(ctx, localUserTx{q: q}, r, d, &e)
+		return localuserstore.CreateReset(ctx, localUserTx{q: q, entry: &e}, r, d, &e)
 	})
 }
 
@@ -150,7 +154,7 @@ func (s *Store) RedeemReset(ctx context.Context, rd localuser.Redeem, e audit.En
 	err := s.inAuditedTx(ctx, e, func(q *db.Queries) error {
 		var err error
 
-		r, err = localuserstore.RedeemReset(ctx, localUserTx{q: q}, rd)
+		r, err = localuserstore.RedeemReset(ctx, localUserTx{q: q, entry: &e}, rd)
 
 		return err
 	})
@@ -187,7 +191,7 @@ func (s *Store) UserOfReset(ctx context.Context, d localuser.Digest, at time.Tim
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return localuserstore.UserOfReset(ctx, localUserTx{q: s.queries}, d, at)
+	return localuserstore.UserOfReset(ctx, localUserTx{q: s.queries, entry: nil}, d, at)
 }
 
 // PruneResets implements localuser.ResetStore.
@@ -211,26 +215,12 @@ func (s *Store) PruneResets(ctx context.Context, at time.Time) (int64, error) {
 	return n, nil
 }
 
-// SessionGeneration implements principal.SessionGenerationStore.
-func (s *Store) SessionGeneration(ctx context.Context, id string) (int64, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	g, err := s.queries.GetSessionGeneration(ctx, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("%w: %s", principal.ErrNotFound, id)
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("select session generation: %w", err)
-	}
-
-	return g, nil
-}
-
-// localUserTx is the localuserstore.Tx of the queries q.
+// localUserTx is the localuserstore.Tx of the queries q. entry is the audit
+// entry of the change of the transaction, which a bump of the session
+// generation names, or nil for a read: a bump with no entry fails closed.
 type localUserTx struct {
-	q *db.Queries
+	q     *db.Queries
+	entry *audit.Entry
 }
 
 // localUserReadErr maps the no-rows error of the driver to localuserstore.ErrNoRow and
@@ -400,10 +390,8 @@ func (t localUserTx) RehashPassword(ctx context.Context, id, oldHash, newHash st
 	return n, localUserReadErr(err)
 }
 
-func (t localUserTx) BumpSessionGeneration(ctx context.Context, principalID string) (int64, error) {
-	n, err := t.q.BumpSessionGeneration(ctx, principalID)
-
-	return n, localUserReadErr(err)
+func (t localUserTx) BumpGeneration(ctx context.Context, principalID string, cause session.BumpCause) error {
+	return bumpFor(ctx, t.q, principalID, cause, t.entry)
 }
 
 func (t localUserTx) RevokeAccessTokens(ctx context.Context, principalID string, atMs int64) (int64, error) {

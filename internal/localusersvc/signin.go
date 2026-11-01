@@ -21,7 +21,7 @@ import (
 type SignedIn struct {
 	PrincipalID       string
 	UserID            string
-	SessionGeneration int64
+	SessionGeneration uint64
 	ChangeRequired    bool
 }
 
