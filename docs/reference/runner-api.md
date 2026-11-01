@@ -132,7 +132,9 @@ of the unit of the job again, as at the start of the job. An enforced gate at
 `change.propose` or `state.write`, also one saved after the start, refuses the
 claim. A gate in evaluate mode refuses nothing. When the server cannot read
 the gates, it refuses the claim too. A refused claim fails the phase and the
-job, with a reason that names each gate. The runner gets no phase from it,
+job, with a reason that names each gate. The job does not wait for the gate
+to go: a person deletes the gate and starts a new run. The runner gets no
+phase from it,
 and the poll looks for other work of the pool. The refusal writes an audit
 entry with the action `runner:claim`, the outcome `denied`, the runner, the
 unit, the job ID and the reason.

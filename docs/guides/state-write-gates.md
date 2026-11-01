@@ -57,7 +57,9 @@ The server cannot evaluate a gate for a job yet. So an enforced gate at
 `state.write` refuses the start of a job on its unit, and it also refuses each
 claim of a phase of a job that started before someone saved the gate. The refused
 claim fails the job, with a reason that names the gate, and writes a denied
-`runner:claim` audit entry. A gate in evaluate mode refuses neither.
+`runner:claim` audit entry. The job does not wait for the gate to go. To run
+the change, a person deletes the gate and starts a new run. A gate in evaluate
+mode refuses neither.
 
 ## What a gate reads
 
