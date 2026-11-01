@@ -132,7 +132,7 @@ type Session struct {
 	EndReason   EndReason
 	SourceIP    string
 	UserAgent   string
-	Generation  int64
+	Generation  uint64
 }
 
 // ActiveBounds are the times after which the last use and the creation of
@@ -203,7 +203,7 @@ type Match struct {
 	Digest     Digest
 	Policy     Policy
 	Accounts   AccountPolicy
-	Generation int64
+	Generation uint64
 }
 
 // AccountPolicy is the part of the access token policy that a console
@@ -280,8 +280,6 @@ func (s Session) validateNames() error {
 		return fmt.Errorf("%w: no principal", ErrInvalid)
 	case !ident.Valid(s.Provider, maxProviderLength):
 		return fmt.Errorf("%w: provider %q", ErrInvalid, s.Provider)
-	case s.Generation < 0:
-		return fmt.Errorf("%w: generation %d", ErrInvalid, s.Generation)
 	default:
 		return nil
 	}

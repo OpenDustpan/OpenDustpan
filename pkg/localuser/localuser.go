@@ -295,7 +295,7 @@ func isControl(r rune) bool {
 type Credential struct {
 	User              User
 	Hash              PasswordHash
-	SessionGeneration int64
+	SessionGeneration uint64
 }
 
 // Algorithm names a password hash function.
