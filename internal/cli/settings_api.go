@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -31,7 +32,8 @@ func (brandingPresetError) Error() string {
 // A serve setting is static only: a flag, a variable or the file sets it, and
 // a change takes effect at the next start. A change through the API answers a
 // conflict for it. The settings that the database layer can hold are
-// declared here by key, and the static layer can lock each of them.
+// declared here by key, and the static layer can lock each of them: the
+// branding preset and the settings of the password sign-in.
 func SettingDeclarations() []setting.Declaration {
 	var out []setting.Declaration
 
@@ -46,6 +48,8 @@ func SettingDeclarations() []setting.Declaration {
 			Doc: docOf(s),
 		})
 	}
+
+	out = append(out, localuser.SettingDeclarations()...)
 
 	return append(out, setting.Declaration{
 		Key: brandingPresetKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "",

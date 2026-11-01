@@ -388,6 +388,10 @@ func signInProvider(
 		return none, fmt.Errorf("%w: provider ID %q is reserved for the dev sign-in", errSignInSetup, p.ID)
 	}
 
+	if p.ID == session.LocalProviderID {
+		return none, fmt.Errorf("%w: provider ID %q is reserved for the local users", errSignInSetup, p.ID)
+	}
+
 	if slices.ContainsFunc(earlier, func(e serverapi.SignInProvider) bool { return e.ID == p.ID }) {
 		return none, fmt.Errorf("%w: provider ID %q is used two times", errSignInSetup, p.ID)
 	}

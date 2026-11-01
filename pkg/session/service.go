@@ -89,13 +89,17 @@ func (s *Sessions) Now() time.Time {
 // the identity provider; a time after the start of the session takes the
 // start. Stored reports that Provider is a stored provider: the session is
 // then created through ProviderSessionStore, which checks the provider in
-// the same write.
+// the same write. Generation is the session generation of the principal
+// that the sign-in read in the same read as the credential, or 0 to take the
+// stored generation in the write that stores the session. A generation that
+// is not the stored one makes Start fail with ErrGenerationChanged.
 type Start struct {
 	AuthTime    time.Time
 	PrincipalID string
 	Provider    string
 	SourceIP    string
 	UserAgent   string
+	Generation  int64
 	Stored      bool
 }
 
@@ -127,6 +131,7 @@ func (s *Sessions) Start(ctx context.Context, e audit.Entry, in Start) (Session,
 		EndReason:   "",
 		SourceIP:    in.SourceIP,
 		UserAgent:   in.UserAgent,
+		Generation:  in.Generation,
 	}
 
 	if err := sess.Validate(); err != nil {
@@ -167,6 +172,15 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 
 	if m.Owner.Kind != principal.KindPerson || !m.Owner.DisabledAt.IsZero() {
 		return Match{}, fmt.Errorf("%w: the principal cannot sign in", ErrUnauthenticated)
+	}
+
+	// A password write, a reset or another change of the credentials adds 1
+	// to the session generation of the person, so each session of the person
+	// that carries an older generation ends here. A generation below 1 is a
+	// session from before the generation existed, or a changed row: no
+	// principal has it, so it fails closed too.
+	if m.Session.Generation < 1 || m.Session.Generation != m.Generation {
+		return Match{}, fmt.Errorf("%w: %w", ErrUnauthenticated, ErrGenerationChanged)
 	}
 
 	if s.inactivity != nil && s.inactivity.AccountInactive(m.Owner, m.Accounts, now) {

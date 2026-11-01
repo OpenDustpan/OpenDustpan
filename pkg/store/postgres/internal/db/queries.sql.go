@@ -2513,11 +2513,14 @@ func (q *Queries) CreateSecretKey(ctx context.Context, arg CreateSecretKeyParams
 }
 
 const createSession = `-- name: CreateSession :execrows
-INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
 SELECT $1, p.id, $2, $3, $4::bigint,
-  $4::bigint, $5::bigint, $6, $7
+  $4::bigint, $5::bigint, $6, $7,
+  COALESCE(g.generation, 1)
 FROM principals p
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 WHERE p.id = $8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+  AND ($9::bigint = 0 OR COALESCE(g.generation, 1) = $9::bigint)
 ON CONFLICT DO NOTHING
 `
 
@@ -2530,10 +2533,15 @@ type CreateSessionParams struct {
 	SourceIp    string
 	UserAgent   string
 	PrincipalID string
+	Generation  int64
 }
 
 // A session needs a person principal that exists and is not disabled. A
 // taken ID or digest inserts nothing.
+// The session stores the session generation of its principal. A
+// generation of 0 takes the stored generation in this statement. Another
+// generation must be the stored one, so a sign-in that read its generation
+// before a password write or a reset inserts nothing.
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, createSession,
 		arg.ID,
@@ -2544,6 +2552,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 		arg.SourceIp,
 		arg.UserAgent,
 		arg.PrincipalID,
+		arg.Generation,
 	)
 	if err != nil {
 		return 0, err
@@ -8170,7 +8179,8 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
 FROM sessions WHERE id = $1
 `
 
@@ -8185,6 +8195,7 @@ type GetSessionRow struct {
 	EndReason    string
 	SourceIp     string
 	UserAgent    string
+	Generation   int64
 }
 
 func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, error) {
@@ -8201,13 +8212,14 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 		&i.EndReason,
 		&i.SourceIp,
 		&i.UserAgent,
+		&i.Generation,
 	)
 	return i, err
 }
 
 const getSessionByDigest = `-- name: GetSessionByDigest :one
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
-  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  s.end_reason, s.source_ip, s.user_agent, s.generation, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
@@ -8216,9 +8228,11 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
   ), 0))::bigint AS principal_active_at_ms,
   sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
   sp.token_freshness_ms AS policy_token_freshness_ms,
-  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable,
+  COALESCE(g.generation, 1)::bigint AS principal_generation
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1
@@ -8236,6 +8250,7 @@ type GetSessionByDigestRow struct {
 	EndReason              string
 	SourceIp               string
 	UserAgent              string
+	Generation             int64
 	Subject                string
 	DisplayName            string
 	PrincipalKind          string
@@ -8248,6 +8263,7 @@ type GetSessionByDigestRow struct {
 	PolicyTokenFreshnessMs pgtype.Int8
 	AccountsInactivityMs   int64
 	AccountsDisable        bool
+	PrincipalGeneration    int64
 }
 
 // principal_active_at_ms is the latest activity of the owner by the account
@@ -8272,6 +8288,7 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.EndReason,
 		&i.SourceIp,
 		&i.UserAgent,
+		&i.Generation,
 		&i.Subject,
 		&i.DisplayName,
 		&i.PrincipalKind,
@@ -8284,6 +8301,7 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.PolicyTokenFreshnessMs,
 		&i.AccountsInactivityMs,
 		&i.AccountsDisable,
+		&i.PrincipalGeneration,
 	)
 	return i, err
 }
@@ -8326,12 +8344,15 @@ func (q *Queries) GetSessionPolicy(ctx context.Context) (GetSessionPolicyRow, er
 }
 
 const getSessionPrincipal = `-- name: GetSessionPrincipal :one
-SELECT kind, disabled_at_ms FROM principals WHERE id = $1 AND deleted_at_ms IS NULL
+SELECT p.kind, p.disabled_at_ms, COALESCE(g.generation, 1)::bigint AS generation
+FROM principals p LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+WHERE p.id = $1 AND p.deleted_at_ms IS NULL
 `
 
 type GetSessionPrincipalRow struct {
 	Kind         string
 	DisabledAtMs pgtype.Int8
+	Generation   int64
 }
 
 // The kind and the disable time of a principal that exists, so a refused
@@ -8339,7 +8360,7 @@ type GetSessionPrincipalRow struct {
 func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessionPrincipalRow, error) {
 	row := q.db.QueryRow(ctx, getSessionPrincipal, id)
 	var i GetSessionPrincipalRow
-	err := row.Scan(&i.Kind, &i.DisabledAtMs)
+	err := row.Scan(&i.Kind, &i.DisabledAtMs, &i.Generation)
 	return i, err
 }
 

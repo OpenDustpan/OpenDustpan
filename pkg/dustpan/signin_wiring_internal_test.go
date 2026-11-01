@@ -150,6 +150,7 @@ func (w wiredSignIn) session(t *testing.T, id string) session.Secret {
 	ss := session.Session{
 		CreatedAt: now, LastSeenAt: now, AuthTime: now, EndedAt: time.Time{}, ID: "ses-" + id, PrincipalID: id,
 		Provider: "corp", EndReason: "", SourceIP: "192.0.2.1", UserAgent: "test",
+		Generation: 1,
 	}
 
 	err = w.store.CreateSession(t.Context(), ss, session.DigestOf(key), wiringEntry(now, "ses-"+id))

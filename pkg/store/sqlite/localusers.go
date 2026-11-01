@@ -182,6 +182,14 @@ func (s *Store) deleteExpiredReset(ctx context.Context, d localuser.Digest, at t
 	return nil
 }
 
+// UserOfReset implements localuser.ResetStore.
+func (s *Store) UserOfReset(ctx context.Context, d localuser.Digest, at time.Time) (localuser.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return localuserstore.UserOfReset(ctx, localUserTx{q: s.queries}, d, at)
+}
+
 // PruneResets implements localuser.ResetStore.
 func (s *Store) PruneResets(ctx context.Context, at time.Time) (int64, error) {
 	s.mu.RLock()
