@@ -13,6 +13,8 @@ Changed by:
 - ADR 227 supersedes decisions 2 and 3: one window replaces the two MFA
   windows.
 - ADR 227 changes decision 4: the window can be only 0 or 60 to 900 seconds.
+- ADR 301 extends decision 5: the rule applies when MFA is on, as for every
+  other method.
 
 ## Context
 
