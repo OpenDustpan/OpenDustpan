@@ -508,6 +508,60 @@ func TestPutAfterALostResponseKeepsTheBody(t *testing.T) {
 	}
 }
 
+// countingStore counts the writes to each key.
+type countingStore struct {
+	blob.Store
+
+	mu   sync.Mutex
+	puts map[string]int
+}
+
+func (c *countingStore) Put(ctx context.Context, k blob.Key, r io.Reader) error {
+	c.mu.Lock()
+	c.puts[k.String()]++
+	c.mu.Unlock()
+
+	return c.Store.Put(ctx, k, r)
+}
+
+func TestPutWritesTheUnitFileOnce(t *testing.T) {
+	t.Parallel()
+
+	inner, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	counted := &countingStore{Store: inner, mu: sync.Mutex{}, puts: map[string]int{}}
+
+	s, err := upload.New(counted, commitsFor(newCommits()), prefix, maxBytes, clock)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	for _, seq := range []int{1, 2, 3} {
+		put(t, s, unit(), seq, []byte("body"))
+	}
+
+	unitKeys := 0
+
+	for k, n := range counted.puts {
+		if !strings.HasSuffix(k, "/unit.json") {
+			continue
+		}
+
+		unitKeys++
+
+		if n != 1 {
+			t.Errorf("writes to %s = %d, want 1", k, n)
+		}
+	}
+
+	if unitKeys != 1 {
+		t.Errorf("unit files written = %d, want 1", unitKeys)
+	}
+}
+
 func TestPutAfterAnUnknownCommitErrorKeepsTheFiles(t *testing.T) {
 	t.Parallel()
 
