@@ -244,17 +244,27 @@ func (s *Store) UnitCollection(ctx context.Context, unit collection.UnitRef) (co
 
 // ListCollectionUnitIDs implements collection.Store. The collection and its
 // members are read in one snapshot.
-func (s *Store) ListCollectionUnitIDs(ctx context.Context, ref collection.Ref) ([]string, error) {
+func (s *Store) ListCollectionUnitIDs(
+	ctx context.Context, ref collection.Ref, id string,
+) ([]string, error) {
 	var ids []string
 
 	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
-		if _, err := collectionID(ctx, q, ref); err != nil {
+		current, err := collectionID(ctx, q, ref)
+		if err != nil {
 			return err
 		}
 
+		// The ID is compared in the transaction that reads the members: a
+		// collection created again under the same name has another ID.
+		if id == "" || current != id {
+			return collection.ErrNotFound
+		}
+
 		rows, err := q.ListCollectionUnitIDs(ctx, db.ListCollectionUnitIDsParams{
-			Namespace:     ref.Namespace.String(),
-			CollectionKey: ref.Name.Key(),
+			Namespace: ref.Namespace.String(),
+			NameKey:   ref.Name.Key(),
+			ID:        id,
 		})
 		if err != nil {
 			return fmt.Errorf("select collection units: %w", err)

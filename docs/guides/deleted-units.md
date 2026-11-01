@@ -34,7 +34,9 @@ unit shows nothing after the unit is deleted, because a grant on a unit
 follows a unit that exists. A grant of `unit:read` on a collection shows
 each deleted unit of that collection in the namespace, because a deleted unit
 keeps its collection until the collection is deleted. A grant on a collection
-of another namespace shows nothing.
+of another namespace shows nothing. A grant on the collection alone gives 403,
+because the list also needs `namespace:read` on the namespace. The server
+checks `namespace:read` first, and then the grant of `unit:read`.
 
 These query values filter and page the list:
 

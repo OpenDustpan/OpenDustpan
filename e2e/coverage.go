@@ -1332,7 +1332,7 @@ func (coverageCollectionStore) SetUnitCollection(
 	return nil
 }
 
-func (coverageCollectionStore) ListCollectionUnitIDs(_ context.Context, _ collection.Ref) ([]string, error) {
+func (coverageCollectionStore) ListCollectionUnitIDs(_ context.Context, _ collection.Ref, _ string) ([]string, error) {
 	return nil, nil
 }
 

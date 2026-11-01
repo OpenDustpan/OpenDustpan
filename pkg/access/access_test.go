@@ -50,7 +50,7 @@ var errCollectionAbsent = errors.New("collection not found")
 // col in its namespace, with the IDs that fixture.unit makes. A unit of another
 // namespace is never in the answer, also when its collection has the same name.
 func (c collections) CollectionUnitIDs(ctx context.Context, col identity.Object) ([]string, error) {
-	if _, found, err := c.CollectionID(ctx, col); err != nil || !found {
+	if id, found, err := c.CollectionID(ctx, col); err != nil || !found || id != col.CollectionID() {
 		return nil, errCollectionAbsent
 	}
 
