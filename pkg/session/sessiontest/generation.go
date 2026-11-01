@@ -10,8 +10,8 @@ import (
 // testGenerationRules checks the session generation of a stored session: a
 // session with the generation 0 takes the stored generation of its
 // principal, a session with another generation than the stored one is
-// refused with ErrGenerationChanged and stores nothing, a negative
-// generation is ErrInvalid, and the lookup answers the stored generation of
+// refused with ErrGenerationChanged and stores nothing, and the lookup
+// answers the stored generation of
 // the owner from the same read.
 func testGenerationRules(t *testing.T, s Store) {
 	t.Helper()
@@ -24,7 +24,7 @@ func testGenerationRules(t *testing.T, s Store) {
 		want       error
 		name       string
 		id         string
-		generation int64
+		generation uint64
 		digest     int
 	}{
 		{name: "zero takes the stored generation", id: "ses-1", generation: 0, digest: 1, want: nil},
@@ -33,7 +33,6 @@ func testGenerationRules(t *testing.T, s Store) {
 			name: "a newer generation is refused", id: "ses-3", generation: 2, digest: 3,
 			want: session.ErrGenerationChanged,
 		},
-		{name: "a negative generation is refused", id: "ses-4", generation: -1, digest: 4, want: session.ErrInvalid},
 	}
 
 	for _, tc := range cases {

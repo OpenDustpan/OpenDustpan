@@ -19,6 +19,10 @@ const (
 	ActionSignIn = "session:sign-in"
 	// ActionSignOut is the action of a sign-out.
 	ActionSignOut = "session:sign-out"
+	// ActionGenerationBumped is the action of a bump of the session
+	// generation of a person. Its changes name the cause and the new
+	// generation.
+	ActionGenerationBumped = "session:generation-bumped"
 )
 
 // TouchEvery is how often a use of a session records its last use. The
@@ -99,7 +103,7 @@ type Start struct {
 	Provider    string
 	SourceIP    string
 	UserAgent   string
-	Generation  int64
+	Generation  uint64
 	Stored      bool
 }
 
@@ -176,10 +180,10 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 
 	// A password write, a reset or another change of the credentials adds 1
 	// to the session generation of the person, so each session of the person
-	// that carries an older generation ends here. A generation below 1 is a
-	// session from before the generation existed, or a changed row: no
-	// principal has it, so it fails closed too.
-	if m.Session.Generation < 1 || m.Session.Generation != m.Generation {
+	// that carries an older generation ends here. A generation of 0 is a
+	// session from before the generation existed: no principal has it, so it
+	// fails closed too.
+	if m.Session.Generation == 0 || m.Session.Generation != m.Generation {
 		return Match{}, fmt.Errorf("%w: %w", ErrUnauthenticated, ErrGenerationChanged)
 	}
 

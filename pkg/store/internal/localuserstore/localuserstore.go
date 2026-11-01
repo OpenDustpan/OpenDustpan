@@ -23,7 +23,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/generationstore"
 )
 
 // ErrNoRow is the error that a Tx returns when a read finds no row. The
@@ -117,7 +119,10 @@ type ResetWrites interface {
 	ResetByDigest(ctx context.Context, digest string) (Reset, error)
 	DeleteReset(ctx context.Context, id string) (int64, error)
 	DeleteResetsOfUser(ctx context.Context, userID string) error
-	BumpSessionGeneration(ctx context.Context, principalID string) (int64, error)
+	// BumpGeneration adds 1 to the session generation of the principal
+	// with cause, through generationstore.Bump, and appends the entry of the
+	// bump that names the change of this transaction.
+	BumpGeneration(ctx context.Context, principalID string, cause session.BumpCause) error
 	RevokeAccessTokens(ctx context.Context, principalID string, atMs int64) (int64, error)
 }
 
@@ -314,12 +319,13 @@ func ByName(ctx context.Context, tx Tx, name string) (localuser.Credential, erro
 	// Defense in depth: the CHECK of the table keeps a stored generation at
 	// 2 or more, and a missing row reads as 1. This check stays so that a
 	// sign-in never seals a generation that no write could make.
-	if u.SessionGeneration < 1 {
-		return none, fmt.Errorf("%w: session generation %d", localuser.ErrUnavailable, u.SessionGeneration)
+	g, err := generationstore.FromRow(u.SessionGeneration)
+	if err != nil {
+		return none, fmt.Errorf("%w: %w", localuser.ErrUnavailable, err)
 	}
 
 	return localuser.Credential{
-		User: UserOf(u), Hash: localuser.PasswordHash(u.PasswordHash), SessionGeneration: u.SessionGeneration,
+		User: UserOf(u), Hash: localuser.PasswordHash(u.PasswordHash), SessionGeneration: g,
 	}, nil
 }
 
@@ -439,15 +445,17 @@ func storePassword(ctx context.Context, tx Tx, u User, w Write) error {
 	return bump(ctx, tx, u.PrincipalID)
 }
 
-// bump adds 1 to the session generation of the principal.
+// bump adds 1 to the session generation of the principal with the cause
+// session.BumpPassword, through the one bump of the session generation: the
+// adapter appends the entry session:generation-bumped that names the change
+// of this transaction.
 func bump(ctx context.Context, tx Tx, principalID string) error {
-	n, err := tx.BumpSessionGeneration(ctx, principalID)
-	if err != nil {
-		return fmt.Errorf("bump session generation: %w", err)
-	}
+	if err := tx.BumpGeneration(ctx, principalID, session.BumpPassword); err != nil {
+		if errors.Is(err, session.ErrPrincipalNotFound) {
+			return fmt.Errorf("bump session generation: %w", principal.ErrNotFound)
+		}
 
-	if n != 1 {
-		return fmt.Errorf("bump session generation: %w", principal.ErrNotFound)
+		return fmt.Errorf("bump session generation: %w", err)
 	}
 
 	return nil
