@@ -331,10 +331,14 @@ type ForgeClaims struct {
 }
 
 // RequestClaims are the fields of a sign-in request cookie: the request of
-// the start and the thumbprint of the refresh key that the start proved.
+// the start, the SHA-256 digest of the OAuth state, and the thumbprint of the
+// refresh key that the start proved. The cookie holds the digest, never the
+// plain state. The callback compares the digest of the state query parameter
+// with StateDigest in constant time, and refuses a difference.
 type RequestClaims struct {
-	Request    Request
-	RefreshKey Thumbprint
+	Request     Request
+	StateDigest Digest
+	RefreshKey  Thumbprint
 }
 
 // PendingClaims are the fields of a pending sign-in cookie. The factor lock
