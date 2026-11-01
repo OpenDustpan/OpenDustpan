@@ -58,7 +58,10 @@ func userCases() []storeCase {
 		runCase("a second user for the same principal fails with ErrAlreadyExists", testCreateSamePrincipal),
 		runCase("a user for a principal that is not a person fails with principal.ErrNotFound", testCreateNotPerson),
 		runCase("an unknown name is ErrNotFound", testUnknownName),
-		runCase("a user delete keeps the principal and deletes the reset codes", testDelete),
+		runCase("a user delete keeps the principal, deletes the reset codes and adds 1 to the session generation",
+			testDelete),
+		runCase("a user delete of a person whose only credential is the password fails with ErrLastCredential "+
+			"and changes nothing", testDeleteLastCredential),
 		runCase("a rename stores the new name, keeps the subject and appends one entry", testRename),
 		runCase("a rename to a name that another user has fails with ErrAlreadyExists", testRenameTaken),
 		runCase("a rename to a name that does not match the pattern fails with ErrInvalid", testRenameBadName),
@@ -67,6 +70,8 @@ func userCases() []storeCase {
 			testOtherScope,
 		),
 		runCase("a change whose audit append fails changes nothing", testAppendFails),
+		runCase("a name lookup returns the session generation of the same read as the hash, so a bump after "+
+			"the read leaves the generation that the sign-in seals stale", testLookupGeneration),
 		runCase(
 			"the session generation of a new person is 1 and of an unknown principal is principal.ErrNotFound",
 			testGenerationStart,
@@ -280,11 +285,21 @@ func mustPassword(t *testing.T, s Store, u localuser.User, n int) {
 	}
 }
 
+// userByName returns the user and the hash of the user name, from
+// Store.UserByName.
+func userByName(t *testing.T, s Store, name string) (localuser.User, localuser.PasswordHash, error) {
+	t.Helper()
+
+	c, err := s.UserByName(t.Context(), name)
+
+	return c.User, c.Hash, err
+}
+
 // storedHash returns the hash of the user name.
 func storedHash(t *testing.T, s Store, name string) localuser.PasswordHash {
 	t.Helper()
 
-	_, h, err := s.UserByName(t.Context(), name)
+	_, h, err := userByName(t, s, name)
 	if err != nil {
 		t.Fatalf("user by name %q: %v", name, err)
 	}
@@ -347,7 +362,7 @@ func testCreateReads(t *testing.T, s Store) {
 
 	u := mustUser(t, s, 1)
 
-	byName, h, err := s.UserByName(t.Context(), "user1")
+	byName, h, err := userByName(t, s, "user1")
 	if err != nil {
 		t.Fatalf("user by name: %v", err)
 	}
@@ -373,7 +388,7 @@ func testCreateNoPassword(t *testing.T, s Store) {
 
 	u := mustUser(t, s, 1)
 
-	got, h, err := s.UserByName(t.Context(), u.UserName)
+	got, h, err := userByName(t, s, u.UserName)
 	if err != nil {
 		t.Fatalf("user by name: %v", err)
 	}
@@ -442,7 +457,7 @@ func testUnknownName(t *testing.T, s Store) {
 	mustUser(t, s, 1)
 
 	for _, name := range []string{"nobody", "USER1", "user1 ", "", strings.Repeat("x", 1000)} {
-		if _, _, err := s.UserByName(t.Context(), name); !errors.Is(err, localuser.ErrNotFound) {
+		if _, _, err := userByName(t, s, name); !errors.Is(err, localuser.ErrNotFound) {
 			t.Errorf("user by name %q: err = %v, want ErrNotFound", name, err)
 		}
 	}
@@ -470,6 +485,10 @@ func testDelete(t *testing.T, s Store) {
 		t.Fatalf("principal after the user delete: %v", err)
 	}
 
+	if got := generation(t, s, "prn-1"); got != 2 {
+		t.Fatalf("session generation after the user delete = %d, want 2", got)
+	}
+
 	_, err := redeem(t, s, d, at(5), hash(1))
 	wantErr(t, "redeem a code of a deleted user", err, localuser.ErrNotFound)
 
@@ -487,12 +506,12 @@ func testRename(t *testing.T, s Store) {
 		t.Fatalf("rename: %v", err)
 	}
 
-	got, _, err := s.UserByName(t.Context(), "alice.smith")
+	got, _, err := userByName(t, s, "alice.smith")
 	if err != nil || got.ID != u.ID || got.PrincipalID != u.PrincipalID {
 		t.Fatalf("user by the new name = %+v, %v; want %s", got, err, u.ID)
 	}
 
-	if _, _, oldErr := s.UserByName(t.Context(), "user1"); !errors.Is(oldErr, localuser.ErrNotFound) {
+	if _, _, oldErr := userByName(t, s, "user1"); !errors.Is(oldErr, localuser.ErrNotFound) {
 		t.Fatalf("user by the old name: err = %v, want ErrNotFound", oldErr)
 	}
 
@@ -515,7 +534,7 @@ func testRenameTaken(t *testing.T, s Store) {
 	err := s.RenameUser(t.Context(), u2.ID, "user1", entry("local-user:lus-2", at(3)))
 	wantErr(t, "rename to a taken name", err, localuser.ErrAlreadyExists)
 
-	if got, _, err := s.UserByName(t.Context(), "user2"); err != nil || got.ID != u2.ID {
+	if got, _, err := userByName(t, s, "user2"); err != nil || got.ID != u2.ID {
 		t.Fatalf("user2 after a refused rename = %+v, %v", got, err)
 	}
 
@@ -556,7 +575,7 @@ func testOtherScope(t *testing.T, s Store) {
 		t.Fatalf("hash after a refused set = %q, want none", h)
 	}
 
-	if _, _, err := s.UserByName(t.Context(), "user2"); !errors.Is(err, localuser.ErrNotFound) {
+	if _, _, err := userByName(t, s, "user2"); !errors.Is(err, localuser.ErrNotFound) {
 		t.Fatalf("user2 after a refused create: err = %v, want ErrNotFound", err)
 	}
 
@@ -595,7 +614,7 @@ func testAppendFails(t *testing.T, s Store) {
 		}
 	}
 
-	got, h, err := s.UserByName(ctx, "user1")
+	got, h, err := userByName(t, s, "user1")
 	if err != nil || h != hash(1) || got.ChangeRequired {
 		t.Fatalf("user after refused changes = %+v, %q, %v; want user1 with hash 1", got, h, err)
 	}
@@ -633,7 +652,7 @@ func testSetPassword(t *testing.T, s Store) {
 		t.Fatalf("set password: %v", err)
 	}
 
-	got, h, err := s.UserByName(t.Context(), "user1")
+	got, h, err := userByName(t, s, "user1")
 	if err != nil {
 		t.Fatalf("user by name: %v", err)
 	}
@@ -933,7 +952,7 @@ func testDemoRename(t *testing.T, s Store) {
 	err = s.RenameUser(t.Context(), u.ID, "visitor", entry("local-user:demo", at(3)))
 	wantErr(t, "rename the demo user", err, localuser.ErrDemoFixed)
 
-	if _, _, err := s.UserByName(t.Context(), localuser.DemoUserName); err != nil {
+	if _, _, err := userByName(t, s, localuser.DemoUserName); err != nil {
 		t.Fatalf("demo user by name after a refused rename: %v", err)
 	}
 }
@@ -947,7 +966,7 @@ func testSeed(t *testing.T, s Store) {
 		t.Fatalf("seed again: %v", err)
 	}
 
-	got, h, err := s.UserByName(t.Context(), localuser.DemoUserName)
+	got, h, err := userByName(t, s, localuser.DemoUserName)
 	if err != nil {
 		t.Fatalf("demo user: %v", err)
 	}
@@ -1091,7 +1110,7 @@ func testRedeem(t *testing.T, s Store) {
 		t.Fatalf("redeemed reset = %+v, want lpr-1 of %s", r, u.ID)
 	}
 
-	got, h, err := s.UserByName(t.Context(), "user1")
+	got, h, err := userByName(t, s, "user1")
 	if err != nil || h != hash(5) || !got.PasswordSetAt.Equal(at(4)) {
 		t.Fatalf("user after a redeem = %+v, %q, %v; want hash 5 set at %s", got, h, err, at(4))
 	}
@@ -1491,4 +1510,72 @@ func testDigestTaken(t *testing.T, s Store) {
 	err := s.CreateReset(t.Context(), newReset("lpr-2", u2.ID, localuser.PurposeSetUp, at(3)), first,
 		entry("local-user:lus-2", at(3)))
 	wantErr(t, "a reset code with a taken digest", err, localuser.ErrAlreadyExists)
+}
+
+func testLookupGeneration(t *testing.T, s Store) {
+	t.Helper()
+
+	u := mustUser(t, s, 1)
+
+	fresh, err := s.UserByName(t.Context(), "user1")
+	if err != nil || fresh.SessionGeneration != 1 {
+		t.Fatalf("lookup of a new user = %+v, %v; want the generation 1", fresh, err)
+	}
+
+	mustPassword(t, s, u, 1)
+
+	// The sign-in reads the hash and the generation, verifies the password,
+	// and only then issues its session. A reset commits in between.
+	read, err := s.UserByName(t.Context(), "user1")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+
+	if read.Hash != hash(1) || read.SessionGeneration != generation(t, s, u.PrincipalID) {
+		t.Fatalf("lookup = %+v, want hash 1 and the stored generation", read)
+	}
+
+	mustReset(t, s, newReset("lpr-1", u.ID, localuser.PurposeReset, at(3)))
+
+	// The session that the sign-in issues carries the generation of its
+	// read. The cookie check compares it with the stored generation, so the
+	// session dies at its first request.
+	if now := generation(t, s, u.PrincipalID); read.SessionGeneration >= now {
+		t.Fatalf("generation of the read = %d, stored generation after the reset = %d; want the read stale",
+			read.SessionGeneration, now)
+	}
+
+	after, err := s.UserByName(t.Context(), "user1")
+	if err != nil || after.SessionGeneration != generation(t, s, u.PrincipalID) {
+		t.Fatalf("lookup after the reset = %+v, %v; want the new generation", after, err)
+	}
+}
+
+func testDeleteLastCredential(t *testing.T, s Store) {
+	t.Helper()
+
+	u := mustUser(t, s, 1)
+	mustPassword(t, s, u, 1)
+	mustReset(t, s, newReset("lpr-1", u.ID, localuser.PurposeSetUp, at(3)))
+
+	g := generation(t, s, u.PrincipalID)
+	before := len(entries(t, s, "local-user:lus-1"))
+
+	err := s.DeleteUser(t.Context(), u.ID, entry("local-user:lus-1", at(4)))
+	wantErr(t, "delete a user whose only credential is the password", err, localuser.ErrLastCredential)
+
+	if h := storedHash(t, s, "user1"); h != hash(1) {
+		t.Fatalf("hash after a refused delete = %q, want hash 1", h)
+	}
+
+	if got := generation(t, s, u.PrincipalID); got != g {
+		t.Fatalf("session generation after a refused delete = %d, want %d", got, g)
+	}
+
+	wantEntries(t, s, "local-user:lus-1", before)
+
+	code := digestOfReset(newReset("lpr-1", u.ID, localuser.PurposeSetUp, at(3)))
+	if _, err := redeem(t, s, code, at(5), hash(2)); err != nil {
+		t.Fatalf("redeem the code after a refused delete: %v; want the code kept", err)
+	}
 }

@@ -35,7 +35,7 @@ func newFake() *fakeTx {
 		},
 		user: localuserstore.User{
 			ID: "lus-1", PrincipalID: "prn-1", UserName: "alice", PasswordHash: "", CreatedBy: "admin",
-			PasswordSetAtMs: 0, CreatedAtMs: 1, ChangeRequired: false, Demo: false,
+			PasswordSetAtMs: 0, CreatedAtMs: 1, SessionGeneration: 0, ChangeRequired: false, Demo: false,
 		},
 		reset: localuserstore.Reset{
 			ID: "lpr-1", UserID: "lus-1", PrincipalID: "prn-1", Digest: localuser.DigestOf("code").String(),
@@ -298,7 +298,7 @@ func TestByNameRefusesBadName(t *testing.T) {
 	for _, name := range []string{"", "Alice", "alice'; DROP TABLE local_users; --", "a\x00b"} {
 		f := newFake()
 
-		if _, _, err := localuserstore.ByName(t.Context(), f, name); !errors.Is(err, localuser.ErrNotFound) {
+		if _, err := localuserstore.ByName(t.Context(), f, name); !errors.Is(err, localuser.ErrNotFound) {
 			t.Errorf("by name %q: err = %v, want ErrNotFound", name, err)
 		}
 
@@ -347,5 +347,61 @@ func TestResetChanges(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("change %s = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+// TestDeleteRefusesLastCredential checks that a delete of a user with a
+// password fails closed and writes nothing, and that a delete of a user with
+// no password bumps the session generation.
+func TestDeleteRefusesLastCredential(t *testing.T) {
+	t.Parallel()
+
+	f := newFake()
+	f.user.PasswordHash = string(validHash)
+
+	if err := localuserstore.Delete(t.Context(), f, "lus-1"); !errors.Is(err, localuser.ErrLastCredential) {
+		t.Fatalf("delete a user with a password: err = %v, want ErrLastCredential", err)
+	}
+
+	wantNoWrites(t, f)
+
+	f = newFake()
+
+	if err := localuserstore.Delete(t.Context(), f, "lus-1"); err != nil {
+		t.Fatalf("delete a user with no password: %v", err)
+	}
+
+	want := []string{"delete resets", "delete user", "bump"}
+	if len(f.writes) != len(want) {
+		t.Fatalf("writes = %v, want %v", f.writes, want)
+	}
+
+	for i := range want {
+		if f.writes[i] != want[i] {
+			t.Fatalf("writes = %v, want %v", f.writes, want)
+		}
+	}
+}
+
+// TestByNameRefusesGenerationBelowOne is the fail-closed layer of the
+// generation that a sign-in seals: a value that no write can make fails.
+func TestByNameRefusesGenerationBelowOne(t *testing.T) {
+	t.Parallel()
+
+	for _, g := range []int64{0, -1} {
+		f := newFake()
+		f.user.SessionGeneration = g
+
+		if _, err := localuserstore.ByName(t.Context(), f, "alice"); !errors.Is(err, localuser.ErrUnavailable) {
+			t.Errorf("by name with the generation %d: err = %v, want ErrUnavailable", g, err)
+		}
+	}
+
+	f := newFake()
+	f.user.SessionGeneration = 7
+
+	c, err := localuserstore.ByName(t.Context(), f, "alice")
+	if err != nil || c.SessionGeneration != 7 {
+		t.Fatalf("by name = %+v, %v; want the generation 7 of the read", c, err)
 	}
 }

@@ -72,6 +72,13 @@ func (l *List) Blocked(ctx context.Context, candidate string) (bool, error) {
 		return false, fmt.Errorf("check the password blocklist: %w", err)
 	}
 
+	// Defense in depth: the service refuses a password above MaxBytes before
+	// it checks the list. This check stays so that a new caller cannot make
+	// the fold run on an input of any size.
+	if len(candidate) > localuser.MaxBytes {
+		return false, fmt.Errorf("%w: %d bytes", localuser.ErrPasswordTooLong, len(candidate))
+	}
+
 	l.once.Do(func() {
 		var raw []byte
 

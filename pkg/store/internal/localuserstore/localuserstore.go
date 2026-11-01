@@ -42,7 +42,8 @@ type Principal struct {
 	BreakGlass bool
 }
 
-// User is a row of the local user table.
+// User is a row of the local user table. SessionGeneration is set only by
+// Reads.UserByName, from the same read as the hash.
 type User struct {
 	ID              string
 	PrincipalID     string
@@ -51,8 +52,10 @@ type User struct {
 	CreatedBy       string
 	PasswordSetAtMs int64
 	CreatedAtMs     int64
-	ChangeRequired  bool
-	Demo            bool
+	// SessionGeneration is the session generation of the person.
+	SessionGeneration int64
+	ChangeRequired    bool
+	Demo              bool
 }
 
 // Reset is a row of the reset code table.
@@ -251,15 +254,16 @@ func CreateUser(ctx context.Context, tx Tx, u localuser.User) error {
 	}
 
 	n, err := tx.CreateUser(ctx, User{
-		ID:              u.ID,
-		PrincipalID:     u.PrincipalID,
-		UserName:        u.UserName,
-		PasswordHash:    "",
-		CreatedBy:       u.CreatedBy,
-		PasswordSetAtMs: 0,
-		CreatedAtMs:     codec.Millis(u.CreatedAt),
-		ChangeRequired:  false,
-		Demo:            false,
+		ID:                u.ID,
+		PrincipalID:       u.PrincipalID,
+		UserName:          u.UserName,
+		PasswordHash:      "",
+		CreatedBy:         u.CreatedBy,
+		PasswordSetAtMs:   0,
+		CreatedAtMs:       codec.Millis(u.CreatedAt),
+		ChangeRequired:    false,
+		Demo:              false,
+		SessionGeneration: 0,
 	})
 	if err != nil {
 		return fmt.Errorf("insert local user: %w", err)
@@ -286,25 +290,37 @@ func conflict(ctx context.Context, tx Tx, id, principalID, userName string) erro
 	return localuser.ErrAlreadyExists
 }
 
-// ByName returns the user whose stored user name is name, and its hash. A
-// name that fails ValidateUserName finds no user.
-func ByName(ctx context.Context, tx Tx, name string) (localuser.User, localuser.PasswordHash, error) {
+// ByName returns the credential of the user whose stored user name is name:
+// the user, its hash and the session generation of its person, from one
+// read. A name that fails ValidateUserName finds no user.
+func ByName(ctx context.Context, tx Tx, name string) (localuser.Credential, error) {
+	var none localuser.Credential
+
 	// Defense in depth: the service checks the name first. This check stays
 	// so that no lookup sends a name that no row can hold.
 	if err := localuser.ValidateUserName(name); err != nil {
-		return localuser.User{}, "", localuser.ErrNotFound
+		return none, localuser.ErrNotFound
 	}
 
 	u, err := tx.UserByName(ctx, name)
 	if errors.Is(err, ErrNoRow) {
-		return localuser.User{}, "", localuser.ErrNotFound
+		return none, localuser.ErrNotFound
 	}
 
 	if err != nil {
-		return localuser.User{}, "", fmt.Errorf("select local user by name: %w", err)
+		return none, fmt.Errorf("select local user by name: %w", err)
 	}
 
-	return UserOf(u), localuser.PasswordHash(u.PasswordHash), nil
+	// Defense in depth: the CHECK of the table keeps a stored generation at
+	// 2 or more, and a missing row reads as 1. This check stays so that a
+	// sign-in never seals a generation that no write could make.
+	if u.SessionGeneration < 1 {
+		return none, fmt.Errorf("%w: session generation %d", localuser.ErrUnavailable, u.SessionGeneration)
+	}
+
+	return localuser.Credential{
+		User: UserOf(u), Hash: localuser.PasswordHash(u.PasswordHash), SessionGeneration: u.SessionGeneration,
+	}, nil
 }
 
 // ByPrincipal returns the user of the principal principalID.
@@ -357,15 +373,25 @@ func Rename(ctx context.Context, tx Tx, userID, name string) error {
 	return nil
 }
 
-// Delete deletes the user userID and each reset code of the user. The
-// principal stays.
+// Delete deletes the user userID and each reset code of the user, and adds
+// 1 to the session generation of the person, so that each session that the
+// password made ends. The principal stays. The delete removes the password
+// too, so it applies the rule of RemovePassword: it fails closed with
+// localuser.ErrLastCredential while the user has a password, because no
+// passkey store exists yet. The passkey store replaces this with the count of
+// the passkeys of the person.
 func Delete(ctx context.Context, tx Tx, userID string) error {
-	if _, _, err := lockedUser(ctx, tx, userID); err != nil {
+	u, _, err := lockedUser(ctx, tx, userID)
+	if err != nil {
 		return err
 	}
 
-	if err := tx.DeleteResetsOfUser(ctx, userID); err != nil {
-		return fmt.Errorf("delete reset codes of local user: %w", err)
+	if u.PasswordHash != "" {
+		return fmt.Errorf("%w: the delete removes the password", localuser.ErrLastCredential)
+	}
+
+	if delErr := tx.DeleteResetsOfUser(ctx, userID); delErr != nil {
+		return fmt.Errorf("delete reset codes of local user: %w", delErr)
 	}
 
 	n, err := tx.DeleteUser(ctx, userID)
@@ -377,7 +403,7 @@ func Delete(ctx context.Context, tx Tx, userID string) error {
 		return localuser.ErrNotFound
 	}
 
-	return nil
+	return bump(ctx, tx, u.PrincipalID)
 }
 
 // credentialChecks returns the error of a password write for u and p: the
@@ -589,15 +615,16 @@ func demoUser(ctx context.Context, tx Tx, principalID string, at time.Time) (Use
 	}
 
 	u = User{
-		ID:              ident.NewID(localuser.UserIDPrefix),
-		PrincipalID:     principalID,
-		UserName:        localuser.DemoUserName,
-		PasswordHash:    "",
-		CreatedBy:       "system",
-		PasswordSetAtMs: 0,
-		CreatedAtMs:     codec.Millis(at),
-		ChangeRequired:  false,
-		Demo:            true,
+		ID:                ident.NewID(localuser.UserIDPrefix),
+		PrincipalID:       principalID,
+		UserName:          localuser.DemoUserName,
+		PasswordHash:      "",
+		CreatedBy:         "system",
+		PasswordSetAtMs:   0,
+		CreatedAtMs:       codec.Millis(at),
+		ChangeRequired:    false,
+		Demo:              true,
+		SessionGeneration: 0,
 	}
 
 	n, err := tx.CreateDemoUser(ctx, u)

@@ -6978,13 +6978,33 @@ func (q *Queries) GetLocalUser(ctx context.Context, id string) (LocalUser, error
 }
 
 const getLocalUserByName = `-- name: GetLocalUserByName :one
-SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
-FROM local_users WHERE user_name = $1
+SELECT u.id, u.principal_id, u.user_name, u.password_hash, u.password_set_at_ms, u.change_required, u.demo,
+  u.created_by, u.created_at_ms,
+  CAST(COALESCE(g.generation, 1) AS bigint) AS session_generation
+FROM local_users u LEFT JOIN principal_session_generations g ON g.principal_id = u.principal_id
+WHERE u.user_name = $1
 `
 
-func (q *Queries) GetLocalUserByName(ctx context.Context, userName string) (LocalUser, error) {
+type GetLocalUserByNameRow struct {
+	ID                string
+	PrincipalID       string
+	UserName          string
+	PasswordHash      string
+	PasswordSetAtMs   int64
+	ChangeRequired    bool
+	Demo              bool
+	CreatedBy         string
+	CreatedAtMs       int64
+	SessionGeneration int64
+}
+
+// The user, its hash and the session generation of its person, in one read:
+// a sign-in seals this generation, so a write that bumps the generation after
+// this read ends the session that the sign-in makes. A person with no row of
+// generation has the generation 1.
+func (q *Queries) GetLocalUserByName(ctx context.Context, userName string) (GetLocalUserByNameRow, error) {
 	row := q.db.QueryRow(ctx, getLocalUserByName, userName)
-	var i LocalUser
+	var i GetLocalUserByNameRow
 	err := row.Scan(
 		&i.ID,
 		&i.PrincipalID,
@@ -6995,6 +7015,7 @@ func (q *Queries) GetLocalUserByName(ctx context.Context, userName string) (Loca
 		&i.Demo,
 		&i.CreatedBy,
 		&i.CreatedAtMs,
+		&i.SessionGeneration,
 	)
 	return i, err
 }
