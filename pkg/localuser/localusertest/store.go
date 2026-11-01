@@ -141,6 +141,8 @@ func resetCases() []storeCase {
 		runCase("two redeems of one code at the same time: one wins", testRedeemRace),
 		runCase("a prune deletes the expired codes only", testPrune),
 		runCase("the store finds a reset code by its digest only", testDigestOnly),
+		runCase("the user of a live reset code reads by its digest, changes nothing, and an unknown or expired "+
+			"code fails with ErrNotFound", testUserOfReset),
 		runCase("a second reset code with a digest that another code holds fails with ErrAlreadyExists",
 			testDigestTaken),
 	}
@@ -1577,5 +1579,40 @@ func testDeleteLastCredential(t *testing.T, s Store) {
 	code := digestOfReset(newReset("lpr-1", u.ID, localuser.PurposeSetUp, at(3)))
 	if _, err := redeem(t, s, code, at(5), hash(2)); err != nil {
 		t.Fatalf("redeem the code after a refused delete: %v; want the code kept", err)
+	}
+}
+
+func testUserOfReset(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	u := mustUser(t, s, 1)
+	r := newReset("lpr-1", u.ID, localuser.PurposeSetUp, at(3))
+	d := mustReset(t, s, r)
+
+	cases := []struct {
+		want   error
+		when   time.Time
+		name   string
+		digest localuser.Digest
+	}{
+		{name: "a live code", digest: d, when: at(4), want: nil},
+		{name: "an unknown digest", digest: localuser.DigestOf("another code"), when: at(4), want: localuser.ErrNotFound},
+		{name: "at the expiry", digest: d, when: r.ExpiresAt, want: localuser.ErrNotFound},
+		{name: "after the expiry", digest: d, when: r.ExpiresAt.Add(time.Minute), want: localuser.ErrNotFound},
+	}
+
+	for _, tc := range cases {
+		got, err := s.UserOfReset(ctx, tc.digest, tc.when)
+		wantErr(t, tc.name, err, tc.want)
+
+		if tc.want == nil && (got.ID != u.ID || got.UserName != u.UserName || got.PrincipalID != u.PrincipalID) {
+			t.Fatalf("%s: user = %+v, want %s", tc.name, got, u.ID)
+		}
+	}
+
+	// The read changes nothing: the code still redeems once.
+	if _, err := redeem(t, s, d, at(5), hash(5)); err != nil {
+		t.Fatalf("redeem after the reads: %v", err)
 	}
 }

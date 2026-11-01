@@ -503,7 +503,7 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sessions",
 			columns: []string{
 				"id", pgColPrincipalID, pgColDigest, "provider", pgColCreatedAtMs, "last_seen_at_ms", "auth_time_ms",
-				"ended_at_ms", "end_reason", "source_ip", "user_agent",
+				"ended_at_ms", "end_reason", "source_ip", "user_agent", "generation",
 			},
 			orderBy: []string{"id"},
 		},

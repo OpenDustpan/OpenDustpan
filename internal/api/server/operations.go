@@ -144,6 +144,7 @@ func joinLabels() map[string]apidesc.Label {
 	maps.Copy(labels, gitHostOperationLabels)
 	maps.Copy(labels, gateObjectLabels())
 	maps.Copy(labels, storeCheckOperationLabels())
+	maps.Copy(labels, localUserOperationLabels())
 
 	return labels
 }

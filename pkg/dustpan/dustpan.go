@@ -946,7 +946,7 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	cfg.authenticator = authn
 	cfg.authorizer = allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
-			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences,
+			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences, identity.ActionCallerManageSignIn,
 		},
 	}}, cfg.ipAllowlists)
 
@@ -3085,6 +3085,13 @@ func newServerHandler(
 		return nil, err
 	}
 
+	settingsSvc := newSettingService(cfg, cfg.namespaceStore)
+
+	localUsers, err := newLocalUserService(cfg, principals, settingsSvc, deps.signIn)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		GitHost:          gitHost,
 		Idempotency:      idem,
@@ -3117,7 +3124,8 @@ func newServerHandler(
 		Workers:          cfg.watch,
 		SignIn:           deps.signIn,
 		Preferences:      newPreferencesService(cfg),
-		Settings:         newSettingService(cfg, cfg.namespaceStore),
+		LocalUsers:       localUsers.service,
+		Settings:         settingsSvc,
 		InstallationKind: cfg.installationKind,
 		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
