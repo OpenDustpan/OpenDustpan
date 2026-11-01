@@ -74,6 +74,7 @@ func TestAuthenticateRefusesAnotherGeneration(t *testing.T) {
 				t.Fatalf("authenticate = %v, want ErrGenerationChanged", err)
 			case !tc.wantErr && err != nil:
 				t.Fatalf("authenticate = %v, want nil", err)
+			default:
 			}
 		})
 	}

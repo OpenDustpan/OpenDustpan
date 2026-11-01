@@ -73,9 +73,23 @@ type localAnswer struct {
 	body   string
 }
 
-// send sends one request with the token when token is true, and with the
-// cookie jar of the browser and the CSRF value when csrf is not empty.
-func (c localClient) send(t *testing.T, method, path, body string, token bool, csrf string) localAnswer {
+// localAuth is the credential of one request: the administrator token, or
+// the CSRF value of the session in the cookie jar. The jar sends the cookie
+// with each request.
+type localAuth struct {
+	csrf  string
+	token bool
+}
+
+// asAdmin is a request with the token of the administrator.
+func asAdmin() localAuth { return localAuth{csrf: "", token: true} }
+
+// asBrowser is a request with the cookie jar and the CSRF value csrf, which
+// may be empty.
+func asBrowser(csrf string) localAuth { return localAuth{csrf: csrf, token: false} }
+
+// send sends one request with the credential a.
+func (c localClient) send(t *testing.T, method, path, body string, a localAuth) localAnswer {
 	t.Helper()
 
 	req, err := http.NewRequestWithContext(t.Context(), method, c.env.URL+path, strings.NewReader(body))
@@ -86,12 +100,12 @@ func (c localClient) send(t *testing.T, method, path, body string, token bool, c
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
-	if token {
+	if a.token {
 		req.Header.Set("Authorization", "Bearer "+c.env.AdminToken())
 	}
 
-	if csrf != "" {
-		req.Header.Set("X-Dustpan-CSRF", csrf)
+	if a.csrf != "" {
+		req.Header.Set("X-Dustpan-Csrf", a.csrf)
 	}
 
 	resp, err := c.browser.Do(req)
@@ -139,7 +153,7 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 
 	c := localClient{env: env, browser: env.BrowserClient(t)}
 
-	policy := c.send(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", true, "")
+	policy := c.send(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", asAdmin())
 	policy.want(t, "read the policy", http.StatusOK, "")
 
 	if !strings.Contains(policy.body, `"enabled":true`) || !strings.Contains(policy.body, `"minLength":15`) {
@@ -147,11 +161,11 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 	}
 
 	created := c.send(t, http.MethodPost, "/api/dustpan/v1/local-users",
-		`{"userName":"alice","displayName":"Alice Example","reason":"e2e"}`, true, "")
+		`{"userName":"alice","displayName":"Alice Example","reason":"e2e"}`, asAdmin())
 	created.want(t, "create the local user", http.StatusCreated, "")
 
 	var user struct {
-		PrincipalID string `json:"principalId"`
+		PrincipalID string `json:"principalID"`
 		Subject     string `json:"subject"`
 		SetUpCode   string `json:"setUpCode"`
 	}
@@ -161,44 +175,44 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 	}
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+user.SetUpCode+`","password":"short"}`, false, "").
+		`{"code":"`+user.SetUpCode+`","password":"short"}`, asBrowser("")).
 		want(t, "set a short password", http.StatusBadRequest, "password.too-short")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+user.SetUpCode+`","password":"`+e2ePassword+`"}`, false, "").
+		`{"code":"`+user.SetUpCode+`","password":"`+e2ePassword+`"}`, asBrowser("")).
 		want(t, "set the password", http.StatusNoContent, "")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+user.SetUpCode+`","password":"`+e2eNewPassword+`"}`, false, "").
+		`{"code":"`+user.SetUpCode+`","password":"`+e2eNewPassword+`"}`, asBrowser("")).
 		want(t, "use the set-up code again", http.StatusBadRequest, "local-user.code-invalid")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
-		`{"userName":"alice","password":"`+e2eNewPassword+`"}`, false, "").
+		`{"userName":"alice","password":"`+e2eNewPassword+`"}`, asBrowser("")).
 		want(t, "sign in with a wrong password", http.StatusUnauthorized, "local-user.sign-in-failed")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
-		`{"userName":"ALICE","password":"`+e2ePassword+`"}`, false, "").
+		`{"userName":"ALICE","password":"`+e2ePassword+`"}`, asBrowser("")).
 		want(t, "sign in", http.StatusNoContent, "")
 
 	csrf := c.readSession(t, user.Subject)
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/reset",
-		`{"principalId":"`+user.PrincipalID+`","reason":"e2e"}`, true, "").
+		`{"principalID":"`+user.PrincipalID+`","reason":"e2e"}`, asAdmin()).
 		want(t, "reset with a token", http.StatusForbidden, "mfa.fresh-step-required")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/me/password",
-		`{"currentPassword":"`+e2ePassword+`","newPassword":"`+e2eNewPassword+`"}`, false, csrf).
+		`{"currentPassword":"`+e2ePassword+`","newPassword":"`+e2eNewPassword+`"}`, asBrowser(csrf)).
 		want(t, "change the password", http.StatusNoContent, "")
 
 	// The jar holds the new session cookie of the change.
 	c.readSession(t, user.Subject)
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
-		`{"userName":"alice","password":"`+e2ePassword+`"}`, false, "").
+		`{"userName":"alice","password":"`+e2ePassword+`"}`, asBrowser("")).
 		want(t, "sign in with the old password", http.StatusUnauthorized, "local-user.sign-in-failed")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
-		`{"userName":"alice","password":"`+e2eNewPassword+`"}`, false, "").
+		`{"userName":"alice","password":"`+e2eNewPassword+`"}`, asBrowser("")).
 		want(t, "sign in with the new password", http.StatusNoContent, "")
 }
 
@@ -207,7 +221,7 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 func (c localClient) readSession(t *testing.T, subject string) string {
 	t.Helper()
 
-	a := c.send(t, http.MethodGet, "/api/server/session", "", false, "")
+	a := c.send(t, http.MethodGet, "/api/server/session", "", asBrowser(""))
 	a.want(t, "read the session", http.StatusOK, "")
 
 	var s e2eSession

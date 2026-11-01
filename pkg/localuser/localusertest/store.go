@@ -1597,7 +1597,12 @@ func testUserOfReset(t *testing.T, s Store) {
 		digest localuser.Digest
 	}{
 		{name: "a live code", digest: d, when: at(4), want: nil},
-		{name: "an unknown digest", digest: localuser.DigestOf("another code"), when: at(4), want: localuser.ErrNotFound},
+		{
+			name:   "an unknown digest",
+			digest: localuser.DigestOf("another code"),
+			when:   at(4),
+			want:   localuser.ErrNotFound,
+		},
 		{name: "at the expiry", digest: d, when: r.ExpiresAt, want: localuser.ErrNotFound},
 		{name: "after the expiry", digest: d, when: r.ExpiresAt.Add(time.Minute), want: localuser.ErrNotFound},
 	}

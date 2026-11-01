@@ -3,7 +3,8 @@ package errcode
 // The codes of the area. A code is never removed and never changes its
 // meaning.
 const (
-	// PasswordBlocked means that the new password is common, holds a name of the person or of the product, or is a repeat or a sequence.
+	// PasswordBlocked means that the new password is common, holds a name of the person or of the product, or is a
+	// repeat or a sequence.
 	PasswordBlocked = "password.blocked"
 	// PasswordForm means that the password is not valid UTF-8 or holds a control character.
 	PasswordForm = "password.form"

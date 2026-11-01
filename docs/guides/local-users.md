@@ -61,8 +61,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 
 ```json
 {
-  "principalId": "prn-...",
-  "userId": "lus-...",
+  "principalID": "prn-...",
+  "userID": "lus-...",
   "userName": "alice",
   "subject": "local:lus-...",
   "setUpCode": "<43 characters>",
@@ -163,7 +163,7 @@ Set `revokeAccessTokens` to `true` to revoke each access token of the person
 too:
 
 ```json
-{"principalId":"prn-...","reason":"the person lost the password","revokeAccessTokens":false}
+{"principalID":"prn-...","reason":"the person lost the password","revokeAccessTokens":false}
 ```
 
 Send it to `POST /api/dustpan/v1/local-users/reset`. The answer holds the

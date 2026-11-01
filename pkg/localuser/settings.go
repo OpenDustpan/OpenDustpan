@@ -27,6 +27,12 @@ const (
 	SettingResetLifetime = "password.resetLifetime"
 )
 
+// The text forms of a boolean setting.
+const (
+	textTrue  = "true"
+	textFalse = "false"
+)
+
 // errSettingValue is the reason of a value that a check of these settings
 // refuses. The settings resource shows the text, so it holds no value.
 var errSettingValue = errors.New("the value is outside the allowed values")
@@ -42,7 +48,7 @@ func SettingDeclarations() []setting.Declaration {
 			// A change to "true" or back to the configuration can turn the
 			// password sign-in on next to an identity provider. Each such
 			// change needs a fresh authentication.
-			ReducesSecurity: func(old, next string) bool { return old != next && next != "false" },
+			ReducesSecurity: func(old, next string) bool { return old != next && next != textFalse },
 			Doc: `Password sign-in of local users: "true", "false", or empty. Empty means on when the ` +
 				"installation has no identity provider, and off when it has one.",
 		},
@@ -55,8 +61,8 @@ func SettingDeclarations() []setting.Declaration {
 		},
 		{
 			Key: SettingRequireLettersAndDigits, Level: setting.LevelInstallation, Kind: setting.KindBool,
-			Default: "false", Secret: false, Database: true, Apply: setting.ApplyLive, Check: nil,
-			ReducesSecurity: func(old, next string) bool { return old == "true" && next != "true" },
+			Default: textFalse, Secret: false, Database: true, Apply: setting.ApplyLive, Check: nil,
+			ReducesSecurity: func(old, next string) bool { return old == textTrue && next != textTrue },
 			Doc:             "Each new password holds at least one letter and one digit.",
 		},
 		{
@@ -78,7 +84,7 @@ func SettingDeclarations() []setting.Declaration {
 // checkEnabled accepts "true", "false" and the empty value.
 func checkEnabled(value string) error {
 	switch value {
-	case "", "true", "false":
+	case "", textTrue, textFalse:
 		return nil
 	default:
 		return errSettingValue

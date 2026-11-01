@@ -52,7 +52,7 @@ func TestLocalUserSuccessPaths(t *testing.T) {
 	f := newAccessFixture(t)
 
 	var created struct {
-		PrincipalID string `json:"principalId"`
+		PrincipalID string `json:"principalID"`
 		SetUpCode   string `json:"setUpCode"`
 	}
 
@@ -113,7 +113,7 @@ func TestLocalUserSuccessPaths(t *testing.T) {
 
 	f.asFresh(t, "admin", apiCall{
 		method: http.MethodPost, path: "/api/dustpan/v1/local-users/reset",
-		body: `{"principalId":"` + created.PrincipalID + `","reason":"lost the password"}`, want: http.StatusCreated,
+		body: `{"principalID":"` + created.PrincipalID + `","reason":"lost the password"}`, want: http.StatusCreated,
 	}, &reset)
 
 	if len(reset.ResetCode) != 43 {
