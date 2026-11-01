@@ -746,6 +746,7 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
+		Damaged:          nil,
 	}
 }
 

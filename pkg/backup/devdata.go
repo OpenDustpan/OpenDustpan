@@ -292,6 +292,11 @@ const (
 	// WarnAuditAppendFailed says that the restore finished but an audit
 	// entry could not be written. The restore record holds the report.
 	WarnAuditAppendFailed RestoreWarningCode = "audit-append-failed"
+	// WarnDamagedLiveBlobs says that the backup before the restore found
+	// live blobs that were missing or that did not match their records. The
+	// restore wrote the checked bytes of the backup there, and the audit log
+	// names each blob.
+	WarnDamagedLiveBlobs RestoreWarningCode = "damaged-live-blobs"
 )
 
 // RestoreWarning is a warning in the answer of the restore API. The restore
