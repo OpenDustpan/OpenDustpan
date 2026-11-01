@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -37,6 +38,11 @@ func TestNameLockConformance(t *testing.T) {
 
 				return closed
 			},
+			Entries: func(t *testing.T) []audit.Entry {
+				t.Helper()
+
+				return serverEntries(t, s)
+			},
 		}
 	})
 }
@@ -57,4 +63,16 @@ func TestNameLockKey(t *testing.T) {
 	if err != nil || !bytes.Equal(second, first) {
 		t.Fatalf("second key differs or fails: %v", err)
 	}
+}
+
+// serverEntries returns the audit entries of the installation that s holds.
+func serverEntries(t *testing.T, s *sqlite.Store) []audit.Entry {
+	t.Helper()
+
+	page, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	return page.Entries
 }
