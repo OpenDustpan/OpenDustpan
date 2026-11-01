@@ -27,8 +27,6 @@ This ADR writes the words of the owner. It adds no decision of its own.
    OpenPGP library APPROVED (owner, 2026-10-20, after provenance check): github.com/ProtonMail/go-crypto v1.5.2, github.com/cloudflare/circl v1.6.3, golang.org/x/crypto >= v0.56.0 (RFC 101 Q6, #1221).
    ```
 
-   RFC 101 is the RFC of the private registry. The library is for the registry of the server.
-
 ## Consequences
 
 - ADR 176 and ADR 177 get a pointer to this ADR.
