@@ -9,6 +9,7 @@ Changed by:
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 222 changes decision 9: the age of the fresh step.
 - ADR 227 changes decision 9: the age of a break-glass review authentication.
+- ADR 297 changes decisions 1, 3 and 9: a session use names the sign-in ID.
 
 ## Context
 
