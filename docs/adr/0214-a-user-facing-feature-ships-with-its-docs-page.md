@@ -4,7 +4,7 @@ Status: accepted · 2026-10-18. Accepts part of RFC 57
 
 Changed by:
 
-- ADR 314 extends: who owns the pages of the docs site.
+- ADR 315 extends: who owns the pages of the docs site.
 
 ## Context
 

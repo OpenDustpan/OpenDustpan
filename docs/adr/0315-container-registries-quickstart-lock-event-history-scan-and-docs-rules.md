@@ -1,4 +1,4 @@
-# 314. Container registries, the quickstart, the lock event, the history scan and the rules for the docs site
+# 315. Container registries, the quickstart, the lock event, the history scan and the rules for the docs site
 
 Status: accepted · 2026-11-01. Records decisions of the project owner of 18 and 19 October 2026
 

@@ -7,7 +7,7 @@ Changed by:
 - ADR 241 extends decision 16: the operation kind unit-import at state.write.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
-- ADR 312 extends decision 1: the authorization object of a profile.
+- ADR 313 extends decision 1: the authorization object of a profile.
 
 ## Context
 
