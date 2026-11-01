@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -510,12 +511,63 @@ func (h *Handler) recordEvents(w http.ResponseWriter, r *http.Request, call Leas
 	}
 
 	if err := h.updates.AppendEvents(ctx, call.Ref, call.ID, call.Token, events); err != nil {
+		if errors.Is(err, stack.ErrItemKeyUnavailable) {
+			h.auditItemKeyRefusal(r, call)
+		}
+
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
+// itemKeyRefusalReason is the reason of the audit entry of a refused event
+// batch. It names no key and no value.
+const itemKeyRefusalReason = "the item key of the update is shredded or missing: no event was stored"
+
+// auditItemKeyRefusal writes a security entry with the outcome denied for an
+// event batch that the server refused because the item key of the update is
+// shredded or missing. The lease authorized the batch, so the entry names the
+// creator and the access token of the update. The refusal stays when the
+// entry is lost: a lost entry is logged and counted.
+func (h *Handler) auditItemKeyRefusal(r *http.Request, call LeaseCall) {
+	ctx := r.Context()
+
+	obj, err := unitObject(call.Ref)
+	if err != nil {
+		h.failAudit(ctx)
+
+		return
+	}
+
+	u, err := h.updates.Get(ctx, call.Ref, call.ID)
+	if err != nil {
+		h.failAudit(ctx)
+
+		return
+	}
+
+	p := identity.Principal{
+		Subject: u.CreatedBy, DisplayName: "", Admin: false, TokenID: u.TokenID, TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+
+	entry := requestEntry(ctx, r, p, obj, auditDetail{
+		at:         time.Now().UTC(),
+		action:     string(identity.ActionUnitWrite),
+		version:    call.ID.String(),
+		valuePath:  "",
+		valueCount: nil,
+		kind:       audit.KindSecurity,
+		outcome:    audit.OutcomeDenied,
+	})
+	entry.Reason = itemKeyRefusalReason
+
+	if err := h.appendEntry(ctx, entry); err != nil {
+		h.failAudit(ctx)
+	}
 }
 
 // completeUpdate ends the update with the status its client reports.

@@ -201,6 +201,9 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "another key-encryption key does not open", test: testSealerForeignWrapper},
 		{name: "no key-encryption key fails closed", test: testSealerUnkeyed},
 		{name: "a malformed reference is refused", test: testSealerBadRef},
+		{name: "a batch seals and opens with one read of the key", test: testSealerBatchRoundTrip},
+		{name: "a batch with a moved part or of another item fails as a whole", test: testSealerBatchMoved},
+		{name: "a batch with a bad binding, no key or a shredded key fails", test: testSealerBatchRefusals},
 	}
 
 	for _, tc := range cases {
