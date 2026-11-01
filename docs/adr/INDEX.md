@@ -253,4 +253,12 @@ that the named part applies, and the later ADR adds to it.
 | [285](0285-local-users-sign-in-with-a-password-and-a-passkey.md) | Local users sign in with a password and with a passkey | accepted | - | - | this ADR |
 | [286](0286-self-service-failover-and-promotion-three-renames.md) | Self-service, failover and promotion: three renames | accepted | - | - | this ADR |
 | [287](0287-no-contributor-license-agreement.md) | No contributor license agreement and no copyright assignment | accepted | - | - | this ADR |
+| [288](0288-the-sign-in-page-looks-the-same-on-every-installation.md) | The sign-in page looks the same on every installation | accepted | - | - | this ADR |
+| [289](0289-marks-of-git-hosts-in-the-console.md) | Marks of Git hosts in the console | accepted | - | - | this ADR |
+| [290](0290-console-themes-friendly-theme-dropped-and-the-search-shortcut.md) | Console themes: the Friendly theme is dropped, and the search shortcut | accepted | - | - | this ADR |
+| [291](0291-insights-count-failures-by-token-and-service-principal.md) | Insights count failures by token and service principal, never by person | accepted | - | - | this ADR |
+| [292](0292-plain-ldap-and-smtp-connections-are-refused-unless-an-operator-opts-in.md) | Plain LDAP and SMTP connections are refused unless an operator opts in | accepted | - | - | this ADR |
+| [293](0293-the-stuck-hint-of-a-runner-job.md) | The stuck hint of a runner job | accepted | - | - | this ADR |
+| [294](0294-registry-used-by-evidence-needs-an-exact-version.md) | Registry "Used by" evidence needs an exact version | accepted | - | - | this ADR |
+| [295](0295-break-glass-recovery-mode-2-over-the-network.md) | Break-glass recovery mode 2 over the network | accepted | - | - | this ADR |
 | [296](0296-change-links-between-adrs-and-the-adr-index.md) | Change links between ADRs, and the ADR index | accepted | extends ADR 1 | - | this ADR |
