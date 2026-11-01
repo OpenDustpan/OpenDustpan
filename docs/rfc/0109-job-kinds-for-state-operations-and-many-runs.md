@@ -40,7 +40,7 @@ None yet.
 - ~~Is `run-all` one job for each Terragrunt unit, or a job kind that
   produces many runs?~~ Answered by ADR 304: one job for each Terragrunt
   unit, under a change order. The open points of the shim (unit discovery,
-  dependency order, a failure in one unit) go to the RFC for milestone 9.
+  dependency order, a failure in one unit) go to [RFC 115](0115-terragrunt-run-all-fan-out-on-runners.md).
 
 ## Checklist
 

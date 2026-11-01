@@ -657,33 +657,35 @@ fact that it names.
 
 **Goal.** A team that uses Terragrunt can run `terragrunt run-all` and keep
 one reviewed change for many units. Locally and in the CI of the team, the
-command keeps working unchanged. On OpenDustpan runners, a shim turns it into
-one job for each Terragrunt unit, under a change order. No runner applies all
-the units in one process
+command keeps working unchanged. On OpenDustpan runners, a discovery job finds
+the Terragrunt units, and a shim turns the command into one job for each unit,
+under a change order. No runner applies all the units in one process
 ([ADR 304](adr/0304-native-run-all-fan-out-applies-in-milestone-9.md)).
 
 Milestone 9 comes after milestone 8. Profiles and blueprints stay the
-recommended path. Terragrunt is supported for teams that already use it.
+recommended path. OpenDustpan supports Terragrunt for teams that already use
+it.
 
-**Design first.** An RFC for the shim comes before any code. Its scope is:
-unit discovery (how the shim finds the Terragrunt units and maps each one to
-a unit of OpenDustpan), dependency order (how the order between units reaches
-the apply jobs), and a failure in one unit (what happens to the other units).
-ADR 304 does not decide these points.
+**Design first.** [RFC 115](rfc/0115-terragrunt-run-all-fan-out-on-runners.md)
+comes before any code. Its scope is: unit discovery, dependency order (ordered
+apply jobs, or a change order that does not order its apply jobs), and a
+failure in one unit. ADR 304 does not decide these points.
 
 **Scope.**
 
 - Locally and in the CI of a team: `terragrunt run-all` works with no change.
   Each Terragrunt unit talks to its own workspace.
-- On runners: a shim turns `terragrunt run-all` into one job for each
-  Terragrunt unit, under a change order. It does not run all the applies in
-  one process.
+- On runners: a discovery job and a shim in the runner and the launcher. The
+  shim uses only the change order API. It turns `terragrunt run-all` into one
+  job for each Terragrunt unit, under a change order. The TFE-compatible API
+  adapter has no run-all logic.
 - The documentation: a guide for Terragrunt with OpenDustpan, and a page that
   says why profiles and blueprints stay the recommended path.
 
 **Exit test.** On Linux, on PostgreSQL, through the real binary over TLS,
-with real OpenTofu and real Terragrunt, the e2e suite does these steps. Each
-step passes or fails on the fact that it names.
+with real OpenTofu, real Terragrunt and a test provider that records each
+call with a time, the e2e suite does these steps. Each step passes or fails on
+the fact that it names.
 
 1. **Local run-all.** `terragrunt run-all apply` on a laptop over 3 units.
    Pass: 3 workspaces, each with 1 new state version and 1 history entry, and
@@ -691,16 +693,20 @@ step passes or fails on the fact that it names.
 2. **Run-all in the CI of a team.** The same command in a CI job. Pass: the
    result of step 1.
 3. **Run-all on a runner.** `terragrunt run-all apply` over 3 units on an
-   OpenDustpan runner. Pass: 1 change order with 3 plan jobs and 3 apply jobs,
-   each on its own unit, and each unit has 1 new state version and 1 history
-   entry. No job runs more than one unit.
-4. **The review holds.** Pass: the apply jobs start only after the apply
-   request of a person, and the provider log has no apply call before it.
-5. **A failure in one unit.** One of the 3 units fails at the apply. Pass:
-   the failed unit has a failed apply job and no new state version, and the
-   other two units have their result.
-6. **A job does not apply two units.** Pass: the provider log shows no unit
-   applied by the job of another unit.
+   OpenDustpan runner. Pass: 1 discovery job, 1 change order, 3 plan jobs and
+   3 apply jobs, each on its own unit. Each unit has 1 new state version and
+   1 history entry. The call record of the test provider shows no unit applied
+   by the job of another unit.
+4. **The record names the cause.** Pass: the history entry and the audit
+   entry of each plan job and each apply job name the discovery job, the
+   principal that requested the wrapper job, and the reason "terragrunt
+   run-all fan-out".
+5. **The review holds.** Pass: the apply jobs start only after the apply
+   request of a person, and the call record of the test provider has no apply
+   call before it.
+6. **A failure in one unit.** One of the 3 units fails at the apply. Pass: the
+   failed unit has a failed apply job and no new state version, and the other
+   2 units show the result that RFC 115 decides.
 
 ## Accepted designs that wait for adapters
 
