@@ -2848,14 +2848,47 @@ type uncachedStateOpener struct {
 	workspaces *workspace.Service
 }
 
-// OpenStateBlob implements backup.StateOpener.
+// OpenStateBlob implements backup.StateOpener. Sealed bytes that do not
+// open, and plain bytes that do not match the row of their version, wrap
+// backup.ErrLiveBlobDamaged, at the open and at each read. Every other error
+// keeps its own class, so the backup cannot take a read error for damage.
 func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	reader, err := o.workspaces.OpenStateBlob(blobcache.WithoutCache(ctx), key)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob: %w", err)
+		return nil, fmt.Errorf("open state blob: %w", stateDamage(err))
 	}
 
-	return reader, nil
+	return damageReader{ReadCloser: reader}, nil
+}
+
+// stateDamage wraps err with backup.ErrLiveBlobDamaged when err says that the
+// stored state does not match its record, and returns any other error as it
+// is.
+func stateDamage(err error) error {
+	if errors.Is(err, workspace.ErrSealedContent) || errors.Is(err, workspace.ErrStoredContentMismatch) {
+		return fmt.Errorf("%w: %w", backup.ErrLiveBlobDamaged, err)
+	}
+
+	return err
+}
+
+// damageReader maps the read errors of opened state with stateDamage.
+type damageReader struct {
+	io.ReadCloser
+}
+
+// Read returns the next plain bytes. io.EOF stays as it is.
+func (r damageReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+
+	switch {
+	case err == nil:
+		return n, nil
+	case errors.Is(err, io.EOF):
+		return n, io.EOF
+	}
+
+	return n, stateDamage(err)
 }
 
 // checkRetention refuses a soft-delete retention below
