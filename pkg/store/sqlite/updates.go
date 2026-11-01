@@ -25,7 +25,9 @@ var (
 )
 
 // CreateUpdate implements stack.UpdateStore.
-func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
+func (s *Store) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -33,6 +35,14 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 		stackID, err := stackIDFor(ctx, q, u.Ref)
 		if err != nil {
 			return err
+		}
+
+		// Defense in depth: Updates.Create builds the key for the stack that
+		// it resolved. This check stays so that the key record of an update
+		// always names the stack of the row, also after a rename between
+		// that resolve and this transaction, or for a new caller.
+		if keyErr := stack.CheckUpdateKey(key, u.Ref.Namespace, stack.ID(stackID), u.ID); keyErr != nil {
+			return keyErr
 		}
 
 		row := codec.ToUpdateRow(u, stack.ID(stackID))
@@ -64,6 +74,12 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			}
 
 			return fmt.Errorf("insert update: %w", err)
+		}
+
+		// The record of the item key commits with the update row: a failed
+		// key write rolls the update back.
+		if _, err := key.NewKey(ctx, itemKeyTx{q: q, fence: fence}, key.Ref, fence); err != nil {
+			return fmt.Errorf("item key of update %s: %w", u.ID, err)
 		}
 
 		return nil

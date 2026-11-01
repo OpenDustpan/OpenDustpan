@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -178,7 +179,19 @@ func (m *memUpdates) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, er
 	return st, nil
 }
 
-func (m *memUpdates) CreateUpdate(_ context.Context, u stack.Update, fence namespace.Fence) error {
+func (m *memUpdates) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
+	// The fake has no transaction: it creates the key first, and a failed key
+	// stores no update. A sealer of the tests needs no transaction.
+	if key.NewKey == nil {
+		return stack.ErrInvalidUpdateKey
+	}
+
+	if _, err := key.NewKey(ctx, nil, key.Ref, fence); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -613,6 +626,7 @@ type updatesFixture struct {
 	blobs      blob.Store
 	clock      *clock
 	namespaces *namespace.Service
+	sealer     *secrettest.MemorySealer
 	ref        stack.Ref
 }
 
@@ -702,7 +716,10 @@ func newUpdatesFull(
 		checkpoints = wrap(store)
 	}
 
+	sealer := secrettest.NewMemorySealer()
+
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             sealer,
 		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,
@@ -734,6 +751,7 @@ func newUpdatesFull(
 	return updatesFixture{
 		svc: svc, store: store, blobs: blobs, clock: clk, namespaces: namespaces, ref: ref,
 		refusals: refusals, nsID: ns.ID, nsStore: nsStore, prefix: "namespaces/" + ns.ID.String() + "/pulumi/",
+		sealer: sealer,
 	}
 }
 
@@ -2141,6 +2159,7 @@ func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Upda
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:      secrettest.NewMemorySealer(),
 		BlobGuard:   blobguardtest.None{},
 		ManualLocks: nil, Updates: f.store, Tokens: nil,
 		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
@@ -2161,6 +2180,7 @@ func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Wa
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:      secrettest.NewMemorySealer(),
 		BlobGuard:   guard,
 		ManualLocks: nil, Updates: f.store, Tokens: nil,
 		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},

@@ -267,6 +267,7 @@ disk encryption and with access rules on the S3 bucket.
 | OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. Versions that an older server wrote stay plain: the server does not encrypt them later |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
+| Pulumi update events, for example the lines that a program prints | Database | Yes, each event with the key of its update. A printed line can hold a secret value in plain text, because the Pulumi CLI masks only the secret values that it knows |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
 | Audit entries, with no secret value | Database | No |
 | Backups | Backup target | Not as a whole. A backup holds the stored bytes: encrypted state stays encrypted. It holds no key-encryption key |
