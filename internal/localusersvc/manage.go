@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -419,6 +420,14 @@ func (s *Service) checkCurrent(ctx context.Context, a Actor, u localuser.User, i
 		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "hasher cannot answer", hashError(err))
 	}
 
+	// A wrong current password counts in the lockout by name, after the hash
+	// has its budget and before the compare.
+	if countErr := s.countCurrent(ctx, a, object, u); countErr != nil {
+		res.Release()
+
+		return countErr
+	}
+
 	_, err = res.Verify(nfc, localuser.DefaultHashParams())
 	res.Release()
 
@@ -487,4 +496,27 @@ func (s *Service) User(ctx context.Context, principalID string) (localuser.User,
 	}
 
 	return u, nil
+}
+
+// countCurrent adds the check of the current password of u to the counts of
+// its name. A lock refuses the change with ErrWrongPassword, and a count that
+// cannot be written refuses it with ErrUnavailable.
+func (s *Service) countCurrent(ctx context.Context, a Actor, object string, u localuser.User) error {
+	tg := on(ActionPasswordRefused, object)
+
+	name, err := s.nameDigest(ctx, u.UserName)
+	if err != nil {
+		return s.refuse(ctx, a.Entry, tg, "key of the names cannot be read", err)
+	}
+
+	err = s.countFailure(ctx, a.Entry, object, lockKeys{name: name, sub: SourcePrefix(a.Entry.SourceIP)})
+
+	switch {
+	case errors.Is(err, authgate.ErrNameLocked):
+		return s.refuse(ctx, a.Entry, tg, ReasonNameLocked, localuser.ErrWrongPassword)
+	case err != nil:
+		return s.refuse(ctx, a.Entry, tg, "count of the name cannot be written", err)
+	default:
+		return nil
+	}
 }

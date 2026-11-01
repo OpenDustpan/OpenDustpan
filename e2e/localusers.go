@@ -13,7 +13,8 @@ const localUsersCoveringTest = "TestLocalPasswordSignIn"
 // through the server of each store: the administrator makes a user, the
 // person sets the password with the set-up code, signs in with a cookie jar,
 // changes the password, and the administrator reads the policy and tries a
-// reset with a token.
+// reset with a token. Ten wrong passwords lock the name; the administrator
+// reads the lock and unlocks it.
 func localUserAllowEntries() []AllowEntry {
 	reason := "Console route: no CLI makes a local user or signs in with a password. " +
 		"The harness plays the browser with a cookie jar and the administrator with a token, and checks each answer."
@@ -23,6 +24,8 @@ func localUserAllowEntries() []AllowEntry {
 		{http.MethodPost, "/api/dustpan/v1/local-users/redeem"},
 		{http.MethodGet, "/api/dustpan/v1/local-users/policy"},
 		{http.MethodPost, "/api/dustpan/v1/local-users/reset"},
+		{http.MethodPost, "/api/dustpan/v1/local-users/unlock"},
+		{http.MethodGet, "/api/dustpan/v1/local-users/locks"},
 		{http.MethodPost, "/api/dustpan/v1/sign-in/password"},
 		{http.MethodPost, "/api/dustpan/v1/me/password"},
 	}
