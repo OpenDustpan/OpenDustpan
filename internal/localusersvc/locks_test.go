@@ -87,7 +87,7 @@ func TestLockoutByNameAndSource(t *testing.T) {
 		t.Fatal("no audit entry of the lock")
 	}
 
-	locks, err := f.svc.Locks(t.Context(), c.Principal.ID)
+	locks, err := f.svc.Locks(t.Context(), admin(), c.Principal.ID)
 	if err != nil {
 		t.Fatalf("locks: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestLockLimits(t *testing.T) {
 		}
 	}
 
-	locks, err := f.svc.Locks(t.Context(), c.Principal.ID)
+	locks, err := f.svc.Locks(t.Context(), admin(), c.Principal.ID)
 	if err != nil || len(locks) != 0 {
 		t.Fatalf("counts after the refused attempts = %+v, %v; want none", locks, err)
 	}
@@ -314,7 +314,7 @@ func TestUnlockThatCannotClearChangesNothing(t *testing.T) {
 	svc, err := localusersvc.New(localusersvc.Config{
 		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: brokenClear{NameLockCounter: f.store}, Keys: f.store, Settings: f.settings,
-		SSO: nil, Kind: "", Now: nil, Reach: noReach(),
+		SSO: nil, Kind: "", Now: nil, Reach: f.storeReach(),
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

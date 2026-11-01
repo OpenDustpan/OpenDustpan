@@ -17961,19 +17961,29 @@ func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (
 
 const pruneNameLocks = `-- name: PruneNameLocks :execrows
 DELETE FROM name_locks
-WHERE last_failure_ms <= $1::bigint AND locked_until_ms <= $2::bigint
+WHERE (scope, name, sub) IN (
+    SELECT p.scope, p.name, p.sub FROM name_locks p
+    WHERE p.last_failure_ms <= $1::bigint AND p.locked_until_ms <= $2::bigint
+      AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= $2::bigint)
+    LIMIT $3::bigint
+    FOR UPDATE SKIP LOCKED
+)
+  AND last_failure_ms <= $1::bigint AND locked_until_ms <= $2::bigint
   AND (level = 0 OR last_lock_end_ms + reset_after_ms <= $2::bigint)
 `
 
 type PruneNameLocksParams struct {
 	BeforeMs int64
 	NowMs    int64
+	MaxRows  int64
 }
 
-// Deletes each count whose last failure is at or before before_ms, whose lock
-// ended at now_ms, and whose level is 0 or past its reset time.
+// Deletes at most max_rows counts whose last failure is at or before
+// before_ms, whose lock ended at now_ms, and whose level is 0 or past its
+// reset time. The select skips a row that a failure locks now, and the
+// delete checks the conditions again on the row that it deletes.
 func (q *Queries) PruneNameLocks(ctx context.Context, arg PruneNameLocksParams) (int64, error) {
-	result, err := q.db.Exec(ctx, pruneNameLocks, arg.BeforeMs, arg.NowMs)
+	result, err := q.db.Exec(ctx, pruneNameLocks, arg.BeforeMs, arg.NowMs, arg.MaxRows)
 	if err != nil {
 		return 0, err
 	}

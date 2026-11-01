@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -39,6 +40,9 @@ const (
 	signInPruneScheduleName = "signin-prune"
 	idempotencyScheduleName = "idempotency-sweep"
 	auditChainScheduleName  = "audit-chain-check"
+	// nameLockPruneScheduleName is the schedule of the prune of the counts
+	// of the lockout by name.
+	nameLockPruneScheduleName = "name-lock-prune"
 
 	jobScheduleVersion = 1
 )
@@ -53,6 +57,8 @@ const (
 	kindSignInPrune durable.Kind = signInPruneScheduleName
 	kindIdempotency durable.Kind = idempotencyScheduleName
 	kindAuditChain  durable.Kind = auditChainScheduleName
+
+	kindNameLockPrune durable.Kind = nameLockPruneScheduleName
 )
 
 // durableOwner returns the owner name of the job runner: the instance ID
@@ -112,6 +118,13 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	if s.nameLocks != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: nameLockPruneScheduleName, Kind: kindNameLockPrune, Version: jobScheduleVersion,
+			Interval: localusersvc.Prune().Interval, Input: nil,
+		})
+	}
+
 	if s.artifactSweeper != nil {
 		specs = append(specs, durable.ScheduleSpec{
 			Name: job.ArtifactSweepName, Kind: job.KindArtifactSweep, Version: job.ArtifactSweepVersion,
@@ -149,6 +162,10 @@ func (s *Server) jobKinds() []durable.KindSpec {
 
 	if s.reconciler != nil {
 		kinds = append(kinds, s.reconcileKind())
+	}
+
+	if s.nameLocks != nil {
+		kinds = append(kinds, s.nameLockPruneKind())
 	}
 
 	if s.artifactSweeper != nil {
@@ -208,6 +225,39 @@ func (s *Server) artifactSweepKind() durable.KindSpec {
 				out, err := json.Marshal(res)
 				if err != nil {
 					return nil, fmt.Errorf("job artifact sweep: encode the result: %w", err)
+				}
+
+				return out, nil
+			}},
+		},
+	}
+}
+
+// nameLockPruneKind returns the runner kind of the schedule of the prune of
+// the name counts. Its step returns the error of a run, so the runner counts
+// a failed run as a failed attempt. The store appends one audit entry for
+// each run, in the transaction of the delete, with the count that it
+// deleted. The output of the step is the result of the run in JSON, and the
+// step writes one log line.
+func (s *Server) nameLockPruneKind() durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       kindNameLockPrune,
+		Version:    jobScheduleVersion,
+		MinVersion: jobScheduleVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				res, err := localusersvc.PruneLocks(ctx, s.nameLocks, s.now())
+				if err != nil {
+					return nil, fmt.Errorf("name lock prune: %w", err)
+				}
+
+				s.logger.InfoContext(ctx, "name lock prune: deleted the counts past their age",
+					slog.Int64("deleted", res.Deleted), slog.Int64("age_seconds", res.AgeSeconds),
+					slog.Int("max_rows", res.MaxRows))
+
+				out, err := json.Marshal(res)
+				if err != nil {
+					return nil, fmt.Errorf("name lock prune: encode the result: %w", err)
 				}
 
 				return out, nil

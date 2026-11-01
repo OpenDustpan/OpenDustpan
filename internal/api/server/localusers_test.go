@@ -313,6 +313,51 @@ func TestResetNeedsTheReachOfThePerson(t *testing.T) {
 	}
 }
 
+// TestUnlockNeedsTheReachOfThePerson proves that an administrator who holds
+// the action of an unlock and of the read of the counts, but not every
+// action of the person, gets 403 with the code local-user.outside-reach on
+// both routes.
+func TestUnlockNeedsTheReachOfThePerson(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	carol := createRouteLocalUser(t, f)
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	role := access.Role{
+		CreatedAt: at, UpdatedAt: at, ID: "rol-signin", Name: "Sign-in manager", Description: "Manages the sign-in.",
+		Actions: []identity.Action{identity.ActionServerManageSignIn}, BuiltIn: false,
+	}
+
+	if err := f.store.CreateRole(t.Context(), role, storetest.ServerChange(at, "role:rol-signin")); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	f.seed(t, "sam", "rol-signin", identity.ServerObject())
+	grantInstallation(t, f, carol, access.RoleSiteAdministrator, "grt-carol")
+
+	rec := f.sessionPost(t, "sam", "/api/dustpan/v1/local-users/unlock",
+		`{"principal":"`+carol+`","reason":"the person called"}`)
+	if got := errorCodeOf(t, rec.Body.String()); rec.Code != http.StatusForbidden || got != "local-user.outside-reach" {
+		t.Fatalf("unlock outside the reach = %d %s, want 403 local-user.outside-reach", rec.Code, got)
+	}
+
+	cookie, _ := f.sessionOf(t, "sam", f.sessions.Now())
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		"/api/dustpan/v1/local-users/locks?principal="+carol, nil)
+	req.AddCookie(cookie)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	read := httptest.NewRecorder()
+	f.handler.ServeHTTP(read, req)
+
+	if got := errorCodeOf(t, read.Body.String()); read.Code != http.StatusForbidden ||
+		got != "local-user.outside-reach" {
+		t.Fatalf("read outside the reach = %d %s, want 403 local-user.outside-reach", read.Code, got)
+	}
+}
+
 // grantInstallation gives the principal principalID the role on the
 // installation, directly in the store.
 func grantInstallation(t *testing.T, f accessFixture, principalID, role, grantID string) {
