@@ -8,6 +8,7 @@ Changed by:
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
 - ADR 313 extends decision 1: the authorization object of a profile.
+- ADR 317 changes decision 1: the key of the gate rows of a unit.
 
 ## Context
 

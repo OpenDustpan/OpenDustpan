@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-17 · the sign-off of agent commits after the push of October 2026 is an open question
 
+Changed by:
+
+- ADR 317 changes decisions 7 and 8: the identity of an agent commit and the trailer.
+
 ## Context
 
 `CONTRIBUTING.md` already lets contributors use AI tools. It asks them to
