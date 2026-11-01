@@ -256,7 +256,7 @@ func (f fixture) create(t *testing.T, ref stack.Ref, id string, plan stack.Plan)
 
 	u := newUpdate(ref, id, plan, plan.CreatedBy, plan.RestoredFrom)
 
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+	if err := f.s.CreateUpdate(t.Context(), u, UpdateKeyFor(t.Context(), f.s, u), f.fence); err != nil {
 		t.Fatalf("create update %s: %v", id, err)
 	}
 
@@ -398,7 +398,7 @@ func (f historyFixture) create(
 
 	u := newUpdate(f.ref, id, plan, createdBy, restoredFrom)
 
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+	if err := f.s.CreateUpdate(t.Context(), u, UpdateKeyFor(t.Context(), f.s, u), f.fence); err != nil {
 		t.Fatalf("create update %s: %v", id, err)
 	}
 
@@ -751,7 +751,9 @@ func testUpdateMissingStack(t *testing.T, f fixture) {
 	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
 	u := newUpdate(ghost, "u1", mutating(), "", 0)
 
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); !errors.Is(err, stack.ErrNotFound) {
+	if err := f.s.CreateUpdate(t.Context(), u, UpdateKeyFor(t.Context(), f.s, u), f.fence); !errors.Is(
+		err, stack.ErrNotFound,
+	) {
 		t.Fatalf("create update of missing stack: err = %v, want stack.ErrNotFound", err)
 	}
 }
@@ -768,7 +770,7 @@ func testUpdateWritesFenced(t *testing.T, f fixture) {
 			u := waiting
 			u.ID = "fenced"
 
-			return f.s.CreateUpdate(t.Context(), u, stale)
+			return f.s.CreateUpdate(t.Context(), u, UpdateKeyFor(t.Context(), f.s, u), stale)
 		},
 		"StartUpdate": func() error {
 			_, err := f.s.StartUpdate(t.Context(), started(t, waiting), stale)
@@ -1231,7 +1233,9 @@ func testHistoryCreateFenced(t *testing.T, f historyFixture) {
 	stale := namespace.Fence{Namespace: f.fence.Namespace, FailoverVersion: f.fence.FailoverVersion + 1}
 	u := newUpdate(f.ref, "fenced", mutating(), "alice@example.com", 0)
 
-	if err := f.s.CreateUpdate(t.Context(), u, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := f.s.CreateUpdate(t.Context(), u, UpdateKeyFor(t.Context(), f.s, u), stale); !errors.Is(
+		err, namespace.ErrFenced,
+	) {
 		t.Fatalf("create update with stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -2560,7 +2564,7 @@ func runResourcedUpdate(t *testing.T, f fixture) error {
 	t.Helper()
 
 	u := newUpdate(f.ref, "racer", mutating(), "", 0)
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+	if err := f.s.CreateUpdate(t.Context(), u, UpdateKeyFor(t.Context(), f.s, u), f.fence); err != nil {
 		return err
 	}
 

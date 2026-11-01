@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -86,7 +87,14 @@ func newMemUpdateStore() *memUpdateStore {
 	}
 }
 
-func (m *memUpdateStore) CreateUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+func (m *memUpdateStore) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
+	// The fake has no transaction: a sealer of the tests needs none.
+	if _, err := key.NewKey(ctx, nil, key.Ref, fence); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -600,6 +608,7 @@ func newUpdateFixtureWithAuthenticator(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        opts.manual,
 		Updates:            mem,
@@ -2832,6 +2841,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            mem,

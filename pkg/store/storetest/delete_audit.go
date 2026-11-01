@@ -237,7 +237,8 @@ func testTombstoneNameFindsNothing(t *testing.T, f fixture) {
 		t.Fatalf("update tags by the stored name: err = %v, want ErrNotFound", err)
 	}
 
-	if err := f.s.CreateUpdate(ctx, newUpdate(tomb, "u2", mutating(), "", 0), f.fence); !errors.Is(
+	tombUpdate := newUpdate(tomb, "u2", mutating(), "", 0)
+	if err := f.s.CreateUpdate(ctx, tombUpdate, UpdateKeyFor(ctx, f.s, tombUpdate), f.fence); !errors.Is(
 		err, stack.ErrNotFound,
 	) {
 		t.Fatalf("create update by the stored name: err = %v, want ErrNotFound", err)
