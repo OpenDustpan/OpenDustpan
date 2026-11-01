@@ -5,6 +5,7 @@ Status: accepted · 2026-10-18 · part of ADR 170. Open question answered in par
 Changed by:
 
 - ADR 257 extends: the second open question.
+- ADR 316 extends: the OpenPGP library.
 
 ## Context
 
