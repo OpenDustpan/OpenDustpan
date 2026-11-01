@@ -1158,6 +1158,12 @@ func (s *RestoreService) readPinnedManifest(ctx context.Context, id ID, pinned p
 		return Manifest{}, err
 	}
 
+	// A backup before a restore that found damaged live blobs holds no copy
+	// of them. Restoring it would bring back rows with no content.
+	if err := refuseDamagedBackup(manifest); err != nil {
+		return Manifest{}, err
+	}
+
 	return manifest, nil
 }
 
