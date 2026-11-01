@@ -4,9 +4,6 @@ Status: accepted · 2026-10-15. The `server:` action names superseded in part by
 
 Changed by:
 
-- ADR 306 extends decision 21: the limit and the window of the mass-suspension alert.
-- ADR 306 extends decision 24: a site admin may disable a break-glass principal.
-- ADR 306 changes decision 25: the time limit of the elevated session, and a disable by a site admin.
 - ADR 142 changes decision 26: the review after use of a break-glass session.
 - ADR 142 extends decision 13: server:review-break-glass is a sensitive
   action.
@@ -18,6 +15,8 @@ Changed by:
   window.
 - ADR 245 changes decisions 26 and 27: the host command, its reason and its
   review.
+- ADR 306 changes decisions 24, 25 and 26: a site admin may disable a break-glass principal, and the rule of the sweep.
+- ADR 306 extends decision 21: the limit and the window of the mass-suspension alert.
 
 ## Context
 
