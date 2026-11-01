@@ -21,6 +21,7 @@ Changed by:
 - ADR 241 extends decision 5: the import event types.
 - ADR 248 changes decision 9: each namespace has its own primary installation.
 - ADR 262 extends: the open question on the first chat tools.
+- ADR 314 extends: the event lock.held-too-long.
 
 ## Context
 
