@@ -692,7 +692,7 @@ func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.
 // touchedLive reports whether the restore id of op can have changed the
 // installation: it recorded enter-maintenance, or its row holds the
 // maintenance flag of an enter that it did not confirm, or it stored audit
-// events, which it stores before each forced cancel and each repair.
+// events, which it stores before each forced cancel and each refusal to overwrite a live blob.
 func (s *RestoreService) touchedLive(ctx context.Context, op durable.Operation, id RestoreID) (bool, error) {
 	if _, entered := op.Step(RestoreStepEnterMaintenance); entered {
 		return true, nil
