@@ -6,7 +6,7 @@ Changes:
 
 - Extends ADR 70 decision 21: the limit and the window of the mass-suspension alert.
 - Extends ADR 70 decision 24: a site admin may disable a break-glass principal.
-- Extends ADR 70 decision 25: the time limit of the elevated session.
+- Changes ADR 70 decision 25: the time limit of the elevated session, and a disable of a break-glass principal by a site admin.
 
 ## Context
 
@@ -30,4 +30,5 @@ This ADR writes the words of the owner. It adds no decision of its own.
 - ADR 70 gets a pointer to this ADR.
 - Decisions 1 and 2 close two items of the list "Not decided here" in ADR 70.
 - Decisions 3 to 6 need a test for each step. Each test sends hostile input to that step alone.
-- Open for the project manager: how decision 3 fits ADR 70 decision 25 ("No job disables a break-glass account"). Also open: what "re-enable stays checked" checks.
+- ADR 70 decision 25 says "No job disables a break-glass account". The owner line of decision 3 is later than ADR 70 (accepted 2026-10-15), so decision 3 wins where the two differ. A site admin may disable a break-glass principal.
+- Open for the project manager: what "re-enable stays checked" checks.
