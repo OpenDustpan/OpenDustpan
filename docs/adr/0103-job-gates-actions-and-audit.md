@@ -30,6 +30,7 @@ Changed by:
 - ADR 224 supersedes decision 1: the start decision becomes gates.
 - ADR 225 changes decision 2: the approval gate becomes approval rules.
 - ADR 227 changes decision 2: the age of a confirmation.
+- ADR 299 supersedes decision 3: the four review modes.
 
 ## Context
 

@@ -56,6 +56,7 @@ func translateCases(connectErr error) []translateCase {
 		{"crash shutdown", pgError("57P02"), storeerr.Shutdown},
 		{"cannot connect now", pgError("57P03"), storeerr.Shutdown},
 		{"read only transaction", pgError("25006"), storeerr.ReadOnly},
+		{"statement timeout", pgError("57014"), storeerr.StatementTimeout},
 		{"wrapped class", fmt.Errorf("transaction: %w", pgError("57P01")), storeerr.Shutdown},
 		{"unique violation", pgError("23505"), ""},
 		{"similar prefix", pgError("0A000"), ""},
@@ -109,6 +110,11 @@ func checkTranslation(t *testing.T, tc translateCase) {
 
 	if !errors.Is(got, tc.err) {
 		t.Fatalf("translate(%v) lost the driver error", tc.err)
+	}
+
+	if errors.Is(got, namespace.ErrUnreachable) != tc.want.Unreachable() {
+		t.Fatalf("translate(%v) wraps ErrUnreachable = %t, want %t", tc.err, !tc.want.Unreachable(),
+			tc.want.Unreachable())
 	}
 
 	if again := translate(got); !errors.Is(again, got) || again.Error() != got.Error() {

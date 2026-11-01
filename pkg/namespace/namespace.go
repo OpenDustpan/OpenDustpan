@@ -42,6 +42,12 @@ var (
 	// return it without driver text. Callers must use errors.Is to check
 	// for it, not string matching.
 	ErrUnavailable = errors.New("database unavailable")
+	// ErrUnreachable reports that the database cannot be reached: the
+	// connection failed, the server shuts down, or the server refuses writes.
+	// An error that wraps it also wraps ErrUnavailable. A slow statement or a
+	// server with no free session wraps ErrUnavailable only, so background
+	// work counts it as a failure and does not wait for it for ever.
+	ErrUnreachable = errors.New("database unreachable")
 	// ErrNoPaging reports a namespace store that does not page namespaces:
 	// it does not implement Pager.
 	ErrNoPaging = errors.New("the namespace store does not page namespaces")

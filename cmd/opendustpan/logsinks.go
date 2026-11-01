@@ -49,7 +49,8 @@ type appLog struct {
 // newAppLog builds the application logger from the --log-sink items. No
 // item writes to stderr, as serve always did.
 // An item is [<name>=]<sink>: stderr, stdout, file:<path>,
-// syslog+udp|tcp|tls://<host>:<port> or webhook:<https URL>. The name
+// syslog+udp|tcp|tls://<host>:<port>, webhook:<https URL> or
+// otlp:<https URL>. The name
 // labels the drop metric; without one, the kind is the name. Each sink
 // other than a stream is best effort: a slow or failed sink drops records
 // and never holds a request. On error it closes every sink it opened.
@@ -124,12 +125,14 @@ func (a *appLog) openSinkHandler(
 	seen[name] = true
 
 	sink, _, err := openSink(named.spec, sinkConfig{
-		setting:       errLogSink,
-		blobs:         nil,
-		lookup:        lookup,
-		secretEnv:     logWebhookSecretEnvVar,
-		secretFileEnv: logWebhookSecretFileEnvVar,
-		facility:      syslog.FacilityLocal0,
+		setting:        errLogSink,
+		blobs:          nil,
+		lookup:         lookup,
+		secretEnv:      logWebhookSecretEnvVar,
+		secretFileEnv:  logWebhookSecretFileEnvVar,
+		headersEnv:     logOTLPHeadersEnvVar,
+		headersFileEnv: logOTLPHeadersFileEnvVar,
+		facility:       syslog.FacilityLocal0,
 	})
 	if err != nil {
 		return nil, err

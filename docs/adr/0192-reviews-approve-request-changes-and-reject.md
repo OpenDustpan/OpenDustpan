@@ -9,6 +9,7 @@ Changed by:
 - ADR 225 changes decisions 4 and 5: MinApprovals and the eligible approvers.
 - ADR 227 extends: answers the open question on fresh authentication of
   signatures.
+- ADR 299 extends: in mode 1, an approving review on the Git host counts.
 
 ## Context
 

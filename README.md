@@ -337,6 +337,18 @@ How-to guides:
   workspace, fire it by hand, and see what the server checks.
 - [The planner role](docs/guides/planner-role.md): what a planner can do, what
   it cannot do, and the limit of the role on a workstation.
+- [Principals and groups](docs/guides/principals-and-groups.md): create, change,
+  disable and delete principals, and manage the members of a group.
+- [Roles and grants](docs/guides/roles-and-grants.md): the built-in roles, custom
+  roles, and the grants that give a role to a principal or a group.
+- [Access review](docs/guides/access-review.md): read the grants of an installation,
+  a namespace, a unit or a principal, and save the review.
+- [Access tokens](docs/guides/access-tokens.md): personal, service and principal
+  tokens, rotation, inactivity, expiry warnings and the token policy.
+- [Collections and placement rules](docs/guides/collections-and-placement.md): make
+  a collection, move a unit into it, and write the rules that place new stacks.
+- [IP allowlists](docs/guides/ip-allowlists.md): limit the client addresses of a
+  namespace, read the effective state, and recover from a lock-out.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.

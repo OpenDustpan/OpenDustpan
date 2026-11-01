@@ -17,6 +17,8 @@ Changed by:
 - ADR 273 extends: the open item on a rule naming another namespace.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 300 changes decision 2: a plan that starts from the Git host never gets the secrets of the first bullet.
+- ADR 300 changes decision 10: a manual lock can cover the whole installation.
 
 ## Context
 
