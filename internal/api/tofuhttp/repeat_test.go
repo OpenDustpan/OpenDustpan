@@ -128,7 +128,7 @@ func newRepeatEnv(t *testing.T) repeatEnv {
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
 		Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
-		Workspaces: workspaces, Namespaces: namespaces, Audit: newTestAudit(), Gate: nil,
+		Workspaces: workspaces, Namespaces: namespaces, Audit: newTestAudit(), Gate: nil, StateGuard: nil,
 		OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
