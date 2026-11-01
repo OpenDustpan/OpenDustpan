@@ -61,6 +61,22 @@ const (
 	DefaultFactorLockFor = 30 * time.Minute
 )
 
+// The prune of the name counts. The server deletes the counts that can no
+// longer change a lock, so that failed attempts for many names cannot grow
+// the table with no limit.
+const (
+	// NamePruneInterval is the time between two runs of the prune.
+	NamePruneInterval = time.Hour
+	// NamePruneAge is how long after its last failure a count can go: the
+	// longest lock plus the reset time of the global rule. The store deletes
+	// a count only when its lock ended and its level is past its reset time
+	// too.
+	NamePruneAge = DefaultNameGlobalMaxLockFor + DefaultNameGlobalResetAfter
+	// MaxNamePruneRows is the most counts that one run of the prune deletes.
+	// The next run deletes the rest.
+	MaxNamePruneRows = 10000
+)
+
 // ErrInvalidLock reports a scope that is not one of the letters a to z, an
 // empty name, a limit below 1, a lock time of 0 or less, a maximum below the
 // lock time, or a negative reset time.
@@ -123,10 +139,15 @@ type NameLockCounter interface {
 	// NameLocks returns every count of name in scope, one for each sub-key,
 	// in the order of the sub-key. A name with no count returns no entry.
 	NameLocks(ctx context.Context, scope, name string) ([]NameLock, error)
-	// PruneNameLocks deletes each count whose last failure is age or longer
-	// ago, whose lock ended and whose level is past its reset time, and
-	// returns how many it deleted.
-	PruneNameLocks(ctx context.Context, age time.Duration) (int64, error)
+	// PruneNameLocks deletes at most limit counts whose last failure is age
+	// or longer ago, whose lock ended and whose level is past its reset
+	// time, and appends e with the change "pruned", the count of the counts
+	// that it deleted, in one transaction, and returns that count. The
+	// scheduled prune of the server calls it, so each run and its audit
+	// entry commit together or not at all. It returns ErrInvalidLock for a
+	// request that CheckPruneRequest refuses, and audit.ErrInvalidEntry for
+	// an entry that fails validation; both change nothing.
+	PruneNameLocks(ctx context.Context, age time.Duration, limit int, e audit.Entry) (int64, error)
 }
 
 // Limits of the keys of a name count. A name is a keyed digest or a
@@ -170,6 +191,27 @@ func CheckClearRequest(scopes []string, name string) error {
 	}
 
 	return nil
+}
+
+// CheckPruneRequest returns ErrInvalidLock for a prune with an age of 0 or
+// less, or with a limit below 1 or above MaxNamePruneRows. Each adapter of
+// NameLockCounter calls it before PruneNameLocks writes, so a request that it
+// refuses changes nothing.
+func CheckPruneRequest(age time.Duration, limit int) error {
+	switch {
+	case age <= 0:
+		return fmt.Errorf("%w: prune age %s", ErrInvalidLock, age)
+	case limit < 1 || limit > MaxNamePruneRows:
+		return fmt.Errorf("%w: prune limit %d", ErrInvalidLock, limit)
+	default:
+		return nil
+	}
+}
+
+// PrunedChange returns the change of the entry of a prune: the count of the
+// counts that the prune deleted.
+func PrunedChange(n int64) audit.Change {
+	return audit.Change{Key: "pruned", Old: nil, New: strconv.FormatInt(n, 10), Layer: "", TakesEffect: ""}
 }
 
 // ClearedChange returns the change of the entry of a clear of a name: the
