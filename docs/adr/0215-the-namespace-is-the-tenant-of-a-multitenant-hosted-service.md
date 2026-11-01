@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · supersedes in part ADR 52 (decisions 1 and 2), ADR 59 (decision 6) and ADR 67 (decision 7). Decision 21 amended by ADR 248 (federation model)
 
+Changed by:
+
+- ADR 248 changes decision 21: routing between installations follows the
+  federation model.
+
 ## Context
 
 ADR 59 decision 6 says: "Each hosted customer has its own installation and

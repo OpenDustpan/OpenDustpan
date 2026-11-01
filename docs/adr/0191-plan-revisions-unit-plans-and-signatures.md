@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18 · part of ADR 190. The open question on fresh authentication answered by ADR 227. Decision 6 amended by ADR 225 decision 12
 
+Changed by:
+
+- ADR 222 changes decision 6: a signature can carry over, as an opt-in.
+- ADR 225 changes decision 6: a signature can carry over to an identical plan.
+- ADR 227 extends: answers the open question on fresh authentication.
+
 ## Context
 
 A change order holds a plan of one or more units (ADR 190). An author can

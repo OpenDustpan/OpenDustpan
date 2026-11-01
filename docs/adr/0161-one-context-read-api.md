@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-17. Decisions 1 and 3 superseded in part by ADR 166. Route paths superseded in part by ADR 210. Open question 2 answered by ADR 263
 
+Changed by:
+
+- ADR 166 changes decisions 1 and 3: the route paths and the 404 rule.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 263 extends: open question 2, drift gets its own context section.
+
 ## Context
 
 On 17 October 2026 the project owner asked for a rival to a "context API":

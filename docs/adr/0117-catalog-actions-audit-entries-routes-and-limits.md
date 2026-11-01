@@ -2,6 +2,18 @@
 
 Status: accepted · 2026-10-17. Route paths superseded in part by ADR 210. An open question answered, and the action of the options route superseded, by ADR 213. Decisions 2, 5, 6 and 7 superseded in part by ADR 230
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 213 changes decision 2: the action of the options route.
+- ADR 213 extends: the open question on an action to read options.
+- ADR 222 changes decisions 2, 5, 6 and 7: actions, routes, audit entries and
+  limits of gates.
+- ADR 230 changes decisions 2, 5, 6 and 7: namespace:manage-gates and the gate
+  routes, audit entries and limits.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 [ADR 17](0017-api-authorization-and-policy-for-every-feature.md) says that

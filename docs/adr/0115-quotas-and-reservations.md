@@ -2,6 +2,18 @@
 
 Status: accepted · 2026-10-17. The `expr` rules of decision 2 and decision 13 superseded by ADRs 224 and 226. Reservations extended by ADR 241 for imports
 
+Changed by:
+
+- ADR 222 supersedes decision 13: usage in the policy input.
+- ADR 222 changes decision 2: the Expr quota rules.
+- ADR 224 supersedes decision 13: usage in the policy input, with ADR 226.
+- ADR 224 changes decision 2: the Expr rules.
+- ADR 226 supersedes decision 13: the quota usage in the policy input becomes
+  the quota fact.
+- ADR 241 extends: the reservations of an import.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The owner decided on 17 October 2026:

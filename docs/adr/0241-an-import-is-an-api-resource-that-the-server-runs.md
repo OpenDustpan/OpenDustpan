@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-19. ADRs 242 to 244 give the other parts. Supersedes in part ADR 29 decisions 1, 5 and 8, and ADR 213 decision 10. Extends ADR 203 decision 1, ADR 224 decision 16, ADR 145 decision 5 and ADR 201 decision 7. Extends the reservations of ADR 115 and the `state.write` fact schema of ADR 226. Answers part of RFC 42 and RFC 66. Accepts RFC 81. The home region amended by ADR 248 (primary installation)
 
+Changed by:
+
+- ADR 248 changes decision 11: resume continues on the new primary
+  installation.
+
 ## Context
 
 ADR 29 made an import a tested guide. The server got no import engine, no

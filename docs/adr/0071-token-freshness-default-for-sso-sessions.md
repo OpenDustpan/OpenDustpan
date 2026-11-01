@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-16. Decisions 1 and 2 superseded by ADR 227
 
+Changed by:
+
+- ADR 222 supersedes decisions 1 and 2: one fresh-authentication window.
+- ADR 227 supersedes decisions 1 and 2: tokenFreshnessSeconds becomes
+  freshAuthSeconds and 0 asks each time.
+
 ## Context
 
 [ADR 56](0056-mfa-freshness-for-token-creation-and-reveal.md) sets a

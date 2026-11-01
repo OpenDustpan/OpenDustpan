@@ -425,7 +425,7 @@ func (s *Source) prepare(
 	return attempt{facts: f, unitFile: unitFile, id: id, started: started}, nil
 }
 
-// commit makes the unit file, writes the facts file of the attempt, and
+// commit makes the unit file for the first version of a unit, writes the facts file of the attempt, and
 // inserts the commit row, which commits the version. The row decides which
 // attempt wins a sequence. The body at bk and the facts file of this attempt
 // are deleted when the row says that another attempt won, or when the attempt
@@ -436,8 +436,13 @@ func (s *Source) commit(
 ) (unitimport.SourceVersion, error) {
 	f := at.facts
 
-	if err := s.ensureUnit(ctx, u, at.unitFile); err != nil {
-		return unitimport.SourceVersion{}, s.discard(ctx, err, bk)
+	// checkNext accepts only the next sequence of the committed versions, and
+	// a committed version has made the unit file first. So a unit has no unit
+	// file only while the sequence is 1, and a later version never writes it.
+	if f.Sequence == 1 {
+		if err := s.ensureUnit(ctx, u, at.unitFile); err != nil {
+			return unitimport.SourceVersion{}, s.discard(ctx, err, bk)
+		}
 	}
 
 	encoded, err := encode(f)

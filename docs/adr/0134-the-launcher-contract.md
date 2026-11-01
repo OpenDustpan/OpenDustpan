@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · adds to ADR 101 decisions 7, 10 and 13 · ADR 199 changes decisions 4 and 6
 
+Changed by:
+
+- ADR 199 changes decisions 4 and 6: a file set in the run order and
+  DUSTPAN_SNAPSHOT.
+
 ## Context
 
 [ADR 101](0101-two-executors-write-back-and-runners.md) decides that a

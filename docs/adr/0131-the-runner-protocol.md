@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18 · adds to ADR 101 decisions 2, 13 and 15. Decision 7: decision 4 governs the release of a claim after the session wait (owner, 2026-10-19). `RunnerRenew` releases no claim. It returns `runner.ErrSessionWaitPassed`, and the handler releases the claim through `job.Claimer` or `SweepClaimer` (PR #881)
 
+Changed by:
+
+- ADR 139 extends decision 6: work carries the image only as a digest.
+
 ## Context
 
 [ADR 101](0101-two-executors-write-back-and-runners.md) decision 15 fixes
