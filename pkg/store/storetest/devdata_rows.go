@@ -114,7 +114,6 @@ func DevPrincipalRow(id, subject string) map[string]any {
 		"id": id, "subject": subject, "display_name": "", "kind": "person", "source": "local",
 		"created_at_ms": 1, "updated_at_ms": 1, "deleted_at_ms": nil, "disabled_at_ms": nil,
 		"last_active_at_ms": 0, "last_sign_in_at_ms": nil, "namespace": "", "break_glass": false,
-		"session_generation": 1,
 	}
 }
 
@@ -163,6 +162,11 @@ func DevLocalUserRow(id, principalID string) map[string]any {
 			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"password_set_at_ms": 1, "change_required": false, "demo": true, "created_by": "system", "created_at_ms": 1,
 	}
+}
+
+// DevSessionGenerationRow returns a principal_session_generations row.
+func DevSessionGenerationRow(principalID string) map[string]any {
+	return map[string]any{"principal_id": principalID, "generation": 3}
 }
 
 // DevGroupRow returns a principal_groups row.

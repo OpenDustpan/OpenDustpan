@@ -433,13 +433,16 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 }
 
 const bumpSessionGeneration = `-- name: BumpSessionGeneration :execrows
-UPDATE principals SET session_generation = session_generation + 1 WHERE id = $1
+INSERT INTO principal_session_generations (principal_id, generation)
+VALUES ($1, 2)
+ON CONFLICT (principal_id) DO UPDATE SET generation = principal_session_generations.generation + 1
 `
 
 // Adds 1 to the session generation of a principal, so that each console
-// session of the principal ends.
-func (q *Queries) BumpSessionGeneration(ctx context.Context, id string) (int64, error) {
-	result, err := q.db.Exec(ctx, bumpSessionGeneration, id)
+// session of the principal ends. A principal with no row has the generation
+// 1, so the first bump writes 2.
+func (q *Queries) BumpSessionGeneration(ctx context.Context, principalID string) (int64, error) {
+	result, err := q.db.Exec(ctx, bumpSessionGeneration, principalID)
 	if err != nil {
 		return 0, err
 	}
@@ -8251,14 +8254,17 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 }
 
 const getSessionGeneration = `-- name: GetSessionGeneration :one
-SELECT session_generation FROM principals WHERE id = $1 AND deleted_at_ms IS NULL
+SELECT CAST(COALESCE(g.generation, 1) AS bigint) AS generation
+FROM principals p LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+WHERE p.id = $1 AND p.deleted_at_ms IS NULL
 `
 
+// The session generation of a principal that exists: 1 when it has no row.
 func (q *Queries) GetSessionGeneration(ctx context.Context, id string) (int64, error) {
 	row := q.db.QueryRow(ctx, getSessionGeneration, id)
-	var session_generation int64
-	err := row.Scan(&session_generation)
-	return session_generation, err
+	var generation int64
+	err := row.Scan(&generation)
+	return generation, err
 }
 
 const getSessionPolicy = `-- name: GetSessionPolicy :one

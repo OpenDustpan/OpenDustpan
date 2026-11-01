@@ -1,7 +1,8 @@
 package sqlite
 
 // sqliteLocalUserBackupTables holds the backup columns of the table of local
-// users, in the order of backup.Tables.
+// users and of the table of session generations, in the order of
+// backup.Tables.
 func sqliteLocalUserBackupTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
 		{
@@ -10,6 +11,10 @@ func sqliteLocalUserBackupTables() []sqliteBackupTable {
 				"id", backupColPrincipalID, "user_name", "password_hash", "password_set_at_ms", "change_required",
 				"demo", backupColCreatedBy, backupColCreatedAtMs,
 			},
+		},
+		{
+			table:   "principal_session_generations",
+			columns: []string{backupColPrincipalID, "generation"},
 		},
 	}
 }
