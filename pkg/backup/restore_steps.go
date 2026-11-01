@@ -1145,6 +1145,22 @@ func differingBlobAuditObject(in restoreInput, key string) string {
 		" whose bytes differ from backup " + in.BackupID.String()
 }
 
+// stagedDiffersAuditObject names the stop of restore in at a blob whose staged
+// copy differs from the backup, for its audit entry. The restore wrote
+// nothing to the live key.
+func stagedDiffersAuditObject(in restoreInput, key string) string {
+	return "restore " + in.ID.String() + " stopped at blob " + strconv.Quote(truncateKey(key)) +
+		": the staged copy differs from backup " + in.BackupID.String() + ", nothing was written to the live key"
+}
+
+// writtenDiffersAuditObject names the stop of restore in at a blob whose bytes
+// failed the check after the write to the live key, for its audit entry. The
+// live key holds the bytes that failed the check.
+func writtenDiffersAuditObject(in restoreInput, key string) string {
+	return "restore " + in.ID.String() + " wrote blob " + strconv.Quote(truncateKey(key)) +
+		" and its bytes failed the check after the write, backup " + in.BackupID.String()
+}
+
 // canceledAuditObject names the cancel of one unit of active work by the
 // enter of restore id with the claim token, for its audit entry.
 func canceledAuditObject(id RestoreID, token int64, unit string) string {
@@ -1232,42 +1248,38 @@ func (s *RestoreService) copyBlob(
 }
 
 // copyCheckedKey copies one blob of the backup into the live store with
-// checked bytes. It never replaces a live key and never deletes one:
+// checked bytes. It never replaces a live key that it saw, and it never
+// deletes one:
 //
 //  1. A live key that holds the bytes of the manifest stays.
 //  2. A live key with other bytes stops the restore with ErrCorrupt. The audit
 //     event of the refusal is stored under the fence, and nothing is written.
 //  3. For an absent live key, the bytes of the backup go to a temporary key
 //     of this restore and token, with the check of the size and the checksum.
-//     A failed check deletes only the temporary key.
-//  4. The claim is checked again, then the checked bytes go to the live key.
-//     A store that refuses the write because the key exists is not trusted:
-//     the live key is read again, and it must hold the bytes of the manifest.
+//     The staged bytes are read and checked again before any write to the live
+//     key. Bytes that differ stop the restore with ErrCorrupt, delete only the
+//     temporary key, and write nothing to the live key.
+//  4. The claim is checked, then the live key is read again, then the checked
+//     bytes go to the live key. A store that refuses the write because the key
+//     exists is not trusted: the live key is read once more, and it must hold
+//     the bytes of the manifest.
 //
-// Defense in depth: the restore does not rely on a conditional write of the
-// store. A store that ignores If-None-Match gives the same result, because
-// steps 1 and 2 read the live key first and step 4 reads it again.
+// The restore does not rely on a conditional write of the store, but one gap
+// stays on a store that ignores If-None-Match: a writer that creates the live
+// key between the second read in step 4 and the write is not seen, and the
+// restore replaces its bytes. Maintenance mode stops every other writer
+// before the copy steps run, and the fence stops a holder that lost its claim.
+// The claim can also expire between its check and the write. The lease bounds
+// that gap, and the next holder writes the same checked bytes.
 func (s *RestoreService) copyCheckedKey(
 	ctx context.Context,
 	in restoreInput,
 	fence durable.StepFence,
 	ref ManifestBlob,
 ) error {
-	live, err := blob.ParseKey(ref.Key)
-	if err != nil {
-		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
-	}
-
-	verifyErr := s.verifyLiveBlob(ctx, ref)
-
-	switch {
-	case verifyErr == nil:
-		return nil
-	case isNotFound(verifyErr):
-	case errors.Is(verifyErr, ErrCorrupt):
-		return s.refuseDifferingBlob(ctx, in, fence, ref, verifyErr)
-	default:
-		return verifyErr
+	absent, err := s.liveKeyIsAbsent(ctx, in, fence, ref)
+	if err != nil || !absent {
+		return err
 	}
 
 	tmp, err := s.stageTemp(ctx, in.ID, fence.Token, ref)
@@ -1275,56 +1287,135 @@ func (s *RestoreService) copyCheckedKey(
 		return err
 	}
 
-	// The write changes a store that the fence does not guard, so the claim
-	// is checked just before it. A holder that lost its claim writes nothing.
-	if fenceErr := s.live.CheckRestoreFence(ctx, fence, in.ID); fenceErr != nil {
-		return errors.Join(
-			fmt.Errorf("check the claim before the write of blob %q: %w", ref.Key, fenceErr),
-			s.blobs.Delete(ctx, tmp),
-		)
-	}
-
-	if _, placeErr := s.placeChecked(ctx, tmp, live, ref); placeErr != nil {
-		if errors.Is(placeErr, ErrCorrupt) {
-			return errors.Join(s.refuseDifferingBlob(ctx, in, fence, ref, placeErr), s.blobs.Delete(ctx, tmp))
-		}
-
-		return placeErr
-	}
-
-	// The temporary key has done its work. A failed delete leaves it to the
-	// cleanup step.
+	// A failure from here on removes the temporary key. A failed delete leaves
+	// it to the cleanup step.
+	err = s.writeStaged(ctx, in, fence, ref, tmp)
 	if delErr := s.blobs.Delete(ctx, tmp); delErr != nil {
 		s.logger.WarnContext(ctx, "temporary restore blob was not deleted", slog.String("restore_id", in.ID.String()))
 	}
 
-	return nil
+	return err
 }
 
-// refuseDifferingBlob stores the audit event of a live key whose bytes differ
-// from the manifest, under the fence, and returns ErrCorrupt with the cause. It
-// fails closed: when the event cannot be stored, the restore is refused all
-// the same, and the error of the store is joined. A lost claim or a cancel
-// stops the step instead.
+// writeStaged checks the staged bytes at tmp, checks the claim, reads the live
+// key again, and writes the staged bytes to the live key.
+func (s *RestoreService) writeStaged(
+	ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob, tmp blob.Key,
+) error {
+	live, err := blob.ParseKey(ref.Key)
+	if err != nil {
+		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
+	}
+
+	// The check comes before the write, so that the restore never writes bytes
+	// that it knows to be bad. A read error is not corruption: the step retries.
+	if stagedErr := s.verifyObject(ctx, tmp, ref, "staged copy of blob"); stagedErr != nil {
+		if !errors.Is(stagedErr, ErrCorrupt) {
+			return stagedErr
+		}
+
+		return s.failWithEvent(ctx, in, fence, stagedDiffersAuditObject(in, ref.Key), stagedErr)
+	}
+
+	// The write changes a store that the fence does not guard, so the claim
+	// is checked just before it. A holder that lost its claim writes nothing.
+	if fenceErr := s.live.CheckRestoreFence(ctx, fence, in.ID); fenceErr != nil {
+		return fmt.Errorf("check the claim before the write of blob %q: %w", ref.Key, fenceErr)
+	}
+
+	// Defense in depth: a store that ignores If-None-Match does not refuse a
+	// write to a key that exists. The key is read again here, after the copy
+	// and the claim check, so that the gap to the write is one read and one
+	// write.
+	absent, err := s.liveKeyIsAbsent(ctx, in, fence, ref)
+	if err != nil || !absent {
+		return err
+	}
+
+	putErr := s.putChecked(ctx, copyFrom{store: s.blobs, key: tmp, target: false}, live, ref)
+
+	switch {
+	case putErr == nil:
+		return nil
+	case errors.Is(putErr, blob.ErrExists):
+		return s.settleExisting(ctx, in, fence, ref)
+	case errors.Is(putErr, ErrCorrupt):
+		return s.failWithEvent(ctx, in, fence, writtenDiffersAuditObject(in, ref.Key), putErr)
+	default:
+		return putErr
+	}
+}
+
+// liveKeyIsAbsent reads the live key of ref and reports whether the copy goes
+// on. It reports true when the key is absent. It reports false with no error
+// when the key holds the bytes of the manifest, so there is nothing to write.
+// Other bytes stop the restore as corrupt, with the audit event of the
+// refusal. Any other error, for example a throttled store, returns as it is.
+func (s *RestoreService) liveKeyIsAbsent(
+	ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob,
+) (bool, error) {
+	verifyErr := s.verifyLiveBlob(ctx, ref)
+
+	switch {
+	case verifyErr == nil:
+		return false, nil
+	case isNotFound(verifyErr):
+		return true, nil
+	case errors.Is(verifyErr, ErrCorrupt):
+		return false, s.refuseDifferingBlob(ctx, in, fence, ref, verifyErr)
+	default:
+		return false, verifyErr
+	}
+}
+
+// settleExisting resolves a write that the store refused because the live key
+// exists. The key must hold the bytes of the manifest. Only a read that gives
+// ErrCorrupt stops the restore as corrupt: any other error, for example a
+// throttled store, returns as it is, so that the step retries and no event
+// says that bytes differ.
+func (s *RestoreService) settleExisting(
+	ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob,
+) error {
+	verifyErr := s.verifyLiveBlob(ctx, ref)
+
+	switch {
+	case verifyErr == nil:
+		return nil
+	case errors.Is(verifyErr, ErrCorrupt):
+		return s.refuseDifferingBlob(ctx, in, fence, ref, verifyErr)
+	default:
+		return verifyErr
+	}
+}
+
+// refuseDifferingBlob stops the restore at a live key whose bytes differ from
+// the manifest. See failWithEvent.
 func (s *RestoreService) refuseDifferingBlob(
 	ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob, cause error,
 ) error {
-	refusal := fmt.Errorf("live blob %q differs from backup %s and the restore does not overwrite it: %w: %w",
-		truncateKey(ref.Key), in.BackupID, ErrCorrupt, cause)
+	refusal := fmt.Errorf("live blob %q differs from backup %s and the restore does not overwrite it: %w",
+		truncateKey(ref.Key), in.BackupID, cause)
 
-	recordErr := s.live.RecordRestoreEvent(ctx, fence, in.ID, differingBlobAuditObject(in, ref.Key))
+	return s.failWithEvent(ctx, in, fence, differingBlobAuditObject(in, ref.Key), refusal)
+}
+
+// failWithEvent stores object as an audit event of the restore under the fence,
+// and returns cause, which wraps ErrCorrupt. It fails closed: when the event
+// cannot be stored, the restore is refused all the same, and the error of the
+// store is joined. A lost claim or a cancel stops the step instead.
+func (s *RestoreService) failWithEvent(
+	ctx context.Context, in restoreInput, fence durable.StepFence, object string, cause error,
+) error {
+	recordErr := s.live.RecordRestoreEvent(ctx, fence, in.ID, object)
 	if recordErr == nil {
-		return refusal
+		return cause
 	}
 
 	if errors.Is(recordErr, durable.ErrClaimLost) || errors.Is(recordErr, durable.ErrCanceled) {
 		return recordErr
 	}
 
-	return errors.Join(
-		refusal,
-		fmt.Errorf("record the refusal to overwrite blob %q: %w", truncateKey(ref.Key), recordErr),
-	)
+	return errors.Join(cause, fmt.Errorf("record the audit event of restore %s: %w", in.ID, recordErr))
 }
 
 // stageTemp copies the object of ref from the backup to the temporary key of
@@ -1353,27 +1444,6 @@ func (s *RestoreService) stageTemp(ctx context.Context, id RestoreID, token int6
 	}
 
 	return tmp, nil
-}
-
-// placeChecked copies the checked bytes of the temporary key tmp to the live
-// key. It reports whether it wrote the live key. A store with conditional
-// writes refuses the overwrite: the live key must then hold the bytes of the
-// manifest, or the copy fails with ErrCorrupt.
-func (s *RestoreService) placeChecked(ctx context.Context, tmp, live blob.Key, ref ManifestBlob) (bool, error) {
-	err := s.putChecked(ctx, copyFrom{store: s.blobs, key: tmp, target: false}, live, ref)
-
-	switch {
-	case err == nil:
-		return true, nil
-	case !errors.Is(err, blob.ErrExists):
-		return false, err
-	}
-
-	if verifyErr := s.verifyLiveBlob(ctx, ref); verifyErr != nil {
-		return false, errors.Join(verifyErr, ErrCorrupt)
-	}
-
-	return false, nil
 }
 
 // copyFrom names the source of one copy: a store, a key in it, and whether
