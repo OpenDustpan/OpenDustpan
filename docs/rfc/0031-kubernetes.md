@@ -16,6 +16,10 @@ Changed by:
   decides the role of the operator in phases 3 and 4: OpenDustpan builds its
   own tool-neutral operator, modeled on the Pulumi Kubernetes Operator.
   Crossplane is not an option and not a target. The other points stay open.
+- [ADR 305](../adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md)
+  replaces the rule "Each tool keeps its own words" for the resource kinds:
+  they are tool-neutral, with a `tool` field, and there is no `Stack` or
+  `Workspace` resource. It also accepts the sign-in per Kubernetes namespace.
 
 ## Problem
 
