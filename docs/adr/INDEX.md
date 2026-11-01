@@ -237,7 +237,7 @@ that the named part applies, and the later ADR adds to it.
 | [268](0268-approval-default-reset-route-and-gate-read-roles.md) | Approval-default reset route and gate read roles | accepted | changes ADR 230 decision 3 | - | this ADR |
 | [269](0269-private-providers-and-modules-are-uploaded-as-the-archive-set.md) | Private providers and modules: own providers first, uploaded as the archive set | accepted | - | - | this ADR |
 | [270](0270-manage-opendustpan-as-code.md) | Manage OpenDustpan as code with a CLI and two providers | accepted | - | - | this ADR |
-| [271](0271-the-forge-port-git-host-connections-and-the-installation-level-github-app.md) | The Forge port, Git host connections and the installation-level GitHub App | accepted | changes ADR 213 decisions 7 and 8 | ADR 286 changes | this ADR, with ADR 286 |
+| [271](0271-the-forge-port-git-host-connections-and-the-installation-level-github-app.md) | The Forge port, Git host connections and the installation-level GitHub App | accepted | changes ADR 213 decisions 7 and 8 | ADR 286 changes; ADR 303 extends decision 11 | this ADR, with ADR 286, 303 |
 | [272](0272-the-public-sdk-surface.md) | The public SDK surface | accepted | changes ADR 2; changes ADR 35 decision 1 | - | this ADR |
 | [273](0273-output-sharing-rules-and-the-read-outputs-action.md) | Output sharing: the read-outputs action and sharing rules on the producer | accepted | changes ADR 207 decision 7; changes ADR 213 decision 1; extends ADR 213; changes ADR 216 decision 8; changes ADR 220 decision 12; changes ADR 267 decision 14 | ADR 286 changes | this ADR, with ADR 286 |
 | [274](0274-dialect-neutral-store-logic.md) | Dialect-neutral store logic | accepted | changes ADR 3 | - | this ADR |
@@ -264,3 +264,4 @@ that the named part applies, and the later ADR adds to it.
 | [296](0296-change-links-between-adrs-and-the-adr-index.md) | Change links between ADRs, and the ADR index | accepted | extends ADR 1 | - | this ADR |
 | [297](0297-console-sessions-are-sealed-cookies-not-stored-sessions.md) | Console sessions are sealed cookies, not stored sessions | accepted | changes ADR 55 decision 9; changes ADR 69 decision 4; changes ADR 71; changes ADR 120 decisions 13 and 14; changes ADR 142 decisions 1, 3 and 9; changes ADR 146 decision 9; changes ADR 180 decision 15; extends ADR 240; changes ADR 285 decisions 5, 17, 19, 20 and 21 | - | this ADR |
 | [298](0298-postgresql-failover-readiness.md) | PostgreSQL failover readiness | accepted | extends ADR 72; extends ADR 280 decision 4 | - | this ADR |
+| [303](0303-scope-limits-ansible-cdktf-and-git-hosting.md) | Scope limits: no Ansible stack, no CDKTF, and not a Git host | accepted | extends ADR 271 decision 11 | - | this ADR |

@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 303 extends decision 11: OpenDustpan is not a Git host. The Forge port
+  connects to Git hosts for repositories, pull requests and statuses.
 
 ## Context
 
