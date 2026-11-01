@@ -1,0 +1,445 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/internal/pulumijournal
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+                              │ bench-old.txt │             bench-new.txt             │
+                              │    sec/op     │    sec/op      vs base                │
+JournalBuildCreate3000-4         84.93m ± ∞ ¹    89.66m ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange3000-4         98.14m ± ∞ ¹   103.29m ± ∞ ¹       ~ (p=0.200 n=3) ²
+JournalBuildCreate10000-4        248.2m ± ∞ ¹    265.4m ± ∞ ¹       ~ (p=0.400 n=3) ²
+JournalBuildChange10000-4        296.6m ± ∞ ¹    314.1m ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4      228.7m ± ∞ ¹    224.7m ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4    122.0m ± ∞ ¹    131.4m ± ∞ ¹       ~ (p=0.200 n=3) ²
+geomean                          160.5m          168.4m        +4.89%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                              │ bench-old.txt │             bench-new.txt             │
+                              │      B/s      │      B/s       vs base                │
+JournalBuildCreate3000-4        13.74Mi ± ∞ ¹   13.02Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange3000-4        12.14Mi ± ∞ ¹   11.54Mi ± ∞ ¹       ~ (p=0.200 n=3) ²
+JournalBuildCreate10000-4       15.74Mi ± ∞ ¹   14.72Mi ± ∞ ¹       ~ (p=0.400 n=3) ²
+JournalBuildChange10000-4       13.46Mi ± ∞ ¹   12.71Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4     10.75Mi ± ∞ ¹   10.94Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4   29.30Ki ± ∞ ¹   29.30Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                         4.706Mi         4.544Mi        -3.45%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                              │ bench-old.txt │             bench-new.txt             │
+                              │     B/op      │     B/op       vs base                │
+JournalBuildCreate3000-4        21.34Mi ± ∞ ¹   21.33Mi ± ∞ ¹       ~ (p=0.100 n=3) ²
+JournalBuildChange3000-4        23.09Mi ± ∞ ¹   23.09Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4       75.54Mi ± ∞ ¹   75.54Mi ± ∞ ¹       ~ (p=0.700 n=3) ²
+JournalBuildChange10000-4       81.58Mi ± ∞ ¹   81.58Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4     66.66Mi ± ∞ ¹   66.65Mi ± ∞ ¹       ~ (p=0.400 n=3) ²
+JournalBuildChange10in10000-4   34.53Mi ± ∞ ¹   34.53Mi ± ∞ ¹       ~ (p=0.700 n=3) ²
+geomean                         43.72Mi         43.72Mi        -0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                              │ bench-old.txt │            bench-new.txt             │
+                              │   allocs/op   │  allocs/op    vs base                │
+JournalBuildCreate3000-4         188.9k ± ∞ ¹   188.8k ± ∞ ¹       ~ (p=0.100 n=3) ²
+JournalBuildChange3000-4         206.8k ± ∞ ¹   206.8k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4        629.9k ± ∞ ¹   629.9k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10000-4        690.0k ± ∞ ¹   690.0k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4      599.9k ± ∞ ¹   599.9k ± ∞ ¹       ~ (p=0.400 n=3) ²
+JournalBuildChange10in10000-4    111.1k ± ∞ ¹   111.1k ± ∞ ¹       ~ (p=0.600 n=3) ²
+geomean                          322.8k         322.8k        -0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                              │ bench-old.txt │             bench-new.txt             │
+                              │  batch-bytes  │  batch-bytes   vs base                │
+JournalBuildCreate3000-4        1.167Mi ± ∞ ¹   1.167Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange3000-4        1.192Mi ± ∞ ¹   1.192Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4       3.907Mi ± ∞ ¹   3.907Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10000-4       3.992Mi ± ∞ ¹   3.992Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4     2.457Mi ± ∞ ¹   2.457Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4   3.961Ki ± ∞ ¹   3.961Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                         787.0Ki         787.0Ki        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                              │ bench-old.txt │            bench-new.txt             │
+                              │    entries    │   entries     vs base                │
+JournalBuildCreate3000-4         6.000k ± ∞ ¹   6.000k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange3000-4         6.000k ± ∞ ¹   6.000k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4        20.00k ± ∞ ¹   20.00k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10000-4        20.00k ± ∞ ¹   20.00k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4      20.00k ± ∞ ¹   20.00k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4     20.00 ± ∞ ¹    20.00 ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                          4.234k         4.234k        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                              │ bench-old.txt │            bench-new.txt             │
+                              │  link-index   │  link-index   vs base                │
+JournalBuildCreate3000-4         3.000k ± ∞ ¹   3.000k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange3000-4         3.000k ± ∞ ¹   3.000k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4        10.00k ± ∞ ¹   10.00k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10000-4        10.00k ± ∞ ¹   10.00k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4      10.00k ± ∞ ¹   10.00k ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4     10.00 ± ∞ ¹    10.00 ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                          2.117k         2.117k        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                              │  bench-old.txt  │              bench-new.txt              │
+                              │ new-state-bytes │ new-state-bytes  vs base                │
+JournalBuildCreate3000-4          621.1Ki ± ∞ ¹     621.1Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange3000-4          647.5Ki ± ∞ ¹     647.5Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4         2.022Mi ± ∞ ¹     2.022Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10000-4         2.108Mi ± ∞ ¹     2.108Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4       585.9Ki ± ∞ ¹     585.9Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4     2.158Ki ± ∞ ¹     2.158Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                           362.6Ki           362.6Ki        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                              │ bench-old.txt │             bench-new.txt             │
+                              │   out-bytes   │   out-bytes    vs base                │
+JournalBuildCreate3000-4        624.2Ki ± ∞ ¹   624.2Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange3000-4        650.6Ki ± ∞ ¹   650.6Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4       2.031Mi ± ∞ ¹   2.031Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10000-4       2.117Mi ± ∞ ¹   2.117Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4     596.0Ki ± ∞ ¹   596.0Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4   2.032Mi ± ∞ ¹   2.032Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                         1.120Mi         1.120Mi        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                              │  bench-old.txt  │              bench-new.txt              │
+                              │ peak-heap-bytes │ peak-heap-bytes  vs base                │
+JournalBuildCreate3000-4          7.535Mi ± ∞ ¹     6.029Mi ± ∞ ¹       ~ (p=0.100 n=3) ²
+JournalBuildChange3000-4          8.586Mi ± ∞ ¹     8.585Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildCreate10000-4         19.82Mi ± ∞ ¹     19.82Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10000-4         23.66Mi ± ∞ ¹     24.65Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildSmallestState-4       16.32Mi ± ∞ ¹     16.32Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+JournalBuildChange10in10000-4     13.23Mi ± ∞ ¹     13.53Mi ± ∞ ¹       ~ (p=0.700 n=3) ²
+geomean                           13.68Mi           13.32Mi        -2.63%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+pkg: opendustpan.org/opendustpan/pkg/dustpan
+                                    │ bench-old.txt │            bench-new.txt             │
+                                    │    sec/op     │    sec/op     vs base                │
+IPAllowlistServeNamespaceRead-4        67.90µ ± ∞ ¹   67.24µ ± ∞ ¹       ~ (p=0.400 n=3) ²
+IPAllowlistServeNamespaceReadOff-4     52.96µ ± ∞ ¹   51.64µ ± ∞ ¹       ~ (p=0.700 n=3) ²
+IPAllowlistAuthorize1000Stacks-4       18.02m ± ∞ ¹   17.92m ± ∞ ¹       ~ (p=0.700 n=3) ²
+LeaseCheck/sqlite/with-check-4         629.9µ ± ∞ ¹   579.7µ ± ∞ ¹       ~ (p=0.400 n=3) ²
+LeaseCheck/sqlite/without-check-4      541.8µ ± ∞ ¹   442.8µ ± ∞ ¹       ~ (p=0.100 n=3) ²
+LeaseCheck/postgres/with-check-4       833.4µ ± ∞ ¹   987.8µ ± ∞ ¹       ~ (p=0.200 n=3) ²
+LeaseCheck/postgres/without-check-4    492.9µ ± ∞ ¹   862.3µ ± ∞ ¹       ~ (p=0.100 n=3) ²
+geomean                                510.9µ         541.2µ        +5.93%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                    │ bench-old.txt │             bench-new.txt             │
+                                    │     B/op      │     B/op       vs base                │
+IPAllowlistServeNamespaceRead-4       12.74Ki ± ∞ ¹   12.74Ki ± ∞ ¹       ~ (p=0.300 n=3) ²
+IPAllowlistServeNamespaceReadOff-4    11.60Ki ± ∞ ¹   11.60Ki ± ∞ ¹       ~ (p=0.800 n=3) ²
+IPAllowlistAuthorize1000Stacks-4      1.101Mi ± ∞ ¹   1.103Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+LeaseCheck/sqlite/with-check-4        30.23Ki ± ∞ ¹   30.26Ki ± ∞ ¹       ~ (p=0.700 n=3) ²
+LeaseCheck/sqlite/without-check-4     26.27Ki ± ∞ ¹   26.24Ki ± ∞ ¹       ~ (p=0.200 n=3) ²
+LeaseCheck/postgres/with-check-4      24.14Ki ± ∞ ¹   28.66Ki ± ∞ ¹       ~ (p=0.100 n=3) ²
+LeaseCheck/postgres/without-check-4   21.24Ki ± ∞ ¹   24.22Ki ± ∞ ¹       ~ (p=0.100 n=3) ²
+geomean                               35.27Ki         36.84Ki        +4.45%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                    │ bench-old.txt │            bench-new.txt             │
+                                    │   allocs/op   │  allocs/op    vs base                │
+IPAllowlistServeNamespaceRead-4         158.0 ± ∞ ¹    158.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+IPAllowlistServeNamespaceReadOff-4      125.0 ± ∞ ¹    125.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+IPAllowlistAuthorize1000Stacks-4       33.02k ± ∞ ¹   33.02k ± ∞ ¹       ~ (p=1.000 n=3) ³
+LeaseCheck/sqlite/with-check-4          616.0 ± ∞ ¹    616.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+LeaseCheck/sqlite/without-check-4       495.0 ± ∞ ¹    495.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+LeaseCheck/postgres/with-check-4        266.0 ± ∞ ¹    326.0 ± ∞ ¹       ~ (p=0.100 n=3) ³
+LeaseCheck/postgres/without-check-4     229.0 ± ∞ ¹    269.0 ± ∞ ¹       ~ (p=0.100 n=3) ³
+geomean                                 532.3          560.8        +5.35%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ need >= 4 samples to detect a difference at alpha level 0.05
+
+pkg: opendustpan.org/opendustpan/pkg/ipallow
+                            │ bench-old.txt │             bench-new.txt             │
+                            │    sec/op     │    sec/op      vs base                │
+GateAuthorize/inside-last-4    455.1n ± ∞ ¹    419.9n ± ∞ ¹       ~ (p=0.700 n=3) ²
+GateAuthorize/outside-all-4    878.4n ± ∞ ¹   1049.0n ± ∞ ¹       ~ (p=0.700 n=3) ²
+geomean                        632.3n          663.7n        +4.97%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                            │ bench-old.txt │            bench-new.txt            │
+                            │     B/op      │    B/op      vs base                │
+GateAuthorize/inside-last-4     0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3) ²
+GateAuthorize/outside-all-4     144.0 ± ∞ ¹   144.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                                   ³                +0.00%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                            │ bench-old.txt │            bench-new.txt            │
+                            │   allocs/op   │  allocs/op   vs base                │
+GateAuthorize/inside-last-4     0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3) ²
+GateAuthorize/outside-all-4     4.000 ± ∞ ¹   4.000 ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                                   ³                +0.00%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: opendustpan.org/opendustpan/pkg/stack
+                             │ bench-old.txt │             bench-new.txt             │
+                             │    sec/op     │    sec/op      vs base                │
+DeltaApply256K-4                83.80µ ± ∞ ¹   120.80µ ± ∞ ¹       ~ (p=0.700 n=3) ²
+DeltaApply1M-4                  720.7µ ± ∞ ¹    684.3µ ± ∞ ¹       ~ (p=0.700 n=3) ²
+DeploymentShape1M-4             1.633m ± ∞ ¹    1.463m ± ∞ ¹       ~ (p=0.400 n=3) ²
+DeploymentShapeSequenced1M-4    1.814m ± ∞ ¹    1.791m ± ∞ ¹       ~ (p=1.000 n=3) ²
+DeploymentShapeSequenced4M-4    5.680m ± ∞ ¹    6.015m ± ∞ ¹       ~ (p=0.700 n=3) ²
+GzipBestSpeedCompress-4         544.7µ ± ∞ ¹    587.2µ ± ∞ ¹       ~ (p=0.400 n=3) ²
+GzipBestSpeedDecompress-4       93.08µ ± ∞ ¹    90.05µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                         654.6µ          682.4µ        +4.24%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                             │ bench-old.txt │             bench-new.txt             │
+                             │      B/s      │      B/s       vs base                │
+DeltaApply256K-4               2.918Gi ± ∞ ¹   2.024Gi ± ∞ ¹       ~ (p=0.700 n=3) ²
+DeltaApply1M-4                 1.355Gi ± ∞ ¹   1.427Gi ± ∞ ¹       ~ (p=0.700 n=3) ²
+DeploymentShape1M-4            612.5Mi ± ∞ ¹   683.6Mi ± ∞ ¹       ~ (p=0.400 n=3) ²
+DeploymentShapeSequenced1M-4   551.2Mi ± ∞ ¹   558.4Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+DeploymentShapeSequenced4M-4   704.3Mi ± ∞ ¹   665.0Mi ± ∞ ¹       ~ (p=0.700 n=3) ²
+GzipBestSpeedCompress-4        459.7Mi ± ∞ ¹   426.4Mi ± ∞ ¹       ~ (p=0.400 n=3) ²
+GzipBestSpeedDecompress-4      32.20Mi ± ∞ ¹   33.27Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                        546.7Mi         524.4Mi        -4.07%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                             │ bench-old.txt │             bench-new.txt             │
+                             │     B/op      │     B/op       vs base                │
+DeltaApply256K-4               265.3Ki ± ∞ ¹   265.3Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+DeltaApply1M-4                 1.010Mi ± ∞ ¹   1.010Mi ± ∞ ¹       ~ (p=0.400 n=3) ²
+DeploymentShape1M-4            50.66Ki ± ∞ ¹   50.66Ki ± ∞ ¹       ~ (p=1.000 n=3) ³
+DeploymentShapeSequenced1M-4   50.75Ki ± ∞ ¹   50.75Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+DeploymentShapeSequenced4M-4   201.1Ki ± ∞ ¹   201.1Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+GzipBestSpeedCompress-4        802.7Ki ± ∞ ¹   802.7Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+GzipBestSpeedDecompress-4      40.33Ki ± ∞ ¹   40.34Ki ± ∞ ¹       ~ (p=0.800 n=3) ²
+geomean                        172.8Ki         172.8Ki        +0.01%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+³ all samples are equal
+
+                             │ bench-old.txt │            bench-new.txt             │
+                             │   allocs/op   │  allocs/op    vs base                │
+DeltaApply256K-4                 11.00 ± ∞ ¹    11.00 ± ∞ ¹       ~ (p=1.000 n=3) ²
+DeltaApply1M-4                   14.00 ± ∞ ¹    14.00 ± ∞ ¹       ~ (p=1.000 n=3) ³
+DeploymentShape1M-4             8.038k ± ∞ ¹   8.038k ± ∞ ¹       ~ (p=1.000 n=3) ²
+DeploymentShapeSequenced1M-4    8.041k ± ∞ ¹   8.041k ± ∞ ¹       ~ (p=1.000 n=3) ²
+DeploymentShapeSequenced4M-4    32.09k ± ∞ ¹   32.09k ± ∞ ¹       ~ (p=1.000 n=3) ²
+GzipBestSpeedCompress-4          21.00 ± ∞ ¹    21.00 ± ∞ ¹       ~ (p=1.000 n=3) ²
+GzipBestSpeedDecompress-4        8.000 ± ∞ ¹    8.000 ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                          245.4          245.4        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ need >= 4 samples to detect a difference at alpha level 0.05
+
+pkg: opendustpan.org/opendustpan/pkg/store/postgres
+                                                        │ bench-old.txt │             bench-new.txt             │
+                                                        │    sec/op     │    sec/op     vs base                 │
+WriteCheck/state_only-4                                    193.5µ ± ∞ ¹   261.4µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+WriteCheck/state_and_minimum,_none_set-4                   237.0µ ± ∞ ¹   272.5µ ± ∞ ¹        ~ (p=0.200 n=3) ²
+WriteCheck/state_and_minimum,_one_set-4                    239.8µ ± ∞ ¹   286.7µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/principals-4                                4.890m ± ∞ ¹   5.333m ± ∞ ¹        ~ (p=0.700 n=3) ²
+PrincipalLists/principals_with_a_prefix-4                  2.749m ± ∞ ¹   3.148m ± ∞ ¹        ~ (p=0.200 n=3) ²
+PrincipalLists/workloads,_2_percent_of_the_principals-4    2.546m ± ∞ ¹   3.352m ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/services_with_a_prefix-4                    2.376m ± ∞ ¹   2.423m ± ∞ ¹        ~ (p=0.700 n=3) ²
+PrincipalLists/groups-4                                    1.235m ± ∞ ¹   1.689m ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/members_of_a_group-4                        498.7µ ± ∞ ¹   692.0µ ± ∞ ¹        ~ (p=0.200 n=3) ²
+PrincipalLists/groups_of_a_principal_in_80_groups-4        2.174m ± ∞ ¹   2.332m ± ∞ ¹        ~ (p=1.000 n=3) ²
+CallerGrants/others=0-4                                    11.00m ± ∞ ¹   10.87m ± ∞ ¹        ~ (p=1.000 n=3) ²
+CallerGrants/others=20000-4                                6.886m ± ∞ ¹   6.351m ± ∞ ¹        ~ (p=0.700 n=3) ²
+CallerGrants/others=100000-4                               7.013m ± ∞ ¹   6.377m ± ∞ ¹        ~ (p=1.000 n=3) ²
+Authorizer/check-4                                         5.714m ± ∞ ¹   5.815m ± ∞ ¹        ~ (p=0.700 n=3) ²
+Authorizer/list_objects-4                                  2.705m ± ∞ ¹   2.759m ± ∞ ¹        ~ (p=0.400 n=3) ²
+FencedWrite/fence_only/serial-4                            877.0µ ± ∞ ¹   888.6µ ± ∞ ¹        ~ (p=0.700 n=3) ²
+FencedWrite/fence_only/parallel8-4                         246.5µ ± ∞ ¹   319.9µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/check/serial-4                                 829.7µ ± ∞ ¹   997.0µ ± ∞ ¹        ~ (p=0.200 n=3) ²
+FencedWrite/check/parallel8-4                              278.9µ ± ∞ ¹   313.2µ ± ∞ ¹        ~ (p=0.400 n=3) ²
+WriteCheck/state,_fence_and_minimum,_one_set-4             636.0µ ± ∞ ¹   801.3µ ± ∞ ¹        ~ (p=0.100 n=3) ²
+geomean                                                    1.333m         1.510m        +13.32%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                                        │ bench-old.txt │             bench-new.txt              │
+                                                        │     B/op      │     B/op       vs base                 │
+WriteCheck/state_only-4                                   2.058Ki ± ∞ ¹   2.163Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+WriteCheck/state_and_minimum,_none_set-4                  2.582Ki ± ∞ ¹   2.687Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+WriteCheck/state_and_minimum,_one_set-4                   2.707Ki ± ∞ ¹   2.743Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/principals-4                               100.4Ki ± ∞ ¹   103.5Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/principals_with_a_prefix-4                 100.4Ki ± ∞ ¹   103.4Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/workloads,_2_percent_of_the_principals-4   100.7Ki ± ∞ ¹   103.8Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/services_with_a_prefix-4                   100.0Ki ± ∞ ¹   103.1Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/groups-4                                   64.12Ki ± ∞ ¹   67.17Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/members_of_a_group-4                       11.85Ki ± ∞ ¹   15.61Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/groups_of_a_principal_in_80_groups-4       56.93Ki ± ∞ ¹   60.71Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CallerGrants/others=0-4                                   340.4Ki ± ∞ ¹   345.9Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CallerGrants/others=20000-4                               339.8Ki ± ∞ ¹   345.2Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+CallerGrants/others=100000-4                              339.8Ki ± ∞ ¹   345.1Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+Authorizer/check-4                                        58.65Ki ± ∞ ¹   60.85Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+Authorizer/list_objects-4                                 376.9Ki ± ∞ ¹   379.9Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/fence_only/serial-4                           2.157Ki ± ∞ ¹   5.234Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/fence_only/parallel8-4                        2.334Ki ± ∞ ¹   5.394Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/check/serial-4                                3.372Ki ± ∞ ¹   6.519Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/check/parallel8-4                             3.542Ki ± ∞ ¹   6.689Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+WriteCheck/state,_fence_and_minimum,_one_set-4            2.869Ki ± ∞ ¹   5.321Ki ± ∞ ¹        ~ (p=0.100 n=3) ²
+geomean                                                   25.05Ki         31.12Ki        +24.23%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                                        │ bench-old.txt │             bench-new.txt             │
+                                                        │   allocs/op   │  allocs/op    vs base                 │
+WriteCheck/state_only-4                                     51.00 ± ∞ ¹    52.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+WriteCheck/state_and_minimum,_none_set-4                    69.00 ± ∞ ¹    70.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+WriteCheck/state_and_minimum,_one_set-4                     73.00 ± ∞ ¹    74.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/principals-4                                 754.0 ± ∞ ¹    796.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/principals_with_a_prefix-4                   758.0 ± ∞ ¹    799.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/workloads,_2_percent_of_the_principals-4     749.0 ± ∞ ¹    790.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/services_with_a_prefix-4                     753.0 ± ∞ ¹    794.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/groups-4                                     653.0 ± ∞ ¹    694.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/members_of_a_group-4                         105.0 ± ∞ ¹    155.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+PrincipalLists/groups_of_a_principal_in_80_groups-4         542.0 ± ∞ ¹    592.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+CallerGrants/others=0-4                                    2.480k ± ∞ ¹   2.554k ± ∞ ¹        ~ (p=0.100 n=3) ²
+CallerGrants/others=20000-4                                2.477k ± ∞ ¹   2.548k ± ∞ ¹        ~ (p=0.100 n=3) ²
+CallerGrants/others=100000-4                               2.477k ± ∞ ¹   2.548k ± ∞ ¹        ~ (p=0.100 n=3) ²
+Authorizer/check-4                                          669.0 ± ∞ ¹    699.0 ± ∞ ¹        ~ (p=0.100 n=3) ²
+Authorizer/list_objects-4                                  3.767k ± ∞ ¹   3.808k ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/fence_only/serial-4                             43.00 ± ∞ ¹    84.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/fence_only/parallel8-4                          47.00 ± ∞ ¹    88.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/check/serial-4                                  87.00 ± ∞ ¹   132.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+FencedWrite/check/parallel8-4                               90.00 ± ∞ ¹   135.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+WriteCheck/state,_fence_and_minimum,_one_set-4              80.00 ± ∞ ¹   116.00 ± ∞ ¹        ~ (p=0.100 n=3) ²
+geomean                                                     322.6          383.0        +18.71%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+                                                        │ bench-old.txt │             bench-new.txt             │
+                                                        │    sec/op     │    sec/op      vs base                │
+WriteCheck/state_only-4                                    23.91µ ± ∞ ¹    24.25µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+WriteCheck/state_and_minimum,_none_set-4                   44.75µ ± ∞ ¹    44.05µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+WriteCheck/state_and_minimum,_one_set-4                    49.51µ ± ∞ ¹    48.81µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveFull1000-4                                   251.2µ ± ∞ ¹    240.8µ ± ∞ ¹       ~ (p=0.700 n=3) ²
+CheckpointSaveFull3000-4                                   229.0µ ± ∞ ¹    209.7µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveDelta1000-4                                  428.6µ ± ∞ ¹    385.8µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveDelta3000-4                                  422.2µ ± ∞ ¹    399.1µ ± ∞ ¹       ~ (p=0.400 n=3) ²
+CountManagedResources1000-4                                9.962m ± ∞ ¹   11.438m ± ∞ ¹       ~ (p=0.200 n=3) ²
+CountManagedResources3000-4                                28.43m ± ∞ ¹    31.05m ± ∞ ¹       ~ (p=0.700 n=3) ²
+PrincipalLists/principals-4                                1.315m ± ∞ ¹    1.574m ± ∞ ¹       ~ (p=0.200 n=3) ²
+PrincipalLists/principals_with_a_prefix-4                  1.711m ± ∞ ¹    1.492m ± ∞ ¹       ~ (p=0.700 n=3) ²
+PrincipalLists/workloads,_2_percent_of_the_principals-4    2.723m ± ∞ ¹    3.108m ± ∞ ¹       ~ (p=0.700 n=3) ²
+PrincipalLists/services_with_a_prefix-4                    2.377m ± ∞ ¹    2.386m ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/groups-4                                    981.9µ ± ∞ ¹   1002.4µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/members_of_a_group-4                        293.1µ ± ∞ ¹    331.4µ ± ∞ ¹       ~ (p=0.200 n=3) ²
+PrincipalLists/groups_of_a_principal_in_80_groups-4        992.6µ ± ∞ ¹   1041.5µ ± ∞ ¹       ~ (p=1.000 n=3) ²
+CallerGrants/others=0-4                                    4.042m ± ∞ ¹    4.778m ± ∞ ¹       ~ (p=0.400 n=3) ²
+CallerGrants/others=20000-4                                3.923m ± ∞ ¹    3.996m ± ∞ ¹       ~ (p=0.400 n=3) ²
+CallerGrants/others=100000-4                               4.229m ± ∞ ¹    4.736m ± ∞ ¹       ~ (p=0.100 n=3) ²
+Authorizer/check-4                                         651.3µ ± ∞ ¹    535.1µ ± ∞ ¹       ~ (p=0.200 n=3) ²
+Authorizer/list_objects-4                                  2.968m ± ∞ ¹    3.034m ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                                                    888.9µ          906.5µ        +1.99%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                            │ bench-old.txt │             bench-new.txt             │
+                            │      B/s      │      B/s       vs base                │
+CheckpointSaveFull1000-4      12.26Gi ± ∞ ¹   12.79Gi ± ∞ ¹       ~ (p=0.700 n=3) ²
+CheckpointSaveFull3000-4      40.41Gi ± ∞ ¹   44.11Gi ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveDelta1000-4     7.185Gi ± ∞ ¹   7.981Gi ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveDelta3000-4     21.92Gi ± ∞ ¹   23.18Gi ± ∞ ¹       ~ (p=0.400 n=3) ²
+CountManagedResources1000-4   316.5Mi ± ∞ ¹   275.7Mi ± ∞ ¹       ~ (p=0.200 n=3) ²
+CountManagedResources3000-4   333.2Mi ± ∞ ¹   305.2Mi ± ∞ ¹       ~ (p=0.700 n=3) ²
+geomean                       4.458Gi         4.507Gi        +1.10%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                                        │ bench-old.txt │             bench-new.txt             │
+                                                        │     B/op      │     B/op       vs base                │
+WriteCheck/state_only-4                                   1.653Ki ± ∞ ¹   1.647Ki ± ∞ ¹       ~ (p=0.400 n=3) ²
+WriteCheck/state_and_minimum,_none_set-4                  2.071Ki ± ∞ ¹   2.072Ki ± ∞ ¹       ~ (p=0.700 n=3) ²
+WriteCheck/state_and_minimum,_one_set-4                   2.196Ki ± ∞ ¹   2.196Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveFull1000-4                                  10.17Ki ± ∞ ¹   10.17Ki ± ∞ ¹       ~ (p=0.900 n=3) ²
+CheckpointSaveFull3000-4                                  10.17Ki ± ∞ ¹   10.17Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveDelta1000-4                                 12.35Ki ± ∞ ¹   12.35Ki ± ∞ ¹       ~ (p=0.500 n=3) ²
+CheckpointSaveDelta3000-4                                 12.33Ki ± ∞ ¹   12.33Ki ± ∞ ¹       ~ (p=0.300 n=3) ²
+CountManagedResources1000-4                               3.703Mi ± ∞ ¹   3.703Mi ± ∞ ¹       ~ (p=0.800 n=3) ²
+CountManagedResources3000-4                               11.15Mi ± ∞ ¹   11.15Mi ± ∞ ¹       ~ (p=0.200 n=3) ²
+PrincipalLists/principals-4                               95.44Ki ± ∞ ¹   95.44Ki ± ∞ ¹       ~ (p=0.800 n=3) ²
+PrincipalLists/principals_with_a_prefix-4                 95.51Ki ± ∞ ¹   95.51Ki ± ∞ ¹       ~ (p=0.500 n=3) ²
+PrincipalLists/workloads,_2_percent_of_the_principals-4   94.55Ki ± ∞ ¹   94.55Ki ± ∞ ¹       ~ (p=0.600 n=3) ²
+PrincipalLists/services_with_a_prefix-4                   94.61Ki ± ∞ ¹   94.61Ki ± ∞ ¹       ~ (p=0.600 n=3) ²
+PrincipalLists/groups-4                                   62.18Ki ± ∞ ¹   62.19Ki ± ∞ ¹       ~ (p=0.100 n=3) ²
+PrincipalLists/members_of_a_group-4                       12.43Ki ± ∞ ¹   12.43Ki ± ∞ ¹       ~ (p=0.600 n=3) ²
+PrincipalLists/groups_of_a_principal_in_80_groups-4       56.08Ki ± ∞ ¹   56.08Ki ± ∞ ¹       ~ (p=0.500 n=3) ²
+CallerGrants/others=0-4                                   321.5Ki ± ∞ ¹   321.6Ki ± ∞ ¹       ~ (p=0.200 n=3) ²
+CallerGrants/others=20000-4                               321.6Ki ± ∞ ¹   321.6Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+CallerGrants/others=100000-4                              321.5Ki ± ∞ ¹   321.6Ki ± ∞ ¹       ~ (p=0.700 n=3) ²
+Authorizer/check-4                                        59.24Ki ± ∞ ¹   59.21Ki ± ∞ ¹       ~ (p=0.400 n=3) ²
+Authorizer/list_objects-4                                 374.8Ki ± ∞ ¹   374.8Ki ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                                                   58.60Ki         58.60Ki        -0.02%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                                        │ bench-old.txt │            bench-new.txt             │
+                                                        │   allocs/op   │  allocs/op    vs base                │
+WriteCheck/state_only-4                                     42.00 ± ∞ ¹    42.00 ± ∞ ¹       ~ (p=1.000 n=3) ²
+WriteCheck/state_and_minimum,_none_set-4                    56.00 ± ∞ ¹    56.00 ± ∞ ¹       ~ (p=1.000 n=3) ²
+WriteCheck/state_and_minimum,_one_set-4                     59.00 ± ∞ ¹    59.00 ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveFull1000-4                                    255.0 ± ∞ ¹    255.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveFull3000-4                                    255.0 ± ∞ ¹    255.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveDelta1000-4                                   311.0 ± ∞ ¹    311.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+CheckpointSaveDelta3000-4                                   311.0 ± ∞ ¹    311.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+CountManagedResources1000-4                                51.32k ± ∞ ¹   51.32k ± ∞ ¹       ~ (p=1.000 n=3) ²
+CountManagedResources3000-4                                153.9k ± ∞ ¹   153.9k ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/principals-4                                1.426k ± ∞ ¹   1.426k ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/principals_with_a_prefix-4                  1.430k ± ∞ ¹   1.430k ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/workloads,_2_percent_of_the_principals-4    1.414k ± ∞ ¹   1.414k ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/services_with_a_prefix-4                    1.418k ± ∞ ¹   1.418k ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/groups-4                                    1.210k ± ∞ ¹   1.210k ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/members_of_a_group-4                         238.0 ± ∞ ¹    238.0 ± ∞ ¹       ~ (p=1.000 n=3) ²
+PrincipalLists/groups_of_a_principal_in_80_groups-4        1.010k ± ∞ ¹   1.010k ± ∞ ¹       ~ (p=1.000 n=3) ²
+CallerGrants/others=0-4                                    3.742k ± ∞ ¹   3.742k ± ∞ ¹       ~ (p=1.000 n=3) ²
+CallerGrants/others=20000-4                                3.742k ± ∞ ¹   3.742k ± ∞ ¹       ~ (p=1.000 n=3) ²
+CallerGrants/others=100000-4                               3.742k ± ∞ ¹   3.742k ± ∞ ¹       ~ (p=1.000 n=3) ³
+Authorizer/check-4                                          886.0 ± ∞ ¹    886.0 ± ∞ ¹       ~ (p=1.000 n=3) ³
+Authorizer/list_objects-4                                  5.874k ± ∞ ¹   5.874k ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                                                    1.039k         1.039k        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ need >= 4 samples to detect a difference at alpha level 0.05
+
+pkg: opendustpan.org/opendustpan/pkg/workspace
+                                      │ bench-old.txt │            bench-new.txt             │
+                                      │    sec/op     │    sec/op     vs base                │
+ScanPointersManyPointersManyMembers-4    129.0m ± ∞ ¹   112.7m ± ∞ ¹       ~ (p=0.400 n=3) ²
+Upload32MiB-4                            369.9m ± ∞ ¹   352.4m ± ∞ ¹       ~ (p=0.400 n=3) ²
+geomean                                  218.5m         199.3m        -8.76%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                      │ bench-old.txt │             bench-new.txt             │
+                                      │     B/op      │     B/op       vs base                │
+ScanPointersManyPointersManyMembers-4   43.92Mi ± ∞ ¹   43.92Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+Upload32MiB-4                           6.420Mi ± ∞ ¹   6.419Mi ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                                 16.79Mi         16.79Mi        -0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
+
+                                      │ bench-old.txt │            bench-new.txt             │
+                                      │   allocs/op   │  allocs/op    vs base                │
+ScanPointersManyPointersManyMembers-4    501.3k ± ∞ ¹   501.2k ± ∞ ¹       ~ (p=0.600 n=3) ²
+Upload32MiB-4                            226.0k ± ∞ ¹   226.0k ± ∞ ¹       ~ (p=1.000 n=3) ²
+geomean                                  336.6k         336.6k        -0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² need >= 4 samples to detect a difference at alpha level 0.05
