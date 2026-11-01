@@ -94,7 +94,9 @@ func FuzzParsePublicKey(f *testing.F) {
 
 // FuzzVerifier checks that the verifier never panics, never accepts a
 // changed signature of the real ssh-keygen, and fails only with ErrBadAnswer
-// for a signature by a valid key.
+// for a signature by a valid key. An accepted signature must parse to the
+// same values as a valid fixture, so that another armor of a fixture is not
+// reported as a forgery.
 func FuzzVerifier(f *testing.F) {
 	for _, s := range seeds(f) {
 		f.Add(s, uint8(0))
@@ -106,17 +108,49 @@ func FuzzVerifier(f *testing.F) {
 
 		_, err := sshsig.NewVerifier().Verify(t.Context(), v.Key, scopes[int(scope)%len(scopes)], v.Message, sig)
 		if err == nil {
-			for _, ok := range []string{"sk-presence", "sk-verified", "sk-counter-zero", "sk-counter-max", "sk-key-add"} {
-				if bytes.Equal(sig, fixture(t, ok+".sig")) {
-					return
-				}
+			if !isFixture(t, sig) {
+				t.Fatal("Verify accepted a signature that the key did not make")
 			}
 
-			t.Fatal("Verify accepted a signature that the key did not make")
+			return
 		}
 
 		if !errors.Is(err, stepup.ErrBadAnswer) {
 			t.Fatalf("Verify error = %v, want ErrBadAnswer", err)
 		}
 	})
+}
+
+// sameSignature reports whether a and b hold the same values.
+func sameSignature(a, b sshsig.Signature) bool {
+	return bytes.Equal(a.PublicKey, b.PublicKey) &&
+		a.Namespace == b.Namespace &&
+		a.HashAlgorithm == b.HashAlgorithm &&
+		a.Type == b.Type &&
+		bytes.Equal(a.Blob, b.Blob) &&
+		a.Flags == b.Flags &&
+		a.Counter == b.Counter
+}
+
+// isFixture reports whether sig parses to the values of a valid sk fixture.
+func isFixture(t *testing.T, sig []byte) bool {
+	t.Helper()
+
+	got, err := sshsig.Parse(sig)
+	if err != nil {
+		t.Fatalf("Verify accepted a signature that Parse refuses: %v", err)
+	}
+
+	for _, ok := range []string{"sk-presence", "sk-verified", "sk-counter-zero", "sk-counter-max", "sk-key-add"} {
+		want, err := sshsig.Parse(fixture(t, ok+".sig"))
+		if err != nil {
+			t.Fatalf("parse fixture %s: %v", ok, err)
+		}
+
+		if sameSignature(got, want) {
+			return true
+		}
+	}
+
+	return false
 }
