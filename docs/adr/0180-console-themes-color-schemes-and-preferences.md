@@ -9,6 +9,7 @@ Changed by:
 - ADR 212 extends decision 11: the branding preset as an installation setting.
 - ADR 235 extends decision 11: the product name, logo, accent and agent name.
 - ADR 290 changes decision 2: the Default theme gets the search shortcut.
+- ADR 297 changes decision 15: the audit entry names the sign-in ID.
 
 ## Context
 

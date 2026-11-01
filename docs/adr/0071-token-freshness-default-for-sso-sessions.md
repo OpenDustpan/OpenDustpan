@@ -7,6 +7,7 @@ Changed by:
 - ADR 222 supersedes decisions 1 and 2: one fresh-authentication window.
 - ADR 227 supersedes decisions 1 and 2: tokenFreshnessSeconds becomes
   freshAuthSeconds and 0 asks each time.
+- ADR 297 changes: the audit entry names the sign-in ID.
 
 ## Context
 
