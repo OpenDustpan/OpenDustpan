@@ -391,6 +391,15 @@ type ImportUnit struct {
 	Findings     string
 }
 
+type ImportUploadCommit struct {
+	NamespaceID   string
+	ImportID      string
+	UnitDir       string
+	Sequence      int64
+	Facts         string
+	CommittedAtMs int64
+}
+
 type ImportsPurged struct {
 	NamespaceID string
 	ID          string
@@ -715,6 +724,18 @@ type PersonPreference struct {
 	UpdatedAtMs int64
 }
 
+type PlacementRule struct {
+	ID            string
+	Namespace     string
+	Position      int32
+	Tool          string
+	Project       string
+	Stack         string
+	CollectionKey string
+	CreatedBy     string
+	CreatedAtMs   int64
+}
+
 type Principal struct {
 	ID             string
 	Subject        string
@@ -942,6 +963,19 @@ type SessionPolicy struct {
 	TokenFreshnessMs pgtype.Int8
 }
 
+type Setting struct {
+	ScopeID     string
+	Key         string
+	Value       string
+	UpdatedAtMs int64
+}
+
+type SettingsState struct {
+	ScopeID      string
+	Revision     int64
+	StaticDigest string
+}
+
 type SignInFailure struct {
 	Source      string
 	WindowEndMs int64
@@ -1077,6 +1111,13 @@ type TrustRule struct {
 	CreatedAtMs    int64
 }
 
+type UnitDefault struct {
+	NamespaceID string
+	Pool        string
+	Version     int64
+	UpdatedAtMs int64
+}
+
 type UnitFinalVersion struct {
 	UnitID      string
 	NamespaceID string
@@ -1084,6 +1125,14 @@ type UnitFinalVersion struct {
 	CommitID    string
 	JobID       string
 	AtMs        int64
+}
+
+type UnitSetting struct {
+	UnitID      string
+	NamespaceID string
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
 }
 
 type UnitStateVersion struct {

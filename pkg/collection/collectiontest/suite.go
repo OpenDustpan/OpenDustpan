@@ -275,7 +275,7 @@ func testUnitNotFound(t *testing.T, s Store) {
 		t.Fatalf("CreateCollection: %v", err)
 	}
 
-	missing := collection.UnitRef{Namespace: ns.Name, Tool: "opentofu", Name: "absent"}
+	missing := collection.UnitRef{Namespace: ns.Name, Tool: toolOpenTofu, Name: "absent"}
 
 	_, err := setUnit(t, s, missing, c.Ref, ns.Fence())
 	if !errors.Is(err, collection.ErrUnitNotFound) {
@@ -716,7 +716,7 @@ func auditFor(fence namespace.Fence) audit.Entry {
 	return audit.Entry{
 		At:            now(),
 		Namespace:     fence.Namespace,
-		Subject:       "tester",
+		Subject:       testSubject,
 		IDPSubject:    "",
 		TokenID:       "",
 		Action:        "collection:test",

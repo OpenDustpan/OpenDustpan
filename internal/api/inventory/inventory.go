@@ -60,6 +60,10 @@ type Config struct {
 	// service serves no collection route, so a namespace store that holds no
 	// collections keeps the rest of the API unchanged.
 	Collections *collection.Service
+	// Placements serves the placement rule routes. It is optional: nil serves
+	// no such route, so a store that holds no placement rules keeps the rest of
+	// the API unchanged.
+	Placements *collection.PlacementService
 	// Locks serves the manual lock routes. It is optional: a nil service serves
 	// no lock route, so a namespace store that holds no manual locks keeps the
 	// rest of the API unchanged.
@@ -113,6 +117,7 @@ type Handler struct {
 	lifecycles    map[string]coreinventory.Lifecycle
 	readScope     DeletedReadScope
 	collections   *collection.Service
+	placements    *collection.PlacementService
 	locks         *manuallock.Service
 	outputSharing *outputsharesvc.Service
 	outputs       *outputsharesvc.Reader
@@ -187,6 +192,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		lifecycles:    cfg.Lifecycles,
 		readScope:     cfg.ReadScope,
 		collections:   cfg.Collections,
+		placements:    cfg.Placements,
 		locks:         cfg.Locks,
 		outputSharing: cfg.OutputSharing,
 		outputs:       cfg.Outputs,
@@ -596,7 +602,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // to show callers. The shared module answers the rest.
 func classify(err error) (problem.Problem, bool) {
 	for _, try := range []func(error) (problem.Problem, bool){
-		classifyView, classifyRequest, classifyCollection, classifyChange, classifyLock,
+		classifyView, classifyRequest, classifyCollection, classifyPlacement, classifyChange, classifyLock,
 	} {
 		if p, ok := try(err); ok {
 			return p, true
@@ -612,8 +618,11 @@ func classifyRequest(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errMissingOrganization), errors.Is(err, errMissingUnit):
 		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
-	case errors.Is(err, errOutputSharingBody), errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody):
+	case errors.Is(err, errOutputSharingBody), errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody),
+		errors.Is(err, errPlacementBody):
 		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
+	case errors.Is(err, errPlacementRuleID):
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidPath, err.Error()), true
 	case errors.Is(err, namespace.ErrInvalidName):
 		return problem.New(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
 	case errors.Is(err, identity.ErrInvalidObject):
@@ -648,6 +657,28 @@ func classifyCollection(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusConflict, errcode.UnitNoCollection, err.Error()), true
 	case errors.Is(err, collection.ErrMoveOutOfLockedCollection):
 		return problem.New(http.StatusConflict, errcode.CollectionMoveOutLocked, err.Error()), true
+	}
+
+	var none problem.Problem
+
+	return none, false
+}
+
+// classifyPlacement maps the errors of the placement rules.
+func classifyPlacement(err error) (problem.Problem, bool) {
+	switch {
+	case errors.Is(err, collection.ErrInvalidPattern):
+		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidPattern, err.Error()), true
+	case errors.Is(err, collection.ErrInvalidPlacementTool):
+		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidTool, err.Error()), true
+	case errors.Is(err, collection.ErrInvalidPosition):
+		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidPosition, err.Error()), true
+	case errors.Is(err, collection.ErrPlacementRuleNotFound):
+		return problem.New(http.StatusNotFound, errcode.PlacementRuleNotFound, err.Error()), true
+	case errors.Is(err, collection.ErrPlacementConflict):
+		return problem.New(http.StatusConflict, errcode.PlacementConflict, err.Error()), true
+	case errors.Is(err, collection.ErrTooManyPlacementRules):
+		return problem.New(http.StatusConflict, errcode.PlacementTooManyRules, err.Error()), true
 	}
 
 	var none problem.Problem

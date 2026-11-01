@@ -367,12 +367,17 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Placement rules API](docs/reference/placement-rules-api.md): the rules that
+  choose the collection of a new stack, their patterns and their routes.
 - [Gate configuration API](docs/reference/gate-config-api.md): the routes that store,
   read and delete gates and access limits.
 - [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the
   keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Settings API](docs/reference/settings-api.md): the routes that read the
+  settings of the installation and of a namespace, with the source of each
+  value, and change them.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the
   stable codes that tell a missing permission, the IP allowlist and the session
   checks apart.
