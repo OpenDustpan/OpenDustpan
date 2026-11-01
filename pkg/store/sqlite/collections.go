@@ -253,6 +253,41 @@ func (s *Store) UnitCollection(ctx context.Context, unit collection.UnitRef) (co
 	return collection.Ref{Namespace: unit.Namespace, Name: name}, nil
 }
 
+// ListCollectionUnitIDs implements collection.Store.
+func (s *Store) ListCollectionUnitIDs(ctx context.Context, ref collection.Ref) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var ids []string
+
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
+		if _, err := collectionID(ctx, q, ref); err != nil {
+			return err
+		}
+
+		rows, err := q.ListCollectionUnitIDs(ctx, db.ListCollectionUnitIDsParams{
+			Namespace:     ref.Namespace.String(),
+			CollectionKey: ref.Name.Key(),
+		})
+		if err != nil {
+			return fmt.Errorf("select collection units: %w", err)
+		}
+
+		ids = rows
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if ids == nil {
+		ids = []string{}
+	}
+
+	return ids, nil
+}
+
 // currentUnitCollection returns the collection that the unit with unitID is in,
 // or the empty name when it has none.
 func currentUnitCollection(ctx context.Context, q *db.Queries, unitID string) (collection.Name, error) {
