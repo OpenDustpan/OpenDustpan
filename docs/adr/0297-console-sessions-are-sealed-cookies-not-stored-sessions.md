@@ -502,6 +502,16 @@ credential.
       person counts the wrong factors (ADR 285 decision 14). A good factor
       writes the audit entry, expires the pending sign-in cookie, and sets
       the cookies of the session with the thumbprint of the pending sign-in.
+
+      A good factor clears only the copy in the browser. A copy of the
+      pending value still opens until its expiry. With the private key of
+      the sign-in and another good factor, that copy can finish a second
+      sign-in inside the 5 minutes. The bound: the second sign-in needs the
+      non-extractable key of the browser (the factor step needs a proof of
+      it, decision 6) and a second good factor, and each wrong factor counts
+      in the factor lock of the person. Its cookies are bound to the same key,
+      so a person who has the copy and not the key gets nothing. The owner
+      accepts this cost with option (b) of the decisions of the owner.
     - **Enroll-only (ADR 285 decision 21).** A person with no factor, after
       the grace, gets cookies with the restriction `enroll-only`. A refresh
       keeps it. The enrollment of a factor bumps the generation (decision 12)
@@ -564,6 +574,8 @@ credential.
     | Sign-out request | `POST` only, no body, origin and CSRF value | as the refresh request | the source budget | ends only the runs of the sign-in ID of the cookie that opened | an unopened cookie ends nothing and clears the cookies |
     | Body of end-sessions, sign-out-everywhere and rotation | strict JSON, a reason of at most 512 bytes of valid UTF-8, `retireAll` a boolean | the reason goes to the audit entry, never to a header | a fresh authentication. The source budget | `principal:manage` on the principal, or `installation:manage-sign-in`. A person signs out everywhere only for themselves | a refusal writes a denial entry |
     | Session generation and run record read from the database | a generation of at least 1. A run record with a sign-in ID of the right form and deadlines that are not zero | the values are compared, never formatted into SQL | not applicable | the generation of the cookie must equal it. The deadlines of the run must not have passed | an unknown or zero value refuses the request or ends the run |
+    | Sign-in request cookie `__Host-dustpan_signin` | as the access cookie, kind `signin`. `SameSite=Lax`, `__Host-` | AEAD with the cookie name and the key ID in the associated data. It holds the digest of the state, never the plain state. The PKCE verifier and the nonce never reach a log | 10 minutes. The identity provider gives each code once. PKCE binds the code to the verifier | the digest of the `state` query parameter equals the digest in the cookie, in constant time. The thumbprint comes from the cookie | a mismatch, an expiry or a cookie that does not open ends the sign-in, expires the cookie and writes `sign-in.failed` |
+    | Pending sign-in cookie `__Host-dustpan_pending` | as the access cookie, kind `pending`. `SameSite=Strict`, `__Host-` | AEAD with the cookie name and the key ID in the associated data | 5 minutes. The factor lock of the person | the factor step needs a proof of the key of the cookie. The factor belongs to the person of the cookie. The generation of the cookie is the stored generation | a wrong factor counts in the factor lock. A refusal expires the cookie and writes `sign-in.failed` |
     | Forge cookie | as the access cookie, kind `forge`, a known connection ID, at most 4 | AEAD with the connection ID in the associated data. The token type redacts itself | expiry of the token or the absolute deadline | the access cookie of the same request has the same sign-in ID and generation. The linked Git host account. Then the Git host checks the person | a refused cookie is cleared and the action is off with the reason |
     | Session key ring | wrapped versions only. Key ID pattern | the key-encryption key wraps each version. The key never leaves the memory of the sealer | two-phase rotation. Retire after the longest maximum length. The seal count | only the sealer opens a version | a version that does not unwrap stops the start of the server |
 
@@ -727,7 +739,11 @@ The options:
 **Decision of the owner: (b).** The sign-in request cookie is
 `__Host-dustpan_signin` with `SameSite=Lax`. The pending sign-in cookie is
 `__Host-dustpan_pending` with `SameSite=Strict`. The session key ring seals
-both, with the name of each cookie in the associated data. No table holds
+both, with the name of each cookie in the associated data. The sign-in
+request holds the SHA-256 digest of the OAuth `state`, never the plain
+state. The callback compares the digest of the `state` query parameter with
+it in constant time, and refuses a difference. So the cookie of one sign-in
+never finishes the callback of another. No table holds
 the state of a sign-in. The costs of (b) stay as stated above: no "works
 once" for the cookie itself, and no limit of 5 wrong factors for each
 pending sign-in. The factor lock of the person is the limit on guesses.
