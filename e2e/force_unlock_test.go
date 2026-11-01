@@ -323,8 +323,7 @@ func (r *forceUnlockRun) checkAllowed(t *testing.T) {
 
 	status, respBody = r.forceUnlock(t, r.admin, other)
 	if status != http.StatusConflict || errorCode(t, respBody) != "workspace.not-locked" {
-		t.Fatalf("force-unlock of an unlocked workspace that names another lock answers %d %q, want 409 workspace.not-locked",
-			status, respBody)
+		t.Fatalf("force-unlock that names another lock answers %d %q, want 409 workspace.not-locked", status, respBody)
 	}
 }
 
