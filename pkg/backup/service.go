@@ -191,6 +191,7 @@ type Service struct {
 	version    string
 	maxSQL     int64
 	runner     *durable.Runner
+	operations durable.Store
 	lease      time.Duration
 	logger     *slog.Logger
 }
@@ -250,6 +251,7 @@ func NewService(cfg Config) (*Service, error) {
 		version:    version,
 		maxSQL:     cfg.MaxSQLBytes,
 		runner:     nil,
+		operations: cfg.Operations,
 		lease:      cmp.Or(cfg.Lease, durable.DefaultLease),
 		logger:     cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
 	}
@@ -356,7 +358,7 @@ func sleep(ctx context.Context, d time.Duration) {
 // running. When the instance that runs the backup stops, another instance
 // takes the operation over after the lease ends.
 func (s *Service) Start(ctx context.Context, id ID) error {
-	return s.begin(ctx, id, stopAtDamage)
+	return s.begin(ctx, id, stopAtDamage, "")
 }
 
 // StartBeforeRestore starts backup id as Start does, for the backup of the
@@ -364,8 +366,16 @@ func (s *Service) Start(ctx context.Context, id ID) error {
 // is missing or that does not match its own live row: it records the blob in
 // the Damaged list of its manifest and goes on, so the restore can repair it.
 // Every other read error still stops the backup.
-func (s *Service) StartBeforeRestore(ctx context.Context, id ID) error {
-	return s.begin(ctx, id, recordDamage)
+//
+// The operation input names restore, so a takeover of the restore can tell the
+// backup that it started from a backup that another restore started. See
+// StartedForRestore.
+func (s *Service) StartBeforeRestore(ctx context.Context, id ID, restore RestoreID) error {
+	if _, err := ParseRestoreID(restore.String()); err != nil {
+		return fmt.Errorf("begin backup %s: %w", id, err)
+	}
+
+	return s.begin(ctx, id, recordDamage, restore)
 }
 
 // Work claims and runs backup operations until ctx ends, and marks failed
@@ -389,6 +399,9 @@ type operationInput struct {
 	// RecordDamaged marks the backup before a restore: it records a missing
 	// or damaged live blob in the manifest and goes on.
 	RecordDamaged bool `json:"recordDamaged,omitempty"`
+	// Restore names the restore whose pre-backup step started this backup.
+	// Only a backup before a restore names one.
+	Restore RestoreID `json:"restore,omitempty"`
 }
 
 // readInput decodes and checks the input of a backup operation. An input
@@ -485,9 +498,50 @@ func (s *Service) PreserveAfterRestore(ctx context.Context, rec Record) error {
 	return nil
 }
 
+// StartedForRestore returns the restore that started backup id with
+// StartBeforeRestore, as the input of its durable operation names it. It
+// returns an empty ID when no operation of backup id exists, when the input
+// names no restore, or when the input does not decode or names an ID that is
+// not valid: the caller then treats the backup as one that it did not start.
+func (s *Service) StartedForRestore(ctx context.Context, id ID) (RestoreID, error) {
+	ops, err := s.operations.List(ctx, durable.Filter{Kind: OperationKind, States: nil, Limit: 0})
+	if err != nil {
+		return "", fmt.Errorf("list the operations of backup %s: %w", id, err)
+	}
+
+	key := OperationKey(id)
+
+	for i := range ops {
+		if ops[i].Key == key {
+			return restoreOfInput(ops[i].Input, id), nil
+		}
+	}
+
+	return "", nil
+}
+
+// restoreOfInput returns the restore that the operation input raw of backup id
+// names, or an empty ID when raw does not decode, names another backup, or
+// names no valid restore ID.
+func restoreOfInput(raw []byte, id ID) RestoreID {
+	var in operationInput
+	if err := json.Unmarshal(raw, &in); err != nil || in.ID != id {
+		return ""
+	}
+
+	// Defense in depth: StartBeforeRestore checks the ID before it stores
+	// it. This check stays so that a row from another version cannot name a
+	// restore that is not valid.
+	if _, err := ParseRestoreID(in.Restore.String()); err != nil {
+		return ""
+	}
+
+	return in.Restore
+}
+
 // begin stores id as a running row and starts its durable operation. See
 // Start and StartBeforeRestore.
-func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy) error {
+func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy, restore RestoreID) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("begin backup %s: %w", id, err)
 	}
@@ -499,7 +553,9 @@ func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy) error {
 
 	startedAt := s.now().UTC()
 
-	input, err := json.Marshal(operationInput{ID: id, StartedAt: startedAt, RecordDamaged: policy == recordDamage})
+	input, err := json.Marshal(operationInput{
+		ID: id, StartedAt: startedAt, RecordDamaged: policy == recordDamage, Restore: restore,
+	})
 	if err != nil {
 		return fmt.Errorf("encode input of backup %s: %w", id, err)
 	}
