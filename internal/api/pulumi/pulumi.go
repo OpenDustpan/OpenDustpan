@@ -1201,7 +1201,7 @@ func classifyUpdate(err error) failure {
 		}
 	}
 
-	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal, classifyItemKey, classifyAttempt} {
+	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal, classifyAttempt, classifyItemKey} {
 		if f, ok := try(err); ok {
 			return f
 		}
