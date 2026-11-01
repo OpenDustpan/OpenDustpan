@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/jobgate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -574,4 +575,72 @@ func pulumiPreviewStep(unit identity.Object) (job.Step, error) {
 		Env:  map[string]string{pulumiSkipUpdate: "true"}, Dir: "", Timeout: 0, AllowFailure: false,
 		ChangesResources: false, Outputs: nil,
 	}, nil
+}
+
+// newJobWorkers builds the periodic work of the job model: the reconcile and
+// the sweep of the artifact blobs. Each is nil when the server lacks a port
+// that it needs.
+func newJobWorkers(svc services, cfg *settings) (*job.Reconciler, *job.ArtifactSweeper, error) {
+	reconciler, err := newJobReconciler(svc, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sweeper, err := newArtifactSweeper(svc, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return reconciler, sweeper, nil
+}
+
+// newArtifactSweeper builds the sweep of the plan and log blobs of jobs, the
+// schedule job.artifact-sweep. It returns nil when the server lacks a port
+// that the sweep needs: the job store, the durable store, the blob store or
+// the namespace service. A job store that cannot read the names of the
+// artifact blobs, or a store that cannot tell whether a backup runs, logs a
+// warning and runs no sweep, so the server deletes no artifact blob.
+func newArtifactSweeper(svc services, cfg *settings) (*job.ArtifactSweeper, error) {
+	if cfg.jobStore == nil || svc.namespaces == nil || cfg.durableStore == nil || cfg.blobStore == nil {
+		return nil, nil //nolint:nilnil // No sweep: the server lacks a port that it needs.
+	}
+
+	log := cfg.logger
+	if log == nil {
+		log = slog.Default()
+	}
+
+	names, ok := cfg.jobStore.(job.ArtifactKeyStore)
+	if !ok {
+		log.Warn("the job store cannot read the names of the artifact blobs: the server deletes no artifact blob")
+
+		return nil, nil //nolint:nilnil // No sweep: the job store cannot give the names that it keeps.
+	}
+
+	guard, ok := cfg.namespaceStore.(blobguard.Watch)
+	if !ok {
+		log.Warn("the store cannot tell whether a backup or a restore runs: the server deletes no artifact blob")
+
+		return nil, nil //nolint:nilnil // No sweep: no guard of the blob deletes.
+	}
+
+	refusals, err := blobRefusals(cfg, job.ArtifactBlobFamily())
+	if err != nil {
+		return nil, err
+	}
+
+	blobs, err := job.NewArtifactBlobs(cfg.blobStore, refusals)
+	if err != nil {
+		return nil, fmt.Errorf("job artifact blobs: %w", err)
+	}
+
+	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
+		Jobs: cfg.jobStore, Names: names, Blobs: blobs, Namespaces: jobNamespaces{namespaces: svc.namespaces},
+		Guard: guard, Logger: log, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("job artifact sweep: %w", err)
+	}
+
+	return s, nil
 }

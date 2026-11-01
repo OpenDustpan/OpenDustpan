@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -140,6 +143,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		drainPeriod:      0,
 		tempAdmins:       nil,
 		reconciler:       nil,
+		artifactSweeper:  nil,
 		issuer:           nil,
 		handler:          nil,
 		started:          nil,
@@ -434,4 +438,96 @@ func TestJobScheduleReconcileRuns(t *testing.T) {
 			t.Fatalf("operation %s of the reconcile = %s, want succeeded", op.ID, op.State)
 		}
 	}
+}
+
+// newArtifactSweepServer returns a test server with the artifact sweep over a
+// fresh SQLite store and an empty blob store.
+func newArtifactSweepServer(t *testing.T) *Server {
+	t.Helper()
+
+	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	blobs, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+	artifacts, err := job.NewArtifactBlobs(blobs, dropRefusals{})
+	if err != nil {
+		t.Fatalf("artifact blobs: %v", err)
+	}
+
+	sweeper, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
+		Jobs: store.Jobs(), Names: store.Jobs(), Blobs: artifacts, Namespaces: store, Guard: store, Logger: nil,
+		Now: nil,
+	})
+	if err != nil {
+		t.Fatalf("new sweeper: %v", err)
+	}
+
+	srv := testServer(store.DurableOperations(), "a")
+	srv.artifactSweeper = sweeper
+
+	return srv
+}
+
+// TestJobScheduleArtifactSweepRuns proves that a server with the artifact
+// sweep lists the schedule job.artifact-sweep with an interval of one hour and
+// a runner kind whose step runs the sweep to a successful end.
+func TestJobScheduleArtifactSweepRuns(t *testing.T) {
+	t.Parallel()
+
+	srv := newArtifactSweepServer(t)
+
+	var found *durable.ScheduleSpec
+
+	for _, spec := range srv.jobSchedules() {
+		if spec.Name == job.ArtifactSweepName {
+			found = &spec
+		}
+	}
+
+	if found == nil || found.Kind != job.KindArtifactSweep || found.Interval != time.Hour {
+		t.Fatalf("schedules = %+v, want %s every hour with kind %s", srv.jobSchedules(), job.ArtifactSweepName,
+			job.KindArtifactSweep)
+	}
+
+	// The interval is one hour, so the case runs the step of the kind itself
+	// instead of waiting for a tick.
+	var kind *durable.KindSpec
+
+	for _, k := range srv.jobKinds() {
+		if k.Kind == job.KindArtifactSweep {
+			kind = &k
+		}
+	}
+
+	if kind == nil || len(kind.Steps) != 1 || kind.Version != job.ArtifactSweepVersion {
+		t.Fatalf("kinds = %+v, want %s with one step", srv.jobKinds(), job.KindArtifactSweep)
+	}
+
+	// The step reads nothing of its context.
+	var step durable.StepContext
+
+	if _, err := kind.Steps[0].Run(t.Context(), step); err != nil {
+		t.Fatalf("run the step of the artifact sweep: %v", err)
+	}
+}
+
+// dropRefusals is a scopeaudit.Recorder that drops every refusal.
+type dropRefusals struct{}
+
+func (dropRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopeaudit.Where) error {
+	return nil
 }

@@ -138,6 +138,9 @@ type Filter struct {
 	// StateChangedBefore selects the jobs whose state last changed before this
 	// time. The zero time selects every job.
 	StateChangedBefore time.Time
+	// StateChangedAfter selects the jobs whose state last changed after this
+	// time. The zero time selects every job.
+	StateChangedAfter time.Time
 }
 
 // Store is the persistence port for jobs. Each SQL store adapter implements
