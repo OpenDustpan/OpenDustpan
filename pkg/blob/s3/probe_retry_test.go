@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode"
 
 	"opendustpan.org/opendustpan/pkg/blob/s3"
 )
@@ -648,6 +649,111 @@ func TestOpenProbeRetryLogIsSafe(t *testing.T) {
 			if len(text) > 512 {
 				t.Errorf("error text has %d bytes, want at most 512", len(text))
 			}
+		})
+	}
+}
+
+func TestOpenProbeInnerRetryFindsStoredObject(t *testing.T) {
+	t.Parallel()
+
+	fake := newProbeServer(t, true, false)
+
+	var failed atomic.Bool
+
+	// The first PUT reaches the store and the store keeps the object, but
+	// the answer is 503. The retry inside Put then gets 412.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && failed.CompareAndSwap(false, true) {
+			fake.ServeHTTP(httptest.NewRecorder(), r)
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			if _, err := io.WriteString(w, errorDoc("ServiceUnavailable")); err != nil {
+				t.Errorf("write answer: %v", err)
+			}
+
+			return
+		}
+
+		fake.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := s3.Open(
+		t.Context(), testSigner(server.URL, nil), "pfx", server.Client(),
+		s3.WithSleep(realSleep),
+		s3.WithBackoff(func(int) time.Duration { return time.Millisecond }),
+	)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if got := fake.objectCount(); got != 0 {
+		t.Errorf("server holds %d objects, want none", got)
+	}
+
+	puts := fake.putPaths()
+	if len(puts) < 2 || puts[0] != puts[1] {
+		t.Fatalf("PUT paths = %v, want the first key sent twice", puts)
+	}
+
+	if !slices.Contains(fake.deletePaths(), puts[0]) {
+		t.Errorf("DELETE paths = %v, want the first key %s deleted", fake.deletePaths(), puts[0])
+	}
+}
+
+// checkCleanLines checks that each line of text holds no control character
+// and at most maxB bytes "B" (the byte that the long code repeats).
+func checkCleanLines(t *testing.T, text string, maxB int) {
+	t.Helper()
+
+	// The error joins two errors with one newline that the adapter writes.
+	// A hostile answer must not add a line.
+	lines := strings.Split(text, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("error has %d lines, want 2: %q", len(lines), text)
+	}
+
+	for _, line := range lines {
+		if i := strings.IndexFunc(line, unicode.IsControl); i >= 0 {
+			t.Fatalf("line %q holds a control character at byte %d", line, i)
+		}
+
+		if got := strings.Count(line, "B"); got > maxB {
+			t.Errorf("line holds %d bytes of the code, want at most %d", got, maxB)
+		}
+	}
+}
+
+func TestOpenErrorHoldsNoControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		code string
+	}{
+		{name: "CR and LF", code: "AccessDenied&#13;&#10;opendustpan: forged line"},
+		{name: "other control characters", code: "Access&#9;&#11;Denied"},
+		{name: "long text", code: strings.Repeat("B", 5000)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeServer(t, func(*http.Request, []byte, int) (int, string) {
+				return http.StatusForbidden, errorDoc(tt.code)
+			})
+			server := httptest.NewServer(fake)
+			t.Cleanup(server.Close)
+
+			_, err := s3.Open(
+				t.Context(), testSigner(server.URL, nil), "pfx", server.Client(), fastProbeOptions()...,
+			)
+			if err == nil {
+				t.Fatal("open succeeded, want an error")
+			}
+
+			checkCleanLines(t, err.Error(), 128)
 		})
 	}
 }
