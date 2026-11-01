@@ -59,13 +59,23 @@ The open then fails and the server does not start.
 The error names the endpoint and the bucket.
 It holds no credential.
 
-A probe step that gets a connection reset, an end of file, a timeout, a 5xx answer or `SlowDown` tries again.
+A probe step tries again after these errors:
+- a connection reset, a connection refused, an end of file or a timeout
+- a DNS error that the resolver marks as temporary
+- an answer with status 500, 502, 503, 504 or 429, or with the code `SlowDown`
+
 The wait between tries grows from 100 ms to 5 s.
-The probe has a total time of 30 seconds.
 Each retry writes a warning to the log.
-When the time ends, the open fails and the error names the last cause.
-Other errors, for example access denied, a missing bucket or a bad signature, fail at once.
-The 30 seconds is a fixed value. No setting changes it.
+The write steps of the probe have a total time of 30 seconds.
+The delete of the probe object after a failure has its own time of 5 seconds.
+The worst case of the start is therefore about 35 seconds.
+When the time ends, the start fails and the error names the last cause.
+These times are fixed. The `serve` command has no setting for them.
+
+All other errors fail at once, with no retry.
+Examples are access denied, a missing bucket, a bad signature, a DNS name that does not exist, status 400 and status 501.
+A write that the store got, but whose answer was lost, makes the retry fail with "exists".
+The probe then deletes that object and uses a new key.
 
 ## Write-once use and the size limit
 
