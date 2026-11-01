@@ -14,7 +14,8 @@ const (
 )
 
 // portableLocalUserTables is the portable description of the table of local
-// users, in the order of Tables. The reset codes are not in a backup.
+// users and of the table of session generations, in the order of Tables. The
+// reset codes are not in a backup.
 func portableLocalUserTables() []PortableTable {
 	return []PortableTable{
 		{
@@ -30,6 +31,14 @@ func portableLocalUserTables() []PortableTable {
 				{Name: "demo", Kind: KindBool},
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableSessionGenerations,
+			OrderBy: []string{portColPrincipalID},
+			Columns: []Column{
+				{Name: portColPrincipalID, Kind: KindText},
+				{Name: "generation", Kind: KindInteger},
 			},
 		},
 	}

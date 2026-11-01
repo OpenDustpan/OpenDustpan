@@ -51,5 +51,11 @@ CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
 -- The session generation of each principal. A console session carries the
 -- generation that its issue read, and works only while the generation is the
 -- stored one. A password set, change or reset adds 1 in its own transaction,
--- so each session of the person ends.
-ALTER TABLE principals ADD COLUMN session_generation INTEGER NOT NULL DEFAULT 1 CHECK (session_generation >= 1);
+-- so each session of the person ends. A principal with no row has the
+-- generation 1, and the first bump writes 2. The column is not in the
+-- principals table: a wider principals row makes the planner of PostgreSQL
+-- pick a partial index for a read by ID on a database with no statistics.
+CREATE TABLE principal_session_generations (
+    principal_id TEXT    NOT NULL PRIMARY KEY REFERENCES principals (id),
+    generation   INTEGER NOT NULL CHECK (generation >= 2)
+) STRICT;

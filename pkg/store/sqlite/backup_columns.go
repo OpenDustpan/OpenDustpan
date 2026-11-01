@@ -666,7 +666,6 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"last_sign_in_at_ms",
 				"namespace",
 				"break_glass",
-				"session_generation",
 			},
 		},
 		{
