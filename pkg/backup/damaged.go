@@ -10,10 +10,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
-// ErrLiveBlobDamaged reports a live blob whose stored bytes do not match the
-// record of its own live row: another size, another checksum, or sealed
-// content that does not open. A StateOpener wraps it, so the backup before a
-// restore can tell damage from a read error.
+// ErrLiveBlobDamaged reports a live blob whose plain bytes do not match the
+// record of its own live row: another size or another MD5. A StateOpener
+// wraps it, so the backup before a restore can tell damage from a read error.
+// Sealed content that does not open is not damage: a key or a key provider
+// can cause it.
 var ErrLiveBlobDamaged = errors.New("live blob does not match its record")
 
 // DamageState says what the backup before a restore found at a live key.
@@ -38,8 +39,8 @@ const (
 	ReasonSize DamageReason = "size"
 	// ReasonChecksum says that the live bytes have another MD5 than the row.
 	ReasonChecksum DamageReason = "checksum"
-	// ReasonSealed says that sealed live bytes do not open, or that their
-	// plain bytes do not match the row.
+	// ReasonSealed says that the plain bytes of a sealed live blob opened and
+	// do not match the size or the MD5 of the row.
 	ReasonSealed DamageReason = "sealed"
 )
 

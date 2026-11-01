@@ -185,7 +185,7 @@ func mustMarkApplying(t *testing.T, s RestoreStore, id backup.RestoreID, pre bac
 	t.Helper()
 
 	fence := restoreClaim(t, s, id).Step(backup.RestoreStepPreBackup)
-	if err := restorePortsOf(t, s).ops.MarkRestoreApplying(t.Context(), fence, id, pre); err != nil {
+	if err := restorePortsOf(t, s).ops.MarkRestoreApplying(t.Context(), fence, id, pre, nil); err != nil {
 		t.Fatalf("mark restore %s applying: %v", id, err)
 	}
 }
@@ -339,7 +339,7 @@ func checkRestoreApplying(t *testing.T, s RestoreStore, first backup.RestoreReco
 
 	again := restoreClaim(t, s, applying.ID).Step("pre-backup-again")
 
-	err := restorePortsOf(t, s).ops.MarkRestoreApplying(ctx, again, applying.ID, preID)
+	err := restorePortsOf(t, s).ops.MarkRestoreApplying(ctx, again, applying.ID, preID, nil)
 	if !errors.Is(err, backup.ErrRestoreNotRunning) {
 		t.Fatalf("mark an applying restore again: err = %v, want ErrRestoreNotRunning", err)
 	}
