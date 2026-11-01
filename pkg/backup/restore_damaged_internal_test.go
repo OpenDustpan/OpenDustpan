@@ -325,6 +325,10 @@ func TestCheckRefusesABackupWithDamagedEntries(t *testing.T) {
 	putPreManifest(t, target, []DamagedBlob{damagedEntry(damagedBytes())})
 
 	err := Check(t.Context(), target, preBackupID)
+	if err == nil {
+		t.Fatal("Check = nil, want ErrCorrupt that names the damaged blobs")
+	}
+
 	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "missing or damaged") {
 		t.Fatalf("Check = %v, want ErrCorrupt that names the damaged blobs", err)
 	}
