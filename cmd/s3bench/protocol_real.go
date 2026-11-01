@@ -154,14 +154,17 @@ func unitImportUpload() family {
 	}
 
 	return family{
-		Name: "unit import upload (upload code)", Bytes: checkpointBytes, Read: false,
-		OpBytes: checkpointBytes + unitFileBytes + factsFileBytes, Candidate: false,
-		OldPath: "PUT body + PUT unit file + PUT facts, all with If-None-Match and fixed keys + audited fenced tx",
-		NewPath: "PUT body + PUT unit file (first version of a unit only) + PUT facts, attempt keys + audited fenced tx",
-		pause:   0,
-		seed:    nil,
-		old:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },
-		new:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeNew) },
+		Name:      "unit import upload (upload code)",
+		Bytes:     checkpointBytes,
+		Read:      false,
+		OpBytes:   checkpointBytes + unitFileBytes + factsFileBytes,
+		Candidate: false,
+		OldPath:   "PUT body + PUT unit file + PUT facts, all with If-None-Match and fixed keys + audited fenced tx",
+		NewPath:   "PUT body + PUT unit file (first version of a unit only) + PUT facts, attempt keys + audited fenced tx",
+		pause:     0,
+		seed:      nil,
+		old:       func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },
+		new:       func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeNew) },
 	}
 }
 
@@ -324,7 +327,8 @@ type writeVariant struct {
 // check marks, the LIST of the scope directory, the read of the last entry,
 // the read of the epoch again, and the PUT of the checkpoint. The new path
 // lists the scope directory a second time in storeNew, and writes under a key
-// with an attempt part, <sequence>-<attempt> in the directory of the scope. The model writes the checkpoint outside the seeded
+// with an attempt part, <sequence>-<attempt> in the directory of the scope. The model writes the checkpoint outside the
+// seeded
 // directory, so the directory keeps its size during a run.
 func auditWrite() family {
 	return auditWriteModel(writeVariant{
