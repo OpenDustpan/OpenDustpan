@@ -86,7 +86,11 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	// The ranges apply to the connections that the routes of a namespace make.
 	"gitHost": {"newGitHostService": "api", "newUnitSettingsHandler": "api"},
 	"oidcProviders": {
-		"bindingOf": "api", "hasStaticSignIn": "api", "newProviderAdmin": "api", "staticSignInProviders": "api",
+		"bindingOf":             "api",
+		"hasStaticSignIn":       "api",
+		"identityProviders":     "api",
+		"newProviderAdmin":      "api",
+		"staticSignInProviders": "api",
 	},
 	// The cache wraps the blob store that the purge of deleted objects also uses.
 	"blobCacheBytes":          {"wrapBlobCache": "all"},

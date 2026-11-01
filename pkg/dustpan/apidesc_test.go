@@ -38,8 +38,13 @@ const openAPIPath = "/api/dustpan/v1/openapi.json"
 //
 // exchangeWorkloadToken is public because the JWT of the workload in its body
 // is the credential: the exchange checks it against the trust rules.
+// signInWithPassword runs before the person has a session: the user name and
+// the password in its body are the credential. redeemLocalUserCode is public
+// because the one-use code in its body is the credential.
 func publicOperations() []string {
-	return []string{"exchangeWorkloadToken", "getApiDescription", "getCapabilities"}
+	return []string{
+		"exchangeWorkloadToken", "getApiDescription", "getCapabilities", "redeemLocalUserCode", "signInWithPassword",
+	}
 }
 
 // TestAPIDescriptionGolden proves that the checked-in description is what the
