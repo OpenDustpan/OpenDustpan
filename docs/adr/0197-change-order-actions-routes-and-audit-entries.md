@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-18. Part of ADR 190. Route paths superseded in part by ADR 210. Decisions 5 and 6 superseded in part by ADRs 229 and 230
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 222 changes decisions 5 and 6: errors, status codes and audit entries of
+  gates.
+- ADR 229 changes decision 6: the policy decisions stored audit entry.
+- ADR 230 changes decisions 5 and 6: the errors and audit entries of gates.
+
 ## Context
 
 [ADR 17](0017-api-authorization-and-policy-for-every-feature.md) says that

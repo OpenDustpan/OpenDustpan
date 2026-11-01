@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18. Accepts part of RFC 7 and part of RFC 52. Extends ADR 8. Extended by ADR 249
 
+Changed by:
+
+- ADR 237 extends decision 5: the capabilities document gets installationKind.
+- ADR 249 extends: components of a process next to the module switches.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Decided by the project manager under the owner's decision rule, 2026-10-18.

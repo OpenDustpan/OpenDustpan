@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-12. Decision 8 extended by ADR 212 decision 3
 
+Changed by:
+
+- ADR 55 extends decision 3: passkey sign-in and the open sign-in hardening
+  items.
+- ADR 56 extends decision 6: the MFA freshness window.
+- ADR 57 extends: recovery after the loss of every factor and code.
+- ADR 212 extends decision 8: an access token gets a refusal for a fresh MFA
+  step.
+- ADR 285 changes decisions 1 and 2: local password users need MFA also next
+  to an SSO provider.
+
 ## Context
 
 [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) found that an install

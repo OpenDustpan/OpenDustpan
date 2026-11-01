@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18 · part of ADR 200. Decisions 6 and 7 superseded in part by ADR 225 decision 10
 
+Changed by:
+
+- ADR 222 changes decisions 6 and 7: the change rule and the open rule become
+  gates.
+- ADR 224 changes decisions 6 and 7: the change rule and the open rule become
+  decision points.
+- ADR 225 changes decisions 6 and 7: the change rule and the open rule become
+  gates.
+
 ## Context
 
 The parity list of the project owner (ADR 200) holds, from Pulumi ESC:

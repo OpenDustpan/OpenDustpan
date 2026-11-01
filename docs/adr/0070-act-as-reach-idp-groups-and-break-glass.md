@@ -2,6 +2,20 @@
 
 Status: accepted · 2026-10-15. The `server:` action names superseded in part by ADR 210. Decisions 11, 23 and 28 superseded in part by ADR 216: the sign-in of a namespace, and support access. The fresh MFA step of decisions 16, 17 and 23 uses the window of ADR 227. Decisions 26 and 27 refined by ADR 245: the host command, its reason and its review
 
+Changed by:
+
+- ADR 142 changes decision 26: the review after use of a break-glass session.
+- ADR 142 extends decision 13: server:review-break-glass is a sensitive
+  action.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 216 changes decisions 11, 23, 24 and 28: sign-in of a namespace,
+  break-glass of a namespace, support access.
+- ADR 222 extends decisions 16, 17 and 23: the fresh step uses the one window.
+- ADR 227 extends decisions 16, 17 and 23: the fresh MFA step uses the one
+  window.
+- ADR 245 changes decisions 26 and 27: the host command, its reason and its
+  review.
+
 ## Context
 
 Issue #531 showed that an access token can give its maker authority that no

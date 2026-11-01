@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-17. Changes the output schema of ADR 127 before it ships (see "Changes to ADR 127"). Decisions 8, 13, 16 and 18 and open question 4 superseded in part by ADR 166. Route paths superseded in part by ADR 210
 
+Changed by:
+
+- ADR 166 changes decisions 8, 13, 16 and 18: projection operation, SQL
+  adapters, built-in roles, route paths, open question 4.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 On 17 October 2026 the project owner decided:

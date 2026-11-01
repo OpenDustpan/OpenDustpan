@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-17. Decisions 5, 6, 7 and 13 superseded in part by ADR 128. The `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 128 changes decisions 5, 6, 7 and 13: fresh authentication, agent
+  verdicts and cancel.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 The project owner decided on 2026-10-17:

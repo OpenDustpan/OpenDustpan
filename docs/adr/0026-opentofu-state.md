@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-11
 
+Changed by:
+
+- ADR 31 changes: the need for a prefix list and a presigned MD5 check.
+- ADR 44 changes decision 3: forced and unlocked writes need an action and a
+  switch.
+- ADR 44 extends decision 6: a force-unlock writes a fence version with a new
+  lineage.
+- ADR 45 changes decisions 4 and 5: the state size default and checks while
+  the upload streams.
+- ADR 220 changes decision 2: the state blob key gets a namespace prefix.
+
 ## Context
 
 Part 3 of

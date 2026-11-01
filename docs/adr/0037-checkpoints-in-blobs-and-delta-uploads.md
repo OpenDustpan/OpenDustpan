@@ -2,6 +2,18 @@
 
 Status: accepted · 2026-10-11 · decision 1 superseded in part by ADR 151
 
+Changed by:
+
+- ADR 41 changes decision 8: the server may read state.
+- ADR 43 supersedes decision 9: no journaling.
+- ADR 43 changes decisions 4 and 8: exact bytes and no state reads for a
+  journaled update.
+- ADR 43 extends decisions 2, 3 and 11: the key shape of journal blobs.
+- ADR 45 changes decision 1: the blob holds the request envelope.
+- ADR 151 changes decision 1: each checkpoint blob is sealed with the item
+  key.
+- ADR 220 changes decision 2: the checkpoint blob key gets a namespace prefix.
+
 ## Context
 
 ADR 24 keeps each Pulumi checkpoint whole in a SQL column (`BLOB` in SQLite,

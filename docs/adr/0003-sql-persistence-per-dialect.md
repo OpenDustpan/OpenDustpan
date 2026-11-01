@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-08 · two decisions superseded in part by ADR 274
 
+Changed by:
+
+- ADR 274 changes: each dialect as a full adapter, and driver error codes.
+
 ## Context
 
 The database must be swappable (SQLite, PostgreSQL, later MySQL) without an ORM

@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-13
 
+Changed by:
+
+- ADR 70 changes decisions 4, 9 and 11: the SCIM groups, removals and the
+  sign-in settings action.
+- ADR 285 changes decision 5: a local user signs in with a passkey, a password
+  or both.
+
 ## Context
 
 ADR 6 makes `Authenticator` a port. It says that operators want any sign-in

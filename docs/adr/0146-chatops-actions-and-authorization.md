@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18. Decisions 9 and 13 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210. Decision 11: an action button shows only in a chat sink that posts as the installation's chat app (RFC 98)
 
+Changed by:
+
+- ADR 149 extends decisions 9 and 13: a later link stops an intent, intents
+  are 404 to others.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 227 changes decision 9: the ChatOps approval uses the one window, not 15
+  minutes.
+- ADR 262 extends: the open question on the first chat tools.
+
 ## Context
 
 On 17 October 2026 the project owner decided that chat offers only safe

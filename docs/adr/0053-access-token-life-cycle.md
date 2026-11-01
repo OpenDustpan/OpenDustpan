@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-13. The SMTP settings decided by ADR 212 · decision 9 superseded in part by ADR 237
 
+Changed by:
+
+- ADR 69 extends decisions 2 and 11: the default maximum lifetime of 365 days.
+- ADR 70 changes decisions 5, 6 and 10: break-glass inactivity rules and
+  personal tokens.
+- ADR 70 extends: who can rotate or revoke a personal token.
+- ADR 212 extends decision 11: the SMTP settings of the expiry email.
+- ADR 237 changes decision 9: no retire prompt while the kind is dev.
+
 ## Context
 
 ADR 6 says that OpenDustpan issues its own access tokens. It sets no kinds,

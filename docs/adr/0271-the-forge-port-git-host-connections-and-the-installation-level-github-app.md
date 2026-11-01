@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-20. Decisions 1 to 11 and 13 are owner decisions. The project manager decided details of decisions 8, 10, 12 and 13 on the same day, under the owner's delegation. Amends ADR 213 decision 7. Accepts RFC 89, except its questions 4 and 11
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Many accepted decisions use a Git host and name "the `Forge` port of RFC 12,

@@ -2,6 +2,20 @@
 
 Status: accepted · 2026-10-17 · supersedes the "Policy engines" section of RFC 13. Superseded by ADRs 224 and 229, with two exceptions. Decision 4 is kept by ADR 225 decision 3. The request signature of decision 8 is kept by ADR 226 decision 10
 
+Changed by:
+
+- ADR 192 extends decision 2: a new input kind changeorder.review.
+- ADR 222 supersedes decisions 1, 2, 3, 5, 6, 7, 9, 10, 11 and 12: the gate
+  engine port replaces policy.Engine.
+- ADR 222 changes decision 8: only the request signature stays.
+- ADR 224 supersedes decisions 1, 2, 3, 5, 6, 7, 9, 10, 11 and 12: all of the
+  policy port except two parts.
+- ADR 224 changes decision 8: only the request signature stays.
+- ADR 228 supersedes decision 5.
+- ADR 229 supersedes decision 11: one decision record for each evaluation.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 [RFC 13](../rfc/0013-policy-and-approvals.md) proposes a `Policy` port for

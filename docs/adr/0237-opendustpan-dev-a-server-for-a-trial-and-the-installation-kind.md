@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18. Accepts RFC 75 with ADR 238. Supersedes in part ADR 23 decision 2, ADR 39 decisions 1 and 4 and ADR 53 decision 9
 
+Changed by:
+
+- ADR 252 changes decision 12: who the session of the dev link belongs to.
+- ADR 285 changes decision 3: the flag --demo of dev.
+
 ## Context
 
 Today one command, `serve`, has two jobs. A trial needs a server with no

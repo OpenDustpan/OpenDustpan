@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-17. Decisions 11 and 15 superseded in part by ADR 166. Route paths superseded in part by ADR 210
 
+Changed by:
+
+- ADR 166 changes decisions 11 and 15: the graph routes, the 404 rule and the
+  edge order.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 On 17 October 2026 the project owner decided:

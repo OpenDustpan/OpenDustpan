@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-08
 
+Changed by:
+
+- ADR 15 extends: RFCs for open questions, no proposed status for an ADR.
+- ADR 16 changes: an exception to the no-edit rule for spelling corrections.
+- ADR 296 extends: an accepted ADR gets a "Changed by" list.
+
 ## Context
 
 OpenDustpan is built partly with AI coding agents and, later, outside

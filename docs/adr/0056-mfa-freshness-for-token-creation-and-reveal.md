@@ -2,6 +2,18 @@
 
 Status: accepted · 2026-10-13. Extended by ADR 212 decision 3. Decisions 2 and 3 superseded by ADR 227
 
+Changed by:
+
+- ADR 69 extends: console session idle and total timeouts.
+- ADR 70 changes decisions 3 and 4: the freshness settings need
+  server:manage-sign-in.
+- ADR 71 extends: token freshness for sessions from an SSO provider.
+- ADR 212 extends decision 1: fresh MFA for settings changes and approvals.
+- ADR 222 supersedes decisions 2 and 3: one fresh-authentication window.
+- ADR 227 supersedes decisions 2 and 3: one window replaces the two MFA
+  windows.
+- ADR 227 changes decision 4: the window can be only 0 or 60 to 900 seconds.
+
 ## Context
 
 ADR 46 makes built-in MFA cover console sign-in, the creation of access

@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-18 · part of ADR 200 · decision 12 amended by ADR 210 decision 6. The replay record holds a keyed hash. A route that does not take the key answers 400. Decision 5 superseded in part by ADR 225. Decision 1 extended by ADR 241
 
+Changed by:
+
+- ADR 210 changes decision 12: a keyed hash in the replay record, refusal of
+  an unsupported key.
+- ADR 222 changes decision 5: the open rule becomes a gate.
+- ADR 225 changes decision 5: a job with an open rule waits in the approval
+  wait.
+- ADR 241 extends decision 1: the consumer import.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 An **open** resolves a profile for one caller: it merges the imports, calls

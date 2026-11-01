@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-17
 
+Changed by:
+
+- ADR 129 extends decisions 6 and 7: filtered value count and entries for
+  probes, secrets, allowlist.
+
 ## Context
 
 The project owner decided that every tool call of Dusty is in the audit log
