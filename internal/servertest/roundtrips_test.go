@@ -1116,9 +1116,15 @@ func backupModel() costModel {
 // rest. The margin holds the restore step that the held-out commit adds (5
 // round trips), the handover of the operation (up to 12), and a retried step
 // that a run under load showed once in 29 runs (24 round trips).
+//
+// The fixed part holds 2 more round trips for the name locks. The restore
+// keeps the name_locks and name_lock_key tables of the installation, so that
+// a restore cannot clear a lockout. Each kept table costs one delete and one
+// copy. The migrations that come with the lockout cost more round trips than
+// the coefficients add.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        319,
+		fixed:        321,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
