@@ -5223,3 +5223,95 @@ WHERE id = sqlc.arg(id)
 FOR SHARE;
 
 
+
+-- name: GetLocalUserPrincipal :one
+-- The kind, the break-glass flag and the subject of a principal that exists,
+-- for the checks of a local user write. The row stays locked until the end of
+-- the transaction, so two writes that change the credentials of one person
+-- run one after the other.
+SELECT kind, break_glass, subject FROM principals WHERE id = $1 AND deleted_at_ms IS NULL FOR UPDATE;
+
+-- name: CreateLocalUser :execrows
+INSERT INTO local_users (id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms)
+VALUES ($1, $2, $3, '', 0, false, false, $4, $5)
+ON CONFLICT DO NOTHING;
+
+-- name: CountLocalUserConflicts :one
+-- The local users that hold the ID, the principal or the user name.
+SELECT COUNT(*) FROM local_users
+WHERE id = sqlc.arg('id') OR principal_id = sqlc.arg('principal_id') OR user_name = sqlc.arg('user_name');
+
+-- name: GetLocalUserByName :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE user_name = $1;
+
+-- name: GetLocalUserByPrincipal :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE principal_id = $1;
+
+-- name: GetLocalUser :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE id = $1;
+
+-- name: CountLocalUserName :one
+-- The other local users that hold the user name.
+SELECT COUNT(*) FROM local_users WHERE user_name = sqlc.arg('user_name') AND id <> sqlc.arg('id');
+
+-- name: RenameLocalUser :execrows
+UPDATE local_users SET user_name = $1 WHERE id = $2;
+
+-- name: DeleteLocalUser :execrows
+DELETE FROM local_users WHERE id = $1;
+
+-- name: DeleteLocalUserResets :exec
+DELETE FROM local_user_resets WHERE user_id = $1;
+
+-- name: SetLocalUserPassword :execrows
+UPDATE local_users
+SET password_hash = sqlc.arg('password_hash'), password_set_at_ms = sqlc.arg('set_at_ms'),
+  change_required = sqlc.arg('change_required')
+WHERE id = sqlc.arg('id');
+
+-- name: SetLocalUserChangeRequired :execrows
+UPDATE local_users SET change_required = $1 WHERE id = $2 AND password_hash <> '';
+
+-- name: RehashLocalUserPassword :execrows
+-- Replaces the hash only while the stored hash is still the old one.
+UPDATE local_users SET password_hash = sqlc.arg('new_hash')
+WHERE id = sqlc.arg('id') AND password_hash = sqlc.arg('old_hash') AND password_hash <> '';
+
+-- name: CreateDemoLocalUser :execrows
+INSERT INTO local_users (id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms)
+VALUES ($1, $2, $3, '', 0, false, true, $4, $5)
+ON CONFLICT DO NOTHING;
+
+-- name: BumpSessionGeneration :execrows
+-- Adds 1 to the session generation of a principal, so that each console
+-- session of the principal ends.
+UPDATE principals SET session_generation = session_generation + 1 WHERE id = $1;
+
+-- name: GetSessionGeneration :one
+SELECT session_generation FROM principals WHERE id = $1 AND deleted_at_ms IS NULL;
+
+-- name: RevokePrincipalAccessTokens :execrows
+-- Ends every live access token of a principal.
+UPDATE access_tokens SET revoked_at_ms = sqlc.arg('revoked_at_ms')::bigint
+WHERE principal_id = sqlc.arg('principal_id') AND revoked_at_ms IS NULL;
+
+-- name: CreateLocalUserReset :execrows
+INSERT INTO local_user_resets (id, user_id, principal_id, digest, purpose, created_by, reason, revoke_access_tokens, created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT DO NOTHING;
+
+-- name: GetLocalUserResetByDigest :one
+SELECT id, user_id, principal_id, digest, purpose, created_by, reason, revoke_access_tokens, created_at_ms, expires_at_ms
+FROM local_user_resets WHERE digest = $1;
+
+-- name: DeleteLocalUserReset :execrows
+DELETE FROM local_user_resets WHERE id = $1;
+
+-- name: DeleteExpiredLocalUserReset :execrows
+DELETE FROM local_user_resets WHERE digest = sqlc.arg('digest') AND expires_at_ms <= sqlc.arg('at_ms');
+
+-- name: PruneLocalUserResets :execrows
+DELETE FROM local_user_resets WHERE expires_at_ms <= $1;

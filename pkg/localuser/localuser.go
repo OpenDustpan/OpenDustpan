@@ -22,8 +22,11 @@ package localuser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -42,6 +45,18 @@ const (
 	UserNameMaxLength = 64
 	UserNamePattern   = `^[a-z0-9][a-z0-9._-]{0,63}$`
 )
+
+// ID prefixes of the records of this package.
+const (
+	UserIDPrefix  = "lus-"
+	ResetIDPrefix = "lpr-"
+)
+
+// maxIDLength is the length limit of a record ID and of a principal ID.
+const maxIDLength = 128
+
+// MaxReasonLength is the length limit of the reason of a reset, in bytes.
+const MaxReasonLength = 1024
 
 // Defaults and bounds of the password rules.
 //
@@ -165,6 +180,101 @@ type User struct {
 	CreatedBy      string
 	ChangeRequired bool
 	Demo           bool
+}
+
+// ValidateUserName returns ErrInvalid when name does not match
+// UserNamePattern: 1 to 64 characters, a lowercase ASCII letter or a digit
+// first, then lowercase ASCII letters, digits, '.', '_' and '-'. It never
+// changes a name to make it valid.
+func ValidateUserName(name string) error {
+	if name == "" || len(name) > UserNameMaxLength {
+		return fmt.Errorf("%w: a user name of %d bytes, want 1 to %d", ErrInvalid, len(name), UserNameMaxLength)
+	}
+
+	for i := range len(name) {
+		c := name[i]
+		alnum := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+
+		if !alnum && (i == 0 || (c != '.' && c != '_' && c != '-')) {
+			return fmt.Errorf("%w: the user name holds a character that is not allowed at %d", ErrInvalid, i)
+		}
+	}
+
+	return nil
+}
+
+// FoldUserName returns name with each ASCII upper-case letter in lower case,
+// and each other byte as it is. A sign-in compares the folded name with the
+// stored name.
+func FoldUserName(name string) string {
+	b := []byte(name)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+
+	return string(b)
+}
+
+// validID reports whether id has the prefix and 1 to maxIDLength characters
+// of ASCII letters, digits, '-', '_' and '.' after it.
+func validID(id, prefix string) bool {
+	rest, ok := strings.CutPrefix(id, prefix)
+	if !ok || rest == "" || len(id) > maxIDLength {
+		return false
+	}
+
+	return validToken(id)
+}
+
+// validToken reports whether s is 1 to maxIDLength characters of ASCII
+// letters, digits, '-', '_', '.' and ':'.
+func validToken(s string) bool {
+	if s == "" || len(s) > maxIDLength {
+		return false
+	}
+
+	return !strings.ContainsFunc(s, func(r rune) bool { return !isTokenRune(r) })
+}
+
+// isTokenRune reports an ASCII letter, a digit, '-', '_', '.' or ':'.
+func isTokenRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	default:
+		return r == '-' || r == '_' || r == '.' || r == ':'
+	}
+}
+
+// Validate returns ErrInvalid when u cannot be stored: an ID without the
+// prefix UserIDPrefix, an empty or malformed principal ID, a user name that
+// fails ValidateUserName, an empty creator or a zero creation time.
+func (u User) Validate() error {
+	switch {
+	case !validID(u.ID, UserIDPrefix):
+		return fmt.Errorf("%w: user ID %q", ErrInvalid, u.ID)
+	case !validToken(u.PrincipalID):
+		return fmt.Errorf("%w: principal ID %q", ErrInvalid, u.PrincipalID)
+	case !validCreator(u.CreatedBy):
+		return fmt.Errorf("%w: the creator of a local user", ErrInvalid)
+	case u.CreatedAt.IsZero():
+		return fmt.Errorf("%w: a local user with no creation time", ErrInvalid)
+	default:
+		return ValidateUserName(u.UserName)
+	}
+}
+
+// validCreator reports whether s is a subject that a record can name as its
+// creator: 1 to 2*maxIDLength bytes with no control character.
+func validCreator(s string) bool {
+	return s != "" && len(s) <= maxIDLength*2 && !strings.ContainsFunc(s, isControl)
+}
+
+// isControl reports a control character of ASCII or of Unicode.
+func isControl(r rune) bool {
+	return r < 0x20 || (r >= 0x7f && r <= 0x9f)
 }
 
 // Algorithm names a password hash function.
@@ -356,18 +466,70 @@ type Reset struct {
 	RevokeAccessTokens bool
 }
 
+// Valid reports whether p is PurposeSetUp or PurposeReset.
+func (p Purpose) Valid() bool {
+	return p == PurposeSetUp || p == PurposeReset
+}
+
+// Validate returns ErrInvalid when r cannot be stored: an ID without the
+// prefix ResetIDPrefix, an empty user ID, an unknown purpose, an empty
+// creator, a reason above MaxReasonLength or with a control character, or
+// an expiry that is not after the creation time by at most
+// MaxResetLifetime.
+func (r Reset) Validate() error {
+	switch {
+	case !validID(r.ID, ResetIDPrefix):
+		return fmt.Errorf("%w: reset ID %q", ErrInvalid, r.ID)
+	case !validID(r.UserID, UserIDPrefix):
+		return fmt.Errorf("%w: user ID %q", ErrInvalid, r.UserID)
+	case !r.Purpose.Valid():
+		return fmt.Errorf("%w: reset purpose %q", ErrInvalid, r.Purpose)
+	case !validCreator(r.CreatedBy):
+		return fmt.Errorf("%w: the creator of a reset", ErrInvalid)
+	case len(r.Reason) > MaxReasonLength || strings.ContainsFunc(r.Reason, isControl):
+		return fmt.Errorf("%w: the reason of a reset", ErrInvalid)
+	case r.CreatedAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt):
+		return fmt.Errorf("%w: a reset that expires before it starts", ErrInvalid)
+	case r.ExpiresAt.Sub(r.CreatedAt) > MaxResetLifetime:
+		return fmt.Errorf("%w: a reset that lives longer than %s", ErrInvalid, MaxResetLifetime)
+	default:
+		return nil
+	}
+}
+
 // Digest is the SHA-256 digest of a reset code.
 type Digest [32]byte
 
+// Redeem is one use of a reset code: the digest of the code, the time of
+// the use, the hash of the new password and the options of the write.
+type Redeem struct {
+	At     time.Time
+	Hash   PasswordHash
+	Change PasswordChange
+	Digest Digest
+}
+
+// DigestOf returns the SHA-256 digest of the reset code code.
+func DigestOf(code string) Digest {
+	return sha256.Sum256([]byte(code))
+}
+
+// String returns the digest in lowercase hexadecimal, the form that the
+// stores keep.
+func (d Digest) String() string {
+	return hex.EncodeToString(d[:])
+}
+
 // PasswordChange holds the options of a password write.
+//
+// Each password write adds 1 to the session generation of the person, in
+// its own transaction, so that each console session of the person ends. A
+// change that keeps the session of the change gets new cookies with the new
+// generation from the service.
 type PasswordChange struct {
 	// ChangeRequired sets the flag that asks the person for a new password
 	// at the next sign-in.
 	ChangeRequired bool
-	// KeepSession is the ID of the one session that stays when the person
-	// changes the own password. Every other session of the person ends in
-	// the same transaction. Empty ends every session.
-	KeepSession string
 }
 
 // Store is the persistence port of the records of local users.
@@ -413,9 +575,10 @@ type Store interface {
 // takes the principal lock and the break-glass check that Store describes.
 type PasswordStore interface {
 	// SetPassword stores h as the password of the user userID, sets
-	// PasswordSetAt to e.At, applies c, ends the sessions of the person that
-	// c names, and appends e, in one transaction. It returns ErrNotFound for
-	// no such user, ErrDemoFixed for the demo person, and ErrBreakGlass for a
+	// PasswordSetAt to e.At, applies c, adds 1 to the session generation of
+	// the person, and appends e, in one transaction. It returns ErrInvalid
+	// for a hash that the hasher does not read, ErrNotFound for no such
+	// user, ErrDemoFixed for the demo person, and ErrBreakGlass for a
 	// break-glass person.
 	SetPassword(ctx context.Context, userID string, h PasswordHash, c PasswordChange, e audit.Entry) error
 	// SetChangeRequired sets or clears the flag that asks the person for a
@@ -426,16 +589,20 @@ type PasswordStore interface {
 	// RehashPassword replaces the hash old of the user userID with h and
 	// appends e, in one transaction, only when the stored hash is still
 	// old. It returns ErrNotFound when the user has no such hash, so that a
-	// rehash never overwrites a password that changed in the meantime.
+	// rehash never overwrites a password that changed in the meantime. The
+	// password stays the same, so the session generation stays.
 	RehashPassword(ctx context.Context, userID string, old, h PasswordHash, e audit.Entry) error
 	// RemovePassword deletes the password of the user userID and appends e,
 	// in one transaction. It returns ErrLastCredential when the person has
 	// no passkey, ErrNotFound for no such user, and ErrDemoFixed for the
 	// demo person.
 	RemovePassword(ctx context.Context, userID string, e audit.Entry) error
-	// SeedDemoPassword stores h as the password of the demo person and
-	// appends e, in one transaction. It makes the demo user record when it
-	// does not exist. The store reads the installation kind from its own
+	// SeedDemoPassword stores h as the password of the demo person, adds 1
+	// to its session generation, and appends e, in one transaction. It
+	// makes the demo user record when it does not exist. The demo person is
+	// the principal with the subject DemoSubject, which the seed makes
+	// first: it returns principal.ErrNotFound when no such person exists. The store reads the installation kind from
+	// its own
 	// database in the same transaction, and returns ErrDemoOnly when the
 	// kind is not dev or cannot be read. It takes no kind from the caller.
 	// Only the seed of the dev server calls it.
@@ -446,30 +613,25 @@ type PasswordStore interface {
 type ResetStore interface {
 	// CreateReset stores r, keyed by the digest d of its secret, deletes
 	// every earlier reset code of the same user, and appends e, in one
-	// transaction. For PurposeReset, the same transaction ends every
-	// session of the person, and revokes each access token of the person
-	// when r.RevokeAccessTokens is set. It returns ErrInvalid for a value
+	// transaction. For PurposeReset, the same transaction adds 1 to the
+	// session generation of the person, so that each session ends, and
+	// revokes each access token of the person when r.RevokeAccessTokens is
+	// set. It returns ErrInvalid for a value
 	// that fails a check, ErrNotFound for no such user, ErrAlreadyExists
 	// when the digest is taken, ErrDemoFixed for the demo person, and
 	// ErrBreakGlass for a break-glass person.
 	CreateReset(ctx context.Context, r Reset, d Digest, e audit.Entry) error
-	// RedeemReset uses the reset code with the digest d, in one
+	// RedeemReset uses the reset code with the digest r.Digest, in one
 	// transaction: it checks that the code exists and did not expire at or
-	// before at, deletes it, stores h as the password of its user, applies
-	// c, ends the sessions that c names, and appends e. The service checks
+	// before r.At, deletes it, stores r.Hash as the password of its user,
+	// applies r.Change, adds 1 to the session generation of the person, and
+	// appends e. The service checks
 	// the password rules before it calls, so a refused password never uses
 	// up a code. It returns ErrNotFound when no code has the digest or when
 	// the code expired, and deletes an expired code then. It returns
 	// ErrBreakGlass for a break-glass person and changes nothing. Of two
 	// calls at the same time with one code, one wins.
-	RedeemReset(
-		ctx context.Context,
-		d Digest,
-		at time.Time,
-		h PasswordHash,
-		c PasswordChange,
-		e audit.Entry,
-	) (Reset, error)
+	RedeemReset(ctx context.Context, r Redeem, e audit.Entry) (Reset, error)
 	// PruneResets deletes the reset codes that expired at or before at, and
 	// returns how many it deleted.
 	PruneResets(ctx context.Context, at time.Time) (int64, error)

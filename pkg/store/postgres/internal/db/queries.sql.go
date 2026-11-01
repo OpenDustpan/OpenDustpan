@@ -432,6 +432,20 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const bumpSessionGeneration = `-- name: BumpSessionGeneration :execrows
+UPDATE principals SET session_generation = session_generation + 1 WHERE id = $1
+`
+
+// Adds 1 to the session generation of a principal, so that each console
+// session of the principal ends.
+func (q *Queries) BumpSessionGeneration(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, bumpSessionGeneration, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const callerGrants = `-- name: CallerGrants :many
 WITH holders (kind, id) AS (
   SELECT 'principal'::text, $2::text
@@ -1394,6 +1408,42 @@ func (q *Queries) CountLiveProfiles(ctx context.Context, namespaceID string) (in
 	return count, err
 }
 
+const countLocalUserConflicts = `-- name: CountLocalUserConflicts :one
+SELECT COUNT(*) FROM local_users
+WHERE id = $1 OR principal_id = $2 OR user_name = $3
+`
+
+type CountLocalUserConflictsParams struct {
+	ID          string
+	PrincipalID string
+	UserName    string
+}
+
+// The local users that hold the ID, the principal or the user name.
+func (q *Queries) CountLocalUserConflicts(ctx context.Context, arg CountLocalUserConflictsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLocalUserConflicts, arg.ID, arg.PrincipalID, arg.UserName)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countLocalUserName = `-- name: CountLocalUserName :one
+SELECT COUNT(*) FROM local_users WHERE user_name = $1 AND id <> $2
+`
+
+type CountLocalUserNameParams struct {
+	UserName string
+	ID       string
+}
+
+// The other local users that hold the user name.
+func (q *Queries) CountLocalUserName(ctx context.Context, arg CountLocalUserNameParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLocalUserName, arg.UserName, arg.ID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countNamespaces = `-- name: CountNamespaces :one
 SELECT COUNT(*)
 FROM namespaces
@@ -2051,6 +2101,34 @@ func (q *Queries) CreateCollection(ctx context.Context, arg CreateCollectionPara
 	return result.RowsAffected(), nil
 }
 
+const createDemoLocalUser = `-- name: CreateDemoLocalUser :execrows
+INSERT INTO local_users (id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms)
+VALUES ($1, $2, $3, '', 0, false, true, $4, $5)
+ON CONFLICT DO NOTHING
+`
+
+type CreateDemoLocalUserParams struct {
+	ID          string
+	PrincipalID string
+	UserName    string
+	CreatedBy   string
+	CreatedAtMs int64
+}
+
+func (q *Queries) CreateDemoLocalUser(ctx context.Context, arg CreateDemoLocalUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createDemoLocalUser,
+		arg.ID,
+		arg.PrincipalID,
+		arg.UserName,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createFirstHostToken = `-- name: CreateFirstHostToken :execrows
 INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
 SELECT $1, p.id, $2, $3, $4,
@@ -2200,6 +2278,72 @@ func (q *Queries) CreateInstallationSecretKey(ctx context.Context, arg CreateIns
 		arg.WrapperID,
 		arg.Ciphertext,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createLocalUser = `-- name: CreateLocalUser :execrows
+INSERT INTO local_users (id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms)
+VALUES ($1, $2, $3, '', 0, false, false, $4, $5)
+ON CONFLICT DO NOTHING
+`
+
+type CreateLocalUserParams struct {
+	ID          string
+	PrincipalID string
+	UserName    string
+	CreatedBy   string
+	CreatedAtMs int64
+}
+
+func (q *Queries) CreateLocalUser(ctx context.Context, arg CreateLocalUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createLocalUser,
+		arg.ID,
+		arg.PrincipalID,
+		arg.UserName,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createLocalUserReset = `-- name: CreateLocalUserReset :execrows
+INSERT INTO local_user_resets (id, user_id, principal_id, digest, purpose, created_by, reason, revoke_access_tokens, created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT DO NOTHING
+`
+
+type CreateLocalUserResetParams struct {
+	ID                 string
+	UserID             string
+	PrincipalID        string
+	Digest             string
+	Purpose            string
+	CreatedBy          string
+	Reason             string
+	RevokeAccessTokens bool
+	CreatedAtMs        int64
+	ExpiresAtMs        int64
+}
+
+func (q *Queries) CreateLocalUserReset(ctx context.Context, arg CreateLocalUserResetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createLocalUserReset,
+		arg.ID,
+		arg.UserID,
+		arg.PrincipalID,
+		arg.Digest,
+		arg.Purpose,
+		arg.CreatedBy,
+		arg.Reason,
+		arg.RevokeAccessTokens,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -2933,6 +3077,23 @@ func (q *Queries) DeleteExpiredIdempotencyRecord(ctx context.Context, arg Delete
 	return err
 }
 
+const deleteExpiredLocalUserReset = `-- name: DeleteExpiredLocalUserReset :execrows
+DELETE FROM local_user_resets WHERE digest = $1 AND expires_at_ms <= $2
+`
+
+type DeleteExpiredLocalUserResetParams struct {
+	Digest string
+	AtMs   int64
+}
+
+func (q *Queries) DeleteExpiredLocalUserReset(ctx context.Context, arg DeleteExpiredLocalUserResetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredLocalUserReset, arg.Digest, arg.AtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredRunnerNonces = `-- name: DeleteExpiredRunnerNonces :exec
 DELETE FROM runner_nonces WHERE expires_at_ms < $1
 `
@@ -3240,6 +3401,39 @@ WHERE stack_id = $1
 
 func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.Exec(ctx, deleteJournalSequencesOfStack, stackID)
+	return err
+}
+
+const deleteLocalUser = `-- name: DeleteLocalUser :execrows
+DELETE FROM local_users WHERE id = $1
+`
+
+func (q *Queries) DeleteLocalUser(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteLocalUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteLocalUserReset = `-- name: DeleteLocalUserReset :execrows
+DELETE FROM local_user_resets WHERE id = $1
+`
+
+func (q *Queries) DeleteLocalUserReset(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteLocalUserReset, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteLocalUserResets = `-- name: DeleteLocalUserResets :exec
+DELETE FROM local_user_resets WHERE user_id = $1
+`
+
+func (q *Queries) DeleteLocalUserResets(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, deleteLocalUserResets, userID)
 	return err
 }
 
@@ -6758,6 +6952,116 @@ func (q *Queries) GetLiveProfileByName(ctx context.Context, arg GetLiveProfileBy
 	return i, err
 }
 
+const getLocalUser = `-- name: GetLocalUser :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE id = $1
+`
+
+func (q *Queries) GetLocalUser(ctx context.Context, id string) (LocalUser, error) {
+	row := q.db.QueryRow(ctx, getLocalUser, id)
+	var i LocalUser
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.UserName,
+		&i.PasswordHash,
+		&i.PasswordSetAtMs,
+		&i.ChangeRequired,
+		&i.Demo,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getLocalUserByName = `-- name: GetLocalUserByName :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE user_name = $1
+`
+
+func (q *Queries) GetLocalUserByName(ctx context.Context, userName string) (LocalUser, error) {
+	row := q.db.QueryRow(ctx, getLocalUserByName, userName)
+	var i LocalUser
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.UserName,
+		&i.PasswordHash,
+		&i.PasswordSetAtMs,
+		&i.ChangeRequired,
+		&i.Demo,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getLocalUserByPrincipal = `-- name: GetLocalUserByPrincipal :one
+SELECT id, principal_id, user_name, password_hash, password_set_at_ms, change_required, demo, created_by, created_at_ms
+FROM local_users WHERE principal_id = $1
+`
+
+func (q *Queries) GetLocalUserByPrincipal(ctx context.Context, principalID string) (LocalUser, error) {
+	row := q.db.QueryRow(ctx, getLocalUserByPrincipal, principalID)
+	var i LocalUser
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.UserName,
+		&i.PasswordHash,
+		&i.PasswordSetAtMs,
+		&i.ChangeRequired,
+		&i.Demo,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getLocalUserPrincipal = `-- name: GetLocalUserPrincipal :one
+SELECT kind, break_glass, subject FROM principals WHERE id = $1 AND deleted_at_ms IS NULL FOR UPDATE
+`
+
+type GetLocalUserPrincipalRow struct {
+	Kind       string
+	BreakGlass bool
+	Subject    string
+}
+
+// The kind, the break-glass flag and the subject of a principal that exists,
+// for the checks of a local user write. The row stays locked until the end of
+// the transaction, so two writes that change the credentials of one person
+// run one after the other.
+func (q *Queries) GetLocalUserPrincipal(ctx context.Context, id string) (GetLocalUserPrincipalRow, error) {
+	row := q.db.QueryRow(ctx, getLocalUserPrincipal, id)
+	var i GetLocalUserPrincipalRow
+	err := row.Scan(&i.Kind, &i.BreakGlass, &i.Subject)
+	return i, err
+}
+
+const getLocalUserResetByDigest = `-- name: GetLocalUserResetByDigest :one
+SELECT id, user_id, principal_id, digest, purpose, created_by, reason, revoke_access_tokens, created_at_ms, expires_at_ms
+FROM local_user_resets WHERE digest = $1
+`
+
+func (q *Queries) GetLocalUserResetByDigest(ctx context.Context, digest string) (LocalUserReset, error) {
+	row := q.db.QueryRow(ctx, getLocalUserResetByDigest, digest)
+	var i LocalUserReset
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PrincipalID,
+		&i.Digest,
+		&i.Purpose,
+		&i.CreatedBy,
+		&i.Reason,
+		&i.RevokeAccessTokens,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
+}
+
 const getManualLock = `-- name: GetManualLock :one
 SELECT holder, reason, since_ms
 FROM manual_locks
@@ -7947,6 +8251,17 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.AccountsDisable,
 	)
 	return i, err
+}
+
+const getSessionGeneration = `-- name: GetSessionGeneration :one
+SELECT session_generation FROM principals WHERE id = $1 AND deleted_at_ms IS NULL
+`
+
+func (q *Queries) GetSessionGeneration(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, getSessionGeneration, id)
+	var session_generation int64
+	err := row.Scan(&session_generation)
+	return session_generation, err
 }
 
 const getSessionPolicy = `-- name: GetSessionPolicy :one
@@ -17212,6 +17527,18 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	return count, err
 }
 
+const pruneLocalUserResets = `-- name: PruneLocalUserResets :execrows
+DELETE FROM local_user_resets WHERE expires_at_ms <= $1
+`
+
+func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneLocalUserResets, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
 DELETE FROM sign_in_failures
 WHERE window_end_ms <= (
@@ -17770,6 +18097,26 @@ func (q *Queries) RedeliverNotificationDelivery(ctx context.Context, arg Redeliv
 	return result.RowsAffected(), nil
 }
 
+const rehashLocalUserPassword = `-- name: RehashLocalUserPassword :execrows
+UPDATE local_users SET password_hash = $1
+WHERE id = $2 AND password_hash = $3 AND password_hash <> ''
+`
+
+type RehashLocalUserPasswordParams struct {
+	NewHash string
+	ID      string
+	OldHash string
+}
+
+// Replaces the hash only while the stored hash is still the old one.
+func (q *Queries) RehashLocalUserPassword(ctx context.Context, arg RehashLocalUserPasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rehashLocalUserPassword, arg.NewHash, arg.ID, arg.OldHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const rejoinRunner = `-- name: RejoinRunner :exec
 UPDATE runners
 SET kind = $1, isolation = $2, labels = $3, release = $4,
@@ -17820,6 +18167,23 @@ type RemoveGroupMemberParams struct {
 
 func (q *Queries) RemoveGroupMember(ctx context.Context, arg RemoveGroupMemberParams) (int64, error) {
 	result, err := q.db.Exec(ctx, removeGroupMember, arg.RemovedAtMs, arg.GroupID, arg.PrincipalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const renameLocalUser = `-- name: RenameLocalUser :execrows
+UPDATE local_users SET user_name = $1 WHERE id = $2
+`
+
+type RenameLocalUserParams struct {
+	UserName string
+	ID       string
+}
+
+func (q *Queries) RenameLocalUser(ctx context.Context, arg RenameLocalUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renameLocalUser, arg.UserName, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -18283,6 +18647,25 @@ type RevokeGrantsOnTargetParams struct {
 // access-review history (ADR 52, decision 10).
 func (q *Queries) RevokeGrantsOnTarget(ctx context.Context, arg RevokeGrantsOnTargetParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeGrantsOnTarget, arg.RevokedAtMs, arg.RevokedBy, arg.Target)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokePrincipalAccessTokens = `-- name: RevokePrincipalAccessTokens :execrows
+UPDATE access_tokens SET revoked_at_ms = $1::bigint
+WHERE principal_id = $2 AND revoked_at_ms IS NULL
+`
+
+type RevokePrincipalAccessTokensParams struct {
+	RevokedAtMs int64
+	PrincipalID string
+}
+
+// Ends every live access token of a principal.
+func (q *Queries) RevokePrincipalAccessTokens(ctx context.Context, arg RevokePrincipalAccessTokensParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokePrincipalAccessTokens, arg.RevokedAtMs, arg.PrincipalID)
 	if err != nil {
 		return 0, err
 	}
@@ -18974,6 +19357,50 @@ type SetLastSignInParams struct {
 func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) error {
 	_, err := q.db.Exec(ctx, setLastSignIn, arg.AtMs, arg.ID)
 	return err
+}
+
+const setLocalUserChangeRequired = `-- name: SetLocalUserChangeRequired :execrows
+UPDATE local_users SET change_required = $1 WHERE id = $2 AND password_hash <> ''
+`
+
+type SetLocalUserChangeRequiredParams struct {
+	ChangeRequired bool
+	ID             string
+}
+
+func (q *Queries) SetLocalUserChangeRequired(ctx context.Context, arg SetLocalUserChangeRequiredParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setLocalUserChangeRequired, arg.ChangeRequired, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setLocalUserPassword = `-- name: SetLocalUserPassword :execrows
+UPDATE local_users
+SET password_hash = $1, password_set_at_ms = $2,
+  change_required = $3
+WHERE id = $4
+`
+
+type SetLocalUserPasswordParams struct {
+	PasswordHash   string
+	SetAtMs        int64
+	ChangeRequired bool
+	ID             string
+}
+
+func (q *Queries) SetLocalUserPassword(ctx context.Context, arg SetLocalUserPasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setLocalUserPassword,
+		arg.PasswordHash,
+		arg.SetAtMs,
+		arg.ChangeRequired,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setLockTimeout = `-- name: SetLockTimeout :exec
