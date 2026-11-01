@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 222 changes decisions 6 and 7: approval defaults replace MinApprovals.
 - ADR 225 changes decisions 6 and 7: approval defaults replace MinApprovals.
+- ADR 299 changes decisions 4, 9, 10, 12 and 14: authors, the apply after a
+  merge, and review requests.
 
 ## Context
 

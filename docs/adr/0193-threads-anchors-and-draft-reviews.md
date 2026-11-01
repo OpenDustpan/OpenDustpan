@@ -8,6 +8,7 @@ Changed by:
   rules.
 - ADR 225 changes decisions 4 and 9: eligible approver comes from approval
   rules.
+- ADR 299 changes: code comments of a review request live on the Git host.
 
 ## Context
 

@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 299 changes decision 4: webhooks with three recovery paths.
+- ADR 299 extends decision 7: more comment commands and a reaction.
 
 ## Context
 
