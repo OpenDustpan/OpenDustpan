@@ -42,7 +42,7 @@ authentication time.
 
 Rules 1 to 5 are from the first review round. Rules 6 to 14 record the
 decisions of the project manager (PM) for the open points of that review,
-under the owner's delegation. Rules 15 and 16 are owner decisions of 1
+under the owner's delegation. Rules 15 to 17 are owner decisions of 1
 November 2026.
 
 1. **A factor of OpenDustpan gives the fresh step (owner).** For a person
@@ -147,7 +147,14 @@ November 2026.
       factor (decision 8) or an administrator code (decision 14). A person
       who controls the Git account of a GitHub sign-in can already sign in
       as that person, so this channel adds no new trust.
-16. **Limits (owner).** The email code is the only weak channel. It proves
+16. **The console offers passkey and TOTP first (owner).** The three
+    factors have the same rank for the server. In the console, the fresh
+    step offers a passkey and TOTP first. An SSH signature stays available
+    as a fallback only: the person copies a challenge, signs it with
+    `ssh-keygen -Y sign` and pastes the signature. The console labels it as a
+    fallback, and the user documentation recommends a passkey or TOTP for the
+    browser. The CLI keeps the SSH signature as its normal step-up factor.
+17. **Limits (owner).** The email code is the only weak channel. It proves
     the one-time first enrollment only, and it is never a fresh step. An SSH
     signature is a first-class factor and a fresh step, not a weak channel.
     The administrator code of decision 14 stays the fallback when neither
