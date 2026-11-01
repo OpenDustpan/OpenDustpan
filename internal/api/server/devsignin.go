@@ -135,7 +135,7 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
 		AuthTime: h.signIn.sessions.Now(), PrincipalID: p.ID, Provider: devProvider, SourceIP: e.SourceIP,
-		UserAgent: e.UserAgent, Stored: false,
+		UserAgent: e.UserAgent, Generation: 0, Stored: false,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)

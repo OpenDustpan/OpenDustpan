@@ -17,6 +17,7 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -30,6 +31,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
+	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/preferences"
@@ -68,7 +72,9 @@ func wantPublicStatus(route apiserver.Route) int {
 
 // publicPatterns lists the routes that need no sign-in: the start and the
 // callback of a sign-in, which run before the person has a session, the
-// sign-in with the one-time code of the dev command, and the capabilities
+// sign-in with the one-time code of the dev command, the password sign-in of a
+// local user and the use of a set-up code or a reset code, which run before
+// the person has a session and whose credential is the body, the capabilities
 // document, which answers the API version to every caller, and the
 // description of the API, which a generator reads before it has a token. The
 // description names routes, actions and shapes. It holds no data of a
@@ -78,6 +84,8 @@ func publicPatterns() []string {
 		"GET /api/server/sign-in/{provider}",
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
+		"POST /api/dustpan/v1/sign-in/password",
+		"POST /api/dustpan/v1/local-users/redeem",
 		"GET /api/dustpan/v1/capabilities",
 		"GET /api/dustpan/v1/openapi.json",
 	}
@@ -359,6 +367,7 @@ func newServiceBackedHandlerOf(
 		CheckpointEpochs: fakeEpochs{},
 		DenialLimiter:    nil,
 		Preferences:      preferences.NewService(st, st, nil),
+		LocalUsers:       newRouteLocalUsers(t, st),
 		Settings:         newRouteTestSettings(st),
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -712,6 +721,7 @@ var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
 	"POST /api/dustpan/v1/store-checks":                        `{"target":"blobs"}`,
+	"POST /api/dustpan/v1/local-users":                         `{"userName":"routeuser","displayName":"","reason":"route test"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
 	) + `"}`,
@@ -1211,7 +1221,7 @@ func createsRecord(path string) bool {
 	created := []string{
 		"/api/server/namespaces", "/api/server/principals", "/api/server/groups",
 		"/api/server/groups/{id}/members", "/api/server/roles", "/api/server/namespaces/{namespace}/principals",
-		"/api/server/audit/checkpoint-epochs",
+		"/api/server/audit/checkpoint-epochs", "/api/dustpan/v1/local-users",
 	}
 
 	return slices.Contains(created, path) ||
@@ -1251,6 +1261,8 @@ func freshAuthRoutes() []string {
 		"POST /api/server/audit/chain",
 		"PUT /api/server/namespaces/{namespace}/ip-allowlist",
 		"DELETE /api/server/namespaces/{namespace}/ip-allowlist",
+		"POST /api/dustpan/v1/local-users/reset",
+		"POST /api/dustpan/v1/me/password",
 	}
 }
 
@@ -1591,6 +1603,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 
 	full := apiserver.Config{
 		Preferences:      nil,
+		LocalUsers:       nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1754,6 +1767,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		LocalUsers:       nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1799,6 +1813,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	without, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		LocalUsers:       nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1916,4 +1931,38 @@ func seedRouteStoreCheck(t *testing.T, st *sqlite.Store, ended time.Time) {
 	if _, err := st.FailEndedChecks(t.Context(), ended); err != nil {
 		t.Fatalf("fail seed store check %s: %v", testStoreCheckID, err)
 	}
+}
+
+// newRouteLocalUsers returns the local user service of the route tests, over
+// st.
+func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
+	t.Helper()
+
+	principals, err := principal.NewService(principal.Config{
+		Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, TempAdmins: nil, Now: nil,
+		NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("principal service: %v", err)
+	}
+
+	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
+	if err != nil {
+		t.Fatalf("hash budget: %v", err)
+	}
+
+	hasher, err := argon2id.New(budget)
+	if err != nil {
+		t.Fatalf("hasher: %v", err)
+	}
+
+	svc, err := localusersvc.New(localusersvc.Config{
+		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
+		Settings: nil, SSO: nil, Kind: installation.KindProduction, Now: nil,
+	})
+	if err != nil {
+		t.Fatalf("local user service: %v", err)
+	}
+
+	return svc
 }

@@ -361,6 +361,12 @@ const (
 	// holds it with no grant. A request that acts as a person acts on its
 	// subject. No agent tool holds it.
 	ActionCallerManagePreferences Action = "caller:manage-preferences"
+	// ActionCallerManageSignIn allows a person to change its own sign-in
+	// credentials, for example the password of its local user. Its object is
+	// CallerObject. Every authenticated person holds it with no grant. A
+	// request that acts as a person acts on its subject. No agent tool holds
+	// it.
+	ActionCallerManageSignIn Action = "caller:manage-sign-in"
 	// ActionCollectionRead allows reading a collection and listing the
 	// collections of a namespace. Its object is a collection, or the namespace
 	// for a list (ADR 51, decision 11).

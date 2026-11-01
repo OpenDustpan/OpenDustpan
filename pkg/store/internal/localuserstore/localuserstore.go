@@ -778,6 +778,30 @@ func RedeemReset(ctx context.Context, tx Tx, rd localuser.Redeem) (localuser.Res
 	return ResetOf(r), nil
 }
 
+// UserOfReset returns the user of the reset code with the digest d when the
+// code exists and did not expire at or before at. It writes nothing.
+func UserOfReset(ctx context.Context, tx Tx, d localuser.Digest, at time.Time) (localuser.User, error) {
+	r, err := tx.ResetByDigest(ctx, d.String())
+	if errors.Is(err, ErrNoRow) {
+		return localuser.User{}, localuser.ErrNotFound
+	}
+
+	if err != nil {
+		return localuser.User{}, fmt.Errorf("select reset code: %w", err)
+	}
+
+	if r.ExpiresAtMs <= codec.Millis(at) {
+		return localuser.User{}, fmt.Errorf("%w: %w", localuser.ErrNotFound, errExpired)
+	}
+
+	u, err := userByID(ctx, tx, r.UserID)
+	if err != nil {
+		return localuser.User{}, err
+	}
+
+	return UserOf(u), nil
+}
+
 // Expired reports whether err is the error of RedeemReset for a code that
 // expired.
 func Expired(err error) bool {
