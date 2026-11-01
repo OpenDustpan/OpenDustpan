@@ -138,7 +138,7 @@ The stop took 10.0 s in each run. The server drains for 10 s before it stops.
 
 With two or three instances, no request failed during the restart.
 With one instance there is no other instance. The balancer answered 503 with `Retry-After: 1` from the first failed probe until the new process was ready.
-In the run, 1193 of 1221 requests got 503 in 10.1 s.
+In the run, 1193 of 1221 requests got 503 in 10.1 s. All of these 503 answers came from the balancer, not from a server. The runs with two and three instances had no error of any kind, so no request got a 502 from a stale health state.
 These clients never retry.
 A Pulumi or OpenTofu command retries a request that gets 503.
 See [High availability](high-availability.md) for the retry times of each CLI version.
