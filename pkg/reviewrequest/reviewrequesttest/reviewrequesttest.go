@@ -1,10 +1,12 @@
 // Package reviewrequesttest holds the conformance suites of the ports of
 // package reviewrequest: Store, GitHost, ClosureResolver and
-// ConflictChecker. A new adapter runs the suite of its port with a factory.
+// ConflictChecker, and the list of the cases of the service of the review
+// requests. A new adapter runs the suite of its port with a factory.
 //
 // Each case states one rule of its port. The ports are new, and no adapter
 // exists yet, so each case skips with the reason pending. The first adapter
-// of a port writes the body of each case of that port before it lands.
+// of a port, or the service, writes the body of each of its cases before it
+// lands.
 package reviewrequesttest
 
 import (
@@ -76,6 +78,7 @@ func storeCases() []suiteCase {
 		"GetOfAnotherNamespaceIsNotFound",
 		"PutWithAStaleVersionIsAConflictAndChangesNothing",
 		"PutWithAStaleFenceIsFencedAndChangesNothing",
+		"PutWithAFenceOfAnotherNamespaceIsFencedAndChangesNothing",
 		"PutAppendsTheAuditEntryInTheSameTransaction",
 		"PutWithAnInvalidAuditEntryChangesNothing",
 		"ByChangeOrderFindsTheRecordThatCarriesIt",
@@ -101,20 +104,40 @@ func gitHostCases() []suiteCase {
 	return pendingCases(
 		"ReadReturnsTheHeadTheReviewsAndTheRequirements",
 		"ReadNamesTheCommitOfEachReviewWhereTheGitHostHasOne",
-		"ReadLeavesOutTheStatusesOfOpenDustpanFromTheRequirements",
+		"ReadReportsTheCreatorOfEachStatus",
+		"ReadLeavesOutOnlyTheStatusesThatTheAppCreatedFromTheRequirements",
+		"AStatusOfAnOpenDustpanNameFromAnotherCreatorStaysARequirement",
+		"ReadReportsTheMergerTheQueuerAndTheMergeCommit",
 		"ReadOfAMergeStateThatIsNotComputedIsUnknown",
 		"ReadNeverAsksTheGitHostToComputeTheMergeStateAgain",
 		"ReadOfAnUnknownReviewRequestIsNotFound",
 		"ReadReturnsAuthorsByImmutableAccountID",
 		"ReadDoesNotMakeACoAuthoredByTrailerAnAuthor",
 		"ReadNamesThePersonBehindABotPushOrNoPerson",
+		"ReadNamesTheAppIDOfABotAndNeverItsLogin",
+		"ReadMarksABotPushWithNoKnownPerson",
+		"ReadReturnsAccountIDsAndNoPrincipal",
+		"RulesReportTheRequiredStatusesAndTheirApp",
+		"RulesReportTheBypassList",
+		"RulesReportThatTheAppCanBypass",
+		"RulesThatTheAppCannotReadAreUnknown",
+		"PermissionReportsWriteAccess",
+		"PermissionOfAnUnknownAccountIsNone",
 		"PostStatusTwiceWithOneNameReplacesIt",
 		"PutCommentEditsTheCommentThatItNames",
 		"DeleteCommentDeletesTheComment",
 		"ReactAddsTheReaction",
 		"MergeOfAMovedHeadIsHeadMoved",
 		"MergeThatTheGitHostRefusesCarriesItsAnswer",
-		"MergeNeverUsesABypass",
+		"MergeIsRefusedWhenTheAppCanBypass",
+		"MergeIsRefusedWhenTheRulesNoLongerRequireTheStatus",
+		"MergeReturnsTheMergeCommit",
+		"AReferenceThatFailsValidationIsInvalidWithNoCall",
+		"ACommitThatFailsValidationIsInvalidWithNoCall",
+		"AnAccountIDThatFailsValidationIsInvalidWithNoCall",
+		"AnEmojiOutsideTheAllowListIsInvalidWithNoCall",
+		"AMergeMethodOutsideTheAllowListIsInvalidWithNoCall",
+		"ACommentBodyAboveTheLimitIsInvalidWithNoCall",
 		"ATimeoutIsUnavailable",
 	)
 }
@@ -140,6 +163,14 @@ func closureCases() []suiteCase {
 		"ClosureFollowsASymlinkInsideTheRepository",
 		"ClosureOfAnImportThatTheResolverCannotReadIsNotKnown",
 		"ClosureOfARemoteModuleIsNotKnown",
+		"ASymlinkOutOfTheRepositoryIsNotKnown",
+		"AModuleSourceThatLeavesTheRepositoryIsNotKnown",
+		"AnAbsolutePathIsNotKnown",
+		"ASymlinkLoopIsNotKnown",
+		"AClosureAboveTheSizeLimitIsNotKnown",
+		"AClosureAboveTheDepthLimitIsNotKnown",
+		"ClosureNeverReadsAFileOutsideTheRepository",
+		"ClosureRefusesAReferenceThatIsNotAUnit",
 		"ClosureRefusesAnInvalidCommit",
 	)
 }
@@ -173,6 +204,9 @@ func conflictCases() []suiteCase {
 		"RemoteStateOfAnUnmanagedUnitIsNeverDisjoint",
 		"APulumiDynamicProviderIsNeverDisjoint",
 		"DriftIsNeverDisjoint",
+		"AReaderThatTheCheckCannotSeeIsAConflict",
+		"APlanWithNoUnitIsInvalid",
+		"APlanWithNoOperationsIsInvalid",
 		"ResourcesNameOnlyTheCollidingResources",
 	)
 }
