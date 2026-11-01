@@ -57,15 +57,25 @@ blob. The sweep keeps these blobs:
 
 - each part of a plan whose row exists, also a plan that a replan cleared and
   a reserved plan with no part yet,
-- the blob of each confirmed chunk of each log version,
+- the blob of each chunk that a log version counts,
 - each blob younger than the grace period,
 - each blob with a key that is not a plan part or a chunk attempt of the job.
 
 Each sweep deletes nothing while a backup or a restore runs, or when it
 cannot read the backups registry. It reads the registry again before each
 delete. A failed read of the rows of a job deletes nothing for that job.
-Each run writes one log line, `job artifact sweep`, with the number of jobs,
-of deleted blobs, of unknown keys and of failed jobs.
+
+Each run of `job.artifact-sweep` keeps a record of what it did:
+
+| Record | Content |
+| --- | --- |
+| The output of the step of its durable operation | The number of jobs, of deleted blobs, of unknown blobs and of failed jobs. The full key of each deleted blob, at most 1,000 keys. `truncated` is `true` when the run deleted more. `skipped` gives the reason when the run deleted nothing. |
+| One audit entry in the scope `@server` | The action `job:artifact-sweep`, the object `job.artifact-sweep` and the counts. The reason is `unnamed job artifact older than the grace period`, or `deleted nothing:` with the reason of a run that deleted nothing. The entry names no blob key. |
+| One log line, `job artifact sweep` | The same counts. |
+
+A blob that the sweep keeps because its key is not a plan part or a chunk
+attempt, or because the blob store gives no modification time for it,
+counts as unknown.
 
 ## The answer of the Pulumi Cloud-compatible API
 

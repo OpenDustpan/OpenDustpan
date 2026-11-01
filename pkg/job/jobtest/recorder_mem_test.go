@@ -44,7 +44,11 @@ func newMemRecorderHarness(t *testing.T) jobtest.RecorderHarness {
 		t.Fatalf("open blob store: %v", err)
 	}
 
-	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if err := blobs.Close(); err != nil {
+			t.Errorf("close blob store: %v", err)
+		}
+	})
 
 	return buildRecorderHarness(t, db, newMemKeyIndex(db), blobs)
 }
@@ -793,10 +797,40 @@ func TestMemArtifactSweep(t *testing.T) {
 			t.Fatalf("open blob store: %v", err)
 		}
 
-		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+		t.Cleanup(func() {
+			if err := blobs.Close(); err != nil {
+				t.Errorf("close blob store: %v", err)
+			}
+		})
 
 		return jobtest.ArtifactSweepHarness{
 			RecorderHarness: buildRecorderHarness(t, db, newMemKeyIndex(db), blobs), Names: db,
+			Clock: machineClock{}, Audit: &memServerAudit{mu: sync.Mutex{}, entries: nil},
 		}
 	})
+}
+
+// machineClock is the clock of the database of the memory store: the clock of
+// the machine.
+type machineClock struct{}
+
+func (machineClock) DatabaseNow(context.Context) (time.Time, error) { return time.Now(), nil }
+
+// memServerAudit keeps the audit entries of the scope of the server.
+type memServerAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+func (a *memServerAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append server entry: %w", err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
 }

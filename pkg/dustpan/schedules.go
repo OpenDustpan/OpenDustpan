@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -182,8 +183,9 @@ func (s *Server) reconcileKind() durable.KindSpec {
 
 // artifactSweepKind returns the runner kind of the schedule of the artifact
 // sweep. Its step returns the error of a run, so the runner counts a failed
-// run as a failed attempt. Each run writes one log line with its counts: the
-// record of what the sweep deleted and why.
+// run as a failed attempt. The output of the step is the result of the run in
+// JSON: its counts and the keys that it deleted. The sweep also appends one
+// audit entry for each run, and the step writes one log line.
 func (s *Server) artifactSweepKind() durable.KindSpec {
 	return durable.KindSpec{
 		Kind:       job.KindArtifactSweep,
@@ -198,9 +200,17 @@ func (s *Server) artifactSweepKind() durable.KindSpec {
 
 				s.logger.InfoContext(ctx, "job artifact sweep: deleted the blobs that no row names",
 					slog.Int("jobs", res.Jobs), slog.Int("deleted", res.Deleted),
-					slog.Int("unknown", res.Unknown), slog.Int("failed", res.Failed), slog.Bool("held", res.Held))
+					slog.Int("unknown", res.Unknown), slog.Int("failed", res.Failed), slog.Bool("held", res.Held),
+					slog.String("skipped", res.Skipped))
 
-				return nil, nil
+				// The output of the step is the record of the run: the counts
+				// and the deleted keys.
+				out, err := json.Marshal(res)
+				if err != nil {
+					return nil, fmt.Errorf("job artifact sweep: encode the result: %w", err)
+				}
+
+				return out, nil
 			}},
 		},
 	}
