@@ -214,10 +214,13 @@ Phase 2 is answered by ADR 136 (the Kubernetes coordinator), on 2026-10-18.
 Decided by the owner on 2026-11-01 in
 [ADR 305](../adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md):
 phases 3 and 4 use our own operator, modeled on the Pulumi Kubernetes
-Operator. Option 2 ("phase 1 and 2 only") does not apply now. Crossplane
+Operator. The primary use is a resource that applies a blueprint. A second
+resource declares one unit directly. Option 2 ("phase 1 and 2 only") does not
+apply now. Crossplane
 compositions are not an alternative and not a target. The operator comes
 after runners scoped to namespaces. These points stay open here: the resource
 names, a namespace-scoped install, the map of a Kubernetes namespace to an
 OpenDustpan namespace and to a collection (ADR 51 decision 10 stays in
-force), the drift status in the resource, and the deletion policy.
+force), the drift status in the resource, the deletion policy, and the overlap of
+a blueprint resource with RFC 111.
 Phase 1 stays open.
