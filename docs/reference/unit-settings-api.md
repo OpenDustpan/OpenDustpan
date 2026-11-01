@@ -173,6 +173,8 @@ code `unit-settings.invalid` for each of these:
 - a `ref`, a `repository` or a `connection` that starts with `-` or holds a
   control character or a space,
 - a `repository` URL with a user name, a password, a query or a fragment,
+- a `repository` URL whose host is not a DNS name: an IP address such as
+  `10.0.0.5` or `[fd00::1]`, a number such as `2130706433`, or `localhost`,
 - a value of `executor` or `delivery` that is not in the list,
 - more than 16 files, or a file in the list twice,
 - a step that does not pass the rules of a custom step, for example a variable
