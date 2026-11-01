@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -79,6 +80,15 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 	if err != nil {
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	// A write that names no lock met no gate at a lock, so the gates run
+	// here, before the body streams and before the transaction. A write that
+	// names a lock met the gates at that lock, a forced write too.
+	if in.LockID == "" && !h.guardStateWrite(ctx, w, c, stateCheck{
+		action: identity.ActionUnitWriteUnlocked, op: gate.OperationUnlockedWrite,
+	}) {
 		return
 	}
 
@@ -162,6 +172,10 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 	if err != nil {
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	if !h.guardStateWrite(ctx, w, c, stateCheck{action: identity.ActionUnitWriteForced, op: gate.OperationUnlock}) {
 		return
 	}
 

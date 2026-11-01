@@ -89,7 +89,8 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
 	}
 
-	env := e2e.NewEnv(t.Context(), t, cli, store)
+	// The gate steps write gates as a signed-in administrator.
+	env := e2e.NewEnvWithSignIn(t.Context(), t, cli, store)
 	ctx := t.Context()
 
 	address := env.URL + "/tofu/state/" + e2e.Namespace + "/" + e2e.Workspace
@@ -154,6 +155,8 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	runTofuHTTPMigration(t, env, address, backendEnv)
 
 	runTofuHTTPForceUnlock(t, env, backendEnv)
+
+	runTofuHTTPStateWriteGate(t, env, backendEnv)
 
 	tofuNotHomeScenario(t, env, backendEnv)
 

@@ -510,6 +510,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)
