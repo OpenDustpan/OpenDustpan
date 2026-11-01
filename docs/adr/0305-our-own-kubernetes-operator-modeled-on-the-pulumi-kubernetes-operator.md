@@ -60,6 +60,12 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
      its model (decision 2).
    - Both kinds go through the same jobs, gates and history (decision 4).
    - This ADR leaves the names of the resources to RFC 31.
+   - A resource is mostly the inputs of one apply: the source, the Pulumi
+     stack config or the OpenTofu variables, the placement in a namespace and
+     a collection, and the apply policy (plan only, or apply after the
+     gates). Secrets and credentials are references to a profile or to a
+     Secret, never inline. The status reports the last plan or apply and the
+     drift. The history stays in OpenDustpan.
 2. **The model is the Pulumi Kubernetes Operator version 2
    (owner).** The operator takes these shapes:
    - A resource for a unit, with its own `spec` and `status`. The `Stack`
