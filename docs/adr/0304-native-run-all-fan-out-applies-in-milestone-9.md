@@ -4,6 +4,8 @@ Status: accepted · 2026-11-01. Decided by the project owner on 1 November 2026
 
 Changes:
 
+- Changes ADR 100 decision 2: a discovery job is the only job kind with no unit.
+- Changes ADR 100 decision 20: the job token of a discovery job covers the namespace of the job and holds one stored grant.
 - Changes ADR 282 decision 5: answers the open question "A job kind for `terragrunt run-all` that makes many runs?".
 
 ## Context
@@ -73,13 +75,19 @@ The facts that the decision uses:
    - The wrapper job that runs `terragrunt run-all` is a discovery job. It
      finds the Terragrunt units and the order of their dependencies. It
      writes no state.
-   - The discovery job is a job of the tool-neutral job model (ADR 100). It
-     has no unit run of its own: it is not a plan job and not an apply job
-     of a unit.
-   - The discovery job sends the unit list to the server with its job token
-     (ADR 213). The token gets one narrowly scoped grant: to create the
-     change order for this one job and to attach its revision. The grant is
-     a stored grant. A user can list it. It ends with the job.
+   - The discovery job is a job kind of the tool-neutral job model (ADR
+     100). It belongs to a namespace. It has no unit, no run of its own and
+     no state write. It is not a plan job and not an apply job of a unit.
+   - It is the only job kind with no unit. Every other job keeps "one job,
+     one unit" (ADR 100 decision 2). So this ADR changes that decision for
+     this one kind.
+   - The job token of a discovery job (ADR 100 decision 20) covers the
+     namespace of the job, not a unit. It holds one stored grant:
+     `changeorder:author` on that namespace. The grant has a condition on the
+     job-ID claim, so it works only for a token of that job. A user can list
+     it as a grant. It ends when the job ends.
+   - With that grant, the token can create the change order of this job and
+     attach its revision. It can do nothing else.
    - The author of the change order is the principal that requested the
      wrapper job. The runner is never the author, so ADR 191 decision 2
      stays as it is.
@@ -88,11 +96,13 @@ The facts that the decision uses:
      fan-out". The history and the audit entry of each job show them.
 7. **The shim lives in the runner and the launcher.** It uses only the
    change order API. The TFE-compatible API adapter has no run-all logic.
-8. **The shim is not a new job kind.** This answers the open question of RFC
-   109: `run-all` is one job for each Terragrunt unit, under a change order.
-   The job kinds of ADR 100 stay. The state-operation questions of RFC 109
-   stay open: import, `state rm` and `state mv` as jobs, and the question of
-   whether a state operation needs a gate.
+8. **The fan-out jobs are not a new job kind.** This answers the open
+   question of RFC 109: `run-all` is one job for each Terragrunt unit, under
+   a change order. The plan jobs and apply jobs are the job kinds of ADR 100
+   and ADR 190. The discovery job of decision 6 is the one new kind. The
+   state-operation questions of RFC 109 stay open: import, `state rm` and
+   `state mv` as jobs, and the question of whether a state operation needs a
+   gate.
 9. **Profiles and blueprints stay the recommended path (owner, same
    conversation).** The owner said, right before the decision quoted in the
    context: "I would recommend teams use profiles and blueprints".
@@ -144,8 +154,8 @@ that it names.
    entry of each plan job and each apply job name the discovery job, the
    principal that requested the wrapper job, and the reason "terragrunt
    run-all fan-out". The change order names the same principal as its
-   author. The grant of the discovery job is in the list of grants while the
-   job runs, and it is gone after the job ends.
+   author. The list of grants shows the grant of the discovery job while the
+   job runs. The grant ends with the job.
 5. **The review holds.** Pass: the apply jobs start only after the apply
    request of a person, and the call record of the test provider has no
    apply call before that time.

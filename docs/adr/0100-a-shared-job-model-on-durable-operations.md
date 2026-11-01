@@ -4,6 +4,10 @@ Status: accepted · 2026-10-17. An open question superseded by ADR 125. Decision
 
 Changed by:
 
+- ADR 304 changes decision 2: a discovery job is a namespace-scoped job
+  kind with no unit.
+- ADR 304 changes decision 20: the job token of a discovery job is limited to
+  the namespace, with one stored grant.
 - ADR 110 extends decision 17: a Catalog origin on a start request and a
   precondition port.
 - ADR 125 changes: the open question on what Dusty is.
