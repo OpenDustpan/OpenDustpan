@@ -2,13 +2,17 @@ package job_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/blob/blobfault"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -200,34 +204,116 @@ func (noWatch) Running(context.Context) (blobguard.Work, bool, error) {
 	return blobguard.Work{Kind: "", ID: ""}, false, nil
 }
 
+// sweepSetup is the setup of one sweep case: the names that the rows give,
+// how far the clock of the database runs ahead of the clock of the test, how
+// far the clock of the instance runs ahead of the database, and a wrapper of
+// the blob store.
+type sweepSetup struct {
+	names    job.ArtifactKeyStore
+	ahead    time.Duration
+	instance time.Duration
+	wrap     func(blob.Store) blob.Store
+}
+
+// sweepRig is one sweep case: the sweeper, the blob store, the job store and
+// the audit entries.
+type sweepRig struct {
+	s     *job.ArtifactSweeper
+	store *blobfault.Store
+	jobs  *listedJobs
+	audit *recordedAudit
+}
+
 // sweepCase builds a sweeper over a blob store that holds the chunk and the
-// plan part, with names and a clock ahead by ahead.
+// plan part, with names and the clocks of the database and of the instance
+// ahead by ahead.
 func sweepCase(t *testing.T, names job.ArtifactKeyStore, ahead time.Duration) (*job.ArtifactSweeper,
 	*blobfault.Store, *listedJobs,
 ) {
 	t.Helper()
 
-	b, store, _ := newArtifactBlobs(t)
+	r := newSweepRig(t, sweepSetup{names: names, ahead: ahead, instance: 0, wrap: nil})
+
+	return r.s, r.store, r.jobs
+}
+
+// newSweepRig builds the sweep case of setup.
+func newSweepRig(t *testing.T, setup sweepSetup) *sweepRig {
+	t.Helper()
+
+	_, store, refusals := newArtifactBlobs(t)
+
+	var inner blob.Store = store
+	if setup.wrap != nil {
+		inner = setup.wrap(store)
+	}
+
+	b, err := job.NewArtifactBlobs(inner, refusals)
+	if err != nil {
+		t.Fatalf("NewArtifactBlobs = %v", err)
+	}
 
 	for _, rel := range []string{chunkKey, planPart} {
-		if err := store.Put(t.Context(), blob.Key(sweepPrefix()+rel), strings.NewReader("x")); err != nil {
-			t.Fatalf("Put = %v", err)
+		if putErr := store.Put(t.Context(), blob.Key(sweepPrefix()+rel), strings.NewReader("x")); putErr != nil {
+			t.Fatalf("Put = %v", putErr)
 		}
 	}
 
-	jobs := &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil}
+	r := &sweepRig{
+		s: nil, store: store, jobs: &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil},
+		audit: &recordedAudit{mu: sync.Mutex{}, entries: nil},
+	}
 
-	now := time.Now()
-
-	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
-		Jobs: jobs, Names: names, Blobs: b, Namespaces: sweepNamespaces{}, Guard: noWatch{}, Logger: nil,
-		Now: func() time.Time { return now.Add(ahead) },
+	r.s, err = job.NewArtifactSweeper(job.ArtifactSweeperConfig{
+		Jobs: r.jobs, Names: setup.names, Blobs: b, Namespaces: sweepNamespaces{}, Guard: noWatch{},
+		Clock: aheadClock{ahead: setup.ahead}, Audit: r.audit, Logger: nil,
+		Now: func() time.Time { return time.Now().Add(setup.ahead + setup.instance) },
 	})
 	if err != nil {
 		t.Fatalf("NewArtifactSweeper = %v", err)
 	}
 
-	return s, store, jobs
+	return r
+}
+
+// aheadClock is a database clock that runs ahead of the clock of the test.
+type aheadClock struct{ ahead time.Duration }
+
+func (c aheadClock) DatabaseNow(context.Context) (time.Time, error) {
+	return time.Now().Add(c.ahead), nil
+}
+
+// recordedAudit is an audit.ServerStore that keeps each entry.
+type recordedAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+func (a *recordedAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append: %w", err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
+}
+
+// only returns the one entry, and fails t when there is not exactly one.
+func (a *recordedAudit) only(t *testing.T) audit.Entry {
+	t.Helper()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(a.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(a.entries))
+	}
+
+	return a.entries[0]
 }
 
 // sweepPrefix is the key prefix of sweepNS.
@@ -334,7 +420,8 @@ func TestNewArtifactSweeperNeedsItsPorts(t *testing.T) {
 	full := job.ArtifactSweeperConfig{
 		Jobs:  &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil},
 		Names: sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil},
-		Blobs: b, Namespaces: sweepNamespaces{}, Guard: noWatch{}, Logger: nil, Now: nil,
+		Blobs: b, Namespaces: sweepNamespaces{}, Guard: noWatch{}, Clock: aheadClock{ahead: 0},
+		Audit: &recordedAudit{mu: sync.Mutex{}, entries: nil}, Logger: nil, Now: nil,
 	}
 
 	for name, edit := range map[string]func(c *job.ArtifactSweeperConfig){
@@ -343,6 +430,8 @@ func TestNewArtifactSweeperNeedsItsPorts(t *testing.T) {
 		"blobs":      func(c *job.ArtifactSweeperConfig) { c.Blobs = nil },
 		"namespaces": func(c *job.ArtifactSweeperConfig) { c.Namespaces = nil },
 		"guard":      func(c *job.ArtifactSweeperConfig) { c.Guard = nil },
+		"clock":      func(c *job.ArtifactSweeperConfig) { c.Clock = nil },
+		"audit":      func(c *job.ArtifactSweeperConfig) { c.Audit = nil },
 	} {
 		cfg := full
 		edit(&cfg)
@@ -362,4 +451,117 @@ func requireStored(t *testing.T, store blob.Store, rels ...string) {
 			t.Errorf("Get(%q) = %v, want it stored", rel, err)
 		}
 	}
+}
+
+// TestSweepRecordsItsRun shows that a run lists the keys that it deleted in
+// its result, and appends one audit entry with its counts and its reason.
+func TestSweepRecordsItsRun(t *testing.T) {
+	t.Parallel()
+
+	named := sweepNames{names: job.ArtifactNames{Plans: []string{"pln-1"}, ChunkKeys: nil}, err: nil}
+	r := newSweepRig(t, sweepSetup{names: named, ahead: sweepAhead, instance: 0, wrap: nil})
+
+	res, err := r.s.Sweep(t.Context())
+	if err != nil {
+		t.Fatalf("Sweep = %v", err)
+	}
+
+	// The fake job store lists the job in each of the two passes.
+	want := []string{sweepPrefix() + chunkKey}
+	if res.Deleted != 1 || !slices.Equal(res.DeletedKeys, want) || res.Truncated || res.Skipped != "" {
+		t.Fatalf("Sweep = %+v, want the chunk deleted and listed", res)
+	}
+
+	requireSweepEntry(t, r.audit.only(t))
+	requireStepOutput(t, &res, want[0])
+}
+
+// requireSweepEntry checks the audit entry of a run that deleted the chunk.
+func requireSweepEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Action != job.ArtifactSweepAuditAction || e.Namespace != audit.ServerScope ||
+		!strings.HasPrefix(e.Reason, job.ArtifactSweepReason+": ") || !strings.Contains(e.Reason, "1 blobs deleted") {
+		t.Fatalf("audit entry = %+v, want the sweep, its reason and its counts", e)
+	}
+
+	if strings.Contains(e.Reason, chunkKey) {
+		t.Fatalf("audit reason %q names a blob key", e.Reason)
+	}
+}
+
+// requireStepOutput checks the JSON of the result, the output of the step.
+func requireStepOutput(t *testing.T, res *job.ArtifactSweepResult, key string) {
+	t.Helper()
+
+	out, err := json.Marshal(res)
+	if err != nil || !strings.Contains(string(out), `"deletedKeys":["`+key+`"]`) ||
+		!strings.Contains(string(out), `"truncated":false`) {
+		t.Fatalf("step output = %s, %v; want the deleted keys and the truncated flag", out, err)
+	}
+}
+
+// TestSweepDeletesNothingOnClockSkew shows that a run whose instance clock
+// differs from the clock of the database by more than the skew deletes
+// nothing, and records why.
+func TestSweepDeletesNothingOnClockSkew(t *testing.T) {
+	t.Parallel()
+
+	nothing := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
+
+	for _, skew := range []time.Duration{blob.AttemptSkew + time.Minute, -blob.AttemptSkew - time.Minute} {
+		r := newSweepRig(t, sweepSetup{names: nothing, ahead: sweepAhead, instance: skew, wrap: nil})
+
+		res, err := r.s.Sweep(t.Context())
+		if err != nil || res.Deleted != 0 || res.Jobs != 0 || !strings.Contains(res.Skipped, "do not agree") {
+			t.Errorf("instance %s off: Sweep = %+v, %v; want nothing swept and the reason", skew, res, err)
+		}
+
+		if e := r.audit.only(t); !strings.HasPrefix(e.Reason, "deleted nothing: ") {
+			t.Errorf("instance %s off: audit reason = %q, want the reason that it deleted nothing", skew, e.Reason)
+		}
+
+		if _, err := r.s.SweepJob(t.Context(), &r.jobs.j); !errors.Is(err, blob.ErrClockSkew) {
+			t.Errorf("instance %s off: SweepJob = %v, want ErrClockSkew", skew, err)
+		}
+
+		requireStored(t, r.store, chunkKey, planPart)
+	}
+}
+
+// zeroTimes is a blob store whose list gives no modification time.
+type zeroTimes struct{ blob.Store }
+
+func (z zeroTimes) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := z.Store.ListPage(ctx, req)
+	if err != nil {
+		return blob.Page{}, fmt.Errorf("list page: %w", err)
+	}
+
+	for i := range page.Objects {
+		page.Objects[i].ModifiedAt = time.Time{}
+	}
+
+	return page, nil
+}
+
+// TestSweepKeepsABlobWithNoModificationTime shows that a blob with no
+// modification time is never old: the sweep keeps it and counts it unknown.
+func TestSweepKeepsABlobWithNoModificationTime(t *testing.T) {
+	t.Parallel()
+
+	nothing := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
+	r := newSweepRig(t, sweepSetup{
+		names:    nothing,
+		ahead:    sweepAhead,
+		instance: 0,
+		wrap:     func(s blob.Store) blob.Store { return zeroTimes{Store: s} },
+	})
+
+	res, err := r.s.SweepJob(t.Context(), &r.jobs.j)
+	if err != nil || res.Deleted != 0 || res.Unknown != 2 {
+		t.Fatalf("SweepJob = %+v, %v; want nothing deleted and 2 unknown", res, err)
+	}
+
+	requireStored(t, r.store, chunkKey, planPart)
 }

@@ -279,7 +279,7 @@ func TestArtifactSweepConformance(t *testing.T) {
 
 		r := newRecorderHarness(t)
 
-		return jobtest.ArtifactSweepHarness{RecorderHarness: r.h, Names: r.names}
+		return jobtest.ArtifactSweepHarness{RecorderHarness: r.h, Names: r.names, Clock: r.store, Audit: r.store}
 	})
 }
 
@@ -288,6 +288,7 @@ func TestArtifactSweepConformance(t *testing.T) {
 type recorderStores struct {
 	h     jobtest.RecorderHarness
 	names job.ArtifactKeyStore
+	store *sqlite.Store
 }
 
 // newRecorderHarness returns the recorder harness over a fresh store, with
@@ -304,7 +305,11 @@ func newRecorderHarness(t *testing.T) recorderStores {
 		t.Fatalf("open blob store: %v", err)
 	}
 
-	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if err := blobs.Close(); err != nil {
+			t.Errorf("close blob store: %v", err)
+		}
+	})
 
 	h := jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
@@ -317,7 +322,7 @@ func newRecorderHarness(t *testing.T) recorderStores {
 		Wrapper:  nil,
 	})
 
-	return recorderStores{h: h, names: j}
+	return recorderStores{h: h, names: j, store: s}
 }
 
 func TestJobBackupKeepsTheDefaultedValues(t *testing.T) {

@@ -3,13 +3,16 @@ package jobtest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -22,6 +25,10 @@ type ArtifactSweepHarness struct {
 
 	// Names is the job.ArtifactKeyStore under test.
 	Names job.ArtifactKeyStore
+	// Clock reads the clock of the database.
+	Clock blob.DatabaseClock
+	// Audit takes the audit entry of each run of the sweep.
+	Audit audit.ServerStore
 }
 
 // ArtifactSweepFactory returns a fresh harness for one case.
@@ -44,6 +51,8 @@ func RunArtifactSweep(t *testing.T, newHarness ArtifactSweepFactory) {
 		{"sweep: a running backup, a running restore or a failed guard read keeps every blob", testSweepHeld},
 		{"sweep: a run sweeps each running job", testSweepRun},
 		{"sweep: a chunk attempt whose confirm comes after the sweep of its blob is refused", testSweepStalledChunk},
+		{"sweep: each run appends one audit entry and lists the keys that it deleted", testSweepRecordsItsRun},
+		{"sweep: an instance clock that runs fast deletes nothing", testSweepFastInstanceClock},
 	}
 
 	for _, tc := range cases {
@@ -81,6 +90,23 @@ func newGuardSwitch() *guardSwitch {
 	return &guardSwitch{work: atomic.Pointer[blobguard.Work]{}, fail: atomic.Bool{}}
 }
 
+// aheadClock runs ahead of the clock of the database by ahead, so that the
+// blobs of a case look old to the sweep. The clock of the instance in the
+// case runs ahead by the same time, so the two clocks agree.
+type aheadClock struct {
+	inner blob.DatabaseClock
+	ahead time.Duration
+}
+
+func (c aheadClock) DatabaseNow(ctx context.Context) (time.Time, error) {
+	now, err := c.inner.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("database now: %w", err)
+	}
+
+	return now.Add(c.ahead), nil
+}
+
 // sweepAfter is how far ahead of the clock the sweep of the cases runs, so
 // every blob of a case is older than the grace period.
 const sweepAfter = blob.UnnamedGracePeriod + time.Minute
@@ -96,7 +122,8 @@ func newSweeper(t *testing.T, h ArtifactSweepHarness, g blobguard.Watch, ahead t
 	}
 
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
-		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: g, Logger: nil,
+		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: g,
+		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Audit: h.Audit, Logger: nil,
 		Now: func() time.Time { return time.Now().Add(ahead) },
 	})
 	if err != nil {
@@ -252,7 +279,9 @@ func stored(t *testing.T, h ArtifactSweepHarness, key string) bool {
 		t.Fatalf("Get(%q) = %v", key, err)
 	}
 
-	_ = rc.Close() //nolint:errcheck // A read-only test handle.
+	if err := rc.Close(); err != nil {
+		t.Errorf("close the blob: %v", err)
+	}
 
 	return true
 }
@@ -385,7 +414,9 @@ func testSweepDeletesOrphans(t *testing.T, h ArtifactSweepHarness) {
 		t.Fatalf("read the log after the sweep = %v", err)
 	}
 
-	_ = rc.Close() //nolint:errcheck // A read-only test handle.
+	if err := rc.Close(); err != nil {
+		t.Errorf("close the blob: %v", err)
+	}
 }
 
 func testSweepHeld(t *testing.T, h ArtifactSweepHarness) {
@@ -487,5 +518,98 @@ func testSweepStalledChunk(t *testing.T, h ArtifactSweepHarness) {
 		if !stored(t, h, namespacePrefix(t, h, fx.a)+key) {
 			t.Errorf("a row names the missing blob %q", key)
 		}
+	}
+}
+
+// auditTap forwards each audit entry to the store under test and keeps it, so
+// a case reads the entries that the sweep appended.
+type auditTap struct {
+	inner   audit.ServerStore
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+// AppendServer implements audit.ServerStore.
+func (a *auditTap) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	stored, err := a.inner.AppendServer(ctx, e)
+	if err != nil {
+		return audit.Entry{}, fmt.Errorf("append server entry: %w", err)
+	}
+
+	a.mu.Lock()
+	a.entries = append(a.entries, stored)
+	a.mu.Unlock()
+
+	return stored, nil
+}
+
+// tappedSweeper returns a sweep of h whose audit entries a case can read, with
+// the clock of the database ahead by ahead and the clock of the instance ahead
+// by ahead+instance.
+func tappedSweeper(
+	t *testing.T, h ArtifactSweepHarness, ahead, instance time.Duration,
+) (*job.ArtifactSweeper, *auditTap) {
+	t.Helper()
+
+	artifacts, err := job.NewArtifactBlobs(h.Blobs, noRefusals{})
+	if err != nil {
+		t.Fatalf("artifact blobs: %v", err)
+	}
+
+	tap := &auditTap{inner: h.Audit, mu: sync.Mutex{}, entries: nil}
+
+	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
+		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(),
+		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Audit: tap, Logger: nil,
+		Now: func() time.Time { return time.Now().Add(ahead + instance) },
+	})
+	if err != nil {
+		t.Fatalf("artifact sweeper: %v", err)
+	}
+
+	return s, tap
+}
+
+func testSweepRecordsItsRun(t *testing.T, h ArtifactSweepHarness) {
+	t.Helper()
+
+	fx := newSweepFixture(t, h)
+	s, tap := tappedSweeper(t, h, sweepAfter, 0)
+
+	res, err := s.Sweep(t.Context())
+	if err != nil || res.Deleted != len(fx.orphans) || res.Truncated {
+		t.Fatalf("Sweep = %+v, %v; want %d deleted", res, err, len(fx.orphans))
+	}
+
+	if !slices.Equal(sorted(res.DeletedKeys), sorted(fx.orphans)) {
+		t.Fatalf("deleted keys = %q, want %q", res.DeletedKeys, fx.orphans)
+	}
+
+	if len(tap.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(tap.entries))
+	}
+
+	e := tap.entries[0]
+	if e.Action != job.ArtifactSweepAuditAction || e.Namespace != audit.ServerScope ||
+		!strings.HasPrefix(e.Reason, job.ArtifactSweepReason+": ") {
+		t.Fatalf("audit entry = %+v, want the sweep and its reason", e)
+	}
+}
+
+func testSweepFastInstanceClock(t *testing.T, h ArtifactSweepHarness) {
+	t.Helper()
+
+	fx := newSweepFixture(t, h)
+	s, tap := tappedSweeper(t, h, sweepAfter, blob.AttemptSkew+time.Minute)
+
+	res, err := s.Sweep(t.Context())
+	if err != nil || res.Deleted != 0 || res.Skipped == "" {
+		t.Fatalf("Sweep = %+v, %v; want nothing deleted and the reason", res, err)
+	}
+
+	requireBlobs(t, h, append(slices.Clone(fx.named), fx.orphans...), nil)
+
+	if len(tap.entries) != 1 || !strings.HasPrefix(tap.entries[0].Reason, "deleted nothing: ") {
+		t.Fatalf("audit entries = %+v, want one that tells why the run deleted nothing", tap.entries)
 	}
 }
