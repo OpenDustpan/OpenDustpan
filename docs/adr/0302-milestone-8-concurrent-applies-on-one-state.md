@@ -36,7 +36,10 @@ has the label "(owner)".
    any other product for this feature.
 2. **The design is job-aware (owner).**
    - A runner job registers its saved plan as a claim before the apply.
-   - The server refuses overlapping claims before anything runs.
+   - The server refuses overlapping claims before anything runs. It always
+     refuses an overlap. A runner job turns the refusal into the status
+     "blocked". The local `dustpan` wrapper waits: it tries the claim again
+     after the refusal until the blocking claim ends, or until a timeout.
    - The server serves each job the state version that the plan used
      as its base.
    - The server merges each upload one resource instance at a time.
@@ -72,6 +75,7 @@ has the label "(owner)".
    - A parent pointer and a claim ID for each state version.
    - A fence for each claim.
    - One principal for each job on the TFE-compatible path.
+   - The retry interval and the timeout of the local wrapper.
    - A change to the rule of ADR 299 that a replacement is never disjoint.
      The RFC proposes a closure test in its place.
 
@@ -82,7 +86,8 @@ has the label "(owner)".
 `docs/roadmap.md` holds the goal, the work items and the exit test of
 milestone 8. The exit test uses two teams that apply to disjoint parts of
 one workspace at the same time through OpenDustpan runners. A local
-`dustpan` CLI run of a third change waits or joins, as the rules say.
+`dustpan` CLI run of a third change waits on an overlap, and runs at the same
+time when the claims do not overlap.
 
 ## Consequences
 
