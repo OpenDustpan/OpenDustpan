@@ -23,6 +23,7 @@ package localuser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -142,6 +143,10 @@ var (
 	// ErrUnavailable reports that the store or the hasher cannot answer.
 	// The sign-in fails closed on it.
 	ErrUnavailable = errors.New("local user store unavailable")
+	// ErrHashBusy reports a hash that found no room in the memory budget of
+	// the instance within HashWait. The sign-in answers that the server is
+	// busy, and counts no failure for the name or the person.
+	ErrHashBusy = errors.New("the password hash budget of this server is full")
 )
 
 // User is the stored record of one local user, without its password hash.
@@ -252,6 +257,33 @@ func DefaultHashParams() HashParams {
 	}
 }
 
+// Validate returns ErrInvalid when p names another algorithm than
+// AlgorithmArgon2id or holds a value outside the bounds of this package.
+func (p HashParams) Validate() error {
+	if p.Algorithm != AlgorithmArgon2id {
+		return fmt.Errorf("%w: hash algorithm %q", ErrInvalid, p.Algorithm)
+	}
+
+	bounds := []struct {
+		name          string
+		value, lo, hi uint32
+	}{
+		{name: "memory in KiB", value: p.MemoryKiB, lo: MinMemoryKiB, hi: MaxMemoryKiB},
+		{name: "iterations", value: p.Iterations, lo: MinIterations, hi: MaxIterations},
+		{name: "parallelism", value: uint32(p.Parallelism), lo: MinParallelism, hi: MaxParallelism},
+		{name: "salt bytes", value: p.SaltBytes, lo: MinSaltBytes, hi: MaxSaltBytes},
+		{name: "key bytes", value: p.KeyBytes, lo: MinKeyBytes, hi: MaxKeyBytes},
+	}
+
+	for _, b := range bounds {
+		if b.value < b.lo || b.value > b.hi {
+			return fmt.Errorf("%w: hash %s %d, want %d to %d", ErrInvalid, b.name, b.value, b.lo, b.hi)
+		}
+	}
+
+	return nil
+}
+
 // PasswordHash is a stored password hash in the PHC string format, for
 // example $argon2id$v=19$m=19456,t=2,p=1$<salt>$<key>, with the salt and the
 // key in base64 without padding. The store keeps the string and returns it
@@ -265,21 +297,23 @@ type Verdict struct {
 	NeedsRehash bool
 }
 
-// PasswordHasher hashes and checks passwords. The adapter on Argon2id lives
-// outside the domain packages. The suite RunHasher in package localusertest
-// states the rules.
+// PasswordHasher hashes and checks passwords. Package localuser/argon2id
+// holds the adapter on Argon2id. The suite RunHasher in package
+// localusertest states the rules.
 type PasswordHasher interface {
 	// Hash returns the hash of password with a new random salt from
 	// crypto/rand and the parameters p. The password is the NFC form that
 	// the service checked. It returns ErrInvalid for parameters out of the
-	// bounds, and ErrPasswordTooLong above MaxBytes.
+	// bounds, ErrPasswordTooLong above MaxBytes, and ErrHashBusy when the
+	// memory budget of the instance has no room within HashWait.
 	Hash(ctx context.Context, password string, p HashParams) (PasswordHash, error)
 	// Verify checks password against h in constant time over the derived
 	// key, and compares the parameters of h with current. It returns
 	// ErrWrongPassword for a password that does not match, and ErrInvalid
 	// for a hash that does not parse or whose parameters are out of the
 	// bounds (a parallelism of 0 included), before any work. It never
-	// panics on a malformed hash.
+	// panics on a malformed hash. It returns ErrPasswordTooLong above
+	// MaxBytes, and ErrHashBusy as Hash does.
 	Verify(ctx context.Context, password string, h PasswordHash, current HashParams) (Verdict, error)
 }
 
