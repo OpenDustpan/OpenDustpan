@@ -518,6 +518,7 @@ func startInput(id RestoreID, req RestoreRequest) ([]byte, error) {
 	in := restoreInput{
 		ID: id, BackupID: req.BackupID, PreBackupID: req.PreBackupID, CheckOnly: req.CheckOnly, Force: req.Force,
 		RequestedBy: req.RequestedBy, KeepAccessTables: req.KeepAccessTables,
+		evidence: preBackupResult{Digest: "", Damaged: 0, Created: false},
 	}
 
 	if in.PreBackupID == "" {
