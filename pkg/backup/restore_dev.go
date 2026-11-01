@@ -69,6 +69,8 @@ var warningTexts = map[RestoreWarningCode]string{
 		"Its tokens and sessions are now in a dev data directory.",
 	WarnAuditAppendFailed: "The restore finished. The server could not write an audit entry for the removed dev data. " +
 		"The restore record holds the report.",
+	WarnDamagedLiveBlobs: "The backup before this restore found live blobs that were missing or did not match " +
+		"their records. The restore wrote the checked bytes of the backup there. The audit log names each blob.",
 }
 
 // WarningFor returns the warning of code, and false for an unknown code.
