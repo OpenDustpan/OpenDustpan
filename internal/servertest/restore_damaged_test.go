@@ -261,33 +261,51 @@ func (r damagedRig) mustRepaired(t *testing.T, name string) {
 	}
 }
 
-// TestRestoreRepairsMissingAndDamagedStateBlobs runs the reproduction of a
-// restore over a lost or damaged live state blob: two workspaces, a backup,
-// then a live blob that is deleted, that holds other bytes, or that holds the
-// sealed bytes of the other workspace. Each restore succeeds with the warning
-// of damaged live blobs, the live blob holds its first bytes again, and the
-// state reads back.
-func TestRestoreRepairsMissingAndDamagedStateBlobs(t *testing.T) {
+// TestRestoreRepairsAMissingStateBlob runs the reproduction of a restore
+// over a lost live state blob: two workspaces, a backup, then a live blob
+// that is deleted. The restore succeeds with the warning of damaged live
+// blobs, the live blob holds its first bytes again, and both states read
+// back.
+func TestRestoreRepairsAMissingStateBlob(t *testing.T) {
+	t.Parallel()
+
+	r := newDamagedRig(t)
+
+	if err := r.root.Remove(r.victim); err != nil {
+		t.Fatalf("delete the live blob: %v", err)
+	}
+
+	r.mustRepaired(t, "a live blob that is absent")
+}
+
+// TestRestoreStopsAtSealedStateThatDoesNotOpen runs the reproduction of a
+// restore over a live state blob whose sealed bytes do not open: bytes that
+// are not sealed, and the sealed bytes of the other workspace. A key or a key
+// provider can cause the same error, so the backup before the restore stops,
+// the restore fails, and the live blob keeps its bytes.
+func TestRestoreStopsAtSealedStateThatDoesNotOpen(t *testing.T) {
 	t.Parallel()
 
 	r := newDamagedRig(t)
 
 	for _, tc := range []struct {
-		name   string
-		damage func() error
+		name  string
+		bytes []byte
 	}{
-		{name: "a live blob that is absent", damage: func() error { return r.root.Remove(r.victim) }},
-		{name: "a live blob that holds other bytes", damage: func() error {
-			return r.root.WriteFile(r.victim, []byte("tampered"), 0o600)
-		}},
-		{name: "a live blob that holds the sealed bytes of the other workspace", damage: func() error {
-			return r.root.WriteFile(r.victim, r.other, 0o600)
-		}},
+		{name: "a live blob that holds other bytes", bytes: []byte("tampered")},
+		{name: "a live blob that holds the sealed bytes of the other workspace", bytes: r.other},
 	} {
-		if err := tc.damage(); err != nil {
+		if err := r.root.WriteFile(r.victim, tc.bytes, 0o600); err != nil {
 			t.Fatalf("%s: damage the live blob: %v", tc.name, err)
 		}
 
-		r.mustRepaired(t, tc.name)
+		doc := runRestore(t, r.c, r.backupID)
+		if doc.State != string(backup.RestoreFailed) {
+			t.Fatalf("%s: restore = %q, want failed", tc.name, doc.State)
+		}
+
+		if got := readFile(t, r.root, r.victim); !bytes.Equal(got, tc.bytes) {
+			t.Fatalf("%s: live blob after the restore = %d bytes, want the bytes that it held", tc.name, len(got))
+		}
 	}
 }

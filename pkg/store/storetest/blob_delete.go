@@ -45,7 +45,9 @@ type BlobDeleteStore interface {
 	// StartRestore stores a checking restore row and starts its operation.
 	StartRestore(ctx context.Context, r backup.RestoreRecord, start durable.StartRequest) error
 	// MarkRestoreApplying moves the checking restore to applying.
-	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID) error
+	MarkRestoreApplying(
+		ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID, result []byte,
+	) error
 }
 
 // kindClaimer claims the installation kind, which a backup records.
@@ -889,7 +891,7 @@ func testBlobDeleteRestore(t *testing.T, r *blobDeleteRig) {
 			claimed := mustClaimRestoreOp(t, r.store.DurableOperationsPort(), "instance-a")
 
 			err = r.store.MarkRestoreApplying(
-				ctx, claimed.Claim.Step(backup.RestoreStepPreBackup), id, backup.ID(ident.NewID("bkp-")),
+				ctx, claimed.Claim.Step(backup.RestoreStepPreBackup), id, backup.ID(ident.NewID("bkp-")), nil,
 			)
 			if err != nil {
 				t.Fatalf("mark restore applying: %v", err)

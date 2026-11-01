@@ -141,6 +141,12 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 		return checkPlan{}, err
 	}
 
+	// A backup before a restore that found damaged live blobs holds no copy
+	// of them. Restoring it would bring back rows with no content.
+	if damagedErr := refuseDamagedBackup(manifest); damagedErr != nil {
+		return checkPlan{}, damagedErr
+	}
+
 	wantSHA, err := parseSQLSHA(manifest, id)
 	if err != nil {
 		return checkPlan{}, err
