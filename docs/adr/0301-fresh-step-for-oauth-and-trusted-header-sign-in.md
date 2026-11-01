@@ -8,7 +8,10 @@ Changes:
 - Extends ADR 55 decisions 6 and 7: the trusted header and a plain OAuth 2.0
   provider give no authentication time, so the fresh step uses a factor of
   OpenDustpan.
+- Extends ADR 55 decision 10: the rule "MFA is the job of the provider" has a narrow exception for the fresh step.
+- Extends ADR 56 decision 5: the rule applies when MFA is on, as for every other method.
 - Extends ADR 227 decision 1: a passkey or TOTP is a fresh authentication for these two methods.
+- Extends ADR 285 decision 1: the same narrowing of ADR 46 decision 2 for two more methods.
 
 ## Context
 
@@ -36,6 +39,10 @@ authentication time.
 
 ## Decision
 
+Rules 1 to 5 are from the first review round. Rules 6 to 13 record the
+decisions of the project manager (PM) for the open points of that review,
+under the owner's delegation.
+
 1. **A factor of OpenDustpan gives the fresh step (owner).** For a person
    who signed in with a plain OAuth 2.0 provider or with the trusted header
    of a proxy, the fresh authentication of ADR 227 decision 1 is a passkey
@@ -48,7 +55,8 @@ authentication time.
    asks for no second factor. So ADR 46 decision 2 stays true for sign-in.
    This ADR narrows it: for these two methods, OpenDustpan asks for its own
    factor at the fresh step only. ADR 285 decision 1 narrowed the same
-   decision for local password users.
+   decision for local password users. ADR 55 decision 10 keeps its meaning
+   for sign-in.
 4. **No factor, no fresh step (owner).** A person of these methods who has
    enrolled no factor cannot do a step that needs a fresh authentication.
    The refusal is `403` with the error code `mfa.fresh-step-required`
@@ -56,18 +64,53 @@ authentication time.
    TOTP. The server does not skip the step. This is the fail-closed rule.
 5. **One code path.** The passkey and TOTP code is the code of the local-user
    MFA. The enrollment, the check, the recovery codes and the audit entries
-   are the same. The audit entry of a fresh step names the method of the
-   sign-in and the factor that gave the step.
+   are the same.
+6. **First enrollment needs an enrollment code (PM).** A person of these
+   methods who has no factor enrolls the first one with an enrollment code
+   that an administrator issues. The code is short-lived, works one time,
+   and is bound to that person. Each issue and each use writes an audit
+   entry. An administrator can issue codes for many people in one request.
+   So a stolen session alone cannot enroll a factor. Benchmark: Microsoft
+   Entra Temporary Access Pass. GitHub asks for sudo mode to add a factor.
+7. **An administrator reset returns the person to "no factor" (PM).** After
+   a reset of the MFA of a person, the next enrollment needs a new
+   enrollment code again.
+8. **A change of a factor needs a fresh step (PM).** When a person has a
+   factor, adding or removing a factor needs a fresh step with a factor
+   that exists.
+9. **A recovery code gives no fresh step (PM).** A recovery code lets the
+   person enroll one replacement factor, one time, and the server writes an
+   audit entry. It never passes a fresh step. Benchmark: GitHub sudo mode
+   does not accept recovery codes.
+10. **Each change of a factor tells the person (PM).** An enrollment, a
+    removal and a reset each write an audit entry and send a notice to the
+    notification channel of the person. Each one also ends the other
+    sessions of the person. The session that did the change stays.
+11. **The step belongs to one session (PM).** The server records the fresh
+    step on the session that did it, and on no other session. It lasts for
+    `freshAuthSeconds` or until that session ends. The audit entry of the
+    step names the session. The session model is the model of ADR 297.
+12. **Only when MFA is on (PM).** ADR 56 decision 5 holds. On an
+    installation with MFA off, the server asks for no fresh step, as for
+    every other method. The rules of this ADR apply when MFA is on.
+13. **The refusal names the factor step (PM).** For a person who has a
+    factor, the `403` of decision 4 names the factor step. It does not name
+    a new sign-in. For a person with no factor, it names the enrollment page
+    (decision 4) and the enrollment code (decision 6).
 
 ## Consequences
 
 - An operator who uses GitHub as a sign-in provider, or a proxy header, can
-  use all steps that need a fresh authentication. Each person enrolls one
-  passkey or one TOTP device first.
+  use all steps that need a fresh authentication. Each person gets an
+  enrollment code from an administrator and enrolls one passkey or one TOTP
+  device first.
 - A person of these two methods who enrolls no factor still signs in, and
   can still do each action that needs no fresh step.
 - The enrollment page must be reachable for a person of these methods. The
-  enrollment itself needs no fresh step, because the person has no factor
-  yet. Later specs M4-32 and M4-38 depend on this ADR.
+  first enrollment needs the enrollment code, not a fresh step, because the
+  person has no factor yet. Later specs M4-32 and M4-38 depend on this ADR.
 - The code of local-user MFA (M4-29 WebAuthn and M4-31 TOTP) is shared. A
   change to it applies to these two methods too.
+- The enrollment code is a new object with a REST API and an action
+  (ADR 17). The spec of the code covers its length, its life time and its
+  limit.
