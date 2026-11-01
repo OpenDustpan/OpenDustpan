@@ -40,6 +40,7 @@ func restoreOperationCases() []restoreCase {
 		{name: "the audit entry of a restore commits once with its step", test: testRestoreOpAudit},
 		{name: "audit events are stored under the fence, once each, in order", test: testRestoreOpEvents},
 		{name: "audit events past the limit keep one summary and never fail", test: testRestoreOpEventsPastLimit},
+		{name: "the claim is checked with no write", test: testRestoreOpCheckFence},
 		{name: "ended operations fail their running restore rows", test: testRestoreOpFailEnded},
 		{name: "live operations keep their running restore rows", test: testRestoreOpFailEndedLive},
 	}...)
@@ -287,6 +288,57 @@ func testRestoreOpEvents(t *testing.T, newStore RestoreFactory) {
 
 	if _, err := ops.RestoreEvents(ctx, backup.MintRestoreID()); !errors.Is(err, backup.ErrRestoreNotFound) {
 		t.Fatalf("events of an unknown restore: error = %v, want ErrRestoreNotFound", err)
+	}
+}
+
+func testRestoreOpCheckFence(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ops := restorePortsOf(t, s).ops
+	durableOps := s.DurableOperationsPort()
+	ctx := t.Context()
+	id := mustStartRestoreOp(t, ops)
+	held := mustClaimRestoreOp(t, durableOps, "instance-a")
+	fence := held.Claim.Step("check-fence")
+
+	for range 2 {
+		if err := ops.CheckRestoreFence(ctx, fence, id); err != nil {
+			t.Fatalf("check by the live holder: %v", err)
+		}
+	}
+
+	// The check writes nothing: no step and no audit event.
+	mustLackStep(t, durableOps, held.ID, "check-fence")
+
+	if events, err := ops.RestoreEvents(ctx, id); err != nil || len(events) != 0 {
+		t.Fatalf("events after the checks = %q, %v; want none", events, err)
+	}
+
+	if err := ops.CheckRestoreFence(ctx, fence, backup.MintRestoreID()); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("check of another restore under this fence: error = %v, want ErrClaimLost", err)
+	}
+
+	taken := replaceClaim(t, durableOps, held)
+
+	if err := ops.CheckRestoreFence(ctx, fence, id); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("check by the replaced holder: error = %v, want ErrClaimLost", err)
+	}
+
+	live := taken.Claim.Step("check-fence")
+	if err := ops.CheckRestoreFence(ctx, live, id); err != nil {
+		t.Fatalf("check by the new holder: %v", err)
+	}
+
+	_, err := ops.FinishRestore(ctx, taken.Claim.Step(backup.RestoreStepFinish), backup.RestoreEnd{
+		ID: id, State: backup.RestoreFailed, Error: "stopped", EndedAt: now(), DevReport: nil, LeaveMaintenance: false,
+	})
+	if err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	if err := ops.CheckRestoreFence(ctx, live, id); !errors.Is(err, backup.ErrRestoreNotRunning) {
+		t.Fatalf("check of a finished restore: error = %v, want ErrRestoreNotRunning", err)
 	}
 }
 

@@ -119,6 +119,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyProfileTables()...)
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
+	tables = append(tables, pgCopyLocalUserTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
 	tables = append(tables, pgCopyUnitSettingsTables()...)
@@ -485,6 +486,11 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TableDurableHeartbeats,
 			columns: []string{pgColOwner, pgColAtMs, "lease_ms"},
 			orderBy: []string{pgColOwner},
+		},
+		{
+			table:   backup.TableLocalUserResets,
+			columns: pgLocalUserResetColumns(),
+			orderBy: []string{"id"},
 		},
 	}
 }
