@@ -159,14 +159,18 @@ func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy)
 }
 
 // countAttempt adds the failure of the attempt in to the counts of its name
-// before the compare, and returns the keys of the counts. The demo person of
-// a dev installation has no lockout by name, so one visitor cannot lock out
+// before the compare, and returns the keys of the counts. Only the demo person
+// of an installation of the kind dev has no lockout by name, so one visitor cannot lock out
 // the others. A lock refuses the attempt with ErrSignInFailed, and a count
 // that cannot be written refuses it with ErrUnavailable.
 func (s *Service) countAttempt(ctx context.Context, in *attempt) (lockKeys, error) {
 	tg := on(ActionSignInPasswordFails, in.object)
 
-	if in.cred.User.Demo {
+	// Defense in depth: the demo person exists only on a dev installation,
+	// and principalRefusal refuses it after the compare on any other kind.
+	// This check stays so that a demo flag on a row of another installation
+	// kind, from a restore or a bug, never turns the lockout off.
+	if in.cred.User.Demo && s.kind == installation.KindDev {
 		return lockKeys{name: "", sub: ""}, nil
 	}
 

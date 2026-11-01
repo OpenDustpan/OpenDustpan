@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -145,6 +147,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		tempAdmins:       nil,
 		reconciler:       nil,
 		artifactSweeper:  nil,
+		nameLocks:        nil,
 		issuer:           nil,
 		handler:          nil,
 		started:          nil,
@@ -549,4 +552,101 @@ type dropRefusals struct{}
 
 func (dropRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopeaudit.Where) error {
 	return nil
+}
+
+// TestJobScheduleNameLockPruneRuns proves that a server whose store keeps
+// the counts of the lockout by name lists the schedule name-lock-prune with
+// the interval that the API shows, and a runner kind whose step runs one
+// prune: its output is the result, and the store holds the entry of the run.
+func TestJobScheduleNameLockPruneRuns(t *testing.T) {
+	t.Parallel()
+
+	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	srv := testServer(store.DurableOperations(), "a")
+	srv.nameLocks = store
+	srv.now = time.Now
+
+	var found *durable.ScheduleSpec
+
+	for _, spec := range srv.jobSchedules() {
+		if spec.Name == nameLockPruneScheduleName {
+			found = &spec
+		}
+	}
+
+	if found == nil || found.Kind != kindNameLockPrune || found.Interval != localusersvc.Prune().Interval {
+		t.Fatalf("schedules = %+v, want %s every %s", srv.jobSchedules(), nameLockPruneScheduleName,
+			localusersvc.Prune().Interval)
+	}
+
+	var kind *durable.KindSpec
+
+	for _, k := range srv.jobKinds() {
+		if k.Kind == kindNameLockPrune {
+			kind = &k
+		}
+	}
+
+	if kind == nil || len(kind.Steps) != 1 {
+		t.Fatalf("kinds = %+v, want %s with one step", srv.jobKinds(), kindNameLockPrune)
+	}
+
+	var step durable.StepContext
+
+	out, err := kind.Steps[0].Run(t.Context(), step)
+	if err != nil {
+		t.Fatalf("run the step of the prune: %v", err)
+	}
+
+	var res localusersvc.PruneResult
+	if decodeErr := json.Unmarshal(out, &res); decodeErr != nil || res.MaxRows != localusersvc.Prune().MaxRows {
+		t.Fatalf("step output = %s; want the result of a run", out)
+	}
+
+	page, err := store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 50})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	runs := 0
+
+	for i := range page.Entries {
+		if page.Entries[i].Action == localusersvc.ActionNameLocksPruned {
+			runs++
+		}
+	}
+
+	if runs != 1 {
+		t.Fatalf("entries of the prune = %d, want 1", runs)
+	}
+}
+
+// TestNoNameLockPruneWithoutCounts proves that a server whose store keeps no
+// counts of the lockout by name lists no prune schedule and no prune kind.
+func TestNoNameLockPruneWithoutCounts(t *testing.T) {
+	t.Parallel()
+
+	srv := testServer(nil, "a")
+
+	for _, spec := range srv.jobSchedules() {
+		if spec.Name == nameLockPruneScheduleName {
+			t.Fatalf("schedules = %+v, want no %s", srv.jobSchedules(), nameLockPruneScheduleName)
+		}
+	}
+
+	for _, k := range srv.jobKinds() {
+		if k.Kind == kindNameLockPrune {
+			t.Fatalf("kinds = %+v, want no %s", srv.jobKinds(), kindNameLockPrune)
+		}
+	}
 }

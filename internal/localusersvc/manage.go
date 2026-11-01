@@ -422,7 +422,8 @@ func (s *Service) checkCurrent(ctx context.Context, a Actor, u localuser.User, i
 
 	// A wrong current password counts in the lockout by name, after the hash
 	// has its budget and before the compare.
-	if countErr := s.countCurrent(ctx, a, object, u); countErr != nil {
+	keys, countErr := s.countCurrent(ctx, a, object, u)
+	if countErr != nil {
 		res.Release()
 
 		return countErr
@@ -431,7 +432,37 @@ func (s *Service) checkCurrent(ctx context.Context, a Actor, u localuser.User, i
 	_, err = res.Verify(nfc, localuser.DefaultHashParams())
 	res.Release()
 
-	return s.currentRefusal(ctx, a, object, err)
+	if refusal := s.currentRefusal(ctx, a, object, err); refusal != nil {
+		return refusal
+	}
+
+	// A good current password ends the failures in a row of this check, so
+	// only consecutive failures lock the name.
+	s.clearCurrent(ctx, a, object, keys)
+
+	return nil
+}
+
+// clearCurrent clears the counts that the good check of a current password
+// added to, as a full sign-in does. A failed clear leaves the counts, which
+// is the safe direction, so the change goes on, and a failure entry of
+// ActionNameCountsKept records it.
+func (s *Service) clearCurrent(ctx context.Context, a Actor, object string, keys lockKeys) {
+	err := s.ClearLocks(ctx, SignedIn{
+		PrincipalID: "", UserID: "", locks: keys, SessionGeneration: 0, ChangeRequired: false,
+	})
+	if err == nil {
+		return
+	}
+
+	e := s.entry(a.Entry, ActionNameCountsKept, object, audit.OutcomeFailure, "")
+	e.Changes = []audit.Change{
+		{Key: "cause", Old: nil, New: "counts of the name cannot be cleared", Layer: "", TakesEffect: ""},
+	}
+
+	if _, appendErr := s.audit.AppendServer(ctx, e); appendErr != nil {
+		return
+	}
 }
 
 // currentRefusal returns the answer of the check of a current password that
@@ -499,24 +530,27 @@ func (s *Service) User(ctx context.Context, principalID string) (localuser.User,
 }
 
 // countCurrent adds the check of the current password of u to the counts of
-// its name. A lock refuses the change with ErrWrongPassword, and a count that
-// cannot be written refuses it with ErrUnavailable.
-func (s *Service) countCurrent(ctx context.Context, a Actor, object string, u localuser.User) error {
+// its name, and returns the keys of the counts. A lock refuses the change
+// with ErrWrongPassword, and a count that cannot be written refuses it with
+// ErrUnavailable.
+func (s *Service) countCurrent(ctx context.Context, a Actor, object string, u localuser.User) (lockKeys, error) {
 	tg := on(ActionPasswordRefused, object)
 
 	name, err := s.nameDigest(ctx, u.UserName)
 	if err != nil {
-		return s.refuse(ctx, a.Entry, tg, "key of the names cannot be read", err)
+		return lockKeys{name: "", sub: ""}, s.refuse(ctx, a.Entry, tg, "key of the names cannot be read", err)
 	}
 
-	err = s.countFailure(ctx, a.Entry, object, lockKeys{name: name, sub: SourcePrefix(a.Entry.SourceIP)})
+	keys := lockKeys{name: name, sub: SourcePrefix(a.Entry.SourceIP)}
+
+	err = s.countFailure(ctx, a.Entry, object, keys)
 
 	switch {
 	case errors.Is(err, authgate.ErrNameLocked):
-		return s.refuse(ctx, a.Entry, tg, ReasonNameLocked, localuser.ErrWrongPassword)
+		return keys, s.refuse(ctx, a.Entry, tg, ReasonNameLocked, localuser.ErrWrongPassword)
 	case err != nil:
-		return s.refuse(ctx, a.Entry, tg, "count of the name cannot be written", err)
+		return keys, s.refuse(ctx, a.Entry, tg, "count of the name cannot be written", err)
 	default:
-		return nil
+		return keys, nil
 	}
 }

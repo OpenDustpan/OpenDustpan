@@ -729,6 +729,10 @@ type Server struct {
 	// the schedule job.artifact-sweep. It is nil without the ports that it
 	// needs.
 	artifactSweeper *job.ArtifactSweeper
+	// nameLocks holds the counts of the lockout by name: the schedule
+	// name-lock-prune deletes the counts that can no longer change a lock.
+	// It is nil when the store keeps no such counts.
+	nameLocks authgate.NameLockCounter
 	// issuer is the OIDC issuer, or nil. The schedule issuer.rotate calls it.
 	issuer          *issuersvc.Service
 	inactivityEvery time.Duration
@@ -1125,6 +1129,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	started := newStartState()
 
+	// A store that keeps no counts of the lockout by name leaves nameLocks
+	// nil, and the server runs no prune of them.
+	nameLocks, _ := cfg.namespaceStore.(authgate.NameLockCounter)
+
 	srv := &Server{
 		flushDenials: flushDenials,
 		handler:      withStartGate(handlers.served, started, cfg.logger),
@@ -1159,6 +1167,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		durable:      cfg.durableStore,
 		durableOwner: durableOwner(cfg),
 		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
+		nameLocks:       nameLocks,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components,

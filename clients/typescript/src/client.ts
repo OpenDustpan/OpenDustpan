@@ -253,6 +253,7 @@ import type {
   ListUnitsResponse,
   ListViewsResponse,
   LocalUserLock,
+  LocalUserLockPrune,
   LocalUserLocks,
   LockLockedError,
   LockLockedErrorArgs,
