@@ -4,6 +4,7 @@ Status: accepted · 2026-10-11. Extended by ADR 213 decision 10. Decisions 1 and
 
 Changed by:
 
+- ADR 307 extends decision 1: the Terraform CLI is out of scope.
 - ADR 35 changes decision 2: the package path of the TFE adapter.
 - ADR 41 changes decision 6: the state download needs unit:read-secrets.
 - ADR 44 changes decision 6: a forced state write needs unit:write-forced.

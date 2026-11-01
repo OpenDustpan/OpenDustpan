@@ -4,6 +4,7 @@ Status: accepted · 2026-10-20. Records decisions 24.1, 24.3 and 6.1 of the owne
 
 Changed by:
 
+- ADR 307 extends decision 8: the TFE-compatible view of run triggers.
 - ADR 273 changes decision 14: the last saver needs unit:read-outputs.
 - ADR 299 changes decisions 14 and 19: one credential rule for every start of
   a plan.
