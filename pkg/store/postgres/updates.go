@@ -394,18 +394,33 @@ func checkCheckpointKey(ctx context.Context, q *db.Queries, stackID string, cp s
 	return stack.CheckCheckpointBlobKey(namespace.ID(nsID), stack.ID(stackID), cp.Update, cp.BlobKey)
 }
 
-// writeCheckpoint checks the key, the lease, rejects previews, checks the sequence,
-// then upserts the checkpoint of its update. It returns true when the last checkpoint of the
-// update has the same sequence and digest: the write is a replay and the row keeps its blob key.
+// writeCheckpoint runs writeCheckpointRows, then checks the attempt window of
+// cp against the clock of the database. The check comes after every lock wait
+// of the transaction, the wait of the upsert included, so a commit that a lock
+// held past the deadline is refused. A refusal returns the error, and the
+// caller rolls the transaction back: the attempt writes nothing, also when it
+// repeats a committed checkpoint.
 func writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) (bool, error) {
-	// The attempt window comes first, so a late attempt writes nothing, also
-	// when it repeats a committed checkpoint.
+	known, err := writeCheckpointRows(ctx, q, cp, stackID, row)
+	if err != nil {
+		return false, err
+	}
+
 	if attemptErr := checkAttempt(ctx, q, cp.AttemptStartedAt); attemptErr != nil {
 		return false, attemptErr
 	}
 
+	return known, nil
+}
+
+// writeCheckpointRows checks the key, the lease, rejects previews, checks the sequence,
+// then upserts the checkpoint of its update. It returns true when the last checkpoint of the
+// update has the same sequence and digest: the write is a replay and the row keeps its blob key.
+func writeCheckpointRows(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+) (bool, error) {
 	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
 		return false, keyErr
 	}
