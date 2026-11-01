@@ -47,6 +47,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 	scenarios := approvalScenarios()
 	maps.Copy(scenarios, preferenceScenarios())
+	maps.Copy(scenarios, settingsScenarios())
 	maps.Copy(scenarios, gateObjectScenarios())
 
 	_, h := newGateHandler(t, adminGates())

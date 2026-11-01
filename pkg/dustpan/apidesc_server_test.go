@@ -6,6 +6,7 @@ import (
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/setting/settingtest"
 )
 
 // newEveryModuleServer builds a server with every optional module turned on:
@@ -43,10 +44,12 @@ func newModuleServer(t *testing.T, extra ...dustpan.Option) *dustpan.Server {
 		dustpan.WithJobStore(p.st.Jobs()),
 		dustpan.WithDriftStore(p.st.DriftResults()),
 		dustpan.WithTriggerStore(p.st.Triggers()),
+		dustpan.WithUnitSettingsStore(p.st.UnitSettings()),
 		dustpan.WithRunners(p.st.Runners()),
 		dustpan.WithSourceFilters(p.st.SourceFilters()),
 		dustpan.WithTrustRules(p.st.TrustRules()),
 		dustpan.WithSavedViewStore(p.st.SavedViews()),
+		dustpan.WithSettings(p.st.SettingStore(), settingtest.Declarations(), nil),
 		dustpan.WithProfileStore(p.st.Profiles()),
 		dustpan.WithIssuerStore(p.st.Issuer()),
 		dustpan.WithGitHostStore(p.st.GitHost()),

@@ -1,0 +1,6 @@
+settings.key-unknown
+settings.locked key:identifier source:identifier
+settings.patch-invalid
+settings.static-only key:identifier
+settings.unavailable
+settings.value-invalid key:identifier

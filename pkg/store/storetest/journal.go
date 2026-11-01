@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,24 @@ import (
 // different sha bytes hold different content.
 func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...int64) stack.JournalRow {
 	t.Helper()
+
+	return journalRowAttempt(t, s, u, journalWrite{sha: sha, attempt: defaultAttempt, seqs: seqs})
+}
+
+// journalWrite is one write attempt of a batch: the content (sha), the ID of
+// the attempt and the sequence IDs of the batch.
+type journalWrite struct {
+	sha     byte
+	attempt string
+	seqs    []int64
+}
+
+// journalRowAttempt returns journalRow with the blob key of the write attempt
+// with the ID attempt: journal/<lowest sequence ID>-<attempt ID>.
+func journalRowAttempt(t *testing.T, s UpdatesStore, u stack.Update, w journalWrite) stack.JournalRow {
+	t.Helper()
+
+	sha, attempt, seqs := w.sha, w.attempt, w.seqs
 
 	st, err := s.GetStack(t.Context(), u.Ref)
 	if err != nil {
@@ -43,7 +62,7 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 		Update: u.ID,
 		Lease:  u.Lease.Digest,
 		BlobKey: blob.Key(
-			fmt.Sprintf("%s%s/%s/journal/%d", stackBlobPrefix(t, s, u.Ref.Namespace), st.ID, u.ID, low),
+			fmt.Sprintf("%s%s/%s/journal/%d-%s", stackBlobPrefix(t, s, u.Ref.Namespace), st.ID, u.ID, low, attempt),
 		),
 		SHA256:       sum,
 		MD5:          [16]byte{sha},
@@ -144,7 +163,9 @@ func testJournalRefusals(t *testing.T, f fixture) {
 	}
 
 	wrongKey := journalRow(t, f.s, u, 1, 1)
-	wrongKey.BlobKey = blob.Key(stackBlobPrefix(t, f.s, f.ref.Namespace) + "other/" + u.ID.String() + "/journal/1")
+	wrongKey.BlobKey = blob.Key(
+		stackBlobPrefix(t, f.s, f.ref.Namespace) + "other/" + u.ID.String() + "/journal/1-attempt0000",
+	)
 	if _, err := f.s.PutJournalRow(t.Context(), wrongKey, f.fence); !errors.Is(err, stack.ErrJournalKey) {
 		t.Fatalf("batch with a blob key of another stack: err = %v, want ErrJournalKey", err)
 	}
@@ -160,10 +181,11 @@ func testJournalRefusals(t *testing.T, f fixture) {
 	nsID := strings.TrimSuffix(strings.TrimPrefix(stackBlobPrefix(t, f.s, f.ref.Namespace), "namespaces/"), "/pulumi/")
 
 	for name, key := range map[string]string{
-		"another namespace":            "namespaces/ns-other/pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
-		"no namespace directory":       "pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
-		"a directory of the namespace": "namespaces/" + nsID + "/tofu/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
-		"a nested key":                 stackBlobPrefix(t, f.s, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/journal/1/2",
+		"another namespace":            "namespaces/ns-other/pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1-attempt0000",
+		"no namespace directory":       "pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1-attempt0000",
+		"a directory of the namespace": "namespaces/" + nsID + "/tofu/" + st.ID.String() + "/" + u.ID.String() + "/journal/1-attempt0000",
+		"a nested key":                 stackBlobPrefix(t, f.s, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/journal/1-attempt0000/2",
+		"no attempt ID":                stackBlobPrefix(t, f.s, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/journal/1",
 	} {
 		row := journalRow(t, f.s, u, 1, 1)
 		row.BlobKey = blob.Key(key)
@@ -1122,4 +1144,138 @@ func testReferencedBlobKeysJournal(t *testing.T, f fixture) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("referenced keys with checkpoint and journal = %v, want %v", got, want)
 	}
+}
+
+// testJournalReplayOtherKey shows that a batch that arrives again under the key
+// of another write attempt is a retry: the store reports retried, writes nothing
+// and keeps the key of the first write, so the caller deletes only its own blob.
+// A batch with other content is a conflict and keeps the first key too.
+func testJournalReplayOtherKey(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+	stackID := mustStackID(t, f.s, f.ref)
+	first := journalRowAttempt(t, f.s, u, journalWrite{sha: 1, attempt: "attempt0001", seqs: []int64{1, 2}})
+
+	if retried, err := f.s.PutJournalRow(t.Context(), first, f.fence); err != nil || retried {
+		t.Fatalf("first write: retried = %v, err = %v, want false, nil", retried, err)
+	}
+
+	same := journalRowAttempt(t, f.s, u, journalWrite{sha: 1, attempt: "attempt0002", seqs: []int64{1, 2}})
+	if retried, err := f.s.PutJournalRow(t.Context(), same, f.fence); err != nil || !retried {
+		t.Fatalf("replay under another key: retried = %v, err = %v, want true, nil", retried, err)
+	}
+
+	other := journalRowAttempt(t, f.s, u, journalWrite{sha: 2, attempt: "attempt0003", seqs: []int64{1, 2}})
+
+	retried, err := f.s.PutJournalRow(t.Context(), other, f.fence)
+	if !errors.Is(err, stack.ErrJournalConflict) || retried {
+		t.Fatalf("other content under another key: retried = %v, err = %v, want false, conflict", retried, err)
+	}
+
+	keys, err := f.s.JournalKeys(t.Context(), stackID, u.ID)
+	if err != nil || len(keys) != 1 || keys[0] != first.BlobKey {
+		t.Fatalf("journal keys = %v, %v; want only the key of the first write", keys, err)
+	}
+}
+
+// testJournalBatches shows that the store gives the key, the SHA-256 and the size
+// of each batch in arrival order, and nothing for a missing update.
+func testJournalBatches(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+	stackID := mustStackID(t, f.s, f.ref)
+
+	rows := []stack.JournalRow{
+		journalRowAttempt(t, f.s, u, journalWrite{sha: 1, attempt: "attempt0001", seqs: []int64{3, 4}}),
+		journalRowAttempt(t, f.s, u, journalWrite{sha: 2, attempt: "attempt0002", seqs: []int64{1, 2}}),
+	}
+	rows[1].Size = 7
+
+	for i := range rows {
+		if _, err := f.s.PutJournalRow(t.Context(), rows[i], f.fence); err != nil {
+			t.Fatalf("put batch %d: %v", i, err)
+		}
+	}
+
+	got, err := f.s.JournalBatches(t.Context(), stackID, u.ID)
+	if err != nil || len(got) != len(rows) {
+		t.Fatalf("journal batches = %v, %v; want %d", got, err, len(rows))
+	}
+
+	for i := range rows {
+		want := stack.JournalBatchRef{Key: rows[i].BlobKey, SHA256: rows[i].SHA256, Size: rows[i].Size}
+		if got[i] != want {
+			t.Fatalf("batch %d = %+v, want %+v", i, got[i], want)
+		}
+	}
+
+	none, err := f.s.JournalBatches(t.Context(), stackID, "no-such-update")
+	if err != nil || len(none) != 0 {
+		t.Fatalf("journal batches of a missing update = %v, %v; want empty", none, err)
+	}
+}
+
+// testJournalConcurrentWinner sends several writes of one batch at once, each
+// under the key of its own attempt. With the same content, exactly one write
+// stores the batch and each other write reports a retry. With different
+// content, exactly one write stores it and each other write fails with
+// ErrJournalConflict. The rows keep the key of the winner in both cases.
+func testJournalConcurrentWinner(t *testing.T, f fixture) {
+	t.Helper()
+
+	for round := range checkpointRounds {
+		for _, same := range []bool{false, true} {
+			u := f.runJournaled(t, f.ref, "u"+strconv.Itoa(round)+strconv.FormatBool(same))
+			rows := make([]stack.JournalRow, checkpointWriters)
+
+			for i := range rows {
+				sha := byte(1)
+				if !same {
+					sha = byte(i + 1)
+				}
+
+				write := journalWrite{sha: sha, attempt: "attempt" + strconv.Itoa(1000+i), seqs: []int64{1, 2}}
+				rows[i] = journalRowAttempt(t, f.s, u, write)
+			}
+
+			retried, errs := putAtOnce(t, f, rows)
+			winner := wantOneJournalWinner(t, retried, errs, same)
+
+			keys, err := f.s.JournalKeys(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+			if err != nil || len(keys) != 1 || keys[0] != rows[winner].BlobKey {
+				t.Fatalf("round %d: journal keys = %v, %v; want only the key of the winner", round, keys, err)
+			}
+
+			f.end(t, u, stack.StatusSucceeded)
+		}
+	}
+}
+
+// wantOneJournalWinner fails the test unless exactly one write stored the batch
+// and each other write has the answer of its content. It returns the index of
+// the winner.
+func wantOneJournalWinner(t *testing.T, retried []bool, errs []error, same bool) int {
+	t.Helper()
+
+	winner, won := -1, 0
+
+	for i := range errs {
+		switch {
+		case errs[i] == nil && !retried[i]:
+			winner = i
+			won++
+		case same && errs[i] == nil && retried[i]:
+		case !same && errors.Is(errs[i], stack.ErrJournalConflict) && !retried[i]:
+		default:
+			t.Fatalf("write %d: retried = %v, err = %v, same content = %v", i, retried[i], errs[i], same)
+		}
+	}
+
+	if won != 1 {
+		t.Fatalf("%d writes stored the batch, want exactly one (same content = %v)", won, same)
+	}
+
+	return winner
 }

@@ -309,17 +309,22 @@ type serveFlags struct {
 	allowDevBackups              bool
 	logLevel                     string
 	logFormat                    string
-	components                   string
-	keyFile                      string
-	maxCheckpointBytes           int64
-	maxSecretBatchBytes          int64
-	maxStateBytes                int64
-	blobCacheBytes               int64
-	maxBodyBytesInFlight         int64
-	checkpointDeltaCutoff        int64
-	disablePulumiJournaling      bool
-	auditChain                   string
-	softDeleteRetention          string
+	brandingPreset               string
+	// layer is the static layer of the settings resource. settingsSync records
+	// it in the store.
+	layer                   *cli.StaticLayer
+	settingsSync            func(ctx context.Context) error
+	components              string
+	keyFile                 string
+	maxCheckpointBytes      int64
+	maxSecretBatchBytes     int64
+	maxStateBytes           int64
+	blobCacheBytes          int64
+	maxBodyBytesInFlight    int64
+	checkpointDeltaCutoff   int64
+	disablePulumiJournaling bool
+	auditChain              string
+	softDeleteRetention     string
 	// retention is softDeleteRetention after the check.
 	retention  time.Duration
 	auditSinks []string
@@ -522,6 +527,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
+	cli.ByFlag("branding-preset").String(fs, &f.brandingPreset)
 	cli.ByFlag("log-sink").List(fs, &f.logSinks)
 }
 
@@ -616,6 +622,25 @@ func (f *serveFlags) writeStartEntry(ctx context.Context, entries audit.ServerSt
 	}
 
 	return nil
+}
+
+// beforeServe returns the hook that runs after the start-up checks and before
+// serving: it writes the start entry, records the static layer of the
+// settings resource, and starts the reloader.
+func (f *serveFlags) beforeServe(
+	ctx context.Context, st store, logger *slog.Logger, reloads *reloadMetrics, started *startedReloader,
+) func(context.Context) error {
+	return func(hookCtx context.Context) error {
+		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
+			return startErr
+		}
+
+		f.syncSettings(hookCtx, logger)
+
+		started.stop = f.startReloader(ctx, st, reloads.record, logger)
+
+		return nil
+	}
 }
 
 // checkDatabaseFlag rejects a --database value with an unknown form before
@@ -908,15 +933,7 @@ func (f *serveFlags) serveWithStores(
 	reloads := &reloadMetrics{observe: nil}
 	started := &startedReloader{stop: nil}
 
-	opts = append(opts, dustpan.WithBeforeServe(func(hookCtx context.Context) error {
-		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
-			return startErr
-		}
-
-		started.stop = f.startReloader(ctx, st, reloads.record, logger)
-
-		return nil
-	}))
+	opts = append(opts, dustpan.WithBeforeServe(f.beforeServe(ctx, st, logger, reloads, started)))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -1135,7 +1152,16 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, trustRuleStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, triggerStoreOption(st)...)
+	opts = append(opts, unitSettingsStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
+
+	wiring, wireErr := f.settingsWiring(st)
+	if wireErr != nil {
+		return nil, wireErr
+	}
+
+	opts = append(opts, wiring.options...)
+	f.settingsSync = wiring.sync
 	opts = append(opts, driftStoreOption(st)...)
 	opts = append(opts, gitHostStoreOption(st)...)
 	opts = append(opts, registryStoreOption(st)...)
@@ -1263,6 +1289,19 @@ func triggerStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
+	default:
+		return nil
+	}
+}
+
+// unitSettingsStoreOption returns the option of the unit settings store for
+// st, or nil when st keeps no unit settings.
+func unitSettingsStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
 	default:
 		return nil
 	}

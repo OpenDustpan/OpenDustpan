@@ -250,6 +250,13 @@ var Settings = []*Setting{
 			"multicast addresses, also inside a range. It checks this when a person sets an address and at each call.",
 	).WithFile("git-host-allowed-ranges"),
 	stringSetting(
+		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",
+		"name of the branding preset of the installation, for example high-contrast (DUSTPAN_BRANDING_PRESET)",
+		"(none: the console shows its standard palette). A name of lower-case letters, digits and hyphens, "+
+			"at most 32 characters. The settings resource also holds it, and a value from a flag, a variable or "+
+			"this file locks it",
+	).WithFile("branding.preset"),
+	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
 		"`info` (or `debug`, `warn`, `error`)",

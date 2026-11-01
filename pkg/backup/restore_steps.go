@@ -84,6 +84,7 @@ type stageResult struct {
 	Dialect  Dialect           `json:"dialect"`
 	Kind     installation.Kind `json:"kind"`
 	Wrappers []string          `json:"wrapperIDs"`
+	Digest   string            `json:"manifestSha256"`
 	Live     installation.Kind `json:"liveKind"`
 	Report   DevStripReport    `json:"report"`
 }
@@ -98,7 +99,7 @@ func (r stageResult) pinned() pinnedManifest {
 
 	return pinnedManifest{
 		sqlSize: r.SQLSize, sqlSHA: string(sum), schema: r.Schema, dialect: r.Dialect, kind: r.Kind,
-		wrappers: r.Wrappers,
+		wrappers: r.Wrappers, digest: r.Digest,
 	}
 }
 
@@ -401,14 +402,22 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 		return nil, err
 	}
 
-	area, stage, err := s.stageInput(ctx, in, sc.Fence.Token, pinned, dev)
+	area, stage, err := s.stageInput(ctx, in, sc.Fence, pinned, dev)
 	if err != nil {
 		return nil, err
 	}
 
-	_, report, err := s.live.StageRestore(ctx, area, stage)
+	staged, report, err := s.live.StageRestore(ctx, area, stage)
 	if err != nil {
 		return nil, fmt.Errorf("stage backup %s for restore %s: %w", in.BackupID, in.ID, err)
+	}
+
+	// The rows of the staged data name blobs too. The stage compares them with
+	// the manifest, which was checked above; this check stays so that a row
+	// key does not depend on that comparison. Nothing is applied yet: the
+	// staging area is dropped by the cleanup of the failed restore.
+	if keyErr := s.refuseKeys(ctx, sc.Fence, in, manifestBlobs(staged.Blobs)); keyErr != nil {
+		return nil, keyErr
 	}
 
 	if dropErr := s.dropIssuerKeys(ctx, sc, in, area); dropErr != nil {
@@ -433,7 +442,8 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 	out, err := json.Marshal(stageResult{
 		Area: area.String(), SQLSize: pinned.sqlSize, SQLSHA: hex.EncodeToString([]byte(pinned.sqlSHA)),
 		Schema:  pinned.schema,
-		Dialect: pinned.dialect, Kind: pinned.kind, Wrappers: pinned.wrappers, Live: dev.live, Report: dev.report,
+		Dialect: pinned.dialect, Kind: pinned.kind, Wrappers: pinned.wrappers, Digest: pinned.digest,
+		Live: dev.live, Report: dev.report,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode the stage result of restore %s: %w", in.ID, err)
@@ -470,13 +480,19 @@ func (s *RestoreService) dropIssuerKeys(
 // stageInput verifies the SQL part of the backup, and returns the staging
 // area of the claim token and the input of the stage.
 func (s *RestoreService) stageInput(
-	ctx context.Context, in restoreInput, token int64, pinned pinnedManifest, dev *devRun,
+	ctx context.Context, in restoreInput, fence durable.StepFence, pinned pinnedManifest, dev *devRun,
 ) (StagingArea, RestoreStageInput, error) {
 	var none RestoreStageInput
 
-	manifest, err := readManifest(ctx, s.target, in.BackupID)
+	manifest, err := s.readPinnedManifest(ctx, in.BackupID, pinned)
 	if err != nil {
 		return StagingArea{Restore: "", Token: 0}, none, err
+	}
+
+	// A key that a restore does not write refuses the restore before the
+	// first byte is staged or written.
+	if keyErr := s.refuseKeys(ctx, fence, in, manifest.Blobs); keyErr != nil {
+		return StagingArea{Restore: "", Token: 0}, none, keyErr
 	}
 
 	if verifyErr := verifySQLPart(ctx, s.target, in.BackupID, manifest.SQLFiles); verifyErr != nil {
@@ -488,7 +504,7 @@ func (s *RestoreService) stageInput(
 		return StagingArea{Restore: "", Token: 0}, none, err
 	}
 
-	area, err := NewStagingArea(in.ID, token)
+	area, err := NewStagingArea(in.ID, fence.Token)
 	if err != nil {
 		return StagingArea{Restore: "", Token: 0}, none, err
 	}
@@ -540,11 +556,7 @@ func (s *RestoreService) stepCheck(ctx context.Context, sc durable.StepContext, 
 		return nil, err
 	}
 
-	if repinErr := s.repinManifest(ctx, in.BackupID, st.pinned()); repinErr != nil {
-		return nil, repinErr
-	}
-
-	manifest, err := readManifest(ctx, s.target, in.BackupID)
+	manifest, err := s.readPinnedManifest(ctx, in.BackupID, st.pinned())
 	if err != nil {
 		return nil, err
 	}
@@ -562,6 +574,12 @@ func (s *RestoreService) stepCheck(ctx context.Context, sc durable.StepContext, 
 	check := backupKeyCheck{target: s.target, peeker: s.live, id: in.BackupID, manifest: manifest, key: s.key}
 	if err := check.run(ctx); err != nil {
 		return nil, err
+	}
+
+	// Check the keys again: the check reads the target, which may have changed
+	// since the stage. The refusal comes before any read of a blob.
+	if keyErr := s.refuseKeys(ctx, sc.Fence, in, manifest.Blobs); keyErr != nil {
+		return nil, keyErr
 	}
 
 	if err := verifyTargetBlobs(ctx, s.target, manifest.Blobs); err != nil {
@@ -692,22 +710,35 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 		return nil, err
 	}
 
-	if repinErr := s.repinManifest(ctx, in.BackupID, st.pinned()); repinErr != nil {
-		return nil, repinErr
-	}
-
-	manifest, err := readManifest(ctx, s.target, in.BackupID)
+	manifest, err := s.readPinnedManifest(ctx, in.BackupID, st.pinned())
 	if err != nil {
 		return nil, err
 	}
 
+	return nil, s.copyManifestBlobs(ctx, sc.Fence, in, manifest)
+}
+
+// copyManifestBlobs copies each blob of the manifest into the live store.
+//
+// It checks the keys of the whole manifest before the first live key is
+// written, so a refused key leaves no blob that an earlier entry wrote.
+// Defense in depth: the stage, the check and the digest of the pinned manifest
+// each stop a swapped manifest too. This check stays so that the copy does not
+// depend on them.
+func (s *RestoreService) copyManifestBlobs(
+	ctx context.Context, fence durable.StepFence, in restoreInput, manifest Manifest,
+) error {
+	if keyErr := s.refuseKeys(ctx, fence, in, manifest.Blobs); keyErr != nil {
+		return keyErr
+	}
+
 	for _, ref := range manifest.Blobs {
-		if copyErr := s.copyBlob(ctx, in, sc.Fence, ref); copyErr != nil {
-			return nil, fmt.Errorf("copy blobs for restore %s: %w", in.ID, copyErr)
+		if copyErr := s.copyBlob(ctx, in, fence, ref); copyErr != nil {
+			return fmt.Errorf("copy blobs for restore %s: %w", in.ID, copyErr)
 		}
 	}
 
-	return nil, nil
+	return nil
 }
 
 // stepSwap swaps the staging area of the stage result into the live data.
@@ -1106,6 +1137,25 @@ func tempKey(id RestoreID, token int64, key string) (blob.Key, error) {
 	return tmp, nil
 }
 
+// copyBlob refuses a key that a restore does not write, then copies the blob
+// of ref into the live store with copyCheckedKey.
+//
+// Defense in depth: the steps check the whole manifest before they copy. This
+// check stays so that no caller of copyBlob, such as the repair of
+// after-apply, can write a key that a restore does not write.
+func (s *RestoreService) copyBlob(
+	ctx context.Context,
+	in restoreInput,
+	fence durable.StepFence,
+	ref ManifestBlob,
+) error {
+	if keyErr := s.refuseKeys(ctx, fence, in, []ManifestBlob{ref}); keyErr != nil {
+		return keyErr
+	}
+
+	return s.copyCheckedKey(ctx, in, fence, ref)
+}
+
 // copyBlob copies one blob of the backup into the live store with checked
 // bytes, with no conditional write and no delete of a live key:
 //
@@ -1117,7 +1167,7 @@ func tempKey(id RestoreID, token int64, key string) (blob.Key, error) {
 //     a repair: the restore overwrites it, and writes a log line and an
 //     audit entry. A store that refuses the overwrite fails the copy with
 //     ErrCorrupt.
-func (s *RestoreService) copyBlob(
+func (s *RestoreService) copyCheckedKey(
 	ctx context.Context,
 	in restoreInput,
 	fence durable.StepFence,
@@ -1337,4 +1387,15 @@ func (s *RestoreService) restoreEnded(ctx context.Context, id RestoreID) bool {
 	}
 
 	return record.State == RestoreSucceeded || record.State == RestoreFailed
+}
+
+// manifestBlobs converts the blob references of a summary to manifest entries.
+func manifestBlobs(refs []BlobRef) []ManifestBlob {
+	out := make([]ManifestBlob, 0, len(refs))
+
+	for _, ref := range refs {
+		out = append(out, ManifestBlob{Key: ref.Key, Size: ref.Size, MD5: "", Sealed: ref.Sealed})
+	}
+
+	return out
 }

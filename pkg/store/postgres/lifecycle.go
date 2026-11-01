@@ -567,7 +567,7 @@ func insertBlobPurge(ctx context.Context, q *db.Queries, ns namespace.Name, u pu
 
 // deleteUnitLinks deletes the rows that other features keep for the unit unitID
 // of the namespace ns: its collection membership, its manual locks and its
-// latest drift result.
+// latest drift result, and its unit settings.
 func deleteUnitLinks(ctx context.Context, q *db.Queries, ns namespace.Name, unitID string) error {
 	if err := q.DeleteCollectionMembersOfUnit(ctx, unitID); err != nil {
 		return fmt.Errorf("delete collection membership: %w", err)
@@ -583,6 +583,11 @@ func deleteUnitLinks(ctx context.Context, q *db.Queries, ns namespace.Name, unit
 	err = q.DeleteDriftResult(ctx, db.DeleteDriftResultParams{UnitID: unitID, Namespace: ns.String()})
 	if err != nil {
 		return fmt.Errorf("delete drift result: %w", err)
+	}
+
+	err = q.DeleteUnitSettingsOfUnit(ctx, db.DeleteUnitSettingsOfUnitParams{UnitID: unitID, Namespace: ns.String()})
+	if err != nil {
+		return fmt.Errorf("delete unit settings: %w", err)
 	}
 
 	return nil

@@ -2232,6 +2232,40 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 	return result.RowsAffected(), nil
 }
 
+const createPlacementRule = `-- name: CreatePlacementRule :exec
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type CreatePlacementRuleParams struct {
+	ID            string
+	Namespace     string
+	Position      int32
+	Tool          string
+	Project       string
+	Stack         string
+	CollectionKey string
+	CreatedBy     string
+	CreatedAtMs   int64
+}
+
+// The caller checks the fence in the same transaction and renumbers the list
+// after the insert.
+func (q *Queries) CreatePlacementRule(ctx context.Context, arg CreatePlacementRuleParams) error {
+	_, err := q.db.Exec(ctx, createPlacementRule,
+		arg.ID,
+		arg.Namespace,
+		arg.Position,
+		arg.Tool,
+		arg.Project,
+		arg.Stack,
+		arg.CollectionKey,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
 const createPrincipal = `-- name: CreatePrincipal :execrows
 INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -3064,6 +3098,21 @@ func (q *Queries) DeleteImportUnits(ctx context.Context, arg DeleteImportUnitsPa
 	return err
 }
 
+const deleteImportUploadCommits = `-- name: DeleteImportUploadCommits :exec
+DELETE FROM import_upload_commits
+WHERE namespace_id = $1 AND import_id = $2
+`
+
+type DeleteImportUploadCommitsParams struct {
+	NamespaceID string
+	ImportID    string
+}
+
+func (q *Queries) DeleteImportUploadCommits(ctx context.Context, arg DeleteImportUploadCommitsParams) error {
+	_, err := q.db.Exec(ctx, deleteImportUploadCommits, arg.NamespaceID, arg.ImportID)
+	return err
+}
+
 const deleteInstanceVersion = `-- name: DeleteInstanceVersion :execrows
 DELETE FROM instance_versions
 WHERE id = $1
@@ -3397,6 +3446,39 @@ func (q *Queries) DeletePersonPreferences(ctx context.Context, principalID strin
 	return err
 }
 
+const deletePlacementRule = `-- name: DeletePlacementRule :execrows
+DELETE FROM placement_rules
+WHERE namespace = $1 AND id = $2
+`
+
+type DeletePlacementRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) DeletePlacementRule(ctx context.Context, arg DeletePlacementRuleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePlacementRule, arg.Namespace, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deletePlacementRulesOfCollection = `-- name: DeletePlacementRulesOfCollection :exec
+DELETE FROM placement_rules
+WHERE namespace = $1 AND collection_key = $2
+`
+
+type DeletePlacementRulesOfCollectionParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+func (q *Queries) DeletePlacementRulesOfCollection(ctx context.Context, arg DeletePlacementRulesOfCollectionParams) error {
+	_, err := q.db.Exec(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	return err
+}
+
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = $1
 WHERE principals.id = $2 AND principals.namespace = $3 AND num_nulls(principals.deleted_at_ms) = 1
@@ -3555,6 +3637,20 @@ func (q *Queries) DeleteSecretKeysOfStack(ctx context.Context, stackID string) e
 	return err
 }
 
+const deleteSetting = `-- name: DeleteSetting :exec
+DELETE FROM settings WHERE scope_id = $1 AND key = $2
+`
+
+type DeleteSettingParams struct {
+	ScopeID string
+	Key     string
+}
+
+func (q *Queries) DeleteSetting(ctx context.Context, arg DeleteSettingParams) error {
+	_, err := q.db.Exec(ctx, deleteSetting, arg.ScopeID, arg.Key)
+	return err
+}
+
 const deleteSignInProvider = `-- name: DeleteSignInProvider :execrows
 DELETE FROM sign_in_providers WHERE provider_id = $1
 `
@@ -3708,6 +3804,44 @@ type DeleteUnitOutputContextParams struct {
 // Deletes the output entries of a unit and of its resources.
 func (q *Queries) DeleteUnitOutputContext(ctx context.Context, arg DeleteUnitOutputContextParams) error {
 	_, err := q.db.Exec(ctx, deleteUnitOutputContext, arg.NamespaceID, arg.ObjectID)
+	return err
+}
+
+const deleteUnitSettings = `-- name: DeleteUnitSettings :execrows
+DELETE FROM unit_settings
+WHERE unit_id = $1 AND version = $2::bigint
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+`
+
+type DeleteUnitSettingsParams struct {
+	UnitID    string
+	Expected  int64
+	Namespace string
+}
+
+// Deletes the row that the caller read, and no other row.
+func (q *Queries) DeleteUnitSettings(ctx context.Context, arg DeleteUnitSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnitSettings, arg.UnitID, arg.Expected, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteUnitSettingsOfUnit = `-- name: DeleteUnitSettingsOfUnit :exec
+DELETE FROM unit_settings
+WHERE unit_id = $1
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+`
+
+type DeleteUnitSettingsOfUnitParams struct {
+	UnitID    string
+	Namespace string
+}
+
+// Removes the settings of a purged unit, in the same transaction as the purge.
+func (q *Queries) DeleteUnitSettingsOfUnit(ctx context.Context, arg DeleteUnitSettingsOfUnitParams) error {
+	_, err := q.db.Exec(ctx, deleteUnitSettingsOfUnit, arg.UnitID, arg.Namespace)
 	return err
 }
 
@@ -7000,6 +7134,47 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	return i, err
 }
 
+const getPlacementRule = `-- name: GetPlacementRule :one
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = $1 AND r.id = $2
+`
+
+type GetPlacementRuleParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetPlacementRuleRow struct {
+	ID             string
+	Namespace      string
+	Position       int32
+	Tool           string
+	Project        string
+	Stack          string
+	CollectionName string
+	CreatedBy      string
+	CreatedAtMs    int64
+}
+
+func (q *Queries) GetPlacementRule(ctx context.Context, arg GetPlacementRuleParams) (GetPlacementRuleRow, error) {
+	row := q.db.QueryRow(ctx, getPlacementRule, arg.Namespace, arg.ID)
+	var i GetPlacementRuleRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Position,
+		&i.Tool,
+		&i.Project,
+		&i.Stack,
+		&i.CollectionName,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getPrincipal = `-- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -7812,6 +7987,26 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 	return i, err
 }
 
+const getSettingsState = `-- name: GetSettingsState :one
+SELECT revision, static_digest
+FROM settings_state
+WHERE scope_id = $1
+`
+
+type GetSettingsStateRow struct {
+	Revision     int64
+	StaticDigest string
+}
+
+// The revision and the digest of the static layer of one scope. No row means
+// a scope that never changed.
+func (q *Queries) GetSettingsState(ctx context.Context, scopeID string) (GetSettingsStateRow, error) {
+	row := q.db.QueryRow(ctx, getSettingsState, scopeID)
+	var i GetSettingsStateRow
+	err := row.Scan(&i.Revision, &i.StaticDigest)
+	return i, err
+}
+
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
     created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
@@ -8233,6 +8428,32 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	return name, err
 }
 
+const getUnitDefaults = `-- name: GetUnitDefaults :one
+SELECT n.name AS namespace, d.pool, d.version, d.updated_at_ms
+FROM unit_defaults AS d
+JOIN namespaces AS n ON n.id = d.namespace_id
+WHERE n.name = $1
+`
+
+type GetUnitDefaultsRow struct {
+	Namespace   string
+	Pool        string
+	Version     int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) GetUnitDefaults(ctx context.Context, namespace string) (GetUnitDefaultsRow, error) {
+	row := q.db.QueryRow(ctx, getUnitDefaults, namespace)
+	var i GetUnitDefaultsRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Pool,
+		&i.Version,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getUnitFinalVersion = `-- name: GetUnitFinalVersion :one
 SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
@@ -8281,6 +8502,41 @@ func (q *Queries) GetUnitOutputSeq(ctx context.Context, arg GetUnitOutputSeqPara
 	var item_seq int64
 	err := row.Scan(&item_seq)
 	return item_seq, err
+}
+
+const getUnitSettings = `-- name: GetUnitSettings :one
+SELECT s.unit_id, n.name AS namespace, s.version, s.body, s.updated_at_ms
+FROM unit_settings AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1 AND s.unit_id = $2
+`
+
+type GetUnitSettingsParams struct {
+	Namespace string
+	UnitID    string
+}
+
+type GetUnitSettingsRow struct {
+	UnitID      string
+	Namespace   string
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
+}
+
+// The namespace is part of the key: a row of the same unit ID in another
+// namespace reads as no row.
+func (q *Queries) GetUnitSettings(ctx context.Context, arg GetUnitSettingsParams) (GetUnitSettingsRow, error) {
+	row := q.db.QueryRow(ctx, getUnitSettings, arg.Namespace, arg.UnitID)
+	var i GetUnitSettingsRow
+	err := row.Scan(
+		&i.UnitID,
+		&i.Namespace,
+		&i.Version,
+		&i.Body,
+		&i.UpdatedAtMs,
+	)
+	return i, err
 }
 
 const getUnitStateVersion = `-- name: GetUnitStateVersion :one
@@ -9502,6 +9758,53 @@ func (q *Queries) InsertImportUnit(ctx context.Context, arg InsertImportUnitPara
 	return err
 }
 
+const insertImportUploadCommit = `-- name: InsertImportUploadCommit :execrows
+INSERT INTO import_upload_commits (namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms)
+SELECT n.id, i.id, $1::text, $2::bigint, $3::text, (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+FROM namespaces n
+JOIN imports i ON i.namespace_id = n.id
+WHERE n.name = $4 AND n.failover_version = $5
+  AND i.id = $6 AND i.state NOT IN ('released', 'canceled')
+  AND $7::bigint + $8::bigint >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+  AND $7::bigint <= (extract(epoch FROM clock_timestamp()) * 1000)::bigint + $9::bigint
+`
+
+type InsertImportUploadCommitParams struct {
+	UnitDir         string
+	Sequence        int64
+	Facts           string
+	Namespace       string
+	FailoverVersion int64
+	ImportID        string
+	StartedAtMs     int64
+	DeadlineMs      int64
+	SkewMs          int64
+}
+
+// The commit row of one upload version, in one statement: the namespace must
+// hold the failover version of the caller, the import must not have
+// ended, and the attempt must have started no more than deadline_ms before
+// the clock of the database, and no more than skew_ms ahead of it. The time of
+// the row is the clock of the database. It inserts no row when a check fails, and the primary key
+// refuses a second row for the version.
+func (q *Queries) InsertImportUploadCommit(ctx context.Context, arg InsertImportUploadCommitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertImportUploadCommit,
+		arg.UnitDir,
+		arg.Sequence,
+		arg.Facts,
+		arg.Namespace,
+		arg.FailoverVersion,
+		arg.ImportID,
+		arg.StartedAtMs,
+		arg.DeadlineMs,
+		arg.SkewMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertIssuerKey = `-- name: InsertIssuerKey :exec
 INSERT INTO issuer_keys (
     namespace_id, id, state, public_key, sealed, created_at_ms, activated_at_ms, retired_at_ms, deleted_at_ms
@@ -10596,6 +10899,62 @@ func (q *Queries) InsertTrustRule(ctx context.Context, arg InsertTrustRuleParams
 	return result.RowsAffected(), nil
 }
 
+const insertUnitDefaults = `-- name: InsertUnitDefaults :execrows
+INSERT INTO unit_defaults (namespace_id, pool, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1), $2, 1,
+    $3
+)
+ON CONFLICT (namespace_id) DO NOTHING
+`
+
+type InsertUnitDefaultsParams struct {
+	Namespace   string
+	Pool        string
+	UpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A row that exists is
+// not written: the count is 0.
+func (q *Queries) InsertUnitDefaults(ctx context.Context, arg InsertUnitDefaultsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnitDefaults, arg.Namespace, arg.Pool, arg.UpdatedAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertUnitSettings = `-- name: InsertUnitSettings :execrows
+INSERT INTO unit_settings (unit_id, namespace_id, version, body, updated_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), 1,
+    $3, $4
+)
+ON CONFLICT (unit_id) DO NOTHING
+`
+
+type InsertUnitSettingsParams struct {
+	UnitID      string
+	Namespace   string
+	Body        string
+	UpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A row that exists for
+// the unit is not written: the count is 0.
+func (q *Queries) InsertUnitSettings(ctx context.Context, arg InsertUnitSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnitSettings,
+		arg.UnitID,
+		arg.Namespace,
+		arg.Body,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertWorkspaceBlameItem = `-- name: InsertWorkspaceBlameItem :exec
 INSERT INTO workspace_blame_items (workspace_id, state_version_id, ordinal, opaque, lineage_changed, resource_count)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -10662,6 +11021,43 @@ func (q *Queries) InsertWorkspaceResourceChange(ctx context.Context, arg InsertW
 		arg.LineageChanged,
 	)
 	return err
+}
+
+const journalBatchRefs = `-- name: JournalBatchRefs :many
+SELECT blob_key, sha256, size FROM update_journal
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival
+`
+
+type JournalBatchRefsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+type JournalBatchRefsRow struct {
+	BlobKey string
+	Sha256  []byte
+	Size    int64
+}
+
+func (q *Queries) JournalBatchRefs(ctx context.Context, arg JournalBatchRefsParams) ([]JournalBatchRefsRow, error) {
+	rows, err := q.db.Query(ctx, journalBatchRefs, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JournalBatchRefsRow
+	for rows.Next() {
+		var i JournalBatchRefsRow
+		if err := rows.Scan(&i.BlobKey, &i.Sha256, &i.Size); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const journalBlobKeys = `-- name: JournalBlobKeys :many
@@ -12557,6 +12953,49 @@ func (q *Queries) ListImportUnits(ctx context.Context, arg ListImportUnitsParams
 	return items, nil
 }
 
+const listImportUploadCommits = `-- name: ListImportUploadCommits :many
+SELECT namespace_id, import_id, unit_dir, sequence, facts, committed_at_ms
+FROM import_upload_commits
+WHERE namespace_id = $1 AND import_id = $2
+  AND unit_dir = $3
+ORDER BY sequence
+`
+
+type ListImportUploadCommitsParams struct {
+	NamespaceID string
+	ImportID    string
+	UnitDir     string
+}
+
+// The commit rows of one unit directory of an import, in the order of the
+// sequences.
+func (q *Queries) ListImportUploadCommits(ctx context.Context, arg ListImportUploadCommitsParams) ([]ImportUploadCommit, error) {
+	rows, err := q.db.Query(ctx, listImportUploadCommits, arg.NamespaceID, arg.ImportID, arg.UnitDir)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ImportUploadCommit
+	for rows.Next() {
+		var i ImportUploadCommit
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ImportID,
+			&i.UnitDir,
+			&i.Sequence,
+			&i.Facts,
+			&i.CommittedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listImports = `-- name: ListImports :many
 SELECT namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
        state, reason, created_by, created_at_ms, plan, ended_at_ms
@@ -14033,6 +14472,129 @@ func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int32) ([]ListOrph
 	return items, nil
 }
 
+const listPlacementRuleIDs = `-- name: ListPlacementRuleIDs :many
+SELECT id
+FROM placement_rules
+WHERE namespace = $1
+ORDER BY position, id
+`
+
+// The IDs of the rules of a namespace in list order.
+func (q *Queries) ListPlacementRuleIDs(ctx context.Context, namespace string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listPlacementRuleIDs, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlacementRules = `-- name: ListPlacementRules :many
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+FROM placement_rules AS r
+JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+WHERE r.namespace = $1
+ORDER BY r.position, r.id
+`
+
+type ListPlacementRulesRow struct {
+	ID             string
+	Namespace      string
+	Position       int32
+	Tool           string
+	Project        string
+	Stack          string
+	CollectionName string
+	CreatedBy      string
+	CreatedAtMs    int64
+}
+
+func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]ListPlacementRulesRow, error) {
+	rows, err := q.db.Query(ctx, listPlacementRules, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPlacementRulesRow
+	for rows.Next() {
+		var i ListPlacementRulesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Position,
+			&i.Tool,
+			&i.Project,
+			&i.Stack,
+			&i.CollectionName,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlacementRulesOfCollection = `-- name: ListPlacementRulesOfCollection :many
+SELECT id, tool, project, stack
+FROM placement_rules
+WHERE namespace = $1 AND collection_key = $2
+ORDER BY position, id
+`
+
+type ListPlacementRulesOfCollectionParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+type ListPlacementRulesOfCollectionRow struct {
+	ID      string
+	Tool    string
+	Project string
+	Stack   string
+}
+
+// The rules that name one collection, for the audit entry of its delete.
+func (q *Queries) ListPlacementRulesOfCollection(ctx context.Context, arg ListPlacementRulesOfCollectionParams) ([]ListPlacementRulesOfCollectionRow, error) {
+	rows, err := q.db.Query(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPlacementRulesOfCollectionRow
+	for rows.Next() {
+		var i ListPlacementRulesOfCollectionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Tool,
+			&i.Project,
+			&i.Stack,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -14791,6 +15353,39 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		items = append(items, wrapper_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSettings = `-- name: ListSettings :many
+SELECT key, value
+FROM settings
+WHERE scope_id = $1
+ORDER BY key
+`
+
+type ListSettingsRow struct {
+	Key   string
+	Value string
+}
+
+// The database values of one scope, in key order.
+func (q *Queries) ListSettings(ctx context.Context, scopeID string) ([]ListSettingsRow, error) {
+	rows, err := q.db.Query(ctx, listSettings, scopeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSettingsRow
+	for rows.Next() {
+		var i ListSettingsRow
+		if err := rows.Scan(&i.Key, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -18463,6 +19058,23 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 	return result.RowsAffected(), nil
 }
 
+const setPlacementRulePosition = `-- name: SetPlacementRulePosition :exec
+UPDATE placement_rules
+SET position = $1
+WHERE namespace = $2 AND id = $3
+`
+
+type SetPlacementRulePositionParams struct {
+	Position  int32
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) SetPlacementRulePosition(ctx context.Context, arg SetPlacementRulePositionParams) error {
+	_, err := q.db.Exec(ctx, setPlacementRulePosition, arg.Position, arg.Namespace, arg.ID)
+	return err
+}
+
 const setRestoreAuditEvents = `-- name: SetRestoreAuditEvents :execrows
 UPDATE restores
 SET audit_events = $1
@@ -19587,6 +20199,36 @@ func (q *Queries) UpdateNotificationSubscription(ctx context.Context, arg Update
 	return result.RowsAffected(), nil
 }
 
+const updatePlacementRuleContent = `-- name: UpdatePlacementRuleContent :execrows
+UPDATE placement_rules
+SET tool = $1, project = $2, stack = $3, collection_key = $4
+WHERE namespace = $5 AND id = $6
+`
+
+type UpdatePlacementRuleContentParams struct {
+	Tool          string
+	Project       string
+	Stack         string
+	CollectionKey string
+	Namespace     string
+	ID            string
+}
+
+func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlacementRuleContentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePlacementRuleContent,
+		arg.Tool,
+		arg.Project,
+		arg.Stack,
+		arg.CollectionKey,
+		arg.Namespace,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updatePrincipal = `-- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = $1, updated_at_ms = $2
 WHERE id = $3 AND namespace = $4 AND num_nulls(deleted_at_ms) = 1
@@ -19731,6 +20373,66 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateUnitDefaults = `-- name: UpdateUnitDefaults :execrows
+UPDATE unit_defaults
+SET pool = $1, version = $2::bigint + 1, updated_at_ms = $3
+WHERE version = $2::bigint
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $4)
+`
+
+type UpdateUnitDefaultsParams struct {
+	Pool        string
+	Expected    int64
+	UpdatedAtMs int64
+	Namespace   string
+}
+
+// Replaces the row that the caller read: the version must be the one that the
+// caller read. It sets the version one above.
+func (q *Queries) UpdateUnitDefaults(ctx context.Context, arg UpdateUnitDefaultsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUnitDefaults,
+		arg.Pool,
+		arg.Expected,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateUnitSettings = `-- name: UpdateUnitSettings :execrows
+UPDATE unit_settings
+SET body = $1, version = $2::bigint + 1, updated_at_ms = $3
+WHERE unit_id = $4 AND version = $2::bigint
+  AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $5)
+`
+
+type UpdateUnitSettingsParams struct {
+	Body        string
+	Expected    int64
+	UpdatedAtMs int64
+	UnitID      string
+	Namespace   string
+}
+
+// Replaces the row that the caller read: the version must be the one that the
+// caller read, and the namespace must match. It sets the version one above.
+func (q *Queries) UpdateUnitSettings(ctx context.Context, arg UpdateUnitSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUnitSettings,
+		arg.Body,
+		arg.Expected,
+		arg.UpdatedAtMs,
+		arg.UnitID,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err
@@ -19976,6 +20678,64 @@ type UpsertPersonPreferencesParams struct {
 
 func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonPreferencesParams) error {
 	_, err := q.db.Exec(ctx, upsertPersonPreferences, arg.PrincipalID, arg.Document, arg.UpdatedAtMs)
+	return err
+}
+
+const upsertSetting = `-- name: UpsertSetting :exec
+INSERT INTO settings (scope_id, key, value, updated_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms
+`
+
+type UpsertSettingParams struct {
+	ScopeID     string
+	Key         string
+	Value       string
+	UpdatedAtMs int64
+}
+
+func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) error {
+	_, err := q.db.Exec(ctx, upsertSetting,
+		arg.ScopeID,
+		arg.Key,
+		arg.Value,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const upsertSettingsDigest = `-- name: UpsertSettingsDigest :exec
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES ($1, $2, $3)
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest
+`
+
+type UpsertSettingsDigestParams struct {
+	ScopeID      string
+	Revision     int64
+	StaticDigest string
+}
+
+// Sets the digest of the static layer and the revision of the installation.
+func (q *Queries) UpsertSettingsDigest(ctx context.Context, arg UpsertSettingsDigestParams) error {
+	_, err := q.db.Exec(ctx, upsertSettingsDigest, arg.ScopeID, arg.Revision, arg.StaticDigest)
+	return err
+}
+
+const upsertSettingsRevision = `-- name: UpsertSettingsRevision :exec
+INSERT INTO settings_state (scope_id, revision, static_digest)
+VALUES ($1, $2, '')
+ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision
+`
+
+type UpsertSettingsRevisionParams struct {
+	ScopeID  string
+	Revision int64
+}
+
+// Sets the revision of a scope and keeps its digest.
+func (q *Queries) UpsertSettingsRevision(ctx context.Context, arg UpsertSettingsRevisionParams) error {
+	_, err := q.db.Exec(ctx, upsertSettingsRevision, arg.ScopeID, arg.Revision)
 	return err
 }
 
