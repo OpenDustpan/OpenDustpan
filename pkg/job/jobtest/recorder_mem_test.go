@@ -459,6 +459,10 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 		return false, fmt.Errorf("confirm log chunk: %w", err)
 	}
 
+	if err := blob.CheckAttempt(c.AttemptStartedAt, time.Now()); err != nil {
+		return false, fmt.Errorf("confirm log chunk: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
