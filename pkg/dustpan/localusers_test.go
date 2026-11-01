@@ -207,26 +207,26 @@ func TestLocalPasswordRoutes(t *testing.T) {
 	s.checkRefusals(t, "/api/dustpan/v1/local-users/redeem", []localRefusal{
 		{
 			name:   "unknown field",
-			body:   `{"code":"x","password":"y","admin":true}`,
+			body:   `{"oneTimeCode":"x","password":"y","admin":true}`,
 			status: 400,
 			code:   "request.body-invalid",
 		},
 		{name: "not an object", body: `["x"]`, status: 400, code: "request.body-invalid"},
-		{name: "two objects", body: `{"code":"x","password":"y"}{}`, status: 400, code: "request.body-invalid"},
+		{name: "two objects", body: `{"oneTimeCode":"x","password":"y"}{}`, status: 400, code: "request.body-invalid"},
 		{
-			name: "code not valid", body: `{"code":"x","password":"` + localPassword + `"}`, status: 400,
+			name: "code not valid", body: `{"oneTimeCode":"x","password":"` + localPassword + `"}`, status: 400,
 			code: "local-user.code-invalid",
 		},
 		{
 			name:   "short password",
-			body:   `{"code":"` + code + `","password":"short"}`,
+			body:   `{"oneTimeCode":"` + code + `","password":"short"}`,
 			status: 400,
 			code:   "password.too-short",
 		},
 	})
 
 	redeemed := s.do(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+code+`","password":"`+localPassword+`"}`, anonymous())
+		`{"oneTimeCode":"`+code+`","password":"`+localPassword+`"}`, anonymous())
 	wantAnswer(t, "redeem", redeemed, http.StatusNoContent, "")
 
 	if got := redeemed.Header().Get("Referrer-Policy"); got != "no-referrer" {
@@ -311,7 +311,7 @@ func (s localServer) checkAdministratorRoutes(t *testing.T) {
 	t.Helper()
 
 	reset := s.do(t, http.MethodPost, "/api/dustpan/v1/local-users/reset",
-		`{"principalID":"prn-x","reason":"lost"}`, administrator())
+		`{"principal":"prn-x","reason":"lost"}`, administrator())
 	wantAnswer(t, "reset with a token", reset, http.StatusForbidden, "mfa.fresh-step-required")
 
 	policy := s.do(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", administrator())

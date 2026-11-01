@@ -165,7 +165,7 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 	created.want(t, "create the local user", http.StatusCreated, "")
 
 	var user struct {
-		PrincipalID string `json:"principalID"`
+		PrincipalID string `json:"principal"`
 		Subject     string `json:"subject"`
 		SetUpCode   string `json:"setUpCode"`
 	}
@@ -175,15 +175,15 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 	}
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+user.SetUpCode+`","password":"short"}`, asBrowser("")).
+		`{"oneTimeCode":"`+user.SetUpCode+`","password":"short"}`, asBrowser("")).
 		want(t, "set a short password", http.StatusBadRequest, "password.too-short")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+user.SetUpCode+`","password":"`+e2ePassword+`"}`, asBrowser("")).
+		`{"oneTimeCode":"`+user.SetUpCode+`","password":"`+e2ePassword+`"}`, asBrowser("")).
 		want(t, "set the password", http.StatusNoContent, "")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+user.SetUpCode+`","password":"`+e2eNewPassword+`"}`, asBrowser("")).
+		`{"oneTimeCode":"`+user.SetUpCode+`","password":"`+e2eNewPassword+`"}`, asBrowser("")).
 		want(t, "use the set-up code again", http.StatusBadRequest, "local-user.code-invalid")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
@@ -197,7 +197,7 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 	csrf := c.readSession(t, user.Subject)
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/reset",
-		`{"principalID":"`+user.PrincipalID+`","reason":"e2e"}`, asAdmin()).
+		`{"principal":"`+user.PrincipalID+`","reason":"e2e"}`, asAdmin()).
 		want(t, "reset with a token", http.StatusForbidden, "mfa.fresh-step-required")
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/me/password",
