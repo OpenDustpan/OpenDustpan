@@ -60,8 +60,6 @@ const (
 	probeRandSize = 16
 	// probeNamePrefix starts every probe key.
 	probeNamePrefix = "probe-"
-	// firstTry is the try count of a request that needed no retry.
-	firstTry = 1
 	// probeAttempts caps first-write tries when a probe key already exists.
 	probeAttempts = 3
 	// probeBody is the content of each probe object.
@@ -194,12 +192,14 @@ func Open(
 	probeCtx, cancel := context.WithTimeout(ctx, store.probeDeadline)
 	defer cancel()
 
-	key, err := store.writeFirstProbe(probeCtx)
+	budget := newCleanupBudget()
+
+	key, err := store.writeFirstProbe(probeCtx, budget)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := store.checkSecondProbe(probeCtx, key); err != nil {
+	if err := store.checkSecondProbe(probeCtx, key, budget); err != nil {
 		return nil, err
 	}
 
@@ -354,29 +354,30 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 // writeFirstProbe writes the first probe copy under a fresh key. A key that
-// already exists belongs to another start, so it tries the next key. Any
-// other failure deletes the probe and reports the failure.
-func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
+// already exists is ours, because the key is random: it deletes the object
+// and tries the next key. Any other failure deletes the probe and reports
+// the failure.
+func (s *Store) writeFirstProbe(ctx context.Context, budget *cleanupBudget) (blob.Key, error) {
 	for range probeAttempts {
 		key, err := newProbeKey()
 		if err != nil {
 			return "", fmt.Errorf("s3: open store at %s: %w", s.describe(), err)
 		}
 
-		tries, err := s.probePut(ctx, key)
+		err = s.probePut(ctx, key)
 		if err == nil {
 			return key, nil
 		}
 
 		if errors.Is(err, blob.ErrExists) {
-			if cleanupErr := s.deleteOrphan(ctx, key, tries); cleanupErr != nil {
+			if cleanupErr := s.deleteOrphan(ctx, key, budget); cleanupErr != nil {
 				return "", cleanupErr
 			}
 
 			continue
 		}
 
-		if cleanupErr := s.probeDelete(ctx, key); cleanupErr != nil {
+		if cleanupErr := s.probeDelete(ctx, key, budget); cleanupErr != nil {
 			return "", errors.Join(
 				fmt.Errorf("s3: open store at %s: probe first write: %w", s.describe(), err),
 				fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), cleanupErr),
@@ -389,17 +390,13 @@ func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
 	return "", fmt.Errorf("s3: open store at %s: probe key exists: %w", s.describe(), blob.ErrExists)
 }
 
-// deleteOrphan deletes the probe object of a key that a retried write found
-// in place. A write that the store got, but whose answer was lost, makes the
-// retry of the same key fail with ErrExists. The object is ours, so it must
-// not stay behind when the probe goes on with a new key. A write that was
-// not retried found a key of another start: that object stays.
-func (s *Store) deleteOrphan(ctx context.Context, key blob.Key, tries int) error {
-	if tries <= firstTry {
-		return nil
-	}
-
-	if err := s.probeDelete(ctx, key); err != nil {
+// deleteOrphan deletes the probe object of a key that the first write found
+// in place. The key is random, so the object is ours: a write that the store
+// got, but whose answer was lost or replaced by a 5xx answer, makes the
+// retry of the same key fail with ErrExists. The object must not stay behind
+// when the probe goes on with a new key.
+func (s *Store) deleteOrphan(ctx context.Context, key blob.Key, budget *cleanupBudget) error {
+	if err := s.probeDelete(ctx, key, budget); err != nil {
 		return fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), err)
 	}
 
@@ -409,9 +406,9 @@ func (s *Store) deleteOrphan(ctx context.Context, key blob.Key, tries int) error
 // checkSecondProbe writes the probe a second time and deletes it. A second
 // write that succeeds means the store ignores conditional writes. It deletes
 // the probe on every path, so no probe object stays behind.
-func (s *Store) checkSecondProbe(ctx context.Context, key blob.Key) error {
-	_, secondErr := s.probePut(ctx, key)
-	cleanupErr := s.probeDelete(ctx, key)
+func (s *Store) checkSecondProbe(ctx context.Context, key blob.Key, budget *cleanupBudget) error {
+	secondErr := s.probePut(ctx, key)
+	cleanupErr := s.probeDelete(ctx, key, budget)
 
 	switch {
 	case secondErr == nil:
@@ -819,7 +816,7 @@ func shouldRetry(status int, code string) bool {
 }
 
 // readCode parses the S3 XML error code from r. It returns "" when the body
-// has no code. It never returns the body itself.
+// has no code. It drops control characters and caps the code at 128 bytes. It never returns the body itself.
 func readCode(r io.Reader) string {
 	data, err := io.ReadAll(io.LimitReader(r, maxErrorBody))
 	if err != nil || len(bytes.TrimSpace(data)) == 0 {
@@ -831,7 +828,11 @@ func readCode(r io.Reader) string {
 		return ""
 	}
 
-	return parsed.Code
+	// Defense in depth: the text comes from the store. Drop control
+	// characters and cap the length, so that a hostile endpoint cannot put CR
+	// or LF in an error that the caller prints. The log layer cleans the text
+	// again and does not rely on this.
+	return capText(stripControl(parsed.Code), maxCodeBytes)
 }
 
 // sanitizePingError wraps a ping failure without a credential, a path or a
