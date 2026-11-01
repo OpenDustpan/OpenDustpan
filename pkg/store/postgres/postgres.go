@@ -98,6 +98,9 @@ type Store struct {
 	tracer pgx.QueryTracer
 	// failover holds the effective failover settings of the pool.
 	failover FailoverSettings
+	// guard resets the pool when it holds a connection to a server that
+	// refuses writes.
+	guard *poolGuard
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -220,7 +223,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool:                nil,
-		txs:                 guardedPool{pool: nil},
+		txs:                 guardedPool{pool: nil, rt: roundTrip{deadline: 0, watch: nil}},
 		queries:             nil,
 		stagingMu:           sync.Mutex{},
 		stagingSchema:       "",
@@ -236,6 +239,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		logger:              slog.New(slog.DiscardHandler),
 		tracer:              nil,
 		failover:            failover,
+		guard:               nil,
 	}
 
 	for _, opt := range opts {
@@ -258,8 +262,9 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	}
 
 	s.pool = pool
-	s.txs = guardedPool{pool: pool}
-	s.queries = db.New(guardedDB{inner: pool})
+	s.guard = newPoolGuard(pool, s.logger)
+	s.txs = guardedPool{pool: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard}}
+	s.queries = db.New(guardedDB{inner: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard}})
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	if err := s.migrate(ctx); err != nil {
@@ -292,6 +297,7 @@ func (s *Store) CloseContext(ctx context.Context) {
 		_ = s.dropStagingSchema(context.WithoutCancel(ctx), staging) //nolint:errcheck // Best-effort cleanup.
 	}
 
+	s.guard.close()
 	s.pool.Close()
 }
 
@@ -305,6 +311,15 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
+// CheckWritable reports whether the database accepts writes. It reads
+// pg_is_in_recovery() and transaction_read_only on one connection of the
+// pool. It returns false for a server that refuses writes, and then resets the
+// pool, at most once in each resetInterval. It returns an error that wraps
+// namespace.ErrUnavailable, with no driver text, when the check cannot run.
+func (s *Store) CheckWritable(ctx context.Context) (bool, error) {
+	return s.guard.checkWritable(ctx)
+}
+
 // FailoverSettings returns the effective failover settings of the pool. They
 // hold no part of the URL besides the values of the settings.
 func (s *Store) FailoverSettings() FailoverSettings {
@@ -312,6 +327,12 @@ func (s *Store) FailoverSettings() FailoverSettings {
 	out.Settings = slices.Clone(s.failover.Settings)
 
 	return out
+}
+
+// PoolResets returns how many times the store reset its pool because a
+// connection reached a server that refuses writes.
+func (s *Store) PoolResets() uint64 {
+	return s.guard.resets.Load()
 }
 
 // CreateNamespace implements namespace.Store.

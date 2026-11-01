@@ -235,7 +235,8 @@ func makeDatabaseReadOnly(tb testing.TB, schemaURL string) {
 // that were writable, and the test ends them, so the pool must open new
 // sessions. The read-write check of each new connection refuses them, so a
 // read and a write both return an error that wraps namespace.ErrUnavailable,
-// and the API answers 503 with Retry-After.
+// and the API answers 503 with Retry-After. The write check of the readiness
+// probe cannot run either, and says so with an error, not with a false answer.
 func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
 	t.Parallel()
 
@@ -253,8 +254,8 @@ func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
 	schemaURL := isolatedURL(t, base)
 	s := openURL(t, withApplicationName(t, schemaURL, app))
 
-	if err := s.Ping(t.Context()); err != nil {
-		t.Fatalf("ping before the change: %v", err)
+	if ok, err := s.CheckWritable(t.Context()); err != nil || !ok {
+		t.Fatalf("CheckWritable before the change = %t, %v, want true and no error", ok, err)
 	}
 
 	makeDatabaseReadOnly(t, schemaURL)
@@ -273,6 +274,10 @@ func TestStoreLostWhenDatabaseIsReadOnly(t *testing.T) {
 	}
 
 	checkAPIAnswers503(t, err)
+
+	if ok, checkErr := s.CheckWritable(t.Context()); checkErr == nil || ok {
+		t.Fatalf("CheckWritable on a read-only database = %t, %v, want false and an error", ok, checkErr)
+	}
 }
 
 // TestOpenRefusesReadOnlySessionWithReadWriteAttribute proves that the store
