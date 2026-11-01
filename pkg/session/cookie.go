@@ -43,6 +43,14 @@ const (
 	// ForgeCookiePrefix starts the name of each cookie that holds the token of
 	// a Git host user. The connection ID follows it.
 	ForgeCookiePrefix = "__Host-dustpan_forge_"
+	// SignInRequestCookie is the name of the sealed cookie that holds a
+	// sign-in through an identity provider between its start and its
+	// callback. It is SameSite=Lax, because the callback is a navigation
+	// from another site.
+	SignInRequestCookie = "__Host-dustpan_signin"
+	// PendingCookie is the name of the sealed cookie that holds a pending
+	// sign-in of MFA until the second factor. It is SameSite=Strict.
+	PendingCookie = "__Host-dustpan_pending"
 )
 
 // Limits of the cookies and of the proof.
@@ -322,6 +330,36 @@ type ForgeClaims struct {
 	Token ForgeToken
 }
 
+// RequestClaims are the fields of a sign-in request cookie: the request of
+// the start and the thumbprint of the refresh key that the start proved.
+type RequestClaims struct {
+	Request    Request
+	RefreshKey Thumbprint
+}
+
+// PendingClaims are the fields of a pending sign-in cookie. The factor lock
+// of the person counts the wrong factors, so the cookie holds no count.
+type PendingClaims struct {
+	// CreatedAt is the time of the first factor.
+	CreatedAt time.Time
+	// ExpiresAt is at most 5 minutes after CreatedAt.
+	ExpiresAt time.Time
+	// AuthTime is the time of the first factor.
+	AuthTime time.Time
+	// PrincipalID names the person.
+	PrincipalID string
+	// Provider names the sign-in method of the first factor.
+	Provider string
+	// Restriction is RestrictionEnrollOnly for a person with no factor
+	// after the grace.
+	Restriction Restriction
+	// Generation is the session generation that the first factor read.
+	Generation uint64
+	// RefreshKey is the thumbprint of the refresh key that the first factor
+	// proved.
+	RefreshKey Thumbprint
+}
+
 // Sealer seals and opens the cookies of sessions with the session key ring.
 // The associated data of each seal holds the format version, the cookie name
 // and the key ID, and the connection ID for a Git host token cookie, so that
@@ -348,6 +386,24 @@ type Sealer interface {
 	// OpenForge returns the claims of the Git host token cookie raw of the
 	// connection connectionID at now.
 	OpenForge(ctx context.Context, raw, connectionID string, now time.Time) (ForgeClaims, error)
+}
+
+// StateSealer seals and opens the short state of a sign-in and the server
+// nonces, with the session key ring and the same seal as Sealer. The
+// associated data holds the cookie name, or "dpop-nonce" for a nonce, so a
+// value of one kind never opens as another. Each Open method returns the
+// errors of the Open methods of Sealer.
+type StateSealer interface {
+	// SealRequest returns the value of a sign-in request cookie with c.
+	SealRequest(ctx context.Context, c RequestClaims) (string, error)
+	// OpenRequest returns the claims of the sign-in request cookie raw. It
+	// returns ErrCookieExpired at or after the expiry of the request.
+	OpenRequest(ctx context.Context, raw string, now time.Time) (RequestClaims, error)
+	// SealPending returns the value of a pending sign-in cookie with c.
+	SealPending(ctx context.Context, c PendingClaims) (string, error)
+	// OpenPending returns the claims of the pending sign-in cookie raw. It
+	// returns ErrCookieExpired at or after c.ExpiresAt.
+	OpenPending(ctx context.Context, raw string, now time.Time) (PendingClaims, error)
 	// SealNonce returns a server nonce with the time at.
 	SealNonce(ctx context.Context, at time.Time) (string, error)
 	// OpenNonce returns the time of the server nonce raw. It returns
@@ -460,8 +516,8 @@ type VerifiedProof struct {
 // ProofVerifier checks a refresh proof. It keeps no list of used proofs: the
 // nonce window limits a replay. It never opens a URL from the proof, and it
 // compares htu with the configured public URL, never with the Host header.
-// An implementation opens the nonce with a Sealer, so that it refuses a
-// proof outside the window by itself.
+// An implementation opens the nonce with a StateSealer, so that it refuses
+// a proof outside the window by itself.
 type ProofVerifier interface {
 	// Verify checks the proof raw for the request want at now, its nonce
 	// included. It returns ErrProofMalformed, ErrProofSignature,

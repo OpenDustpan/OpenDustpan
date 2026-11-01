@@ -15,6 +15,10 @@ func TestCookieSuites(t *testing.T) {
 		t.Parallel()
 		sessiontest.RunSealer(t, nil)
 	})
+	t.Run("StateSealer", func(t *testing.T) {
+		t.Parallel()
+		sessiontest.RunStateSealer(t, nil)
+	})
 	t.Run("KeyStore", func(t *testing.T) {
 		t.Parallel()
 		sessiontest.RunKeyStore(t, nil)

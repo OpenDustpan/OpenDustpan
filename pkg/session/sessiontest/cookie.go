@@ -7,11 +7,12 @@ import (
 )
 
 // The suites in this file test the ports of sessions that the server does
-// not store: session.Sealer, session.KeyStore, session.PrincipalStateStore,
-// session.ProofVerifier and session.CookieSessions. No adapter implements
-// them yet. Each case names one rule and is skipped until the adapter
-// exists. A case that sends hostile input tests one defense-in-depth layer
-// alone, as if every other layer had failed.
+// not store: session.Sealer, session.StateSealer, session.KeyStore,
+// session.PrincipalStateStore, session.ProofVerifier and
+// session.CookieSessions. No adapter implements them yet. Each case names
+// one rule and is skipped until the adapter exists. A case that sends
+// hostile input tests one defense-in-depth layer alone, as if every other
+// layer had failed.
 
 // designOnly is the reason of each skipped case.
 const designOnly = "design only: no adapter implements this port yet"
@@ -51,13 +52,6 @@ func RunSealer(t *testing.T, _ func(t *testing.T) session.Sealer) {
 		"ASealCountOverTheLimitAddsAVersion",
 		"AVersionThatDoesNotUnwrapStopsTheStart",
 		"TheKeyRingIsReachableOnlyThroughTheSealer",
-		// The server nonce.
-		"NonceRoundTrip",
-		"ANonceOlderThanTheWindowIsStale",
-		"ANonceUpTo5SecondsAheadOpens",
-		"ANonceMoreThan5SecondsAheadIsStale",
-		"ANonceDoesNotOpenAsACookie",
-		"ACookieDoesNotOpenAsANonce",
 		// Boundary: the form and the length, before any open.
 		"AValueLongerThanTheLimitIsMalformedBeforeTheOpen",
 		"AValueWithNoVersionIsMalformed",
@@ -83,6 +77,31 @@ func RunSealer(t *testing.T, _ func(t *testing.T) session.Sealer) {
 		"TheForgeTokenIsRedactedInEachFormat",
 		"TheCSRFValueIsRedactedInEachFormat",
 		"AnErrorHoldsNoPartOfTheValue",
+	})
+}
+
+// RunStateSealer runs the conformance suite of a session.StateSealer. The
+// factory returns a sealer over a fresh key ring.
+func RunStateSealer(t *testing.T, _ func(t *testing.T) session.StateSealer) {
+	t.Helper()
+
+	skipCases(t, []string{
+		// The server nonce.
+		"NonceRoundTrip",
+		"ANonceOlderThanTheWindowIsStale",
+		"ANonceUpTo5SecondsAheadOpens",
+		"ANonceMoreThan5SecondsAheadIsStale",
+		"ANonceDoesNotOpenAsACookie",
+		"ACookieDoesNotOpenAsANonce",
+		// The sealed state of a sign-in.
+		"SignInRequestRoundTrip",
+		"PendingRoundTrip",
+		"ASignInRequestAfterItsExpiryIsExpired",
+		"APendingSignInAfterItsExpiryIsExpired",
+		"ASignInRequestDoesNotOpenAsAPendingSignIn",
+		"APendingSignInDoesNotOpenAsAnAccessCookie",
+		"AnAccessCookieDoesNotOpenAsASignInRequest",
+		"TheSealedRequestHoldsNoPlainNonceOrVerifier",
 	})
 }
 
@@ -305,6 +324,11 @@ func RunCookieSessions(t *testing.T, _ func(t *testing.T) session.CookieSessions
 			"TheCallbackNeverReadsAKeyFromItsRequest",
 			"TheIdentityProviderCallbackReceivesTheSignInRequestCookie",
 			"ThePendingSignInCookieIsStrict",
+			"WrongFactorsCountInTheFactorLockOfThePerson",
+			"ACopiedPendingCookieStopsAtTheFactorLock",
+			"AGoodFactorExpiresThePendingCookie",
+			"ACopiedSignInRequestCookieCannotUseACodeTwice",
+			"TheCallbackExpiresTheSignInRequestCookie",
 			"AFactorStepWithNoProofIsRefused",
 			"AFactorStepWithAProofOfAnotherKeyIsRefused",
 			"APasskeySignInFinishWithNoProofIsRefused",
@@ -412,6 +436,7 @@ func RunNoSessionAtRest(t *testing.T, _ func(t *testing.T) session.CookieSession
 		"ADatabaseDumpHoldsNoUnwrappedSessionKey",
 		"ADatabaseDumpHoldsNoSessionRow",
 		"ADatabaseDumpHoldsNoNonce",
+		"ADatabaseDumpHoldsNoSignInRequestAndNoPendingSignIn",
 		"ABackupHoldsNoSessionKey",
 		"ABackupHoldsNoCookieValueAndNoGitHostToken",
 		"ARestoreMakesANewKeyRingAndEndsEverySession",
