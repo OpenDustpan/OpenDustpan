@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -208,6 +209,88 @@ func TestPoolConfigRefusesFailoverSetting(t *testing.T) {
 				t.Errorf("error %q holds a part of the URL", err)
 			}
 		})
+	}
+}
+
+// TestPoolConfigRefusesConnectionStringThatIsNotAURL proves the check at the
+// point of use: a keyword/value connection string, a URL of another scheme
+// and an opaque URL fail the open with ErrFailoverSetting. A keyword/value
+// string parses as a URL with an empty query, so without the check its
+// settings would skip the allowlist. A socket URL with no host passes.
+func TestPoolConfigRefusesConnectionStringThatIsNotAURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		conn    string
+		refused bool
+	}{
+		{"keyword/value", "host=db.example target_session_attrs=any connect_timeout=600", true},
+		{"other scheme", "mysql://db.example/dustpan", true},
+		{"opaque", "postgres:db.example", true},
+		{"no scheme", "db.example:5432/dustpan", true},
+		{"socket URL", "postgres:///dustpan?host=/var/run/postgresql", false},
+		{"postgresql scheme", "postgresql://db.example/dustpan", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := poolConfig(tc.conn)
+			if got := errors.Is(err, ErrFailoverSetting); got != tc.refused {
+				t.Fatalf("poolConfig(%q) = %v, want refused %t", tc.conn, err, tc.refused)
+			}
+		})
+	}
+}
+
+// TestWritableAnswerFailsClosed proves that an answer of the read-write check
+// of a new connection with an unexpected shape or value counts as a server
+// that refuses writes, so the pool does not keep the connection.
+func TestWritableAnswerFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		rows [][][]byte
+		want error
+	}{
+		{"writable", [][][]byte{{[]byte("f"), []byte("off")}}, nil},
+		{"in recovery", [][][]byte{{[]byte("t"), []byte("on")}}, errNotWritable},
+		{"read-only default", [][][]byte{{[]byte("f"), []byte("on")}}, errNotWritable},
+		{"recovery with writes", [][][]byte{{[]byte("t"), []byte("off")}}, errNotWritable},
+		{"no row", nil, errNotWritable},
+		{"two rows", [][][]byte{{[]byte("f"), []byte("off")}, {[]byte("f"), []byte("off")}}, errNotWritable},
+		{"one column", [][][]byte{{[]byte("f")}}, errNotWritable},
+		{"null values", [][][]byte{{nil, nil}}, errNotWritable},
+		{"unknown value", [][][]byte{{[]byte("maybe"), []byte("off")}}, errNotWritable},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := new(pgconn.Result)
+			result.Rows = tc.rows
+
+			err := writableAnswer([]*pgconn.Result{result})
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatalf("writableAnswer = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestWritableAnswerRefusesNoResult proves that an answer with no result, or
+// with a nil result, counts as a server that refuses writes.
+func TestWritableAnswerRefusesNoResult(t *testing.T) {
+	t.Parallel()
+
+	for _, results := range [][]*pgconn.Result{nil, {nil}} {
+		if err := writableAnswer(results); !errors.Is(err, errNotWritable) {
+			t.Fatalf("writableAnswer(%v) = %v, want errNotWritable", results, err)
+		}
 	}
 }
 
