@@ -149,9 +149,10 @@ func (s *Service) CollectionOf(ctx context.Context, unit identity.Object) (strin
 }
 
 // CollectionUnitIDs returns the stable IDs of the units in the collection obj,
-// deleted units that are not purged included. It returns ErrNotFound when the
-// collection does not exist in the namespace of obj, and an error for an object
-// that is not a collection.
+// deleted units that are not purged included. The object must carry the stable
+// ID of the collection: it returns ErrNotFound when the collection does not
+// exist in the namespace of obj, when it has another ID, or when obj has none.
+// It returns an error for an object that is not a collection.
 func (s *Service) CollectionUnitIDs(ctx context.Context, obj identity.Object) ([]string, error) {
 	if !obj.IsCollection() {
 		return nil, fmt.Errorf("units of %s: %w", obj, identity.ErrInvalidObject)
@@ -162,7 +163,13 @@ func (s *Service) CollectionUnitIDs(ctx context.Context, obj identity.Object) ([
 		return nil, fmt.Errorf("units of %s: %w", obj, err)
 	}
 
-	ids, err := s.store.ListCollectionUnitIDs(ctx, Ref{Namespace: obj.Namespace(), Name: name})
+	// Defense in depth: the store checks the ID in its transaction too. This
+	// check stays so that a caller with no ID never reaches the store.
+	if obj.CollectionID() == "" {
+		return nil, fmt.Errorf("units of %s: %w", obj, ErrNotFound)
+	}
+
+	ids, err := s.store.ListCollectionUnitIDs(ctx, Ref{Namespace: obj.Namespace(), Name: name}, obj.CollectionID())
 	if err != nil {
 		return nil, fmt.Errorf("units of %s: %w", obj, err)
 	}

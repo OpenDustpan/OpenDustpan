@@ -11787,21 +11787,24 @@ func (q *Queries) ListCatalogBlueprintLatest(ctx context.Context, namespace stri
 const listCollectionUnitIDs = `-- name: ListCollectionUnitIDs :many
 SELECT m.unit_id
 FROM collection_members AS m
-WHERE m.namespace = $1 AND m.collection_key = $2
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE c.namespace = $1 AND c.name_key = $2 AND c.id = $3
 ORDER BY m.unit_id COLLATE "C"
 `
 
 type ListCollectionUnitIDsParams struct {
-	Namespace     string
-	CollectionKey string
+	Namespace string
+	NameKey   string
+	ID        string
 }
 
 // The stable IDs of the units in one collection, ordered. The membership of a
 // unit that was deleted stays until the collection is deleted, so these units
-// are in the list too. The namespace is part of the key: a collection of
-// another namespace with the same name gives nothing.
+// are in the list too. The collection is selected by its namespace, its name
+// and its stable ID together: a collection that was deleted and created again
+// under the same name has another ID and gives nothing.
 func (q *Queries) ListCollectionUnitIDs(ctx context.Context, arg ListCollectionUnitIDsParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, listCollectionUnitIDs, arg.Namespace, arg.CollectionKey)
+	rows, err := q.db.Query(ctx, listCollectionUnitIDs, arg.Namespace, arg.NameKey, arg.ID)
 	if err != nil {
 		return nil, err
 	}
