@@ -1,0 +1,223 @@
+go: downloading go.uber.org/goleak v1.3.0
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	    5730	     62745 ns/op	4184.21 MB/s	  271698 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	     948	    406240 ns/op	2581.49 MB/s	 1059209 B/op	      13 allocs/op
+BenchmarkDeploymentShape1M-4            	     304	   1269555 ns/op	 826.04 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     301	   1258924 ns/op	 833.04 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	      79	   5609761 ns/op	 747.71 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	     897	    373655 ns/op	 702.62 MB/s	  821921 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	    4920	     66100 ns/op	  47.53 MB/s	   41291 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	2.693s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4      	    3324	     93597 ns/op	35328.55 MB/s	    9989 B/op	     237 allocs/op
+BenchmarkCheckpointSaveFull3000-4      	    3423	    107885 ns/op	92085.95 MB/s	    9983 B/op	     237 allocs/op
+BenchmarkCheckpointSaveDelta1000-4     	    1322	    286908 ns/op	11525.03 MB/s	   12207 B/op	     292 allocs/op
+BenchmarkCheckpointSaveDelta3000-4     	    1483	    279052 ns/op	35601.46 MB/s	   12195 B/op	     292 allocs/op
+BenchmarkCountManagedResources1000-4   	      45	   7894507 ns/op	 418.85 MB/s	 3883258 B/op	   51319 allocs/op
+BenchmarkCountManagedResources3000-4   	      16	  23860587 ns/op	 416.36 MB/s	11693174 B/op	  153879 allocs/op
+BenchmarkPrincipalLists/principals-4   	     388	    927157 ns/op	   97682 B/op	    1423 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4         	     324	   1053954 ns/op	   97751 B/op	    1427 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     142	   2405649 ns/op	   96775 B/op	    1411 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     168	   1954150 ns/op	   96858 B/op	    1415 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	     484	    743258 ns/op	   63619 B/op	    1207 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    1508	    237932 ns/op	   12667 B/op	     234 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	     496	    702284 ns/op	   57368 B/op	    1006 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     121	   2940397 ns/op	  329403 B/op	    3732 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     109	   3294784 ns/op	  329580 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     120	   3089421 ns/op	  329459 B/op	    3732 allocs/op
+BenchmarkAuthorizer/check-4                                              	     927	    359348 ns/op	   60505 B/op	     883 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     189	   1858525 ns/op	  384136 B/op	    5866 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	58.124s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	    4052	     89027 ns/op	2948.96 MB/s	  271707 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	     898	    424157 ns/op	2472.44 MB/s	 1059221 B/op	      13 allocs/op
+BenchmarkDeploymentShape1M-4            	     266	   1446878 ns/op	 724.80 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     278	   1260682 ns/op	 831.87 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	      76	   4742343 ns/op	 884.47 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	     963	    443865 ns/op	 591.48 MB/s	  821920 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	    4795	     75697 ns/op	  41.51 MB/s	   41295 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	2.727s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4      	    3040	    125123 ns/op	26426.93 MB/s	    9991 B/op	     237 allocs/op
+BenchmarkCheckpointSaveFull3000-4      	    2779	    120163 ns/op	82676.92 MB/s	   10012 B/op	     237 allocs/op
+BenchmarkCheckpointSaveDelta1000-4     	    1200	    330530 ns/op	10004.01 MB/s	   12213 B/op	     292 allocs/op
+BenchmarkCheckpointSaveDelta3000-4     	    1214	    330582 ns/op	30052.03 MB/s	   12191 B/op	     292 allocs/op
+BenchmarkCountManagedResources1000-4   	      38	   9544423 ns/op	 346.45 MB/s	 3883259 B/op	   51319 allocs/op
+BenchmarkCountManagedResources3000-4   	      13	  29982571 ns/op	 331.35 MB/s	11693173 B/op	  153879 allocs/op
+BenchmarkPrincipalLists/principals-4   	     302	   1115309 ns/op	   97678 B/op	    1423 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4         	     253	   1219862 ns/op	   97757 B/op	    1427 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     159	   2637494 ns/op	   96768 B/op	    1411 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     194	   1850971 ns/op	   96830 B/op	    1415 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	     535	    804280 ns/op	   63632 B/op	    1207 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    1345	    238170 ns/op	   12667 B/op	     234 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	     476	    836716 ns/op	   57346 B/op	    1006 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     100	   3429423 ns/op	  329537 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     115	   3073451 ns/op	  329579 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     124	   2864669 ns/op	  329558 B/op	    3733 allocs/op
+BenchmarkAuthorizer/check-4                                              	     882	    401063 ns/op	   60510 B/op	     883 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     192	   2007356 ns/op	  384126 B/op	    5866 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	63.738s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	    4797	     77932 ns/op	3368.79 MB/s	  271680 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	     644	    523307 ns/op	2003.99 MB/s	 1059281 B/op	      14 allocs/op
+BenchmarkDeploymentShape1M-4            	     278	   1339017 ns/op	 783.19 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     298	   1197409 ns/op	 875.83 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	      70	   5011794 ns/op	 836.92 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	     909	    472873 ns/op	 555.20 MB/s	  821923 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	    4342	     78532 ns/op	  40.01 MB/s	   41288 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	2.653s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4      	    3253	    101867 ns/op	32460.25 MB/s	    9997 B/op	     237 allocs/op
+BenchmarkCheckpointSaveFull3000-4      	    3666	     97233 ns/op	102174.28 MB/s	    9981 B/op	     237 allocs/op
+BenchmarkCheckpointSaveDelta1000-4     	    1524	    304524 ns/op	10858.36 MB/s	   12213 B/op	     292 allocs/op
+BenchmarkCheckpointSaveDelta3000-4     	    1118	    304621 ns/op	32613.22 MB/s	   12195 B/op	     292 allocs/op
+BenchmarkCountManagedResources1000-4   	      43	   7511387 ns/op	 440.22 MB/s	 3883257 B/op	   51319 allocs/op
+BenchmarkCountManagedResources3000-4   	      15	  21471812 ns/op	 462.68 MB/s	11693181 B/op	  153879 allocs/op
+BenchmarkPrincipalLists/principals-4   	     362	   1015600 ns/op	   97683 B/op	    1423 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4         	     303	   1173498 ns/op	   97764 B/op	    1427 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     153	   2415707 ns/op	   96763 B/op	    1411 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     171	   2045493 ns/op	   96835 B/op	    1415 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	     388	    775761 ns/op	   63631 B/op	    1207 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    1390	    218197 ns/op	   12666 B/op	     234 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	     465	    785991 ns/op	   57376 B/op	    1006 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     116	   3137769 ns/op	  329575 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     122	   3003580 ns/op	  329557 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     127	   2808309 ns/op	  329607 B/op	    3733 allocs/op
+BenchmarkAuthorizer/check-4                                              	     754	    421172 ns/op	   60515 B/op	     883 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     186	   1870719 ns/op	  384126 B/op	    5866 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	57.561s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	    3879	     82445 ns/op	3184.39 MB/s	  271692 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	     889	    465911 ns/op	2250.86 MB/s	 1059360 B/op	      14 allocs/op
+BenchmarkDeploymentShape1M-4            	     316	   1239968 ns/op	 845.75 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     307	   1205894 ns/op	 869.67 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	      61	   5477313 ns/op	 765.79 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	     880	    497394 ns/op	 527.83 MB/s	  821924 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	    4779	     77261 ns/op	  40.67 MB/s	   41290 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	2.728s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4      	    3278	    120024 ns/op	27549.64 MB/s	    9991 B/op	     237 allocs/op
+BenchmarkCheckpointSaveFull3000-4      	    3432	    145602 ns/op	68231.52 MB/s	   10008 B/op	     237 allocs/op
+BenchmarkCheckpointSaveDelta1000-4     	    1568	    317422 ns/op	10417.15 MB/s	   12207 B/op	     292 allocs/op
+BenchmarkCheckpointSaveDelta3000-4     	    1088	    337251 ns/op	29457.83 MB/s	   12191 B/op	     292 allocs/op
+BenchmarkCountManagedResources1000-4   	      38	   9184803 ns/op	 360.01 MB/s	 3883264 B/op	   51319 allocs/op
+BenchmarkCountManagedResources3000-4   	      14	  27433410 ns/op	 362.14 MB/s	11693177 B/op	  153879 allocs/op
+BenchmarkPrincipalLists/principals-4   	     231	   1345493 ns/op	   97730 B/op	    1423 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4         	     333	   1078107 ns/op	   97748 B/op	    1427 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     146	   2431713 ns/op	   96767 B/op	    1411 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     182	   1969851 ns/op	   96830 B/op	    1415 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	     471	    755249 ns/op	   63621 B/op	    1207 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    1574	    217023 ns/op	   12670 B/op	     234 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	     420	    817950 ns/op	   57362 B/op	    1006 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     111	   3177823 ns/op	  329551 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	      92	   3820288 ns/op	  329537 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     111	   3165667 ns/op	  329554 B/op	    3733 allocs/op
+BenchmarkAuthorizer/check-4                                              	     870	    386584 ns/op	   60505 B/op	     883 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     182	   1962517 ns/op	  384127 B/op	    5866 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	62.871s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	    4585	     77081 ns/op	3406.01 MB/s	  271659 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	     670	    519406 ns/op	2019.04 MB/s	 1059189 B/op	      13 allocs/op
+BenchmarkDeploymentShape1M-4            	     241	   1345576 ns/op	 779.37 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     294	   1334954 ns/op	 785.59 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	      69	   4822064 ns/op	 869.85 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	     900	    466173 ns/op	 563.18 MB/s	  821923 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	    4599	     75426 ns/op	  41.66 MB/s	   41301 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	2.621s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4      	    2832	    116222 ns/op	28450.93 MB/s	    9992 B/op	     237 allocs/op
+BenchmarkCheckpointSaveFull3000-4      	    3361	    155226 ns/op	64001.50 MB/s	    9980 B/op	     237 allocs/op
+BenchmarkCheckpointSaveDelta1000-4     	     979	    344803 ns/op	9589.90 MB/s	   12210 B/op	     292 allocs/op
+BenchmarkCheckpointSaveDelta3000-4     	    1239	    299609 ns/op	33158.83 MB/s	   12195 B/op	     292 allocs/op
+BenchmarkCountManagedResources1000-4   	      43	   8666573 ns/op	 381.54 MB/s	 3883256 B/op	   51319 allocs/op
+BenchmarkCountManagedResources3000-4   	      14	  23875953 ns/op	 416.10 MB/s	11693174 B/op	  153879 allocs/op
+BenchmarkPrincipalLists/principals-4   	     276	   1161119 ns/op	   97684 B/op	    1423 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4         	     324	   1139262 ns/op	   97777 B/op	    1427 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     140	   2538698 ns/op	   96783 B/op	    1411 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     186	   1825251 ns/op	   96840 B/op	    1415 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	     452	    746873 ns/op	   63619 B/op	    1207 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    1032	    302207 ns/op	   12669 B/op	     234 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	     468	    801751 ns/op	   57363 B/op	    1006 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     100	   3334818 ns/op	  329547 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     121	   2948776 ns/op	  329549 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     115	   3152012 ns/op	  329488 B/op	    3732 allocs/op
+BenchmarkAuthorizer/check-4                                              	     836	    468733 ns/op	   60529 B/op	     883 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     183	   2146175 ns/op	  384135 B/op	    5866 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	65.195s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	    3889	     90710 ns/op	2894.25 MB/s	  271699 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	     916	    377519 ns/op	2777.88 MB/s	 1059426 B/op	      14 allocs/op
+BenchmarkDeploymentShape1M-4            	     306	   1189615 ns/op	 881.55 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     284	   1192814 ns/op	 879.21 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	      75	   4769455 ns/op	 879.44 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	     964	    429698 ns/op	 610.98 MB/s	  821921 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	    5251	     67851 ns/op	  46.31 MB/s	   41294 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	2.613s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4      	    3052	    103276 ns/op	32017.34 MB/s	    9987 B/op	     237 allocs/op
+BenchmarkCheckpointSaveFull3000-4      	    3379	    104511 ns/op	95058.19 MB/s	    9987 B/op	     237 allocs/op
+BenchmarkCheckpointSaveDelta1000-4     	    1592	    301847 ns/op	10954.65 MB/s	   12205 B/op	     292 allocs/op
+BenchmarkCheckpointSaveDelta3000-4     	    1382	    333823 ns/op	29760.26 MB/s	   12194 B/op	     292 allocs/op
+BenchmarkCountManagedResources1000-4   	      40	   8593594 ns/op	 384.78 MB/s	 3883263 B/op	   51319 allocs/op
+BenchmarkCountManagedResources3000-4   	      15	  22351404 ns/op	 444.48 MB/s	11693172 B/op	  153879 allocs/op
+BenchmarkPrincipalLists/principals-4   	     334	   1104771 ns/op	   97689 B/op	    1423 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4         	     325	   1115447 ns/op	   97752 B/op	    1427 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     154	   2257177 ns/op	   96777 B/op	    1411 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     230	   1610181 ns/op	   96854 B/op	    1415 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	     459	    689414 ns/op	   63620 B/op	    1207 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    1807	    202490 ns/op	   12665 B/op	     234 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	     518	    720584 ns/op	   57361 B/op	    1006 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     127	   2804437 ns/op	  329510 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	      98	   3071078 ns/op	  329542 B/op	    3733 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     110	   3256333 ns/op	  329587 B/op	    3733 allocs/op
+BenchmarkAuthorizer/check-4                                              	     888	    464824 ns/op	   60523 B/op	     883 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     180	   2128515 ns/op	  384135 B/op	    5866 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	61.976s

@@ -1,0 +1,2 @@
+FAIL	opendustpan.org/opendustpan/internal/servertest [build failed]
+FAIL

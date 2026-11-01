@@ -1,0 +1,84 @@
+{
+  "time": "2026-11-01T03:00:49Z",
+  "store": "sqlite",
+  "namespace": "load",
+  "units": 10000,
+  "durationMs": 38000.807351,
+  "seedMs": 35351.28528,
+  "checkpoints": [
+    {
+      "sizeBytes": 262382,
+      "fullMs": 5.839405,
+      "deltaMs": 8.503481,
+      "fullPeakAllocBytes": 3867096,
+      "deltaPeakAllocBytes": 5234000
+    },
+    {
+      "sizeBytes": 1048972,
+      "fullMs": 14.166304,
+      "deltaMs": 10.088697,
+      "fullPeakAllocBytes": 8640696,
+      "deltaPeakAllocBytes": 12603072
+    },
+    {
+      "sizeBytes": 4194492,
+      "fullMs": 39.480002,
+      "deltaMs": 32.951993,
+      "fullPeakAllocBytes": 30053344,
+      "deltaPeakAllocBytes": 32132864
+    }
+  ],
+  "imports": [
+    {
+      "sizeBytes": 262382,
+      "importMs": 7.379954,
+      "peakAllocBytes": 15245320,
+      "checkpointBytes": 262382
+    },
+    {
+      "sizeBytes": 1048972,
+      "importMs": 17.492149,
+      "peakAllocBytes": 8662296,
+      "checkpointBytes": 1048972
+    },
+    {
+      "sizeBytes": 4194492,
+      "importMs": 54.50394,
+      "peakAllocBytes": 28096280,
+      "checkpointBytes": 4194492
+    }
+  ],
+  "workspaceLocks": {
+    "goroutines": 16,
+    "rounds": 8,
+    "locks": 26,
+    "conflicts": 102,
+    "p50Ms": 6.136361
+  },
+  "updateConflicts": {
+    "attempts": 64,
+    "started": 1,
+    "conflicts": 63,
+    "p50Ms": 214.436489
+  },
+  "namespaceUpdates": {
+    "attempts": 64,
+    "started": 64,
+    "conflicts": 0,
+    "p50Ms": 240.933384
+  },
+  "database": {
+    "instances": 1,
+    "storesOpen": 1,
+    "firstP50Ms": 0.407608,
+    "secondP50Ms": 0,
+    "secondPresent": false
+  },
+  "lists": {
+    "units": 10000,
+    "unitsListed": 100,
+    "workspaceListP50Ms": 13.777841,
+    "workspaceListFullMs": 772.73701,
+    "inventoryMs": 2.300302
+  }
+}

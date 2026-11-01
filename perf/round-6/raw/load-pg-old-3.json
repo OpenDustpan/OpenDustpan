@@ -1,0 +1,84 @@
+{
+  "time": "2026-11-01T03:03:55Z",
+  "store": "postgres",
+  "namespace": "load",
+  "units": 10000,
+  "durationMs": 29223.007626,
+  "seedMs": 27085.496461,
+  "checkpoints": [
+    {
+      "sizeBytes": 262382,
+      "fullMs": 9.92457,
+      "deltaMs": 6.151943,
+      "fullPeakAllocBytes": 4570904,
+      "deltaPeakAllocBytes": 5397456
+    },
+    {
+      "sizeBytes": 1048972,
+      "fullMs": 13.472486,
+      "deltaMs": 12.280396,
+      "fullPeakAllocBytes": 9694576,
+      "deltaPeakAllocBytes": 10186640
+    },
+    {
+      "sizeBytes": 4194492,
+      "fullMs": 55.338762,
+      "deltaMs": 26.430212,
+      "fullPeakAllocBytes": 28339520,
+      "deltaPeakAllocBytes": 44165344
+    }
+  ],
+  "imports": [
+    {
+      "sizeBytes": 262382,
+      "importMs": 12.733204,
+      "peakAllocBytes": 4879472,
+      "checkpointBytes": 262382
+    },
+    {
+      "sizeBytes": 1048972,
+      "importMs": 27.469791,
+      "peakAllocBytes": 9193696,
+      "checkpointBytes": 1048972
+    },
+    {
+      "sizeBytes": 4194492,
+      "importMs": 65.197605,
+      "peakAllocBytes": 28563424,
+      "checkpointBytes": 4194492
+    }
+  ],
+  "workspaceLocks": {
+    "goroutines": 16,
+    "rounds": 8,
+    "locks": 4,
+    "conflicts": 124,
+    "p50Ms": 1.979182
+  },
+  "updateConflicts": {
+    "attempts": 64,
+    "started": 1,
+    "conflicts": 63,
+    "p50Ms": 67.797929
+  },
+  "namespaceUpdates": {
+    "attempts": 64,
+    "started": 64,
+    "conflicts": 0,
+    "p50Ms": 58.684223
+  },
+  "database": {
+    "instances": 2,
+    "storesOpen": 2,
+    "firstP50Ms": 1.30527,
+    "secondP50Ms": 1.285402,
+    "secondPresent": true
+  },
+  "lists": {
+    "units": 10000,
+    "unitsListed": 100,
+    "workspaceListP50Ms": 23.916042,
+    "workspaceListFullMs": 1232.847066,
+    "inventoryMs": 3.841504
+  }
+}

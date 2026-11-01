@@ -1,0 +1,5 @@
+time=2026-11-01T03:14:34.939Z level=INFO msg="seed units" units=500
+time=2026-11-01T03:14:36.443Z level=INFO msg="warm up" for=5s
+time=2026-11-01T03:14:41.468Z level=WARN msg="no -store-pid: the object store CPU is not measured"
+time=2026-11-01T03:14:41.487Z level=INFO msg="steady window" for=30s
+time=2026-11-01T03:15:21.733Z level=INFO msg="wrote load report" path=/tmp/perf6/raw/scale-new-2-1.json flows=scale

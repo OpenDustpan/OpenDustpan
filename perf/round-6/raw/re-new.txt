@@ -1,0 +1,100 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1185	    536005 ns/op	1956.52 MB/s	 1059398 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    4068	    146872 ns/op	22513.73 MB/s	   10421 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1461	    532556 ns/op	1969.19 MB/s	 1059351 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    4447	    149465 ns/op	22123.17 MB/s	   10427 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1015	    509213 ns/op	2059.46 MB/s	 1059356 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    3370	    177795 ns/op	18597.95 MB/s	   10423 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1186	    539426 ns/op	1944.11 MB/s	 1059328 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    3968	    162028 ns/op	20407.81 MB/s	   10423 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1108	    585013 ns/op	1792.61 MB/s	 1059475 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    3672	    153462 ns/op	21546.94 MB/s	   10418 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	     967	    610379 ns/op	1718.12 MB/s	 1059372 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    4394	    154687 ns/op	21376.26 MB/s	   10417 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1372	    563394 ns/op	1861.40 MB/s	 1059383 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    3945	    147948 ns/op	22349.90 MB/s	   10422 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	     898	    598338 ns/op	1752.69 MB/s	 1059413 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    3834	    161271 ns/op	20503.55 MB/s	   10419 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1076	    552897 ns/op	1896.74 MB/s	 1059435 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    4066	    141846 ns/op	23311.44 MB/s	   10420 B/op	     255 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply1M-4   	    1089	    598258 ns/op	1752.93 MB/s	 1059324 B/op	      14 allocs/op
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    3674	    161394 ns/op	20487.87 MB/s	   10428 B/op	     255 allocs/op

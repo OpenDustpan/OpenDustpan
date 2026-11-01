@@ -1,0 +1,137 @@
+{
+  "time": "2026-11-01T03:17:25Z",
+  "machine": {
+    "cpus": 4,
+    "cpuModel": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "memoryMb": 16091,
+    "os": "linux",
+    "arch": "amd64",
+    "go": "go1.27.3"
+  },
+  "instances": 2,
+  "clients": 32,
+  "thinkMs": 0,
+  "units": 500,
+  "steady": {
+    "seconds": 30.007633336,
+    "requests": 20434,
+    "errors": 0,
+    "errorRate": 0,
+    "requestsPerSec": 680.9600667669262,
+    "routes": [
+      {
+        "route": "inventory list",
+        "requests": 1861,
+        "errors": 0,
+        "p50Ms": 6.388522,
+        "p95Ms": 16.389917,
+        "p99Ms": 22.826935,
+        "maxMs": 53.666287
+      },
+      {
+        "route": "pulumi checkpoint save",
+        "requests": 1858,
+        "errors": 0,
+        "p50Ms": 21.942734,
+        "p95Ms": 37.750006,
+        "p99Ms": 47.332687,
+        "maxMs": 81.446615
+      },
+      {
+        "route": "pulumi stack create",
+        "requests": 1861,
+        "errors": 0,
+        "p50Ms": 7.332865,
+        "p95Ms": 17.725115,
+        "p99Ms": 27.357504,
+        "maxMs": 39.14809
+      },
+      {
+        "route": "pulumi update complete",
+        "requests": 1857,
+        "errors": 0,
+        "p50Ms": 12.003782,
+        "p95Ms": 24.767943,
+        "p99Ms": 32.842129,
+        "maxMs": 69.509557
+      },
+      {
+        "route": "pulumi update create",
+        "requests": 1860,
+        "errors": 0,
+        "p50Ms": 5.998346,
+        "p95Ms": 15.585506,
+        "p99Ms": 23.055548,
+        "maxMs": 38.568987
+      },
+      {
+        "route": "pulumi update start",
+        "requests": 1860,
+        "errors": 0,
+        "p50Ms": 13.597431,
+        "p95Ms": 28.173663,
+        "p99Ms": 36.895189,
+        "maxMs": 70.841914
+      },
+      {
+        "route": "tofu lock",
+        "requests": 1857,
+        "errors": 0,
+        "p50Ms": 30.457017,
+        "p95Ms": 62.977981,
+        "p99Ms": 78.237955,
+        "maxMs": 117.391321
+      },
+      {
+        "route": "tofu state declare",
+        "requests": 1859,
+        "errors": 0,
+        "p50Ms": 24.437442,
+        "p95Ms": 46.863143,
+        "p99Ms": 60.863524,
+        "maxMs": 86.577616
+      },
+      {
+        "route": "tofu state upload",
+        "requests": 1860,
+        "errors": 0,
+        "p50Ms": 23.903853,
+        "p95Ms": 43.471296,
+        "p99Ms": 56.368017,
+        "maxMs": 99.463641
+      },
+      {
+        "route": "tofu unlock",
+        "requests": 1862,
+        "errors": 0,
+        "p50Ms": 12.639219,
+        "p95Ms": 26.439399,
+        "p99Ms": 35.17911,
+        "maxMs": 54.992593
+      },
+      {
+        "route": "tofu workspace list",
+        "requests": 1839,
+        "errors": 0,
+        "p50Ms": 352.625295,
+        "p95Ms": 603.817224,
+        "p99Ms": 650.57293,
+        "maxMs": 700.665321
+      }
+    ]
+  },
+  "resources": {
+    "instanceCores": 1.401976608049554,
+    "postgresCores": 1.3056677799710368,
+    "harnessCores": 0.2514827782485138,
+    "dbConnectionsMean": 8,
+    "dbConnectionsMax": 8,
+    "dbTransactionsPerSec": 22915.435959257884,
+    "instanceCoreMsPer1kRequests": 2058.823529411765,
+    "postgresCoreMsPer1kRequests": 1917.3925809924635,
+    "unmeasured": [
+      "storeCores"
+    ]
+  },
+  "clientErrors": 0
+}

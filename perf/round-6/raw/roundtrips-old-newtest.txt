@@ -1,0 +1,15 @@
+    roundtrips_test.go:791: pulumi checkpoint save: 13 round trips, budget 13
+    roundtrips_test.go:791: opentofu upload: 44 round trips, budget 41
+    roundtrips_test.go:791: unlock: 10 round trips, budget 10
+    roundtrips_test.go:791: lock: 42 round trips, budget 42
+    roundtrips_test.go:791: lock, upload and unlock: 100 round trips, budget 97
+    roundtrips_test.go:791: pulumi update cycle: 60 round trips, budget 58
+--- FAIL: TestRoundTripsOfRequests (0.00s)
+    roundtrips_test.go:932: backup of 3 stacks and 3 workspaces: 289 round trips, ceiling 307
+    roundtrips_test.go:932: restore of 3 stacks and 3 workspaces: 1397 round trips, ceiling 1007
+    roundtrips_test.go:932: backup of 30 stacks and 30 workspaces: 371 round trips, ceiling 388
+    roundtrips_test.go:932: restore of 30 stacks and 30 workspaces: 1531 round trips, ceiling 1142
+--- FAIL: TestRoundTripsOfBackup (0.03s)
+FAIL
+FAIL	opendustpan.org/opendustpan/internal/servertest	5.002s
+FAIL

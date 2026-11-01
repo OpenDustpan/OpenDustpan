@@ -1,0 +1,136 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+                             │ clean-old.txt │            clean-new.txt            │
+                             │    sec/op     │    sec/op     vs base               │
+DeltaApply256K-4                80.19µ ± 22%   80.94µ ± 24%        ~ (p=0.937 n=6)
+DeltaApply1M-4                  445.0µ ± 18%   588.3µ ± 11%  +32.20% (p=0.002 n=6)
+DeploymentShape1M-4             1.304m ± 11%   1.229m ±  7%        ~ (p=0.180 n=6)
+DeploymentShapeSequenced1M-4    1.232m ±  8%   1.200m ±  7%        ~ (p=0.485 n=6)
+DeploymentShapeSequenced4M-4    4.917m ± 14%   4.897m ± 11%        ~ (p=0.485 n=6)
+GzipBestSpeedCompress-4         455.0µ ± 18%   458.2µ ± 19%        ~ (p=0.818 n=6)
+GzipBestSpeedDecompress-4       75.56µ ± 13%   68.51µ ±  7%        ~ (p=0.093 n=6)
+geomean                         515.7µ         523.7µ         +1.55%
+
+                             │ clean-old.txt │            clean-new.txt             │
+                             │      B/s      │      B/s       vs base               │
+DeltaApply256K-4               3.052Gi ± 28%   3.022Gi ± 31%        ~ (p=0.937 n=6)
+DeltaApply1M-4                 2.199Gi ± 18%   1.661Gi ± 10%  -24.46% (p=0.002 n=6)
+DeploymentShape1M-4            767.3Mi ± 10%   813.9Mi ±  7%        ~ (p=0.180 n=6)
+DeploymentShapeSequenced1M-4   811.9Mi ±  8%   833.3Mi ±  7%        ~ (p=0.485 n=6)
+DeploymentShapeSequenced4M-4   813.9Mi ± 12%   817.3Mi ± 10%        ~ (p=0.485 n=6)
+GzipBestSpeedCompress-4        550.6Mi ± 22%   546.6Mi ± 16%        ~ (p=0.818 n=6)
+GzipBestSpeedDecompress-4      39.66Mi ± 14%   43.76Mi ±  7%        ~ (p=0.093 n=6)
+geomean                        694.5Mi         683.7Mi         -1.56%
+
+                             │ clean-old.txt │            clean-new.txt             │
+                             │     B/op      │     B/op      vs base                │
+DeltaApply256K-4                265.3Ki ± 0%   265.4Ki ± 0%       ~ (p=0.065 n=6)
+DeltaApply1M-4                  1.010Mi ± 0%   1.010Mi ± 0%       ~ (p=0.132 n=6)
+DeploymentShape1M-4             50.66Ki ± 0%   50.66Ki ± 0%       ~ (p=1.000 n=6) ¹
+DeploymentShapeSequenced1M-4    50.75Ki ± 0%   50.75Ki ± 0%       ~ (p=1.000 n=6) ¹
+DeploymentShapeSequenced4M-4    201.1Ki ± 0%   201.1Ki ± 0%       ~ (p=0.455 n=6)
+GzipBestSpeedCompress-4         802.7Ki ± 0%   802.7Ki ± 0%       ~ (p=1.000 n=6)
+GzipBestSpeedDecompress-4       40.32Ki ± 0%   40.32Ki ± 0%       ~ (p=0.734 n=6)
+geomean                         172.8Ki        172.8Ki       +0.00%
+¹ all samples are equal
+
+                             │ clean-old.txt │            clean-new.txt            │
+                             │   allocs/op   │  allocs/op   vs base                │
+DeltaApply256K-4                  11.00 ± 0%    11.00 ± 0%       ~ (p=1.000 n=6) ¹
+DeltaApply1M-4                    13.50 ± 4%    14.00 ± 0%       ~ (p=0.182 n=6)
+DeploymentShape1M-4              8.038k ± 0%   8.038k ± 0%       ~ (p=1.000 n=6) ¹
+DeploymentShapeSequenced1M-4     8.041k ± 0%   8.041k ± 0%       ~ (p=1.000 n=6) ¹
+DeploymentShapeSequenced4M-4     32.09k ± 0%   32.09k ± 0%       ~ (p=1.000 n=6) ¹
+GzipBestSpeedCompress-4           21.00 ± 0%    21.00 ± 0%       ~ (p=1.000 n=6) ¹
+GzipBestSpeedDecompress-4         8.000 ± 0%    8.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                           244.2         245.4       +0.52%
+¹ all samples are equal
+
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+                                                        │ clean-old.txt │            clean-new.txt            │
+                                                        │    sec/op     │    sec/op     vs base               │
+CheckpointSaveFull1000-4                                   109.7µ ± 15%   159.7µ ± 20%  +45.51% (p=0.002 n=6)
+CheckpointSaveFull3000-4                                   114.0µ ± 36%   158.9µ ± 18%  +39.32% (p=0.009 n=6)
+CheckpointSaveDelta1000-4                                  311.0µ ± 11%   348.0µ ±  8%  +11.90% (p=0.026 n=6)
+CheckpointSaveDelta3000-4                                  317.6µ ± 12%   335.3µ ±  6%        ~ (p=0.132 n=6)
+CountManagedResources1000-4                                8.630m ± 13%   8.184m ± 14%        ~ (p=0.485 n=6)
+CountManagedResources3000-4                                23.87m ± 26%   23.93m ± 14%        ~ (p=0.699 n=6)
+PrincipalLists/principals-4                                1.110m ± 21%   1.043m ±  9%        ~ (p=0.589 n=6)
+PrincipalLists/principals_with_a_prefix-4                  1.127m ±  8%   1.170m ± 14%        ~ (p=0.310 n=6)
+PrincipalLists/workloads,_2_percent_of_the_principals-4    2.424m ±  9%   2.432m ± 14%        ~ (p=0.937 n=6)
+PrincipalLists/services_with_a_prefix-4                    1.903m ± 15%   1.824m ± 27%        ~ (p=0.699 n=6)
+PrincipalLists/groups-4                                    751.1µ ±  8%   794.8µ ± 13%        ~ (p=0.310 n=6)
+PrincipalLists/members_of_a_group-4                        228.1µ ± 33%   221.9µ ± 15%        ~ (p=0.818 n=6)
+PrincipalLists/groups_of_a_principal_in_80_groups-4        793.9µ ± 12%   801.5µ ± 14%        ~ (p=0.699 n=6)
+CallerGrants/others=0-4                                    3.158m ± 11%   3.057m ±  7%        ~ (p=0.589 n=6)
+CallerGrants/others=20000-4                                3.072m ± 24%   2.967m ±  9%        ~ (p=0.240 n=6)
+CallerGrants/others=100000-4                               3.121m ± 10%   3.118m ±  7%        ~ (p=0.818 n=6)
+Authorizer/check-4                                         411.1µ ± 14%   443.2µ ± 15%        ~ (p=0.394 n=6)
+Authorizer/list_objects-4                                  1.985m ±  8%   2.074m ± 21%        ~ (p=0.240 n=6)
+WriteCheck/state_only-4                                                   18.55µ ± 10%
+WriteCheck/state_and_minimum,_none_set-4                                  37.66µ ±  8%
+WriteCheck/state_and_minimum,_one_set-4                                   37.24µ ± 13%
+geomean                                                    1.093m         679.6µ         +4.82%
+
+                            │ clean-old.txt │            clean-new.txt             │
+                            │      B/s      │      B/s       vs base               │
+CheckpointSaveFull1000-4      28.16Gi ± 17%   19.28Gi ± 16%  -31.52% (p=0.002 n=6)
+CheckpointSaveFull3000-4      81.38Gi ± 27%   58.25Gi ± 15%  -28.42% (p=0.009 n=6)
+CheckpointSaveDelta1000-4     9.907Gi ± 10%   8.850Gi ±  9%  -10.67% (p=0.026 n=6)
+CheckpointSaveDelta3000-4     29.18Gi ± 14%   27.60Gi ±  5%        ~ (p=0.132 n=6)
+CountManagedResources1000-4   365.4Mi ± 15%   385.6Mi ± 16%        ~ (p=0.485 n=6)
+CountManagedResources3000-4   396.9Mi ± 20%   396.2Mi ± 13%        ~ (p=0.699 n=6)
+geomean                       6.714Gi         5.847Gi        -12.91%
+
+                                                        │ clean-old.txt │            clean-new.txt            │
+                                                        │     B/op      │     B/op       vs base              │
+CheckpointSaveFull1000-4                                   9.757Ki ± 0%   10.172Ki ± 0%  +4.25% (p=0.002 n=6)
+CheckpointSaveFull3000-4                                   9.751Ki ± 0%   10.169Ki ± 0%  +4.29% (p=0.002 n=6)
+CheckpointSaveDelta1000-4                                  11.92Ki ± 0%    12.35Ki ± 0%  +3.55% (p=0.002 n=6)
+CheckpointSaveDelta3000-4                                  11.91Ki ± 0%    12.33Ki ± 0%  +3.57% (p=0.002 n=6)
+CountManagedResources1000-4                                3.703Mi ± 0%    3.703Mi ± 0%       ~ (p=0.784 n=6)
+CountManagedResources3000-4                                11.15Mi ± 0%    11.15Mi ± 0%       ~ (p=0.054 n=6)
+PrincipalLists/principals-4                                95.39Ki ± 0%    95.45Ki ± 0%  +0.06% (p=0.002 n=6)
+PrincipalLists/principals_with_a_prefix-4                  95.46Ki ± 0%    95.52Ki ± 0%  +0.06% (p=0.002 n=6)
+PrincipalLists/workloads,_2_percent_of_the_principals-4    94.50Ki ± 0%    94.56Ki ± 0%  +0.06% (p=0.002 n=6)
+PrincipalLists/services_with_a_prefix-4                    94.57Ki ± 0%    94.62Ki ± 0%  +0.06% (p=0.002 n=6)
+PrincipalLists/groups-4                                    62.13Ki ± 0%    62.18Ki ± 0%  +0.08% (p=0.002 n=6)
+PrincipalLists/members_of_a_group-4                        12.37Ki ± 0%    12.43Ki ± 0%  +0.49% (p=0.002 n=6)
+PrincipalLists/groups_of_a_principal_in_80_groups-4        56.02Ki ± 0%    56.08Ki ± 0%  +0.11% (p=0.002 n=6)
+CallerGrants/others=0-4                                    321.8Ki ± 0%    321.4Ki ± 0%  -0.11% (p=0.002 n=6)
+CallerGrants/others=20000-4                                321.8Ki ± 0%    321.5Ki ± 0%  -0.10% (p=0.002 n=6)
+CallerGrants/others=100000-4                               321.8Ki ± 0%    321.4Ki ± 0%  -0.12% (p=0.002 n=6)
+Authorizer/check-4                                         59.09Ki ± 0%    59.19Ki ± 0%  +0.16% (p=0.002 n=6)
+Authorizer/list_objects-4                                  375.1Ki ± 0%    374.8Ki ± 0%  -0.09% (p=0.002 n=6)
+WriteCheck/state_only-4                                                    1.643Ki ± 0%
+WriteCheck/state_and_minimum,_none_set-4                                   2.071Ki ± 1%
+WriteCheck/state_and_minimum,_one_set-4                                    2.196Ki ± 1%
+geomean                                                    102.3Ki         58.58Ki       +0.89%
+
+                                                        │ clean-old.txt │            clean-new.txt            │
+                                                        │   allocs/op   │  allocs/op   vs base                │
+CheckpointSaveFull1000-4                                     237.0 ± 0%    255.0 ± 0%  +7.59% (p=0.002 n=6)
+CheckpointSaveFull3000-4                                     237.0 ± 0%    255.0 ± 0%  +7.59% (p=0.002 n=6)
+CheckpointSaveDelta1000-4                                    292.0 ± 0%    311.0 ± 0%  +6.51% (p=0.002 n=6)
+CheckpointSaveDelta3000-4                                    292.0 ± 0%    311.0 ± 0%  +6.51% (p=0.002 n=6)
+CountManagedResources1000-4                                 51.32k ± 0%   51.32k ± 0%       ~ (p=1.000 n=6) ¹
+CountManagedResources3000-4                                 153.9k ± 0%   153.9k ± 0%       ~ (p=1.000 n=6) ¹
+PrincipalLists/principals-4                                 1.423k ± 0%   1.426k ± 0%  +0.21% (p=0.002 n=6)
+PrincipalLists/principals_with_a_prefix-4                   1.427k ± 0%   1.430k ± 0%  +0.21% (p=0.002 n=6)
+PrincipalLists/workloads,_2_percent_of_the_principals-4     1.411k ± 0%   1.414k ± 0%  +0.21% (p=0.002 n=6)
+PrincipalLists/services_with_a_prefix-4                     1.415k ± 0%   1.418k ± 0%  +0.21% (p=0.002 n=6)
+PrincipalLists/groups-4                                     1.207k ± 0%   1.210k ± 0%  +0.25% (p=0.002 n=6)
+PrincipalLists/members_of_a_group-4                          234.0 ± 0%    238.0 ± 0%  +1.71% (p=0.002 n=6)
+PrincipalLists/groups_of_a_principal_in_80_groups-4         1.006k ± 0%   1.010k ± 0%  +0.40% (p=0.002 n=6)
+CallerGrants/others=0-4                                     3.733k ± 0%   3.742k ± 0%  +0.24% (p=0.002 n=6)
+CallerGrants/others=20000-4                                 3.733k ± 0%   3.742k ± 0%  +0.24% (p=0.002 n=6)
+CallerGrants/others=100000-4                                3.733k ± 0%   3.741k ± 0%  +0.23% (p=0.002 n=6)
+Authorizer/check-4                                           883.0 ± 0%    886.0 ± 0%  +0.34% (p=0.002 n=6)
+Authorizer/list_objects-4                                   5.866k ± 0%   5.874k ± 0%  +0.14% (p=0.002 n=6)
+WriteCheck/state_only-4                                                    42.00 ± 0%
+WriteCheck/state_and_minimum,_none_set-4                                   56.00 ± 0%
+WriteCheck/state_and_minimum,_one_set-4                                    59.00 ± 0%
+geomean                                                     1.683k        1.039k       +1.77%
+¹ all samples are equal
