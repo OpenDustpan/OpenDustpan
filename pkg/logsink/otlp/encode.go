@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/logsink"
 )
@@ -17,7 +18,7 @@ var errNesting = errors.New("attribute value nests too deep")
 
 // encode writes records as one ExportLogsServiceRequest in the OTLP JSON
 // encoding.
-func encode(service string, records []logsink.Record) ([]byte, error) {
+func encode(service string, received time.Time, records []logsink.Record) ([]byte, error) {
 	var buf bytes.Buffer
 
 	buf.WriteString(`{"resourceLogs":[{"resource":{"attributes":[`)
@@ -39,7 +40,7 @@ func encode(service string, records []logsink.Record) ([]byte, error) {
 			buf.WriteByte(',')
 		}
 
-		if err := writeRecord(&buf, records[i]); err != nil {
+		if err := writeRecord(&buf, received, records[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -50,11 +51,11 @@ func encode(service string, records []logsink.Record) ([]byte, error) {
 }
 
 // writeRecord writes one LogRecord.
-func writeRecord(buf *bytes.Buffer, r logsink.Record) error {
+func writeRecord(buf *bytes.Buffer, received time.Time, r logsink.Record) error {
 	number, text := severity(r.Level)
 
 	buf.WriteString(`{"timeUnixNano":"`)
-	buf.WriteString(strconv.FormatInt(r.Time.UnixNano(), 10))
+	buf.WriteString(strconv.FormatInt(unixNano(r.Time, received), 10))
 	buf.WriteString(`","severityNumber":`)
 	buf.WriteString(strconv.Itoa(number))
 	buf.WriteString(`,"severityText":`)
@@ -84,6 +85,18 @@ func writeRecord(buf *bytes.Buffer, r logsink.Record) error {
 	buf.WriteString(`]}`)
 
 	return nil
+}
+
+// unixNano answers the time of a record in Unix nanoseconds. Time.UnixNano
+// is undefined for a zero time and for a time outside the years 1678 to
+// 2262, so such a record takes the time the sink received the batch. The
+// shipped entry then shows when the sink sent it, not a wrong time.
+func unixNano(t, received time.Time) int64 {
+	if t.IsZero() || t.Before(time.Unix(0, math.MinInt64)) || t.After(time.Unix(0, math.MaxInt64)) {
+		t = received
+	}
+
+	return t.UnixNano()
 }
 
 // severity answers the OTLP severity number and text of a level.

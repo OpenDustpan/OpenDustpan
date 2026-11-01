@@ -193,3 +193,41 @@ func checkRawArray(t *testing.T, arr *arrayValue) {
 		t.Errorf("array[4] = %+v, want doubleValue 2.5", arr.Values[4])
 	}
 }
+
+// TestUnusableTimeTakesTheReceiveTime checks that a zero time and a time
+// outside the range of int64 nanoseconds never reach Time.UnixNano.
+func TestUnusableTimeTakesTheReceiveTime(t *testing.T) {
+	t.Parallel()
+
+	r := newReceiver(t, nil)
+	s := newSink(t, r, nil)
+
+	times := map[string]time.Time{
+		"zero":       {},
+		"year 3000":  time.Date(3000, time.January, 1, 0, 0, 0, 0, time.UTC),
+		"year 1000":  time.Date(1000, time.January, 1, 0, 0, 0, 0, time.UTC),
+		"year 99999": time.Date(99999, time.January, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	for name, when := range times {
+		beforeNano := time.Now().UnixNano()
+
+		rec := rec(name)
+		rec.Time = when
+
+		if err := s.Write(t.Context(), []logsink.Record{rec}); err != nil {
+			t.Fatalf("%s: write: %v", name, err)
+		}
+
+		afterNano := time.Now().UnixNano()
+
+		r.mu.Lock()
+		got := r.recs[len(r.recs)-1].TimeUnixNano
+		r.mu.Unlock()
+
+		ns, err := strconv.ParseInt(got, 10, 64)
+		if err != nil || ns < beforeNano || ns > afterNano {
+			t.Errorf("%s: timeUnixNano = %q, want a time between %d and %d", name, got, beforeNano, afterNano)
+		}
+	}
+}
