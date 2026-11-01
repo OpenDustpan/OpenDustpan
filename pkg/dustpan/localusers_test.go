@@ -279,7 +279,13 @@ func (s localServer) checkChange(t *testing.T, cookie, subject string) {
 
 	wrong := s.do(t, http.MethodPost, "/api/dustpan/v1/me/password",
 		`{"currentPassword":"`+localNewPass+`","newPassword":"`+localNewPass+`"}`, withCookie(cookie, csrf))
-	wantAnswer(t, "change with a wrong current password", wrong, http.StatusForbidden, "local-user.current-wrong")
+	wantAnswer(
+		t,
+		"change with a wrong current password",
+		wrong,
+		http.StatusForbidden,
+		"local-user.current-password-wrong",
+	)
 
 	noCSRF := s.do(t, http.MethodPost, "/api/dustpan/v1/me/password",
 		`{"currentPassword":"`+localPassword+`","newPassword":"`+localNewPass+`"}`, withCookie(cookie, ""))
