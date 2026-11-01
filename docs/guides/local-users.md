@@ -61,8 +61,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 
 ```json
 {
-  "principalID": "prn-...",
-  "userID": "lus-...",
+  "principal": "prn-...",
+  "localUser": "lus-...",
   "userName": "alice",
   "subject": "local:lus-...",
   "setUpCode": "<43 characters>",
@@ -90,11 +90,11 @@ The person sends the code and the new password:
 
 ```sh
 curl -X POST -H "Content-Type: application/json" \
-  -d '{"code":"<set-up code>","password":"<new password>"}' \
+  -d '{"oneTimeCode":"<set-up code>","password":"<new password>"}' \
   https://dustpan.example/api/dustpan/v1/local-users/redeem
 ```
 
-The answer is `204`. A code that is not valid, was used or expired answers
+The answer is `204`. A code that is not valid, used or expired answers
 `400` with the error code `local-user.code-invalid`. A password that a rule
 refuses answers `400` with the code of the rule, and the code stays valid.
 
@@ -106,7 +106,7 @@ refuses answers `400` with the code of the rule, and the code stays valid.
 | At most 256 characters and 1024 bytes | `password.too-long` |
 | Valid UTF-8 with no control character | `password.form` |
 | A letter and a digit, when `password.requireLettersAndDigits` is on | `password.letters-and-digits` |
-| Not on the list of common passwords in the binary, not the user name, a word of the display name or the product name, and not one character again and again or a plain sequence | `password.blocked` |
+| Not a common password of the list in the binary. Not the user name, a word of the name of the person, or the product name. Not one character again and again, or a plain sequence. | `password.blocked` |
 
 The server counts Unicode code points after the NFC form, and hashes the NFC
 form. It never cuts a password. It has no rule on upper case, digits or
@@ -163,7 +163,7 @@ Set `revokeAccessTokens` to `true` to revoke each access token of the person
 too:
 
 ```json
-{"principalID":"prn-...","reason":"the person lost the password","revokeAccessTokens":false}
+{"principal":"prn-...","reason":"the person lost the password","revokeAccessTokens":false}
 ```
 
 Send it to `POST /api/dustpan/v1/local-users/reset`. The answer holds the
@@ -203,9 +203,9 @@ value and the source of each one.
 | `local-user.created` | An administrator makes a local user. |
 | `password.reset-created` | An administrator makes a set-up code or a reset code. The changes record the purpose and whether the reset revoked the access tokens. |
 | `password.reset-used` | A person sets a password with a code. |
-| `password.reset-refused` | A use of a code is refused. The changes record the cause. |
+| `password.reset-refused` | The server refuses a use of a code. The changes record the cause. |
 | `password.changed` | A person changes the own password. |
-| `password.change-refused` | A change of the own password is refused. |
+| `password.change-refused` | The server refuses a change of the own password. |
 | `password.rehashed` | A sign-in stores a new hash with the current parameters. |
 | `sign-in.password-failed` | A password sign-in fails. The changes record the real reason. |
 | `session:sign-in` | A password sign-in starts a session, with the provider `local`. |

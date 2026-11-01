@@ -798,7 +798,10 @@
       },
       "CreateLocalUserResponse": {
         "properties": {
-          "principalId": {
+          "localUser": {
+            "type": "string"
+          },
+          "principal": {
             "type": "string"
           },
           "setUpCode": {
@@ -810,19 +813,16 @@
           "subject": {
             "type": "string"
           },
-          "userId": {
-            "type": "string"
-          },
           "userName": {
             "type": "string"
           }
         },
         "required": [
-          "principalId",
+          "localUser",
+          "principal",
           "setUpCode",
           "setUpExpiresAt",
           "subject",
-          "userId",
           "userName"
         ],
         "type": "object"
@@ -3904,7 +3904,7 @@
       },
       "RedeemLocalUserCodeRequest": {
         "properties": {
-          "code": {
+          "oneTimeCode": {
             "type": "string"
           },
           "password": {
@@ -3912,7 +3912,7 @@
           }
         },
         "required": [
-          "code",
+          "oneTimeCode",
           "password"
         ],
         "type": "object"
@@ -4083,7 +4083,7 @@
       },
       "ResetLocalUserPasswordRequest": {
         "properties": {
-          "principalId": {
+          "principal": {
             "type": "string"
           },
           "reason": {
@@ -4094,7 +4094,7 @@
           }
         },
         "required": [
-          "principalId",
+          "principal",
           "reason",
           "revokeAccessTokens"
         ],
@@ -6256,7 +6256,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.30.0"
+    "version": "0.32.0"
   },
   "openapi": "3.1.0",
   "paths": {

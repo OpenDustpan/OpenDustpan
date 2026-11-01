@@ -52,7 +52,7 @@ func TestLocalUserSuccessPaths(t *testing.T) {
 	f := newAccessFixture(t)
 
 	var created struct {
-		PrincipalID string `json:"principalID"`
+		PrincipalID string `json:"principal"`
 		SetUpCode   string `json:"setUpCode"`
 	}
 
@@ -62,7 +62,7 @@ func TestLocalUserSuccessPaths(t *testing.T) {
 	}, &created)
 
 	redeemed := publicPost(t, f, "/api/dustpan/v1/local-users/redeem",
-		`{"code":"`+created.SetUpCode+`","password":"`+routePassword+`"}`)
+		`{"oneTimeCode":"`+created.SetUpCode+`","password":"`+routePassword+`"}`)
 	if redeemed.Code != http.StatusNoContent || redeemed.Header().Get("Referrer-Policy") != "no-referrer" {
 		t.Fatalf("redeem = %d %v: %s", redeemed.Code, redeemed.Header(), redeemed.Body)
 	}
@@ -113,7 +113,7 @@ func TestLocalUserSuccessPaths(t *testing.T) {
 
 	f.asFresh(t, "admin", apiCall{
 		method: http.MethodPost, path: "/api/dustpan/v1/local-users/reset",
-		body: `{"principalID":"` + created.PrincipalID + `","reason":"lost the password"}`, want: http.StatusCreated,
+		body: `{"principal":"` + created.PrincipalID + `","reason":"lost the password"}`, want: http.StatusCreated,
 	}, &reset)
 
 	if len(reset.ResetCode) != 43 {
@@ -153,7 +153,7 @@ func TestPasswordSignInRefusals(t *testing.T) {
 		},
 		{
 			name: "code of a wrong form", path: "/api/dustpan/v1/local-users/redeem",
-			body: `{"code":"../../etc","password":"` + routePassword + `"}`, status: http.StatusBadRequest,
+			body: `{"oneTimeCode":"../../etc","password":"` + routePassword + `"}`, status: http.StatusBadRequest,
 			code: "local-user.code-invalid",
 		},
 	}
