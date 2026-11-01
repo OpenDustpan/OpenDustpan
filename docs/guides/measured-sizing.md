@@ -32,7 +32,8 @@ The workspace page is the most costly request of the cycle, so a mix with fewer 
 ## The limits of the measurement
 
 - The harness, the balancer, the server processes, PostgreSQL and MinIO share 4 CPUs. The numbers show the shared host, not a host for each part.
-- The measured CPU of all parts together was 2.4 to 3.5 cores of 4. The host had no free CPU for more load at three instances, so two and three instances reach the same throughput in the saturation run.
+- The harness counted the CPU of the server processes, PostgreSQL, MinIO and the harness together. It was 3.0 to 3.6 cores of 4 in the saturation runs, and 1.8 to 2.7 cores in the fixed-load runs. At three instances in the saturation run it was 3.6 cores. The host was close to CPU saturation. Kernel time and other work on the host are not in the count. So the flat throughput of two and three instances probably comes from the CPU of the shared host. The run does not prove it.
+- The data set grows during a run. Each cycle makes a new stack. A window at about 30 cycles each second adds about 1700 stacks to the 500 seeded units. The count differs between settings, because their throughput differs. The inventory read lists this set, so the settings are not exactly comparable.
 - The network is loopback. A real network adds time to each request and to each database round trip.
 - One run for each setting. Nobody repeated the runs, so the numbers have an error that this page does not measure.
 - The times run from the start of a request to the response headers.
@@ -44,6 +45,8 @@ The workspace page is the most costly request of the cycle, so a mix with fewer 
 
 The users run with no wait between cycles. Each setting used a new database and a new bucket prefix.
 
+The results for two and three instances are CPU bound on one shared host. The host was close to CPU saturation, and the numbers show the cost of the parts, not the limit of a host with more CPUs.
+
 | Instances | Requests each second | Pulumi updates each second | OpenTofu applies each second | Errors |
 | --- | --- | --- | --- | --- |
 | 1 | 316 | 28.8 | 28.7 | 0 of 18959 |
@@ -51,8 +54,7 @@ The users run with no wait between cycles. Each setting used a new database and 
 | 3 | 409 | 37.3 | 37.2 | 0 of 24568 |
 
 From one to two instances the throughput rose by about 30 percent.
-From two to three instances it did not rise, because the host had no free CPU.
-So the table shows the cost of the parts, not the limit of a host with more CPUs.
+From two to three instances it did not rise. This probably comes from the CPU of the shared host (see the limits above), but the run does not prove it.
 
 ## Latency of the hot routes at saturation
 
@@ -72,7 +74,7 @@ Times use milliseconds: p50 / p95 / p99.
 | tofu workspace list | 674 / 936 / 1083 | 584 / 995 / 1136 | 453 / 1089 / 1200 |
 
 The route `tofu workspace list` reads 100 workspaces, so it is the slowest.
-The write routes get faster when you add an instance, because each instance has 4 database connections by default and the requests queue for them.
+The write routes got faster when the run added an instance. A probable cause is that each instance has 4 database connections by default and the requests queue for them. The run with a larger pool, below, points the same way. It does not isolate the cause.
 
 ## Latency at a fixed load
 
@@ -96,7 +98,7 @@ The times use milliseconds: p50 / p95 / p99.
 ## What the parts used
 
 The CPU is in cores, averaged over the 60 s window.
-The cost is core-milliseconds for each request.
+The cost columns are core-milliseconds for each request. The report fields `instanceCoreMsPer1kRequests` and `postgresCoreMsPer1kRequests` count 1000 requests, so this page divided them by 1000.
 
 | Setting | Instances (cores) | PostgreSQL (cores) | MinIO (cores) | Harness (cores) | Connections (mean / max) | Transactions each second | Instance cost | PostgreSQL cost |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -117,16 +119,16 @@ The table below shows saturation runs with `pool_max_conns=16`.
 | 1 | 357 | 16 | 70 / 108 / 126 | 609 / 730 / 780 |
 | 2 | 386 | 32 | 76 / 149 / 186 | 394 / 707 / 844 |
 
-A larger pool raised the throughput of one instance by about 13 percent.
-It did not raise the throughput of two instances, because the host ran out of CPU.
+In one run, a larger pool gave one instance about 13 percent more throughput (357 against 316 requests each second). Nobody repeated the run, so treat the 13 percent as a hint, not as an effect.
+The larger pool did not raise the throughput of two instances. This probably comes from the CPU of the shared host.
 
 ## A rolling restart of one instance
 
 After the 60 s window the harness stopped instance 0 with SIGTERM, started it again, and kept the load for 30 s.
 The load was the fixed load of the table above.
 The balancer takes an instance out of its pool when its readiness probe fails, as a load balancer does.
-The restarted instance was ready in 0.1 to 0.2 s, because the binary and the schema were in place.
-The stop took 10.0 s in each run, because the server drains for 10 s before it stops.
+The restarted instance was ready in 0.1 to 0.2 s. The binary and the schema were in place.
+The stop took 10.0 s in each run. The server drains for 10 s before it stops.
 
 | Instances | Requests from SIGTERM to ready again | Errors | Error rate | Requests in the 30 s after | Errors after |
 | --- | --- | --- | --- | --- | --- |
@@ -143,26 +145,28 @@ See [High availability](high-availability.md) for the retry times of each CLI ve
 
 ## A sizing table from these numbers
 
-The table multiplies the measured cost of a request by a request rate.
-It uses 4.0 core-milliseconds for the server processes and 3.5 for PostgreSQL, which are the middle of the fixed-load and saturation runs.
+The table is a straight-line extrapolation. It multiplies the measured cost of a request by a request rate.
+The costs come from runs at 175 to 409 requests each second. The top row, 400 requests each second, is close to the saturation point that the host reached, and the rows below it are not measured.
+The results for two and three instances are CPU bound on one shared host, so the table does not show what more instances can serve.
+It uses 4.0 core-milliseconds for the server processes and 3.5 for PostgreSQL, which are about the middle of the measured costs.
 Your mix of requests will differ.
 Size from your own run.
 
 | Requests each second | Server cores (all instances) | PostgreSQL cores | Database connections with 2 instances | Database connections with 3 instances |
 | --- | --- | --- | --- | --- |
-| 50 | 0.2 | 0.2 | 8 | 12 |
-| 100 | 0.4 | 0.3 | 8 | 12 |
-| 200 | 0.8 | 0.7 | 8 | 12 |
-| 400 | 1.6 | 1.4 | 8 | 12 |
+| 50 | 0.20 | 0.18 | 8 | 12 |
+| 100 | 0.40 | 0.35 | 8 | 12 |
+| 200 | 0.80 | 0.70 | 8 | 12 |
+| 400 | 1.60 | 1.40 | 8 | 12 |
 
 Use these rules with the table:
 
 - Run at least two instances for availability. The restart run shows that two instances lose no request when one restarts.
-- Add instances for CPU and for database connections, not for the database. Each instance used about the same CPU for each request.
+- Add instances when the server processes need more CPU. The cost of a request on the server processes stayed about the same from one to three instances. Each instance also holds its own database connections, so more instances need more connections on the database. PostgreSQL does not get more capacity from more instances.
 - PostgreSQL used about as much CPU as all server processes together. Give it as much CPU as the server processes.
 - Check the database limit `max_connections`. Each instance holds 4 connections by default, or the value of `pool_max_conns`, and PostgreSQL needs some for other tools.
 - MinIO used 0.2 to 0.5 cores in these runs.
-- Leave free CPU on each host. The saturation runs had no free CPU left.
+- Leave free CPU on each host. The saturation runs left little free CPU.
 
 ## Run it again
 

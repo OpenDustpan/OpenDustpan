@@ -322,7 +322,7 @@ The report holds these fields:
 | `instances`, `clients`, `thinkMs`, `units` | The settings of the run |
 | `steady` | The requests that began in the measurement window: `requests`, `errors`, `errorRate`, `requestsPerSec`, `errorStatuses` and one entry in `routes` for each route |
 | `resources` | The CPU in cores, averaged over the window, of the server processes, PostgreSQL, the object store and the harness. Also the client connections to PostgreSQL (mean and maximum), the transactions each second, and the CPU cost of 1000 requests in core-milliseconds |
-| `restart` | With `-restart`: the stop time and the start time of the instance. Also the requests `during` the restart (SIGTERM to ready) and `after` it |
+| `restart` | With `-restart`: the stop time and the start time of the instance. Also the requests `during` the restart (SIGTERM to ready) and `after` it. The mode sets `stopError` or `startError` when the stop or the start failed. The report is then not the report of a restart |
 | `clientErrors` | The client calls that failed, over the whole run |
 
 Each entry of `routes` holds `requests`, `errors`, `p50Ms`, `p95Ms`, `p99Ms` and `maxMs`.
@@ -331,6 +331,8 @@ The times run from the start of the request to the response headers.
 The harness groups the requests by what the server does, for example `tofu lock` and `pulumi checkpoint save`, not by the name of a unit.
 
 The mode reads the CPU time of the processes from `/proc`, so it runs on Linux only.
+A field that nobody measured is absent from `resources`, and `resources.unmeasured` names it. The PostgreSQL CPU needs a readable `postmaster.pid` in the data directory that the database reports. The object store CPU needs `-store-pid`.
+The mode starts each server process as the leader of its own process group, and a stop sends SIGTERM to the group. Known limit: if you send SIGKILL to the harness, the server processes stay running and you must stop them yourself. A SIGINT or a SIGTERM to the harness stops them.
 The harness, the balancer, the server processes, PostgreSQL and the object store share the CPUs of one host.
 So the numbers depend on that host.
 The [measured sizing page](measured-sizing.md) shows a run and its limits.

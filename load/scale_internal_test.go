@@ -76,9 +76,42 @@ func TestBalancerPickSkipsUnhealthy(t *testing.T) {
 	t.Parallel()
 
 	procs := []*serverProc{
-		newServerProc(procSpec{index: 0, port: 1, bin: "x", args: nil, env: nil, dir: t.TempDir()}),
-		newServerProc(procSpec{index: 1, port: 2, bin: "x", args: nil, env: nil, dir: t.TempDir()}),
-		newServerProc(procSpec{index: 2, port: 3, bin: "x", args: nil, env: nil, dir: t.TempDir()}),
+		newServerProc(
+			procSpec{
+				index:        0,
+				port:         1,
+				bin:          "x",
+				args:         nil,
+				env:          nil,
+				dir:          t.TempDir(),
+				startTimeout: 0,
+				stopTimeout:  0,
+			},
+		),
+		newServerProc(
+			procSpec{
+				index:        1,
+				port:         2,
+				bin:          "x",
+				args:         nil,
+				env:          nil,
+				dir:          t.TempDir(),
+				startTimeout: 0,
+				stopTimeout:  0,
+			},
+		),
+		newServerProc(
+			procSpec{
+				index:        2,
+				port:         3,
+				bin:          "x",
+				args:         nil,
+				env:          nil,
+				dir:          t.TempDir(),
+				startTimeout: 0,
+				stopTimeout:  0,
+			},
+		),
 	}
 
 	lb, err := newBalancer(procs)

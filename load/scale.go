@@ -91,11 +91,12 @@ type MachineInfo struct {
 type ResourceStats struct {
 	// InstanceCores is the CPU of all server processes together.
 	InstanceCores float64 `json:"instanceCores"`
-	// PostgresCores is the CPU of the postmaster and its children.
-	PostgresCores float64 `json:"postgresCores"`
-	// StoreCores is the CPU of the object store process, or 0 when
-	// -store-pid is not set.
-	StoreCores float64 `json:"storeCores"`
+	// PostgresCores is the CPU of the postmaster and its children. It is
+	// absent when the harness could not find the postmaster.
+	PostgresCores *float64 `json:"postgresCores,omitempty"`
+	// StoreCores is the CPU of the object store process. It is absent
+	// when -store-pid is not set.
+	StoreCores *float64 `json:"storeCores,omitempty"`
 	// HarnessCores is the CPU of clients, balancer and sampler.
 	HarnessCores float64 `json:"harnessCores"`
 	// DBConnectionsMean and DBConnectionsMax count client connections.
@@ -105,8 +106,10 @@ type ResourceStats struct {
 	DBTransactionsPerSec float64 `json:"dbTransactionsPerSec"`
 	// InstanceCoreMsPer1k and PostgresCoreMsPer1k are the CPU cost of 1000
 	// requests, in core-milliseconds.
-	InstanceCoreMsPer1k float64 `json:"instanceCoreMsPer1kRequests"`
-	PostgresCoreMsPer1k float64 `json:"postgresCoreMsPer1kRequests"`
+	InstanceCoreMsPer1k float64  `json:"instanceCoreMsPer1kRequests"`
+	PostgresCoreMsPer1k *float64 `json:"postgresCoreMsPer1kRequests,omitempty"`
+	// Unmeasured names the fields that nobody measured in this run.
+	Unmeasured []string `json:"unmeasured,omitempty"`
 }
 
 // RestartStats holds the restart of one instance while the clients run.
@@ -114,6 +117,10 @@ type RestartStats struct {
 	Instance int     `json:"instance"`
 	StopMs   float64 `json:"stopMs"`
 	StartMs  float64 `json:"startMs"`
+	// StopError and StartError are set when the stop or the start failed.
+	// The report is then not the report of a restart.
+	StopError  string `json:"stopError,omitempty"`
+	StartError string `json:"startError,omitempty"`
 	// During covers the requests that began from the SIGTERM until the
 	// instance was ready again. After covers the tail that follows.
 	During PhaseStats `json:"during"`
@@ -122,13 +129,19 @@ type RestartStats struct {
 
 // scaleRun holds the running parts of one scale run.
 type scaleRun struct {
-	flags   scaleFlags
-	procs   []*serverProc
-	rec     *recorder
-	target  target
-	clients []*scaleClient
-	server  *http.Server
-	stop    atomic.Bool
+	flags     scaleFlags
+	procs     []*serverProc
+	rec       *recorder
+	target    target
+	clients   []*scaleClient
+	server    *http.Server
+	lb        *balancer
+	transport *http.Transport
+	stop      atomic.Bool
+	// background holds the goroutines that shutdown waits for: the health
+	// check and the balancer server. watchStop ends the health check.
+	background sync.WaitGroup
+	watchStop  context.CancelFunc
 	// failed counts the calls of a client that did not end well. The
 	// samples hold the failed requests; this count also holds the calls
 	// that failed before or after a request, such as a body that did not decode.
@@ -168,18 +181,58 @@ func executeScale(ctx context.Context, logger *slog.Logger, f harnessFlags, dir 
 		procStore{pgURL: pgURL, endpoint: signer.Endpoint, bucket: signer.Bucket, dir: dir},
 	)
 
-	defer stopProcs(logger, procs)
+	run := newScaleRun(f, procs)
+	defer run.shutdown(ctx, logger)
 
 	if err != nil {
 		return ScaleReport{}, err
 	}
 
-	run, report, err := prepareScale(ctx, logger, f, procs)
+	report, err := run.prepare(ctx, logger, f)
 	if err != nil {
 		return ScaleReport{}, err
 	}
 
 	return run.measure(ctx, logger, report, pgURL)
+}
+
+// newScaleRun answers a run over procs that nothing serves yet.
+func newScaleRun(f harnessFlags, procs []*serverProc) *scaleRun {
+	return &scaleRun{
+		flags: f.scale, procs: procs, rec: nil, target: newTarget(nil, harnessToken(), f.ns),
+		clients: nil, server: nil, lb: nil, transport: nil, stop: atomic.Bool{},
+		background: sync.WaitGroup{}, watchStop: nil, failed: atomic.Int64{},
+	}
+}
+
+// shutdown ends everything the run started, in the order that leaves no
+// goroutine and no idle connection: the health check and the balancer
+// server first, then the idle connections, then the server processes.
+func (r *scaleRun) shutdown(ctx context.Context, logger *slog.Logger) {
+	r.stop.Store(true)
+
+	if r.watchStop != nil {
+		r.watchStop()
+	}
+
+	if r.server != nil {
+		if err := r.server.Close(); err != nil {
+			logger.ErrorContext(ctx, "close balancer", slog.String("error", err.Error()))
+		}
+	}
+
+	r.background.Wait()
+
+	if r.lb != nil {
+		r.lb.transport.CloseIdleConnections()
+	}
+
+	if r.transport != nil {
+		r.transport.CloseIdleConnections()
+	}
+
+	http.DefaultClient.CloseIdleConnections()
+	stopProcs(ctx, logger, r.procs)
 }
 
 // procStore names what all server processes share: the database, the
@@ -214,22 +267,16 @@ func startProcs(ctx context.Context, sf scaleFlags, shared procStore) ([]*server
 	}
 
 	store := "s3://" + shared.bucket + "/scale-" + hex.EncodeToString(prefix)
+	args := []string{
+		"serve", "--installation", scaleInstallation, "--blob-store", store, "--s3-endpoint", shared.endpoint,
+	}
 
 	procs := make([]*serverProc, 0, sf.instances)
 
 	for index := range sf.instances {
-		port, err := freePort(ctx)
-		if err != nil {
-			return procs, err
-		}
-
-		args := []string{
-			"serve", "--listen", "127.0.0.1:" + strconv.Itoa(port), "--installation", scaleInstallation,
-			"--blob-store", store, "--s3-endpoint", shared.endpoint,
-		}
-
 		procs = append(procs, newServerProc(procSpec{
-			index: index, port: port, bin: sf.binary, args: args, env: env, dir: shared.dir,
+			index: index, port: 0, bin: sf.binary, args: args, env: env, dir: shared.dir,
+			startTimeout: procStartTimeout, stopTimeout: procStopTimeout,
 		}))
 	}
 
@@ -258,69 +305,78 @@ func startProcs(ctx context.Context, sf scaleFlags, shared procStore) ([]*server
 	return procs, startErr
 }
 
-// stopProcs stops every started process.
-func stopProcs(logger *slog.Logger, procs []*serverProc) {
+// stopProcs stops every process at the same time, so the drain of all
+// instances takes the time of one.
+func stopProcs(ctx context.Context, logger *slog.Logger, procs []*serverProc) {
+	var wait sync.WaitGroup
+
 	for _, proc := range procs {
-		if _, err := proc.stop(); err != nil {
-			logger.Error("stop server", slog.Int("instance", proc.index), slog.String("error", err.Error()))
-		}
+		wait.Go(func() {
+			if _, err := proc.stop(); err != nil {
+				logger.ErrorContext(
+					ctx,
+					"stop server",
+					slog.Int("instance", proc.index),
+					slog.String("error", err.Error()),
+				)
+			}
+		})
 	}
+
+	wait.Wait()
 }
 
-// prepareScale serves the balancer, makes the namespace, seeds units and
-// makes the clients. It answers the run with a report that holds the
-// settings of the run.
-func prepareScale(
-	ctx context.Context, logger *slog.Logger, f harnessFlags, procs []*serverProc,
-) (*scaleRun, ScaleReport, error) {
-	run := &scaleRun{
-		flags: f.scale, procs: procs, rec: nil, target: newTarget(nil, harnessToken(), f.ns),
-		clients: nil, server: nil, stop: atomic.Bool{}, failed: atomic.Int64{},
-	}
-
+// prepare serves the balancer, makes the namespace, seeds units and makes
+// the clients. It answers a report that holds the settings of the run.
+func (r *scaleRun) prepare(ctx context.Context, logger *slog.Logger, f harnessFlags) (ScaleReport, error) {
 	var empty ScaleReport
 
-	lb, err := newBalancer(procs)
+	lb, err := newBalancer(r.procs)
 	if err != nil {
-		return nil, empty, err
+		return empty, err
 	}
+
+	r.lb = lb
 
 	listener, err := listenLoopback(ctx)
 	if err != nil {
-		return nil, empty, err
+		return empty, err
 	}
 
-	run.server = &http.Server{Handler: lb, ReadHeaderTimeout: scaleHTTPTimeout}
+	r.server = &http.Server{Handler: lb, ReadHeaderTimeout: scaleHTTPTimeout}
 
-	go func() {
-		if serveErr := run.server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+	r.background.Go(func() {
+		if serveErr := r.server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			logger.ErrorContext(ctx, "balancer", slog.String("error", serveErr.Error()))
 		}
-	}()
+	})
 
-	go lb.watch(context.WithoutCancel(ctx))
+	watchCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	r.watchStop = cancel
+
+	r.background.Go(func() { lb.watch(watchCtx) })
 
 	base := "http://" + listener.Addr().String()
-	transport := newTransport()
+	r.transport = newTransport()
 
-	run.target = newTarget([]string{base}, harnessToken(), f.ns)
-	run.target.client = &http.Client{Transport: transport, Timeout: scaleHTTPTimeout}
+	r.target = newTarget([]string{base}, harnessToken(), f.ns)
+	r.target.client = &http.Client{Transport: r.transport, Timeout: scaleHTTPTimeout}
 
-	if err := run.makeNamespace(ctx, base, f.ns); err != nil {
-		return nil, empty, err
+	if err := r.makeNamespace(ctx, base, f.ns); err != nil {
+		return empty, err
 	}
 
 	logger.InfoContext(ctx, "seed units", slog.Int("units", f.units))
 
-	if err := run.target.seedUnits(ctx, f.units, defaultSeedWorkers); err != nil {
-		return nil, empty, err
+	if err := r.target.seedUnits(ctx, f.units, defaultSeedWorkers); err != nil {
+		return empty, err
 	}
 
-	run.rec = newRecorder(transport)
-	run.target.client = &http.Client{Transport: run.rec, Timeout: scaleHTTPTimeout}
+	r.rec = newRecorder(r.transport)
+	r.target.client = &http.Client{Transport: r.rec, Timeout: scaleHTTPTimeout}
 
-	if err := run.makeClients(ctx); err != nil {
-		return nil, empty, err
+	if err := r.makeClients(ctx); err != nil {
+		return empty, err
 	}
 
 	var (
@@ -328,13 +384,11 @@ func prepareScale(
 		resources ResourceStats
 	)
 
-	report := ScaleReport{
-		Time: time.Now().UTC().Format(time.RFC3339), Machine: machineInfo(), Instances: len(procs),
+	return ScaleReport{
+		Time: time.Now().UTC().Format(time.RFC3339), Machine: machineInfo(), Instances: len(r.procs),
 		Clients: f.scale.clients, ThinkMs: ms(f.scale.think), Units: f.units,
 		Steady: steady, Resources: resources, Restart: nil, ClientErrors: 0,
-	}
-
-	return run, report, nil
+	}, nil
 }
 
 // makeClients makes the workspace of each client.
@@ -385,10 +439,6 @@ func (r *scaleRun) measure(
 	defer func() {
 		r.stop.Store(true)
 		wait.Wait()
-
-		if err := r.server.Close(); err != nil {
-			logger.ErrorContext(ctx, "close balancer", slog.String("error", err.Error()))
-		}
 	}()
 
 	logger.InfoContext(ctx, "warm up", slog.Duration("for", r.flags.warmup))
@@ -404,6 +454,14 @@ func (r *scaleRun) measure(
 			logger.ErrorContext(ctx, "close sampler", slog.String("error", closeErr.Error()))
 		}
 	}()
+
+	if monitor.pgRoot == 0 {
+		logger.WarnContext(ctx, "the postmaster file is not readable: the PostgreSQL CPU is not measured")
+	}
+
+	if r.flags.storePID == 0 {
+		logger.WarnContext(ctx, "no -store-pid: the object store CPU is not measured")
+	}
 
 	from := r.rec.since()
 
@@ -426,7 +484,9 @@ func (r *scaleRun) measure(
 }
 
 // restartOne stops instance 0 with SIGTERM, starts it again, and answers the
-// statistics of the requests around it. The clients keep running.
+// statistics of the requests around it. The clients keep running. A stop or
+// a start that failed shows in StopError and StartError, and the times then
+// are not the times of a restart.
 func (r *scaleRun) restartOne(ctx context.Context, logger *slog.Logger) *RestartStats {
 	proc := r.procs[0]
 	began := r.rec.since()
@@ -434,15 +494,8 @@ func (r *scaleRun) restartOne(ctx context.Context, logger *slog.Logger) *Restart
 	logger.InfoContext(ctx, "restart instance", slog.Int("instance", proc.index))
 
 	stopTook, stopErr := proc.stop()
-	if stopErr != nil {
-		logger.ErrorContext(ctx, "restart: stop", slog.String("error", stopErr.Error()))
-	}
-
 	startBegan := time.Now()
-	if err := proc.start(ctx); err != nil {
-		logger.ErrorContext(ctx, "restart: start", slog.String("error", err.Error()))
-	}
-
+	startErr := proc.start(ctx)
 	startTook := time.Since(startBegan)
 	ready := r.rec.since()
 
@@ -450,11 +503,25 @@ func (r *scaleRun) restartOne(ctx context.Context, logger *slog.Logger) *Restart
 
 	end := r.rec.since()
 
-	return &RestartStats{
-		Instance: proc.index, StopMs: ms(stopTook), StartMs: ms(startTook),
+	out := &RestartStats{
+		Instance: proc.index, StopMs: ms(stopTook), StartMs: ms(startTook), StopError: "", StartError: "",
 		During: summarize(r.rec.window(began, ready), ready-began),
 		After:  summarize(r.rec.window(ready, end), end-ready),
 	}
+
+	if stopErr != nil {
+		out.StopError = stopErr.Error()
+
+		logger.ErrorContext(ctx, "restart: stop", slog.String("error", stopErr.Error()))
+	}
+
+	if startErr != nil {
+		out.StartError = startErr.Error()
+
+		logger.ErrorContext(ctx, "restart: start", slog.String("error", startErr.Error()))
+	}
+
+	return out
 }
 
 // sleep waits for d or until ctx ends.
@@ -490,11 +557,15 @@ func (r *scaleRun) loop(ctx context.Context, one *scaleClient) {
 }
 
 // tofuCycle replays one OpenTofu apply on the workspace of the client:
-// lock, state upload, unlock.
+// lock, state upload, unlock. A lock request that failed or was refused may
+// leave a lock that the client holds, for example when the answer was lost
+// at a restart. The client then releases the workspace, so one error does
+// not fail the later cycles of the client.
 func (r *scaleRun) tofuCycle(ctx context.Context, one *scaleClient) {
 	status, err := r.target.lockWorkspace(ctx, one.workspace)
 	if err != nil || status != http.StatusOK {
 		r.failed.Add(1)
+		r.release(ctx, one)
 
 		return
 	}
@@ -506,8 +577,23 @@ func (r *scaleRun) tofuCycle(ctx context.Context, one *scaleClient) {
 		r.failed.Add(1)
 	}
 
+	r.release(ctx, one)
+}
+
+// release unlocks the workspace of the client. It tries again while the
+// request fails to get an answer. Any answer of the server ends it,
+// also 409 for a workspace that has no lock.
+func (r *scaleRun) release(ctx context.Context, one *scaleClient) {
 	for range unlockTries {
-		if unlockErr := r.target.unlockWorkspace(ctx, one.workspace); unlockErr == nil {
+		resp, err := r.target.do(ctx, request{
+			method: http.MethodPost, url: r.target.firstURL(tfeByID + one.workspace + tfeUnlock),
+			auth: tfeScheme + r.target.token, mediaType: jsonMediaType, body: []byte(emptyJSONBody),
+		})
+		if err == nil {
+			if resp.status != http.StatusOK && resp.status != http.StatusConflict {
+				r.failed.Add(1)
+			}
+
 			return
 		}
 
@@ -696,33 +782,75 @@ func (m *monitor) end(ctx context.Context, window time.Duration, requests int) R
 	m.cancel()
 	m.sampled.Wait()
 
-	seconds := window.Seconds()
-	var out ResourceStats
-
-	out.InstanceCores = (now.instances - m.cpu.instances) / seconds
-	out.PostgresCores = (now.postgres - m.cpu.postgres) / seconds
-	out.StoreCores = (now.store - m.cpu.store) / seconds
-	out.HarnessCores = (now.harness - m.cpu.harness) / seconds
-	out.DBTransactionsPerSec = float64(tx-m.txBegin) / seconds
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return resourcesOf(resourceInput{
+		begin: m.cpu, end: now, txBegin: m.txBegin, txEnd: tx, window: window, requests: requests,
+		counts: m.counts, postgres: m.pgRoot != 0, store: m.storePID != 0,
+	})
+}
+
+// resourceInput is what resourcesOf turns into the resources of a window.
+type resourceInput struct {
+	begin, end cpuMark
+	txBegin    int64
+	txEnd      int64
+	window     time.Duration
+	requests   int
+	// counts are the samples of the client connections.
+	counts []int
+	// postgres and store say that the CPU of the part was measured.
+	postgres bool
+	store    bool
+}
+
+// resourcesOf answers the resources of one window. A part that nobody
+// measured has no value, not the value 0, and the report names it.
+func resourcesOf(in resourceInput) ResourceStats {
+	seconds := in.window.Seconds()
+
+	out := ResourceStats{
+		InstanceCores:        (in.end.instances - in.begin.instances) / seconds,
+		HarnessCores:         (in.end.harness - in.begin.harness) / seconds,
+		DBTransactionsPerSec: float64(in.txEnd-in.txBegin) / seconds,
+		InstanceCoreMsPer1k:  0, PostgresCores: nil, StoreCores: nil, PostgresCoreMsPer1k: nil,
+		DBConnectionsMean: 0, DBConnectionsMax: 0, Unmeasured: nil,
+	}
+
+	if in.postgres {
+		cores := (in.end.postgres - in.begin.postgres) / seconds
+		out.PostgresCores = &cores
+	} else {
+		out.Unmeasured = append(out.Unmeasured, "postgresCores")
+	}
+
+	if in.store {
+		cores := (in.end.store - in.begin.store) / seconds
+		out.StoreCores = &cores
+	} else {
+		out.Unmeasured = append(out.Unmeasured, "storeCores")
+	}
+
 	sum := 0
 
-	for _, count := range m.counts {
+	for _, count := range in.counts {
 		sum += count
 		out.DBConnectionsMax = max(out.DBConnectionsMax, count)
 	}
 
-	if len(m.counts) > 0 {
-		out.DBConnectionsMean = float64(sum) / float64(len(m.counts))
+	if len(in.counts) > 0 {
+		out.DBConnectionsMean = float64(sum) / float64(len(in.counts))
 	}
 
-	if requests > 0 {
-		scale := perThousand / float64(requests)
-		out.InstanceCoreMsPer1k = (now.instances - m.cpu.instances) * perThousand * scale
-		out.PostgresCoreMsPer1k = (now.postgres - m.cpu.postgres) * perThousand * scale
+	if in.requests > 0 {
+		perRequest := perThousand / float64(in.requests)
+		out.InstanceCoreMsPer1k = (in.end.instances - in.begin.instances) * perThousand * perRequest
+
+		if in.postgres {
+			cost := (in.end.postgres - in.begin.postgres) * perThousand * perRequest
+			out.PostgresCoreMsPer1k = &cost
+		}
 	}
 
 	return out
