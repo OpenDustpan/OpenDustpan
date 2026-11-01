@@ -5,6 +5,8 @@ Status: accepted · 2026-10-20. Decided by the product manager under the owner's
 Changed by:
 
 - ADR 300 changes decision 6: the log read of OpenTofu uses a signed URL for each job, phase and principal.
+- ADR 310 extends decision 4: the run options target, replace and refresh-only.
+- ADR 310 extends decision 5: per-run values.
 
 ## Context
 

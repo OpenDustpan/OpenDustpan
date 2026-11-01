@@ -8,6 +8,7 @@ Changed by:
 - ADR 273 changes decision 14: the last saver needs unit:read-outputs.
 - ADR 299 changes decisions 14 and 19: one credential rule for every start of
   a plan.
+- ADR 310 extends decision 22: the run order.
 
 ## Context
 
