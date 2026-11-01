@@ -66,7 +66,7 @@ The name `namespace-admin` is an alias of `admin`.
 A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
 
 ```json
-{"name":"deployer","description":"Runs the plans and the applies","actions":["unit:run-plan","unit:run-apply","job:read-plans","job:read-logs"]}
+{"name":"deployer","description":"Plans and reads the units","actions":["unit:run-plan","unit:read","unit:write"]}
 ```
 
 
@@ -179,7 +179,7 @@ with an optional `action`. The `object` form is also accepted, but not with
 
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://dustpan.example.com/api/server/caller/access?type=namespace&action=unit:run-apply"
+  "https://dustpan.example.com/api/server/caller/access?type=namespace&action=unit:write"
 ```
 
 Any signed-in principal can read its own access. The caller only sees its own
