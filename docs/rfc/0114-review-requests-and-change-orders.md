@@ -104,7 +104,8 @@ The mode is a required field in the API, the IaC providers, the CLI and the
 setup wizard. The server asks for it when a Git host connection is first
 attached to a scope (installation, namespace, collection or unit). The wizard
 shows each mode with a one-line trade-off and no answer selected. The
-effective mode of a unit shows in the API with the scope that set it.
+effective mode of a unit shows in the API with the scope that set it. The
+scope of the mode is decision 10.
 
 | Mode | What it means | Trade-off in one line |
 | --- | --- | --- |
@@ -369,6 +370,27 @@ The console shows a mark of a Git host only where it names the integration.
   an integration. We found no logo policy for Gitea.
 - The console never uses the colors of a Git host.
 
+### 10. The scope of the mode
+
+Decided by the project owner on 1 November 2026.
+
+- **A unit setting with a cascade.** The review mode is a setting of a unit,
+  with the cascade installation, namespace, collection, unit. A level can
+  force a value, and a lower level cannot override a forced value. The API
+  shows the effective value and its source, as the settings resource does.
+- **The strictest mode for a review request.** A review request that touches
+  units with different modes uses the strictest mode of those units. The
+  review request says which unit set it.
+- **Branch-wide settings of the Git host.** Mode 1 and mode 2 can need a
+  setting of the Git host that holds for the whole branch: the required
+  status, or "only OpenDustpan merges". Before the server turns such a setting
+  on, it lists each unit on that repository branch that the setting affects.
+  It refuses to turn the mode on until the effective mode of each affected
+  unit allows it, or a forced value above them settles it.
+
+This replaces the earlier options of one mode for each repository and branch,
+and of the code location as the scope of the mode.
+
 ## Design that follows from the decisions
 
 This section proposes the details. Each part can change in review.
@@ -412,6 +434,7 @@ This section proposes the details. Each part can change in review.
 | `approvals` status required | Yes | Yes | Not applicable | No. The `plan` status and the plan comment |
 | Who merges | People on the Git host | OpenDustpan, or people, as the scope sets | No review request | People |
 | Apply | After the merge | After the merge | At the apply request | As the tool runs today, or on merge when the scope turns it on |
+| Order of strictness (decision 10) | Third | Second | First (strictest) | Fourth |
 
 ### Mode 2: "only the OpenDustpan app merges", with no bypass
 
@@ -489,15 +512,19 @@ the words of the Git host:
   host account in the same flow, because a merge by an account that is not
   linked waits for a person with the apply grant.
 
-### One mode for each repository and branch
+### The order of strictness, and the errors of decision 10
 
-A review request can touch units whose modes differ. To keep one answer for
-"who approves and who merges", the server refuses a mode setting that gives
-different modes to units whose code locations share one repository and one
-branch. The error names the units, the scopes, the grant that can change the
-mode of each scope (`namespace:manage-gates`) and the people who hold it. The
-wizard says so. Open question 9 asks whether the code location should be the
-scope of the mode.
+- For decision 10, the order of the modes from the strictest is: mode 3, mode
+  2, mode 1, mode 4 (a decision of the PM for the owner, 1 November 2026). The
+  reason: where rules overlap, the most restrictive rule wins, as with an
+  explicit deny in AWS IAM and the layers of GitHub rulesets. Mode 3 has no review request flow of its own. So a review
+  request that touches a unit in mode 3 follows the rules of mode 2 (the
+  review in OpenDustpan, and OpenDustpan merges), and the review request says
+  so.
+- The refusal of a branch-wide setting names each affected unit, its effective
+  mode and its source, the grant that can change the mode of each scope
+  (`namespace:manage-gates`) and the people who hold it.
+- The wizard shows the same list before the person confirms.
 
 ### Who may set a mode, and mode 4
 
@@ -505,7 +532,8 @@ scope of the mode.
   `installation:manage-gates`), writes an audit entry `change` with the old
   and the new value, and needs a fresh authentication when the new mode asks
   for fewer approvals.
-- A parent scope can forbid modes below it, as with `signatureCarryOver`.
+- A level can force a mode below it (decision 10), and a parent scope can
+  forbid modes below it, as with the binding level.
 - Mode 4 refuses to turn on while any requirement source holds at the scope or
   at a wider scope: an approval rule that a gate names, an approval default,
   or an ownership rule in `enforce` mode. A later save of such a source on a
@@ -562,13 +590,13 @@ scope of the mode.
 - In mode 1, a review on the Git host counts only while the Git host still
   shows it as valid (not dismissed, not stale by the rules of the Git host),
   and only while the reset rule of the level keeps it, from a fresh read.
+- Conformance fixtures cover each bot path.
 
 ### Reset at each level
 
-The owner's reset rule ("reset only when a push changes the set of operations
-of the unit") is the meaning of L1, the default. Each level resets on its own
-binding. This is the PM's reading of the owner's answer, recorded on 31
-October 2026:
+Decided by the project owner on 1 November 2026: each level resets on what it
+binds to. The owner's earlier rule ("reset only when a push changes the set of
+operations of the unit") is the rule of L1, the default.
 
 | Level | A push resets the approvals when |
 | --- | --- |
@@ -580,7 +608,6 @@ An approval by a principal who later becomes an author is void at once, at
 every level (S1). At L0, the approval floor still compares the plan at the
 apply with the recorded set of operations, and L0 still resets on a new
 commit.
-- Conformance fixtures cover each bot path.
 
 ### Reviews on the Git host that do not count
 
@@ -961,24 +988,6 @@ recommendation and a plain summary.
       review requests now.
     - Recommendation: (a).
     - Plain summary: one review request, one change order for now.
-
-9. **The scope of the mode.**
-    - Context: the mode is set on an installation, a namespace, a collection or
-      a unit, and one repository and branch must have one mode. So the first
-      scope that sets a mode for a repository can block another team in
-      another namespace.
-    - Options: (a) keep the mode on the scopes, refuse a clash, and name the
-      grant and the people who hold it (the design now). (b) make the code
-      location (the repository and the branch) the scope of the mode, with its
-      own record, its own grant and its own audit entry. The scopes then only
-      limit which modes are allowed.
-    - Consequences: (a) no new object, and a clash needs people to agree. (b)
-      one record holds the answer for one repository and branch, and no
-      namespace setting depends on another. It needs a new object and a grant
-      for it.
-    - Recommendation: (b).
-    - Plain summary: the mode belongs to the repository and branch, because
-      that is where the review requests are.
 
 ## Checklist
 
