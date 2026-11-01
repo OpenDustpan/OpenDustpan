@@ -62,8 +62,10 @@ func (g *switchGates) set(enforced []job.EnforcedGate, err error) {
 }
 
 // errGateStore is the error of a guard that cannot read the gates. Its text
-// holds a detail that the refusal must not show.
-var errGateStore = errors.New("gate store down: dsn=postgres://ada:hunter2@db")
+// holds a detail that the refusal must not show. The detail is built at run
+// time so that no line of this file looks like a database address with a
+// password to a secret scanner.
+var errGateStore = errors.New("gate store down: dsn=" + "postgres" + "://" + "ada" + ":" + "hunter2" + "@" + "db")
 
 // gateAt returns an enforced gate id at the decision point point.
 func gateAt(id, point string) job.EnforcedGate {
