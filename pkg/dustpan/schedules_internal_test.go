@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"path/filepath"
 	"sync"
@@ -461,7 +462,11 @@ func newArtifactSweepServer(t *testing.T) *Server {
 		t.Fatalf("open blob store: %v", err)
 	}
 
-	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
 
 	artifacts, err := job.NewArtifactBlobs(blobs, dropRefusals{})
 	if err != nil {
@@ -469,8 +474,8 @@ func newArtifactSweepServer(t *testing.T) *Server {
 	}
 
 	sweeper, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
-		Jobs: store.Jobs(), Names: store.Jobs(), Blobs: artifacts, Namespaces: store, Guard: store, Logger: nil,
-		Now: nil,
+		Jobs: store.Jobs(), Names: store.Jobs(), Blobs: artifacts, Namespaces: store, Guard: store,
+		Clock: store, Audit: store, Logger: nil, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("new sweeper: %v", err)
@@ -480,6 +485,37 @@ func newArtifactSweepServer(t *testing.T) *Server {
 	srv.artifactSweeper = sweeper
 
 	return srv
+}
+
+// runArtifactSweepStep runs the step of the kind of the artifact sweep of srv,
+// and checks that its output is the result of a run that swept.
+func runArtifactSweepStep(t *testing.T, srv *Server) {
+	t.Helper()
+
+	var kind *durable.KindSpec
+
+	for _, k := range srv.jobKinds() {
+		if k.Kind == job.KindArtifactSweep {
+			kind = &k
+		}
+	}
+
+	if kind == nil || len(kind.Steps) != 1 || kind.Version != job.ArtifactSweepVersion {
+		t.Fatalf("kinds = %+v, want %s with one step", srv.jobKinds(), job.KindArtifactSweep)
+	}
+
+	// The step reads nothing of its context.
+	var step durable.StepContext
+
+	out, err := kind.Steps[0].Run(t.Context(), step)
+	if err != nil {
+		t.Fatalf("run the step of the artifact sweep: %v", err)
+	}
+
+	var res job.ArtifactSweepResult
+	if decodeErr := json.Unmarshal(out, &res); decodeErr != nil || res.Skipped != "" || res.DeletedKeys == nil {
+		t.Fatalf("step output = %s; want the result of a run that swept", out)
+	}
 }
 
 // TestJobScheduleArtifactSweepRuns proves that a server with the artifact
@@ -505,24 +541,7 @@ func TestJobScheduleArtifactSweepRuns(t *testing.T) {
 
 	// The interval is one hour, so the case runs the step of the kind itself
 	// instead of waiting for a tick.
-	var kind *durable.KindSpec
-
-	for _, k := range srv.jobKinds() {
-		if k.Kind == job.KindArtifactSweep {
-			kind = &k
-		}
-	}
-
-	if kind == nil || len(kind.Steps) != 1 || kind.Version != job.ArtifactSweepVersion {
-		t.Fatalf("kinds = %+v, want %s with one step", srv.jobKinds(), job.KindArtifactSweep)
-	}
-
-	// The step reads nothing of its context.
-	var step durable.StepContext
-
-	if _, err := kind.Steps[0].Run(t.Context(), step); err != nil {
-		t.Fatalf("run the step of the artifact sweep: %v", err)
-	}
+	runArtifactSweepStep(t, srv)
 }
 
 // dropRefusals is a scopeaudit.Recorder that drops every refusal.
