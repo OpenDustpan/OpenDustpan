@@ -262,8 +262,8 @@ answered question 9, the scope of the mode, with decisions 4 to 6. Decisions
     entry, a backup, a runner or an error. It uses the token only inside the
     request of the person, checks at each use that the account of the token
     is the account linked to the person, never refreshes the token, and ends
-    the cookie at sign-out. ADR 297 (in review in pull request #2147) gives
-    the sealed cookies of the console sessions, and the cookie follows it.
+    the cookie at sign-out. ADR 297 gives the sealed cookies of the
+    console sessions, and the cookie follows it.
 33. **Failures (owner).** A Git host that says "not mergeable" or does not
     answer fails the command with its own answer. A partial apply records "N
     of M applied" truthfully, with no blocking and no rollback, and a
