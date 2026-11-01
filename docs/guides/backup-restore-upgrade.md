@@ -112,7 +112,11 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
-The restore copies a blob only when its key is absent from the blob store of the server. A key that holds the bytes of the manifest stays as it is. A key that holds other bytes stops the restore. The restore never writes over it, on any blob store, and it does not rely on the conditional writes of the store. The restore fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key. Before each write of a blob, the restore checks that its worker still holds the claim on the restore.
+The restore copies a blob only when its key is absent from the blob store of the server. A key that holds the bytes of the manifest stays as it is. A key that holds other bytes stops the restore. The restore then fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key.
+
+The restore does not rely on the conditional writes of the blob store. It reads the key again just before it writes. It also reads the staged copy of the blob and checks it against the manifest before it writes the live key. A staged copy that differs stops the restore, and the live key stays absent. Before each write of a blob, the restore checks that its worker still holds the claim on the restore.
+
+A blob store that ignores conditional writes can still take a write of another writer between the last read and the write of the restore. Maintenance mode stops every other writer while the restore copies blobs. This is the protection against that gap.
 
 During a rolling deploy, a worker that runs a binary below the minimum binary
 version of the schema fails the check step of a restore, and the step is
