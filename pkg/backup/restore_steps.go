@@ -43,6 +43,10 @@ type restoreInput struct {
 	Force            bool      `json:"force"`
 	RequestedBy      string    `json:"requestedBy"`
 	KeepAccessTables bool      `json:"keepAccessTables"`
+	// evidence is the result of the pre-backup step of the operation, read
+	// from the durable step record for each step. It is not part of the
+	// stored input.
+	evidence preBackupResult
 }
 
 // readRestoreInput decodes and checks the input of a restore operation. An
@@ -171,6 +175,8 @@ func (s *RestoreService) guarded(body restoreStepFunc) durable.StepFunc {
 		if err != nil {
 			return nil, err
 		}
+
+		in.evidence = evidenceOf(sc.Operation)
 
 		out, err := body(ctx, sc, in)
 
@@ -687,8 +693,17 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 		return nil, nil
 	}
 
-	if err := s.backups.StartBeforeRestore(ctx, in.PreBackupID); err != nil && !errors.Is(err, ErrAlreadyExists) {
-		return nil, fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
+	// A backup that this step did not start, for example a pre-backup ID
+	// that names an older backup, or a start of an earlier try, is not
+	// evidence of this run: the restore then repairs no damaged blob.
+	created := true
+
+	if err := s.backups.StartBeforeRestore(ctx, in.PreBackupID); err != nil {
+		if !errors.Is(err, ErrAlreadyExists) {
+			return nil, fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
+		}
+
+		created = false
 	}
 
 	pre, err := s.backups.Await(ctx, in.PreBackupID)
@@ -696,15 +711,54 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 		return nil, fmt.Errorf("backup live data before restore %s: %w", in.ID, err)
 	}
 
-	if err := s.recordPreBackupDamage(ctx, sc.Fence, in, pre.ID); err != nil {
+	result, err := s.recordPreBackupDamage(ctx, sc.Fence, in, pre.ID)
+	if err != nil {
 		return nil, err
 	}
 
-	if err := s.live.MarkRestoreApplying(ctx, sc.Fence, in.ID, pre.ID); err != nil {
+	result.Created = created
+
+	out, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("encode the pre-backup result of restore %s: %w", in.ID, err)
+	}
+
+	if err := s.live.MarkRestoreApplying(ctx, sc.Fence, in.ID, pre.ID, out); err != nil {
 		return nil, fmt.Errorf("mark restore %s applying: %w", in.ID, err)
 	}
 
 	return nil, nil
+}
+
+// preBackupResult is the result of the pre-backup step, stored in the step
+// record under the fence of the step. Digest is the SHA-256 of the manifest of
+// the backup before the restore, as the step read it. Damaged counts its
+// damaged entries. Created reports that this step started that backup. The
+// restore accepts a damaged entry only from a manifest with this digest, and
+// only when Created is true.
+type preBackupResult struct {
+	Digest  string `json:"digest"`
+	Damaged int    `json:"damaged"`
+	Created bool   `json:"created"`
+}
+
+// evidenceOf returns the stored result of the pre-backup step of op. A step
+// with no result, or a result that does not decode, gives the zero value,
+// which is no evidence: the restore then repairs no damaged blob.
+func evidenceOf(op durable.Operation) preBackupResult {
+	none := preBackupResult{Digest: "", Damaged: 0, Created: false}
+
+	rec, ok := op.Step(RestoreStepPreBackup)
+	if !ok || len(rec.Result) == 0 {
+		return none
+	}
+
+	var res preBackupResult
+	if err := json.Unmarshal(rec.Result, &res); err != nil {
+		return none
+	}
+
+	return res
 }
 
 // recordPreBackupDamage reads the manifest of the backup before restore in,
@@ -713,15 +767,22 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 // recorded, and a second store of one event changes nothing.
 func (s *RestoreService) recordPreBackupDamage(
 	ctx context.Context, fence durable.StepFence, in restoreInput, pre ID,
-) error {
+) (preBackupResult, error) {
+	none := preBackupResult{Digest: "", Damaged: 0, Created: false}
+
 	manifest, err := readManifest(ctx, s.target, pre)
 	if err != nil {
-		return fmt.Errorf("read the backup of the live data before restore %s: %w", in.ID, err)
+		return none, fmt.Errorf("read the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	digest, err := manifestDigest(manifest)
+	if err != nil {
+		return none, err
 	}
 
 	for _, entry := range manifest.Damaged {
 		if err := s.live.RecordRestoreEvent(ctx, fence, in.ID, preBackupDamageAuditObject(in, pre, entry)); err != nil {
-			return fmt.Errorf("record the damaged live blobs of restore %s: %w", in.ID, err)
+			return none, fmt.Errorf("record the damaged live blobs of restore %s: %w", in.ID, err)
 		}
 	}
 
@@ -730,13 +791,7 @@ func (s *RestoreService) recordPreBackupDamage(
 			slog.String("restore_id", in.ID.String()), slog.String("backup_id", pre.String()), slog.Int("blobs", n))
 	}
 
-	return nil
-}
-
-// copyStepResult is the result of the copy step: the count of live blobs
-// that the backup before the restore found missing or damaged.
-type copyStepResult struct {
-	Damaged int `json:"damaged"`
+	return preBackupResult{Digest: digest, Damaged: len(manifest.Damaged), Created: false}, nil
 }
 
 // stepCopyBlobs pins the manifest again and copies each blob that it names
@@ -756,37 +811,7 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 		return nil, err
 	}
 
-	pre, err := readManifest(ctx, s.target, in.PreBackupID)
-	if err != nil {
-		return nil, fmt.Errorf("read the backup of the live data before restore %s: %w", in.ID, err)
-	}
-
-	if copyErr := s.copyManifestBlobs(ctx, sc.Fence, in, manifest); copyErr != nil {
-		return nil, copyErr
-	}
-
-	out, err := json.Marshal(copyStepResult{Damaged: len(pre.Damaged)})
-	if err != nil {
-		return nil, fmt.Errorf("encode the copy result of restore %s: %w", in.ID, err)
-	}
-
-	return out, nil
-}
-
-// damagedOf returns the count of damaged live blobs that the copy step of op
-// recorded. A copy step with no result has none.
-func damagedOf(op durable.Operation) (int, error) {
-	rec, ok := op.Step(RestoreStepCopyBlobs)
-	if !ok || len(rec.Result) == 0 {
-		return 0, nil
-	}
-
-	var res copyStepResult
-	if err := json.Unmarshal(rec.Result, &res); err != nil {
-		return 0, fmt.Errorf("decode the copy result of the restore: %w", ErrCorrupt)
-	}
-
-	return res.Damaged, nil
+	return nil, s.copyManifestBlobs(ctx, sc.Fence, in, manifest)
 }
 
 // copyManifestBlobs copies each blob of the manifest into the live store.
@@ -1112,12 +1137,7 @@ func (s *RestoreService) stepFinish(ctx context.Context, sc durable.StepContext,
 		report.Warnings = append(slices.Clone(report.Warnings), WarnAuditAppendFailed)
 	}
 
-	damaged, damagedErr := damagedOf(sc.Operation)
-	if damagedErr != nil {
-		return nil, durable.Permanent(damagedErr)
-	}
-
-	if damaged > 0 {
+	if in.evidence.Damaged > 0 {
 		report.Warnings = append(slices.Clone(report.Warnings), WarnDamagedLiveBlobs)
 	}
 
@@ -1234,11 +1254,12 @@ func preBackupDamageAuditObject(in restoreInput, pre ID, entry DamagedBlob) stri
 }
 
 // replacedDamagedAuditObject names the replacement of one damaged live blob
-// by restore in, for its audit entry. The backup before the restore keeps the
-// evidence of the damage.
-func replacedDamagedAuditObject(in restoreInput, key string) string {
+// by restore in, for its audit entry, with the target key of the copy of the
+// damaged bytes.
+func replacedDamagedAuditObject(in restoreInput, key string, damagedCopy blob.Key) string {
 	return "restore " + in.ID.String() + " replaced damaged live blob " + strconv.Quote(truncateKey(key)) +
-		": live bytes did not match their record, evidence in backup " + in.PreBackupID.String() +
+		": live bytes did not match their record, damaged bytes copied to " +
+		strconv.Quote(truncateKey(damagedCopy.String())) + " of backup " + in.PreBackupID.String() +
 		", bytes from backup " + in.BackupID.String()
 }
 
@@ -1502,7 +1523,7 @@ func (s *RestoreService) liveKeyState(
 	case isNotFound(verifyErr):
 		return liveAbsent, nil
 	case errors.Is(verifyErr, ErrCorrupt):
-		evidenceErr := s.checkDamageEvidence(ctx, in, ref)
+		_, evidenceErr := s.damageEvidence(ctx, in, ref)
 		if evidenceErr == nil {
 			return liveDamaged, nil
 		}
@@ -1511,76 +1532,6 @@ func (s *RestoreService) liveKeyState(
 	default:
 		return liveMatches, verifyErr
 	}
-}
-
-// errNoDamageEvidence reports a live blob that differs from the backup and
-// that the backup before the restore did not prove damaged. It fails closed:
-// the restore treats the blob as live data and does not overwrite it.
-var errNoDamageEvidence = errors.New("the backup before the restore did not record the live blob as damaged")
-
-// checkDamageEvidence returns nil only when the backup before restore in
-// recorded the live key of ref as damaged, and the live key still holds the
-// bytes of that record: the same size and the same MD5. Any other result,
-// also a manifest that cannot be read, returns an error that wraps
-// errNoDamageEvidence.
-func (s *RestoreService) checkDamageEvidence(ctx context.Context, in restoreInput, ref ManifestBlob) error {
-	if in.CheckOnly || in.PreBackupID == "" {
-		return errNoDamageEvidence
-	}
-
-	pre, err := readManifest(ctx, s.target, in.PreBackupID)
-	if err != nil {
-		return errors.Join(errNoDamageEvidence, err)
-	}
-
-	entry, ok := damagedEvidence(pre, ref.Key)
-	if !ok || entry.State != DamageMismatch {
-		return errNoDamageEvidence
-	}
-
-	// Defense in depth: the read of the manifest checks each damaged entry.
-	// This check stays so that an entry that a new reader does not check
-	// cannot let the restore replace a live blob.
-	if err := validDamagedEntry(entry); err != nil {
-		return errors.Join(errNoDamageEvidence, err)
-	}
-
-	recorded := ManifestBlob{Key: entry.Key, Size: entry.Size, MD5: entry.MD5, Sealed: false}
-	if err := s.verifyLiveBlob(ctx, recorded); err != nil {
-		return errors.Join(errNoDamageEvidence, err)
-	}
-
-	return nil
-}
-
-// removeDamaged stores the audit event of the replacement of the damaged live
-// blob of ref, then deletes the live key, so that the checked bytes of the
-// backup can go there. It fails closed: when the event cannot be stored, it
-// deletes nothing. The backup before the restore keeps the evidence of the
-// damage. A stop after the delete leaves the key absent, and the next try
-// writes the checked bytes.
-func (s *RestoreService) removeDamaged(
-	ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob, live blob.Key,
-) error {
-	// Defense in depth: the copy checks the keys of the manifest before it
-	// starts. This check stays so that no caller can delete a key that a
-	// restore does not write.
-	if err := checkRestoreKey(live.String()); err != nil {
-		return err
-	}
-
-	if err := s.live.RecordRestoreEvent(ctx, fence, in.ID, replacedDamagedAuditObject(in, ref.Key)); err != nil {
-		return fmt.Errorf("record the replacement of damaged live blob %q: %w", truncateKey(ref.Key), err)
-	}
-
-	if err := s.blobs.Delete(ctx, live); err != nil {
-		return fmt.Errorf("delete damaged live blob %q: %w", truncateKey(ref.Key), err)
-	}
-
-	s.logger.WarnContext(ctx, "restore replaces a damaged live blob",
-		slog.String("restore_id", in.ID.String()), slog.String("key", truncateKey(ref.Key)))
-
-	return nil
 }
 
 // settleExisting resolves a write that the store refused because the live key

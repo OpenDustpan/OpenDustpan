@@ -229,7 +229,7 @@ func (l *restoreServiceLive) RestoreMaintenanceEntered(ctx context.Context, id b
 
 // MarkRestoreApplying implements backup.RestoreOperations.
 func (l *restoreServiceLive) MarkRestoreApplying(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID,
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID, result []byte,
 ) error {
 	l.mu.Lock()
 	hook := l.onApplying
@@ -239,7 +239,7 @@ func (l *restoreServiceLive) MarkRestoreApplying(
 		hook()
 	}
 
-	if err := l.recordFence(ctx, f, id, nil); err != nil {
+	if err := l.recordFence(ctx, f, id, result); err != nil {
 		return err
 	}
 

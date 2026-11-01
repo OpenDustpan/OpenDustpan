@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -15,10 +16,10 @@ import (
 var errDatabaseDown = errors.New("database is down")
 
 // TestStateDamageMapsOnlyContentErrors proves that the state opener of the
-// backup marks as damage only sealed content that does not open and plain
-// content that does not match its row. A missing blob, a row that cannot be
-// read and any other error keep their class, so the backup before a restore
-// stops at them.
+// backup marks as damage only plain content that does not match the size and
+// the MD5 of its row. Sealed content that does not open, a key or a key
+// provider that fails, a missing blob, a row that cannot be read and any
+// other error keep their class, so the backup before a restore stops at them.
 func TestStateDamageMapsOnlyContentErrors(t *testing.T) {
 	t.Parallel()
 
@@ -26,8 +27,11 @@ func TestStateDamageMapsOnlyContentErrors(t *testing.T) {
 		err    error
 		damage bool
 	}{
-		{err: workspace.ErrSealedContent, damage: true},
 		{err: workspace.ErrStoredContentMismatch, damage: true},
+		{err: workspace.ErrSealedContent, damage: false},
+		{err: secret.ErrDecrypt, damage: false},
+		{err: errors.Join(workspace.ErrStoredContentMismatch, workspace.ErrSealedContent), damage: false},
+		{err: errors.Join(workspace.ErrStoredContentMismatch, secret.ErrDecrypt), damage: false},
 		{err: blob.ErrNotFound, damage: false},
 		{err: workspace.ErrNotFound, damage: false},
 		{err: blob.ErrOutOfScope, damage: false},
@@ -64,11 +68,18 @@ func (*failingReader) Close() error { return nil }
 func TestDamageReaderMapsReadErrors(t *testing.T) {
 	t.Parallel()
 
-	_, err := io.ReadAll(
-		damageReader{ReadCloser: &failingReader{data: "x", err: workspace.ErrSealedContent, done: false}},
-	)
+	mismatch := &failingReader{data: "x", err: workspace.ErrStoredContentMismatch, done: false}
+
+	_, err := io.ReadAll(damageReader{ReadCloser: mismatch})
 	if !errors.Is(err, backup.ErrLiveBlobDamaged) {
-		t.Fatalf("read of sealed content that does not open = %v, want ErrLiveBlobDamaged", err)
+		t.Fatalf("read of plain content that does not match its row = %v, want ErrLiveBlobDamaged", err)
+	}
+
+	keyFault := &failingReader{data: "x", err: workspace.ErrSealedContent, done: false}
+
+	_, err = io.ReadAll(damageReader{ReadCloser: keyFault})
+	if err == nil || errors.Is(err, backup.ErrLiveBlobDamaged) {
+		t.Fatalf("read of sealed content that does not open = %v, want a read error that is not damage", err)
 	}
 
 	data, err := io.ReadAll(damageReader{ReadCloser: &failingReader{data: "state", err: io.EOF, done: false}})
