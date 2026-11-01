@@ -10,6 +10,7 @@ Changes:
   OpenDustpan.
 - Extends ADR 55 decision 10: the rule "MFA is the job of the provider" has a narrow exception for the fresh step.
 - Extends ADR 56 decision 5: the rule applies when MFA is on, as for every other method.
+- Extends ADR 212 decision 2: the SMTP sender of the installation also sends the one-time code of the first enrollment.
 - Extends ADR 227 decision 1: a passkey or TOTP is a fresh authentication for these two methods.
 - Extends ADR 285 decision 1: the same narrowing of ADR 46 decision 2 for two more methods.
 
@@ -41,7 +42,8 @@ authentication time.
 
 Rules 1 to 5 are from the first review round. Rules 6 to 14 record the
 decisions of the project manager (PM) for the open points of that review,
-under the owner's delegation.
+under the owner's delegation. Rules 15 and 16 are owner decisions of 1
+November 2026.
 
 1. **A factor of OpenDustpan gives the fresh step (owner).** For a person
    who signed in with a plain OAuth 2.0 provider or with the trusted header
@@ -65,9 +67,10 @@ under the owner's delegation.
 5. **One code path.** The passkey and TOTP code is the code of the local-user
    MFA. The enrollment, the check, the recovery codes and the audit entries
    are the same.
-6. **First enrollment needs an enrollment code (PM).** A person of these
-   methods who has no factor enrolls the first one with an enrollment code
-   that an administrator issues. The code is short-lived, works one time,
+6. **First enrollment needs a proof that a stolen session does not hold
+   (PM).** A person of these methods who has no factor enrolls the first
+   one with an enrollment code that an administrator issues (decision 14).
+   Decision 15 gives two other ways, and decision 14 is their fallback. The code is short-lived, works one time,
    and is bound to that person. Each issue and each use writes an audit
    entry. An administrator can issue codes for many people in one request.
    So a stolen session alone cannot enroll a factor. Benchmark: Microsoft
@@ -114,6 +117,29 @@ under the owner's delegation.
     - Each issue, use, revoke and expiry writes an audit entry.
     - A wrong code counts in the factor lock of the person.
 
+15. **A weaker channel proves the first enrollment (owner).** The owner
+    refined decision 6 on 1 November 2026. A person with no factor can prove
+    the first enrollment with one of two channels. A stolen session does not
+    hold either channel.
+    - **Email code.** The server sends a one-time code to the verified
+      address of the person. It needs the SMTP sender of the installation
+      (ADR 212 decision 2). The code is short-lived, works one time and is
+      stored only as a hash. A wrong code counts in the factor lock.
+    - **SSH signature.** The person signs a challenge of the server with the
+      format of `ssh-keygen -Y sign`, with the namespace
+      `opendustpan-enroll`. The key is one that the person registered. For a
+      person who signed in with GitHub, the key can be a public key that the
+      Git host lists for that account. The server reads the list through the
+      Git host API at enrollment time. The server sends this request only
+      to the Git host that the operator configured.
+16. **Limits of the weaker channel (owner).** The weaker channel proves the
+    one-time first enrollment only. It is never a fresh step itself. The
+    administrator code of decision 14 stays the fallback when neither
+    channel is available, for example with no SMTP sender and no SSH key.
+    It also stays the only way after an administrator reset (decision 7).
+    Each use of a weaker channel writes an audit entry, as decision 14 says
+    for the code.
+
 ## Consequences
 
 - An operator who uses GitHub as a sign-in provider, or a proxy header, can
@@ -127,5 +153,7 @@ under the owner's delegation.
   person has no factor yet. Later specs M4-32 and M4-38 depend on this ADR.
 - The code of local-user MFA (M4-29 WebAuthn and M4-31 TOTP) is shared. A
   change to it applies to these two methods too.
+- The email channel needs the SMTP sender. The SSH channel needs a verifier
+  of the signature format (package `internal/sshsig`).
 - The enrollment code is a new object. Decision 14 gives its API, its
   action, its life time and its limit.
