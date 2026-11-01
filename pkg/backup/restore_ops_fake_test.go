@@ -159,6 +159,15 @@ func (l *restoreServiceLive) ConfirmRestoreMaintenance(
 	return entered, l.recordFence(ctx, f, id, result)
 }
 
+// CheckRestoreFence implements backup.RestoreOperations.
+func (l *restoreServiceLive) CheckRestoreFence(ctx context.Context, f durable.StepFence, id backup.RestoreID) error {
+	if err := l.checkFence(ctx, f, id); err != nil {
+		return err
+	}
+
+	return l.requireRunning(ctx, id)
+}
+
 // RecordRestoreEvent implements backup.RestoreOperations.
 func (l *restoreServiceLive) RecordRestoreEvent(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, object string,
