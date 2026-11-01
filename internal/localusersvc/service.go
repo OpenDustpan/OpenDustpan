@@ -91,6 +91,13 @@ type Principals interface {
 	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
 }
 
+// Subjects finds a principal by its subject. Both SQL adapters meet it.
+type Subjects interface {
+	// GetPrincipalBySubject returns the principal with the subject, or
+	// principal.ErrNotFound.
+	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
+}
+
 // Settings answers the effective value of an installation setting.
 // *setting.Service meets it.
 type Settings interface {
@@ -127,6 +134,10 @@ type Config struct {
 	// Reach reads the reach of a principal for the check of a reset. A
 	// config with a nil field makes each reset fail closed.
 	Reach access.ReachConfig
+	// Subjects finds the principal of the subject of an access token, for
+	// the reach check of an unlock and of the read of the counts. Nil
+	// refuses each such caller that has no console session.
+	Subjects Subjects
 	// Kind is the installation kind of the server.
 	Kind installation.Kind
 	Now  func() time.Time
@@ -147,6 +158,7 @@ type Service struct {
 	settings   Settings
 	sso        func(ctx context.Context) (bool, error)
 	reach      access.ReachConfig
+	subjects   Subjects
 	now        func() time.Time
 	kind       installation.Kind
 
@@ -188,7 +200,7 @@ func New(cfg Config) (*Service, error) {
 		locks:      cfg.Locks,
 		keys:       cfg.Keys,
 		settings:   cfg.Settings,
-		sso:        cfg.SSO, reach: cfg.Reach,
+		sso:        cfg.SSO, reach: cfg.Reach, subjects: cfg.Subjects,
 		now:     now,
 		kind:    cfg.Kind,
 		dummyMu: sync.Mutex{},
@@ -351,11 +363,14 @@ func (s *Service) requireEnabled(ctx context.Context) (Policy, error) {
 }
 
 // Actor is the caller of a change: the audit entry that the HTTP adapter
-// fills (subject, source address, user agent, channel, request ID) and the
-// principal ID of the caller.
+// fills (subject, source address, user agent, channel, request ID), the
+// principal ID of the caller from its console session, and whether the
+// caller is an administrator of the identity layer, which holds every action
+// on every object.
 type Actor struct {
 	Entry       audit.Entry
 	PrincipalID string
+	Admin       bool
 }
 
 // entry returns the entry of a of the action on object at the time of the
