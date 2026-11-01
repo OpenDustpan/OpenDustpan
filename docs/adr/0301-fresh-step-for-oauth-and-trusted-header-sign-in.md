@@ -1,4 +1,4 @@
-# 301. A passkey or TOTP gives the fresh step to a person who signed in with OAuth or a trusted header
+# 301. A passkey, TOTP or SSH signature gives the fresh step to a person who signed in with OAuth or a trusted header
 
 Status: accepted · 2026-11-01. Decided by the project owner on 1 November 2026. The owner first proposed it in an earlier week, when the owner discussed GitHub as a sign-in provider
 
@@ -11,7 +11,7 @@ Changes:
 - Extends ADR 55 decision 10: the rule "MFA is the job of the provider" has a narrow exception for the fresh step.
 - Extends ADR 56 decision 5: the rule applies when MFA is on, as for every other method.
 - Extends ADR 212 decision 2: the SMTP sender of the installation also sends the one-time code of the first enrollment.
-- Extends ADR 227 decision 1: a passkey or TOTP is a fresh authentication for these two methods.
+- Extends ADR 227 decision 1: a passkey, TOTP or an SSH signature is a fresh authentication for these two methods.
 - Extends ADR 285 decision 1: the same narrowing of ADR 46 decision 2 for two more methods.
 
 ## Context
@@ -47,9 +47,13 @@ November 2026.
 
 1. **A factor of OpenDustpan gives the fresh step (owner).** For a person
    who signed in with a plain OAuth 2.0 provider or with the trusted header
-   of a proxy, the fresh authentication of ADR 227 decision 1 is a passkey
-   or a TOTP code of that person. The person enrolled the factor with
-   OpenDustpan. The window and the other rules of ADR 227 stay the same.
+   of a proxy, the fresh authentication of ADR 227 decision 1 is a passkey,
+   a TOTP code or an SSH signature of that person. The three have the same
+   rank. The person enrolled the factor with OpenDustpan. The SSH signature
+   is the SSH factor of the CLI step-up (RFC 102): the same registered keys,
+   the same verifier, and the format of `ssh-keygen -Y sign` over a server
+   challenge with the step-up namespace. This ADR adds no second SSH
+   factor. The window and the other rules of ADR 227 stay the same.
 2. **Only these two methods (owner).** OIDC keeps `max_age`, SAML keeps
    `ForceAuthn`, and CAS keeps `renew=true`. This ADR changes nothing for
    them.
@@ -65,7 +69,7 @@ November 2026.
    (ADR 227 decision 6). Its text names the enrollment page of passkeys and
    TOTP. The server does not skip the step. This is the fail-closed rule.
 5. **One code path.** The passkey and TOTP code is the code of the local-user
-   MFA. The enrollment, the check, the recovery codes and the audit entries
+   MFA, and the SSH code is the code of the CLI step-up. The enrollment, the check, the recovery codes and the audit entries
    are the same.
 6. **First enrollment needs a proof that a stolen session does not hold
    (PM).** A person of these methods who has no factor enrolls the first
@@ -117,35 +121,47 @@ November 2026.
     - Each issue, use, revoke and expiry writes an audit entry.
     - A wrong code counts in the factor lock of the person.
 
-15. **A weaker channel proves the first enrollment (owner).** The owner
-    refined decision 6 on 1 November 2026. A person with no factor can prove
-    the first enrollment with one of two channels. A stolen session does not
-    hold either channel.
+15. **The first enrollment of a person with no factor (owner).** The owner
+    refined decision 6 on 1 November 2026. A stolen session does not hold
+    either of these two proofs.
     - **Email code.** The server sends a one-time code to the verified
       address of the person. It needs the SMTP sender of the installation
       (ADR 212 decision 2). The code is short-lived, works one time and is
-      stored only as a hash. A wrong code counts in the factor lock.
-    - **SSH signature.** The person signs a challenge of the server with the
-      format of `ssh-keygen -Y sign`, with the namespace
-      `opendustpan-enroll`. The key is one that the person registered. For a
-      person who signed in with GitHub, the key can be a public key that the
-      Git host lists for that account. The server reads the list through the
-      Git host API at enrollment time. The server sends this request only
-      to the Git host that the operator configured.
-16. **Limits of the weaker channel (owner).** The weaker channel proves the
-    one-time first enrollment only. It is never a fresh step itself. The
-    administrator code of decision 14 stays the fallback when neither
-    channel is available, for example with no SMTP sender and no SSH key.
+      stored only as a hash. A wrong code counts in the factor lock. It
+      enrolls a passkey or a TOTP device, or it registers an SSH key with
+      the proof of possession of the next item.
+    - **An SSH key that the Git host lists.** A person who signed in with
+      GitHub can register as an SSH factor a public key that the Git host
+      lists for that account. The server reads the list through the Git host
+      API when the person registers, and only from the Git host that the
+      operator configured. The key must be in that list at that time. The
+      person proves that they hold the private key with a signature of the
+      key-add challenge (`ssh-keygen -Y sign`, the key-add namespace of RFC
+      102). The server verifies with the key of the list and never with the
+      key in the signature. The key then is a registered SSH key, the same
+      as a key that the person registered with an existing factor.
+    - **Why a stolen session cannot register a key of the attacker.** A key
+      of the attacker is not in the list that the Git host gives for the
+      account of the person. The attacker would need to change the account
+      at the Git host. A registration of any other key needs an existing
+      factor (decision 8) or an administrator code (decision 14). A person
+      who controls the Git account of a GitHub sign-in can already sign in
+      as that person, so this channel adds no new trust.
+16. **Limits (owner).** The email code is the only weak channel. It proves
+    the one-time first enrollment only, and it is never a fresh step. An SSH
+    signature is a first-class factor and a fresh step, not a weak channel.
+    The administrator code of decision 14 stays the fallback when neither
+    proof is available, for example with no SMTP sender and no listed key.
     It also stays the only way after an administrator reset (decision 7).
-    Each use of a weaker channel writes an audit entry, as decision 14 says
-    for the code.
+    Each use of the email code, each read of the Git host list for a
+    registration and each registration of a key writes an audit entry.
 
 ## Consequences
 
 - An operator who uses GitHub as a sign-in provider, or a proxy header, can
   use all steps that need a fresh authentication. Each person gets an
-  enrollment code from an administrator and enrolls one passkey or one TOTP
-  device first.
+  enrollment code from an administrator and enrolls one passkey, one TOTP
+  device or one SSH key first.
 - A person of these two methods who enrolls no factor still signs in, and
   can still do each action that needs no fresh step.
 - The enrollment page must be reachable for a person of these methods. The
@@ -153,7 +169,9 @@ November 2026.
   person has no factor yet. Later specs M4-32 and M4-38 depend on this ADR.
 - The code of local-user MFA (M4-29 WebAuthn and M4-31 TOTP) is shared. A
   change to it applies to these two methods too.
-- The email channel needs the SMTP sender. The SSH channel needs a verifier
-  of the signature format (package `internal/sshsig`).
+- The email code needs the SMTP sender. The SSH factor and the key-add proof
+  need the verifier of the signature format (package `internal/sshsig`),
+  which the CLI step-up uses too. There is one SSH factor. The step-up ADR
+  of RFC 102 and this ADR must use the same words for it.
 - The enrollment code is a new object. Decision 14 gives its API, its
   action, its life time and its limit.
