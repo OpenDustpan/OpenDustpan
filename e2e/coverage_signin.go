@@ -11,8 +11,12 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
+	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -50,6 +54,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		LocalUsers:     coverageLocalUsers(tb, st, principals),
 		Preferences:    nil,
 		Settings:       nil,
 		GitHost:        nil,
@@ -120,12 +125,39 @@ func coverageSignInServices(tb testing.TB, st *sqlite.Store) (*principal.Service
 	return principals, sessions
 }
 
+// coverageLocalUsers returns the local user service over st, so the route
+// table holds the local user routes and the password sign-in.
+func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.Service) *localusersvc.Service {
+	tb.Helper()
+
+	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
+	if err != nil {
+		tb.Fatalf("hash budget: %v", err)
+	}
+
+	hasher, err := argon2id.New(budget)
+	if err != nil {
+		tb.Fatalf("hasher: %v", err)
+	}
+
+	svc, err := localusersvc.New(localusersvc.Config{
+		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
+		Settings: nil, SSO: nil, Kind: installation.KindDev, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("local user service: %v", err)
+	}
+
+	return svc
+}
+
 // signInRows keeps the sign-in rows of the route table of handler.
 func signInRows(handler *serverapi.Handler) []RouteRef {
 	var out []RouteRef
 
 	for _, ref := range serverRefs(handler.Routes()) {
 		if strings.Contains(ref.Path, "/sign-in/") || strings.HasPrefix(ref.Path, "/api/server/sign-in-providers") ||
+			strings.HasPrefix(ref.Path, "/api/dustpan/v1/local-users") || ref.Path == "/api/dustpan/v1/me/password" ||
 			ref.Path == "/api/server/session" ||
 			ref.Path == "/api/server/sign-out" {
 			out = append(out, ref)
