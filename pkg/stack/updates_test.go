@@ -1894,6 +1894,8 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 		BlobKey:       missing,
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: clk.Now(),
 	}
 
 	if _, err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -269,7 +270,19 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 // confirm of a row wins and returns true. A row that is confirmed already
 // stays as it is, and the call returns true only when the row holds c.BlobKey:
 // the same attempt confirmed twice.
+//
+// The attempt window comes first, so a late attempt changes nothing, also when
+// it repeats a confirm that committed.
 func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkConfirm) (bool, error) {
+	now, err := tx.Now(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if attemptErr := blob.CheckAttempt(c.AttemptStartedAt, now); attemptErr != nil {
+		return false, fmt.Errorf("confirm chunk %d of log %s: %w", c.Seq, c.Version, attemptErr)
+	}
+
 	j, err := claimed(ctx, tx, *pc)
 	if err != nil {
 		return false, err

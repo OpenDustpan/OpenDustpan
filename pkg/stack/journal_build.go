@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -198,6 +199,9 @@ func (s *Updates) builtCheckpoint(ref Ref, u Update, document []byte) (Checkpoin
 		BlobKey:       "",
 		BlobSize:      0,
 		BlobMD5:       [md5.Size]byte{},
+
+		// The commit of the build sets the start of its attempt.
+		AttemptStartedAt: time.Time{},
 	}, nil
 }
 
@@ -220,8 +224,8 @@ func (s *Updates) storeBuiltCheckpoint(ctx context.Context, save builtSave) erro
 	return s.writeCheckpoint(ctx, checkpointWrite{
 		op: "save built checkpoint", ref: save.ref, id: save.id, blobs: save.blobs, stackID: save.stackID,
 		key: key, deployment: save.built.Deployment,
-		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) (bool, error) {
-			return false, s.commitBuiltRow(ctx, builtRow(save, key, prev), size, sum)
+		commit: func(ctx context.Context, size int64, sum [md5.Size]byte, started time.Time) (bool, error) {
+			return false, s.commitBuiltRow(ctx, builtRow(save, key, prev), size, sum, started)
 		},
 	})
 }
@@ -248,7 +252,9 @@ func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
 // and the fence; a refused build deletes nothing and keeps the journal. A
 // failed blob delete leaves the blob for the sweep and never fails the
 // build.
-func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
+func (s *Updates) commitBuiltRow(
+	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte, started time.Time,
+) error {
 	built, ok := s.checkpoints.(BuiltCheckpointStore)
 	if !ok {
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, ErrMissingDependency)
@@ -269,6 +275,8 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+
+		AttemptStartedAt: started,
 	}
 
 	keys, err := built.PutBuiltCheckpoint(ctx, cp, save.fence)
