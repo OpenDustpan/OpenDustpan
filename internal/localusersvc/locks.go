@@ -197,7 +197,7 @@ func (s *Service) Locks(ctx context.Context, a Actor, principalID string) ([]Loc
 	// Defense in depth: the route needs server:manage-sign-in too. This check
 	// stays because that action does not cover the reach of the person, and
 	// so that a new caller of the service cannot skip it.
-	if reachErr := s.checkReach(ctx, a.PrincipalID, principalID); reachErr != nil {
+	if reachErr := s.checkCallerReach(ctx, a, principalID); reachErr != nil {
 		return nil, s.refuse(ctx, a.Entry, on(ActionNameLocksRead, UserObject(u.ID)), "outside the reach", reachErr)
 	}
 
@@ -247,7 +247,7 @@ func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason strin
 	// Defense in depth: the route needs server:manage-sign-in too. This check
 	// stays because that action does not cover the reach of the person, and
 	// so that a new caller of the service cannot skip it.
-	if reachErr := s.checkReach(ctx, a.PrincipalID, principalID); reachErr != nil {
+	if reachErr := s.checkCallerReach(ctx, a, principalID); reachErr != nil {
 		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), "outside the reach", reachErr)
 	}
 
@@ -267,6 +267,34 @@ func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason strin
 	}
 
 	return total, nil
+}
+
+// checkCallerReach returns nil only when the reach of the caller a covers the
+// reach of the person with the principal ID target. The caller is the owner
+// of its console session, or else the principal of the subject of its access
+// token. An administrator of the identity layer holds every action on every
+// object, so its reach covers each person. A caller whose principal cannot
+// be found fails closed with localuser.ErrOutsideReach.
+func (s *Service) checkCallerReach(ctx context.Context, a Actor, target string) error {
+	if a.Admin {
+		return nil
+	}
+
+	id := a.PrincipalID
+	if id == "" {
+		if s.subjects == nil || a.Entry.Subject == "" {
+			return fmt.Errorf("%w: the caller has no principal", localuser.ErrOutsideReach)
+		}
+
+		p, err := s.subjects.GetPrincipalBySubject(ctx, a.Entry.Subject)
+		if err != nil {
+			return fmt.Errorf("%w: find the principal of the caller: %w", localuser.ErrOutsideReach, err)
+		}
+
+		id = p.ID
+	}
+
+	return s.checkReach(ctx, id, target)
 }
 
 // The audit entry of each run of the prune of the name counts.

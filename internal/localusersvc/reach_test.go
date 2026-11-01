@@ -66,7 +66,7 @@ func TestResetNeedsTheReachOfThePerson(t *testing.T) {
 				f.grantInstallation(t, holder.Principal.ID, tc.adminRole, "grt-admin")
 			}
 
-			actor := localusersvc.Actor{Entry: base("local:bob"), PrincipalID: holder.Principal.ID}
+			actor := localusersvc.Actor{Entry: base("local:bob"), PrincipalID: holder.Principal.ID, Admin: false}
 
 			_, err := f.svc.StartReset(t.Context(), actor, c.Principal.ID, localusersvc.ResetInput{
 				Reason: "the person lost the password", RevokeAccessTokens: false,
