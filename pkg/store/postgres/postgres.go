@@ -96,6 +96,8 @@ type Store struct {
 	// tracer, when set, sees every statement, batch, prepare and copy of the
 	// pool. Nil in production.
 	tracer pgx.QueryTracer
+	// failover holds the effective failover settings of the pool.
+	failover FailoverSettings
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -165,23 +167,34 @@ func liveSchemaName(searchPath string) string {
 	return "public"
 }
 
-// poolConfig parses the database URL into the pool configuration. It reads
-// the pool and failover settings of the URL (target_session_attrs,
-// pool_max_conn_lifetime, pool_health_check_period and the other pgxpool
-// settings) and keeps them as they are. It sets only the search path of each
-// new connection.
-func poolConfig(url string) (*pgxpool.Config, error) {
+// poolConfig parses the database URL into the pool configuration. It checks
+// the failover settings of the URL against their allowlist and sets the
+// default of each setting that the URL does not name (see
+// readFailoverSettings). It also sets the search path of each new connection.
+// The other pgxpool settings of the URL stay as the URL gives them.
+func poolConfig(url string) (*pgxpool.Config, FailoverSettings, error) {
+	plan, err := readFailoverSettings(url)
+	if err != nil {
+		return nil, FailoverSettings{}, fmt.Errorf("open postgres pool: %w", err)
+	}
+
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres pool: %w", err)
+		return nil, FailoverSettings{}, fmt.Errorf("open postgres pool: %w", err)
 	}
+
+	plan.apply(cfg)
 
 	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
 
 	// Defense in depth: pgIdent still doubles the quotes of this name, so a
 	// name that this check misses still cannot end the quoted identifier.
 	if identErr := checkIdent(live); identErr != nil {
-		return nil, fmt.Errorf("open postgres store: schema %q of the search path: %w", live, identErr)
+		return nil, FailoverSettings{}, fmt.Errorf(
+			"open postgres store: schema %q of the search path: %w",
+			live,
+			identErr,
+		)
 	}
 
 	ctl := live + "_control"
@@ -193,12 +206,12 @@ func poolConfig(url string) (*pgxpool.Config, error) {
 		return nil
 	}
 
-	return cfg, nil
+	return cfg, plan.report, nil
 }
 
 // Open connects to the database at url and migrates it.
 func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
-	cfg, err := poolConfig(url)
+	cfg, failover, err := poolConfig(url)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +235,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		noMigrate:           false,
 		logger:              slog.New(slog.DiscardHandler),
 		tracer:              nil,
+		failover:            failover,
 	}
 
 	for _, opt := range opts {
@@ -289,6 +303,15 @@ func (s *Store) Ping(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// FailoverSettings returns the effective failover settings of the pool. They
+// hold no part of the URL besides the values of the settings.
+func (s *Store) FailoverSettings() FailoverSettings {
+	out := s.failover
+	out.Settings = slices.Clone(s.failover.Settings)
+
+	return out
 }
 
 // CreateNamespace implements namespace.Store.
