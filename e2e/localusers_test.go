@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -214,6 +215,44 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
 		`{"userName":"alice","password":"`+e2eNewPassword+`"}`, asBrowser("")).
 		want(t, "sign in with the new password", http.StatusNoContent, "")
+
+	checkLockout(t, c, user.PrincipalID)
+}
+
+// lockoutLimit is the count of wrong passwords in a row that lock a user name
+// from one source.
+const lockoutLimit = 10
+
+// checkLockout sends wrong passwords until the name of alice locks, proves
+// that the good password then fails with the one answer, reads the lock, and
+// unlocks it.
+func checkLockout(t *testing.T, c localClient, principalID string) {
+	t.Helper()
+
+	for i := range lockoutLimit {
+		c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
+			`{"userName":"alice","password":"`+e2ePassword+`"}`, asBrowser("")).
+			want(t, "wrong password "+strconv.Itoa(i+1), http.StatusUnauthorized, "local-user.sign-in-failed")
+	}
+
+	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
+		`{"userName":"alice","password":"`+e2eNewPassword+`"}`, asBrowser("")).
+		want(t, "good password while the name is locked", http.StatusUnauthorized, "local-user.sign-in-failed")
+
+	locks := c.send(t, http.MethodGet, "/api/dustpan/v1/local-users/locks?principal="+principalID, "", asAdmin())
+	locks.want(t, "read the locks", http.StatusOK, "")
+
+	if !strings.Contains(locks.body, `"scope":"password"`) || !strings.Contains(locks.body, `"failures":10`) {
+		t.Fatalf("locks = %s, want the lock of the source", locks.body)
+	}
+
+	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/unlock",
+		`{"principal":"`+principalID+`","reason":"e2e"}`, asAdmin()).
+		want(t, "unlock", http.StatusOK, "")
+
+	c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
+		`{"userName":"alice","password":"`+e2eNewPassword+`"}`, asBrowser("")).
+		want(t, "sign in after the unlock", http.StatusNoContent, "")
 }
 
 // readSession reads the console session of the jar, checks its subject and
