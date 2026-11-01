@@ -495,13 +495,6 @@ func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, err
 	return s.cancelJournaled(ctx, ref, id)
 }
 
-// sweepGracePeriod is how long after its write a checkpoint blob stays before
-// the unreferenced sweep deletes it, so a save that still commits is never
-// collected: the store refuses the commit of an attempt older than
-// blob.AttemptDeadline, and the grace period is longer than that deadline
-// with a margin for the clocks.
-const sweepGracePeriod = blob.UnnamedGracePeriod
-
 // checkpointSave groups one checkpoint save after the lease and idempotency
 // checks: the row parts with the blob key to write.
 type checkpointSave struct {
@@ -1342,14 +1335,32 @@ type sweepTarget struct {
 	update  UpdateID
 }
 
+// sweepNow returns the time that a sweep takes as now: the clock of the
+// database, which the checkpoint store reads. It returns blob.ErrClockSkew
+// when the store cannot read it, or when the clock of the instance differs
+// from it by more than blob.AttemptSkew.
+func (s *Updates) sweepNow(ctx context.Context) (time.Time, error) {
+	// A store with no clock leaves clock nil, and SweepNow refuses nil.
+	var clock blob.DatabaseClock
+	if c, ok := s.checkpoints.(blob.DatabaseClock); ok {
+		clock = c
+	}
+
+	now, err := blob.SweepNow(ctx, clock, s.clock())
+	if err != nil {
+		return time.Time{}, fmt.Errorf("sweep clock: %w", err)
+	}
+
+	return now, nil
+}
+
 // graceCandidates returns the objects of listed that are older than the grace
-// period.
-func (s *Updates) graceCandidates(listed []blob.Object) []blob.Object {
-	now := s.clock()
+// period at now. An object with no modification time is never a candidate.
+func graceCandidates(listed []blob.Object, now time.Time) []blob.Object {
 	candidates := make([]blob.Object, 0, len(listed))
 
 	for _, obj := range listed {
-		if now.Sub(obj.ModifiedAt) >= sweepGracePeriod {
+		if blob.OldEnough(obj.ModifiedAt, now) {
 			candidates = append(candidates, obj)
 		}
 	}
@@ -1400,7 +1411,18 @@ func (s *Updates) sweepOrphans(
 ) {
 	ref, id := target.ref, target.update
 
-	candidates := s.graceCandidates(listed)
+	now, err := s.sweepNow(ctx)
+	if err != nil {
+		// The grace period holds only when the clocks agree, so a run with a
+		// clock that it cannot trust deletes nothing.
+		s.logger.WarnContext(ctx, "blob delete skipped: the clocks of the instance and the database do not agree",
+			slog.String("deleter", sweepDeleter(id)), slog.String("stack", ref.String()),
+			slog.String("error", err.Error()))
+
+		return
+	}
+
+	candidates := graceCandidates(listed, now)
 	if len(candidates) == 0 {
 		return
 	}
