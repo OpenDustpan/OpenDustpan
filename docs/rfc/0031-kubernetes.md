@@ -10,6 +10,13 @@ created: 2026-10-10
 Status: draft. The phases, the resource names and the repository layout are
 proposals.
 
+Changed by:
+
+- [ADR 305](../adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md)
+  decides the role of the operator in phases 3 and 4: OpenDustpan builds its
+  own tool-neutral operator, modeled on the Pulumi Kubernetes Operator.
+  Crossplane is not an option and not a target. The other points stay open.
+
 ## Problem
 
 Teams that run Kubernetes manage much of their platform as resources in the
@@ -203,4 +210,14 @@ change for the imported objects.
 ## Outcome
 
 Phase 2 is answered by ADR 136 (the Kubernetes coordinator), on 2026-10-18.
-The other phases stay open.
+
+Decided by the owner on 2026-11-01 in
+[ADR 305](../adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md):
+phases 3 and 4 use our own operator, modeled on the Pulumi Kubernetes
+Operator. Option 2 ("phase 1 and 2 only") does not apply now. Crossplane
+compositions are not an alternative and not a target. The operator comes
+after runners scoped to namespaces. These points stay open here: the resource
+names, a namespace-scoped install, the map of a Kubernetes namespace to an
+OpenDustpan namespace and to a collection (ADR 51 decision 10 stays in
+force), the drift status in the resource, and the deletion policy.
+Phase 1 stays open.

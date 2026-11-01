@@ -9,6 +9,7 @@ Changed by:
 - ADR 222 changes: the policy check on every change.
 - ADR 224 changes: the policy check on every change.
 - ADR 266 extends: the saved view API.
+- ADR 305 extends: the operator uses only the REST API.
 
 ## Context
 
