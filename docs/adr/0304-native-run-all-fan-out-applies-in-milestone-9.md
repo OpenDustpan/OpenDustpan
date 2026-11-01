@@ -67,24 +67,45 @@ The facts that the decision uses:
    - The change order keeps its rules: the approvals, the signatures and the
      threads are on the change order, and a person asks for the apply (ADR
      190 decisions 6 and 10).
-6. **The shim is not a new job kind.** This answers the open question of RFC
+6. **The discovery job (PM, for the owner).** The shim creates nothing by
+   itself. The model is a setup job that emits a dynamic matrix of child
+   jobs, which then run in the same run and for the same actor.
+   - The wrapper job that runs `terragrunt run-all` is a discovery job. It
+     finds the Terragrunt units and the order of their dependencies. It
+     writes no state.
+   - The discovery job is a job of the tool-neutral job model (ADR 100). It
+     has no unit run of its own: it is not a plan job and not an apply job
+     of a unit.
+   - The discovery job sends the unit list to the server with its job token
+     (ADR 213). The token gets one narrowly scoped grant: to create the
+     change order for this one job and to attach its revision. The grant is
+     a stored grant. A user can list it. It ends with the job.
+   - The author of the change order is the principal that requested the
+     wrapper job. The runner is never the author, so ADR 191 decision 2
+     stays as it is.
+   - Each plan job and each apply job records the change order and the
+     discovery job that caused it, with the reason "terragrunt run-all
+     fan-out". The history and the audit entry of each job show them.
+7. **The shim lives in the runner and the launcher.** It uses only the
+   change order API. The TFE-compatible API adapter has no run-all logic.
+8. **The shim is not a new job kind.** This answers the open question of RFC
    109: `run-all` is one job for each Terragrunt unit, under a change order.
    The job kinds of ADR 100 stay. The state-operation questions of RFC 109
    stay open: import, `state rm` and `state mv` as jobs, and the question of
    whether a state operation needs a gate.
-7. **Profiles and blueprints stay the recommended path (owner).** OpenDustpan
-   supports Terragrunt for teams that already use it. The documentation does not
-   present it as the first choice for a new team.
-8. **Open points go to an RFC.** The RFC for milestone 9 decides these
-   points. This ADR does not decide them:
-   - Unit discovery: how the shim finds the Terragrunt units and maps each
-     one to a unit of OpenDustpan.
-   - Dependency order: how the order between Terragrunt units reaches the
-     apply jobs. The apply jobs of one change order have no order today (ADR
-     190, consequences and open questions).
-   - A failure in one unit: what happens to the other units when one apply
-     job fails. A change order moves to `partially-applied` today (ADR 190
-     decision 7).
+9. **Profiles and blueprints stay the recommended path (owner, same
+   conversation).** The owner said, right before the decision quoted in the
+   context: "I would recommend teams use profiles and blueprints".
+   OpenDustpan supports Terragrunt for teams that already use it. The
+   documentation does not present it as the first choice for a new team.
+10. **Open points go to an RFC.** [RFC 115](../rfc/0115-terragrunt-run-all-fan-out-on-runners.md)
+    holds them. This ADR does not decide them:
+    - Unit discovery: how the discovery job finds the Terragrunt units and
+      maps each one to a unit of OpenDustpan.
+    - Dependency order: ordered apply jobs, or a change order that does not
+      order its apply jobs (ADR 190, consequences and open questions).
+    - A failure in one unit: what happens to the other units when one apply
+      job fails.
 
 ## Consequences
 
@@ -93,19 +114,20 @@ The facts that the decision uses:
 - The roadmap gets milestone 9 after milestone 8, with the work items and the
   exit test below.
 - ADR 282 gets a "Changed by" item for this ADR.
-- No code lands before the project owner accepts the RFC of decision 8.
+- No code lands before the project owner accepts RFC 115.
 - A runner shim needs a change order for each `run-all`. A team that does not
   want a review in every case sets its approval rules (ADR 225), as for any
   change order.
 - A fan-out over more than 100 units, or over units of more than one
   namespace, hits the limits of a change order (ADR 190 decisions 3 and 12).
-  The RFC of decision 8 says what the shim does then.
+  RFC 115 says what the shim does then.
 
 ## Exit test of milestone 9
 
 On Linux, on PostgreSQL, through the real binary over TLS, with real
-OpenTofu and real Terragrunt, the e2e suite does these steps. Each step
-passes or fails on the fact that it names.
+OpenTofu, real Terragrunt and a test provider that records each call with a
+time, the e2e suite does these steps. Each step passes or fails on the fact
+that it names.
 
 1. **Local run-all.** `terragrunt run-all apply` on a laptop over 3 units
    uses OpenDustpan as the backend. Pass: the suite finds 3 workspaces, each
@@ -113,16 +135,20 @@ passes or fails on the fact that it names.
 2. **Run-all in the CI of a team.** The same command in a CI job gives the
    same result as step 1.
 3. **Run-all on a runner.** `terragrunt run-all apply` over 3 units runs on
-   an OpenDustpan runner. Pass: the suite finds 1 change order with 3 plan
-   jobs and 3 apply jobs, each job on its own unit. Each unit has 1 new state
-   version and 1 history entry. No job runs more than one unit.
-4. **The review holds.** The change order of step 3 starts no apply job
-   before the approvals of its requirements are in place. Pass: the apply
-   jobs start after the apply request of a person, and the provider log has
-   no apply call before that time.
-5. **A failure in one unit.** One of the 3 units fails at the apply. Pass:
-   the failed unit has its failed apply job and no new state version, the
-   other two units have their result, and the change order shows the state
-   that the RFC of decision 8 names.
-6. **A job does not apply two units.** Pass: the provider log shows no unit
-   applied by the job of another unit.
+   an OpenDustpan runner. Pass: the suite finds 1 discovery job, 1 change
+   order, 3 plan jobs and 3 apply jobs. Each plan job and each apply job is
+   on its own unit. Each unit has 1 new state version and 1 history entry.
+   The call record of the test provider shows no unit applied by the job of
+   another unit.
+4. **The record names the cause.** Pass: the history entry and the audit
+   entry of each plan job and each apply job name the discovery job, the
+   principal that requested the wrapper job, and the reason "terragrunt
+   run-all fan-out". The change order names the same principal as its
+   author. The grant of the discovery job is in the list of grants while the
+   job runs, and it is gone after the job ends.
+5. **The review holds.** Pass: the apply jobs start only after the apply
+   request of a person, and the call record of the test provider has no
+   apply call before that time.
+6. **A failure in one unit.** One of the 3 units fails at the apply. Pass:
+   the failed unit has a failed apply job and no new state version, and the
+   other 2 units show the result that RFC 115 decides.
