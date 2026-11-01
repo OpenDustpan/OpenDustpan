@@ -210,30 +210,39 @@ of each part. Where this ADR and the RFC differ, this ADR holds.
 ### The questions that the RFC left open (PM)
 
 The RFC gave a recommendation for each of its last eight questions. The PM
-takes each recommendation, and the owner accepts them with the merge.
+decides each one under the decision rule of the owner: each decision has a
+benchmark, and each one can be reversed by a later ADR.
 
 27. **A change of mode** applies only to change orders that start after it.
-    Each change order keeps the mode that it had at its creation.
+    Each change order keeps the mode that it had at its creation. Benchmark:
+    a change of a GitHub branch protection rule applies to new reviews.
 28. **One operation at L1** is the address (or the URN) and the kind of
-    change. Each order of a replace is its own kind.
+    change. Each order of a replace is its own kind. Benchmark: an OpenTofu
+    plan lists each change as a resource address and an action.
 29. **An apply before the merge** keeps the hold of RFC 27 question 6: the
-    units stay held from the first pre-merge apply until the merge.
+    units stay held from the first pre-merge apply until the merge. Benchmark:
+    Atlantis locks a directory from the plan until the merge or the close.
 30. **The status on GitLab Free and Premium** is tested in both directions
     before the code depends on it: does it block a merge, and can it unblock a
     merge whose CI pipeline failed. If a test fails, a documented CI job of the
     team asks the server for the state of `approvals`. Until the tests pass,
-    the wizard warns about both risks.
+    the wizard warns about both risks. Benchmark: test both directions, and
+    fail closed.
 31. **A trusted person** is a linked principal with `unit:run-plan` on each
-    unit and write access on the Git host.
+    unit and write access on the Git host. Benchmark: GitHub asks for write
+    access to approve and run a workflow of a pull request from a fork.
 32. **The scope of the plan conflict check** is each namespace that reads an
     output of a changed unit, limited to the units that the reader of the
     check can see. A reader that the check cannot see counts as a conflict.
+    Benchmark: fail closed when a reader is unknown.
 33. **A Git host that is down.** A person with a new action
     `changeorder:detach` and a fresh authentication can move the change to a
     review in OpenDustpan only, with a reason. The break-glass review of ADR
-    142 follows.
+    142 follows. Benchmark: a break-glass with a fresh authentication and a
+    review after use, as ADR 245 gives.
 34. **A change across many repositories** is one change order for each review
-    request. A later RFC can group linked review requests.
+    request. A later RFC can group linked review requests. Benchmark: Atlantis
+    and Spacelift run one plan for each pull request.
 
 ### Ports
 
