@@ -206,6 +206,9 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
       uses the existing workload-identity trust rules and the token exchange.
     - There is one principal for each Kubernetes namespace that the operator
       serves.
+    - An administrator creates the trust rule, the principal and the grants
+      for each Kubernetes namespace through the API, as for any other
+      workload identity.
     - A principal holds stored grants only. A person can list and revoke each
       grant. A grant names the OpenDustpan namespace or collection where the
       principal can act. There is no default grant.
@@ -248,3 +251,6 @@ it. This note decides nothing.
 
 Each point of decision 7, and each rule of decision 8, stays open in
 [RFC 31](../rfc/0031-kubernetes.md).
+
+How the operator passes the cause (kind, Kubernetes namespace, name, UID and
+generation) to the audit entry, as new API surface, is left to RFC 31.
