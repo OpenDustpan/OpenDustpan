@@ -14,7 +14,7 @@ import (
 // console session needs an HTTPS public URL.
 const localPublicURL = "https://dustpan.example"
 
-// localPasswords pass every default rule.
+// Passwords of the local user tests. Each one passes every default rule.
 const (
 	localPassword = "violet-harbor-tin-81-ledger"
 	localNewPass  = "copper-meadow-quiet-47-lantern"
@@ -39,28 +39,42 @@ func newLocalServer(t *testing.T) localServer {
 	return localServer{handler: startedHandler(t, srv)}
 }
 
-// localRequest is one request of a local user test.
-type localRequest struct {
-	method, path, body, token, cookie, csrf string
+// localCaller is the credential of one request: the administrator token, a
+// session cookie with its CSRF value, or nothing.
+type localCaller struct {
+	token  string
+	cookie string
+	csrf   string
 }
 
-func (s localServer) do(t *testing.T, in localRequest) *httptest.ResponseRecorder {
+// anonymous is a request with no credential.
+func anonymous() localCaller { return localCaller{token: "", cookie: "", csrf: ""} }
+
+// administrator is a request with the token of the bootstrap administrator.
+func administrator() localCaller { return localCaller{token: adminToken, cookie: "", csrf: ""} }
+
+// withCookie is a request with the session cookie and its CSRF value.
+func withCookie(cookie, csrf string) localCaller {
+	return localCaller{token: "", cookie: cookie, csrf: csrf}
+}
+
+func (s localServer) do(t *testing.T, method, path, body string, c localCaller) *httptest.ResponseRecorder {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), in.method, in.path, strings.NewReader(in.body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", localPublicURL)
 
-	if in.token != "" {
-		req.Header.Set("Authorization", "Bearer "+in.token)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	if in.cookie != "" {
-		req.Header.Add("Cookie", "__Host-dustpan_session="+in.cookie)
+	if c.cookie != "" {
+		req.Header.Add("Cookie", "__Host-dustpan_session="+c.cookie)
 	}
 
-	if in.csrf != "" {
-		req.Header.Set("X-Dustpan-CSRF", in.csrf)
+	if c.csrf != "" {
+		req.Header.Set("X-Dustpan-Csrf", c.csrf)
 	}
 
 	rec := httptest.NewRecorder()
@@ -106,11 +120,17 @@ func sessionOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return ""
 }
 
-// csrfOf returns the CSRF value of the session cookie.
-func (s localServer) csrfOf(t *testing.T, cookie string) (string, string) {
+// sessionView is the subject and the CSRF value of a console session.
+type sessionView struct {
+	subject string
+	csrf    string
+}
+
+// readSession returns the subject and the CSRF value of the session cookie.
+func (s localServer) readSession(t *testing.T, cookie string) sessionView {
 	t.Helper()
 
-	rec := s.do(t, localRequest{method: http.MethodGet, path: "/api/server/session", cookie: cookie})
+	rec := s.do(t, http.MethodGet, "/api/server/session", "", withCookie(cookie, ""))
 	wantAnswer(t, "read the session", rec, http.StatusOK, "")
 
 	var body struct {
@@ -122,22 +142,43 @@ func (s localServer) csrfOf(t *testing.T, cookie string) (string, string) {
 		t.Fatalf("decode the session: %v", err)
 	}
 
-	return body.Subject, body.CSRFToken
+	return sessionView{subject: body.Subject, csrf: body.CSRFToken}
 }
 
-// TestLocalPasswordRoutes drives the routes of the local users through the
-// mux of the server: an administrator makes a user, the person sets the
-// password with the set-up code, signs in, and changes the password. Each
-// hostile request is refused at its layer.
-func TestLocalPasswordRoutes(t *testing.T) {
-	t.Parallel()
+// localRefusal is one request that a route refuses with a status and a code.
+type localRefusal struct {
+	name, body, code string
+	status           int
+}
 
-	s := newLocalServer(t)
+// checkRefusals sends each refusal to path with no credential: each one
+// answers its status and code, sets no cookie and echoes no password.
+func (s localServer) checkRefusals(t *testing.T, path string, cases []localRefusal) {
+	t.Helper()
 
-	created := s.do(t, localRequest{
-		method: http.MethodPost, path: "/api/dustpan/v1/local-users", token: adminToken,
-		body: `{"userName":"alice","displayName":"Alice Example","reason":"new team member"}`,
-	})
+	for _, tc := range cases {
+		rec := s.do(t, http.MethodPost, path, tc.body, anonymous())
+		wantAnswer(t, path+": "+tc.name, rec, tc.status, tc.code)
+
+		if len(rec.Result().Cookies()) != 0 || strings.Contains(rec.Body.String(), localPassword) {
+			t.Fatalf("%s: %s: the answer sets a cookie or holds the password", path, tc.name)
+		}
+	}
+}
+
+// createdUser is the subject and the set-up code of a new local user.
+type createdUser struct {
+	subject string
+	code    string
+}
+
+// createLocalUser makes the local user alice and returns her subject and
+// her set-up code.
+func (s localServer) createLocalUser(t *testing.T) createdUser {
+	t.Helper()
+
+	created := s.do(t, http.MethodPost, "/api/dustpan/v1/local-users",
+		`{"userName":"alice","displayName":"Alice Example","reason":"new team member"}`, administrator())
 	wantAnswer(t, "create", created, http.StatusCreated, "")
 
 	var user struct {
@@ -149,113 +190,131 @@ func TestLocalPasswordRoutes(t *testing.T) {
 		t.Fatalf("created = %s (%v)", created.Body, err)
 	}
 
-	redeemTests := []struct {
-		name, body, code string
-		status           int
-	}{
-		{name: "unknown field", body: `{"code":"x","password":"y","admin":true}`, status: 400, code: "request.body-invalid"},
+	return createdUser{subject: user.Subject, code: user.SetUpCode}
+}
+
+// TestLocalPasswordRoutes drives the routes of the local users through the
+// mux of the server: an administrator makes a user, the person sets the
+// password with the set-up code, signs in, and changes the password. Each
+// hostile request is refused at its layer.
+func TestLocalPasswordRoutes(t *testing.T) {
+	t.Parallel()
+
+	s := newLocalServer(t)
+	user := s.createLocalUser(t)
+	subject, code := user.subject, user.code
+
+	s.checkRefusals(t, "/api/dustpan/v1/local-users/redeem", []localRefusal{
+		{
+			name:   "unknown field",
+			body:   `{"code":"x","password":"y","admin":true}`,
+			status: 400,
+			code:   "request.body-invalid",
+		},
 		{name: "not an object", body: `["x"]`, status: 400, code: "request.body-invalid"},
 		{name: "two objects", body: `{"code":"x","password":"y"}{}`, status: 400, code: "request.body-invalid"},
-		{name: "code not valid", body: `{"code":"x","password":"` + localPassword + `"}`, status: 400, code: "local-user.code-invalid"},
-		{name: "short password", body: `{"code":"` + user.SetUpCode + `","password":"short"}`, status: 400, code: "password.too-short"},
-	}
-
-	for _, tc := range redeemTests {
-		rec := s.do(t, localRequest{method: http.MethodPost, path: "/api/dustpan/v1/local-users/redeem", body: tc.body})
-		wantAnswer(t, "redeem: "+tc.name, rec, tc.status, tc.code)
-
-		if strings.Contains(rec.Body.String(), localPassword) {
-			t.Fatalf("redeem: %s: the answer holds the password", tc.name)
-		}
-	}
-
-	redeemed := s.do(t, localRequest{
-		method: http.MethodPost, path: "/api/dustpan/v1/local-users/redeem",
-		body: `{"code":"` + user.SetUpCode + `","password":"` + localPassword + `"}`,
+		{
+			name: "code not valid", body: `{"code":"x","password":"` + localPassword + `"}`, status: 400,
+			code: "local-user.code-invalid",
+		},
+		{
+			name:   "short password",
+			body:   `{"code":"` + code + `","password":"short"}`,
+			status: 400,
+			code:   "password.too-short",
+		},
 	})
+
+	redeemed := s.do(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
+		`{"code":"`+code+`","password":"`+localPassword+`"}`, anonymous())
 	wantAnswer(t, "redeem", redeemed, http.StatusNoContent, "")
 
 	if got := redeemed.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Fatalf("Referrer-Policy = %q, want no-referrer", got)
 	}
 
-	signInTests := []struct {
-		name, body, code string
-		status           int
-	}{
-		{name: "wrong password", body: `{"userName":"alice","password":"` + localNewPass + `"}`, status: 401, code: "local-user.sign-in-failed"},
-		{name: "unknown name", body: `{"userName":"carol","password":"` + localPassword + `"}`, status: 401, code: "local-user.sign-in-failed"},
-		{name: "unknown field", body: `{"userName":"alice","password":"x","otp":"1"}`, status: 400, code: "request.body-invalid"},
-		{name: "too large", body: `{"userName":"alice","password":"` + strings.Repeat("a", 9000) + `"}`, status: 400, code: "request.body-invalid"},
-	}
-
-	for _, tc := range signInTests {
-		rec := s.do(t, localRequest{method: http.MethodPost, path: "/api/dustpan/v1/sign-in/password", body: tc.body})
-		wantAnswer(t, "sign in: "+tc.name, rec, tc.status, tc.code)
-
-		if len(rec.Result().Cookies()) != 0 {
-			t.Fatalf("sign in: %s: the answer sets a cookie", tc.name)
-		}
-	}
-
-	signedIn := s.do(t, localRequest{
-		method: http.MethodPost, path: "/api/dustpan/v1/sign-in/password",
-		body: `{"userName":"Alice","password":"` + localPassword + `"}`,
+	s.checkRefusals(t, "/api/dustpan/v1/sign-in/password", []localRefusal{
+		{
+			name: "wrong password", body: `{"userName":"alice","password":"` + localNewPass + `"}`, status: 401,
+			code: "local-user.sign-in-failed",
+		},
+		{
+			name: "unknown name", body: `{"userName":"carol","password":"` + localPassword + `"}`, status: 401,
+			code: "local-user.sign-in-failed",
+		},
+		{
+			name:   "unknown field",
+			body:   `{"userName":"alice","password":"x","otp":"1"}`,
+			status: 400,
+			code:   "request.body-invalid",
+		},
+		{
+			name: "too large", body: `{"userName":"alice","password":"` + strings.Repeat("a", 9000) + `"}`, status: 400,
+			code: "request.body-invalid",
+		},
 	})
+
+	signedIn := s.do(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
+		`{"userName":"Alice","password":"`+localPassword+`"}`, anonymous())
 	wantAnswer(t, "sign in", signedIn, http.StatusNoContent, "")
 
 	cookie := sessionOf(t, signedIn)
 
-	subject, csrf := s.csrfOf(t, cookie)
-	if subject != user.Subject || !strings.HasPrefix(subject, "local:lus-") {
-		t.Fatalf("session subject = %q, want %q", subject, user.Subject)
+	got := s.readSession(t, cookie).subject
+	if got != subject || !strings.HasPrefix(got, "local:lus-") {
+		t.Fatalf("session subject = %q, want %q", got, subject)
 	}
 
-	// The fresh layer: an access token never stands for a fresh
-	// authentication, so the reset and the removal refuse it.
-	for _, path := range []string{"/api/dustpan/v1/local-users/reset"} {
-		rec := s.do(t, localRequest{
-			method: http.MethodPost, path: path, token: adminToken,
-			body: `{"principalId":"prn-x","reason":"lost"}`,
-		})
-		wantAnswer(t, path, rec, http.StatusForbidden, "mfa.fresh-step-required")
-	}
+	s.checkChange(t, cookie, subject)
+	s.checkAdministratorRoutes(t)
+}
 
-	wrong := s.do(t, localRequest{
-		method: http.MethodPost, path: "/api/dustpan/v1/me/password", cookie: cookie, csrf: csrf,
-		body: `{"currentPassword":"` + localNewPass + `","newPassword":"` + localNewPass + `"}`,
-	})
-	wantAnswer(t, "change with a wrong current password", wrong, http.StatusForbidden,
-		"local-user.current-password-wrong")
+// checkChange changes the password of the session cookie: a wrong current
+// password and a missing CSRF header are refused, and a good change ends the
+// old session and sets a new one.
+func (s localServer) checkChange(t *testing.T, cookie, subject string) {
+	t.Helper()
 
-	noCSRF := s.do(t, localRequest{
-		method: http.MethodPost, path: "/api/dustpan/v1/me/password", cookie: cookie,
-		body: `{"currentPassword":"` + localPassword + `","newPassword":"` + localNewPass + `"}`,
-	})
-	if noCSRF.Code < 400 {
+	csrf := s.readSession(t, cookie).csrf
+
+	wrong := s.do(t, http.MethodPost, "/api/dustpan/v1/me/password",
+		`{"currentPassword":"`+localNewPass+`","newPassword":"`+localNewPass+`"}`, withCookie(cookie, csrf))
+	wantAnswer(t, "change with a wrong current password", wrong, http.StatusForbidden, "local-user.current-wrong")
+
+	noCSRF := s.do(t, http.MethodPost, "/api/dustpan/v1/me/password",
+		`{"currentPassword":"`+localPassword+`","newPassword":"`+localNewPass+`"}`, withCookie(cookie, ""))
+	if noCSRF.Code < http.StatusBadRequest {
 		t.Fatalf("change with no CSRF header = %d, want a refusal", noCSRF.Code)
 	}
 
-	changed := s.do(t, localRequest{
-		method: http.MethodPost, path: "/api/dustpan/v1/me/password", cookie: cookie, csrf: csrf,
-		body: `{"currentPassword":"` + localPassword + `","newPassword":"` + localNewPass + `"}`,
-	})
+	changed := s.do(t, http.MethodPost, "/api/dustpan/v1/me/password",
+		`{"currentPassword":"`+localPassword+`","newPassword":"`+localNewPass+`"}`, withCookie(cookie, csrf))
 	wantAnswer(t, "change", changed, http.StatusNoContent, "")
 
 	renewed := sessionOf(t, changed)
 
 	// The change added 1 to the session generation: the old cookie no longer
 	// authenticates, and the new one does.
-	old := s.do(t, localRequest{method: http.MethodGet, path: "/api/server/session", cookie: cookie})
+	old := s.do(t, http.MethodGet, "/api/server/session", "", withCookie(cookie, ""))
 	if old.Code != http.StatusUnauthorized {
 		t.Fatalf("old session after a change = %d, want 401: %s", old.Code, old.Body)
 	}
 
-	if got, _ := s.csrfOf(t, renewed); got != user.Subject {
-		t.Fatalf("renewed session subject = %q, want %q", got, user.Subject)
+	if got := s.readSession(t, renewed).subject; got != subject {
+		t.Fatalf("renewed session subject = %q, want %q", got, subject)
 	}
+}
 
-	policy := s.do(t, localRequest{method: http.MethodGet, path: "/api/dustpan/v1/local-users/policy", token: adminToken})
+// checkAdministratorRoutes reads the policy with the token, and proves that a
+// token never stands for the fresh authentication of a reset.
+func (s localServer) checkAdministratorRoutes(t *testing.T) {
+	t.Helper()
+
+	reset := s.do(t, http.MethodPost, "/api/dustpan/v1/local-users/reset",
+		`{"principalID":"prn-x","reason":"lost"}`, administrator())
+	wantAnswer(t, "reset with a token", reset, http.StatusForbidden, "mfa.fresh-step-required")
+
+	policy := s.do(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", administrator())
 	wantAnswer(t, "policy", policy, http.StatusOK, "")
 
 	if !strings.Contains(policy.Body.String(), `"minLength":15`) ||

@@ -3,6 +3,7 @@ package localusersvc_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,7 +106,10 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("hasher: %v", err)
 	}
 
-	f := &fixture{store: st, principals: principals, svc: nil, settings: &fakeSettings{values: map[string]string{}}}
+	f := &fixture{
+		store: st, principals: principals, svc: nil, settings: &fakeSettings{values: map[string]string{}, err: nil},
+		sso: false,
+	}
 
 	svc, err := localusersvc.New(localusersvc.Config{
 		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
@@ -179,9 +183,9 @@ func (f *fixture) entriesWith(t *testing.T, action string) []audit.Entry {
 
 	var out []audit.Entry
 
-	for _, e := range page.Entries {
-		if e.Action == action {
-			out = append(out, e)
+	for i := range page.Entries {
+		if page.Entries[i].Action == action {
+			out = append(out, page.Entries[i])
 		}
 	}
 
@@ -245,7 +249,12 @@ func TestSignInFailsWithOneAnswer(t *testing.T) {
 		{name: "no password", user: "nopass", password: goodPassword, reason: localusersvc.ReasonNoPassword},
 		{name: "disabled", user: "bob", password: goodPassword, reason: localusersvc.ReasonDisabled},
 		{name: "name with a newline", user: "alice\r\nx", password: goodPassword, reason: localusersvc.ReasonNameForm},
-		{name: "name too long", user: strings.Repeat("a", 65), password: goodPassword, reason: localusersvc.ReasonNameForm},
+		{
+			name:     "name too long",
+			user:     strings.Repeat("a", 65),
+			password: goodPassword,
+			reason:   localusersvc.ReasonNameForm,
+		},
 		{name: "password with NUL", user: "alice", password: "abc\x00def", reason: localusersvc.ReasonPasswordForm},
 		{name: "password not UTF-8", user: "alice", password: "\xff\xfe", reason: localusersvc.ReasonPasswordForm},
 		{
@@ -265,30 +274,44 @@ func TestSignInFailsWithOneAnswer(t *testing.T) {
 		}
 	}
 
+	want := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		want = append(want, tc.reason)
+	}
+
+	f.checkFailureEntries(t, want)
+}
+
+// checkFailureEntries fails unless the log holds one failure entry of the
+// password sign-in for each reason of want, and no entry holds a password or
+// a user name.
+func (f *fixture) checkFailureEntries(t *testing.T, want []string) {
+	t.Helper()
+
 	entries := f.entriesWith(t, localusersvc.ActionSignInPasswordFails)
-	if len(entries) != len(cases) {
-		t.Fatalf("failure entries = %d, want %d", len(entries), len(cases))
+	if len(entries) != len(want) {
+		t.Fatalf("failure entries = %d, want %d", len(entries), len(want))
 	}
 
 	reasons := map[string]bool{}
 
-	for _, e := range entries {
-		for _, c := range e.Changes {
+	for i := range entries {
+		for _, c := range entries[i].Changes {
 			reasons[c.New] = true
 
 			if strings.Contains(c.New, goodPassword) || strings.Contains(c.New, otherPassword) {
-				t.Fatalf("an entry holds a password: %+v", e)
+				t.Fatalf("an entry holds a password: %+v", entries[i])
 			}
 		}
 
-		if strings.Contains(e.Object, "carol") || strings.Contains(e.Object, "alice") {
-			t.Fatalf("the object of an entry holds a user name: %q", e.Object)
+		if strings.Contains(entries[i].Object, "carol") || strings.Contains(entries[i].Object, "alice") {
+			t.Fatalf("the object of an entry holds a user name: %q", entries[i].Object)
 		}
 	}
 
-	for _, tc := range cases {
-		if !reasons[tc.reason] {
-			t.Fatalf("no failure entry with the reason %q", tc.reason)
+	for _, reason := range want {
+		if !reasons[reason] {
+			t.Fatalf("no failure entry with the reason %q", reason)
 		}
 	}
 }
@@ -299,11 +322,7 @@ func TestSignInFailsWithOneAnswer(t *testing.T) {
 func TestPasswordSignInSwitch(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name, value string
-		sso, want   bool
-		source      localusersvc.Source
-	}{
+	cases := []switchCase{
 		{name: "default without SSO", value: "", sso: false, want: true, source: localusersvc.SourceDefault},
 		{name: "default with SSO", value: "", sso: true, want: false, source: localusersvc.SourceDefault},
 		{name: "set off", value: "false", sso: false, want: false, source: localusersvc.SourceSet},
@@ -313,37 +332,55 @@ func TestPasswordSignInSwitch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			f := newFixture(t)
-			c := f.mustCreate(t, "alice", goodPassword)
-			f.sso = tc.sso
-			f.settings.values[localuser.SettingEnabled] = tc.value
-
-			p, err := f.svc.Policy(t.Context())
-			if err != nil {
-				t.Fatalf("policy: %v", err)
-			}
-
-			if p.Enabled != tc.want || p.EnabledSource != tc.source {
-				t.Fatalf("policy = %+v, want enabled %v from %s", p, tc.want, tc.source)
-			}
-
-			if tc.want {
-				return
-			}
-
-			if _, err := f.svc.SignIn(t.Context(), base(""), "alice", goodPassword); !errors.Is(
-				err, localuser.ErrPasswordSignInOff) {
-				t.Fatalf("sign in = %v, want ErrPasswordSignInOff", err)
-			}
-
-			_, err = f.svc.StartReset(t.Context(), admin(), c.Principal.ID, localusersvc.ResetInput{
-				Reason: "lost", RevokeAccessTokens: false,
-			})
-			if !errors.Is(err, localuser.ErrPasswordSignInOff) {
-				t.Fatalf("reset = %v, want ErrPasswordSignInOff", err)
-			}
+			checkSwitch(t, tc)
 		})
+	}
+}
+
+// switchCase is one value of the switch of the password sign-in: the stored
+// value, whether an identity provider exists, and the effective value and
+// source that the policy must answer.
+type switchCase struct {
+	name, value string
+	source      localusersvc.Source
+	sso, want   bool
+}
+
+// checkSwitch sets the switch of tc and checks the effective value and the
+// answers while the password sign-in is off.
+func checkSwitch(t *testing.T, tc switchCase) {
+	t.Helper()
+
+	value, sso, want, source := tc.value, tc.sso, tc.want, tc.source
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", goodPassword)
+	f.sso = sso
+	f.settings.values[localuser.SettingEnabled] = value
+
+	p, err := f.svc.Policy(t.Context())
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	if p.Enabled != want || p.EnabledSource != source {
+		t.Fatalf("policy = %+v, want enabled %v from %s", p, want, source)
+	}
+
+	if want {
+		return
+	}
+
+	_, err = f.svc.SignIn(t.Context(), base(""), "alice", goodPassword)
+	if !errors.Is(err, localuser.ErrPasswordSignInOff) {
+		t.Fatalf("sign in = %v, want ErrPasswordSignInOff", err)
+	}
+
+	_, err = f.svc.StartReset(t.Context(), admin(), c.Principal.ID, localusersvc.ResetInput{
+		Reason: "lost", RevokeAccessTokens: false,
+	})
+	if !errors.Is(err, localuser.ErrPasswordSignInOff) {
+		t.Fatalf("reset = %v, want ErrPasswordSignInOff", err)
 	}
 }
 
@@ -358,8 +395,8 @@ func TestSignInNextToSSONeedsASecondFactor(t *testing.T) {
 	f.sso = true
 	f.settings.values[localuser.SettingEnabled] = "true"
 
-	if _, err := f.svc.SignIn(t.Context(), base(""), "alice", goodPassword); !errors.Is(
-		err, localuser.ErrSecondFactorRequired) {
+	_, err := f.svc.SignIn(t.Context(), base(""), "alice", goodPassword)
+	if !errors.Is(err, localuser.ErrSecondFactorRequired) {
 		t.Fatalf("sign in = %v, want ErrSecondFactorRequired", err)
 	}
 }
@@ -390,15 +427,15 @@ func TestPolicyRefusesHostileSettings(t *testing.T) {
 				t.Fatalf("policy = %v, want ErrUnavailable", err)
 			}
 
-			if _, err := f.svc.SignIn(t.Context(), base(""), "alice", goodPassword); !errors.Is(
-				err, localuser.ErrUnavailable) {
+			_, err := f.svc.SignIn(t.Context(), base(""), "alice", goodPassword)
+			if !errors.Is(err, localuser.ErrUnavailable) {
 				t.Fatalf("sign in = %v, want ErrUnavailable", err)
 			}
 		})
 	}
 
 	f := newFixture(t)
-	f.settings.err = errors.New("settings store down")
+	f.settings.err = fmt.Errorf("%w: the settings store is down", setting.ErrScope)
 
 	if _, err := f.svc.Policy(t.Context()); !errors.Is(err, localuser.ErrUnavailable) {
 		t.Fatalf("policy with a failing store = %v, want ErrUnavailable", err)
@@ -415,35 +452,35 @@ func TestRedeemRules(t *testing.T) {
 	c := f.mustCreate(t, "alice", "")
 
 	cases := []struct {
-		want     error
-		name     string
-		password string
+		want      error
+		name      string
+		candidate string
 	}{
-		{name: "too short", password: "short-pass-1", want: localuser.ErrPasswordTooShort},
-		{name: "too long", password: strings.Repeat("ab", 129), want: localuser.ErrPasswordTooLong},
-		{name: "control character", password: "violet-harbor\ttin-81-ledger", want: localuser.ErrPasswordForm},
-		{name: "not UTF-8", password: "violet-harbor-\xff-81-ledger", want: localuser.ErrPasswordForm},
-		{name: "repeat", password: strings.Repeat("z", 20), want: localuser.ErrPasswordBlocked},
-		{name: "sequence", password: "abcdefghijklmnopq", want: localuser.ErrPasswordBlocked},
-		{name: "user name", password: "the-ALICE-harbor-81-ledger", want: localuser.ErrPasswordBlocked},
-		{name: "display name", password: "example-harbor-81-ledger", want: localuser.ErrPasswordBlocked},
-		{name: "product name", password: "my-opendustpan-81-ledger", want: localuser.ErrPasswordBlocked},
-		{name: "common password", password: "1qaz2wsx3edc4rfv", want: localuser.ErrPasswordBlocked},
+		{name: "too short", candidate: "short-pass-1", want: localuser.ErrPasswordTooShort},
+		{name: "too long", candidate: strings.Repeat("ab", 129), want: localuser.ErrPasswordTooLong},
+		{name: "control character", candidate: "violet-harbor\ttin-81-ledger", want: localuser.ErrPasswordForm},
+		{name: "not UTF-8", candidate: "violet-harbor-\xff-81-ledger", want: localuser.ErrPasswordForm},
+		{name: "repeat", candidate: strings.Repeat("z", 20), want: localuser.ErrPasswordBlocked},
+		{name: "sequence", candidate: "abcdefghijklmnopq", want: localuser.ErrPasswordBlocked},
+		{name: "user name", candidate: "the-ALICE-harbor-81-ledger", want: localuser.ErrPasswordBlocked},
+		{name: "display name", candidate: "example-harbor-81-ledger", want: localuser.ErrPasswordBlocked},
+		{name: "product name", candidate: "my-opendustpan-81-ledger", want: localuser.ErrPasswordBlocked},
+		{name: "common password", candidate: "1qaz2wsx3edc4rfv", want: localuser.ErrPasswordBlocked},
 	}
 
 	for _, tc := range cases {
-		err := f.svc.Redeem(t.Context(), base(""), c.SetUp.Text, tc.password)
+		err := f.svc.Redeem(t.Context(), base(""), c.SetUp.Text, tc.candidate)
 		if !errors.Is(err, tc.want) {
 			t.Fatalf("%s: redeem = %v, want %v", tc.name, err, tc.want)
 		}
 
-		if strings.Contains(err.Error(), tc.password) {
+		if strings.Contains(err.Error(), tc.candidate) {
 			t.Fatalf("%s: the error holds the password", tc.name)
 		}
 	}
 
-	if n, ok := localusersvc.MinLengthOf(f.svc.Redeem(t.Context(), base(""), c.SetUp.Text, "short")); !ok ||
-		n != localuser.DefaultMinLength {
+	n, ok := localusersvc.MinLengthOf(f.svc.Redeem(t.Context(), base(""), c.SetUp.Text, "short"))
+	if !ok || n != localuser.DefaultMinLength {
 		t.Fatalf("minimum of a short password = %d, %v; want %d", n, ok, localuser.DefaultMinLength)
 	}
 
@@ -451,8 +488,8 @@ func TestRedeemRules(t *testing.T) {
 		t.Fatalf("redeem after the refusals: %v", err)
 	}
 
-	if err := f.svc.Redeem(t.Context(), base(""), c.SetUp.Text, otherPassword); !errors.Is(
-		err, localuser.ErrNotFound) {
+	err := f.svc.Redeem(t.Context(), base(""), c.SetUp.Text, otherPassword)
+	if !errors.Is(err, localuser.ErrNotFound) {
 		t.Fatalf("second redeem = %v, want ErrNotFound", err)
 	}
 }
@@ -519,14 +556,16 @@ func TestResetEndsSessionsAndKeepsOwnAccount(t *testing.T) {
 		},
 		{
 			name: "reason with a newline", actor: admin(),
-			in: localusersvc.ResetInput{Reason: "lost\r\nforged", RevokeAccessTokens: false},
+			in:   localusersvc.ResetInput{Reason: "lost\r\nforged", RevokeAccessTokens: false},
 			want: localuser.ErrReasonRequired,
 		},
 	}
 
 	for _, tc := range refusals {
-		if _, err := f.svc.StartReset(t.Context(), tc.actor, c.Principal.ID, tc.in); !errors.Is(err, tc.want) {
-			t.Fatalf("%s: reset = %v, want %v", tc.name, err, tc.want)
+		if _, resetErr := f.svc.StartReset(t.Context(), tc.actor, c.Principal.ID, tc.in); !errors.Is(
+			resetErr, tc.want,
+		) {
+			t.Fatalf("%s: reset = %v, want %v", tc.name, resetErr, tc.want)
 		}
 	}
 
@@ -545,12 +584,12 @@ func TestResetEndsSessionsAndKeepsOwnAccount(t *testing.T) {
 		t.Fatalf("code = %d characters until %s", len(code.Text), code.ExpiresAt)
 	}
 
-	if err := f.svc.Redeem(t.Context(), base(""), code.Text, otherPassword); err != nil {
-		t.Fatalf("redeem the reset code: %v", err)
+	if redeemErr := f.svc.Redeem(t.Context(), base(""), code.Text, otherPassword); redeemErr != nil {
+		t.Fatalf("redeem the reset code: %v", redeemErr)
 	}
 
-	if _, err := f.svc.SignIn(t.Context(), base(""), "alice", goodPassword); !errors.Is(
-		err, localuser.ErrSignInFailed) {
+	_, err = f.svc.SignIn(t.Context(), base(""), "alice", goodPassword)
+	if !errors.Is(err, localuser.ErrSignInFailed) {
 		t.Fatalf("sign in with the old password = %v, want ErrSignInFailed", err)
 	}
 
@@ -598,9 +637,10 @@ func TestChangePassword(t *testing.T) {
 
 	before := f.generation(t, c.Principal.ID)
 
-	if err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+	err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
 		Current: goodPassword, New: otherPassword, Fresh: false,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("change: %v", err)
 	}
 
@@ -608,16 +648,18 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("generation after a change = %d, want %d", after, before+1)
 	}
 
-	if err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
-		Current: "", New: goodPassword, Fresh: true,
-	}); err != nil {
+	err = f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{Current: "", New: goodPassword, Fresh: true})
+	if err != nil {
 		t.Fatalf("change with a fresh step: %v", err)
 	}
 
 	stranger := localusersvc.Actor{Entry: base("corp:bob"), PrincipalID: "prn-nobody"}
-	if err := f.svc.ChangePassword(t.Context(), stranger, localusersvc.ChangeInput{
-		Current: goodPassword, New: otherPassword, Fresh: true,
-	}); !errors.Is(err, localuser.ErrNotFound) {
+	err = f.svc.ChangePassword(
+		t.Context(),
+		stranger,
+		localusersvc.ChangeInput{Current: goodPassword, New: otherPassword, Fresh: true},
+	)
+	if !errors.Is(err, localuser.ErrNotFound) {
 		t.Fatalf("change of a person with no local user = %v, want ErrNotFound", err)
 	}
 }
@@ -630,14 +672,14 @@ func TestRemovePasswordKeepsTheLastCredential(t *testing.T) {
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
 
-	if err := f.svc.RemovePassword(t.Context(), admin(), c.Principal.ID, "leaves the team"); !errors.Is(
-		err, localuser.ErrLastCredential) {
+	err := f.svc.RemovePassword(t.Context(), admin(), c.Principal.ID, "leaves the team")
+	if !errors.Is(err, localuser.ErrLastCredential) {
 		t.Fatalf("remove = %v, want ErrLastCredential", err)
 	}
 
-	if err := f.svc.RemovePassword(t.Context(), localusersvc.Actor{
-		Entry: base("x"), PrincipalID: c.Principal.ID,
-	}, c.Principal.ID, "mine"); !errors.Is(err, localuser.ErrOwnAccount) {
+	err = f.svc.RemovePassword(t.Context(), localusersvc.Actor{Entry: base("x"), PrincipalID: c.Principal.ID},
+		c.Principal.ID, "mine")
+	if !errors.Is(err, localuser.ErrOwnAccount) {
 		t.Fatalf("remove the own password = %v, want ErrOwnAccount", err)
 	}
 
@@ -688,9 +730,10 @@ func TestCreateUserRefusesHostileNames(t *testing.T) {
 
 	f.mustCreate(t, "alice", "")
 
-	if _, err := f.svc.CreateUser(t.Context(), admin(), localusersvc.CreateInput{
+	_, err = f.svc.CreateUser(t.Context(), admin(), localusersvc.CreateInput{
 		UserName: "alice", DisplayName: "", Reason: "again",
-	}); !errors.Is(err, localuser.ErrAlreadyExists) {
+	})
+	if !errors.Is(err, localuser.ErrAlreadyExists) {
 		t.Fatalf("second create of alice = %v, want ErrAlreadyExists", err)
 	}
 }
