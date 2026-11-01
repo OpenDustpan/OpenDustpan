@@ -116,10 +116,13 @@ func checkRepositoryURL(r string) error {
 	case u.RawQuery != "" || u.ForceQuery || strings.Contains(r, "#"):
 		return fmt.Errorf("%w: the repository URL of the code location cannot have a query or a fragment",
 			ErrInvalid)
-	// Defense in depth: the egress rules check the resolved address of each
-	// connection that the server opens. This check stays so that a stored
-	// location never names an IP address, a number or localhost, and so that
-	// a new path that fetches the code does not rely on its dial alone.
+	// Defense in depth: the API handlers, the unit settings and the catalog
+	// documents call CheckRepository on input, and Location.Validate calls it
+	// again when a job starts. This check stays so that a stored location
+	// never names an IP address, a number or localhost, also for a new caller.
+	// It checks the name only. The server never connects to the repository:
+	// the runner fetches it, and the runner must check the resolved address of
+	// each connection itself.
 	case !source.AllowedHost(u.Hostname()):
 		return fmt.Errorf("%w: the host of the repository URL of the code location must be a DNS name, not an "+
 			"IP address, a number or localhost", ErrInvalid)
