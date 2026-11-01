@@ -1277,13 +1277,21 @@ func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q
 	})
 }
 
+// migrationDeadline bounds each round trip of the migration transaction. It
+// replaces the statement deadline of the API paths there: the first round
+// trip waits for the migration lock while another instance migrates, and a
+// migration of a large table can run for minutes.
+const migrationDeadline = 15 * time.Minute
+
 func (s *Store) migrate(ctx context.Context) error {
 	all, err := migrate.Load(migrations, "migrations")
 	if err != nil {
 		return err
 	}
 
-	err = pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
+	starter := guardedPool{pool: s.pool, rt: roundTrip{deadline: migrationDeadline, watch: s.guard}}
+
+	err = pgx.BeginFunc(ctx, starter, func(tx pgx.Tx) error {
 		return migrateTx(
 			ctx,
 			tx,
