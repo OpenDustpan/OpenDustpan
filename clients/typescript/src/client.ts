@@ -57,6 +57,7 @@ import type {
   GetGitHostConnectionInput,
   GetGitHostInstallationInput,
   GetJobInput,
+  GetLocalUserLocksInput,
   GetModuleReleaseInput,
   GetNamespaceContextInput,
   GetNamespaceIssuerInput,
@@ -139,6 +140,7 @@ import type {
   StartStoreCheckInput,
   TestNotificationSinkInput,
   UnlockCollectionInput,
+  UnlockLocalUserInput,
   UnlockNamespaceInput,
   UpdateNamespaceContextInput,
   UpdateNamespaceIssuerInput,
@@ -250,6 +252,8 @@ import type {
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
+  LocalUserLock,
+  LocalUserLocks,
   LockLockedError,
   LockLockedErrorArgs,
   LockRequest,
@@ -368,6 +372,8 @@ import type {
   UnitSettingsSuggestions,
   UnitSettingsWriteBack,
   UnitState,
+  UnlockLocalUserRequest,
+  UnlockLocalUserResponse,
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
@@ -598,6 +604,10 @@ export class Client {
 
   getJob(input: GetJobInput): Promise<Answer<Job>> {
     return execute(this.transport, operations.getJob, input);
+  }
+
+  getLocalUserLocks(input: GetLocalUserLocksInput = {}): Promise<Answer<LocalUserLocks>> {
+    return execute(this.transport, operations.getLocalUserLocks, input);
   }
 
   getModuleRelease(input: GetModuleReleaseInput): Promise<Answer<ModuleRelease>> {
@@ -926,6 +936,10 @@ export class Client {
 
   unlockCollection(input: UnlockCollectionInput): Promise<Answer<void>> {
     return execute(this.transport, operations.unlockCollection, input);
+  }
+
+  unlockLocalUser(input: UnlockLocalUserInput): Promise<Answer<UnlockLocalUserResponse>> {
+    return execute(this.transport, operations.unlockLocalUser, input);
   }
 
   unlockNamespace(input: UnlockNamespaceInput): Promise<Answer<void>> {
