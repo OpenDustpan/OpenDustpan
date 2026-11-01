@@ -3,6 +3,7 @@ package jobtest
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -116,7 +117,7 @@ func checkStateChangedFilter(t *testing.T, h Harness, j *job.Job) {
 
 	queued := job.Filter{
 		Namespace: "", UnitID: "", States: []job.State{job.StateQueued}, Limit: 0, After: "",
-		StateChangedBefore: j.StateChangedAt,
+		StateChangedBefore: j.StateChangedAt, StateChangedAfter: time.Time{},
 	}
 	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got) != 0 {
 		t.Fatalf("List before the state change = %v, %v; want none", ids(got), err)
@@ -125,6 +126,21 @@ func checkStateChangedFilter(t *testing.T, h Harness, j *job.Job) {
 	queued.StateChangedBefore = j.StateChangedAt.Add(smallestStep)
 	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got) != 1 || got[0].ID != j.ID {
 		t.Fatalf("List after the state change = %v, %v; want %s", ids(got), err, j.ID)
+	}
+
+	// StateChangedAfter is strict too: the time of the change itself selects
+	// none, and a time before it selects the job.
+	since := job.Filter{
+		Namespace: "", UnitID: "", States: nil, Limit: 0, After: "",
+		StateChangedBefore: time.Time{}, StateChangedAfter: j.StateChangedAt,
+	}
+	if got, err := h.Jobs.List(t.Context(), since); err != nil || slices.Contains(ids(got), j.ID) {
+		t.Fatalf("List of changes after the state change = %v, %v; want no %s", ids(got), err, j.ID)
+	}
+
+	since.StateChangedAfter = j.StateChangedAt.Add(-smallestStep)
+	if got, err := h.Jobs.List(t.Context(), since); err != nil || !slices.Contains(ids(got), j.ID) {
+		t.Fatalf("List of changes before the state change = %v, %v; want %s", ids(got), err, j.ID)
 	}
 }
 
