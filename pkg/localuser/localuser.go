@@ -163,6 +163,16 @@ var (
 	// the instance within HashWait. The sign-in answers that the server is
 	// busy, and counts no failure for the name or the person.
 	ErrHashBusy = errors.New("the password hash budget of this server is full")
+	// ErrOwnAccount reports a reset or a removal of the password of the own
+	// account by an administrator. A person changes the own password with
+	// the change route.
+	ErrOwnAccount = errors.New("an administrator cannot reset or remove the own password")
+	// ErrReasonRequired reports an administrator change with no reason, or a
+	// reason that is not valid.
+	ErrReasonRequired = errors.New("the change needs a reason")
+	// ErrSecondFactorRequired reports a password sign-in that needs a second
+	// factor that the server cannot ask for yet. The sign-in fails closed.
+	ErrSecondFactorRequired = errors.New("the password sign-in needs a second factor")
 )
 
 // User is the stored record of one local user, without its password hash.
@@ -714,6 +724,13 @@ type ResetStore interface {
 	// ErrBreakGlass for a break-glass person and changes nothing. Of two
 	// calls at the same time with one code, one wins.
 	RedeemReset(ctx context.Context, r Redeem, e audit.Entry) (Reset, error)
+	// UserOfReset returns the user of the reset code with the digest d,
+	// when the code exists and did not expire at or before at. It changes
+	// nothing. The service reads it before RedeemReset, so that the password
+	// rules can refuse a password that holds the user name before a redeem
+	// uses up the code. It returns ErrNotFound when no code has the digest or
+	// when the code expired.
+	UserOfReset(ctx context.Context, d Digest, at time.Time) (User, error)
 	// PruneResets deletes the reset codes that expired at or before at, and
 	// returns how many it deleted.
 	PruneResets(ctx context.Context, at time.Time) (int64, error)

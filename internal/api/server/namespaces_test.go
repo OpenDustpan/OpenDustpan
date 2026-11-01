@@ -31,6 +31,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,

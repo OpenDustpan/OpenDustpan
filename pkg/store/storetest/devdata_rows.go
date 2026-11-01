@@ -133,7 +133,7 @@ func DevSessionRow(id, principalID, provider string) map[string]any {
 	return map[string]any{
 		"id": id, "principal_id": principalID, "digest": "digest-" + id, "provider": provider,
 		"created_at_ms": 1, "last_seen_at_ms": 1, "auth_time_ms": 1, "ended_at_ms": nil,
-		"end_reason": "", "source_ip": "", "user_agent": "",
+		"end_reason": "", "source_ip": "", "user_agent": "", "generation": 1,
 	}
 }
 

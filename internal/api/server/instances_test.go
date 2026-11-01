@@ -31,6 +31,7 @@ func newInstanceHandler(
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,

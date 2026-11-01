@@ -156,6 +156,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,

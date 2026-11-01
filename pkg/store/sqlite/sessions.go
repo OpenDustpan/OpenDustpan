@@ -86,13 +86,14 @@ func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d ses
 		SourceIp:    ss.SourceIP,
 		UserAgent:   ss.UserAgent,
 		PrincipalID: ss.PrincipalID,
+		Generation:  ss.Generation,
 	})
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
 	}
 
 	if n != 1 {
-		return refusedSession(ctx, q, ss.PrincipalID)
+		return refusedSession(ctx, q, ss.PrincipalID, ss.Generation)
 	}
 
 	last := db.SetLastSignInParams{AtMs: codec.Millis(ss.CreatedAt), ID: ss.PrincipalID}
@@ -103,9 +104,11 @@ func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d ses
 	return nil
 }
 
-// refusedSession names why the insert of a session of the principal id
-// inserted nothing: the principal, or a taken ID or digest.
-func refusedSession(ctx context.Context, q *db.Queries, id string) error {
+// refusedSession names why the insert of a session of the principal id, with
+// the session generation gen that the sign-in read (0 for none),
+// inserted nothing: the principal, a changed generation, or a taken ID or
+// digest.
+func refusedSession(ctx context.Context, q *db.Queries, id string, gen int64) error {
 	p, err := q.GetSessionPrincipal(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return session.ErrPrincipalNotFound
@@ -120,6 +123,8 @@ func refusedSession(ctx context.Context, q *db.Queries, id string) error {
 		return fmt.Errorf("%w: the principal is a %s", session.ErrPrincipalNotFound, p.Kind)
 	case p.DisabledAtMs.Valid:
 		return session.ErrPrincipalDisabled
+	case gen != 0 && p.Generation != gen:
+		return session.ErrGenerationChanged
 	default:
 		return session.ErrAlreadyExists
 	}
@@ -150,6 +155,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (session.Session, err
 		EndReason:   session.EndReason(row.EndReason),
 		SourceIP:    row.SourceIp,
 		UserAgent:   row.UserAgent,
+		Generation:  row.Generation,
 	}, nil
 }
 
@@ -184,6 +190,7 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			EndReason:   session.EndReason(row.EndReason),
 			SourceIP:    row.SourceIp,
 			UserAgent:   row.UserAgent,
+			Generation:  row.Generation,
 		},
 		Owner: session.Owner{
 			ActiveAt:    codec.FromMillis(row.PrincipalActiveAtMs),
@@ -199,7 +206,8 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			IdleMs: row.PolicyIdleMs, MaxLengthMs: row.PolicyMaxLengthMs, UpdatedAtMs: row.PolicyUpdatedAtMs,
 			TokenFreshnessMs: row.PolicyTokenFreshnessMs.Int64, TokenFreshnessSet: row.PolicyTokenFreshnessMs.Valid,
 		}),
-		Accounts: codec.FromSessionAccountsRow(row.AccountsInactivityMs, row.AccountsDisable),
+		Accounts:   codec.FromSessionAccountsRow(row.AccountsInactivityMs, row.AccountsDisable),
+		Generation: row.PrincipalGeneration,
 	}, nil
 }
 

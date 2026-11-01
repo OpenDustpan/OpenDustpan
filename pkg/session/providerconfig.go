@@ -57,6 +57,10 @@ func ValidProviderID(id string) bool {
 // provider cannot compose the subject of the dev person ("dev:admin").
 const DevProviderID = "dev"
 
+// LocalProviderID is the provider ID that the password sign-in of a local
+// user records. No identity provider can take it.
+const LocalProviderID = "local"
+
 // SubjectPrefix returns the prefix of the subject of each person who signs
 // in with the provider id: the subject is "<provider ID>:<sub>".
 func SubjectPrefix(id string) string {
@@ -122,6 +126,10 @@ func (p ProviderConfig) validateNames() error {
 
 	if p.ID == DevProviderID {
 		return fmt.Errorf("%w: the provider ID %q is reserved for the dev sign-in", ErrInvalidProvider, p.ID)
+	}
+
+	if p.ID == LocalProviderID {
+		return fmt.Errorf("%w: the provider ID %q is reserved for the local users", ErrInvalidProvider, p.ID)
 	}
 
 	if err := p.validateMode(); err != nil {
