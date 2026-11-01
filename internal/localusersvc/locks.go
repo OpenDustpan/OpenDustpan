@@ -229,25 +229,14 @@ func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason strin
 		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), "key cannot be read", err)
 	}
 
-	var total int64
-
-	for _, scope := range []string{authgate.ScopePassword, authgate.ScopePasswordName} {
-		n, clearErr := s.locks.ClearName(ctx, scope, name)
-		if clearErr != nil {
-			return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), "counts cannot be cleared",
-				fmt.Errorf("%w: clear the counts of the name: %w", localuser.ErrUnavailable, clearErr))
-		}
-
-		total += n
-	}
-
+	// The clear of both counts and the entry of the unlock commit in one
+	// transaction of the store: a failed append clears nothing.
 	e := s.entry(a.Entry, ActionNameUnlocked, object, audit.OutcomeSuccess, reason)
-	e.Changes = []audit.Change{
-		{Key: "cleared", Old: nil, New: strconv.FormatInt(total, 10), Layer: "", TakesEffect: ""},
-	}
 
-	if _, err := s.audit.AppendServer(ctx, e); err != nil {
-		return total, fmt.Errorf("append the audit entry of the unlock: %w", err)
+	total, err := s.locks.ClearName(ctx, []string{authgate.ScopePassword, authgate.ScopePasswordName}, name, e)
+	if err != nil {
+		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), "counts cannot be cleared",
+			fmt.Errorf("%w: clear the counts of the name: %w", localuser.ErrUnavailable, err))
 	}
 
 	return total, nil

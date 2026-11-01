@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/store/internal/namelockstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -117,20 +118,40 @@ func (s *Store) ClearNameFailures(ctx context.Context, scope, name, sub string) 
 	})
 }
 
-// ClearName implements authgate.NameLockCounter.
-func (s *Store) ClearName(ctx context.Context, scope, name string) (int64, error) {
+// ClearName implements authgate.NameLockCounter. The clear of each scope and
+// the append of e run in one transaction.
+func (s *Store) ClearName(ctx context.Context, scopes []string, name string, e audit.Entry) (int64, error) {
+	if err := authgate.CheckClearRequest(scopes, name); err != nil {
+		return 0, err
+	}
+
+	if err := validServerEntry(e); err != nil {
+		return 0, err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var n int64
+	var total int64
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		cleared, err := q.ClearNameLocks(ctx, db.ClearNameLocksParams{Scope: scope, Name: name})
-		if err != nil {
-			return fmt.Errorf("clear name counts: %w", err)
+		total = 0
+
+		for _, scope := range scopes {
+			cleared, err := q.ClearNameLocks(ctx, db.ClearNameLocksParams{Scope: scope, Name: name})
+			if err != nil {
+				return fmt.Errorf("clear name counts: %w", err)
+			}
+
+			total += cleared
 		}
 
-		n = cleared
+		entry := e
+		entry.Changes = append(append([]audit.Change{}, e.Changes...), authgate.ClearedChange(total))
+
+		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+			return fmt.Errorf("append the entry of the clear: %w", err)
+		}
 
 		return nil
 	})
@@ -138,7 +159,7 @@ func (s *Store) ClearName(ctx context.Context, scope, name string) (int64, error
 		return 0, err
 	}
 
-	return n, nil
+	return total, nil
 }
 
 // NameLocks implements authgate.NameLockCounter.
