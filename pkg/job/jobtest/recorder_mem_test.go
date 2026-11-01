@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -731,4 +732,61 @@ func (m *memDB) Log(_ context.Context, ns namespace.Name, version string) (job.A
 	}
 
 	return job.ArtifactRecord{}, job.ErrNotFound
+}
+
+// ArtifactNames implements job.ArtifactKeyStore.
+func (m *memDB) ArtifactNames(_ context.Context, ns namespace.Name, id job.ID) (job.ArtifactNames, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	j, ok := m.lookup(id)
+	if !ok || j.Spec.Unit.Namespace() != ns {
+		return job.ArtifactNames{}, job.ErrNotFound
+	}
+
+	out := job.ArtifactNames{Plans: []string{}, ChunkKeys: []string{}}
+
+	for planID := range m.records.plans {
+		if m.records.plans[planID].job == id {
+			out.Plans = append(out.Plans, planID)
+		}
+	}
+
+	for version, e := range m.records.logs {
+		if e.job != id {
+			continue
+		}
+
+		for seq := range m.records.chunks[version] {
+			if c := m.records.chunks[version][seq]; c.Confirmed {
+				out.ChunkKeys = append(out.ChunkKeys, c.BlobKey)
+			}
+		}
+	}
+
+	slices.Sort(out.Plans)
+	slices.Sort(out.ChunkKeys)
+
+	return out, nil
+}
+
+func TestMemArtifactSweep(t *testing.T) {
+	t.Parallel()
+
+	jobtest.RunArtifactSweep(t, func(t *testing.T) jobtest.ArtifactSweepHarness {
+		t.Helper()
+
+		db := newMemDB()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+		return jobtest.ArtifactSweepHarness{
+			RecorderHarness: buildRecorderHarness(t, db, newMemKeyIndex(db), blobs), Names: db,
+		}
+	})
 }

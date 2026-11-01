@@ -204,8 +204,8 @@ func testChunkAttemptKey(t *testing.T, h RecorderHarness) {
 
 // testChunkConfirmAttemptWindow checks that the store refuses the confirm of an
 // attempt outside its time window, by the clock of the store, and that the
-// refusal counts nothing: the row of the chunk names no blob, so the orphan
-// cleanup may delete the blob of the attempt. A late repeat of a confirm that
+// refusal counts nothing: the row of the chunk names no blob, so the artifact
+// sweep may delete the blob of the attempt. A late repeat of a confirm that
 // committed is refused too, and the row keeps its key.
 func testChunkConfirmAttemptWindow(t *testing.T, h RecorderHarness) {
 	t.Helper()

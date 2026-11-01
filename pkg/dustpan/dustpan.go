@@ -720,6 +720,10 @@ type Server struct {
 	// reconciler does the periodic work of the job model: the schedule
 	// job.reconcile. It is nil without a job store or a namespace service.
 	reconciler *job.Reconciler
+	// artifactSweeper deletes the plan and log blobs of jobs that no row names:
+	// the schedule job.artifact-sweep. It is nil without the ports that it
+	// needs.
+	artifactSweeper *job.ArtifactSweeper
 	// issuer is the OIDC issuer, or nil. The schedule issuer.rotate calls it.
 	issuer          *issuersvc.Service
 	inactivityEvery time.Duration
@@ -1108,7 +1112,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
-	reconciler, err := newJobReconciler(svc, cfg)
+	reconciler, artifactSweeper, err := newJobWorkers(svc, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1148,7 +1152,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		kind:             newKindState(cfg), instances: newInstanceState(cfg),
 		durable:      cfg.durableStore,
 		durableOwner: durableOwner(cfg),
-		reconciler:   reconciler, issuer: svc.issuer,
+		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components,

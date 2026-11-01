@@ -765,3 +765,37 @@ func CheckPlanBody(id, body string) error {
 
 	return nil
 }
+
+var _ job.ArtifactKeyStore = (*Store)(nil)
+
+// ArtifactNames implements job.ArtifactKeyStore. It reads the job first, so an
+// unknown job and a job of another namespace are job.ErrNotFound, never an
+// empty set.
+func (s *Store) ArtifactNames(ctx context.Context, ns namespace.Name, id job.ID) (job.ArtifactNames, error) {
+	var out job.ArtifactNames
+
+	err := s.run.Read(ctx, func(tx Tx) error {
+		if _, err := loadJob(ctx, tx, id, ns); err != nil {
+			return err
+		}
+
+		plans, err := tx.JobPlanIDs(ctx, ns, id)
+		if err != nil {
+			return err
+		}
+
+		chunks, err := tx.JobChunkKeys(ctx, ns, id)
+		if err != nil {
+			return err
+		}
+
+		out = job.ArtifactNames{Plans: plans, ChunkKeys: chunks}
+
+		return nil
+	})
+	if err != nil {
+		return job.ArtifactNames{}, err
+	}
+
+	return out, nil
+}

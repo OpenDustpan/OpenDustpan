@@ -400,6 +400,8 @@ func selects(f *job.Filter, j *job.Job) bool {
 		return false
 	case len(f.States) > 0 && !slices.Contains(f.States, j.State):
 		return false
+	case !f.StateChangedAfter.IsZero() && !j.StateChangedAt.After(f.StateChangedAfter):
+		return false
 	default:
 		return f.StateChangedBefore.IsZero() || j.StateChangedAt.Before(f.StateChangedBefore)
 	}

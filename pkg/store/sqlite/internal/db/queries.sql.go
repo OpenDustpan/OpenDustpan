@@ -13184,6 +13184,45 @@ func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]L
 	return items, nil
 }
 
+const listJobChunkBlobKeys = `-- name: ListJobChunkBlobKeys :many
+SELECT c.blob_key
+FROM job_log_chunks AS c
+JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = ?1 AND l.job_id = ?2 AND c.confirmed = 1
+ORDER BY c.blob_key
+`
+
+type ListJobChunkBlobKeysParams struct {
+	Namespace string
+	JobID     string
+}
+
+// The blob key of each confirmed chunk of each log version of one job. The
+// sweep of the artifact blobs keeps these blobs.
+func (q *Queries) ListJobChunkBlobKeys(ctx context.Context, arg ListJobChunkBlobKeysParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listJobChunkBlobKeys, arg.Namespace, arg.JobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var blob_key string
+		if err := rows.Scan(&blob_key); err != nil {
+			return nil, err
+		}
+		items = append(items, blob_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobFreezes = `-- name: ListJobFreezes :many
 SELECT f.id, n.name AS namespace, f.reason, f.starts_at_ms, f.ends_at_ms, f.created_by, f.ended_by
 FROM job_freezes AS f
@@ -13271,6 +13310,45 @@ func (q *Queries) ListJobLogChunkKeys(ctx context.Context, arg ListJobLogChunkKe
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobPlanIDs = `-- name: ListJobPlanIDs :many
+SELECT p.id
+FROM job_plans AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = ?1 AND p.job_id = ?2
+ORDER BY p.id
+`
+
+type ListJobPlanIDsParams struct {
+	Namespace string
+	JobID     string
+}
+
+// The ID of each plan row of one job: a stored plan, a plan that a replan
+// cleared and a reserved plan. The sweep of the artifact blobs keeps every
+// part of each of these plans.
+func (q *Queries) ListJobPlanIDs(ctx context.Context, arg ListJobPlanIDsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listJobPlanIDs, arg.Namespace, arg.JobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -110,6 +111,13 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	if s.artifactSweeper != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: job.ArtifactSweepName, Kind: job.KindArtifactSweep, Version: job.ArtifactSweepVersion,
+			Interval: job.ArtifactSweepInterval, Input: nil,
+		})
+	}
+
 	return append(specs, s.issuerRotateSchedule()...)
 }
 
@@ -142,6 +150,10 @@ func (s *Server) jobKinds() []durable.KindSpec {
 		kinds = append(kinds, s.reconcileKind())
 	}
 
+	if s.artifactSweeper != nil {
+		kinds = append(kinds, s.artifactSweepKind())
+	}
+
 	return append(kinds, s.issuerRotateKindSpec()...)
 }
 
@@ -161,6 +173,32 @@ func (s *Server) reconcileKind() durable.KindSpec {
 				if err != nil {
 					return nil, fmt.Errorf("job reconcile: %w", err)
 				}
+
+				return nil, nil
+			}},
+		},
+	}
+}
+
+// artifactSweepKind returns the runner kind of the schedule of the artifact
+// sweep. Its step returns the error of a run, so the runner counts a failed
+// run as a failed attempt. Each run writes one log line with its counts: the
+// record of what the sweep deleted and why.
+func (s *Server) artifactSweepKind() durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       job.KindArtifactSweep,
+		Version:    job.ArtifactSweepVersion,
+		MinVersion: job.ArtifactSweepVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				res, err := s.artifactSweeper.Sweep(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("job artifact sweep: %w", err)
+				}
+
+				s.logger.InfoContext(ctx, "job artifact sweep: deleted the blobs that no row names",
+					slog.Int("jobs", res.Jobs), slog.Int("deleted", res.Deleted),
+					slog.Int("unknown", res.Unknown), slog.Int("failed", res.Failed), slog.Bool("held", res.Held))
 
 				return nil, nil
 			}},

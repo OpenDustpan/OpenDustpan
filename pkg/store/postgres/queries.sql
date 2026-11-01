@@ -4794,6 +4794,26 @@ JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.confirmed = 1
 ORDER BY c.seq;
 
+-- name: ListJobPlanIDs :many
+-- The ID of each plan row of one job: a stored plan, a plan that a replan
+-- cleared and a reserved plan. The sweep of the artifact blobs keeps every
+-- part of each of these plans.
+SELECT p.id
+FROM job_plans AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND p.job_id = sqlc.arg(job_id)
+ORDER BY p.id;
+
+-- name: ListJobChunkBlobKeys :many
+-- The blob key of each confirmed chunk of each log version of one job. The
+-- sweep of the artifact blobs keeps these blobs.
+SELECT c.blob_key
+FROM job_log_chunks AS c
+JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND l.job_id = sqlc.arg(job_id) AND c.confirmed = 1
+ORDER BY c.blob_key;
+
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is
 -- replaced, so a process that starts again with its ID keeps one row.

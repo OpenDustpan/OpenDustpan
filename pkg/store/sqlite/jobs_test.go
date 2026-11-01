@@ -266,28 +266,57 @@ func TestRecorderConformance(t *testing.T) {
 	jobtest.RunRecorder(t, func(t *testing.T) jobtest.RecorderHarness {
 		t.Helper()
 
-		s := open(t)
-		j := s.Jobs()
-		ops := s.DurableOperationsPort()
-
-		blobs, err := blobfs.Open(t.TempDir())
-		if err != nil {
-			t.Fatalf("open blob store: %v", err)
-		}
-
-		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
-
-		return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
-			Harness: jobtest.Harness{
-				Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
-				Domain: &jobDomain{s: s},
-			},
-			Records:  j,
-			ItemKeys: s,
-			Blobs:    blobs,
-			Wrapper:  nil,
-		})
+		return newRecorderHarness(t).h
 	})
+}
+
+func TestArtifactSweepConformance(t *testing.T) {
+	t.Parallel()
+
+	jobtest.RunArtifactSweep(t, func(t *testing.T) jobtest.ArtifactSweepHarness {
+		t.Helper()
+
+		r := newRecorderHarness(t)
+
+		return jobtest.ArtifactSweepHarness{RecorderHarness: r.h, Names: r.names}
+	})
+}
+
+// recorderStores are the recorder harness over a fresh store and the job store
+// of that store, which serves the artifact names.
+type recorderStores struct {
+	h     jobtest.RecorderHarness
+	names job.ArtifactKeyStore
+}
+
+// newRecorderHarness returns the recorder harness over a fresh store, with
+// the job store that serves the artifact names.
+func newRecorderHarness(t *testing.T) recorderStores {
+	t.Helper()
+
+	s := open(t)
+	j := s.Jobs()
+	ops := s.DurableOperationsPort()
+
+	blobs, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+	h := jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
+		Harness: jobtest.Harness{
+			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
+			Domain: &jobDomain{s: s},
+		},
+		Records:  j,
+		ItemKeys: s,
+		Blobs:    blobs,
+		Wrapper:  nil,
+	})
+
+	return recorderStores{h: h, names: j}
 }
 
 func TestJobBackupKeepsTheDefaultedValues(t *testing.T) {
