@@ -15,8 +15,19 @@ This ADR writes the words of the owner. It adds no decision of its own.
 
 ## Decision
 
-1. **Dependencies of the provider kit (owner, 2026-10-18).** The owner said: "Provider dependencies (gRPC, protobuf, tfplugin6.proto and go-plugin .proto files under MPL-2.0". The owner said also: "a YAML library, OpenPGP signing) are approved for opendustpan/providerkit only, not for the server".
-2. **The OpenPGP library (owner, 2026-10-20).** The owner said: "OpenPGP library APPROVED (owner, 2026-10-20, after provenance check)". The approved modules and versions: "github.com/ProtonMail/go-crypto v1.5.2, github.com/cloudflare/circl v1.6.3, golang.org/x/crypto >= v0.56.0".
+1. **Dependencies of the provider kit (owner, 2026-10-18).** The verbatim quote of the owner:
+
+   ```text
+   (18 October) Provider dependencies (gRPC, protobuf, tfplugin6.proto and go-plugin .proto files under MPL-2.0, a YAML library, OpenPGP signing) are approved for opendustpan/providerkit only, not for the server.
+   ```
+
+2. **The OpenPGP library (owner, 2026-10-20).** The verbatim quote of the owner:
+
+   ```text
+   OpenPGP library APPROVED (owner, 2026-10-20, after provenance check): github.com/ProtonMail/go-crypto v1.5.2, github.com/cloudflare/circl v1.6.3, golang.org/x/crypto >= v0.56.0 (RFC 101 Q6, #1221).
+   ```
+
+   RFC 101 is the RFC of the private registry. The library is for the registry of the server.
 
 ## Consequences
 

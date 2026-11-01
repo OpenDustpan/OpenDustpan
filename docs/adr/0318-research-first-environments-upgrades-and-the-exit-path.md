@@ -21,4 +21,4 @@ This ADR writes the words of the owner. It adds no decision of its own.
 
 ## Consequences
 
-- RFC 55 and RFC 56 stay the place for the research.
+- (PM, for the owner): RFC 55 and RFC 56 stay the place for the research.
