@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // The reasons of the cases that skip.
@@ -84,6 +85,8 @@ func passwordCases() []storeCase {
 		runCase("a password set stores the hash, sets the time and appends one entry", testSetPassword),
 		runCase("a password set adds 1 to the session generation of the person in the same transaction",
 			testSetPasswordBumps),
+		runCase("a password set records its bump with the cause password and the action of the change",
+			testSetPasswordRecordsBump),
 		runCase("a password set with a hash that the hasher does not read fails with ErrInvalid and changes nothing",
 			testSetPasswordBadHash),
 		runCase("a password set with ChangeRequired reads back with the flag", testSetPasswordChangeRequired),
@@ -309,16 +312,17 @@ func storedHash(t *testing.T, s Store, name string) localuser.PasswordHash {
 	return h
 }
 
-// generation returns the session generation of the principal id.
-func generation(t *testing.T, s Store, id string) int64 {
+// generation returns the session generation of the principal id, from the
+// one port of the session generation.
+func generation(t *testing.T, s Store, id string) uint64 {
 	t.Helper()
 
-	g, err := s.SessionGeneration(t.Context(), id)
+	st, err := s.PrincipalState(t.Context(), id)
 	if err != nil {
 		t.Fatalf("session generation of %s: %v", id, err)
 	}
 
-	return g
+	return st.Generation
 }
 
 // entries returns the entries of @server whose object has the prefix.
@@ -638,8 +642,8 @@ func testGenerationStart(t *testing.T, s Store) {
 		t.Fatalf("session generation of a new person = %d, want 1", got)
 	}
 
-	if _, err := s.SessionGeneration(t.Context(), "prn-none"); !errors.Is(err, principal.ErrNotFound) {
-		t.Fatalf("session generation of an unknown principal: err = %v, want principal.ErrNotFound", err)
+	if _, err := s.PrincipalState(t.Context(), "prn-none"); !errors.Is(err, session.ErrPrincipalNotFound) {
+		t.Fatalf("session generation of an unknown principal: err = %v, want session.ErrPrincipalNotFound", err)
 	}
 }
 
@@ -1619,5 +1623,40 @@ func testUserOfReset(t *testing.T, s Store) {
 	// The read changes nothing: the code still redeems once.
 	if _, err := redeem(t, s, d, at(5), hash(5)); err != nil {
 		t.Fatalf("redeem after the reads: %v", err)
+	}
+}
+
+func testSetPasswordRecordsBump(t *testing.T, s Store) {
+	t.Helper()
+
+	u := mustUser(t, s, 1)
+	e := entry("local-user:"+u.ID, at(4))
+	e.Action = "password.changed"
+
+	err := s.SetPassword(t.Context(), u.ID, hash(2), localuser.PasswordChange{ChangeRequired: false}, e)
+	if err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+
+	bumps := entries(t, s, principal.Ref(u.PrincipalID))
+
+	var found bool
+
+	for i := range bumps {
+		if bumps[i].Action != session.ActionGenerationBumped {
+			continue
+		}
+
+		changes := map[string]string{}
+		for _, c := range bumps[i].Changes {
+			changes[c.Key] = c.New
+		}
+
+		found = changes["cause"] == string(session.BumpPassword) && changes["causeAction"] == "password.changed" &&
+			changes["generation"] == "2"
+	}
+
+	if !found {
+		t.Fatalf("entries of %s = %+v, want the bump with the cause password", u.PrincipalID, bumps)
 	}
 }

@@ -497,7 +497,7 @@ The random ID, with the prefix `sin-`, that names one sign-in. The cookies of th
 _Avoid_: Session ID
 
 **Session generation**:
-A count, one for each principal, that starts at 1. Each cookie of a session carries the generation that its issue read, and works only while it equals the stored count. A sign-out everywhere and an end of the sessions by an administrator add 1 to it. A disable and a change of a password or a factor do the same (ADR 297).
+A count, one for each principal, that starts at 1. Each cookie of a session carries the generation that its issue read, and works only while it equals the stored count. A sign-out everywhere and an end of the sessions by an administrator add 1 to it. A disable and a change of a password or a factor do the same (ADR 297). One port reads and bumps it: `session.PrincipalStateStore`. Each bump writes the audit entry `session:generation-bumped` with its cause.
 _Avoid_: Valid-after time, revocation list, token epoch
 
 **Server nonce**:

@@ -169,15 +169,15 @@ func (f *fixture) mustCreate(t *testing.T, name, password string) localusersvc.C
 }
 
 // generation returns the stored session generation of the person id.
-func (f *fixture) generation(t *testing.T, id string) int64 {
+func (f *fixture) generation(t *testing.T, id string) uint64 {
 	t.Helper()
 
-	g, err := f.store.SessionGeneration(t.Context(), id)
+	st, err := f.store.PrincipalState(t.Context(), id)
 	if err != nil {
 		t.Fatalf("session generation: %v", err)
 	}
 
-	return g
+	return st.Generation
 }
 
 // entriesWith returns every audit entry of the action.

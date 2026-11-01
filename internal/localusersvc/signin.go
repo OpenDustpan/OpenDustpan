@@ -23,7 +23,7 @@ type SignedIn struct {
 	PrincipalID       string
 	UserID            string
 	locks             lockKeys
-	SessionGeneration int64
+	SessionGeneration uint64
 	ChangeRequired    bool
 }
 
