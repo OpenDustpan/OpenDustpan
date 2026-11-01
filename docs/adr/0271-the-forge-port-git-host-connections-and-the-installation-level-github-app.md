@@ -8,6 +8,7 @@ Changed by:
   failover.
 - ADR 299 changes decision 4: webhooks with three recovery paths.
 - ADR 299 extends decision 7: more comment commands and a reaction.
+- ADR 299 extends decision 2: new operations of the Forge port.
 
 ## Context
 

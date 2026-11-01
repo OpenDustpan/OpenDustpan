@@ -14,6 +14,7 @@ func TestCaseNamesAreUniqueAndNotEmpty(t *testing.T) {
 		"GitHost":         reviewrequesttest.GitHostCaseNames(),
 		"ClosureResolver": reviewrequesttest.ClosureCaseNames(),
 		"ConflictChecker": reviewrequesttest.ConflictCaseNames(),
+		"Service":         reviewrequesttest.ServiceCaseNames(),
 	} {
 		if len(names) == 0 {
 			t.Errorf("suite %s has no case", suite)
@@ -55,5 +56,9 @@ func TestSuitesRun(t *testing.T) {
 	t.Run("ConflictChecker", func(t *testing.T) {
 		t.Parallel()
 		reviewrequesttest.RunConflicts(t, nil)
+	})
+	t.Run("Service", func(t *testing.T) {
+		t.Parallel()
+		reviewrequesttest.RunService(t, nil)
 	})
 }
