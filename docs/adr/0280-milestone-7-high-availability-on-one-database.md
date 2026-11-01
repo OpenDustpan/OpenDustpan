@@ -8,6 +8,8 @@ Changed by:
   store.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 298 extends decision 4: what each instance does while the
+  PostgreSQL primary fails over.
 
 ## Context
 

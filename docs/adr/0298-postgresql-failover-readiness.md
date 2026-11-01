@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-31. Work item W9 of milestone 7 (ADR 280). The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. Extends ADR 280 decision 4 and ADR 72. Does not change ADR 4 or the minimum topology of ADR 280 decision 5
 
+Changes:
+
+- Extends ADR 280 decision 4: what each instance does while the
+  PostgreSQL primary fails over.
+- Extends ADR 72: what each instance does while the PostgreSQL primary
+  fails over.
+
 ## Context
 
 ADR 280 makes one installation run active-active on one PostgreSQL

@@ -18,6 +18,8 @@ Changed by:
   jobID.
 - ADR 249 extends decision 11: the version row records the components.
 - ADR 280 extends: the restore as a durable operation and the lease period.
+- ADR 298 extends: what each instance does while the PostgreSQL primary
+  fails over.
 
 ## Context
 
