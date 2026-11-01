@@ -570,10 +570,12 @@ and the change of the rule of ADR 299 that a replacement is never disjoint
   refuses overlapping claims before anything runs.
 - The server serves each job the state version that its plan was made from,
   and merges each upload one resource instance at a time.
-- Work that is not provably disjoint takes turns. In the first design these cases keep
-  the whole-unit lock: data sources, providers configured from resources,
-  root outputs, client-encrypted state, a version or lineage mismatch, and a
-  local CLI run without the wrapper.
+- Work that is not provably disjoint takes turns. Six cases from the
+  research keep the whole-unit lock: data sources, providers configured from
+  resources, root outputs, client-encrypted state, a version or lineage
+  mismatch, and a local CLI run without the wrapper. They are the starting
+  set. The RFC may add a case. It may not remove one without a decision of
+  the owner.
 - OpenTofu first. The Pulumi CLI follows after its own spike.
 - The local CLI wrapper: `dustpan` wraps the real `tofu` or `pulumi` CLI on
   the machine of the user, as the runner wrapper does.
@@ -582,17 +584,18 @@ and the change of the rule of ADR 299 that a replacement is never disjoint
 
 **Work items.**
 
-- C1. The inventory: a list of each feature that works only inside
-  OpenDustpan runners today because it needs the CLI wrapper. Each entry
-  names the feature, why it needs the wrapper and what a local run lacks
-  now. This is the first task. It can end milestone 7 as an exit task or
-  start milestone 8 as a pre-flight. The owner picks one in the pull request
-  that does it.
+- C1. The pre-flight, and the first task of the milestone: the inventory.
+  It lists each feature that works only inside OpenDustpan runners today
+  because it needs the CLI wrapper. Each entry names the feature, why it
+  needs the wrapper and what a local run lacks now. The inventory can mark
+  an entry that cannot be ported, with the reason. The owner decides what
+  happens to such an entry.
 - C2. The RFC for concurrent applies, then the ADR that accepts it.
 - C3. The claim model and the strict disjointness rules, for OpenTofu.
 - C4. The merge of an upload, one resource instance at a time.
 - C5. The local CLI wrapper for OpenTofu, with claims.
-- C6. The port of each feature in the inventory (C1) to the local wrapper.
+- C6. The port of each feature in the inventory (C1) to the local wrapper,
+  except an entry that the owner decided not to port.
 - C7. A spike with the Pulumi CLI, then its claim model if the spike passes.
 - C8. Docs: a guide for the wrapper, and an explanation page of the cases
   that keep the whole-unit lock.
@@ -600,26 +603,52 @@ and the change of the rule of ADR 299 that a replacement is never disjoint
 C1, then C2, then C3 is the critical path.
 
 **Exit test.** For a real person: a platform lead has one workspace that
-two teams change. On Linux, on PostgreSQL, with real OpenTofu in OpenDustpan
-runners, the e2e suite does these steps:
+two teams change, and a third person who applies from a laptop. On Linux, on
+PostgreSQL, with real OpenTofu and a fake cloud provider that logs each call
+with a time, the e2e suite does these steps. Each step passes or fails on the
+fact that it names.
 
-1. Team A and team B each change a different part of the same workspace. Both
-   jobs plan, and both register a claim. The server accepts both claims.
-2. Both applies run at the same time. The state after both has the changes of
-   A and of B, and no resource of A or B is lost or reverted. The history
-   shows two state versions with their claims.
-3. A third change overlaps the claim of team A. The server refuses the claim
-   before any call to the cloud provider. The refusal names the claim that
-   blocks it.
-4. A change that uses a case of the strict rules (for example a root output)
-   waits for the whole-unit lock, and the history says why.
-5. A person runs the third change from a laptop with the `dustpan` CLI
-   wrapper. The run waits or joins, as the rules say, and the history shows
-   the claim of the local run.
-6. A local run with the plain `tofu` CLI and no wrapper keeps the whole-unit
-   lock, and a concurrent job waits for it.
-7. A feature from the inventory (C1) works in a local run through the
-   wrapper, with the same result as in a runner.
+1. **Two disjoint claims.** Team A and team B each change a different
+   resource in the same workspace. Both runner jobs plan and register a
+   claim. Pass: the suite finds two claim records in the state "accepted"
+   and no refusal.
+2. **Concurrent applies.** Both applies run. Pass: the provider log shows
+   that the two apply periods overlap in time, the final state has the
+   change of A and the change of B, and the history shows two new state
+   versions, each with its own claim ID. Fail: a resource of A or B is
+   lost or reverted.
+3. **A runner job with an overlapping claim is refused.** While the apply
+   of A runs, team C starts a runner job that changes the resource of A.
+   Pass: the server refuses the claim of C, the refusal names the claim of
+   A, the job of C ends as "blocked", and the provider log has no call from
+   the job of C.
+4. **A strict case takes turns.** A change that reads a data source (a case
+   of the strict rules) runs while the apply of A runs. Pass: it holds the
+   whole-unit lock, it starts its apply only after the apply of A ends, and
+   the history names the case.
+5. **A local run, two cases.** A person runs `dustpan` with the wrapper
+   around `tofu apply` from a laptop.
+   - The change overlaps a running claim: pass when the wrapper waits and
+     the provider log has no call from it until the time that the blocking
+     claim ends. After that, it applies on the new state version. The claim
+     record of the local run shows a start time after the end time of the
+     blocking claim.
+   - The change does not overlap any running claim: pass when its claim
+     is accepted, its apply period overlaps the running apply in the
+     provider log, and the state serials show two merged versions with no
+     lost resource.
+6. **A local run without the wrapper.** A person runs plain `tofu apply` on
+   the same workspace. Pass: it takes the whole-unit lock, and a runner job
+   that starts meanwhile waits for it. The history shows the lock holder.
+7. **A runner-only feature in a local run.** Secret masking is a feature
+   that works only in runners today: the launcher masks each secret value
+   of a phase in the step log (`Masker` in `internal/launcher`). Pass: a
+   local wrapper run of a change that prints a secret value of its profile
+   shows the masked value in the log that the server stores, and the
+   plain text appears nowhere in the log. The job token credential of the
+   launcher, which a run uses to call the server, must work from the wrapper
+   in the same step. The inventory (C1) may name more features. Each one
+   that the owner did not exempt gets its own check here.
 
 ## Accepted designs that wait for adapters
 
