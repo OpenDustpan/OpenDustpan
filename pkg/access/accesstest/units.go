@@ -79,8 +79,9 @@ func unitStore(t *testing.T, s access.Store) UnitStore {
 	ws := workspace.Workspace{
 		NamespaceID: "",
 		CreatedAt:   at(0), UpdatedAt: at(0),
-		Lock: workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
-		ID:   "ws-network", Ref: workspace.Ref{Namespace: "acme", Name: name},
+		Lock:        workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          "ws-network", Ref: workspace.Ref{Namespace: "acme", Name: name},
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
 	}
 	if err := us.CreateWorkspace(ctx, ws, ns.Fence()); err != nil {

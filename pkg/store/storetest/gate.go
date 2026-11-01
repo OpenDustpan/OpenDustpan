@@ -447,6 +447,7 @@ func (d gateDomain) CreateUnit(
 			CreatedAt:   gateTime(),
 			UpdatedAt:   gateTime(),
 			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			LastRelease: workspace.NoRelease(),
 			ID:          workspace.ID(ident.NewID("ws-")),
 			Ref:         workspace.Ref{Namespace: ns, Name: wname},
 			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},

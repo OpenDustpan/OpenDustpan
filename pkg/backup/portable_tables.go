@@ -412,7 +412,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "workspaces",
+			Table:   portTableWorkspaces,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -430,6 +430,11 @@ func portableSpec() []PortableTable {
 				{Name: "allow_unlocked_writes", Kind: KindBool},
 				{Name: portColDeletedAtMs, Kind: KindTime},
 				{Name: portColDeletedName, Kind: KindText},
+				{Name: "last_release_lock_id", Kind: KindText},
+				{Name: "last_release_holder", Kind: KindText},
+				{Name: "last_release_by", Kind: KindText},
+				{Name: portColLastReleaseKind, Kind: KindText},
+				{Name: "last_release_at_ms", Kind: KindTime},
 			},
 		},
 		{

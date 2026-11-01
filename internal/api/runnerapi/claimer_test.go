@@ -31,8 +31,9 @@ func unitOf(t *testing.T, s stores, fence namespace.Fence, name string) identity
 
 	w := workspace.Workspace{
 		NamespaceID: "", CreatedAt: now, UpdatedAt: now,
-		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
 		Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err = s.units.CreateWorkspace(t.Context(), w, fence); err != nil {

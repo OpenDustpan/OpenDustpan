@@ -75,6 +75,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 		CreatedAt:   ns.CreatedAt,
 		UpdatedAt:   ns.CreatedAt,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "web")},
 		Revision:    1,

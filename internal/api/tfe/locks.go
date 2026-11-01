@@ -201,7 +201,11 @@ func (h *Handler) writeLockRefusal(ctx context.Context, w http.ResponseWriter, i
 
 // unlockWorkspace serves POST /api/v2/workspaces/{id}/actions/unlock. The
 // holder unlocks. An unlock by another principal answers 409 with a detail
-// holding "is locked by User" and the holder.
+// holding "is locked by User" and the holder. On an unlocked workspace, an
+// unlock by the holder of the last normal release answers success with no
+// change, because OpenTofu sends an unlock again when its answer is lost. The
+// workspace service applies that rule: the protocol sends no lock ID, so the
+// handler has no check of its own to make before it.
 func (h *Handler) unlockWorkspace(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
@@ -287,7 +291,10 @@ func forceUnlockEntry(r *http.Request, p identity.Principal, obj identity.Object
 // hold data.attributes.reason, which the audit entry of the release keeps,
 // and data.attributes.lock-id and lock-holder, which name the lock that the
 // caller saw. A lock that differs answers 409 and changes nothing. A
-// force-unlock of an unlocked workspace answers 409. A success writes one
+// force-unlock of an unlocked workspace answers 409, except a repeat of the
+// last forced release by the same principal: the workspace service answers it
+// with success and no change, because OpenTofu sends a force-unlock again
+// when its answer is lost. A success writes one
 // audit entry of the kind change in the transaction of the release, and one
 // info log line with the action, the unit, the principal and the released
 // holder, and never with the request path or query. The handler owns the
