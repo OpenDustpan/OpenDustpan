@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18. Accepts RFC 75 with ADR 237. Supersedes in part ADR 39 decisions 1 and 4, ADR 41 decision 12 and ADR 154 decision 10
 
+Changed by:
+
+- ADR 314 extends: the quickstart.
+
 ## Context
 
 `serve` has defaults that suit a trial and are wrong for production: the

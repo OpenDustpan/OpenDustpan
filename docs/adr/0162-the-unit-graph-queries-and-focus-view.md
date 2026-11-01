@@ -7,6 +7,7 @@ Changed by:
 - ADR 166 changes decisions 11 and 15: the graph routes, the 404 rule and the
   edge order.
 - ADR 210 changes: the route paths and the server: action names.
+- ADR 312 extends: declared edges.
 
 ## Context
 
