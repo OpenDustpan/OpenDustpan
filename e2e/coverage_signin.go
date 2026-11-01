@@ -141,8 +141,17 @@ func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.S
 	}
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
-		Settings: nil, SSO: nil, Kind: installation.KindDev, Now: nil,
+		Store:      st,
+		Principals: principals,
+		Hasher:     hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      st,
+		Locks:      st,
+		Keys:       st,
+		Settings:   nil,
+		SSO:        nil,
+		Kind:       installation.KindDev,
+		Now:        nil,
 	})
 	if err != nil {
 		tb.Fatalf("local user service: %v", err)

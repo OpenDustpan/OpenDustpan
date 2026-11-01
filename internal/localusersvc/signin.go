@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
@@ -21,6 +22,7 @@ import (
 type SignedIn struct {
 	PrincipalID       string
 	UserID            string
+	locks             lockKeys
 	SessionGeneration int64
 	ChangeRequired    bool
 }
@@ -59,6 +61,7 @@ func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, passwo
 
 	nfc, formErr := checkForm(password)
 	name := localuser.FoldUserName(userName)
+	in.name = name
 
 	switch {
 	case formErr != nil:
@@ -85,8 +88,11 @@ type attempt struct {
 	// not tell: an unknown name or a user with no password. Empty for a user
 	// whose hash the sign-in checks.
 	reason string
-	hash   localuser.PasswordHash
-	cred   localuser.Credential
+	// name is the folded user name that the client sent. Its digest names
+	// the counts of the lockout by name.
+	name string
+	hash localuser.PasswordHash
+	cred localuser.Credential
 }
 
 // readCredential reads the credential of the folded user name into in.
@@ -120,6 +126,16 @@ func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy)
 		return SignedIn{}, err
 	}
 
+	// The failure counts after the hash has its budget and before the
+	// compare: a request that finds the budget full counts nothing, and of
+	// attempts at the same time no more than the limit reach the compare.
+	keys, err := s.countAttempt(ctx, in)
+	if err != nil {
+		res.Release()
+
+		return SignedIn{}, err
+	}
+
 	verdict, err := res.Verify(nfc, localuser.DefaultHashParams())
 	res.Release()
 
@@ -137,9 +153,40 @@ func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy)
 	}
 
 	return SignedIn{
-		PrincipalID: in.cred.User.PrincipalID, UserID: in.cred.User.ID,
+		PrincipalID: in.cred.User.PrincipalID, UserID: in.cred.User.ID, locks: keys,
 		SessionGeneration: in.cred.SessionGeneration, ChangeRequired: in.cred.User.ChangeRequired,
 	}, nil
+}
+
+// countAttempt adds the failure of the attempt in to the counts of its name
+// before the compare, and returns the keys of the counts. The demo person of
+// a dev installation has no lockout by name, so one visitor cannot lock out
+// the others. A lock refuses the attempt with ErrSignInFailed, and a count
+// that cannot be written refuses it with ErrUnavailable.
+func (s *Service) countAttempt(ctx context.Context, in *attempt) (lockKeys, error) {
+	tg := on(ActionSignInPasswordFails, in.object)
+
+	if in.cred.User.Demo {
+		return lockKeys{name: "", sub: ""}, nil
+	}
+
+	name, err := s.nameDigest(ctx, in.name)
+	if err != nil {
+		return lockKeys{name: "", sub: ""}, s.refuse(ctx, in.base, tg, "key of the names cannot be read", err)
+	}
+
+	keys := lockKeys{name: name, sub: SourcePrefix(in.base.SourceIP)}
+
+	err = s.countFailure(ctx, in.base, in.object, keys)
+
+	switch {
+	case errors.Is(err, authgate.ErrNameLocked):
+		return keys, s.refuse(ctx, in.base, tg, ReasonNameLocked, localuser.ErrSignInFailed)
+	case err != nil:
+		return keys, s.refuse(ctx, in.base, tg, "count of the name cannot be written", err)
+	default:
+		return keys, nil
+	}
 }
 
 // reserve takes the memory of the hash of in, or of the fixed hash when in

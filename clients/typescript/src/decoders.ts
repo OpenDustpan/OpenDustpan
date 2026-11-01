@@ -123,6 +123,8 @@ import type {
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
+  LocalUserLock,
+  LocalUserLocks,
   LocalUserPolicy,
   LockLockedError,
   LockLockedErrorArgs,
@@ -248,6 +250,8 @@ import type {
   UnitSettingsSuggestions,
   UnitSettingsWriteBack,
   UnitState,
+  UnlockLocalUserRequest,
+  UnlockLocalUserResponse,
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
@@ -1071,6 +1075,20 @@ export const decodeListUnitsResponse: Decoder<ListUnitsResponse> = object<ListUn
 /** The validator of ListViewsResponse. */
 export const decodeListViewsResponse: Decoder<ListViewsResponse> = object<ListViewsResponse>("ListViewsResponse", {
   views: array(ref(() => decodeView)),
+});
+
+/** The validator of LocalUserLock. */
+export const decodeLocalUserLock: Decoder<LocalUserLock> = object<LocalUserLock>("LocalUserLock", {
+  failures: int64,
+  level: int64,
+  lockedUntil: string,
+  scope: string,
+  source: string,
+});
+
+/** The validator of LocalUserLocks. */
+export const decodeLocalUserLocks: Decoder<LocalUserLocks> = object<LocalUserLocks>("LocalUserLocks", {
+  locks: array(ref(() => decodeLocalUserLock)),
 });
 
 /** The validator of LocalUserPolicy. */
@@ -2030,6 +2048,17 @@ export const decodeUnitSettingsWriteBack: Decoder<UnitSettingsWriteBack> = objec
 export const decodeUnitState: Decoder<UnitState> = object<UnitState>("UnitState", {
   since: string,
   state: string,
+});
+
+/** The validator of UnlockLocalUserRequest. */
+export const decodeUnlockLocalUserRequest: Decoder<UnlockLocalUserRequest> = object<UnlockLocalUserRequest>("UnlockLocalUserRequest", {
+  principal: string,
+  reason: string,
+});
+
+/** The validator of UnlockLocalUserResponse. */
+export const decodeUnlockLocalUserResponse: Decoder<UnlockLocalUserResponse> = object<UnlockLocalUserResponse>("UnlockLocalUserResponse", {
+  cleared: int64,
 });
 
 /** The validator of UpdateContextRequest. */

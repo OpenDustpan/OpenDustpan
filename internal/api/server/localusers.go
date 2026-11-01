@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -40,6 +41,8 @@ const (
 	localUserRedeemPath      = "/api/dustpan/v1/local-users/redeem"
 	localUserPolicyPath      = "/api/dustpan/v1/local-users/policy"
 	localUserResetPath       = "/api/dustpan/v1/local-users/reset"
+	localUserUnlockPath      = "/api/dustpan/v1/local-users/unlock"
+	localUserLocksPath       = "/api/dustpan/v1/local-users/locks"
 	ownSignInChangePath      = "/api/dustpan/v1/me/password"
 	maxLocalUserBody         = 8 * 1024
 	tagLocalUsers            = "local-users"
@@ -91,6 +94,40 @@ type resetLocalUserRequest struct {
 type resetLocalUserResponse struct {
 	ResetCode string `json:"resetCode"`
 	ExpiresAt string `json:"expiresAt"`
+}
+
+// unlockLocalUserRequest is the body of an unlock of the name of a local
+// user.
+type unlockLocalUserRequest struct {
+	Principal string `json:"principal"`
+	Reason    string `json:"reason"`
+}
+
+// unlockLocalUserResponse is the count of the counts that an unlock cleared.
+//
+// Contract: never remove or rename these fields.
+type unlockLocalUserResponse struct {
+	Cleared int64 `json:"cleared"`
+}
+
+// localUserLockBody is the state of one count of the name of a local user.
+// lockedUntil is empty when no lock holds.
+//
+// Contract: never remove or rename these fields.
+type localUserLockBody struct {
+	Scope       string `json:"scope"`
+	Source      string `json:"source"`
+	LockedUntil string `json:"lockedUntil"`
+	Failures    int    `json:"failures"`
+	Level       int    `json:"level"`
+}
+
+// localUserLocksResponse is the state of each count of the name of a local
+// user.
+//
+// Contract: never remove or rename these fields.
+type localUserLocksResponse struct {
+	Locks []localUserLockBody `json:"locks"`
 }
 
 // changeOwnPasswordRequest is the body of a change of the own password. An
@@ -155,6 +192,14 @@ func (h *Handler) localUserRoutes() []Route {
 			Method: http.MethodPost, Path: localUserResetPath, Scope: ScopeAuthorized, Actions: manage,
 			Resolve: resolveServer, ActionsFor: nil,
 			Serve: h.fresh(identity.ActionServerManageSignIn, h.resetLocalUser),
+		},
+		{
+			Method: http.MethodPost, Path: localUserUnlockPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveServer, ActionsFor: nil, Serve: h.unlockLocalUser,
+		},
+		{
+			Method: http.MethodGet, Path: localUserLocksPath, Scope: ScopeAuthorized, Actions: manage,
+			Resolve: resolveServer, ActionsFor: nil, Serve: h.getLocalUserLocks,
 		},
 		{
 			Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
@@ -255,6 +300,14 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		h.writeError(ctx, w, err)
 
 		return
+	}
+
+	// Only the end of a full sign-in clears the counts of the name, after the
+	// commit of the session. A failed clear leaves the counts, which is the
+	// safe direction, so the sign-in still succeeds.
+	if clearErr := h.localUsers.ClearLocks(ctx, in); clearErr != nil {
+		h.logger.WarnContext(ctx, "the counts of a user name were not cleared after a sign-in",
+			slog.String("cause", causeType(clearErr)))
 	}
 
 	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
@@ -395,6 +448,69 @@ func (h *Handler) resetLocalUser(w http.ResponseWriter, r *http.Request, p ident
 	h.writeJSON(ctx, w, http.StatusCreated, resetLocalUserResponse{
 		ResetCode: code.Text, ExpiresAt: code.ExpiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// unlockLocalUser ends every count and lock of the name of a local user.
+func (h *Handler) unlockLocalUser(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	var req unlockLocalUserRequest
+	if err := decodeLocalUserBody(w, r, &req); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if _, err := identity.ParsePrincipalObject(req.Principal); err != nil {
+		h.writeError(ctx, w, localUserError(localuser.ErrNotFound))
+
+		return
+	}
+
+	n, err := h.localUsers.Unlock(ctx, localUserActor(r, p, identity.ActionServerManageSignIn), req.Principal,
+		req.Reason)
+	if err != nil {
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, unlockLocalUserResponse{Cleared: n})
+}
+
+// getLocalUserLocks answers the state of each count of the name of the local
+// user that the query parameter principal names.
+func (h *Handler) getLocalUserLocks(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	id := queryOf(r).Get("principal")
+	if _, err := identity.ParsePrincipalObject(id); err != nil {
+		h.writeError(ctx, w, localUserError(localuser.ErrNotFound))
+
+		return
+	}
+
+	locks, err := h.localUsers.Locks(ctx, id)
+	if err != nil {
+		h.writeError(ctx, w, localUserError(err))
+
+		return
+	}
+
+	out := localUserLocksResponse{Locks: make([]localUserLockBody, 0, len(locks))}
+
+	for _, l := range locks {
+		until := ""
+		if !l.LockedUntil.IsZero() {
+			until = l.LockedUntil.UTC().Format(time.RFC3339)
+		}
+
+		out.Locks = append(out.Locks, localUserLockBody{
+			Scope: l.Scope, Source: l.Source, LockedUntil: until, Failures: l.Failures, Level: l.Level,
+		})
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, out)
 }
 
 // changeOwnPassword changes the password of the caller. The change ends every

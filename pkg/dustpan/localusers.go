@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -50,8 +51,9 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 }
 
 // localUserWiring holds the service of the local users. The service is nil
-// when the store keeps no local users, no principals or no audit log: then no
-// local user route is mounted.
+// when the store keeps no local users, no principals, no audit log or no
+// lockout by name: then no local user route is mounted, so the password
+// sign-in never runs without its lockout.
 type localUserWiring struct {
 	service *localusersvc.Service
 }
@@ -74,6 +76,16 @@ func newLocalUserService(
 		return none, nil
 	}
 
+	locks, ok := cfg.namespaceStore.(authgate.NameLockCounter)
+	if !ok {
+		return none, nil
+	}
+
+	keys, ok := cfg.namespaceStore.(localusersvc.NameKeys)
+	if !ok {
+		return none, nil
+	}
+
 	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
 	if err != nil {
 		return none, fmt.Errorf("password hash budget: %w", err)
@@ -90,8 +102,17 @@ func newLocalUserService(
 	}
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Store: store, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: entries,
-		Settings: settingsPort, SSO: identityProviders(cfg, signIn), Kind: cfg.installationKind, Now: cfg.now,
+		Store:      store,
+		Principals: principals,
+		Hasher:     hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      entries,
+		Locks:      locks,
+		Keys:       keys,
+		Settings:   settingsPort,
+		SSO:        identityProviders(cfg, signIn),
+		Kind:       cfg.installationKind,
+		Now:        cfg.now,
 	})
 	if err != nil {
 		return none, fmt.Errorf("local users: %w", err)

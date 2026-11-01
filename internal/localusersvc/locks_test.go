@@ -1,0 +1,279 @@
+package localusersvc_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
+	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
+)
+
+// from returns the entry of a caller at the source address addr.
+func from(addr string) audit.Entry {
+	e := base("")
+	e.SourceIP = addr
+
+	return e
+}
+
+// fail sends n wrong passwords for name from addr, and fails the test unless
+// each one answers ErrSignInFailed.
+func (f *fixture) fail(t *testing.T, n int, name, addr string) {
+	t.Helper()
+
+	for i := range n {
+		if _, err := f.svc.SignIn(t.Context(), from(addr), name, otherPassword); !errors.Is(
+			err, localuser.ErrSignInFailed,
+		) {
+			t.Fatalf("wrong password %d = %v, want ErrSignInFailed", i+1, err)
+		}
+	}
+}
+
+// reasons returns the reasons of the failure entries of the password sign-in.
+func (f *fixture) reasons(t *testing.T) map[string]int {
+	t.Helper()
+
+	out := map[string]int{}
+
+	for _, e := range f.entriesWith(t, localusersvc.ActionSignInPasswordFails) {
+		for _, c := range e.Changes {
+			out[c.New]++
+		}
+	}
+
+	return out
+}
+
+// TestLockoutByNameAndSource proves the lock of a name from one source
+// prefix: after the limit of wrong passwords, the good password from that
+// prefix fails with the one answer and the audit reason of a lock, the good
+// password from another prefix signs in, and the lock is in the audit log.
+func TestLockoutByNameAndSource(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", goodPassword)
+
+	f.fail(t, authgate.DefaultNameLimit, "alice", "192.0.2.1")
+
+	if _, err := f.svc.SignIn(t.Context(), from("192.0.2.1"), "alice", goodPassword); !errors.Is(
+		err, localuser.ErrSignInFailed,
+	) {
+		t.Fatalf("good password from the locked source = %v, want ErrSignInFailed", err)
+	}
+
+	if f.reasons(t)[localusersvc.ReasonNameLocked] != 1 {
+		t.Fatalf("reasons = %v, want one lock refusal", f.reasons(t))
+	}
+
+	in, err := f.svc.SignIn(t.Context(), from("198.51.100.7"), "alice", goodPassword)
+	if err != nil {
+		t.Fatalf("good password from another source: %v", err)
+	}
+
+	if len(f.entriesWith(t, localusersvc.ActionNameLocked)) != 1 {
+		t.Fatal("no audit entry of the lock")
+	}
+
+	locks, err := f.svc.Locks(t.Context(), c.Principal.ID)
+	if err != nil {
+		t.Fatalf("locks: %v", err)
+	}
+
+	locked := 0
+
+	for _, l := range locks {
+		if !l.LockedUntil.IsZero() && l.LockedUntil.After(time.Now()) {
+			locked++
+		}
+	}
+
+	if locked != 1 {
+		t.Fatalf("locks = %+v, want one lock that holds", locks)
+	}
+
+	if err := f.svc.ClearLocks(t.Context(), in); err != nil {
+		t.Fatalf("clear after the sign-in: %v", err)
+	}
+}
+
+// TestUnknownNameLocksAsAKnownName proves that the counts take the digest of
+// the name: an unknown name locks after the same count, so the answer and the
+// lock tell nothing about a user.
+func TestUnknownNameLocksAsAKnownName(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	f.fail(t, authgate.DefaultNameLimit, "nobody", "192.0.2.1")
+	f.fail(t, 1, "nobody", "192.0.2.1")
+
+	if got := f.reasons(t); got[localusersvc.ReasonNameLocked] != 1 ||
+		got[localusersvc.ReasonUnknownName] != authgate.DefaultNameLimit {
+		t.Fatalf("reasons = %v, want the limit of unknown names and one lock refusal", got)
+	}
+}
+
+// TestUnlockClearsEveryCount proves that an unlock needs a reason, clears
+// every count of the name, writes its entry, and lets the person sign in
+// from the source that was locked.
+func TestUnlockClearsEveryCount(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", goodPassword)
+
+	f.fail(t, authgate.DefaultNameLimit, "alice", "192.0.2.1")
+
+	if _, err := f.svc.Unlock(t.Context(), admin(), c.Principal.ID, " "); !errors.Is(
+		err, localuser.ErrReasonRequired,
+	) {
+		t.Fatalf("unlock with no reason = %v, want ErrReasonRequired", err)
+	}
+
+	n, err := f.svc.Unlock(t.Context(), admin(), c.Principal.ID, "the person called the help desk")
+	if err != nil || n != 2 {
+		t.Fatalf("unlock = %d, %v; want 2 counts cleared", n, err)
+	}
+
+	if len(f.entriesWith(t, localusersvc.ActionNameUnlocked)) == 0 {
+		t.Fatal("no audit entry of the unlock")
+	}
+
+	if _, err := f.svc.SignIn(t.Context(), from("192.0.2.1"), "alice", goodPassword); err != nil {
+		t.Fatalf("sign in after the unlock: %v", err)
+	}
+}
+
+// TestWrongCurrentPasswordCounts proves that a wrong current password of a
+// change counts in the lockout by name.
+func TestWrongCurrentPasswordCounts(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", goodPassword)
+	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+
+	for range authgate.DefaultNameLimit {
+		err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+			Current: otherPassword, New: otherPassword, Fresh: false,
+		})
+		if !errors.Is(err, localuser.ErrWrongPassword) {
+			t.Fatalf("wrong current password = %v, want ErrWrongPassword", err)
+		}
+	}
+
+	if _, err := f.svc.SignIn(t.Context(), base(""), "alice", goodPassword); !errors.Is(
+		err, localuser.ErrSignInFailed,
+	) {
+		t.Fatalf("sign in after the wrong current passwords = %v, want ErrSignInFailed", err)
+	}
+}
+
+// busyHasher answers ErrHashBusy to each reservation, as a full budget does.
+type busyHasher struct {
+	localuser.PasswordHasher
+}
+
+func (busyHasher) Reserve(context.Context, localuser.PasswordHash) (*localuser.Reservation, error) {
+	return nil, localuser.ErrHashBusy
+}
+
+// errDiskOnFire is the error of a counter whose writes fail.
+var errDiskOnFire = errors.New("disk on fire")
+
+// brokenLocks is a counter whose writes fail.
+type brokenLocks struct {
+	authgate.NameLockCounter
+}
+
+func (brokenLocks) AddNameFailure(
+	context.Context, string, string, string, authgate.LockRule,
+) (authgate.NameLock, error) {
+	return authgate.NameLock{}, errDiskOnFire
+}
+
+// TestLockLimits sends a full hash budget and a counter that cannot write
+// directly to the sign-in: a full budget counts no failure, and a count that
+// cannot be written refuses the sign-in with ErrUnavailable.
+func TestLockLimits(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", goodPassword)
+
+	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
+	if err != nil {
+		t.Fatalf("budget: %v", err)
+	}
+
+	hasher, err := argon2id.New(budget)
+	if err != nil {
+		t.Fatalf("hasher: %v", err)
+	}
+
+	cases := []struct {
+		want   error
+		hasher localuser.PasswordHasher
+		locks  authgate.NameLockCounter
+		name   string
+	}{
+		{name: "full budget", hasher: busyHasher{PasswordHasher: hasher}, locks: f.store, want: localuser.ErrHashBusy},
+		{
+			name: "count cannot be written", hasher: hasher, locks: brokenLocks{NameLockCounter: f.store},
+			want: localuser.ErrUnavailable,
+		},
+	}
+
+	for _, tc := range cases {
+		svc, newErr := localusersvc.New(localusersvc.Config{
+			Store: f.store, Principals: f.principals, Hasher: tc.hasher, Blocklist: blocklist.Embedded(),
+			Audit: f.store, Locks: tc.locks, Keys: f.store, Settings: f.settings, SSO: nil, Kind: "", Now: nil,
+		})
+		if newErr != nil {
+			t.Fatalf("service: %v", newErr)
+		}
+
+		for range authgate.DefaultNameLimit + 1 {
+			if _, signErr := svc.SignIn(t.Context(), base(""), "alice", otherPassword); !errors.Is(signErr, tc.want) {
+				t.Fatalf("%s: sign in = %v, want %v", tc.name, signErr, tc.want)
+			}
+		}
+	}
+
+	locks, err := f.svc.Locks(t.Context(), c.Principal.ID)
+	if err != nil || len(locks) != 0 {
+		t.Fatalf("counts after the refused attempts = %+v, %v; want none", locks, err)
+	}
+}
+
+// TestSourcePrefix sends hostile source addresses directly to the prefix of
+// a count: each one gives a short, fixed form.
+func TestSourcePrefix(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ in, want string }{
+		{in: "192.0.2.1", want: "192.0.2.1"},
+		{in: "::ffff:192.0.2.1", want: "192.0.2.1"},
+		{in: "2001:db8:1:2:3:4:5:6", want: "2001:db8:1:2::/64"},
+		{in: "2001:db8:1:2::9", want: "2001:db8:1:2::/64"},
+		{in: "fe80::1%eth0", want: "fe80::/64"},
+		{in: "", want: "unknown"},
+		{in: "192.0.2.1\r\nX-Forged: 1", want: "unknown"},
+		{in: "not an address", want: "unknown"},
+		{in: "192.0.2.1:443", want: "unknown"},
+	}
+
+	for _, tc := range cases {
+		if got := localusersvc.SourcePrefix(tc.in); got != tc.want {
+			t.Fatalf("prefix of %q = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

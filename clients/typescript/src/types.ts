@@ -736,6 +736,18 @@ export interface ListViewsResponse {
   readonly views: ReadonlyArray<View>;
 }
 
+export interface LocalUserLock {
+  readonly failures: number;
+  readonly level: number;
+  readonly lockedUntil: string;
+  readonly scope: string;
+  readonly source: string;
+}
+
+export interface LocalUserLocks {
+  readonly locks: ReadonlyArray<LocalUserLock>;
+}
+
 export interface LocalUserPolicy {
   readonly enabled: boolean;
   readonly enabledSource: string;
@@ -1658,6 +1670,15 @@ export interface UnitSettingsWriteBack {
 export interface UnitState {
   readonly since: string;
   readonly state: string;
+}
+
+export interface UnlockLocalUserRequest {
+  readonly principal: string;
+  readonly reason: string;
+}
+
+export interface UnlockLocalUserResponse {
+  readonly cleared: number;
 }
 
 export interface UpdateContextRequest {

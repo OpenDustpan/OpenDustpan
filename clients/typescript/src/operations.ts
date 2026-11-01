@@ -105,6 +105,8 @@ import {
   decodeListStoreChecksResponse,
   decodeListUnitsResponse,
   decodeListViewsResponse,
+  decodeLocalUserLock,
+  decodeLocalUserLocks,
   decodeLocalUserPolicy,
   decodeLockLockedError,
   decodeLockLockedErrorArgs,
@@ -230,6 +232,8 @@ import {
   decodeUnitSettingsSuggestions,
   decodeUnitSettingsWriteBack,
   decodeUnitState,
+  decodeUnlockLocalUserRequest,
+  decodeUnlockLocalUserResponse,
   decodeUpdateContextRequest,
   decodeUpdateNamespaceIssuerRequest,
   decodeUpdatePreferencesRequest,
@@ -346,6 +350,8 @@ import type {
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
+  LocalUserLock,
+  LocalUserLocks,
   LocalUserPolicy,
   LockLockedError,
   LockLockedErrorArgs,
@@ -471,6 +477,8 @@ import type {
   UnitSettingsSuggestions,
   UnitSettingsWriteBack,
   UnitState,
+  UnlockLocalUserRequest,
+  UnlockLocalUserResponse,
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
@@ -1032,6 +1040,15 @@ export interface GetJobInput {
   readonly path: {
     readonly namespace: string;
     readonly job_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getLocalUserLocks. */
+export interface GetLocalUserLocksInput {
+  readonly query?: {
+    /** The principal ID of the local user. */
+    readonly principal?: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -1913,6 +1930,12 @@ export interface UnlockCollectionInput {
     readonly namespace: string;
     readonly collection: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation unlockLocalUser. */
+export interface UnlockLocalUserInput {
+  readonly body: UnlockLocalUserRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -2927,6 +2950,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeJob),
+  ),
+  getLocalUserLocks: operation<LocalUserLocks>(
+    {
+      id: "getLocalUserLocks",
+      method: "GET",
+      path: "/api/dustpan/v1/local-users/locks",
+      pathParameters: [],
+      queryParameters: ["principal"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeLocalUserLocks),
   ),
   getLocalUserPolicy: operation<LocalUserPolicy>(
     {
@@ -4389,6 +4429,23 @@ export const operations = {
       statuses: [204],
     },
     undefined,
+  ),
+  unlockLocalUser: operation<UnlockLocalUserResponse>(
+    {
+      id: "unlockLocalUser",
+      method: "POST",
+      path: "/api/dustpan/v1/local-users/unlock",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeUnlockLocalUserResponse),
   ),
   unlockNamespace: operation<void>(
     {

@@ -112,9 +112,17 @@ func newFixture(t *testing.T) *fixture {
 	}
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Store: st, Principals: principals, Hasher: hasher, Blocklist: blocklist.Embedded(), Audit: st,
-		Settings: f.settings, SSO: func(context.Context) (bool, error) { return f.sso, nil },
-		Kind: installation.KindProduction, Now: nil,
+		Store:      st,
+		Principals: principals,
+		Hasher:     hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      st,
+		Locks:      st,
+		Keys:       st,
+		Settings:   f.settings,
+		SSO:        func(context.Context) (bool, error) { return f.sso, nil },
+		Kind:       installation.KindProduction,
+		Now:        nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
