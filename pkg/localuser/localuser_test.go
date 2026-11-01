@@ -195,6 +195,9 @@ func TestReservationWorksOnce(t *testing.T) {
 	}
 
 	r := localuser.NewReservation(verify, release)
+	if r == nil {
+		t.Fatal("NewReservation returned nil for two functions")
+	}
 
 	if _, err := r.Verify("pw", localuser.DefaultHashParams()); err != nil {
 		t.Fatalf("first verify: %v", err)
@@ -212,6 +215,10 @@ func TestReservationWorksOnce(t *testing.T) {
 	}
 
 	unused := localuser.NewReservation(verify, release)
+	if unused == nil {
+		t.Fatal("NewReservation returned nil for two functions")
+	}
+
 	unused.Release()
 
 	if _, err := unused.Verify("pw", localuser.DefaultHashParams()); !errors.Is(err, localuser.ErrInvalid) {
