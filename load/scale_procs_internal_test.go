@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"testing"
 	"time"
 )
@@ -231,6 +232,9 @@ func TestPortFromLog(t *testing.T) {
 		{`{"msg":"listening","addr":"127.0.0.1:0"}`, 0, false},
 		{`{"msg":"listening","addr":"not an address"}`, 0, false},
 		{`no address here`, 0, false},
+		{`{"level":"WARN","msg":"serving plain HTTP on a non-loopback address","addr":"10.0.0.5:9"}`, 0, false},
+		{`{"level":"WARN","msg":"serving plain HTTP on a non-loopback address","addr":"10.0.0.5:9"}` + "\n" +
+			`{"level":"INFO","msg":"listening","addr":"127.0.0.1:7001"}`, 7001, true},
 	}
 
 	for _, tc := range cases {
@@ -241,22 +245,21 @@ func TestPortFromLog(t *testing.T) {
 	}
 }
 
+// markOK answers a mark whose every group was read.
+func markOK(instances, postgres, store, harness float64) cpuMark {
+	return cpuMark{
+		instances: instances, postgres: postgres, store: store, harness: harness,
+		instancesOK: true, postgresOK: true, storeOK: true, harnessOK: true,
+	}
+}
+
 func TestResourcesOf(t *testing.T) {
 	t.Parallel()
 
-	in := resourceInput{
-		begin:    cpuMark{instances: 10, postgres: 20, store: 5, harness: 1},
-		end:      cpuMark{instances: 14, postgres: 26, store: 6, harness: 2},
-		txBegin:  100,
-		txEnd:    700,
-		window:   10 * time.Second,
-		requests: 2000,
-		counts:   []int{4, 8, 6},
-		postgres: true,
-		store:    true,
-	}
-
-	got := resourcesOf(in)
+	got := resourcesOf(resourceInput{
+		begin: markOK(10, 20, 5, 1), end: markOK(14, 26, 6, 2), txBegin: 100, txEnd: 700, txOK: true,
+		window: 10 * time.Second, requests: 2000, counts: []int{4, 8, 6},
+	})
 
 	// 4 core-seconds in 10 s is 0.4 cores. 4 core-seconds for 2000 requests
 	// is 2 core-ms for each request, which is 2000 core-ms for 1000 requests.
@@ -264,15 +267,15 @@ func TestResourcesOf(t *testing.T) {
 		name      string
 		got, want float64
 	}{
-		{"instance cores", got.InstanceCores, 0.4},
+		{"instance cores", *got.InstanceCores, 0.4},
 		{"postgres cores", *got.PostgresCores, 0.6},
 		{"store cores", *got.StoreCores, 0.1},
-		{"harness cores", got.HarnessCores, 0.1},
-		{"transactions", got.DBTransactionsPerSec, 60},
-		{"instance cost", got.InstanceCoreMsPer1k, 2000},
+		{"harness cores", *got.HarnessCores, 0.1},
+		{"transactions", *got.DBTransactionsPerSec, 60},
+		{"instance cost", *got.InstanceCoreMsPer1k, 2000},
 		{"postgres cost", *got.PostgresCoreMsPer1k, 3000},
-		{"connections mean", got.DBConnectionsMean, 6},
-		{"connections max", float64(got.DBConnectionsMax), 8},
+		{"connections mean", *got.DBConnectionsMean, 6},
+		{"connections max", float64(*got.DBConnectionsMax), 8},
 	}
 
 	for _, check := range checks {
@@ -286,39 +289,110 @@ func TestResourcesOf(t *testing.T) {
 	}
 }
 
-func TestResourcesOfUnmeasuredPartsHaveNoValue(t *testing.T) {
-	t.Parallel()
+// unmeasuredCase is one window whose resources are partly missing.
+type unmeasuredCase struct {
+	name  string
+	input resourceInput
+	// absent are the names that must be in Unmeasured.
+	absent []string
+}
 
-	got := resourcesOf(resourceInput{
-		begin: cpuMark{instances: 0, postgres: 0, store: 0, harness: 0},
-		end: cpuMark{
-			instances: 1,
-			postgres:  0,
-			store:     0,
-			harness:   0,
-		},
-		txBegin:  0,
-		txEnd:    0,
-		window:   time.Second,
-		requests: 10,
-		counts:   nil,
-		postgres: false,
-		store:    false,
-	})
+// unmeasuredCases answers the windows of TestResourcesOfUnmeasured.
+func unmeasuredCases() []unmeasuredCase {
+	full := markOK(1, 1, 1, 1)
 
-	if got.PostgresCores != nil || got.StoreCores != nil || got.PostgresCoreMsPer1k != nil {
-		t.Fatalf("unmeasured parts have values: %+v", got)
+	without := func(edit func(*cpuMark)) cpuMark {
+		mark := full
+		edit(&mark)
+
+		return mark
 	}
 
-	if len(got.Unmeasured) != 2 {
-		t.Fatalf("unmeasured = %v, want postgresCores and storeCores", got.Unmeasured)
+	return []unmeasuredCase{
+		{
+			name: "a failed read at the begin of the window",
+			input: resourceInput{
+				txBegin: 0, txEnd: 0,
+				begin: without(func(m *cpuMark) { m.instancesOK = false }), end: full, txOK: true,
+				window: time.Second, requests: 10, counts: []int{1},
+			},
+			absent: []string{"instanceCores", "instanceCoreMsPer1kRequests"},
+		},
+		{
+			name: "a failed read at the end of the window",
+			input: resourceInput{
+				txBegin: 0, txEnd: 0,
+				begin: full, end: without(func(m *cpuMark) { m.postgresOK = false }), txOK: true,
+				window: time.Second, requests: 10, counts: []int{1},
+			},
+			absent: []string{"postgresCores", "postgresCoreMsPer1kRequests"},
+		},
+		{
+			name: "no object store process",
+			input: resourceInput{
+				txBegin: 0, txEnd: 0,
+				begin: without(
+					func(m *cpuMark) { m.storeOK = false },
+				),
+				end:      without(func(m *cpuMark) { m.storeOK = false }),
+				txOK:     true,
+				window:   time.Second,
+				requests: 10,
+				counts:   []int{1},
+			},
+			absent: []string{"storeCores"},
+		},
+		{
+			name: "a failed read of the transaction count",
+			input: resourceInput{
+				begin: full, end: full, txBegin: 0, txEnd: 5, txOK: false,
+				window: time.Second, requests: 10, counts: []int{1},
+			},
+			absent: []string{"dbTransactionsPerSec"},
+		},
+		{
+			name: "a count that went down",
+			input: resourceInput{
+				begin: full, end: full, txBegin: 100, txEnd: 5, txOK: true,
+				window: time.Second, requests: 10, counts: []int{1},
+			},
+			absent: []string{"dbTransactionsPerSec"},
+		},
+		{
+			name: "no connection sample",
+			input: resourceInput{
+				txBegin: 0, txEnd: 0,
+				begin: full, end: full, txOK: true, window: time.Second, requests: 10, counts: nil,
+			},
+			absent: []string{"dbConnections"},
+		},
+		{
+			name: "no request",
+			input: resourceInput{
+				txBegin: 0, txEnd: 0,
+				begin: full, end: full, txOK: true, window: time.Second, requests: 0, counts: []int{1},
+			},
+			absent: []string{"instanceCoreMsPer1kRequests", "postgresCoreMsPer1kRequests"},
+		},
+	}
+}
+
+func TestResourcesOfUnmeasured(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range unmeasuredCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkUnmeasured(t, resourcesOf(tc.input), tc.absent)
+		})
 	}
 }
 
 func TestExecuteScaleRefusesBadFlags(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.DiscardHandler)
+	logger := discardLogger()
 
 	cases := map[string]scaleFlags{
 		"no binary": {
@@ -387,7 +461,7 @@ func TestScaleRunShutdownLeavesNothingRunning(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	logger := slog.New(slog.DiscardHandler)
+	logger := discardLogger()
 	flags := newTestFlags(scaleFlags{
 		binary: "x", instances: 1, clients: 1, duration: time.Second,
 		warmup: 0, think: 0, restart: false, restartTail: 0, storePID: 0,
@@ -413,5 +487,36 @@ func newTestFlags(scale scaleFlags) harnessFlags {
 	return harnessFlags{
 		out: "", units: 1, ns: "load", flows: flowsScale, blobs: "", probe: false, maxDuration: 0,
 		blobCfg: DefaultBlobFlowConfig(), scale: scale,
+	}
+}
+
+// discardLogger answers a logger that writes nowhere.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
+}
+
+// checkUnmeasured fails the test when a name in absent is not in Unmeasured,
+// or when its field has a value although the name is in the list.
+func checkUnmeasured(t *testing.T, got ResourceStats, absent []string) {
+	t.Helper()
+
+	for _, name := range absent {
+		if !slices.Contains(got.Unmeasured, name) {
+			t.Errorf("unmeasured = %v, want it to hold %q", got.Unmeasured, name)
+		}
+	}
+
+	hasValue := map[string]bool{
+		"instanceCores":        got.InstanceCores != nil,
+		"postgresCores":        got.PostgresCores != nil,
+		"storeCores":           got.StoreCores != nil,
+		"dbTransactionsPerSec": got.DBTransactionsPerSec != nil,
+		"dbConnections":        got.DBConnectionsMean != nil || got.DBConnectionsMax != nil,
+	}
+
+	for name, present := range hasValue {
+		if present && slices.Contains(got.Unmeasured, name) {
+			t.Errorf("%s has a value and is also named unmeasured", name)
+		}
 	}
 }
