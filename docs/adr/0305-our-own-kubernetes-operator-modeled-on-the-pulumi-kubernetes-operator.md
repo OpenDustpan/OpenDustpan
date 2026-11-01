@@ -35,7 +35,10 @@ model of phase 4.
 
 On 1 November 2026 the project owner decided this, in these words:
 
-- "Crossplane is shit. I would migrate to our own k8s operator."
+- "I would migrate to our own k8s operator." The owner gave this answer to
+  Crossplane. The reasons are those of RFC 31: a team must rewrite its
+  infrastructure as code as compositions, and a composition has no
+  plan-and-approve step before a change.
 - "our own operator for applying IaC tool agnostic would be better. Modelled
   around this thing ofc." Here "this thing" is the Pulumi Kubernetes
   Operator.
@@ -43,8 +46,8 @@ On 1 November 2026 the project owner decided this, in these words:
   individual units couldn't work."
 
 The project owner decided parts of the operator on 18 October 2026. These
-decisions never reached an ADR before this one. The answers to RFC 31
-questions 31.1, 31.6 and 31.8 is this text of the decisions record:
+decisions never reached an ADR before this one. The text below is the answer
+of the owner to the RFC 31 questions on the operator, in the decision record:
 
 ```text
 Operator: after the Catalog ships, sharing the coordinator's chart and
@@ -54,12 +57,14 @@ generic Argo CD Lua health check lives in our repo and is offered upstream at
 beta. Phase 1 e2e steps now.
 ```
 
-The answer to question 42.3 of the same date is: "Kubernetes operators as
-import sources: not now."
+The answer of the owner to the RFC 42 question of the same date is:
+"Kubernetes operators as import sources: not now."
 
-The project owner approved every decision of this ADR. The label "(owner)"
-names a decision that the words of 1 November 2026 or of 18 October 2026
-state.
+The label "(owner)" names a decision that the words of the owner of
+1 November 2026 or of 18 October 2026 state. The label "(PM, for the owner)"
+names a decision of the project manager under the delegation of the owner.
+The owner accepts it with the merge of this ADR. The rest of the text is
+drafting.
 
 The shapes below come from a read of the Pulumi Kubernetes Operator version
 2.10.0: its README, its `docs/migration.md` and its API reference
@@ -71,6 +76,8 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
    is tool-neutral. One set of resources declares units for every supported
    tool: the Pulumi CLI and OpenTofu today. Each tool keeps its own model
    below the resources (ADR 12, ADR 13). The operator merges no tool model.
+   This replaces the rule of RFC 31 "no resource that merges them" and its
+   `Stack` and `Workspace` resources (decision 13).
    The operator has two kinds of resource (owner):
    - The primary resource applies a blueprint. The resource names the
      blueprint and gives its answers. OpenDustpan creates and updates the
@@ -155,9 +162,8 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
 
    The proposals of RFC 31, for example orphan as the default deletion policy
    (31.10), stay proposals.
-8. **The other rules of RFC 31 stay as proposals.** They are the sign-in per
-   Kubernetes namespace, one home for each value, plan before apply, and
-   drift as a scheduled plan. The next ADR about the operator decides each of
+8. **The other rules of RFC 31 stay as proposals.** They are one home for
+   each value, plan before apply, and drift as a scheduled plan. The next ADR about the operator decides each of
    them.
 9. **The operator ships with the coordinator (owner, 18 October 2026).** The
    operator shares the chart and the binary of the Kubernetes coordinator
@@ -166,8 +172,9 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
    separate repository. The core server binary does not carry the operator.
 10. **Every resource reports status in the kstatus form (owner, 18 October
     2026).** From the first version, each resource has `status.observedGeneration`
-    and the conditions `Reconciling`, `Stalled` and `Ready`. So Flux health
-    checks work with no change. A generic Argo CD Lua health check lives in
+    and the conditions `Reconciling`, `Stalled` and `Ready`. Resources that
+    follow kstatus are designed to work with Flux health checks with no
+    change. The phase 1 e2e steps check this. A generic Argo CD Lua health check lives in
     our repository. We offer it upstream when the resource reaches beta. The
     conditions of RFC 31 (`Planned`, `WaitingForApproval`, `Applied`,
     `Failed`) are open: they must fit this form.
@@ -179,6 +186,34 @@ The shapes below come from a read of the Pulumi Kubernetes Operator version
 12. **The phase 1 e2e steps start now (owner, 18 October 2026).** They run
     the Pulumi Kubernetes Operator, tofu-controller and Burrito against
     OpenDustpan. This is the test that the interoperation note below needs.
+
+13. **The resource kinds are tool-neutral (PM, for the owner).** This ADR
+    replaces the proposal of RFC 31 for a `Stack` resource of the Pulumi CLI
+    and a `Workspace` resource of OpenTofu.
+    - A resource kind declares a unit in tool-neutral terms: the source, the
+      inputs, the placement, the apply policy and a `tool` field.
+    - The model of each tool stays in its domain package and its adapter
+      (ADR 12, ADR 13). A unit is still a reference of tool, namespace and
+      the name that the tool uses (ADR 13), so ADR 13 holds.
+    - The blueprint resource is one generic kind, a Catalog request. It is
+      not a custom resource definition for each blueprint. The server checks
+      the answers against the inputs of the blueprint and fails closed.
+    - Benchmark: the Argo CD `Application` is one generic kind. The AWS
+      Service Catalog provisioned product is one generic kind too.
+14. **The identity of the operator (PM, for the owner).** This accepts the
+    proposal of RFC 31 for a sign-in per Kubernetes namespace.
+    - The operator signs in with its Kubernetes service account token. It
+      uses the existing workload-identity trust rules and the token exchange.
+    - There is one principal for each Kubernetes namespace that the operator
+      serves.
+    - A principal holds stored grants only. A person can list and revoke each
+      grant. A grant names the OpenDustpan namespace or collection where the
+      principal can act. There is no default grant.
+    - Each API call of the operator writes an audit record. The record names
+      the principal and the cause: the resource kind, the Kubernetes
+      namespace, the name, the UID and the generation.
+    - Benchmark: GKE Workload Identity, AWS IRSA, and the service accounts for
+      each tenant of Flux and Argo CD.
 
 ## Interoperation note
 
