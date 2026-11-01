@@ -403,7 +403,8 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 }
 
 // localUserActor returns the actor of a change by p, with the action
-// server:manage-sign-in that each route of an administrator needs. The principal ID is the
+// server:manage-sign-in that each route of an administrator needs, and the
+// admin flag of p. The principal ID is the
 // owner of the console session of the request, and empty for a request with
 // an access token: the service then refuses each change that compares it
 // with the target, which fails closed.
@@ -413,7 +414,9 @@ func localUserActor(r *http.Request, p identity.Principal) localusersvc.Actor {
 		id = s.Match.Owner.ID
 	}
 
-	return localusersvc.Actor{Entry: callerEntry(r, p, identity.ActionServerManageSignIn), PrincipalID: id}
+	return localusersvc.Actor{
+		Entry: callerEntry(r, p, identity.ActionServerManageSignIn), PrincipalID: id, Admin: p.Admin,
+	}
 }
 
 // createLocalUser makes a local user and answers 201 with its set-up code.
@@ -599,6 +602,7 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 	fresh := req.CurrentPassword == "" && h.checkTokenFreshness(r) == nil
 	actor := localusersvc.Actor{
 		Entry: callerEntry(r, p, identity.ActionCallerManageSignIn), PrincipalID: caller.Match.Owner.ID,
+		Admin: false,
 	}
 
 	g, err := h.localUsers.ChangePassword(ctx, actor, localusersvc.ChangeInput{
@@ -735,7 +739,7 @@ func changeErrors() []localUserMapping {
 			status:  http.StatusForbidden,
 			code:    errcode.LocalUserOutsideReach,
 			args:    nil,
-			message: "the reset needs a reach that covers each grant of the person: ask an administrator who holds them",
+			message: "the request needs a reach that covers each grant of the person: ask an administrator who holds them",
 		}},
 	}
 }

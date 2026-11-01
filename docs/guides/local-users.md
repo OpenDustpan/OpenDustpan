@@ -193,7 +193,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 
 The answer gives the count of the counts that the unlock cleared. Both routes
 need `server:manage-sign-in`. Each action of the person must also be an
-action of the administrator, as for a reset. Otherwise both routes answer
+action of the administrator, as for a reset. With an access token, the
+administrator is the principal of the token. Otherwise both routes answer
 `403` with the code `local-user.outside-reach`, and the audit log records the
 denial.
 

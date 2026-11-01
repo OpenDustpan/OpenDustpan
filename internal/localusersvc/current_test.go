@@ -95,7 +95,7 @@ func TestCurrentPasswordHasherErrors(t *testing.T) {
 				Units:       f.store,
 			})
 
-			me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+			me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID, Admin: false}
 
 			_, err := svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
 				Current: goodPassword, New: otherPassword, Generation: f.generation(t, c.Principal.ID), Fresh: false,

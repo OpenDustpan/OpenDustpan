@@ -164,7 +164,7 @@ func TestWrongCurrentPasswordCounts(t *testing.T) {
 
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
-	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID, Admin: false}
 
 	g := f.generation(t, c.Principal.ID)
 
@@ -243,7 +243,7 @@ func TestLockLimits(t *testing.T) {
 		svc, newErr := localusersvc.New(localusersvc.Config{
 			Store: f.store, Principals: f.principals, Hasher: tc.hasher, Blocklist: blocklist.Embedded(),
 			Audit: f.store, Locks: tc.locks, Keys: f.store, Settings: f.settings, SSO: nil, Kind: "", Now: nil,
-			Reach: noReach(),
+			Reach: noReach(), Subjects: nil,
 		})
 		if newErr != nil {
 			t.Fatalf("service: %v", newErr)
@@ -314,7 +314,7 @@ func TestUnlockThatCannotClearChangesNothing(t *testing.T) {
 	svc, err := localusersvc.New(localusersvc.Config{
 		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: brokenClear{NameLockCounter: f.store}, Keys: f.store, Settings: f.settings,
-		SSO: nil, Kind: "", Now: nil, Reach: f.storeReach(),
+		SSO: nil, Kind: "", Now: nil, Reach: f.storeReach(), Subjects: f.store,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
