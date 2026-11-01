@@ -78,27 +78,35 @@ func TestUnlockNeedsTheReachOfThePerson(t *testing.T) {
 				t.Fatalf("locks = %v, want %v", err, tc.want)
 			}
 
-			if got := f.denied(t, localusersvc.ActionNameLocksRead); got != deniedWant(tc.want) {
-				t.Fatalf("denied reads = %d, want %d", got, deniedWant(tc.want))
-			}
-
 			if _, err := f.svc.Unlock(t.Context(), actor, person, "the person called"); !errors.Is(err, tc.want) {
 				t.Fatalf("unlock = %v, want %v", err, tc.want)
 			}
 
-			if got := f.denied(t, localusersvc.ActionNameUnlocked); got != deniedWant(tc.want) {
-				t.Fatalf("denied unlocks = %d, want %d", got, deniedWant(tc.want))
-			}
-
-			_, err := f.svc.SignIn(t.Context(), from(lockedSource), "alice", goodPassword)
-			if tc.want != nil && !errors.Is(err, localuser.ErrSignInFailed) {
-				t.Fatalf("sign in after a refused unlock = %v, want ErrSignInFailed", err)
-			}
-
-			if tc.want == nil && err != nil {
-				t.Fatalf("sign in after the unlock: %v", err)
-			}
+			f.checkUnlockOutcome(t, tc.want)
 		})
+	}
+}
+
+// checkUnlockOutcome checks the denied entries of a read and an unlock that
+// answered want, and that the lock holds after a refused unlock and ends
+// after an unlock that passed.
+func (f *fixture) checkUnlockOutcome(t *testing.T, want error) {
+	t.Helper()
+
+	for _, action := range []string{localusersvc.ActionNameLocksRead, localusersvc.ActionNameUnlocked} {
+		if got := f.denied(t, action); got != deniedWant(want) {
+			t.Fatalf("denied entries of %s = %d, want %d", action, got, deniedWant(want))
+		}
+	}
+
+	_, err := f.svc.SignIn(t.Context(), from(lockedSource), "alice", goodPassword)
+
+	switch {
+	case want != nil && !errors.Is(err, localuser.ErrSignInFailed):
+		t.Fatalf("sign in after a refused unlock = %v, want ErrSignInFailed", err)
+	case want == nil && err != nil:
+		t.Fatalf("sign in after the unlock: %v", err)
+	default:
 	}
 }
 
@@ -165,10 +173,12 @@ func TestGoodCurrentPasswordClearsTheCounts(t *testing.T) {
 	wrong()
 
 	// A good current password: the change passes and clears the counts.
-	if _, err := f.svc.ChangePassword(t.Context(), me, localusersvc.ChangeInput{
+	good := localusersvc.ChangeInput{
 		Current: goodPassword, New: "amber-falcon-river-62-signal", Generation: f.generation(t, c.Principal.ID),
 		Fresh: false,
-	}); err != nil {
+	}
+
+	if _, err := f.svc.ChangePassword(t.Context(), me, good); err != nil {
 		t.Fatalf("change with the good current password: %v", err)
 	}
 
@@ -255,24 +265,31 @@ func TestDemoExceptionNeedsAKindDev(t *testing.T) {
 				}
 			}
 
-			locks, err := f.svc.Locks(t.Context(), admin(), c.Principal.ID)
-			if err != nil {
-				t.Fatalf("locks: %v", err)
-			}
-
-			locked := false
-
-			for _, l := range locks {
-				if !l.LockedUntil.IsZero() {
-					locked = true
-				}
-			}
-
+			locked := f.hasLock(t, c.Principal.ID)
 			if locked != tc.wantLocked || (f.reasons(t)[localusersvc.ReasonNameLocked] == 1) != tc.wantLocked {
 				t.Fatalf("locked = %v, reasons = %v; want locked %v", locked, f.reasons(t), tc.wantLocked)
 			}
 		})
 	}
+}
+
+// hasLock reports whether a count of the name of the person principalID
+// holds a lock.
+func (f *fixture) hasLock(t *testing.T, principalID string) bool {
+	t.Helper()
+
+	locks, err := f.svc.Locks(t.Context(), admin(), principalID)
+	if err != nil {
+		t.Fatalf("locks: %v", err)
+	}
+
+	for _, l := range locks {
+		if !l.LockedUntil.IsZero() {
+			return true
+		}
+	}
+
+	return false
 }
 
 // recentCounts is the count of names with a recent failure in the case of the
@@ -311,7 +328,20 @@ func TestPruneLocksKeepsRecentCountsWithItsRecord(t *testing.T) {
 		t.Fatalf("entries of the prune = %d, want 1", len(entries))
 	}
 
-	e := entries[0]
+	checkPruneEntry(t, &entries[0])
+
+	if p.Interval != time.Hour || p.MaxRows != authgate.MaxNamePruneRows ||
+		p.Age != authgate.DefaultNameGlobalMaxLockFor+authgate.DefaultNameGlobalResetAfter {
+		t.Fatalf("prune settings = %+v, want every hour, the longest lock plus the reset, and the bound", p)
+	}
+}
+
+// checkPruneEntry checks that e is the entry of a run of the prune that
+// deleted nothing: the server as the subject, the reason, the object and the
+// change pruned 0.
+func checkPruneEntry(t *testing.T, e *audit.Entry) {
+	t.Helper()
+
 	if e.Subject != history.ServerSubject || e.PrincipalKind != audit.PrincipalKindService ||
 		e.Reason != localusersvc.ReasonNameLocksPruned || e.Object != localusersvc.NameLocksObject {
 		t.Fatalf("entry of the prune = %+v, want the server, the reason and the object", e)
@@ -319,11 +349,6 @@ func TestPruneLocksKeepsRecentCountsWithItsRecord(t *testing.T) {
 
 	if len(e.Changes) != 1 || e.Changes[0].Key != "pruned" || e.Changes[0].New != "0" {
 		t.Fatalf("changes of the entry of the prune = %+v, want pruned 0", e.Changes)
-	}
-
-	if p.Interval != time.Hour || p.MaxRows != authgate.MaxNamePruneRows ||
-		p.Age != authgate.DefaultNameGlobalMaxLockFor+authgate.DefaultNameGlobalResetAfter {
-		t.Fatalf("prune settings = %+v, want every hour, the longest lock plus the reset, and the bound", p)
 	}
 }
 
