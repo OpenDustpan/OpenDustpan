@@ -542,7 +542,7 @@ func (errStore) Get(context.Context, blob.Key) (io.ReadCloser, error) {
 func backupService(source, target blob.Store, opener StateOpener) *Service {
 	return &Service{
 		exporter: nil, kinds: nil, registry: nil, source: source, opener: opener, target: target, targetName: "",
-		now: nil, version: "", maxSQL: 0, runner: nil, lease: 0, logger: slog.New(slog.DiscardHandler),
+		now: nil, version: "", maxSQL: 0, runner: nil, operations: nil, lease: 0, logger: slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -704,5 +704,61 @@ func TestCheckRestoreRefusesABackupWithDamagedEntries(t *testing.T) {
 
 	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "missing or damaged") {
 		t.Fatalf("CheckRestore = %v, want ErrCorrupt that names the damaged blobs", err)
+	}
+}
+
+// listOps is a durable store whose List returns ops.
+type listOps struct {
+	durable.Store
+
+	ops []durable.Operation
+}
+
+func (l listOps) List(context.Context, durable.Filter) ([]durable.Operation, error) {
+	return l.ops, nil
+}
+
+// TestStartedForRestoreRefusesHostileInput sends hostile operation inputs to
+// the read of the restore that started a backup. Only a decoded input of the
+// same backup with a valid restore ID names a restore; every other input
+// names none, so the restore counts the backup as one that it did not start.
+func TestStartedForRestoreRefusesHostileInput(t *testing.T) {
+	t.Parallel()
+
+	restore := MintRestoreID()
+	key := OperationKey(preBackupID)
+
+	for _, tc := range []struct {
+		name  string
+		key   string
+		input string
+		want  RestoreID
+	}{
+		{
+			name: "the input of this restore", key: key, input: `{"id":"bkp-pre","restore":"` + restore.String() + `"}`,
+			want: restore,
+		},
+		{name: "an input that does not decode", key: key, input: `{"id":`, want: ""},
+		{
+			name: "an input of another backup", key: key, input: `{"id":"bkp-other","restore":"` + restore.String() + `"}`,
+			want: "",
+		},
+		{name: "a restore ID that is not valid", key: key, input: `{"id":"bkp-pre","restore":"rst-../x"}`, want: ""},
+		{name: "no restore ID", key: key, input: `{"id":"bkp-pre"}`, want: ""},
+		{
+			name: "an operation of another key", key: OperationKey("bkp-other"),
+			input: `{"id":"bkp-pre","restore":"` + restore.String() + `"}`, want: "",
+		},
+	} {
+		var op durable.Operation
+		op.Key, op.Input = tc.key, []byte(tc.input)
+
+		s := backupService(nil, nil, nil)
+		s.operations = listOps{Store: nil, ops: []durable.Operation{op}}
+
+		got, err := s.StartedForRestore(t.Context(), preBackupID)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: StartedForRestore = %q, %v; want %q", tc.name, got, err, tc.want)
+		}
 	}
 }

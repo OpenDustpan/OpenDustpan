@@ -693,17 +693,9 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 		return nil, nil
 	}
 
-	// A backup that this step did not start, for example a pre-backup ID
-	// that names an older backup, or a start of an earlier try, is not
-	// evidence of this run: the restore then repairs no damaged blob.
-	created := true
-
-	if err := s.backups.StartBeforeRestore(ctx, in.PreBackupID); err != nil {
-		if !errors.Is(err, ErrAlreadyExists) {
-			return nil, fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
-		}
-
-		created = false
+	created, err := s.startPreBackup(ctx, in)
+	if err != nil {
+		return nil, err
 	}
 
 	pre, err := s.backups.Await(ctx, in.PreBackupID)
@@ -728,6 +720,30 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 	}
 
 	return nil, nil
+}
+
+// startPreBackup starts the backup before restore in and reports whether this
+// restore started it. A backup that exists already counts only when the input
+// of its operation names this restore: an earlier try of this step, before a
+// takeover. A backup that another restore or a person started, for example a
+// pre-backup ID that names an older backup, is not evidence of this run: the
+// restore then repairs no damaged blob.
+func (s *RestoreService) startPreBackup(ctx context.Context, in restoreInput) (bool, error) {
+	err := s.backups.StartBeforeRestore(ctx, in.PreBackupID, in.ID)
+	if err == nil {
+		return true, nil
+	}
+
+	if !errors.Is(err, ErrAlreadyExists) {
+		return false, fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	owner, err := s.backups.StartedForRestore(ctx, in.PreBackupID)
+	if err != nil {
+		return false, fmt.Errorf("read the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	return owner == in.ID, nil
 }
 
 // preBackupResult is the result of the pre-backup step, stored in the step
