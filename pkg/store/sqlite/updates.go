@@ -375,7 +375,7 @@ func writeCheckpoint(
 // the clock that the upsert returned.
 func writeCheckpointRows(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
-) (known, checked bool, err error) {
+) (bool, bool, error) {
 	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
 		return false, false, keyErr
 	}
