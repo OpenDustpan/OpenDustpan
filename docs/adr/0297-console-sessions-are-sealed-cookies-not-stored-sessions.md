@@ -1,6 +1,6 @@
 # 297. Console sessions are sealed cookies, not stored sessions
 
-Status: accepted · 2026-10-31. The project owner set the direction on 31 October 2026. The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. Two questions are held for the owner: where the short state of a sign-in lives, and an optional cache of proof IDs on each replica. The "Changes" list names the ADRs that this ADR changes
+Status: accepted · 2026-10-31. The project owner set the direction on 31 October 2026. The design details are decisions of the PM under the owner's delegation, and the owner accepts them with the merge. The owner decided the two held questions on 1 November 2026. The state of a sign-in is in sealed cookies. No replica keeps a cache of proof IDs. The "Changes" list names the ADRs that this ADR changes
 
 Changes:
 
@@ -205,9 +205,10 @@ credential.
      server nonce, and the server keeps the thumbprint of its key (RFC 7638,
      SHA-256 over `crv`, `kty`, `x` and `y` only):
      - a sign-in through an identity provider: the start keeps it in the
-       sign-in request (`session.Request`) until the callback,
-     - a password sign-in: the password request. With MFA, the pending
-       sign-in (`mfa.Pending`) keeps it until the second factor,
+       sealed sign-in request cookie until the callback (decisions of the
+       owner, item 1),
+     - a password sign-in: the password request. With MFA, the sealed
+       pending sign-in cookie keeps it until the second factor,
      - a passkey sign-in: the start of the ceremony keeps it in the WebAuthn
        challenge (`mfa.Challenge`),
      - the demo sign-in (ADR 285 decision 24) and a break-glass sign-in
@@ -229,7 +230,7 @@ credential.
      the private key. The identity provider gives each code once, and PKCE
      binds the code to the verifier of the start.
    - **Each route that issues cookies again copies the thumbprint and the
-     sign-in ID** from the access cookie or from the record of the sign-in.
+     sign-in ID** from the access cookie or from the state of the sign-in.
      It never reads a key or a thumbprint from the request. These routes
      are the fresh step, a change that keeps the session (decision 12), the
      completion of an enrollment, and the refresh. The fresh step, the
@@ -288,7 +289,8 @@ credential.
    30 seconds. That gives an access cookie of 5 minutes and a refresh cookie
    that needs the key again. The risk stays inside 5 minutes and 30 seconds.
    A shared list of `jti` values would be state on the server that the owner
-   does not want. A cache on each replica is a held question for the owner.
+   does not want. The owner decided against a cache on each replica too
+   (decisions of the owner, item 2).
 
    **What the key stops, and what it does not stop.** A non-extractable
    key stops a script from reading the private key. A copy of the cookies
@@ -495,12 +497,11 @@ credential.
       at a sign-out of the same sign-in ID (decision 16). So the idle limit
       of ADR 69 also stops the actions of an agent.
 20. **Sign-in paths.**
-    - **MFA.** A pending sign-in stays a short record in SQL, because it
-      must count wrong factors (ADR 285 decision 20). The owner decides this
-      point (the held question below). It holds no credential that
-      authenticates a request. A good factor deletes it and writes the
-      audit entry in one transaction, and the answer sets the cookies with
-      the thumbprint of the pending sign-in.
+    - **MFA.** A pending sign-in is a sealed cookie (decisions of the owner,
+      item 1). It cannot authenticate a request. The factor lock of the
+      person counts the wrong factors (ADR 285 decision 14). A good factor
+      writes the audit entry, expires the pending sign-in cookie, and sets
+      the cookies of the session with the thumbprint of the pending sign-in.
     - **Enroll-only (ADR 285 decision 21).** A person with no factor, after
       the grace, gets cookies with the restriction `enroll-only`. A refresh
       keeps it. The enrollment of a factor bumps the generation (decision 12)
@@ -555,7 +556,7 @@ credential.
     | Access cookie | length at most 4096, form `v1.<key ID>.<base64url>`, key ID pattern, strict JSON, kind | AEAD with the cookie name and the key ID in the associated data. The value never reaches a log | 5-minute expiry, idle and absolute deadlines, `HttpOnly`, `SameSite=Strict`, `__Host-` | principal read at each request: person, enabled, generation, policy, dev subject, restriction | any error is `401`. A refused dev subject writes a denial entry |
     | Refresh cookie | as the access cookie, kind `refresh`, at most 2 of the name | AEAD. `Path` of the session routes only | opens only at the refresh and the sign-out routes. Makes only cookies | the same principal read as the access cookie, and the proof | each refusal writes `session:refresh-refused` |
     | Proof at a refresh | at most 2048 bytes, compact JWS only, `typ`, `alg` `ES256` only, EC P-256 key on the curve with no private part, no `crit`, no duplicate keys | the thumbprint compared in constant time. `htu` compared with the configured URL, never the `Host` header. The proof never reaches a log | the nonce window of 30 seconds, which the verifier and the caller each check. `iat` within 24 hours. No URL opened | the key thumbprint of the cookie | a bad proof refuses the refresh and writes the entry |
-    | Proof and public key at a sign-in | as the proof at a refresh | the thumbprint goes to the short record of the sign-in, never to a log | the nonce window. One key for each sign-in | the step that issues the cookies reads the thumbprint from the record, never from its request. The factor step, the finish of a passkey sign-in, the fresh step and the completion of an enrollment need a proof of that key. The callback of an identity provider is the one gap (decision 6) | a sign-in with no good proof issues no cookie and writes `sign-in.failed` |
+    | Proof and public key at a sign-in | as the proof at a refresh | the thumbprint goes to the sealed state cookie of the sign-in, or to the WebAuthn challenge, never to a log | the nonce window. One key for each sign-in | the step that issues the cookies reads the thumbprint from the state of the sign-in, never from its request. The factor step, the finish of a passkey sign-in, the fresh step and the completion of an enrollment need a proof of that key. The callback of an identity provider is the one gap (decision 6) | a sign-in with no good proof issues no cookie and writes `sign-in.failed` |
     | Nonce | form and length as a cookie, kind `dpop-nonce` | AEAD with `dpop-nonce` in the associated data | 30 seconds back and 5 seconds ahead. One nonce each 5 seconds on each replica | not applicable: a nonce authorizes nothing | an old nonce gets `use_dpop_nonce`, which the source budget counts |
     | `X-Dustpan-Csrf` header | 43 characters of base64url | compared in constant time with the value in the cookie | one value for each sign-in | the value of the cookie of the same request | a missing or wrong value is `403` |
     | `Origin` and `Sec-Fetch-Site` | allowlist of origins. Exact values of `Sec-Fetch-Site` | never written to a header. Logged with CR and LF taken out | not applicable | a change needs `same-origin` or an allowed origin | a refusal is `403` and a log record |
@@ -642,10 +643,13 @@ that day.
 
 - `pkg/session` loses the session row, `Store.CreateSession`,
   `GetSessionByDigest`, `TouchSession` and `EndSession`, and the tables of
-  sessions in each SQL dialect. The sign-in request and the providers stay.
+  sessions in each SQL dialect, and the store of sign-in requests
+  (`CreateRequest`, `TakeRequest`, `PruneRequests`) and its table. The
+  providers stay.
 - Each principal gets a session generation, in a numbered migration.
-- `session.Request` and `mfa.Pending` get the thumbprint of the refresh key.
-  `mfa.Challenge` gets it for a passkey sign-in.
+- The sign-in request and the pending sign-in of MFA become sealed cookies
+  with the thumbprint of the refresh key. `mfa.PendingStore` and its table
+  go. `mfa.Challenge` gets the thumbprint for a passkey sign-in.
 - The run record of Dusty gets the sign-in ID, the generation and the two
   deadlines.
 - `internal/sessionauth` checks the access cookie and reads the principal
@@ -682,9 +686,11 @@ delegation:
    a bump, or at a sign-out of its sign-in** (decision 19). The run record
    keeps its own idle deadline, so this needs no record of each refresh.
 
-## Open questions for the owner (held)
+## Decisions of the owner (1 November 2026)
 
-### 1. Where the short state of a sign-in lives
+The owner decided both questions that this ADR held.
+
+### 1. The short state of a sign-in is in sealed cookies (option b)
 
 Two records hold state between
 two requests of one sign-in. Neither can authenticate a request:
@@ -718,19 +724,19 @@ The options:
   lock of the person stops it, so the limit of 5 for each pending sign-in
   goes away.
 
-**Recommendation of the PM: (b).** No table holds the state of a sign-in,
-which follows the direction of the owner. The identity provider gives each
-authorization code once, so a copied sign-in request cookie cannot finish a
-second sign-in with the same code. The factor lock of the person (10 wrong
-factors, 30 minutes, shared by each instance) stays the limit on guesses.
-The costs of (b) above stay: no "works once" for the cookie itself, and no
-limit of 5 wrong factors for each pending sign-in. The owner decides.
+**Decision of the owner: (b).** The sign-in request cookie is
+`__Host-dustpan_signin` with `SameSite=Lax`. The pending sign-in cookie is
+`__Host-dustpan_pending` with `SameSite=Strict`. The session key ring seals
+both, with the name of each cookie in the associated data. No table holds
+the state of a sign-in. The costs of (b) stay as stated above: no "works
+once" for the cookie itself, and no limit of 5 wrong factors for each
+pending sign-in. The factor lock of the person is the limit on guesses.
 
-**Plain summary:** the PM recommends that the browser carries the few
-minutes of state of a sign-in in sealed cookies, and that the server keeps
-only its existing lock on wrong factors.
+**Plain summary:** the browser carries the few minutes of state of a
+sign-in in sealed cookies. The server keeps only its existing lock on wrong
+factors.
 
-### 2. A cache of proof IDs on each replica
+### 2. No cache of proof IDs (option a)
 
 **Context.** The server keeps no list of `jti` values (decision 7). A copy
 of a refresh cookie and one proof works again inside the window of 30
@@ -745,9 +751,11 @@ The options:
   session and writes nothing to the database. A replay to another replica
   still passes, so the cache stops most replays and not all of them.
 
-**Recommendation: (a).** It keeps the server free of state for sessions,
-which is the direction of the owner. The replay stays inside the window and
-still needs the cookie of the person.
+**Decision of the owner: (a).** No replica keeps a cache of `jti` values.
+The sealed server nonce, the short window of a proof and the key binding
+limit a replay. The cost stays as stated above: a copy of a refresh cookie
+and one proof works again inside the window of 30 seconds, which gives at
+most 5 minutes and 30 seconds of access.
 
-**Plain summary:** a captured proof can work for 30 seconds more. A cache
-would make that harder, at the cost of state in memory.
+**Plain summary:** a captured proof can work for 30 seconds more. The
+server keeps no state to stop that.
