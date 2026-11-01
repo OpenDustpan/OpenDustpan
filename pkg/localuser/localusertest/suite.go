@@ -96,33 +96,27 @@ func CaseNames() []string {
 // HasherCaseNames returns the names of the cases of the PasswordHasher
 // suite, in the order of the run.
 func HasherCaseNames() []string {
-	return []string{
-		"a hash verifies with the same password",
-		"a hash does not verify with another password: ErrWrongPassword",
-		"two hashes of one password have different salts",
-		"a hash holds its algorithm and its parameters in the PHC string",
-		"a hash with other parameters than the current ones verifies with NeedsRehash",
-		"a hash with parameters out of the bounds fails with ErrInvalid before any work",
-		"parameters out of the bounds for a new hash fail with ErrInvalid",
-		"a password above MaxBytes fails with ErrPasswordTooLong",
-		"a password that differs in its last byte does not verify",
-		"a malformed hash fails with ErrInvalid and does not panic",
-		"a hash with p=0 fails with ErrInvalid and does not panic",
-		"a hash with a memory cost above MaxMemoryKiB fails with ErrInvalid before any work",
-		"a hash of another algorithm fails with ErrInvalid",
+	cases := hasherCases()
+	names := make([]string, 0, len(cases))
+
+	for _, c := range cases {
+		names = append(names, c.name)
 	}
+
+	return names
 }
 
 // BlocklistCaseNames returns the names of the cases of the Blocklist suite,
 // in the order of the run.
 func BlocklistCaseNames() []string {
-	return []string{
-		"a password of the list is blocked",
-		"a password of the list in another case is blocked",
-		"a password of the list in another Unicode normalization form is blocked",
-		"a long random password is not blocked",
-		"the list loads from the binary and opens no network connection",
+	cases := blocklistCases()
+	names := make([]string, 0, len(cases))
+
+	for _, c := range cases {
+		names = append(names, c.name)
 	}
+
+	return names
 }
 
 // Run runs every case of the store suite against the stores that newStore
@@ -146,7 +140,12 @@ func RunHasher(t *testing.T, newHasher HasherFactory) {
 		t.Fatal("localusertest.RunHasher needs a hasher factory")
 	}
 
-	skipCases(t, HasherCaseNames())
+	for _, c := range hasherCases() {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.test(t, newHasher(t))
+		})
+	}
 }
 
 // RunBlocklist runs every case of the Blocklist suite against the lists that
@@ -158,7 +157,12 @@ func RunBlocklist(t *testing.T, newList BlocklistFactory) {
 		t.Fatal("localusertest.RunBlocklist needs a blocklist factory")
 	}
 
-	skipCases(t, BlocklistCaseNames())
+	for _, c := range blocklistCases() {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.test(t, newList(t))
+		})
+	}
 }
 
 // skipCases runs one subtest for each name. Each case skips until an
