@@ -43,6 +43,30 @@ own, then commits the row that names the blob.
   database. So a sweep never deletes the blob of an attempt that can still
   commit.
 
+## The sweeps
+
+| Blobs | Sweep | When it runs |
+| --- | --- | --- |
+| Checkpoints and journal batches of an update | the sweep of the update and the sweep of the stack | after a checkpoint save, and at the start of an update |
+| Plans and log chunks of a job | the schedule `job.artifact-sweep` | one time each hour, on one instance |
+
+The schedule `job.artifact-sweep` sweeps each job that has not ended, and
+each job whose state changed in the last 25 hours. Only a job that runs
+writes plan and log blobs, so an ended job gets about 24 runs after its last
+blob. The sweep keeps these blobs:
+
+- each part of a plan whose row exists, also a plan that a replan cleared and
+  a reserved plan with no part yet,
+- the blob of each confirmed chunk of each log version,
+- each blob younger than the grace period,
+- each blob with a key that is not a plan part or a chunk attempt of the job.
+
+Each sweep deletes nothing while a backup or a restore runs, or when it
+cannot read the backups registry. It reads the registry again before each
+delete. A failed read of the rows of a job deletes nothing for that job.
+Each run writes one log line, `job artifact sweep`, with the number of jobs,
+of deleted blobs, of unknown keys and of failed jobs.
+
 ## The answer of the Pulumi Cloud-compatible API
 
 A checkpoint save or a journal batch past its deadline answers 503 with the

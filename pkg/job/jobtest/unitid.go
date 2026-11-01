@@ -162,7 +162,7 @@ func testParallelNamespaces(t *testing.T, h Harness) {
 
 	got := pageAll(t, h, job.Filter{
 		Namespace: "", UnitID: "", States: nil, Limit: pageSize, After: "",
-		StateChangedBefore: time.Time{},
+		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 	})
 	if len(got) != namespaces*perNamespace || !sameSet(got, want) {
 		t.Fatalf("paging over all namespaces returned %d jobs (%d distinct), want %d", len(got),
@@ -174,7 +174,7 @@ func testParallelNamespaces(t *testing.T, h Harness) {
 
 		own := pageAll(t, h, job.Filter{
 			Namespace: ns, UnitID: "", States: nil, Limit: nsPageSize, After: "",
-			StateChangedBefore: time.Time{},
+			StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 		})
 		if len(own) != perNamespace {
 			t.Fatalf("paging in %s returned %d jobs, want %d", ns, len(own), perNamespace)

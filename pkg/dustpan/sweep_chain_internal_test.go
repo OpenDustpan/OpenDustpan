@@ -27,6 +27,7 @@ func sweepChainServer(
 		drainPeriod:      0,
 		tempAdmins:       nil,
 		reconciler:       nil,
+		artifactSweeper:  nil,
 		issuer:           nil,
 		handler:          nil,
 		started:          nil,
