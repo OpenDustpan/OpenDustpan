@@ -346,16 +346,27 @@ func (s *Service) entry(base audit.Entry, action, object string, outcome audit.O
 	return e
 }
 
-// refuse appends the entry of a refusal of action on object with the cause,
-// best effort, and returns err. A refused append does not change the answer:
-// the refusal changed nothing.
-func (s *Service) refuse(ctx context.Context, base audit.Entry, action, object, cause string, err error) error {
+// target is the action and the object of an audit entry.
+type target struct {
+	action string
+	object string
+}
+
+// on returns the target of action on object.
+func on(action, object string) target {
+	return target{action: action, object: object}
+}
+
+// refuse appends the entry of a refusal of the target with the cause, and
+// returns err. A refused append joins its error to err: the refusal changed
+// nothing, and the caller still refuses.
+func (s *Service) refuse(ctx context.Context, base audit.Entry, tg target, cause string, err error) error {
 	outcome := audit.OutcomeDenied
 	if errors.Is(err, localuser.ErrUnavailable) || errors.Is(err, localuser.ErrHashBusy) {
 		outcome = audit.OutcomeFailure
 	}
 
-	e := s.entry(base, action, object, outcome, "")
+	e := s.entry(base, tg.action, tg.object, outcome, "")
 	e.Changes = []audit.Change{{Key: "cause", Old: nil, New: cause, Layer: "", TakesEffect: ""}}
 
 	if _, appendErr := s.audit.AppendServer(ctx, e); appendErr != nil {
@@ -439,9 +450,12 @@ func validReason(reason string) error {
 // contextWords returns the words of the person that no password can hold:
 // the user name and each word of the display name.
 func contextWords(userName, displayName string) []string {
-	words := []string{userName}
-
-	return append(words, strings.FieldsFunc(displayName, func(r rune) bool {
+	parts := strings.FieldsFunc(displayName, func(r rune) bool {
 		return r == ' ' || r == '.' || r == '_' || r == '-' || r == '@'
-	})...)
+	})
+
+	words := make([]string, 0, 1+len(parts))
+	words = append(words, userName)
+
+	return append(words, parts...)
 }

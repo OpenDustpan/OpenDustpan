@@ -19,6 +19,10 @@ func productNames() []string {
 	return []string{"opendustpan", "dustpan"}
 }
 
+// minSequence is the shortest text that has a step between two code points.
+// A shorter text is a repeat of one character.
+const minSequence = 2
+
 // minContextWord is the shortest context word, in code points, that the
 // password check refuses inside a password. A shorter word, for example a
 // user name of two letters, would refuse too many good passwords.
@@ -109,8 +113,7 @@ func (*ShortError) Unwrap() error { return localuser.ErrPasswordTooShort }
 // MinLengthOf returns the minimum length that err names, and false when err
 // is not a ShortError.
 func MinLengthOf(err error) (int, bool) {
-	var short *ShortError
-	if errors.As(err, &short) {
+	if short, ok := errors.AsType[*ShortError](err); ok {
 		return short.MinLength, true
 	}
 
@@ -130,7 +133,7 @@ func lettersAndDigits(s string) bool {
 // "abcdef" or "987654". The case of a letter does not count.
 func repeatOrSequence(s string) bool {
 	runes := []rune(blocklist.Fold(s))
-	if len(runes) < 2 {
+	if len(runes) < minSequence {
 		return true
 	}
 

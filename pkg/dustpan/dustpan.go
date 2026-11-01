@@ -3018,11 +3018,6 @@ func newServerHandler(
 		return nil, err
 	}
 
-	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
-	if err != nil {
-		return nil, err
-	}
-
 	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
 	if err != nil {
 		return nil, err
@@ -3033,14 +3028,7 @@ func newServerHandler(
 		return nil, err
 	}
 
-	serverAudit, err := serverAuditOf(cfg.namespaceStore)
-	if err != nil {
-		return nil, err
-	}
-
-	settingsSvc := newSettingService(cfg, cfg.namespaceStore)
-
-	localUsers, err := newLocalUserService(cfg, principals, settingsSvc, deps.signIn)
+	extras, err := newServerExtras(cfg, deps, principals)
 	if err != nil {
 		return nil, err
 	}
@@ -3062,10 +3050,10 @@ func newServerHandler(
 		Principals:       principals,
 		Access:           grants,
 		Tokens:           deps.services.tokens,
-		IPAllowlists:     allow,
+		IPAllowlists:     extras.allow,
 		Gates:            gatesPort(gates),
 		SessionPolicy:    deps.policies,
-		Audit:            serverAudit,
+		Audit:            extras.audit,
 		CheckpointEpochs: checkpointEpochsOf(deps.chain),
 		OnAuditFailure:   deps.observed.IncAuditAppendFailure,
 		DenialLimiter:    cfg.denialLimiter,
@@ -3077,8 +3065,8 @@ func newServerHandler(
 		Workers:          cfg.watch,
 		SignIn:           deps.signIn,
 		Preferences:      newPreferencesService(cfg),
-		LocalUsers:       localUsers.service,
-		Settings:         settingsSvc,
+		LocalUsers:       extras.localUsers,
+		Settings:         extras.settings,
 		InstallationKind: cfg.installationKind,
 		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})

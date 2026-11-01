@@ -6,12 +6,48 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
 	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
+
+// serverExtras holds the parts of the installation API that newServerHandler
+// builds after the principals: the IP allowlists, the audit store of the
+// installation, the settings service and the local user service.
+type serverExtras struct {
+	allow      *ipallow.Service
+	audit      audit.ServerStore
+	settings   *setting.Service
+	localUsers *localusersvc.Service
+}
+
+// newServerExtras builds the serverExtras of cfg.
+func newServerExtras(cfg *settings, deps installationDeps, principals *principal.Service) (serverExtras, error) {
+	none := serverExtras{allow: nil, audit: nil, settings: nil, localUsers: nil}
+
+	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
+	if err != nil {
+		return none, err
+	}
+
+	serverAudit, err := serverAuditOf(cfg.namespaceStore)
+	if err != nil {
+		return none, err
+	}
+
+	settingsSvc := newSettingService(cfg, cfg.namespaceStore)
+
+	localUsers, err := newLocalUserService(cfg, principals, settingsSvc, deps.signIn)
+	if err != nil {
+		return none, err
+	}
+
+	return serverExtras{allow: allow, audit: serverAudit, settings: settingsSvc, localUsers: localUsers.service}, nil
+}
 
 // localUserWiring holds the service of the local users. The service is nil
 // when the store keeps no local users, no principals or no audit log: then no
@@ -83,8 +119,8 @@ func identityProviders(cfg *settings, signIn *serverapi.SignIn) func(ctx context
 			return false, fmt.Errorf("list the sign-in providers: %w", err)
 		}
 
-		for _, p := range list {
-			if p.Enabled {
+		for i := range list {
+			if list[i].Enabled {
 				return true, nil
 			}
 		}
