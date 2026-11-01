@@ -117,6 +117,16 @@ func readFailoverSettings(raw string) (failoverPlan, error) {
 		return failoverPlan{}, fmt.Errorf("%w: the database URL does not parse", ErrFailoverSetting)
 	}
 
+	// Defense in depth: serve passes only postgres:// and postgresql:// URLs
+	// to the store, and Open is also an SDK entry point. A keyword/value
+	// string parses as a URL with an empty query, so its settings would skip
+	// the allowlist and get defaults without notice. The check stays here so
+	// that a new caller cannot skip it.
+	if (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Opaque != "" {
+		return failoverPlan{}, fmt.Errorf("%w: the database URL must be a postgres:// or postgresql:// URL",
+			ErrFailoverSetting)
+	}
+
 	query := u.Query()
 	plan := failoverPlan{
 		connectTimeout: defaultConnectTimeout,
