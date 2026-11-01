@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 const (
@@ -49,8 +50,12 @@ const (
 // namespace.ErrFenced if it is stale.
 type UpdateStore interface {
 	// CreateUpdate persists a new, not-started u with its CreatedBy and
-	// RestoredFrom as given. It returns ErrNotFound if the stack does not exist.
-	CreateUpdate(ctx context.Context, u Update, fence namespace.Fence) error
+	// RestoredFrom as given, and calls key.NewKey in the same transaction, so
+	// the record of the item key of u commits with the update row. It returns
+	// ErrNotFound if the stack does not exist, ErrInvalidUpdateKey when
+	// CheckUpdateKey refuses key for the stack and u, and the error of
+	// key.NewKey. On every error it stores nothing.
+	CreateUpdate(ctx context.Context, u Update, key UpdateKey, fence namespace.Fence) error
 	// GetUpdate returns the update with its CreatedBy, RestoredFrom and
 	// CheckpointBytes, or ErrUpdateNotFound. CheckpointBytes is the size in
 	// bytes of the checkpoint the update saved, or 0 when it saved none.
@@ -135,7 +140,8 @@ type EventStore interface {
 	// for the update is skipped, so retries are harmless.
 	AppendEvents(ctx context.Context, batch EventBatch, fence namespace.Fence) error
 	// ListEvents returns up to limit events with Sequence greater than after,
-	// in order. It returns ErrUpdateNotFound if the update does not exist.
+	// in order, with each payload as AppendEvents stored it. It returns
+	// ErrUpdateNotFound if the update does not exist.
 	ListEvents(ctx context.Context, ref Ref, id UpdateID, after int64, limit int) ([]Event, error)
 }
 
@@ -184,6 +190,10 @@ type UpdatesConfig struct {
 	// ManualLocks refuses the start of a mutating update on a stack that a
 	// manual lock covers. Nil turns the check off.
 	ManualLocks ManualLocks
+	// Sealer creates the item key of each update and seals the payload of
+	// each event of the update with it. Required: no event is stored as the
+	// CLI sent it.
+	Sealer secret.ItemSealer
 	// BlobGuard tells whether a backup or a restore runs. Every delete of a
 	// blob that a backup snapshot or restored data can name asks it after the
 	// commit that removed the last row that names the blob, and runs only
@@ -228,6 +238,7 @@ type Updates struct {
 	replayer       JournalReplayer
 	manual         ManualLocks
 	guard          blobguard.Watch
+	sealer         secret.ItemSealer
 	skipMu         sync.Mutex
 	skipLogged     string
 	stateAt        StateAtReader
@@ -242,19 +253,11 @@ type TokenChecker interface {
 	CheckActive(ctx context.Context, id string) error
 }
 
-// NewUpdates returns Updates. Every store, Stacks, Blobs and Namespaces are required.
+// NewUpdates returns Updates. Every store, Stacks, Blobs, Namespaces and
+// Sealer are required.
 func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
-	switch {
-	case cfg.Updates == nil:
-		return nil, fmt.Errorf("%w: update store", ErrMissingDependency)
-	case cfg.Checkpoints == nil:
-		return nil, fmt.Errorf("%w: checkpoint store", ErrMissingDependency)
-	case cfg.Events == nil:
-		return nil, fmt.Errorf("%w: event store", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Stacks == nil:
-		return nil, fmt.Errorf("%w: stack resolver", ErrMissingDependency)
+	if err := checkUpdatesConfig(&cfg); err != nil {
+		return nil, err
 	}
 
 	access, err := newBlobAccess(cfg.Blobs, cfg.Refusals)
@@ -262,6 +265,32 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		return nil, err
 	}
 
+	return buildUpdates(&cfg, access), nil
+}
+
+// checkUpdatesConfig returns ErrMissingDependency for a required dependency
+// that cfg lacks.
+func checkUpdatesConfig(cfg *UpdatesConfig) error {
+	switch {
+	case cfg.Updates == nil:
+		return fmt.Errorf("%w: update store", ErrMissingDependency)
+	case cfg.Checkpoints == nil:
+		return fmt.Errorf("%w: checkpoint store", ErrMissingDependency)
+	case cfg.Events == nil:
+		return fmt.Errorf("%w: event store", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Stacks == nil:
+		return fmt.Errorf("%w: stack resolver", ErrMissingDependency)
+	case cfg.Sealer == nil:
+		return fmt.Errorf("%w: item sealer", ErrMissingDependency)
+	}
+
+	return nil
+}
+
+// buildUpdates builds the service of a checked cfg over the blob access.
+func buildUpdates(cfg *UpdatesConfig, access blobAccess) *Updates {
 	s := &Updates{
 		updates:        cfg.Updates,
 		checkpoints:    cfg.Checkpoints,
@@ -277,6 +306,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		replayer:       cfg.Replayer,
 		manual:         cfg.ManualLocks,
 		guard:          cfg.BlobGuard,
+		sealer:         cfg.Sealer,
 		skipMu:         sync.Mutex{},
 		skipLogged:     "",
 		stateAt:        nil,
@@ -306,7 +336,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		s.maxCheckpoints = DefaultMaxCheckpointBytes
 	}
 
-	return s, nil
+	return s
 }
 
 // Started is a running update and the lease token its client must present on
@@ -345,7 +375,18 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		CheckpointBytes: 0,
 	}
 
-	if err := s.updates.CreateUpdate(ctx, u, fence); err != nil {
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
+	}
+
+	item, err := UpdateItem(ref.Namespace, st.ID, u.ID)
+	if err != nil {
+		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
+	}
+
+	key := UpdateKey{Ref: item, NewKey: s.sealer.NewItemKey}
+	if err := s.updates.CreateUpdate(ctx, u, key, fence); err != nil {
 		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
 	}
 
@@ -624,7 +665,20 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 		return err
 	}
 
-	batch := EventBatch{Events: events, Ref: ref, Update: id, Lease: u.Lease.Digest}
+	item, err := s.updateItem(ctx, ref, id)
+	if err != nil {
+		return fmt.Errorf("append events to update %s: %w", id, err)
+	}
+
+	// The payload of an event can hold a secret value in plain text, for
+	// example a diagnostic message that the program printed. So each payload
+	// is sealed before the row write.
+	sealed, err := sealEvents(ctx, s.sealer, item, id, events)
+	if err != nil {
+		return fmt.Errorf("append events to update %s: %w", id, err)
+	}
+
+	batch := EventBatch{Events: sealed, Ref: ref, Update: id, Lease: u.Lease.Digest}
 	if err := s.events.AppendEvents(ctx, batch, fence); err != nil {
 		return fmt.Errorf("append events to update %s: %w", id, err)
 	}
@@ -1001,7 +1055,31 @@ func (s *Updates) Events(ctx context.Context, ref Ref, id UpdateID, after int64,
 		return nil, fmt.Errorf("events of update %s: %w", id, err)
 	}
 
+	if len(events) == 0 {
+		return events, nil
+	}
+
+	item, err := s.updateItem(ctx, ref, id)
+	if err != nil {
+		return nil, fmt.Errorf("events of update %s: %w", id, err)
+	}
+
+	if err := openEvents(ctx, s.sealer, item, id, events); err != nil {
+		return nil, fmt.Errorf("events of update %s: %w", id, err)
+	}
+
 	return events, nil
+}
+
+// updateItem returns the reference of the item key of the update id of the
+// stack ref.
+func (s *Updates) updateItem(ctx context.Context, ref Ref, id UpdateID) (secret.ItemRef, error) {
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return secret.ItemRef{}, err
+	}
+
+	return UpdateItem(ref.Namespace, st.ID, id)
 }
 
 // leaseGet reads one update for a lease request. A token-started update must

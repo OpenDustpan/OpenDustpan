@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -129,6 +130,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	blobs := openBenchBlobs(b)
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:      secrettest.NewMemorySealer(),
 		ManualLocks: nil, BlobGuard: blobguardtest.None{},
 		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,

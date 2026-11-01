@@ -747,10 +747,13 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 58 because the second save reads the blob guard after
-		// the commit that replaces the previous checkpoint blob, so that a
-		// backup that started before the commit cannot lose the blob.
-		{"pulumi update cycle", 58, func(h *rtHarness) {
+		// The budget is 63. The second save reads the blob guard after the
+		// commit that replaces the previous checkpoint blob, so that a backup
+		// that started before the commit cannot lose the blob. The create
+		// reads the stack ID for the reference of the item key of the update,
+		// and its transaction writes the record of that key: a read of the
+		// record, a read of the namespace, the insert and a read back.
+		{"pulumi update cycle", 63, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()

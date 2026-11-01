@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // benchResourceBytes is the approximate size of one benchmark resource, so a
@@ -184,7 +185,7 @@ func (f *benchSaveFixture) startBenchUpdate(b *testing.B, id string) stack.Updat
 		CheckpointBytes: 0,
 	}
 
-	if err := f.store.CreateUpdate(ctx, u, f.fence); err != nil {
+	if err := f.store.CreateUpdate(ctx, u, storetest.UpdateKeyFor(ctx, f.store, u), f.fence); err != nil {
 		b.Fatalf("create update %s: %v", id, err)
 	}
 
