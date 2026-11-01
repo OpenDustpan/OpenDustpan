@@ -165,6 +165,10 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReviewRefusals(ctx, t, env)
 	checkCallerAccess(ctx, t, env)
 	checkCallerAccessRoles(ctx, t, env)
+
+	t.Run("collection", func(t *testing.T) {
+		checkCollectionReview(ctx, t, env)
+	})
 }
 
 // seedReview makes a principal in a group, a namespace and five grants:
@@ -383,10 +387,6 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 
 		checkReviewRow(t, f, &rows[i])
 	}
-
-	t.Run("collection", func(t *testing.T) {
-		checkCollectionReview(ctx, t, env, f)
-	})
 }
 
 // checkReviewRow checks the fields of one current row of the seed.
