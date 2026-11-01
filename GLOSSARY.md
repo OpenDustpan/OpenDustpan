@@ -234,7 +234,7 @@ The credentials that let the server use one forge for a namespace. With them, th
 _Avoid_: VCS integration, VCS provider, app (alone)
 
 **Review request**:
-A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. OpenDustpan approvals add to the approvals of the review request. They never replace them (ADR 103).
+A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. One change order carries each review request. The review mode of its units decides which approvals count and who merges (ADR 299).
 _Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
 
 **Forge capability**:
@@ -250,8 +250,36 @@ A signed request that a forge sends to the server: a push, a change of a review 
 _Avoid_: Webhook (that is the setting on the forge, or a sink of notifications), callback, hook (alone)
 
 **Comment command**:
-A command that a person writes in a comment of a review request, for example `plan`, `dustpan apply` or `unlock` (RFC 27). The commands include a command that starts a plan or shows a status. `dustpan apply` applies the plan of the current head, and refuses when the head moved since the plan. A comment command never approves a change.
+A command that a person writes in a comment of a review request, for example `dustpan plan`, `dustpan apply`, `dustpan unlock` or the redact command (RFC 27, ADR 299). The server reacts to each received command with an emoji that the installation sets, and answers it with a reply comment. `dustpan apply` applies the plan of the current head, and refuses when the head moved since the plan. A comment command never approves a change, and credentials never follow a comment alone.
 _Avoid_: Chat command, slash command, bot command
+
+**Review mode**:
+The setting of a unit that says where people review a change of the unit and who merges (ADR 299). Its values are merged approvals, OpenDustpan merges, no review requests, and no change orders. It has no default. It cascades from the installation to the namespace, the collection and the unit, and a level can force a value. A review request that touches units with different modes uses the strictest mode.
+_Avoid_: Review place, integration mode, workflow
+
+**Binding level**:
+What an approval binds to (ADR 299): L0 the commit, L1 the set of operations, L2 the exact plan. The default is L1. Each level resets on what it binds to. A parent scope can forbid weaker levels below it.
+_Avoid_: Approval level, signature carry-over (the code deletes that setting)
+
+**Set of operations**:
+The resource addresses of a plan of one unit, each with its kind of change (ADR 299). A kind is create, update, delete, or one of the two orders of a replace. Each approval records the set of operations of the revision that the approver saw.
+_Avoid_: Change set, operation list
+
+**Approval floor**:
+A rule of every binding level (ADR 299). A new delete, a new replace or any operation that no approval holds stops the apply. The apply then needs a new approval with a fresh authentication.
+_Avoid_: Minimum approval, safety net
+
+**Plan conflict**:
+Two plans whose changed resources and dependency closures the server cannot prove disjoint (ADR 299). It keeps the status of the later change order red. It replaces unit locks for review requests. An eligible approver can accept an overlap, with a reason.
+_Avoid_: Lock conflict, merge conflict (that is of the code)
+
+**Declared paths**:
+The paths of a unit that a person declares in addition to the file closure that the server computes (ADR 299). They only add files. A unit whose closure is unknown stays pending until a person records an acceptance.
+_Avoid_: Watch paths, trigger paths
+
+**Plan comment**:
+The one comment of the server on a review request, with a summary of the plan and a link (ADR 299). The server edits it in place. By default it holds counts and resource addresses, never a value. The full diff is opt-in.
+_Avoid_: Summary comment, plan output
 
 **Sensitive setting**:
 A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
