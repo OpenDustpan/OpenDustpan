@@ -1841,11 +1841,13 @@ WHERE m.namespace = ? AND m.collection_key = ?;
 -- name: ListCollectionUnitIDs :many
 -- The stable IDs of the units in one collection, ordered. The membership of a
 -- unit that was deleted stays until the collection is deleted, so these units
--- are in the list too. The namespace is part of the key: a collection of
--- another namespace with the same name gives nothing.
+-- are in the list too. The collection is selected by its namespace, its name
+-- and its stable ID together: a collection that was deleted and created again
+-- under the same name has another ID and gives nothing.
 SELECT m.unit_id
 FROM collection_members AS m
-WHERE m.namespace = ? AND m.collection_key = ?
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE c.namespace = ? AND c.name_key = ? AND c.id = ?
 ORDER BY m.unit_id;
 
 -- name: DeleteCollectionMembers :exec
