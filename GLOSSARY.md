@@ -1155,7 +1155,7 @@ The setting that lets a signature of a change order carry over to a new plan rev
 _Avoid_: Sticky approval, stale approval
 
 **Fresh authentication**:
-A built-in MFA step, or a new authentication at the SSO identity provider. It is no older than the window `freshAuthSeconds` (ADR 227). A person can sign in with a plain OAuth 2.0 provider or a trusted header. For that person, it is a passkey or TOTP code. The person enrolled it with OpenDustpan (ADR 301). The step belongs to one session. A recovery code never gives it. The default window is 900 seconds. A window of 0 asks for a fresh authentication at each step. A namespace or an approval rule can only set a shorter window.
+A built-in MFA step, or a new authentication at the SSO identity provider. It is no older than the window `freshAuthSeconds` (ADR 227). A person can sign in with a plain OAuth 2.0 provider or a trusted header. For that person, it is a passkey, a TOTP code or an SSH signature. The person enrolled it with OpenDustpan (ADR 301). The step belongs to one session. A recovery code never gives it. The default window is 900 seconds. A window of 0 asks for a fresh authentication at each step. A namespace or an approval rule can only set a shorter window.
 _Avoid_: Token freshness, re-auth, step-up (alone)
 
 ### Change orders
