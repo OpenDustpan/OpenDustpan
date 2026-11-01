@@ -11,6 +11,11 @@
 # is copied, not only LICENSE. The license of the Go distribution goes to
 # <outdir>/go/, because the Go runtime is in every binary.
 #
+# A package of this module can hold a copy of a file of another project, in
+# the directory third_party/<project path>/ of the package, with the license
+# of that project next to it. The script copies those license files into
+# <outdir>/<project path>/, and fails if such a directory has no license file.
+#
 # The script fails if a module has no license file at its root. The --check
 # mode collects into a temporary directory for each platform and keeps
 # nothing: `make licenses` uses it as a gate.
@@ -96,6 +101,24 @@ collect() {
   done < <(
     cd "$root" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go list -deps \
       -f '{{if not .Standard}}{{with .Module}}{{if not .Main}}{{.Path}}{{"\t"}}{{.Dir}}{{"\t"}}{{$.Dir}}{{end}}{{end}}{{end}}' \
+      ./cmd/opendustpan
+  )
+
+  # The copies of files of other projects in linked packages of this module.
+  local project
+  while IFS= read -r package_dir; do
+    [[ -d "$package_dir/third_party" ]] || continue
+    while IFS= read -r project; do
+      rel="${project#"$package_dir/third_party/"}"
+      copy_license_files "$project" "$out/$rel"
+      if ! has_license "$out/$rel"; then
+        echo "third-party-licenses: $project holds a third-party file and no license file" >&2
+        exit 1
+      fi
+    done < <(find "$package_dir/third_party" -type f ! -iname 'LICENSE*' ! -iname 'README*' -exec dirname {} \; | sort -u)
+  done < <(
+    cd "$root" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go list -deps \
+      -f '{{if not .Standard}}{{with .Module}}{{if .Main}}{{$.Dir}}{{end}}{{end}}{{end}}' \
       ./cmd/opendustpan
   )
 

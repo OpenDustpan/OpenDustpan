@@ -33,6 +33,7 @@ func TestErrorsAreDistinct(t *testing.T) {
 		localuser.ErrBreakGlass,
 		localuser.ErrPasswordSignInOff,
 		localuser.ErrUnavailable,
+		localuser.ErrHashBusy,
 	}
 
 	for i, a := range all {
