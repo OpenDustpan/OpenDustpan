@@ -92,6 +92,10 @@ type ChunkConfirm struct {
 	// BlobKey is the key of the blob of this write attempt, as
 	// LogChunkAttemptKey makes it.
 	BlobKey string
+	// AttemptStartedAt is the time at which this write attempt started, before
+	// its blob write, by the clock of the recorder. The store checks it with
+	// blob.CheckAttempt against its own clock. The store does not keep it.
+	AttemptStartedAt time.Time
 }
 
 // ChunkPlan is what PlanChunk decides for a reserve of a chunk.
@@ -170,7 +174,9 @@ type RecordStore interface {
 	// caller deletes it. It returns ErrInvalid for a chunk that no reserve
 	// recorded or that is not the next one, for a c.Stored with no size, and
 	// for a c.BlobKey that is empty or is not the key of an attempt of this
-	// chunk.
+	// chunk. It returns blob.ErrAttemptExpired, and changes nothing, for a
+	// c.AttemptStartedAt that fails blob.CheckAttempt against the clock of the
+	// store, also for a chunk that is counted already.
 	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, c ChunkConfirm) (bool, error)
 	// ReservePlan records the plan np before its parts exist, with its item key
 	// in the same transaction, and returns it. A reserved plan has no part and

@@ -327,6 +327,10 @@ _Avoid_: Retention sweep, sweep (that is the Sweep feature), garbage collection,
 The task that deletes a key blob with no record (ADR 151 decision 22). It waits a grace period of 24 hours from the write of the blob. So it never deletes the key blob of an item whose transaction has not ended.
 _Avoid_: Orphan sweep, sweep (that is the Sweep feature)
 
+**Attempt deadline**:
+The time that one write attempt has from its start to the commit of its row: 30 minutes (ADR 281 decision 11). The row names the blob of the attempt. The commit compares the start time with the database clock and refuses a later commit with `blob.ErrAttemptExpired`. A sweep of blobs that no row names waits 1 hour, longer than the deadline. In code this time is `blob.UnnamedGracePeriod`. So a sweep never deletes the blob of an attempt that can still commit.
+_Avoid_: Timeout (that is a bound on one request), lease
+
 **Blob purge record**:
 A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention expiry deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period. It covers the live blob store only. The tombstone of the purge covers the backup targets (ADR 151).
 _Avoid_: Tombstone (that is the shred record of a purged unit)

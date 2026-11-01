@@ -430,6 +430,11 @@ type Checkpoint struct {
 	BlobSize int64
 	// BlobMD5 is the MD5 of the stored gzip bytes, for backups.
 	BlobMD5 [md5.Size]byte
+	// AttemptStartedAt is the time at which the write attempt of the blob
+	// started, by the clock of the writer. The store checks it with
+	// blob.CheckAttempt against the clock of the database, in the transaction
+	// of the commit. The store does not keep it, and a read gives it as zero.
+	AttemptStartedAt time.Time
 }
 
 // CheckpointInput is a checkpoint as a client submits it.

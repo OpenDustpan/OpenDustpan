@@ -108,6 +108,10 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "a checkpoint replay under another key keeps the first key", test: testCheckpointReplayOtherKey},
 		{name: "a checkpoint conflict under another key keeps the first key", test: testCheckpointConflictOtherKey},
+		{name: "a checkpoint of an attempt outside its time window is refused", test: testCheckpointAttemptWindow},
+		{name: "a checkpoint replay after the attempt deadline is refused", test: testCheckpointReplayAfterDeadline},
+		{name: "a built checkpoint after the attempt deadline is refused", test: testBuiltCheckpointAttemptWindow},
+		{name: "a journal row of an attempt outside its time window is refused", test: testJournalAttemptWindow},
 		{name: "an unsequenced checkpoint replaces the row and its key", test: testCheckpointUnsequencedKeys},
 		{name: "concurrent checkpoints of one sequence: one winner", test: testCheckpointConcurrentWinner},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
@@ -1382,6 +1386,8 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 		BlobKey:       placeholderKey(u, seq),
 		BlobSize:      size,
 		BlobMD5:       sum,
+		// The attempt starts now, so the store accepts it in its time window.
+		AttemptStartedAt: time.Now(),
 	}
 }
 

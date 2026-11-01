@@ -147,6 +147,8 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 		BlobKey:       blob.Key(key),
 		BlobSize:      1,
 		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: f.clock.Now(),
 	}
 
 	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}

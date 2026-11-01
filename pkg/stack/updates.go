@@ -99,9 +99,12 @@ type CheckpointStore interface {
 	// ErrStaleCheckpoint. A write without a sequence number is never known:
 	// it replaces the row. The row keeps the blob key with the size, the
 	// digest and the sequence, and no content. A checkpoint without a blob
-	// key returns ErrCheckpointNoKey. When the answer is known or an error
-	// that no row followed, no row names the blob of cp, and the caller may
-	// delete that blob, which holds the key of its own attempt.
+	// key returns ErrCheckpointNoKey. A checkpoint whose AttemptStartedAt
+	// fails blob.CheckAttempt against the clock of the database, in the same
+	// transaction, returns blob.ErrAttemptExpired and writes nothing, also for
+	// a replay. When the answer is known or an error that no row followed, no
+	// row names the blob of cp, and the caller may delete that blob, which
+	// holds the key of its own attempt.
 	PutCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) (known bool, err error)
 	// LatestCheckpoint returns the checkpoint of the stack's highest version
 	// that has one, or ErrNoState.
@@ -462,9 +465,10 @@ func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, err
 
 // sweepGracePeriod is how long after its write a checkpoint blob stays before
 // the unreferenced sweep deletes it, so a save that still commits is never
-// collected: every new blob is fresh, and the row names it only after the
-// bytes land.
-const sweepGracePeriod = time.Hour
+// collected: the store refuses the commit of an attempt older than
+// blob.AttemptDeadline, and the grace period is longer than that deadline
+// with a margin for the clocks.
+const sweepGracePeriod = blob.UnnamedGracePeriod
 
 // checkpointSave groups one checkpoint save after the lease and idempotency
 // checks: the row parts with the blob key to write.
@@ -699,6 +703,7 @@ func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok t
 		Lease:     u.Lease.Digest,
 		Content:   content,
 		Version:   int(u.JournalVersion),
+		StartedAt: s.clock(),
 	}
 
 	if err := s.journal.Append(ctx, batch, ns.Fence()); err != nil {
@@ -1035,8 +1040,8 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 	return s.writeCheckpoint(ctx, checkpointWrite{
 		op: "save checkpoint", ref: save.ref, id: save.id, blobs: save.blobs, stackID: save.stackID,
 		key: save.key, deployment: save.in.Deployment,
-		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) (bool, error) {
-			return s.commitCheckpoint(ctx, save, size, sum)
+		commit: func(ctx context.Context, size int64, sum [md5.Size]byte, started time.Time) (bool, error) {
+			return s.commitCheckpoint(ctx, save, size, sum, started)
 		},
 	})
 }
@@ -1047,9 +1052,9 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 // failed commit leaves the blob without a row that names it; the sweep
 // collects it once it is older than the grace period.
 func (s *Updates) commitCheckpoint(
-	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
+	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte, started time.Time,
 ) (bool, error) {
-	known, err := s.commitCheckpointRow(ctx, save, size, sum)
+	known, err := s.commitCheckpointRow(ctx, save, size, sum, started)
 	if err != nil {
 		return false, fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
 	}
@@ -1063,9 +1068,10 @@ func (s *Updates) commitCheckpoint(
 	return false, nil
 }
 
-// commitCheckpointRow writes the fenced SQL row of save naming its blob.
+// commitCheckpointRow writes the fenced SQL row of save naming its blob, with
+// the start of the attempt that wrote the blob.
 func (s *Updates) commitCheckpointRow(
-	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
+	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte, started time.Time,
 ) (bool, error) {
 	cp := Checkpoint{
 		NamespaceID: "", StackID: "",
@@ -1082,6 +1088,8 @@ func (s *Updates) commitCheckpointRow(
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+
+		AttemptStartedAt: started,
 	}
 
 	return s.checkpoints.PutCheckpoint(ctx, cp, save.fence)

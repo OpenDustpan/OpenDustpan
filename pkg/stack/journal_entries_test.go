@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
@@ -333,6 +334,7 @@ func journalBatchFor(body []byte) stack.JournalBatch {
 		Lease:     token.Digest{},
 		Content:   body,
 		Version:   0,
+		StartedAt: time.Now(),
 	}
 }
 
@@ -777,5 +779,7 @@ func rowNaming(key blob.Key, sum [sha256.Size]byte, size int64) stack.JournalRow
 		OperationIDs: nil,
 		HasRebuild:   false,
 		Verify:       nil,
+
+		AttemptStartedAt: time.Time{},
 	}
 }

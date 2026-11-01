@@ -42,6 +42,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -1200,7 +1201,7 @@ func classifyUpdate(err error) failure {
 		}
 	}
 
-	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal} {
+	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal, classifyAttempt} {
 		if f, ok := try(err); ok {
 			return f
 		}
@@ -1251,6 +1252,18 @@ func classifyUpdateState(err error) (failure, bool) {
 		return coded(http.StatusConflict, err.Error(), errcode.UpdateCheckpointConflict), true
 	case errors.Is(err, stack.ErrStaleCheckpoint):
 		return coded(http.StatusConflict, err.Error(), errcode.UpdateCheckpointStale), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyAttempt maps the refusal of a write attempt that ran past its
+// deadline. The CLI sends the request again, and the new attempt has a new
+// start time. ok is false for any other error.
+func classifyAttempt(err error) (failure, bool) {
+	if errors.Is(err, blob.ErrAttemptExpired) {
+		return coded(http.StatusServiceUnavailable, blob.ErrAttemptExpired.Error()+": try again",
+			errcode.UpdateAttemptExpired), true
 	}
 
 	return unmatched(), false
