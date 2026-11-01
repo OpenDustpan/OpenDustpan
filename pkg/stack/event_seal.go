@@ -20,18 +20,18 @@ type NewItemKeyFunc func(
 	ctx context.Context, tx secret.ItemKeyTx, ref secret.ItemRef, fence namespace.Fence,
 ) (secret.ItemKey, error)
 
-// UpdateKey is the item key that a new update gets: the reference of the key
-// and the function that creates it. Every update has one, a preview too. It
-// seals the payload of each event of the update.
+// UpdateKey is the item key that a new update gets: the function that
+// creates it. Every update has one, a preview too. It seals the payload of
+// each event of the update. The store builds the reference of the key with
+// RefFor, from the stack ID that it resolves in the transaction that creates
+// the update, so the key always names the stack of the row.
 type UpdateKey struct {
-	Ref    secret.ItemRef
 	NewKey NewItemKeyFunc
 }
 
-// ErrInvalidUpdateKey reports an UpdateKey that does not name the update that
-// a store creates: a missing function, or a reference of another namespace,
-// another stack, another kind or another update.
-var ErrInvalidUpdateKey = errors.New("the item key does not name the update")
+// ErrInvalidUpdateKey reports an UpdateKey with no NewKey function, or a
+// reference that RefFor cannot build from the parts of the update.
+var ErrInvalidUpdateKey = errors.New("the item key of the update is not valid")
 
 // UpdateItem returns the reference of the item key of the update id of the
 // stack with the stable ID stackID in the namespace ns. The kind is
@@ -39,31 +39,28 @@ var ErrInvalidUpdateKey = errors.New("the item key does not name the update")
 func UpdateItem(ns namespace.Name, stackID ID, id UpdateID) (secret.ItemRef, error) {
 	scope, err := secret.NewScope(ns, string(stackID))
 	if err != nil {
-		return secret.ItemRef{}, err
+		return secret.ItemRef{Scope: secret.Scope{Namespace: "", ID: ""}, Kind: "", Item: ""}, err
 	}
 
 	return secret.NewItemRef(scope, secret.ItemKindState, id.String())
 }
 
-// CheckUpdateKey returns ErrInvalidUpdateKey when k does not name the update
-// id of the stack stackID in the namespace ns, or has no NewKey function. A
-// store calls it in the transaction that creates the update, after it
-// resolves the stack.
-//
-// Defense in depth: Updates.Create builds the reference with UpdateItem. This
-// check stays so that a new caller of a store cannot store an update under the
-// key of another item.
-func CheckUpdateKey(k UpdateKey, ns namespace.Name, stackID ID, id UpdateID) error {
-	want, err := UpdateItem(ns, stackID, id)
+// RefFor returns the reference of the item key of the update id of the stack
+// stackID in the namespace ns, as UpdateItem builds it. It returns
+// ErrInvalidUpdateKey when k has no NewKey function or a part is not valid. A
+// store calls it in the transaction that creates the update, after it resolves
+// the stack.
+func (k UpdateKey) RefFor(ns namespace.Name, stackID ID, id UpdateID) (secret.ItemRef, error) {
+	if k.NewKey == nil {
+		return secret.ItemRef{Scope: secret.Scope{Namespace: "", ID: ""}, Kind: "", Item: ""}, ErrInvalidUpdateKey
+	}
+
+	ref, err := UpdateItem(ns, stackID, id)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidUpdateKey, err)
+		return ref, fmt.Errorf("%w: %w", ErrInvalidUpdateKey, err)
 	}
 
-	if k.NewKey == nil || k.Ref != want {
-		return ErrInvalidUpdateKey
-	}
-
-	return nil
+	return ref, nil
 }
 
 // eventBindingLabel starts the binding of a sealed event payload.

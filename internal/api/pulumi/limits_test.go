@@ -58,7 +58,7 @@ func newUpdateFixtureWithGate(
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,

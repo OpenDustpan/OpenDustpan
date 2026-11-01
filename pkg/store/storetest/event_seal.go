@@ -59,7 +59,8 @@ func RunEventSealing(t *testing.T, newStore EventSealFactory) {
 		{name: "the item key record commits with the update", test: testUpdateKeyCommits},
 		{name: "a preview gets its own item key", test: testPreviewKey},
 		{name: "a failed key write stores no update", test: testUpdateKeyRollsBack},
-		{name: "a key of another item stores no update", test: testUpdateKeyRefused},
+		{name: "a key with no function stores no update", test: testUpdateKeyRefused},
+		{name: "the key names the update and the stack that the store resolved", test: testUpdateKeyNamesTheStack},
 		{name: "a payload moved to another sequence does not open", test: testEventSwapSequence},
 		{name: "a payload moved to another update does not open", test: testEventSwapUpdate},
 	}
@@ -294,7 +295,7 @@ func testUpdateKeyRollsBack(t *testing.T, r *sealRig) {
 	t.Helper()
 
 	u := newUpdate(r.ref, "rolled", mutating(), "", 0)
-	key := stack.UpdateKey{Ref: r.itemOf(t, u.ID), NewKey: RecordingKey(errKeyWrite)}
+	key := stack.UpdateKey{NewKey: RecordingKey(errKeyWrite)}
 
 	if err := r.store.CreateUpdate(t.Context(), u, key, r.fence); !errors.Is(err, errKeyWrite) {
 		t.Fatalf("create update with a failed key: err = %v, want the key error", err)
@@ -304,7 +305,7 @@ func testUpdateKeyRollsBack(t *testing.T, r *sealRig) {
 		t.Fatalf("update after a failed key: err = %v, want ErrUpdateNotFound", err)
 	}
 
-	if _, err := r.store.GetItemKey(t.Context(), key.Ref); !errors.Is(err, secret.ErrKeyNotFound) {
+	if _, err := r.store.GetItemKey(t.Context(), r.itemOf(t, u.ID)); !errors.Is(err, secret.ErrKeyNotFound) {
 		t.Fatalf("key record after a failed create: err = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -314,40 +315,42 @@ func testUpdateKeyRefused(t *testing.T, r *sealRig) {
 
 	u := newUpdate(r.ref, "refused", mutating(), "", 0)
 
-	otherStack, err := stack.UpdateItem(r.ref.Namespace, "stk-other", u.ID)
-	if err != nil {
-		t.Fatalf("item of another stack: %v", err)
+	err := r.store.CreateUpdate(t.Context(), u, stack.UpdateKey{NewKey: nil}, r.fence)
+	if !errors.Is(err, stack.ErrInvalidUpdateKey) {
+		t.Fatalf("create update with no key function: err = %v, want ErrInvalidUpdateKey", err)
 	}
 
-	otherNamespace, err := stack.UpdateItem("other", r.stackID, u.ID)
-	if err != nil {
-		t.Fatalf("item of another namespace: %v", err)
+	if _, err := r.store.GetUpdate(t.Context(), r.ref, u.ID); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Fatalf("update with no key function: err = %v, want ErrUpdateNotFound", err)
+	}
+}
+
+// testUpdateKeyNamesTheStack checks that the store gives the key function the
+// reference of the update and of the stack that it resolved.
+func testUpdateKeyNamesTheStack(t *testing.T, r *sealRig) {
+	t.Helper()
+
+	var got secret.ItemRef
+
+	capture := func(
+		ctx context.Context, tx secret.ItemKeyTx, ref secret.ItemRef, fence namespace.Fence,
+	) (secret.ItemKey, error) {
+		got = ref
+
+		return RecordingKey(nil)(ctx, tx, ref, fence)
 	}
 
-	otherKind := r.itemOf(t, u.ID)
-	otherKind.Kind = secret.ItemKindPlan
+	u := newUpdate(r.ref, "named", mutating(), "", 0)
+	if err := r.store.CreateUpdate(t.Context(), u, stack.UpdateKey{NewKey: capture}, r.fence); err != nil {
+		t.Fatalf("create update: %v", err)
+	}
 
-	for name, key := range map[string]stack.UpdateKey{
-		"no key function":   {Ref: r.itemOf(t, u.ID), NewKey: nil},
-		"another update":    {Ref: r.itemOf(t, "u-other"), NewKey: RecordingKey(nil)},
-		"another stack":     {Ref: otherStack, NewKey: RecordingKey(nil)},
-		"another namespace": {Ref: otherNamespace, NewKey: RecordingKey(nil)},
-		"another kind":      {Ref: otherKind, NewKey: RecordingKey(nil)},
-		"an empty ref":      {Ref: emptyItemRef(), NewKey: RecordingKey(nil)},
-	} {
-		if err := r.store.CreateUpdate(t.Context(), u, key, r.fence); !errors.Is(err, stack.ErrInvalidUpdateKey) {
-			t.Fatalf("create update with %s: err = %v, want ErrInvalidUpdateKey", name, err)
-		}
+	if want := r.itemOf(t, u.ID); got != want {
+		t.Fatalf("key reference = %s, want %s", got, want)
+	}
 
-		if _, err := r.store.GetUpdate(t.Context(), r.ref, u.ID); !errors.Is(err, stack.ErrUpdateNotFound) {
-			t.Fatalf("update after %s: err = %v, want ErrUpdateNotFound", name, err)
-		}
-
-		if key.Ref != emptyItemRef() {
-			if _, err := r.store.GetItemKey(t.Context(), key.Ref); !errors.Is(err, secret.ErrKeyNotFound) {
-				t.Fatalf("key record after %s: err = %v, want ErrKeyNotFound", name, err)
-			}
-		}
+	if _, err := r.store.GetItemKey(t.Context(), got); err != nil {
+		t.Fatalf("key record of the update: %v", err)
 	}
 }
 
