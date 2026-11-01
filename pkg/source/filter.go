@@ -349,6 +349,19 @@ func validHost(h string) bool {
 	return egress.CheckURL("https://"+h, egress.HTTPSOnly) == nil
 }
 
+// AllowedHost reports whether h is a host that a repository URL can name: a
+// DNS name that SplitHTTPS accepts. It is false for an empty host, an IP
+// address in any form (for example 10.0.0.5, fd00::1, ::ffff:127.0.0.1 or
+// fe80::1%eth0), a number that a resolver reads as an IPv4 address
+// (2130706433, 0x7f000001 or 0177.0.0.1), localhost, a name under localhost,
+// and a host with a port, a bracket or a character other than an ASCII
+// letter, a digit, '.' or '-'. A caller that parses a URL with net/url gives
+// it the host with no port, from url.URL.Hostname. The connection still
+// checks the resolved address of each dial.
+func AllowedHost(h string) bool {
+	return h != "" && validHost(h)
+}
+
 // validLabels reports whether h is labels of ASCII letters, digits and '-',
 // with '.' between them and no empty label.
 func validLabels(h string) bool {
