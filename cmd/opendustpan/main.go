@@ -1269,12 +1269,16 @@ func jobStoreOption(st store) []dustpan.Option {
 	case sqliteStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	case postgresStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	default:
 		return nil

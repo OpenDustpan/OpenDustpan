@@ -302,9 +302,9 @@ type settings struct {
 	// trustRules keeps the workload trust rules of each namespace, or nil
 	// without them. See WithTrustRules.
 	trustRules trustRuleSettings
-	// jobClaimer claims the phases of runner jobs for the runners of the
-	// protocol, or is nil. See WithJobClaimer.
-	jobClaimer job.Claimer
+	// jobClaimer builds the claimer of the phases of runner jobs for the
+	// runners of the protocol, or is nil. See WithJobClaimer.
+	jobClaimer JobClaimerFunc
 	// components are the components this process runs. See WithComponents.
 	components Components
 	// operationLease is the lease period of a claim on a durable operation,

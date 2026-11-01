@@ -81,6 +81,7 @@ func testGiveBackCancelBetween(t *testing.T, h Harness) {
 		&failFirstGet{Store: h.Jobs, once: sync.Once{}},
 		&hookEnds{Store: h.Durable, once: sync.Once{}, hook: func() { cancelJob(t, h, f, j.ID) }},
 		h.Namespaces,
+		NoGates{},
 	)
 
 	_, err := holder.Claim(t.Context(), request(runnerTwo, shortLease, runnerKind(&j)))

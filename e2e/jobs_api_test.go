@@ -132,6 +132,7 @@ func jobsScenario(t *testing.T, env *e2e.Env) {
 	defaultsAndPools(ctx, t, env)
 	missingJobsAnswerNotFound(ctx, t, env, started)
 	memberStartsNothing(ctx, t, env, started)
+	aGateStopsAClaim(ctx, t, env)
 }
 
 // startsAJob starts the plan job, starts it again with the same key, and

@@ -254,7 +254,7 @@ func TestJobConformance(t *testing.T) {
 		ops := s.DurableOperationsPort()
 
 		return jobtest.Harness{
-			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
+			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: &jobDomain{s: s},
 		}
 	})
@@ -279,7 +279,7 @@ func TestRecorderConformance(t *testing.T) {
 
 		return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 			Harness: jobtest.Harness{
-				Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
+				Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 				Domain: &jobDomain{s: s},
 			},
 			Records:  j,

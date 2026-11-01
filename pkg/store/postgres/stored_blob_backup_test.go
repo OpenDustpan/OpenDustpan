@@ -73,8 +73,12 @@ func newStoredBlobRig(base string) storetest.StoredBlobBackupFactory {
 		return &storetest.StoredBlobBackupRig{
 			Recorder: jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 				Harness: jobtest.Harness{
-					Jobs: jobs, Durable: ops, Freezes: jobs, Claimer: job.NewClaimer(jobs, ops, st.Store),
-					Namespaces: st.Store, Domain: &jobDomain{s: st.Store},
+					Jobs:       jobs,
+					Durable:    ops,
+					Freezes:    jobs,
+					Claimer:    job.NewClaimer(jobs, ops, st.Store, jobtest.NoGates{}),
+					Namespaces: st.Store,
+					Domain:     &jobDomain{s: st.Store},
 				},
 				Records: jobs, ItemKeys: st.Store, Blobs: live, Wrapper: in.Key,
 			}),
