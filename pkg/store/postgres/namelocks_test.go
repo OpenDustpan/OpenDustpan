@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
@@ -60,7 +61,7 @@ func TestNameLockKey(t *testing.T) {
 	}
 
 	second, err := openURL(t, schemaURL).NameLockKey(t.Context())
-	if err != nil || string(second) != string(first) {
+	if err != nil || !bytes.Equal(second, first) {
 		t.Fatalf("second handle reads another key or fails: %v", err)
 	}
 }

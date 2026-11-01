@@ -75,7 +75,12 @@ func (s *Store) AddNameFailure(
 	)
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		lock, addErr := namelockstore.Add(ctx, nameLockTx{q: q}, scope, name, sub, rule)
+		lock, addErr := namelockstore.Add(
+			ctx,
+			nameLockTx{q: q},
+			namelockstore.Key{Scope: scope, Name: name, Sub: sub},
+			rule,
+		)
 		if errors.Is(addErr, authgate.ErrNameLocked) {
 			// A locked name writes nothing: the transaction commits no change.
 			out, locked = lock, true
