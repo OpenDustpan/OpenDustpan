@@ -97,9 +97,10 @@ func (a adminSessions) Authenticate(context.Context, session.Secret) (session.Ma
 			ActiveAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "admin", DisplayName: "Admin",
 			Kind: principal.KindPerson, BreakGlass: false,
 		},
-		Digest:   session.Digest{},
-		Policy:   session.DefaultPolicy(),
-		Accounts: session.AccountPolicy{Inactivity: 0, DisableAccounts: false},
+		Digest:     session.Digest{},
+		Policy:     session.DefaultPolicy(),
+		Accounts:   session.AccountPolicy{Inactivity: 0, DisableAccounts: false},
+		Generation: 1,
 	}, nil
 }
 
