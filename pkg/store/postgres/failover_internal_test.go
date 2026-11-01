@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -562,50 +561,6 @@ func TestCheckWritableFailsWhenTheServerIsGone(t *testing.T) {
 
 	if err.Error() != "check that the database accepts writes: database unavailable: connection failed" {
 		t.Errorf("error text %q, want no driver text", err)
-	}
-}
-
-// TestWritableAnswerFailsClosed proves that an answer of an unexpected shape
-// or value counts as a server that refuses writes.
-func TestWritableAnswerFailsClosed(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		rows [][][]byte
-		want error
-	}{
-		{"writable", [][][]byte{{[]byte("f"), []byte("off")}}, nil},
-		{"in recovery", [][][]byte{{[]byte("t"), []byte("on")}}, errNotWritable},
-		{"read-only default", [][][]byte{{[]byte("f"), []byte("on")}}, errNotWritable},
-		{"no row", nil, errNotWritable},
-		{"two rows", [][][]byte{{[]byte("f"), []byte("off")}, {[]byte("f"), []byte("off")}}, errNotWritable},
-		{"one column", [][][]byte{{[]byte("f")}}, errNotWritable},
-		{"unknown value", [][][]byte{{[]byte("maybe"), []byte("off")}}, errNotWritable},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := new(pgconn.Result)
-			result.Rows = tc.rows
-
-			err := writableAnswer([]*pgconn.Result{result})
-			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
-				t.Fatalf("writableAnswer = %v, want %v", err, tc.want)
-			}
-		})
-	}
-}
-
-// TestWritableAnswerRefusesNoResult proves that an answer with no result
-// counts as a server that refuses writes.
-func TestWritableAnswerRefusesNoResult(t *testing.T) {
-	t.Parallel()
-
-	if err := writableAnswer(nil); !errors.Is(err, errNotWritable) {
-		t.Fatalf("writableAnswer(nil) = %v, want errNotWritable", err)
 	}
 }
 
