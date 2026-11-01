@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -633,6 +634,8 @@ func classifyRequest(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusNotFound, errcode.UnitNotFound, "unit not found"), true
 	case errors.Is(err, collection.ErrUnitNotFound):
 		return problem.New(http.StatusNotFound, errcode.UnitNotFound, err.Error()), true
+	case errors.Is(err, access.ErrUnitMissing):
+		return problem.New(http.StatusNotFound, errcode.UnitNotFound, "unit not found"), true
 	}
 
 	var none problem.Problem
@@ -647,6 +650,10 @@ func classifyCollection(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusBadRequest, errcode.CollectionInvalidName, err.Error()), true
 	case errors.Is(err, collection.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.CollectionNotFound, err.Error()), true
+	case errors.Is(err, access.ErrCollectionMissing):
+		// The move check found no such collection. The text is the fixed one of
+		// the collection error, so it does not repeat the check's wrap.
+		return problem.New(http.StatusNotFound, errcode.CollectionNotFound, collection.ErrNotFound.Error()), true
 	case errors.Is(err, collection.ErrAlreadyExists):
 		return problem.New(http.StatusConflict, errcode.CollectionAlreadyExists, err.Error()), true
 	case errors.Is(err, collection.ErrNotEmpty):
