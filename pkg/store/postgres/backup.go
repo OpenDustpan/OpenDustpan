@@ -338,6 +338,8 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", pgColNamespace, pgColName, pgColRevision, "lock_id", "lock_holder",
 				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, pgColUpdatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes", pgColDeletedAtMs, pgColDeletedName,
+				"last_release_lock_id", "last_release_holder", "last_release_by", "last_release_kind",
+				"last_release_at_ms",
 			},
 			orderBy: []string{"id"},
 		},

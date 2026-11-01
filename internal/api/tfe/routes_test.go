@@ -349,6 +349,7 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Wo
 		CreatedAt:   stubWorkspaceTime(),
 		UpdatedAt:   stubWorkspaceTime(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID("ws-" + name.String()),
 		Ref:         workspace.Ref{Namespace: ns, Name: name},
 		Revision:    1,
@@ -882,10 +883,11 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 			Holder:   "",
 			Reason:   "",
 		},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: ns, Name: parsed},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns, Name: parsed},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 

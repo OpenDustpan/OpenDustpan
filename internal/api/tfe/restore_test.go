@@ -202,10 +202,11 @@ func (foreignRestoreWorkspaces) GetByID(
 			Holder:   "",
 			Reason:   "",
 		},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: ns, Name: name},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns, Name: name},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -281,10 +282,11 @@ func (lockedRestoreWorkspaces) GetByID(
 			Holder:   "alice",
 			Reason:   "apply",
 		},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: ns, Name: name},
-		Revision:  2,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns, Name: name},
+		Revision:    2,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 

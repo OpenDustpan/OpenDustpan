@@ -59,7 +59,12 @@ type WorkspaceService interface {
 	LockWithIDForJob(ctx context.Context, id workspace.ID, req workspace.LockRequest) (workspace.Workspace, error)
 	// UnlockLock releases holder's lock when it is lockID (ADR 49, decision 6). A
 	// lock that changed after the caller read the unit is refused, not released.
+	// On a free workspace, a request that repeats the last normal release of
+	// holder succeeds without a change.
 	UnlockLock(ctx context.Context, id workspace.ID, lockID, holder string) (workspace.Workspace, error)
+	// RepeatsRelease reports whether q repeats the last release of w, at the
+	// time of the clock of the service (see workspace.Workspace.RepeatsRelease).
+	RepeatsRelease(w workspace.Workspace, q workspace.ReleaseRepeat) bool
 	// ForceUnlockLock releases the lock expect names, whoever holds it, writing
 	// the fence version of a unit with state (ADR 44, decision 1). It reports an
 	// unfenced release.
