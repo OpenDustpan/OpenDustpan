@@ -36,12 +36,10 @@ server does not store them, and an operator cannot change them.
 
 | Role | What it holds |
 | --- | --- |
-| `viewer` | Read the namespace, the collections and the units. Read the outputs that the sharing rules allow, the profiles and the gates. Manage its own saved views. |
+| `viewer` | Read the namespace, the collections, the units, the outputs that the sharing rules allow, the profiles and the gates, and manage its own saved views. |
 | `auditor` | Everything in `viewer`, plus the audit log and the access of each object. |
 | `secret-viewer` | Everything in `viewer`, plus read the secrets of a unit. |
-| `planner` | Everything in `viewer`, plus plan jobs and their logs. It cannot apply, destroy, approve, cancel or read secrets. |
-
-The [planner role guide](planner-role.md) describes the role in detail.
+| `planner` | Everything in `viewer`, plus plan jobs and their logs. |
 | `writer` | Everything in `viewer`, plus write, encrypt and decrypt state, read secrets and set the context of a unit. |
 | `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. |
 | `admin` | Every action of the data family. This includes the management of access on the namespace. |
@@ -49,6 +47,8 @@ The [planner role guide](planner-role.md) describes the role in detail.
 | `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. |
 | `site-administrator` | The operator, administration, data and delegation families. It holds every action except the actions of the caller's own access. |
 | `token-manager` | The action `principal:manage-tokens`, which issues service tokens. |
+
+The `planner` role cannot apply, destroy, approve, cancel or read secrets. The [planner role guide](planner-role.md) describes the role in detail.
 
 The name `namespace-admin` is an alias of `admin`.
 
@@ -63,12 +63,12 @@ The name `namespace-admin` is an alias of `admin`.
 | `actions` | yes | At least one action. Each action must be in the action catalog. A caller cannot use the self actions. |
 | `description` | no | At most 1000 bytes. |
 
-```sh
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"deployer","description":"Runs the plans and the applies","actions":["unit:run-plan","unit:run-apply","job:read-plans","job:read-logs"]}' \
-  https://dustpan.example.com/api/server/roles
+A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
+
+```json
+{"name":"deployer","description":"Runs the plans and the applies","actions":["unit:run-plan","unit:run-apply","job:read-plans","job:read-logs"]}
 ```
+
 
 These rules apply to the actions of a custom role:
 
@@ -125,14 +125,14 @@ The object is set by the route. The body does not name it.
 
 The unit route needs both `tool` and `unit`. Without them the answer is `400`.
 
-Create a grant. The body holds `subject` and `role`:
+Create a grant. The body holds `subject` and `role`.
 
-```sh
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"subject":"group:grp-...#member","role":"viewer"}' \
-  https://dustpan.example.com/api/server/namespaces/acme/grants
+A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the grant is:
+
+```json
+{"subject":"group:grp-...#member","role":"viewer"}
 ```
+
 
 A grant answers `201` with the grant. The grant has these fields: `id` (with
 the prefix `grt-`), `subject`, `role`, `object`, `createdAt` and `createdBy`.
@@ -150,7 +150,8 @@ Some rules apply to a create:
 - A current grant with the same subject, role and object gets `409`.
 
 A create on the installation, on a namespace, on a collection or on a service
-principal needs a fresh sign-in. A create on a unit does not.
+principal needs a fresh sign-in. A stored access token gets `403` for these creates.
+A create on a unit does not need a fresh sign-in.
 
 ## List and revoke grants
 

@@ -33,12 +33,12 @@ appears to come from the proxy's address. Use `--trusted-proxies` and
 needs `namespace:manage-ip-allowlist` on the namespace, with a fresh sign-in.
 The answer is `200` with the list as stored.
 
-```sh
-curl -s -X PUT -H "Authorization: Bearer $CONSOLE_SESSION" \
-  -H "Content-Type: application/json" \
-  -d '{"cidrs":["10.0.0.0/8","2001:db8::/32","192.0.2.7"]}' \
-  https://dustpan.example.com/api/server/namespaces/acme/ip-allowlist
+Set the list in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body is:
+
+```json
+{"cidrs":["10.0.0.0/8","2001:db8::/32","192.0.2.7"]}
 ```
+
 
 The body holds `cidrs`, a list of addresses or networks:
 
@@ -83,6 +83,8 @@ set to `false`. The list stays stored and does not apply.
 
 ## Delete the list
 
+A stored access token gets `403` with `mfa.fresh-step-required`. Delete the list in the console.
+
 `DELETE /api/server/namespaces/{namespace}/ip-allowlist` deletes the list. It
 answers `204`. The caller needs `namespace:manage-ip-allowlist`, with a fresh
 sign-in. The delete works when the feature is off. A delete of a namespace that
@@ -118,10 +120,10 @@ ways.
 
 1. Restart the server with `--ip-allowlists`, and without
    `--ip-allowlists-include-bootstrap`. The bootstrap administrator token is
-   exempt again. Then send the `DELETE`.
+   exempt again. Then delete the list in the console. The delete needs a fresh sign-in.
 2. If no bootstrap token is available, restart the server without
    `--ip-allowlists`. The lists stay stored and do not apply while the feature
-   is off. The `DELETE` route works while the feature is off, so delete the list
+   is off. The delete works while the feature is off, so delete the list in the console
    on that run. Then restart with `--ip-allowlists` again.
 
 The [security model](../explanation/security-model.md) describes the recovery
