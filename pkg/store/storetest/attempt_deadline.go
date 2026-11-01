@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strconv"
@@ -215,4 +216,112 @@ func keyNamed(t *testing.T, f fixture, key blob.Key) bool {
 	}
 
 	return slices.Contains(named, key)
+}
+
+// UpdateLocker is an optional capability of the stores of the update cases. A
+// store that can hold the row of an update in another transaction implements
+// it, so a case can make a write wait for that lock inside its own
+// transaction. A store that takes its write lock before the transaction
+// starts skips the case.
+type UpdateLocker interface {
+	// HoldUpdate locks the row of the update id of the stack stackID in
+	// another transaction. It returns when the lock is held. The lock is
+	// released when release is called.
+	HoldUpdate(ctx context.Context, stackID stack.ID, id stack.UpdateID) (release func(), err error)
+}
+
+// lockWaitHold is how long a case holds the row of an update. The attempt of
+// the case starts this much less one half before its deadline, so the wait
+// alone pushes the commit past the deadline.
+const lockWaitHold = 3 * time.Second
+
+// testCheckpointLockWaitPastDeadline checks that the store checks the attempt
+// window after every lock wait of the commit: a save that starts inside its
+// window and waits for the lock of its update past the deadline is refused,
+// and writes no row. A control save with the same start and no wait commits.
+func testCheckpointLockWaitPastDeadline(t *testing.T, f fixture) {
+	t.Helper()
+
+	locker, ok := f.s.(UpdateLocker)
+	if !ok {
+		t.Skip("store cannot hold the row of an update in another transaction")
+	}
+
+	stackID := mustStackID(t, f.s, f.ref)
+
+	cases := []struct {
+		name string
+		wait bool
+		want error
+	}{
+		{name: "no lock wait", wait: false, want: nil},
+		{name: "a lock wait past the deadline", wait: true, want: blob.ErrAttemptExpired},
+	}
+
+	for i, tc := range cases {
+		u := f.run(t, f.ref, "w"+strconv.Itoa(i), mutating())
+		cp := f.checkpoint(t, u, 1, `{"n":1}`)
+		cp.AttemptStartedAt = time.Now().Add(-blob.AttemptDeadline + lockWaitHold/2)
+
+		if tc.wait {
+			holdFor(t, locker, stackID, u.ID)
+		}
+
+		_, err := f.s.PutCheckpoint(t.Context(), cp, f.fence)
+		if !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
+			t.Errorf("%s: PutCheckpoint = %v, want %v", tc.name, err, tc.want)
+		}
+
+		_, readErr := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID)
+		if tc.want != nil && !errors.Is(readErr, stack.ErrNoState) {
+			t.Errorf("%s: checkpoint after the refusal: err = %v, want ErrNoState", tc.name, readErr)
+		}
+
+		f.end(t, u, stack.StatusFailed)
+	}
+}
+
+// testDatabaseClock checks that the store reads the clock of the database for
+// the sweeps, and that it agrees with the clock of the test within the skew.
+func testDatabaseClock(t *testing.T, f fixture) {
+	t.Helper()
+
+	clock, ok := f.s.(blob.DatabaseClock)
+	if !ok {
+		t.Fatalf("store %T does not read the clock of the database: every sweep would delete nothing", f.s)
+	}
+
+	before := time.Now()
+
+	now, err := blob.SweepNow(t.Context(), clock, before)
+	if err != nil {
+		t.Fatalf("SweepNow = %v", err)
+	}
+
+	if now.Before(before.Add(-blob.AttemptSkew)) || now.After(time.Now().Add(blob.AttemptSkew)) {
+		t.Fatalf("DatabaseNow = %v, want a time near %v", now, before)
+	}
+}
+
+// holdFor locks the row of the update id in another transaction and releases
+// it after lockWaitHold, or when the test ends.
+func holdFor(t *testing.T, locker UpdateLocker, stackID stack.ID, id stack.UpdateID) {
+	t.Helper()
+
+	release, err := locker.HoldUpdate(t.Context(), stackID, id)
+	if err != nil {
+		t.Fatalf("hold the update: %v", err)
+	}
+
+	timer := time.NewTimer(lockWaitHold)
+
+	go func() {
+		defer release()
+
+		select {
+		case <-timer.C:
+		case <-t.Context().Done():
+			timer.Stop()
+		}
+	}()
 }

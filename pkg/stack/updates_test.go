@@ -75,6 +75,12 @@ type memUpdates struct {
 	cancelOnPut func()
 	// renewFirst makes the next SaveUpdate lose to a simulated lease renewal.
 	renewFirst bool
+	// dbNow is the clock of the database that DatabaseNow reads. Nil reads
+	// the clock of the machine.
+	dbNow func() time.Time
+	// dbErr, when set, is the error of each read of the clock of the
+	// database.
+	dbErr error
 	// nsID is the ID of the namespace row that the reads of stacks and
 	// checkpoints fill, as the SQL stores do from the join of the query.
 	nsID namespace.ID
@@ -93,10 +99,25 @@ func newMemUpdates() *memUpdates {
 		saves:        0,
 		cancelOnPut:  nil,
 		renewFirst:   false,
+		dbNow:        nil,
+		dbErr:        nil,
 	}
 }
 
 // Ping implements namespace.Store: the in-memory store is always ready.
+// DatabaseNow implements blob.DatabaseClock.
+func (m *memUpdates) DatabaseNow(context.Context) (time.Time, error) {
+	if m.dbErr != nil {
+		return time.Time{}, m.dbErr
+	}
+
+	if m.dbNow != nil {
+		return m.dbNow(), nil
+	}
+
+	return time.Now(), nil
+}
+
 func (m *memUpdates) Ping(context.Context) error {
 	return nil
 }
@@ -616,6 +637,18 @@ func (m *memBlob) ageAll(d time.Duration) {
 	}
 }
 
+// clearModified removes the modification time of every object, as a store
+// that does not give one does.
+func (m *memBlob) clearModified() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key, obj := range m.objects {
+		obj.modifiedAt = time.Time{}
+		m.objects[key] = obj
+	}
+}
+
 type updatesFixture struct {
 	nsStore    *memNamespaces
 	refusals   *stacktest.Refusals
@@ -705,6 +738,8 @@ func newUpdatesFull(
 	}
 
 	store := newMemUpdates()
+	// The database runs on the clock of the test, as the service does.
+	store.dbNow = clk.Now
 	refusals := stacktest.NewRefusals()
 
 	if blobs == nil {
