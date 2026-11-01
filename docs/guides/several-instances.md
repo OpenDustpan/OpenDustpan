@@ -202,33 +202,39 @@ Run the same command again after the database answers. The next `pulumi preview`
 
 ## Database settings for a failover
 
-After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. Settings in the `DUSTPAN_DATABASE` URL help the pool to leave such a connection:
+After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. The server uses these settings of the `DUSTPAN_DATABASE` URL. When the URL does not name a setting, the server sets the default below:
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `target_session_attrs=read-write` | (none) | A new connection must reach a server that accepts writes. The driver closes a connection to a read-only server and does not give it to the pool. Without it, a new connection can reach a read-only server. |
-| `pool_max_conn_lifetime=<duration>` | `1h` | The pool closes a connection when it is older than this time, and opens a new one. A short time limits how long a connection to an old primary can live. |
-| `pool_health_check_period=<duration>` | `1m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
+| Setting | Default | Allowed values | What it does |
+| --- | --- | --- | --- |
+| `target_session_attrs` | `read-write` | `read-write`, `primary` | A new connection must reach a server that is not in recovery and whose transactions are not read-only. The server applies this check for both values: `primary` gets the same check as `read-write`. |
+| `connect_timeout` | `5` | Whole seconds from 1 to 60 | The time limit to open one connection. |
+| `pool_max_conn_lifetime` | `30m` | `1m` to `24h` | The pool closes a connection when it is older than this time, and opens a new one. |
+| `pool_max_conn_lifetime_jitter` | `1m` | `0s` to the lifetime | A random part of the lifetime, so the instances do not open their connections again at the same time. |
+| `pool_health_check_period` | `10s` | `1s` to `10m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
 
-A duration is a number with a unit, for example `5m` or `30s`. The server passes the three settings to the driver as the URL gives them. A value that is not valid stops the start of the server. Example:
+A duration is a number with a unit, for example `5m` or `30s`. A value outside the allowed values stops the start of the server with the error code `store.failover-setting-invalid`. The error names the setting and the allowed values. The server does not change a value to make it valid. A setting that appears two times in the URL also stops the start. The variables `PGTARGETSESSIONATTRS` and `PGCONNECT_TIMEOUT` of the environment do not apply: the URL or the default decides.
+
+At the start, the server writes the effective value of each setting to its log, with the word `url` or `default` for where the value came from.
+
+Example:
 
 ```
-DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&target_session_attrs=read-write&pool_max_conn_lifetime=5m&pool_health_check_period=10s'
+DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&pool_max_conn_lifetime=10m'
 ```
 
-The values `5m` and `10s` are examples. Nobody measured them against a managed database.
+The defaults are values that the project chose. Nobody measured them against a managed database.
 
-The driver checks `target_session_attrs` only when it opens a connection. A connection that turns read-only after it opened stays in the pool until it reaches `pool_max_conn_lifetime`, which is 1 hour by default. Writes on that connection fail with 503 until then. Set `pool_max_conn_lifetime` lower, for example `5m`, for a faster recovery.
+The server also sets the TCP keepalive of each connection. It sends a keepalive after 15 seconds without traffic, then every 5 seconds. After 3 keepalives with no answer, the connection closes. So an idle connection to a host that stopped answering closes in about 30 seconds.
 
 ### What was tested
 
-The tests ran on 2026-10-30 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
+The tests ran on 2026-11-01 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
 
-- The settings above reach the pool as the URL gives them. A value that is not valid is refused.
+- Each setting above gets its default when the URL does not name it. It gets the value of the URL when the value is inside its range. A value outside its range stops the start, and the error holds no part of the URL besides the value.
 - The server answers 503 with `Retry-After: 5` and the error code `namespace.unavailable` for each write while a proxy cuts all its database connections. After the proxy lets the connections through again, the same server accepts writes. Nobody restarted it.
 - A session that the database ended (`pg_terminate_backend`) gives the same 503 answer.
-- A database with `default_transaction_read_only = on` gives the SQLSTATE code 25006 to each write on a new session. A write then gets the same 503 answer. A read still works.
-- With `target_session_attrs=read-write`, the server does not open against that read-only database. It opens against the same database when the database accepts writes.
+- When the database turns read-only (`default_transaction_read_only = on`) and its sessions end, the server does not open a new read-only session. Reads and writes then answer 503 until the database accepts writes.
+- With the default settings, the server does not open against a read-only database. It opens against the same database when the database accepts writes.
 
 ### What should work, and was not tested
 
@@ -253,7 +259,7 @@ A URL can name more than one host, separated by commas. With `target_session_att
 
 The "What the vendor page says" column is a summary of the page on 2026-10-30. It is not a test result. Do not use the address of one node or a read-only service.
 
-For each service, set `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
+For each service, keep the default `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
 
 During the failover, the instances answer 503 on the readiness probe. They also answer 503 on each request that needs the database. Section "When the database does not answer" describes this. This guide makes no claim about the failover time or about data loss. Both depend on the service and on its settings for synchronous replication.
 

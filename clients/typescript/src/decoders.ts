@@ -180,6 +180,8 @@ import type {
   StoreCheckCase,
   StoreCheckLatency,
   StoreCheckReport,
+  StoreFailoverSettingInvalidError,
+  StoreFailoverSettingInvalidErrorArgs,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,
@@ -519,6 +521,7 @@ export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("Error
   "stack.no-state-at-time": ref(() => decodeStackNoStateAtTimeError),
   "stack.reveal-path-too-long": ref(() => decodeStackRevealPathTooLongError),
   "state-version.reveal-path-too-long": ref(() => decodeStateVersionRevealPathTooLongError),
+  "store.failover-setting-invalid": ref(() => decodeStoreFailoverSettingInvalidError),
   "unit.no-state": ref(() => decodeUnitNoStateError),
   "workspace.no-state-at": ref(() => decodeWorkspaceNoStateAtError),
 }, ref(() => decodeErrorResponse));
@@ -1474,6 +1477,19 @@ export const decodeStoreCheckReport: Decoder<StoreCheckReport> = object<StoreChe
   putLatency: ref(() => decodeStoreCheckLatency),
   startedAt: string,
   throttlingSeen: boolean,
+});
+
+/** The validator of StoreFailoverSettingInvalidError. */
+export const decodeStoreFailoverSettingInvalidError: Decoder<StoreFailoverSettingInvalidError> = object<StoreFailoverSettingInvalidError>("StoreFailoverSettingInvalidError", {
+  code: int64,
+  errorArgs: ref(() => decodeStoreFailoverSettingInvalidErrorArgs),
+  errorCode: literal("store.failover-setting-invalid"),
+  message: string,
+});
+
+/** The validator of StoreFailoverSettingInvalidErrorArgs. */
+export const decodeStoreFailoverSettingInvalidErrorArgs: Decoder<StoreFailoverSettingInvalidErrorArgs> = object<StoreFailoverSettingInvalidErrorArgs>("StoreFailoverSettingInvalidErrorArgs", {
+  setting: string,
 });
 
 /** The validator of TerminalSchemes. */
