@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -74,6 +75,10 @@ func TestUpdateErrorsCarryACode(t *testing.T) {
 		{
 			"journal batch over its bound", stack.BatchOverLimit(2048, 1024), http.StatusRequestEntityTooLarge,
 			errcode.UpdateTooLarge, nil,
+		},
+		{
+			"write attempt past its deadline", fmt.Errorf("save checkpoint: %w", blob.ErrAttemptExpired),
+			http.StatusServiceUnavailable, errcode.UpdateAttemptExpired, nil,
 		},
 		{
 			"journal build timeout", stack.ErrJournalBuildTimeout, http.StatusServiceUnavailable,

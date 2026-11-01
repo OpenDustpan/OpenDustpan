@@ -342,6 +342,7 @@ const (
 	ErrorCodeUnitNoState                           ErrorCode = "unit.no-state"
 	ErrorCodeUnitNotFound                          ErrorCode = "unit.not-found"
 	ErrorCodeUnitStateMoved                        ErrorCode = "unit.state-moved"
+	ErrorCodeUpdateAttemptExpired                  ErrorCode = "update.attempt-expired"
 	ErrorCodeUpdateCheckpointConflict              ErrorCode = "update.checkpoint-conflict"
 	ErrorCodeUpdateCheckpointStale                 ErrorCode = "update.checkpoint-stale"
 	ErrorCodeUpdateConcurrentModification          ErrorCode = "update.concurrent-modification"

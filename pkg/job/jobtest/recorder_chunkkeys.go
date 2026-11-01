@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -18,6 +19,7 @@ func chunkKeyCases() []recorderCase {
 		{"chunk keys: the first confirm of a chunk wins and the row keeps its blob key", testChunkConfirmFirstWins},
 		{"chunk keys: a confirm with a key that is not an attempt of the chunk is ErrInvalid", testChunkConfirmBadKey},
 		{"chunk keys: a chunk the recorder stores has the key of its attempt", testChunkAttemptKey},
+		{"chunk keys: a confirm of an attempt outside its time window is refused", testChunkConfirmAttemptWindow},
 	}
 }
 
@@ -51,13 +53,30 @@ func attemptKey(t *testing.T, a *job.Assignment, version string, seq int, attemp
 	return key.String()
 }
 
-// confirmWith confirms chunk seq of the version with the blob key key.
+// confirmWith confirms chunk seq of the version with the blob key key, for an
+// attempt that starts now.
 func confirmWith(t *testing.T, h RecorderHarness, a *job.Assignment, at chunkAt, key string) (bool, error) {
 	t.Helper()
 
+	return confirmStarted(t, h, a, chunkAttempt{at: at, key: key, started: time.Now()})
+}
+
+// chunkAttempt is one write attempt of a chunk: the chunk, the blob key of
+// the attempt and its start time.
+type chunkAttempt struct {
+	at      chunkAt
+	key     string
+	started time.Time
+}
+
+// confirmStarted confirms the chunk of the attempt c with its blob key and its
+// start time.
+func confirmStarted(t *testing.T, h RecorderHarness, a *job.Assignment, c chunkAttempt) (bool, error) {
+	t.Helper()
+
 	return h.Records.ConfirmLogChunk(t.Context(), a.Claim, job.ChunkConfirm{
-		Step: stepPrepare, Version: at.version, Seq: at.seq, Stored: blob.Digest{Size: 1, MD5: [16]byte{1}},
-		BlobKey: key,
+		Step: stepPrepare, Version: c.at.version, Seq: c.at.seq, Stored: blob.Digest{Size: 1, MD5: [16]byte{1}},
+		BlobKey: c.key, AttemptStartedAt: c.started,
 	})
 }
 
@@ -180,5 +199,69 @@ func testChunkAttemptKey(t *testing.T, h RecorderHarness) {
 
 	if got, err := readLog(t, h, log.ID); err != nil || string(got) != "one\ntwo\n" {
 		t.Fatalf("OpenLog = %q, %v; want %q", got, err, "one\ntwo\n")
+	}
+}
+
+// testChunkConfirmAttemptWindow checks that the store refuses the confirm of an
+// attempt outside its time window, by the clock of the store, and that the
+// refusal counts nothing: the row of the chunk names no blob, so the orphan
+// cleanup may delete the blob of the attempt. A late repeat of a confirm that
+// committed is refused too, and the row keeps its key.
+func testChunkConfirmAttemptWindow(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	a := logCaseStep(t, h)
+	version := reserveFirstChunk(t, h, a, "x")
+	at := chunkAt{version, 0}
+
+	const margin = time.Minute
+
+	cases := []struct {
+		name    string
+		attempt string
+		started time.Time
+	}{
+		{"an attempt just past the deadline", "late", time.Now().Add(-blob.AttemptDeadline - margin)},
+		{"an attempt older than the grace period", "old", time.Now().Add(-blob.UnnamedGracePeriod - margin)},
+		{"an attempt ahead of the clock by more than the skew", "ahead", time.Now().Add(blob.AttemptSkew + margin)},
+		{"an attempt with no start time", "zero", time.Time{}},
+	}
+
+	for _, tc := range cases {
+		c := chunkAttempt{at: at, key: attemptKey(t, a, version, 0, tc.attempt), started: tc.started}
+
+		won, err := confirmStarted(t, h, a, c)
+		if won || !errors.Is(err, blob.ErrAttemptExpired) {
+			t.Errorf("%s: ConfirmLogChunk = %v, %v; want false, ErrAttemptExpired", tc.name, won, err)
+		}
+	}
+
+	requireChunkKeys(t, h, a, version, nil)
+
+	good := attemptKey(t, a, version, 0, "good")
+	if won, err := confirmWith(t, h, a, at, good); err != nil || !won {
+		t.Fatalf("fresh confirm = %v, %v; want true, nil", won, err)
+	}
+
+	late := chunkAttempt{at: at, key: good, started: time.Now().Add(-blob.UnnamedGracePeriod)}
+	if won, err := confirmStarted(t, h, a, late); won || !errors.Is(err, blob.ErrAttemptExpired) {
+		t.Errorf("late repeat of the confirm = %v, %v; want false, ErrAttemptExpired", won, err)
+	}
+
+	requireChunkKeys(t, h, a, version, []string{good})
+}
+
+// requireChunkKeys checks that the log version holds exactly the confirmed
+// chunks with the blob keys want, in order.
+func requireChunkKeys(t *testing.T, h RecorderHarness, a *job.Assignment, version string, want []string) {
+	t.Helper()
+
+	rec, err := h.Records.Log(t.Context(), a.Claim.Fence.Namespace, version)
+	if err != nil {
+		t.Fatalf("Log = %v", err)
+	}
+
+	if !slices.Equal(rec.ChunkKeys, want) || rec.Log.Chunks != len(want) {
+		t.Fatalf("log = %d chunks with keys %q; want keys %q", rec.Log.Chunks, rec.ChunkKeys, want)
 	}
 }

@@ -79,6 +79,10 @@ func RunBlobDelete(t *testing.T, newStore BlobDeleteFactory) {
 		{name: "an OpenTofu purge during a backup keeps the state blobs", test: testBlobDeleteOpenTofuPurge},
 		{name: "the retention sweep during a backup keeps the blobs of a purged unit", test: testBlobDeleteRetention},
 		{name: "a purge during a restore keeps the blobs", test: testBlobDeleteRestore},
+		{
+			name: "a save whose commit stalls past the sweep of its blob is refused",
+			test: testStalledSaveAfterSweep,
+		},
 	}
 
 	for _, tc := range cases {
