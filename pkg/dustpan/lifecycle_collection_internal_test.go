@@ -177,3 +177,31 @@ func TestDeletedReadScopeCollectionGrant(t *testing.T) {
 		})
 	}
 }
+
+// TestDeletedReadScopeStaleCollectionID proves that an object with the ID of a
+// collection that was created again under the same name, or with no ID, adds no
+// deleted unit, although a collection of that name holds one now.
+func TestDeletedReadScopeStaleCollectionID(t *testing.T) {
+	t.Parallel()
+
+	f, svc, scope := collectionScope(t)
+	payments := makeCollection(t, f, svc, "acme", "payments")
+	putInCollection(t, f, svc, payments)
+	deleteWeb(t, f)
+
+	// The live object adds the unit, so the test shows that the unit is there.
+	ids, err := scope.collectionUnits(t.Context(), []identity.Object{payments}, "acme", nil)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("units of the live collection = %v, %v, want one", ids, err)
+	}
+
+	for name, obj := range map[string]identity.Object{
+		"an old ID": identity.CollectionObject("acme", "payments").WithCollectionID("col-old"),
+		"no ID":     identity.CollectionObject("acme", "payments"),
+	} {
+		got, err := scope.collectionUnits(t.Context(), []identity.Object{obj}, "acme", []string{})
+		if err != nil || len(got) != 0 {
+			t.Errorf("units with %s = %v, %v, want none", name, got, err)
+		}
+	}
+}

@@ -177,6 +177,17 @@ func TestReviewOfACollectionFailsClosed(t *testing.T) {
 		t.Errorf("review of a missing collection = %v, want ErrNotFound", err)
 	}
 
+	// An object with the ID of a collection that was created again under the
+	// same name selects nothing.
+	stale := identity.CollectionObject("acme", "payments").WithCollectionID("col-old")
+
+	_, err = f.svc.Review(t.Context(), stale, access.ReviewRequest{
+		From: nil, To: nil, Subject: "", Cursor: "", Limit: 0, Expand: false,
+	})
+	if !errors.Is(err, access.ErrNotFound) {
+		t.Errorf("review with a stale collection ID = %v, want ErrNotFound", err)
+	}
+
 	_, err = f.svc.Review(t.Context(), identity.CollectionObject("nowhere", "payments"), access.ReviewRequest{
 		From: nil, To: nil, Subject: "", Cursor: "", Limit: 0, Expand: false,
 	})

@@ -33,6 +33,11 @@ var ErrCollectionReview = errors.New("the export of a collection needs a store t
 // collection obj, deleted units that are not purged included. It returns an
 // error when the collection does not exist. A unit of another collection is
 // never in the answer.
+//
+// obj carries the stable ID of the collection. An implementation returns an
+// error when no collection with that name and that ID exists, so the units of a
+// collection that was created again under the same name are never returned for
+// the ID of the old one.
 type CollectionUnits interface {
 	CollectionUnitIDs(ctx context.Context, collection identity.Object) ([]string, error)
 }
@@ -529,30 +534,9 @@ func (s *Service) collectionReviewScope(
 		return scope, fmt.Errorf("export of %q: %w", obj.String(), ErrCollectionReview)
 	}
 
-	// Defense in depth: the unit list is read for the stable ID of the
-	// collection only. A name that has no collection stops here, so the scope
-	// never holds the units of another collection.
-	col, err := collectionIDOf(ctx, obj, s.authz.collections)
+	col, inside, err := s.collectionInside(ctx, obj, units)
 	if err != nil {
 		return scope, err
-	}
-
-	if col.CollectionID() == "" {
-		return scope, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
-	}
-
-	ids, err := units.CollectionUnitIDs(ctx, col)
-	if err != nil {
-		return scope, fmt.Errorf("read units of collection %q: %w", obj.String(), err)
-	}
-
-	inside := make([]string, 0, len(ids))
-
-	for _, id := range ids {
-		// An empty ID would make the target "unit:", which no grant holds.
-		if id != "" {
-			inside = append(inside, unitTargetPrefix+id)
-		}
 	}
 
 	chain, err := s.authz.chain(ctx, col)
@@ -568,6 +552,51 @@ func (s *Service) collectionReviewScope(
 	scope.Object, scope.Inside, scope.ContainerRoles = col, inside, roles
 
 	return scope, nil
+}
+
+// collectionInside returns the collection obj with its current stable ID, and
+// the targets of the grants on the units in it. It returns ErrNotFound when
+// the collection does not exist or when obj carries the ID of another
+// collection of the same name.
+func (s *Service) collectionInside(
+	ctx context.Context, obj identity.Object, units CollectionUnits,
+) (identity.Object, []string, error) {
+	// Defense in depth: the unit list is read for the stable ID of the
+	// collection only. A name that has no collection stops here, so the scope
+	// never holds the units of another collection.
+	col, err := collectionIDOf(ctx, obj, s.authz.collections)
+	if err != nil {
+		return obj, nil, err
+	}
+
+	// Defense in depth: collectionIDOf keeps an ID that the caller gives, and
+	// the collection port checks the ID in its own transaction too. This check
+	// stays so that an ID of a collection that was created again under the
+	// same name never selects the units of the new collection.
+	current, found, err := s.authz.collections.CollectionID(ctx, col)
+	if err != nil {
+		return obj, nil, fmt.Errorf("read collection ID: %w", err)
+	}
+
+	if col.CollectionID() == "" || !found || current != col.CollectionID() {
+		return obj, nil, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	ids, err := units.CollectionUnitIDs(ctx, col)
+	if err != nil {
+		return obj, nil, fmt.Errorf("read units of collection %q: %w", obj.String(), err)
+	}
+
+	inside := make([]string, 0, len(ids))
+
+	for _, id := range ids {
+		// An empty ID would make the target "unit:", which no grant holds.
+		if id != "" {
+			inside = append(inside, unitTargetPrefix+id)
+		}
+	}
+
+	return col, inside, nil
 }
 
 // principalReviewScope returns the scope of the export of obj, a service

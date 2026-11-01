@@ -72,6 +72,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "CollectionOf names the collection, and false when there is none", test: testCollectionOf},
 		{name: "the unit IDs of a collection hold its units only", test: testListCollectionUnitIDs},
 		{name: "the unit IDs of a missing collection are not found", test: testListCollectionUnitIDsMissing},
+		{name: "the unit IDs of a re-created collection need its new ID", test: testListCollectionUnitIDsRecreated},
 	}
 
 	for _, tc := range cases {
@@ -851,10 +852,56 @@ func testListCollectionUnitIDsMissing(t *testing.T, s Store) {
 		{Namespace: ns.Name, Name: mustName(t, "payments")},
 		{Namespace: namespace.Name("absent"), Name: mustName(t, "payments")},
 	} {
-		ids, err := s.ListCollectionUnitIDs(t.Context(), ref)
+		ids, err := s.ListCollectionUnitIDs(t.Context(), ref, "col-any")
 		if !errors.Is(err, collection.ErrNotFound) || len(ids) != 0 {
 			t.Errorf("ListCollectionUnitIDs(%s) = %v, %v; want ErrNotFound", ref, ids, err)
 		}
+	}
+}
+
+// testListCollectionUnitIDsRecreated checks the hostile case: a collection is
+// deleted and created again under the same name, and a caller still holds the
+// old ID. The old ID, an empty ID and the ID of a collection of another name
+// all return ErrNotFound with no unit, and the new ID reads the new members.
+func testListCollectionUnitIDsRecreated(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	unit := createUnit(t, s, ns)
+	first := newCollection(t, ns.Name, "payments")
+	other := newCollection(t, ns.Name, "billing")
+
+	for _, c := range []*collection.Collection{&first, &other} {
+		if err := createColl(t, s, *c, ns.Fence()); err != nil {
+			t.Fatalf("CreateCollection %s: %v", c.Ref, err)
+		}
+	}
+
+	if err := deleteColl(t, s, first.Ref, ns.Fence()); err != nil {
+		t.Fatalf("DeleteCollection: %v", err)
+	}
+
+	second := newCollection(t, ns.Name, "payments")
+	if err := createColl(t, s, second, ns.Fence()); err != nil {
+		t.Fatalf("CreateCollection again: %v", err)
+	}
+
+	if _, err := setUnit(t, s, unit, second.Ref, ns.Fence()); err != nil {
+		t.Fatalf("SetUnitCollection: %v", err)
+	}
+
+	for name, id := range map[string]string{
+		"the old ID": first.ID, "an empty ID": "", "the ID of another collection": other.ID,
+	} {
+		ids, err := s.ListCollectionUnitIDs(t.Context(), second.Ref, id)
+		if !errors.Is(err, collection.ErrNotFound) || len(ids) != 0 {
+			t.Errorf("ListCollectionUnitIDs with %s = %v, %v; want ErrNotFound", name, ids, err)
+		}
+	}
+
+	ids, err := s.ListCollectionUnitIDs(t.Context(), second.Ref, second.ID)
+	if err != nil || len(ids) != 1 || ids[0] != unitID(t, s, unit) {
+		t.Errorf("ListCollectionUnitIDs with the new ID = %v, %v; want the unit", ids, err)
 	}
 }
 
@@ -877,7 +924,7 @@ func unitID(t *testing.T, s Store, unit collection.UnitRef) string {
 func assertUnitIDs(t *testing.T, s Store, ref collection.Ref, want []string) {
 	t.Helper()
 
-	got, err := s.ListCollectionUnitIDs(t.Context(), ref)
+	got, err := s.ListCollectionUnitIDs(t.Context(), ref, collectionID(t, s, ref))
 	if err != nil {
 		t.Fatalf("ListCollectionUnitIDs(%s): %v", ref, err)
 	}

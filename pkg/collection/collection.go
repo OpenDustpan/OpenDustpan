@@ -196,7 +196,11 @@ type Store interface {
 	// ListCollectionUnitIDs returns the stable IDs of the units in the
 	// collection ref, ordered. A unit that was deleted and not yet purged is
 	// in the list: its membership stays until the collection is deleted. A
-	// collection of another namespace is never read. It returns ErrNotFound
-	// when the collection does not exist in the namespace of ref.
-	ListCollectionUnitIDs(ctx context.Context, ref Ref) ([]string, error)
+	// collection of another namespace is never read. id is the stable ID of
+	// the collection that the caller means: the store reads the collection and
+	// its members in one transaction, and returns ErrNotFound when no
+	// collection ref exists in the namespace of ref or when it has another ID,
+	// so a collection that was created again under the same name gives
+	// nothing. An empty id also returns ErrNotFound.
+	ListCollectionUnitIDs(ctx context.Context, ref Ref, id string) ([]string, error)
 }
