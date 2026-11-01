@@ -413,6 +413,7 @@ linters:
         - github.com/jackc/pgx/v5.Rows
         - github.com/jackc/pgx/v5.Row
         - github.com/jackc/pgx/v5.Tx
+        - github.com/jackc/pgx/v5.BatchResults
 
     misspell:
       locale: US

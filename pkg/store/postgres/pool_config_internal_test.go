@@ -140,6 +140,10 @@ func checkReport(t *testing.T, report FailoverSettings, want map[string]string) 
 		t.Errorf("ConnectCheck = %q, want %q", report.ConnectCheck, ConnectCheckReadWrite)
 	}
 
+	if report.StatementDeadline != statementDeadline {
+		t.Errorf("StatementDeadline = %s, want %s", report.StatementDeadline, statementDeadline)
+	}
+
 	if len(report.Settings) != len(want) {
 		t.Fatalf("report has %d settings, want %d", len(report.Settings), len(want))
 	}
