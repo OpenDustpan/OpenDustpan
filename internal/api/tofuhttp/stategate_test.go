@@ -70,6 +70,9 @@ type guardedUnits struct {
 
 	mu     sync.Mutex
 	writes int
+	// acceptAll makes WriteState accept each write with no lock check, as if
+	// the lock check of the domain failed.
+	acceptAll bool
 }
 
 func (c *guardedUnits) WriteState(
@@ -77,7 +80,18 @@ func (c *guardedUnits) WriteState(
 ) (workspace.StateVersion, error) {
 	c.mu.Lock()
 	c.writes++
+	accept := c.acceptAll
 	c.mu.Unlock()
+
+	if accept {
+		if _, err := io.Copy(io.Discard, body); err != nil {
+			return workspace.StateVersion{}, fmt.Errorf("drain body: %w", err)
+		}
+
+		var none workspace.StateVersion
+
+		return none, nil
+	}
 
 	return c.fakeUnits.WriteState(ctx, id, in, auth, body)
 }
@@ -107,7 +121,7 @@ type guardedHandler struct {
 func newGuardedHandler(t *testing.T, guard *fakeGuard) guardedHandler {
 	t.Helper()
 
-	units := &guardedUnits{fakeUnits: newFakeUnits(true), mu: sync.Mutex{}, writes: 0}
+	units := &guardedUnits{fakeUnits: newFakeUnits(true), mu: sync.Mutex{}, writes: 0, acceptAll: false}
 	entries := newTestAudit()
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
@@ -499,5 +513,44 @@ func TestStateWriteGuardMessageStaysOneLine(t *testing.T) {
 	body := strings.TrimSuffix(rec.Body.String(), "\n")
 	if rec.Code != http.StatusForbidden || strings.ContainsAny(body, "\r\n") {
 		t.Fatalf("status %d, body %q, want 403 on one line", rec.Code, body)
+	}
+}
+
+// TestStateWriteGuardRunsForALockThatTheCallerDoesNotHold proves that a
+// state version whose lock ID is not the current lock of the caller meets the
+// gates, even when the workspace port would accept the write. The guard
+// refuses everything, so each write must stop at the guard.
+func TestStateWriteGuardRunsForALockThatTheCallerDoesNotHold(t *testing.T) {
+	t.Parallel()
+
+	state := `{"version":4,"serial":1,"lineage":"L","outputs":{},"resources":[]}`
+
+	for _, tc := range []struct {
+		name    string
+		lockID  string
+		prepare func(u *fakeUnits)
+	}{
+		{name: "lock ID on an unlocked unit", lockID: "no-such-lock", prepare: func(*fakeUnits) {}},
+		{name: "the real lock ID of another holder", lockID: "lock-carol", prepare: lockedBy("lock-carol", "carol")},
+		{name: "a wrong ID of the caller's own lock", lockID: "not-" + lockOne, prepare: lockedBy(lockOne, "alice")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			g := newGuardedHandler(t, newFakeGuard(gate.ResultAllow, &gate.RefusalError{
+				Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen."},
+			}))
+			g.units.acceptAll = true
+			tc.prepare(g.units.fakeUnits)
+
+			rec := do(g.h, http.MethodPost, unitPath+"?ID="+tc.lockID, state, bearer(adminToken))
+
+			seen := g.guard.checks()
+			if rec.Code != http.StatusForbidden || len(seen) != 1 || seen[0].Operation != gate.OperationUnlockedWrite ||
+				g.units.reached() != 0 {
+				t.Fatalf("status %d, checks %+v, writes %d, want 403, one unlocked-write check and no write: %s",
+					rec.Code, seen, g.units.reached(), rec.Body.String())
+			}
+		})
 	}
 }
