@@ -1,4 +1,4 @@
-# 312. Grant expiry, declared edges, profile objects and operator imports
+# 313. Grant expiry, declared edges, profile objects and operator imports
 
 Status: accepted · 2026-11-01. Records decisions of the project owner of 18 and 19 October 2026
 

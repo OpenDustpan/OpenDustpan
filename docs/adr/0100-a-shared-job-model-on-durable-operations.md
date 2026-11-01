@@ -27,7 +27,7 @@ Changed by:
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
 - ADR 299 changes decisions 12 and 15: the `job.review-watch` poll ends.
-- ADR 313 extends: what a job is for.
+- ADR 314 extends: what a job is for.
 
 ## Context
 
