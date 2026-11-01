@@ -1771,6 +1771,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          coverageGitHost(tb),
@@ -1932,6 +1933,7 @@ func CoverageAllowlist() []AllowEntry {
 		outputSharingAllowEntries(),
 		preferencesAllowEntries(),
 		settingsAllowEntries(),
+		localUserAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
 		registryAllowEntries(),
