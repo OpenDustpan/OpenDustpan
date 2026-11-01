@@ -132,6 +132,32 @@ type JournalRow struct {
 	Verify func(known []int64, recordsChanged bool) (changed bool, err error)
 }
 
+// JournalBatchRef names the blob of one stored batch with the SHA-256 and the
+// size of its bytes, as the row recorded them.
+type JournalBatchRef struct {
+	Key    blob.Key
+	SHA256 [sha256.Size]byte
+	Size   int64
+}
+
+// NewJournalBatchRef builds the reference of a stored batch from the columns of
+// its row. A SHA-256 of another length, or a negative size, is a corrupt row,
+// which fails with ErrCheckpointMismatch and never names the key. The row
+// stores call it, so the check does not depend on the dialect.
+func NewJournalBatchRef(key string, sum []byte, size int64) (JournalBatchRef, error) {
+	var ref JournalBatchRef
+
+	if len(sum) != sha256.Size || size < 0 {
+		return ref, ErrCheckpointMismatch
+	}
+
+	ref.Key = blob.Key(key)
+	ref.Size = size
+	copy(ref.SHA256[:], sum)
+
+	return ref, nil
+}
+
 // JournalStore persists the rows of journal batches.
 type JournalStore interface {
 	// PutJournalRow stores the row of one batch in the same transaction as
@@ -139,7 +165,9 @@ type JournalStore interface {
 	// returns ErrWrongUpdateState. It also checks the fence. The arrival number is
 	// the next number of the update, given in that transaction. When every
 	// sequence ID of the row is stored with the same SHA-256, the batch is a retry:
-	// it returns retried true and writes nothing. A sequence ID stored with a
+	// it returns retried true and writes nothing, whatever blob key the row names,
+	// so the rows keep the key of the first write and the caller may delete the blob
+	// of its own attempt. A sequence ID stored with a
 	// different SHA-256, or a batch that is only partly stored, returns
 	// ErrJournalConflict. The blob must already be in the blob store. A row with
 	// no sequence ID, with a sequence ID that is 0 or less, or with a sequence ID
@@ -156,6 +184,11 @@ type JournalStore interface {
 	// order. It is keyed by the stack ID, as the blob keys are. A missing update
 	// yields an empty list. The sweep compares this set with the stored blobs.
 	JournalKeys(ctx context.Context, stackID ID, update UpdateID) ([]blob.Key, error)
+	// JournalBatches returns the blob key, the SHA-256 and the size of each batch
+	// of the update, in arrival order, as the rows recorded them. It is keyed by
+	// the stack ID, as the blob keys are. A missing update yields an empty list.
+	// A reader of a batch compares the bytes with the SHA-256 and the size.
+	JournalBatches(ctx context.Context, stackID ID, update UpdateID) ([]JournalBatchRef, error)
 	// JournalSweepable reports whether the sweep may delete the journal blobs of the
 	// update: its journal is closed, or the update no longer runs. Then no batch can
 	// be added while the sweep runs. It returns ErrUpdateNotFound for a missing update,
@@ -309,15 +342,15 @@ func (j *JournalEntries) Batches(
 	// directory of this update, so the reads are narrowed to it.
 	bl = bl.narrow(bl.journalPrefix(stackID, update))
 
-	keys, err := j.rows.JournalKeys(ctx, stackID, update)
+	refs, err := j.rows.JournalBatches(ctx, stackID, update)
 	if err != nil {
-		return nil, fmt.Errorf("read journal keys: %w", err)
+		return nil, fmt.Errorf("read journal batches: %w", err)
 	}
 
-	out := make([][]byte, 0, len(keys))
+	out := make([][]byte, 0, len(refs))
 
-	for _, key := range keys {
-		body, err := batchBody(ctx, bl, key)
+	for i := range refs {
+		body, err := batchBody(ctx, bl, refs[i])
 		if err != nil {
 			return nil, err
 		}
@@ -437,8 +470,9 @@ func (e *batchLimitError) Message() string {
 // Append stores one batch. It returns nil when the batch is stored, or when it is
 // a retry of batch content that is already stored (ADR 43, decisions 6.2 and 6.3).
 // It returns ErrJournalConflict when the batch differs from what is stored, and
-// ErrWrongUpdateState or namespace.ErrFenced when the write is refused. A refusal
-// deletes the blob that this call wrote, as a previous save does. Any other
+// ErrWrongUpdateState or namespace.ErrFenced when the write is refused. A refusal,
+// and a retry that the rows already hold, delete the blob of this call, which has
+// the key of its own attempt. Any other
 // failure keeps the blob for the sweep. A batch over MaxJournalBatchBytes is
 // refused with ErrTooLarge before anything is stored, unless it holds one
 // entry and fits the configured checkpoint bound, because the CLI cannot split
@@ -475,9 +509,8 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		return j.recorded(ctx, batch, fence, summary.SequenceIDs, err)
 	}
 
-	created, err := putBlob(ctx, bl, key, batch.Content, sum)
-	if err != nil {
-		return j.recorded(ctx, batch, fence, summary.SequenceIDs, err)
+	if err = bl.Put(ctx, key, bytes.NewReader(batch.Content)); err != nil {
+		return j.recorded(ctx, batch, fence, summary.SequenceIDs, fmt.Errorf("put journal blob: %w", err))
 	}
 
 	row := JournalRow{
@@ -494,19 +527,43 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		Verify:       summary.Verify,
 	}
 
-	if _, err := j.rows.PutJournalRow(ctx, row, fence); err != nil {
-		err = fmt.Errorf("store journal batch: %w", err)
-		if created && refused(err) {
-			if derr := bl.Delete(ctx, key); derr != nil {
-				// The sweep removes the blob that this delete leaves behind.
-				err = errors.Join(err, fmt.Errorf("delete refused journal blob: %w", derr))
-			}
-		}
-
+	if err = j.storeRow(ctx, bl, row, fence); err != nil {
 		return j.recorded(ctx, batch, fence, summary.SequenceIDs, err)
 	}
 
 	return nil
+}
+
+// storeRow stores the row of a batch whose blob is already written under
+// row.BlobKey, the key of this attempt. When the rows already hold the batch (a
+// retry), they keep the key of the first write, so the blob of this attempt has
+// no row and the call deletes it. A clear refusal deletes it too. Any other
+// failure keeps the blob for the sweep.
+func (j *JournalEntries) storeRow(ctx context.Context, bl *scopedBlobs, row JournalRow, fence namespace.Fence) error {
+	retried, err := j.rows.PutJournalRow(ctx, row, fence)
+	if err == nil {
+		if retried {
+			discardOwnBlob(ctx, bl, row.BlobKey)
+		}
+
+		return nil
+	}
+
+	err = fmt.Errorf("store journal batch: %w", err)
+	if refused(err) {
+		if derr := bl.Delete(ctx, row.BlobKey); derr != nil {
+			// The sweep removes the blob that this delete leaves behind.
+			err = errors.Join(err, fmt.Errorf("delete refused journal blob: %w", derr))
+		}
+	}
+
+	return err
+}
+
+// discardOwnBlob deletes the blob under key, the key of this attempt, and
+// reports whether the delete worked. It never reads or guesses another key.
+func discardOwnBlob(ctx context.Context, bl *scopedBlobs, key blob.Key) bool {
+	return bl.Delete(ctx, key) == nil
 }
 
 // readBatch decodes content once with the batch reader. It refuses a body
@@ -650,63 +707,8 @@ func refusalStatus(err error) int {
 // out of the journal, so its blob has no row to name it.
 func refused(err error) bool {
 	return errors.Is(err, ErrWrongUpdateState) || errors.Is(err, ErrJournalConflict) ||
-		errors.Is(err, ErrJournalBatch) || errors.Is(err, namespace.ErrFenced)
-}
-
-// putBlob writes the content under key. It reports whether this call wrote it.
-// When the key already holds a blob, the content must match, so that a row
-// never names bytes other than the ones the batch carried.
-func putBlob(
-	ctx context.Context,
-	bl *scopedBlobs,
-	key blob.Key,
-	content []byte,
-	sum [sha256.Size]byte,
-) (bool, error) {
-	err := bl.Put(ctx, key, bytes.NewReader(content))
-	if err == nil {
-		return true, nil
-	}
-
-	if !errors.Is(err, blob.ErrExists) {
-		return false, fmt.Errorf("put journal blob: %w", err)
-	}
-
-	stored, err := digestOf(ctx, bl, key)
-	if err != nil {
-		return false, err
-	}
-
-	if stored != sum {
-		return false, fmt.Errorf("%w: blob %s holds other content", ErrJournalConflict, key)
-	}
-
-	return false, nil
-}
-
-// digestOf reads the blob under key and returns the SHA-256 of its bytes.
-func digestOf(ctx context.Context, bl *scopedBlobs, key blob.Key) ([sha256.Size]byte, error) {
-	r, err := bl.Get(ctx, key)
-	if err != nil {
-		return [sha256.Size]byte{}, fmt.Errorf("read journal blob: %w", err)
-	}
-
-	h := sha256.New()
-	_, copyErr := io.Copy(h, r)
-	closeErr := r.Close()
-
-	if copyErr != nil {
-		return [sha256.Size]byte{}, fmt.Errorf("read journal blob: %w", copyErr)
-	}
-
-	if closeErr != nil {
-		return [sha256.Size]byte{}, fmt.Errorf("close journal blob: %w", closeErr)
-	}
-
-	var sum [sha256.Size]byte
-	copy(sum[:], h.Sum(nil))
-
-	return sum, nil
+		errors.Is(err, ErrJournalBatch) || errors.Is(err, namespace.ErrFenced) ||
+		errors.Is(err, ErrNotJournaled) || errors.Is(err, ErrJournalKey)
 }
 
 // lowest returns the smallest sequence ID of a non-empty batch.
@@ -719,21 +721,26 @@ func lowest(seqs []int64) int64 {
 	return low
 }
 
-// journalKey returns the blob key of a batch in the scope of bl:
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
-// sequence ID> (ADR 43, decision 6.1).
+// journalKey returns the blob key of one write attempt of a batch in the scope of
+// bl: namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
+// sequence ID>-<attempt ID>. The attempt ID is new for each call, so no two
+// writes share a key.
 func journalKey(bl *scopedBlobs, stackID ID, update UpdateID, low int64) (blob.Key, error) {
-	return bl.Key(fmt.Sprintf("%s/%s/journal/%d", stackID, update, low))
+	return bl.Key(fmt.Sprintf("%s/%s/journal/%d-%s", stackID, update, low, newAttemptID()))
 }
 
-// batchBody reads the batch stored under key.
-func batchBody(ctx context.Context, bl *scopedBlobs, key blob.Key) ([]byte, error) {
-	r, err := bl.Get(ctx, key)
+// batchBody reads the batch that ref names. It reads at most the recorded size
+// plus one byte, and it compares the size and the SHA-256 of the bytes with the
+// row. Bytes that differ fail with ErrCheckpointMismatch, so the replay never
+// builds a checkpoint from a blob that is not the batch of its row. The error
+// never names the key.
+func batchBody(ctx context.Context, bl *scopedBlobs, ref JournalBatchRef) ([]byte, error) {
+	r, err := bl.Get(ctx, ref.Key)
 	if err != nil {
 		return nil, fmt.Errorf("read journal batch: %w", err)
 	}
 
-	body, readErr := io.ReadAll(r)
+	body, readErr := io.ReadAll(io.LimitReader(r, ref.Size+1))
 	closeErr := r.Close()
 
 	if readErr != nil {
@@ -742,6 +749,10 @@ func batchBody(ctx context.Context, bl *scopedBlobs, key blob.Key) ([]byte, erro
 
 	if closeErr != nil {
 		return nil, fmt.Errorf("close journal batch: %w", closeErr)
+	}
+
+	if int64(len(body)) != ref.Size || sha256.Sum256(body) != ref.SHA256 {
+		return nil, fmt.Errorf("read journal batch: %w", ErrCheckpointMismatch)
 	}
 
 	return body, nil

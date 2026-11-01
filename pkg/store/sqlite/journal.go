@@ -308,6 +308,36 @@ func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.
 	return journalBlobKeys(rows), nil
 }
 
+// JournalBatches implements stack.JournalStore. It is keyed by the stack ID, as the
+// blob keys are. A missing update yields no batches.
+func (s *Store) JournalBatches(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalBatchRef, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.JournalBatchRefs(
+		ctx,
+		db.JournalBatchRefsParams{StackID: stackID.String(), UpdateID: update.String()},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("select journal batches: %w", err)
+	}
+
+	refs := make([]stack.JournalBatchRef, 0, len(rows))
+
+	for i := range rows {
+		ref, refErr := stack.NewJournalBatchRef(rows[i].BlobKey, rows[i].Sha256, rows[i].Size)
+		if refErr != nil {
+			return nil, fmt.Errorf("select journal batches: %w", refErr)
+		}
+
+		refs = append(refs, ref)
+	}
+
+	return refs, nil
+}
+
 // RecordJournalRefusal implements stack.JournalStore. It stores one refused or
 // unstored batch of a running update with the next arrival number of its
 // refusals, in the same fenced transaction. A missing stack or update, or an
