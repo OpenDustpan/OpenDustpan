@@ -1,4 +1,4 @@
-# 313. Jobs are for user workloads, and Dusty streams its answers
+# 314. Jobs are for user workloads, and Dusty streams its answers
 
 Status: accepted · 2026-11-01. Records decisions of the project owner of 18 October 2026
 

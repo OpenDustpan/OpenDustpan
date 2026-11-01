@@ -4,7 +4,7 @@ Status: accepted · 2026-10-30. Decided by the project owner on 30 October 2026.
 
 Changed by:
 
-- ADR 314 extends: the container registries of v0.1.0.
+- ADR 315 extends: the container registries of v0.1.0.
 
 ## Context
 
