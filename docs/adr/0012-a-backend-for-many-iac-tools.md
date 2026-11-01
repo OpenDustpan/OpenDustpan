@@ -11,6 +11,7 @@ Changed by:
 - ADR 209 changes: the sentence no client plugins or wrappers.
 - ADR 248 changes: home regions and fencing reads primary installations and
   fencing.
+- ADR 305 extends: the operator is a tool-neutral client.
 
 ## Context
 

@@ -29,6 +29,13 @@ own, then commits the row that names the blob.
   transaction of the commit. The clock of an instance does not decide.
 - A commit after the deadline fails. The attempt does not count, and the
   server deletes its blob. A retry is a new attempt with a new start time.
+- The commit checks the start time after every lock wait of its
+  transaction, so a commit that a lock holds past the deadline fails too.
+- A sweep takes the time from the clock of the database, not from the clock
+  of the instance. When the two clocks differ by more than the skew of
+  2 minutes, or when the sweep cannot read the clock of the database, the
+  sweep deletes nothing in that run, and the server log tells why. A blob
+  for which the blob store gives no modification time is never old.
 - A sweep deletes a blob that no row names only after the grace period. The
   grace period is longer than the deadline, the skew and a lease of
   30 seconds. The margin of about 27 minutes covers a difference between the

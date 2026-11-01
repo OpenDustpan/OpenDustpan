@@ -1517,6 +1517,12 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		minimum = checker
 	}
 
+	// A store without the write check leaves writable nil: the probe skips it.
+	var writable writeChecker
+	if checker, ok := cfg.namespaceStore.(writeChecker); ok {
+		writable = checker
+	}
+
 	return newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		store:       cfg.namespaceStore,
@@ -1524,6 +1530,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		watch:       cfg.watch,
 		chainAdmits: admits,
 		minimum:     minimum,
+		writable:    writable,
 		timeout:     readinessTimeout,
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,

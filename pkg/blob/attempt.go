@@ -1,6 +1,7 @@
 package blob
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -60,4 +61,47 @@ func CheckAttempt(started, now time.Time) error {
 	default:
 		return nil
 	}
+}
+
+// ErrClockSkew reports a sweep that deletes nothing in its run, because the
+// clock of the instance and the clock of the database differ by more than
+// AttemptSkew, or because the sweep cannot read the clock of the database. The
+// grace period holds only when the clocks agree, so the sweep fails closed.
+var ErrClockSkew = errors.New("the clock of the instance and the clock of the database do not agree")
+
+// DatabaseClock reads the clock of the database. A sweep takes "now" from it,
+// never from the clock of an instance, so a fast clock on one instance cannot
+// make a young blob look old.
+type DatabaseClock interface {
+	// DatabaseNow returns the time on the clock of the database.
+	DatabaseNow(ctx context.Context) (time.Time, error)
+}
+
+// SweepNow returns the time that one run of a sweep uses as now: the clock of
+// the database. It returns ErrClockSkew when c is nil, when the read fails, or
+// when instance, the clock of the instance, differs from the clock of the
+// database by more than AttemptSkew. The run then deletes nothing.
+func SweepNow(ctx context.Context, c DatabaseClock, instance time.Time) (time.Time, error) {
+	if c == nil {
+		return time.Time{}, fmt.Errorf("%w: the sweep has no database clock", ErrClockSkew)
+	}
+
+	now, err := c.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: read the clock of the database: %w", ErrClockSkew, err)
+	}
+
+	if diff := instance.Sub(now).Abs(); diff > AttemptSkew {
+		return time.Time{}, fmt.Errorf("%w: they differ by %s, the limit is %s",
+			ErrClockSkew, diff.Round(time.Second), AttemptSkew)
+	}
+
+	return now, nil
+}
+
+// OldEnough reports whether a blob that the store last modified at modified
+// is older than UnnamedGracePeriod at now. A zero modified is never old: the
+// store did not say when it wrote the blob, so a sweep keeps it.
+func OldEnough(modified, now time.Time) bool {
+	return !modified.IsZero() && now.Sub(modified) >= UnnamedGracePeriod
 }

@@ -11,7 +11,7 @@ the same list.
 | Flag | Environment | File key | Default |
 | --- | --- | --- | --- |
 | `--config` | `DUSTPAN_CONFIG` | (none) | (none) |
-| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
+| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
 | `--installation` | `DUSTPAN_INSTALLATION` | `installation` | `local` |
 | `--components` | `DUSTPAN_COMPONENTS` | `components` | `all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts durable operations, but never claims one. `worker` runs the durable operations, the schedules, the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 on each route except the probes and the metrics route. An unknown name stops the start. See the several instances guide (docs/guides/several-instances.md) |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
@@ -167,6 +167,10 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
 | `DUSTPAN_LOG_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. Required when `--log-sink` names a webhook and you set no secret file. |
 | `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` | A file that holds the log webhook secret. Only its owner can read it. When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins. |
+| `DUSTPAN_AUDIT_OTLP_HEADERS` | Extra headers of each request of an `otlp:` audit sink, as `Name=Value` items separated by commas or line breaks. Percent-encode a value. Optional. |
+| `DUSTPAN_AUDIT_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_OTLP_HEADERS` wins. |
+| `DUSTPAN_LOG_OTLP_HEADERS` | Extra headers of each request of an `otlp:` log sink, in the same form. Optional. |
+| `DUSTPAN_LOG_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_LOG_OTLP_HEADERS` wins. |
 
 Make a key-encryption key with this command:
 
@@ -284,7 +288,7 @@ the steps.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `--database` | `DUSTPAN_DATABASE` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
+| `--database` | `DUSTPAN_DATABASE` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
 | `--reason` | (none) | (none) |
 | `--recovery-mode` | `DUSTPAN_RECOVERY_MODE` | `bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: recovery with a request signed with an offline operator key. `none`: no break-glass, the operator restores from a backup, and the host command refuses to run |
 | (none) | `DUSTPAN_DISABLE_HOST_RECOVERY` | (none: the host command is on). Set `true` or `1` in the environment of the operator account to turn it off. `false`, `0` and an empty value keep it on. The host command refuses any other value |

@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 299 changes decisions 1, 7 and 12: review requests, mode 1 and the
+  binding level.
 
 ## Context
 

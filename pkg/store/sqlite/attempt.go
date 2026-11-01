@@ -26,3 +26,19 @@ func checkAttempt(ctx context.Context, q *db.Queries, started time.Time) error {
 
 	return nil
 }
+
+var _ blob.DatabaseClock = (*Store)(nil)
+
+// DatabaseNow implements blob.DatabaseClock: the time on the clock of the
+// database, which every sweep of blobs takes as now.
+func (s *Store) DatabaseNow(ctx context.Context) (time.Time, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nowMs, err := s.queries.DatabaseNowMs(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read database clock: %w", err)
+	}
+
+	return codec.FromMillis(nowMs), nil
+}

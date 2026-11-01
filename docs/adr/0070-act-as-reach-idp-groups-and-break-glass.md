@@ -15,6 +15,8 @@ Changed by:
   window.
 - ADR 245 changes decisions 26 and 27: the host command, its reason and its
   review.
+- ADR 306 changes decisions 24, 25 and 26: a site admin may disable a break-glass principal, and the rule of the sweep.
+- ADR 306 extends decision 21: the limit and the window of the mass-suspension alert.
 
 ## Context
 

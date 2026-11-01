@@ -160,4 +160,5 @@ both together.
 | [110](0110-step-results-hooks-approval-steps-and-scanners.md) | Step results: hooks, approval steps and scanners, from the gaps of RFC 6 | draft |
 | [111](0111-blueprint-rollouts-and-the-migration-of-answers.md) | Blueprint rollouts and the migration of answers | discussing |
 | [112](0112-the-token-exchange-issues-a-stored-access-token.md) | The token exchange issues a stored access token | accepted (ADR 284) |
-| [114](0114-review-requests-and-change-orders.md) | Review requests and change orders, one integration with the Git host | discussing |
+| [114](0114-review-requests-and-change-orders.md) | Review requests and change orders, one integration with the Git host | accepted (ADR 299) |
+| [115](0115-terragrunt-run-all-fan-out-on-runners.md) | Terragrunt run-all fan-out on runners | draft |
