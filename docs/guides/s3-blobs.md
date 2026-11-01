@@ -59,6 +59,14 @@ The open then fails and the server does not start.
 The error names the endpoint and the bucket.
 It holds no credential.
 
+A probe step that gets a connection reset, an end of file, a timeout, a 5xx answer or `SlowDown` tries again.
+The wait between tries grows from 100 ms to 5 s.
+The probe has a total time of 30 seconds.
+Each retry writes a warning to the log.
+When the time ends, the open fails and the error names the last cause.
+Other errors, for example access denied, a missing bucket or a bad signature, fail at once.
+The 30 seconds is a fixed value. No setting changes it.
+
 ## Write-once use and the size limit
 
 Each `Put` sends `If-None-Match: *`.
