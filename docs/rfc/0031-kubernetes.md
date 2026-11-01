@@ -218,7 +218,14 @@ Operator. The primary use is a resource that applies a blueprint. A second
 resource declares one unit directly. Option 2 ("phase 1 and 2 only") does not
 apply now. Crossplane
 compositions are not an alternative and not a target. The operator comes
-after runners scoped to namespaces. These points stay open here: the resource
+after the Catalog ships, and the current order of the owner puts it after
+runners scoped to namespaces. The owner also decided on 2026-10-18: the
+operator shares the chart and the binary of the coordinator, so it has no
+repository of its own; each resource is kstatus-compliant from v1; a generic
+Argo CD Lua health check lives in our repository; a Kubernetes operator is
+not an import source now; the phase 1 e2e steps start now. The proposals
+"Repository and dependencies" and the question about the Argo CD health check
+are answered by that. These points stay open here: the resource
 names, a namespace-scoped install, the map of a Kubernetes namespace to an
 OpenDustpan namespace and to a collection (ADR 51 decision 10 stays in
 force), the drift status in the resource, the deletion policy, and the overlap of
