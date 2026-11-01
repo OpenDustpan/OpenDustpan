@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-01. Records decisions of the project owner of 19 and 20 October 2026 that are later than the ADRs they change
 
+Changed by:
+
+- ADR 319 changes decision 2: the trailer `Co-Authored-By` of an agent commit.
+
 Changes:
 
 - Changes ADR 224 decision 1: the key of the gate rows of a unit.
