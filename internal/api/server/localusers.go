@@ -543,150 +543,70 @@ func localUserErrors() []localUserMapping {
 // the check. ErrNotFound comes last.
 func credentialErrors() []localUserMapping {
 	return []localUserMapping{
-		{
-			err: localuser.ErrPasswordTooLong,
-			answer: &codedError{
-				status:  http.StatusBadRequest,
-				code:    errcode.PasswordTooLong,
-				args:    nil,
-				message: "the password is too long: use 256 characters or fewer",
-			},
-		},
-		{
-			err: localuser.ErrPasswordForm,
-			answer: &codedError{
-				status:  http.StatusBadRequest,
-				code:    errcode.PasswordForm,
-				args:    nil,
-				message: "the password holds a character that is not allowed: remove control characters",
-			},
-		},
-		{
-			err: localuser.ErrPasswordLettersAndDigits,
-			answer: &codedError{
-				status:  http.StatusBadRequest,
-				code:    errcode.PasswordLettersAndDigits,
-				args:    nil,
-				message: "the password needs a letter and a digit",
-			},
-		},
-		{
-			err: localuser.ErrPasswordBlocked,
-			answer: &codedError{
-				status:  http.StatusBadRequest,
-				code:    errcode.PasswordBlocked,
-				args:    nil,
-				message: "the password is too common or holds a name: choose another password",
-			},
-		},
-		{
-			err: localuser.ErrCurrentPasswordRequired,
-			answer: &codedError{
-				status:  http.StatusForbidden,
-				code:    errcode.LocalUserCurrentRequired,
-				args:    nil,
-				message: "the change needs the current password or a recent sign-in",
-			},
-		},
-		{
-			err: localuser.ErrWrongPassword,
-			answer: &codedError{
-				status:  http.StatusForbidden,
-				code:    errcode.LocalUserCurrentWrong,
-				args:    nil,
-				message: "the current password is wrong",
-			},
-		},
-		{
-			err: localuser.ErrOwnAccount,
-			answer: &codedError{
-				status:  http.StatusForbidden,
-				code:    errcode.LocalUserOwnAccount,
-				args:    nil,
-				message: "an administrator cannot reset or remove the own password: use POST /api/dustpan/v1/me/password",
-			},
-		},
-		{
-			err: localuser.ErrReasonRequired,
-			answer: &codedError{
-				status:  http.StatusBadRequest,
-				code:    errcode.LocalUserReasonRequired,
-				args:    nil,
-				message: "the change needs a reason",
-			},
-		},
-		{
-			err: localuser.ErrLastCredential,
-			answer: &codedError{
-				status:  http.StatusConflict,
-				code:    errcode.LocalUserLastCredential,
-				args:    nil,
-				message: "the change removes the last sign-in credential of the person",
-			},
-		},
-		{
-			err: localuser.ErrBreakGlass,
-			answer: &codedError{
-				status:  http.StatusConflict,
-				code:    errcode.LocalUserBreakGlass,
-				args:    nil,
-				message: "a break-glass account signs in with a passkey or a hardware key only",
-			},
-		},
-		{
-			err: localuser.ErrDemoFixed,
-			answer: &codedError{
-				status:  http.StatusConflict,
-				code:    errcode.LocalUserDemoFixed,
-				args:    nil,
-				message: "the credentials of the demo user cannot change",
-			},
-		},
-		{
-			err: localuser.ErrAlreadyExists,
-			answer: &codedError{
-				status:  http.StatusConflict,
-				code:    errcode.LocalUserExists,
-				args:    nil,
-				message: "another local user has the user name",
-			},
-		},
-		{
-			err: localuser.ErrInvalid,
-			answer: &codedError{
-				status:  http.StatusBadRequest,
-				code:    errcode.LocalUserNameInvalid,
-				args:    nil,
-				message: "the user name is not valid: use 1 to 64 lowercase letters, digits, '.', '_' and '-'",
-			},
-		},
-		{
-			err: localuser.ErrUnavailable,
-			answer: &codedError{
-				status:  http.StatusServiceUnavailable,
-				code:    errcode.LocalUserUnavailable,
-				args:    nil,
-				message: "the local users cannot answer: try again later",
-			},
-		},
-		{
-			err: principal.ErrReservedSubject,
-			answer: &codedError{
-				status:  http.StatusBadRequest,
-				code:    errcode.LocalUserNameInvalid,
-				args:    nil,
-				message: "the user name is not valid",
-			},
-		},
-		{
-			err: localuser.ErrNotFound,
-			answer: &codedError{
-				status:  http.StatusNotFound,
-				code:    errcode.LocalUserNotFound,
-				args:    nil,
-				message: "no such local user or code",
-			},
-		},
+		{localuser.ErrPasswordTooLong, &codedError{
+			status: http.StatusBadRequest, code: errcode.PasswordTooLong, args: nil,
+			message: "the password is too long: use 256 characters or fewer",
+		}},
+		{localuser.ErrPasswordForm, &codedError{
+			status: http.StatusBadRequest, code: errcode.PasswordForm, args: nil,
+			message: "the password holds a character that is not allowed: remove control characters",
+		}},
+		{localuser.ErrPasswordLettersAndDigits, &codedError{
+			status: http.StatusBadRequest, code: errcode.PasswordLettersAndDigits, args: nil,
+			message: "the password needs a letter and a digit",
+		}},
+		{localuser.ErrPasswordBlocked, &codedError{
+			status: http.StatusBadRequest, code: errcode.PasswordBlocked, args: nil,
+			message: "the password is too common or holds a name: choose another password",
+		}},
+		{localuser.ErrCurrentPasswordRequired, &codedError{
+			status: http.StatusForbidden, code: errcode.LocalUserCurrentRequired, args: nil,
+			message: "the change needs the current password or a recent sign-in",
+		}},
+		{localuser.ErrWrongPassword, &codedError{
+			status: http.StatusForbidden, code: errcode.LocalUserCurrentWrong, args: nil,
+			message: "the current password is wrong",
+		}},
+		{localuser.ErrOwnAccount, &codedError{
+			status: http.StatusForbidden, code: errcode.LocalUserOwnAccount, args: nil,
+			message: "an administrator cannot reset or remove the own password: use POST /api/dustpan/v1/me/password",
+		}},
+		{localuser.ErrReasonRequired, &codedError{
+			status: http.StatusBadRequest, code: errcode.LocalUserReasonRequired, args: nil,
+			message: "the change needs a reason",
+		}},
+		{localuser.ErrLastCredential, &codedError{
+			status: http.StatusConflict, code: errcode.LocalUserLastCredential, args: nil,
+			message: "the change removes the last sign-in credential of the person",
+		}},
+		{localuser.ErrBreakGlass, &codedError{
+			status: http.StatusConflict, code: errcode.LocalUserBreakGlass, args: nil,
+			message: "a break-glass account signs in with a passkey or a hardware key only",
+		}},
+		{localuser.ErrDemoFixed, &codedError{
+			status: http.StatusConflict, code: errcode.LocalUserDemoFixed, args: nil,
+			message: "the credentials of the demo user cannot change",
+		}},
+		{localuser.ErrAlreadyExists, &codedError{
+			status: http.StatusConflict, code: errcode.LocalUserExists, args: nil,
+			message: "another local user has the user name",
+		}},
+		{localuser.ErrInvalid, &codedError{
+			status: http.StatusBadRequest, code: errcode.LocalUserNameInvalid, args: nil,
+			message: "the user name is not valid: use 1 to 64 lowercase letters, digits, '.', '_' and '-'",
+		}},
+		{localuser.ErrUnavailable, &codedError{
+			status: http.StatusServiceUnavailable, code: errcode.LocalUserUnavailable, args: nil,
+			message: "the local users cannot answer: try again later",
+		}},
+		{principal.ErrReservedSubject, &codedError{
+			status: http.StatusBadRequest, code: errcode.LocalUserNameInvalid, args: nil,
+			message: "the user name is not valid",
+		}},
+		{localuser.ErrNotFound, &codedError{
+			status: http.StatusNotFound, code: errcode.LocalUserNotFound, args: nil,
+			message: "no such local user or code",
+		}},
 	}
 }
 
