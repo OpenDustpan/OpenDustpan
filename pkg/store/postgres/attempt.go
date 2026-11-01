@@ -20,6 +20,13 @@ func checkAttempt(ctx context.Context, q *db.Queries, started time.Time) error {
 		return fmt.Errorf("read database clock: %w", err)
 	}
 
+	return checkAttemptAt(started, nowMs)
+}
+
+// checkAttemptAt is checkAttempt for a database clock that the caller has read
+// already, in Unix milliseconds, for example in the RETURNING row of the
+// statement that writes.
+func checkAttemptAt(started time.Time, nowMs int64) error {
 	if err := blob.CheckAttempt(started, codec.FromMillis(nowMs)); err != nil {
 		return fmt.Errorf("commit write attempt: %w", err)
 	}

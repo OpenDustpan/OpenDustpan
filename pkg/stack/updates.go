@@ -1411,6 +1411,16 @@ func (s *Updates) sweepOrphans(
 ) {
 	ref, id := target.ref, target.update
 
+	// The clock of the database costs a round trip, so the sweep reads it only
+	// when a blob could be old. When the clocks agree to AttemptSkew, the
+	// database is at most AttemptSkew ahead of this instance, so a blob that is
+	// not old by the instance clock plus AttemptSkew is not old by the clock of
+	// the database. When the clocks do not agree, sweepNow refuses the run and
+	// nothing is deleted, so skipping it changes only the log line.
+	if len(graceCandidates(listed, s.clock().Add(blob.AttemptSkew))) == 0 {
+		return
+	}
+
 	now, err := s.sweepNow(ctx)
 	if err != nil {
 		// The grace period holds only when the clocks agree, so a run with a
