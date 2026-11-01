@@ -27,6 +27,9 @@ const (
 	probeCleanupDeadline = 5 * time.Second
 	// maxLogErrorBytes caps the error text in a retry log record.
 	maxLogErrorBytes = 512
+	// maxCodeBytes caps the error code that the adapter takes from an error
+	// answer of the store.
+	maxCodeBytes = 128
 )
 
 // WithProbeDeadline sets the total time that Open spends on the write steps
@@ -94,43 +97,51 @@ func isTransientNetwork(err error) bool {
 	return ok && netErr.Timeout()
 }
 
-// logText returns err text that is safe for a log record: it drops CR, LF
-// and the other control characters and it holds at most maxLogErrorBytes
-// bytes. The text can hold data from the store, so it is untrusted.
-func logText(err error) string {
-	text := strings.Map(func(r rune) rune {
+// stripControl drops CR, LF and the other control characters from text.
+func stripControl(text string) string {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
 		}
 
 		return r
-	}, err.Error())
+	}, text)
+}
 
-	if len(text) <= maxLogErrorBytes {
+// capText cuts text to at most limit bytes. A cut text ends with "...".
+func capText(text string, limit int) string {
+	if len(text) <= limit {
 		return text
 	}
 
 	const marker = "..."
 
-	return strings.ToValidUTF8(text[:maxLogErrorBytes-len(marker)], "") + marker
+	return strings.ToValidUTF8(text[:limit-len(marker)], "") + marker
+}
+
+// logText returns err text that is safe for a log record: it drops CR, LF
+// and the other control characters and it holds at most maxLogErrorBytes
+// bytes. The text can hold data from the store, so it is untrusted.
+func logText(err error) string {
+	return capText(stripControl(err.Error()), maxLogErrorBytes)
 }
 
 // retryProbe runs op until it succeeds, fails with an error that is not
 // transient, or ctx ends. It waits with the exponential backoff of the store
 // between tries and logs each retry. When ctx ends, the error names the last
-// cause. It returns the number of tries with the error.
+// cause.
 func (s *Store) retryProbe(
 	ctx context.Context,
 	step string,
 	op func(ctx context.Context) error,
-) (int, error) {
+) error {
 	// cause is the last error that did not come from the end of ctx.
 	var cause error
 
 	for attempt := 0; ; attempt++ {
 		err := op(ctx)
 		if err == nil || !isTransient(err) {
-			return attempt + 1, err
+			return err
 		}
 
 		ctxErr := ctx.Err()
@@ -139,7 +150,7 @@ func (s *Store) retryProbe(
 		}
 
 		if ctxErr != nil {
-			return attempt + 1, fmt.Errorf(
+			return fmt.Errorf(
 				"probe %s stopped after %d tries: %w: last cause: %w", step, attempt+1, ctxErr, cause,
 			)
 		}
@@ -154,33 +165,47 @@ func (s *Store) retryProbe(
 		)
 
 		if waitErr := s.sleep(ctx, delay); waitErr != nil {
-			return attempt + 1, fmt.Errorf(
+			return fmt.Errorf(
 				"probe %s stopped after %d tries: %w: last cause: %w", step, attempt+1, waitErr, cause,
 			)
 		}
 	}
 }
 
-// probePut writes the probe object with retries on transient errors. It
-// returns the number of tries.
-func (s *Store) probePut(ctx context.Context, key blob.Key) (int, error) {
-	tries, err := s.retryProbe(ctx, "write", func(ctx context.Context) error {
+// probePut writes the probe object with retries on transient errors.
+func (s *Store) probePut(ctx context.Context, key blob.Key) error {
+	return s.retryProbe(ctx, "write", func(ctx context.Context) error {
 		return s.Put(ctx, key, bytes.NewReader([]byte(probeBody)))
 	})
-
-	return tries, err
 }
 
-// probeDelete removes the probe object. It uses its own deadline of 5
-// seconds and ignores a cancel of ctx, so a failed or canceled start still
-// removes the probe.
-func (s *Store) probeDelete(ctx context.Context, key blob.Key) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), probeCleanupDeadline)
+// cleanupBudget is the one time of 5 seconds that all deletes of probe
+// objects of one Open share. The deletes run one after the other, so the
+// time they use adds up and the worst case of Open stays at the probe
+// deadline plus 5 seconds.
+type cleanupBudget struct {
+	remaining time.Duration
+}
+
+// newCleanupBudget returns a budget of probeCleanupDeadline.
+func newCleanupBudget() *cleanupBudget {
+	return &cleanupBudget{remaining: probeCleanupDeadline}
+}
+
+// probeDelete removes the probe object. It takes its time from budget and
+// ignores a cancel of ctx, so a failed or canceled start still removes the
+// probe. When the budget is spent, it fails at once.
+func (s *Store) probeDelete(ctx context.Context, key blob.Key, budget *cleanupBudget) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget.remaining)
 	defer cancel()
 
-	_, err := s.retryProbe(cleanupCtx, "delete", func(ctx context.Context) error {
+	started := time.Now()
+
+	err := s.retryProbe(cleanupCtx, "delete", func(ctx context.Context) error {
 		return s.Delete(ctx, key)
 	})
+
+	budget.remaining = max(budget.remaining-time.Since(started), 0)
 
 	return err
 }

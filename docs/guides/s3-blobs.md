@@ -67,15 +67,20 @@ A probe step tries again after these errors:
 The wait between tries grows from 100 ms to 5 s.
 Each retry writes a warning to the log.
 The write steps of the probe have a total time of 30 seconds.
-The delete of the probe object after a failure has its own time of 5 seconds.
+All deletes of probe objects after a failure share one time of 5 seconds.
 The worst case of the start is therefore about 35 seconds.
 When the time ends, the start fails and the error names the last cause.
 These times are fixed. The `serve` command has no setting for them.
 
 All other errors fail at once, with no retry.
 Examples are access denied, a missing bucket, a bad signature, a DNS name that does not exist, status 400 and status 501.
-A write that the store got, but whose answer was lost, makes the retry fail with "exists".
+The key of the probe object is random.
+When the first write finds its key in place, the object is the probe's own.
+The store got an earlier try, but the answer was a 5xx answer or did not arrive.
 The probe then deletes that object and uses a new key.
+
+The error text of the store is untrusted.
+The start deletes control characters from the error code of the store and cuts it to 128 bytes.
 
 ## Write-once use and the size limit
 
