@@ -395,6 +395,19 @@ func (s *Store) RecordRestoreEvent(
 	})
 }
 
+// CheckRestoreFence implements backup.RestoreOperations.
+func (s *Store) CheckRestoreFence(ctx context.Context, f durable.StepFence, id backup.RestoreID) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		if _, _, err := fencedRestore(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		_, err := runningRestore(ctx, q, id)
+
+		return err
+	})
+}
+
 // RestoreEvents implements backup.RestoreOperations.
 func (s *Store) RestoreEvents(ctx context.Context, id backup.RestoreID) ([]string, error) {
 	row, err := s.queries.GetRestoreAuditEvents(ctx, id.String())
