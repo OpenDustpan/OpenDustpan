@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/pkg/audit"
 )
 
 // NameLockHarness opens handles on one store that counts the failures of
@@ -17,6 +18,9 @@ type NameLockHarness struct {
 	Open func(t *testing.T) authgate.NameLockCounter
 	// Broken returns a handle whose writes fail, for example a closed store.
 	Broken func(t *testing.T) authgate.NameLockCounter
+	// Entries returns the audit entries of the installation that the store
+	// of the harness holds, in the order of the append.
+	Entries func(t *testing.T) []audit.Entry
 }
 
 // NameLockFactory returns a fresh harness on an empty store for one subtest.
@@ -76,8 +80,19 @@ func nameCases() []nameCase {
 		{name: "a clear sets the count to 0, ends the lock and keeps the level", test: testClear},
 		{name: "a clear of a count that does not exist is no error", test: testClearMissing},
 		{
-			name: "a clear of a name ends the count of each sub-key and returns the count",
+			name: "a clear of a name ends the count of each sub-key in each scope, returns the count and appends " +
+				"its entry",
 			test: testClearName,
+		},
+		{
+			name: "a clear of a name with an entry that fails validation fails with audit.ErrInvalidEntry and " +
+				"changes nothing",
+			test: testClearNameBadEntry,
+		},
+		{
+			name: "a clear of a name with no scope, a scope that is not valid or an empty name fails with " +
+				"ErrInvalidLock and changes nothing",
+			test: testClearNameInvalid,
 		},
 		{
 			name: "the list of a name returns one entry for each sub-key in the order of the sub-key",
@@ -369,18 +384,117 @@ func testClearName(t *testing.T, h NameLockHarness) {
 		add(t, c, key(authgate.ScopePassword, "n1", sub), rule(1, longLock), nil)
 	}
 
+	add(t, c, key(authgate.ScopePasswordName, "n1", ""), rule(1, longLock), nil)
 	add(t, c, key(authgate.ScopePassword, "n2", "a"), rule(1, longLock), nil)
 
-	n, err := c.ClearName(t.Context(), authgate.ScopePassword, "n1")
-	if err != nil || n != limitThree {
-		t.Fatalf("clear name = %d, %v; want 3", n, err)
+	before := len(h.Entries(t))
+
+	n, err := c.ClearName(t.Context(), clearScopes(), "n1", clearEntry())
+	if err != nil || n != limitThree+1 {
+		t.Fatalf("clear name = %d, %v; want 4", n, err)
 	}
 
 	for _, sub := range []string{"a", "b", "c"} {
 		add(t, c, key(authgate.ScopePassword, "n1", sub), rule(1, longLock), nil)
 	}
 
+	add(t, c, key(authgate.ScopePasswordName, "n1", ""), rule(1, longLock), nil)
 	add(t, c, key(authgate.ScopePassword, "n2", "a"), rule(1, longLock), authgate.ErrNameLocked)
+
+	entries := h.Entries(t)
+	if len(entries) != before+1 {
+		t.Fatalf("entries after a clear = %d, want %d", len(entries), before+1)
+	}
+
+	var cleared []string
+
+	for i := range entries {
+		if entries[i].Action != clearAction {
+			continue
+		}
+
+		for _, ch := range entries[i].Changes {
+			if ch.Key == "cleared" {
+				cleared = append(cleared, ch.New)
+			}
+		}
+	}
+
+	if len(cleared) != 1 || cleared[0] != "4" {
+		t.Fatalf("cleared counts of the entries of the clear = %v, want [4]", cleared)
+	}
+}
+
+// clearAction is the action of the entry of a clear in the suite.
+const clearAction = "local-user.name-unlocked"
+
+// clearScopes returns the scopes of the clear of a name in the suite.
+func clearScopes() []string {
+	return []string{authgate.ScopePassword, authgate.ScopePasswordName}
+}
+
+// clearEntry returns a valid entry of the installation for a clear.
+func clearEntry() audit.Entry {
+	return audit.Entry{
+		At: time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC), Namespace: audit.ServerScope,
+		Subject: "corp:admin", IDPSubject: "", TokenID: "", Action: clearAction, Object: "local-user:lus-1",
+		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test",
+		Channel: audit.ChannelConsole, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "the person called",
+		PrincipalKind: "", JobID: "",
+	}
+}
+
+func testClearNameBadEntry(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, key(authgate.ScopePassword, "n1", "a"), rule(1, longLock), nil)
+
+	before := len(h.Entries(t))
+
+	bad := clearEntry()
+	bad.Namespace = "acme"
+
+	if _, err := c.ClearName(t.Context(), clearScopes(), "n1", bad); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("clear with an entry of a namespace = %v, want audit.ErrInvalidEntry", err)
+	}
+
+	// The lock holds: the clear changed nothing.
+	add(t, c, key(authgate.ScopePassword, "n1", "a"), rule(1, longLock), authgate.ErrNameLocked)
+
+	if got := len(h.Entries(t)); got != before {
+		t.Fatalf("entries after a refused clear = %d, want %d", got, before)
+	}
+}
+
+func testClearNameInvalid(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, key(authgate.ScopePassword, "n1", "a"), rule(1, longLock), nil)
+
+	cases := []struct {
+		name   string
+		lock   string
+		scopes []string
+	}{
+		{name: "no scope", lock: "n1", scopes: nil},
+		{name: "a scope with a digit", lock: "n1", scopes: []string{authgate.ScopePassword, "pass1"}},
+		{name: "a scope with a separator", lock: "n1", scopes: []string{"password|x"}},
+		{name: "an empty name", lock: "", scopes: clearScopes()},
+		{name: "a name with a line feed", lock: "n1\n", scopes: clearScopes()},
+	}
+
+	for _, tc := range cases {
+		if _, err := c.ClearName(t.Context(), tc.scopes, tc.lock, clearEntry()); !errors.Is(
+			err, authgate.ErrInvalidLock,
+		) {
+			t.Fatalf("%s: clear = %v, want ErrInvalidLock", tc.name, err)
+		}
+	}
+
+	add(t, c, key(authgate.ScopePassword, "n1", "a"), rule(1, longLock), authgate.ErrNameLocked)
 }
 
 func testList(t *testing.T, h NameLockHarness) {

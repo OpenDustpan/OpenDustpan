@@ -7,6 +7,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 // TestNameLockConformance runs the suite of the lockout by name: each handle
@@ -39,6 +41,11 @@ func TestNameLockConformance(t *testing.T) {
 
 				return closed
 			},
+			Entries: func(t *testing.T) []audit.Entry {
+				t.Helper()
+
+				return serverEntries(t, openURL(t, schemaURL))
+			},
 		}
 	})
 }
@@ -64,4 +71,16 @@ func TestNameLockKey(t *testing.T) {
 	if err != nil || !bytes.Equal(second, first) {
 		t.Fatalf("second handle reads another key or fails: %v", err)
 	}
+}
+
+// serverEntries returns the audit entries of the installation that s holds.
+func serverEntries(t *testing.T, s *postgres.Store) []audit.Entry {
+	t.Helper()
+
+	page, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	return page.Entries
 }

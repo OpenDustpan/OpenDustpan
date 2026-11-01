@@ -189,10 +189,10 @@ func New(cfg Config) (*Service, error) {
 		keys:       cfg.Keys,
 		settings:   cfg.Settings,
 		sso:        cfg.SSO, reach: cfg.Reach,
-		now:        now,
-		kind:       cfg.Kind,
-		dummyMu:    sync.Mutex{},
-		dummy:      "",
+		now:     now,
+		kind:    cfg.Kind,
+		dummyMu: sync.Mutex{},
+		dummy:   "",
 	}, nil
 }
 
