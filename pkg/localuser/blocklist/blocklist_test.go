@@ -109,3 +109,22 @@ func TestEndedContext(t *testing.T) {
 		t.Fatalf("blocked with an ended context = %t, %v; want false, context.Canceled", got, err)
 	}
 }
+
+// TestBlockedRefusesLongInput is the limit layer of the list: a candidate
+// above MaxBytes fails before the fold runs, and is never "not blocked".
+func TestBlockedRefusesLongInput(t *testing.T) {
+	t.Parallel()
+
+	l := blocklist.Embedded()
+
+	for _, n := range []int{localuser.MaxBytes + 1, 10 * localuser.MaxBytes} {
+		got, err := l.Blocked(t.Context(), strings.Repeat("é", n/2+1))
+		if !errors.Is(err, localuser.ErrPasswordTooLong) || got {
+			t.Errorf("blocked a candidate of %d bytes = %t, %v; want false, ErrPasswordTooLong", n, got, err)
+		}
+	}
+
+	if _, err := l.Blocked(t.Context(), strings.Repeat("a", localuser.MaxBytes)); err != nil {
+		t.Errorf("blocked a candidate of MaxBytes: %v", err)
+	}
+}

@@ -100,37 +100,82 @@ func (h *Hasher) Hash(ctx context.Context, password string, p localuser.HashPara
 	return Encode(p, salt, key), nil
 }
 
-// Verify implements localuser.PasswordHasher.
+// Verify implements localuser.PasswordHasher. It is Reserve, then the
+// Verify of the reservation, then its Release.
 func (h *Hasher) Verify(
 	ctx context.Context, password string, stored localuser.PasswordHash, current localuser.HashParams,
 ) (localuser.Verdict, error) {
-	// Defense in depth: the service checks the current parameters when it
-	// loads its settings; this check stays so that a new caller cannot
-	// compare a hash with parameters that no hash may have.
-	if err := current.Validate(); err != nil {
-		return localuser.Verdict{NeedsRehash: false}, err
-	}
-
+	// The reservation checks the length too. This check comes first so that
+	// a password that is too long takes no budget.
 	if len(password) > localuser.MaxBytes {
 		return localuser.Verdict{NeedsRehash: false}, fmt.Errorf(
 			"%w: %d bytes", localuser.ErrPasswordTooLong, len(password),
 		)
 	}
 
+	r, err := h.Reserve(ctx, stored)
+	if err != nil {
+		return localuser.Verdict{NeedsRehash: false}, err
+	}
+	defer r.Release()
+
+	return r.Verify(password, current)
+}
+
+// Reserve implements localuser.PasswordHasher. It parses stored before it
+// takes any budget, so a hash that does not parse never waits and never
+// holds memory.
+func (h *Hasher) Reserve(ctx context.Context, stored localuser.PasswordHash) (*localuser.Reservation, error) {
 	d, err := Decode(stored)
 	if err != nil {
-		return localuser.Verdict{NeedsRehash: false}, err
+		return nil, err
 	}
 
-	p, want := d.Params, d.Key
-
-	got, err := h.derive(ctx, password, d.Salt, p)
+	release, err := h.budget.Acquire(ctx, d.Params.MemoryKiB)
 	if err != nil {
-		return localuser.Verdict{NeedsRehash: false}, err
+		return nil, err
 	}
 
-	if subtle.ConstantTimeCompare(got, want) != 1 {
-		return localuser.Verdict{NeedsRehash: false}, localuser.ErrWrongPassword
+	r := localuser.NewReservation(func(password string, current localuser.HashParams) (localuser.Verdict, error) {
+		return compare(d, password, current)
+	}, release)
+	if r == nil {
+		release()
+
+		return nil, fmt.Errorf("%w: no reservation", localuser.ErrUnavailable)
+	}
+
+	return r, nil
+}
+
+// compare checks password against the decoded hash d, on memory that the
+// caller holds in the budget.
+func compare(d Decoded, password string, current localuser.HashParams) (localuser.Verdict, error) {
+	none := localuser.Verdict{NeedsRehash: false}
+
+	// Defense in depth: the service checks the current parameters when it
+	// loads its settings; this check stays so that a new caller cannot
+	// compare a hash with parameters that no hash may have.
+	if err := current.Validate(); err != nil {
+		return none, err
+	}
+
+	if len(password) > localuser.MaxBytes {
+		return none, fmt.Errorf("%w: %d bytes", localuser.ErrPasswordTooLong, len(password))
+	}
+
+	p := d.Params
+
+	// Defense in depth: Decode checks the parameters; this check stays so
+	// that no path reaches argon2 with a cost outside the bounds.
+	if err := p.Validate(); err != nil {
+		return none, err
+	}
+
+	got := argon2.IDKey([]byte(password), d.Salt, p.Iterations, p.MemoryKiB, p.Parallelism, p.KeyBytes)
+
+	if subtle.ConstantTimeCompare(got, d.Key) != 1 {
+		return none, localuser.ErrWrongPassword
 	}
 
 	return localuser.Verdict{NeedsRehash: p != current}, nil

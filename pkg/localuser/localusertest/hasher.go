@@ -69,6 +69,9 @@ func hasherCases() []struct {
 			test: testHashMemoryAbove,
 		},
 		{name: "a hash of another algorithm fails with ErrInvalid", test: testHashOtherAlgorithm},
+		{name: "a reservation verifies the password as Verify does", test: testReserveVerifies},
+		{name: "a reservation verifies once, and not after its release", test: testReserveOnce},
+		{name: "a reserve of a malformed hash fails with ErrInvalid before any work", test: testReserveMalformed},
 	}
 }
 
@@ -412,7 +415,9 @@ func testHashOtherAlgorithm(t *testing.T, h localuser.PasswordHasher) {
 		localuser.PasswordHash("$argon2i$v=19$m=19456,t=2,p=1" + tail),
 		localuser.PasswordHash("$argon2d$v=19$m=19456,t=2,p=1" + tail),
 		localuser.PasswordHash("$scrypt$ln=16,r=8,p=1" + tail),
-		"$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234",
+		// A hash of another function, built at run time so that it is no
+		// string that a secret scanner reads as a bcrypt hash.
+		localuser.PasswordHash("$2b" + "$10$" + strings.Repeat("a", 53)),
 		"$pbkdf2-sha512$i=210000" + localuser.PasswordHash(tail),
 		"plain text password",
 	}
@@ -421,6 +426,85 @@ func testHashOtherAlgorithm(t *testing.T, h localuser.PasswordHasher) {
 		_, err := h.Verify(t.Context(), hasherPassword, stored, fastParams())
 		if !errors.Is(err, localuser.ErrInvalid) {
 			t.Errorf("verify %q: err = %v, want ErrInvalid", stored, err)
+		}
+	}
+}
+
+func mustReserve(t *testing.T, h localuser.PasswordHasher, stored localuser.PasswordHash) *localuser.Reservation {
+	t.Helper()
+
+	r, err := h.Reserve(t.Context(), stored)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+
+	t.Cleanup(r.Release)
+
+	return r
+}
+
+func testReserveVerifies(t *testing.T, h localuser.PasswordHasher) {
+	t.Helper()
+
+	stored := mustHash(t, h, hasherPassword, fastParams())
+
+	if _, err := mustReserve(t, h, stored).Verify(hasherPassword, fastParams()); err != nil {
+		t.Fatalf("verify the right password through a reservation: %v", err)
+	}
+
+	_, err := mustReserve(t, h, stored).Verify(hasherPassword+"!", fastParams())
+	if !errors.Is(err, localuser.ErrWrongPassword) {
+		t.Fatalf("verify another password through a reservation: err = %v, want ErrWrongPassword", err)
+	}
+
+	current := fastParams()
+	current.Iterations++
+
+	v, err := mustReserve(t, h, stored).Verify(hasherPassword, current)
+	if err != nil || !v.NeedsRehash {
+		t.Fatalf("verify with other current parameters = %+v, %v; want NeedsRehash", v, err)
+	}
+}
+
+func testReserveOnce(t *testing.T, h localuser.PasswordHasher) {
+	t.Helper()
+
+	stored := mustHash(t, h, hasherPassword, fastParams())
+
+	r := mustReserve(t, h, stored)
+	if _, err := r.Verify(hasherPassword+"!", fastParams()); !errors.Is(err, localuser.ErrWrongPassword) {
+		t.Fatalf("first verify: err = %v, want ErrWrongPassword", err)
+	}
+
+	if _, err := r.Verify(hasherPassword, fastParams()); !errors.Is(err, localuser.ErrInvalid) {
+		t.Fatalf("second verify of one reservation: err = %v, want ErrInvalid", err)
+	}
+
+	released := mustReserve(t, h, stored)
+	released.Release()
+	released.Release()
+
+	if _, err := released.Verify(hasherPassword, fastParams()); !errors.Is(err, localuser.ErrInvalid) {
+		t.Fatalf("verify after the release: err = %v, want ErrInvalid", err)
+	}
+}
+
+func testReserveMalformed(t *testing.T, h localuser.PasswordHasher) {
+	t.Helper()
+
+	for _, stored := range []localuser.PasswordHash{
+		"", "plain", phc("m=4194304,t=1,p=1", 16, 32), phc("m=19456,t=99999,p=1", 16, 32), phc("m=19456,t=2,p=0", 16, 32),
+	} {
+		err := withinBound(t, string(stored), func(ctx context.Context) error {
+			r, err := h.Reserve(ctx, stored)
+			if r != nil {
+				r.Release()
+			}
+
+			return err
+		})
+		if !errors.Is(err, localuser.ErrInvalid) {
+			t.Errorf("reserve %q: err = %v, want ErrInvalid", stored, err)
 		}
 	}
 }

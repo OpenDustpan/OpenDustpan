@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -277,6 +278,16 @@ func isControl(r rune) bool {
 	return r < 0x20 || (r >= 0x7f && r <= 0x9f)
 }
 
+// Credential is what a password sign-in reads in one query: the user, the
+// password hash, and the session generation of the person at the time of
+// the read. The sign-in seals this generation in its session, never a
+// generation that it reads later.
+type Credential struct {
+	User              User
+	Hash              PasswordHash
+	SessionGeneration int64
+}
+
 // Algorithm names a password hash function.
 type Algorithm string
 
@@ -425,6 +436,69 @@ type PasswordHasher interface {
 	// panics on a malformed hash. It returns ErrPasswordTooLong above
 	// MaxBytes, and ErrHashBusy as Hash does.
 	Verify(ctx context.Context, password string, h PasswordHash, current HashParams) (Verdict, error)
+	// Reserve parses h and takes its memory cost from the budget of the
+	// instance, and returns the reservation. A sign-in adds the failure of
+	// the name after Reserve and before Reservation.Verify, so that a
+	// request that finds no room counts no failure, and no more attempts
+	// than the limit reach the compare. It returns ErrInvalid for a hash
+	// that does not parse or whose parameters are out of the bounds, before
+	// it takes any budget, and ErrHashBusy when the budget has no room
+	// within HashWait. The caller calls Release once.
+	Reserve(ctx context.Context, h PasswordHash) (*Reservation, error)
+}
+
+// Reservation is a stored hash that holds its memory in the budget of the
+// instance until Release. An adapter makes it with NewReservation. It works
+// once, whatever the adapter does: a second Verify, or a Verify after
+// Release, returns ErrInvalid and calls the adapter no more.
+type Reservation struct {
+	verify   func(password string, current HashParams) (Verdict, error)
+	release  func()
+	mu       sync.Mutex
+	used     bool
+	released bool
+}
+
+// NewReservation returns a reservation that checks a password with verify
+// and gives the memory back with release. It returns nil when either
+// function is nil.
+func NewReservation(
+	verify func(password string, current HashParams) (Verdict, error), release func(),
+) *Reservation {
+	if verify == nil || release == nil {
+		return nil
+	}
+
+	return &Reservation{verify: verify, release: release, mu: sync.Mutex{}, used: false, released: false}
+}
+
+// Verify checks password against the reserved hash, as
+// PasswordHasher.Verify does. It works once: a second call, or a call after
+// Release, returns ErrInvalid.
+func (r *Reservation) Verify(password string, current HashParams) (Verdict, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.used || r.released {
+		return Verdict{NeedsRehash: false}, fmt.Errorf("%w: the reservation was used or released", ErrInvalid)
+	}
+
+	r.used = true
+
+	return r.verify(password, current)
+}
+
+// Release gives the memory back to the budget. A second call does nothing.
+func (r *Reservation) Release() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.released {
+		return
+	}
+
+	r.released = true
+	r.release()
 }
 
 // Blocklist holds the common and breached passwords that the binary ships.
@@ -433,7 +507,8 @@ type PasswordHasher interface {
 type Blocklist interface {
 	// Blocked reports whether the list holds candidate, compared after NFC
 	// and a Unicode lowercase fold. It returns ErrUnavailable when the list
-	// cannot load. The service then refuses the password.
+	// cannot load, and ErrPasswordTooLong for a candidate above MaxBytes. The
+	// service then refuses the password.
 	Blocked(ctx context.Context, candidate string) (bool, error)
 }
 
@@ -553,9 +628,13 @@ type Store interface {
 	// the principal has a record, and principal.ErrNotFound when the
 	// principal does not exist or is not a person.
 	CreateUser(ctx context.Context, u User, e audit.Entry) error
-	// UserByName returns the user whose stored user name is name, and its
-	// hash, or ErrNotFound. The hash is empty for a user with no password.
-	UserByName(ctx context.Context, name string) (User, PasswordHash, error)
+	// UserByName returns the credential of the user whose stored user name
+	// is name, or ErrNotFound. The hash is empty for a user with no
+	// password. The session generation comes from the same read as the
+	// hash, so a sign-in that verifies this hash and issues its session with
+	// this generation never carries a generation that a later password
+	// write or reset made: such a session ends at its next request.
+	UserByName(ctx context.Context, name string) (Credential, error)
 	// UserByPrincipal returns the user of the principal principalID, or
 	// ErrNotFound.
 	UserByPrincipal(ctx context.Context, principalID string) (User, error)
@@ -566,8 +645,11 @@ type Store interface {
 	// such user, and ErrDemoFixed for the demo person.
 	RenameUser(ctx context.Context, userID, name string, e audit.Entry) error
 	// DeleteUser deletes the record of the user userID and every reset code
-	// of the user, and appends e, in one transaction. The principal stays.
-	// It returns ErrNotFound for no such user.
+	// of the user, adds 1 to the session generation of the person, and
+	// appends e, in one transaction. The principal stays. The delete removes
+	// the password too, so it returns ErrLastCredential as RemovePassword
+	// does when the person keeps no other credential. It returns ErrNotFound
+	// for no such user.
 	DeleteUser(ctx context.Context, userID string, e audit.Entry) error
 }
 
