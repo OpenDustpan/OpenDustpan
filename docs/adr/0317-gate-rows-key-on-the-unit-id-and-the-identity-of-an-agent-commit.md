@@ -9,7 +9,7 @@ Changes:
 
 ## Context
 
-The project owner made these decisions in the owner decision files of 19 and 20 October 2026. ADR 224 and ADR 76 are older. The owner decisions are later, so they win.
+The project owner made these decisions in the owner decision files of 19 and 20 October 2026. ADR 224 and ADR 76 are older. Decision 1 is later than ADR 224 decision 1, so it wins. Decision 2 changes two decisions of ADR 76. ADR 76 decision 7 is a PM addition, so the owner line wins by rank. ADR 76 decision 8 is a decision of the owner, and the owner line is later, so it wins by date.
 
 ADR 224 decision 1 builds the scope key of a unit from the tool and the name of the unit. ADR 76 decision 7 says that the `Co-Authored-By` trailer is the disclosure.
 
@@ -23,4 +23,4 @@ This ADR writes the words of the owner. It adds no decision of its own.
 ## Consequences
 
 - ADR 76 and ADR 224 get a pointer to this ADR.
-- Decision 1 needs a conformance test for a unit that a name outlives.
+- (PM, for the owner): decision 1 needs a conformance test for a unit that a name outlives.
