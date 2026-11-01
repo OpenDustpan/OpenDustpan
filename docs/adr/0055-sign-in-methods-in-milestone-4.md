@@ -8,6 +8,8 @@ Changed by:
   sign-in settings action.
 - ADR 285 changes decision 5: a local user signs in with a passkey, a password
   or both.
+- ADR 301 extends decisions 6 and 7: a passkey or TOTP gives the fresh step
+  to a person of the trusted header or a plain OAuth 2.0 provider.
 
 ## Context
 
