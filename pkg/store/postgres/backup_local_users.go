@@ -1,7 +1,7 @@
 package postgres
 
-// pgCopyLocalUserTables holds the COPY columns of the table of local users,
-// in the order of backup.Tables.
+// pgCopyLocalUserTables holds the COPY columns of the table of local users
+// and of the table of session generations, in the order of backup.Tables.
 func pgCopyLocalUserTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
@@ -11,6 +11,11 @@ func pgCopyLocalUserTables() []pgCopyTable {
 				pgColCreatedBy, pgColCreatedAtMs,
 			},
 			orderBy: []string{"id"},
+		},
+		{
+			table:   "principal_session_generations",
+			columns: []string{pgColPrincipalID, "generation"},
+			orderBy: []string{pgColPrincipalID},
 		},
 	}
 }
