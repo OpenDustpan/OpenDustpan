@@ -127,7 +127,13 @@ package backup
 //   - A live key that exists is verified. When its bytes differ, the restore
 //     stores the refusal as an audit event under the fence and fails with
 //     ErrCorrupt. It writes nothing over the key, on every store.
-//   - The claim is checked, with no write, just before each Put to a live key.
+//   - The restore reads and checks the staged copy before it writes the live key.
+//     A staged copy that differs stops the restore with ErrCorrupt and writes
+//     nothing to the live key.
+//   - The claim is checked, with no write, just before each Put to a live key,
+//     and the live key is read once more after that check. A store that ignores
+//     conditional writes can still take a write of another writer between the
+//     last read and the Put. Maintenance mode stops the other writers.
 //   - The copy from the temporary key to the live key reads the temporary key
 //     a second time, and checks those bytes after the Put. A temporary key
 //     that answers other bytes the second time leaves a live key with bytes

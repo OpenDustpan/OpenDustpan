@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -111,6 +112,9 @@ type fenceLive struct {
 	events   []string
 	eventErr error
 	fenceErr error
+	// onFence runs at each check of the claim, for a test that changes the
+	// store at that moment.
+	onFence func()
 }
 
 func (l *fenceLive) RecordRestoreEvent(_ context.Context, _ durable.StepFence, _ RestoreID, object string) error {
@@ -125,6 +129,10 @@ func (l *fenceLive) RecordRestoreEvent(_ context.Context, _ durable.StepFence, _
 
 func (l *fenceLive) CheckRestoreFence(context.Context, durable.StepFence, RestoreID) error {
 	*l.log = append(*l.log, "fence")
+
+	if l.onFence != nil {
+		l.onFence()
+	}
 
 	return l.fenceErr
 }
@@ -160,7 +168,7 @@ func newLiveBlobSetup(conditional bool) liveBlobSetup {
 	blobs := newMapStore(conditional, &log)
 	target := newMapStore(false, nil)
 	target.objects["blobs/"+liveKey] = wantBytes()
-	live := &fenceLive{RestoreLive: nil, log: &log, events: nil, eventErr: nil, fenceErr: nil}
+	live := &fenceLive{RestoreLive: nil, log: &log, events: nil, eventErr: nil, fenceErr: nil, onFence: nil}
 
 	svc := keyService(live)
 	svc.blobs, svc.target, svc.logger = blobs, target, slog.New(slog.DiscardHandler)
@@ -229,9 +237,7 @@ func TestCopyCheckedKeyRefusesALiveBlobThatAppearsDuringTheCopy(t *testing.T) {
 	t.Parallel()
 
 	u := newLiveBlobSetup(true)
-	racer := &appearingStore{
-		mapStore: u.blobs, key: liveKey, data: []byte("a writer got there first"), once: sync.Once{},
-	}
+	racer := newAppearing(u, []byte("a writer got there first"), false)
 	u.svc.blobs = racer
 
 	err := u.copyKey(t)
@@ -248,14 +254,18 @@ func TestCopyCheckedKeyRefusesALiveBlobThatAppearsDuringTheCopy(t *testing.T) {
 	}
 }
 
-// appearingStore stores data under key when the first object is written to a
-// key of the restore, so the key exists when the copy writes it.
+// appearingStore stores data under key when the first write to key arrives,
+// so the key exists when the copy writes it. With throttle set, a read of key
+// after that answers ErrThrottled, as a store does that asks the client to slow
+// down.
 type appearingStore struct {
 	*mapStore
 
-	key  string
-	data []byte
-	once sync.Once
+	key      string
+	data     []byte
+	once     sync.Once
+	appeared atomic.Bool
+	throttle bool
 }
 
 func (a *appearingStore) Put(ctx context.Context, key blob.Key, r io.Reader) error {
@@ -264,10 +274,66 @@ func (a *appearingStore) Put(ctx context.Context, key blob.Key, r io.Reader) err
 			a.mu.Lock()
 			a.objects[a.key] = a.data
 			a.mu.Unlock()
+			a.appeared.Store(true)
 		})
 	}
 
 	return a.mapStore.Put(ctx, key, r)
+}
+
+func (a *appearingStore) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if a.throttle && a.appeared.Load() && key.String() == a.key {
+		return nil, blob.ErrThrottled
+	}
+
+	return a.mapStore.Get(ctx, key)
+}
+
+func newAppearing(u liveBlobSetup, data []byte, throttle bool) *appearingStore {
+	return &appearingStore{
+		mapStore: u.blobs, key: liveKey, data: data, once: sync.Once{}, appeared: atomic.Bool{}, throttle: throttle,
+	}
+}
+
+// flipStore answers other bytes for the reads of a temporary key from the
+// read number from on (1 is the first read).
+type flipStore struct {
+	*mapStore
+
+	reads atomic.Int64
+	from  int64
+}
+
+func (f *flipStore) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	rc, err := f.mapStore.Get(ctx, key)
+	if err != nil || !strings.HasPrefix(key.String(), tempKeyPrefix) {
+		return rc, err
+	}
+
+	if f.reads.Add(1) < f.from {
+		return rc, nil
+	}
+
+	if closeErr := rc.Close(); closeErr != nil {
+		return nil, fmt.Errorf("close the object: %w", closeErr)
+	}
+
+	return io.NopCloser(strings.NewReader("flipped bytes")), nil
+}
+
+func (f *flipStore) tempKeys() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	n := 0
+
+	for k := range f.objects {
+		if strings.HasPrefix(k, tempKeyPrefix) {
+			n++
+		}
+	}
+
+	return n
 }
 
 // TestCopyCheckedKeyChecksTheClaimBeforeTheWrite proves that the claim is
@@ -367,5 +433,128 @@ func TestRefuseDifferingBlobFailsClosed(t *testing.T) {
 
 	if got, _ := u.blobs.liveBytes(); string(got) != "other" {
 		t.Errorf("live bytes = %q, want them unchanged", got)
+	}
+}
+
+// TestCopyCheckedKeyChecksTheStagedBytesBeforeTheWrite proves that staged bytes
+// that differ from the manifest stop the restore before the live key is
+// written: the live key stays absent, only the temporary key is deleted, and
+// the audit event says what happened.
+func TestCopyCheckedKeyChecksTheStagedBytesBeforeTheWrite(t *testing.T) {
+	t.Parallel()
+
+	for _, conditional := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enforcing store", false: "ignoring store"}[conditional], func(t *testing.T) {
+			t.Parallel()
+
+			u := newLiveBlobSetup(conditional)
+			flip := &flipStore{mapStore: u.blobs, reads: atomic.Int64{}, from: 1}
+			u.svc.blobs = flip
+
+			err := u.copyKey(t)
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("copyCheckedKey: err = %v, want ErrCorrupt", err)
+			}
+
+			if _, ok := u.blobs.liveBytes(); ok || u.blobs.liveWrites() != 0 {
+				t.Error("the live key was written, want no write")
+			}
+
+			if n := flip.tempKeys(); n != 0 {
+				t.Errorf("temporary keys = %d, want 0", n)
+			}
+
+			if len(u.live.events) != 1 || !strings.Contains(u.live.events[0], "the staged copy differs") ||
+				strings.Contains(u.live.events[0], "refused to overwrite") {
+				t.Errorf("events = %v, want one event that names the staged copy", u.live.events)
+			}
+		})
+	}
+}
+
+// TestCopyCheckedKeyRecordsBytesThatFailTheCheckAfterTheWrite proves that bytes
+// that pass the check before the write and fail it after the write fail the
+// restore with an event that says so. The restore wrote the live key, and the
+// event does not claim that it refused to overwrite it.
+func TestCopyCheckedKeyRecordsBytesThatFailTheCheckAfterTheWrite(t *testing.T) {
+	t.Parallel()
+
+	u := newLiveBlobSetup(false)
+	u.svc.blobs = &flipStore{mapStore: u.blobs, reads: atomic.Int64{}, from: 2}
+
+	err := u.copyKey(t)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("copyCheckedKey: err = %v, want ErrCorrupt", err)
+	}
+
+	if len(u.live.events) != 1 || !strings.Contains(u.live.events[0], "failed the check after the write") {
+		t.Errorf("events = %v, want one event that names the check after the write", u.live.events)
+	}
+}
+
+// TestCopyCheckedKeyDoesNotCallAThrottledReadCorrupt proves that a read error
+// after a refused write is not corruption: the error returns as it is, so the
+// step retries, and no event says that bytes differ.
+func TestCopyCheckedKeyDoesNotCallAThrottledReadCorrupt(t *testing.T) {
+	t.Parallel()
+
+	u := newLiveBlobSetup(true)
+	u.svc.blobs = newAppearing(u, []byte("a writer got there first"), true)
+
+	err := u.copyKey(t)
+	if !errors.Is(err, blob.ErrThrottled) || errors.Is(err, ErrCorrupt) {
+		t.Fatalf("copyCheckedKey: err = %v, want ErrThrottled and not ErrCorrupt", err)
+	}
+
+	if len(u.live.events) != 0 {
+		t.Errorf("events = %v, want none", u.live.events)
+	}
+}
+
+// TestCopyCheckedKeyReadsTheLiveKeyAgainAfterTheClaimCheck proves that, on a
+// store that ignores conditional writes, a key that appears after the first
+// read and before the claim check is seen: the restore stops and writes nothing
+// over it.
+func TestCopyCheckedKeyReadsTheLiveKeyAgainAfterTheClaimCheck(t *testing.T) {
+	t.Parallel()
+
+	u := newLiveBlobSetup(false)
+	other := []byte("a writer got there first")
+	u.live.onFence = func() {
+		u.blobs.mu.Lock()
+		u.blobs.objects[liveKey] = other
+		u.blobs.mu.Unlock()
+	}
+
+	err := u.copyKey(t)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("copyCheckedKey: err = %v, want ErrCorrupt", err)
+	}
+
+	if got, _ := u.blobs.liveBytes(); !bytes.Equal(got, other) || u.blobs.liveWrites() != 0 {
+		t.Errorf("live bytes = %q with %d writes, want the other bytes and no write", got, u.blobs.liveWrites())
+	}
+
+	if len(u.live.events) != 1 || !strings.Contains(u.live.events[0], "refused to overwrite live blob") {
+		t.Errorf("events = %v, want one refusal", u.live.events)
+	}
+}
+
+// TestCopyCheckedKeyKeepsTheGapThatMaintenanceModeCloses pins the behavior that
+// remains: on a store that ignores conditional writes, a key that appears after
+// the last read and before the write is replaced with no error. Maintenance
+// mode stops other writers while the copy steps run, and the guide says so.
+func TestCopyCheckedKeyKeepsTheGapThatMaintenanceModeCloses(t *testing.T) {
+	t.Parallel()
+
+	u := newLiveBlobSetup(false)
+	u.svc.blobs = newAppearing(u, []byte("a writer got there first"), false)
+
+	if err := u.copyKey(t); err != nil {
+		t.Fatalf("copyCheckedKey: %v", err)
+	}
+
+	if got, _ := u.blobs.liveBytes(); !bytes.Equal(got, wantBytes()) {
+		t.Errorf("live bytes = %q, want the bytes of the backup", got)
 	}
 }
