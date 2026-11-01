@@ -1,57 +1,543 @@
 package authgatetest
 
 import (
+	"errors"
+	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 )
 
-// NameLockFactory returns a fresh, empty counter for one subtest.
-type NameLockFactory func(t *testing.T) authgate.NameLockCounter
+// NameLockHarness opens handles on one store that counts the failures of
+// names. Two handles act as two instances on one database.
+type NameLockHarness struct {
+	// Open returns a new handle on the store of the harness.
+	Open func(t *testing.T) authgate.NameLockCounter
+	// Broken returns a handle whose writes fail, for example a closed store.
+	Broken func(t *testing.T) authgate.NameLockCounter
+}
+
+// NameLockFactory returns a fresh harness on an empty store for one subtest.
+type NameLockFactory func(t *testing.T) NameLockHarness
+
+// Times of the cases. A short lock ends many times inside one case; a long
+// lock never ends inside one case.
+const (
+	shortLock = 300 * time.Millisecond
+	longLock  = time.Hour
+	waitLimit = 10 * time.Second
+	// clockSlack is how far the time of a lock can be from the time of the
+	// test: the store and the test read clocks of one host.
+	clockSlack = 5 * time.Second
+	// concurrentAdds is the count of adds at the same time.
+	concurrentAdds = 24
+)
+
+// nameCase is one case of the suite.
+type nameCase struct {
+	test func(t *testing.T, h NameLockHarness)
+	name string
+}
+
+// nameCases returns the cases of the suite, in the order of the run.
+func nameCases() []nameCase {
+	return []nameCase{
+		{name: "a first failure counts 1 and sets no lock", test: testFirstFailure},
+		{name: "the failure that reaches the limit passes and sets the lock", test: testReachLimit},
+		{
+			name: "a failure while the lock holds fails with ErrNameLocked and counts nothing",
+			test: testLockedCountsNothing,
+		},
+		{name: "a failure after the lock ends starts a new count at 1", test: testAfterLockEnds},
+		{name: "a second lock within the reset time lasts twice the first", test: testDoubles},
+		{name: "a lock never lasts longer than the maximum", test: testMaximum},
+		{
+			name: "a lock after the reset time with no lock lasts the first lock time again",
+			test: testLevelResets,
+		},
+		{name: "a rule whose maximum equals its lock time never doubles", test: testNeverDoubles},
+		{name: "a clear sets the count to 0, ends the lock and keeps the level", test: testClear},
+		{name: "a clear of a count that does not exist is no error", test: testClearMissing},
+		{
+			name: "a clear of a name ends the count of each sub-key and returns the count",
+			test: testClearName,
+		},
+		{
+			name: "the list of a name returns one entry for each sub-key in the order of the sub-key",
+			test: testList,
+		},
+		{name: "the count of one sub-key does not lock another sub-key of the same name", test: testSubKeys},
+		{name: "two scopes keep separate counts for one name", test: testScopes},
+		{name: "concurrent failures never pass the limit", test: testConcurrent},
+		{name: "the lock time comes from the clock of the store", test: testStoreClock},
+		{name: "every instance on one database shares one count", test: testShared},
+		{
+			name: "a prune deletes old counts and keeps a lock that holds and a level that has not reset",
+			test: testPrune,
+		},
+		{name: "a write that fails is an error that is not ErrNameLocked", test: testBroken},
+		{
+			name: "a scope with a character other than a to z, an empty name, a limit below 1, a lock time of 0, " +
+				"a maximum below the lock time or a negative reset fails with ErrInvalidLock",
+			test: testInvalid,
+		},
+		{name: "the store holds the name as the caller gives it and no user name", test: testExactName},
+	}
+}
 
 // NameLockCaseNames returns the names of the cases of the suite of
 // authgate.NameLockCounter, in the order of the run.
 func NameLockCaseNames() []string {
-	return []string{
-		"a first failure counts 1 and sets no lock",
-		"the failure that reaches the limit passes and sets the lock",
-		"a failure while the lock holds fails with ErrNameLocked and counts nothing",
-		"a failure after the lock ends starts a new count at 1",
-		"a second lock within the reset time lasts twice the first",
-		"a lock never lasts longer than the maximum",
-		"a lock after the reset time with no lock lasts the first lock time again",
-		"a rule whose maximum equals its lock time never doubles",
-		"a clear sets the count to 0, ends the lock and keeps the level",
-		"a clear of a count that does not exist is no error",
-		"a clear of a name ends the count of each sub-key and returns the count",
-		"the list of a name returns one entry for each sub-key in the order of the sub-key",
-		"the count of one sub-key does not lock another sub-key of the same name",
-		"two scopes keep separate counts for one name",
-		"concurrent failures never pass the limit",
-		"the lock time comes from the clock of the store",
-		"every instance on one database shares one count",
-		"a prune deletes old counts and keeps a lock that holds and a level that has not reset",
-		"a write that fails is an error that is not ErrNameLocked",
-		"a scope with a character other than a to z, an empty name, a limit below 1, a lock time of 0, a maximum below the lock time or a negative reset fails with ErrInvalidLock",
-		"the store holds the name as the caller gives it and no user name",
+	cases := nameCases()
+	names := make([]string, 0, len(cases))
+
+	for _, c := range cases {
+		names = append(names, c.name)
+	}
+
+	return names
+}
+
+// RunNameLocks runs every case of the suite against the harnesses that
+// newHarness returns.
+func RunNameLocks(t *testing.T, newHarness NameLockFactory) {
+	t.Helper()
+
+	for _, c := range nameCases() {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			if newHarness == nil {
+				t.Fatal("authgatetest.RunNameLocks needs a harness factory")
+			}
+
+			c.test(t, newHarness(t))
+		})
 	}
 }
 
-// RunNameLocks runs every case of the suite against the counters that
-// newCounter returns. Each case skips until a store adapter implements the
-// port, so that the names are the contract that the first adapter meets.
-func RunNameLocks(t *testing.T, newCounter NameLockFactory) {
+// rule returns a rule with the limit and the lock time, that never doubles.
+func rule(limit int, lockFor time.Duration) authgate.LockRule {
+	return authgate.LockRule{Limit: limit, LockFor: lockFor, MaxLockFor: lockFor, ResetAfter: 0}
+}
+
+// doubling returns a rule of limit 1 that doubles from lockFor up to max, and
+// resets after reset with no lock.
+func doubling(lockFor, maxLockFor, reset time.Duration) authgate.LockRule {
+	return authgate.LockRule{Limit: 1, LockFor: lockFor, MaxLockFor: maxLockFor, ResetAfter: reset}
+}
+
+// add adds one failure and fails the test on an error that is not want.
+func add(
+	t *testing.T, c authgate.NameLockCounter, scope, name, sub string, r authgate.LockRule, want error,
+) authgate.NameLock {
 	t.Helper()
 
-	for _, name := range NameLockCaseNames() {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+	got, err := c.AddNameFailure(t.Context(), scope, name, sub, r)
+	if !errors.Is(err, want) || (want == nil && err != nil) {
+		t.Fatalf("add %s/%s/%s = %v, want %v", scope, name, sub, err, want)
+	}
 
-			if newCounter == nil {
-				t.Fatal("authgatetest.RunNameLocks needs a counter factory")
+	return got
+}
+
+// waitUnlocked waits until the lock of name and sub in scope ended on the
+// clock of the store.
+func waitUnlocked(t *testing.T, c authgate.NameLockCounter, scope, name string, until time.Time) {
+	t.Helper()
+
+	deadline := time.Now().Add(waitLimit)
+
+	for time.Now().Before(deadline) {
+		if time.Now().After(until.Add(50 * time.Millisecond)) {
+			locks, err := c.NameLocks(t.Context(), scope, name)
+			if err != nil {
+				t.Fatalf("list: %v", err)
 			}
 
-			t.Skip("no adapter implements authgate.NameLockCounter yet")
+			if len(locks) == 0 || !locks[0].LockedUntil.After(time.Now()) {
+				return
+			}
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("the lock of %s/%s did not end", scope, name)
+}
+
+// lockLength returns how long the lock lasts from the time of its add.
+func lockLength(t *testing.T, before time.Time, l authgate.NameLock, want time.Duration) {
+	t.Helper()
+
+	if l.LockedUntil.IsZero() {
+		t.Fatal("no lock, want one")
+	}
+
+	got := l.LockedUntil.Sub(before)
+	if got < want-clockSlack || got > want+clockSlack {
+		t.Fatalf("lock of %s, want %s", got, want)
+	}
+}
+
+func testFirstFailure(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	got := add(t, h.Open(t), "password", "n1", "s", rule(3, longLock), nil)
+	if got.Failures != 1 || !got.LockedUntil.IsZero() || got.Level != 0 || got.Sub != "s" {
+		t.Fatalf("first failure = %+v, want 1 failure and no lock", got)
+	}
+}
+
+func testReachLimit(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	before := time.Now()
+
+	add(t, c, "password", "n1", "s", rule(3, longLock), nil)
+	add(t, c, "password", "n1", "s", rule(3, longLock), nil)
+	got := add(t, c, "password", "n1", "s", rule(3, longLock), nil)
+
+	if got.Failures != 3 || got.Level != 1 {
+		t.Fatalf("third failure = %+v, want 3 failures at level 1", got)
+	}
+
+	lockLength(t, before, got, longLock)
+}
+
+func testLockedCountsNothing(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	locked := add(t, c, "password", "n1", "s", rule(1, longLock), nil)
+	again := add(t, c, "password", "n1", "s", rule(1, longLock), authgate.ErrNameLocked)
+
+	if again.Failures != locked.Failures || !again.LockedUntil.Equal(locked.LockedUntil) || again.Level != 1 {
+		t.Fatalf("add while locked = %+v, want the state %+v", again, locked)
+	}
+}
+
+func testAfterLockEnds(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	// The reset time is long, so the level of the lock stays after it ends.
+	r := authgate.LockRule{Limit: 2, LockFor: shortLock, MaxLockFor: shortLock, ResetAfter: longLock}
+	add(t, c, "password", "n1", "s", r, nil)
+	locked := add(t, c, "password", "n1", "s", r, nil)
+	waitUnlocked(t, c, "password", "n1", locked.LockedUntil)
+
+	got := add(t, c, "password", "n1", "s", r, nil)
+	if got.Failures != 1 || !got.LockedUntil.IsZero() || got.Level != 1 {
+		t.Fatalf("add after the lock = %+v, want 1 failure, no lock, level 1", got)
+	}
+}
+
+func testDoubles(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	r := doubling(shortLock, longLock, longLock)
+	first := add(t, c, "passwordname", "n1", "", r, nil)
+	waitUnlocked(t, c, "passwordname", "n1", first.LockedUntil)
+
+	before := time.Now()
+	second := add(t, c, "passwordname", "n1", "", r, nil)
+
+	if second.Level != 2 {
+		t.Fatalf("second lock = %+v, want level 2", second)
+	}
+
+	lockLength(t, before, second, 2*shortLock)
+}
+
+func testMaximum(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	r := doubling(shortLock, shortLock+shortLock/2, longLock)
+	first := add(t, c, "passwordname", "n1", "", r, nil)
+	waitUnlocked(t, c, "passwordname", "n1", first.LockedUntil)
+
+	before := time.Now()
+	second := add(t, c, "passwordname", "n1", "", r, nil)
+
+	lockLength(t, before, second, r.MaxLockFor)
+}
+
+func testLevelResets(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	r := doubling(shortLock, longLock, shortLock)
+	first := add(t, c, "passwordname", "n1", "", r, nil)
+	waitUnlocked(t, c, "passwordname", "n1", first.LockedUntil.Add(r.ResetAfter))
+
+	before := time.Now()
+	second := add(t, c, "passwordname", "n1", "", r, nil)
+
+	if second.Level != 1 {
+		t.Fatalf("lock after the reset time = %+v, want level 1", second)
+	}
+
+	lockLength(t, before, second, shortLock)
+}
+
+func testNeverDoubles(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	r := rule(1, shortLock)
+	first := add(t, c, "factor", "prn-1", "", r, nil)
+	waitUnlocked(t, c, "factor", "prn-1", first.LockedUntil)
+
+	before := time.Now()
+	second := add(t, c, "factor", "prn-1", "", r, nil)
+
+	lockLength(t, before, second, shortLock)
+}
+
+func testClear(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, "password", "n1", "s", rule(1, longLock), nil)
+
+	if err := c.ClearNameFailures(t.Context(), "password", "n1", "s"); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+
+	got := add(t, c, "password", "n1", "s", rule(3, longLock), nil)
+	if got.Failures != 1 || !got.LockedUntil.IsZero() || got.Level != 1 {
+		t.Fatalf("add after a clear = %+v, want 1 failure, no lock, level 1", got)
+	}
+}
+
+func testClearMissing(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	if err := h.Open(t).ClearNameFailures(t.Context(), "password", "nobody", "s"); err != nil {
+		t.Fatalf("clear of a missing count = %v, want nil", err)
+	}
+}
+
+func testClearName(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	for _, sub := range []string{"a", "b", "c"} {
+		add(t, c, "password", "n1", sub, rule(1, longLock), nil)
+	}
+
+	add(t, c, "password", "n2", "a", rule(1, longLock), nil)
+
+	n, err := c.ClearName(t.Context(), "password", "n1")
+	if err != nil || n != 3 {
+		t.Fatalf("clear name = %d, %v; want 3", n, err)
+	}
+
+	for _, sub := range []string{"a", "b", "c"} {
+		add(t, c, "password", "n1", sub, rule(1, longLock), nil)
+	}
+
+	add(t, c, "password", "n2", "a", rule(1, longLock), authgate.ErrNameLocked)
+}
+
+func testList(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	for _, sub := range []string{"c", "a", "b"} {
+		add(t, c, "password", "n1", sub, rule(5, longLock), nil)
+	}
+
+	locks, err := c.NameLocks(t.Context(), "password", "n1")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if len(locks) != 3 || locks[0].Sub != "a" || locks[1].Sub != "b" || locks[2].Sub != "c" {
+		t.Fatalf("list = %+v, want a, b, c", locks)
+	}
+
+	none, err := c.NameLocks(t.Context(), "password", "nobody")
+	if err != nil || len(none) != 0 {
+		t.Fatalf("list of a name with no count = %+v, %v; want none", none, err)
+	}
+}
+
+func testSubKeys(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, "password", "n1", "192.0.2.1", rule(1, longLock), nil)
+
+	got := add(t, c, "password", "n1", "198.51.100.1", rule(2, longLock), nil)
+	if got.Failures != 1 || !got.LockedUntil.IsZero() {
+		t.Fatalf("other sub-key = %+v, want 1 failure and no lock", got)
+	}
+}
+
+func testScopes(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, "password", "n1", "", rule(1, longLock), nil)
+
+	got := add(t, c, "passwordname", "n1", "", rule(2, longLock), nil)
+	if got.Failures != 1 || !got.LockedUntil.IsZero() {
+		t.Fatalf("other scope = %+v, want 1 failure and no lock", got)
+	}
+}
+
+func testConcurrent(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	limit := 5
+
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		passed int
+		other  error
+	)
+
+	for range concurrentAdds {
+		wg.Go(func() {
+			_, err := c.AddNameFailure(t.Context(), "password", "n1", "s", rule(limit, longLock))
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				passed++
+			case !errors.Is(err, authgate.ErrNameLocked):
+				other = err
+			default:
+			}
 		})
+	}
+
+	wg.Wait()
+
+	if other != nil {
+		t.Fatalf("a concurrent add failed: %v", other)
+	}
+
+	if passed != limit {
+		t.Fatalf("passed adds = %d, want the limit %d", passed, limit)
+	}
+}
+
+func testStoreClock(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	before := time.Now()
+	got := add(t, h.Open(t), "password", "n1", "s", rule(1, longLock), nil)
+
+	lockLength(t, before, got, longLock)
+}
+
+func testShared(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	a, b := h.Open(t), h.Open(t)
+	add(t, a, "password", "n1", "s", rule(2, longLock), nil)
+	add(t, b, "password", "n1", "s", rule(2, longLock), nil)
+	add(t, a, "password", "n1", "s", rule(2, longLock), authgate.ErrNameLocked)
+}
+
+func testPrune(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, "password", "old", "s", rule(5, longLock), nil)
+	add(t, c, "password", "locked", "s", rule(1, longLock), nil)
+	add(t, c, "passwordname", "level", "", doubling(shortLock, longLock, longLock), nil)
+
+	time.Sleep(2 * shortLock)
+
+	n, err := c.PruneNameLocks(t.Context(), shortLock)
+	if err != nil || n != 1 {
+		t.Fatalf("prune = %d, %v; want 1", n, err)
+	}
+
+	for _, name := range []string{"locked", "level"} {
+		scope := "password"
+		if name == "level" {
+			scope = "passwordname"
+		}
+
+		locks, listErr := c.NameLocks(t.Context(), scope, name)
+		if listErr != nil || len(locks) != 1 {
+			t.Fatalf("count %s after a prune = %+v, %v; want it kept", name, locks, listErr)
+		}
+	}
+}
+
+func testBroken(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	_, err := h.Broken(t).AddNameFailure(t.Context(), "password", "n1", "s", rule(1, longLock))
+	if err == nil || errors.Is(err, authgate.ErrNameLocked) {
+		t.Fatalf("add on a broken store = %v, want an error that is not ErrNameLocked", err)
+	}
+}
+
+func testInvalid(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	good := rule(1, longLock)
+
+	cases := []struct {
+		name, scope, key, sub string
+		r                     authgate.LockRule
+	}{
+		{name: "upper case scope", scope: "Password", key: "n1", r: good},
+		{name: "digit in the scope", scope: "pass1", key: "n1", r: good},
+		{name: "empty scope", scope: "", key: "n1", r: good},
+		{name: "empty name", scope: "password", key: "", r: good},
+		{name: "name with a newline", scope: "password", key: "n\n1", r: good},
+		{name: "name too long", scope: "password", key: string(make([]byte, 300)), r: good},
+		{name: "limit 0", scope: "password", key: "n1", r: rule(0, longLock)},
+		{name: "lock time 0", scope: "password", key: "n1", r: rule(1, 0)},
+		{name: "maximum below the lock time", scope: "password", key: "n1", r: doubling(longLock, shortLock, 0)},
+		{name: "negative reset", scope: "password", key: "n1", r: doubling(shortLock, longLock, -time.Second)},
+	}
+
+	for i, tc := range cases {
+		sub := tc.sub + strconv.Itoa(i)
+
+		_, err := c.AddNameFailure(t.Context(), tc.scope, tc.key, sub, tc.r)
+		if !errors.Is(err, authgate.ErrInvalidLock) {
+			t.Fatalf("%s: add = %v, want ErrInvalidLock", tc.name, err)
+		}
+	}
+
+	if locks, err := c.NameLocks(t.Context(), "password", "n1"); err != nil || len(locks) != 0 {
+		t.Fatalf("counts after refused adds = %+v, %v; want none", locks, err)
+	}
+}
+
+func testExactName(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	add(t, c, "password", "digest-AbC", "s", rule(1, longLock), nil)
+
+	for _, other := range []string{"digest-abc", "DIGEST-ABC", "digest-AbC "} {
+		if locks, err := c.NameLocks(t.Context(), "password", other); err != nil || len(locks) != 0 {
+			t.Fatalf("list of %q = %+v, %v; want none", other, locks, err)
+		}
+	}
+
+	if locks, err := c.NameLocks(t.Context(), "password", "digest-AbC"); err != nil || len(locks) != 1 {
+		t.Fatalf("list of the exact name = %+v, %v; want one", locks, err)
 	}
 }

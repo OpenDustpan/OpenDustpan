@@ -3,6 +3,7 @@ package authgate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -118,4 +119,88 @@ type NameLockCounter interface {
 	// ago, whose lock ended and whose level is past its reset time, and
 	// returns how many it deleted.
 	PruneNameLocks(ctx context.Context, age time.Duration) (int64, error)
+}
+
+// Limits of the keys of a name count. A name is a keyed digest or a
+// principal ID, and a sub-key is a source prefix, so both are short.
+const (
+	MaxLockNameBytes = 256
+	MaxLockSubBytes  = 256
+)
+
+// CheckLockRequest returns ErrInvalidLock for a scope that is empty or holds
+// another character than the letters a to z, an empty name, a name or a
+// sub-key above its limit or with a control character, and a rule that
+// LockRule.Validate refuses. Each adapter of NameLockCounter calls it before
+// it writes, so a request that it refuses changes nothing.
+func CheckLockRequest(scope, name, sub string, rule LockRule) error {
+	switch {
+	case scope == "" || !validScope(scope):
+		return fmt.Errorf("%w: scope %q", ErrInvalidLock, scope)
+	case name == "" || len(name) > MaxLockNameBytes || hasControl(name):
+		return fmt.Errorf("%w: a name of %d bytes", ErrInvalidLock, len(name))
+	case len(sub) > MaxLockSubBytes || hasControl(sub):
+		return fmt.Errorf("%w: a sub-key of %d bytes", ErrInvalidLock, len(sub))
+	default:
+		return rule.Validate()
+	}
+}
+
+// Validate returns ErrInvalidLock for a limit below 1, a lock time of 0 or
+// less, a maximum below the lock time, or a negative reset time.
+func (r LockRule) Validate() error {
+	switch {
+	case r.Limit < 1:
+		return fmt.Errorf("%w: limit %d", ErrInvalidLock, r.Limit)
+	case r.LockFor <= 0:
+		return fmt.Errorf("%w: lock time %s", ErrInvalidLock, r.LockFor)
+	case r.MaxLockFor < r.LockFor:
+		return fmt.Errorf("%w: maximum %s below the lock time %s", ErrInvalidLock, r.MaxLockFor, r.LockFor)
+	case r.ResetAfter < 0:
+		return fmt.Errorf("%w: reset time %s", ErrInvalidLock, r.ResetAfter)
+	default:
+		return nil
+	}
+}
+
+// LockDuration returns how long the lock at level lasts under r: LockFor
+// times 2 to the power of level, and never more than MaxLockFor.
+func (r LockRule) LockDuration(level int) time.Duration {
+	d := r.LockFor
+
+	for range level {
+		if d >= r.MaxLockFor/2 {
+			return r.MaxLockFor
+		}
+
+		d *= 2
+	}
+
+	return min(d, r.MaxLockFor)
+}
+
+// hasControl reports a byte below 0x20 or the byte 0x7f.
+func hasControl(s string) bool {
+	for i := range len(s) {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+
+	return false
+}
+
+// PasswordRule is the rule of the count of one name from one source prefix.
+func PasswordRule() LockRule {
+	return LockRule{
+		Limit: DefaultNameLimit, LockFor: DefaultNameLockFor, MaxLockFor: DefaultNameLockFor, ResetAfter: 0,
+	}
+}
+
+// PasswordNameRule is the rule of the count of one name from every source.
+func PasswordNameRule() LockRule {
+	return LockRule{
+		Limit: DefaultNameGlobalLimit, LockFor: DefaultNameGlobalLockFor, MaxLockFor: DefaultNameGlobalMaxLockFor,
+		ResetAfter: DefaultNameGlobalResetAfter,
+	}
 }
