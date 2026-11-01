@@ -154,6 +154,21 @@ func DevPreferencesRow(principalID string) map[string]any {
 	}
 }
 
+// DevLocalUserRow returns a local_users row with a password hash.
+func DevLocalUserRow(id, principalID string) map[string]any {
+	return map[string]any{
+		"id": id, "principal_id": principalID, "user_name": "demo",
+		"password_hash": "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$" +
+			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"password_set_at_ms": 1, "change_required": false, "demo": true, "created_by": "system", "created_at_ms": 1,
+	}
+}
+
+// DevSessionGenerationRow returns a principal_session_generations row.
+func DevSessionGenerationRow(principalID string) map[string]any {
+	return map[string]any{"principal_id": principalID, "generation": 3}
+}
+
 // DevGroupRow returns a principal_groups row.
 func DevGroupRow(id string) map[string]any {
 	return map[string]any{

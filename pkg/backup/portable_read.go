@@ -187,7 +187,8 @@ func checkManualLockReason(value any) error {
 
 // checkPortableValue runs the check of the column that has one: the ID, the
 // output sharing setting and the source filter of a namespace, the reason of a manual lock,
-// the document of the preferences of a person and the unit settings.
+// the document of the preferences of a person, the user name and the password
+// hash of a local user, and the unit settings.
 func checkPortableValue(table, column string, value any) error {
 	switch {
 	case table == portTableNamespaces && column == "id":
@@ -201,8 +202,18 @@ func checkPortableValue(table, column string, value any) error {
 	case table == TablePersonPreferences && column == portColDocument:
 		return checkPreferencesDocument(value)
 	default:
-		return checkUnitSettingsValue(table, column, value)
+		return checkOtherValue(table, column, value)
 	}
+}
+
+// checkOtherValue runs the checks of the local users and of the unit
+// settings, so that checkPortableValue stays short.
+func checkOtherValue(table, column string, value any) error {
+	if table == TableLocalUsers {
+		return checkLocalUserValue(column, value)
+	}
+
+	return checkUnitSettingsValue(table, column, value)
 }
 
 // checkNamespaceID refuses a namespace row whose id value is not a valid

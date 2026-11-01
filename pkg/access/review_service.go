@@ -21,11 +21,30 @@ import (
 // ErrNoReview reports a Service whose store reads no access review.
 var ErrNoReview = errors.New("the store reads no access review")
 
-// ErrCollectionReview reports an export of a collection. The export of a
-// collection must hold the grants on the units inside it, and the core
-// cannot read them until the collections are wired (#478), so the export
-// is refused instead of an incomplete answer.
-var ErrCollectionReview = errors.New("the export of a collection is not available until collections are wired")
+// ErrCollectionReview reports an export of a collection on a Service whose
+// authorizer has no collection port that lists the units of a collection.
+// The export of a collection must hold the grants on the units inside it, so
+// the export is refused instead of an incomplete answer.
+var ErrCollectionReview = errors.New("the export of a collection needs a store that holds collections")
+
+// CollectionUnits lists the units of a collection, for the export of a
+// collection and for the read of deleted units. The collection package
+// implements it. CollectionUnitIDs returns the stable IDs of the units in the
+// collection obj, deleted units that are not purged included. It returns an
+// error when the collection does not exist. A unit of another collection is
+// never in the answer.
+//
+// obj carries the stable ID of the collection. An implementation returns an
+// error when no collection with that name and that ID exists, so the units of a
+// collection that was created again under the same name are never returned for
+// the ID of the old one.
+type CollectionUnits interface {
+	CollectionUnitIDs(ctx context.Context, collection identity.Object) ([]string, error)
+}
+
+// unitTargetPrefix starts the target of a grant on a unit: the prefix and the
+// stable ID of the unit.
+const unitTargetPrefix = "unit:"
 
 // BootstrapHolder is the holder of a row of an export that a bootstrap
 // admin token gives: it holds every action and has no grant (ADR 6).
@@ -112,8 +131,12 @@ type ReviewPage struct {
 // unless the request names a subject.
 //
 // A namespace of obj must exist (ErrNotFound). The export of a collection
-// returns ErrCollectionReview until collections are wired. A bad request
-// returns ErrInvalid, and a store that reads no review ErrNoReview.
+// holds the grants on the collection, the grants on each unit that is in it
+// now (a deleted unit that is not purged included, with the state deleted),
+// and the grants on the containers of the collection. A collection that does
+// not exist returns ErrNotFound, and an authorizer with no collection port
+// ErrCollectionReview. A bad request returns ErrInvalid, and a store that
+// reads no review ErrNoReview.
 //
 // Review reads only. The caller writes the audit entry of the export (ADR
 // 52, decision 13).
@@ -426,7 +449,7 @@ func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
 // manage access.
 func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewScope, map[string]bool, error) {
 	scope := ReviewScope{
-		Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		Object: identity.Object{}, Namespace: "", Inside: nil, Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: false,
 	}
 
@@ -447,7 +470,9 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 	}
 
 	if kind == ObjectCollection {
-		return scope, nil, fmt.Errorf("export of %q: %w", obj.String(), ErrCollectionReview)
+		scope, err = s.collectionReviewScope(ctx, obj, roles)
+
+		return scope, grantAccess, err
 	}
 
 	if kind == ObjectPrincipal {
@@ -486,6 +511,94 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 	return scope, grantAccess, nil
 }
 
+// collectionReviewScope returns the scope of the export of obj, a collection:
+// the grants on the collection by its stable ID, the grants on the units that
+// are in it now, and the grants with a data role on the objects that contain
+// it. It fails closed: it returns ErrNotFound for a collection that does not
+// exist, and ErrCollectionReview when no port lists the units, so a partial
+// answer is never given.
+func (s *Service) collectionReviewScope(
+	ctx context.Context, obj identity.Object, roles []string,
+) (ReviewScope, error) {
+	scope := ReviewScope{
+		Object: identity.Object{}, Namespace: "", Inside: nil, Containers: nil, ContainerRoles: nil,
+		TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
+	}
+
+	if err := s.reviewNamespace(ctx, obj); err != nil {
+		return scope, err
+	}
+
+	units, ok := s.authz.collections.(CollectionUnits)
+	if !ok {
+		return scope, fmt.Errorf("export of %q: %w", obj.String(), ErrCollectionReview)
+	}
+
+	col, inside, err := s.collectionInside(ctx, obj, units)
+	if err != nil {
+		return scope, err
+	}
+
+	chain, err := s.authz.chain(ctx, col)
+	if err != nil {
+		return scope, err
+	}
+
+	// The chain starts with the collection: every later object contains it.
+	for i := 1; i < len(chain); i++ {
+		scope.Containers = append(scope.Containers, chain[i].String())
+	}
+
+	scope.Object, scope.Inside, scope.ContainerRoles = col, inside, roles
+
+	return scope, nil
+}
+
+// collectionInside returns the collection obj with its current stable ID, and
+// the targets of the grants on the units in it. It returns ErrNotFound when
+// the collection does not exist or when obj carries the ID of another
+// collection of the same name.
+func (s *Service) collectionInside(
+	ctx context.Context, obj identity.Object, units CollectionUnits,
+) (identity.Object, []string, error) {
+	// Defense in depth: the unit list is read for the stable ID of the
+	// collection only. A name that has no collection stops here, so the scope
+	// never holds the units of another collection.
+	col, err := collectionIDOf(ctx, obj, s.authz.collections)
+	if err != nil {
+		return obj, nil, err
+	}
+
+	// Defense in depth: collectionIDOf keeps an ID that the caller gives, and
+	// the collection port checks the ID in its own transaction too. This check
+	// stays so that an ID of a collection that was created again under the
+	// same name never selects the units of the new collection.
+	current, found, err := s.authz.collections.CollectionID(ctx, col)
+	if err != nil {
+		return obj, nil, fmt.Errorf("read collection ID: %w", err)
+	}
+
+	if col.CollectionID() == "" || !found || current != col.CollectionID() {
+		return obj, nil, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	ids, err := units.CollectionUnitIDs(ctx, col)
+	if err != nil {
+		return obj, nil, fmt.Errorf("read units of collection %q: %w", obj.String(), err)
+	}
+
+	inside := make([]string, 0, len(ids))
+
+	for _, id := range ids {
+		// An empty ID would make the target "unit:", which no grant holds.
+		if id != "" {
+			inside = append(inside, unitTargetPrefix+id)
+		}
+	}
+
+	return col, inside, nil
+}
+
 // principalReviewScope returns the scope of the export of obj, a service
 // principal: the grants on the principal, the grants on the installation
 // with a role that holds principal:manage-tokens, and, for a principal of
@@ -496,7 +609,7 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 // principal.
 func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object) (ReviewScope, error) {
 	scope := ReviewScope{
-		Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		Object: obj, Namespace: "", Inside: nil, Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: false,
 	}
 
@@ -609,8 +722,14 @@ func inheritedFrom(scope ReviewScope, obj identity.Object) *identity.Object {
 func reviewQuery(req ReviewRequest, obj identity.Object, now time.Time) (ReviewQuery, int, error) {
 	q := ReviewQuery{
 		Scope: ReviewScope{
-			Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
-			TokenNamespaceRoles: nil, All: false,
+			Object:              identity.Object{},
+			Namespace:           "",
+			Inside:              nil,
+			Containers:          nil,
+			ContainerRoles:      nil,
+			TokenNamespace:      "",
+			TokenNamespaceRoles: nil,
+			All:                 false,
 		},
 		Subject:   "",
 		Principal: "",

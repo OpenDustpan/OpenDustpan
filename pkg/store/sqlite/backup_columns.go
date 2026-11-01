@@ -415,6 +415,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteProfileBackupTables(),
 		sqliteManualLockBackupTables(),
 		sqlitePreferenceBackupTables(),
+		sqliteLocalUserBackupTables(),
 		sqliteSavedViewBackupTables(),
 		sqliteDriftBackupTables(),
 		sqliteUnitSettingsBackupTables(),
@@ -565,6 +566,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		{
 			table:   backup.TableDurableHeartbeats,
 			columns: []string{"owner", backupColAtMs, "lease_ms"},
+		},
+		{
+			table:   backup.TableLocalUserResets,
+			columns: sqliteLocalUserResetColumns(),
 		},
 	}
 }

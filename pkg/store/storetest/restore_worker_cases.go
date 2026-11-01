@@ -84,7 +84,7 @@ func restoreWorkerCases() []restoreCase {
 		{name: "a cancel after the swap is refused and the restore succeeds", test: testWorkerCancelAfterSwap},
 		{name: "the cleanup of the next restore drops an area of an ended restore", test: testWorkerNextCleanup},
 		{
-			name: "a restore on a blob store with no conditional writes never deletes a live key",
+			name: "a restore on a blob store with no conditional writes never replaces a live key that differs",
 			test: testWorkerOverwritingBlobs,
 		},
 		{name: "a corrupt backup object fails the restore and deletes no live key", test: testWorkerCorruptObject},
@@ -1188,18 +1188,27 @@ func testWorkerOverwritingBlobs(t *testing.T, newStore RestoreFactory) {
 	aDone := runAsync(t, a, gate)
 	waitReached(t, gate, aDone)
 
-	// The live key holds other bytes after the pre-backup took its copy:
-	// the copy step repairs it with the checked bytes of the backup.
-	putBlob(t, r.live.Store, r.seed.liveBlob, []byte("bytes that differ from the backup"))
+	// The live key holds other bytes after the pre-backup took its copy. The
+	// store would replace the key, because it ignores conditional writes. The
+	// copy step refuses: the restore fails, and the key keeps its bytes.
+	differing := []byte("bytes that differ from the backup")
+	putBlob(t, r.live.Store, r.seed.liveBlob, differing)
 
 	gate.open()
 	<-aDone
 
-	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
+	row := r.driveToEnd(t, a, id)
+	if row.State != backup.RestoreFailed || !strings.Contains(row.Error, "corrupt") {
+		t.Fatalf("restore over a live key that differs = %q %q, want failed as corrupt", row.State, row.Error)
+	}
 
-	repair := "restore " + id.String() + " repaired blob " + strconv.Quote(r.seed.liveBlob.String())
-	if n := r.restoreEntries(t, repair); n != 1 {
-		t.Fatalf("audit entries of the repair = %d, want 1", n)
+	if got := r.liveBlobBytes(t); !bytes.Equal(got, differing) {
+		t.Fatalf("live key = %q, want the bytes that it held before the restore", got)
+	}
+
+	refusal := "restore " + id.String() + " refused to overwrite live blob " + strconv.Quote(r.seed.liveBlob.String())
+	if n := r.restoreEntries(t, refusal); n != 1 {
+		t.Fatalf("audit entries of the refusal = %d, want 1", n)
 	}
 }
 

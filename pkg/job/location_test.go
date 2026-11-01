@@ -103,6 +103,48 @@ func TestLocationValidateRepository(t *testing.T) {
 		"an upper case scheme":                {"HTTPS://git.example.com/acme/infra.git", false},
 	}
 
+	// Hostile hosts: each is an address, a number or localhost, so a fetch
+	// of the code could reach an internal service.
+	for name, r := range map[string]string{
+		"a private IPv4 host":            "https://10.0.0.5/acme/infra",
+		"a loopback IPv4 host":           "https://127.0.0.1/acme/infra",
+		"a public IPv4 host":             "https://93.184.216.34/acme/infra",
+		"a metadata host":                "https://169.254.169.254/acme/infra",
+		"a link-local IPv4 host":         "https://169.254.1.1/acme/infra",
+		"an IPv4 host with a port":       "https://10.0.0.5:443/acme/infra",
+		"a unique local IPv6 host":       "https://[fd00::1]/acme/infra",
+		"a loopback IPv6 host":           "https://[::1]/acme/infra",
+		"a link-local IPv6 host":         "https://[fe80::1]/acme/infra",
+		"an IPv6 host with a zone":       "https://[fe80::1%25eth0]/acme/infra",
+		"an IPv4-mapped IPv6 host":       "https://[::ffff:127.0.0.1]/acme/infra",
+		"a hex IPv4-mapped IPv6 host":    "https://[::ffff:a9fe:a9fe]/acme/infra",
+		"a metadata IPv6 host":           "https://[fd00:ec2::254]/acme/infra",
+		"an IPv6 host with a port":       "https://[fd00::1]:443/acme/infra",
+		"a decimal host":                 "https://2130706433/acme/infra",
+		"a hexadecimal host":             "https://0x7f000001/acme/infra",
+		"an upper case hexadecimal host": "https://0X7F000001/acme/infra",
+		"an octal host":                  "https://0177.0.0.1/acme/infra",
+		"a short host":                   "https://127.1/acme/infra",
+		"a mixed form host":              "https://0x7f.0.0.0x1/acme/infra",
+		"an IPv4 host with a final dot":  "https://127.0.0.1./acme/infra",
+		"localhost":                      "https://localhost/acme/infra",
+		"localhost in upper case":        "https://LOCALHOST/acme/infra",
+		"localhost with a final dot":     "https://localhost./acme/infra",
+		"a name under localhost":         "https://git.localhost/acme/infra",
+		"an encoded host":                "https://%31%32%37.0.0.1/acme/infra",
+		"a non-ASCII host":               "https://gіt.example.com/acme/infra",
+	} {
+		tests[name] = struct {
+			repository string
+			ok         bool
+		}{r, false}
+	}
+
+	tests["a name that holds an address"] = struct {
+		repository string
+		ok         bool
+	}{"https://127.0.0.1.example.com/acme/infra", true}
+
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -118,7 +160,8 @@ func TestLocationValidateRepository(t *testing.T) {
 				t.Fatalf("Validate = %v, want ErrInvalid", err)
 			}
 
-			if err != nil && (strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "example")) {
+			if err != nil && (strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "example") ||
+				strings.Contains(err.Error(), "127.0.0.1")) {
 				t.Fatalf("Validate = %v, want an error with no part of the repository", err)
 			}
 		})

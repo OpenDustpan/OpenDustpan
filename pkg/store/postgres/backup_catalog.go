@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/internal/catalog"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -49,7 +47,7 @@ func pgCopyCatalogTables() []pgCopyTable {
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedCatalogBlueprints(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedCatalogBlueprints(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedCatalogDrafts(ctx, pool, staging); err != nil {
 		return err
 	}
@@ -57,7 +55,7 @@ func checkStagedCatalogBlueprints(ctx context.Context, pool *pgxpool.Pool, stagi
 	return checkStagedCatalogVersions(ctx, pool, staging)
 }
 
-func checkStagedCatalogDrafts(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedCatalogDrafts(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT n.name, b.name, b.draft_json FROM " + stagingTable(staging, "catalog_blueprints") +
 		" AS b LEFT JOIN " + stagingTable(staging, "namespaces") + " AS n ON n.id = b.namespace_id"
 
@@ -98,7 +96,7 @@ func checkStagedCatalogDrafts(ctx context.Context, pool *pgxpool.Pool, staging s
 	return nil
 }
 
-func checkStagedCatalogVersions(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedCatalogVersions(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT n.name, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by, " +
 		"v.published_at_ms, v.retired FROM " + stagingTable(staging, "catalog_blueprint_versions") +
 		" AS v LEFT JOIN " + stagingTable(staging, "namespaces") + " AS n ON n.id = v.namespace_id"

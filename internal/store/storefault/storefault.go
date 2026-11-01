@@ -300,12 +300,14 @@ func (s *Store) RenameStack(
 }
 
 // CreateUpdate persists a new update, unless a fault fires first.
-func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
+func (s *Store) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
 	if err := s.before(ctx, "CreateUpdate"); err != nil {
 		return err
 	}
 
-	return s.inner.CreateUpdate(ctx, u, fence)
+	return s.inner.CreateUpdate(ctx, u, key, fence)
 }
 
 // GetUpdate returns one update, unless a fault fires first.

@@ -302,9 +302,9 @@ type settings struct {
 	// trustRules keeps the workload trust rules of each namespace, or nil
 	// without them. See WithTrustRules.
 	trustRules trustRuleSettings
-	// jobClaimer claims the phases of runner jobs for the runners of the
-	// protocol, or is nil. See WithJobClaimer.
-	jobClaimer job.Claimer
+	// jobClaimer builds the claimer of the phases of runner jobs for the
+	// runners of the protocol, or is nil. See WithJobClaimer.
+	jobClaimer JobClaimerFunc
 	// components are the components this process runs. See WithComponents.
 	components Components
 	// operationLease is the lease period of a claim on a durable operation,
@@ -1556,6 +1556,7 @@ func newTofuHTTPHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
+		StateGuard:    tofuHTTPGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1862,6 +1863,11 @@ func newUpdateService(
 
 	attachBlobGuard(cfg)
 
+	sealer, err := newItemSealer(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
@@ -1878,6 +1884,7 @@ func newUpdateService(
 		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		Sealer:             sealer,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -2914,7 +2921,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,
 		},
-		ReadScope:     deletedReadScope{authz: cfg.authorizer},
+		ReadScope:     newDeletedReadScope(cfg.authorizer, svc.collections),
 		Collections:   svc.collections,
 		Placements:    svc.placements,
 		Locks:         svc.manualLocks,

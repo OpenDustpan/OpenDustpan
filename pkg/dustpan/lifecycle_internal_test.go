@@ -148,7 +148,7 @@ func TestDeletedReadScope(t *testing.T) {
 		{name: "no grant", subject: "nobody", ns: "acme", wantIDs: []string{}, wantAll: false},
 	}
 
-	scope := deletedReadScope{authz: f.authz}
+	scope := deletedReadScope{authz: f.authz, units: nil}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,7 +183,7 @@ func TestDeletedReadScope(t *testing.T) {
 func TestDeletedReadScopeFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	scope := deletedReadScope{authz: identity.AdminOnly{}}
+	scope := deletedReadScope{authz: identity.AdminOnly{}, units: nil}
 
 	for _, admin := range []bool{true, false} {
 		p := identity.Principal{

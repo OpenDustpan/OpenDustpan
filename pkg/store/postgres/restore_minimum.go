@@ -54,7 +54,7 @@ func (s *Store) checkSwap(ctx context.Context, tx pgx.Tx, staging string) error 
 func (s *Store) CheckBinaryMinimum(ctx context.Context) error {
 	var minimums []string
 
-	if err := s.pool.QueryRow(ctx, `SELECT `+minimumsSQL).Scan(&minimums); err != nil {
+	if err := s.reads.QueryRow(ctx, `SELECT `+minimumsSQL).Scan(&minimums); err != nil {
 		return fmt.Errorf("read schema minimum postgres database: %w", maintenance.ErrUnavailable)
 	}
 

@@ -127,6 +127,18 @@ token. The runner that held the lapsed claim gets `claim-lost` on its next
 renewal, and the claim is in `lost` in its next heartbeat. The runner renews a
 claim after a third of the lease.
 
+Before a poll gives a phase of a job to a runner, the server checks the gates
+of the unit of the job again, as at the start of the job. An enforced gate at
+`change.propose` or `state.write`, also one saved after the start, refuses the
+claim. A gate in evaluate mode refuses nothing. When the server cannot read
+the gates, it refuses the claim too. A refused claim fails the phase and the
+job, with a reason that names each gate. The job does not wait for the gate
+to go: a person deletes the gate and starts a new run. The runner gets no
+phase from it,
+and the poll looks for other work of the pool. The refusal writes an audit
+entry with the action `runner:claim`, the outcome `denied`, the runner, the
+unit, the job ID and the reason.
+
 The launcher of a claim must open its job session within 30 minutes of the
 claim. After that time, a renewal of a claim with no job session gives the
 claim back through the job service, with the same rules as a release, and
