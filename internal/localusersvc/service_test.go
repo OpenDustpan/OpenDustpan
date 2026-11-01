@@ -136,8 +136,9 @@ func (f *fixture) serviceWith(t *testing.T, reach access.ReachConfig) *localuser
 		Keys:       f.store,
 		Settings:   f.settings,
 		SSO:        func(context.Context) (bool, error) { return f.sso, nil }, Reach: reach,
-		Kind: installation.KindProduction,
-		Now:  nil,
+		Subjects: f.store,
+		Kind:     installation.KindProduction,
+		Now:      nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -158,7 +159,7 @@ func base(subject string) audit.Entry {
 
 // admin is the administrator that makes and resets local users.
 func admin() localusersvc.Actor {
-	return localusersvc.Actor{Entry: base("corp:admin"), PrincipalID: adminID}
+	return localusersvc.Actor{Entry: base("corp:admin"), PrincipalID: adminID, Admin: false}
 }
 
 // mustCreate makes the local user name with a password and returns it.
@@ -568,8 +569,9 @@ func TestResetEndsSessionsAndKeepsOwnAccount(t *testing.T) {
 		in    localusersvc.ResetInput
 	}{
 		{
-			name: "own account", actor: localusersvc.Actor{Entry: base("local:x"), PrincipalID: c.Principal.ID},
-			in: localusersvc.ResetInput{Reason: "lost", RevokeAccessTokens: false}, want: localuser.ErrOwnAccount,
+			name:  "own account",
+			actor: localusersvc.Actor{Entry: base("local:x"), PrincipalID: c.Principal.ID, Admin: false},
+			in:    localusersvc.ResetInput{Reason: "lost", RevokeAccessTokens: false}, want: localuser.ErrOwnAccount,
 		},
 		{
 			name: "no reason", actor: admin(), in: localusersvc.ResetInput{Reason: " ", RevokeAccessTokens: false},
@@ -625,7 +627,7 @@ func TestChangePassword(t *testing.T) {
 
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
-	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID, Admin: false}
 	g := f.generation(t, c.Principal.ID)
 
 	refusals := []struct {
@@ -696,7 +698,7 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("change with a fresh step: %v", err)
 	}
 
-	stranger := localusersvc.Actor{Entry: base("corp:bob"), PrincipalID: "prn-nobody"}
+	stranger := localusersvc.Actor{Entry: base("corp:bob"), PrincipalID: "prn-nobody", Admin: false}
 
 	_, err = f.svc.ChangePassword(t.Context(), stranger, localusersvc.ChangeInput{
 		Current: goodPassword, New: otherPassword, Generation: 1, Fresh: true,
@@ -716,7 +718,7 @@ func TestConcurrentChangesFromOneSessionPassOnce(t *testing.T) {
 
 	f := newFixture(t)
 	c := f.mustCreate(t, "alice", goodPassword)
-	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID}
+	me := localusersvc.Actor{Entry: base(c.Principal.Subject), PrincipalID: c.Principal.ID, Admin: false}
 	g := f.generation(t, c.Principal.ID)
 
 	var (
@@ -775,8 +777,9 @@ func TestRemovePasswordKeepsTheLastCredential(t *testing.T) {
 		t.Fatalf("remove = %v, want ErrLastCredential", err)
 	}
 
-	err = f.svc.RemovePassword(t.Context(), localusersvc.Actor{Entry: base("x"), PrincipalID: c.Principal.ID},
-		c.Principal.ID, "mine")
+	self := localusersvc.Actor{Entry: base("x"), PrincipalID: c.Principal.ID, Admin: false}
+
+	err = f.svc.RemovePassword(t.Context(), self, c.Principal.ID, "mine")
 	if !errors.Is(err, localuser.ErrOwnAccount) {
 		t.Fatalf("remove the own password = %v, want ErrOwnAccount", err)
 	}

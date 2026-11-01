@@ -150,8 +150,9 @@ func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.S
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
-		Kind: installation.KindDev,
-		Now:  nil,
+		Subjects: st,
+		Kind:     installation.KindDev,
+		Now:      nil,
 	})
 	if err != nil {
 		tb.Fatalf("local user service: %v", err)
