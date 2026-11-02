@@ -272,7 +272,7 @@ type lockEntry struct {
 // lock succeeds for 24 hours after the time of the release, because of this
 // record. It never holds a token or a secret.
 type lastReleaseEntry struct {
-	LockID     string `json:"lockId"`
+	LockID     string `json:"id"`
 	Holder     string `json:"holder"`
 	ReleasedBy string `json:"releasedBy"`
 	ReleasedAt string `json:"releasedAt"`

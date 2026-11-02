@@ -157,6 +157,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 func enforcingUnitEntries() map[namespace.Name][]coreinventory.Entry {
 	return map[namespace.Name][]coreinventory.Entry{
 		"acme": {{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "acme",

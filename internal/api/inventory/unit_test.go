@@ -59,6 +59,7 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 
 	return map[namespace.Name][]coreinventory.Entry{
 		"acme": {{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "acme",
@@ -75,6 +76,7 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 			Labels:     map[string]string{"team": "payments"},
 		}},
 		"globex": {{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "globex",
