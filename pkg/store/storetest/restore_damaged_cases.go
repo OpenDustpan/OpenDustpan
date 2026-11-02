@@ -2,21 +2,19 @@ package storetest
 
 import (
 	"bytes"
-	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/blob"
 )
 
 // restoreDamagedCases are the cases of a restore over a live blob that is
 // missing or damaged. Blobs are write-once: a restore never writes over a
 // live blob, and it stops before any change of the live data at a damaged
 // live blob or at more missing live blobs than its bound allows. The backup
-// before such a restore stays restorable.
+// before a restore stays restorable.
 func restoreDamagedCases() []restoreCase {
 	return []restoreCase{
 		{
@@ -24,15 +22,15 @@ func restoreDamagedCases() []restoreCase {
 			test: testWorkerDamagedLiveBlob,
 		},
 		{
-			name: "a restore stops before any live change when more live blobs are missing than the bound allows",
-			test: testWorkerMissingPastBound,
+			name: "a restore writes a live blob that the backup before the restore found missing within the bound",
+			test: testWorkerMissingWithinBound,
 		},
 		{
 			name: "a restore with force never replaces a live blob that matched its record and differs from the backup",
 			test: testWorkerChangedLiveBlob,
 		},
 		{
-			name: "a backup before a restore that found a missing live blob restores and leaves that key as it is",
+			name: "a backup before a restore that found a missing live blob undoes the restore and leaves that key",
 			test: testWorkerRestoreOfPreBackup,
 		},
 	}
@@ -148,7 +146,7 @@ func testWorkerDamagedLiveBlob(t *testing.T, newStore RestoreFactory) {
 	}
 }
 
-func testWorkerMissingPastBound(t *testing.T, newStore RestoreFactory) {
+func testWorkerMissingWithinBound(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	r := newWorkerRig(t, newStore)
@@ -160,18 +158,52 @@ func testWorkerMissingPastBound(t *testing.T, newStore RestoreFactory) {
 		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
 	})
 
-	// The live data names one blob, and it is missing: 100 percent, which a
-	// wrong blob store setting gives.
+	// The live data names one blob, and it is missing. One missing blob is
+	// within the bound at every size: the restore adds the key.
 	id := backup.MintRestoreID()
 	pre := r.startWithPreBackupID(t, a, id, r.backupID)
 	row := r.driveToEnd(t, a, id)
 
 	r.mustDamaged(t, pre, backup.DamageMissing)
-	r.mustStopped(t, row, "store check --target blobs", 1, 0)
+	r.mustWroteMissing(t, row)
+}
 
-	if _, err := r.live.Get(t.Context(), r.seed.liveBlob); !errors.Is(err, blob.ErrNotFound) {
-		t.Fatalf("get the live key = %v, want ErrNotFound: the restore must not write it", err)
+// mustWroteMissing checks that restore row succeeded with the warning of
+// missing live blobs, that the live key holds the bytes of the backup, and
+// that its report and the audit log name what the backup before it found.
+func (r *workerRig) mustWroteMissing(t *testing.T, row backup.RestoreRecord) {
+	t.Helper()
+
+	if row.State != backup.RestoreSucceeded {
+		t.Fatalf("restore %s = %q (%s), want succeeded", row.ID, row.State, row.Error)
 	}
+
+	if !bytes.Equal(r.liveBlobBytes(t), r.backupBlobBytes(t)) {
+		t.Fatal("the live key does not hold the bytes of the backup after the restore")
+	}
+
+	if !slices.Contains(warningCodes(row), backup.WarnMissingLiveBlobs) {
+		t.Fatalf("warnings of restore %s = %v, want %q", row.ID, warningCodes(row), backup.WarnMissingLiveBlobs)
+	}
+
+	if row.DevReport == nil || row.DevReport.PreBackupFound == nil || row.DevReport.PreBackupFound.Missing != 1 ||
+		!slices.Contains(row.DevReport.PreBackupFound.Keys, r.seed.liveBlob.String()) {
+		t.Fatalf("report of restore %s = %+v, want 1 missing", row.ID, row.DevReport)
+	}
+
+	if n := r.restoreEntries(t, "backup "+row.PreBackupID.String()+" before restore "+row.ID.String()); n != 1 {
+		t.Fatalf("audit entries of the findings = %d, want 1", n)
+	}
+}
+
+// warningCodes returns the codes of the warnings of row.
+func warningCodes(row backup.RestoreRecord) []backup.RestoreWarningCode {
+	codes := make([]backup.RestoreWarningCode, 0, len(row.Warnings()))
+	for _, w := range row.Warnings() {
+		codes = append(codes, w.Code)
+	}
+
+	return codes
 }
 
 func testWorkerChangedLiveBlob(t *testing.T, newStore RestoreFactory) {
@@ -215,7 +247,6 @@ func testWorkerRestoreOfPreBackup(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	r := newWorkerRig(t, newStore)
-	whole := r.liveBlobBytes(t)
 
 	if err := r.live.Store.Delete(t.Context(), r.seed.liveBlob); err != nil {
 		t.Fatalf("delete the live blob: %v", err)
@@ -225,25 +256,20 @@ func testWorkerRestoreOfPreBackup(t *testing.T, newStore RestoreFactory) {
 		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
 	})
 
-	// The first restore stops at the missing blob. Its backup before the
+	// The first restore writes the missing blob. Its backup before the
 	// restore records the key as missing and holds no copy of it.
 	first := backup.MintRestoreID()
 	pre := r.startWithPreBackupID(t, a, first, r.backupID)
-
-	if row := r.driveToEnd(t, a, first); row.State != backup.RestoreFailed {
-		t.Fatalf("first restore = %q (%s), want failed", row.State, row.Error)
-	}
-
+	r.mustWroteMissing(t, r.driveToEnd(t, a, first))
 	r.mustDamaged(t, pre, backup.DamageMissing)
 
 	if err := backup.Check(t.Context(), r.target, pre); err != nil {
 		t.Fatalf("backup check of the backup before the restore = %v, want nil", err)
 	}
 
-	// The operator puts the blob back. The backup before the first restore
-	// must restore: its data names the key, and the restore leaves the key
-	// as it is.
-	putBlob(t, r.live.Store, r.seed.liveBlob, whole)
+	// The backup before the first restore must restore, to undo it: its data
+	// names the key, and the restore leaves the key as it is.
+	written := r.liveBlobBytes(t)
 
 	second := backup.MintRestoreID()
 	r.startWithPreBackupID(t, a, second, pre)
@@ -253,17 +279,12 @@ func testWorkerRestoreOfPreBackup(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("restore of the backup before a restore = %q (%s), want succeeded", row.State, row.Error)
 	}
 
-	if got := r.liveBlobBytes(t); !bytes.Equal(got, whole) {
+	if got := r.liveBlobBytes(t); !bytes.Equal(got, written) {
 		t.Fatalf("live key = %q, want the bytes that it held", got)
 	}
 
-	codes := make([]backup.RestoreWarningCode, 0, len(row.Warnings()))
-	for _, w := range row.Warnings() {
-		codes = append(codes, w.Code)
-	}
-
-	if !slices.Contains(codes, backup.WarnBlobsNotHeld) {
-		t.Fatalf("warnings of restore %s = %v, want %q", row.ID, codes, backup.WarnBlobsNotHeld)
+	if !slices.Contains(warningCodes(row), backup.WarnBlobsNotHeld) {
+		t.Fatalf("warnings of restore %s = %v, want %q", row.ID, warningCodes(row), backup.WarnBlobsNotHeld)
 	}
 
 	if row.DevReport == nil || row.DevReport.NotHeld == nil || row.DevReport.NotHeld.Missing != 1 ||

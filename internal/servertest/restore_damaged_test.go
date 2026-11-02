@@ -116,8 +116,9 @@ type findingsDoc struct {
 
 // limitDoc is the bound on missing live blobs in a restore answer.
 type limitDoc struct {
-	Count   int `json:"count"`
-	Percent int `json:"percent"`
+	Count        int `json:"count"`
+	Percent      int `json:"percent"`
+	PercentAbove int `json:"percentAbove"`
 }
 
 // restoreDoc is the part of the answer of GET /api/server/restores/{id} that
@@ -182,7 +183,7 @@ func runRestore(t *testing.T, c *servertest.Cluster, backupID string) restoreDoc
 
 	return restoreDoc{
 		ID: id, State: "", PreBackupID: "", Error: "", Warnings: nil, PreBackupFound: nil,
-		MissingBlobLimit: limitDoc{Count: 0, Percent: 0},
+		MissingBlobLimit: limitDoc{Count: 0, Percent: 0, PercentAbove: 0},
 	}
 }
 
@@ -275,14 +276,15 @@ func (r damagedRig) mustStatesRead(t *testing.T, name string) {
 }
 
 // TestRestoreWritesAMissingStateBlob runs the reproduction of a restore over
-// a lost live state blob: six workspaces, a backup, then one live blob that
-// is deleted. One of six is within the bound, so the restore writes the blob
-// of the backup at the absent key: that adds a key and changes none. The
-// answer names the missing blob and the bound, and every state reads back.
+// a lost live state blob: two workspaces, a backup, then one live blob that
+// is deleted. One missing blob is within the bound at every size, so the
+// restore writes the blob of the backup at the absent key: that adds a key
+// and changes none. The answer names the missing blob and the bound, and
+// every state reads back.
 func TestRestoreWritesAMissingStateBlob(t *testing.T) {
 	t.Parallel()
 
-	r := newDamagedRig(t, 6)
+	r := newDamagedRig(t, 2)
 
 	if err := r.root.Remove(r.victim); err != nil {
 		t.Fatalf("delete the live blob: %v", err)
@@ -297,13 +299,13 @@ func TestRestoreWritesAMissingStateBlob(t *testing.T) {
 		t.Fatalf("warnings = %+v, want %q", doc.Warnings, backup.WarnMissingLiveBlobs)
 	}
 
-	if doc.PreBackupFound == nil || doc.PreBackupFound.Missing != 1 || doc.PreBackupFound.Named != 6 ||
+	if doc.PreBackupFound == nil || doc.PreBackupFound.Missing != 1 || doc.PreBackupFound.Named != 2 ||
 		doc.PreBackupFound.Damaged != 0 || !slices.Contains(doc.PreBackupFound.Keys, r.victim) {
-		t.Fatalf("preBackupFound = %+v, want 1 missing of 6 with the key %s", doc.PreBackupFound, r.victim)
+		t.Fatalf("preBackupFound = %+v, want 1 missing of 2 with the key %s", doc.PreBackupFound, r.victim)
 	}
 
-	if doc.MissingBlobLimit != (limitDoc{Count: 10, Percent: 20}) {
-		t.Fatalf("missingBlobLimit = %+v, want 10 blobs or 20 percent", doc.MissingBlobLimit)
+	if doc.MissingBlobLimit != (limitDoc{Count: 10, Percent: 20, PercentAbove: 1}) {
+		t.Fatalf("missingBlobLimit = %+v, want 10 blobs, or 20 percent when more than 1", doc.MissingBlobLimit)
 	}
 
 	if got := readFile(t, r.root, r.victim); !bytes.Equal(got, r.first) {
@@ -313,31 +315,36 @@ func TestRestoreWritesAMissingStateBlob(t *testing.T) {
 	r.mustStatesRead(t, "a live blob that is absent")
 }
 
-// TestRestoreStopsWhenTooManyStateBlobsAreMissing deletes one of two live
-// state blobs: 50 percent is above the bound. The restore stops before any
-// change of the live data with the text that names the count and the next
-// step, and the key stays absent.
+// TestRestoreStopsWhenTooManyStateBlobsAreMissing deletes both live state
+// blobs, as a blob store setting that names another store does: 2 of 2 is
+// above the bound. The restore stops before any change of the live data with
+// the text that names the count and the next step, and the keys stay absent.
 func TestRestoreStopsWhenTooManyStateBlobsAreMissing(t *testing.T) {
 	t.Parallel()
 
 	r := newDamagedRig(t, 2)
+	blobs := stateBlobs(t, r.root)
 
-	if err := r.root.Remove(r.victim); err != nil {
-		t.Fatalf("delete the live blob: %v", err)
+	for _, key := range blobs {
+		if err := r.root.Remove(key); err != nil {
+			t.Fatalf("delete the live blob: %v", err)
+		}
 	}
 
 	doc := runRestore(t, r.c, r.backupID)
-	if doc.State != string(backup.RestoreFailed) || !strings.Contains(doc.Error, "found 1 of 2 live blobs missing") ||
+	if doc.State != string(backup.RestoreFailed) || !strings.Contains(doc.Error, "found 2 of 2 live blobs missing") ||
 		!strings.Contains(doc.Error, "store check --target blobs") {
 		t.Fatalf("restore = %q (%s), want failed at the bound", doc.State, doc.Error)
 	}
 
-	if doc.PreBackupFound == nil || doc.PreBackupFound.Missing != 1 {
-		t.Fatalf("preBackupFound = %+v, want 1 missing", doc.PreBackupFound)
+	if doc.PreBackupFound == nil || doc.PreBackupFound.Missing != 2 {
+		t.Fatalf("preBackupFound = %+v, want 2 missing", doc.PreBackupFound)
 	}
 
-	if _, err := r.root.Stat(r.victim); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("stat the live blob = %v, want absent", err)
+	for _, key := range blobs {
+		if _, err := r.root.Stat(key); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stat the live blob %s = %v, want absent", key, err)
+		}
 	}
 }
 
