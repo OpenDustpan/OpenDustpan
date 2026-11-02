@@ -1934,8 +1934,8 @@ export const decodeUnitDrift: Decoder<UnitDrift> = object<UnitDrift>("UnitDrift"
 /** The validator of UnitLastRelease. */
 export const decodeUnitLastRelease: Decoder<UnitLastRelease> = object<UnitLastRelease>("UnitLastRelease", {
   holder: string,
+  id: string,
   kind: string,
-  lockId: string,
   releasedAt: string,
   releasedBy: string,
 });

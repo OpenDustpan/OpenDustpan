@@ -1565,8 +1565,8 @@ export interface UnitDrift {
 
 export interface UnitLastRelease {
   readonly holder: string;
+  readonly id: string;
   readonly kind: string;
-  readonly lockId: string;
   readonly releasedAt: string;
   readonly releasedBy: string;
 }

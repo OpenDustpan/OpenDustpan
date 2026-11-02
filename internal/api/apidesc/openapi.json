@@ -5658,10 +5658,10 @@
           "holder": {
             "type": "string"
           },
-          "kind": {
+          "id": {
             "type": "string"
           },
-          "lockId": {
+          "kind": {
             "type": "string"
           },
           "releasedAt": {
@@ -5673,8 +5673,8 @@
         },
         "required": [
           "holder",
+          "id",
           "kind",
-          "lockId",
           "releasedAt",
           "releasedBy"
         ],
