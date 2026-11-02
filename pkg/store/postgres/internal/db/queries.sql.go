@@ -6408,6 +6408,8 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 const getInventoryEntryByUnitID = `-- name: GetInventoryEntryByUnitID :one
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -6436,6 +6438,11 @@ type GetInventoryEntryByUnitIDRow struct {
 	LockHolder              pgtype.Text
 	LockSinceMs             pgtype.Int8
 	LockOperation           pgtype.Text
+	LastReleaseLockID       string
+	LastReleaseHolder       string
+	LastReleaseBy           string
+	LastReleaseKind         string
+	LastReleaseAtMs         int64
 	Collection              string
 	UnitManualHolder        pgtype.Text
 	UnitManualReason        pgtype.Text
@@ -6464,6 +6471,11 @@ func (q *Queries) GetInventoryEntryByUnitID(ctx context.Context, unitID string) 
 		&i.LockHolder,
 		&i.LockSinceMs,
 		&i.LockOperation,
+		&i.LastReleaseLockID,
+		&i.LastReleaseHolder,
+		&i.LastReleaseBy,
+		&i.LastReleaseKind,
+		&i.LastReleaseAtMs,
 		&i.Collection,
 		&i.UnitManualHolder,
 		&i.UnitManualReason,
@@ -13716,6 +13728,8 @@ func (q *Queries) ListInstanceVersions(ctx context.Context) ([]InstanceVersion, 
 const listInventory = `-- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -13745,6 +13759,11 @@ type ListInventoryRow struct {
 	LockHolder              pgtype.Text
 	LockSinceMs             pgtype.Int8
 	LockOperation           pgtype.Text
+	LastReleaseLockID       string
+	LastReleaseHolder       string
+	LastReleaseBy           string
+	LastReleaseKind         string
+	LastReleaseAtMs         int64
 	Collection              string
 	UnitManualHolder        pgtype.Text
 	UnitManualReason        pgtype.Text
@@ -13778,6 +13797,11 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 			&i.LockHolder,
 			&i.LockSinceMs,
 			&i.LockOperation,
+			&i.LastReleaseLockID,
+			&i.LastReleaseHolder,
+			&i.LastReleaseBy,
+			&i.LastReleaseKind,
+			&i.LastReleaseAtMs,
 			&i.Collection,
 			&i.UnitManualHolder,
 			&i.UnitManualReason,
@@ -21006,6 +21030,41 @@ func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateInventoryLastRelease = `-- name: UpdateInventoryLastRelease :exec
+UPDATE inventory
+SET last_release_lock_id = $1, last_release_holder = $2, last_release_by = $3,
+    last_release_kind = $4, last_release_at_ms = $5
+WHERE namespace = $6 AND tool = $7 AND name = $8
+`
+
+type UpdateInventoryLastReleaseParams struct {
+	LastReleaseLockID string
+	LastReleaseHolder string
+	LastReleaseBy     string
+	LastReleaseKind   string
+	LastReleaseAtMs   int64
+	Namespace         string
+	Tool              string
+	Name              string
+}
+
+// Publishes the last released lock of one workspace unit. The caller writes it
+// in the same transaction as the record on the workspace. An empty kind, empty
+// text and the time 0 mean no record.
+func (q *Queries) UpdateInventoryLastRelease(ctx context.Context, arg UpdateInventoryLastReleaseParams) error {
+	_, err := q.db.Exec(ctx, updateInventoryLastRelease,
+		arg.LastReleaseLockID,
+		arg.LastReleaseHolder,
+		arg.LastReleaseBy,
+		arg.LastReleaseKind,
+		arg.LastReleaseAtMs,
+		arg.Namespace,
+		arg.Tool,
+		arg.Name,
+	)
+	return err
 }
 
 const updateInventoryLock = `-- name: UpdateInventoryLock :exec

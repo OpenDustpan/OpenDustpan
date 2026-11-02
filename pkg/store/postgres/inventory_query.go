@@ -14,6 +14,8 @@ import (
 // unitPageColumns are the columns of ListInventory for one page of units.
 const unitPageColumns = `SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status,
        i.resource_count, i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder, ul.reason, ul.since_ms,
        cl.holder, cl.reason, cl.since_ms,
@@ -190,6 +192,7 @@ func scanUnitPageRow(row pgx.CollectableRow) (inventory.Entry, error) {
 	err := row.Scan(
 		&r.Namespace, &r.Tool, &r.Name, &r.UnitID, &r.DisplayName, &r.LastChangedMs, &r.Status,
 		&r.ResourceCount, &r.LockHolder, &r.LockSinceMs, &r.LockOperation,
+		&r.LastReleaseLockID, &r.LastReleaseHolder, &r.LastReleaseBy, &r.LastReleaseKind, &r.LastReleaseAtMs,
 		&r.Collection,
 		&r.UnitManualHolder, &r.UnitManualReason, &r.UnitManualSinceMs,
 		&r.CollectionManualHolder, &r.CollectionManualReason, &r.CollectionManualSinceMs,

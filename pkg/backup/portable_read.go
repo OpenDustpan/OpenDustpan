@@ -216,7 +216,7 @@ func checkOtherValue(table, column string, value any) error {
 		return checkLocalUserValue(column, value)
 	}
 
-	if table == portTableWorkspaces && column == portColLastReleaseKind {
+	if (table == portTableWorkspaces || table == portTableInventory) && column == portColLastReleaseKind {
 		return checkLastReleaseKind(value)
 	}
 
@@ -241,11 +241,14 @@ func checkNamespaceID(value any) error {
 // portTableWorkspaces is the table of the workspaces.
 const portTableWorkspaces = "workspaces"
 
+// portTableInventory is the table of the inventory entries.
+const portTableInventory = "inventory"
+
 // portColLastReleaseKind is the column of the kind of the last released lock
 // of a workspace.
 const portColLastReleaseKind = "last_release_kind"
 
-// checkLastReleaseKind refuses a workspace row whose kind of the last release
+// checkLastReleaseKind refuses a workspace or inventory row whose kind of the last release
 // is not empty, normal or forced. It returns ErrCorrupt.
 //
 // Defense in depth: the CHECK of the column refuses such a value at the copy,
@@ -254,11 +257,11 @@ const portColLastReleaseKind = "last_release_kind"
 func checkLastReleaseKind(value any) error {
 	kind, isText := value.(string)
 	if !isText {
-		return fmt.Errorf("workspace row has a last release kind that is not text: %w", ErrCorrupt)
+		return fmt.Errorf("row has a last release kind that is not text: %w", ErrCorrupt)
 	}
 
 	if kind != "" && !workspace.ReleaseKind(kind).Valid() {
-		return fmt.Errorf("workspace row has an invalid last release kind: %w", ErrCorrupt)
+		return fmt.Errorf("row has an invalid last release kind: %w", ErrCorrupt)
 	}
 
 	return nil
