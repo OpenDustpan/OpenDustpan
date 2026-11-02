@@ -360,18 +360,21 @@ func (e *LiveBlobsError) Is(target error) bool {
 // before it names damaged live blobs, or more missing live blobs than limit
 // allows. It returns nil, or a *LiveBlobsError.
 func checkLiveFindings(manifest Manifest, limit MissingBlobLimit) error {
-	found := findingsOf(manifest)
+	return checkFindings(
+		findingsOf(manifest), limit, damagedKeys(manifest, DamageMismatch), damagedKeys(manifest, DamageMissing),
+	)
+}
 
+// checkFindings refuses the restore when found names a damaged live blob, or
+// more missing live blobs than limit allows. The refusal names damaged or
+// missing as its keys. It returns nil, or a *LiveBlobsError.
+func checkFindings(found BlobFindings, limit MissingBlobLimit, damaged, missing []string) error {
 	if found.Damaged > 0 {
-		return &LiveBlobsError{
-			Sentinel: ErrLiveBlobsDamaged, Findings: found, Limit: limit, Keys: damagedKeys(manifest, DamageMismatch),
-		}
+		return &LiveBlobsError{Sentinel: ErrLiveBlobsDamaged, Findings: found, Limit: limit, Keys: damaged}
 	}
 
 	if limit.Exceeded(found.Missing, found.Named) {
-		return &LiveBlobsError{
-			Sentinel: ErrLiveBlobsMissing, Findings: found, Limit: limit, Keys: damagedKeys(manifest, DamageMissing),
-		}
+		return &LiveBlobsError{Sentinel: ErrLiveBlobsMissing, Findings: found, Limit: limit, Keys: missing}
 	}
 
 	return nil
