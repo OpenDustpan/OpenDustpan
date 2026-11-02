@@ -83,6 +83,31 @@ func TestGateUnitChecks(t *testing.T) {
 
 			return err
 		}, gate.ErrInvalid},
+		{"a read with the real ID of a unit of another namespace", func(tx *gateTx) error {
+			// The workspace net of globex exists. Its ID with the scope of the
+			// workspace net of acme names a unit of another namespace.
+			byID, err := gateUnitScope(t, "net").WithUnitID("ws-globex-net")
+			if err != nil {
+				return err
+			}
+
+			return tx.checkUnitID(t.Context(), gateNamespaceIDOfAcme(t, tx), byID)
+		}, gate.ErrInvalid},
+		{"a read with the real ID of a unit of another tool", func(tx *gateTx) error {
+			// The workspace net of acme exists. Its ID with the scope of a
+			// Pulumi stack names a unit of another tool.
+			stackScope, err := gate.UnitScope("acme", "pulumi", "web/prod")
+			if err != nil {
+				return err
+			}
+
+			byID, err := stackScope.WithUnitID("ws-net")
+			if err != nil {
+				return err
+			}
+
+			return tx.checkUnitID(t.Context(), gateNamespaceIDOfAcme(t, tx), byID)
+		}, gate.ErrInvalid},
 		{"a unit with an empty ID in the inventory", func(tx *gateTx) error {
 			_, _, err := tx.Get(t.Context(), gateUnitScope(t, "blank"), row.Kind, row.ID)
 
@@ -126,16 +151,35 @@ func gateUnitFixture(t *testing.T, s *Store) {
 	}
 
 	for _, name := range []workspace.Name{"net", "blank"} {
-		w := workspace.Workspace{
-			NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
-			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			LastRelease: workspace.NoRelease(), ID: workspace.ID("ws-" + string(name)),
-			Ref:       workspace.Ref{Namespace: "acme", Name: name},
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
-		}
-		if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
-			t.Fatalf("create workspace %s: %v", name, err)
-		}
+		createGateUnitWorkspace(t, s, ns, workspace.ID("ws-"+string(name)), name)
+	}
+
+	// The namespace globex has a workspace net too, with an ID of its own.
+	other := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.Now(), Name: "globex", PrimaryInstallation: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(t.Context(), other); err != nil {
+		t.Fatalf("create namespace globex: %v", err)
+	}
+
+	createGateUnitWorkspace(t, s, other, "ws-globex-net", "net")
+}
+
+// createGateUnitWorkspace makes the OpenTofu workspace name with the ID id in
+// the namespace ns.
+func createGateUnitWorkspace(t *testing.T, s *Store, ns namespace.Namespace, id workspace.ID, name workspace.Name) {
+	t.Helper()
+
+	w := workspace.Workspace{
+		NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(), ID: id,
+		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+	}
+	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
+		t.Fatalf("create workspace %s/%s: %v", ns.Name, name, err)
 	}
 }
 
@@ -201,4 +245,17 @@ func TestGateObjectChecks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// gateNamespaceIDOfAcme returns the stable ID of the namespace acme in the
+// transaction of tx.
+func gateNamespaceIDOfAcme(t *testing.T, tx *gateTx) string {
+	t.Helper()
+
+	id, ok, err := tx.namespaceID(t.Context(), "acme")
+	if err != nil || !ok {
+		t.Fatalf("namespace ID of acme = %q, %v, %v", id, ok, err)
+	}
+
+	return id
 }
