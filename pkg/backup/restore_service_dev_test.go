@@ -52,8 +52,10 @@ func dirtyReport() backup.DevStripReport {
 			backup.RemovedPrincipals: 1, backup.RemovedGrants: 1, backup.RemovedSessions: 2,
 			backup.RemovedProviders: 1,
 		},
-		Approvers: nil,
-		Warnings:  nil,
+		Approvers:      nil,
+		Warnings:       nil,
+		PreBackupFound: nil,
+		NotHeld:        nil,
 	}
 }
 
@@ -524,8 +526,10 @@ func boundedRemovalReport() backup.DevStripReport {
 			backup.RemovedPrincipals: 250, backup.RemovedSessions: 500, backup.RemovedProviders: 1,
 			backup.RemovedDangling: 3,
 		},
-		Approvers: nil,
-		Warnings:  nil,
+		Approvers:      nil,
+		Warnings:       nil,
+		PreBackupFound: nil,
+		NotHeld:        nil,
 	}
 
 	for i := range backup.MaxAuditedPrincipals {

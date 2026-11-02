@@ -20,6 +20,8 @@ func newReporter() *reporter {
 		Classes:         map[backup.DevRemovalClass]int64{},
 		Approvers:       nil,
 		Warnings:        nil,
+		PreBackupFound:  nil,
+		NotHeld:         nil,
 	}}
 }
 

@@ -114,18 +114,24 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
-Before the restore changes data, it takes a backup of the live data, the backup before restore. This backup checks each live blob against the size and MD5 in its own live row. When a live blob is absent, or its bytes have another size or MD5 than its row, the backup does not stop. It records the blob in the `damaged` list of its manifest, with the key, the state (`missing` or `damaged`) and the reason (`absent`, `size`, `checksum` or `sealed`). For damaged bytes, the entry also holds the size and the MD5 of the live bytes. The backup holds no copy of these blobs. Every other read error stops the backup and the restore. Sealed OpenTofu state that does not open is such an error, because a key or a key provider can cause it too. For each entry, the audit log holds an entry that names the key.
+Before the restore changes data, it takes a backup of the live data, the backup before restore. This backup checks each live blob against the size and MD5 in its own live row. When a live blob is absent, or its bytes have another size or MD5 than its row, the backup does not stop. It records the blob in the `damaged` list of its manifest. Each entry has the key, the state (`missing` or `damaged`) and the reason (`absent`, `size`, `checksum` or `sealed`). It also has the size and MD5 of the live row. The backup holds no copy of these blobs. Every other read error stops the backup and the restore. Sealed OpenTofu state that does not open is such an error, because a key or a key provider can cause it too. When the backup finds missing or damaged blobs, the audit log holds one entry with the counts and the first keys.
+
+Blobs are write-once. A restore adds keys and never writes over a live blob. So the restore stops before it changes any live data in these cases:
+
+- The backup before restore found a live blob whose bytes do not match its record. The text names the count and the first keys. It says that the restore changed no live data. Put the good bytes back at these keys from a copy of the blob store. A snapshot of the volume or of the bucket is such a copy. Then run `opendustpan restore` again.
+- The backup before restore found more live blobs missing than the bound allows. The bound is more than 10 blobs, or more than 20 percent of the blobs that the live data names. Many missing blobs point to a blob store setting that names another directory, bucket or prefix, not to lost blobs. The text names the count and the bound. Check the blob store setting of the server with `opendustpan store check --target blobs`, then run `opendustpan restore` again.
+
+No setting changes the bound. The answers of `POST /api/server/restores` and `GET /api/server/restores/{id}` show it as `missingBlobLimit`, with `count` and `percent`.
 
 For each blob of the backup, the restore does one of these:
 
 - The key is absent from the blob store of the server: the restore writes the blob.
 - The key holds the bytes of the manifest: the blob stays as it is.
-- The key holds the damaged bytes that the backup before restore recorded: the restore replaces them with the bytes of the backup. It does this only when this restore took that backup and its manifest did not change after the restore read it. Before the replacement, the restore reads the live row again and checks that the live bytes still do not match it. It then copies the damaged bytes to `backups/<backup before restore>/damaged/<key>` in the backup target, and writes an audit entry, `replaced damaged live blob <key>: live bytes did not match their record, damaged bytes copied to <path>`. When one of these steps fails, the restore stops and the live key keeps its bytes.
 - The key holds other bytes: the restore stops and writes nothing over them. These bytes matched their live row, so they are live data that is newer or different. The restore then fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key. `--force` does not change this.
 
-A restore that wrote or replaced a missing or damaged blob succeeds with the warning `damaged-live-blobs`.
+A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/server/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
 
-A backup before restore that has a `damaged` list is not complete. `opendustpan backup check` reports it as corrupt, and a restore of it stops with the text `backup data is corrupt`.
+A backup before restore that has a `damaged` list stays restorable, so that it can undo the restore. `opendustpan backup check` checks the objects that it holds. The backup holds no copy of the blobs of the `damaged` list. So a restore of it writes nothing to those keys and leaves them as they are. That restore succeeds with the warning `blobs-not-held`, and its answer has `notHeld` with the counts and the first keys.
 
 The restore does not rely on the conditional writes of the blob store. It reads the key again just before it writes. It also reads the staged copy of the blob and checks it against the manifest before it writes the live key. A staged copy that differs stops the restore, and the live key stays absent. Before each write of a blob, the restore checks that its worker still holds the claim on the restore.
 
@@ -277,13 +283,9 @@ PostgreSQL database, leave out these schemas:
 pg_dump --exclude-schema='restore_*' "$DATABASE_URL"
 ```
 
-The restore deletes a live blob only when the backup before restore recorded
-its bytes as damaged, the key still holds those bytes, and a check against the
-live row shows the damage. It copies the damaged bytes to the backup target and
-writes the audit entry first, and then writes the bytes of the backup to the
-key. When a live
-blob has other bytes that differ from the backup, the restore stops and writes
-nothing over them. See [Restore a backup](#restore-a-backup).
+The restore never deletes a live blob and never writes over one. When a live
+blob is damaged, or has other bytes that differ from the backup, the restore
+stops and writes nothing over it. See [Restore a backup](#restore-a-backup).
 
 ### Blob keys that a restore refuses
 
