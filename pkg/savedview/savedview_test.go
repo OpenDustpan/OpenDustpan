@@ -114,6 +114,11 @@ func TestQueryValidate(t *testing.T) {
 		{"reference of another namespace", refs("pulumi:other/web/prod"), false},
 		{"reference that is a namespace", refs("acme"), false},
 		{"reference with a newline", refs("pulumi:acme/web/prod\n"), false},
+		{"reference with a right-to-left override", refs("pulumi:acme/web/pr" + string(rune(0x202e)) + "od"), false},
+		{"reference with a line separator", refs("pulumi:acme/web/pr" + string(rune(0x2028)) + "od"), false},
+		{"reference with a zero-width space", refs("pulumi:acme/web/pr" + string(rune(0x200b)) + "od"), false},
+		{"reference with a left-to-right isolate", refs("pulumi:acme/web/pr" + string(rune(0x2066)) + "od"), false},
+		{"reference with a bell character", refs("pulumi:acme/web/pr\x07od"), false},
 		{"empty reference", refs(""), false},
 	}
 
