@@ -345,9 +345,9 @@ func (u *UnitRef) UnmarshalText(text []byte) error {
 // The text forms of the identifiers. A JSON document holds each one as its
 // text.
 var (
-	_ encoding.TextMarshaler   = Scope{level: "", seg: [3]string{}}
+	_ encoding.TextMarshaler   = Scope{level: "", seg: [3]string{}, unitID: ""}
 	_ encoding.TextUnmarshaler = (*Scope)(nil)
-	_ encoding.TextMarshaler   = PolicyID{Scope: Scope{level: "", seg: [3]string{}}, ID: ""}
+	_ encoding.TextMarshaler   = PolicyID{Scope: Scope{level: "", seg: [3]string{}, unitID: ""}, ID: ""}
 	_ encoding.TextUnmarshaler = (*PolicyID)(nil)
 	_ encoding.TextMarshaler   = RequirementName("")
 	_ encoding.TextUnmarshaler = (*RequirementName)(nil)

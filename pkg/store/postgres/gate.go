@@ -95,15 +95,15 @@ type gateTx struct {
 	q   *db.Queries
 	ids map[namespace.Name]string
 	// units holds the stable unit ID of each unit scope key that the
-	// transaction resolved, and names holds the scope key of each unit ID.
+	// transaction resolved, and refs holds the unit of each unit ID.
 	units map[string]string
-	names map[string]string
+	refs  map[string]unitRef
 }
 
 var _ gatestore.Tx = (*gateTx)(nil)
 
 func newGateTx(q *db.Queries) *gateTx {
-	return &gateTx{q: q, ids: map[namespace.Name]string{}, units: map[string]string{}, names: map[string]string{}}
+	return &gateTx{q: q, ids: map[namespace.Name]string{}, units: map[string]string{}, refs: map[string]unitRef{}}
 }
 
 func (t *gateTx) ScopeExists(ctx context.Context, scope gate.Scope) (bool, error) {
@@ -287,13 +287,15 @@ func (t *gateTx) Narrower(ctx context.Context, scope gate.Scope, kind, id string
 
 	out := make([]gatestore.Located, len(rows))
 	for i, r := range rows {
-		key, kerr := t.locatedKey(ctx, r.NamespaceID, r.ScopeKey, r.UnitID)
+		name, kerr := t.locatedKey(ctx, r.NamespaceID, r.ScopeKey, r.UnitID)
 		if kerr != nil {
 			return nil, kerr
 		}
 
 		out[i] = gatestore.Located{
-			ScopeKey: key, Row: gatestore.Row{Kind: kind, ID: id, Version: r.Version, Body: r.Body},
+			ScopeKey: name.key,
+			Label:    name.label,
+			Row:      gatestore.Row{Kind: kind, ID: id, Version: r.Version, Body: r.Body},
 		}
 	}
 
@@ -316,13 +318,15 @@ func (t *gateTx) Referrers(ctx context.Context, scope gate.Scope, ref gatestore.
 
 	out := make([]gatestore.Located, len(rows))
 	for i, r := range rows {
-		key, kerr := t.locatedKey(ctx, r.NamespaceID, r.ScopeKey, r.UnitID)
+		name, kerr := t.locatedKey(ctx, r.NamespaceID, r.ScopeKey, r.UnitID)
 		if kerr != nil {
 			return nil, kerr
 		}
 
 		out[i] = gatestore.Located{
-			ScopeKey: key, Row: gatestore.Row{Kind: r.Kind, ID: r.ID, Version: r.Version, Body: r.Body},
+			ScopeKey: name.key,
+			Label:    name.label,
+			Row:      gatestore.Row{Kind: r.Kind, ID: r.ID, Version: r.Version, Body: r.Body},
 		}
 	}
 
@@ -488,26 +492,107 @@ type rowScope struct {
 	unitID string
 }
 
+// unitRef is the namespace, the tool and the name of the unit of a stable ID,
+// and whether the unit is live or deleted.
+type unitRef struct {
+	ns      namespace.Name
+	tool    string
+	name    string
+	deleted bool
+}
+
+// noUnitRef is the unitRef that a lookup with no unit returns.
+func noUnitRef() unitRef {
+	return unitRef{ns: "", tool: "", name: "", deleted: false}
+}
+
+// noRowScope is the rowScope that a read with no rows returns.
+func noRowScope() rowScope {
+	return rowScope{nsID: "", key: "", unitID: ""}
+}
+
 // rowScopeOf returns the rows of scope: the scope key for each level but a
-// unit, and the key of the stable ID of the live unit that holds the name for
-// a unit. It reports false for a namespace that does not exist and for a unit
-// scope whose name no live unit holds.
+// unit. For a unit, it is the key of the stable ID that the scope carries,
+// of a live or a deleted unit, and else the key of the ID of the live unit
+// that has the name. It reports false for a namespace that does not exist and
+// for a unit scope with no ID whose name no live unit holds.
 func (t *gateTx) rowScopeOf(ctx context.Context, scope gate.Scope) (rowScope, bool, error) {
 	nsID, ok, err := t.scopeNamespaceID(ctx, scope)
 	if err != nil || !ok {
-		return rowScope{nsID: "", key: "", unitID: ""}, false, err
+		return noRowScope(), false, err
 	}
 
 	if scope.Level() != gate.LevelUnit {
 		return rowScope{nsID: nsID, key: scope.Key(), unitID: ""}, true, nil
 	}
 
-	id, ok, err := t.unitID(ctx, scope)
+	id := scope.UnitID()
+	if id != "" {
+		if checkErr := t.checkUnitID(ctx, nsID, scope); checkErr != nil {
+			return noRowScope(), false, checkErr
+		}
+
+		return rowScope{nsID: nsID, key: gatestore.UnitRowKey(id), unitID: id}, true, nil
+	}
+
+	id, ok, err = t.unitID(ctx, scope)
 	if err != nil || !ok {
-		return rowScope{nsID: "", key: "", unitID: ""}, false, err
+		return noRowScope(), false, err
 	}
 
 	return rowScope{nsID: nsID, key: gatestore.UnitRowKey(id), unitID: id}, true, nil
+}
+
+// checkUnitID returns gate.ErrInvalid when the stable ID that the unit scope
+// carries names no live or deleted unit of the namespace and the tool of the
+// scope. A check that names a unit by its ID reads the rows of that unit only,
+// so an ID of another unit, of another tool or of a purged unit fails closed.
+func (t *gateTx) checkUnitID(ctx context.Context, nsID string, scope gate.Scope) error {
+	ref, ok, err := t.unitOfID(ctx, nsID, scope.UnitID())
+	if err != nil {
+		return err
+	}
+
+	obj, isUnit := scope.Unit()
+	if !ok || !isUnit || ref.tool != obj.Tool() || ref.ns != obj.Namespace() {
+		return fmt.Errorf("%w: the unit ID of %s names no unit of its namespace and tool", gate.ErrInvalid, scope)
+	}
+
+	return nil
+}
+
+// unitOfID returns the live or the deleted unit of the stable ID id in the
+// namespace nsID, and false when there is none.
+func (t *gateTx) unitOfID(ctx context.Context, nsID, id string) (unitRef, bool, error) {
+	if ref, ok := t.refs[id]; ok {
+		return ref, true, nil
+	}
+
+	live, err := t.q.GetGateLiveUnit(ctx, db.GetGateLiveUnitParams{NamespaceID: nsID, UnitID: id})
+	if err == nil {
+		ref := unitRef{ns: namespace.Name(live.Namespace), tool: live.Tool, name: live.Name, deleted: false}
+		t.refs[id] = ref
+
+		return ref, true, nil
+	}
+
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return noUnitRef(), false, fmt.Errorf("select gate live unit: %w", err)
+	}
+
+	gone, err := t.q.GetGateDeletedUnit(ctx, db.GetGateDeletedUnitParams{NamespaceID: nsID, UnitID: id})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return noUnitRef(), false, nil
+	}
+
+	if err != nil {
+		return noUnitRef(), false, fmt.Errorf("select gate deleted unit: %w", err)
+	}
+
+	ref := unitRef{ns: namespace.Name(gone.Namespace), tool: gone.Tool, name: gone.Name, deleted: true}
+	t.refs[id] = ref
+
+	return ref, true, nil
 }
 
 // unitID returns the stable ID of the live unit that holds the name of the
@@ -549,11 +634,21 @@ func (t *gateTx) unitID(ctx context.Context, scope gate.Scope) (string, bool, er
 
 // writeScopeOf is rowScopeOf for a write: it returns namespace.ErrNotFound for
 // a namespace that does not exist and the error of gatestore.NoUnitError for a
-// unit scope whose name no live unit holds.
+// unit scope whose name no live unit holds. A write names a unit by its name
+// only: a unit scope with a stable ID returns gate.ErrInvalid.
 func (t *gateTx) writeScopeOf(ctx context.Context, scope gate.Scope) (rowScope, error) {
+	// Defense in depth: the configuration routes build a unit scope from the
+	// name in the path, and the runner refuses a write at a unit scope with
+	// an ID. This check stays so that no write path can store a row for a
+	// deleted unit.
+	if scope.UnitID() != "" {
+		return noRowScope(), fmt.Errorf("%w: a write names the unit of %s by its name, not by its ID",
+			gate.ErrInvalid, scope)
+	}
+
 	rs, ok, err := t.rowScopeOf(ctx, scope)
 	if err != nil {
-		return rowScope{nsID: "", key: "", unitID: ""}, err
+		return noRowScope(), err
 	}
 
 	if ok {
@@ -564,41 +659,50 @@ func (t *gateTx) writeScopeOf(ctx context.Context, scope gate.Scope) (rowScope, 
 	// live unit before the write runs. This check stays so that a write path
 	// that skips the runner cannot store a row of no unit.
 	if scope.Level() == gate.LevelUnit {
-		return rowScope{nsID: "", key: "", unitID: ""}, gatestore.NoUnitError(scope)
+		return noRowScope(), gatestore.NoUnitError(scope)
 	}
 
-	return rowScope{nsID: "", key: "", unitID: ""}, namespace.ErrNotFound
+	return noRowScope(), namespace.ErrNotFound
 }
 
-// locatedKey returns the scope key of a row that a query across scopes
-// found: the stored key, or for a unit row the scope key of the name of its
-// unit, live or deleted. A unit row of no unit fails closed.
-func (t *gateTx) locatedKey(ctx context.Context, nsID, key, unitID string) (string, error) {
+// locatedName is the scope key and the label of a row that a query across
+// scopes found (see gatestore.Located).
+type locatedName struct {
+	key   string
+	label string
+}
+
+// locatedKey returns the scope key and the label of a row that a query across
+// scopes found. For each level but a unit, both are the stored key. For a unit
+// row, the key is the scope key of the name of its unit, live or deleted, which
+// the decode of the row needs. The label is that key for a live unit, and
+// gatestore.DeletedUnitLabel for a deleted unit, so a refusal never names a
+// deleted unit by a name that a live unit can hold. A unit row of no unit fails
+// closed.
+func (t *gateTx) locatedKey(ctx context.Context, nsID, stored, unitID string) (locatedName, error) {
 	if unitID == "" {
-		return key, nil
+		return locatedName{key: stored, label: stored}, nil
 	}
 
-	if name, ok := t.names[unitID]; ok {
-		return name, nil
-	}
-
-	row, err := t.q.GetGateUnitName(ctx, db.GetGateUnitNameParams{NamespaceID: nsID, UnitID: unitID})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("%w: the gate row %s names no unit", gate.ErrInvalid, key)
-	}
-
+	ref, ok, err := t.unitOfID(ctx, nsID, unitID)
 	if err != nil {
-		return "", fmt.Errorf("select gate unit name: %w", err)
+		return locatedName{key: "", label: ""}, err
 	}
 
-	scope, err := gate.UnitScope(namespace.Name(row.Namespace), row.Tool, row.Name)
+	if !ok {
+		return locatedName{key: "", label: ""}, fmt.Errorf("%w: the gate row %s names no unit", gate.ErrInvalid, stored)
+	}
+
+	scope, err := gate.UnitScope(ref.ns, ref.tool, ref.name)
 	if err != nil {
-		return "", fmt.Errorf("scope of the unit of the gate row %s: %w", key, err)
+		return locatedName{key: "", label: ""}, fmt.Errorf("scope of the unit of the gate row %s: %w", stored, err)
 	}
 
-	t.names[unitID] = scope.Key()
+	if ref.deleted {
+		return locatedName{key: scope.Key(), label: gatestore.DeletedUnitLabel(ref.tool, unitID)}, nil
+	}
 
-	return scope.Key(), nil
+	return locatedName{key: scope.Key(), label: scope.Key()}, nil
 }
 
 // scopeNamespaceID is namespaceID for the namespace of a scope: the scope of
