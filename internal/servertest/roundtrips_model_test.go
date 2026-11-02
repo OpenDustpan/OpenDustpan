@@ -223,3 +223,73 @@ func TestRunnerBookkeepingRule(t *testing.T) {
 		})
 	}
 }
+
+// TestWorkerOfRule checks which worker of pkg/backup the tracer names for a
+// stack, with made-up stacks.
+func TestWorkerOfRule(t *testing.T) {
+	t.Parallel()
+
+	const (
+		runner    = "opendustpan.org/opendustpan/pkg/durable.(*Runner).Run"
+		backupSvc = "opendustpan.org/opendustpan/pkg/backup.(*Service).Work.func1"
+		restore   = "opendustpan.org/opendustpan/pkg/backup.(*RestoreService).Work.func1"
+		await     = "opendustpan.org/opendustpan/pkg/backup.(*Service).Await"
+	)
+
+	cases := []struct {
+		name  string
+		stack []string
+		want  string
+	}{
+		{"the worker of the backup", []string{runner, backupSvc}, workerBackup},
+		{"the worker of the restore", []string{runner, restore}, workerRestore},
+		{"a poll of Await has no worker", []string{runner, await}, ""},
+		{"no pkg/backup frame", []string{runner}, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := workerOf(tc.stack); got != tc.want {
+				t.Fatalf("workerOf(%v) = %q, want %q", tc.stack, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunnerGrowthRule checks the rule that the runner round trips do not grow
+// with the units, with made-up runs.
+func TestRunnerGrowthRule(t *testing.T) {
+	t.Parallel()
+
+	run := func(restoreN, backupN int) measuredRun {
+		return measuredRun{
+			backup: nil, restore: nil, backupGrowth: nil, restoreGrowth: nil,
+			restoreWorker: perRowTrips("InsertDurableStep", restoreN),
+			backupWorker:  perRowTrips("InsertDurableStep", backupN),
+		}
+	}
+
+	cases := []struct {
+		name         string
+		small, large measuredRun
+		want         int
+	}{
+		{"the same", run(104, 28), run(104, 28), 0},
+		{"the spread of the runs", run(102, 24), run(110, 33), 0},
+		{"a record for each unit of the restore", run(104, 28), run(131, 28), 1},
+		{"a record for each unit of both", run(104, 28), run(131, 55), 2},
+		{"fewer round trips", run(110, 33), run(102, 24), 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := runnerGrowthProblems(tc.small, tc.large); len(got) != tc.want {
+				t.Fatalf("problems = %q, want %d", got, tc.want)
+			}
+		})
+	}
+}

@@ -87,6 +87,10 @@ const (
 	// goroutine that does not serve a request. The poll of the status of an
 	// operation serves a request, so it does not count.
 	traceBackup
+	// traceRunner counts only the round trips that the durable runner asks for
+	// itself, on the goroutine of a worker of pkg/backup. traceBackup leaves
+	// them out. The count is not the same in every run (see runnerRestoreCeiling).
+	traceRunner
 )
 
 // Function name parts that the tracer reads in the stack of a round trip.
@@ -152,6 +156,9 @@ type roundTripTracer struct {
 	mu    sync.Mutex
 	mode  traceMode
 	trips []roundTrip
+	// runner holds the round trips of traceRunner. begin does not clear it, so
+	// that it holds both windows of a run until takeRunner.
+	runner []roundTrip
 }
 
 var (
@@ -162,7 +169,7 @@ var (
 )
 
 func newRoundTripTracer() *roundTripTracer {
-	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil}
+	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil, runner: nil}
 }
 
 // statementLabel shortens a statement to its sqlc name or its first characters.
@@ -249,7 +256,10 @@ type stackFacts struct {
 	// bookkeeping is true for a round trip that the durable runner makes for
 	// itself: the record of a step, or the end of an attempt.
 	bookkeeping bool
-	caller      string
+	// worker is the worker of pkg/backup that runs the goroutine: workerBackup,
+	// workerRestore or empty.
+	worker string
+	caller string
 }
 
 // inspectStack reads the stack of the goroutine that makes a round trip: does
@@ -290,6 +300,7 @@ func inspectStack() stackFacts {
 			// loop runs through the runner has a deeper pkg/backup frame.
 			facts.polling = facts.polling || strings.HasSuffix(innermostBackup, awaitSuffix)
 			facts.bookkeeping = isRunnerBookkeeping(functions)
+			facts.worker = workerOf(functions)
 
 			return facts
 		}
@@ -349,6 +360,30 @@ func isRunnerBookkeeping(functions []string) bool {
 	return false
 }
 
+// Names of the workers of pkg/backup that run durable operations, and the parts
+// of the function names that tell them apart.
+const (
+	workerBackup       = "backup"
+	workerRestore      = "restore"
+	workerBackupFrame  = "/pkg/backup.(*Service).Work"
+	workerRestoreFrame = "/pkg/backup.(*RestoreService).Work"
+)
+
+// workerOf returns the worker of pkg/backup whose goroutine made the round trip,
+// or an empty string. functions is the stack, innermost first.
+func workerOf(functions []string) string {
+	for _, function := range functions {
+		switch {
+		case strings.Contains(function, workerRestoreFrame):
+			return workerRestore
+		case strings.Contains(function, workerBackupFrame):
+			return workerBackup
+		}
+	}
+
+	return ""
+}
+
 // accepts reports whether a round trip with the facts counts in the mode.
 func (m traceMode) accepts(facts stackFacts) bool {
 	switch m {
@@ -356,6 +391,8 @@ func (m traceMode) accepts(facts stackFacts) bool {
 		return facts.serving
 	case traceBackup:
 		return facts.backing && !facts.serving && !facts.polling && !facts.bookkeeping
+	case traceRunner:
+		return facts.worker != "" && facts.bookkeeping && !facts.serving && !facts.polling
 	case traceOff:
 		return false
 	}
@@ -382,6 +419,18 @@ func (r *roundTripTracer) end() []roundTrip {
 	return r.trips
 }
 
+// takeRunner returns the runner round trips of the windows since the last call
+// and clears them.
+func (r *roundTripTracer) takeRunner() []roundTrip {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	out := r.runner
+	r.runner = nil
+
+	return out
+}
+
 // record counts one round trip when the stack of the caller fits the mode.
 func (r *roundTripTracer) record(kind, sql string) {
 	r.mu.Lock()
@@ -393,6 +442,15 @@ func (r *roundTripTracer) record(kind, sql string) {
 	}
 
 	facts := inspectStack()
+
+	// The runner round trips go to their own list, whichever worker made them.
+	if mode == traceBackup && traceRunner.accepts(facts) {
+		r.mu.Lock()
+		r.runner = append(r.runner,
+			roundTrip{kind: kind, sql: statementLabel(sql), frame: facts.worker + " worker: " + facts.caller})
+		r.mu.Unlock()
+	}
+
 	if !mode.accepts(facts) {
 		return
 	}
@@ -975,6 +1033,9 @@ func (h *rtHarness) settleOperations(kind durable.Kind) {
 type backupRun struct {
 	backup  []roundTrip
 	restore []roundTrip
+	// runner holds the round trips that the durable runner asked for itself in
+	// both windows, with the worker in the frame.
+	runner []roundTrip
 }
 
 // measuredRun holds the round trips of a backup and of a restore in two lists.
@@ -983,6 +1044,28 @@ type backupRun struct {
 type measuredRun struct {
 	backup, restore             []roundTrip
 	backupGrowth, restoreGrowth []roundTrip
+	// restoreWorker and backupWorker hold the runner round trips of the two
+	// workers of pkg/backup over the whole run, without the timer statements.
+	restoreWorker, backupWorker []roundTrip
+}
+
+// newMeasuredRun counts a run of the backup flow.
+func newMeasuredRun(run backupRun) measuredRun {
+	runner := counted(run.runner)
+
+	return measuredRun{
+		backup:        counted(run.backup),
+		restore:       counted(run.restore),
+		backupGrowth:  withoutTimerLoops(withoutPrepares(run.backup)),
+		restoreGrowth: withoutTimerLoops(withoutPrepares(run.restore)),
+		restoreWorker: runnerOf(runner, workerRestore),
+		backupWorker:  runnerOf(runner, workerBackup),
+	}
+}
+
+// runnerOf returns the runner round trips of one worker.
+func runnerOf(trips []roundTrip, worker string) []roundTrip {
+	return filterTrips(trips, func(trip roundTrip) bool { return strings.HasPrefix(trip.frame, worker+" worker: ") })
 }
 
 // runBackupAndRestore runs a backup, then a restore of it.
@@ -1015,6 +1098,7 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 	h.settleOperations(backup.RestoreOperationKind)
 
 	out.restore = h.tracer.end()
+	out.runner = h.tracer.takeRunner()
 
 	return out
 }
@@ -1069,12 +1153,7 @@ func TestRoundTripsOfBackup(t *testing.T) {
 			h.seedUnits(size.units)
 
 			run := h.runBackupAndRestore()
-			runs[i] = measuredRun{
-				backup:        counted(run.backup),
-				restore:       counted(run.restore),
-				backupGrowth:  withoutTimerLoops(withoutPrepares(run.backup)),
-				restoreGrowth: withoutTimerLoops(withoutPrepares(run.restore)),
-			}
+			runs[i] = newMeasuredRun(run)
 		})
 	}
 }
@@ -1113,15 +1192,7 @@ func TestRoundTripsOfBackupAreStable(t *testing.T) {
 			return
 		}
 
-		for i, run := range runs[1:] {
-			if got, want := len(run.backup), len(runs[0].backup); got != want {
-				t.Errorf("run %d: backup counted %d round trips, run 0 counted %d", i+1, got, want)
-			}
-
-			if got, want := len(run.restore), len(runs[0].restore); got != want {
-				t.Errorf("run %d: restore counted %d round trips, run 0 counted %d", i+1, got, want)
-			}
-		}
+		checkStableRuns(t, runs)
 	})
 
 	for i := range runs {
@@ -1139,10 +1210,30 @@ func TestRoundTripsOfBackupAreStable(t *testing.T) {
 			h.seedUnits(size.units)
 
 			run := h.runBackupAndRestore()
-			runs[i] = measuredRun{
-				backup: counted(run.backup), restore: counted(run.restore), backupGrowth: nil, restoreGrowth: nil,
-			}
+			runs[i] = newMeasuredRun(run)
 		})
+	}
+}
+
+// checkStableRuns checks that every run counted the same backup and restore
+// round trips as run 0, and that the runner round trips of every run are under
+// their ceilings. The runner counts differ between runs by design, so they have
+// a ceiling and no equality.
+func checkStableRuns(t *testing.T, runs []measuredRun) {
+	t.Helper()
+
+	for i := 1; i < len(runs); i++ {
+		if got, want := len(runs[i].backup), len(runs[0].backup); got != want {
+			t.Errorf("run %d: backup counted %d round trips, run 0 counted %d", i, got, want)
+		}
+
+		if got, want := len(runs[i].restore), len(runs[0].restore); got != want {
+			t.Errorf("run %d: restore counted %d round trips, run 0 counted %d", i, got, want)
+		}
+	}
+
+	for i := range runs {
+		checkRunnerCeilings(t, strconv.Itoa(i), &runs[i])
 	}
 }
 
@@ -1158,8 +1249,14 @@ func checkBackupRuns(t *testing.T, sizes []backupSize, runs []measuredRun) {
 		checkCeiling(t, "restore of "+size.name, runs[i].restore, restoreModel().ceiling(schema))
 	}
 
+	for i, size := range sizes {
+		checkRunnerCeilings(t, size.name, &runs[i])
+	}
+
 	small, large := runs[0], runs[len(runs)-1]
 	extraUnits := sizes[len(sizes)-1].units - sizes[0].units
+
+	checkRunnerGrowth(t, small, large, extraUnits)
 
 	reportGrowth(t, "backup", small.backupGrowth, large.backupGrowth, backupGrowthAllowance(extraUnits))
 	reportGrowth(t, "restore", small.restoreGrowth, large.restoreGrowth, restoreGrowthAllowance(extraUnits))
@@ -1181,6 +1278,77 @@ func checkBackupRuns(t *testing.T, sizes []backupSize, runs []measuredRun) {
 				t.Errorf("%s: the growth rule did not catch %s for each row", flow.name, statement)
 			}
 		}
+	}
+}
+
+// The ceilings of the runner round trips of the two workers over a whole run.
+// The runner records the steps that a step function did not record, ends the
+// attempt, and reads the steps again when it takes a claim. How many of these
+// the run needs follows how the poll of Service.Await, the worker of the backup
+// and the worker of the restore interleave for the backup that the restore
+// starts before the swap, so the count is not the same in every run. In 80 runs
+// under heavy load (a build of the whole module with the race detector beside
+// the test) the total was 127 to 142, the restore worker 102 to 110 and the
+// backup worker 24 to 33. Only the transaction frames were the same in every
+// run: 14 begin, 14 commit and 9 rollback. So the ceiling is the highest
+// count of those runs plus 4, and not the count plus 2 as for the other
+// counts. There is no lower bound. The ceilings stop a runner that records
+// more than it does now, for example a record for each unit.
+const (
+	runnerRestoreCeiling = 114
+	runnerBackupCeiling  = 37
+	// runnerSpread is the most that a run of 30 units may count above a run
+	// of 3 units for one worker. It is the width of the spread above, so the
+	// allowance does not fail at random. A record for each unit adds at least
+	// 27 more.
+	runnerSpread = 15
+)
+
+// checkRunnerCeilings checks the runner round trips of the two workers of one
+// run against their ceilings.
+func checkRunnerCeilings(t *testing.T, name string, run *measuredRun) {
+	t.Helper()
+
+	checkCeiling(t, "runner of the restore worker, "+name, run.restoreWorker, runnerRestoreCeiling)
+	checkCeiling(t, "runner of the backup worker, "+name, run.backupWorker, runnerBackupCeiling)
+}
+
+// runnerGrowthProblems names each worker whose run of the large data set counts
+// more than runnerSpread round trips above the run of the small one.
+func runnerGrowthProblems(small, large measuredRun) []string {
+	var problems []string
+
+	for _, worker := range []struct {
+		name         string
+		small, large []roundTrip
+	}{
+		{workerRestore, small.restoreWorker, large.restoreWorker},
+		{workerBackup, small.backupWorker, large.backupWorker},
+	} {
+		if grew := len(worker.large) - len(worker.small); grew > runnerSpread {
+			problems = append(problems, fmt.Sprintf("the runner of the %s worker counts %d round trips more for %d",
+				worker.name, grew, len(worker.large)))
+		}
+	}
+
+	return problems
+}
+
+// checkRunnerGrowth requires that the runner round trips do not grow with the
+// units, and checks the rule with a record for each unit added to the large run.
+func checkRunnerGrowth(t *testing.T, small, large measuredRun, extraUnits int) {
+	t.Helper()
+
+	for _, problem := range runnerGrowthProblems(small, large) {
+		t.Error(problem)
+	}
+
+	mutated := large
+	mutated.restoreWorker = slices.Concat(large.restoreWorker, perRowTrips("InsertDurableStep", extraUnits))
+	mutated.backupWorker = slices.Concat(large.backupWorker, perRowTrips("InsertDurableStep", extraUnits))
+
+	if len(runnerGrowthProblems(small, mutated)) != 2 {
+		t.Error("the runner growth rule did not catch a record for each unit")
 	}
 }
 
@@ -1269,11 +1437,18 @@ func backupModel() costModel {
 // keeps the name_locks and name_lock_key tables of the installation, so that
 // a restore cannot clear a lockout. Each kept table costs one delete and one
 // copy, which is 4 round trips for the 2 tables. The migrations that come
-// with the lockout cost more round trips than the coefficients add. The
-// ceiling keeps 2 round trips of headroom above the measured count. The tracer
-// does not count the bookkeeping of the durable runner (102 round trips of a
-// restore), so the fixed part is 102 lower than it was, and the count is the
-// same in every run.
+// with the lockout cost more round trips than the coefficients add.
+//
+// The ceiling is the model plus the margin, and nothing else is added. The
+// model without the margin is 38 round trips below the measured count of the
+// smallest data set, and the margin of 40 lifts the ceiling to 2 above that
+// count. So the margin and the 2 round trips of headroom are one number seen
+// from two sides: the margin also covers the held-out restore step.
+//
+// The tracer does not count the bookkeeping of the durable runner (102 round
+// trips of a restore) in this count, so the fixed part is 102 lower than it
+// was, and the count is the same in every run. The runner round trips have
+// their own ceilings (see runnerRestoreCeiling).
 func restoreModel() costModel {
 	return costModel{
 		fixed:        221,
