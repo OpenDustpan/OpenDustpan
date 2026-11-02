@@ -16,9 +16,12 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
@@ -518,36 +521,74 @@ func TestRefusalSaysOneCode(t *testing.T) {
 	}
 }
 
-// TestEveryWriteRouteMeetsTheGates fails for a route that writes, that is
-// not a route of guardRoutes, and that is not on the list of routes that
-// write no state. Every route other than GET writes in this API.
+// allRoutesFixture is guardedFixture with every optional service set, so
+// that the handler mounts every route group. The placement service, the
+// manual lock service, the output sharing service and the output reader are
+// zero values: the route test lists the routes and calls none of them. The
+// handler serves no request, so it takes no check of the success statuses.
+func allRoutesFixture(t *testing.T) *apiinventory.Handler {
+	t.Helper()
+
+	cfg, _ := guardedConfig(t, guardSpec{
+		entries: seededDeleted().entries, authz: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		lifecycleErr: nil, scope: fixedScope{err: nil, ids: nil, all: true}, guard: newRecordingGuard(nil),
+	})
+	cfg.Collections = testCollectionService(t, homedNamespaceStore{})
+	cfg.Placements = new(collection.PlacementService)
+	cfg.Locks = new(manuallock.Service)
+	cfg.Views = testViewsConfig(t)
+	cfg.OutputSharing = new(outputsharesvc.Service)
+	cfg.Outputs = new(outputsharesvc.Reader)
+
+	handler, err := apiinventory.NewHandler(cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// TestEveryWriteRouteMeetsTheGates fails for a route other than GET that is
+// not a route of guardRoutes and is not on the list of routes that write no
+// state, with the reason. The fixture mounts every optional route group.
 func TestEveryWriteRouteMeetsTheGates(t *testing.T) {
 	t.Parallel()
-
-	// noStateWrite lists the routes other than GET that write no state, and
-	// why. It is empty: each such route of this API writes state.
-	noStateWrite := map[string]string{}
 
 	gated := map[string]bool{}
 	for _, rt := range guardRoutes() {
 		gated[rt.method+" "+strings.SplitN(rt.target, "?", 2)[0]] = true
 	}
 
-	f := guardedFixture(t, newRecordingGuard(nil))
-
-	for _, route := range f.handler.Routes() {
+	for _, route := range allRoutesFixture(t).Routes() {
 		if route.Method == http.MethodGet || route.Method == http.MethodHead {
 			continue
 		}
 
 		key := route.Method + " " + route.Path
-		if _, ok := noStateWrite[key]; ok {
+		if _, ok := noStateWrite()[key]; ok {
 			continue
 		}
 
 		if !routeIsGated(route.Method, route.Path, gated) {
 			t.Errorf("%s writes and meets no state.write: add its case to guardRoutes, "+
 				"or list it in noStateWrite with the reason", key)
+		}
+	}
+}
+
+// TestNoStateWriteNamesMountedRoutes fails for a route of noStateWrite that
+// the handler does not mount, so that the list stays the list of real routes.
+func TestNoStateWriteNamesMountedRoutes(t *testing.T) {
+	t.Parallel()
+
+	mounted := map[string]bool{}
+	for _, route := range allRoutesFixture(t).Routes() {
+		mounted[route.Method+" "+route.Path] = true
+	}
+
+	for key := range noStateWrite() {
+		if !mounted[key] {
+			t.Errorf("noStateWrite lists %s, which the handler does not mount", key)
 		}
 	}
 }
@@ -579,4 +620,39 @@ func routeIsGated(method, pattern string, gated map[string]bool) bool {
 	}
 
 	return false
+}
+
+// noStateWrite lists the routes other than GET that write no state, and why.
+// A manual lock is a lock that a person puts on a unit, a collection or a
+// namespace. It is not the state lock of a tool, so its routes write no
+// state and end no state lock.
+func noStateWrite() map[string]string {
+	const (
+		collectionRow = "writes a collection row; the units and their state do not change"
+		placementRow  = "writes a placement rule; the rule places new units and writes no state"
+		manualLock    = "puts or ends a manual lock, which is not the state lock of a tool; it writes no state"
+		savedView     = "writes a saved view, a named query of the unit list"
+		ns            = "/api/dustpan/v1/namespaces/{namespace}"
+	)
+
+	return map[string]string{
+		"POST " + ns + "/collections":                                collectionRow,
+		"DELETE " + ns + "/collections/{collection}":                 collectionRow,
+		"PUT /api/inventory/unit-collection":                         "moves a unit into a collection; the state of the unit does not change",
+		"POST " + ns + "/placement-rules":                            placementRow,
+		"PUT " + ns + "/placement-rules/{rule}":                      placementRow,
+		"DELETE " + ns + "/placement-rules/{rule}":                   placementRow,
+		"PUT /api/inventory/unit-lock":                               manualLock,
+		"DELETE /api/inventory/unit-lock":                            manualLock,
+		"POST /api/inventory/unit-lock/force-unlock":                 manualLock,
+		"PUT " + ns + "/collections/{collection}/lock":               manualLock,
+		"DELETE " + ns + "/collections/{collection}/lock":            manualLock,
+		"POST " + ns + "/collections/{collection}/lock/force-unlock": manualLock,
+		"PUT " + ns + "/lock":                                        manualLock,
+		"DELETE " + ns + "/lock":                                     manualLock,
+		"POST " + ns + "/lock/force-unlock":                          manualLock,
+		"POST " + ns + "/views":                                      savedView,
+		"DELETE " + ns + "/views/{view_id}":                          savedView,
+		"PUT " + ns + "/output-sharing":                              "writes the output sharing setting of a namespace; it writes no state",
+	}
 }
