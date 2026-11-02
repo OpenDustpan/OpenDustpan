@@ -146,6 +146,13 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 		return checkPlan{}, err
 	}
 
+	// This check reads no record of operations, so it cannot prove that a
+	// restore of this installation took a backup with a damaged list. It
+	// refuses such a backup: fail closed.
+	if len(manifest.Damaged) > 0 {
+		return checkPlan{}, fmt.Errorf("backup %s: %w: %w", id, ErrDamagedListForeign, ErrCorrupt)
+	}
+
 	wantBlobs, err := restoreWantBlobs(manifest, id)
 	if err != nil {
 		return checkPlan{}, err

@@ -154,6 +154,7 @@ type RestoreStatusResponse struct {
 	BackupID    string           `json:"backupID"`
 	PreBackupID string           `json:"preBackupID"`
 	Error       string           `json:"error"`
+	ErrorCode   string           `json:"errorCode"`
 	Manifest    *RestoreManifest `json:"manifest"`
 	Warnings    []RestoreWarning `json:"warnings"`
 	DevData     *RestoreDevData  `json:"devData"`
@@ -597,14 +598,17 @@ func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id st
 		return fmt.Sprintf(restoreForceHelp, server, id)
 	}
 
-	// The backup is not at fault when the live blobs stopped the restore,
-	// so these come before the check of a corrupt backup.
-	if strings.Contains(doc.Error, backup.ErrLiveBlobsDamaged.Error()) {
+	// The code of the refusal chooses the help, not the text: the text
+	// holds keys that the code does not depend on.
+	switch backup.RestoreErrorCode(doc.ErrorCode) {
+	case backup.CodeLiveBlobsDamaged:
 		return fmt.Sprintf(restoreDamagedHelp, server, id)
-	}
-
-	if strings.Contains(doc.Error, backup.ErrLiveBlobsMissing.Error()) {
+	case backup.CodeLiveBlobsMissing:
 		return fmt.Sprintf(restoreMissingHelp, server, server, id)
+	case backup.CodeBlobsNotBacked:
+		return fmt.Sprintf(restoreCorruptHelp, server, id)
+	case backup.CodePreBackupForeign:
+		return fmt.Sprintf(restoreRerunHelp, server, id)
 	}
 
 	if strings.HasSuffix(strings.TrimSpace(doc.Error), backup.ErrCorrupt.Error()) {

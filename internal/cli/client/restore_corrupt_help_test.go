@@ -18,6 +18,14 @@ import (
 func serveFailedRestore(t *testing.T, errText string) *httptest.Server {
 	t.Helper()
 
+	return serveCodedRestore(t, errText, "")
+}
+
+// serveCodedRestore is serveFailedRestore with an error code in the answer
+// of the restore.
+func serveCodedRestore(t *testing.T, errText, code string) *httptest.Server {
+	t.Helper()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/server/restores":
@@ -27,7 +35,9 @@ func serveFailedRestore(t *testing.T, errText string) *httptest.Server {
 				t.Errorf("write the answer: %v", err)
 			}
 		case r.Method == http.MethodGet && r.URL.Path == "/api/server/restores/rst-test":
-			doc := map[string]string{"id": "rst-test", "state": "failed", "backupID": "bkp-aaa", "error": errText}
+			doc := map[string]string{
+				"id": "rst-test", "state": "failed", "backupID": "bkp-aaa", "error": errText, "errorCode": code,
+			}
 			if err := json.NewEncoder(w).Encode(doc); err != nil {
 				t.Errorf("write the answer: %v", err)
 			}
@@ -78,46 +88,60 @@ func TestRestoreOfCorruptDataNamesTheBackupCheck(t *testing.T) {
 	}
 }
 
-// TestRestoreStoppedAtLiveBlobsNamesTheRepair proves that a restore that
-// stopped at damaged or missing live blobs prints the text of the server,
-// which names the keys, and the help for the live blob store, and not the
-// check of the backup, which is not at fault. The test sets the admin token,
-// so it cannot run in parallel.
+// TestRestoreStoppedAtLiveBlobsNamesTheRepair proves that the CLI chooses
+// its help from the error code of the restore, not from its text. A restore
+// that stopped at damaged or missing live blobs prints the text of the
+// server, which names the keys, and the help for the live blob store, and not
+// the check of the backup, which is not at fault. A key in the text that
+// holds the words of the other refusal does not change the help. The test
+// sets the admin token, so it cannot run in parallel.
 func TestRestoreStoppedAtLiveBlobsNamesTheRepair(t *testing.T) {
 	t.Setenv(client.AdminTokenEnvVar, "test-token")
 
+	damagedHelp := "put the good bytes back at the keys above from a copy of the blob store, then run opendustpan " +
+		"restore --server %s --backup bkp-aaa again"
+	missingHelp := "run opendustpan store check --server %s --target blobs to check the blob store setting of the " +
+		"server, then run opendustpan restore --server %s --backup bkp-aaa again"
+
 	for _, tc := range []struct {
+		name    string
 		errText string
+		code    string
 		help    string
 	}{
 		{
+			name: "damaged", code: "restore.live-blobs-damaged", help: damagedHelp,
 			errText: `the backup before the restore found 1 live blobs whose bytes do not match their records or ` +
 				`do not open: "namespaces/ns-a/tofu/ws/sv/a1": live blobs do not match their records: ` +
 				`backup data is corrupt`,
-			help: "put the good bytes back at the keys above from a copy of the blob store, then run opendustpan " +
-				"restore --server %s --backup bkp-aaa again",
 		},
 		{
+			name: "missing", code: "restore.live-blobs-missing", help: missingHelp,
 			errText: `the backup before the restore found 2 of 2 live blobs missing: too many live blobs are ` +
 				`missing: backup data is corrupt`,
-			help: "run opendustpan store check --server %s --target blobs to check the blob store setting of the " +
-				"server, then run opendustpan restore --server %s --backup bkp-aaa again",
+		},
+		{
+			name: "missing with a key that holds the words of the damaged refusal", code: "restore.live-blobs-missing",
+			help: missingHelp,
+			errText: `the backup before the restore found 11 of 11 live blobs missing, first ` +
+				`"namespaces/ns-a/live blobs do not match their records": too many live blobs are missing: ` +
+				`backup data is corrupt`,
 		},
 	} {
-		srv := serveFailedRestore(t, tc.errText)
+		srv := serveCodedRestore(t, tc.errText, tc.code)
 
 		var stdout, stderr bytes.Buffer
 
 		err := client.RestoreCommand(t.Context(),
 			[]string{"--server", srv.URL, "--backup", "bkp-aaa"}, &stdout, &stderr)
 		if err == nil || !errors.Is(err, client.ErrRestoreFailed) {
-			t.Fatalf("restore = %v, want ErrRestoreFailed", err)
+			t.Fatalf("%s: restore = %v, want ErrRestoreFailed", tc.name, err)
 		}
 
 		help := strings.ReplaceAll(tc.help, "%s", srv.URL)
 		if got := err.Error(); !strings.Contains(got, tc.errText) || !strings.HasSuffix(got, help) ||
 			strings.Contains(got, "backup check") {
-			t.Fatalf("restore = %q, want the error text and %q", got, help)
+			t.Fatalf("%s: restore = %q, want the error text and %q", tc.name, got, help)
 		}
 	}
 }

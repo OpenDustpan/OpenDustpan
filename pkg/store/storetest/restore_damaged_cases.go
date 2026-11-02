@@ -2,6 +2,8 @@ package storetest
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +34,18 @@ func restoreDamagedCases() []restoreCase {
 		{
 			name: "a backup before a restore that found a missing live blob undoes the restore and leaves that key",
 			test: testWorkerRestoreOfPreBackup,
+		},
+		{
+			name: "a restore refuses a pre-backup ID that names a backup that exists",
+			test: testWorkerExistingPreBackupID,
+		},
+		{
+			name: "a restore stops before any live change at a backup before it that another restore started",
+			test: testWorkerForeignPreBackup,
+		},
+		{
+			name: "a restore refuses a damaged list in a backup that no restore started",
+			test: testWorkerForgedDamagedList,
 		},
 	}
 }
@@ -267,6 +281,10 @@ func testWorkerRestoreOfPreBackup(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("backup check of the backup before the restore = %v, want nil", err)
 	}
 
+	if r.hasLater(t) {
+		t.Fatal("the first restore did not replace the live data")
+	}
+
 	// The backup before the first restore must restore, to undo it: its data
 	// names the key, and the restore leaves the key as it is.
 	written := r.liveBlobBytes(t)
@@ -283,6 +301,12 @@ func testWorkerRestoreOfPreBackup(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("live key = %q, want the bytes that it held", got)
 	}
 
+	// The first restore removed the namespace that came after the backup.
+	// The restore of the backup before it brings the live data back.
+	if !r.hasLater(t) {
+		t.Fatal("the restore of the backup before the first restore did not bring the live data back")
+	}
+
 	if !slices.Contains(warningCodes(row), backup.WarnBlobsNotHeld) {
 		t.Fatalf("warnings of restore %s = %v, want %q", row.ID, warningCodes(row), backup.WarnBlobsNotHeld)
 	}
@@ -290,5 +314,136 @@ func testWorkerRestoreOfPreBackup(t *testing.T, newStore RestoreFactory) {
 	if row.DevReport == nil || row.DevReport.NotHeld == nil || row.DevReport.NotHeld.Missing != 1 ||
 		!slices.Contains(row.DevReport.NotHeld.Keys, r.seed.liveBlob.String()) {
 		t.Fatalf("report of restore %s = %+v, want the key that the backup does not hold", row.ID, row.DevReport)
+	}
+}
+
+// mustRefusedForeign checks that restore row failed with the code of a backup
+// before it that it did not start, before any change of the live data, and
+// with the audit event of the refusal.
+func (r *workerRig) mustRefusedForeign(t *testing.T, row backup.RestoreRecord) {
+	t.Helper()
+
+	if row.State != backup.RestoreFailed || !strings.Contains(row.Error, backup.ErrPreBackupForeign.Error()) {
+		t.Fatalf("restore %s = %q %q, want failed with %q", row.ID, row.State, row.Error, backup.ErrPreBackupForeign)
+	}
+
+	if row.DevReport == nil || row.DevReport.ErrorCode != backup.CodePreBackupForeign {
+		t.Fatalf("report of restore %s = %+v, want the code %q", row.ID, row.DevReport, backup.CodePreBackupForeign)
+	}
+
+	if !r.hasLater(t) {
+		t.Fatal("the restore changed the live data")
+	}
+
+	if n := r.restoreEntries(t, "restore "+row.ID.String()+" refused backup "); n != 1 {
+		t.Fatalf("audit entries of the refusal = %d, want 1", n)
+	}
+}
+
+func testWorkerExistingPreBackupID(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+	if err := r.live.Store.Delete(t.Context(), r.seed.liveBlob); err != nil {
+		t.Fatalf("delete the live blob: %v", err)
+	}
+
+	a := r.service(t, workerService{
+		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
+	})
+
+	// The pre-backup ID names the backup that the restore reads. A restore
+	// must take a new backup of the live data, so the start refuses it.
+	id := backup.MintRestoreID()
+	req := backup.RestoreRequest{
+		BackupID: r.backupID, PreBackupID: r.backupID, CheckOnly: false, Force: false, RequestedBy: "tester",
+		KeepAccessTables: false,
+	}
+
+	if err := a.Start(t.Context(), id, req); !errors.Is(err, backup.ErrPreBackupForeign) {
+		t.Fatalf("start restore with an existing pre-backup ID = %v, want ErrPreBackupForeign", err)
+	}
+
+	if _, err := a.Get(t.Context(), id); !errors.Is(err, backup.ErrRestoreNotFound) {
+		t.Fatalf("get the refused restore = %v, want ErrRestoreNotFound", err)
+	}
+
+	if !r.hasLater(t) {
+		t.Fatal("the refused restore changed the live data")
+	}
+}
+
+func testWorkerForeignPreBackup(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+	a := r.service(t, workerService{
+		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
+	})
+
+	// Another restore starts a backup with the pre-backup ID of this restore
+	// after its start. The pre-backup step finds that backup and refuses it.
+	id := backup.MintRestoreID()
+	pre := r.startWithPreBackupID(t, a, id, r.backupID)
+
+	if err := r.backups.StartBeforeRestore(t.Context(), pre, backup.MintRestoreID()); err != nil {
+		t.Fatalf("start the backup of another restore: %v", err)
+	}
+
+	r.mustRefusedForeign(t, r.driveToEnd(t, a, id))
+}
+
+func testWorkerForgedDamagedList(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+
+	// A person with access to the target moves the blob of an ordinary backup
+	// from its blobs to a damaged list.
+	key := mustBlobKey(t, "backups/"+r.backupID.String()+"/manifest.json")
+
+	var manifest backup.Manifest
+	if err := json.Unmarshal(readBlob(t, r.target, key.String()), &manifest); err != nil {
+		t.Fatalf("decode the manifest: %v", err)
+	}
+
+	idx := slices.IndexFunc(
+		manifest.Blobs,
+		func(b backup.ManifestBlob) bool { return b.Key == r.seed.liveBlob.String() },
+	)
+	if idx < 0 {
+		t.Fatalf("the backup does not hold %s", r.seed.liveBlob)
+	}
+
+	moved := manifest.Blobs[idx]
+	manifest.Blobs = slices.Delete(manifest.Blobs, idx, idx+1)
+	manifest.Damaged = []backup.DamagedBlob{{
+		Key: moved.Key, State: backup.DamageMissing, Reason: backup.ReasonAbsent, MD5: moved.MD5, Size: moved.Size,
+		Sealed: moved.Sealed,
+	}}
+
+	forged, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode the manifest: %v", err)
+	}
+
+	putBlob(t, r.target, key, forged)
+
+	if err := r.backups.Check(t.Context(), r.backupID); !errors.Is(err, backup.ErrDamagedListForeign) {
+		t.Fatalf("backup check of the forged backup = %v, want ErrDamagedListForeign", err)
+	}
+
+	a := r.service(t, workerService{
+		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, afterApply: nil, lockWait: 0,
+	})
+
+	row := r.driveToEnd(t, a, r.start(t, a, false, false))
+	if row.State != backup.RestoreFailed || !strings.Contains(row.Error, backup.ErrDamagedListForeign.Error()) ||
+		!strings.HasSuffix(row.Error, backup.ErrCorrupt.Error()) {
+		t.Fatalf("restore of the forged backup = %q %q, want failed as corrupt", row.State, row.Error)
+	}
+
+	if !r.hasLater(t) {
+		t.Fatal("the restore of the forged backup changed the live data")
 	}
 }
