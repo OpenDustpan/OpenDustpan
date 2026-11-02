@@ -222,6 +222,6 @@ func DevIssuerRow(id string) map[string]any {
 func DevGateObjectRow(kind, id, body string) map[string]any {
 	return map[string]any{
 		"namespace_id": "", "scope_key": "installation", "kind": kind, "id": id, "level": "installation",
-		"tool": "", "unit_name": "", "version": 1, "body": body, "updated_at_ms": 1,
+		"unit_id": "", "version": 1, "body": body, "updated_at_ms": 1,
 	}
 }

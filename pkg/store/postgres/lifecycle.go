@@ -99,19 +99,6 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, deleted 
 		return fmt.Errorf("select stack: %w", liveErr)
 	}
 
-	from := unitGate{
-		ns:   ref.Namespace,
-		tool: inventoryTool,
-		name: stackUnitName(stack.Ref{Namespace: ref.Namespace, Project: ref.Project, Stack: deleted.name}),
-	}
-
-	moved, err := restoreUnitGate(ctx, q, from, stackUnitName(ref), audit.MaxChanges-len(e.Changes))
-	if err != nil {
-		return err
-	}
-
-	e.Changes = append(e.Changes, moved...)
-
 	n, err := q.RestoreStack(ctx, db.RestoreStackParams{
 		Name: ref.Stack.String(), UpdatedAtMs: e.At.UnixMilli(), Namespace: ref.Namespace.String(), ID: id.String(),
 	})
@@ -285,15 +272,6 @@ func restoreWorkspaceRow(
 	case !errors.Is(liveErr, pgx.ErrNoRows):
 		return fmt.Errorf("select workspace: %w", liveErr)
 	}
-
-	from := unitGate{ns: ref.Namespace, tool: inventoryToolOpenTofu, name: deleted.name.String()}
-
-	moved, err := restoreUnitGate(ctx, q, from, ref.Name.String(), audit.MaxChanges-len(e.Changes))
-	if err != nil {
-		return err
-	}
-
-	e.Changes = append(e.Changes, moved...)
 
 	n, err := q.RestoreWorkspace(ctx, db.RestoreWorkspaceParams{
 		Name: ref.Name.String(), UpdatedAtMs: e.At.UnixMilli(), Namespace: ref.Namespace.String(), ID: id.String(),
@@ -510,7 +488,10 @@ func (s *Store) purgeUnit(
 		}
 
 		removed, gateErr := purgeUnitGate(
-			ctx, q, unitGate{ns: fence.Namespace, tool: u.tool, name: deleted.Name}, audit.MaxChanges-len(e.Changes),
+			ctx,
+			q,
+			unitGate{ns: fence.Namespace, tool: u.tool, name: deleted.Name, id: u.id},
+			audit.MaxChanges-len(e.Changes),
 		)
 		if gateErr != nil {
 			return gateErr

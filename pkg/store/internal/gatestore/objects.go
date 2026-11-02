@@ -397,20 +397,3 @@ func validateGate(g gate.Gate) error {
 
 	return err
 }
-
-// UnitParts names the unit of a unit scope.
-type UnitParts struct {
-	Tool string
-	Name string
-}
-
-// UnitPartsOf returns the tool and the unit name of a unit scope, and empty
-// parts for any other scope.
-func UnitPartsOf(scope gate.Scope) UnitParts {
-	obj, ok := scope.Unit()
-	if !ok {
-		return UnitParts{Tool: "", Name: ""}
-	}
-
-	return UnitParts{Tool: obj.Tool(), Name: obj.UnitName()}
-}

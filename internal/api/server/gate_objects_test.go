@@ -5,12 +5,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 const (
@@ -752,5 +756,97 @@ func TestGateRoutesUnavailableWithoutEngine(t *testing.T) {
 				wantStatus(t, serveGate(t, g, gateCall{http.MethodGet, item, "", ""}), http.StatusNotFound)
 			})
 		}
+	}
+}
+
+// TestGateRoutesFollowTheUnit proves that the gates of a unit belong to the
+// unit, not to its name: a write for a name that no live unit has answers 404
+// with unit.not-found, and a new unit with the name of a deleted unit starts
+// with no gate.
+func TestGateRoutesFollowTheUnit(t *testing.T) {
+	t.Parallel()
+
+	st, h := newGateHandler(t, adminGates())
+	net := gateBase + "acme/units/by-name/opentofu/net"
+
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, net + "/gates/freeze", freezeGateDoc, ""}), http.StatusOK)
+
+	ns, err := st.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	del := inventory.Deletion{Entry: gateTestEntry("workspace:delete"), PurgeAfter: time.Now().Add(time.Hour)}
+	ref := workspace.Ref{Namespace: "acme", Name: "net"}
+
+	if err = st.DeleteWorkspace(t.Context(), ref, ns.Fence(), del); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		call   gateCall
+		status int
+		code   string
+	}{
+		{
+			"a put for a unit that never existed",
+			gateCall{
+				http.MethodPut,
+				gateBase + "acme/units/by-name/opentofu/ghost/gates/freeze", freezeGateDoc, "",
+			},
+			http.StatusNotFound, errcode.UnitNotFound,
+		},
+		{
+			"a put for a deleted unit",
+			gateCall{http.MethodPut, net + "/gates/freeze", freezeGateDoc, ""},
+			http.StatusNotFound, errcode.UnitNotFound,
+		},
+		{
+			"a put of an access limit for a deleted unit",
+			gateCall{http.MethodPut, net + "/access-limits/no-writes", noWritesDoc, ""},
+			http.StatusNotFound, errcode.UnitNotFound,
+		},
+		{
+			"a read of the gate of a deleted unit",
+			gateCall{http.MethodGet, net + "/gates/freeze", "", ""},
+			http.StatusNotFound, errcode.GateNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		rec := serveGate(t, h, tt.call)
+		wantStatus(t, rec, tt.status)
+
+		if !strings.Contains(rec.Body.String(), `"errorCode":"`+tt.code+`"`) {
+			t.Fatalf("%s: body = %s, want the code %s", tt.name, rec.Body.String(), tt.code)
+		}
+	}
+
+	createGateWorkspace(t, st, "ws-gate-net-again", "net")
+
+	rec := serveGate(t, h, gateCall{http.MethodGet, net + "/gates", "", ""})
+	wantStatus(t, rec, http.StatusOK)
+
+	var list gateObjectList
+
+	decodeGateJSON(t, rec, &list)
+
+	if len(list.Gates) != 0 {
+		t.Fatalf(
+			"gates of the new workspace net = %+v, want none: a new unit with a used name starts clean",
+			list.Gates,
+		)
+	}
+
+	rec = serveGate(t, h, gateCall{http.MethodPut, net + "/gates/freeze", freezeGateDoc, ""})
+	wantStatus(t, rec, http.StatusOK)
+
+	var created gateObjectDoc
+
+	decodeGateJSON(t, rec, &created)
+
+	if created.Version != 1 {
+		t.Fatalf("gate of the new workspace net = version %d, want 1", created.Version)
 	}
 }
