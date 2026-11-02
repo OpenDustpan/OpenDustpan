@@ -140,6 +140,7 @@ func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.S
 	}
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:        nil,
 		Store:      st,
 		Principals: principals,
 		Hasher:     hasher,

@@ -5419,20 +5419,43 @@ UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = $1 AND nam
 SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
 FROM name_locks WHERE scope = $1 AND name = $2 ORDER BY sub;
 
--- name: PruneNameLocks :execrows
+-- name: PruneEndedNameLocks :many
 -- Deletes at most max_rows counts whose last failure is at or before
--- before_ms, whose lock ended at now_ms, and whose level is 0 or past its
--- reset time. The select skips a row that a failure locks now, and the
--- delete checks the conditions again on the row that it deletes.
+-- before_ms, whose lock ended at now_ms and that no attempt saw (their
+-- locked_until_ms is not 0), and whose level is 0 or past its reset time. The
+-- select skips a row that a failure locks now, and the delete checks the
+-- conditions again on the row that it deletes. It returns the scope and the
+-- end of the lock of each deleted count.
 DELETE FROM name_locks
 WHERE (scope, name, sub) IN (
     SELECT p.scope, p.name, p.sub FROM name_locks p
-    WHERE p.last_failure_ms <= sqlc.arg('before_ms')::bigint AND p.locked_until_ms <= sqlc.arg('now_ms')::bigint
+    WHERE p.last_failure_ms <= sqlc.arg('before_ms')::bigint AND p.locked_until_ms <> 0
+      AND p.locked_until_ms <= sqlc.arg('now_ms')::bigint
       AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= sqlc.arg('now_ms')::bigint)
     LIMIT sqlc.arg('max_rows')::bigint
     FOR UPDATE SKIP LOCKED
 )
-  AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms <= sqlc.arg('now_ms')::bigint
+  AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms <> 0
+  AND locked_until_ms <= sqlc.arg('now_ms')::bigint
+  AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms')::bigint)
+RETURNING scope, locked_until_ms;
+
+-- name: PruneNameLocks :execrows
+-- Deletes at most max_rows counts with no lock (locked_until_ms is 0) whose
+-- last failure is at or before before_ms and whose level is 0 or past its
+-- reset time. A count whose lock ended and that no attempt saw goes through
+-- PruneEndedNameLocks, so the end of its lock has an entry. The select skips
+-- a row that a failure locks now, and the delete checks the conditions again
+-- on the row that it deletes.
+DELETE FROM name_locks
+WHERE (scope, name, sub) IN (
+    SELECT p.scope, p.name, p.sub FROM name_locks p
+    WHERE p.last_failure_ms <= sqlc.arg('before_ms')::bigint AND p.locked_until_ms = 0
+      AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= sqlc.arg('now_ms')::bigint)
+    LIMIT sqlc.arg('max_rows')::bigint
+    FOR UPDATE SKIP LOCKED
+)
+  AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms = 0
   AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms')::bigint);
 
 -- name: InsertNameLockKey :exec

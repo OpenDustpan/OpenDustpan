@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/textbody"
@@ -151,6 +152,52 @@ type localUserPolicyResponse struct {
 	// LockPrune is the effective schedule of the prune of the counts of the
 	// lockout by name.
 	LockPrune localUserLockPruneBody `json:"lockPrune"`
+	// LockRules is the effective set of rules of the lockout by name.
+	LockRules localUserLockRulesBody `json:"lockRules"`
+}
+
+// localUserLockRulesBody is the effective set of rules of the lockout by
+// name. The password rule counts the failures of one user name from one
+// source prefix. The password name rule counts the failures of one user name
+// from every source, and its lock holds for every source.
+//
+// Contract: never remove or rename these fields.
+type localUserLockRulesBody struct {
+	Password     localUserLockRuleBody     `json:"password"`
+	PasswordName localUserLockRuleBody     `json:"passwordName"`
+	SourcePrefix localUserSourcePrefixBody `json:"sourcePrefix"`
+}
+
+// localUserLockRuleBody is one rule of the lockout by name. The failure that
+// takes a count to Limit sets a lock of LockSeconds. Each new lock of the
+// same name, less than ResetSeconds after the earlier lock ended, lasts
+// twice the lock before, up to MaxLockSeconds. A rule with MaxLockSeconds
+// equal to LockSeconds never doubles.
+//
+// Contract: never remove or rename these fields.
+type localUserLockRuleBody struct {
+	Limit          int   `json:"limit"`
+	LockSeconds    int64 `json:"lockSeconds"`
+	MaxLockSeconds int64 `json:"maxLockSeconds"`
+	ResetSeconds   int64 `json:"resetSeconds"`
+}
+
+// localUserSourcePrefixBody is the length of the source prefix of the
+// password rule, in bits: the whole IPv4 address, and the first bits of an
+// IPv6 address.
+//
+// Contract: never remove or rename these fields.
+type localUserSourcePrefixBody struct {
+	IPv4Bits int `json:"ipv4Bits"`
+	IPv6Bits int `json:"ipv6Bits"`
+}
+
+// lockRuleBody returns the body of the rule r.
+func lockRuleBody(r authgate.LockRule) localUserLockRuleBody {
+	return localUserLockRuleBody{
+		Limit: r.Limit, LockSeconds: int64(r.LockFor / time.Second), MaxLockSeconds: int64(r.MaxLockFor / time.Second),
+		ResetSeconds: int64(r.ResetAfter / time.Second),
+	}
 }
 
 // localUserLockPruneBody is the effective schedule of the prune of the
@@ -163,6 +210,7 @@ type localUserLockPruneBody struct {
 	IntervalSeconds int64 `json:"intervalSeconds"`
 	AgeSeconds      int64 `json:"ageSeconds"`
 	MaxRows         int   `json:"maxRows"`
+	MaxEndedLocks   int   `json:"maxEndedLocks"`
 }
 
 // errLocalUsersUnavailable is the answer of a local user route on a server
@@ -458,6 +506,7 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 	}
 
 	prune := localusersvc.Prune()
+	rules := localusersvc.Rules()
 
 	h.writeJSON(ctx, w, http.StatusOK, localUserPolicyResponse{
 		Enabled: p.Enabled, EnabledSource: string(p.EnabledSource), IdentityProvider: p.SSO, MinLength: p.MinLength,
@@ -465,7 +514,11 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 		ResetLifetimeSeconds: int64(p.ResetLifetime / time.Second),
 		LockPrune: localUserLockPruneBody{
 			IntervalSeconds: int64(prune.Interval / time.Second), AgeSeconds: int64(prune.Age / time.Second),
-			MaxRows: prune.MaxRows,
+			MaxRows: prune.MaxRows, MaxEndedLocks: prune.MaxEnded,
+		},
+		LockRules: localUserLockRulesBody{
+			Password: lockRuleBody(rules.Password), PasswordName: lockRuleBody(rules.PasswordName),
+			SourcePrefix: localUserSourcePrefixBody{IPv4Bits: rules.IPv4PrefixBits, IPv6Bits: rules.IPv6PrefixBits},
 		},
 	})
 }

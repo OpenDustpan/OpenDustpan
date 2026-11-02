@@ -201,9 +201,7 @@ type brokenLocks struct {
 	authgate.NameLockCounter
 }
 
-func (brokenLocks) AddNameFailure(
-	context.Context, string, string, string, authgate.LockRule,
-) (authgate.NameLock, error) {
+func (brokenLocks) AddNameFailure(context.Context, authgate.NameFailure) (authgate.NameLock, error) {
 	return authgate.NameLock{}, errDiskOnFire
 }
 
@@ -241,6 +239,7 @@ func TestLockLimits(t *testing.T) {
 
 	for _, tc := range cases {
 		svc, newErr := localusersvc.New(localusersvc.Config{
+			Log:   nil,
 			Store: f.store, Principals: f.principals, Hasher: tc.hasher, Blocklist: blocklist.Embedded(),
 			Audit: f.store, Locks: tc.locks, Keys: f.store, Settings: f.settings, SSO: nil, Kind: "", Now: nil,
 			Reach: noReach(), Subjects: nil,
@@ -312,6 +311,7 @@ func TestUnlockThatCannotClearChangesNothing(t *testing.T) {
 	f.fail(t, authgate.DefaultNameLimit, "alice")
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:   nil,
 		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: brokenClear{NameLockCounter: f.store}, Keys: f.store, Settings: f.settings,
 		SSO: nil, Kind: "", Now: nil, Reach: f.storeReach(), Subjects: f.store,
@@ -336,5 +336,35 @@ func TestUnlockThatCannotClearChangesNothing(t *testing.T) {
 		signErr, localuser.ErrSignInFailed,
 	) {
 		t.Fatalf("sign in after a failed unlock = %v, want ErrSignInFailed", signErr)
+	}
+}
+
+// TestSourcePrefixUsesTheRules proves that the lengths in the rules that the
+// policy shows are the lengths that the prefix of a source applies: addresses
+// that agree in the first bits of the rule share one sub-key, and addresses
+// that differ in the last bit of the rule do not.
+func TestSourcePrefixUsesTheRules(t *testing.T) {
+	t.Parallel()
+
+	rules := localusersvc.Rules()
+	if rules.IPv4PrefixBits != 32 || rules.IPv6PrefixBits != 64 {
+		t.Fatalf("rules = %+v, want 32 and 64 bits", rules)
+	}
+
+	cases := []struct {
+		name string
+		a, b string
+		same bool
+	}{
+		{name: "two IPv4 addresses", a: "192.0.2.1", b: "192.0.2.2", same: false},
+		{name: "one IPv4 address", a: "192.0.2.1", b: "::ffff:192.0.2.1", same: true},
+		{name: "IPv6 in one /64", a: "2001:db8:1:2::1", b: "2001:db8:1:2:ffff::9", same: true},
+		{name: "IPv6 in two /64", a: "2001:db8:1:2::1", b: "2001:db8:1:3::1", same: false},
+	}
+
+	for _, tc := range cases {
+		if got := localusersvc.SourcePrefix(tc.a) == localusersvc.SourcePrefix(tc.b); got != tc.same {
+			t.Fatalf("%s: same sub-key = %v, want %v", tc.name, got, tc.same)
+		}
 	}
 }

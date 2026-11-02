@@ -117,6 +117,10 @@ const (
 	// IssuerKeyCopyMissing reports a copy check at the issuerURL of a
 	// namespace that failed.
 	IssuerKeyCopyMissing Type = "issuer.key-copy-missing"
+	// SignInLocked reports a lock of the password sign-in by name, or of the
+	// second factors of a person, after failed attempts. It goes to the
+	// administrators of the installation.
+	SignInLocked Type = "sign-in.locked"
 	// SinkTest is the fixed message of the test route of a sink. A person
 	// sends it to check a sink. It reports no event.
 	SinkTest Type = "sink.test"
@@ -131,6 +135,7 @@ func Types() []Type {
 		OnCallHandoff, OnCallSyncFailed, CostEstimated, BudgetThreshold,
 		IncidentOpened, IncidentChanged, IncidentResolved, LockHeldLong, SubscriptionSuspended,
 		IssuerKeyNext, IssuerKeyRevoked, IssuerKeyCopyMissing,
+		SignInLocked,
 		SinkTest,
 	}
 }

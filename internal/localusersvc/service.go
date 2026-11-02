@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -141,6 +142,9 @@ type Config struct {
 	// Kind is the installation kind of the server.
 	Kind installation.Kind
 	Now  func() time.Time
+	// Log receives the errors of the writes that fail closed. Nil means
+	// slog.Default().
+	Log *slog.Logger
 }
 
 // ErrMissingDependency reports a Config with a required field that is nil.
@@ -160,6 +164,7 @@ type Service struct {
 	reach      access.ReachConfig
 	subjects   Subjects
 	now        func() time.Time
+	log        *slog.Logger
 	kind       installation.Kind
 
 	dummyMu sync.Mutex
@@ -191,7 +196,13 @@ func New(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
+	log := cfg.Log
+	if log == nil {
+		log = slog.Default()
+	}
+
 	return &Service{
+		log:        log,
 		store:      cfg.Store,
 		principals: cfg.Principals,
 		hasher:     cfg.Hasher,
