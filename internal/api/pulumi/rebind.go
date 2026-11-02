@@ -1,10 +1,21 @@
-package stack
+package pulumi
 
 import (
 	"bytes"
 	"encoding/json"
 	"encoding/json/jsontext"
+	"fmt"
+
+	"opendustpan.org/opendustpan/pkg/stack"
 )
+
+// secretsProvidersMember is the top-level member of a checkpoint that names
+// the secrets provider of the stack.
+const secretsProvidersMember = "secrets_providers"
+
+// serviceSecretsProvider is the type of the secrets provider that the server
+// holds for the stack.
+const serviceSecretsProvider = "service"
 
 // providerOwnerKey, providerProjectKey and providerStackKey are the members of
 // the state of the service secrets provider that name the stack.
@@ -14,7 +25,7 @@ const (
 	providerStackKey   = "stack"
 )
 
-// RebindSecretsProvider returns deployment with the state of its service
+// rebindSecretsProvider returns deployment with the state of its service
 // secrets provider rewritten to name ref: the owner, the project and the stack.
 // The checkpoint keeps the name that the stack had when the CLI saved it. After
 // a rename or a restore under a new name, the CLI would read that name and ask
@@ -25,7 +36,7 @@ const (
 // It returns deployment unchanged when the entry is missing, names another
 // provider or has no object state, when the state already names ref, and when
 // deployment does not decode: the caller serves what it holds then.
-func RebindSecretsProvider(deployment []byte, ref Ref) []byte {
+func rebindSecretsProvider(deployment []byte, ref stack.Ref) []byte {
 	spans, found := providersSpans(deployment)
 	if !found {
 		return deployment
@@ -67,44 +78,69 @@ type byteSpan struct {
 func providersSpans(deployment []byte) ([]byteSpan, bool) {
 	dec := jsontext.NewDecoder(bytes.NewReader(deployment), jsontext.AllowDuplicateNames(true))
 
-	open, err := openStreamedObject(dec)
-	if err != nil || !open {
+	if !openObject(dec) {
 		return nil, false
 	}
 
 	var spans []byteSpan
 
 	for {
-		name, end, err := streamedMember(dec)
-		if err != nil {
+		name, nameErr := dec.ReadToken()
+		if nameErr != nil {
 			return nil, false
 		}
 
-		if end {
+		if name.Kind() == jsontext.KindEndObject {
 			return spans, len(spans) > 0
 		}
 
-		if name != secretsProvidersMember {
-			if skipErr := skipStreamed(dec); skipErr != nil {
+		if name.Kind() != jsontext.KindString {
+			return nil, false
+		}
+
+		if name.String() != secretsProvidersMember {
+			if skipErr := dec.SkipValue(); skipErr != nil {
 				return nil, false
 			}
 
 			continue
 		}
 
-		raw, err := dec.ReadValue()
-		if err != nil {
+		span, readErr := readSpan(dec)
+		if readErr != nil {
 			return nil, false
 		}
 
-		stop := int(dec.InputOffset())
-		spans = append(spans, byteSpan{start: stop - len(raw), end: stop})
+		spans = append(spans, span)
 	}
+}
+
+// openObject reads the first token of dec and reports whether it opens an
+// object. It keeps the token check out of providersSpans, which the complexity
+// limit of the linter bounds.
+func openObject(dec *jsontext.Decoder) bool {
+	first, err := dec.ReadToken()
+
+	return err == nil && first.Kind() == jsontext.KindBeginObject
+}
+
+// readSpan reads the value that follows a member name and returns its byte
+// range in the input of dec. It moves the span read out of providersSpans to
+// keep that function within the complexity limit of the linter.
+func readSpan(dec *jsontext.Decoder) (byteSpan, error) {
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return byteSpan{}, fmt.Errorf("read a value of %s: %w", secretsProvidersMember, err)
+	}
+
+	stop := int(dec.InputOffset())
+
+	return byteSpan{start: stop - len(raw), end: stop}, nil
 }
 
 // reboundProviders returns the providers object raw with the stack members of
 // its state set to ref. changed is false when raw needs no change.
-func reboundProviders(raw []byte, ref Ref) ([]byte, bool) {
+func reboundProviders(raw []byte, ref stack.Ref) ([]byte, bool) {
 	var providers map[string]json.RawMessage
 
 	if err := json.Unmarshal(raw, &providers); err != nil {
