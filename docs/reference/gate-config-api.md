@@ -97,12 +97,13 @@ This gate body denies an unlock:
   "decisionPoint": "state.write",
   "condition": "context.operation.kind == \"unlock\"",
   "outcome": "deny",
-  "message": "Unlocks need approval"
+  "message": "Unlocks are denied"
 }
 ```
 
-A condition without the `context.` prefix does not parse. The condition
-`operation.kind == "unlock"` answers 422:
+A condition without the `context.` prefix does not parse. The request
+`PUT /namespaces/acme/units/by-name/pulumi/web%2Fprod/gates/x` with the
+condition `operation.kind == "unlock"` answers 422:
 
 ```json
 {
@@ -111,6 +112,14 @@ A condition without the `context.` prefix does not parse. The condition
   "errorCode": "gate.invalid"
 }
 ```
+
+The object in the message is the scope key of the gate, then its ID. It changes
+with the scope of the gate, which is part of the path of the request. The rest of
+the message is the same at each scope:
+
+- A namespace gate, `PUT /namespaces/acme/gates/x`: `namespace/acme/x`.
+- A collection gate, `PUT /namespaces/acme/collections/payments/gates/x`: `collection/acme/payments/x`.
+- A unit gate, `PUT /namespaces/acme/units/by-name/pulumi/web%2Fprod/gates/x`: `unit/acme/pulumi/web%2Fprod/x`.
 
 A change that makes a final gate weaker needs a `reason`. A change is weaker when
 it switches the mode to `evaluate`, clears `final`, or changes the decision
