@@ -96,6 +96,15 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
+	return newUnitHandlerWithEntries(t, authz, unitEntries())
+}
+
+// newUnitHandlerWithEntries is newUnitHandler over the live units entries.
+func newUnitHandlerWithEntries(
+	t *testing.T, authz identity.Authorizer, entries map[namespace.Name][]coreinventory.Entry,
+) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
@@ -115,7 +124,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
-		Units:         &memReader{entries: unitEntries(), err: nil},
+		Units:         &memReader{entries: entries, err: nil},
 		Deleted:       deleted,
 		History:       nil,
 		Lifecycles:    testLifecycles(),
