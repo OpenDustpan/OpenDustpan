@@ -275,6 +275,80 @@ func initOnce(ctx context.Context, a *conformance.ProcessAdapter) error {
 	return err
 }
 
+// closeLogged closes the adapter. What Close reports depends on how the
+// adapter ended, so the test only logs it.
+func closeLogged(t *testing.T, a *conformance.ProcessAdapter) {
+	t.Helper()
+
+	if err := a.Close(); err != nil {
+		t.Logf("close: %v", err)
+	}
+}
+
+// TestProcessAdapterKillSkipsAReapedAdapter checks that kill sends no signal
+// to a process group after Wait has reaped the adapter. A later signal could
+// reach a new process that has the same process ID.
+func TestProcessAdapterKillSkipsAReapedAdapter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		mode      string
+		timeout   time.Duration
+		wantErr   error
+		afterCall func(t *testing.T, a *conformance.ProcessAdapter)
+		wantKills int64
+	}{
+		{
+			// The timeout in roundTrip calls kill while the process runs, so one
+			// signal goes out. Close sees done closed and sends no second signal.
+			name:    "adapter that runs",
+			mode:    "hang",
+			timeout: 300 * time.Millisecond,
+			wantErr: context.DeadlineExceeded,
+			afterCall: func(t *testing.T, a *conformance.ProcessAdapter) {
+				t.Helper()
+				closeLogged(t, a)
+			},
+			wantKills: 1,
+		},
+		{
+			// The adapter exits by itself. Close returns only after done is
+			// closed, so the later kill must send no signal.
+			name:    "adapter that was reaped",
+			mode:    "exitearly",
+			timeout: 0,
+			wantErr: conformance.ErrAdapterExited,
+			afterCall: func(t *testing.T, a *conformance.ProcessAdapter) {
+				t.Helper()
+				closeLogged(t, a)
+				conformance.Kill(a)
+			},
+			wantKills: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := startFake(t, tt.mode, tt.timeout)
+			kills := conformance.CountKills(a)
+
+			err := callOnce(t.Context(), a)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("want %v, got %v", tt.wantErr, err)
+			}
+
+			tt.afterCall(t, a)
+
+			if got := kills.Load(); got != tt.wantKills {
+				t.Errorf("kill sent %d signals to the process group, want %d", got, tt.wantKills)
+			}
+		})
+	}
+}
+
 // TestProcessAdapterRPCErrorFailsOneRequest checks that a JSON-RPC error is a
 // fault of one request: it is not a break of the protocol, and the next request
 // gets its answer.
