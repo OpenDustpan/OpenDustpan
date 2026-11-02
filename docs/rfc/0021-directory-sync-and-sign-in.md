@@ -1558,12 +1558,16 @@ Accepted on 2026-11-02:
 
 - ADR 320: one sign-in path for every method. Three method ports in
   `pkg/session` return one `session.Assertion`. `principal.ApplyGroupClaims`
-  applies the groups of each method with the rules of ADR 70. Each method asks
-  for a fresh authentication with the parameter of its protocol. LDAP uses
-  the lockout by name of ADR 285. A passkey sign-in counts by client address.
+  applies the groups of each method through a group mapping, with the rules
+  of ADR 70. The form of the mapping waits for the owner, and with no mapping
+  a sign-in joins no group. Each method asks for a fresh authentication with
+  the parameter of its protocol, bound to the person of the session. LDAP
+  uses the lockout by name of ADR 285 on the typed name and on the person. A
+  passkey sign-in counts by client address.
 - ADR 321: the designs of LDAP (with a check at each sign-in and an hourly
-  sync), SAML, CAS, the OAuth 2.0 groups claim and the trusted header (two
-  modes with two layers each, and groups from a header). The start of a SAML
+  sync that disables nobody above a bound), SAML, CAS, the OAuth 2.0 groups
+  claim and the trusted header (two modes with two layers each, a proxy list
+  of each provider, and groups from a header). The start of a SAML
   sign-in (O4) waits for the owner.
 
 The other questions in "Open questions" have no outcome yet.

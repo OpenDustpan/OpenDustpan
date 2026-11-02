@@ -62,6 +62,9 @@ func RunRedirectMethod(t *testing.T, _ func(t *testing.T) RedirectFixture) {
 		"FinishReturnsGroupsPresentFalseWhenTheProviderSendsNone",
 		"AnEmptyGroupsValueIsPresentAndEmpty",
 		"AFreshAnswerHasAKnownAuthTimeNotBeforeTheStart",
+		"AFreshRequestKeepsThePrincipalAndTheSignInIDInThePendingRequest",
+		"ACASValidationWithRenewSetsTheAuthTime",
+		"ACASValidationWithoutRenewHasAuthTimeKnownFalseWithNoAuthenticationDate",
 		"AMethodWithNoAuthTimeReturnsAuthTimeKnownFalse",
 		"ADisabledPersonReturnsErrSubjectDisabledWithTheSubject",
 		"ADisabledProviderReturnsErrProviderDisabled",
@@ -82,8 +85,18 @@ func RunRedirectMethod(t *testing.T, _ func(t *testing.T) RedirectFixture) {
 		"ASignatureOverAnotherElementIsErrMethodAnswer",
 		"AnotherAudienceIsErrMethodAnswer",
 		"AnotherIssuerIsErrMethodAnswer",
+		"AnAssertionAnywhereOutsideTheSignedElementIsCounted",
+		"AnEncryptedAssertionCountsAsAnAssertion",
+		"AValueOutsideTheSignedElementIsNeverRead",
+		"AReferenceURIThatIsNotTheIDOfTheSignedElementIsErrMethodAnswer",
+		"ADigestAlgorithmOutsideTheAllowlistIsErrMethodAnswer",
+		"ANewSigningCertificateInFetchedMetadataIsNotUsedUntilAccepted",
+		"EachOutboundConnectionGoesThroughTheEgressRules",
+		"AnEndpointThatResolvesToARefusedAddressIsErrMethodUnavailable",
 		// Layer 3: limit the effect.
 		"AnAnswerOutsideTheClockSkewIsErrMethodAnswer",
+		"ANotOnOrAfterThatIsMissingIsErrMethodAnswer",
+		"ANotOnOrAfterTooFarInTheFutureIsErrMethodAnswer",
 		"AnAuthTimeInTheFutureIsErrMethodAnswer",
 		"ASecondUseOfAnAssertionIDIsErrReplay",
 		"ASecondUseOfATicketIsErrReplay",
@@ -91,14 +104,14 @@ func RunRedirectMethod(t *testing.T, _ func(t *testing.T) RedirectFixture) {
 		// Layer 4: the binding to the browser.
 		"AnotherStateIsErrRequestBinding",
 		"AnotherRequestIDIsErrRequestBinding",
-		"ACallbackWithNoPendingRequestIsErrRequestBinding",
+		"ANilPendingRequestIsErrRequestBinding",
 		"APendingRequestOfAnotherProviderIsErrRequestBinding",
 		// Layer 5: fail closed.
 		"AnErrorAnswerOfTheProviderIsErrMethodRejected",
 		"AnUnknownAnswerIsErrMethodAnswer",
 		"GroupsOnAndNoGroupsIsErrGroupsMissing",
 		"AStoppedProviderIsErrMethodUnavailable",
-		"EachErrorReturnsTheZeroAssertion",
+		"EachErrorExceptErrSubjectDisabledReturnsTheZeroAssertion",
 	})
 }
 
@@ -108,6 +121,9 @@ type PasswordFixture struct {
 	Method session.PasswordMethod
 	// AddUser adds the person p with the password to the test directory.
 	AddUser func(t *testing.T, p TestPerson, password string)
+	// Gate is the session.BindGate that a case passes to Verify, so that a
+	// case can see each subject and stop a bind.
+	Gate session.BindGate
 	// Stop makes the test directory stop answering.
 	Stop func(t *testing.T)
 }
@@ -120,6 +136,11 @@ func RunPasswordMethod(t *testing.T, _ func(t *testing.T) PasswordFixture) {
 	skipCases(t, []string{
 		"AGoodPasswordReturnsTheAssertionOfThePerson",
 		"TheSubjectIsTheStableAttributeNotTheUserName",
+		"AnObjectGUIDSubjectHasTheCanonicalTextForm",
+		"AnEntryUUIDSubjectIsLowercase",
+		"BeforeBindReceivesTheSubjectBeforeThePasswordIsSent",
+		"AnErrorOfBeforeBindStopsTheBindAndIsReturnedWrapped",
+		"EachFormOfOneUserNameGivesTheSameSubjectToBeforeBind",
 		"TheAssertionHoldsTheFactorPassword",
 		"TheAuthTimeIsKnownAndIsTheTimeOfTheBind",
 		"TheAssertionHasTheKindOfTheMethod",
@@ -131,12 +152,14 @@ func RunPasswordMethod(t *testing.T, _ func(t *testing.T) PasswordFixture) {
 		"AnEmptyUserNameIsErrMethodInput",
 		"AUserNameLongerThanTheLimitIsErrMethodInput",
 		"AUserNameWithControlCharactersIsErrMethodInput",
-		"AnEmptyPasswordIsErrMethodInput",
+		"AnEmptyPasswordIsErrMethodInputAndSendsNoBind",
 		// Layer 2: encode or contain.
 		"FilterCharactersInTheUserNameAreEscaped",
 		"DNCharactersInTheUserNameAreEscaped",
 		"AUserNameWithAWildcardFindsNoOtherUser",
 		"ThePasswordIsNeverInAnErrorOrALog",
+		"AReferralIsNeverFollowed",
+		"TheConnectionGoesThroughTheEgressRules",
 		// Layer 3: limit the effect.
 		"ASearchOverTheSizeLimitIsErrMethodAnswer",
 		"AGroupSearchOverTheLimitIsErrMethodAnswer",
@@ -151,7 +174,7 @@ func RunPasswordMethod(t *testing.T, _ func(t *testing.T) PasswordFixture) {
 		"AnUnknownUserAndAWrongPasswordGiveTheSameError",
 		"GroupsOnAndNoGroupsIsErrGroupsMissing",
 		"AStoppedDirectoryIsErrMethodUnavailable",
-		"EachErrorReturnsTheZeroAssertion",
+		"EachErrorExceptErrSubjectDisabledReturnsTheZeroAssertion",
 	})
 }
 
@@ -182,7 +205,8 @@ func RunRequestMethod(t *testing.T, _ func(t *testing.T) RequestFixture) {
 		"ARequestWithNoHeaderIsErrNoAssertion",
 		"ADisabledProviderReturnsErrProviderDisabled",
 		// Layer 1: the boundary.
-		"APeerOutsideTheTrustedProxiesIsErrUntrustedSource",
+		"APeerOutsideTheProxyListOfTheProviderIsErrUntrustedSource",
+		"APeerInTheClientAddressProxiesOnlyIsErrUntrustedSource",
 		"ASubjectOutsideTheAllowlistIsErrMethodInput",
 		"AHeaderWithControlCharactersIsErrMethodInput",
 		"TwoValuesOfTheUserHeaderAreErrMethodInput",
@@ -193,6 +217,10 @@ func RunRequestMethod(t *testing.T, _ func(t *testing.T) RequestFixture) {
 		"AJWTWithAnotherAudienceIsErrMethodAnswer",
 		"AJWTSignedWithAnotherKeyIsErrMethodAnswer",
 		"AJWTWithTheAlgorithmNoneIsErrMethodAnswer",
+		"AJWTWithAnAlgorithmOutsideTheAllowlistIsErrMethodAnswer",
+		"AKeyIDOutsideTheAllowlistIsErrMethodInputBeforeTheKeyURL",
+		"AnALBSignerThatIsNotTheConfiguredARNIsErrMethodAnswer",
+		"TheKeyURLGoesThroughTheEgressRules",
 		// Layer 3: limit the effect.
 		"AJWTOutsideTheClockSkewIsErrMethodAnswer",
 		"AnExpiredJWTIsErrMethodAnswer",
