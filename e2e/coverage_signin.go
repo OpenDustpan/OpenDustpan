@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -88,6 +89,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		},
 		CheckpointEpochs: nil,
 		InstallationKind: installation.KindDev,
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		DenialLimiter:    nil,
 	})
 	if err != nil {

@@ -171,8 +171,8 @@ func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *drif
 	}
 
 	_, gates, err := newCollectionAndGateServices(cfg, namespaces)
-	if err != nil || gates == nil {
-		t.Fatalf("gate service: %v, %v", gates, err)
+	if err != nil || gates.svc == nil {
+		t.Fatalf("gate service: %v, %v", gates.svc, err)
 	}
 
 	// The job service reads the namespace service and the gate service only.
@@ -186,7 +186,8 @@ func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *drif
 		tokens:      nil,
 		collections: nil,
 		placements:  nil,
-		gates:       gates,
+		gates:       gates.svc,
+		stateWrite:  gates,
 		deleted:     nil,
 		access:      nil,
 		tempAdmins:  nil,

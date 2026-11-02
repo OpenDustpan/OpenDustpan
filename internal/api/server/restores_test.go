@@ -14,6 +14,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -153,6 +154,7 @@ func newRestoreFixtureWorkers(
 		Idempotency:      nil,
 		Workers:          workers,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -621,6 +623,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -836,6 +839,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -978,6 +982,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		TempAdmins:       nil,
 		Now:              nil,
 		CheckpointEpochs: nil,
@@ -1111,6 +1116,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		TempAdmins:       nil,
 		Now:              nil,
 		CheckpointEpochs: nil,

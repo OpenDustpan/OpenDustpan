@@ -1,12 +1,15 @@
 package dustpan
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
@@ -30,9 +33,9 @@ func WithRunners(s RunnerStores) Option {
 
 // JobClaimerFunc builds the claimer that a poll of a runner of a pool for jobs
 // calls. The server gives it the guard of the gates of its gate store, which
-// the claimer asks at each claim (see job.NewClaimer). The guard is nil when
-// the server keeps no gates or no inventory: the claimer of job.NewClaimer
-// then refuses every claim.
+// the claimer asks at each claim (see job.NewClaimer). When the store keeps
+// no gates, the state.write gates are off, and the guard finds no gate on any
+// unit, as the tool adapters check no write. The guard is never nil.
 type JobClaimerFunc func(gates job.GateGuard) job.Claimer
 
 // WithJobClaimer sets the function that builds the claimer that a poll of a
@@ -42,17 +45,46 @@ func WithJobClaimer(build JobClaimerFunc) Option {
 	return func(o *settings) { o.jobClaimer = build }
 }
 
-// claimGates returns the guard of the gates that the claimer of the runner
-// protocol asks at each claim, and false when the server keeps no gates or no
-// inventory. It is the guard that the start of a job asks, so the claim and
-// the start meet the same gates.
-func claimGates(cfg *settings) (jobGates, bool) {
-	gates, ok := cfg.namespaceStore.(gate.Store)
-	if !ok || cfg.inventoryReader == nil {
-		return jobGates{snapshots: nil, members: inventoryFacts{reader: nil, ids: nil, deleted: nil}}, false
+// claimGuard is the guard of the gates that the claimer of the runner
+// protocol asks at each claim. It follows the rule of the state.write gates
+// of the tool adapters: with the gates on, it is the guard that the start of
+// a job asks, so the claim and the start meet the same gates. With the gates
+// off, offReason names why, and no gate covers a unit.
+type claimGuard struct {
+	gates     jobGates
+	offReason string
+}
+
+// Enforced implements job.GateGuard.
+func (g claimGuard) Enforced(ctx context.Context, unit identity.Object) ([]job.EnforcedGate, error) {
+	if g.offReason != "" {
+		return nil, nil
 	}
 
-	return jobGates{snapshots: gates, members: newInventoryFacts(cfg)}, true
+	return g.gates.Enforced(ctx, unit)
+}
+
+// claimGates returns the guard of the claimer under the rule of gates. A
+// store that keeps gates with a part missing is an error, so the server does
+// not start, as for the tool adapters.
+func claimGates(cfg *settings, gates stateWriteGates) (claimGuard, error) {
+	none := jobGates{snapshots: nil, members: inventoryFacts{reader: nil, ids: nil, deleted: nil}}
+
+	if eff := gates.effective(); eff.Mode == stategate.ModeOff {
+		return claimGuard{gates: none, offReason: eff.Reason}, nil
+	}
+
+	store, ok := cfg.namespaceStore.(gate.Store)
+
+	// Defense in depth: newStateWriteGates refuses a store that keeps gates
+	// with no inventory reader. This check stays so that the claimer never
+	// runs with gates on and no store of gates. It does not rely on that
+	// check.
+	if !ok || cfg.inventoryReader == nil || gates.svc == nil {
+		return claimGuard{gates: none, offReason: ""}, fmt.Errorf("%w: %w", ErrMissingOption, errGateParts)
+	}
+
+	return claimGuard{gates: jobGates{snapshots: store, members: newInventoryFacts(cfg)}, offReason: ""}, nil
 }
 
 // newRunnerHandler builds the runner protocol and the runner management API,
@@ -77,14 +109,14 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		release = runner.Release{Major: 0, Minor: 0, Patch: 0, Pre: ""}
 	}
 
-	// A server with no gates gives the claimer no guard, and the claimer then
-	// refuses every claim.
+	// The claimer gets the guard of the rule of the state.write gates, the
+	// rule of the tool adapters.
 	var claimer job.Claimer
 
 	if cfg.jobClaimer != nil {
-		var guard job.GateGuard
-		if g, ok := claimGates(cfg); ok {
-			guard = g
+		guard, claimErr := claimGates(cfg, svc.stateWrite)
+		if claimErr != nil {
+			return nil, claimErr
 		}
 
 		claimer = cfg.jobClaimer(guard)

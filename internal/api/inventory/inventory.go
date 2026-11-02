@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
@@ -104,9 +105,10 @@ type Config struct {
 	Logger    *slog.Logger
 	Now       func() time.Time
 	// StateGuard checks the restore and the final delete of a unit against
-	// the access limits and the gates of state.write. It is optional: nil
-	// means the server keeps no gates, and no call is checked.
-	StateGuard StateGuard
+	// the access limits and the gates of state.write. It is required. A
+	// server whose store keeps no gates gives the guard of stategate.Off
+	// with its reason.
+	StateGuard stategate.Guard
 }
 
 // Handler serves the inventory API under /api/inventory/.
@@ -131,7 +133,7 @@ type Handler struct {
 	publicURL     *url.URL
 	logger        *slog.Logger
 	now           func() time.Time
-	stateGuard    StateGuard
+	admit         *stategate.Admitter
 	mux           *route.Mux
 	routes        []Route
 }
@@ -184,6 +186,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
+	admit, err := stategate.New(cfg.StateGuard, cfg.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("%w: state guard: %w", ErrMissingDependency, err)
+	}
+
 	h := &Handler{
 		views:         viewState,
 		namespaces:    cfg.Namespaces,
@@ -205,7 +212,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		publicURL:     publicURL,
 		logger:        cfg.Logger,
 		now:           clockOf(cfg.Now),
-		stateGuard:    cfg.StateGuard,
+		admit:         admit,
 		mux:           route.NewMux(),
 		routes:        nil,
 	}

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -82,7 +83,7 @@ func TestDeleteWorkspace(t *testing.T) {
 				Gate:           nil,
 				MaxStateBytes:  0,
 				DenialLimiter:  nil,
-				Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+				Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 			})
 			if err != nil {
 				t.Fatalf("handler: %v", err)

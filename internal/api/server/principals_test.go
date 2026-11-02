@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -130,6 +131,7 @@ func newAuditedPrincipalHandler(
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -1004,6 +1006,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",
@@ -1096,6 +1099,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",

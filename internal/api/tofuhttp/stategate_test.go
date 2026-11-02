@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -115,6 +116,28 @@ type guardedHandler struct {
 	units *guardedUnits
 	audit *testAudit
 	guard *fakeGuard
+}
+
+// TestNilGuardDoesNotStart checks the start-time step: a handler with no
+// state guard is an error, never a handler that checks no write.
+func TestNilGuardDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	h, err := tofuhttp.NewHandler(tofuhttp.Config{
+		Authenticator:  tokenAuth{},
+		Authorizer:     userAuthz{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     newFakeUnits(true),
+		Namespaces:     fakeNamespaces{},
+		Audit:          newTestAudit(),
+		Gate:           nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		StateGuard:     nil,
+	})
+	if h != nil || !errors.Is(err, tofuhttp.ErrMissingDependency) || !errors.Is(err, stategate.ErrNoGuard) {
+		t.Fatalf("NewHandler(no guard) = %v, %v, want ErrMissingDependency and stategate.ErrNoGuard", h, err)
+	}
 }
 
 // newGuardedHandler returns a handler over a unit that exists, with guard.

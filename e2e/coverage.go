@@ -26,6 +26,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	settingsapi "opendustpan.org/opendustpan/internal/api/settings"
 	sourcefilterapi "opendustpan.org/opendustpan/internal/api/sourcefilter"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
@@ -467,7 +468,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
 		Sessions:       nil,
 		SessionPolicy:  nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		AddressGate:    nil,
@@ -512,7 +513,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)
@@ -816,7 +817,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		Audit:         coverageAuditStore{}, OnAuditFailure: nil, DenialLimiter: nil,
-		StateGuard: nil,
+		StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		tb.Fatalf("inventory handler: %v", err)
@@ -1796,6 +1797,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		StoreChecks:      coverageStoreChecks(tb),
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},

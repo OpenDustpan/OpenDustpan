@@ -119,10 +119,12 @@ func newDeletedGuard(t *testing.T) deletedGuard {
 	cfg := new(settings)
 	cfg.namespaceStore, cfg.inventoryReader, cfg.now = st, st, time.Now
 
-	svc, err := newGateService(cfg, nss)
-	if err != nil || svc == nil {
-		t.Fatalf("newGateService() = %v, %v", svc, err)
+	gates, err := newStateWriteGates(cfg, nss)
+	if err != nil || gates.svc == nil {
+		t.Fatalf("newStateWriteGates() = %v, %v", gates.svc, err)
 	}
+
+	svc := gates.svc
 
 	g := gate.Gate{
 		Scope: gate.CollectionScope("acme", "payments"), ID: "frozen", Version: 0, DecisionPoint: gate.PointStateWrite,

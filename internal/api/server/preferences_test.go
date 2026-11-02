@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -807,18 +808,42 @@ func TestPreferencesUnavailable(t *testing.T) {
 	}
 
 	h, err := newCheckedHandler(t, apiserver.Config{
-		Preferences: nil,
-		Settings:    nil,
-		GitHost:     nil,
-		Idempotency: nil,
-		Workers:     nil, InstallationKind: "", Now: nil, TempAdmins: nil, Authenticator: prefsCallerSet(),
-		Authorizer: allowAll{}, Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil,
-		Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{},
-		Version: "test", Schema: nil, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: newTestAudit(),
-		OnAuditFailure: nil, DeletedUnits: nil, AuditChain: nil, AuditSinks: nil, IPAllowlists: nil, Gates: nil,
-		SessionPolicy: nil, SignIn: nil, CheckpointEpochs: nil, DenialLimiter: nil,
-		Instances:   nil,
-		StoreChecks: nil,
+		Preferences:      nil,
+		Settings:         nil,
+		GitHost:          nil,
+		Idempotency:      nil,
+		Workers:          nil,
+		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    prefsCallerSet(),
+		Authorizer:       allowAll{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           nil,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            newTestAudit(),
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
+		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

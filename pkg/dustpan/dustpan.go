@@ -732,6 +732,9 @@ type Server struct {
 	// worker state for the readiness probe, the metric and the start gate.
 	components Components
 	watch      *workerWatch
+	// stateWrite is the effective value of the state.write gates, which the
+	// start writes to the log, and to the audit log when the gates are off.
+	stateWrite stateWriteStart
 }
 
 // services holds the domain services that NewServer wires together.
@@ -759,6 +762,10 @@ type services struct {
 	// gates checks the writes of state against the access limits and the
 	// gates of state.write, or is nil when the store keeps no gates.
 	gates *gateService
+	// stateWrite is the rule of the state.write gates that the tool adapters
+	// and the claimer share. Its guard is never nil after
+	// addCollectionServices.
+	stateWrite stateWriteGates
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
@@ -1156,7 +1163,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components,
-		watch:      cfg.watch, auditChainEvery: cfg.auditChainInterval,
+		watch:      cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
 	}
 
 	cfg.watch.attach(srv, observed.Registry())
@@ -1560,7 +1567,7 @@ func newTofuHTTPHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
-		StateGuard:    tofuHTTPGuardOf(svc.gates),
+		StateGuard:    svc.stateWrite.guard,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1664,7 +1671,7 @@ func newTFEHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
-		StateGuard:    stateGuardOf(svc.gates),
+		StateGuard:    svc.stateWrite.guard,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -1988,7 +1995,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		secrets:     secrets,
 		workspaces:  workspaces,
 		tokens:      nil, tempAdmins: nil, deleted: nil, access: nil, collections: nil, placements: nil, gates: nil,
-		issuer: nil,
+		stateWrite: stateWriteGates{svc: nil, guard: nil}, issuer: nil,
 	}, nil
 }
 
@@ -2940,7 +2947,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		Audit:          neutralAudit,
 		OnAuditFailure: onFailure,
 		DenialLimiter:  cfg.denialLimiter,
-		StateGuard:     inventoryGuardOf(svc.gates),
+		StateGuard:     svc.stateWrite.guard,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
@@ -3081,8 +3088,8 @@ func newServerHandler(
 		SignIn:           deps.signIn,
 		Preferences:      newPreferencesService(cfg),
 		Settings:         newSettingService(cfg, cfg.namespaceStore),
-		InstallationKind: cfg.installationKind,
-		Instances:        cfg.instanceStore, StoreChecks: checks,
+		InstallationKind: cfg.installationKind, StateWriteGates: deps.services.stateWrite.effective(),
+		Instances: cfg.instanceStore, StoreChecks: checks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -3342,10 +3349,12 @@ func newCollectionService(cfg *settings) (*collection.Service, error) {
 func (s *services) addCollectionServices(cfg *settings) error {
 	var err error
 
-	s.collections, s.gates, err = newCollectionAndGateServices(cfg, s.namespaces)
+	s.collections, s.stateWrite, err = newCollectionAndGateServices(cfg, s.namespaces)
 	if err != nil {
 		return err
 	}
+
+	s.gates = s.stateWrite.svc
 
 	if store, ok := cfg.namespaceStore.(collection.PlacementStore); ok {
 		s.placements, err = newPlacementService(cfg, store)

@@ -176,6 +176,39 @@ requirements, the warnings and the result: `allow`, `warn`, `awaiting-approval`,
 refusals of the same principal, action and limit within 60 seconds. The record
 keeps a count.
 
+## Check that the gates are on
+
+The capabilities document shows the effective value of the gates to a
+signed-in caller with the action `caller:read`:
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" https://dustpan.example.com/api/dustpan/v1/capabilities
+```
+
+```json
+{
+  "apiVersion": "v1",
+  "installationKind": "production",
+  "stateWriteGates": {
+    "mode": "on",
+    "reason": "the store keeps gates, so the server checks each write at state.write"
+  }
+}
+```
+
+The two SQL stores keep gates, so `opendustpan serve` always runs with the
+gates on. The gates are off only for a program that embeds the server with a
+store that keeps no gates. Then `mode` is `off`, the reason names the store,
+and no write is checked. At each start, such a server writes the line
+`state.write gates: off` with the reason to the log, and one audit entry in the
+`@server` scope with the key `state.write gates`, the value `off` and the
+reason.
+
+The server does not start when the store keeps gates and the server cannot
+check them, for example with no inventory reader. A runner claim follows the
+same rule as a write from a CLI: with the gates on, an enforced gate refuses
+the claim, and with the gates off, no gate covers a unit.
+
 ## Limits of this version
 
 - The [gate configuration API](../reference/gate-config-api.md) stores gates and
