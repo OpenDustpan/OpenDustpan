@@ -1019,7 +1019,9 @@ func TestRoundTripsOfBackup(t *testing.T) {
 				t.Fatalf("open backup target: %v", err)
 			}
 
-			h := newRoundTripHarness(t, traceBackup, dustpan.WithBackupTarget(target, "test"))
+			h := newRoundTripHarness(
+				t, traceBackup, dustpan.WithBackupTarget(target, "test"), dustpan.WithOperationLease(roundTripLease),
+			)
 			h.seedUnits(size.units)
 
 			run := h.runBackupAndRestore()
@@ -1032,6 +1034,18 @@ func TestRoundTripsOfBackup(t *testing.T) {
 		})
 	}
 }
+
+// roundTripLease is the lease period of the backup and restore servers. It is
+// far longer than any run, even a run on a machine under heavy load. Two
+// timers follow the lease, and each of them adds round trips to a run that
+// lasts long enough to meet it. The renewal of the claim of the restore waits
+// for the lock that the swap holds on the durable tables. When the swap is
+// slow, the renewal fails, the runner ends the claim and the swap step runs
+// again from its start, which repeats the whole swap (46 to 54 round trips).
+// The sweeps that mark ended backups and restores failed run once in each
+// lease period, and one more sweep in the run adds 10 round trips. With this
+// lease neither timer fires in a run, so the count is the count of the work.
+const roundTripLease = time.Hour
 
 // stableRuns is the number of backup and restore runs that
 // TestRoundTripsOfBackupAreStable compares.
@@ -1075,7 +1089,9 @@ func TestRoundTripsOfBackupAreStable(t *testing.T) {
 				t.Fatalf("open backup target: %v", err)
 			}
 
-			h := newRoundTripHarness(t, traceBackup, dustpan.WithBackupTarget(target, "test"))
+			h := newRoundTripHarness(
+				t, traceBackup, dustpan.WithBackupTarget(target, "test"), dustpan.WithOperationLease(roundTripLease),
+			)
 			h.seedUnits(size.units)
 
 			run := h.runBackupAndRestore()
