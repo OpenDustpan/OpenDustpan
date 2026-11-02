@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/namelockstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -57,6 +58,21 @@ func (t nameLockTx) AppendAudit(ctx context.Context, e audit.Entry) error {
 	}
 
 	return nil
+}
+
+func (t nameLockTx) HasNotification(ctx context.Context, dedupeKey string) (bool, error) {
+	_, err := t.q.GetNotificationIDByDedupe(ctx, db.GetNotificationIDByDedupeParams{
+		Scope: audit.ServerScope.String(), DedupeKey: dedupeKey,
+	})
+
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, fmt.Errorf("select notification by dedupe key: %w", err)
+	}
 }
 
 func (t nameLockTx) AppendNotification(ctx context.Context, n notify.Notification) error {
@@ -195,10 +211,12 @@ func (s *Store) NameLocks(ctx context.Context, scope, name string) ([]authgate.N
 }
 
 // PruneNameLocks implements authgate.NameLockCounter. It reads the time from
-// the clock of the store. The delete and the append of e run in one
-// transaction.
-func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int, e audit.Entry) (int64, error) {
-	if err := authgate.CheckPruneRequest(age, limit); err != nil {
+// the clock of the store. The delete, the entries of the end of the locks and
+// the append of e run in one transaction.
+func (s *Store) PruneNameLocks(
+	ctx context.Context, age time.Duration, limit, endedLimit int, e audit.Entry,
+) (int64, error) {
+	if err := authgate.CheckPruneRequest(age, limit, endedLimit); err != nil {
 		return 0, err
 	}
 
@@ -217,21 +235,30 @@ func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int
 			return fmt.Errorf("read the clock of the store: %w", err)
 		}
 
-		ends, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{
-			BeforeMs: now - age.Milliseconds(), NowMs: now, MaxRows: int64(limit),
-		})
+		before := now - age.Milliseconds()
+
+		ended, err := pruneEnded(ctx, q, e, endedPrune{before: before, now: now, limit: int64(endedLimit)})
+		if err != nil {
+			return err
+		}
+
+		rest := max(int64(limit)-ended, 0)
+
+		plain, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{BeforeMs: before, NowMs: now, MaxRows: rest})
 		if err != nil {
 			return fmt.Errorf("prune name counts: %w", err)
 		}
 
+		deleted := plain + ended
 		entry := e
-		entry.Changes = append(append([]audit.Change{}, e.Changes...), authgate.PrunedChanges(ends)...)
+		entry.Changes = append(append([]audit.Change{}, e.Changes...),
+			authgate.PrunedChanges(deleted, ended)...)
 
 		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
 			return fmt.Errorf("append the entry of the prune: %w", err)
 		}
 
-		n = int64(len(ends))
+		n = deleted
 
 		return nil
 	})
@@ -240,6 +267,33 @@ func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int
 	}
 
 	return n, nil
+}
+
+// endedPrune is the time and the bound of the prune of the counts with an
+// ended lock that no attempt saw.
+type endedPrune struct {
+	before, now, limit int64
+}
+
+// pruneEnded deletes the counts of p and appends the entry of the end of each
+// lock, built from the entry e of the prune, in the transaction of q. It
+// returns how many counts it deleted.
+func pruneEnded(ctx context.Context, q *db.Queries, e audit.Entry, p endedPrune) (int64, error) {
+	ended, err := q.PruneEndedNameLocks(ctx, db.PruneEndedNameLocksParams{
+		BeforeMs: p.before, NowMs: p.now, MaxRows: p.limit,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("prune name counts with an ended lock: %w", err)
+	}
+
+	for _, row := range ended {
+		end := authgate.PrunedLockEndedEntry(e, row.Scope, codec.FromMillis(row.LockedUntilMs))
+		if _, appendErr := appendAuditEntry(ctx, q, end); appendErr != nil {
+			return 0, fmt.Errorf("append the entry of the end of a lock: %w", appendErr)
+		}
+	}
+
+	return int64(len(ended)), nil
 }
 
 // NameLockKey returns the key of the digests of the names of the lockout by

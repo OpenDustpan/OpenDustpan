@@ -2929,6 +2929,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "maxEndedLocks": {
+            "format": "int64",
+            "type": "integer"
+          },
           "maxRows": {
             "format": "int64",
             "type": "integer"
@@ -2937,6 +2941,7 @@
         "required": [
           "ageSeconds",
           "intervalSeconds",
+          "maxEndedLocks",
           "maxRows"
         ],
         "type": "object"
@@ -6423,7 +6428,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.32.1"
+    "version": "0.32.2"
   },
   "openapi": "3.1.0",
   "paths": {

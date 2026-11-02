@@ -210,6 +210,7 @@ type localUserLockPruneBody struct {
 	IntervalSeconds int64 `json:"intervalSeconds"`
 	AgeSeconds      int64 `json:"ageSeconds"`
 	MaxRows         int   `json:"maxRows"`
+	MaxEndedLocks   int   `json:"maxEndedLocks"`
 }
 
 // errLocalUsersUnavailable is the answer of a local user route on a server
@@ -513,7 +514,7 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 		ResetLifetimeSeconds: int64(p.ResetLifetime / time.Second),
 		LockPrune: localUserLockPruneBody{
 			IntervalSeconds: int64(prune.Interval / time.Second), AgeSeconds: int64(prune.Age / time.Second),
-			MaxRows: prune.MaxRows,
+			MaxRows: prune.MaxRows, MaxEndedLocks: prune.MaxEnded,
 		},
 		LockRules: localUserLockRulesBody{
 			Password: lockRuleBody(rules.Password), PasswordName: lockRuleBody(rules.PasswordName),

@@ -3,6 +3,7 @@ package authgatetest
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -319,28 +320,156 @@ func testPruneEndedLocks(t *testing.T, h NameLockHarness) {
 	t.Helper()
 
 	c := h.Open(t)
-	// This lock ends and no add sees the end.
-	add(t, c, key(authgate.ScopePassword, "ended", "s"), rule(1, shortLock), nil)
+	// These two locks end and no add sees the end.
+	add(t, c, key(authgate.ScopePassword, "ended-1", "s"), rule(1, shortLock), nil)
+	add(t, c, key(authgate.ScopePasswordName, "ended-2", ""), rule(1, shortLock), nil)
 	// This count has no lock.
 	add(t, c, key(authgate.ScopePassword, "plain", "s"), rule(limitFive, longLock), nil)
 
 	pause(t, doubleLock)
 
-	n, err := c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, pruneEntry())
-	if err != nil || n != limitTwo {
-		t.Fatalf("prune = %d, %v; want 2", n, err)
+	n, err := c.PruneNameLocks(
+		t.Context(),
+		shortLock,
+		authgate.MaxNamePruneRows,
+		authgate.MaxNamePruneEnded,
+		pruneEntry(),
+	)
+	if err != nil || n != limitThree {
+		t.Fatalf("prune = %d, %v; want 3", n, err)
 	}
+
+	entries := h.Entries(t)
 
 	var got []string
 
-	entries := h.Entries(t)
 	for i := range entries {
 		if entries[i].Action == pruneAction {
 			got = append(got, change(entries[i], "pruned")+"/"+change(entries[i], "locksEnded"))
 		}
 	}
 
-	if !slices.Equal(got, []string{"2/1"}) {
-		t.Fatalf("pruned and locksEnded of the entries of the prune = %v, want [2/1]", got)
+	if !slices.Equal(got, []string{"3/2"}) {
+		t.Fatalf("pruned and locksEnded of the entries of the prune = %v, want [3/2]", got)
+	}
+
+	// Each lock that ended has its own entry, with its scope and its end.
+	var scopes []string
+
+	for i := range entries {
+		if entries[i].Action == authgate.ActionNameLockEnded {
+			scopes = append(scopes, change(entries[i], "scope"))
+
+			if change(entries[i], "endedAt") == "" || entries[i].Reason != authgate.ReasonLockEndedUnseen {
+				t.Fatalf("entry of the end of a lock = %+v", entries[i])
+			}
+		}
+	}
+
+	slices.Sort(scopes)
+
+	if !slices.Equal(scopes, []string{authgate.ScopePassword, authgate.ScopePasswordName}) {
+		t.Fatalf("scopes of the entries of the end of a lock = %v", scopes)
+	}
+}
+
+func testPruneEndedBound(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	for i := range limitThree {
+		add(t, c, key(authgate.ScopePassword, "ended-"+strconv.Itoa(i), "s"), rule(1, shortLock), nil)
+	}
+
+	pause(t, doubleLock)
+
+	// A limit of one for the ended locks deletes one of them in a run, and
+	// no run deletes an ended lock with no entry.
+	for run := range limitThree {
+		n, err := c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, 1, pruneEntry())
+		if err != nil || n != 1 {
+			t.Fatalf("run %d = %d, %v; want 1", run+1, n, err)
+		}
+
+		if got := count(actions(h.Entries(t)), authgate.ActionNameLockEnded); got != run+1 {
+			t.Fatalf("entries of the end of a lock after run %d = %d, want %d", run+1, got, run+1)
+		}
+	}
+}
+
+func testAlertAppendFails(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	cases := []struct {
+		mutate func(ev *authgate.LockEvents)
+		name   string
+	}{
+		{name: "the alert fails its validation", mutate: func(ev *authgate.LockEvents) { ev.Alert.ID = "bad" }},
+		{name: "the outbox refuses the alert", mutate: func(ev *authgate.LockEvents) { ev.Alert.Scope = otherScope }},
+	}
+
+	for _, tc := range cases {
+		c := h.Open(t)
+		k := key(authgate.ScopePassword, "n-"+strconv.Itoa(len(tc.name)), "s")
+		r := rule(limitTwo, longLock)
+		add(t, c, k, r, nil)
+
+		entries := len(h.Entries(t))
+
+		bad := failure(k, r)
+		tc.mutate(bad.Events)
+
+		if _, err := c.AddNameFailure(t.Context(), bad); err == nil || errors.Is(err, authgate.ErrNameLocked) {
+			t.Fatalf("%s: add = %v, want an error", tc.name, err)
+		}
+
+		locks, listErr := c.NameLocks(t.Context(), k.scope, k.name)
+		if listErr != nil || len(locks) != 1 || locks[0].Failures != 1 || !locks[0].LockedUntil.IsZero() {
+			t.Fatalf("%s: count = %+v, %v; want 1 failure and no lock", tc.name, locks, listErr)
+		}
+
+		if len(h.Entries(t)) != entries || len(h.Notices(t)) != 0 {
+			t.Fatalf("%s: a failed add left a record", tc.name)
+		}
+	}
+}
+
+func testEndRecordFails(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	k := key(authgate.ScopePassword, "n1", "s")
+	r := authgate.LockRule{Limit: limitTwo, LockFor: shortLock, MaxLockFor: shortLock, ResetAfter: longLock}
+
+	add(t, c, k, r, nil)
+	locked := add(t, c, k, r, nil)
+	waitUnlocked(t, c, k.scope, k.name, locked.LockedUntil)
+
+	entries := len(h.Entries(t))
+
+	// The first add past the end cannot append the entry of the end, so the
+	// add fails as a whole: the count does not restart and the old end stays.
+	bad := failure(k, r)
+	bad.Events.Ended.Namespace = otherScope
+
+	if _, err := c.AddNameFailure(t.Context(), bad); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("add with an entry of the end that fails = %v, want audit.ErrInvalidEntry", err)
+	}
+
+	locks, err := c.NameLocks(t.Context(), k.scope, k.name)
+	if err != nil || len(locks) != 1 || locks[0].Failures != limitTwo ||
+		!locks[0].LockedUntil.Equal(locked.LockedUntil) {
+		t.Fatalf("count after the failed add = %+v, %v; want %+v", locks, err, locked)
+	}
+
+	if len(h.Entries(t)) != entries {
+		t.Fatal("a failed add left an entry")
+	}
+
+	// The next add with good events writes the entry of the end.
+	add(t, c, k, r, nil)
+
+	if got := count(actions(h.Entries(t)), authgate.ActionNameLockEnded); got != 1 {
+		t.Fatalf("entries of the end = %d, want 1", got)
 	}
 }
