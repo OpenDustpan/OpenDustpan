@@ -172,6 +172,49 @@ budget, so an attacker who fills the budget cannot lock the name of a person.
 
 An attacker with 10 or more networks can keep a person out of the password
 sign-in for up to 24 hours at a time. An administrator can end each lock.
+
+### Rules in the API
+
+`GET /api/dustpan/v1/local-users/policy` shows the rules that the server
+applies, in `lockRules`. The times are in seconds. `limit` is the count of
+wrong passwords in a row that sets a lock. `lockSeconds` is the first lock.
+Each new lock of the name, less than `resetSeconds` after the earlier lock
+ended, lasts twice the lock before, up to `maxLockSeconds`. A rule whose
+`maxLockSeconds` is equal to its `lockSeconds` never doubles.
+`sourcePrefix` gives the length of the source of the `password` rule, in
+bits.
+
+```json
+{"lockRules": {
+  "password": {"limit": 10, "lockSeconds": 1800, "maxLockSeconds": 1800, "resetSeconds": 0},
+  "passwordName": {"limit": 100, "lockSeconds": 1800, "maxLockSeconds": 86400, "resetSeconds": 86400},
+  "sourcePrefix": {"ipv4Bits": 32, "ipv6Bits": 64}
+}}
+```
+
+### Records and alerts
+
+Each lock, each unlock and the end of each lock write an audit entry. The
+entry of a lock and the count commit in one transaction. If the
+server cannot write the entry or the alert, it does not change the count and
+refuses the attempt with an error before it compares the password, and it
+writes the error to the log. So a lock never exists without its entry.
+
+The end of a lock has an entry the first time that the name gets an attempt
+after the lock ended (`sign-in.name-lock-ended`). A lock that ends with no
+later attempt has no entry of its own. The prune of old counts records how
+many such locks it deleted in the change `locksEnded` of its entry.
+
+A new lock also sends the notification `sign-in.locked` to the
+administrators of the installation, with the severity warning. The
+notification names the audit object, the scope, the end of the lock and the
+level, and never a user name. A lock of one name from one source, and a lock
+of the second factors of a person, send at most one notification for each
+name in each clock hour, also when many source prefixes lock the same name.
+A lock of one name from every source sends its notification at once, each
+time. Only a principal that can manage the notifications of the installation
+can read the notification.
+
 Read the counts of a local user:
 
 ```sh
@@ -298,10 +341,11 @@ value and the source of each one.
 | `password.rehashed` | A sign-in stores a new hash with the current parameters. |
 | `sign-in.password-failed` | A password sign-in fails. The changes record the real reason. |
 | `sign-in.name-locked` | A count locks a user name. The changes record the scope, the end of the lock and the level. |
+| `sign-in.name-lock-ended` | The first attempt for a user name after a lock ended. The changes record the scope and the end of the lock. |
 | `sign-in.name-unlocked` | An administrator ends the counts and locks of a user name, with a reason. A refused unlock writes a denied entry with the cause. |
 | `sign-in.name-locks-read` | The server refuses a read of the counts of a user name. The changes record the cause. |
 | `sign-in.name-counts-kept` | A good current password could not clear the counts of its name. The counts stay. |
-| `sign-in.name-locks-pruned` | A run of the prune deletes old counts. The subject is the server, and the change `pruned` records the number of counts. |
+| `sign-in.name-locks-pruned` | A run of the prune deletes old counts. The subject is the server, and the change `pruned` records the number of counts. The change `locksEnded` records the number of locks that ended with no later attempt. |
 | `session:sign-in` | A password sign-in starts a session, with the provider `local`. |
 
 No entry holds a password, a hash or a code.

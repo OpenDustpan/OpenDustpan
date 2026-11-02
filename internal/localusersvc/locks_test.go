@@ -201,9 +201,7 @@ type brokenLocks struct {
 	authgate.NameLockCounter
 }
 
-func (brokenLocks) AddNameFailure(
-	context.Context, string, string, string, authgate.LockRule,
-) (authgate.NameLock, error) {
+func (brokenLocks) AddNameFailure(context.Context, authgate.NameFailure) (authgate.NameLock, error) {
 	return authgate.NameLock{}, errDiskOnFire
 }
 
@@ -241,6 +239,7 @@ func TestLockLimits(t *testing.T) {
 
 	for _, tc := range cases {
 		svc, newErr := localusersvc.New(localusersvc.Config{
+			Log:   nil,
 			Store: f.store, Principals: f.principals, Hasher: tc.hasher, Blocklist: blocklist.Embedded(),
 			Audit: f.store, Locks: tc.locks, Keys: f.store, Settings: f.settings, SSO: nil, Kind: "", Now: nil,
 			Reach: noReach(), Subjects: nil,
@@ -312,6 +311,7 @@ func TestUnlockThatCannotClearChangesNothing(t *testing.T) {
 	f.fail(t, authgate.DefaultNameLimit, "alice")
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:   nil,
 		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: brokenClear{NameLockCounter: f.store}, Keys: f.store, Settings: f.settings,
 		SSO: nil, Kind: "", Now: nil, Reach: f.storeReach(), Subjects: f.store,
