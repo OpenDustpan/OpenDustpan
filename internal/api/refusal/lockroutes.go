@@ -23,6 +23,11 @@ const (
 	ForceUnlockSuffix = "/force-unlock"
 )
 
+// MaxLockedTextBytes is the most bytes of a refusal text with its removal
+// route. It is the limit of the message of an answer, so that a cut of the
+// message never removes the route.
+const MaxLockedTextBytes = 300
+
 // LockRoutes holds the routes that remove a manual lock. Remove is the route
 // of the holder. Force is the route of a person with unit:manage.
 type LockRoutes struct {
@@ -71,9 +76,13 @@ func LockedText(e *manuallock.LockedError) string {
 
 // WithRemoval returns text, then the route of the holder that removes the
 // manual lock of t: "<text>. To remove the lock, the holder sends DELETE
-// <route>.".
+// <route>.". The text before the route is cut so that the whole result has at
+// most MaxLockedTextBytes bytes. The route sentence is never cut.
 func WithRemoval(text string, t manuallock.Target) string {
-	return text + ". To remove the lock, the holder sends DELETE " + RemovalRoutes(t).Remove + "."
+	suffix := ". To remove the lock, the holder sends DELETE " + RemovalRoutes(t).Remove + "."
+	budget := max(0, MaxLockedTextBytes-len(suffix))
+
+	return Clean(text, budget) + suffix
 }
 
 // unitQueryValue escapes the unit reference for a query. A colon and a slash

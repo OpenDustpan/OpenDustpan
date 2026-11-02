@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -141,24 +140,20 @@ func checkManualInfo(t *testing.T, body []byte, w manualInfoWant) {
 		t.Fatalf("lock body %q: %v", body, err)
 	}
 
-	if info.Who != w.who || !strings.HasPrefix(info.Info, w.text) {
-		t.Errorf("lock info = Who %q Info %q, want Who %q and Info that starts with %q",
-			info.Who, info.Info, w.who, w.text)
+	wantInfo := w.text + ". `tofu force-unlock` does not remove a manual lock. " +
+		"The holder sends `DELETE " + w.remove + "`. A person with unit:manage sends `POST " + w.force + "`."
+	wantID := "A manual lock blocks this run. To remove it, send `DELETE " + w.remove + "`."
+
+	if info.Who != w.who {
+		t.Errorf("Who = %q, want %q", info.Who, w.who)
 	}
 
-	route := "`DELETE " + w.remove + "`"
-	for field, got := range map[string]string{"ID": info.ID, "Info": info.Info} {
-		if !strings.Contains(got, route) {
-			t.Errorf("%s = %q, want the route %s", field, got, route)
-		}
+	if info.Info != wantInfo {
+		t.Errorf("Info = %q, want %q", info.Info, wantInfo)
 	}
 
-	if !strings.HasPrefix(info.ID, "A manual lock blocks this run.") {
-		t.Errorf("ID = %q, want plain words that say a manual lock blocks the run", info.ID)
-	}
-
-	if !strings.Contains(info.Info, "`POST "+w.force+"`") {
-		t.Errorf("Info = %q, want the force-unlock route", info.Info)
+	if info.ID != wantID {
+		t.Errorf("ID = %q, want %q", info.ID, wantID)
 	}
 }
 
