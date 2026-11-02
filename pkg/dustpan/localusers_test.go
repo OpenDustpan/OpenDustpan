@@ -6,7 +6,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
@@ -326,5 +329,66 @@ func (s localServer) checkAdministratorRoutes(t *testing.T) {
 	if !strings.Contains(policy.Body.String(), `"minLength":15`) ||
 		!strings.Contains(policy.Body.String(), `"enabledSource":"default"`) {
 		t.Fatalf("policy = %s", policy.Body)
+	}
+
+	checkLockRules(t, policy.Body.Bytes())
+}
+
+// lockRuleBody is one rule of the policy answer.
+type lockRuleBody struct {
+	Limit          int   `json:"limit"`
+	LockSeconds    int64 `json:"lockSeconds"`
+	MaxLockSeconds int64 `json:"maxLockSeconds"`
+	ResetSeconds   int64 `json:"resetSeconds"`
+}
+
+// sourcePrefixBody is the length of the source prefix of the policy answer.
+type sourcePrefixBody struct {
+	IPv4Bits int `json:"ipv4Bits"`
+	IPv6Bits int `json:"ipv6Bits"`
+}
+
+// lockRulesBody is the part of the policy answer that holds the lock rules.
+type lockRulesBody struct {
+	Password     lockRuleBody     `json:"password"`
+	PasswordName lockRuleBody     `json:"passwordName"`
+	SourcePrefix sourcePrefixBody `json:"sourcePrefix"`
+}
+
+// checkLockRules proves that the policy shows the rules that the server
+// applies to each failed attempt: the same numbers as the rules of authgate,
+// in seconds.
+func checkLockRules(t *testing.T, body []byte) {
+	t.Helper()
+
+	var got struct {
+		LockRules lockRulesBody `json:"lockRules"`
+	}
+
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode the policy: %v", err)
+	}
+
+	toRule := func(r authgate.LockRule) lockRuleBody {
+		return lockRuleBody{
+			Limit: r.Limit, LockSeconds: int64(r.LockFor / time.Second),
+			MaxLockSeconds: int64(r.MaxLockFor / time.Second), ResetSeconds: int64(r.ResetAfter / time.Second),
+		}
+	}
+
+	rules := localusersvc.Rules()
+	if got.LockRules.Password != toRule(rules.Password) || got.LockRules.PasswordName != toRule(rules.PasswordName) {
+		t.Fatalf("lockRules = %+v, want the rules of the service %+v", got.LockRules, rules)
+	}
+
+	// The numbers of the documented defaults, so a change of a default shows
+	// in this test and in the guide.
+	want := lockRulesBody{
+		Password:     lockRuleBody{Limit: 10, LockSeconds: 1800, MaxLockSeconds: 1800, ResetSeconds: 0},
+		PasswordName: lockRuleBody{Limit: 100, LockSeconds: 1800, MaxLockSeconds: 86400, ResetSeconds: 86400},
+		SourcePrefix: sourcePrefixBody{IPv4Bits: 32, IPv6Bits: 64},
+	}
+	if got.LockRules != want {
+		t.Fatalf("lockRules = %+v, want %+v", got.LockRules, want)
 	}
 }
