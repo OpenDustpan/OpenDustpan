@@ -1248,19 +1248,21 @@ func (s *Service) copySealedBlob(
 // sealedDamage classifies the error of the check of one sealed blob. A
 // missing live object is missing damage. Plain bytes that opened and do not
 // match the size or the MD5 of the row are damaged: the error wraps
-// ErrLiveBlobDamaged. Any other error, for example sealed bytes that do not
-// open or a row that cannot be read, returns as it is: the code cannot tell
-// damage from it, so the backup stops.
+// ErrLiveBlobDamaged. Sealed bytes that do not open are damaged with the
+// reason unopened: the error wraps ErrLiveBlobUnopened. A restore stops at
+// both and writes over neither. Any other error, for example a row that
+// cannot be read, returns as it is, so the backup stops.
 func sealedDamage(ref BlobRef, cause error) error {
-	if sourceMissing(cause) {
+	switch {
+	case sourceMissing(cause):
 		return missingDamage(ref, cause)
-	}
-
-	if !errors.Is(cause, ErrLiveBlobDamaged) {
+	case errors.Is(cause, ErrLiveBlobDamaged):
+		return mismatchDamage(ref, ReasonSealed, cause)
+	case errors.Is(cause, ErrLiveBlobUnopened):
+		return mismatchDamage(ref, ReasonUnopened, cause)
+	default:
 		return cause
 	}
-
-	return mismatchDamage(ref, ReasonSealed, cause)
 }
 
 // copyResult holds the size and MD5 of one streamed blob copy. Kept reports
