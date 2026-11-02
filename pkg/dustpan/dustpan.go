@@ -267,6 +267,11 @@ type settings struct {
 	// with gate; nil means no limit. Each gate keeps its own LRU of sources,
 	// so the gate memory of one process is at most 2 x 10,000 buckets.
 	signInGate *authgate.Gate
+	// passwordGate is the per-address limit of the routes that check a
+	// password or a one-time code of a local user. It has its own budget, so
+	// a guess of a password never slows another sign-in. wireTokens sets it
+	// with gate; nil mounts no such route.
+	passwordGate *authgate.Gate
 	// sessionCookies checks the console session cookie on the inventory,
 	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
 	// means no console sign-in.
@@ -724,6 +729,10 @@ type Server struct {
 	// the schedule job.artifact-sweep. It is nil without the ports that it
 	// needs.
 	artifactSweeper *job.ArtifactSweeper
+	// nameLocks holds the counts of the lockout by name: the schedule
+	// name-lock-prune deletes the counts that can no longer change a lock.
+	// It is nil when the store keeps no such counts.
+	nameLocks nameLockPrune
 	// issuer is the OIDC issuer, or nil. The schedule issuer.rotate calls it.
 	issuer          *issuersvc.Service
 	inactivityEvery time.Duration
@@ -827,6 +836,7 @@ func defaultSettings() *settings {
 		signInHTTPClient:        nil,
 		gate:                    nil,
 		signInGate:              nil,
+		passwordGate:            nil,
 		sessionCookies:          nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
@@ -946,7 +956,7 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	cfg.authenticator = authn
 	cfg.authorizer = allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
-			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences,
+			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences, identity.ActionCallerManageSignIn,
 		},
 	}}, cfg.ipAllowlists)
 
@@ -1155,8 +1165,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components,
-		watch:      cfg.watch, auditChainEvery: cfg.auditChainInterval,
+		components: cfg.components, nameLocks: nameLocksOf(cfg),
+		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval,
 	}
 
 	cfg.watch.attach(srv, observed.Registry())
@@ -2848,14 +2858,51 @@ type uncachedStateOpener struct {
 	workspaces *workspace.Service
 }
 
-// OpenStateBlob implements backup.StateOpener.
+// OpenStateBlob implements backup.StateOpener. Plain bytes that do not match
+// the size and the MD5 of the row of their version wrap
+// backup.ErrLiveBlobDamaged, at the open and at each read. Sealed bytes that
+// do not open are not damage: a key or a key provider can cause that, so the
+// error keeps its own class and the backup stops. Every other error keeps its
+// own class too.
 func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	reader, err := o.workspaces.OpenStateBlob(blobcache.WithoutCache(ctx), key)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob: %w", err)
+		return nil, fmt.Errorf("open state blob: %w", stateDamage(err))
 	}
 
-	return reader, nil
+	return damageReader{ReadCloser: reader}, nil
+}
+
+// stateDamage wraps err with backup.ErrLiveBlobDamaged when err says that the
+// plain state does not match the size and the MD5 of its row, and returns any
+// other error as it is. An error that also says that the sealed content does
+// not open, or that a key failed, is not damage: the cause is not clear.
+func stateDamage(err error) error {
+	if errors.Is(err, workspace.ErrStoredContentMismatch) && !errors.Is(err, workspace.ErrSealedContent) &&
+		!errors.Is(err, secret.ErrDecrypt) {
+		return fmt.Errorf("%w: %w", backup.ErrLiveBlobDamaged, err)
+	}
+
+	return err
+}
+
+// damageReader maps the read errors of opened state with stateDamage.
+type damageReader struct {
+	io.ReadCloser
+}
+
+// Read returns the next plain bytes. io.EOF stays as it is.
+func (r damageReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+
+	switch {
+	case err == nil:
+		return n, nil
+	case errors.Is(err, io.EOF):
+		return n, io.EOF
+	}
+
+	return n, stateDamage(err)
 }
 
 // checkRetention refuses a soft-delete retention below
@@ -3028,11 +3075,6 @@ func newServerHandler(
 		return nil, err
 	}
 
-	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
-	if err != nil {
-		return nil, err
-	}
-
 	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
 	if err != nil {
 		return nil, err
@@ -3043,7 +3085,7 @@ func newServerHandler(
 		return nil, err
 	}
 
-	serverAudit, err := serverAuditOf(cfg.namespaceStore)
+	extras, err := newServerExtras(cfg, deps, principals)
 	if err != nil {
 		return nil, err
 	}
@@ -3065,10 +3107,10 @@ func newServerHandler(
 		Principals:       principals,
 		Access:           grants,
 		Tokens:           deps.services.tokens,
-		IPAllowlists:     allow,
+		IPAllowlists:     extras.allow,
 		Gates:            gatesPort(gates),
 		SessionPolicy:    deps.policies,
-		Audit:            serverAudit,
+		Audit:            extras.audit,
 		CheckpointEpochs: checkpointEpochsOf(deps.chain),
 		OnAuditFailure:   deps.observed.IncAuditAppendFailure,
 		DenialLimiter:    cfg.denialLimiter,
@@ -3080,7 +3122,8 @@ func newServerHandler(
 		Workers:          cfg.watch,
 		SignIn:           deps.signIn,
 		Preferences:      newPreferencesService(cfg),
-		Settings:         newSettingService(cfg, cfg.namespaceStore),
+		LocalUsers:       extras.localUsers,
+		Settings:         extras.settings,
 		InstallationKind: cfg.installationKind,
 		Instances:        cfg.instanceStore, StoreChecks: checks,
 	})
@@ -3534,12 +3577,27 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 
 	cfg.signInGate = signInGate
 
+	passwordGate, err := authgate.New(authgate.Config{
+		Next: refuseAll{}, Charge: nil, Logger: cfg.logger, Now: cfg.now,
+		Failures: failures, Window: 0, CounterErrors: nil, Scope: passwordGateScope,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("password gate: %w", err)
+	}
+
+	cfg.passwordGate = passwordGate
+
 	return identity.Chain{cfg.authenticator, gate}, nil
 }
 
 // signInGateScope names the budget of the sign-in routes in the shared
 // count.
 const signInGateScope = "signin"
+
+// passwordGateScope names the budget of the routes that check a password or
+// a one-time code of a local user in the shared count.
+const passwordGateScope = "password"
 
 // refuseAll is the Next of the sign-in gate. The sign-in routes never look
 // up a token through that gate; if one does, it gets no principal.

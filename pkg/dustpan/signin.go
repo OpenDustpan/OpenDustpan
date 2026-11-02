@@ -107,17 +107,15 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 
 	in := &serverapi.SignIn{
 		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...), DevCode: nil, DevAdmin: noDevAdmin,
-		OnDevRefused: devRefusalAudit(cfg),
+		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, DevCode: nil,
+		DevAdmin: noDevAdmin, OnDevRefused: devRefusalAudit(cfg),
 	}
 
 	if cfg.devSignIn != nil {
 		in.DevCode, in.DevAdmin = cfg.devSignIn.Code, cfg.devSignIn.Admin
 	}
 
-	if cfg.signInGate != nil {
-		in.Limiter = cfg.signInGate
-	}
+	setSignInLimiters(cfg, in)
 
 	if stored {
 		admin, adminErr := newProviderAdmin(cfg, stores)
@@ -388,6 +386,10 @@ func signInProvider(
 		return none, fmt.Errorf("%w: provider ID %q is reserved for the dev sign-in", errSignInSetup, p.ID)
 	}
 
+	if p.ID == session.LocalProviderID {
+		return none, fmt.Errorf("%w: provider ID %q is reserved for the local users", errSignInSetup, p.ID)
+	}
+
 	if slices.ContainsFunc(earlier, func(e serverapi.SignInProvider) bool { return e.ID == p.ID }) {
 		return none, fmt.Errorf("%w: provider ID %q is used two times", errSignInSetup, p.ID)
 	}
@@ -409,4 +411,18 @@ func signInProvider(
 		Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
 		Source: principal.SourceOIDC,
 	}, nil
+}
+
+// setSignInLimiters sets the budgets of the sign-in routes and of the
+// password routes of in. A gate that wireTokens did not make stays nil in
+// in: a nil gate in a non-nil interface would pass the nil checks of the
+// handler.
+func setSignInLimiters(cfg *settings, in *serverapi.SignIn) {
+	if cfg.signInGate != nil {
+		in.Limiter = cfg.signInGate
+	}
+
+	if cfg.passwordGate != nil {
+		in.PasswordLimiter = cfg.passwordGate
+	}
 }

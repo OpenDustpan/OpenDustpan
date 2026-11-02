@@ -45,6 +45,7 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
 	pgColName        = "name"
+	pgColKey         = "key"
 	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
@@ -447,7 +448,27 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables())
+	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables(), pgNameLockControlTables())
+}
+
+// pgNameLockControlTables holds the COPY columns of the counts of the
+// lockout by name and of the key of their names.
+func pgNameLockControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				sinkColScope, pgColName, "sub", "failures", "locked_until_ms", "level", "last_failure_ms",
+				"last_lock_end_ms", "reset_after_ms",
+			},
+			orderBy: []string{sinkColScope, pgColName, "sub"},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", pgColKey},
+			orderBy: []string{"id"},
+		},
+	}
 }
 
 // pgStoreCheckControlTables lists the column list of the store check rows,
@@ -503,7 +524,7 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sessions",
 			columns: []string{
 				"id", pgColPrincipalID, pgColDigest, "provider", pgColCreatedAtMs, "last_seen_at_ms", "auth_time_ms",
-				"ended_at_ms", "end_reason", "source_ip", "user_agent",
+				"ended_at_ms", "end_reason", "source_ip", "user_agent", "generation",
 			},
 			orderBy: []string{"id"},
 		},

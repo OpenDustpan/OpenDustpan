@@ -58,7 +58,9 @@ A backup is a set of objects under the target:
 
 The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the primary installations and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
-For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5.
+For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5. The backup copies each file of a release with its size and MD5.
+
+The publish path limits each file of an upload to 512 MiB and the sum of the files of one release to 2 GiB. These values are fixed in the server.
 
 The server copies a blob only when the SQL data holds its size and its MD5. It checks the copy against these values. A row can name a blob without them, for example a row that an earlier version of the server wrote. The server does not copy that blob. It lists the key in the optional `unverified` list of the manifest and writes a warning to the server log.
 
@@ -112,7 +114,18 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
-The restore copies a blob only when its key is absent from the blob store of the server. A key that holds the bytes of the manifest stays as it is. A key that holds other bytes stops the restore. The restore then fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key.
+Before the restore changes data, it takes a backup of the live data, the backup before restore. This backup checks each live blob against the size and MD5 in its own live row. When a live blob is absent, or its bytes have another size or MD5 than its row, the backup does not stop. It records the blob in the `damaged` list of its manifest, with the key, the state (`missing` or `damaged`) and the reason (`absent`, `size`, `checksum` or `sealed`). For damaged bytes, the entry also holds the size and the MD5 of the live bytes. The backup holds no copy of these blobs. Every other read error stops the backup and the restore. Sealed OpenTofu state that does not open is such an error, because a key or a key provider can cause it too. For each entry, the audit log holds an entry that names the key.
+
+For each blob of the backup, the restore does one of these:
+
+- The key is absent from the blob store of the server: the restore writes the blob.
+- The key holds the bytes of the manifest: the blob stays as it is.
+- The key holds the damaged bytes that the backup before restore recorded: the restore replaces them with the bytes of the backup. It does this only when this restore took that backup and its manifest did not change after the restore read it. Before the replacement, the restore reads the live row again and checks that the live bytes still do not match it. It then copies the damaged bytes to `backups/<backup before restore>/damaged/<key>` in the backup target, and writes an audit entry, `replaced damaged live blob <key>: live bytes did not match their record, damaged bytes copied to <path>`. When one of these steps fails, the restore stops and the live key keeps its bytes.
+- The key holds other bytes: the restore stops and writes nothing over them. These bytes matched their live row, so they are live data that is newer or different. The restore then fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key. `--force` does not change this.
+
+A restore that wrote or replaced a missing or damaged blob succeeds with the warning `damaged-live-blobs`.
+
+A backup before restore that has a `damaged` list is not complete. `opendustpan backup check` reports it as corrupt, and a restore of it stops with the text `backup data is corrupt`.
 
 The restore does not rely on the conditional writes of the blob store. It reads the key again just before it writes. It also reads the staged copy of the blob and checks it against the manifest before it writes the live key. A staged copy that differs stops the restore, and the live key stays absent. Before each write of a blob, the restore checks that its worker still holds the claim on the restore.
 
@@ -264,9 +277,13 @@ PostgreSQL database, leave out these schemas:
 pg_dump --exclude-schema='restore_*' "$DATABASE_URL"
 ```
 
-The restore never deletes a live blob. When a live blob has bytes that differ
-from the backup, the restore writes the bytes of the backup, logs a warning and
-writes an audit entry.
+The restore deletes a live blob only when the backup before restore recorded
+its bytes as damaged, the key still holds those bytes, and a check against the
+live row shows the damage. It copies the damaged bytes to the backup target and
+writes the audit entry first, and then writes the bytes of the backup to the
+key. When a live
+blob has other bytes that differ from the backup, the restore stops and writes
+nothing over them. See [Restore a backup](#restore-a-backup).
 
 ### Blob keys that a restore refuses
 

@@ -35,7 +35,7 @@ func (f accessFixture) sessionOf(t *testing.T, subject string, authTime time.Tim
 
 	_, secret, err := f.sessions.Start(t.Context(), entry, session.Start{
 		AuthTime: authTime, PrincipalID: "prn-" + subject, Provider: "corp", SourceIP: "192.0.2.1",
-		UserAgent: "test", Stored: false,
+		UserAgent: "test", Generation: 0, Stored: false,
 	})
 	if err != nil {
 		t.Fatalf("start the session of %s: %v", subject, err)
@@ -179,7 +179,7 @@ func (s storeSessions) seedTester(t *testing.T) {
 func (s storeSessions) signIn() *apiserver.SignIn {
 	return &apiserver.SignIn{
 		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: s.svc, Limiter: nil,
-		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil,
+		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: nil,
 	}
 }
 
@@ -201,7 +201,7 @@ func (s storeSessions) start(t *testing.T, req *http.Request, age time.Duration)
 
 	_, secret, err := s.svc.Start(t.Context(), entry, session.Start{
 		AuthTime: at.Add(-age), PrincipalID: "prn-tester", Provider: "corp", SourceIP: "192.0.2.1",
-		UserAgent: "test", Stored: false,
+		UserAgent: "test", Generation: 0, Stored: false,
 	})
 	if err != nil {
 		t.Fatalf("start the session of tester: %v", err)

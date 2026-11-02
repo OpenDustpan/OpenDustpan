@@ -330,6 +330,21 @@
         ],
         "type": "object"
       },
+      "ChangeOwnPasswordRequest": {
+        "properties": {
+          "currentPassword": {
+            "type": "string"
+          },
+          "newPassword": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "type": "object"
+      },
       "Collection": {
         "properties": {
           "createdAt": {
@@ -762,6 +777,56 @@
         ],
         "type": "object"
       },
+      "CreateLocalUserRequest": {
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "userName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "displayName",
+          "reason",
+          "userName"
+        ],
+        "type": "object"
+      },
+      "CreateLocalUserResponse": {
+        "properties": {
+          "localUser": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "setUpCode": {
+            "type": "string"
+          },
+          "setUpExpiresAt": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "userName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "localUser",
+          "principal",
+          "setUpCode",
+          "setUpExpiresAt",
+          "subject",
+          "userName"
+        ],
+        "type": "object"
+      },
       "CreateNotificationSinkRequest": {
         "properties": {
           "accessToken": {
@@ -1049,6 +1114,7 @@
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
             "lock.locked": "#/components/schemas/LockLockedError",
             "maintenance.active-work": "#/components/schemas/MaintenanceActiveWorkError",
+            "password.too-short": "#/components/schemas/PasswordTooShortError",
             "preferences.field-invalid": "#/components/schemas/PreferencesFieldInvalidError",
             "preferences.field-read-only": "#/components/schemas/PreferencesFieldReadOnlyError",
             "request.body-too-large": "#/components/schemas/RequestBodyTooLargeError",
@@ -1084,6 +1150,9 @@
           },
           {
             "$ref": "#/components/schemas/MaintenanceActiveWorkError"
+          },
+          {
+            "$ref": "#/components/schemas/PasswordTooShortError"
           },
           {
             "$ref": "#/components/schemas/PreferencesFieldInvalidError"
@@ -1202,6 +1271,24 @@
           "journal.build-timeout",
           "journal.conflict",
           "journal.incomplete",
+          "local-user.break-glass",
+          "local-user.code-invalid",
+          "local-user.current-password-required",
+          "local-user.current-password-wrong",
+          "local-user.demo-fixed",
+          "local-user.exists",
+          "local-user.hash-busy",
+          "local-user.last-credential",
+          "local-user.name-invalid",
+          "local-user.not-found",
+          "local-user.outside-reach",
+          "local-user.own-account",
+          "local-user.password-sign-in-off",
+          "local-user.reason-required",
+          "local-user.second-factor-required",
+          "local-user.session-ended",
+          "local-user.sign-in-failed",
+          "local-user.unavailable",
           "lock.already-locked",
           "lock.changed",
           "lock.invalid-target",
@@ -1223,6 +1310,11 @@
           "namespace.not-found",
           "namespace.not-home",
           "namespace.unavailable",
+          "password.blocked",
+          "password.form",
+          "password.letters-and-digits",
+          "password.too-long",
+          "password.too-short",
           "placement.conflict",
           "placement.invalid-pattern",
           "placement.invalid-position",
@@ -2798,6 +2890,113 @@
         ],
         "type": "object"
       },
+      "LocalUserLock": {
+        "properties": {
+          "failures": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "level": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "lockedUntil": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "failures",
+          "level",
+          "lockedUntil",
+          "scope",
+          "source"
+        ],
+        "type": "object"
+      },
+      "LocalUserLockPrune": {
+        "properties": {
+          "ageSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "intervalSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "maxRows": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ageSeconds",
+          "intervalSeconds",
+          "maxRows"
+        ],
+        "type": "object"
+      },
+      "LocalUserLocks": {
+        "properties": {
+          "locks": {
+            "items": {
+              "$ref": "#/components/schemas/LocalUserLock"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "locks"
+        ],
+        "type": "object"
+      },
+      "LocalUserPolicy": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "enabledSource": {
+            "type": "string"
+          },
+          "identityProvider": {
+            "type": "boolean"
+          },
+          "lockPrune": {
+            "$ref": "#/components/schemas/LocalUserLockPrune"
+          },
+          "maxLength": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "minLength": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "requireLettersAndDigits": {
+            "type": "boolean"
+          },
+          "resetLifetimeSeconds": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "enabledSource",
+          "identityProvider",
+          "lockPrune",
+          "maxLength",
+          "minLength",
+          "requireLettersAndDigits",
+          "resetLifetimeSeconds"
+        ],
+        "type": "object"
+      },
       "LockLockedError": {
         "description": "The error answer with the code lock.locked.",
         "properties": {
@@ -3185,6 +3384,62 @@
         },
         "required": [
           "newUnitDefault"
+        ],
+        "type": "object"
+      },
+      "PasswordSignInRequest": {
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "userName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "password",
+          "userName"
+        ],
+        "type": "object"
+      },
+      "PasswordTooShortError": {
+        "description": "The error answer with the code password.too-short.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/PasswordTooShortErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "password.too-short"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "PasswordTooShortErrorArgs": {
+        "description": "The arguments of the text of the error with the code password.too-short.",
+        "properties": {
+          "minLength": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "minLength"
         ],
         "type": "object"
       },
@@ -3720,6 +3975,21 @@
         ],
         "type": "object"
       },
+      "RedeemLocalUserCodeRequest": {
+        "properties": {
+          "oneTimeCode": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "oneTimeCode",
+          "password"
+        ],
+        "type": "object"
+      },
       "RegistryKey": {
         "properties": {
           "addedAt": {
@@ -3881,6 +4151,40 @@
         },
         "required": [
           "objectID"
+        ],
+        "type": "object"
+      },
+      "ResetLocalUserPasswordRequest": {
+        "properties": {
+          "principal": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revokeAccessTokens": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "principal",
+          "reason",
+          "revokeAccessTokens"
+        ],
+        "type": "object"
+      },
+      "ResetLocalUserPasswordResponse": {
+        "properties": {
+          "expiresAt": {
+            "type": "string"
+          },
+          "resetCode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expiresAt",
+          "resetCode"
         ],
         "type": "object"
       },
@@ -5720,6 +6024,33 @@
         ],
         "type": "object"
       },
+      "UnlockLocalUserRequest": {
+        "properties": {
+          "principal": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnlockLocalUserResponse": {
+        "properties": {
+          "cleared": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cleared"
+        ],
+        "type": "object"
+      },
       "UpdateContextRequest": {
         "properties": {
           "links": {
@@ -6025,7 +6356,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.31.0"
+    "version": "0.32.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -6441,6 +6772,301 @@
           {
             "action": "server:manage-git-host",
             "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/local-users": {
+      "post": {
+        "operationId": "createLocalUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLocalUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateLocalUserResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-sign-in",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/local-users/locks": {
+      "get": {
+        "operationId": "getLocalUserLocks",
+        "parameters": [
+          {
+            "description": "The principal ID of the local user.",
+            "in": "query",
+            "name": "principal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalUserLocks"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-sign-in",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/local-users/policy": {
+      "get": {
+        "operationId": "getLocalUserPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalUserPolicy"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-sign-in",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/local-users/redeem": {
+      "post": {
+        "operationId": "redeemLocalUserCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemLocalUserCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
+    "/api/dustpan/v1/local-users/reset": {
+      "post": {
+        "operationId": "resetLocalUserPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetLocalUserPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetLocalUserPasswordResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-sign-in",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/local-users/unlock": {
+      "post": {
+        "operationId": "unlockLocalUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlockLocalUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlockLocalUserResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-sign-in",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/password": {
+      "post": {
+        "operationId": "changeOwnPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeOwnPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:manage-sign-in",
+            "object": "caller"
           }
         ]
       }
@@ -14253,6 +14879,41 @@
         ]
       }
     },
+    "/api/dustpan/v1/sign-in/password": {
+      "post": {
+        "operationId": "signInWithPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "local-users"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
     "/api/dustpan/v1/store-checks": {
       "get": {
         "operationId": "listStoreChecks",
@@ -14427,6 +15088,9 @@
     },
     {
       "name": "jobs"
+    },
+    {
+      "name": "local-users"
     },
     {
       "name": "locks"

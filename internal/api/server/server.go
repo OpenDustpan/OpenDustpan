@@ -22,6 +22,7 @@ import (
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -139,6 +140,10 @@ type Config struct {
 	// keeps none: the preferences routes answer 501. Both SQL adapters keep
 	// them.
 	Preferences *preferences.Service
+	// LocalUsers is the service of the local users and of the password
+	// sign-in. Nil means the server keeps no local users: their routes are
+	// not mounted.
+	LocalUsers *localusersvc.Service
 	// Settings keeps the settings resource of the installation and of the
 	// namespaces. Nil means the store keeps none: the settings routes answer
 	// 501. Both SQL adapters keep them.
@@ -222,6 +227,7 @@ type Handler struct {
 	signIn         *signInState
 	kind           installation.Kind
 	preferences    *preferences.Service
+	localUsers     *localusersvc.Service
 	settings       *setting.Service
 	gitHost        *forge.Service
 	idem           *idempotent.Middleware
@@ -280,6 +286,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
 		preferences:    cfg.Preferences,
+		localUsers:     cfg.LocalUsers,
 		settings:       cfg.Settings,
 		gitHost:        cfg.GitHost,
 		idem:           cfg.Idempotency,

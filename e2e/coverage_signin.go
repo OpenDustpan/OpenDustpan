@@ -11,8 +11,13 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
+	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -50,42 +55,39 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Preferences:    nil,
-		Settings:       nil,
-		GitHost:        nil,
-		Idempotency:    nil,
-		Instances:      nil,
-		StoreChecks:    nil,
-		Workers:        nil,
-		TempAdmins:     nil,
-		Now:            nil,
-		Authenticator:  coverageAuthenticator{},
-		Authorizer:     coverageAuthorizer{},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     coverageNamespaces(tb),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    coverageMaintenance{},
-		Metrics:        coverageMetrics{},
-		Version:        "test",
-		Schema:         coverageSchema{},
-		Journal:        nil,
-		Principals:     principals,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          coverageAuditStore{},
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		AuditSinks:     nil,
-		AuditChain:     nil,
-		IPAllowlists:   nil,
-		Gates:          nil,
-		SessionPolicy:  nil,
-		SignIn: &serverapi.SignIn{
-			OnDevRefused: nil,
-			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
-			DevCode: code, DevAdmin: identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
-		},
+		LocalUsers:       coverageLocalUsers(tb, st, principals),
+		Preferences:      nil,
+		Settings:         nil,
+		GitHost:          nil,
+		Idempotency:      nil,
+		Instances:        nil,
+		StoreChecks:      nil,
+		Workers:          nil,
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    coverageAuthenticator{},
+		Authorizer:       coverageAuthorizer{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       coverageNamespaces(tb),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      coverageMaintenance{},
+		Metrics:          coverageMetrics{},
+		Version:          "test",
+		Schema:           coverageSchema{},
+		Journal:          nil,
+		Principals:       principals,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            coverageAuditStore{},
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditSinks:       nil,
+		AuditChain:       nil,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    nil,
+		SignIn:           coverageSignIn(sessions, admin, code),
 		CheckpointEpochs: nil,
 		InstallationKind: installation.KindDev,
 		DenialLimiter:    nil,
@@ -120,12 +122,52 @@ func coverageSignInServices(tb testing.TB, st *sqlite.Store) (*principal.Service
 	return principals, sessions
 }
 
+// coverageLocalUsers returns the local user service over st, so the route
+// table holds the local user routes and the password sign-in.
+func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.Service) *localusersvc.Service {
+	tb.Helper()
+
+	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
+	if err != nil {
+		tb.Fatalf("hash budget: %v", err)
+	}
+
+	hasher, err := argon2id.New(budget)
+	if err != nil {
+		tb.Fatalf("hasher: %v", err)
+	}
+
+	svc, err := localusersvc.New(localusersvc.Config{
+		Store:      st,
+		Principals: principals,
+		Hasher:     hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      st,
+		Locks:      st,
+		Keys:       st,
+		Settings:   nil,
+		SSO:        nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+		},
+		Subjects: st,
+		Kind:     installation.KindDev,
+		Now:      nil,
+	})
+	if err != nil {
+		tb.Fatalf("local user service: %v", err)
+	}
+
+	return svc
+}
+
 // signInRows keeps the sign-in rows of the route table of handler.
 func signInRows(handler *serverapi.Handler) []RouteRef {
 	var out []RouteRef
 
 	for _, ref := range serverRefs(handler.Routes()) {
 		if strings.Contains(ref.Path, "/sign-in/") || strings.HasPrefix(ref.Path, "/api/server/sign-in-providers") ||
+			strings.HasPrefix(ref.Path, "/api/dustpan/v1/local-users") || ref.Path == "/api/dustpan/v1/me/password" ||
 			ref.Path == "/api/server/session" ||
 			ref.Path == "/api/server/sign-out" {
 			out = append(out, ref)
@@ -153,4 +195,30 @@ func coverageProviderAdmin(tb testing.TB, st *sqlite.Store) *session.ProviderAdm
 	}
 
 	return admin
+}
+
+// coveragePasswordLimiter is the password budget of the coverage handler:
+// it admits each request and counts nothing.
+type coveragePasswordLimiter struct{}
+
+func (coveragePasswordLimiter) Admit(context.Context) error { return nil }
+
+func (coveragePasswordLimiter) Fail(context.Context) {}
+
+// coverageSignIn returns the sign-in of the coverage handler: the dev
+// sign-in code mounts the dev route, and the password budget mounts the
+// password routes.
+func coverageSignIn(sessions *session.Sessions, admin *session.ProviderAdmin, code *devcode.Code) *serverapi.SignIn {
+	return &serverapi.SignIn{
+		OnDevRefused:    nil,
+		Sessions:        sessions,
+		Limiter:         nil,
+		Stored:          nil,
+		Admin:           admin,
+		Providers:       nil,
+		Origins:         nil,
+		PasswordLimiter: coveragePasswordLimiter{},
+		DevCode:         code,
+		DevAdmin:        identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
+	}
 }

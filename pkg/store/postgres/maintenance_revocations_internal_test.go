@@ -39,6 +39,7 @@ func revSeed(t *testing.T, s *Store) string {
 	ss := session.Session{
 		CreatedAt: at, LastSeenAt: at, AuthTime: at, EndedAt: time.Time{}, ID: "ses-race", PrincipalID: p.ID,
 		Provider: "corp", EndReason: "", SourceIP: "192.0.2.1", UserAgent: "race",
+		Generation: 1,
 	}
 
 	digest := sha256.Sum256([]byte("race"))

@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/localuserstore"
 )
 
@@ -108,8 +109,12 @@ func (f *fakeTx) RehashPassword(context.Context, string, string, string) (int64,
 	return f.write("rehash")
 }
 
-func (f *fakeTx) BumpSessionGeneration(context.Context, string) (int64, error) {
-	return f.write("bump")
+func (f *fakeTx) BumpGeneration(context.Context, string, session.BumpCause, uint64) (uint64, error) {
+	if _, err := f.write("bump"); err != nil {
+		return 0, err
+	}
+
+	return 2, nil
 }
 
 func (f *fakeTx) RevokeAccessTokens(context.Context, string, int64) (int64, error) {
@@ -142,7 +147,7 @@ func use(h localuser.PasswordHash) localuser.Redeem {
 }
 
 func noChange() localuser.PasswordChange {
-	return localuser.PasswordChange{ChangeRequired: false}
+	return localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0}
 }
 
 func wantNoWrites(t *testing.T, f *fakeTx) {
@@ -179,8 +184,10 @@ func TestPasswordWritesRefuseBreakGlass(t *testing.T) {
 
 	writes := map[string]func(f *fakeTx) error{
 		"set password": func(f *fakeTx) error {
-			return localuserstore.SetPassword(context.Background(), f, "lus-1",
+			_, err := localuserstore.SetPassword(context.Background(), f, "lus-1",
 				localuserstore.PasswordWrite(validHash, noChange(), at()))
+
+			return err
 		},
 		"rehash": func(f *fakeTx) error {
 			return localuserstore.Rehash(context.Background(), f, "lus-1", validHash, validHash)
@@ -261,7 +268,7 @@ func TestHashCheckedBeforeAnyWrite(t *testing.T) {
 	for _, h := range []localuser.PasswordHash{"", "plain", validHash + "\n", "$argon2id$v=19$m=7168,t=1,p=0$AA$AA"} {
 		f := newFake()
 
-		err := localuserstore.SetPassword(t.Context(), f, "lus-1", localuserstore.PasswordWrite(h, noChange(), at()))
+		_, err := localuserstore.SetPassword(t.Context(), f, "lus-1", localuserstore.PasswordWrite(h, noChange(), at()))
 		if !errors.Is(err, localuser.ErrInvalid) {
 			t.Errorf("set the hash %q: err = %v, want ErrInvalid", h, err)
 		}

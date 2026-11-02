@@ -590,6 +590,7 @@ func portableSpec() []PortableTable {
 				{Name: "end_reason", Kind: KindText},
 				{Name: "source_ip", Kind: KindText},
 				{Name: "user_agent", Kind: KindText},
+				{Name: "generation", Kind: KindInteger},
 			},
 		},
 		{
