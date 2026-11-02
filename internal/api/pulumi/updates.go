@@ -770,7 +770,7 @@ func (h *Handler) exportStack(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{
-		Deployment: stack.RebindSecretsProvider(cp.Deployment, ref),
+		Deployment: rebindSecretsProvider(cp.Deployment, ref),
 		Version:    cp.SchemaVersion,
 	})
 }
@@ -804,7 +804,7 @@ func (h *Handler) exportStackVersion(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{
-		Deployment: stack.RebindSecretsProvider(cp.Deployment, ref),
+		Deployment: rebindSecretsProvider(cp.Deployment, ref),
 		Version:    cp.SchemaVersion,
 	})
 }
