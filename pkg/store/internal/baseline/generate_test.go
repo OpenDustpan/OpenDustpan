@@ -108,10 +108,12 @@ const addSumColumn = `ALTER TABLE schema_migrations ADD COLUMN sha256 TEXT NOT N
 // with its line end, or nothing. The generator writes the rest.
 func header(dialect, ref, extra string) string {
 	return minimumLine + `
--- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the ` + dialect + ` migrations of ` + ref + `.
 -- This baseline replaced every migration before it. No binary opens a
--- database or restores a backup from before it.
+-- database or restores a backup from before it. Until the first tag, a
+-- change to the schema edits this file in place and adds no numbered
+-- migration. The server refuses a database that another version of this
+-- file made. make regenerate-baseline wrote the first version of this file
+-- from the ` + dialect + ` migrations of ` + ref + `.
 ` + extra
 }
 

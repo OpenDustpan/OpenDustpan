@@ -141,7 +141,7 @@ func TestOpenRefusesTheMigrationChain(t *testing.T) {
 		`CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL,
 			min_binary_version TEXT NOT NULL DEFAULT '') STRICT`,
 		`INSERT INTO schema_migrations (version, name, min_binary_version)
-			VALUES (100, '0100_baseline.sql', 'v0.1.0'), (165, '0165_name_locks.sql', '')`,
+			VALUES (100, '0100_old_baseline.sql', 'v0.1.0'), (165, '0165_name_locks.sql', '')`,
 		`CREATE TABLE namespaces (name TEXT NOT NULL PRIMARY KEY) STRICT`,
 	)
 
