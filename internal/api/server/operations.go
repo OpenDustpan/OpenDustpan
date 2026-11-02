@@ -59,7 +59,8 @@ var operationLabels = map[string]apidesc.Label{
 		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities",
 			apidesc.Named[stateWriteGatesBody]("StateWriteGates"),
 			apidesc.DeclareOpenEnum[stategate.Mode]("StateWriteGatesMode",
-				string(stategate.ModeOn), string(stategate.ModeOff)))),
+				string(stategate.ModeOn), string(stategate.ModeOff)),
+			apidesc.DeclareOpenEnum[stategate.WritePath]("StateWritePath", writePaths()...))),
 	apidesc.Pattern(http.MethodGet, openAPIPath): apidesc.Name("getApiDescription", "description").
 		WithBodies(apidesc.NoBody, apidesc.Free("ApiDescription")),
 	apidesc.Pattern(http.MethodGet, preferencesPath): apidesc.Name("getPreferences", tagPreferences).
@@ -173,4 +174,17 @@ func actionNames(actions []identity.Action) []string {
 // userAgent returns the User-Agent header of a request, for the audit record.
 func userAgent(r *http.Request) string {
 	return apidesc.Header(r, "User-Agent")
+}
+
+// writePaths returns the names of every write path of the state.write gates,
+// the values of the enum StateWritePath.
+func writePaths() []string {
+	all := append(stategate.CheckedPaths(), stategate.UncheckedPaths()...)
+	out := make([]string, 0, len(all))
+
+	for _, p := range all {
+		out = append(out, string(p))
+	}
+
+	return out
 }

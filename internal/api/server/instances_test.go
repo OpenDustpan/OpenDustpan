@@ -39,7 +39,7 @@ func newInstanceHandler(
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,
 		Now:              nil,
 		Authenticator:    tokenAuthenticator{},

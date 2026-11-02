@@ -808,14 +808,14 @@ func TestPreferencesUnavailable(t *testing.T) {
 	}
 
 	h, err := newCheckedHandler(t, apiserver.Config{
-		LocalUsers:  nil,
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    prefsCallerSet(),

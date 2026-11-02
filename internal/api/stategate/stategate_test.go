@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -148,7 +149,8 @@ func TestNewRefusesANilGuard(t *testing.T) {
 		guard stategate.Guard
 	}{
 		{"nil guard", nil},
-		{"zero off guard", stategate.OffGuard{}},
+		{"zero off guard", &stategate.OffGuard{}},
+		{"nil off guard", (*stategate.OffGuard)(nil)},
 		{"off guard with an empty reason", stategate.Off("")},
 		{"off guard with a blank reason", stategate.Off(" \t\n")},
 	}
@@ -363,9 +365,24 @@ func TestOffGuard(t *testing.T) {
 
 	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
 
-	out := newAdmitter(t, off).Admit(t.Context(), write(t, gate.OperationLock, principal("", "")), rec.record)
+	admit := newAdmitter(t, off)
+
+	out := admit.Admit(t.Context(), write(t, gate.OperationLock, principal("", "")), rec.record)
 	if !out.Allowed {
 		t.Fatalf("outcome = %+v, want allowed", out)
+	}
+
+	if eff := admit.Effective(); eff.Mode != stategate.ModeOff || eff.Reason != "the store keeps no gates" {
+		t.Fatalf("Effective() = %+v, want off with the reason of Off", eff)
+	}
+
+	on := stategate.Effective{
+		Mode: stategate.ModeOn, Reason: stategate.ReasonOn,
+		Checked: stategate.CheckedPaths(), Unchecked: stategate.UncheckedPaths(),
+	}
+	offValue := stategate.Effective{
+		Mode: stategate.ModeOff, Reason: "the store keeps no gates", Checked: []stategate.WritePath{},
+		Unchecked: append(stategate.CheckedPaths(), stategate.UncheckedPaths()...),
 	}
 
 	cases := []struct {
@@ -373,28 +390,40 @@ func TestOffGuard(t *testing.T) {
 		guard stategate.Guard
 		want  stategate.Effective
 	}{
-		{"off", off, stategate.Effective{Mode: stategate.ModeOff, Reason: "the store keeps no gates"}},
-		{
-			"zero off guard",
-			stategate.OffGuard{},
-			stategate.Effective{Mode: stategate.ModeOn, Reason: stategate.ReasonOn},
-		},
-		{"nil", nil, stategate.Effective{Mode: stategate.ModeOn, Reason: stategate.ReasonOn}},
-		{
-			"a guard",
-			&fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil},
-			stategate.Effective{Mode: stategate.ModeOn, Reason: stategate.ReasonOn},
-		},
+		{"off", off, offValue},
+		{"zero off guard", &stategate.OffGuard{}, on},
+		{"nil off guard", (*stategate.OffGuard)(nil), on},
+		{"off guard with a blank reason", stategate.Off(" \t"), on},
+		{"nil", nil, on},
+		{"a guard", &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}, on},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := stategate.EffectiveOf(tc.guard); got != tc.want {
+			got := stategate.EffectiveOf(tc.guard)
+			if got.Mode != tc.want.Mode || got.Reason != tc.want.Reason ||
+				!slices.Equal(got.Checked, tc.want.Checked) || !slices.Equal(got.Unchecked, tc.want.Unchecked) {
 				t.Fatalf("EffectiveOf = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestWritePathsAreDistinct checks that no write path is both checked and
+// unchecked, and that no name is listed twice.
+func TestWritePathsAreDistinct(t *testing.T) {
+	t.Parallel()
+
+	seen := map[stategate.WritePath]bool{}
+
+	for _, p := range append(stategate.CheckedPaths(), stategate.UncheckedPaths()...) {
+		if seen[p] {
+			t.Fatalf("the write path %q is listed twice", p)
+		}
+
+		seen[p] = true
 	}
 }
 
@@ -406,9 +435,10 @@ func TestOffGuardWithNoReasonRefuses(t *testing.T) {
 
 	cases := []struct {
 		name  string
-		guard stategate.OffGuard
+		guard *stategate.OffGuard
 	}{
-		{"zero", stategate.OffGuard{}},
+		{"zero", &stategate.OffGuard{}},
+		{"nil", nil},
 		{"empty", stategate.Off("")},
 		{"blank", stategate.Off(" \r\n\t")},
 	}

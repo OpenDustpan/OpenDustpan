@@ -44,8 +44,10 @@ before the check, because a gate reads the facts of a unit that exists. A
 refused first lock leaves the workspace with no state and no lock.
 
 The server does not check these writes yet: a Pulumi update, stack import,
-rename or removal, and a state version with no lock through the TFE-compatible
-API. They keep their earlier behavior.
+restore, rename or removal, a Pulumi update cancel, and a state version with no
+lock through the TFE-compatible API. They keep their earlier behavior. The
+`unchecked` list of the effective value names them (see
+[Check that the gates are on](#check-that-the-gates-are-on)).
 
 A write with the token of a job passes the gates only in two cases. The job
 decided the change before it started, so a phase that passed the apply decision
@@ -225,15 +227,55 @@ curl -H "Authorization: Bearer $TOKEN" https://dustpan.example.com/api/dustpan/v
   "installationKind": "production",
   "stateWriteGates": {
     "mode": "on",
-    "reason": "the store keeps gates, so the server checks each write at state.write"
+    "reason": "the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet",
+    "checked": [
+      "opentofu.tfe.lock",
+      "opentofu.tfe.force-unlock",
+      "opentofu.tfe.rollback",
+      "opentofu.tfe.delete",
+      "opentofu.http.lock",
+      "opentofu.http.force-unlock",
+      "opentofu.http.unlocked-write",
+      "inventory.restore",
+      "inventory.purge"
+    ],
+    "unchecked": [
+      "opentofu.tfe.state-version-without-lock",
+      "pulumi.update",
+      "pulumi.import",
+      "pulumi.restore",
+      "pulumi.rename",
+      "pulumi.delete",
+      "pulumi.cancel"
+    ]
   }
 }
 ```
 
+Each write path is `<tool>.<api>.<operation>`, or `inventory.<operation>` for
+the tool-neutral inventory API:
+
+| Write path | Write |
+| --- | --- |
+| `opentofu.tfe.lock`, `opentofu.tfe.force-unlock` | The lock and a force-unlock through the TFE-compatible API |
+| `opentofu.tfe.rollback`, `opentofu.tfe.delete` | A restore of a state version and the removal of a workspace |
+| `opentofu.http.lock`, `opentofu.http.force-unlock` | The `LOCK`, and an `UNLOCK` by a principal that does not hold the lock, on the HTTP backend |
+| `opentofu.http.unlocked-write` | A state version with no lock on the HTTP backend |
+| `inventory.restore`, `inventory.purge` | The restore and the final delete of a deleted unit |
+| `opentofu.tfe.state-version-without-lock` | A state version with no lock through the TFE-compatible API |
+| `pulumi.update` | The create of a Pulumi update, preview, refresh or destroy |
+| `pulumi.import`, `pulumi.restore`, `pulumi.rename`, `pulumi.delete` | A Pulumi stack import, restore, rename or `pulumi stack rm` |
+| `pulumi.cancel` | A Pulumi update cancel |
+
+A change that adds the check of a write path moves it from `unchecked` to
+`checked`. With the gates off, `checked` is empty and `unchecked` holds every
+write path.
+
 The two SQL stores keep gates, so `opendustpan serve` always runs with the
 gates on. The gates are off only for a program that embeds the server with a
 store that keeps no gates. Then `mode` is `off`, the reason names the store,
-and no write is checked. At each start, such a server writes the line
+and no write is checked. The `store` of `opendustpan serve` must keep gates, so
+a build of the binary with a store that keeps none does not compile. At each start, such a server writes the line
 `state.write gates: off` with the reason to the log, and one audit entry in the
 `@server` scope with the key `state.write gates`, the value `off` and the
 reason.

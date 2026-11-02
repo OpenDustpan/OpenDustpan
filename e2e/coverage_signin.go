@@ -91,7 +91,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		SignIn:           coverageSignIn(sessions, admin, code),
 		CheckpointEpochs: nil,
 		InstallationKind: installation.KindDev,
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		DenialLimiter:    nil,
 	})
 	if err != nil {
