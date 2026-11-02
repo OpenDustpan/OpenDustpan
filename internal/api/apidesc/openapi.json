@@ -1384,6 +1384,9 @@
           "request.precondition-required",
           "restore.blobs-missing",
           "restore.ended",
+          "restore.live-blobs-damaged",
+          "restore.live-blobs-missing",
+          "restore.pre-backup-foreign",
           "restore.swapped",
           "runner.immutable",
           "runner.invalid",
@@ -6509,7 +6512,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.34.0"
+    "version": "0.35.0"
   },
   "openapi": "3.1.0",
   "paths": {
