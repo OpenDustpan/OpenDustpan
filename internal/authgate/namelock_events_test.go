@@ -215,3 +215,48 @@ func TestLockEventsValidate(t *testing.T) {
 		}
 	}
 }
+
+// pruneRequest is the arguments of a prune that the check reads.
+type pruneRequest struct {
+	name       string
+	age        time.Duration
+	limit      int
+	endedLimit int
+	valid      bool
+}
+
+// TestCheckPruneRequest sends the bounds of a prune directly to the check: an
+// ended limit above the limit, above its maximum or below 1 fails closed.
+func TestCheckPruneRequest(t *testing.T) {
+	t.Parallel()
+
+	cases := []pruneRequest{
+		{name: "equal limits", age: time.Hour, limit: 5, endedLimit: 5, valid: true},
+		{name: "ended limit below the limit", age: time.Hour, limit: 5, endedLimit: 1, valid: true},
+		{name: "ended limit above the limit", age: time.Hour, limit: 1, endedLimit: 2, valid: false},
+		{
+			name: "ended limit above its maximum", age: time.Hour, limit: authgate.MaxNamePruneRows,
+			endedLimit: authgate.MaxNamePruneEnded + 1, valid: false,
+		},
+		{name: "ended limit of 0", age: time.Hour, limit: 1, endedLimit: 0, valid: false},
+		{name: "no age", age: 0, limit: 1, endedLimit: 1, valid: false},
+		{
+			name:       "limit above its maximum",
+			age:        time.Hour,
+			limit:      authgate.MaxNamePruneRows + 1,
+			endedLimit: 1,
+			valid:      false,
+		},
+	}
+
+	for _, tc := range cases {
+		err := authgate.CheckPruneRequest(tc.age, tc.limit, tc.endedLimit)
+		if tc.valid && err != nil {
+			t.Fatalf("%s: check = %v, want nil", tc.name, err)
+		}
+
+		if !tc.valid && !errors.Is(err, authgate.ErrInvalidLock) {
+			t.Fatalf("%s: check = %v, want ErrInvalidLock", tc.name, err)
+		}
+	}
+}

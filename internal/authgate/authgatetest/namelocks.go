@@ -174,6 +174,11 @@ func recordCases() []nameCase {
 			test: testPruneEndedBound,
 		},
 		{
+			name: "a prune with an ended limit above its limit fails with ErrInvalidLock and deletes nothing, so a " +
+				"run never deletes more counts than its limit",
+			test: testPruneEndedAboveLimit,
+		},
+		{
 			name: "an alert that cannot be appended fails the add and changes nothing",
 			test: testAlertAppendFails,
 		},
@@ -740,7 +745,7 @@ func testPruneBound(t *testing.T, h NameLockHarness) {
 
 	pause(t, doubleLock)
 
-	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, authgate.MaxNamePruneEnded, pruneEntry())
+	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, limitTwo, pruneEntry())
 	if err != nil || n != limitTwo {
 		t.Fatalf("prune with a limit of 2 = %d, %v; want 2", n, err)
 	}
@@ -788,6 +793,7 @@ func testPruneInvalid(t *testing.T, h NameLockHarness) {
 		{name: "an ended limit of 0", age: shortLock, limit: 1, ended: 0},
 		{name: "a negative ended limit", age: shortLock, limit: 1, ended: -1},
 		{name: "an ended limit above the maximum", age: shortLock, limit: 1, ended: authgate.MaxNamePruneEnded + 1},
+		{name: "an ended limit above the limit", age: shortLock, limit: 1, ended: limitTwo},
 	}
 
 	for _, tc := range cases {

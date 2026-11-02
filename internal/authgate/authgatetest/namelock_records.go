@@ -473,3 +473,32 @@ func testEndRecordFails(t *testing.T, h NameLockHarness) {
 		t.Fatalf("entries of the end = %d, want 1", got)
 	}
 }
+
+func testPruneEndedAboveLimit(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	c := h.Open(t)
+	for i := range limitThree {
+		add(t, c, key(authgate.ScopePassword, "ended-"+strconv.Itoa(i), "s"), rule(1, shortLock), nil)
+	}
+
+	pause(t, doubleLock)
+
+	before := len(h.Entries(t))
+
+	// A limit of 1 with an ended limit of 1000 asks for more than the limit.
+	_, err := c.PruneNameLocks(t.Context(), shortLock, 1, authgate.MaxNamePruneEnded, pruneEntry())
+	if !errors.Is(err, authgate.ErrInvalidLock) {
+		t.Fatalf("prune with an ended limit above the limit = %v, want ErrInvalidLock", err)
+	}
+
+	if len(h.Entries(t)) != before {
+		t.Fatal("a refused prune wrote an entry")
+	}
+
+	// A prune with the limit 1 deletes one count and no more.
+	n, err := c.PruneNameLocks(t.Context(), shortLock, 1, 1, pruneEntry())
+	if err != nil || n != 1 {
+		t.Fatalf("prune with a limit of 1 = %d, %v; want 1", n, err)
+	}
+}
