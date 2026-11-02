@@ -1353,6 +1353,7 @@ func testDevRecordReport(t *testing.T, env *devEnv) {
 		Warnings:       []backup.RestoreWarningCode{backup.WarnDevBackupIntoProduction},
 		PreBackupFound: nil,
 		NotHeld:        nil,
+		ErrorCode:      "",
 	}
 
 	fence := restoreClaim(t, dst, record.ID).Step(backup.RestoreStepCheck)

@@ -449,7 +449,7 @@ func testRestoreOpFencedWrites(t *testing.T, newStore RestoreFactory) {
 func devReport(n int64) backup.DevStripReport {
 	return backup.DevStripReport{
 		Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Approvers: nil, Warnings: nil,
-		PreBackupFound: nil, NotHeld: nil,
+		PreBackupFound: nil, NotHeld: nil, ErrorCode: "",
 		Classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: n},
 	}
 }

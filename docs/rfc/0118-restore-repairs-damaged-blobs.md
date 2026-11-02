@@ -72,14 +72,26 @@ option A below:
   changes none, which decision 6 allows.
 - More than 10 missing live blobs, or more than 20 percent of the blobs that
   the live data names when more than 1 is missing, stop the restore before
-  any change of the live data. So a store with every blob missing stops the
-  restore at every size, and one missing blob never stops it. The text says
+  any change of the live data. So one missing blob never stops the restore,
+  and a store with every blob missing stops it at every size above 1 blob.
+  When the live data names 1 blob and it is missing, the restore goes on, by
+  decision. The text says
   to check the blob store setting. The restore answers show the three numbers
   of the rule as `missingBlobLimit` (`count` 10, `percent` 20, `percentAbove`
   1). The product manager decided this rule; it is close to the bound of
   other mass changes of the project (ADR 306 decision 2).
 - A backup with a `damaged` list stays restorable. A restore of it leaves
-  those keys as they are, and its answer names them (`notHeld`).
+  those keys as they are, and its answer names them (`notHeld`). Only a
+  backup that a restore of this installation started (its operation input
+  names the restore) can have this list. Backup check and a restore refuse
+  any other manifest with a `damaged` list as corrupt. A restore onto
+  another installation therefore cannot restore such a backup.
+- A restore always takes a new backup before it. It refuses a pre-backup ID
+  that names a backup that exists, or a backup that another restore started,
+  and the copy step checks the stored findings again before its first write.
+- Each refusal has a catalog error code (`restore.live-blobs-damaged`,
+  `restore.live-blobs-missing`, `restore.pre-backup-foreign`) in the restore
+  answer.
 - The restore answers show what the backup before the restore found
   (`preBackupFound`). One audit entry holds the counts and the first keys.
 

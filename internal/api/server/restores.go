@@ -115,6 +115,9 @@ type restoreSummaryJSON struct {
 	StartedAt   string `json:"startedAt"`
 	EndedAt     string `json:"endedAt,omitempty"`
 	Error       string `json:"error,omitempty"`
+	// ErrorCode is the catalog code of the refusal that ended the restore,
+	// when it has one.
+	ErrorCode string `json:"errorCode,omitempty"`
 	// Warnings is always a list, empty when the restore has none.
 	Warnings []restoreWarningJSON `json:"warnings"`
 }
@@ -127,15 +130,18 @@ type listRestoresResponse struct {
 // getRestoreResponse answers one restore: its row and, when the restore
 // succeeded, the manifest of the restored backup.
 type getRestoreResponse struct {
-	ID          string           `json:"id"`
-	State       string           `json:"state"`
-	BackupID    string           `json:"backupID"`
-	PreBackupID string           `json:"preBackupID,omitempty"`
-	RequestedBy string           `json:"requestedBy"`
-	StartedAt   string           `json:"startedAt"`
-	EndedAt     string           `json:"endedAt,omitempty"`
-	Error       string           `json:"error,omitempty"`
-	Manifest    *backup.Manifest `json:"manifest,omitempty"`
+	ID          string `json:"id"`
+	State       string `json:"state"`
+	BackupID    string `json:"backupID"`
+	PreBackupID string `json:"preBackupID,omitempty"`
+	RequestedBy string `json:"requestedBy"`
+	StartedAt   string `json:"startedAt"`
+	EndedAt     string `json:"endedAt,omitempty"`
+	Error       string `json:"error,omitempty"`
+	// ErrorCode is the catalog code of the refusal that ended the restore,
+	// when it has one.
+	ErrorCode string           `json:"errorCode,omitempty"`
+	Manifest  *backup.Manifest `json:"manifest,omitempty"`
 	// Warnings is always a list, empty when the restore has none.
 	Warnings []restoreWarningJSON `json:"warnings"`
 	// DevData is set when the restore found or removed dev data.
@@ -338,6 +344,7 @@ func (h *Handler) getRestore(w http.ResponseWriter, r *http.Request, _ identity.
 		StartedAt:   formatBackupTime(record.StartedAt),
 		EndedAt:     "",
 		Error:       record.Error,
+		ErrorCode:   errorCodeOf(record),
 		Manifest:    nil,
 		Warnings:    warningsJSON(record),
 		DevData:     devDataOf(record),
@@ -384,6 +391,7 @@ func summarizeRestore(record backup.RestoreRecord) restoreSummaryJSON {
 		StartedAt:   formatBackupTime(record.StartedAt),
 		EndedAt:     "",
 		Error:       record.Error,
+		ErrorCode:   errorCodeOf(record),
 		Warnings:    warningsJSON(record),
 	}
 
@@ -427,6 +435,16 @@ func devDataOf(record backup.RestoreRecord) *devDataJSON {
 	}
 
 	return &devDataJSON{Principals: record.DevReport.Classes[backup.RemovedPrincipals], Classes: classes}
+}
+
+// errorCodeOf returns the catalog code of the refusal that ended the restore
+// of record, or an empty string.
+func errorCodeOf(record backup.RestoreRecord) string {
+	if record.DevReport == nil {
+		return ""
+	}
+
+	return string(record.DevReport.ErrorCode)
 }
 
 // missingBlobLimit returns the effective bound on missing live blobs.

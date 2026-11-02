@@ -1,3 +1,6 @@
 restore.blobs-missing
 restore.ended restore:identifier
+restore.live-blobs-damaged
+restore.live-blobs-missing
+restore.pre-backup-foreign
 restore.swapped restore:identifier

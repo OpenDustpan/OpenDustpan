@@ -119,11 +119,15 @@ Before the restore changes data, it takes a backup of the live data, the backup 
 Blobs are write-once. A restore adds keys and never writes over a live blob. So the restore stops before it changes any live data in these cases:
 
 - The backup before restore found a live blob whose bytes do not match its record or do not open. The text names the count and the first keys. It says that the restore changed no live data. Check also that the server runs with the key-encryption key that wrote the data. Put the good bytes back at these keys from a copy of the blob store. A snapshot of the volume or of the bucket is such a copy. Then run `opendustpan restore` again.
-- The backup before restore found more live blobs missing than the bound allows. The bound is more than 10 blobs. It is also more than 20 percent of the blobs that the live data names, when more than 1 blob is missing. So one missing blob never stops a restore, and a store with every blob missing always does. Many missing blobs point to a blob store setting that names another directory, bucket or prefix, not to lost blobs. The text names the count and the bound. Check the blob store setting of the server with `opendustpan store check --target blobs`, then run `opendustpan restore` again.
+- The backup before restore found more live blobs missing than the bound allows. The bound is more than 10 blobs. It is also more than 20 percent of the blobs that the live data names, when more than 1 blob is missing. So one missing blob never stops a restore. A store with every blob missing stops it when the live data names more than 1 blob. When the live data names 1 blob and it is missing, the restore goes on and writes it. Many missing blobs point to a blob store setting that names another directory, bucket or prefix, not to lost blobs. The text names the count and the bound. Check the blob store setting of the server with `opendustpan store check --target blobs`, then run `opendustpan restore` again.
 
 `opendustpan restore` prints this text and the next step. It does not tell you to run the same restore again before you put the good bytes back or change the blob store setting.
 
 When the command cannot read a restore that started, for example while the database of the server is not available, it names the restore ID. The server resumes the restore on its own, so you do not run it again. Read its state with `GET /api/server/restores/{id}`.
+
+Each of these stops has an error code in the restore answer (`errorCode`): `restore.live-blobs-damaged` or `restore.live-blobs-missing`. `opendustpan restore` chooses its next step from the code.
+
+A restore always takes a new backup before restore. A pre-backup ID can name a backup that exists, or a backup that another restore started. Then the restore stops before any live change with the code `restore.pre-backup-foreign`. Run the restore again.
 
 No setting changes the bound. The answers of `POST /api/server/restores` and `GET /api/server/restores/{id}` show it as `missingBlobLimit`, with `count` (10), `percent` (20) and `percentAbove` (1).
 
@@ -135,7 +139,7 @@ For each blob of the backup, the restore does one of these:
 
 A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/server/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
 
-A backup before restore that has a `damaged` list stays restorable, so that it can undo the restore. `opendustpan backup check` checks the objects that it holds. The backup holds no copy of the blobs of the `damaged` list. So a restore of it writes nothing to those keys and leaves them as they are. That restore succeeds with the warning `blobs-not-held`, and its answer has `notHeld` with the counts and the first keys.
+A backup before restore that has a `damaged` list stays restorable, so that it can undo the restore. Only a backup that a restore of this installation started can have this list. `opendustpan backup check` and a restore refuse any other backup with a `damaged` list as corrupt. `opendustpan backup check` checks the objects that it holds. The backup holds no copy of the blobs of the `damaged` list. So a restore of it writes nothing to those keys and leaves them as they are. That restore succeeds with the warning `blobs-not-held`, and its answer has `notHeld` with the counts and the first keys.
 
 The restore does not rely on the conditional writes of the blob store. It reads the key again just before it writes. It also reads the staged copy of the blob and checks it against the manifest before it writes the live key. A staged copy that differs stops the restore, and the live key stays absent. Before each write of a blob, the restore checks that its worker still holds the claim on the restore.
 
