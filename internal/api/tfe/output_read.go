@@ -103,3 +103,28 @@ func (h *Handler) authorizeWholeStateRead(
 
 	return nil
 }
+
+// authorizeVersionRead checks the action of a read of the state version sv
+// before the handler looks up an output name. A read of the current state
+// version by a principal without a job token passes here, and the output
+// sharing checker decides it later. A read of an older state version, or a
+// read with a job token, needs unit:read on the unit. Checking the action first
+// makes the answer for an older state version the same for a known and an
+// unknown output name, so the answer does not reveal which old output names
+// exist.
+func (h *Handler) authorizeVersionRead(
+	ctx context.Context, r *http.Request, p identity.Principal, obj identity.Object, sv workspace.StateVersion,
+) error {
+	current, err := h.workspaces.Current(ctx, sv.Workspace)
+	if err != nil && !errors.Is(err, workspace.ErrNoState) {
+		return fmt.Errorf("read the current state of %s: %w", obj, err)
+	}
+
+	if err == nil && current.ID == sv.ID && p.JobTokenID() == "" {
+		return nil
+	}
+
+	read := outputRead{obj: obj, workspace: sv.Workspace, version: sv.ID, secrets: false}
+
+	return h.authorizeWholeStateRead(ctx, r, p, read)
+}
