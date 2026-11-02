@@ -68,6 +68,10 @@ var (
 	// the lock (manuallock.LockedError), which names the holder and the
 	// reason. A phase that runs already is not affected.
 	ErrLocked = errors.New("a manual lock covers the unit")
+	// ErrUnitGone reports a dispatch of a job whose unit is not in the
+	// inventory: no manual lock of the unit can be read, so the dispatch
+	// fails closed. The job stays queued.
+	ErrUnitGone = errors.New("the unit of the job is not in the inventory")
 	// ErrPolicyDenied reports a start that the policy decision denied.
 	ErrPolicyDenied = errors.New("policy denied the job")
 	// ErrGateEnforced reports a start on a unit that an enforced gate at

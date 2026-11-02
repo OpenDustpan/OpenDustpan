@@ -120,6 +120,10 @@ func testUnitGone(t *testing.T, h Harness) {
 		t.Fatal("dispatch of a unit that left the inventory = nil, want an error")
 	}
 
+	if !errors.Is(err, job.ErrUnitGone) {
+		t.Fatalf("dispatch of a unit that left the inventory = %v, want ErrUnitGone", err)
+	}
+
 	if errors.Is(err, job.ErrLocked) {
 		t.Fatalf("dispatch of a unit that left the inventory = %v, want an error that is not ErrLocked", err)
 	}
