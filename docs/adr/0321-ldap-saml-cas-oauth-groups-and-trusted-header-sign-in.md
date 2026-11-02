@@ -8,7 +8,7 @@ Changes:
 - Extends ADR 55 decision 6: two modes of the trusted header with two layers each. Each provider has its own list of proxies. Groups can come from a header.
 - Extends ADR 55 decision 7: a groups claim for a plain OAuth 2.0 provider. Each outbound connection of a sign-in method uses the egress rules.
 - Extends ADR 55 decision 9: the server finds an LDAP removal at each sign-in and with an hourly sync.
-- Changes ADR 70 decision 19: an LDAP sync with no entry, or above a bound, disables nobody. A site administrator decides.
+- Extends ADR 70 decision 19: an LDAP sync applies a disabled entry at once. A search that misses more persons than a bound waits for a site administrator.
 
 ## Context
 
@@ -111,37 +111,43 @@ Each fact about another product is from RFC 21, with its mark there.
     service follows ADR 320 decision 9. A user that the search does not
     find receives `ErrMethodRejected`: the sign-in fails closed for that person,
     and the principal stays as it is until the sync.
-11. **A removal with a sync, with a bound (PM).** Precedent: GitLab checks
-    each LDAP user in a daily worker, and syncs groups each hour (fetched).
-    Keycloak finds deletions only with a full sync (from a search summary).
+11. **A removal with a sync (PM).** Precedent: GitLab checks each LDAP user
+    in a daily worker, and syncs groups each hour (fetched). Keycloak finds
+    deletions only with a full sync (from a search summary). This decision
+    adds to ADR 70 decision 19, and it leaves that decision as it is.
     - A durable operation (`pkg/durable`) syncs the directory at the
       interval `ldap.syncIntervalSeconds`: 3600 by default, at least 300. It
       runs a full search, because a search of changed entries does not find
       deletions. A longer interval is a weaker setting (ADR 212 decision 3).
-    - A person whose entry the search does not find, or that the directory
-      reports as disabled, is a termination candidate.
-    - **The bound.** A run that finds no entry at all, or that has more
-      termination candidates than the limit of the mass-suspension alert
-      (ADR 306 decision 2: 10 persons, or 20 percent of the persons of the
-      provider), disables nobody. It raises the alert and stores the list of
-      the candidates. A site administrator reads the list and approves it
-      with a fresh authentication and a reason. Then the server applies each
-      termination of the list that is still a candidate. Each approval writes
-      an audit entry. A wrong base DN, a filter change or a change of the
-      rights of the service account can return a search with few or no
-      entries. This bound stops such a search from disabling every LDAP
-      person.
-    - A run under the bound applies each termination at once, as ADR 70
-      decision 19 says.
+    - **An entry that the directory reports as disabled** is a deactivation
+      signal. The server applies it at once, in each run, also in a run
+      above the bound, as ADR 70 decision 19 says. The server never holds
+      it.
+    - **A person whose entry the search does not find** is a termination
+      only in a run under the bound. A run under the bound applies each such
+      termination at once.
+    - **The bound (PM), the same numbers as ADR 306 decision 2.** The bound
+      counts the persons of one run whose entry the search does not find: more
+      than 10 persons, or more than 20 percent of the persons of the
+      provider. A run above the bound, or a run that finds no entry at all,
+      disables none of these persons. It raises the alert and stores their
+      list. A wrong base DN, a filter change or a change of the rights of the
+      service account can return a search with few or no entries. The bound
+      stops such a search from disabling every LDAP person.
+    - **The approval route (PM).** A site administrator reads the stored list
+      with `GET /api/dustpan/v1/sign-in/providers/{providerID}/sync-holds`
+      and approves it with
+      `POST /api/dustpan/v1/sign-in/providers/{providerID}/sync-holds/{holdID}/approve`.
+      The approval needs the action `server:manage-sign-in`, a fresh
+      authentication and a reason. The server then applies each termination
+      of the list whose entry the search still does not find. Each approval
+      writes an audit entry.
     - An entry that the run cannot read, for example one with no subject
       attribute, is not a termination. The run skips it and raises an alert.
     - An unreachable directory changes no person and raises an alert. A
       network fault is not a termination.
     - The base DN, the user filter and the subject attribute are sensitive
       settings with an alert (ADR 70 decision 22).
-
-    This changes ADR 70 decision 19 for a sync above the bound only. A
-    termination at a sign-in (decision 10) still applies at once.
 12. **Fresh authentication (PM).** A new bind with the password (ADR 320
     decisions 16 and 17).
 
@@ -304,7 +310,7 @@ Each fact about another product is from RFC 21, with its mark there.
 
 - RFC 21 work items W9 (LDAP), W11 (SAML), W12 (CAS), W13 (OAuth 2.0
   groups) and W14 (trusted header) implement this ADR. W10 implements the
-  LDAP sync with its bound and its approval route.
+  LDAP sync with its bound and its approval routes.
 - SAML and CAS each add a table of used values (assertion IDs and tickets),
   in both dialects. SAML adds the pending and accepted signing
   certificates. The LDAP sync adds the stored list of candidates.

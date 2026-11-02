@@ -307,6 +307,23 @@ not say how a group value of an identity provider finds a group.
     the limit of the count of the subject from every source: 5 by default,
     1 to 100. The guide tells the operator to set it below the threshold of
     the directory, and says that a lock in OpenDustpan then comes first.
+
+    The lock times follow ADR 285 decision 14:
+    - The count of the subject from one source prefix locks the person from
+      that prefix for 30 minutes after 10 failures in a row.
+    - The count of the subject from every source locks the person for every
+      source after `ldap.subjectFailureLimit` failures in a row. The first
+      lock lasts 30 minutes. Each new lock of the same person doubles the
+      time, up to 24 hours. After 24 hours with no lock, the next lock lasts
+      30 minutes again.
+
+    The risk that stays: anyone who knows the user name of an LDAP person
+    can lock that person out of the LDAP sign-in from one network, with 5
+    wrong passwords by default, and lock the person again after each lock
+    ends. The ways out are an administrator unlock through the routes of
+    decision 21, and the alerts of ADR 285 decision 16, which tell the
+    administrators. This decision takes that cost to protect the account of
+    the person in the directory. The guide says so.
 21. **An LDAP lock is visible and ends with a record (owner, ADR 285
     decision 16).** An administrator reads and clears the locks of an LDAP
     person with `GET /api/dustpan/v1/sign-in/providers/{providerID}/locks?principalId=...`
