@@ -43,12 +43,14 @@ func (s *exchangeRuleStore) List(context.Context, namespace.Name) ([]trustrule.R
 }
 
 func (s *exchangeRuleStore) Delete(context.Context, namespace.Name, trustrule.ID, namespace.Fence,
-	audit.Entry) error {
+	audit.Entry,
+) error {
 	return trustrule.ErrNotFound
 }
 
 func (s *exchangeRuleStore) RecordExchange(context.Context, trustrule.Exchange, namespace.Fence,
-	audit.Entry) error {
+	audit.Entry,
+) error {
 	return trustrule.ErrNotFound
 }
 
@@ -99,12 +101,19 @@ func (k exchangeKey) token(t *testing.T, iss string) string {
 	return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(k.priv, []byte(input)))
 }
 
-// exchangeFixture builds the token exchange of the server for the namespace
-// acme. The rule of the namespace has the issuer ruleIssuer and the static
-// key k. When withIssuer is true, the server has an issuer service with the
-// issuerURL https://files.example.com/acme.
-func exchangeFixture(t *testing.T, withIssuer bool, ruleIssuer string, k exchangeKey) (*trustrulesvc.Exchanger,
-	*sqlite.Store) {
+// exchangeEnv holds the parts of a server that the token exchange needs.
+type exchangeEnv struct {
+	store     *sqlite.Store
+	namespace *namespace.Service
+	issuer    *issuersvc.Service
+	rules     *exchangeRuleStore
+	cfg       *settings
+}
+
+// exchangeFixture returns the parts of a server for the namespace acme. The
+// rule of the namespace has the issuer ruleIssuer and the static key k. The
+// issuer service has the issuerURL https://files.example.com/acme.
+func exchangeFixture(t *testing.T, ruleIssuer string, k exchangeKey) exchangeEnv {
 	t.Helper()
 
 	st := openCollectionStore(t)
@@ -187,18 +196,70 @@ func exchangeFixture(t *testing.T, withIssuer bool, ruleIssuer string, k exchang
 	cfg.authorizer = identity.AdminOnly{}
 	cfg.publicURL = "https://api.example.com"
 
-	var svc services
-	svc.namespaces = nsSvc
-	if withIssuer {
-		svc.issuer = issuer
-	}
+	return exchangeEnv{store: st, namespace: nsSvc, issuer: issuer, rules: rules, cfg: cfg}
+}
 
-	x, err := newExchanger(svc, cfg, rules)
+// checkRefusal checks that the last audit entry of acme records the refusal
+// of a token, and that its reason names wantReason.
+func checkRefusal(t *testing.T, st *sqlite.Store, wantReason string) {
+	t.Helper()
+
+	last, ok, err := st.LastEntry(t.Context(), "acme")
 	if err != nil {
-		t.Fatalf("token exchange: %v", err)
+		t.Fatalf("last audit entry: %v", err)
 	}
 
-	return x, st
+	if !ok {
+		t.Fatal("no audit entry of the refused exchange")
+	}
+
+	if last.Action != trustrulesvc.ActionExchange {
+		t.Errorf("action = %q, want %q", last.Action, trustrulesvc.ActionExchange)
+	}
+
+	if last.Outcome != audit.OutcomeDenied {
+		t.Errorf("outcome = %q, want %q", last.Outcome, audit.OutcomeDenied)
+	}
+
+	if !strings.Contains(last.Reason, wantReason) {
+		t.Errorf("reason = %q, want it to contain %q", last.Reason, wantReason)
+	}
+
+	if wantReason == trustrule.ErrPrincipal.Error() &&
+		strings.Contains(last.Reason, trustrule.ErrIssuerRefused.Error()) {
+		t.Errorf("reason = %q, must not name the own-issuer check", last.Reason)
+	}
+}
+
+// requestEntry is the request of an exchange in these tests.
+func requestEntry() audit.Entry {
+	return audit.Entry{
+		At:            time.Time{},
+		Namespace:     "",
+		Subject:       "ada",
+		Action:        "",
+		Object:        "",
+		Channel:       audit.ChannelAPI,
+		Kind:          "",
+		Outcome:       "",
+		PrincipalKind: "",
+		IDPSubject:    "",
+		TokenID:       "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		JobID:         "",
+		Reason:        "",
+	}
 }
 
 // TestTheExchangeAsksTheIssuer proves the wiring of the server: the token
@@ -244,73 +305,31 @@ func TestTheExchangeAsksTheIssuer(t *testing.T) {
 			t.Parallel()
 
 			k := newExchangeKey(t)
-			x, st := exchangeFixture(t, tc.withIssuer, tc.issuer, k)
+			env := exchangeFixture(t, tc.issuer, k)
 
-			req := audit.Entry{
-				At:            time.Time{},
-				Namespace:     "",
-				Subject:       "ada",
-				Action:        "",
-				Object:        "",
-				Channel:       audit.ChannelAPI,
-				Kind:          "",
-				Outcome:       "",
-				PrincipalKind: "",
-				IDPSubject:    "",
-				TokenID:       "",
-				Version:       "",
-				ValuePath:     "",
-				ValueCount:    nil,
-				Changes:       nil,
-				SourceIP:      "",
-				UserAgent:     "",
-				RequestID:     "",
-				ObjectID:      "",
-				PrevHash:      "",
-				Hash:          "",
-				Sequence:      0,
-				FenceVersion:  0,
-				JobID:         "",
-				Reason:        "",
+			var svc services
+			svc.namespaces = env.namespace
+			if tc.withIssuer {
+				svc.issuer = env.issuer
+			}
+
+			x, err := newExchanger(svc, env.cfg, env.rules)
+			if err != nil {
+				t.Fatalf("token exchange: %v", err)
 			}
 
 			in := trustrulesvc.ExchangeInput{
 				Namespace: "acme",
 				Token:     k.token(t, tc.issuer),
 				Rule:      "",
-				Request:   req,
+				Request:   requestEntry(),
 			}
 
-			_, err := x.Exchange(t.Context(), in)
-			if !errors.Is(err, trustrulesvc.ErrNoMatch) {
+			if _, err = x.Exchange(t.Context(), in); !errors.Is(err, trustrulesvc.ErrNoMatch) {
 				t.Fatalf("Exchange = %v, want ErrNoMatch", err)
 			}
 
-			last, ok, err := st.LastEntry(t.Context(), "acme")
-			if err != nil {
-				t.Fatalf("last audit entry: %v", err)
-			}
-
-			if !ok {
-				t.Fatal("no audit entry of the refused exchange")
-			}
-
-			if last.Action != trustrulesvc.ActionExchange {
-				t.Errorf("action = %q, want %q", last.Action, trustrulesvc.ActionExchange)
-			}
-
-			if last.Outcome != audit.OutcomeDenied {
-				t.Errorf("outcome = %q, want %q", last.Outcome, audit.OutcomeDenied)
-			}
-
-			if !strings.Contains(last.Reason, tc.wantReason) {
-				t.Errorf("reason = %q, want it to contain %q", last.Reason, tc.wantReason)
-			}
-
-			if tc.wantReason == trustrule.ErrPrincipal.Error() &&
-				strings.Contains(last.Reason, trustrule.ErrIssuerRefused.Error()) {
-				t.Errorf("reason = %q, must not name the own-issuer check", last.Reason)
-			}
+			checkRefusal(t, env.store, tc.wantReason)
 		})
 	}
 }
