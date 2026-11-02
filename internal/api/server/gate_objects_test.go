@@ -559,6 +559,16 @@ func TestGateRoutesAnswerCodes(t *testing.T) {
 			"gate.invalid",
 		},
 		{
+			"condition without the context prefix",
+			nil,
+			http.MethodPut,
+			"/gates/x",
+			strings.Replace(freezeGateDoc, "context.operation.kind", "operation.kind", 1),
+			"",
+			http.StatusUnprocessableEntity,
+			"gate.invalid",
+		},
+		{
 			"gate the engine refuses",
 			nil,
 			http.MethodPut,

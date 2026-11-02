@@ -72,7 +72,7 @@ list fails the request with 400. The body names no `id`: the path names it.
 | Field | Content |
 | --- | --- |
 | `decisionPoint` | The point where the gate runs: `change.propose`, `change.planned`, `change.apply`, `profile.save`, `profile.open` or `state.write` |
-| `condition` | The body of the `when` clause, a Cedar expression over the facts of the decision point. An empty value means true. At most 4 KiB. |
+| `condition` | The body of the `when` clause, a Cedar expression over the facts of the decision point. Name each fact with the `context.` prefix, for example `context.unit.tool`. An empty value means true. At most 4 KiB. |
 | `unless` | The body of the optional `unless` clause. At most 4 KiB. |
 | `outcome` | `deny`, `warn` or `approval:<rule ID>` |
 | `message` | The text that a refusal shows. It can name a fact as `{{unit.tool}}`. At most 1 KiB. A gate needs a message. |
@@ -89,6 +89,28 @@ The server checks the condition and the `unless` clause against the fact schema
 of the decision point before it stores the gate. A gate that does not parse, that
 names an unknown fact, or that has a type error fails with 422. A gate cannot yet
 read a path set, because no route stores path sets.
+
+This gate body denies an unlock:
+
+```json
+{
+  "decisionPoint": "state.write",
+  "condition": "context.operation.kind == \"unlock\"",
+  "outcome": "deny",
+  "message": "Unlocks need approval"
+}
+```
+
+A condition without the `context.` prefix does not parse. The condition
+`operation.kind == "unlock"` answers 422:
+
+```json
+{
+  "message": "the gate configuration is not valid: unit/acme/pulumi/web%2Fprod/x: parser error: parse error at <input>:1:10 \".\": invalid primary",
+  "code": 422,
+  "errorCode": "gate.invalid"
+}
+```
 
 A change that makes a final gate weaker needs a `reason`. A change is weaker when
 it switches the mode to `evaluate`, clears `final`, or changes the decision
