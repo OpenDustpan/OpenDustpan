@@ -4,8 +4,8 @@ Status: accepted · 2026-10-22. Decisions 1 to 6 and 8 are owner decisions. Deci
 
 Changed by:
 
-- ADR 322 supersedes decision 8: `info.version` stays fixed until the first
-  release.
+- ADR 323 changes decision 8: until the first release, `info.version` stays
+  fixed and its test is disabled.
 
 ## Context
 

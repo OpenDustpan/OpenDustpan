@@ -46,7 +46,7 @@ Consider a change done only when `make check` passes with zero findings:
   goroutine continues to run after the tests. Add this file to each new test
   package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
-- Resolve a conflict in a generated file (the API description, the clients,
+  Resolve a conflict in a generated file (the API description, the clients,
   the golden files, `internal/db`) with a new run of its generator on the
   merged code, never by hand.
 - A feature that a user can see has its page in the user documentation in
@@ -201,13 +201,13 @@ The platform must be observable and intuitive. A user must be able to see and ex
   the same transaction. Never add a write path that skips the fence.
 - SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
   and generate them with sqlc. Dynamic queries are hand-written in the adapter.
-  Until the first tag, each dialect has one schema file,
-  `pkg/store/<dialect>/schema.sql` (ADR 322). To change the schema, edit the
-  schema file of each dialect. Do not add a numbered migration, and do not
-  convert data. TestFrozenMigrations fails when a `migrations/` directory holds
-  a file. The store records the SHA-256 of the schema file and refuses a
-  database that another version of the file made, with `ErrSchemaChanged`.
-  After such an edit, start on an empty database. Timestamps are Unix
+  Until the first tag, each dialect has one migration file, the baseline in
+  `pkg/store/<dialect>/migrations/` (ADR 322). To change the schema, edit the
+  baseline of each dialect in place. Do not add a numbered migration. Do not
+  write migration, upgrade, alias or data-conversion code for a shape that no
+  tag shipped. The store records the SHA-256 of each migration and refuses a
+  database of another version of the baseline with `ErrSchemaDiverged`. For
+  dev, run `opendustpan dev reset` (ADR 324). Timestamps are Unix
   milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.

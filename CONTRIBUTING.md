@@ -27,10 +27,12 @@ A change to the architecture starts as an RFC in `docs/rfc/`.
    are in `internal/cli/settings.go`. The prose of the page is in
    `internal/cli/reference.go`. Run `make generate` after a change to either
    file. `TestConfigurationReference` fails on a hand edit of the page.
-6. To change the database schema, edit `pkg/store/sqlite/schema.sql` and
-   `pkg/store/postgres/schema.sql`, then run `make generate`. Until the first
-   tag, do not add a numbered migration. A database of an earlier build does
-   not open after the change: start on an empty database.
+6. To change the database schema, edit the baseline of each dialect in
+   `pkg/store/sqlite/migrations/` and `pkg/store/postgres/migrations/`, then
+   run `make generate`. Until the first tag, do not add a numbered migration,
+   and do not write code that converts data of an earlier build. A dev
+   database of an earlier build does not open after the change: run
+   `opendustpan dev reset`.
 7. Before 1.0, the tool-neutral API can change in a way that breaks a client,
    and its version stays the same. Do not raise the version of the API
    description. When a merge conflicts in a generated file, run the generator

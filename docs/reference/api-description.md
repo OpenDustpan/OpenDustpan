@@ -210,6 +210,14 @@ description does not change it. Before 1.0, the tool-neutral API under
 `/api/dustpan/v1` can change in a way that breaks a client, and its path and
 its version stay the same. The release notes list each break.
 
+The test of `openapi.pin` in `internal/api/apidesc` is disabled until the
+first release. The file stays in the tree. At the first release, the release
+sets `DocumentVersion`, writes the pin again and turns the test on again:
+
+```sh
+go test ./internal/api/apidesc -run TestVersionFollowsTheDescription -update-description-pin
+```
+
 After a change of the routes, a contributor does these steps:
 
 1. Write the description again:

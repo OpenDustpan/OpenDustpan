@@ -4,8 +4,10 @@ Status: accepted · 2026-10-17 · supersedes ADR 21 and ADR 72 in part (see "Sup
 
 Changed by:
 
-- ADR 322 changes decision 6: until the first tag, one schema file for each
-  dialect and no numbered migration.
+- ADR 322 extends decision 4: no migration, upgrade, alias or data-conversion
+  code for an untagged shape until the first tag.
+- ADR 322 changes decision 6: one baseline for each dialect, edited in place
+  until the first tag.
 
 ## Context
 

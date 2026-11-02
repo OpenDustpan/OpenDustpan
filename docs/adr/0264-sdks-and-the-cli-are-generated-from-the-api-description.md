@@ -4,7 +4,7 @@ Status: accepted · 2026-10-18 · decided by the project owner. The open design 
 
 Changed by:
 
-- ADR 322 changes decision 5: until the first release, the description has
+- ADR 323 changes decision 5: until the first release, the description has
   one fixed version.
 
 ## Context
