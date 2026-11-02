@@ -1,0 +1,13 @@
+=== RUN   TestPerf8SignInCost
+    perf8_argon_test.go:24: params: m=19456 KiB t=2 p=1 budget=81920 KiB wait=2s
+    perf8_argon_test.go:47: single verify n=10 p50=40.00247ms p95=49.251863ms p99=49.251863ms allocs/op=36 bytes/op=19926009
+    perf8_argon_test.go:103: concurrent=1 ok=1 busy=0 wall=40.073167ms p50=40.045474ms p95=40.045474ms p99=40.045474ms peakBudgetKiB=19456 (cap 81920) peakHeapInuseMiB=19.9 peakSysMiB=52.6
+    perf8_argon_test.go:103: concurrent=2 ok=2 busy=0 wall=52.147319ms p50=41.879923ms p95=41.879923ms p99=41.879923ms peakBudgetKiB=38912 (cap 81920) peakHeapInuseMiB=38.9 peakSysMiB=52.6
+    perf8_argon_test.go:103: concurrent=4 ok=4 busy=0 wall=257.926927ms p50=75.482774ms p95=246.152599ms p99=246.152599ms peakBudgetKiB=77824 (cap 81920) peakHeapInuseMiB=77.0 peakSysMiB=92.7
+    perf8_argon_test.go:103: concurrent=8 ok=8 busy=0 wall=306.402992ms p50=59.810728ms p95=300.330777ms p99=300.330777ms peakBudgetKiB=77824 (cap 81920) peakHeapInuseMiB=115.0 peakSysMiB=132.7
+    perf8_argon_test.go:103: concurrent=16 ok=16 busy=0 wall=361.732294ms p50=238.638157ms p95=353.355176ms p99=353.355176ms peakBudgetKiB=77824 (cap 81920) peakHeapInuseMiB=134.0 peakSysMiB=192.8
+    perf8_argon_test.go:103: concurrent=32 ok=32 busy=0 wall=315.078578ms p50=162.157629ms p95=306.372952ms p99=314.203956ms peakBudgetKiB=77824 (cap 81920) peakHeapInuseMiB=153.0 peakSysMiB=192.8
+    perf8_argon_test.go:103: concurrent=64 ok=64 busy=0 wall=764.734584ms p50=384.452872ms p95=709.520014ms p99=760.333589ms peakBudgetKiB=77824 (cap 81920) peakHeapInuseMiB=153.1 peakSysMiB=192.8
+--- PASS: TestPerf8SignInCost (2.58s)
+PASS
+ok  	opendustpan.org/opendustpan/pkg/localuser/argon2id	2.612s
