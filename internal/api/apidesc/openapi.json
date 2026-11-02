@@ -4933,6 +4933,19 @@
       },
       "StateWriteGates": {
         "properties": {
+          "checked": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/StateWritePath"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
+          },
           "mode": {
             "anyOf": [
               {
@@ -4945,11 +4958,26 @@
           },
           "reason": {
             "type": "string"
+          },
+          "unchecked": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/StateWritePath"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
           }
         },
         "required": [
+          "checked",
           "mode",
-          "reason"
+          "reason",
+          "unchecked"
         ],
         "type": "object"
       },
@@ -4957,6 +4985,27 @@
         "enum": [
           "on",
           "off"
+        ],
+        "type": "string"
+      },
+      "StateWritePath": {
+        "enum": [
+          "opentofu.tfe.lock",
+          "opentofu.tfe.force-unlock",
+          "opentofu.tfe.rollback",
+          "opentofu.tfe.delete",
+          "opentofu.http.lock",
+          "opentofu.http.force-unlock",
+          "opentofu.http.unlocked-write",
+          "inventory.restore",
+          "inventory.purge",
+          "opentofu.tfe.state-version-without-lock",
+          "pulumi.update",
+          "pulumi.import",
+          "pulumi.restore",
+          "pulumi.rename",
+          "pulumi.delete",
+          "pulumi.cancel"
         ],
         "type": "string"
       },
@@ -6388,7 +6437,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.32.0"
+    "version": "0.33.0"
   },
   "openapi": "3.1.0",
   "paths": {
