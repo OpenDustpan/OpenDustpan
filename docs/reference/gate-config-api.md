@@ -22,7 +22,20 @@ Write each variable segment with percent-encoding. `{tool}` is the code of the
 tool: `pulumi` or `opentofu`. `{name}` is the name that the tool gives the unit.
 The Pulumi stack `web/prod` of the namespace `acme` is
 `/namespaces/acme/units/by-name/pulumi/web%2Fprod`. The server does not check
-that the collection or the unit exists when it stores a gate.
+that the collection exists when it stores a gate.
+
+The gates and the access limits of a stack or a workspace belong to the stack or
+the workspace, not to its name. The server finds the stack or the workspace that
+has the name now, and stores its stable ID. So:
+
+- A rename of a Pulumi stack, a restore under a new name and a move to another
+  collection keep the gates and the access limits of the stack or the workspace.
+- A deleted stack or workspace keeps them until its final delete, which deletes
+  them too. A restore gets them back. Before the restore, no path reaches them.
+- A new stack or workspace that has the name of a deleted one starts with none.
+- A `PUT` for a name that no stack or workspace has now answers 404 with
+  `unit.not-found`. A list for that name is empty, and a `GET` or a `DELETE` of
+  one object answers 404 with `gate.not-found`.
 
 | Method and path | Action | Answer |
 | --- | --- | --- |
@@ -171,6 +184,7 @@ Each answer holds the field `errorCode`.
 | 403 | `access.denied` | The caller lacks the action |
 | 403 | `mfa.fresh-step-required` | The change has no recent sign-in, or the caller uses an access token |
 | 404 | `gate.not-found` | The object does not exist at the scope |
+| 404 | `unit.not-found` | A `PUT` names a stack or a workspace that does not exist now, or a deleted one |
 | 409 | `gate.version-conflict` | The stored version is not the version of `If-Match` |
 | 409 | `gate.final` | A final gate forbids the change, or the change needs a reason |
 | 422 | `gate.invalid` | A field is not valid, an ID is not valid, or the engine refuses the policy. The message names the first problem. |
