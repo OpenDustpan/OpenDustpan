@@ -261,14 +261,14 @@ func TestDamagedOnceRefusesAKeyInTwoLists(t *testing.T) {
 }
 
 // TestMissingBlobLimitExceeded checks the bound on missing live blobs: more
-// than 10, or more than 20 percent of the blobs that the live data names. A
-// count that cannot be true is above the bound.
+// than 10, or more than 20 percent of the blobs that the live data names when
+// more than 1. A count that cannot be true is above the bound.
 func TestMissingBlobLimitExceeded(t *testing.T) {
 	t.Parallel()
 
 	limit := EffectiveMissingBlobLimit()
-	if limit.Count != 10 || limit.Percent != 20 {
-		t.Fatalf("EffectiveMissingBlobLimit = %+v, want 10 blobs or 20 percent", limit)
+	if limit != (MissingBlobLimit{Count: 10, Percent: 20, PercentAbove: 1}) {
+		t.Fatalf("EffectiveMissingBlobLimit = %+v, want 10 blobs, or 20 percent when more than 1", limit)
 	}
 
 	for _, tc := range []struct {
@@ -279,10 +279,17 @@ func TestMissingBlobLimitExceeded(t *testing.T) {
 		{name: "an empty installation", missing: 0, named: 0, want: false},
 		{name: "no missing blob", missing: 0, named: 50, want: false},
 		{name: "1 of 5", missing: 1, named: 5, want: false},
-		{name: "1 of 4", missing: 1, named: 4, want: true},
+		{name: "1 of 4", missing: 1, named: 4, want: false},
+		{name: "1 of 2", missing: 1, named: 2, want: false},
+		{name: "1 of 1", missing: 1, named: 1, want: false},
+		{name: "2 of 4", missing: 2, named: 4, want: true},
+		{name: "2 of 10", missing: 2, named: 10, want: false},
+		{name: "3 of 10", missing: 3, named: 10, want: true},
+		{name: "10 of 1000", missing: 10, named: 1000, want: false},
 		{name: "10 of 50", missing: 10, named: 50, want: false},
 		{name: "11 of 1000", missing: 11, named: 1000, want: true},
-		{name: "every blob", missing: 7, named: 7, want: true},
+		{name: "every blob of 7", missing: 7, named: 7, want: true},
+		{name: "every blob of 2", missing: 2, named: 2, want: true},
 		{name: "a negative count", missing: -1, named: 5, want: true},
 		{name: "a negative total", missing: 0, named: -1, want: true},
 		{name: "more missing than named", missing: 3, named: 2, want: true},
@@ -345,7 +352,10 @@ func TestCheckLiveFindings(t *testing.T) {
 		},
 		{
 			name: "every live blob missing", manifest: testManifest(t, nil, missingEntries(3)), want: ErrLiveBlobsMissing,
-			text: []string{"found 3 of 3 live blobs missing", "10 blobs or 20 percent", "store check --target blobs"},
+			text: []string{
+				"found 3 of 3 live blobs missing", "10 blobs, or 20 percent when more than 1",
+				"store check --target blobs",
+			},
 		},
 		{
 			name:     "11 missing of 1000",

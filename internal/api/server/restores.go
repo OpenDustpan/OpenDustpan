@@ -67,10 +67,12 @@ type startRestoreResponse struct {
 // missingBlobLimitJSON is the bound on the live blobs that the backup before
 // a restore may find missing. The restore stops before it changes live data
 // when the count of missing blobs is above count, or when its share of the
-// blobs that the live data names is above percent. No setting changes the bound.
+// blobs that the live data names is above percent and the count is above
+// percentAbove. No setting changes the bound.
 type missingBlobLimitJSON struct {
-	Count   int `json:"count"`
-	Percent int `json:"percent"`
+	Count        int `json:"count"`
+	Percent      int `json:"percent"`
+	PercentAbove int `json:"percentAbove"`
 }
 
 // blobFindingsJSON is what a backup found at the live blobs that its data
@@ -431,7 +433,7 @@ func devDataOf(record backup.RestoreRecord) *devDataJSON {
 func missingBlobLimit() missingBlobLimitJSON {
 	limit := backup.EffectiveMissingBlobLimit()
 
-	return missingBlobLimitJSON{Count: limit.Count, Percent: limit.Percent}
+	return missingBlobLimitJSON{Count: limit.Count, Percent: limit.Percent, PercentAbove: limit.PercentAbove}
 }
 
 // preBackupFoundOf renders what the backup before the restore of record found

@@ -266,25 +266,32 @@ func damagedKeys(manifest Manifest, state DamageState) []string {
 // MissingBlobLimit is the bound on the live blobs that the backup before a
 // restore may find missing. A restore stops before it changes live data when
 // the count is above Count, or when the count is above Percent percent of the
-// blobs that the live data names. Many missing blobs point to a blob store
-// setting that names another store, and not to lost blobs.
+// blobs that the live data names and also above PercentAbove. Many missing
+// blobs point to a blob store setting that names another store, and not to
+// lost blobs. PercentAbove lets a small installation restore over one
+// missing blob.
 type MissingBlobLimit struct {
-	Count   int `json:"count"`
-	Percent int `json:"percent"`
+	Count        int `json:"count"`
+	Percent      int `json:"percent"`
+	PercentAbove int `json:"percentAbove"`
 }
 
 // The values of the bound on missing live blobs. They are a choice of the
-// product manager, the same as the bound of other mass changes of the
-// project: more than 10, or more than 20 percent. No setting changes them.
+// product manager, close to the bound of other mass changes of the project:
+// more than 10, or more than 20 percent when more than 1. No setting changes
+// them.
 const (
-	missingBlobLimitCount   = 10
-	missingBlobLimitPercent = 20
+	missingBlobLimitCount        = 10
+	missingBlobLimitPercent      = 20
+	missingBlobLimitPercentAbove = 1
 )
 
 // EffectiveMissingBlobLimit returns the bound on missing live blobs that a
 // restore applies.
 func EffectiveMissingBlobLimit() MissingBlobLimit {
-	return MissingBlobLimit{Count: missingBlobLimitCount, Percent: missingBlobLimitPercent}
+	return MissingBlobLimit{
+		Count: missingBlobLimitCount, Percent: missingBlobLimitPercent, PercentAbove: missingBlobLimitPercentAbove,
+	}
 }
 
 // Exceeded reports whether missing of named blobs is above the bound. A count
@@ -294,7 +301,7 @@ func (l MissingBlobLimit) Exceeded(missing, named int) bool {
 		return true
 	}
 
-	return missing > l.Count || missing*100 > l.Percent*named
+	return missing > l.Count || (missing > l.PercentAbove && missing*100 > l.Percent*named)
 }
 
 // ErrLiveBlobsDamaged reports that the backup before a restore found live
@@ -331,10 +338,10 @@ func (e *LiveBlobsError) Error() string {
 
 	if errors.Is(e.Sentinel, ErrLiveBlobsMissing) {
 		return fmt.Sprintf("the backup before the restore found %d of %d live blobs missing, more than the limit "+
-			"of %d blobs or %d percent, first %s. The restore changed no live data. Check the blob store setting "+
-			"of the server with opendustpan store check --target blobs: %s: %s",
-			e.Findings.Missing, e.Findings.Named, e.Limit.Count, e.Limit.Percent, keys, ErrLiveBlobsMissing,
-			ErrCorrupt)
+			"of %d blobs, or %d percent when more than %d, first %s. The restore changed no live data. Check the "+
+			"blob store setting of the server with opendustpan store check --target blobs: %s: %s",
+			e.Findings.Missing, e.Findings.Named, e.Limit.Count, e.Limit.Percent, e.Limit.PercentAbove, keys,
+			ErrLiveBlobsMissing, ErrCorrupt)
 	}
 
 	return fmt.Sprintf("the backup before the restore found %d live blobs whose bytes do not match their "+
