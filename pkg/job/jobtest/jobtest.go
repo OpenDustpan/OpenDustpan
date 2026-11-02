@@ -172,6 +172,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a dispatch of a renamed unit still obeys the lock of the unit", testRenamedUnitOwnLock},
 		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
+		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
 	}, createRuleCases(), reconcileCases())
 
