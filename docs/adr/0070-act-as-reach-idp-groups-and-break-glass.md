@@ -17,6 +17,7 @@ Changed by:
   review.
 - ADR 306 changes decisions 24, 25 and 26: a site admin may disable a break-glass principal, and the rule of the sweep.
 - ADR 306 extends decision 21: the limit and the window of the mass-suspension alert.
+- ADR 320 extends decision 12: a membership can also come from LDAP, with the source `ldap`.
 
 ## Context
 
