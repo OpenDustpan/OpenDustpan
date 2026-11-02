@@ -45,9 +45,30 @@ type Row struct {
 }
 
 // Located is a stored object and the scope key of the scope that holds it.
+// Label names the scope in a refusal: the scope key, or DeletedUnitLabel for
+// a row of a deleted unit, because a live unit can hold the name of the
+// deleted unit. An empty Label means the scope key.
 type Located struct {
 	ScopeKey string
+	Label    string
 	Row      Row
+}
+
+// name returns the label of l, or its scope key when it has none.
+func (l Located) name() string {
+	if l.Label != "" {
+		return l.Label
+	}
+
+	return l.ScopeKey
+}
+
+// DeletedUnitLabel returns the label of the scope of a deleted unit:
+// deleted-unit/<tool>/<unit ID>. The deleted units of a namespace list the
+// unit with that tool and ID, and the restore and the purge of the unit name
+// it by both.
+func DeletedUnitLabel(tool, unitID string) string {
+	return "deleted-unit/" + tool + "/" + unitID
 }
 
 // Ref names an approval rule or a path set that an object uses.
@@ -266,10 +287,17 @@ func (r unitRunner) Read(ctx context.Context, fn func(Tx) error) error {
 }
 
 // requireUnit returns the error of NoUnitError for a unit scope whose name no
-// live unit holds, and nil for any other scope.
+// live unit holds, gate.ErrInvalid for a unit scope with a stable ID, and nil
+// for any other scope. A write names a unit by its name: a scope with an ID
+// is for the checks of a live or a deleted unit, and a write there could give
+// a deleted unit new configuration.
 func requireUnit(ctx context.Context, tx Tx, scope gate.Scope) error {
 	if scope.Level() != gate.LevelUnit {
 		return nil
+	}
+
+	if scope.UnitID() != "" {
+		return fmt.Errorf("%w: a write names the unit of %s by its name, not by its ID", gate.ErrInvalid, scope)
 	}
 
 	ok, err := tx.ScopeExists(ctx, scope)

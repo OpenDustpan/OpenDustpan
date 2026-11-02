@@ -12,6 +12,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// errNoUnitID is the refusal of a restore or a final delete whose unit has no
+// stable ID.
+const errNoUnitID = "the deleted unit has no stable ID, so its gates cannot be checked"
+
 // stateCheck says what a route writes: the action that the route needs and the
 // operation kind of the write.
 type stateCheck struct {
@@ -28,10 +32,29 @@ type stateCheck struct {
 // the error code and the ID of the decision record, and the answer carries
 // the code of the catalog. The admission writes the audit entry of each
 // refusal.
+//
+// The unit of a restore or a final delete is a deleted unit, which the
+// admission must name by its stable ID: the gates and the access limits of that
+// unit hold, and never those of a new unit with its name. An object with no
+// unit ID fails closed with 403 gate.denied, and the refusal is in the audit
+// log.
 func (h *Handler) guardStateWrite(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, check stateCheck,
 ) bool {
 	ctx := r.Context()
+
+	// Defense in depth: the route resolves the object from the unit ID in its
+	// path, and the store reads the gates of a scope by the ID that it
+	// carries. This check stays so that a caller with an object by name
+	// alone can never check the gates of the live unit of that name.
+	if obj.UnitID() == "" {
+		h.guard.Record(ctx, r, p, refusal.Denial{
+			Action: check.action, Object: obj, Reason: errNoUnitID, Window: 0,
+		})
+		h.writeFailure(ctx, w, problem.New(http.StatusForbidden, errcode.GateDenied, errNoUnitID))
+
+		return false
+	}
 
 	out := h.admit.Admit(ctx, stategate.Write{
 		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceAPI,

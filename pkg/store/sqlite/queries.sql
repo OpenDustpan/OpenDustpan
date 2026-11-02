@@ -2921,20 +2921,21 @@ FROM namespaces AS n
 JOIN collection_members AS m ON m.namespace = n.name
 WHERE n.id = sqlc.arg(namespace_id) AND m.unit_id = sqlc.arg(unit_id);
 
--- name: GetGateUnitName :one
--- The namespace, the tool and the name of the unit of a stable ID: the live
--- unit, or else the deleted unit. A gate row of a unit names the unit by its ID
--- only, and a check that names the scope of the row reads the name here.
+-- name: GetGateLiveUnit :one
+-- The namespace, the tool and the name of the live unit of a stable ID. A gate
+-- row of a unit names the unit by its ID only, and a check that names the
+-- scope of the row reads the name here.
 SELECT n.name AS namespace, i.tool, i.name
 FROM namespaces AS n
 JOIN inventory AS i ON i.namespace = n.name
-WHERE n.id = sqlc.arg(namespace_id) AND i.unit_id = sqlc.arg(unit_id)
-UNION ALL
+WHERE n.id = sqlc.arg(namespace_id) AND i.unit_id = sqlc.arg(unit_id);
+
+-- name: GetGateDeletedUnit :one
+-- The namespace, the tool and the name of the deleted unit of a stable ID.
 SELECT n.name AS namespace, d.tool, d.name
 FROM namespaces AS n
 JOIN inventory_deleted AS d ON d.namespace = n.name
-WHERE n.id = sqlc.arg(namespace_id) AND d.unit_id = sqlc.arg(unit_id)
-LIMIT 1;
+WHERE n.id = sqlc.arg(namespace_id) AND d.unit_id = sqlc.arg(unit_id);
 
 -- name: ListUnitGateObjectKeys :many
 -- The kind and ID of the configuration of a unit that a purge removes, for

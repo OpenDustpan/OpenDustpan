@@ -2,6 +2,7 @@ package gatetest
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -14,9 +15,10 @@ import (
 // the units that Placement makes. A case that needs it runs only with a
 // Domain that implements Placement and Lifecycle, and is skipped otherwise.
 type Lifecycle interface {
-	// DeleteUnit deletes the unit name of tool in ns. The delete is not a
-	// purge: the unit stays as a deleted unit, and its name is free.
-	DeleteUnit(ctx context.Context, ns namespace.Name, tool, name string) error
+	// DeleteUnit deletes the unit name of tool in ns and returns its stable
+	// ID. The delete is not a purge: the unit stays as a deleted unit, and its
+	// name is free.
+	DeleteUnit(ctx context.Context, ns namespace.Name, tool, name string) (string, error)
 	// RenameUnit gives the unit name of tool in ns the name next. The tool is
 	// pulumi, and both names are <project>/<stack> of one project.
 	RenameUnit(ctx context.Context, ns namespace.Name, tool, name, next string) error
@@ -35,6 +37,10 @@ func unitRunners() map[string]runner {
 		"unit-move-keeps-objects":               eachKind(caseMoveKeeps),
 		"unit-settings-reused-name-start-clean": once(caseSettingsReusedName),
 		"snapshot-reused-name-starts-clean":     once(caseSnapshotReusedName),
+		"unit-id-scope-reads-the-deleted-unit":  eachKind(caseIDScopeReadsDeleted),
+		"unit-id-scope-refused":                 eachKind(caseIDScopeRefused),
+		"deleted-unit-reader-label":             once(caseDeletedReaderLabel),
+		"snapshot-deleted-unit-by-id":           once(caseSnapshotDeletedByID),
 	}
 }
 
@@ -76,12 +82,20 @@ func unitOf(t *testing.T, scope gate.Scope) identity.Object {
 	return obj
 }
 
-// deleteUnit deletes the unit of scope.
-func (e *env) deleteUnit(l lifecycle, scope gate.Scope) {
+// deleteUnit deletes the unit of scope and returns the scope with the stable
+// ID of the deleted unit.
+func (e *env) deleteUnit(l lifecycle, scope gate.Scope) gate.Scope {
 	e.t.Helper()
 
 	u := unitOf(e.t, scope)
-	mustNil(e.t, "DeleteUnit("+scope.Key()+")", l.DeleteUnit(e.t.Context(), u.Namespace(), u.Tool(), u.UnitName()))
+
+	id, err := l.DeleteUnit(e.t.Context(), u.Namespace(), u.Tool(), u.UnitName())
+	mustNil(e.t, "DeleteUnit("+scope.Key()+")", err)
+
+	byID, err := scope.WithUnitID(id)
+	mustNil(e.t, "WithUnitID("+id+")", err)
+
+	return byID
 }
 
 // recreateUnit makes a new unit with the tool and the name of scope, in no
@@ -271,5 +285,116 @@ func caseSnapshotReusedName(t *testing.T, e *env) {
 
 	if len(cfg.ApprovalDefaults) != 0 || len(cfg.CarryOver) != 0 {
 		t.Fatalf("Snapshot(new unit) settings = %+v, %+v, want none", cfg.ApprovalDefaults, cfg.CarryOver)
+	}
+}
+
+func caseIDScopeReadsDeleted(t *testing.T, e *env, k kindOps) {
+	t.Helper()
+
+	l := e.lifecycle()
+
+	v, err := k.put(e, e.fx.webProd, "a", "old", 0)
+	mustNil(t, "Put(web/prod)", err)
+
+	byID := e.deleteUnit(l, e.fx.webProd)
+
+	// No live unit has the name: the ID reaches the rows, the name does not.
+	wantObjects(t, e, k, byID, v)
+	wantObjects(t, e, k, e.fx.webProd, 0)
+
+	// A new live unit has the name and its own object.
+	e.recreateUnit(l, e.fx.webProd)
+
+	_, err = k.put(e, e.fx.webProd, "b", "new", 0)
+	mustNil(t, "Put(new web/prod)", err)
+
+	wantObjects(t, e, k, byID, v)
+
+	got, err := k.list(e, e.fx.webProd)
+	mustNil(t, "List(new web/prod)", err)
+
+	if len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("List(new web/prod) = %v, want the object b of the new unit only", got)
+	}
+}
+
+func caseIDScopeRefused(t *testing.T, e *env, k kindOps) {
+	t.Helper()
+
+	l := e.lifecycle()
+
+	netByID := e.deleteUnit(l, e.fx.acmeNet)
+	webByID := e.deleteUnit(l, e.fx.webProd)
+	e.recreateUnit(l, e.fx.webProd)
+
+	_, err := k.put(e, webByID, "a", "one", 0)
+	wantErr(t, "Put(scope with a unit ID)", err, gate.ErrInvalid)
+
+	unknown, err := e.fx.webProd.WithUnitID("unknown-unit")
+	mustNil(t, "WithUnitID(unknown)", err)
+
+	// The ID of the workspace net with the scope of the stack web/prod names a
+	// unit of another tool.
+	otherTool, err := e.fx.webProd.WithUnitID(netByID.UnitID())
+	mustNil(t, "WithUnitID(net)", err)
+
+	for _, scope := range []gate.Scope{unknown, otherTool} {
+		_, err = k.list(e, scope)
+		wantErr(t, "List("+scope.Key()+" with the ID "+scope.UnitID()+")", err, gate.ErrInvalid)
+	}
+}
+
+func caseDeletedReaderLabel(t *testing.T, e *env) {
+	t.Helper()
+
+	l := e.lifecycle()
+
+	v := e.mustPutRule(e.fx.acme, "dba-review")
+	e.mustPutGate(e.gate(e.fx.webProd, "dba-review", func(g *gate.Gate) {
+		g.Outcome = gate.ApprovalOutcome("dba-review")
+	}), 0)
+
+	byID := e.deleteUnit(l, e.fx.webProd)
+	e.recreateUnit(l, e.fx.webProd)
+
+	err := e.h.Store.ApprovalRules().Delete(t.Context(), gate.ObjectRef{Scope: e.fx.acme, ID: "dba-review", Version: v},
+		e.acme, entry("acme"))
+	wantErrText(t, "Delete(rule that a deleted unit's gate names)", err, gate.ErrInvalid,
+		"deleted-unit/pulumi/"+byID.UnitID()+"/dba-review")
+
+	if strings.Contains(err.Error(), e.fx.webProd.Key()) {
+		t.Fatalf("Delete(rule) = %q, want no name scope key: a live unit holds the name %s", err, e.fx.webProd.Key())
+	}
+}
+
+func caseSnapshotDeletedByID(t *testing.T, e *env) {
+	t.Helper()
+
+	l := e.lifecycle()
+
+	e.populate(e.fx.webProd, "old-")
+	e.populateSettings(e.fx.webProd)
+
+	byID := e.deleteUnit(l, e.fx.webProd)
+	e.recreateUnit(l, e.fx.webProd)
+	e.populate(e.fx.webProd, "new-")
+
+	cfg, err := e.h.Store.Snapshot(t.Context(), []gate.Scope{e.fx.installation, e.fx.acme, byID})
+	mustNil(t, "Snapshot(deleted unit by ID)", err)
+
+	if len(cfg.Gates) != 2 || len(cfg.AccessLimits) != 2 || len(cfg.ApprovalRules) != 2 ||
+		len(cfg.OwnershipRules) != 2 || len(cfg.PathSets) != 2 {
+		t.Fatalf("Snapshot(deleted unit by ID) = %+v, want the two objects of each kind of the deleted unit", cfg)
+	}
+
+	for i := range cfg.Gates {
+		if !strings.HasPrefix(string(cfg.Gates[i].ID), "old-") {
+			t.Fatalf("Snapshot(deleted unit by ID) holds the gate %s of the new unit", cfg.Gates[i].ID)
+		}
+	}
+
+	if len(cfg.ApprovalDefaults) != 1 || len(cfg.CarryOver) != 1 {
+		t.Fatalf("Snapshot(deleted unit by ID) settings = %+v, %+v, want the deleted unit's", cfg.ApprovalDefaults,
+			cfg.CarryOver)
 	}
 }
