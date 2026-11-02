@@ -20,6 +20,7 @@ action for that object.
 | --- | --- | --- |
 | `GET /api/server/access-review` | `server:read-access` | The installation |
 | `GET /api/server/namespaces/{namespace}/access-review` | `namespace:read-access` | The namespace |
+| `GET /api/server/namespaces/{namespace}/collections/{collection}/access-review` | `collection:read-access` | The collection |
 | `GET /api/server/namespaces/{namespace}/unit-access-review?tool=<tool>&unit=<name>` | `unit:read-access` | The unit |
 | `GET /api/server/principals/{principal}/access-review` | `server:read-access` on the principal | The principal |
 
@@ -27,7 +28,14 @@ The principal route works for a service principal only. For any other kind
 of principal, the answer is `400`. The unit route needs both `tool` and `unit`.
 
 The collection route, `GET /api/server/namespaces/{namespace}/collections/{collection}/access-review`,
-answers `501` in this release. Use the namespace route and filter by subject.
+lists the grants on the collection, the grants on each unit that is in the
+collection, and the grants on the namespace, marked with `inheritedFrom`. A
+deleted unit that is not purged stays in the list, with `objectState` set to
+`deleted`.
+
+The route takes the same query values as the other routes: `limit`, `cursor`,
+`from` and `to`, `subject`, and `expand`. An unknown collection gets `404`. The
+route answers `501` only when the store cannot list the units of a collection.
 
 ## Query values
 
