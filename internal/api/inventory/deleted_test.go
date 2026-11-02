@@ -470,6 +470,139 @@ func (f fixedScope) ReadableUnits(
 	return f.all, f.ids, f.err
 }
 
+// firstPageToken returns the nextPageToken of the first page of one deleted
+// unit per page.
+func firstPageToken(t *testing.T, f deletedFixture) string {
+	t.Helper()
+
+	page := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{"pageSize": {"1"}}), ""))
+	if page.NextPageToken == "" {
+		t.Fatal("first page has no nextPageToken")
+	}
+
+	return page.NextPageToken
+}
+
+// rewriteToken decodes token, applies change to its JSON object, and encodes
+// the result again as a page token.
+func rewriteToken(t *testing.T, token string, change func(m map[string]any)) string {
+	t.Helper()
+
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+
+	var wire map[string]any
+	if err = json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("token is not one JSON object: %v", err)
+	}
+
+	change(wire)
+
+	out, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("encode changed token: %v", err)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(out)
+}
+
+// TestListDeletedUnitsHostileCursor proves that a cursor which the server did
+// not make, or which another query made, answers 400 at the boundary, before
+// the store reads it. The unchanged cursor of the first page answers 200.
+func TestListDeletedUnitsHostileCursor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		raw    string
+		change func(m map[string]any)
+		want   int
+	}{
+		{
+			name:   "unknown member",
+			raw:    "",
+			change: func(m map[string]any) { m["x"] = 1 },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "unknown tool",
+			raw:    "",
+			change: func(m map[string]any) { m["t"] = "terraform" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "empty name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "control character in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\nprod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "long unit ID",
+			raw:    "",
+			change: func(m map[string]any) { m["u"] = strings.Repeat("a", 1025) },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "empty unit ID",
+			raw:    "",
+			change: func(m map[string]any) { m["u"] = "" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "other fingerprint",
+			raw:    "",
+			change: func(m map[string]any) { m["f"] = "0000000000000000" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "token over the length limit",
+			raw:    strings.Repeat("A", 4097),
+			change: nil,
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "unchanged cursor",
+			raw:    "",
+			change: nil,
+			want:   http.StatusOK,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newDeletedFixture(t, fiveDeleted(), selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil)
+
+			token := tc.raw
+			switch {
+			case tc.raw != "":
+			case tc.change != nil:
+				token = rewriteToken(t, firstPageToken(t, f), tc.change)
+			default:
+				token = firstPageToken(t, f)
+			}
+
+			rec := f.serve(t, http.MethodGet, listTarget(url.Values{"pageSize": {"1"}, "pageToken": {token}}), "")
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
+			}
+
+			if tc.want == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "request.invalid-query") {
+				t.Fatalf("body does not hold request.invalid-query: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
 // TestListDeletedUnitsReadScope proves that the list holds only the units
 // that the caller may read, and that the cursor and the total hold no other
 // unit: a walk of every page with limit 1 sees only readable IDs, and the
