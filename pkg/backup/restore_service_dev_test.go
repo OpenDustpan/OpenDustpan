@@ -56,6 +56,7 @@ func dirtyReport() backup.DevStripReport {
 		Warnings:       nil,
 		PreBackupFound: nil,
 		NotHeld:        nil,
+		ErrorCode:      "",
 	}
 }
 
@@ -530,6 +531,7 @@ func boundedRemovalReport() backup.DevStripReport {
 		Warnings:       nil,
 		PreBackupFound: nil,
 		NotHeld:        nil,
+		ErrorCode:      "",
 	}
 
 	for i := range backup.MaxAuditedPrincipals {

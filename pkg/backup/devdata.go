@@ -213,6 +213,10 @@ type DevStripReport struct {
 	// keys as they are. It is nil for a backup with no such blob. The restore
 	// service sets it.
 	NotHeld *BlobFindings `json:"notHeld,omitempty"`
+	// ErrorCode is the catalog code of the refusal that ended the restore,
+	// empty for a restore that succeeded or that ended with an error that
+	// has no code. The restore service sets it.
+	ErrorCode RestoreErrorCode `json:"errorCode,omitempty"`
 }
 
 // HasDev reports whether the report names dev data: a principal, or a class

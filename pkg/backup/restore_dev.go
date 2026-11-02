@@ -179,6 +179,7 @@ func emptyDevReport() DevStripReport {
 		Warnings:        nil,
 		PreBackupFound:  nil,
 		NotHeld:         nil,
+		ErrorCode:       "",
 	}
 }
 

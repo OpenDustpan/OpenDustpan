@@ -22,6 +22,7 @@ func newReporter() *reporter {
 		Warnings:        nil,
 		PreBackupFound:  nil,
 		NotHeld:         nil,
+		ErrorCode:       "",
 	}}
 }
 

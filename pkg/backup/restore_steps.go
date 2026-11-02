@@ -206,7 +206,7 @@ func permanentRestoreError(err error) bool {
 	for _, sentinel := range []error{
 		ErrCorrupt, ErrSchemaMismatch, ErrSchemaBeforeBaseline, ErrNotFound, ErrInvalidID, ErrFailed,
 		ErrDevBackupRefused, ErrDevStripIncomplete, ErrRestoreAccessMismatch, ErrManifestKindInvalid,
-		ErrInvalidRestoreID, ErrKeyUnchecked, maintenance.ErrActiveWork, secret.ErrKeyNotConfigured,
+		ErrInvalidRestoreID, ErrKeyUnchecked, ErrPreBackupForeign, maintenance.ErrActiveWork, secret.ErrKeyNotConfigured,
 		secret.ErrWrapperMismatch, secret.ErrDecrypt,
 	} {
 		if errors.Is(err, sentinel) {
@@ -239,8 +239,8 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 		ID: in.ID, State: RestoreFailed, Error: text, EndedAt: s.now().UTC(), DevReport: nil, LeaveMaintenance: !held,
 	}
 
-	if refused, ok := errors.AsType[*LiveBlobsError](cause); ok && refused != nil {
-		end.DevReport = refusedLiveBlobsReport(sc.Operation, refused)
+	if code := restoreErrorCode(cause); code != "" {
+		end.DevReport = refusedReport(sc.Operation, cause, code)
 	}
 
 	_, swapped := sc.Operation.Step(RestoreStepSwap)
@@ -275,18 +275,22 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 	}
 }
 
-// refusedLiveBlobsReport returns the final report of a restore of op that
-// stopped at the live blobs that the backup before it found: the report of
-// the stage step, with those findings.
-func refusedLiveBlobsReport(op durable.Operation, refused *LiveBlobsError) *DevStripReport {
+// refusedReport returns the final report of a restore of op that a refusal
+// with code stopped: the report of the stage step, with code and, for a stop
+// at the live blobs, the findings of the backup before the restore.
+func refusedReport(op durable.Operation, cause error, code RestoreErrorCode) *DevStripReport {
 	report := emptyDevReport()
 	if st, _, err := stageResultOf(op); err == nil {
 		report = st.Report
 	}
 
-	found := refused.Findings
-	found.Keys = slices.Clone(found.Keys)
-	report.PreBackupFound = &found
+	report.ErrorCode = code
+
+	if refused, ok := errors.AsType[*LiveBlobsError](cause); ok && refused != nil {
+		found := refused.Findings
+		found.Keys = slices.Clone(found.Keys)
+		report.PreBackupFound = &found
+	}
 
 	return &report
 }
@@ -721,9 +725,8 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 		return nil, nil
 	}
 
-	if err := s.backups.StartBeforeRestore(ctx, in.PreBackupID, in.ID); err != nil &&
-		!errors.Is(err, ErrAlreadyExists) {
-		return nil, fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
+	if err := s.startPreBackup(ctx, sc.Fence, in); err != nil {
+		return nil, err
 	}
 
 	pre, err := s.backups.Await(ctx, in.PreBackupID)
@@ -758,6 +761,35 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 	return nil, nil
 }
 
+// startPreBackup starts the backup before restore in. A backup with that ID
+// that exists already counts only when the input of its operation names this
+// restore: an earlier try of this step, before a takeover. Any other backup,
+// for example one that another restore or a person started, stops the
+// restore with ErrPreBackupForeign and its audit event: the restore must not
+// take the findings of a backup that did not read the live data for it.
+func (s *RestoreService) startPreBackup(ctx context.Context, fence durable.StepFence, in restoreInput) error {
+	err := s.backups.StartBeforeRestore(ctx, in.PreBackupID, in.ID)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, ErrAlreadyExists) {
+		return fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	owner, err := s.backups.StartedForRestore(ctx, in.PreBackupID)
+	if err != nil {
+		return fmt.Errorf("read the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	if owner != in.ID {
+		return s.failWithEvent(ctx, in, fence, preBackupForeignAuditObject(in),
+			fmt.Errorf("backup %s: %w", in.PreBackupID, ErrPreBackupForeign))
+	}
+
+	return nil
+}
+
 // preBackupResult is the result of the pre-backup step, stored in the step
 // record under the fence of the step: what the backup before the restore
 // found at the live blobs.
@@ -782,6 +814,19 @@ func preBackupFindingsOf(op durable.Operation) (BlobFindings, bool) {
 	}
 
 	return res.Found, true
+}
+
+// checkPreBackupResult refuses the copy of blobs when the operation of sc
+// holds no stored result of its pre-backup step, or when the result names
+// damaged live blobs or more missing live blobs than the bound allows.
+func (s *RestoreService) checkPreBackupResult(ctx context.Context, sc durable.StepContext, in restoreInput) error {
+	found, ok := preBackupFindingsOf(sc.Operation)
+	if !ok {
+		return s.failWithEvent(ctx, in, sc.Fence, preBackupForeignAuditObject(in),
+			fmt.Errorf("no result of the pre-backup step: %w", ErrPreBackupForeign))
+	}
+
+	return checkFindings(found, EffectiveMissingBlobLimit(), found.Keys, found.Keys)
 }
 
 // recordPreBackupFindings stores one audit event of restore in when the
@@ -816,6 +861,16 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 	st, _, err := stageResultOf(sc.Operation)
 	if err != nil {
 		return nil, err
+	}
+
+	// Defense in depth: the pre-backup step stops the restore at damaged
+	// live blobs and at missing live blobs above the bound, and it refuses a
+	// backup that this restore did not start. This check stays so that a
+	// pre-backup step that was skipped, or a result that is gone, cannot let
+	// the first write of a blob happen. It reads only the step record of
+	// this operation, not the backup target or the backups table.
+	if refused := s.checkPreBackupResult(ctx, sc, in); refused != nil {
+		return nil, refused
 	}
 
 	manifest, err := s.readPinnedManifest(ctx, in.BackupID, st.pinned())
@@ -1280,6 +1335,13 @@ func preBackupFindingsAuditObject(in restoreInput, pre ID, found BlobFindings) s
 	return "backup " + pre.String() + " before restore " + in.ID.String() + " found " +
 		strconv.Itoa(found.Missing) + " missing and " + strconv.Itoa(found.Damaged) + " damaged live blobs of " +
 		strconv.Itoa(found.Named) + ", first " + strings.Join(quoted, ", ")
+}
+
+// preBackupForeignAuditObject names the stop of restore in at a backup before
+// it that it did not start, for its audit entry.
+func preBackupForeignAuditObject(in restoreInput) string {
+	return "restore " + in.ID.String() + " refused backup " + in.PreBackupID.String() +
+		" as the backup before it: this restore did not start it"
 }
 
 // stagedDiffersAuditObject names the stop of restore in at a blob whose staged
