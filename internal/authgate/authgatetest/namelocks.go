@@ -165,8 +165,21 @@ func recordCases() []nameCase {
 			test: testAlertBound,
 		},
 		{
-			name: "a prune counts the locks that ended with no add to see them in its entry",
+			name: "a prune writes one entry for each lock that ended with no add to see it, and counts them in " +
+				"its entry",
 			test: testPruneEndedLocks,
+		},
+		{
+			name: "a prune deletes no more counts with an ended lock than its limit, so each one has its entry",
+			test: testPruneEndedBound,
+		},
+		{
+			name: "an alert that cannot be appended fails the add and changes nothing",
+			test: testAlertAppendFails,
+		},
+		{
+			name: "an entry of the end of a lock that cannot be appended fails the add and changes nothing",
+			test: testEndRecordFails,
 		},
 	}
 }
@@ -675,7 +688,13 @@ func testPrune(t *testing.T, h NameLockHarness) {
 
 	before := len(h.Entries(t))
 
-	n, err := c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, pruneEntry())
+	n, err := c.PruneNameLocks(
+		t.Context(),
+		shortLock,
+		authgate.MaxNamePruneRows,
+		authgate.MaxNamePruneEnded,
+		pruneEntry(),
+	)
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1", n, err)
 	}
@@ -721,12 +740,18 @@ func testPruneBound(t *testing.T, h NameLockHarness) {
 
 	pause(t, doubleLock)
 
-	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, pruneEntry())
+	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, authgate.MaxNamePruneEnded, pruneEntry())
 	if err != nil || n != limitTwo {
 		t.Fatalf("prune with a limit of 2 = %d, %v; want 2", n, err)
 	}
 
-	n, err = c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, pruneEntry())
+	n, err = c.PruneNameLocks(
+		t.Context(),
+		shortLock,
+		authgate.MaxNamePruneRows,
+		authgate.MaxNamePruneEnded,
+		pruneEntry(),
+	)
 	if err != nil || n != pruneRows-limitTwo {
 		t.Fatalf("second prune = %d, %v; want %d", n, err, pruneRows-limitTwo)
 	}
@@ -753,16 +778,20 @@ func testPruneInvalid(t *testing.T, h NameLockHarness) {
 		name  string
 		age   time.Duration
 		limit int
+		ended int
 	}{
-		{name: "an age of 0", age: 0, limit: 1},
-		{name: "a negative age", age: -longLock, limit: 1},
-		{name: "a limit of 0", age: shortLock, limit: 0},
-		{name: "a negative limit", age: shortLock, limit: -1},
-		{name: "a limit above the maximum", age: shortLock, limit: authgate.MaxNamePruneRows + 1},
+		{name: "an age of 0", age: 0, limit: 1, ended: 1},
+		{name: "a negative age", age: -longLock, limit: 1, ended: 1},
+		{name: "a limit of 0", age: shortLock, limit: 0, ended: 1},
+		{name: "a negative limit", age: shortLock, limit: -1, ended: 1},
+		{name: "a limit above the maximum", age: shortLock, limit: authgate.MaxNamePruneRows + 1, ended: 1},
+		{name: "an ended limit of 0", age: shortLock, limit: 1, ended: 0},
+		{name: "a negative ended limit", age: shortLock, limit: 1, ended: -1},
+		{name: "an ended limit above the maximum", age: shortLock, limit: 1, ended: authgate.MaxNamePruneEnded + 1},
 	}
 
 	for _, tc := range cases {
-		if _, err := c.PruneNameLocks(t.Context(), tc.age, tc.limit, pruneEntry()); !errors.Is(
+		if _, err := c.PruneNameLocks(t.Context(), tc.age, tc.limit, tc.ended, pruneEntry()); !errors.Is(
 			err, authgate.ErrInvalidLock,
 		) {
 			t.Fatalf("%s: prune = %v, want ErrInvalidLock", tc.name, err)
@@ -792,7 +821,7 @@ func testPruneBadEntry(t *testing.T, h NameLockHarness) {
 	bad := pruneEntry()
 	bad.Namespace = otherScope
 
-	if _, err := c.PruneNameLocks(t.Context(), shortLock, 1, bad); !errors.Is(err, audit.ErrInvalidEntry) {
+	if _, err := c.PruneNameLocks(t.Context(), shortLock, 1, 1, bad); !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("prune with an entry of a namespace = %v, want audit.ErrInvalidEntry", err)
 	}
 

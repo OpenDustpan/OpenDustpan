@@ -50,6 +50,9 @@ type Tx interface {
 	// transaction. It returns audit.ErrInvalidEntry for an entry that fails
 	// validation.
 	AppendAudit(ctx context.Context, e audit.Entry) error
+	// HasNotification reports whether the outbox of the server scope holds a
+	// notification with the dedupe key.
+	HasNotification(ctx context.Context, dedupeKey string) (bool, error)
 	// AppendNotification appends n to the outbox of the server scope, in the
 	// transaction. The outbox skips a notification whose dedupe key it holds.
 	AppendNotification(ctx context.Context, n notify.Notification) error
@@ -132,9 +135,25 @@ func appendLock(ctx context.Context, tx Tx, f authgate.NameFailure, lock authgat
 		return fmt.Errorf("append the entry of the lock: %w", err)
 	}
 
-	alert := authgate.LockAlert(ev, f.Scope, f.Name, lock, codec.FromMillis(nowMs)).Fit()
+	at := codec.FromMillis(nowMs)
+
+	alert := authgate.LockAlert(ev, f.Scope, f.Name, lock, at).Fit()
 	if err := alert.Validate(); err != nil {
 		return fmt.Errorf("the alert of the lock: %w", err)
+	}
+
+	// One name gets at most one alert of a lock by source prefix or by factor
+	// in the hour before this add. The audit entry above still records the
+	// lock.
+	for _, key := range authgate.AlertWindowKeys(f.Scope, f.Name, at) {
+		held, err := tx.HasNotification(ctx, key)
+		if err != nil {
+			return fmt.Errorf("read the alerts of the name: %w", err)
+		}
+
+		if held {
+			return nil
+		}
 	}
 
 	if err := tx.AppendNotification(ctx, alert); err != nil {
