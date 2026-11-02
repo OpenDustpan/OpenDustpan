@@ -188,8 +188,9 @@ func stepContextWith(t *testing.T, result *preBackupResult) durable.StepContext 
 // TestCheckPreBackupResultRefusesBeforeTheCopy sends hostile step records to
 // the layer at the copy step directly, as if the pre-backup step had not
 // stopped the restore: no result, a result that does not decode, damaged live
-// blobs, and missing live blobs above the bound. Each refuses, and the copy
-// step writes nothing. A result within the bound passes.
+// blobs, and missing live blobs above the bound. Each refuses with one audit
+// event, and the copy step writes nothing. A result within the bound passes
+// with no event.
 func TestCheckPreBackupResultRefusesBeforeTheCopy(t *testing.T) {
 	t.Parallel()
 
@@ -227,8 +228,10 @@ func TestCheckPreBackupResultRefusesBeforeTheCopy(t *testing.T) {
 			t.Errorf("%s: checkPreBackupResult = %v, want nil", tc.name, err)
 		case tc.want != nil && !errors.Is(err, tc.want):
 			t.Errorf("%s: checkPreBackupResult = %v, want %v", tc.name, err, tc.want)
-		case errors.Is(tc.want, ErrPreBackupForeign) && len(u.live.events) != 1:
+		case tc.want != nil && len(u.live.events) != 1:
 			t.Errorf("%s: audit events = %v, want the refusal", tc.name, u.live.events)
+		case tc.want == nil && len(u.live.events) != 0:
+			t.Errorf("%s: audit events = %v, want none", tc.name, u.live.events)
 		default:
 		}
 	}

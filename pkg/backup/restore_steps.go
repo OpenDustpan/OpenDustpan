@@ -826,7 +826,11 @@ func (s *RestoreService) checkPreBackupResult(ctx context.Context, sc durable.St
 			fmt.Errorf("no result of the pre-backup step: %w", ErrPreBackupForeign))
 	}
 
-	return checkFindings(found, EffectiveMissingBlobLimit(), found.Keys, found.Keys)
+	if refused := checkFindings(found, EffectiveMissingBlobLimit(), found.Keys, found.Keys); refused != nil {
+		return s.failWithEvent(ctx, in, sc.Fence, copyRefusedAuditObject(in, found), refused)
+	}
+
+	return nil
 }
 
 // recordPreBackupFindings stores one audit event of restore in when the
@@ -1335,6 +1339,15 @@ func preBackupFindingsAuditObject(in restoreInput, pre ID, found BlobFindings) s
 	return "backup " + pre.String() + " before restore " + in.ID.String() + " found " +
 		strconv.Itoa(found.Missing) + " missing and " + strconv.Itoa(found.Damaged) + " damaged live blobs of " +
 		strconv.Itoa(found.Named) + ", first " + strings.Join(quoted, ", ")
+}
+
+// copyRefusedAuditObject names the stop of restore in at the copy step, for
+// its audit entry: the stored result of the backup before it names damaged
+// live blobs, or more missing live blobs than the bound allows.
+func copyRefusedAuditObject(in restoreInput, found BlobFindings) string {
+	return "restore " + in.ID.String() + " refused to copy blobs: the backup before it found " +
+		strconv.Itoa(found.Missing) + " missing and " + strconv.Itoa(found.Damaged) + " damaged live blobs of " +
+		strconv.Itoa(found.Named)
 }
 
 // preBackupForeignAuditObject names the stop of restore in at a backup before

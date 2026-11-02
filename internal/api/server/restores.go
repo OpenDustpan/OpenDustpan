@@ -31,6 +31,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -438,10 +439,17 @@ func devDataOf(record backup.RestoreRecord) *devDataJSON {
 }
 
 // errorCodeOf returns the catalog code of the refusal that ended the restore
-// of record, or an empty string.
+// of record, or an empty string. The code comes from a stored row, so it is
+// checked against the codes that a restore writes. A row from another
+// version or a changed report can hold any string: an unknown code answers
+// the generic catalog code, and the stored string is never shown.
 func errorCodeOf(record backup.RestoreRecord) string {
-	if record.DevReport == nil {
+	if record.DevReport == nil || record.DevReport.ErrorCode == "" {
 		return ""
+	}
+
+	if !slices.Contains(backup.RestoreErrorCodes(), record.DevReport.ErrorCode) {
+		return errcode.ServerInternal
 	}
 
 	return string(record.DevReport.ErrorCode)
