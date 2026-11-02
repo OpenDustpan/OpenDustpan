@@ -68,15 +68,18 @@ with the `context.` prefix:
 
 | Fact | Meaning |
 | --- | --- |
-| `context.principal.kind` | `person` or `service`. A principal of an unknown kind counts as `person`. |
+| `context.principal.kind` | `person` or `service`. A principal of an unknown kind counts as `person`. The kind `agent` exists, but the server does not set it at `state.write` yet. |
 | `context.principal.credential` | `session`, `access-token`, `job-token` or `trust-token`. |
 | `context.source.kind` | `cli` for a write from the CLI of a tool, `api` for a call of the tool-neutral API. |
 | `context.unit.tool` | The tool code of the unit, for example `opentofu`. |
 | `context.unit.collection` | The collection of the unit, or an empty text. |
 | `context.unit.labels` | The labels of the unit, as `key=value` texts. |
 | `context.operation.kind` | The operation kind in the table above. |
+| `context.document.truncated` | The fact paths that the server emptied to fit the facts into 256 KiB. At `state.write` the only path is `unit.labels`. An empty list means that the server emptied nothing. |
 | `context.plan.available` | Always `false`: the CLI sends no plan. |
 | `context.state.available` | Always `false`: the server holds no new state yet. |
+| `context.state.resources` | The count of resources in the new state. The server does not fill this fact yet, so it is always `0`. |
+| `context.state.removed` | The resource addresses in the current state and not in the new state. The server does not fill this fact yet, so it is always an empty list. |
 
 This gate body denies an unlock:
 
@@ -85,12 +88,13 @@ This gate body denies an unlock:
   "decisionPoint": "state.write",
   "condition": "context.operation.kind == \"unlock\"",
   "outcome": "deny",
-  "message": "Unlocks need approval"
+  "message": "Unlocks are denied"
 }
 ```
 
-A condition without the `context.` prefix does not parse. The condition
-`operation.kind == "unlock"` answers 422:
+A condition without the `context.` prefix does not parse. The request
+`PUT /namespaces/acme/units/by-name/pulumi/web%2Fprod/gates/x` with the
+condition `operation.kind == "unlock"` answers 422:
 
 ```json
 {
@@ -99,6 +103,13 @@ A condition without the `context.` prefix does not parse. The condition
   "errorCode": "gate.invalid"
 }
 ```
+
+The object in the message is the scope key of the gate, then its ID. It changes
+with the scope of the gate. The rest of the message is the same at each scope:
+
+- A namespace gate: `namespace/acme/x`.
+- A collection gate: `collection/acme/payments/x`.
+- A unit gate: `unit/acme/pulumi/web%2Fprod/x`.
 
 A gate that needs a plan fact refuses such a write, because
 `context.plan.available` is `false`.
