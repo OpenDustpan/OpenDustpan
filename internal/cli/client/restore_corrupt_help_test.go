@@ -77,3 +77,89 @@ func TestRestoreOfCorruptDataNamesTheBackupCheck(t *testing.T) {
 		}
 	}
 }
+
+// TestRestoreStoppedAtLiveBlobsNamesTheRepair proves that a restore that
+// stopped at damaged or missing live blobs prints the text of the server,
+// which names the keys, and the help for the live blob store, and not the
+// check of the backup, which is not at fault. The test sets the admin token,
+// so it cannot run in parallel.
+func TestRestoreStoppedAtLiveBlobsNamesTheRepair(t *testing.T) {
+	t.Setenv(client.AdminTokenEnvVar, "test-token")
+
+	for _, tc := range []struct {
+		errText string
+		help    string
+	}{
+		{
+			errText: `the backup before the restore found 1 live blobs whose bytes do not match their records or ` +
+				`do not open: "namespaces/ns-a/tofu/ws/sv/a1": live blobs do not match their records: ` +
+				`backup data is corrupt`,
+			help: "put the good bytes back at the keys above from a copy of the blob store, then run opendustpan " +
+				"restore --server %s --backup bkp-aaa again",
+		},
+		{
+			errText: `the backup before the restore found 2 of 2 live blobs missing: too many live blobs are ` +
+				`missing: backup data is corrupt`,
+			help: "run opendustpan store check --server %s --target blobs to check the blob store setting of the " +
+				"server, then run opendustpan restore --server %s --backup bkp-aaa again",
+		},
+	} {
+		srv := serveFailedRestore(t, tc.errText)
+
+		var stdout, stderr bytes.Buffer
+
+		err := client.RestoreCommand(t.Context(),
+			[]string{"--server", srv.URL, "--backup", "bkp-aaa"}, &stdout, &stderr)
+		if err == nil || !errors.Is(err, client.ErrRestoreFailed) {
+			t.Fatalf("restore = %v, want ErrRestoreFailed", err)
+		}
+
+		help := strings.ReplaceAll(tc.help, "%s", srv.URL)
+		if got := err.Error(); !strings.Contains(got, tc.errText) || !strings.HasSuffix(got, help) ||
+			strings.Contains(got, "backup check") {
+			t.Fatalf("restore = %q, want the error text and %q", got, help)
+		}
+	}
+}
+
+// TestRestoreReadFailureSaysTheServerResumes proves that a restore that
+// started and that the command cannot read any more, for example while the
+// database of the server is down, names the restore and says that the server
+// resumes it, and not to run the restore again. The test sets the admin
+// token, so it cannot run in parallel.
+func TestRestoreReadFailureSaysTheServerResumes(t *testing.T) {
+	t.Setenv(client.AdminTokenEnvVar, "test-token")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/server/restores" {
+			w.WriteHeader(http.StatusAccepted)
+
+			if _, err := w.Write([]byte(`{"id":"rst-test"}`)); err != nil {
+				t.Errorf("write the answer: %v", err)
+			}
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+
+		if _, err := w.Write([]byte(`{"code":503,"message":"the database is not available"}`)); err != nil {
+			t.Errorf("write the answer: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	var stdout, stderr bytes.Buffer
+
+	err := client.RestoreCommand(t.Context(), []string{"--server", srv.URL, "--backup", "bkp-aaa"}, &stdout, &stderr)
+	if err == nil || !errors.Is(err, client.ErrRestoreRead) {
+		t.Fatalf("restore = %v, want ErrRestoreRead", err)
+	}
+
+	want := "the server resumes restore rst-test on its own and it needs no second run: read its state with GET " +
+		srv.URL + "/api/server/restores/rst-test"
+	if got := err.Error(); !strings.Contains(got, want) || strings.Contains(got, " again") {
+		t.Fatalf("restore = %q, want %q and no hint to run it again", got, want)
+	}
+}

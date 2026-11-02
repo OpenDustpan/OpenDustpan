@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -519,27 +520,28 @@ func TestBackupCopyBlobsStopsAtAReadError(t *testing.T) {
 
 // TestBackupCopyBlobsClassifiesSealedErrors proves the classification of the
 // errors of a sealed blob: plain bytes that do not match the row are damaged,
-// a missing object is missing, and any other error stops the backup: a row
-// that cannot be read, and sealed bytes that do not open because a key or a
-// key provider fails.
+// sealed bytes that do not open are damaged with the reason unopened, a
+// missing object is missing, and any other error stops the backup: a row that
+// cannot be read, and an error that the opener does not mark.
 func TestBackupCopyBlobsClassifiesSealedErrors(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name    string
-		err     error
-		stored  bool
-		want    DamageState
-		stopped bool
+		name   string
+		err    error
+		stored bool
+		// want is the reason of the entry, empty when the backup stops.
+		want DamageReason
 	}{
+		{name: "plain bytes that do not match the row", err: ErrLiveBlobDamaged, stored: true, want: ReasonSealed},
 		{
-			name: "plain bytes that do not match the row", err: ErrLiveBlobDamaged, stored: true, want: DamageMismatch,
-			stopped: false,
+			name: "sealed bytes that do not open", err: fmt.Errorf("%w: %w", ErrLiveBlobUnopened, errKeyFault),
+			stored: true, want: ReasonUnopened,
 		},
-		{name: "a missing object", err: blob.ErrNotFound, stored: false, want: DamageMissing, stopped: false},
-		{name: "a row that cannot be read", err: errRowUnreadable, stored: true, want: "", stopped: true},
-		{name: "a key or a key provider that fails", err: errKeyFault, stored: true, want: "", stopped: true},
-		{name: "a corrupt error that is not damage", err: ErrCorrupt, stored: true, want: "", stopped: true},
+		{name: "a missing object", err: blob.ErrNotFound, stored: false, want: ReasonAbsent},
+		{name: "a row that cannot be read", err: errRowUnreadable, stored: true, want: ""},
+		{name: "a key fault that the opener does not mark", err: errKeyFault, stored: true, want: ""},
+		{name: "a corrupt error that is not damage", err: ErrCorrupt, stored: true, want: ""},
 	} {
 		source := newMapStore(true, nil)
 		if tc.stored {
@@ -550,23 +552,27 @@ func TestBackupCopyBlobsClassifiesSealedErrors(t *testing.T) {
 		ref := blobRef(liveKey, wantBytes(), true)
 
 		_, entries, err := s.copyBlobs(t.Context(), []BlobRef{ref}, recordDamage)
-		if tc.stopped {
-			if err == nil {
-				t.Errorf("%s: copyBlobs = nil, want the error", tc.name)
-			}
+		mustSealedEntry(t, tc.name, entries, err, tc.want)
+	}
+}
 
-			continue
+// mustSealedEntry checks the result of the copy of one sealed blob: no entry
+// and an error when want is empty, else one entry of reason want with the
+// reference of the sealed row.
+func mustSealedEntry(t *testing.T, name string, entries []DamagedBlob, err error, want DamageReason) {
+	t.Helper()
+
+	if want == "" {
+		if err == nil {
+			t.Errorf("%s: copyBlobs = nil, want the error", name)
 		}
 
-		if err != nil || len(entries) != 1 || entries[0].State != tc.want {
-			t.Errorf("%s: copyBlobs = %+v, %v; want one entry %q", tc.name, entries, err, tc.want)
+		return
+	}
 
-			continue
-		}
-
-		if entries[0].MD5 != md5Hex(wantBytes()) || !entries[0].Sealed ||
-			(tc.want == DamageMismatch && entries[0].Reason != ReasonSealed) {
-			t.Errorf("%s: entry = %+v, want the reference of the sealed row", tc.name, entries[0])
-		}
+	if err != nil || len(entries) != 1 || entries[0].Reason != want || entries[0].MD5 != md5Hex(wantBytes()) ||
+		!entries[0].Sealed {
+		t.Errorf("%s: copyBlobs = %+v, %v; want one entry %q with the reference of the sealed row", name, entries,
+			err, want)
 	}
 }
