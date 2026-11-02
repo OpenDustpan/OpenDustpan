@@ -265,6 +265,20 @@ type lockEntry struct {
 	Operation string `json:"operation"`
 }
 
+// lastReleaseEntry is the last released lock of a unit: the lock ID, the
+// subject of the principal that held the lock, the subject of the principal
+// that released it, the time of the release as an RFC 3339 time in UTC, and
+// the kind of release ("normal" or "forced"). A repeated unlock of the same
+// lock succeeds for 24 hours after the time of the release, because of this
+// record. It never holds a token or a secret.
+type lastReleaseEntry struct {
+	LockID     string `json:"lockId"`
+	Holder     string `json:"holder"`
+	ReleasedBy string `json:"releasedBy"`
+	ReleasedAt string `json:"releasedAt"`
+	Kind       string `json:"kind"`
+}
+
 // stateEntry is one state of a unit: its wire value and the time it began, an
 // RFC 3339 time in UTC.
 type stateEntry struct {
@@ -298,6 +312,9 @@ type unitEntry struct {
 	States        []stateEntry `json:"states"`
 	ResourceCount *int64       `json:"resourceCount,omitempty"`
 	Lock          *lockEntry   `json:"lock,omitempty"`
+	// LastRelease is the last released lock of the unit, omitted when the
+	// unit has no record. Only an OpenTofu workspace has one.
+	LastRelease *lastReleaseEntry `json:"lastRelease,omitempty"`
 	// ManualLock is the manual lock that covers the unit, omitted when none
 	// does. Like Lock, it is a flag and not a status.
 	ManualLock *manualLockEntry `json:"manualLock,omitempty"`
@@ -348,6 +365,7 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		States:        toStateEntries(e),
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
+		LastRelease:   toLastReleaseEntry(e.LastRelease),
 		ManualLock:    toManualLockEntry(e.ManualLock),
 		Collection:    e.Collection,
 		Labels:        e.Labels,
@@ -388,6 +406,22 @@ func toLockEntry(lock *coreinventory.Lock) *lockEntry {
 	}
 
 	return &lockEntry{Holder: lock.Holder, Since: formatTime(lock.Since), Operation: lock.Operation}
+}
+
+// toLastReleaseEntry maps one projection record to its wire shape, or nil
+// when the unit has none, so the field stays omitted.
+func toLastReleaseEntry(r *coreinventory.LastRelease) *lastReleaseEntry {
+	if r == nil {
+		return nil
+	}
+
+	return &lastReleaseEntry{
+		LockID:     r.LockID,
+		Holder:     r.Holder,
+		ReleasedBy: r.By,
+		ReleasedAt: formatTime(r.At),
+		Kind:       r.Kind,
+	}
 }
 
 // listUnits answers GET /api/dustpan/v1/namespaces/{namespace}/units with one
