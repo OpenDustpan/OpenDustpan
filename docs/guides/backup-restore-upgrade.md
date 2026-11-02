@@ -213,7 +213,7 @@ The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade
 the server instead.
 
-The command also refuses a backup with a schema version below 100, the
+The command also refuses a backup with a schema version below 1000, the
 baseline schema version. The baseline migration replaced every migration
 before it, so no binary can restore such a backup. The error names the
 baseline.
@@ -441,7 +441,9 @@ The command prints the binary version, the schema version of the database and th
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
 
-`serve` refuses a database that records a schema version below 100, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
+`serve` refuses a database that records a schema version below 1000, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
+
+Until the first tag, the schema of each dialect is one schema file, and the baseline migration is that file. The database records the SHA-256 of the file. A build with another version of the file refuses the database at start with the error `another build of the schema made the database`. The error names both values. Start the server on an empty database. An untagged build has no upgrade path. The upgrade check cannot see a change of the schema file, because the name of the file does not change.
 
 ### Minimum binary version
 
@@ -456,6 +458,10 @@ For several nodes, start one new node first. The first new node migrates the dat
 The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. When the older binary is below the minimum binary version of the schema, it refuses to start. The error names the binary version and the minimum.
 
 ## Release checklist
+
+Before the first tag, move the schema file of each dialect, with the same
+bytes, to `pkg/store/<dialect>/migrations/1000_schema.sql`. A database of the
+last untagged build then opens with the tagged build.
 
 Before a tag goes out, copy the migration set of the tag into the test
 data. The schema upgrade test then covers upgrades from that tag without

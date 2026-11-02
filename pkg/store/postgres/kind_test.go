@@ -163,32 +163,6 @@ func TestOpenKindMismatchAppliesNoMigration(t *testing.T) {
 	}
 }
 
-// TestOpenKindOnDatabaseWithoutColumn proves that a database from before the
-// kind column opens with a command kind: the migration adds the column, and
-// the claim decides.
-func TestOpenKindOnDatabaseWithoutColumn(t *testing.T) {
-	t.Parallel()
-
-	schemaURL := openKindFixture(t, "")
-
-	execInSchema(t, schemaURL,
-		`ALTER TABLE installation DROP COLUMN kind`,
-		`DELETE FROM schema_migrations WHERE name = '0120_installation_kind.sql'`,
-	)
-
-	second, err := postgres.Open(t.Context(), schemaURL, postgres.WithInstallationKind(installation.KindDev))
-	if err != nil {
-		t.Fatalf("open as dev: %v", err)
-	}
-
-	defer second.Close()
-
-	got, err := second.ClaimKind(t.Context(), installation.KindDev)
-	if err != nil || got != installation.KindDev {
-		t.Fatalf("claim dev = %q, %v, want dev without error", got, err)
-	}
-}
-
 // TestKindUnknownStoredValue proves that a stored value outside the known
 // kinds is a server fault: the claim reports ErrUnavailable, and so does the
 // check at Open. The test drops the CHECK constraint to plant the value.

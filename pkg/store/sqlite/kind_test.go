@@ -144,58 +144,6 @@ func TestOpenKindMismatchAppliesNoMigration(t *testing.T) {
 	}
 }
 
-// TestOpenKindOnDatabaseWithoutColumn proves that a database from before the
-// kind column opens with a command kind: the migration adds the column, and
-// the claim decides.
-func TestOpenKindOnDatabaseWithoutColumn(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	first, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open the database: %v", err)
-	}
-
-	if closeErr := first.Close(); closeErr != nil {
-		t.Fatalf("close the database: %v", closeErr)
-	}
-
-	raw, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	for _, stmt := range []string{
-		`ALTER TABLE installation DROP COLUMN kind`,
-		`DELETE FROM schema_migrations WHERE name = '0120_installation_kind.sql'`,
-	} {
-		if _, execErr := raw.ExecContext(t.Context(), stmt); execErr != nil {
-			t.Fatalf("make a database from before the kind column: %v", execErr)
-		}
-	}
-
-	if closeErr := raw.Close(); closeErr != nil {
-		t.Fatalf("close raw database: %v", closeErr)
-	}
-
-	second, err := sqlite.Open(t.Context(), path, sqlite.WithInstallationKind(installation.KindDev))
-	if err != nil {
-		t.Fatalf("open as dev: %v", err)
-	}
-
-	defer func() {
-		if closeErr := second.Close(); closeErr != nil {
-			t.Errorf("close the database: %v", closeErr)
-		}
-	}()
-
-	got, err := second.ClaimKind(t.Context(), installation.KindDev)
-	if err != nil || got != installation.KindDev {
-		t.Fatalf("claim dev = %q, %v, want dev without error", got, err)
-	}
-}
-
 // TestKindUnknownStoredValue proves that a stored value outside the known
 // kinds is a server fault: the claim reports ErrUnavailable, and so does the
 // check at Open. The test turns the CHECK constraint off for one connection

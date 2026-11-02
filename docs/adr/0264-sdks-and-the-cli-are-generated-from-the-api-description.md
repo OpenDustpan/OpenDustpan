@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18 · decided by the project owner. The open design questions are in RFC 99.
 
+Changed by:
+
+- ADR 322 changes decision 5: until the first release, the description has
+  one fixed version.
+
 ## Context
 
 Developers call the tool-neutral REST API (ADR 210) from scripts, programs,

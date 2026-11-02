@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-17 · supersedes ADR 21 and ADR 72 in part (see "Superseded decisions")
 
+Changed by:
+
+- ADR 322 changes decision 6: until the first tag, one schema file for each
+  dialect and no numbered migration.
+
 ## Context
 
 ADR 21 says that the API rules in `CLAUDE.md` apply from the first tag. Those

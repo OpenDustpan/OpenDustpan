@@ -1,6 +1,7 @@
 package sqlite_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -181,8 +182,8 @@ func checkAppliedMissingTable(t *testing.T) {
 
 // TestEmbeddedMigrationsMatchSchema proves the adapter embeds exactly the
 // shared schema list: the upgrade check verdict never depends on the
-// dialect. Add a migration file to both dialects and to the schema directory
-// together, with the hash file of each dialect next to its SQL file.
+// dialect. Until the first tag, the list holds the name of the schema file
+// only, and the adapter has no migrations directory.
 func TestEmbeddedMigrationsMatchSchema(t *testing.T) {
 	t.Parallel()
 
@@ -197,22 +198,11 @@ func TestEmbeddedMigrationsMatchSchema(t *testing.T) {
 		t.Fatalf("embedded = %v/%d, want the schema list %v/%d", got, gotNewest, names, newest)
 	}
 
-	entries, err := os.ReadDir("migrations")
-	if err != nil {
-		t.Fatalf("read migrations: %v", err)
+	if !slices.Equal(names, []string{schema.BaselineName}) || newest != schema.BaselineVersion {
+		t.Fatalf("schema list = %v/%d, want [%s]/%d", names, newest, schema.BaselineName, schema.BaselineVersion)
 	}
 
-	var files []string
-
-	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".sql" {
-			files = append(files, entry.Name())
-		}
-	}
-
-	slices.Sort(files)
-
-	if !slices.Equal(files, names) {
-		t.Fatalf("migration files = %v, want the schema list %v", files, names)
+	if _, err := os.Stat("migrations"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat migrations = %v, want no migrations directory before the first tag", err)
 	}
 }

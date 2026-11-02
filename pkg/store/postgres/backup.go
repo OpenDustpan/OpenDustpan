@@ -20,7 +20,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/blobrefs"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
-	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -1180,7 +1179,7 @@ func newStagingSchema() (string, error) {
 // control schema: the live tables stay untouched. It records every migration in the staging
 // schema_migrations, so the staged data carries its own schema version.
 func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
-	all, err := migrate.Load(migrations, "migrations")
+	all, err := embeddedMigrations()
 	if err != nil {
 		return err
 	}
@@ -1206,12 +1205,7 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("set staging search path: %w", err)
 		}
 
-		const createMigrations = `CREATE TABLE schema_migrations (
-			version BIGINT NOT NULL PRIMARY KEY,
-			name    TEXT   NOT NULL
-		)`
-
-		if _, err := tx.Exec(ctx, createMigrations); err != nil {
+		if _, err := tx.Exec(ctx, versionTable); err != nil {
 			return fmt.Errorf("create staging schema_migrations: %w", err)
 		}
 

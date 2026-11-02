@@ -33,6 +33,32 @@ var ErrBadMinimum = errors.New("minimum binary version must have the form vMAJOR
 // does not embed and lacks migrations the binary embeds.
 var ErrSchemaDiverged = errors.New("database schema and binary have diverged")
 
+// ErrSchemaChanged reports a database that records a migration version that
+// the binary embeds, with another name or another SHA-256 of its SQL. Until
+// the first tag, this is a database that another version of the schema file
+// made. No migration changes such a database: the operator starts the server
+// on an empty database.
+var ErrSchemaChanged = errors.New("another build of the schema made the database")
+
+// sha256HexLen is the length of a SHA-256 in hex.
+const sha256HexLen = 64
+
+// ValidSHA256 reports whether value is a SHA-256 as 64 lowercase hex digits.
+// The stores record this form, and every other value is refused.
+func ValidSHA256(value string) bool {
+	if len(value) != sha256HexLen {
+		return false
+	}
+
+	for _, c := range value {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+
+	return true
+}
+
 // ErrMigrationsPending reports a database with migrations that the binary
 // embeds and has not applied, opened by a caller that applies none.
 var ErrMigrationsPending = errors.New("database schema has pending migrations")
@@ -388,13 +414,16 @@ func CheckMinimum(minimum, binaryVersion string) error {
 	return nil
 }
 
-// BaselineVersion is the version of the baseline migration. The baseline
-// replaced every migration before it, so a database that records a version
-// below it is from before the baseline, and no binary can upgrade it.
-const BaselineVersion int64 = 100
+// BaselineVersion is the version of the schema file of each store dialect.
+// Until the first tag, each store applies the schema file as its one
+// migration under this version. The schema file replaced every numbered
+// migration, and its version is above each of them, so a database that
+// records a version below it is from before the schema file, and no binary
+// can upgrade it.
+const BaselineVersion int64 = 1000
 
-// BaselineName is the file name of the baseline migration.
-const BaselineName = "0100_baseline.sql"
+// BaselineName is the name under which each store records its schema file.
+const BaselineName = "1000_schema.sql"
 
 // ErrSchemaBeforeBaseline reports a database that records a migration
 // version from before the baseline.
@@ -485,6 +514,9 @@ type AppliedMigration struct {
 	// MinBinaryVersion is the minimum binary version that the migration
 	// sets, or "" when it sets none.
 	MinBinaryVersion string
+	// SHA256 is the SHA-256 of the SQL of the migration as lowercase hex,
+	// or "" when the database recorded none.
+	SHA256 string
 }
 
 // ErrBadMigrationName reports a migration file not named

@@ -334,7 +334,7 @@ func TestMigrateRefusesContractWhileInstancesBelow(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	all, err := migrate.Load(migrations, "migrations")
+	all, err := embeddedMigrations()
 	if err != nil {
 		t.Fatalf("load migrations: %v", err)
 	}

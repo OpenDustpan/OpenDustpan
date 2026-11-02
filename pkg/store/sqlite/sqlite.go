@@ -12,7 +12,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"embed"
+	_ "embed" // The schema file and the version table are part of the binary.
 	"errors"
 	"fmt"
 	"log/slog"
@@ -195,8 +195,27 @@ var walGuardWarnAfter = walGuardWarnPeriod
 //nolint:gochecknoglobals // The hook and the guard share one lock; every hold stays brief.
 var walGuardMu sync.RWMutex
 
-//go:embed migrations/*.sql
-var migrations embed.FS
+// schemaFile is the schema of the store. Until the first tag, the store
+// applies it as its one migration, and a change to the schema edits it.
+//
+//go:embed schema.sql
+var schemaFile string
+
+// versionTable holds the statement that creates the version table.
+//
+//go:embed schema_migrations.sql
+var versionTable string
+
+// embeddedMigrations returns the migrations that the binary embeds: until
+// the first tag, the schema file alone.
+func embeddedMigrations() ([]migrate.Migration, error) {
+	m, err := migrate.SchemaFile(schemaFile)
+	if err != nil {
+		return nil, fmt.Errorf("load the schema file: %w", err)
+	}
+
+	return []migrate.Migration{m}, nil
+}
 
 // Store implements namespace.Store, stack.Store and the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) on SQLite.
@@ -1441,18 +1460,13 @@ func (s *Store) fencedTx(
 }
 
 func (s *Store) migrate(ctx context.Context) error {
-	all, err := migrate.Load(migrations, "migrations")
+	all, err := embeddedMigrations()
 	if err != nil {
 		return err
 	}
 
-	const createTable = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
 	if !s.noMigrate {
-		if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
+		if _, execErr := s.conn.ExecContext(ctx, versionTable); execErr != nil {
 			return fmt.Errorf("create schema_migrations: %w", execErr)
 		}
 	}
@@ -1470,6 +1484,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 	if checkErr != nil {
 		return fmt.Errorf("check schema: %w", checkErr)
+	}
+
+	if verifyErr := verifyRecorded(ctx, s.conn, all); verifyErr != nil {
+		return fmt.Errorf("check schema: %w", verifyErr)
 	}
 
 	if kindErr := s.checkKind(ctx); kindErr != nil {
@@ -1558,14 +1576,14 @@ type sqlQueryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// hasMinimumColumn reports whether schema_migrations has the
-// min_binary_version column. A migration adds it. Before that migration,
-// the schema records no minimum.
-func hasMinimumColumn(ctx context.Context, q sqlQueryer) (bool, error) {
+// hasVersionColumn reports whether schema_migrations has the column. The
+// version table of an older build can lack the min_binary_version and the
+// sha256 columns.
+func hasVersionColumn(ctx context.Context, q sqlQueryer, column string) (bool, error) {
 	var count int64
 
 	err := q.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'min_binary_version'`,
+		`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = ?`, column,
 	).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check schema_migrations columns: %w", err)
@@ -1575,19 +1593,81 @@ func hasMinimumColumn(ctx context.Context, q sqlQueryer) (bool, error) {
 }
 
 // appliedQuery returns the query that reads the rows of schema_migrations
-// ordered by version: with the minimum binary version when the column
-// exists, and with the empty value before.
+// ordered by version: the version, the name, the minimum binary version and
+// the SHA-256. A column that the table lacks reads as the empty value, so
+// the schema check can refuse the database of an older build with a clear
+// error.
 func appliedQuery(ctx context.Context, q sqlQueryer) (string, error) {
-	exists, err := hasMinimumColumn(ctx, q)
+	hasMinimum, err := hasVersionColumn(ctx, q, "min_binary_version")
 	if err != nil {
 		return "", err
 	}
 
-	if exists {
-		return `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`, nil
+	hasSum, err := hasVersionColumn(ctx, q, "sha256")
+	if err != nil {
+		return "", err
 	}
 
-	return `SELECT version, name, '' FROM schema_migrations ORDER BY version`, nil
+	minimum, digest := "''", "''"
+	if hasMinimum {
+		minimum = "min_binary_version"
+	}
+
+	if hasSum {
+		digest = "sha256"
+	}
+
+	return "SELECT version, name, " + minimum + ", " + digest + " FROM schema_migrations ORDER BY version", nil
+}
+
+// verifyRecorded refuses the database when it records a version that the
+// binary embeds under another name or another SHA-256. It reads the rows
+// itself, so a fault in the read of the migration check cannot let a
+// changed schema through.
+//
+// Defense in depth: migrate.Check compares the same rows, and the baseline
+// check refuses a database from before the schema file; this check stays so
+// that a new caller of Check, or a change to it, cannot skip the comparison.
+func verifyRecorded(ctx context.Context, q sqlQueryer, embedded []migrate.Migration) error {
+	hasSum, err := hasVersionColumn(ctx, q, "sha256")
+	if err != nil {
+		return err
+	}
+
+	for _, m := range embedded {
+		var count int64
+
+		countErr := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, m.Version).
+			Scan(&count)
+		if countErr != nil {
+			return fmt.Errorf("read migration %s: %w", m.Name, countErr)
+		}
+
+		if count == 0 {
+			continue
+		}
+
+		if !hasSum {
+			return fmt.Errorf("%w: the version table records no SHA-256 for migration %s: "+
+				"start the server on an empty database", schema.ErrSchemaChanged, m.Name)
+		}
+
+		var name, digest string
+
+		readErr := q.QueryRowContext(ctx, `SELECT name, sha256 FROM schema_migrations WHERE version = ?`, m.Version).
+			Scan(&name, &digest)
+		if readErr != nil {
+			return fmt.Errorf("read migration %s: %w", m.Name, readErr)
+		}
+
+		if name != m.Name || digest != m.SHA256 {
+			return fmt.Errorf("%w: the database records migration %s with SHA-256 %q, and this binary has %s "+
+				"with SHA-256 %s: start the server on an empty database",
+				schema.ErrSchemaChanged, name, digest, m.Name, m.SHA256)
+		}
+	}
+
+	return nil
 }
 
 // recordedMigrations returns the rows of schema_migrations, ordered by
@@ -1613,7 +1693,7 @@ func (s *Store) recordedMigrations(ctx context.Context) ([]schema.AppliedMigrati
 
 	for rows.Next() {
 		var row schema.AppliedMigration
-		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion); err != nil {
+		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion, &row.SHA256); err != nil {
 			return nil, fmt.Errorf("read schema versions: %w", err)
 		}
 
@@ -1671,31 +1751,13 @@ func (s *Store) apply(ctx context.Context, m migrate.Migration) error {
 	return nil
 }
 
-// recordMigration records m in schema_migrations in tx, after its SQL ran.
-// It records the minimum binary version of m when the column exists. A
-// migration that sets a minimum before the column exists fails.
+// recordMigration records m in schema_migrations in tx, after its SQL ran:
+// its version, its name, its minimum binary version and the SHA-256 of its
+// SQL. A version table without these columns fails the insert, and the
+// transaction then rolls back the migration.
 func recordMigration(ctx context.Context, tx *sql.Tx, m migrate.Migration) error {
-	exists, err := hasMinimumColumn(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	if !exists {
-		if m.MinBinaryVersion != "" {
-			return fmt.Errorf("record migration %s: %w: schema_migrations has no min_binary_version column",
-				m.Name, schema.ErrBadMinimum)
-		}
-
-		const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-		if _, err := tx.ExecContext(ctx, record, m.Version, m.Name); err != nil {
-			return fmt.Errorf("record migration %s: %w", m.Name, err)
-		}
-
-		return nil
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES (?, ?, ?)`
-	if _, err := tx.ExecContext(ctx, record, m.Version, m.Name, m.MinBinaryVersion); err != nil {
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version, sha256) VALUES (?, ?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, record, m.Version, m.Name, m.MinBinaryVersion, m.SHA256); err != nil {
 		return fmt.Errorf("record migration %s: %w", m.Name, err)
 	}
 
