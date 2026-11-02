@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -19,20 +20,24 @@ var ErrUploadExists = errors.New("upload version already committed")
 // ErrAttemptExpired reports a commit of an attempt whose start time is outside
 // the allowed window, by the clock of the database: the attempt started more
 // than UploadAttemptDeadline before the commit, or more than UploadAttemptSkew
-// after it. The attempt does not count, and its files are garbage.
-var ErrAttemptExpired = errors.New("upload attempt is outside its time window")
+// after it. The attempt does not count, and its files are garbage. It wraps
+// blob.ErrAttemptExpired, because an upload follows the shared rule of write
+// attempts.
+var ErrAttemptExpired = fmt.Errorf("upload attempt is outside its time window: %w", blob.ErrAttemptExpired)
 
 // UploadAttemptDeadline is the time that one attempt to store a version has
 // for the write of its files and the commit of its row. A reaper of the blob
 // files of an attempt that no row names must wait longer than this deadline
 // (and the skew below) before it deletes a file. It must read "now" from the
-// database, not from the clock of an instance, as the commit does.
-const UploadAttemptDeadline = 30 * time.Minute
+// database, not from the clock of an instance, as the commit does. It is the
+// shared deadline blob.AttemptDeadline.
+const UploadAttemptDeadline = blob.AttemptDeadline
 
 // UploadAttemptSkew is how far the start time of an attempt may be ahead of
 // the clock of the database. A writer with a clock that is further ahead
-// could commit later than the deadline allows, so its commit is refused.
-const UploadAttemptSkew = 2 * time.Minute
+// could commit later than the deadline allows, so its commit is refused. It is
+// the shared skew blob.AttemptSkew.
+const UploadAttemptSkew = blob.AttemptSkew
 
 // MaxUploadSequence is the largest sequence of an upload version.
 const MaxUploadSequence = 9_999_999_999
