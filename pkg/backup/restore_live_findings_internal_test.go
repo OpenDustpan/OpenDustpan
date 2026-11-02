@@ -371,7 +371,7 @@ func mustLiveFindings(t *testing.T, name string, err, want error, text []string)
 		return
 	}
 
-	if !errors.Is(err, want) || !errors.Is(err, ErrCorrupt) {
+	if err == nil || !errors.Is(err, want) || !errors.Is(err, ErrCorrupt) {
 		t.Errorf("%s: checkLiveFindings = %v, want %v and ErrCorrupt", name, err, want)
 
 		return
