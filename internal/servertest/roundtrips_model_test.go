@@ -110,18 +110,23 @@ func TestGrowthRuleHidesSchemaNames(t *testing.T) {
 // measuredHistory holds the counts of a backup and of a restore at four
 // commits that differ in tables, control tables and migrations, each with 3 and
 // with 30 stacks and workspaces. The tracer of roundtrips_test.go measured them.
-// The first three commits fitted the coefficients of the models. The last one
+// The tracer then counted the round trips of the durable runner for its own
+// bookkeeping, and it does not count them now (see isRunnerBookkeeping). Each
+// count is the measured count minus the bookkeeping of the flow at the current
+// commit: 24 round trips for a backup and 102 for a restore, the same for 3 and
+// for 30 units. A commit with other restore steps had a little less
+// bookkeeping, and fitTolerance covers that. The first three commits fitted the coefficients of the models. The last one
 // did not: the models predict it, and heldOut marks it.
 func measuredHistory() []measuredPoint {
 	return []measuredPoint{
-		{"a839dc5", schemaCounts{tables: 76, otherTables: 18, migrations: 48, units: 3}, 301, 998, false},
-		{"a839dc5", schemaCounts{tables: 76, otherTables: 18, migrations: 48, units: 30}, 382, 1133, false},
-		{"778d3d8", schemaCounts{tables: 78, otherTables: 18, migrations: 50, units: 3}, 307, 1016, false},
-		{"778d3d8", schemaCounts{tables: 78, otherTables: 18, migrations: 50, units: 30}, 388, 1151, false},
-		{"1ebfe03", schemaCounts{tables: 78, otherTables: 19, migrations: 51, units: 3}, 308, 1020, false},
-		{"1ebfe03", schemaCounts{tables: 78, otherTables: 19, migrations: 51, units: 30}, 389, 1155, false},
-		{"19266b1", schemaCounts{tables: 80, otherTables: 19, migrations: 52, units: 3}, 314, 1041, true},
-		{"19266b1", schemaCounts{tables: 80, otherTables: 19, migrations: 52, units: 30}, 395, 1176, true},
+		{"a839dc5", schemaCounts{tables: 76, otherTables: 18, migrations: 48, units: 3}, 277, 896, false},
+		{"a839dc5", schemaCounts{tables: 76, otherTables: 18, migrations: 48, units: 30}, 358, 1031, false},
+		{"778d3d8", schemaCounts{tables: 78, otherTables: 18, migrations: 50, units: 3}, 283, 914, false},
+		{"778d3d8", schemaCounts{tables: 78, otherTables: 18, migrations: 50, units: 30}, 364, 1049, false},
+		{"1ebfe03", schemaCounts{tables: 78, otherTables: 19, migrations: 51, units: 3}, 284, 918, false},
+		{"1ebfe03", schemaCounts{tables: 78, otherTables: 19, migrations: 51, units: 30}, 365, 1053, false},
+		{"19266b1", schemaCounts{tables: 80, otherTables: 19, migrations: 52, units: 3}, 290, 939, true},
+		{"19266b1", schemaCounts{tables: 80, otherTables: 19, migrations: 52, units: 30}, 371, 1074, true},
 	}
 }
 
@@ -176,6 +181,43 @@ func TestCostModelFitsMeasuredHistory(t *testing.T) {
 					t.Errorf("%s: the model predicts %d round trips and the measured count is %d, tolerance %d",
 						flow.name, ceiling-flow.model.margin, flow.trips, fitTolerance)
 				}
+			}
+		})
+	}
+}
+
+// TestRunnerBookkeepingRule checks the rule that tells the round trips of the
+// durable runner from the work of a step function, with made-up stacks.
+func TestRunnerBookkeepingRule(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pgx    = "github.com/jackc/pgx/v5.(*Conn).Exec"
+		db     = "opendustpan.org/opendustpan/internal/db.(*Queries).InsertDurableStep"
+		store  = "opendustpan.org/opendustpan/pkg/store/postgres.(*DurableOperations).RecordStep"
+		runner = "opendustpan.org/opendustpan/pkg/durable.(*Runner).record"
+		step   = "opendustpan.org/opendustpan/pkg/backup.(*Service).stepFinish"
+		worker = "opendustpan.org/opendustpan/pkg/backup.(*Service).Work.func1"
+	)
+
+	cases := []struct {
+		name  string
+		stack []string
+		want  bool
+	}{
+		{"the runner records a step", []string{pgx, db, store, runner, worker}, true},
+		{"the same record under another worker", []string{pgx, db, store, runner, "other.Work"}, true},
+		{"a step function writes under the runner", []string{pgx, db, store, step, runner, worker}, false},
+		{"a function of the store with no caller", []string{pgx, db, store}, false},
+		{"a driver call from a pkg/backup function", []string{pgx, step, runner}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isRunnerBookkeeping(tc.stack); got != tc.want {
+				t.Fatalf("isRunnerBookkeeping(%v) = %v, want %v", tc.stack, got, tc.want)
 			}
 		})
 	}

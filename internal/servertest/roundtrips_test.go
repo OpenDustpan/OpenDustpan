@@ -246,7 +246,10 @@ type stackFacts struct {
 	// clock: a claim attempt or a heartbeat of the durable runner, and a read
 	// of Service.Await itself.
 	polling bool
-	caller  string
+	// bookkeeping is true for a round trip that the durable runner makes for
+	// itself: the record of a step, or the end of an attempt.
+	bookkeeping bool
+	caller      string
 }
 
 // inspectStack reads the stack of the goroutine that makes a round trip: does
@@ -258,12 +261,16 @@ func inspectStack() stackFacts {
 
 	var facts stackFacts
 
+	functions := make([]string, 0, maxTraceFrames)
+
 	// The first pkg/backup frame, from the innermost frame, is the function
 	// of pkg/backup that makes the call.
 	innermostBackup := ""
 
 	for {
 		frame, more := frames.Next()
+
+		functions = append(functions, frame.Function)
 
 		facts.serving = facts.serving || strings.HasPrefix(frame.Function, serveFrame)
 		facts.backing = facts.backing || strings.Contains(frame.Function, backupFrame)
@@ -282,6 +289,7 @@ func inspectStack() stackFacts {
 			// the loop makes itself is a turn of the loop. The work that the
 			// loop runs through the runner has a deeper pkg/backup frame.
 			facts.polling = facts.polling || strings.HasSuffix(innermostBackup, awaitSuffix)
+			facts.bookkeeping = isRunnerBookkeeping(functions)
 
 			return facts
 		}
@@ -305,13 +313,49 @@ func isTimerLoopFrame(function string) bool {
 // of the durable operations of the store, or a closure in one of them.
 var timerLoopMethod = regexp.MustCompile(`\)\.(?:Claim|Beat)(?:\.func\d+(?:\.\d+)*)?$`)
 
+// Parts of a function name that isRunnerBookkeeping reads.
+const (
+	runnerFrame = "/pkg/durable.(*Runner)."
+	driverFrame = "github.com/jackc/pgx"
+	dbFrame     = "/internal/db."
+	// tracerFrame is the tracer itself: the driver calls it, so its methods are
+	// the innermost frames.
+	tracerFrame = ".(*roundTripTracer)."
+)
+
+// isRunnerBookkeeping reports whether the code that asked the store for a
+// round trip is the durable runner. functions is the stack, innermost first.
+// The caller is the first function that is not the tracer, the driver, the
+// generated queries or the store.
+//
+// The runner records each step that a step function did not record in its own
+// write, and it ends each attempt. A worker does this for the operation that
+// it claims, and two workers can race for one operation: the restore starts a
+// backup before the swap, and the worker of the backup or the restore itself
+// claims it. Both have a pkg/backup frame at the foot of the stack, so the
+// bookkeeping of whoever wins would count, and the count would follow the
+// race. A round trip that a pkg/backup function asks for, such as a step
+// function and its write, has that function as the caller and counts.
+func isRunnerBookkeeping(functions []string) bool {
+	for _, function := range functions {
+		if strings.Contains(function, driverFrame) || strings.Contains(function, dbFrame) ||
+			strings.Contains(function, storeFrame) || strings.Contains(function, tracerFrame) {
+			continue
+		}
+
+		return strings.Contains(function, runnerFrame)
+	}
+
+	return false
+}
+
 // accepts reports whether a round trip with the facts counts in the mode.
 func (m traceMode) accepts(facts stackFacts) bool {
 	switch m {
 	case traceRequest:
 		return facts.serving
 	case traceBackup:
-		return facts.backing && !facts.serving && !facts.polling
+		return facts.backing && !facts.serving && !facts.polling && !facts.bookkeeping
 	case traceOff:
 		return false
 	}
@@ -1207,30 +1251,32 @@ func (m costModel) ceiling(c schemaCounts) int {
 
 // backupModel is the cost model of a backup. It was fitted to three commits
 // that differ in tables, control tables and migrations, and a fourth commit
-// checks it (see TestCostModelFitsMeasuredHistory). The margin is above the
-// largest spread that 50 runs under load showed, which is 1 round trip.
+// checks it (see TestCostModelFitsMeasuredHistory). The tracer does not count
+// the bookkeeping of the durable runner, which follows a race between workers,
+// so the count of a run is the same in every run, also under load. The ceiling
+// is 2 above the measured count of the smallest data set.
 func backupModel() costModel {
-	return costModel{fixed: 46, perTable: 3, perOther: 1, perMigration: 0, perUnit: stateVersionReads, margin: 10}
+	return costModel{fixed: 22, perTable: 3, perOther: 1, perMigration: 0, perUnit: stateVersionReads, margin: 3}
 }
 
 // restoreModel is the cost model of a restore, fitted the same way. The cost of
 // a migration (2) and of a unit (the maintenance scans and the state version
 // reads) come from the statement counts of a run, and the commits fit the
 // rest. The margin holds the restore step that the held-out commit adds (5
-// round trips), the handover of the operation (up to 12), and a retried step
-// that a run under load showed once in 29 runs (24 round trips).
+// round trips) and the handover of the operation.
 //
 // The fixed part holds 4 more round trips for the name locks. The restore
 // keeps the name_locks and name_lock_key tables of the installation, so that
 // a restore cannot clear a lockout. Each kept table costs one delete and one
 // copy, which is 4 round trips for the 2 tables. The migrations that come
 // with the lockout cost more round trips than the coefficients add. The
-// ceiling keeps 2 round trips of headroom above the measured count, as it
-// did before the name locks: the count varies between runs, and a ceiling
-// at the measured count would fail at random.
+// ceiling keeps 2 round trips of headroom above the measured count. The tracer
+// does not count the bookkeeping of the durable runner (102 round trips of a
+// restore), so the fixed part is 102 lower than it was, and the count is the
+// same in every run.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        323,
+		fixed:        221,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
