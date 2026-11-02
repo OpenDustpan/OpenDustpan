@@ -130,14 +130,23 @@ func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy)
 	// compare: a request that finds the budget full counts nothing, and of
 	// attempts at the same time no more than the limit reach the compare.
 	keys, err := s.countAttempt(ctx, in)
-	if err != nil {
+	locked := errors.Is(err, authgate.ErrNameLocked)
+
+	if err != nil && !locked {
 		res.Release()
 
 		return SignedIn{}, err
 	}
 
+	// A locked name runs the compare too, and the result is discarded, so that
+	// the time of the answer does not tell that the name is locked.
 	verdict, err := res.Verify(nfc, localuser.DefaultHashParams())
 	res.Release()
+
+	if locked {
+		return SignedIn{}, s.refuse(ctx, in.base, on(ActionSignInPasswordFails, in.object), ReasonNameLocked,
+			localuser.ErrSignInFailed)
+	}
 
 	if refusal := s.compareRefusal(ctx, in, err); refusal != nil {
 		return SignedIn{}, refusal
@@ -161,8 +170,10 @@ func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy)
 // countAttempt adds the failure of the attempt in to the counts of its name
 // before the compare, and returns the keys of the counts. Only the demo person
 // of an installation of the kind dev has no lockout by name, so one visitor cannot lock out
-// the others. A lock refuses the attempt with ErrSignInFailed, and a count
-// that cannot be written refuses it with ErrUnavailable.
+// the others. While a lock holds, it returns an error that wraps
+// authgate.ErrNameLocked, and verify runs the compare and then writes the one
+// refusal entry. A count that cannot be written refuses the attempt with
+// ErrUnavailable.
 func (s *Service) countAttempt(ctx context.Context, in *attempt) (lockKeys, error) {
 	tg := on(ActionSignInPasswordFails, in.object)
 
@@ -185,7 +196,7 @@ func (s *Service) countAttempt(ctx context.Context, in *attempt) (lockKeys, erro
 
 	switch {
 	case errors.Is(err, authgate.ErrNameLocked):
-		return keys, s.refuse(ctx, in.base, tg, ReasonNameLocked, localuser.ErrSignInFailed)
+		return keys, err
 	case err != nil:
 		return keys, s.refuse(ctx, in.base, tg, "count of the name cannot be written", err)
 	default:
