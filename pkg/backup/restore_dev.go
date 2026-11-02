@@ -69,8 +69,11 @@ var warningTexts = map[RestoreWarningCode]string{
 		"Its tokens and sessions are now in a dev data directory.",
 	WarnAuditAppendFailed: "The restore finished. The server could not write an audit entry for the removed dev data. " +
 		"The restore record holds the report.",
-	WarnDamagedLiveBlobs: "The backup before this restore found live blobs that were missing or did not match " +
-		"their records. The restore wrote the checked bytes of the backup there. The audit log names each blob.",
+	WarnMissingLiveBlobs: "The backup before this restore found live blobs missing. The restore wrote the " +
+		"checked bytes of the backup at each of those keys that the backup holds. The answer names the first keys.",
+	WarnBlobsNotHeld: "This backup holds no copy of some blobs that its data names, because the backup before an " +
+		"earlier restore found them missing or damaged. The restore leaves those live keys as they are. The " +
+		"answer names the first keys.",
 }
 
 // WarningFor returns the warning of code, and false for an unknown code.
@@ -110,6 +113,9 @@ type devRun struct {
 	report DevStripReport
 	// checkOnly is true for a check-only restore, which removes nothing.
 	checkOnly bool
+	// notHeld is the damaged list of the restored backup, nil when it has
+	// none.
+	notHeld *BlobFindings
 }
 
 // production reports whether the live installation is a production
@@ -132,6 +138,10 @@ func (d *devRun) warnings() []RestoreWarningCode {
 	default:
 	}
 
+	if d.notHeld != nil {
+		codes = append(codes, WarnBlobsNotHeld)
+	}
+
 	return codes
 }
 
@@ -149,7 +159,7 @@ func (s *RestoreService) devKinds(ctx context.Context, pinned pinnedManifest) (*
 		return nil, fmt.Errorf("read the installation kind of the live data: %w", installation.ErrUnavailable)
 	}
 
-	run := &devRun{live: live, backup: pinned.kind, report: emptyDevReport(), checkOnly: false}
+	run := &devRun{live: live, backup: pinned.kind, report: emptyDevReport(), checkOnly: false, notHeld: nil}
 
 	if live == installation.KindProduction && pinned.kind == installation.KindDev && !s.allowDev {
 		return nil, &devRefusalError{text: refusalSentence(reasonDevBackup, s.devHint)}
@@ -167,6 +177,8 @@ func emptyDevReport() DevStripReport {
 		Classes:         nil,
 		Approvers:       nil,
 		Warnings:        nil,
+		PreBackupFound:  nil,
+		NotHeld:         nil,
 	}
 }
 

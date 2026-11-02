@@ -162,3 +162,4 @@ both together.
 | [112](0112-the-token-exchange-issues-a-stored-access-token.md) | The token exchange issues a stored access token | accepted (ADR 284) |
 | [114](0114-review-requests-and-change-orders.md) | Review requests and change orders, one integration with the Git host | accepted (ADR 299) |
 | [115](0115-terragrunt-run-all-fan-out-on-runners.md) | Terragrunt run-all fan-out on runners | draft |
+| [117](0117-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
