@@ -83,6 +83,10 @@ func notBodies() map[string]map[string]string {
 		"server": {
 			"devCodeRequest":     "the request body of the dev sign-in; code is the sign-in code",
 			"restoreWarningJSON": "a warning in the report of a restore that succeeded; it is no error answer",
+			"getRestoreResponse": "the 200 row of a restore; errorCode repeats the catalog code that the restore " +
+				"stored when it ended, and a test checks that each such code is in the catalog",
+			"restoreSummaryJSON": "a 200 row of the list of restores; errorCode repeats the stored catalog code " +
+				"of the restore, as getRestoreResponse does",
 		},
 		"tfe": {
 			"jsonAPIDocument": "the JSON:API document around jsonAPIError, which is gated",
