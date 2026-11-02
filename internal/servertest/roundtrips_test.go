@@ -1286,22 +1286,33 @@ func checkBackupRuns(t *testing.T, sizes []backupSize, runs []measuredRun) {
 // attempt, and reads the steps again when it takes a claim. How many of these
 // the run needs follows how the poll of Service.Await, the worker of the backup
 // and the worker of the restore interleave for the backup that the restore
-// starts before the swap, so the count is not the same in every run. In 80 runs
-// under heavy load (a build of the whole module with the race detector beside
-// the test) the total was 127 to 142, the restore worker 102 to 110 and the
-// backup worker 24 to 33. Only the transaction frames were the same in every
-// run: 14 begin, 14 commit and 9 rollback. So the ceiling is the highest
-// count of those runs plus 4, and not the count plus 2 as for the other
-// counts. There is no lower bound. The ceilings stop a runner that records
-// more than it does now, for example a record for each unit.
+// starts before the swap, so the count is not the same in every run.
+//
+// Two series of runs under heavy load (a build of the whole module with the
+// race detector beside the test) gave these counts:
+//
+//   - 80 runs: 127 to 142 in total, 102 to 110 for the restore worker and 24 to
+//     33 for the backup worker.
+//   - 100 runs: 102 for the restore worker in every run. The backup worker
+//     counted 24 in 98 runs and 48 in 2. The bookkeeping of one operation is
+//     24 round trips, and the backup worker counts it for the backup, and for
+//     the backup that the restore starts when the worker wins the claim.
+//
+// Only the transaction frames were the same in every run of the first series:
+// 14 begin, 14 commit and 9 rollback. So each ceiling is the highest count of
+// all these runs plus 4, and not the count plus 2 as for the other counts.
+// There is no lower bound. The ceilings stop a runner that records more than
+// it does now, for example a record for each unit.
 const (
 	runnerRestoreCeiling = 114
-	runnerBackupCeiling  = 37
-	// runnerSpread is the most that a run of 30 units may count above a run
-	// of 3 units for one worker. It is the width of the spread above, so the
-	// allowance does not fail at random. A record for each unit adds at least
-	// 27 more.
-	runnerSpread = 15
+	runnerBackupCeiling  = 52
+	// runnerRestoreSpread and runnerBackupSpread are the most that a run of 30
+	// units may count above a run of 3 units for one worker. Each is the width
+	// of the spread of that worker above, so the allowance does not fail at
+	// random. A record for each unit adds at least 54, one for each stack and
+	// one for each workspace.
+	runnerRestoreSpread = 12
+	runnerBackupSpread  = 24
 )
 
 // checkRunnerCeilings checks the runner round trips of the two workers of one
@@ -1314,18 +1325,19 @@ func checkRunnerCeilings(t *testing.T, name string, run *measuredRun) {
 }
 
 // runnerGrowthProblems names each worker whose run of the large data set counts
-// more than runnerSpread round trips above the run of the small one.
+// more than its spread of round trips above the run of the small one.
 func runnerGrowthProblems(small, large measuredRun) []string {
 	var problems []string
 
 	for _, worker := range []struct {
 		name         string
 		small, large []roundTrip
+		spread       int
 	}{
-		{workerRestore, small.restoreWorker, large.restoreWorker},
-		{workerBackup, small.backupWorker, large.backupWorker},
+		{workerRestore, small.restoreWorker, large.restoreWorker, runnerRestoreSpread},
+		{workerBackup, small.backupWorker, large.backupWorker, runnerBackupSpread},
 	} {
-		if grew := len(worker.large) - len(worker.small); grew > runnerSpread {
+		if grew := len(worker.large) - len(worker.small); grew > worker.spread {
 			problems = append(problems, fmt.Sprintf("the runner of the %s worker counts %d round trips more for %d",
 				worker.name, grew, len(worker.large)))
 		}
@@ -1344,8 +1356,8 @@ func checkRunnerGrowth(t *testing.T, small, large measuredRun, extraUnits int) {
 	}
 
 	mutated := large
-	mutated.restoreWorker = slices.Concat(large.restoreWorker, perRowTrips("InsertDurableStep", extraUnits))
-	mutated.backupWorker = slices.Concat(large.backupWorker, perRowTrips("InsertDurableStep", extraUnits))
+	mutated.restoreWorker = slices.Concat(large.restoreWorker, perRowTrips("InsertDurableStep", 2*extraUnits))
+	mutated.backupWorker = slices.Concat(large.backupWorker, perRowTrips("InsertDurableStep", 2*extraUnits))
 
 	if len(runnerGrowthProblems(small, mutated)) != 2 {
 		t.Error("the runner growth rule did not catch a record for each unit")

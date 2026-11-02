@@ -276,11 +276,12 @@ func TestRunnerGrowthRule(t *testing.T) {
 		small, large measuredRun
 		want         int
 	}{
-		{"the same", run(104, 28), run(104, 28), 0},
-		{"the spread of the runs", run(102, 24), run(110, 33), 0},
-		{"a record for each unit of the restore", run(104, 28), run(131, 28), 1},
-		{"a record for each unit of both", run(104, 28), run(131, 55), 2},
-		{"fewer round trips", run(110, 33), run(102, 24), 0},
+		{"the same", run(102, 24), run(102, 24), 0},
+		{"the spread of the runs", run(102, 24), run(114, 48), 0},
+		{"a record for each unit of the restore", run(102, 24), run(156, 24), 1},
+		{"a record for each unit of both", run(102, 24), run(156, 78), 2},
+		{"just above the spread of the backup worker", run(102, 24), run(102, 49), 1},
+		{"fewer round trips", run(114, 48), run(102, 24), 0},
 	}
 
 	for _, tc := range cases {
