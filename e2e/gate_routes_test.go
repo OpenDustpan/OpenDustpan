@@ -73,6 +73,14 @@ func runGateRoutesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		http.MethodPost, "/api/server/namespaces", `{"name":"` + gateRoutesNamespace + `"}`, http.StatusCreated,
 	})
 
+	// The gates of a unit belong to the unit, so the stack of the unit scope
+	// exists before the first write.
+	status, body, err := env.APIStatus(ctx, http.MethodPost, "/api/stacks/"+gateRoutesNamespace+"/web",
+		`{"stackName":"prod"}`)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("create the stack web/prod = %d, %v (%s)", status, err, body)
+	}
+
 	base := "/api/dustpan/v1/namespaces/" + gateRoutesNamespace
 	scopes := map[string]string{
 		"namespace":  base,

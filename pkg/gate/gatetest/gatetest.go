@@ -13,6 +13,9 @@
 //
 // In the cases, the unit web/prod of the tool pulumi is in the collection
 // prod of acme, and the unit net of the tool opentofu is in no collection.
+// The configuration of a unit keys on its stable ID, not on its name: it
+// stays with the unit through a rename and a move between collections, and a
+// new unit with the name of a deleted unit starts with none.
 package gatetest
 
 import (
@@ -88,6 +91,9 @@ type EngineCase struct {
 type fixtures struct {
 	installation, acme, globex, prod, staging              gate.Scope
 	webProd, acmeNet, globexNet, blueprintWeb, profileBase gate.Scope
+	// webLive is the scope of web/prod after a rename to web/live, and
+	// ghost is the scope of a unit that no namespace holds.
+	webLive, ghost gate.Scope
 }
 
 // newFixtures returns the scopes of the cases.
@@ -103,6 +109,8 @@ func newFixtures() fixtures {
 		globexNet:    must(gate.UnitScope("globex", "opentofu", "net")),
 		blueprintWeb: must(gate.BlueprintScope("web", 1)),
 		profileBase:  must(gate.ProfileScope("acme", "base")),
+		webLive:      must(gate.UnitScope("acme", "pulumi", "web/live")),
+		ghost:        must(gate.UnitScope("acme", "opentofu", "ghost")),
 	}
 }
 
@@ -125,7 +133,50 @@ func pid(scope gate.Scope, id gate.ID) gate.PolicyID {
 func StoreCases() []StoreCase {
 	fx := newFixtures()
 
-	return slices.Concat(objectCases(&fx), objectRuleCases(&fx), settingsCases(&fx), recordCases(&fx))
+	return slices.Concat(objectCases(&fx), objectRuleCases(&fx), unitCases(&fx), settingsCases(&fx), recordCases(&fx))
+}
+
+// unitCases returns the cases of the configuration of a unit: it keys on the
+// stable ID of the unit, so it follows the unit and never its name.
+func unitCases(fx *fixtures) []StoreCase {
+	return []StoreCase{
+		{
+			Name: "unit-reused-name-starts-clean", Port: PortObjects, Method: gate.Objects[gate.Gate].List, Kinds: nil,
+			Scopes: []gate.Scope{fx.webProd, fx.acmeNet}, Policies: nil, Want: nil,
+			Checks: "After a delete of a unit, a new unit with the same tool and name has no objects: List of its " +
+				"scope returns none, Get returns ErrNotFound, and a Put with prev 0 of the old ID returns version 1.",
+		},
+		{
+			Name: "unit-deleted-scope-not-found", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acmeNet, fx.ghost}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "Put at the scope of a deleted unit, and at the scope of a unit that the namespace never held, " +
+				"returns ErrNotFound and changes nothing. List of each scope returns none.",
+		},
+		{
+			Name: "unit-rename-keeps-objects", Port: PortObjects, Method: gate.Objects[gate.Gate].Get, Kinds: nil,
+			Scopes: []gate.Scope{fx.webProd, fx.webLive}, Policies: nil, Want: nil,
+			Checks: "After a rename of web/prod to web/live, the scope of web/live holds the objects of the unit " +
+				"with their versions, and the scope of web/prod holds none.",
+		},
+		{
+			Name: "unit-move-keeps-objects", Port: PortObjects, Method: gate.Objects[gate.Gate].Get, Kinds: nil,
+			Scopes: []gate.Scope{fx.webProd, fx.prod, fx.staging}, Policies: nil, Want: nil,
+			Checks: "After a move of web/prod from prod to staging, and then back to prod, the scope of the " +
+				"unit holds its objects with their versions, and no collection scope holds them.",
+		},
+		{
+			Name: "unit-settings-reused-name-start-clean", Port: PortSettings, Method: gate.Settings.ApprovalDefault,
+			Kinds: nil, Scopes: []gate.Scope{fx.webProd}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "After a delete of a unit, a new unit with the same name has no approval default " +
+				"(ErrNotFound), and its carry-over setting is off with version 0.",
+		},
+		{
+			Name: "snapshot-reused-name-starts-clean", Port: PortStore, Method: gate.Store.Snapshot, Kinds: nil,
+			Scopes: []gate.Scope{fx.installation, fx.acme, fx.prod, fx.webProd}, Policies: nil, Want: nil,
+			Checks: "Snapshot of the chain of a new unit with the name of a deleted unit holds no object and no " +
+				"setting of the deleted unit, and holds the objects of the wider scopes.",
+		},
+	}
 }
 
 // objectCases returns the cases of gate.Objects that hold for each kind.

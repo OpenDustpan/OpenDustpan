@@ -70,6 +70,12 @@ const MaxScopeKeyLength = len("unit/") + 100 + len("/") + 100 + len("/") + 3*300
 // The Pulumi stack web/prod of acme has the key unit/acme/pulumi/web%2Fprod.
 // The key is a one-way door: stored policy IDs, records and requirement
 // names hold it.
+//
+// The key of a unit scope names the unit by its name, as the routes do. The
+// configuration of a unit keys on the stable ID of the unit: a store finds the
+// live unit that has the name at the time of the read or the write. So the
+// configuration stays with the unit through a rename and a move between
+// collections, and a new unit with the name of a deleted unit has none.
 type Scope struct {
 	level Level
 	// seg holds the decoded variable segments, in key order.
@@ -95,7 +101,8 @@ func CollectionScope(ns namespace.Name, c collection.Name) Scope {
 
 // UnitScope returns the scope of one unit: the tool code, the namespace ns
 // and the name that the tool gives the unit. The tool and the name follow
-// the rules of a unit reference. The name is opaque and keeps its case.
+// the rules of a unit reference. The name is opaque and keeps its case. The
+// scope reaches the configuration of the live unit that has the name.
 func UnitScope(ns namespace.Name, tool, name string) (Scope, error) {
 	if _, err := identity.UnitObject(tool, ns, name); err != nil {
 		return Scope{}, fmt.Errorf("%w: unit scope: %w", ErrInvalid, err)

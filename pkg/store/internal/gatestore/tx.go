@@ -9,6 +9,7 @@ package gatestore
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -82,6 +83,16 @@ type Window struct {
 // over its queries. The scope arguments name the scope that holds a row; a
 // scope whose namespace does not exist holds no row.
 //
+// The rows of a unit key on the stable ID of the unit, never on its name (see
+// UnitRowKey). The adapter finds the live unit of the name of a unit scope in
+// the inventory, in the same transaction. A unit scope whose name no live unit
+// holds has no rows: a read returns none, and a write returns the error of
+// NoUnitError. So a rename and a move between collections keep the rows of a
+// unit with no write, and a new unit with the name of a deleted unit has none.
+// The rows of a deleted unit stay, out of reach by name, until its purge: a
+// restore keeps the ID, so it gets them back. A row that the adapter returns
+// with its scope (Located) carries the scope key of the name of its unit.
+//
 //nolint:interfacebloat // One adapter contract for one table set: the rows, the scopes and the records share a transaction.
 type Tx interface {
 	// Get returns the row, and false when the scope holds none.
@@ -113,6 +124,9 @@ type Tx interface {
 	// UnitCollection returns the key of the collection that holds the unit of
 	// a unit scope, and false for a unit in no collection.
 	UnitCollection(ctx context.Context, scope gate.Scope) (string, bool, error)
+	// ScopeExists reports whether the scope can hold rows: its namespace
+	// exists, and for a unit scope a live unit holds its name.
+	ScopeExists(ctx context.Context, scope gate.Scope) (bool, error)
 
 	// RecordExists reports whether a record has the ID, in any namespace.
 	RecordExists(ctx context.Context, id string) (bool, error)
@@ -187,6 +201,8 @@ func New(run Runner, opts ...Option) *Store {
 		opt(&o)
 	}
 
+	run = unitRunner{inner: run}
+
 	checker := approverChecker(o)
 
 	return &Store{
@@ -199,6 +215,73 @@ func New(run Runner, opts ...Option) *Store {
 		records:        &Records{run: run},
 		run:            run,
 	}
+}
+
+// UnitRowKey returns the key that the rows of the unit with the stable ID id
+// hold in place of a scope key. The ID is opaque: no reader parses the key.
+func UnitRowKey(id string) string {
+	return "unit/" + id
+}
+
+// NoUnitError is the refusal of a write at a unit scope whose name no live
+// unit holds: the unit does not exist, or it is deleted. It wraps
+// gate.ErrUnitNotFound.
+func NoUnitError(scope gate.Scope) error {
+	return fmt.Errorf("%w: %s", gate.ErrUnitNotFound, scope)
+}
+
+// unitRunner is a Runner that refuses a write at a unit scope whose name no
+// live unit holds, in the transaction of the write and before any row
+// changes.
+type unitRunner struct {
+	inner Runner
+}
+
+// Write implements Runner.
+func (r unitRunner) Write(
+	ctx context.Context, scope gate.Scope, fence namespace.Fence, e audit.Entry, fn func(Tx) error,
+) error {
+	return r.inner.Write(ctx, scope, fence, e, func(tx Tx) error {
+		if err := requireUnit(ctx, tx, scope); err != nil {
+			return err
+		}
+
+		return fn(tx)
+	})
+}
+
+// WriteRecord implements Runner. A record holds no scope of a unit.
+func (r unitRunner) WriteRecord(
+	ctx context.Context,
+	ns namespace.Name,
+	fence namespace.Fence,
+	fn func(Tx) error,
+) error {
+	return r.inner.WriteRecord(ctx, ns, fence, fn)
+}
+
+// Read implements Runner.
+func (r unitRunner) Read(ctx context.Context, fn func(Tx) error) error {
+	return r.inner.Read(ctx, fn)
+}
+
+// requireUnit returns the error of NoUnitError for a unit scope whose name no
+// live unit holds, and nil for any other scope.
+func requireUnit(ctx context.Context, tx Tx, scope gate.Scope) error {
+	if scope.Level() != gate.LevelUnit {
+		return nil
+	}
+
+	ok, err := tx.ScopeExists(ctx, scope)
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		return NoUnitError(scope)
+	}
+
+	return nil
 }
 
 // Gates implements gate.Store.
@@ -238,19 +321,9 @@ type Removed struct {
 // value. The room is the number of changes that the entry still accepts. A
 // list above the room ends with one change that gives the count of the
 // objects that it leaves out. It returns nil when the room is less than 1.
-func RemovedChanges(removed []Removed, room int) []audit.Change {
-	return objectChanges("removed", removed, room)
-}
+func RemovedChanges(objects []Removed, room int) []audit.Change {
+	const verb = "removed"
 
-// MovedChanges returns the audit changes that name the objects that a restore
-// moved to a new unit name. It has the shape and the cap of RemovedChanges.
-func MovedChanges(moved []Removed, room int) []audit.Change {
-	return objectChanges("moved", moved, room)
-}
-
-// objectChanges builds the changes of RemovedChanges and MovedChanges with the
-// key prefix verb.
-func objectChanges(verb string, objects []Removed, room int) []audit.Change {
 	if room < 1 || len(objects) == 0 {
 		return nil
 	}
