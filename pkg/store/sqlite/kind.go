@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -112,6 +115,61 @@ func (s *Store) readKindLocked(ctx context.Context) (installation.Kind, error) {
 			"read installation kind sqlite database: %w",
 			storeerr.Sentinel(installation.ErrUnavailable, err),
 		)
+	}
+
+	return installation.FromStored(raw.String)
+}
+
+// StoredKind reads the installation kind of the database file at path without
+// opening the store: it runs no schema check, applies no migration and claims
+// no kind, so a caller can read the kind of a database whose schema differs
+// from the schema of the binary. It opens an existing file read-only, under
+// the guard of Open, so it fails with ErrInUse while a store holds the file.
+// It answers installation.ErrUnavailable when the file has no installation
+// row, no claimed kind, or a value that is not a known kind.
+func StoredKind(ctx context.Context, path string) (installation.Kind, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve database path: %w", err)
+	}
+
+	resolved, err := resolveDatabasePath(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve database path: %w", err)
+	}
+
+	if _, statErr := os.Stat(resolved); statErr != nil {
+		return "", fmt.Errorf("open database file %s: %w", resolved, statErr)
+	}
+
+	guard, err := acquireGuard(resolved)
+	if err != nil {
+		return "", err
+	}
+
+	conn, err := openDatabase(ctx, resolved, url.Values{"mode": {"ro"}})
+	if err != nil {
+		return "", errors.Join(err, guard.release())
+	}
+
+	kind, readErr := readStoredKind(ctx, conn)
+
+	return kind, errors.Join(readErr, conn.Close(), guard.release())
+}
+
+// readStoredKind reads the kind of the installation row on conn. A missing
+// row, a NULL kind and a value that is not a known kind each fail with
+// installation.ErrUnavailable, so the caller fails closed.
+func readStoredKind(ctx context.Context, conn *sql.DB) (installation.Kind, error) {
+	var raw sql.NullString
+
+	err := conn.QueryRowContext(ctx, `SELECT kind FROM installation WHERE id = 1`).Scan(&raw)
+	if err != nil {
+		return "", fmt.Errorf("read installation kind: %w", storeerr.Sentinel(installation.ErrUnavailable, err))
+	}
+
+	if !raw.Valid {
+		return "", fmt.Errorf("read installation kind: no command claimed the database: %w", installation.ErrUnavailable)
 	}
 
 	return installation.FromStored(raw.String)
