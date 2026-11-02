@@ -362,6 +362,27 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
+	h.logForceUnlock(ctx, p, obj, holder)
+
+	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
+}
+
+// logForceUnlock writes the info line of a force-unlock that answered 200. A
+// release with no holder at the read is a repeat of the last forced release.
+// It changes nothing, so its line does not claim a release.
+func (h *Handler) logForceUnlock(ctx context.Context, p identity.Principal, obj identity.Object, holder string) {
+	if holder == "" {
+		h.logger.InfoContext(
+			ctx,
+			"force-unlock repeated with no change",
+			slog.String("action", "force-unlock"),
+			slog.String("object", obj.String()),
+			slog.String("principal", p.Subject),
+		)
+
+		return
+	}
+
 	h.logger.InfoContext(
 		ctx,
 		"force-unlock completed",
@@ -370,6 +391,4 @@ func (h *Handler) forceUnlockWorkspace(
 		slog.String("principal", p.Subject),
 		slog.String("released", holder),
 	)
-
-	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
 }
