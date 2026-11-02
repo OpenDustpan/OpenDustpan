@@ -7,7 +7,7 @@ Changed by:
 - ADR 301 extends decision 1: a passkey or TOTP is the fresh authentication
   of a person of a plain OAuth 2.0 provider or a trusted header.
 - ADR 320 extends decision 1: the request and the check of a fresh
-  authentication for each method.
+  authentication for each method, bound to the person of the session.
 
 ## Context
 

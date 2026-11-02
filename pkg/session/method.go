@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net/netip"
 	"time"
 )
@@ -66,6 +67,9 @@ var (
 	// that fails the limits of this package. The sign-in service checks
 	// each Assertion again before it uses it.
 	ErrInvalidAssertion = errors.New("sign-in assertion is not valid")
+	// ErrFreshSubject reports a fresh authentication whose person is not
+	// the person of the session that asked for it. The step is refused.
+	ErrFreshSubject = errors.New("fresh authentication names another person")
 )
 
 // Limits of an Assertion.
@@ -135,8 +139,10 @@ const (
 
 // Assertion is the result of a sign-in method: who the person is at the
 // identity provider, and what the method knows about the authentication.
-// It names no principal. The sign-in service finds the principal with the
-// subject "<ProviderID>:<Subject>".
+// The adapter of a method port names no principal: the sign-in service finds
+// the principal with the subject "<ProviderID>:<Subject>". Only the local
+// password and the passkey sign-in, which read their own records, set
+// PrincipalID.
 type Assertion struct {
 	// AuthTime is the time of the authentication at the identity provider,
 	// or the time of the check for a password method. It is the zero time
@@ -144,6 +150,10 @@ type Assertion struct {
 	AuthTime time.Time
 	// ProviderID names the sign-in provider of the method.
 	ProviderID string
+	// PrincipalID names the principal of a local password or a passkey
+	// sign-in. It is empty for each other method, and the sign-in service
+	// refuses an Assertion of another method that sets it.
+	PrincipalID string
 	// Subject is the stable subject at the identity provider, from the
 	// attribute that the provider settings name. It is never a value that
 	// the person can change, such as an email, unless an administrator
@@ -209,6 +219,12 @@ type PendingRedirect struct {
 	Verifier string
 	// RequestID is the ID of the SAML AuthnRequest, or empty.
 	RequestID string
+	// PrincipalID names the principal of the session that asked for a
+	// fresh authentication, or is empty for a sign-in.
+	PrincipalID string
+	// SignInID names the sign-in of the session that asked for a fresh
+	// authentication, or is empty for a sign-in.
+	SignInID string
 	// Fresh is the Fresh value of BeginInput.
 	Fresh bool
 }
@@ -227,8 +243,9 @@ type Redirect struct {
 // passes the request itself.
 type Callback struct {
 	// Pending is the pending request of the browser, opened from its
-	// sealed cookie. A callback with no pending request is refused.
-	Pending PendingRedirect
+	// sealed cookie, or nil when the browser holds none. A method refuses a
+	// callback with no pending request.
+	Pending *PendingRedirect
 	// State is the OAuth state or the SAML RelayState of the callback.
 	State string
 	// Code is the OAuth authorization code, or empty.
@@ -258,7 +275,7 @@ type RedirectMethod interface {
 	// Finish checks a callback against its pending request and returns the
 	// Assertion. It returns ErrMethodInput for a callback of the wrong form
 	// or size, ErrRequestBinding for a callback that does not match its
-	// pending request or has none, ErrMethodRejected for an error answer of
+	// pending request or has none (Pending is nil), ErrMethodRejected for an error answer of
 	// the provider, ErrMethodAnswer for an answer that fails a check,
 	// ErrReplay for a second use of a one-use value, ErrMethodUnavailable
 	// for a provider that does not answer, ErrGroupsMissing when groups are
@@ -266,6 +283,18 @@ type RedirectMethod interface {
 	// reports the person as disabled. On any error, the Assertion is the
 	// zero value, except for ErrSubjectDisabled.
 	Finish(ctx context.Context, cb Callback) (Assertion, error)
+}
+
+// BindGate is the check of the sign-in service between the search and the
+// bind of a password method. The method calls BeforeBind with the subject
+// that the search found, before it sends the password to the directory. So
+// the service counts the attempt on the person, whatever form of the user
+// name the person typed.
+type BindGate interface {
+	// BeforeBind returns nil to allow the bind of the person with the
+	// subject, or an error to stop it. The method then returns that error,
+	// wrapped, and sends no password.
+	BeforeBind(ctx context.Context, subject string) error
 }
 
 // Password is a password that a person typed. Its String and GoString
@@ -306,23 +335,27 @@ type Credentials struct {
 
 // PasswordMethod is a sign-in method that checks a user name and a
 // password at a directory: LDAP. The method never reads or compares a
-// password hash. The lockout by name is not part of the method: the
-// sign-in service counts each attempt before it calls Verify. The
-// conformance suite RunPasswordMethod in package sessiontest checks an
-// implementation.
+// password hash, and never follows a referral, because a referral sends the
+// password to another server. The lockout is not part of the method: the
+// sign-in service counts the typed name before it calls Verify, and counts
+// the subject in BindGate. The conformance suite RunPasswordMethod in
+// package sessiontest checks an implementation.
 type PasswordMethod interface {
 	// Kind returns the kind of the method.
 	Kind() MethodKind
-	// Verify checks the credentials and returns the Assertion. It returns
-	// ErrMethodInput for a user name that fails the boundary check,
-	// ErrMethodRejected for an unknown user name or a wrong password, with
+	// Verify searches for the user, calls gate.BeforeBind with the subject
+	// that it found, then binds as that user with the password, and returns
+	// the Assertion. It returns ErrMethodInput for a user name that fails
+	// the boundary check and for an empty password, which would make an
+	// unauthenticated bind, the error of gate wrapped when gate stops the
+	// bind, ErrMethodRejected for an unknown user name or a wrong password, with
 	// the same error for both, ErrSubjectDisabled for a user that the
 	// directory reports as disabled, ErrMethodUnavailable for a directory
 	// that does not answer, ErrMethodAnswer for an answer that fails a
 	// check or that is over a size limit, ErrGroupsMissing when groups are
 	// on and the answer has none, and ErrProviderDisabled for a disabled
 	// provider.
-	Verify(ctx context.Context, c Credentials) (Assertion, error)
+	Verify(ctx context.Context, c Credentials, gate BindGate) (Assertion, error)
 }
 
 // RequestFacts are the facts of an HTTP request that a request method
@@ -367,4 +400,43 @@ type RequestMethod interface {
 	// read the keys of the issuer, and ErrProviderDisabled for a disabled
 	// provider.
 	FromRequest(ctx context.Context, f RequestFacts) (Assertion, error)
+}
+
+// FreshTarget is the person of the session that asked for a fresh
+// authentication: the principal ID and its subject.
+type FreshTarget struct {
+	PrincipalID string
+	Subject     string
+}
+
+// CheckFreshSubject returns ErrFreshSubject when the Assertion a of a fresh
+// authentication does not name the person of want. A local password or a
+// passkey must name the same principal ID. Each other method must name the
+// same subject: "<ProviderID>:<Subject>". An empty want, or an Assertion
+// that names no person, is refused, so the check fails closed.
+func CheckFreshSubject(want FreshTarget, a Assertion) error {
+	if want.PrincipalID == "" || want.Subject == "" {
+		return fmt.Errorf("%w: the session names no person", ErrFreshSubject)
+	}
+
+	if a.PrincipalID != "" {
+		// Defense in depth: the sign-in service refuses an Assertion of
+		// another method that names a principal too. This check stays so
+		// that a new caller cannot skip it.
+		if a.Method != MethodLocalPassword && a.Method != MethodPasskey {
+			return fmt.Errorf("%w: the method %q cannot name a principal", ErrFreshSubject, a.Method)
+		}
+
+		if a.PrincipalID != want.PrincipalID {
+			return fmt.Errorf("%w: the principal differs", ErrFreshSubject)
+		}
+
+		return nil
+	}
+
+	if a.ProviderID == "" || a.Subject == "" || SubjectPrefix(a.ProviderID)+a.Subject != want.Subject {
+		return fmt.Errorf("%w: the subject differs", ErrFreshSubject)
+	}
+
+	return nil
 }
