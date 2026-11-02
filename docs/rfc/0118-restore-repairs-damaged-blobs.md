@@ -1,11 +1,11 @@
 ---
-rfc: 117
+rfc: 118
 title: A restore that repairs damaged live blobs
 status: discussing
 created: 2026-11-02
 ---
 
-# RFC 117. A restore that repairs damaged live blobs
+# RFC 118. A restore that repairs damaged live blobs
 
 Status: discussing. An open question for the project owner. Until the owner
 decides, `main` follows ADR 38 decision 6: a restore adds blob keys and
@@ -71,10 +71,13 @@ option A below:
 - The restore writes a missing key from the backup. This adds a key and
   changes none, which decision 6 allows.
 - More than 10 missing live blobs, or more than 20 percent of the blobs that
-  the live data names, stop the restore before any change of the live data.
-  The text says to check the blob store setting. The restore answers show the
-  bound as `missingBlobLimit`. This bound is a product manager choice, the
-  same as the bound of other mass changes of the project (ADR 306 decision 2).
+  the live data names when more than 1 is missing, stop the restore before
+  any change of the live data. So a store with every blob missing stops the
+  restore at every size, and one missing blob never stops it. The text says
+  to check the blob store setting. The restore answers show the three numbers
+  of the rule as `missingBlobLimit` (`count` 10, `percent` 20, `percentAbove`
+  1). The product manager decided this rule; it is close to the bound of
+  other mass changes of the project (ADR 306 decision 2).
 - A backup with a `damaged` list stays restorable. A restore of it leaves
   those keys as they are, and its answer names them (`notHeld`).
 - The restore answers show what the backup before the restore found
@@ -96,9 +99,6 @@ versioning, a copy of the files) and runs the restore again.
   gives no command to put them at the live key. The operator can copy
   `blobs/<key>` from the target to the live key by hand, which skips every
   check.
-- Risk: with the bound as it is, a small installation (fewer than 5 blobs)
-  cannot restore over one missing blob: 1 of 4 is 25 percent. The operator
-  must put the blob back by hand first.
 
 ### B. Replace damaged blobs behind an explicit option of each restore
 
@@ -143,11 +143,6 @@ a request of the operator, with a record. Option C is not recommended.
 
 ## Open questions
 
-- Does the owner accept the bound of 10 blobs or 20 percent for missing live
-  blobs, which also stops a restore over one missing blob in an installation
-  with fewer than 5 blobs? A "10 and 20 percent" rule would let small
-  installations restore, but would not stop a wrong store setting in an
-  installation with 10 blobs or fewer.
 - Should the bound be a setting of the installation?
 - For option B: does a repaired restore need step-up or a second person?
 - For option B: what is the form of the manifest of the copies under
