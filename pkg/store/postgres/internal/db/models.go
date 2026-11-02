@@ -224,8 +224,7 @@ type GateObject struct {
 	Kind        string
 	ID          string
 	Level       string
-	Tool        string
-	UnitName    string
+	UnitID      string
 	Version     int64
 	Body        string
 	UpdatedAtMs int64
