@@ -199,16 +199,7 @@ func checkFailedAdd(t *testing.T, f *fixture, principalID, logs string) {
 		t.Fatalf("log holds a password or a user name: %q", logs)
 	}
 
-	locks, err := f.svc.Locks(t.Context(), admin(), principalID)
-	if err != nil {
-		t.Fatalf("list the counts: %v", err)
-	}
-
-	for _, l := range locks {
-		if l.Scope == authgate.ScopePassword && (l.Failures != authgate.DefaultNameLimit-1 || !l.LockedUntil.IsZero()) {
-			t.Fatalf("count after the failed add = %+v, want the earlier count and no lock", l)
-		}
-	}
+	checkEarlierCount(t, f, principalID)
 
 	if len(f.entriesWith(t, localusersvc.ActionNameLocked)) != 0 || len(f.alerts(t)) != 0 {
 		t.Fatal("a failed add left a record of a lock")
@@ -218,5 +209,22 @@ func checkFailedAdd(t *testing.T, f *fixture, principalID, logs string) {
 	refusals := f.entriesWith(t, localusersvc.ActionSignInPasswordFails)
 	if len(refusals) == 0 || refusals[0].Outcome != audit.OutcomeFailure {
 		t.Fatalf("refusals = %+v, want the newest with the outcome failure", refusals)
+	}
+}
+
+// checkEarlierCount checks that the count of the password scope is the count
+// before the failed add, with no lock.
+func checkEarlierCount(t *testing.T, f *fixture, principalID string) {
+	t.Helper()
+
+	locks, err := f.svc.Locks(t.Context(), admin(), principalID)
+	if err != nil {
+		t.Fatalf("list the counts: %v", err)
+	}
+
+	for _, l := range locks {
+		if l.Scope == authgate.ScopePassword && (l.Failures != authgate.DefaultNameLimit-1 || !l.LockedUntil.IsZero()) {
+			t.Fatalf("count after the failed add = %+v, want the earlier count and no lock", l)
+		}
 	}
 }
