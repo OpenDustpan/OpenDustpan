@@ -1,2 +1,0 @@
--- Name record for the shared migration list. Each store dialect applies its
--- schema file, pkg/store/<dialect>/schema.sql, under this name.

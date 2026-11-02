@@ -537,7 +537,7 @@ func checkInstancesCase(t *testing.T, wantName string, wantNamed []string, err e
 // TestCheckRefusesAChangedSchema sends recorded rows that differ from the
 // embedded migration of the same version directly to Check: another SHA-256,
 // another name, no SHA-256 and a value that is not a SHA-256. Each one fails
-// with schema.ErrSchemaChanged and plans nothing.
+// with schema.ErrSchemaDiverged and plans nothing.
 func TestCheckRefusesAChangedSchema(t *testing.T) {
 	t.Parallel()
 
@@ -567,8 +567,8 @@ func TestCheckRefusesAChangedSchema(t *testing.T) {
 			t.Parallel()
 
 			plan, err := migrate.Check(recorded, embedded, "dev")
-			if !errors.Is(err, schema.ErrSchemaChanged) {
-				t.Fatalf("Check = %v, want %v", err, schema.ErrSchemaChanged)
+			if !errors.Is(err, schema.ErrSchemaDiverged) {
+				t.Fatalf("Check = %v, want %v", err, schema.ErrSchemaDiverged)
 			}
 
 			if len(plan.Pending) != 0 {
@@ -595,37 +595,6 @@ func TestCheckIgnoresTheSumOfAnUnknownVersion(t *testing.T) {
 	plan, err := migrate.Check(recorded, migrations(1), "dev")
 	if err != nil || len(plan.Pending) != 0 {
 		t.Fatalf("Check = %+v, %v, want no pending migration and no error", plan, err)
-	}
-}
-
-// TestSchemaFile proves the one migration of the schema file: its version,
-// its name, the SHA-256 of its SQL and the minimum of its header.
-func TestSchemaFile(t *testing.T) {
-	t.Parallel()
-
-	const sql = "-- minimum-binary-version: v0.1.0\n-- The schema.\n\nCREATE TABLE a (b INTEGER);\n"
-
-	m, err := migrate.SchemaFile(sql)
-	if err != nil {
-		t.Fatalf("SchemaFile: %v", err)
-	}
-
-	digest := sha256.Sum256([]byte(sql))
-
-	want := migrate.Migration{
-		Name: schema.BaselineName, SQL: sql, MinBinaryVersion: "v0.1.0",
-		SHA256: hex.EncodeToString(digest[:]), Version: schema.BaselineVersion,
-	}
-	if m != want {
-		t.Fatalf("SchemaFile = %+v, want %+v", m, want)
-	}
-
-	if _, err := migrate.SchemaFile(" \n\t"); !errors.Is(err, migrate.ErrEmptySchemaFile) {
-		t.Fatalf("SchemaFile of an empty file = %v, want %v", err, migrate.ErrEmptySchemaFile)
-	}
-
-	if _, err := migrate.SchemaFile("-- minimum-binary-version: 1\nSELECT 1;"); !errors.Is(err, schema.ErrBadMinimum) {
-		t.Fatalf("SchemaFile with a bad header = %v, want %v", err, schema.ErrBadMinimum)
 	}
 }
 

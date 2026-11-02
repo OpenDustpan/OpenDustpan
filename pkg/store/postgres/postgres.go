@@ -12,7 +12,7 @@ package postgres
 
 import (
 	"context"
-	_ "embed" // The schema file and the version table are part of the binary.
+	"embed"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,27 +41,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
-// schemaFile is the schema of the store. Until the first tag, the store
-// applies it as its one migration, and a change to the schema edits it.
-//
-//go:embed schema.sql
-var schemaFile string
-
-// versionTable holds the statement that creates the version table.
-//
-//go:embed schema_migrations.sql
-var versionTable string
-
-// loadMigrations returns the migrations that the binary embeds: until
-// the first tag, the schema file alone.
-func loadMigrations() ([]migrate.Migration, error) {
-	m, err := migrate.SchemaFile(schemaFile)
-	if err != nil {
-		return nil, fmt.Errorf("load the schema file: %w", err)
-	}
-
-	return []migrate.Migration{m}, nil
-}
+//go:embed migrations/*.sql
+var migrations embed.FS
 
 // migrationLockID is the advisory lock key held while migrating ("odpn" in ASCII).
 const migrationLockID int64 = 0x6f64706e
@@ -1316,7 +1297,7 @@ func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q
 const migrationDeadline = 15 * time.Minute
 
 func (s *Store) migrate(ctx context.Context) error {
-	all, err := loadMigrations()
+	all, err := migrate.Load(migrations, "migrations")
 	if err != nil {
 		return err
 	}
@@ -1359,7 +1340,12 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 		return fmt.Errorf("take migration lock: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, versionTable); err != nil {
+	const createTable = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version BIGINT NOT NULL PRIMARY KEY,
+		name    TEXT   NOT NULL
+	)`
+
+	if _, err := tx.Exec(ctx, createTable); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
@@ -1524,8 +1510,8 @@ func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
 }
 
 // hasVersionColumn reports whether schema_migrations in the current schema
-// has the column. The version table of an older build can lack the
-// min_binary_version and the sha256 columns.
+// has the column. The baseline adds the min_binary_version and the sha256
+// columns, so a version table from before it lacks them.
 func hasVersionColumn(ctx context.Context, tx pgx.Tx, column string) (bool, error) {
 	var exists bool
 
@@ -1543,9 +1529,8 @@ func hasVersionColumn(ctx context.Context, tx pgx.Tx, column string) (bool, erro
 
 // appliedQuery returns the query that reads the rows of schema_migrations
 // ordered by version: the version, the name, the minimum binary version and
-// the SHA-256. A column that the table lacks reads as the empty value, so
-// the schema check can refuse the database of an older build with a clear
-// error.
+// the SHA-256. A column that the table lacks reads as the empty value, so the
+// schema check refuses a recorded migration with no SHA-256.
 func appliedQuery(ctx context.Context, tx pgx.Tx) (string, error) {
 	hasMinimum, err := hasVersionColumn(ctx, tx, "min_binary_version")
 	if err != nil {
@@ -1575,7 +1560,7 @@ func appliedQuery(ctx context.Context, tx pgx.Tx) (string, error) {
 // changed schema through. The caller holds the migration lock in tx.
 //
 // Defense in depth: migrate.Check compares the same rows, and the baseline
-// check refuses a database from before the schema file; this check stays so
+// check refuses a database from before the baseline; this check stays so
 // that a new caller of Check, or a change to it, cannot skip the comparison.
 func verifyRecorded(ctx context.Context, tx pgx.Tx, embedded []migrate.Migration) error {
 	hasSum, err := hasVersionColumn(ctx, tx, "sha256")
@@ -1597,8 +1582,8 @@ func verifyRecorded(ctx context.Context, tx pgx.Tx, embedded []migrate.Migration
 		}
 
 		if !hasSum {
-			return fmt.Errorf("%w: the version table records no SHA-256 for migration %s: "+
-				"start the server on an empty database", schema.ErrSchemaChanged, m.Name)
+			return fmt.Errorf("%w: the version table records no SHA-256 for migration %s",
+				schema.ErrSchemaDiverged, m.Name)
 		}
 
 		var name, digest string
@@ -1611,8 +1596,8 @@ func verifyRecorded(ctx context.Context, tx pgx.Tx, embedded []migrate.Migration
 
 		if name != m.Name || digest != m.SHA256 {
 			return fmt.Errorf("%w: the database records migration %s with SHA-256 %q, and this binary has %s "+
-				"with SHA-256 %s: start the server on an empty database",
-				schema.ErrSchemaChanged, name, digest, m.Name, m.SHA256)
+				"with SHA-256 %s: another build of the schema made the database",
+				schema.ErrSchemaDiverged, name, digest, m.Name, m.SHA256)
 		}
 	}
 
@@ -1621,9 +1606,22 @@ func verifyRecorded(ctx context.Context, tx pgx.Tx, embedded []migrate.Migration
 
 // recordMigration records m in schema_migrations in tx, after its SQL ran:
 // its version, its name, its minimum binary version and the SHA-256 of its
-// SQL. A version table without these columns fails the insert, and the
-// transaction then rolls back the migration.
+// SQL. The baseline adds the min_binary_version and the sha256 columns, so a
+// version table without them is one from before the baseline. The checks
+// refuse such a database before any migration runs, and the record fails too.
 func recordMigration(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
+	for _, column := range []string{"min_binary_version", "sha256"} {
+		exists, err := hasVersionColumn(ctx, tx, column)
+		if err != nil {
+			return err
+		}
+
+		if !exists {
+			return fmt.Errorf("record migration %s: %w: schema_migrations has no %s column",
+				m.Name, schema.ErrSchemaDiverged, column)
+		}
+	}
+
 	const record = `INSERT INTO schema_migrations (version, name, min_binary_version, sha256) VALUES ($1, $2, $3, $4)`
 	if _, err := tx.Exec(ctx, record, m.Version, m.Name, m.MinBinaryVersion, m.SHA256); err != nil {
 		return fmt.Errorf("record migration %s: %w", m.Name, err)

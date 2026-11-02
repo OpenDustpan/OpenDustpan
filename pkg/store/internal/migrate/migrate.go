@@ -19,9 +19,6 @@ import (
 // ErrBadName reports a migration file not named NNNN_description.sql.
 var ErrBadName = errors.New("migration file must be named NNNN_description.sql")
 
-// ErrEmptySchemaFile reports a schema file that holds no statement.
-var ErrEmptySchemaFile = errors.New("the schema file is empty")
-
 // ErrDuplicateVersion reports two migration files with the same version.
 var ErrDuplicateVersion = errors.New("two migration files have the same version")
 
@@ -101,29 +98,6 @@ func sum(sql string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// SchemaFile returns the schema file of a store dialect as its one
-// migration: version schema.BaselineVersion, name schema.BaselineName, and
-// the minimum binary version of its header. Until the first tag, each store
-// applies only this migration.
-func SchemaFile(sql string) (Migration, error) {
-	if strings.TrimSpace(sql) == "" {
-		return Migration{}, fmt.Errorf("%w: %s", ErrEmptySchemaFile, schema.BaselineName)
-	}
-
-	minimum, err := readMinimum(sql)
-	if err != nil {
-		return Migration{}, fmt.Errorf("schema file %s: %w", schema.BaselineName, err)
-	}
-
-	return Migration{
-		Name:             schema.BaselineName,
-		SQL:              sql,
-		MinBinaryVersion: minimum,
-		SHA256:           sum(sql),
-		Version:          schema.BaselineVersion,
-	}, nil
-}
-
 // checkRecordedSums refuses a recorded migration whose version the binary
 // embeds under another name or another SHA-256 of its SQL. Another build of
 // the schema made such a database, and no migration can change it to the
@@ -142,14 +116,14 @@ func checkRecordedSums(recorded []schema.AppliedMigration, embedded []Migration)
 		}
 
 		if !schema.ValidSHA256(r.SHA256) {
-			return fmt.Errorf("%w: migration %d records the SHA-256 %q, which is not 64 lowercase hex digits: "+
-				"start the server on an empty database", schema.ErrSchemaChanged, r.Version, r.SHA256)
+			return fmt.Errorf("%w: migration %d records the SHA-256 %q, which is not 64 lowercase hex digits",
+				schema.ErrSchemaDiverged, r.Version, r.SHA256)
 		}
 
 		if r.Name != m.Name || r.SHA256 != m.SHA256 {
-			return fmt.Errorf("%w: the database records migration %s with SHA-256 %s, and this binary has %s "+
-				"with SHA-256 %s: start the server on an empty database",
-				schema.ErrSchemaChanged, r.Name, r.SHA256, m.Name, m.SHA256)
+			return fmt.Errorf("%w: the database records migration %s with SHA-256 %q, and this binary has %s "+
+				"with SHA-256 %s: another build of the schema made the database",
+				schema.ErrSchemaDiverged, r.Name, r.SHA256, m.Name, m.SHA256)
 		}
 	}
 
@@ -175,7 +149,7 @@ type Plan struct {
 // binary starts on the newer schema and applies nothing. A database that
 // records unknown migrations and lacks embedded ones fails with
 // schema.ErrSchemaDiverged. A database that records an embedded version
-// under another name or another SHA-256 fails with schema.ErrSchemaChanged.
+// under another name or another SHA-256 fails with schema.ErrSchemaDiverged.
 func Check(recorded []schema.AppliedMigration, embedded []Migration, binaryVersion string) (Plan, error) {
 	minimums := make([]string, 0, len(recorded))
 	versions := make([]int64, 0, len(recorded))

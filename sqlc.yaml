@@ -1,14 +1,10 @@
 # sqlc generates typed Go for the fixed queries of each store adapter.
 # It does not translate between dialects: each engine has its own schema and
 # queries. Dynamic queries (optional filters, sorting) are hand-written.
-# Until the first tag, the schema of each engine is its version table and its
-# one schema file.
 version: "2"
 sql:
   - engine: sqlite
-    schema:
-      - pkg/store/sqlite/schema_migrations.sql
-      - pkg/store/sqlite/schema.sql
+    schema: pkg/store/sqlite/migrations
     queries: pkg/store/sqlite/queries.sql
     gen:
       go:
@@ -74,9 +70,7 @@ sql:
           - column: local_user_resets.revoke_access_tokens
             go_type: bool
   - engine: postgresql
-    schema:
-      - pkg/store/postgres/schema_migrations.sql
-      - pkg/store/postgres/schema.sql
+    schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql
     gen:
       go:

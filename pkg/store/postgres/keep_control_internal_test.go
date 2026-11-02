@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 )
 
 // connectKeepControl connects to the test database and closes the
@@ -50,7 +51,7 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	name := "test_" + hex.EncodeToString(suffix)
 	ident := pgx.Identifier{name}.Sanitize()
 
-	all, err := loadMigrations()
+	all, err := migrate.Load(migrations, "migrations")
 	if err != nil {
 		t.Fatalf("load migrations: %v", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -46,8 +45,8 @@ func readRecordRow(t *testing.T, path string) recordRow {
 	return row
 }
 
-// TestOpenRecordsTheSchemaFile proves that a new database records the schema
-// file under its version and its name, with the SHA-256 of the file.
+// TestOpenRecordsTheSchemaFile proves that a new database records the
+// baseline under its version and its name, with the SHA-256 of the file.
 func TestOpenRecordsTheSchemaFile(t *testing.T) {
 	t.Parallel()
 
@@ -73,9 +72,9 @@ func TestOpenRecordsTheSchemaFile(t *testing.T) {
 	}
 }
 
-// TestOpenRefusesAnotherSchemaFile changes the row of the schema file as
-// another build of the schema file would have written it, and proves that
-// open refuses the database with schema.ErrSchemaChanged and changes nothing.
+// TestOpenRefusesAnotherSchemaFile changes the row of the baseline as another
+// version of the baseline file would have written it, and proves that open
+// refuses the database with schema.ErrSchemaDiverged and changes nothing.
 func TestOpenRefusesAnotherSchemaFile(t *testing.T) {
 	t.Parallel()
 
@@ -119,12 +118,8 @@ func checkRefusesChange(t *testing.T, change string) {
 	beforeVersions, beforeTables := newerSchemaSnapshot(t, path)
 
 	_, err = sqlite.Open(t.Context(), path)
-	if !errors.Is(err, schema.ErrSchemaChanged) {
-		t.Fatalf("open a database of another schema file: err = %v, want ErrSchemaChanged", err)
-	}
-
-	if !strings.Contains(err.Error(), "start the server on an empty database") {
-		t.Fatalf("refusal %q does not name the action", err)
+	if !errors.Is(err, schema.ErrSchemaDiverged) {
+		t.Fatalf("open a database of another schema file: err = %v, want ErrSchemaDiverged", err)
 	}
 
 	afterVersions, afterTables := newerSchemaSnapshot(t, path)

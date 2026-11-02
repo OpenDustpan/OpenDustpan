@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: collapse-schema check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regenerate-baseline check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -267,10 +267,10 @@ soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one serve
 
 BASELINE_REF ?= origin/main
 
-collapse-schema: ## Write the schema file of each dialect from the numbered migrations of BASELINE_REF (default origin/main), check that both give the same database, and delete the numbered migrations; needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Run make generate after it. Not part of check.
-	./scripts/collapse-schema.sh $(BASELINE_REF)
+regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
+	./scripts/regenerate-baseline.sh $(BASELINE_REF)
 
-generate: ## Regenerate sqlc query code after editing queries.sql or a schema file, and the settings reference after editing the CLI declarations.
+generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate
 	$(CLIENTGEN)
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1

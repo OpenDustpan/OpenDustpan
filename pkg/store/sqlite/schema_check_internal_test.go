@@ -11,7 +11,7 @@ import (
 
 // TestVerifyRecordedRefusesAlone sends embedded migrations that differ from
 // the recorded row directly to verifyRecorded, as if the migration check had
-// let them through. Each one fails with schema.ErrSchemaChanged. The same
+// let them through. Each one fails with schema.ErrSchemaDiverged. The same
 // migration and a version that the database does not record pass.
 func TestVerifyRecordedRefusesAlone(t *testing.T) {
 	t.Parallel()
@@ -27,7 +27,7 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 		}
 	})
 
-	all, err := loadMigrations()
+	all, err := migrate.Load(migrations, "migrations")
 	if err != nil {
 		t.Fatalf("embedded migrations: %v", err)
 	}
@@ -48,8 +48,8 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 		want     error
 	}{
 		"same migration":   {embedded: same, want: nil},
-		"another sum":      {embedded: otherSum, want: schema.ErrSchemaChanged},
-		"another name":     {embedded: otherName, want: schema.ErrSchemaChanged},
+		"another sum":      {embedded: otherSum, want: schema.ErrSchemaDiverged},
+		"another name":     {embedded: otherName, want: schema.ErrSchemaDiverged},
 		"version not kept": {embedded: unknown, want: nil},
 	} {
 		err := verifyRecorded(t.Context(), s.conn, []migrate.Migration{tc.embedded})
@@ -63,7 +63,7 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 		t.Fatalf("drop the sha256 column: %v", execErr)
 	}
 
-	if err := verifyRecorded(t.Context(), s.conn, all); !errors.Is(err, schema.ErrSchemaChanged) {
-		t.Fatalf("verifyRecorded without the sha256 column = %v, want %v", err, schema.ErrSchemaChanged)
+	if err := verifyRecorded(t.Context(), s.conn, all); !errors.Is(err, schema.ErrSchemaDiverged) {
+		t.Fatalf("verifyRecorded without the sha256 column = %v, want %v", err, schema.ErrSchemaDiverged)
 	}
 }

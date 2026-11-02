@@ -877,8 +877,7 @@ func TestHostRefusesPendingMigrations(t *testing.T) {
 	}
 
 	_, execErr := raw.ExecContext(ctx,
-		`CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL,
-			min_binary_version TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL DEFAULT '') STRICT`)
+		`CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL) STRICT`)
 	if execErr != nil {
 		t.Fatalf("create schema_migrations: %v", execErr)
 	}

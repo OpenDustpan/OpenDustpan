@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -80,10 +81,10 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 // EmbeddedMigrations returns the names of the migrations the binary embeds,
 // ordered by version, with the newest version. The names come from the
 // shared schema list, so the upgrade check verdict never depends on which
-// dialect the server runs. It still loads the schema file, so a bad header
-// fails here and not only in the adapter tests that pin the list.
+// dialect the server runs. It still loads the embedded directory, so a bad
+// file name fails here and not only in the adapter tests that pin the list.
 func EmbeddedMigrations() ([]string, int64, error) {
-	if _, err := loadMigrations(); err != nil {
+	if _, err := migrate.Load(migrations, "migrations"); err != nil {
 		return nil, 0, err
 	}
 
