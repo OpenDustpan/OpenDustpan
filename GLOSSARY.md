@@ -464,7 +464,7 @@ _Avoid_: Principal scope, tenant, realm
 Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal, and through a plain OAuth 2.0 provider an `oauth` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
 
 **Sign-in provider**:
-An OpenID Connect provider or a plain OAuth 2.0 provider through which persons sign in to the console. Its mode is `oidc` or `oauth`. A plain OAuth 2.0 provider identifies a person by a claim of its user-info answer. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
+A configured identity provider through which persons sign in to the console. Its mode is `oidc` or `oauth`, and the adapters of ADR 321 add `saml`, `cas`, `ldap` and `header`. A plain OAuth 2.0 provider identifies a person by a claim of its user-info answer. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
 _Avoid_: Identity source, IdP connection
 
 **Installation scope**:
@@ -479,6 +479,22 @@ _Avoid_: API key, password
 **Sign-in**:
 The step in which a sign-in method, such as an identity provider, proves who a person is. The method only proves the identity. The server then issues its own session.
 _Avoid_: Login, log-in (as a noun). The verb is "sign in".
+
+**Sign-in method**:
+A way to prove who a person is. It has one of three shapes. A redirect method sends the browser to the identity provider: OIDC, plain OAuth 2.0, SAML and CAS. A password method checks a password at a directory: LDAP. A request method reads the trusted header of a proxy. The local password and the passkey of a local user are sign-in methods too. Each method returns a sign-in assertion. It never makes a principal, a membership or a session (ADR 320).
+_Avoid_: Auth provider, authenticator (the `Authenticator` port resolves access tokens), login method
+
+**Sign-in assertion**:
+What a sign-in method returns. It holds the provider ID, the subject at the identity provider, the names and the email. It holds the groups, and whether the method sent groups. It holds the authentication time, and whether the method proves it. It also holds the kind of the method and the factors that OpenDustpan checked itself. In code, `session.Assertion` (ADR 320).
+_Avoid_: Identity, claims (alone), SAML assertion (that is one input of the SAML method)
+
+**Group claim**:
+The list of groups that an identity provider gives for a person at a sign-in. It is a claim of OIDC or OAuth 2.0, or an attribute of SAML or CAS. It is also the groups of an LDAP directory, or a header of a trusted proxy. One function applies it to the memberships of the person, with the rules for groups from an identity provider. It changes only the memberships of its own provider, and never makes a group (ADR 320).
+_Avoid_: Group mapping, role claim, team sync
+
+**Proxy proof**:
+The second proof that a request of the trusted header comes from the trusted proxy. The first proof is the address of the peer. The second proof is a signed JWT of the proxy, a shared secret header, or a TLS client certificate of the proxy. A header from a trusted address alone is never enough (ADR 321).
+_Avoid_: Proxy secret (alone), header auth
 
 **Session**:
 The proof of a sign-in that the console holds in two sealed cookies: the access cookie and the refresh cookie (ADR 297). The server keeps no record of a session. A session belongs to one person. It ends at a sign-out in that browser and at a bump of the session generation of the person. It also ends after a period with no refresh, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
