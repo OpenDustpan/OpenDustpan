@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -106,14 +107,21 @@ func (c *writeCounter) bump() {
 	c.writes++
 }
 
-func newGuardedHandler(t *testing.T, ws tfe.WorkspaceService, guard tfe.StateGuard) *tfe.Handler {
+func newGuardedHandler(t *testing.T, ws tfe.WorkspaceService, guard stategate.Guard) *tfe.Handler {
+	t.Helper()
+
+	return newAuditedHandler(t, ws, guard, newTestAudit())
+}
+
+// newAuditedHandler is newGuardedHandler with the audit store entries.
+func newAuditedHandler(t *testing.T, ws tfe.WorkspaceService, guard stategate.Guard, entries *testAudit) *tfe.Handler {
 	t.Helper()
 
 	h, err := tfe.NewHandler(tfe.Config{
 		Registry:      nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil,
 		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: ws, OutputChecker: nil,
-		BaseURL: baseurl.Resolver{}, Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
+		BaseURL: baseurl.Resolver{}, Audit: entries, OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
 		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: guard,
 	})
 	if err != nil {
@@ -245,7 +253,106 @@ func TestStateGuardSeesTheWrite(t *testing.T) {
 	}
 }
 
-func TestNoGuardChangesNothing(t *testing.T) {
+// resultGuard answers each check with its result and no error.
+type resultGuard struct {
+	result gate.Result
+}
+
+func (g resultGuard) GuardStateWrite(context.Context, gate.StateWrite) (gate.Decision, error) {
+	return gate.Decision{
+		Record: "gdr-eeeeeeeeeeeeeeeeeeee", Result: g.result, Requirements: nil, Warnings: nil, AutoApply: false,
+	}, nil
+}
+
+// TestUnknownResultRefusesAndRecords sends a result that is not allow or
+// warn, with no error, through each write route. Each write is refused with
+// gate.unavailable, reaches no store and writes one denied audit entry.
+func TestUnknownResultRefusesAndRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, result := range []gate.Result{gate.ResultDeny, gate.ResultError, "", "maybe"} {
+			t.Run(rt.name+"/"+string(result), func(t *testing.T) {
+				t.Parallel()
+
+				ws, entries := newWriteCounter(), newTestAudit()
+
+				rec := serveGuarded(t, newAuditedHandler(t, ws, resultGuard{result: result}, entries), rt)
+				checkRefusalDocument(t, rec, guardRefusal{
+					name:    "unknown",
+					code:    "gate.unavailable",
+					message: stategate.UnknownResultText,
+					err: &gate.RefusalError{
+						Err:      gate.ErrUnavailable,
+						Record:   "gdr-eeeeeeeeeeeeeeeeeeee",
+						Messages: nil,
+					},
+				})
+
+				if ws.count() != 0 {
+					t.Fatalf("%d writes reached the store, want 0", ws.count())
+				}
+
+				checkDenied(t, entries, rt.action)
+			})
+		}
+	}
+}
+
+// TestEachRefusalIsRecorded checks that each refusal of the guard writes one
+// denied audit entry with the action of the route.
+func TestEachRefusalIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, rf := range guardRefusals() {
+			t.Run(rt.name+"/"+rf.name, func(t *testing.T) {
+				t.Parallel()
+
+				ws, entries := newWriteCounter(), newTestAudit()
+
+				rec := serveGuarded(t, newAuditedHandler(t, ws, newFakeGuard(rf.err), entries), rt)
+				checkRefusalDocument(t, rec, rf)
+				checkDenied(t, entries, rt.action)
+			})
+		}
+	}
+}
+
+// checkDenied fails t unless entries holds one denied entry with action.
+func checkDenied(t *testing.T, entries *testAudit, action identity.Action) {
+	t.Helper()
+
+	entries.mu.Lock()
+	got := append([]audit.Entry(nil), entries.entries...)
+	entries.mu.Unlock()
+
+	if len(got) != 1 || got[0].Outcome != audit.OutcomeDenied || got[0].Action != string(action) {
+		t.Fatalf("audit entries = %+v, want one denied entry with the action %s", got, action)
+	}
+}
+
+// TestNilGuardDoesNotStart checks the start-time step: a handler with no
+// state guard is an error, never a handler that checks no write.
+func TestNilGuardDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	h, err := tfe.NewHandler(tfe.Config{
+		Registry:      nil,
+		Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil,
+		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: newWriteCounter(),
+		OutputChecker: nil,
+		BaseURL:       baseurl.Resolver{}, Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
+		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: nil,
+	})
+	if h != nil || !errors.Is(err, tfe.ErrMissingDependency) || !errors.Is(err, stategate.ErrNoGuard) {
+		t.Fatalf("NewHandler(no guard) = %v, %v, want ErrMissingDependency and stategate.ErrNoGuard", h, err)
+	}
+}
+
+// TestGatesOffChangesNothing checks that the explicit guard of the gates off
+// lets each write go on.
+func TestGatesOffChangesNothing(t *testing.T) {
 	t.Parallel()
 
 	for _, rt := range guardRoutes() {
@@ -254,7 +361,7 @@ func TestNoGuardChangesNothing(t *testing.T) {
 
 			ws := newWriteCounter()
 
-			rec := serveGuarded(t, newGuardedHandler(t, ws, nil), rt)
+			rec := serveGuarded(t, newGuardedHandler(t, ws, stategate.Off("the test keeps no gates")), rt)
 			if rec.Code != rt.ok || ws.count() != 1 {
 				t.Fatalf(
 					"%s answers %d with %d writes, want %d and 1: %s",

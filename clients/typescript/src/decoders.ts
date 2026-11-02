@@ -205,6 +205,8 @@ import type {
   StartStoreCheckResponse,
   StateVersionRevealPathTooLongError,
   StateVersionRevealPathTooLongErrorArgs,
+  StateWriteGates,
+  StateWriteGatesMode,
   StoreCheck,
   StoreCheckCase,
   StoreCheckLatency,
@@ -272,6 +274,7 @@ import {
   ContextStatusValues,
   DriftStatusValues,
   ErrorCodeValues,
+  StateWriteGatesModeValues,
   TriggerFrequencyPresetValues,
   TriggerKindValues,
   TrustRuleKeySourceValues,
@@ -368,6 +371,7 @@ export const decodeBulkUnitSettingsUnit: Decoder<BulkUnitSettingsUnit> = object<
 export const decodeCapabilities: Decoder<Capabilities> = object<Capabilities>("Capabilities", {
   apiVersion: string,
   installationKind: optional(string),
+  stateWriteGates: optional(ref(() => decodeStateWriteGates)),
 });
 
 /** The validator of ChangeOwnPasswordRequest. */
@@ -1707,6 +1711,15 @@ export const decodeStateVersionRevealPathTooLongError: Decoder<StateVersionRevea
 export const decodeStateVersionRevealPathTooLongErrorArgs: Decoder<StateVersionRevealPathTooLongErrorArgs> = object<StateVersionRevealPathTooLongErrorArgs>("StateVersionRevealPathTooLongErrorArgs", {
   maxBytes: int64,
 });
+
+/** The validator of StateWriteGates. */
+export const decodeStateWriteGates: Decoder<StateWriteGates> = object<StateWriteGates>("StateWriteGates", {
+  mode: ref(() => decodeStateWriteGatesMode),
+  reason: string,
+});
+
+/** The validator of StateWriteGatesMode. It keeps a value that is not in the list. */
+export const decodeStateWriteGatesMode: Decoder<StateWriteGatesMode> = openEnum<StateWriteGatesMode>("StateWriteGatesMode");
 
 /** The validator of StoreCheck. */
 export const decodeStoreCheck: Decoder<StoreCheck> = object<StoreCheck>("StoreCheck", {

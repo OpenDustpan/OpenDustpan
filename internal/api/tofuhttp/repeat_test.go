@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -127,9 +128,16 @@ func newRepeatEnv(t *testing.T) repeatEnv {
 	}
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
-		Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
-		Workspaces: workspaces, Namespaces: namespaces, Audit: newTestAudit(), Gate: nil, StateGuard: nil,
-		OnAuditFailure: nil, DenialLimiter: nil,
+		Authenticator:  tokenAuth{},
+		Authorizer:     userAuthz{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     workspaces,
+		Namespaces:     namespaces,
+		Audit:          newTestAudit(),
+		Gate:           nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

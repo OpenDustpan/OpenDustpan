@@ -13,8 +13,10 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -31,7 +33,7 @@ type recordingGuard struct {
 	seen []gate.StateWrite
 }
 
-var _ apiinventory.StateGuard = (*recordingGuard)(nil)
+var _ stategate.Guard = (*recordingGuard)(nil)
 
 func newRecordingGuard(err error) *recordingGuard {
 	return &recordingGuard{mu: sync.Mutex{}, err: err, seen: nil}
@@ -112,7 +114,7 @@ func guardRefusals() []guardRefusal {
 	}
 }
 
-func guardedFixture(t *testing.T, guard apiinventory.StateGuard) deletedFixture {
+func guardedFixture(t *testing.T, guard stategate.Guard) deletedFixture {
 	t.Helper()
 
 	return buildGuardedFixture(t, guardSpec{
@@ -157,7 +159,25 @@ func TestStateGuardSeesTheWrite(t *testing.T) {
 	}
 }
 
-func TestNoGuardChangesNothing(t *testing.T) {
+// TestNilGuardDoesNotStart checks the start-time step: a handler with no
+// state guard is an error, never a handler that checks no write.
+func TestNilGuardDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := guardedConfig(t, guardSpec{
+		entries: seededDeleted().entries, authz: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		lifecycleErr: nil, scope: fixedScope{err: nil, ids: nil, all: true}, guard: nil,
+	})
+
+	h, err := apiinventory.NewHandler(cfg)
+	if h != nil || !errors.Is(err, apiinventory.ErrMissingDependency) || !errors.Is(err, stategate.ErrNoGuard) {
+		t.Fatalf("NewHandler(no guard) = %v, %v, want ErrMissingDependency and stategate.ErrNoGuard", h, err)
+	}
+}
+
+// TestGatesOffChangesNothing checks that the explicit guard of the gates off
+// lets each write go on.
+func TestGatesOffChangesNothing(t *testing.T) {
 	t.Parallel()
 
 	for _, rt := range guardRoutes() {
@@ -356,6 +376,107 @@ func TestStateGuardStoreFaultNamesTheCause(t *testing.T) {
 			t.Run(tt.name+" on "+rt.name, func(t *testing.T) {
 				t.Parallel()
 				checkStoreFault(t, tt, rt)
+			})
+		}
+	}
+}
+
+// resultGuard answers each check with its result and no error.
+type resultGuard struct {
+	result gate.Result
+}
+
+func (g resultGuard) GuardStateWrite(context.Context, gate.StateWrite) (gate.Decision, error) {
+	return gate.Decision{
+		Record: "gdr-ffffffffffffffffffff", Result: g.result, Requirements: nil, Warnings: nil, AutoApply: false,
+	}, nil
+}
+
+// auditedFixture is guardedFixture with the audit store entries.
+func auditedFixture(t *testing.T, guard stategate.Guard, entries *testAudit) deletedFixture {
+	t.Helper()
+
+	cfg, pulumi := guardedConfig(t, guardSpec{
+		entries: seededDeleted().entries, authz: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		lifecycleErr: nil, scope: fixedScope{err: nil, ids: nil, all: true}, guard: guard,
+	})
+	cfg.Audit = entries
+
+	handler, err := newCheckedHandler(t, cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return deletedFixture{handler: handler, pulumi: pulumi}
+}
+
+// checkGuardDenied fails t unless entries holds one denied entry with action.
+func checkGuardDenied(t *testing.T, entries *testAudit, action identity.Action) {
+	t.Helper()
+
+	entries.mu.Lock()
+	got := append([]audit.Entry(nil), entries.entries...)
+	entries.mu.Unlock()
+
+	if len(got) != 1 || got[0].Outcome != audit.OutcomeDenied || got[0].Action != string(action) {
+		t.Fatalf("audit entries = %+v, want one denied entry with the action %s", got, action)
+	}
+}
+
+// TestUnknownResultRefusesAndRecords sends a result that is not allow or
+// warn, with no error, through each write route. Each call is refused with
+// gate.unavailable, reaches no lifecycle and writes one denied audit entry.
+func TestUnknownResultRefusesAndRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, result := range []gate.Result{gate.ResultDeny, gate.ResultError, "", "maybe"} {
+			t.Run(rt.name+"/"+string(result), func(t *testing.T) {
+				t.Parallel()
+
+				entries := newTestAudit()
+				f := auditedFixture(t, resultGuard{result: result}, entries)
+
+				rec := serveRoute(t, f, rt)
+				if rec.Code != http.StatusServiceUnavailable ||
+					!strings.Contains(rec.Body.String(), errcode.GateUnavailable) ||
+					!strings.Contains(rec.Body.String(), "gdr-ffffffffffffffffffff") {
+					t.Fatalf(
+						"%s answers %d %s, want 503 with gate.unavailable and the record",
+						rt.name,
+						rec.Code,
+						rec.Body,
+					)
+				}
+
+				if len(f.pulumi.calls) != 0 {
+					t.Fatalf("%d calls reached the lifecycle, want 0", len(f.pulumi.calls))
+				}
+
+				checkGuardDenied(t, entries, rt.action)
+			})
+		}
+	}
+}
+
+// TestEachRefusalIsRecorded checks that each refusal of the guard writes one
+// denied audit entry with the action of the route.
+func TestEachRefusalIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, rf := range guardRefusals() {
+			t.Run(rt.name+"/"+rf.name, func(t *testing.T) {
+				t.Parallel()
+
+				entries := newTestAudit()
+				f := auditedFixture(t, newRecordingGuard(rf.err), entries)
+
+				if rec := serveRoute(t, f, rt); rec.Code != rf.status {
+					t.Fatalf("%s answers %d, want %d: %s", rt.name, rec.Code, rf.status, rec.Body)
+				}
+
+				checkGuardDenied(t, entries, rt.action)
 			})
 		}
 	}

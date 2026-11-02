@@ -15,6 +15,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
@@ -258,6 +259,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Gates:            gates,
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		SignIn: &apiserver.SignIn{
 			OnDevRefused:    nil,
 			DevCode:         nil,
@@ -1156,6 +1158,7 @@ func TestSignInProviderDown(t *testing.T) {
 		Gates:            nil,
 		SessionPolicy:    policies,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		SignIn: &apiserver.SignIn{
 			OnDevRefused: nil,
 			DevCode:      nil,

@@ -81,6 +81,7 @@ export interface BulkUnitSettingsUnit {
 export interface Capabilities {
   readonly apiVersion: string;
   readonly installationKind?: string;
+  readonly stateWriteGates?: StateWriteGates;
 }
 
 export interface ChangeOwnPasswordRequest {
@@ -1355,6 +1356,16 @@ export interface StateVersionRevealPathTooLongError {
 export interface StateVersionRevealPathTooLongErrorArgs {
   readonly maxBytes: number;
 }
+
+export interface StateWriteGates {
+  readonly mode: StateWriteGatesMode;
+  readonly reason: string;
+}
+
+/** The known values of StateWriteGatesMode. */
+export const StateWriteGatesModeValues = ["on", "off"] as const;
+
+export type StateWriteGatesMode = (typeof StateWriteGatesModeValues)[number] | (string & {});
 
 export interface StoreCheck {
   readonly endedAt?: string;

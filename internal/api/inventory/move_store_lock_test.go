@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -257,7 +258,7 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		Authenticator: tokenAuthenticator{}, Authorizer: authz, Audit: f.store, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil,
 		Logger:     slog.New(slog.DiscardHandler),
-		StateGuard: nil,
+		StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

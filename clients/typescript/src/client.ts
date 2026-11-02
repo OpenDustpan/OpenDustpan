@@ -343,6 +343,8 @@ import type {
   StartStoreCheckResponse,
   StateVersionRevealPathTooLongError,
   StateVersionRevealPathTooLongErrorArgs,
+  StateWriteGates,
+  StateWriteGatesMode,
   StoreCheck,
   StoreCheckCase,
   StoreCheckLatency,

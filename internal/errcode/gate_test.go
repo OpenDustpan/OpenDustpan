@@ -59,6 +59,11 @@ func gated() []errcodetest.Adapter {
 			"errorResponse", "codedResponse", "codedError", "enterRefusedResponse",
 		}, nil),
 		api("sourcefilter", nil, nil),
+		// The package writes no error answer: it gives each adapter the
+		// outcome of a write of state, and the adapter writes the answer. It is
+		// gated with no body type and no known list, so a new answer in it
+		// needs a code.
+		api("stategate", nil, nil),
 		api("tfe", []string{"jsonAPIError", "errorClass", "registryErrors"}, nil),
 		// The package writes no error answer. It is gated with no body type
 		// and no known list, so a new answer in it needs a code.
