@@ -1117,14 +1117,17 @@ func backupModel() costModel {
 // round trips), the handover of the operation (up to 12), and a retried step
 // that a run under load showed once in 29 runs (24 round trips).
 //
-// The fixed part holds 2 more round trips for the name locks. The restore
+// The fixed part holds 4 more round trips for the name locks. The restore
 // keeps the name_locks and name_lock_key tables of the installation, so that
 // a restore cannot clear a lockout. Each kept table costs one delete and one
-// copy. The migrations that come with the lockout cost more round trips than
-// the coefficients add.
+// copy, which is 4 round trips for the 2 tables. The migrations that come
+// with the lockout cost more round trips than the coefficients add. The
+// ceiling keeps 2 round trips of headroom above the measured count, as it
+// did before the name locks: the count varies between runs, and a ceiling
+// at the measured count would fail at random.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        321,
+		fixed:        323,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
