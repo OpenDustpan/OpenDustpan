@@ -2861,9 +2861,9 @@ type uncachedStateOpener struct {
 // OpenStateBlob implements backup.StateOpener. Plain bytes that do not match
 // the size and the MD5 of the row of their version wrap
 // backup.ErrLiveBlobDamaged, at the open and at each read. Sealed bytes that
-// do not open are not damage: a key or a key provider can cause that, so the
-// error keeps its own class and the backup stops. Every other error keeps its
-// own class too.
+// do not open wrap backup.ErrLiveBlobUnopened: damaged bytes and a wrong key
+// both cause that, so a restore stops at it. Every other error keeps its own
+// class.
 func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	reader, err := o.workspaces.OpenStateBlob(blobcache.WithoutCache(ctx), key)
 	if err != nil {
@@ -2873,17 +2873,19 @@ func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (i
 	return damageReader{ReadCloser: reader}, nil
 }
 
-// stateDamage wraps err with backup.ErrLiveBlobDamaged when err says that the
-// plain state does not match the size and the MD5 of its row, and returns any
-// other error as it is. An error that also says that the sealed content does
-// not open, or that a key failed, is not damage: the cause is not clear.
+// stateDamage wraps err with backup.ErrLiveBlobUnopened when err says that
+// the sealed content does not open or that a key failed, and with
+// backup.ErrLiveBlobDamaged when err says that the plain state does not match
+// the size and the MD5 of its row. It returns any other error as it is.
 func stateDamage(err error) error {
-	if errors.Is(err, workspace.ErrStoredContentMismatch) && !errors.Is(err, workspace.ErrSealedContent) &&
-		!errors.Is(err, secret.ErrDecrypt) {
+	switch {
+	case errors.Is(err, workspace.ErrSealedContent), errors.Is(err, secret.ErrDecrypt):
+		return fmt.Errorf("%w: %w", backup.ErrLiveBlobUnopened, err)
+	case errors.Is(err, workspace.ErrStoredContentMismatch):
 		return fmt.Errorf("%w: %w", backup.ErrLiveBlobDamaged, err)
+	default:
+		return err
 	}
-
-	return err
 }
 
 // damageReader maps the read errors of opened state with stateDamage.

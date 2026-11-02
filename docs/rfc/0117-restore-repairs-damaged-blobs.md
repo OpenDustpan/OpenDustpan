@@ -63,6 +63,11 @@ option A below:
   with the reference of the live row of each, and does not stop.
 - A damaged live blob stops the restore before any change of the live data.
   The text names the count, the first keys and the next step.
+- Sealed state that does not open (issue #2275: a flipped byte, a truncated
+  blob) goes in the list with the reason `unopened`, and stops the restore in
+  the same way. A wrong key-encryption key also causes it, so the text names
+  that cause too. Under option B, a blob that does not open must not be
+  replaced unless the operator also confirms the key.
 - The restore writes a missing key from the backup. This adds a key and
   changes none, which decision 6 allows.
 - More than 10 missing live blobs, or more than 20 percent of the blobs that

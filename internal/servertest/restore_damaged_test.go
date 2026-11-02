@@ -342,20 +342,26 @@ func TestRestoreStopsWhenTooManyStateBlobsAreMissing(t *testing.T) {
 }
 
 // TestRestoreStopsAtSealedStateThatDoesNotOpen runs the reproduction of a
-// restore over a live state blob whose sealed bytes do not open: bytes that
-// are not sealed, and the sealed bytes of the other workspace. A key or a key
-// provider can cause the same error, so the backup before the restore stops,
-// the restore fails, and the live blob keeps its bytes.
+// restore over a live state blob whose sealed bytes do not open or do not
+// match: bytes that are not sealed, a flipped byte, a truncated blob, and the
+// sealed bytes of the other workspace. The restore stops before any change of
+// the live data, the error of the restore answer names the key and the next
+// step, and the live blob keeps its bytes.
 func TestRestoreStopsAtSealedStateThatDoesNotOpen(t *testing.T) {
 	t.Parallel()
 
 	r := newDamagedRig(t, 2)
+
+	flipped := bytes.Clone(r.first)
+	flipped[len(flipped)/2] ^= 0xff
 
 	for _, tc := range []struct {
 		name  string
 		bytes []byte
 	}{
 		{name: "a live blob that holds other bytes", bytes: []byte("tampered")},
+		{name: "a live blob with one flipped byte", bytes: flipped},
+		{name: "a live blob that is truncated", bytes: r.first[:len(r.first)/2]},
 		{name: "a live blob that holds the sealed bytes of the other workspace", bytes: r.other},
 	} {
 		if err := r.root.WriteFile(r.victim, tc.bytes, 0o600); err != nil {
@@ -363,8 +369,16 @@ func TestRestoreStopsAtSealedStateThatDoesNotOpen(t *testing.T) {
 		}
 
 		doc := runRestore(t, r.c, r.backupID)
-		if doc.State != string(backup.RestoreFailed) {
-			t.Fatalf("%s: restore = %q, want failed", tc.name, doc.State)
+		if doc.State != string(backup.RestoreFailed) || !strings.Contains(doc.Error, strconv.Quote(r.victim)) ||
+			!strings.Contains(
+				doc.Error,
+				"changed no live data",
+			) || !strings.Contains(doc.Error, "opendustpan restore") {
+			t.Fatalf("%s: restore = %q (%s), want failed with the key and the next step", tc.name, doc.State, doc.Error)
+		}
+
+		if doc.PreBackupFound == nil || doc.PreBackupFound.Damaged != 1 {
+			t.Fatalf("%s: preBackupFound = %+v, want 1 damaged", tc.name, doc.PreBackupFound)
 		}
 
 		if got := readFile(t, r.root, r.victim); !bytes.Equal(got, tc.bytes) {
