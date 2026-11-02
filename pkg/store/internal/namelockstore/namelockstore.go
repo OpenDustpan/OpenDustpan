@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 )
 
@@ -44,28 +46,37 @@ type Tx interface {
 	Get(ctx context.Context, scope, name, sub string) (Row, error)
 	// Set writes r as the row of scope and name.
 	Set(ctx context.Context, scope, name string, r Row) error
+	// AppendAudit appends e to the audit log of the server scope, in the
+	// transaction. It returns audit.ErrInvalidEntry for an entry that fails
+	// validation.
+	AppendAudit(ctx context.Context, e audit.Entry) error
+	// AppendNotification appends n to the outbox of the server scope, in the
+	// transaction. The outbox skips a notification whose dedupe key it holds.
+	AppendNotification(ctx context.Context, n notify.Notification) error
 }
 
-// Key names one count: its scope, its name and its sub-key.
-type Key struct {
-	Scope string
-	Name  string
-	Sub   string
-}
-
-// Add adds one failure to the count of k under rule, in
-// the transaction of tx. An add while the lock holds counts nothing and
+// Add adds one failure to the count of f under its rule, in
+// the transaction of tx. It appends the records of ev in the same
+// transaction: the entry of the end of an earlier lock, and the entry and the
+// alert of a new lock. A record that cannot be appended fails the add, and
+// the adapter rolls the transaction back. An add while the lock holds counts nothing and
 // returns authgate.ErrNameLocked. An add after the lock ended starts a new
 // count at 1. A level past the reset time of its rule goes back to 0. The add
 // that takes the count to the limit sets the lock and passes.
-func Add(ctx context.Context, tx Tx, k Key, rule authgate.LockRule) (authgate.NameLock, error) {
-	scope, name, sub := k.Scope, k.Name, k.Sub
+func Add(ctx context.Context, tx Tx, f authgate.NameFailure) (authgate.NameLock, error) {
+	scope, name, sub, rule, ev := f.Scope, f.Name, f.Sub, f.Rule, f.Events
 
 	// Defense in depth: the service checks the request too. This check stays
 	// so that no caller writes a row with a scope, a name or a rule that the
 	// port refuses.
 	if checkErr := authgate.CheckLockRequest(scope, name, sub, rule); checkErr != nil {
 		return authgate.NameLock{}, checkErr
+	}
+
+	// Defense in depth: the service builds the events too. This check stays
+	// so that no caller sets a lock that has no record.
+	if evErr := ev.Validate(); evErr != nil {
+		return authgate.NameLock{}, evErr
 	}
 
 	now, err := tx.NowMs(ctx)
@@ -86,13 +97,51 @@ func Add(ctx context.Context, tx Tx, k Key, rule authgate.LockRule) (authgate.Na
 		return Lock(r), authgate.ErrNameLocked
 	}
 
+	if r.LockedUntilMs != 0 {
+		// An earlier lock ended, and this is the first add that sees it.
+		ended := authgate.EndedEntry(ev.Ended, scope, codec.FromMillis(r.LockedUntilMs))
+		if auditErr := tx.AppendAudit(ctx, ended); auditErr != nil {
+			return authgate.NameLock{}, fmt.Errorf("append the entry of the end of the lock: %w", auditErr)
+		}
+	}
+
 	next := step(r, now, rule)
 
 	if setErr := tx.Set(ctx, scope, name, next); setErr != nil {
 		return authgate.NameLock{}, fmt.Errorf("write the name count: %w", setErr)
 	}
 
-	return Lock(next), nil
+	lock := Lock(next)
+
+	if next.LockedUntilMs != 0 {
+		// This add set the lock: it appends the entry and the alert of the
+		// lock before the transaction commits.
+		if recordErr := appendLock(ctx, tx, f, lock, now); recordErr != nil {
+			return authgate.NameLock{}, recordErr
+		}
+	}
+
+	return lock, nil
+}
+
+// appendLock appends the entry and the alert of the new lock of k.
+func appendLock(ctx context.Context, tx Tx, f authgate.NameFailure, lock authgate.NameLock, nowMs int64) error {
+	ev := f.Events
+
+	if err := tx.AppendAudit(ctx, authgate.LockedEntry(ev.Locked, f.Scope, lock)); err != nil {
+		return fmt.Errorf("append the entry of the lock: %w", err)
+	}
+
+	alert := authgate.LockAlert(ev, f.Scope, f.Name, lock, codec.FromMillis(nowMs)).Fit()
+	if err := alert.Validate(); err != nil {
+		return fmt.Errorf("the alert of the lock: %w", err)
+	}
+
+	if err := tx.AppendNotification(ctx, alert); err != nil {
+		return fmt.Errorf("append the alert of the lock: %w", err)
+	}
+
+	return nil
 }
 
 // step returns the row after one failure at now under rule, for a row whose

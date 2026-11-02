@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/store/internal/namelockstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -47,6 +48,22 @@ func (t nameLockTx) Get(ctx context.Context, scope, name, sub string) (namelocks
 	return namelockstore.Row(r), nil
 }
 
+func (t nameLockTx) AppendAudit(ctx context.Context, e audit.Entry) error {
+	if err := validServerEntry(e); err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, t.q, e); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
+}
+
+func (t nameLockTx) AppendNotification(ctx context.Context, n notify.Notification) error {
+	return appendNotifications(ctx, t.q, audit.ServerScope, []notify.Notification{n})
+}
+
 func (t nameLockTx) Set(ctx context.Context, scope, name string, r namelockstore.Row) error {
 	err := t.q.SetNameLock(ctx, db.SetNameLockParams{
 		Failures: r.Failures, LockedUntilMs: r.LockedUntilMs, Level: r.Level, LastFailureMs: r.LastFailureMs,
@@ -62,10 +79,12 @@ func (t nameLockTx) Set(ctx context.Context, scope, name string, r namelockstore
 // AddNameFailure implements authgate.NameLockCounter. The add locks the row
 // of the count in its transaction, so concurrent adds count one after the
 // other.
-func (s *Store) AddNameFailure(
-	ctx context.Context, scope, name, sub string, rule authgate.LockRule,
-) (authgate.NameLock, error) {
-	if err := authgate.CheckLockRequest(scope, name, sub, rule); err != nil {
+func (s *Store) AddNameFailure(ctx context.Context, f authgate.NameFailure) (authgate.NameLock, error) {
+	if err := authgate.CheckLockRequest(f.Scope, f.Name, f.Sub, f.Rule); err != nil {
+		return authgate.NameLock{}, err
+	}
+
+	if err := f.Events.Validate(); err != nil {
 		return authgate.NameLock{}, err
 	}
 
@@ -75,12 +94,7 @@ func (s *Store) AddNameFailure(
 	)
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		lock, addErr := namelockstore.Add(
-			ctx,
-			nameLockTx{q: q},
-			namelockstore.Key{Scope: scope, Name: name, Sub: sub},
-			rule,
-		)
+		lock, addErr := namelockstore.Add(ctx, nameLockTx{q: q}, f)
 		if errors.Is(addErr, authgate.ErrNameLocked) {
 			// A locked name writes nothing: the transaction commits no change.
 			out, locked = lock, true
@@ -190,7 +204,7 @@ func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int
 			return fmt.Errorf("read the clock of the store: %w", err)
 		}
 
-		deleted, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{
+		ends, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{
 			BeforeMs: now - age.Milliseconds(), NowMs: now, MaxRows: int64(limit),
 		})
 		if err != nil {
@@ -198,13 +212,13 @@ func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int
 		}
 
 		entry := e
-		entry.Changes = append(append([]audit.Change{}, e.Changes...), authgate.PrunedChange(deleted))
+		entry.Changes = append(append([]audit.Change{}, e.Changes...), authgate.PrunedChanges(ends)...)
 
 		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
 			return fmt.Errorf("append the entry of the prune: %w", err)
 		}
 
-		n = deleted
+		n = int64(len(ends))
 
 		return nil
 	})
