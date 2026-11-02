@@ -332,6 +332,9 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 
 	checkSQLiteVersionTable(t, old, fresh)
 
+	t.Logf("sqlite: the %d migrations and the baseline give the same dump of %d schema objects and rows",
+		len(input), strings.Count(dumped, ";\n"))
+
 	writeBaseline(t, dir.out, target{dialect: "sqlite", name: name, extra: ""}, body)
 }
 
@@ -385,6 +388,9 @@ func TestWritePostgresBaseline(t *testing.T) {
 
 	checkPostgresTables(ctx, t, old, fresh)
 	checkPostgresVersionTable(ctx, t, old, fresh)
+
+	t.Logf("postgres: the %d migrations and the baseline give the same pg_dump output and the same %d tables",
+		len(input), len(postgresTables(ctx, t, old)))
 
 	writeBaseline(
 		t,

@@ -1,8 +1,10 @@
 -- minimum-binary-version: v0.1.0
--- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the sqlite migrations of origin/main (04c979d834b7).
 -- This baseline replaced every migration before it. No binary opens a
--- database or restores a backup from before it.
+-- database or restores a backup from before it. Until the first tag, a
+-- change to the schema edits this file in place and adds no numbered
+-- migration. The server refuses a database that another version of this
+-- file made. make regenerate-baseline wrote the first version of this file
+-- from the sqlite migrations of origin/main (04c979d834b7).
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER NOT NULL PRIMARY KEY,

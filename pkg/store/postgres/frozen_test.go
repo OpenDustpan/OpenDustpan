@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 //go:embed migrations/*.sql migrations/*.sql.sha256
@@ -24,6 +25,11 @@ var frozenMigrations embed.FS
 // new numbered SQL file and its hash file in the same change.
 func TestFrozenMigrations(t *testing.T) {
 	t.Parallel()
+
+	// TODO: enable again at the first tag. Until then the schema of each
+	// dialect is one baseline file, and a change to the schema edits it in
+	// place. Write its hash file again before the test runs again.
+	t.Skip("disabled until the first tag: the baseline is edited in place until then")
 
 	all, err := migrate.Load(frozenMigrations, "migrations")
 	if err != nil {
@@ -212,4 +218,26 @@ func readFrozenHash(t *testing.T, name string) (string, bool) {
 	}
 
 	return want, true
+}
+
+// TestOneMigrationFileUntilTheFirstTag proves that the migrations directory
+// holds the baseline alone. Until the first tag, a change to the schema edits
+// the baseline in place and adds no numbered migration.
+func TestOneMigrationFileUntilTheFirstTag(t *testing.T) {
+	t.Parallel()
+
+	all, err := migrate.Load(frozenMigrations, "migrations")
+	if err != nil {
+		t.Fatalf("load embedded migrations: %v", err)
+	}
+
+	names := make([]string, 0, len(all))
+	for _, m := range all {
+		names = append(names, m.Name)
+	}
+
+	if len(names) != 1 || names[0] != schema.BaselineName {
+		t.Fatalf("migration files = %v, want [%s]: until the first tag, edit %s and add no numbered migration",
+			names, schema.BaselineName, schema.BaselineName)
+	}
 }
