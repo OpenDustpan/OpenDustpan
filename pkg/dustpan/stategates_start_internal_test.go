@@ -70,8 +70,8 @@ func TestStateWriteGatesOffIsRecordedAtStart(t *testing.T) {
 		line    string
 		entries int
 	}{
-		{"off", stategate.Effective{Mode: stategate.ModeOff, Reason: reasonNoGateStore}, "state.write gates: off", 1},
-		{"on", stategate.Effective{Mode: stategate.ModeOn, Reason: stategate.ReasonOn}, "state.write gates: on", 0},
+		{"off", stategate.EffectiveOf(stategate.Off(reasonNoGateStore)), "state.write gates: off", 1},
+		{"on", stategate.EffectiveOf(nil), "state.write gates: on", 0},
 	}
 
 	for _, tc := range cases {
@@ -119,7 +119,7 @@ func checkOffEntries(t *testing.T, entries []audit.Entry, want int) {
 func TestStateWriteGatesOffWithNoRecordStopsTheStart(t *testing.T) {
 	t.Parallel()
 
-	off := stategate.Effective{Mode: stategate.ModeOff, Reason: reasonNoGateStore}
+	off := stategate.EffectiveOf(stategate.Off(reasonNoGateStore))
 
 	cases := []struct {
 		name  string

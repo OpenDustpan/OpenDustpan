@@ -188,7 +188,10 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		components:       AllComponents(),
 		watch:            nil,
 		flushDenials:     nil,
-		stateWrite:       stateWriteStart{effective: stategate.Effective{Mode: "", Reason: ""}, audit: nil},
+		stateWrite: stateWriteStart{
+			effective: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+			audit:     nil,
+		},
 	}
 }
 

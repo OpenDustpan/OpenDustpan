@@ -74,7 +74,7 @@ func settingsConfig(
 	return apiserver.Config{
 		LocalUsers:  nil,
 		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
-		StateWriteGates: stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:      nil, Now: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil, Restores: nil,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{}, Version: "",

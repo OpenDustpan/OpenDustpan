@@ -69,7 +69,10 @@ func sweepChainServer(
 		idempotencyEvery: 0,
 		auditChainEvery:  0,
 		flushDenials:     nil,
-		stateWrite:       stateWriteStart{effective: stategate.Effective{Mode: "", Reason: ""}, audit: nil},
+		stateWrite: stateWriteStart{
+			effective: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+			audit:     nil,
+		},
 	}
 }
 
