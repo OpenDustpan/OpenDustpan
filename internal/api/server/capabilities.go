@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
@@ -16,13 +17,22 @@ const apiVersion = "v1"
 
 // capabilitiesResponse is the capabilities document on the wire. A caller
 // with no sign-in gets APIVersion only, so a client can check the version
-// before a person signs in. InstallationKind needs a signed-in caller with
-// the action caller:read on the caller.
+// before a person signs in. InstallationKind and StateWriteGates need a
+// signed-in caller with the action caller:read on the caller.
 //
 // Contract: never remove or rename these fields.
 type capabilitiesResponse struct {
-	APIVersion       string `json:"apiVersion"`
-	InstallationKind string `json:"installationKind,omitempty"`
+	APIVersion       string               `json:"apiVersion"`
+	InstallationKind string               `json:"installationKind,omitempty"`
+	StateWriteGates  *stateWriteGatesBody `json:"stateWriteGates,omitempty"`
+}
+
+// stateWriteGatesBody is the effective value of the state.write gates on the
+// wire: the mode on or off, and the reason. The gates are off only when the
+// store keeps no gates.
+type stateWriteGatesBody struct {
+	Mode   stategate.Mode `json:"mode"`
+	Reason string         `json:"reason"`
 }
 
 // capabilitiesRoutes returns the row of the capabilities document.
@@ -40,10 +50,14 @@ func (h *Handler) capabilitiesRoutes() []Route {
 // caller gets the document with no installation kind.
 func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
-	doc := capabilitiesResponse{APIVersion: apiVersion, InstallationKind: ""}
+	doc := capabilitiesResponse{APIVersion: apiVersion, InstallationKind: "", StateWriteGates: nil}
 
 	if h.mayReadCaller(r) {
 		doc.InstallationKind = h.installationKind().String()
+
+		if h.stateWrite.Mode != "" {
+			doc.StateWriteGates = &stateWriteGatesBody{Mode: h.stateWrite.Mode, Reason: h.stateWrite.Reason}
+		}
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, doc)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/oauth"
@@ -326,6 +327,7 @@ func newServiceBackedHandlerOf(
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    authn,
@@ -1615,6 +1617,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -1779,6 +1782,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1825,6 +1829,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -216,7 +217,7 @@ func revealConfig(
 		MaxStateBytes:  0,
 		OnAuditFailure: onFail,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -55,7 +56,10 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodGet, capabilitiesPath): apidesc.Name("getCapabilities", "capabilities").
-		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities")),
+		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities",
+			apidesc.Named[stateWriteGatesBody]("StateWriteGates"),
+			apidesc.DeclareOpenEnum[stategate.Mode]("StateWriteGatesMode",
+				string(stategate.ModeOn), string(stategate.ModeOff)))),
 	apidesc.Pattern(http.MethodGet, openAPIPath): apidesc.Name("getApiDescription", "description").
 		WithBodies(apidesc.NoBody, apidesc.Free("ApiDescription")),
 	apidesc.Pattern(http.MethodGet, preferencesPath): apidesc.Name("getPreferences", tagPreferences).

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -68,6 +69,7 @@ func sweepChainServer(
 		idempotencyEvery: 0,
 		auditChainEvery:  0,
 		flushDenials:     nil,
+		stateWrite:       stateWriteStart{effective: stategate.Effective{Mode: "", Reason: ""}, audit: nil},
 	}
 }
 

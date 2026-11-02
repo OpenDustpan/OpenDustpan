@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -187,6 +188,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		components:       AllComponents(),
 		watch:            nil,
 		flushDenials:     nil,
+		stateWrite:       stateWriteStart{effective: stategate.Effective{Mode: "", Reason: ""}, audit: nil},
 	}
 }
 
