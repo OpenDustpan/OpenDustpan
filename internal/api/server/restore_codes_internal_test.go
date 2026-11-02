@@ -44,3 +44,32 @@ func TestRestoreAnswerCarriesTheErrorCode(t *testing.T) {
 		t.Fatalf("summary errorCode = %q, want %q", got, backup.CodeLiveBlobsMissing)
 	}
 }
+
+// TestRestoreAnswerRefusesAHostileStoredCode sends stored codes that a
+// restore never writes to the answer directly, as if the row came from
+// another version or a changed report. Each answers the generic catalog
+// code, and the stored string is not shown.
+func TestRestoreAnswerRefusesAHostileStoredCode(t *testing.T) {
+	t.Parallel()
+
+	for _, stored := range []backup.RestoreErrorCode{
+		"restore.made-up", "server.internal\r\nINFO forged", "<script>", "restore.live-blobs-damaged ",
+	} {
+		report := backup.DevStripReport{
+			Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil, Approvers: nil, Warnings: nil,
+			PreBackupFound: nil, NotHeld: nil, ErrorCode: stored,
+		}
+
+		var record backup.RestoreRecord
+
+		record.DevReport = &report
+
+		if got := errorCodeOf(record); got != errcode.ServerInternal {
+			t.Errorf("errorCodeOf of the stored code %q = %q, want %q", stored, got, errcode.ServerInternal)
+		}
+
+		if got := summarizeRestore(record).ErrorCode; got != errcode.ServerInternal {
+			t.Errorf("summary errorCode of the stored code %q = %q, want %q", stored, got, errcode.ServerInternal)
+		}
+	}
+}
