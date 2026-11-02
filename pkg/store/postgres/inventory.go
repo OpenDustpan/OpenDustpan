@@ -635,11 +635,7 @@ func (s *Store) GetDeletedUnitFacts(
 		return inventory.DeletedFacts{}, fmt.Errorf("begin read transaction: %w", err)
 	}
 
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			_ = rollbackErr
-		}
-	}()
+	defer rollbackRead(ctx, tx)
 
 	q := s.queries.WithTx(tx)
 
