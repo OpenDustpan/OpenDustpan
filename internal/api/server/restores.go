@@ -60,6 +60,26 @@ type startRestoreRequest struct {
 type startRestoreResponse struct {
 	ID       string               `json:"id"`
 	Warnings []restoreWarningJSON `json:"warnings"`
+	// MissingBlobLimit is the effective bound on missing live blobs.
+	MissingBlobLimit missingBlobLimitJSON `json:"missingBlobLimit"`
+}
+
+// missingBlobLimitJSON is the bound on the live blobs that the backup before
+// a restore may find missing. The restore stops before it changes live data
+// when the count of missing blobs is above count, or when its share of the
+// blobs that the live data names is above percent. No setting changes the bound.
+type missingBlobLimitJSON struct {
+	Count   int `json:"count"`
+	Percent int `json:"percent"`
+}
+
+// blobFindingsJSON is what a backup found at the live blobs that its data
+// names: the counts, and the first keys in key order. keys is never null.
+type blobFindingsJSON struct {
+	Named   int      `json:"named"`
+	Missing int      `json:"missing"`
+	Damaged int      `json:"damaged"`
+	Keys    []string `json:"keys"`
 }
 
 // restoreWarningJSON is one warning of a restore. The code is stable, so a
@@ -118,6 +138,14 @@ type getRestoreResponse struct {
 	Warnings []restoreWarningJSON `json:"warnings"`
 	// DevData is set when the restore found or removed dev data.
 	DevData *devDataJSON `json:"devData,omitempty"`
+	// PreBackupFound is set when the backup before the restore found live
+	// blobs missing or damaged.
+	PreBackupFound *blobFindingsJSON `json:"preBackupFound,omitempty"`
+	// NotHeld is set when the restored backup holds no copy of some blobs
+	// that its data names. The restore leaves those live keys as they are.
+	NotHeld *blobFindingsJSON `json:"notHeld,omitempty"`
+	// MissingBlobLimit is the effective bound on missing live blobs.
+	MissingBlobLimit missingBlobLimitJSON `json:"missingBlobLimit"`
 }
 
 // startRestore starts a restore in the background and answers 202 with its
@@ -187,7 +215,9 @@ func (h *Handler) startRestore(
 		warnings = warningsJSON(record)
 	}
 
-	h.writeJSON(ctx, w, http.StatusAccepted, startRestoreResponse{ID: id.String(), Warnings: warnings})
+	h.writeJSON(ctx, w, http.StatusAccepted, startRestoreResponse{
+		ID: id.String(), Warnings: warnings, MissingBlobLimit: missingBlobLimit(),
+	})
 }
 
 // canReplaceAccess reports whether p may replace the access tables in a
@@ -309,6 +339,10 @@ func (h *Handler) getRestore(w http.ResponseWriter, r *http.Request, _ identity.
 		Manifest:    nil,
 		Warnings:    warningsJSON(record),
 		DevData:     devDataOf(record),
+
+		PreBackupFound:   preBackupFoundOf(record),
+		NotHeld:          notHeldOf(record),
+		MissingBlobLimit: missingBlobLimit(),
 	}
 
 	if record.PreBackupID != "" {
@@ -391,6 +425,45 @@ func devDataOf(record backup.RestoreRecord) *devDataJSON {
 	}
 
 	return &devDataJSON{Principals: record.DevReport.Classes[backup.RemovedPrincipals], Classes: classes}
+}
+
+// missingBlobLimit returns the effective bound on missing live blobs.
+func missingBlobLimit() missingBlobLimitJSON {
+	limit := backup.EffectiveMissingBlobLimit()
+
+	return missingBlobLimitJSON{Count: limit.Count, Percent: limit.Percent}
+}
+
+// preBackupFoundOf renders what the backup before the restore of record found
+// at the live blobs, or nil when it found none.
+func preBackupFoundOf(record backup.RestoreRecord) *blobFindingsJSON {
+	if record.DevReport == nil {
+		return nil
+	}
+
+	return findingsJSON(record.DevReport.PreBackupFound)
+}
+
+// notHeldOf renders the blobs that the restored backup of record holds no
+// copy of, or nil when it holds every blob that its data names.
+func notHeldOf(record backup.RestoreRecord) *blobFindingsJSON {
+	if record.DevReport == nil {
+		return nil
+	}
+
+	return findingsJSON(record.DevReport.NotHeld)
+}
+
+// findingsJSON renders found, or nil when found is nil or names no blob.
+func findingsJSON(found *backup.BlobFindings) *blobFindingsJSON {
+	if found == nil || found.Empty() {
+		return nil
+	}
+
+	keys := make([]string, 0, len(found.Keys))
+	keys = append(keys, found.Keys...)
+
+	return &blobFindingsJSON{Named: found.Named, Missing: found.Missing, Damaged: found.Damaged, Keys: keys}
 }
 
 // cancelRestoreResponse answers an accepted cancel: the ID of the restore.
