@@ -225,7 +225,12 @@ func (s *Store) PruneNameLocks(
 
 		before := now - age.Milliseconds()
 
-		ended, err := pruneEnded(ctx, q, e, endedPrune{before: before, now: now, limit: int64(endedLimit)})
+		// Defense in depth: CheckPruneRequest refuses an ended limit above the
+		// limit too. This bound stays so that a change of that check never lets
+		// a run delete more counts than its limit.
+		ended, err := pruneEnded(ctx, q, e, endedPrune{
+			before: before, now: now, limit: int64(min(endedLimit, limit)),
+		})
 		if err != nil {
 			return err
 		}

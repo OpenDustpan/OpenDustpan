@@ -230,7 +230,7 @@ func CheckClearRequest(scopes []string, name string) error {
 
 // CheckPruneRequest returns ErrInvalidLock for a prune with an age of 0 or
 // less, with a limit below 1 or above MaxNamePruneRows, or with an ended
-// limit below 1 or above MaxNamePruneEnded. Each adapter of NameLockCounter
+// limit below 1, above MaxNamePruneEnded or above the limit. Each adapter of NameLockCounter
 // calls it before PruneNameLocks writes, so a request that it refuses changes
 // nothing.
 func CheckPruneRequest(age time.Duration, limit, endedLimit int) error {
@@ -241,6 +241,8 @@ func CheckPruneRequest(age time.Duration, limit, endedLimit int) error {
 		return fmt.Errorf("%w: prune limit %d", ErrInvalidLock, limit)
 	case endedLimit < 1 || endedLimit > MaxNamePruneEnded:
 		return fmt.Errorf("%w: prune limit of ended locks %d", ErrInvalidLock, endedLimit)
+	case endedLimit > limit:
+		return fmt.Errorf("%w: prune limit of ended locks %d above the limit %d", ErrInvalidLock, endedLimit, limit)
 	default:
 		return nil
 	}
