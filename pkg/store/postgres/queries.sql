@@ -5419,11 +5419,13 @@ UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = $1 AND nam
 SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
 FROM name_locks WHERE scope = $1 AND name = $2 ORDER BY sub;
 
--- name: PruneNameLocks :execrows
+-- name: PruneNameLocks :many
 -- Deletes at most max_rows counts whose last failure is at or before
 -- before_ms, whose lock ended at now_ms, and whose level is 0 or past its
 -- reset time. The select skips a row that a failure locks now, and the
--- delete checks the conditions again on the row that it deletes.
+-- delete checks the conditions again on the row that it deletes. It returns
+-- the end of the lock of each deleted count: a value other than 0 is a lock
+-- that ended and that no add has seen.
 DELETE FROM name_locks
 WHERE (scope, name, sub) IN (
     SELECT p.scope, p.name, p.sub FROM name_locks p
@@ -5433,7 +5435,8 @@ WHERE (scope, name, sub) IN (
     FOR UPDATE SKIP LOCKED
 )
   AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms <= sqlc.arg('now_ms')::bigint
-  AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms')::bigint);
+  AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms')::bigint)
+RETURNING locked_until_ms;
 
 -- name: InsertNameLockKey :exec
 INSERT INTO name_lock_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING;

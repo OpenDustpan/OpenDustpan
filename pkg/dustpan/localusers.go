@@ -127,6 +127,7 @@ func newLocalUserService(
 		SSO:        identityProviders(cfg, signIn), Reach: reach, Subjects: subjects,
 		Kind: cfg.installationKind,
 		Now:  cfg.now,
+		Log:  cfg.logger,
 	})
 	if err != nil {
 		return none, fmt.Errorf("local users: %w", err)

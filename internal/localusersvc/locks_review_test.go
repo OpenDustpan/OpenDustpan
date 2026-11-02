@@ -223,6 +223,7 @@ func (f *fixture) demoService(t *testing.T, kind installation.Kind) *localusersv
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:   nil,
 		Store: demoFlag{Stores: f.store}, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: f.store, Keys: f.store, Settings: f.settings,
 		SSO: func(context.Context) (bool, error) { return false, nil }, Reach: f.storeReach(), Kind: kind, Now: nil,
@@ -339,7 +340,7 @@ func TestPruneLocksKeepsRecentCountsWithItsRecord(t *testing.T) {
 
 // checkPruneEntry checks that e is the entry of a run of the prune that
 // deleted nothing: the server as the subject, the reason, the object and the
-// change pruned 0.
+// changes pruned 0 and locksEnded 0.
 func checkPruneEntry(t *testing.T, e *audit.Entry) {
 	t.Helper()
 
@@ -348,8 +349,13 @@ func checkPruneEntry(t *testing.T, e *audit.Entry) {
 		t.Fatalf("entry of the prune = %+v, want the server, the reason and the object", e)
 	}
 
-	if len(e.Changes) != 1 || e.Changes[0].Key != "pruned" || e.Changes[0].New != "0" {
-		t.Fatalf("changes of the entry of the prune = %+v, want pruned 0", e.Changes)
+	got := map[string]string{}
+	for _, ch := range e.Changes {
+		got[ch.Key] = ch.New
+	}
+
+	if len(e.Changes) != 2 || got["pruned"] != "0" || got["locksEnded"] != "0" {
+		t.Fatalf("changes of the entry of the prune = %+v, want pruned 0 and locksEnded 0", e.Changes)
 	}
 }
 
@@ -464,6 +470,7 @@ func (f *fixture) serviceWithSubjects(t *testing.T, subjects localusersvc.Subjec
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:   nil,
 		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: f.store, Keys: f.store, Settings: f.settings,
 		SSO: func(context.Context) (bool, error) { return false, nil }, Reach: f.storeReach(),
