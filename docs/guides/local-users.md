@@ -201,19 +201,22 @@ refuses the attempt with an error before it compares the password, and it
 writes the error to the log. So a lock never exists without its entry.
 
 The end of a lock has an entry the first time that the name gets an attempt
-after the lock ended (`sign-in.name-lock-ended`). A lock that ends with no
-later attempt has no entry of its own. The prune of old counts records how
-many such locks it deleted in the change `locksEnded` of its entry.
+after the lock ended (`sign-in.name-lock-ended`). The prune of old counts
+writes the same entry for each lock that ended with no later attempt, before
+it deletes the count. One run writes at most 1000 of these entries, and the
+next run writes the rest. The change `locksEnded` of the entry of the run
+gives their number.
 
-A new lock also sends the notification `sign-in.locked` to the
+A new lock of a user name also sends the notification `sign-in.locked` to the
 administrators of the installation, with the severity warning. The
 notification names the audit object, the scope, the end of the lock and the
-level, and never a user name. A lock of one name from one source, and a lock
-of the second factors of a person, send at most one notification for each
-name in each clock hour, also when many source prefixes lock the same name.
-A lock of one name from every source sends its notification at once, each
-time. Only a principal that can manage the notifications of the installation
-can read the notification.
+level, and never a user name. A lock of one name from one source sends at
+most one notification for each name in each hour. The hour is the hour
+before the lock, counted in whole minutes, so a second lock of the name
+less than one hour after the notification sends none. The audit log still
+holds the entry of each lock. A lock of one name from every source sends its
+notification at once, each time. Only a principal that can manage the
+notifications of the installation can read the notification.
 
 Read the counts of a local user:
 
@@ -253,7 +256,7 @@ of counts, in the transaction of the delete. `GET
 `lockPrune`:
 
 ```json
-{"lockPrune": {"intervalSeconds": 3600, "ageSeconds": 172800, "maxRows": 10000}}
+{"lockPrune": {"intervalSeconds": 3600, "ageSeconds": 172800, "maxRows": 10000, "maxEndedLocks": 1000}}
 ```
 
 ## Change the own password
@@ -341,7 +344,7 @@ value and the source of each one.
 | `password.rehashed` | A sign-in stores a new hash with the current parameters. |
 | `sign-in.password-failed` | A password sign-in fails. The changes record the real reason. |
 | `sign-in.name-locked` | A count locks a user name. The changes record the scope, the end of the lock and the level. |
-| `sign-in.name-lock-ended` | The first attempt for a user name after a lock ended. The changes record the scope and the end of the lock. |
+| `sign-in.name-lock-ended` | The first attempt for a user name after a lock ended, or the prune of the count of a lock that ended with no attempt. The changes record the scope and the end of the lock. |
 | `sign-in.name-unlocked` | An administrator ends the counts and locks of a user name, with a reason. A refused unlock writes a denied entry with the cause. |
 | `sign-in.name-locks-read` | The server refuses a read of the counts of a user name. The changes record the cause. |
 | `sign-in.name-counts-kept` | A good current password could not clear the counts of its name. The counts stay. |
