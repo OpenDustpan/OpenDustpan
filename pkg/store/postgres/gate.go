@@ -95,15 +95,23 @@ type gateTx struct {
 	q   *db.Queries
 	ids map[namespace.Name]string
 	// units holds the stable unit ID of each unit scope key that the
-	// transaction resolved, and refs holds the unit of each unit ID.
+	// transaction resolved, and refs holds the unit of each namespace ID and
+	// unit ID.
 	units map[string]string
-	refs  map[string]unitRef
+	refs  map[unitKey]unitRef
+}
+
+// unitKey is the key of the cache of the units of a transaction: the ID of
+// the namespace that the lookup named, and the stable ID of the unit.
+type unitKey struct {
+	nsID   string
+	unitID string
 }
 
 var _ gatestore.Tx = (*gateTx)(nil)
 
 func newGateTx(q *db.Queries) *gateTx {
-	return &gateTx{q: q, ids: map[namespace.Name]string{}, units: map[string]string{}, refs: map[string]unitRef{}}
+	return &gateTx{q: q, ids: map[namespace.Name]string{}, units: map[string]string{}, refs: map[unitKey]unitRef{}}
 }
 
 func (t *gateTx) ScopeExists(ctx context.Context, scope gate.Scope) (bool, error) {
@@ -564,14 +572,19 @@ func (t *gateTx) checkUnitID(ctx context.Context, nsID string, scope gate.Scope)
 // unitOfID returns the live or the deleted unit of the stable ID id in the
 // namespace nsID, and false when there is none.
 func (t *gateTx) unitOfID(ctx context.Context, nsID, id string) (unitRef, bool, error) {
-	if ref, ok := t.refs[id]; ok {
+	// Defense in depth: the queries select the unit by the namespace and the
+	// ID, and checkUnitID compares the namespace and the tool of the unit
+	// with the scope. The cache keys on the namespace too, so that a unit
+	// that a lookup of one namespace found never answers a lookup of another.
+	key := unitKey{nsID: nsID, unitID: id}
+	if ref, ok := t.refs[key]; ok {
 		return ref, true, nil
 	}
 
 	live, err := t.q.GetGateLiveUnit(ctx, db.GetGateLiveUnitParams{NamespaceID: nsID, UnitID: id})
 	if err == nil {
 		ref := unitRef{ns: namespace.Name(live.Namespace), tool: live.Tool, name: live.Name, deleted: false}
-		t.refs[id] = ref
+		t.refs[key] = ref
 
 		return ref, true, nil
 	}
@@ -590,7 +603,7 @@ func (t *gateTx) unitOfID(ctx context.Context, nsID, id string) (unitRef, bool, 
 	}
 
 	ref := unitRef{ns: namespace.Name(gone.Namespace), tool: gone.Tool, name: gone.Name, deleted: true}
-	t.refs[id] = ref
+	t.refs[key] = ref
 
 	return ref, true, nil
 }
