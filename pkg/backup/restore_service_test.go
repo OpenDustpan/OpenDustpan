@@ -1951,6 +1951,7 @@ func (k fixedKind) ReadKind(_ context.Context) (installation.Kind, error) {
 func emptyReport() backup.DevStripReport {
 	return backup.DevStripReport{
 		Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil, Approvers: nil, Warnings: nil,
+		PreBackupFound: nil, NotHeld: nil,
 	}
 }
 

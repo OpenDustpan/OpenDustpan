@@ -518,7 +518,6 @@ func startInput(id RestoreID, req RestoreRequest) ([]byte, error) {
 	in := restoreInput{
 		ID: id, BackupID: req.BackupID, PreBackupID: req.PreBackupID, CheckOnly: req.CheckOnly, Force: req.Force,
 		RequestedBy: req.RequestedBy, KeepAccessTables: req.KeepAccessTables,
-		evidence: preBackupResult{Digest: "", Damaged: 0, Created: false},
 	}
 
 	if in.PreBackupID == "" {
@@ -853,6 +852,10 @@ func sanitizeRestoreError(err error) string {
 		return notBacked.Error()
 	}
 
+	if refused, ok := errors.AsType[*LiveBlobsError](err); ok && refused != nil {
+		return refused.Error()
+	}
+
 	for _, sentinel := range storedRestoreSentinels {
 		if errors.Is(err, sentinel) {
 			return sentinel.Error()
@@ -1156,12 +1159,6 @@ func (s *RestoreService) readPinnedManifest(ctx context.Context, id ID, pinned p
 	}
 
 	if err := checkPinnedManifest(manifest, id, pinned); err != nil {
-		return Manifest{}, err
-	}
-
-	// A backup before a restore that found damaged live blobs holds no copy
-	// of them. Restoring it would bring back rows with no content.
-	if err := refuseDamagedBackup(manifest); err != nil {
 		return Manifest{}, err
 	}
 
