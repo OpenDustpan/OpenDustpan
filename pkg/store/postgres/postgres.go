@@ -52,9 +52,9 @@ var schemaFile string
 //go:embed schema_migrations.sql
 var versionTable string
 
-// embeddedMigrations returns the migrations that the binary embeds: until
+// loadMigrations returns the migrations that the binary embeds: until
 // the first tag, the schema file alone.
-func embeddedMigrations() ([]migrate.Migration, error) {
+func loadMigrations() ([]migrate.Migration, error) {
 	m, err := migrate.SchemaFile(schemaFile)
 	if err != nil {
 		return nil, fmt.Errorf("load the schema file: %w", err)
@@ -1316,7 +1316,7 @@ func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q
 const migrationDeadline = 15 * time.Minute
 
 func (s *Store) migrate(ctx context.Context) error {
-	all, err := embeddedMigrations()
+	all, err := loadMigrations()
 	if err != nil {
 		return err
 	}
@@ -1368,17 +1368,9 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 		return err
 	}
 
-	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
-		return fmt.Errorf("check schema versions: %w", baselineErr)
-	}
-
-	plan, err := migrate.Check(recorded, all, rules.binaryVersion)
+	plan, err := checkSchema(ctx, tx, recorded, all, rules.binaryVersion)
 	if err != nil {
-		return fmt.Errorf("check schema: %w", err)
-	}
-
-	if err := verifyRecorded(ctx, tx, all); err != nil {
-		return fmt.Errorf("check schema: %w", err)
+		return err
 	}
 
 	if err := checkKind(ctx, tx, rules.kind); err != nil {
@@ -1400,6 +1392,28 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 	}
 
 	return nil
+}
+
+// checkSchema runs the three checks of the recorded migrations: the
+// baseline check, migrate.Check and verifyRecorded. Each one refuses a
+// database that another build of the schema made, without the others.
+func checkSchema(
+	ctx context.Context, tx pgx.Tx, recorded []schema.AppliedMigration, all []migrate.Migration, binaryVersion string,
+) (migrate.Plan, error) {
+	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
+		return migrate.Plan{}, fmt.Errorf("check schema versions: %w", baselineErr)
+	}
+
+	plan, err := migrate.Check(recorded, all, binaryVersion)
+	if err != nil {
+		return migrate.Plan{}, fmt.Errorf("check schema: %w", err)
+	}
+
+	if err := verifyRecorded(ctx, tx, all); err != nil {
+		return migrate.Plan{}, fmt.Errorf("check schema: %w", err)
+	}
+
+	return plan, nil
 }
 
 // checkInstances refuses a pending migration that sets a minimum binary

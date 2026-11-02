@@ -19,7 +19,7 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 
 	s := openAt(t, membershipURL(t), "dev")
 
-	all, err := embeddedMigrations()
+	all, err := loadMigrations()
 	if err != nil {
 		t.Fatalf("embedded migrations: %v", err)
 	}

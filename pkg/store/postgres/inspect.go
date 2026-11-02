@@ -58,7 +58,8 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 	for rows.Next() {
 		var applied schema.AppliedMigration
 
-		if scanErr := rows.Scan(&applied.Version, &applied.Name, &applied.MinBinaryVersion, &applied.SHA256); scanErr != nil {
+		scanErr := rows.Scan(&applied.Version, &applied.Name, &applied.MinBinaryVersion, &applied.SHA256)
+		if scanErr != nil {
 			rows.Close()
 
 			return nil, fmt.Errorf("read schema migrations: %w", scanErr)
@@ -82,7 +83,7 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 // dialect the server runs. It still loads the schema file, so a bad header
 // fails here and not only in the adapter tests that pin the list.
 func EmbeddedMigrations() ([]string, int64, error) {
-	if _, err := embeddedMigrations(); err != nil {
+	if _, err := loadMigrations(); err != nil {
 		return nil, 0, err
 	}
 

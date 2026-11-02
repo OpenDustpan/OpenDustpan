@@ -198,18 +198,7 @@ func Check(recorded []schema.AppliedMigration, embedded []Migration, binaryVersi
 		return Plan{Pending: nil, Minimum: minimum}, err
 	}
 
-	done := make(map[int64]bool, len(versions))
-	for _, v := range versions {
-		done[v] = true
-	}
-
-	var pending []Migration
-
-	for _, m := range embedded {
-		if !done[m.Version] {
-			pending = append(pending, m)
-		}
-	}
+	pending := pendingOf(versions, embedded)
 
 	if err := checkPendingMinimums(pending, binaryVersion); err != nil {
 		return Plan{Pending: nil, Minimum: minimum}, err
@@ -229,6 +218,25 @@ func Check(recorded []schema.AppliedMigration, embedded []Migration, binaryVersi
 	default:
 		return Plan{Pending: pending, Minimum: minimum}, nil
 	}
+}
+
+// pendingOf returns the embedded migrations whose version the database does
+// not record, in the order of embedded.
+func pendingOf(versions []int64, embedded []Migration) []Migration {
+	done := make(map[int64]bool, len(versions))
+	for _, v := range versions {
+		done[v] = true
+	}
+
+	var pending []Migration
+
+	for _, m := range embedded {
+		if !done[m.Version] {
+			pending = append(pending, m)
+		}
+	}
+
+	return pending
 }
 
 // Load reads every *.sql file in dir of fsys, ordered by version.

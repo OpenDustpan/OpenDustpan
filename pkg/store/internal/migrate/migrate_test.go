@@ -146,7 +146,9 @@ func TestUnknownRecorded(t *testing.T) {
 func applied(minimums map[int64]string, versions ...int64) []schema.AppliedMigration {
 	out := make([]schema.AppliedMigration, 0, len(versions))
 	for _, v := range versions {
-		out = append(out, schema.AppliedMigration{Version: v, Name: "", MinBinaryVersion: minimums[v], SHA256: sumOf(v)})
+		out = append(out, schema.AppliedMigration{
+			Version: v, Name: "", MinBinaryVersion: minimums[v], SHA256: sumOf(v),
+		})
 	}
 
 	return out
@@ -438,7 +440,7 @@ func TestCheckInstances(t *testing.T) {
 	t.Parallel()
 
 	contract := func(name, minimum string) migrate.Migration {
-		return migrate.Migration{Name: name, SQL: "", MinBinaryVersion: minimum, Version: 0}
+		return migrate.Migration{Name: name, SQL: "", MinBinaryVersion: minimum, SHA256: "", Version: 0}
 	}
 
 	rows := []schema.InstanceRow{
@@ -632,7 +634,7 @@ func TestSchemaFile(t *testing.T) {
 func TestLoadRecordsTheSum(t *testing.T) {
 	t.Parallel()
 
-	fsys := fstest.MapFS{"m/0001_a.sql": {Data: []byte("SELECT 1;")}}
+	fsys := fstest.MapFS{"m/0001_a.sql": mapFile("SELECT 1;")}
 
 	all, err := migrate.Load(fsys, "m")
 	if err != nil || len(all) != 1 {

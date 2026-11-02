@@ -60,15 +60,20 @@ const versionTable = "schema_migrations"
 // schemaFileName is the name of the schema file of each dialect.
 const schemaFileName = "schema.sql"
 
-// displayNames are the names of the dialects in the header of a schema
-// file.
-var displayNames = map[string]string{"sqlite": "SQLite", "postgres": "PostgreSQL"} //nolint:gochecknoglobals // A fixed map, read only.
+// displayName returns the name of dialect in the header of a schema file.
+func displayName(dialect string) string {
+	if dialect == "postgres" {
+		return "PostgreSQL"
+	}
+
+	return "SQLite"
+}
 
 // header returns the comment block that starts the schema file of dialect,
 // written from the migrations of ref.
 func header(dialect, ref string) string {
 	return minimumLine + `
--- The schema of the ` + displayNames[dialect] + ` store. Until the first tag, a change to the
+-- The schema of the ` + displayName(dialect) + ` store. Until the first tag, a change to the
 -- schema edits this file and adds no numbered migration. The server refuses
 -- a database that another version of this file made.
 -- make collapse-schema wrote the first version of this file from the

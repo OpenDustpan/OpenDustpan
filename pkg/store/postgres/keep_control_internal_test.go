@@ -50,7 +50,7 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	name := "test_" + hex.EncodeToString(suffix)
 	ident := pgx.Identifier{name}.Sanitize()
 
-	all, err := embeddedMigrations()
+	all, err := loadMigrations()
 	if err != nil {
 		t.Fatalf("load migrations: %v", err)
 	}

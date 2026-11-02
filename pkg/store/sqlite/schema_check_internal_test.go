@@ -27,7 +27,7 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 		}
 	})
 
-	all, err := embeddedMigrations()
+	all, err := loadMigrations()
 	if err != nil {
 		t.Fatalf("embedded migrations: %v", err)
 	}
@@ -58,7 +58,8 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 		}
 	}
 
-	if _, execErr := s.conn.ExecContext(t.Context(), `ALTER TABLE schema_migrations DROP COLUMN sha256`); execErr != nil {
+	_, execErr := s.conn.ExecContext(t.Context(), `ALTER TABLE schema_migrations DROP COLUMN sha256`)
+	if execErr != nil {
 		t.Fatalf("drop the sha256 column: %v", execErr)
 	}
 

@@ -93,37 +93,44 @@ func TestOpenRefusesAnotherSchemaFile(t *testing.T) {
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-
-			path := filepath.Join(t.TempDir(), "dustpan.db")
-
-			s, err := sqlite.Open(t.Context(), path)
-			if err != nil {
-				t.Fatalf("open: %v", err)
-			}
-
-			if closeErr := s.Close(); closeErr != nil {
-				t.Fatalf("close: %v", closeErr)
-			}
-
-			execRaw(t, path, change)
-
-			beforeVersions, beforeTables := newerSchemaSnapshot(t, path)
-
-			_, err = sqlite.Open(t.Context(), path)
-			if !errors.Is(err, schema.ErrSchemaChanged) {
-				t.Fatalf("open a database of another schema file: err = %v, want ErrSchemaChanged", err)
-			}
-
-			if !strings.Contains(err.Error(), "start the server on an empty database") {
-				t.Fatalf("refusal %q does not name the action", err)
-			}
-
-			afterVersions, afterTables := newerSchemaSnapshot(t, path)
-			if !slices.Equal(afterVersions, beforeVersions) || !slices.Equal(afterTables, beforeTables) {
-				t.Fatalf("after refusal: versions %v, tables %v, want %v, %v",
-					afterVersions, afterTables, beforeVersions, beforeTables)
-			}
+			checkRefusesChange(t, change)
 		})
+	}
+}
+
+// checkRefusesChange opens a new database, applies change to it outside the
+// store, and proves that a second open refuses it and changes nothing.
+func checkRefusesChange(t *testing.T, change string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if closeErr := s.Close(); closeErr != nil {
+		t.Fatalf("close: %v", closeErr)
+	}
+
+	execRaw(t, path, change)
+
+	beforeVersions, beforeTables := newerSchemaSnapshot(t, path)
+
+	_, err = sqlite.Open(t.Context(), path)
+	if !errors.Is(err, schema.ErrSchemaChanged) {
+		t.Fatalf("open a database of another schema file: err = %v, want ErrSchemaChanged", err)
+	}
+
+	if !strings.Contains(err.Error(), "start the server on an empty database") {
+		t.Fatalf("refusal %q does not name the action", err)
+	}
+
+	afterVersions, afterTables := newerSchemaSnapshot(t, path)
+	if !slices.Equal(afterVersions, beforeVersions) || !slices.Equal(afterTables, beforeTables) {
+		t.Fatalf("after refusal: versions %v, tables %v, want %v, %v",
+			afterVersions, afterTables, beforeVersions, beforeTables)
 	}
 }
 

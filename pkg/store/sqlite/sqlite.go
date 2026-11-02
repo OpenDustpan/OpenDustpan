@@ -206,9 +206,9 @@ var schemaFile string
 //go:embed schema_migrations.sql
 var versionTable string
 
-// embeddedMigrations returns the migrations that the binary embeds: until
+// loadMigrations returns the migrations that the binary embeds: until
 // the first tag, the schema file alone.
-func embeddedMigrations() ([]migrate.Migration, error) {
+func loadMigrations() ([]migrate.Migration, error) {
 	m, err := migrate.SchemaFile(schemaFile)
 	if err != nil {
 		return nil, fmt.Errorf("load the schema file: %w", err)
@@ -1460,7 +1460,7 @@ func (s *Store) fencedTx(
 }
 
 func (s *Store) migrate(ctx context.Context) error {
-	all, err := embeddedMigrations()
+	all, err := loadMigrations()
 	if err != nil {
 		return err
 	}

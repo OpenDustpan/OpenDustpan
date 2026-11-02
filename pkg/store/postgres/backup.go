@@ -1179,7 +1179,7 @@ func newStagingSchema() (string, error) {
 // control schema: the live tables stay untouched. It records every migration in the staging
 // schema_migrations, so the staged data carries its own schema version.
 func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
-	all, err := embeddedMigrations()
+	all, err := loadMigrations()
 	if err != nil {
 		return err
 	}
