@@ -1,4 +1,4 @@
-package stack_test
+package pulumi
 
 import (
 	"bytes"
@@ -99,7 +99,7 @@ func TestRebindSecretsProvider(t *testing.T) {
 			t.Parallel()
 
 			in := []byte(tc.deployment)
-			got := stack.RebindSecretsProvider(in, ref)
+			got := rebindSecretsProvider(in, ref)
 
 			if tc.unchanged {
 				if !bytes.Equal(got, in) {
@@ -149,7 +149,7 @@ func TestRebindSecretsProviderRebindsEveryCopy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := stack.RebindSecretsProvider([]byte(tc.deployment), ref)
+			got := rebindSecretsProvider([]byte(tc.deployment), ref)
 
 			if n := bytes.Count(got, []byte(`"stack":"f2"`)); n != tc.wantNew {
 				t.Fatalf("copies that name the stack f2 = %d, want %d: %s", n, tc.wantNew, got)
@@ -192,20 +192,21 @@ type providersDoc struct {
 	State map[string]string `json:"state"`
 }
 
-// deploymentDoc is the part of a deployment that the tests read.
-type deploymentDoc struct {
-	Providers providersDoc `json:"secrets_providers"` //nolint:tagliatelle // The Pulumi wire name; it must not change.
-}
-
 // providerState reads the state of the secrets provider of a deployment.
 func providerState(t *testing.T, deployment []byte) map[string]string {
 	t.Helper()
 
-	var doc deploymentDoc
+	var doc map[string]json.RawMessage
 
 	if err := json.Unmarshal(deployment, &doc); err != nil {
 		t.Fatalf("decode deployment: %v", err)
 	}
 
-	return doc.Providers.State
+	var providers providersDoc
+
+	if err := json.Unmarshal(doc[secretsProvidersMember], &providers); err != nil {
+		t.Fatalf("decode %s: %v", secretsProvidersMember, err)
+	}
+
+	return providers.State
 }
