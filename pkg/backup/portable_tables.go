@@ -227,6 +227,11 @@ func portableSpec() []PortableTable {
 				{Name: "lock_holder", Kind: KindText},
 				{Name: "lock_since_ms", Kind: KindTime},
 				{Name: "lock_operation", Kind: KindText},
+				{Name: "last_release_lock_id", Kind: KindText},
+				{Name: "last_release_holder", Kind: KindText},
+				{Name: "last_release_by", Kind: KindText},
+				{Name: portColLastReleaseKind, Kind: KindText},
+				{Name: "last_release_at_ms", Kind: KindTime},
 			},
 		},
 		{

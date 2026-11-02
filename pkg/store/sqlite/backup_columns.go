@@ -220,6 +220,11 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"lock_holder",
 				"lock_since_ms",
 				"lock_operation",
+				"last_release_lock_id",
+				"last_release_holder",
+				"last_release_by",
+				"last_release_kind",
+				"last_release_at_ms",
 			},
 		},
 		{
