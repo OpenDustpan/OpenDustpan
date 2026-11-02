@@ -215,7 +215,8 @@ func checkFailedAdd(t *testing.T, f *fixture, principalID, logs string) {
 	}
 
 	// The list answers the newest entry first.
-	if last := f.entriesWith(t, localusersvc.ActionSignInPasswordFails)[0]; last.Outcome != audit.OutcomeFailure {
-		t.Fatalf("last refusal = %+v, want an entry with the outcome failure", last)
+	refusals := f.entriesWith(t, localusersvc.ActionSignInPasswordFails)
+	if len(refusals) == 0 || refusals[0].Outcome != audit.OutcomeFailure {
+		t.Fatalf("refusals = %+v, want the newest with the outcome failure", refusals)
 	}
 }
