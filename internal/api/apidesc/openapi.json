@@ -323,6 +323,9 @@
           },
           "installationKind": {
             "type": "string"
+          },
+          "stateWriteGates": {
+            "$ref": "#/components/schemas/StateWriteGates"
           }
         },
         "required": [
@@ -4927,6 +4930,35 @@
           "maxBytes"
         ],
         "type": "object"
+      },
+      "StateWriteGates": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StateWriteGatesMode"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "StateWriteGatesMode": {
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
       },
       "StoreCheck": {
         "properties": {

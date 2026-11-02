@@ -13,6 +13,7 @@ import (
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -124,7 +125,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 		Now:           nil,
 		PublicURL:     "https://dustpan.example.com",
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

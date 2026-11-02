@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
@@ -264,9 +265,9 @@ type Config struct {
 	// Nil means session.DefaultTokenFreshness.
 	SessionPolicy SessionPolicy
 	// StateGuard checks each write of state against the access limits and
-	// the gates of state.write. Nil means the server keeps no gates: no
-	// write is checked.
-	StateGuard StateGuard
+	// the gates of state.write. It is required. A server whose store keeps
+	// no gates gives the guard of stategate.Off with its reason.
+	StateGuard stategate.Guard
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -291,10 +292,26 @@ type Handler struct {
 	maxState int64
 	// registry is nil when the handler serves no provider registry protocol.
 	registry *registryState
-	// stateGuard is nil when the server keeps no gates.
-	stateGuard StateGuard
-	mux        *patternMux
-	routes     []Route
+	// admit asks the state.write guard before each checked write.
+	admit  *stategate.Admitter
+	mux    *patternMux
+	routes []Route
+}
+
+// newGuards returns the recorder of the refusals and the admission of the
+// writes of state of cfg. A missing state guard is ErrMissingDependency.
+func newGuards(cfg Config) (*refusal.Recorder, *stategate.Admitter, error) {
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
+	admit, err := stategate.New(cfg.StateGuard, cfg.Logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: state guard: %w", ErrMissingDependency, err)
+	}
+
+	return recorder, admit, nil
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -319,9 +336,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
-	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	recorder, admit, err := newGuards(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("denial recorder: %w", err)
+		return nil, err
 	}
 
 	h := &Handler{
@@ -341,7 +358,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("tfe"),
 		gate:           cfg.Gate,
 		maxState:       cfg.MaxStateBytes,
-		stateGuard:     cfg.StateGuard,
+		admit:          admit,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}

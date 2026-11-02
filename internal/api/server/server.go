@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
@@ -160,6 +161,10 @@ type Config struct {
 	// InstallationKind is the kind that the capabilities document answers
 	// to a signed-in caller. Empty means production.
 	InstallationKind installation.Kind
+	// StateWriteGates is the effective value of the state.write gates, which
+	// the capabilities document answers to a signed-in caller. A zero value
+	// means that the wiring gives none, and the document leaves it out.
+	StateWriteGates stategate.Effective
 	// GitHost keeps the registration of the GitHub App of the installation, the
 	// map of its installations and the connections of the namespaces. Nil
 	// means the store keeps none: the Git host routes are not mounted. Both SQL
@@ -226,6 +231,7 @@ type Handler struct {
 	workers        WorkerSource
 	signIn         *signInState
 	kind           installation.Kind
+	stateWrite     stategate.Effective
 	preferences    *preferences.Service
 	localUsers     *localusersvc.Service
 	settings       *setting.Service
@@ -285,6 +291,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
+		stateWrite:     cfg.StateWriteGates,
 		preferences:    cfg.Preferences,
 		localUsers:     cfg.LocalUsers,
 		settings:       cfg.Settings,

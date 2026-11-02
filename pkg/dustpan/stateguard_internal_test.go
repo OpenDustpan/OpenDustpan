@@ -3,15 +3,18 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // errReaderDown is the error of an inventory reader that does not answer.
@@ -273,12 +276,116 @@ func TestPrincipalSubjectsRefuseAnUnknownCredential(t *testing.T) {
 	}
 }
 
-func TestNoGateServiceWithoutGateStoreOrInventory(t *testing.T) {
+// TestStateWriteGatesOffWithAStoreThatKeepsNoGates checks that a store with
+// no gates gives the explicit guard of the gates off, with its reason, and
+// never a nil guard.
+func TestStateWriteGatesOffWithAStoreThatKeepsNoGates(t *testing.T) {
 	t.Parallel()
 
-	svc, err := newGateService(new(settings), nil)
-	if svc != nil || err != nil {
-		t.Fatalf("newGateService(no store) = %v, %v, want nil, nil: no write is checked", svc, err)
+	gates, err := newStateWriteGates(new(settings), nil)
+	if err != nil {
+		t.Fatalf("newStateWriteGates(no gate store) = %v, want nil", err)
+	}
+
+	if gates.svc != nil || gates.guard == nil {
+		t.Fatalf("newStateWriteGates(no gate store) = service %v, guard %v, want no service and a guard",
+			gates.svc, gates.guard)
+	}
+
+	eff := gates.effective()
+	if eff.Mode != stategate.ModeOff || eff.Reason != reasonNoGateStore {
+		t.Fatalf("effective = %+v, want off with %q", eff, reasonNoGateStore)
+	}
+}
+
+// openGateStore opens a SQLite store, which keeps gates.
+func openGateStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	return st
+}
+
+// TestStateWriteGatesRefuseAGateStoreWithAMissingPart sends a store that
+// keeps gates with no inventory reader or no namespace service straight to
+// the rule, as if the option check had passed it. The server must not start.
+func TestStateWriteGatesRefuseAGateStoreWithAMissingPart(t *testing.T) {
+	t.Parallel()
+
+	st := openGateStore(t)
+
+	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		inventory  inventory.Reader
+		namespaces *namespace.Service
+	}{
+		{"no inventory reader", nil, nss},
+		{"no namespace service", st, nil},
+		{"neither", nil, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := new(settings)
+			cfg.namespaceStore, cfg.inventoryReader, cfg.now = st, tc.inventory, time.Now
+
+			gates, err := newStateWriteGates(cfg, tc.namespaces)
+			if !errors.Is(err, ErrMissingOption) || !errors.Is(err, errGateParts) {
+				t.Fatalf("newStateWriteGates() error = %v, want ErrMissingOption and errGateParts", err)
+			}
+
+			if gates.guard != nil || gates.svc != nil {
+				t.Fatalf("newStateWriteGates() gave a guard %v with the error", gates.guard)
+			}
+
+			if _, claimErr := claimGates(cfg, gates); !errors.Is(claimErr, errGateParts) {
+				t.Fatalf("claimGates() error = %v, want errGateParts: the claimer follows the same rule", claimErr)
+			}
+		})
+	}
+}
+
+// TestClaimGuardOffFindsNoGate checks that the claimer follows the rule of
+// the tool adapters: with the gates off, no gate covers a unit, and the guard
+// is not nil.
+func TestClaimGuardOffFindsNoGate(t *testing.T) {
+	t.Parallel()
+
+	gates, err := newStateWriteGates(new(settings), nil)
+	if err != nil {
+		t.Fatalf("newStateWriteGates: %v", err)
+	}
+
+	guard, err := claimGates(new(settings), gates)
+	if err != nil {
+		t.Fatalf("claimGates() = %v, want nil", err)
+	}
+
+	unit, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatalf("unit: %v", err)
+	}
+
+	enforced, err := guard.Enforced(t.Context(), unit)
+	if err != nil || len(enforced) != 0 {
+		t.Fatalf("Enforced() = %v, %v, want no gate and no error", enforced, err)
 	}
 }
 

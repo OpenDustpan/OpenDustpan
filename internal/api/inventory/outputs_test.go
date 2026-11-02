@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -141,7 +142,7 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: nil, Moves: nil,
 		Authenticator: subjectAuthenticator{}, Authorizer: authz, Audit: orTestAudit(auditStore),
 		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, PublicURL: "", Logger: slog.New(slog.DiscardHandler),
-		Now: nil, StateGuard: nil,
+		Now: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

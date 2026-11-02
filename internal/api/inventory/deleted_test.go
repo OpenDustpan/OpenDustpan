@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -171,7 +172,11 @@ func buildDeletedFixture(
 	t.Helper()
 
 	return buildGuardedFixture(t, guardSpec{
-		entries: entries, authz: authz, lifecycleErr: lifecycleErr, scope: scope, guard: nil,
+		entries:      entries,
+		authz:        authz,
+		lifecycleErr: lifecycleErr,
+		scope:        scope,
+		guard:        stategate.Off("the test keeps no gates"),
 	})
 }
 
@@ -181,11 +186,26 @@ type guardSpec struct {
 	authz        identity.Authorizer
 	lifecycleErr error
 	scope        apiinventory.DeletedReadScope
-	guard        apiinventory.StateGuard
+	guard        stategate.Guard
 }
 
 // buildGuardedFixture is buildDeletedFixture with the state guard of spec.
 func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
+	t.Helper()
+
+	cfg, pulumi := guardedConfig(t, spec)
+
+	handler, err := newCheckedHandler(t, cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return deletedFixture{handler: handler, pulumi: pulumi}
+}
+
+// guardedConfig returns the config of a handler over the deleted units of
+// spec, with the state guard of spec, and the lifecycle of the Pulumi units.
+func guardedConfig(t *testing.T, spec guardSpec) (apiinventory.Config, *memLifecycle) {
 	t.Helper()
 
 	entries, authz, lifecycleErr, scope, guard := spec.entries, spec.authz, spec.lifecycleErr, spec.scope, spec.guard
@@ -200,7 +220,7 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
-	handler, err := newCheckedHandler(t, apiinventory.Config{
+	return apiinventory.Config{
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
@@ -224,12 +244,7 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
 		DenialLimiter: nil,
 		StateGuard:    guard,
-	})
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-
-	return deletedFixture{handler: handler, pulumi: pulumi}
+	}, pulumi
 }
 
 // serve sends one signed-in request and returns the recorder.
