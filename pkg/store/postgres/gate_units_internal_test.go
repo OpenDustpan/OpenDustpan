@@ -71,45 +71,24 @@ func TestGateUnitChecks(t *testing.T) {
 			return tx.SetReferences(t.Context(), ghost, row.Kind, row.ID, nil)
 		}, gate.ErrUnitNotFound},
 		{"an insert at a unit scope with a unit ID", func(tx *gateTx) error {
-			byID, err := gateUnitScope(t, "net").WithUnitID("ws-net")
-			if err != nil {
-				return err
-			}
-
-			return tx.Insert(t.Context(), byID, row, time.Now())
+			return tx.Insert(t.Context(), gateScopeByID(t, "opentofu", "net", "ws-net"), row, time.Now())
 		}, gate.ErrInvalid},
 		{"a read with the ID of another unit", func(tx *gateTx) error {
-			byID, err := gateUnitScope(t, "net").WithUnitID("ws-gone")
-			if err != nil {
-				return err
-			}
-
-			_, err = tx.List(t.Context(), byID, row.Kind)
+			_, err := tx.List(t.Context(), gateScopeByID(t, "opentofu", "net", "ws-gone"), row.Kind)
 
 			return err
 		}, gate.ErrInvalid},
 		{"a read with the real ID of a unit of another namespace", func(tx *gateTx) error {
 			// The workspace net of globex exists. Its ID with the scope of the
 			// workspace net of acme names a unit of another namespace.
-			byID, err := gateUnitScope(t, "net").WithUnitID("ws-globex-net")
-			if err != nil {
-				return err
-			}
+			byID := gateScopeByID(t, "opentofu", "net", "ws-globex-net")
 
 			return tx.checkUnitID(t.Context(), gateNamespaceIDOfAcme(t, tx), byID)
 		}, gate.ErrInvalid},
 		{"a read with the real ID of a unit of another tool", func(tx *gateTx) error {
 			// The workspace net of acme exists. Its ID with the scope of a
 			// Pulumi stack names a unit of another tool.
-			stackScope, err := gate.UnitScope("acme", "pulumi", "web/prod")
-			if err != nil {
-				return err
-			}
-
-			byID, err := stackScope.WithUnitID("ws-net")
-			if err != nil {
-				return err
-			}
+			byID := gateScopeByID(t, "pulumi", "web/prod", "ws-net")
 
 			return tx.checkUnitID(t.Context(), gateNamespaceIDOfAcme(t, tx), byID)
 		}, gate.ErrInvalid},
@@ -268,4 +247,22 @@ func gateNamespaceIDOfAcme(t *testing.T, tx *gateTx) string {
 	}
 
 	return id
+}
+
+// gateScopeByID returns the scope of the unit name of tool in acme, with the
+// stable ID id.
+func gateScopeByID(t *testing.T, tool, name, id string) gate.Scope {
+	t.Helper()
+
+	scope, err := gate.UnitScope("acme", tool, name)
+	if err != nil {
+		t.Fatalf("unit scope %s: %v", name, err)
+	}
+
+	byID, err := scope.WithUnitID(id)
+	if err != nil {
+		t.Fatalf("unit scope %s with the ID %s: %v", name, id, err)
+	}
+
+	return byID
 }
