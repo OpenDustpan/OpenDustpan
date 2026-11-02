@@ -5350,6 +5350,7 @@ func (m *memStore) publish(w workspace.Workspace) {
 	name := w.Ref.Name.String()
 
 	m.entries[memInventoryKey{namespace: w.Ref.Namespace, tool: memInventoryTool, name: name}] = inventory.Entry{
+		LastRelease:   nil,
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   w.UpdatedAt,

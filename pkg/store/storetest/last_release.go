@@ -235,18 +235,18 @@ func testLastReleaseInventory(t *testing.T, s WorkspaceStore) {
 	forced := inventory.LastRelease{At: forcedAt, LockID: "lock-alice", Holder: "alice", By: "admin", Kind: "forced"}
 
 	steps := []struct {
-		act  func(t *testing.T) workspace.Workspace
+		act  func(t *testing.T)
 		want *inventory.LastRelease
 		name string
 	}{
 		{
 			name: "a lock never released has no record",
-			act:  func(*testing.T) workspace.Workspace { return w },
+			act:  func(*testing.T) {},
 			want: nil,
 		},
 		{
 			name: "a normal release shows its record",
-			act: func(t *testing.T) workspace.Workspace {
+			act: func(t *testing.T) {
 				t.Helper()
 
 				locked := lockTestWorkspace(t, s, ns, w, "alice")
@@ -258,19 +258,17 @@ func testLastReleaseInventory(t *testing.T, s WorkspaceStore) {
 				if err := s.SaveReleased(t.Context(), released, ns.Fence(), releaseEntry(ns.Name)); err != nil {
 					t.Fatalf("save released: %v", err)
 				}
-
-				return released
 			},
 			want: &normal,
 		},
 		{
 			name: "a repeated read shows the same record",
-			act:  func(*testing.T) workspace.Workspace { return workspace.Workspace{} },
+			act:  func(*testing.T) {},
 			want: &normal,
 		},
 		{
 			name: "a forced release replaces the record",
-			act: func(t *testing.T) workspace.Workspace {
+			act: func(t *testing.T) {
 				t.Helper()
 
 				current, err := s.GetWorkspace(t.Context(), w.Ref)
@@ -284,8 +282,6 @@ func testLastReleaseInventory(t *testing.T, s WorkspaceStore) {
 				if err := s.SaveReleased(t.Context(), released, ns.Fence(), releaseEntry(ns.Name)); err != nil {
 					t.Fatalf("save released: %v", err)
 				}
-
-				return released
 			},
 			want: &forced,
 		},

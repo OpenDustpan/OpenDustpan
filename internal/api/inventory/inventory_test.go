@@ -395,6 +395,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 
 	reader.entries[ns] = []coreinventory.Entry{
 		{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
@@ -409,6 +410,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
@@ -423,6 +425,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
@@ -660,6 +663,7 @@ func TestListUnitsLockField(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					LastRelease:   nil,
 					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
@@ -718,6 +722,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					LastRelease:   nil,
 					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
@@ -773,6 +778,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					LastRelease:   nil,
 					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
