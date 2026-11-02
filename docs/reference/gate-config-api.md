@@ -31,7 +31,17 @@ has the name now, and stores its stable ID. So:
 - A rename of a Pulumi stack, a restore under a new name and a move to another
   collection keep the gates and the access limits of the stack or the workspace.
 - A deleted stack or workspace keeps them until its final delete, which deletes
-  them too. A restore gets them back. Before the restore, no path reaches them.
+  them too. A restore gets them back. The routes of this page name a stack or a
+  workspace by its name, so they do not reach the gates of a deleted one. The
+  restore and the final delete of the deleted unit check them.
+- A deleted unit's gates still count in the checks across scopes, for example a
+  final gate of the namespace with the same ID, or the delete of an approval
+  rule that one of them names. A refusal names such a gate by
+  `deleted-unit/{tool}/{unitID}/{id}`, not by the name of the stack or the
+  workspace, which a new one can have. The
+  [deleted units](../guides/deleted-units.md) of the namespace list it by its
+  tool and its `unitID`. Restore it to change its gates, or purge it to delete
+  them.
 - A new stack or workspace that has the name of a deleted one starts with none.
 - A `PUT` for a name that no stack or workspace has now answers 404 with
   `unit.not-found`. A list for that name is empty, and a `GET` or a `DELETE` of

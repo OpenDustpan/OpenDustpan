@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -978,5 +979,128 @@ func TestStateWriteGateStaysWithTheUnit(t *testing.T) {
 
 	if _, err = e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock)); err != nil {
 		t.Fatalf("GuardStateWrite(new web) = %v, want nil: a new unit with a used name starts clean", err)
+	}
+}
+
+// deleteSWWeb deletes the workspace web of e.
+func (e swEnv) deleteSWWeb(t *testing.T) {
+	t.Helper()
+
+	ref := workspace.Ref{Namespace: "acme", Name: "web"}
+	del := inventory.Deletion{Entry: swEntry(), PurgeAfter: time.Now().Add(time.Hour)}
+
+	if err := e.store.DeleteWorkspace(t.Context(), ref, e.fence, del); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+}
+
+// reuseSWWeb makes a new workspace web, after the delete of the old one, with
+// a deny gate and an access limit of its own.
+func (e swEnv) reuseSWWeb(t *testing.T) {
+	t.Helper()
+
+	w := workspace.Workspace{
+		NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(), ID: "ws-test-web-new", Ref: workspace.Ref{Namespace: "acme", Name: "web"},
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+	}
+	if err := e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
+		t.Fatalf("create workspace again: %v", err)
+	}
+
+	e.putGate(t, newSWGate(atUnit, "new-deny", "", gate.OutcomeDeny, "new unit"))
+	e.putLimit(t, swUnitScope(t, "web"), "new-limit", forbidServices)
+}
+
+// swDeletedWeb returns a state write of the deleted workspace web, named by
+// its stable ID, as the restore and the purge of a deleted unit name it.
+func swDeletedWeb(t *testing.T, subject string, op gate.OperationKind) gate.StateWrite {
+	t.Helper()
+
+	w := swWrite(t, subject, "web", op)
+	w.Unit = w.Unit.WithUnitID("ws-test-web")
+
+	return w
+}
+
+// swDeletedCase is one case of TestDeletedUnitWriteChecksItsOwnGates.
+type swDeletedCase struct {
+	op gate.OperationKind
+	// reuse makes a new live workspace web after the delete.
+	reuse bool
+}
+
+// TestDeletedUnitWriteChecksItsOwnGates checks that the restore and the purge
+// of a deleted unit, which name it by its stable ID, check the gates and the
+// access limits of that unit: with no live unit of its name, and with a new
+// live unit of its name, whose gates and limits do not hold.
+func TestDeletedUnitWriteChecksItsOwnGates(t *testing.T) {
+	t.Parallel()
+
+	for _, op := range []gate.OperationKind{gate.OperationRollback, gate.OperationDelete} {
+		for _, reuse := range []bool{false, true} {
+			tc := swDeletedCase{op: op, reuse: reuse}
+			name := fmt.Sprintf("%s with a new unit of the name: %v", op, reuse)
+
+			t.Run(name+"/gate", func(t *testing.T) {
+				t.Parallel()
+				tc.checkGate(t)
+			})
+
+			t.Run(name+"/limit", func(t *testing.T) {
+				t.Parallel()
+				tc.checkLimit(t)
+			})
+		}
+	}
+}
+
+// checkGate checks that the deleted unit's deny gate refuses the write, and
+// that no gate of a new unit with its name is in the refusal.
+func (tc swDeletedCase) checkGate(t *testing.T) {
+	t.Helper()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+	e.putGate(t, newSWGate(atUnit, "old-deny", "", gate.OutcomeDeny, "old unit"))
+	e.deleteSWWeb(t)
+
+	if tc.reuse {
+		e.reuseSWWeb(t)
+	}
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swDeletedWeb(t, "alice", tc.op))
+
+	refusal, ok := errors.AsType[*gate.RefusalError](err)
+	if !ok || !errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("GuardStateWrite(deleted web) = %v, want ErrDenied by the deleted unit's gate", err)
+	}
+
+	if !slices.Contains(refusal.Messages, "old unit") || slices.Contains(refusal.Messages, "new unit") {
+		t.Fatalf("messages = %q, want the deleted unit's gate only", refusal.Messages)
+	}
+}
+
+// checkLimit checks that the deleted unit's access limit refuses the write,
+// and that the access limit of a new unit with its name does not.
+func (tc swDeletedCase) checkLimit(t *testing.T) {
+	t.Helper()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+
+	if !tc.reuse {
+		e.putLimit(t, swUnitScope(t, "web"), "old-limit", forbidServices)
+	}
+
+	e.deleteSWWeb(t)
+
+	if tc.reuse {
+		e.reuseSWWeb(t)
+	}
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swDeletedWeb(t, "ci", tc.op))
+
+	if limited := errors.Is(err, gate.ErrLimited); limited == tc.reuse {
+		t.Fatalf("GuardStateWrite(deleted web) = %v, want ErrLimited only by the deleted unit's own limit", err)
 	}
 }
