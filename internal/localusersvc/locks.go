@@ -7,21 +7,26 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
-	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // Audit actions of the lockout by name.
 const (
-	ActionNameLocked   = "sign-in.name-locked"
+	ActionNameLocked   = authgate.ActionNameLocked
 	ActionNameUnlocked = "sign-in.name-unlocked"
+	// ActionNameLockEnded is the action of the entry of the end of a lock by
+	// time.
+	ActionNameLockEnded = authgate.ActionNameLockEnded
 	// ActionNameLocksRead is the action of the denied entry of a refused
 	// read of the counts of a name. A read that passes writes no entry.
 	ActionNameLocksRead = "sign-in.name-locks-read"
@@ -38,8 +43,35 @@ const ReasonNameLocked = "user name locked after failed attempts"
 // parse. Such requests share one count, which is the safe direction.
 const unknownSource = "unknown"
 
-// ipv6Prefix is the prefix length of an IPv6 source of a name count.
-const ipv6Prefix = 64
+// Prefix lengths of the source of a name count, in bits: a whole IPv4
+// address, and the /64 of an IPv6 address.
+const (
+	ipv4Prefix = 32
+	ipv6Prefix = 64
+)
+
+// LockRuleSet is the effective set of rules of the lockout by name, as the
+// server applies it to each attempt of a password sign-in and to each check
+// of the current password.
+type LockRuleSet struct {
+	// Password is the rule of the count of one name from one source prefix.
+	Password authgate.LockRule
+	// PasswordName is the rule of the count of one name from every source.
+	PasswordName authgate.LockRule
+	// IPv4PrefixBits and IPv6PrefixBits are the lengths of the source prefix
+	// of the count of Password, in bits.
+	IPv4PrefixBits int
+	IPv6PrefixBits int
+}
+
+// Rules returns the effective rules of the lockout by name. The server counts
+// each failure under these rules, and the policy route shows them.
+func Rules() LockRuleSet {
+	return LockRuleSet{
+		Password: authgate.PasswordRule(), PasswordName: authgate.PasswordNameRule(),
+		IPv4PrefixBits: ipv4Prefix, IPv6PrefixBits: ipv6Prefix,
+	}
+}
 
 // keyLength is the length of the key of the digests of the names.
 const keyLength = 32
@@ -108,47 +140,60 @@ type lockKeys struct {
 // the compare of the password. It returns an error that wraps
 // authgate.ErrNameLocked while a lock holds, and ErrUnavailable when a count
 // cannot be written: the caller refuses the attempt in both cases.
+//
+// The store appends the audit entry and the alert of a new lock, and the
+// audit entry of the end of an earlier lock, in the transaction of the add.
+// If a record cannot be appended, the add fails and the count does not
+// change: the lock never exists without its record. The service logs that
+// error and returns it.
 func (s *Service) countFailure(ctx context.Context, base audit.Entry, object string, k lockKeys) error {
+	effective := Rules()
+
 	rules := []struct {
 		rule  authgate.LockRule
 		scope string
 		sub   string
 	}{
-		{scope: authgate.ScopePassword, sub: k.sub, rule: authgate.PasswordRule()},
-		{scope: authgate.ScopePasswordName, sub: "", rule: authgate.PasswordNameRule()},
+		{scope: authgate.ScopePassword, sub: k.sub, rule: effective.Password},
+		{scope: authgate.ScopePasswordName, sub: "", rule: effective.PasswordName},
 	}
 
 	for _, r := range rules {
-		lock, err := s.locks.AddNameFailure(ctx, r.scope, k.name, r.sub, r.rule)
+		_, err := s.locks.AddNameFailure(ctx, authgate.NameFailure{
+			Events: s.lockEvents(base, object), Scope: r.scope, Name: k.name, Sub: r.sub, Rule: r.rule,
+		})
 		if errors.Is(err, authgate.ErrNameLocked) {
 			return err
 		}
 
 		if err != nil {
-			return fmt.Errorf("%w: count the failure of the name: %w", localuser.ErrUnavailable, err)
-		}
+			s.log.LogAttrs(ctx, slog.LevelError, "local users: could not write the count of a name",
+				slog.String("scope", r.scope), slog.String("object", object), slog.String("error", err.Error()))
 
-		if !lock.LockedUntil.IsZero() {
-			// This add set the lock: the name is locked from now on.
-			s.recordLock(ctx, base, object, r.scope, lock)
+			return fmt.Errorf("%w: count the failure of the name: %w", localuser.ErrUnavailable, err)
 		}
 	}
 
 	return nil
 }
 
-// recordLock writes the audit entry of a new lock of a name, best effort: the
-// lock holds in the store whether the entry is written or not.
-func (s *Service) recordLock(ctx context.Context, base audit.Entry, object, scope string, lock authgate.NameLock) {
-	e := s.entry(base, ActionNameLocked, object, audit.OutcomeSuccess, "")
-	e.Changes = []audit.Change{
-		{Key: "scope", Old: nil, New: scope, Layer: "", TakesEffect: ""},
-		{Key: "lockedUntil", Old: nil, New: lock.LockedUntil.UTC().Format(time.RFC3339), Layer: "", TakesEffect: ""},
-		{Key: "level", Old: nil, New: strconv.Itoa(lock.Level), Layer: "", TakesEffect: ""},
-	}
+// lockEvents returns the events of one add: the entries of a new lock and of
+// the end of a lock, and the alert of a new lock to the administrators. The
+// alert is readable only with the action to manage the notifications of the
+// installation.
+func (s *Service) lockEvents(base audit.Entry, object string) *authgate.LockEvents {
+	at := s.Now()
 
-	if _, err := s.audit.AppendServer(ctx, e); err != nil {
-		return
+	return &authgate.LockEvents{
+		Locked: s.entry(base, authgate.ActionNameLocked, object, audit.OutcomeSuccess, ""),
+		Ended:  s.entry(base, authgate.ActionNameLockEnded, object, audit.OutcomeSuccess, ""),
+		Alert: notify.Notification{
+			ID: ident.NewID(notify.IDPrefix), Type: notify.SignInLocked, Scope: audit.ServerScope,
+			Object: notify.NotificationsObject(audit.ServerScope), ObjectID: "", Subject: history.ServerSubject,
+			Agent: "", Severity: notify.SeverityWarning, Summary: "", Links: nil, Attributes: nil,
+			Recipients: []notify.Recipient{{Principal: "", Group: "", Admins: true}},
+			DedupeKey:  "", At: at, Sequence: 0,
+		},
 	}
 }
 

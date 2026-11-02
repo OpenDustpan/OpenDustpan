@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 // Scopes of the lockout by name. A scope holds the letters a to z only.
@@ -99,6 +100,20 @@ type NameLock struct {
 	Level       int
 }
 
+// NameFailure is one failure that AddNameFailure adds: the count that it
+// names, the rule that applies to the count, and the records that the add
+// writes.
+type NameFailure struct {
+	// Events holds the records of the add. It is required.
+	Events *LockEvents
+	// Scope, Name and Sub name the count.
+	Scope string
+	Name  string
+	Sub   string
+	// Rule says when the count locks, and for how long.
+	Rule LockRule
+}
+
 // NameLockCounter counts the failures in a row of each name in a scope, so
 // that every instance on one database shares one lockout. The name is a
 // keyed digest of the user name that the caller computes, or a principal ID
@@ -114,15 +129,26 @@ type NameLock struct {
 // than the limit pass. The conformance suite RunNameLocks in package
 // authgatetest checks an implementation.
 type NameLockCounter interface {
-	// AddNameFailure adds one failure to the count of name and sub in scope,
-	// in one atomic write, and applies rule. The add that takes the count to
+	// AddNameFailure adds one failure to the count of f.Name and f.Sub in
+	// f.Scope, in one atomic write, and applies f.Rule. The add that takes the count to
 	// rule.Limit passes and sets the lock. An add while the lock holds counts
 	// nothing and returns ErrNameLocked. An add after the lock ended starts
-	// a new count at 1 and keeps the level. It returns ErrInvalidLock for a
-	// request that LockRule or the scope refuses, and an error that is not
-	// ErrNameLocked when the write fails. The caller then refuses the
-	// attempt.
-	AddNameFailure(ctx context.Context, scope, name, sub string, rule LockRule) (NameLock, error)
+	// a new count at 1 and keeps the level.
+	//
+	// The same transaction appends the records of f.Events. The add that
+	// sets a lock appends the entry of Locked and the alert of Alert (see
+	// LockedEntry and LockAlert). The add that finds that an earlier lock
+	// ended appends the entry of Ended (see EndedEntry). If a record
+	// cannot be appended, the transaction rolls back and the add returns the
+	// error: the count does not change, and the caller refuses the attempt.
+	// So a lock never exists without its record.
+	//
+	// It returns ErrInvalidLock for a request that LockRule or the scope
+	// refuses, and for events that LockEvents.Validate refuses, also nil
+	// events. It returns
+	// an error that is not ErrNameLocked when the write fails. The caller
+	// then refuses the attempt.
+	AddNameFailure(ctx context.Context, f NameFailure) (NameLock, error)
 	// ClearNameFailures sets the count of name and sub in scope to 0 and
 	// ends its lock. The level stays, so a lock soon after still doubles. A
 	// count that does not exist is no error.
@@ -214,6 +240,25 @@ func PrunedChange(n int64) audit.Change {
 	return audit.Change{Key: "pruned", Old: nil, New: strconv.FormatInt(n, 10), Layer: "", TakesEffect: ""}
 }
 
+// PrunedChanges returns the changes of the entry of a prune from the end of
+// the lock of each deleted count (0 for a count with no lock): the count of
+// the deleted counts, and the count of the locks that ended with no add to
+// see it. So the end of every lock has a record.
+func PrunedChanges(lockedUntilMs []int64) []audit.Change {
+	ended := int64(0)
+
+	for _, until := range lockedUntilMs {
+		if until != 0 {
+			ended++
+		}
+	}
+
+	return []audit.Change{
+		PrunedChange(int64(len(lockedUntilMs))),
+		{Key: "locksEnded", Old: nil, New: strconv.FormatInt(ended, 10), Layer: "", TakesEffect: ""},
+	}
+}
+
 // ClearedChange returns the change of the entry of a clear of a name: the
 // count of the counts that the clear ended.
 func ClearedChange(n int64) audit.Change {
@@ -277,4 +322,123 @@ func PasswordNameRule() LockRule {
 		Limit: DefaultNameGlobalLimit, LockFor: DefaultNameGlobalLockFor, MaxLockFor: DefaultNameGlobalMaxLockFor,
 		ResetAfter: DefaultNameGlobalResetAfter,
 	}
+}
+
+// changeScope is the key of the change and of the attribute that name the
+// scope of a count.
+const changeScope = "scope"
+
+// AlertWindow is the time in which one name gets at most one alert of a lock
+// by source prefix or by factor. The window is the clock hour of the add.
+const AlertWindow = time.Hour
+
+// Audit actions and reasons of the records that a name count writes.
+const (
+	// ActionNameLocked is the action of the entry of a new lock.
+	ActionNameLocked = "sign-in.name-locked"
+	// ActionNameLockEnded is the action of the entry of the end of a lock
+	// by time. A prune of a count whose end no add saw also writes it, as a
+	// change of the entry of the prune.
+	ActionNameLockEnded = "sign-in.name-lock-ended"
+)
+
+// LockEvents are the records that AddNameFailure appends in its transaction.
+// The caller gives the parts that it knows: who, from where, and which
+// object. The store adds the parts that only the add knows: the scope, the
+// end of the lock, the level and the key of the alert.
+type LockEvents struct {
+	// Locked is the entry of a new lock. Its action is ActionNameLocked.
+	Locked audit.Entry
+	// Ended is the entry of the end of an earlier lock. Its action is
+	// ActionNameLockEnded.
+	Ended audit.Entry
+	// Alert is the alert to the administrators of a new lock. Its type is
+	// notify.SignInLocked.
+	Alert notify.Notification
+}
+
+// Validate returns ErrInvalidLock for events that miss an action or a type,
+// or that name another action or type than the ones above. A caller that
+// gives no events could write a lock without a record, so the store refuses
+// it.
+func (ev *LockEvents) Validate() error {
+	switch {
+	case ev == nil:
+		return fmt.Errorf("%w: no events for the records of a lock", ErrInvalidLock)
+	case ev.Locked.Action != ActionNameLocked:
+		return fmt.Errorf("%w: the entry of a lock has the action %q", ErrInvalidLock, ev.Locked.Action)
+	case ev.Ended.Action != ActionNameLockEnded:
+		return fmt.Errorf("%w: the entry of the end of a lock has the action %q", ErrInvalidLock, ev.Ended.Action)
+	case ev.Alert.Type != notify.SignInLocked:
+		return fmt.Errorf("%w: the alert of a lock has the type %q", ErrInvalidLock, ev.Alert.Type)
+	default:
+		return nil
+	}
+}
+
+// LockedEntry returns the entry of a new lock in scope: the base entry with
+// the changes scope, lockedUntil and level.
+func LockedEntry(base audit.Entry, scope string, lock NameLock) audit.Entry {
+	e := base
+	e.Changes = []audit.Change{
+		{Key: changeScope, Old: nil, New: scope, Layer: "", TakesEffect: ""},
+		{Key: "lockedUntil", Old: nil, New: lock.LockedUntil.UTC().Format(time.RFC3339), Layer: "", TakesEffect: ""},
+		{Key: "level", Old: nil, New: strconv.Itoa(lock.Level), Layer: "", TakesEffect: ""},
+	}
+
+	return e
+}
+
+// EndedEntry returns the entry of the end of a lock in scope: the base entry
+// with the changes scope and endedAt.
+func EndedEntry(base audit.Entry, scope string, endedAt time.Time) audit.Entry {
+	e := base
+	e.Changes = []audit.Change{
+		{Key: changeScope, Old: nil, New: scope, Layer: "", TakesEffect: ""},
+		{Key: "endedAt", Old: nil, New: endedAt.UTC().Format(time.RFC3339), Layer: "", TakesEffect: ""},
+	}
+
+	return e
+}
+
+// AlertKey returns the dedupe key of the alert of a lock. The outbox keeps one
+// notification for each scope and dedupe key, so the key sets how often the
+// administrators get an alert.
+//
+// A lock of the name from every source gets a key with the end of the lock:
+// each such lock sends its alert at once. A lock by source prefix or by
+// factor gets a key with the clock hour of at: one alert for each name in
+// each hour, whatever the count of source prefixes. The name is a keyed
+// digest or a principal ID, so the key holds no user name.
+func AlertKey(scope, name string, lock NameLock, at time.Time) string {
+	if scope == ScopePasswordName {
+		return string(notify.SignInLocked) + "/" + scope + "/" + name + "/" +
+			strconv.FormatInt(lock.LockedUntil.UnixMilli(), 10)
+	}
+
+	return string(notify.SignInLocked) + "/" + scope + "/" + name + "/" +
+		strconv.FormatInt(at.UnixMilli()/AlertWindow.Milliseconds(), 10)
+}
+
+// LockAlert returns the alert of a new lock in scope: the alert of ev with
+// the dedupe key of AlertKey and the attributes scope, object, locked-until
+// and level. The object is the object of the entry of the lock, so an
+// administrator finds the person in the audit log. The alert holds no user
+// name.
+func LockAlert(ev *LockEvents, scope, name string, lock NameLock, at time.Time) notify.Notification {
+	until := lock.LockedUntil.UTC().Format(time.RFC3339)
+
+	n := ev.Alert
+	n.At = at
+	n.DedupeKey = AlertKey(scope, name, lock, at)
+	n.Attributes = map[string]string{
+		changeScope:    scope,
+		"object":       ev.Locked.Object,
+		"locked-until": until,
+		"level":        strconv.Itoa(lock.Level),
+	}
+	n.Summary = "Sign-in lock in scope " + scope + " on " + ev.Locked.Object + " until " + until +
+		" after failed attempts."
+
+	return n
 }

@@ -2941,6 +2941,52 @@
         ],
         "type": "object"
       },
+      "LocalUserLockRule": {
+        "properties": {
+          "limit": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "lockSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "maxLockSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "resetSeconds": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "lockSeconds",
+          "maxLockSeconds",
+          "resetSeconds"
+        ],
+        "type": "object"
+      },
+      "LocalUserLockRules": {
+        "properties": {
+          "password": {
+            "$ref": "#/components/schemas/LocalUserLockRule"
+          },
+          "passwordName": {
+            "$ref": "#/components/schemas/LocalUserLockRule"
+          },
+          "sourcePrefix": {
+            "$ref": "#/components/schemas/LocalUserSourcePrefix"
+          }
+        },
+        "required": [
+          "password",
+          "passwordName",
+          "sourcePrefix"
+        ],
+        "type": "object"
+      },
       "LocalUserLocks": {
         "properties": {
           "locks": {
@@ -2969,6 +3015,9 @@
           "lockPrune": {
             "$ref": "#/components/schemas/LocalUserLockPrune"
           },
+          "lockRules": {
+            "$ref": "#/components/schemas/LocalUserLockRules"
+          },
           "maxLength": {
             "format": "int64",
             "type": "integer"
@@ -2990,10 +3039,28 @@
           "enabledSource",
           "identityProvider",
           "lockPrune",
+          "lockRules",
           "maxLength",
           "minLength",
           "requireLettersAndDigits",
           "resetLifetimeSeconds"
+        ],
+        "type": "object"
+      },
+      "LocalUserSourcePrefix": {
+        "properties": {
+          "ipv4Bits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "ipv6Bits": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ipv4Bits",
+          "ipv6Bits"
         ],
         "type": "object"
       },
@@ -6356,7 +6423,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.32.0"
+    "version": "0.32.1"
   },
   "openapi": "3.1.0",
   "paths": {

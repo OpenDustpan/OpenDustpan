@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
@@ -46,6 +47,11 @@ func TestNameLockConformance(t *testing.T) {
 
 				return serverEntries(t, openURL(t, schemaURL))
 			},
+			Notices: func(t *testing.T) []notify.Notification {
+				t.Helper()
+
+				return serverNotices(t, openURL(t, schemaURL).Notifications())
+			},
 		}
 	})
 }
@@ -83,4 +89,17 @@ func serverEntries(t *testing.T, s *postgres.Store) []audit.Entry {
 	}
 
 	return page.Entries
+}
+
+// serverNotices returns the notifications of the server scope that n holds,
+// in the order of the append.
+func serverNotices(t *testing.T, n notify.Outbox) []notify.Notification {
+	t.Helper()
+
+	got, err := n.After(t.Context(), audit.ServerScope, 0, notify.MaxRecipients*1000)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+
+	return got
 }

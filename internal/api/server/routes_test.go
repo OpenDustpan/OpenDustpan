@@ -1965,6 +1965,7 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 	seedRouteLocalUser(t, st)
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:        nil,
 		Store:      st,
 		Principals: principals,
 		Hasher:     hasher,

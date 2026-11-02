@@ -17410,7 +17410,7 @@ func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (
 	return result.RowsAffected()
 }
 
-const pruneNameLocks = `-- name: PruneNameLocks :execrows
+const pruneNameLocks = `-- name: PruneNameLocks :many
 DELETE FROM name_locks
 WHERE rowid IN (
     SELECT p.rowid FROM name_locks p
@@ -17418,6 +17418,7 @@ WHERE rowid IN (
       AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= ?2)
     LIMIT ?3
 )
+RETURNING locked_until_ms
 `
 
 type PruneNameLocksParams struct {
@@ -17428,13 +17429,29 @@ type PruneNameLocksParams struct {
 
 // Deletes at most max_rows counts whose last failure is at or before
 // before_ms, whose lock ended at now_ms, and whose level is 0 or past its
-// reset time.
-func (q *Queries) PruneNameLocks(ctx context.Context, arg PruneNameLocksParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, pruneNameLocks, arg.BeforeMs, arg.NowMs, arg.MaxRows)
+// reset time. It returns the end of the lock of each deleted count: a value
+// other than 0 is a lock that ended and that no add has seen.
+func (q *Queries) PruneNameLocks(ctx context.Context, arg PruneNameLocksParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, pruneNameLocks, arg.BeforeMs, arg.NowMs, arg.MaxRows)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var locked_until_ms int64
+		if err := rows.Scan(&locked_until_ms); err != nil {
+			return nil, err
+		}
+		items = append(items, locked_until_ms)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
