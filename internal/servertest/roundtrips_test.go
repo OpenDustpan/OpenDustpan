@@ -749,6 +749,11 @@ type requestFlow struct {
 
 // requestFlows returns the request flows and their budgets, in the order that
 // they run.
+//
+// A lock reads the gate rows of its unit in two read transactions. Each one
+// first reads the stable ID of the unit from the inventory, because the gate
+// rows of a unit key on that ID and not on its name. So "lock" and "lock,
+// upload and unlock" each hold 2 round trips for those reads.
 func requestFlows() []requestFlow {
 	return []requestFlow{
 		{"opentofu upload", 41, func(h *rtHarness) {
@@ -756,7 +761,7 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 42, func(h *rtHarness) {
+		{"lock", 44, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -764,7 +769,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 97, func(h *rtHarness) {
+		{"lock, upload and unlock", 99, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
