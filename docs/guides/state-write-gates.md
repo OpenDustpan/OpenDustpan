@@ -63,22 +63,45 @@ mode refuses neither.
 
 ## What a gate reads
 
-A gate at `state.write` is a Cedar policy over these facts:
+A gate at `state.write` is a Cedar expression over these facts. Name each fact
+with the `context.` prefix:
 
 | Fact | Meaning |
 | --- | --- |
-| `principal.kind` | `person` or `service`. A principal of an unknown kind counts as `person`. |
-| `principal.credential` | `session`, `access-token`, `job-token` or `trust-token`. |
-| `source.kind` | `cli` for a write from the CLI of a tool, `api` for a call of the tool-neutral API. |
-| `unit.tool` | The tool code of the unit, for example `opentofu`. |
-| `unit.collection` | The collection of the unit, or an empty text. |
-| `unit.labels` | The labels of the unit, as `key=value` texts. |
-| `operation.kind` | The operation kind in the table above. |
-| `plan.available` | Always `false`: the CLI sends no plan. |
-| `state.available` | Always `false`: the server holds no new state yet. |
+| `context.principal.kind` | `person` or `service`. A principal of an unknown kind counts as `person`. |
+| `context.principal.credential` | `session`, `access-token`, `job-token` or `trust-token`. |
+| `context.source.kind` | `cli` for a write from the CLI of a tool, `api` for a call of the tool-neutral API. |
+| `context.unit.tool` | The tool code of the unit, for example `opentofu`. |
+| `context.unit.collection` | The collection of the unit, or an empty text. |
+| `context.unit.labels` | The labels of the unit, as `key=value` texts. |
+| `context.operation.kind` | The operation kind in the table above. |
+| `context.plan.available` | Always `false`: the CLI sends no plan. |
+| `context.state.available` | Always `false`: the server holds no new state yet. |
 
-A gate that needs a plan fact refuses such a write, because `plan.available` is
-`false`.
+This gate body denies an unlock:
+
+```json
+{
+  "decisionPoint": "state.write",
+  "condition": "context.operation.kind == \"unlock\"",
+  "outcome": "deny",
+  "message": "Unlocks need approval"
+}
+```
+
+A condition without the `context.` prefix does not parse. The condition
+`operation.kind == "unlock"` answers 422:
+
+```json
+{
+  "message": "the gate configuration is not valid: unit/acme/pulumi/web%2Fprod/x: parser error: parse error at <input>:1:10 \".\": invalid primary",
+  "code": 422,
+  "errorCode": "gate.invalid"
+}
+```
+
+A gate that needs a plan fact refuses such a write, because
+`context.plan.available` is `false`.
 
 The message of a gate can name a fact in double braces, for example
 `Writes to {{unit.collection}} are frozen`. A message that names a path that is
