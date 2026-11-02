@@ -28,11 +28,14 @@ type capabilitiesResponse struct {
 }
 
 // stateWriteGatesBody is the effective value of the state.write gates on the
-// wire: the mode on or off, and the reason. The gates are off only when the
+// wire: the mode on or off, the reason, the write paths that the gates check
+// and the write paths that they do not check. The gates are off only when the
 // store keeps no gates.
 type stateWriteGatesBody struct {
-	Mode   stategate.Mode `json:"mode"`
-	Reason string         `json:"reason"`
+	Mode      stategate.Mode        `json:"mode"`
+	Reason    string                `json:"reason"`
+	Checked   []stategate.WritePath `json:"checked"`
+	Unchecked []stategate.WritePath `json:"unchecked"`
 }
 
 // capabilitiesRoutes returns the row of the capabilities document.
@@ -56,7 +59,10 @@ func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request, _ identit
 		doc.InstallationKind = h.installationKind().String()
 
 		if h.stateWrite.Mode != "" {
-			doc.StateWriteGates = &stateWriteGatesBody{Mode: h.stateWrite.Mode, Reason: h.stateWrite.Reason}
+			doc.StateWriteGates = &stateWriteGatesBody{
+				Mode: h.stateWrite.Mode, Reason: h.stateWrite.Reason,
+				Checked: nonNilPaths(h.stateWrite.Checked), Unchecked: nonNilPaths(h.stateWrite.Unchecked),
+			}
 		}
 	}
 
@@ -87,4 +93,14 @@ func (h *Handler) mayReadCaller(r *http.Request) bool {
 	}
 
 	return h.authz.Authorize(ctx, p, identity.ActionCallerRead, identity.CallerObject()) == nil
+}
+
+// nonNilPaths returns paths, or an empty list for nil, so that the document holds
+// a list and never null.
+func nonNilPaths(paths []stategate.WritePath) []stategate.WritePath {
+	if paths == nil {
+		return []stategate.WritePath{}
+	}
+
+	return paths
 }

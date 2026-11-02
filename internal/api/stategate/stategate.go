@@ -53,41 +53,98 @@ type Mode string
 
 // The modes of the state.write gates.
 const (
-	// ModeOn means that the server checks each write at state.write.
+	// ModeOn means that the store keeps gates, and the server checks the
+	// write paths of CheckedPaths at state.write.
 	ModeOn Mode = "on"
 	// ModeOff means that the store keeps no gates, so no write is checked.
 	ModeOff Mode = "off"
 )
 
-// Effective is the effective value of the state.write gates and its reason.
-// The installation API shows it, and a server that runs with the gates off
-// writes it to the start log and to the audit log.
+// WritePath names one write of state of a tool: the tool, the API and the
+// operation, for example "opentofu.tfe.lock".
+type WritePath string
+
+// The write paths that the adapters check at state.write.
+const (
+	PathTFELock          WritePath = "opentofu.tfe.lock"
+	PathTFEForceUnlock   WritePath = "opentofu.tfe.force-unlock"
+	PathTFERollback      WritePath = "opentofu.tfe.rollback"
+	PathTFEDelete        WritePath = "opentofu.tfe.delete"
+	PathHTTPLock         WritePath = "opentofu.http.lock"
+	PathHTTPForceUnlock  WritePath = "opentofu.http.force-unlock"
+	PathHTTPUnlocked     WritePath = "opentofu.http.unlocked-write"
+	PathInventoryRestore WritePath = "inventory.restore"
+	PathInventoryPurge   WritePath = "inventory.purge"
+)
+
+// The write paths that write state and that no adapter checks at state.write
+// yet.
+const (
+	PathTFEStateVersionNoLock WritePath = "opentofu.tfe.state-version-without-lock"
+	PathPulumiUpdate          WritePath = "pulumi.update"
+	PathPulumiImport          WritePath = "pulumi.import"
+	PathPulumiRestore         WritePath = "pulumi.restore"
+	PathPulumiRename          WritePath = "pulumi.rename"
+	PathPulumiDelete          WritePath = "pulumi.delete"
+	PathPulumiCancel          WritePath = "pulumi.cancel"
+)
+
+// CheckedPaths returns the write paths that the adapters check at
+// state.write when the gates are on. The route test of each adapter checks
+// that each of its paths meets the gates.
+func CheckedPaths() []WritePath {
+	return []WritePath{
+		PathTFELock, PathTFEForceUnlock, PathTFERollback, PathTFEDelete,
+		PathHTTPLock, PathHTTPForceUnlock, PathHTTPUnlocked,
+		PathInventoryRestore, PathInventoryPurge,
+	}
+}
+
+// UncheckedPaths returns the write paths that no adapter checks at
+// state.write yet. A change that adds the check of a path moves it to
+// CheckedPaths, and the effective value shows the move.
+func UncheckedPaths() []WritePath {
+	return []WritePath{
+		PathTFEStateVersionNoLock,
+		PathPulumiUpdate, PathPulumiImport, PathPulumiRestore, PathPulumiRename, PathPulumiDelete, PathPulumiCancel,
+	}
+}
+
+// Effective is the effective value of the state.write gates: the mode, the
+// reason, the write paths that the gates check and the write paths that they
+// do not check. The installation API shows it, and a server that runs with
+// the gates off writes it to the start log and to the audit log.
 type Effective struct {
-	Mode   Mode
-	Reason string
+	Mode      Mode
+	Reason    string
+	Checked   []WritePath
+	Unchecked []WritePath
 }
 
 // ReasonOn is the reason of the effective value of a guard that is not Off.
-const ReasonOn = "the store keeps gates, so the server checks each write at state.write"
+const ReasonOn = "the store keeps gates: the server checks the write paths in checked, " +
+	"and does not check the write paths in unchecked yet"
 
 // OffGuard is the guard of a server whose store keeps no gates. It lets each
 // write go on with no decision record. It is an explicit value with a reason,
-// so that a missing guard is never read as gates off. Make it with Off: the
-// zero value has no reason, and it refuses each write.
+// so that a missing guard is never read as gates off. Off returns a pointer,
+// and only the pointer implements Guard, so there is one form to match. A
+// nil pointer and a guard with no reason refuse each write.
 type OffGuard struct {
 	reason string
 }
 
-// errOffNoReason means that an OffGuard has no reason: it was not made by Off.
+// errOffNoReason means that an OffGuard is nil or has no reason.
 var errOffNoReason = errors.New("state.write gates off with no reason")
 
 // GuardStateWrite implements Guard. It allows the write, and refuses it when
-// the guard has no reason.
-func (o OffGuard) GuardStateWrite(context.Context, gate.StateWrite) (gate.Decision, error) {
-	// Defense in depth: Off and New refuse an empty reason. This check stays
-	// so that a zero OffGuard, which a caller can make with no call of Off,
-	// never lets a write through. It does not rely on Off or New.
-	if strings.TrimSpace(o.reason) == "" {
+// the guard is nil or has no reason.
+func (o *OffGuard) GuardStateWrite(context.Context, gate.StateWrite) (gate.Decision, error) {
+	// Defense in depth: New refuses a nil guard and an empty reason. This
+	// check stays so that a nil or a zero OffGuard, which a caller can make
+	// with no call of Off or New, never lets a write through. It does not
+	// rely on New.
+	if !o.valid() {
 		return gate.Decision{Record: "", Result: "", Requirements: nil, Warnings: nil, AutoApply: false}, errOffNoReason
 	}
 
@@ -95,27 +152,40 @@ func (o OffGuard) GuardStateWrite(context.Context, gate.StateWrite) (gate.Decisi
 }
 
 // Reason returns the reason why the gates are off.
-func (o OffGuard) Reason() string {
+func (o *OffGuard) Reason() string {
+	if o == nil {
+		return ""
+	}
+
 	return o.reason
+}
+
+// valid reports whether o is a guard of Off with a reason.
+func (o *OffGuard) valid() bool {
+	return o != nil && strings.TrimSpace(o.reason) != ""
 }
 
 // Off returns the guard of a server whose store keeps no gates. It lets each
 // write go on. The reason says why the gates are off, and the effective
 // value shows it. A guard with an empty reason lets no write through: New
 // refuses it, and the guard refuses each write.
-func Off(reason string) OffGuard {
-	return OffGuard{reason: reason}
+func Off(reason string) *OffGuard {
+	return &OffGuard{reason: reason}
 }
 
 // EffectiveOf returns the effective value of the state.write gates of g. A
-// nil guard and an OffGuard with no reason read as on: the Admitter refuses
-// each write with them, so they never let a write through.
+// nil guard and an OffGuard that is nil or has no reason read as on: the
+// Admitter refuses each write with them, so they never let a write through.
+// With the gates off, every write path is unchecked.
 func EffectiveOf(g Guard) Effective {
-	if off, ok := g.(OffGuard); ok && strings.TrimSpace(off.reason) != "" {
-		return Effective{Mode: ModeOff, Reason: off.reason}
+	if off, ok := g.(*OffGuard); ok && off.valid() {
+		return Effective{
+			Mode: ModeOff, Reason: off.reason, Checked: []WritePath{},
+			Unchecked: append(CheckedPaths(), UncheckedPaths()...),
+		}
 	}
 
-	return Effective{Mode: ModeOn, Reason: ReasonOn}
+	return Effective{Mode: ModeOn, Reason: ReasonOn, Checked: CheckedPaths(), Unchecked: UncheckedPaths()}
 }
 
 // Write is one write of state that an adapter asks about.
@@ -180,7 +250,7 @@ func New(guard Guard, log *slog.Logger) (*Admitter, error) {
 		return nil, ErrNoGuard
 	}
 
-	if off, ok := guard.(OffGuard); ok && strings.TrimSpace(off.reason) == "" {
+	if off, ok := guard.(*OffGuard); ok && !off.valid() {
 		return nil, errOffNoReason
 	}
 

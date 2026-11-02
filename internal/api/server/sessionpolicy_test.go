@@ -55,7 +55,7 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},

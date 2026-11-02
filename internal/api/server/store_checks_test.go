@@ -58,13 +58,13 @@ func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
-		LocalUsers:  nil,
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          workers,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,
 		Now:              nil,
 		Authenticator:    tokenAuthenticator{},
