@@ -3797,7 +3797,7 @@ func newRestoreService(
 		AllowDevBackups: cfg.allowDevBackups,
 		AllowDevHint:    cfg.allowDevHint,
 		Owner:           durableOwner(cfg),
-		Lease:           0,
+		Lease:           cfg.operationLease,
 		CleanupLockWait: 0,
 		RetryBase:       0,
 		Now:             cfg.now,
