@@ -89,20 +89,26 @@ func TestStateWriteGatesOffIsRecordedAtStart(t *testing.T) {
 				t.Fatalf("log = %q, want %q with the reason", log.String(), tc.line)
 			}
 
-			if len(store.entries) != tc.entries {
-				t.Fatalf("wrote %d audit entries, want %d", len(store.entries), tc.entries)
-			}
-
-			if tc.entries == 0 {
-				return
-			}
-
-			e := store.entries[0]
-			if e.Namespace != audit.ServerScope || e.Reason != reasonNoGateStore || e.Channel != audit.ChannelStartup ||
-				len(e.Changes) != 1 || e.Changes[0].Key != stateWriteGatesKey || e.Changes[0].New != "off" {
-				t.Fatalf("entry = %+v, want the gates off with the reason in the installation scope", e)
-			}
+			checkOffEntries(t, store.entries, tc.entries)
 		})
+	}
+}
+
+// checkOffEntries fails t unless entries holds want entries, each one the
+// entry of the gates off with its reason in the installation scope.
+func checkOffEntries(t *testing.T, entries []audit.Entry, want int) {
+	t.Helper()
+
+	if len(entries) != want {
+		t.Fatalf("wrote %d audit entries, want %d", len(entries), want)
+	}
+
+	for i := range entries {
+		e := &entries[i]
+		if e.Namespace != audit.ServerScope || e.Reason != reasonNoGateStore || e.Channel != audit.ChannelStartup ||
+			len(e.Changes) != 1 || e.Changes[0].Key != stateWriteGatesKey || e.Changes[0].New != "off" {
+			t.Fatalf("entry = %+v, want the gates off with the reason in the installation scope", e)
+		}
 	}
 }
 
