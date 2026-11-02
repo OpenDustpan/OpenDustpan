@@ -259,7 +259,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Gates:            gates,
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		SignIn: &apiserver.SignIn{
 			OnDevRefused:    nil,
 			DevCode:         nil,
@@ -1158,7 +1158,7 @@ func TestSignInProviderDown(t *testing.T) {
 		Gates:            nil,
 		SessionPolicy:    policies,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		SignIn: &apiserver.SignIn{
 			OnDevRefused: nil,
 			DevCode:      nil,

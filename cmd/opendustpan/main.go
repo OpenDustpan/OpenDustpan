@@ -55,6 +55,7 @@ import (
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -1782,6 +1783,10 @@ type store interface {
 	tempadmin.Store
 	installation.KindStore
 	installation.InstanceStore
+	// gate.Store is here so that opendustpan serve always runs with the
+	// state.write gates on: a store wrapper that does not keep gates does not
+	// compile.
+	gate.Store
 	close()
 }
 

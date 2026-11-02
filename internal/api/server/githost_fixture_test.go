@@ -336,7 +336,7 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 		Idempotency:      mw,
 		Workers:          nil,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},

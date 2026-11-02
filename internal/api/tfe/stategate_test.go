@@ -781,3 +781,83 @@ func TestLockRetryRefusedByTheGuardTakesNoLock(t *testing.T) {
 			rec.Code, ws.calls(), rec.Body)
 	}
 }
+
+// writeActions are the actions of a route that can write state, end a lock
+// of another holder or remove a unit.
+func writeActions() map[identity.Action]bool {
+	return map[identity.Action]bool{
+		identity.ActionUnitWrite: true, identity.ActionUnitWriteForced: true, identity.ActionUnitManage: true,
+	}
+}
+
+// TestEveryWriteRouteMeetsTheGates fails for a route with a write action
+// that is not a route of guardRoutes and is not on the list of routes that
+// do not meet state.write, with the reason.
+func TestEveryWriteRouteMeetsTheGates(t *testing.T) {
+	t.Parallel()
+
+	// noStateWrite lists the routes with a write action that do not meet
+	// state.write, and why.
+	noStateWrite := map[string]string{
+		"POST /api/v2/organizations/{organization}/workspaces": "the create of a workspace writes no state",
+		"POST /api/v2/workspaces/{id}/actions/unlock":          "the holder ends its own lock, which met the gates",
+		"POST /api/v2/workspaces/{id}/state-versions": "a state version needs the lock, which met the gates; " +
+			"a state version with no lock is the unchecked path opentofu.tfe.state-version-without-lock",
+		"PUT /api/v2/state-uploads/{id}/{token}":      "the upload of a state version that the lock holder made",
+		"PUT /api/v2/json-state-uploads/{id}/{token}": "the upload of a state version that the lock holder made",
+	}
+
+	gated := map[string]bool{}
+	for _, rt := range guardRoutes() {
+		gated[rt.method+" "+rt.target] = true
+	}
+
+	h := newGuardedHandler(t, newWriteCounter(), newFakeGuard(nil))
+
+	for _, route := range h.Routes() {
+		writes := false
+
+		for _, a := range route.Actions {
+			writes = writes || writeActions()[a]
+		}
+
+		key := route.Method + " " + route.Path
+		if _, ok := noStateWrite[key]; !writes || ok {
+			continue
+		}
+
+		if !routeIsGated(route.Method, route.Path, gated) {
+			t.Errorf("%s has a write action and meets no state.write: add its case to guardRoutes, "+
+				"or list it in noStateWrite with the reason", key)
+		}
+	}
+}
+
+// routeIsGated reports whether a target of gated matches the pattern of the
+// route. A wildcard of the pattern matches one segment.
+func routeIsGated(method, pattern string, gated map[string]bool) bool {
+	want := strings.Split(pattern, "/")
+
+	for key := range gated {
+		m, target, _ := strings.Cut(key, " ")
+		got := strings.Split(target, "/")
+
+		if m != method || len(got) != len(want) {
+			continue
+		}
+
+		match := true
+
+		for i := range want {
+			if !strings.HasPrefix(want[i], "{") && want[i] != got[i] {
+				match = false
+			}
+		}
+
+		if match {
+			return true
+		}
+	}
+
+	return false
+}

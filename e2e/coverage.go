@@ -1798,7 +1798,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		StoreChecks:      coverageStoreChecks(tb),
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},

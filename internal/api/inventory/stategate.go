@@ -2,7 +2,6 @@ package inventory
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
@@ -49,21 +48,28 @@ func (h *Handler) guardStateWrite(
 		return false
 	}
 
-	// A final gate is a gate that refuses the write, so its refusal answers
-	// gate.denied. The message keeps its own code.
-	status, answerCode := http.StatusForbidden, errcode.GateDenied
-
-	switch {
-	case errors.Is(out.Refusal, gate.ErrLimited):
-		answerCode = errcode.GateLimited
-	case errors.Is(out.Refusal, gate.ErrRuleFailed):
-		status, answerCode = http.StatusConflict, errcode.GateRuleFailed
-	case errors.Is(out.Refusal, gate.ErrUnavailable):
-		status, answerCode = http.StatusServiceUnavailable, errcode.GateUnavailable
-	default:
-	}
+	status, answerCode := refusalAnswer(out.Code)
 
 	h.writeFailure(ctx, w, problem.New(status, answerCode, out.Detail))
 
 	return false
+}
+
+// refusalAnswer maps the code of a refusal, which the admission chose, to the
+// status and the code of the answer. The admission also wrote the code in
+// the detail and in the audit entry, so the three say the same thing. A
+// final gate is a gate that refuses the write, so its refusal answers
+// gate.denied, and the detail keeps gate.final. Any other code fails closed
+// to gate.denied with 403: the write stays refused.
+func refusalAnswer(code string) (int, string) {
+	switch code {
+	case errcode.GateLimited:
+		return http.StatusForbidden, errcode.GateLimited
+	case errcode.GateRuleFailed:
+		return http.StatusConflict, errcode.GateRuleFailed
+	case errcode.GateUnavailable:
+		return http.StatusServiceUnavailable, errcode.GateUnavailable
+	default:
+		return http.StatusForbidden, errcode.GateDenied
+	}
 }

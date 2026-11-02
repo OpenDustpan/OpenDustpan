@@ -23,6 +23,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
+// errNewSentinel is a sentinel that package gate does not know.
+var errNewSentinel = errors.New("a sentinel of a later version")
+
 // errGuardDown is the error of a guard that cannot decide.
 var errGuardDown = errors.New("store down")
 
@@ -110,6 +113,10 @@ func guardRefusals() []guardRefusal {
 		{
 			"final gate", refusal(gate.ErrFinal, "gdr-eeeeeeeeeeeeeeeeeeee"), http.StatusForbidden, "gate.final",
 			errcode.GateDenied,
+		},
+		{
+			"unknown sentinel", refusal(errNewSentinel, "gdr-gggggggggggggggggggg"), http.StatusServiceUnavailable,
+			"gate.unavailable", errcode.GateUnavailable,
 		},
 	}
 }
@@ -480,4 +487,96 @@ func TestEachRefusalIsRecorded(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestRefusalSaysOneCode checks that the answer, the detail and the audit
+// entry of each refusal come from the one code of the admission. A refusal
+// with an unknown sentinel says gate.unavailable in all three.
+func TestRefusalSaysOneCode(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, rf := range guardRefusals() {
+			t.Run(rt.name+"/"+rf.name, func(t *testing.T) {
+				t.Parallel()
+
+				entries := newTestAudit()
+				f := auditedFixture(t, newRecordingGuard(rf.err), entries)
+
+				rec := serveRoute(t, f, rt)
+				checkRefusalBody(t, rec, rf)
+
+				entries.mu.Lock()
+				got := append([]audit.Entry(nil), entries.entries...)
+				entries.mu.Unlock()
+
+				if len(got) != 1 || !strings.Contains(got[0].Reason, "state.write refused with "+rf.code) {
+					t.Fatalf("audit entries = %+v, want one with the code %s", got, rf.code)
+				}
+			})
+		}
+	}
+}
+
+// TestEveryWriteRouteMeetsTheGates fails for a route that writes, that is
+// not a route of guardRoutes, and that is not on the list of routes that
+// write no state. Every route other than GET writes in this API.
+func TestEveryWriteRouteMeetsTheGates(t *testing.T) {
+	t.Parallel()
+
+	// noStateWrite lists the routes other than GET that write no state, and
+	// why. It is empty: each such route of this API writes state.
+	noStateWrite := map[string]string{}
+
+	gated := map[string]bool{}
+	for _, rt := range guardRoutes() {
+		gated[rt.method+" "+strings.SplitN(rt.target, "?", 2)[0]] = true
+	}
+
+	f := guardedFixture(t, newRecordingGuard(nil))
+
+	for _, route := range f.handler.Routes() {
+		if route.Method == http.MethodGet || route.Method == http.MethodHead {
+			continue
+		}
+
+		key := route.Method + " " + route.Path
+		if _, ok := noStateWrite[key]; ok {
+			continue
+		}
+
+		if !routeIsGated(route.Method, route.Path, gated) {
+			t.Errorf("%s writes and meets no state.write: add its case to guardRoutes, "+
+				"or list it in noStateWrite with the reason", key)
+		}
+	}
+}
+
+// routeIsGated reports whether a target of gated matches the pattern of the
+// route. A wildcard of the pattern matches one segment.
+func routeIsGated(method, pattern string, gated map[string]bool) bool {
+	want := strings.Split(pattern, "/")
+
+	for key := range gated {
+		m, target, _ := strings.Cut(key, " ")
+		got := strings.Split(target, "/")
+
+		if m != method || len(got) != len(want) {
+			continue
+		}
+
+		match := true
+
+		for i := range want {
+			if !strings.HasPrefix(want[i], "{") && want[i] != got[i] {
+				match = false
+			}
+		}
+
+		if match {
+			return true
+		}
+	}
+
+	return false
 }
