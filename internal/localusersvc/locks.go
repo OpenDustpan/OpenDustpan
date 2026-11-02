@@ -93,12 +93,21 @@ func SourcePrefix(addr string) string {
 		return unknownSource
 	}
 
+	// The lengths come from Rules, so the rules that the policy route shows
+	// are the lengths that this function applies.
+	rules := Rules()
+
 	ip = ip.Unmap()
 	if ip.Is4() {
-		return ip.String()
+		prefix, prefixErr := ip.Prefix(rules.IPv4PrefixBits)
+		if prefixErr != nil {
+			return unknownSource
+		}
+
+		return prefix.Addr().String()
 	}
 
-	prefix, err := ip.WithZone("").Prefix(ipv6Prefix)
+	prefix, err := ip.WithZone("").Prefix(rules.IPv6PrefixBits)
 	if err != nil {
 		return unknownSource
 	}
@@ -362,6 +371,9 @@ type PruneSettings struct {
 	Interval time.Duration
 	Age      time.Duration
 	MaxRows  int
+	// MaxEnded is the most counts with an ended lock, that no attempt saw,
+	// that one run deletes. Each one gets an entry of the end of its lock.
+	MaxEnded int
 }
 
 // Prune returns the effective schedule of the prune of the name counts, as
@@ -369,6 +381,7 @@ type PruneSettings struct {
 func Prune() PruneSettings {
 	return PruneSettings{
 		Interval: authgate.NamePruneInterval, Age: authgate.NamePruneAge, MaxRows: authgate.MaxNamePruneRows,
+		MaxEnded: authgate.MaxNamePruneEnded,
 	}
 }
 
@@ -406,7 +419,7 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Tim
 		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: "", Reason: ReasonNameLocksPruned,
 	}
 
-	n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, e)
+	n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, p.MaxEnded, e)
 	if err != nil {
 		return res, fmt.Errorf("prune the name counts: %w", err)
 	}

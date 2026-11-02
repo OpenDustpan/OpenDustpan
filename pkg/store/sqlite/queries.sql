@@ -5015,19 +5015,33 @@ UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = ? AND name
 SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
 FROM name_locks WHERE scope = ? AND name = ? ORDER BY sub;
 
--- name: PruneNameLocks :many
+-- name: PruneEndedNameLocks :many
 -- Deletes at most max_rows counts whose last failure is at or before
--- before_ms, whose lock ended at now_ms, and whose level is 0 or past its
--- reset time. It returns the end of the lock of each deleted count: a value
--- other than 0 is a lock that ended and that no add has seen.
+-- before_ms, whose lock ended at now_ms and that no attempt saw (their
+-- locked_until_ms is not 0), and whose level is 0 or past its reset time. It
+-- returns the scope and the end of the lock of each deleted count.
 DELETE FROM name_locks
 WHERE rowid IN (
     SELECT p.rowid FROM name_locks p
-    WHERE p.last_failure_ms <= sqlc.arg('before_ms') AND p.locked_until_ms <= sqlc.arg('now_ms')
+    WHERE p.last_failure_ms <= sqlc.arg('before_ms') AND p.locked_until_ms <> 0
+      AND p.locked_until_ms <= sqlc.arg('now_ms')
       AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= sqlc.arg('now_ms'))
     LIMIT sqlc.arg('max_rows')
 )
-RETURNING locked_until_ms;
+RETURNING scope, locked_until_ms;
+
+-- name: PruneNameLocks :execrows
+-- Deletes at most max_rows counts with no lock (locked_until_ms is 0) whose
+-- last failure is at or before before_ms and whose level is 0 or past its
+-- reset time. A count whose lock ended and that no attempt saw goes through
+-- PruneEndedNameLocks, so the end of its lock has an entry.
+DELETE FROM name_locks
+WHERE rowid IN (
+    SELECT p.rowid FROM name_locks p
+    WHERE p.last_failure_ms <= sqlc.arg('before_ms') AND p.locked_until_ms = 0
+      AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= sqlc.arg('now_ms'))
+    LIMIT sqlc.arg('max_rows')
+);
 
 -- name: InsertNameLockKey :exec
 INSERT INTO name_lock_key (id, key) VALUES (1, ?) ON CONFLICT DO NOTHING;
