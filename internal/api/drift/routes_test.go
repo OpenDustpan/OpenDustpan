@@ -76,6 +76,7 @@ type fakeUnits struct {
 
 func entryOf(ns namespace.Name, unitID, name string) coreinventory.Entry {
 	return coreinventory.Entry{
+		LastRelease: nil,
 		ManualLock:  nil,
 		LastChanged: time.Unix(0, 0), Namespace: ns, Tool: "opentofu", Name: name, UnitID: unitID,
 		DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, Collection: "", Labels: nil,

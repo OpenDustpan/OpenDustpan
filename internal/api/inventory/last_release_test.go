@@ -32,7 +32,7 @@ func TestListUnitsLastRelease(t *testing.T) {
 				At: at, LockID: "lock-1", Holder: "alice", By: "alice", Kind: "normal",
 			},
 			want: map[string]any{
-				"lockId": "lock-1", "holder": "alice", "releasedBy": "alice",
+				"id": "lock-1", "holder": "alice", "releasedBy": "alice",
 				"releasedAt": at.UTC().Format(time.RFC3339Nano), "kind": "normal",
 			},
 		},
@@ -43,7 +43,7 @@ func TestListUnitsLastRelease(t *testing.T) {
 				At: at, LockID: "lock-2", Holder: "alice", By: "admin", Kind: "forced",
 			},
 			want: map[string]any{
-				"lockId": "lock-2", "holder": "alice", "releasedBy": "admin",
+				"id": "lock-2", "holder": "alice", "releasedBy": "admin",
 				"releasedAt": at.UTC().Format(time.RFC3339Nano), "kind": "forced",
 			},
 		},
@@ -89,36 +89,44 @@ func TestListUnitsLastRelease(t *testing.T) {
 				t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 			}
 
-			var doc struct {
-				Units []map[string]any `json:"units"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-				t.Fatalf("decode units: %v", err)
-			}
-
-			if len(doc.Units) != 1 {
-				t.Fatalf("units = %s, want one", rec.Body.String())
-			}
-
-			got, present := doc.Units[0]["lastRelease"]
-			if tc.want == nil {
-				if present {
-					t.Fatalf("unit shows lastRelease %v, want the field omitted", got)
-				}
-
-				return
-			}
-
-			object, isObject := got.(map[string]any)
-			if !isObject || len(object) != len(tc.want) {
-				t.Fatalf("lastRelease = %v, want %v", got, tc.want)
-			}
-
-			for key, want := range tc.want {
-				if object[key] != want {
-					t.Fatalf("lastRelease.%s = %v, want %v", key, object[key], want)
-				}
-			}
+			checkLastReleaseField(t, rec.Body.Bytes(), tc.want)
 		})
+	}
+}
+
+// checkLastReleaseField decodes the unit list in body and checks that its one
+// unit shows the lastRelease object want, or omits the field when want is nil.
+func checkLastReleaseField(t *testing.T, body []byte, want map[string]any) {
+	t.Helper()
+
+	var doc struct {
+		Units []map[string]any `json:"units"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("decode units: %v", err)
+	}
+
+	if len(doc.Units) != 1 {
+		t.Fatalf("units = %s, want one", body)
+	}
+
+	got, present := doc.Units[0]["lastRelease"]
+	if want == nil {
+		if present {
+			t.Fatalf("unit shows lastRelease %v, want the field omitted", got)
+		}
+
+		return
+	}
+
+	object, isObject := got.(map[string]any)
+	if !isObject || len(object) != len(want) {
+		t.Fatalf("lastRelease = %v, want %v", got, want)
+	}
+
+	for key, value := range want {
+		if object[key] != value {
+			t.Fatalf("lastRelease.%s = %v, want %v", key, object[key], value)
+		}
 	}
 }
