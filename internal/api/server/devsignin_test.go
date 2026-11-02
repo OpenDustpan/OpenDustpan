@@ -158,6 +158,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,
@@ -190,7 +191,8 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 		SignIn: &apiserver.SignIn{
 			OnDevRefused: nil,
 			Sessions:     d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
-			Providers: nil, DevCode: handlerCode, DevAdmin: devAdmin,
+			PasswordLimiter: nil,
+			Providers:       nil, DevCode: handlerCode, DevAdmin: devAdmin,
 		},
 		InstallationKind: parts.kind,
 		StateWriteGates:  parts.stateWrite,

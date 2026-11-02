@@ -45,7 +45,8 @@ const (
 // budget is a windowed count in the database: the live rows stay across the
 // swap of a restore, as the claim tokens and the next runs do. So does the
 // row of the last audit chain check and the marks of checkpoint mismatches
-// do too: a restore must not clear a mark.
+// do too: a restore must not clear a mark. The counts of the lockout by name
+// and the key of their digests stay too: a restore must not end a lock.
 const (
 	TableDurableOperations = "durable_operations"
 	TableDurableSteps      = "durable_steps"
@@ -53,6 +54,8 @@ const (
 	TableSignInFailures    = "sign_in_failures"
 	TableAuditChainCheck   = "audit_chain_check"
 	TableAuditChainMark    = "audit_chain_mark"
+	TableNameLocks         = "name_locks"
+	TableNameLockKey       = "name_lock_key"
 )
 
 // The tables of the replay records of the Idempotency-Key header, the server

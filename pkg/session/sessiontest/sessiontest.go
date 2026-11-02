@@ -52,6 +52,7 @@ func Run(t *testing.T, newStore Factory) {
 		name string
 	}{
 		{name: "session round trip", test: testRoundTrip},
+		{name: "a session carries the session generation of its principal", test: testGenerationRules},
 		{name: "a session that fails validation is ErrInvalid", test: testInvalidSession},
 		{name: "a session needs a person that exists and is enabled", test: testPrincipalRules},
 		{name: "duplicate ID or digest is ErrAlreadyExists", test: testDuplicate},
@@ -164,6 +165,7 @@ func newSession(id, principalID string, created time.Time) session.Session {
 		EndReason:   "",
 		SourceIP:    "192.0.2.10",
 		UserAgent:   "Mozilla/5.0 (sessiontest)",
+		Generation:  1,
 	}
 }
 

@@ -228,6 +228,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,
@@ -260,14 +261,15 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: ""},
 		SignIn: &apiserver.SignIn{
-			OnDevRefused: nil,
-			DevCode:      nil,
-			DevAdmin:     noBootstrapAdmin,
-			Sessions:     sessions,
-			Limiter:      limiter,
-			Stored:       stored,
-			Admin:        admin,
-			Origins:      []string{signInBase, consoleOrigin},
+			OnDevRefused:    nil,
+			DevCode:         nil,
+			DevAdmin:        noBootstrapAdmin,
+			Sessions:        sessions,
+			Limiter:         limiter,
+			PasswordLimiter: nil,
+			Stored:          stored,
+			Admin:           admin,
+			Origins:         []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
 				{
 					Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false,
@@ -1125,6 +1127,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,
@@ -1161,8 +1164,9 @@ func TestSignInProviderDown(t *testing.T) {
 			DevCode:      nil,
 			DevAdmin:     noBootstrapAdmin,
 			Sessions:     sessions, Stored: nil, Admin: nil,
-			Limiter: limiter,
-			Origins: nil,
+			Limiter:         limiter,
+			Origins:         nil,
+			PasswordLimiter: nil,
 			Providers: []apiserver.SignInProvider{
 				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true, Stored: false, Source: ""},
 			},

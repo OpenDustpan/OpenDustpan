@@ -3,7 +3,11 @@ package authgate
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
 )
 
 // Scopes of the lockout by name. A scope holds the letters a to z only.
@@ -57,6 +61,22 @@ const (
 	DefaultFactorLockFor = 30 * time.Minute
 )
 
+// The prune of the name counts. The server deletes the counts that can no
+// longer change a lock, so that failed attempts for many names cannot grow
+// the table with no limit.
+const (
+	// NamePruneInterval is the time between two runs of the prune.
+	NamePruneInterval = time.Hour
+	// NamePruneAge is how long after its last failure a count can go: the
+	// longest lock plus the reset time of the global rule. The store deletes
+	// a count only when its lock ended and its level is past its reset time
+	// too.
+	NamePruneAge = DefaultNameGlobalMaxLockFor + DefaultNameGlobalResetAfter
+	// MaxNamePruneRows is the most counts that one run of the prune deletes.
+	// The next run deletes the rest.
+	MaxNamePruneRows = 10000
+)
+
 // ErrInvalidLock reports a scope that is not one of the letters a to z, an
 // empty name, a limit below 1, a lock time of 0 or less, a maximum below the
 // lock time, or a negative reset time.
@@ -107,15 +127,154 @@ type NameLockCounter interface {
 	// ends its lock. The level stays, so a lock soon after still doubles. A
 	// count that does not exist is no error.
 	ClearNameFailures(ctx context.Context, scope, name, sub string) error
-	// ClearName ends every count and lock of name in scope, for each
-	// sub-key, and returns how many it cleared. An unlock by an
-	// administrator calls it.
-	ClearName(ctx context.Context, scope, name string) (int64, error)
+	// ClearName ends every count and lock of name in each scope of scopes,
+	// for each sub-key, and appends e with the change "cleared", the count
+	// of the counts that it ended, in one transaction, and returns that
+	// count. An unlock by an administrator calls it, so the unlock and its
+	// audit entry commit together or not at all. It returns ErrInvalidLock
+	// for a request that CheckClearRequest refuses, and
+	// audit.ErrInvalidEntry for an entry that fails validation; both change
+	// nothing.
+	ClearName(ctx context.Context, scopes []string, name string, e audit.Entry) (int64, error)
 	// NameLocks returns every count of name in scope, one for each sub-key,
 	// in the order of the sub-key. A name with no count returns no entry.
 	NameLocks(ctx context.Context, scope, name string) ([]NameLock, error)
-	// PruneNameLocks deletes each count whose last failure is age or longer
-	// ago, whose lock ended and whose level is past its reset time, and
-	// returns how many it deleted.
-	PruneNameLocks(ctx context.Context, age time.Duration) (int64, error)
+	// PruneNameLocks deletes at most limit counts whose last failure is age
+	// or longer ago, whose lock ended and whose level is past its reset
+	// time, and appends e with the change "pruned", the count of the counts
+	// that it deleted, in one transaction, and returns that count. The
+	// scheduled prune of the server calls it, so each run and its audit
+	// entry commit together or not at all. It returns ErrInvalidLock for a
+	// request that CheckPruneRequest refuses, and audit.ErrInvalidEntry for
+	// an entry that fails validation; both change nothing.
+	PruneNameLocks(ctx context.Context, age time.Duration, limit int, e audit.Entry) (int64, error)
+}
+
+// Limits of the keys of a name count. A name is a keyed digest or a
+// principal ID, and a sub-key is a source prefix, so both are short.
+const (
+	MaxLockNameBytes = 256
+	MaxLockSubBytes  = 256
+)
+
+// CheckLockRequest returns ErrInvalidLock for a scope that is empty or holds
+// another character than the letters a to z, an empty name, a name or a
+// sub-key above its limit or with a control character, and a rule that
+// LockRule.Validate refuses. Each adapter of NameLockCounter calls it before
+// it writes, so a request that it refuses changes nothing.
+func CheckLockRequest(scope, name, sub string, rule LockRule) error {
+	switch {
+	case scope == "" || !validScope(scope):
+		return fmt.Errorf("%w: scope %q", ErrInvalidLock, scope)
+	case name == "" || len(name) > MaxLockNameBytes || hasControl(name):
+		return fmt.Errorf("%w: a name of %d bytes", ErrInvalidLock, len(name))
+	case len(sub) > MaxLockSubBytes || hasControl(sub):
+		return fmt.Errorf("%w: a sub-key of %d bytes", ErrInvalidLock, len(sub))
+	default:
+		return rule.Validate()
+	}
+}
+
+// CheckClearRequest returns ErrInvalidLock for a clear of a name with no
+// scope, a scope that CheckLockRequest refuses, or a name that it refuses.
+// Each adapter of NameLockCounter calls it before ClearName writes, so a
+// request that it refuses changes nothing.
+func CheckClearRequest(scopes []string, name string) error {
+	if len(scopes) == 0 {
+		return fmt.Errorf("%w: a clear with no scope", ErrInvalidLock)
+	}
+
+	for _, scope := range scopes {
+		if err := CheckLockRequest(scope, name, "", PasswordRule()); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// CheckPruneRequest returns ErrInvalidLock for a prune with an age of 0 or
+// less, or with a limit below 1 or above MaxNamePruneRows. Each adapter of
+// NameLockCounter calls it before PruneNameLocks writes, so a request that it
+// refuses changes nothing.
+func CheckPruneRequest(age time.Duration, limit int) error {
+	switch {
+	case age <= 0:
+		return fmt.Errorf("%w: prune age %s", ErrInvalidLock, age)
+	case limit < 1 || limit > MaxNamePruneRows:
+		return fmt.Errorf("%w: prune limit %d", ErrInvalidLock, limit)
+	default:
+		return nil
+	}
+}
+
+// PrunedChange returns the change of the entry of a prune: the count of the
+// counts that the prune deleted.
+func PrunedChange(n int64) audit.Change {
+	return audit.Change{Key: "pruned", Old: nil, New: strconv.FormatInt(n, 10), Layer: "", TakesEffect: ""}
+}
+
+// ClearedChange returns the change of the entry of a clear of a name: the
+// count of the counts that the clear ended.
+func ClearedChange(n int64) audit.Change {
+	return audit.Change{Key: "cleared", Old: nil, New: strconv.FormatInt(n, 10), Layer: "", TakesEffect: ""}
+}
+
+// Validate returns ErrInvalidLock for a limit below 1, a lock time of 0 or
+// less, a maximum below the lock time, or a negative reset time.
+func (r LockRule) Validate() error {
+	switch {
+	case r.Limit < 1:
+		return fmt.Errorf("%w: limit %d", ErrInvalidLock, r.Limit)
+	case r.LockFor <= 0:
+		return fmt.Errorf("%w: lock time %s", ErrInvalidLock, r.LockFor)
+	case r.MaxLockFor < r.LockFor:
+		return fmt.Errorf("%w: maximum %s below the lock time %s", ErrInvalidLock, r.MaxLockFor, r.LockFor)
+	case r.ResetAfter < 0:
+		return fmt.Errorf("%w: reset time %s", ErrInvalidLock, r.ResetAfter)
+	default:
+		return nil
+	}
+}
+
+// LockDuration returns how long the lock at level lasts under r: LockFor
+// times 2 to the power of level, and never more than MaxLockFor.
+func (r LockRule) LockDuration(level int) time.Duration {
+	d := r.LockFor
+
+	for range level {
+		if d >= r.MaxLockFor/2 {
+			return r.MaxLockFor
+		}
+
+		d *= 2
+	}
+
+	return min(d, r.MaxLockFor)
+}
+
+// hasControl reports a byte below 0x20 or the byte 0x7f.
+func hasControl(s string) bool {
+	for i := range len(s) {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+
+	return false
+}
+
+// PasswordRule is the rule of the count of one name from one source prefix.
+func PasswordRule() LockRule {
+	return LockRule{
+		Limit: DefaultNameLimit, LockFor: DefaultNameLockFor, MaxLockFor: DefaultNameLockFor, ResetAfter: 0,
+	}
+}
+
+// PasswordNameRule is the rule of the count of one name from every source.
+func PasswordNameRule() LockRule {
+	return LockRule{
+		Limit: DefaultNameGlobalLimit, LockFor: DefaultNameGlobalLockFor, MaxLockFor: DefaultNameGlobalMaxLockFor,
+		ResetAfter: DefaultNameGlobalResetAfter,
+	}
 }

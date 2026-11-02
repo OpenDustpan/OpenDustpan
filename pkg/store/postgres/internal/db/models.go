@@ -614,6 +614,23 @@ type ManualLock struct {
 	SinceMs   int64
 }
 
+type NameLock struct {
+	Scope         string
+	Name          string
+	Sub           string
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+}
+
+type NameLockKey struct {
+	ID  int32
+	Key []byte
+}
+
 type Namespace struct {
 	Name                 string
 	PrimaryInstallation  string
@@ -983,6 +1000,7 @@ type Session struct {
 	EndReason    string
 	SourceIp     string
 	UserAgent    string
+	Generation   int64
 }
 
 type SessionPolicy struct {

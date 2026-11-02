@@ -243,16 +243,23 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 }
 
 const bumpSessionGeneration = `-- name: BumpSessionGeneration :execrows
-INSERT INTO principal_session_generations (principal_id, generation)
-VALUES (?, 2)
-ON CONFLICT (principal_id) DO UPDATE SET generation = principal_session_generations.generation + 1
+UPDATE principal_session_generations SET generation = generation + 1
+WHERE principal_id = ?1
+  AND (CAST(?2 AS INTEGER) = 0 OR generation = CAST(?2 AS INTEGER))
 `
 
-// Adds 1 to the session generation of a principal, so that each console
-// session of the principal ends. A principal with no row has the generation
-// 1, so the first bump writes 2.
-func (q *Queries) BumpSessionGeneration(ctx context.Context, principalID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bumpSessionGeneration, principalID)
+type BumpSessionGenerationParams struct {
+	PrincipalID string
+	Expected    int64
+}
+
+// Adds 1 to the stored session generation of a principal, so that each
+// console session of the principal ends. An expected generation other than
+// 0 is a compare-and-swap: the write happens only while the stored
+// generation is the expected one. A principal with no row writes no row
+// here: InsertFirstSessionGeneration writes it in the same transaction.
+func (q *Queries) BumpSessionGeneration(ctx context.Context, arg BumpSessionGenerationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bumpSessionGeneration, arg.PrincipalID, arg.Expected)
 	if err != nil {
 		return 0, err
 	}
@@ -568,6 +575,40 @@ WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance'
 func (q *Queries) ClearMaintenanceRevocationsOnEnter(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, clearMaintenanceRevocationsOnEnter)
 	return err
+}
+
+const clearNameLockSub = `-- name: ClearNameLockSub :exec
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = ? AND name = ? AND sub = ?
+`
+
+type ClearNameLockSubParams struct {
+	Scope string
+	Name  string
+	Sub   string
+}
+
+// Sets the count to 0 and ends the lock. The level stays.
+func (q *Queries) ClearNameLockSub(ctx context.Context, arg ClearNameLockSubParams) error {
+	_, err := q.db.ExecContext(ctx, clearNameLockSub, arg.Scope, arg.Name, arg.Sub)
+	return err
+}
+
+const clearNameLocks = `-- name: ClearNameLocks :execrows
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = ? AND name = ?
+`
+
+type ClearNameLocksParams struct {
+	Scope string
+	Name  string
+}
+
+// Sets the count of each sub-key of a name to 0 and ends each lock.
+func (q *Queries) ClearNameLocks(ctx context.Context, arg ClearNameLocksParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearNameLocks, arg.Scope, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const closeJournal = `-- name: CloseJournal :exec
@@ -2207,11 +2248,14 @@ func (q *Queries) CreateSecretKey(ctx context.Context, arg CreateSecretKeyParams
 }
 
 const createSession = `-- name: CreateSession :execrows
-INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
 SELECT ?1, p.id, ?2, ?3, ?4,
-  ?4, ?5, ?6, ?7
+  ?4, ?5, ?6, ?7,
+  COALESCE(g.generation, 1)
 FROM principals p
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 WHERE p.id = ?8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+  AND (CAST(?9 AS INTEGER) = 0 OR COALESCE(g.generation, 1) = CAST(?9 AS INTEGER))
 ON CONFLICT DO NOTHING
 `
 
@@ -2224,10 +2268,15 @@ type CreateSessionParams struct {
 	SourceIp    string
 	UserAgent   string
 	PrincipalID string
+	Generation  int64
 }
 
 // A session needs a person principal that exists and is not disabled. A
 // taken ID or digest inserts nothing.
+// The session stores the session generation of its principal. A
+// generation of 0 takes the stored generation in this statement. Another
+// generation must be the stored one, so a sign-in that read its generation
+// before a password write or a reset inserts nothing.
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, createSession,
 		arg.ID,
@@ -2238,6 +2287,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 		arg.SourceIp,
 		arg.UserAgent,
 		arg.PrincipalID,
+		arg.Generation,
 	)
 	if err != nil {
 		return 0, err
@@ -4147,6 +4197,23 @@ func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const ensureNameLock = `-- name: EnsureNameLock :exec
+INSERT INTO name_locks (scope, name, sub) VALUES (?, ?, ?) ON CONFLICT DO NOTHING
+`
+
+type EnsureNameLockParams struct {
+	Scope string
+	Name  string
+	Sub   string
+}
+
+// Makes the count of a name and a sub-key in a scope when it does not exist,
+// so the read that follows finds a row.
+func (q *Queries) EnsureNameLock(ctx context.Context, arg EnsureNameLockParams) error {
+	_, err := q.db.ExecContext(ctx, ensureNameLock, arg.Scope, arg.Name, arg.Sub)
+	return err
 }
 
 const ensureNotificationCursor = `-- name: EnsureNotificationCursor :exec
@@ -6548,6 +6615,53 @@ func (q *Queries) GetManualLock(ctx context.Context, arg GetManualLockParams) (G
 	return i, err
 }
 
+const getNameLock = `-- name: GetNameLock :one
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = ? AND name = ? AND sub = ?
+`
+
+type GetNameLockParams struct {
+	Scope string
+	Name  string
+	Sub   string
+}
+
+type GetNameLockRow struct {
+	Sub           string
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+}
+
+func (q *Queries) GetNameLock(ctx context.Context, arg GetNameLockParams) (GetNameLockRow, error) {
+	row := q.db.QueryRowContext(ctx, getNameLock, arg.Scope, arg.Name, arg.Sub)
+	var i GetNameLockRow
+	err := row.Scan(
+		&i.Sub,
+		&i.Failures,
+		&i.LockedUntilMs,
+		&i.Level,
+		&i.LastFailureMs,
+		&i.LastLockEndMs,
+		&i.ResetAfterMs,
+	)
+	return i, err
+}
+
+const getNameLockKey = `-- name: GetNameLockKey :one
+SELECT key FROM name_lock_key WHERE id = 1
+`
+
+func (q *Queries) GetNameLockKey(ctx context.Context) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, getNameLockKey)
+	var key []byte
+	err := row.Scan(&key)
+	return key, err
+}
+
 const getNamespace = `-- name: GetNamespace :one
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
@@ -6972,6 +7086,68 @@ func (q *Queries) GetPrincipalNamespace(ctx context.Context, id string) (string,
 	var namespace string
 	err := row.Scan(&namespace)
 	return namespace, err
+}
+
+const getPrincipalState = `-- name: GetPrincipalState :one
+SELECT p.id, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable,
+  CAST(COALESCE(g.generation, 1) AS INTEGER) AS principal_generation
+FROM principals p
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE p.id = ? AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1
+`
+
+type GetPrincipalStateRow struct {
+	ID                     string
+	Subject                string
+	DisplayName            string
+	PrincipalKind          string
+	PrincipalDisabledAtMs  sql.NullInt64
+	PrincipalBreakGlass    bool
+	PrincipalActiveAtMs    int64
+	PolicyIdleMs           int64
+	PolicyMaxLengthMs      int64
+	PolicyUpdatedAtMs      int64
+	PolicyTokenFreshnessMs sql.NullInt64
+	AccountsInactivityMs   int64
+	AccountsDisable        bool
+	PrincipalGeneration    int64
+}
+
+// The state of a principal that each request with an access cookie reads:
+// the owner, its activity by the account rule of the inactivity disable, the
+// policies, and the session generation, from one read. A principal with no
+// row of principal_session_generations has the generation 1.
+func (q *Queries) GetPrincipalState(ctx context.Context, id string) (GetPrincipalStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getPrincipalState, id)
+	var i GetPrincipalStateRow
+	err := row.Scan(
+		&i.ID,
+		&i.Subject,
+		&i.DisplayName,
+		&i.PrincipalKind,
+		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
+		&i.PrincipalActiveAtMs,
+		&i.PolicyIdleMs,
+		&i.PolicyMaxLengthMs,
+		&i.PolicyUpdatedAtMs,
+		&i.PolicyTokenFreshnessMs,
+		&i.AccountsInactivityMs,
+		&i.AccountsDisable,
+		&i.PrincipalGeneration,
+	)
+	return i, err
 }
 
 const getProfileRevision = `-- name: GetProfileRevision :one
@@ -7555,7 +7731,8 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
 FROM sessions WHERE id = ?
 `
 
@@ -7570,6 +7747,7 @@ type GetSessionRow struct {
 	EndReason    string
 	SourceIp     string
 	UserAgent    string
+	Generation   int64
 }
 
 func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, error) {
@@ -7586,13 +7764,14 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 		&i.EndReason,
 		&i.SourceIp,
 		&i.UserAgent,
+		&i.Generation,
 	)
 	return i, err
 }
 
 const getSessionByDigest = `-- name: GetSessionByDigest :one
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
-  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  s.end_reason, s.source_ip, s.user_agent, s.generation, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
@@ -7601,9 +7780,11 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
   ), 0)) AS INTEGER) AS principal_active_at_ms,
   sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
   sp.token_freshness_ms AS policy_token_freshness_ms,
-  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable,
+  CAST(COALESCE(g.generation, 1) AS INTEGER) AS principal_generation
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE s.digest = ? AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1
@@ -7621,6 +7802,7 @@ type GetSessionByDigestRow struct {
 	EndReason              string
 	SourceIp               string
 	UserAgent              string
+	Generation             int64
 	Subject                string
 	DisplayName            string
 	PrincipalKind          string
@@ -7633,6 +7815,7 @@ type GetSessionByDigestRow struct {
 	PolicyTokenFreshnessMs sql.NullInt64
 	AccountsInactivityMs   int64
 	AccountsDisable        bool
+	PrincipalGeneration    int64
 }
 
 // principal_active_at_ms is the latest activity of the owner by the account
@@ -7654,6 +7837,7 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.EndReason,
 		&i.SourceIp,
 		&i.UserAgent,
+		&i.Generation,
 		&i.Subject,
 		&i.DisplayName,
 		&i.PrincipalKind,
@@ -7666,6 +7850,7 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.PolicyTokenFreshnessMs,
 		&i.AccountsInactivityMs,
 		&i.AccountsDisable,
+		&i.PrincipalGeneration,
 	)
 	return i, err
 }
@@ -7708,12 +7893,15 @@ func (q *Queries) GetSessionPolicy(ctx context.Context) (GetSessionPolicyRow, er
 }
 
 const getSessionPrincipal = `-- name: GetSessionPrincipal :one
-SELECT kind, disabled_at_ms FROM principals WHERE id = ? AND deleted_at_ms IS NULL
+SELECT p.kind, p.disabled_at_ms, CAST(COALESCE(g.generation, 1) AS INTEGER) AS generation
+FROM principals p LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+WHERE p.id = ? AND p.deleted_at_ms IS NULL
 `
 
 type GetSessionPrincipalRow struct {
 	Kind         string
 	DisabledAtMs sql.NullInt64
+	Generation   int64
 }
 
 // The kind and the disable time of a principal that exists, so a refused
@@ -7721,7 +7909,7 @@ type GetSessionPrincipalRow struct {
 func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessionPrincipalRow, error) {
 	row := q.db.QueryRowContext(ctx, getSessionPrincipal, id)
 	var i GetSessionPrincipalRow
-	err := row.Scan(&i.Kind, &i.DisabledAtMs)
+	err := row.Scan(&i.Kind, &i.DisabledAtMs, &i.Generation)
 	return i, err
 }
 
@@ -9104,6 +9292,27 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 	return err
 }
 
+const insertFirstSessionGeneration = `-- name: InsertFirstSessionGeneration :execrows
+INSERT INTO principal_session_generations (principal_id, generation)
+SELECT CAST(?1 AS TEXT), 2
+WHERE NOT EXISTS (
+    SELECT 1 FROM principal_session_generations g WHERE g.principal_id = CAST(?1 AS TEXT)
+  )
+`
+
+// Writes the generation 2 for a principal with no row, which has the
+// generation 1. A principal with a row writes nothing. The caller runs it
+// only for an expected generation of 0 or 1. The write lock of the update
+// before it in the same transaction keeps another writer out between the
+// two statements.
+func (q *Queries) InsertFirstSessionGeneration(ctx context.Context, principalID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertFirstSessionGeneration, principalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertGateObject = `-- name: InsertGateObject :exec
 INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
 VALUES (?1, ?2, ?3, ?4, CAST(?5 AS TEXT), ?6,
@@ -9994,6 +10203,15 @@ func (q *Queries) InsertManualLock(ctx context.Context, arg InsertManualLockPara
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const insertNameLockKey = `-- name: InsertNameLockKey :exec
+INSERT INTO name_lock_key (id, key) VALUES (1, ?) ON CONFLICT DO NOTHING
+`
+
+func (q *Queries) InsertNameLockKey(ctx context.Context, key []byte) error {
+	_, err := q.db.ExecContext(ctx, insertNameLockKey, key)
+	return err
 }
 
 const insertNotification = `-- name: InsertNotification :exec
@@ -13934,6 +14152,57 @@ func (q *Queries) ListLiveProfiles(ctx context.Context, arg ListLiveProfilesPara
 	return items, nil
 }
 
+const listNameLocks = `-- name: ListNameLocks :many
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = ? AND name = ? ORDER BY sub
+`
+
+type ListNameLocksParams struct {
+	Scope string
+	Name  string
+}
+
+type ListNameLocksRow struct {
+	Sub           string
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+}
+
+func (q *Queries) ListNameLocks(ctx context.Context, arg ListNameLocksParams) ([]ListNameLocksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNameLocks, arg.Scope, arg.Name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNameLocksRow
+	for rows.Next() {
+		var i ListNameLocksRow
+		if err := rows.Scan(
+			&i.Sub,
+			&i.Failures,
+			&i.LockedUntilMs,
+			&i.Level,
+			&i.LastFailureMs,
+			&i.LastLockEndMs,
+			&i.ResetAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNamespaces = `-- name: ListNamespaces :many
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
@@ -17141,6 +17410,33 @@ func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (
 	return result.RowsAffected()
 }
 
+const pruneNameLocks = `-- name: PruneNameLocks :execrows
+DELETE FROM name_locks
+WHERE rowid IN (
+    SELECT p.rowid FROM name_locks p
+    WHERE p.last_failure_ms <= ?1 AND p.locked_until_ms <= ?2
+      AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= ?2)
+    LIMIT ?3
+)
+`
+
+type PruneNameLocksParams struct {
+	BeforeMs int64
+	NowMs    int64
+	MaxRows  int64
+}
+
+// Deletes at most max_rows counts whose last failure is at or before
+// before_ms, whose lock ended at now_ms, and whose level is 0 or past its
+// reset time.
+func (q *Queries) PruneNameLocks(ctx context.Context, arg PruneNameLocksParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneNameLocks, arg.BeforeMs, arg.NowMs, arg.MaxRows)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
 DELETE FROM sign_in_failures WHERE window_end_ms <= ?
 `
@@ -19071,6 +19367,40 @@ func (q *Queries) SetLocalUserPassword(ctx context.Context, arg SetLocalUserPass
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const setNameLock = `-- name: SetNameLock :exec
+UPDATE name_locks SET failures = ?1, locked_until_ms = ?2,
+  level = ?3, last_failure_ms = ?4,
+  last_lock_end_ms = ?5, reset_after_ms = ?6
+WHERE scope = ?7 AND name = ?8 AND sub = ?9
+`
+
+type SetNameLockParams struct {
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+	Scope         string
+	Name          string
+	Sub           string
+}
+
+func (q *Queries) SetNameLock(ctx context.Context, arg SetNameLockParams) error {
+	_, err := q.db.ExecContext(ctx, setNameLock,
+		arg.Failures,
+		arg.LockedUntilMs,
+		arg.Level,
+		arg.LastFailureMs,
+		arg.LastLockEndMs,
+		arg.ResetAfterMs,
+		arg.Scope,
+		arg.Name,
+		arg.Sub,
+	)
+	return err
 }
 
 const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows

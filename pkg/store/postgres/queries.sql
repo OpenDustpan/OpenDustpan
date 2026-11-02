@@ -2418,24 +2418,34 @@ ORDER BY id;
 -- name: CreateSession :execrows
 -- A session needs a person principal that exists and is not disabled. A
 -- taken ID or digest inserts nothing.
-INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+-- The session stores the session generation of its principal. A
+-- generation of 0 takes the stored generation in this statement. Another
+-- generation must be the stored one, so a sign-in that read its generation
+-- before a password write or a reset inserts nothing.
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
 SELECT sqlc.arg('id'), p.id, sqlc.arg('digest'), sqlc.arg('provider'), sqlc.arg('created_at_ms')::bigint,
-  sqlc.arg('created_at_ms')::bigint, sqlc.arg('auth_time_ms')::bigint, sqlc.arg('source_ip'), sqlc.arg('user_agent')
+  sqlc.arg('created_at_ms')::bigint, sqlc.arg('auth_time_ms')::bigint, sqlc.arg('source_ip'), sqlc.arg('user_agent'),
+  COALESCE(g.generation, 1)
 FROM principals p
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+  AND (sqlc.arg('generation')::bigint = 0 OR COALESCE(g.generation, 1) = sqlc.arg('generation')::bigint)
 ON CONFLICT DO NOTHING;
 
 -- name: GetSessionPrincipal :one
 -- The kind and the disable time of a principal that exists, so a refused
 -- session insert can name its cause.
-SELECT kind, disabled_at_ms FROM principals WHERE id = $1 AND deleted_at_ms IS NULL;
+SELECT p.kind, p.disabled_at_ms, COALESCE(g.generation, 1)::bigint AS generation
+FROM principals p LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+WHERE p.id = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: SetLastSignIn :exec
 UPDATE principals SET last_sign_in_at_ms = GREATEST(COALESCE(last_sign_in_at_ms, 0), sqlc.arg('at_ms')::bigint)
 WHERE id = sqlc.arg('id');
 
 -- name: GetSession :one
-SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
 FROM sessions WHERE id = $1;
 
 -- name: GetSessionByDigest :one
@@ -2447,7 +2457,7 @@ FROM sessions WHERE id = $1;
 -- partial index of the live rows can serve this lookup by ID.
 -- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
-  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  s.end_reason, s.source_ip, s.user_agent, s.generation, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
@@ -2456,9 +2466,11 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
   ), 0))::bigint AS principal_active_at_ms,
   sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
   sp.token_freshness_ms AS policy_token_freshness_ms,
-  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable,
+  COALESCE(g.generation, 1)::bigint AS principal_generation
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
@@ -5333,6 +5345,22 @@ INSERT INTO principal_session_generations (principal_id, generation)
 VALUES ($1, 2)
 ON CONFLICT (principal_id) DO UPDATE SET generation = principal_session_generations.generation + 1;
 
+-- name: BumpSessionGenerationFrom :execrows
+-- Adds 1 to the stored session generation of a principal only while it is
+-- the expected one: a compare-and-swap. The update locks the row and checks
+-- the condition again on its latest version, so two bumps from one
+-- generation never both pass. A principal with no row writes no row here.
+UPDATE principal_session_generations SET generation = generation + 1
+WHERE principal_id = sqlc.arg('principal_id') AND generation = sqlc.arg('expected')::bigint;
+
+-- name: InsertFirstSessionGeneration :execrows
+-- Writes the generation 2 for a principal with no row, which has the
+-- generation 1: the compare-and-swap from the generation 1. A row that
+-- exists, or that a concurrent bump wrote first, writes nothing.
+INSERT INTO principal_session_generations (principal_id, generation)
+VALUES ($1, 2)
+ON CONFLICT (principal_id) DO NOTHING;
+
 -- name: GetSessionGeneration :one
 -- The session generation of a principal that exists: 1 when it has no row.
 SELECT CAST(COALESCE(g.generation, 1) AS bigint) AS generation
@@ -5361,3 +5389,79 @@ DELETE FROM local_user_resets WHERE digest = sqlc.arg('digest') AND expires_at_m
 
 -- name: PruneLocalUserResets :execrows
 DELETE FROM local_user_resets WHERE expires_at_ms <= $1;
+
+-- name: EnsureNameLock :exec
+-- Makes the count of a name and a sub-key in a scope when it does not exist,
+-- so the locked read that follows finds a row.
+INSERT INTO name_locks (scope, name, sub) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;
+
+-- name: GetNameLockForUpdate :one
+-- Locks the row until the end of the transaction, so concurrent failures of
+-- one name count one after the other.
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = $1 AND name = $2 AND sub = $3 FOR UPDATE;
+
+-- name: SetNameLock :exec
+UPDATE name_locks SET failures = sqlc.arg('failures'), locked_until_ms = sqlc.arg('locked_until_ms'),
+  level = sqlc.arg('level'), last_failure_ms = sqlc.arg('last_failure_ms'),
+  last_lock_end_ms = sqlc.arg('last_lock_end_ms'), reset_after_ms = sqlc.arg('reset_after_ms')
+WHERE scope = sqlc.arg('scope') AND name = sqlc.arg('name') AND sub = sqlc.arg('sub');
+
+-- name: ClearNameLockSub :exec
+-- Sets the count to 0 and ends the lock. The level stays.
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = $1 AND name = $2 AND sub = $3;
+
+-- name: ClearNameLocks :execrows
+-- Sets the count of each sub-key of a name to 0 and ends each lock.
+UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = $1 AND name = $2;
+
+-- name: ListNameLocks :many
+SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
+FROM name_locks WHERE scope = $1 AND name = $2 ORDER BY sub;
+
+-- name: PruneNameLocks :execrows
+-- Deletes at most max_rows counts whose last failure is at or before
+-- before_ms, whose lock ended at now_ms, and whose level is 0 or past its
+-- reset time. The select skips a row that a failure locks now, and the
+-- delete checks the conditions again on the row that it deletes.
+DELETE FROM name_locks
+WHERE (scope, name, sub) IN (
+    SELECT p.scope, p.name, p.sub FROM name_locks p
+    WHERE p.last_failure_ms <= sqlc.arg('before_ms')::bigint AND p.locked_until_ms <= sqlc.arg('now_ms')::bigint
+      AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= sqlc.arg('now_ms')::bigint)
+    LIMIT sqlc.arg('max_rows')::bigint
+    FOR UPDATE SKIP LOCKED
+)
+  AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms <= sqlc.arg('now_ms')::bigint
+  AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms')::bigint);
+
+-- name: InsertNameLockKey :exec
+INSERT INTO name_lock_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING;
+
+-- name: GetNameLockKey :one
+SELECT key FROM name_lock_key WHERE id = 1;
+
+
+-- name: GetPrincipalState :one
+-- The state of a principal that each request with an access cookie reads:
+-- the owner, its activity by the account rule of the inactivity disable, the
+-- policies, and the session generation, from one read. A principal with no
+-- row of principal_session_generations has the generation 1.
+-- The live check is num_nulls(p.deleted_at_ms) = 1, as in GetSessionByDigest.
+SELECT p.id, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0))::bigint AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable,
+  COALESCE(g.generation, 1)::bigint AS principal_generation
+FROM principals p
+LEFT JOIN principal_session_generations g ON g.principal_id = p.id
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE p.id = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
+

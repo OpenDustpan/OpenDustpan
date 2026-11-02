@@ -29,6 +29,7 @@ func sweepChainServer(
 		tempAdmins:       nil,
 		reconciler:       nil,
 		artifactSweeper:  nil,
+		nameLocks:        nameLockPrune{locks: nil},
 		issuer:           nil,
 		handler:          nil,
 		started:          nil,

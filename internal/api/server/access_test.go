@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,6 +77,9 @@ type accessFixture struct {
 	store    *sqlite.Store
 	sessions *session.Sessions
 	handler  testHandler
+	// passwords is the password budget of the handler: it counts each
+	// failure of a password or code check.
+	passwords *fakeLimiter
 }
 
 // newAccessFixture builds a handler whose authorizer and access service
@@ -156,7 +160,10 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("sessions: %v", err)
 	}
 
+	passwords := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
+
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
 		Settings:         nil,
 		GitHost:          nil,
@@ -190,7 +197,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		SessionPolicy:    nil,
 		SignIn: &apiserver.SignIn{
 			OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
-			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil,
+			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
 		},
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
@@ -201,7 +208,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("handler: %v", err)
 	}
 
-	f := accessFixture{store: st, sessions: sessions, handler: handler}
+	f := accessFixture{store: st, sessions: sessions, handler: handler, passwords: passwords}
 
 	f.seed(t, "alice", access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.seed(t, "olga", access.RoleInstallationOperator, identity.ServerObject())

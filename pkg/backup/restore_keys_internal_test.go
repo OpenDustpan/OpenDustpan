@@ -47,7 +47,7 @@ func keyService(live RestoreLive) *RestoreService {
 func keyInput() restoreInput {
 	return restoreInput{
 		ID: MintRestoreID(), BackupID: "bkp-1", PreBackupID: "", CheckOnly: false, Force: false,
-		RequestedBy: "", KeepAccessTables: false,
+		RequestedBy: "", KeepAccessTables: false, evidence: preBackupResult{Digest: "", Damaged: 0, Created: false},
 	}
 }
 
@@ -182,6 +182,6 @@ func manifestWith(blobs ...ManifestBlob) Manifest {
 	return Manifest{
 		CreatedAt: time.Time{}, ID: "bkp-1", Dialect: "", PrimaryInstallations: nil, WrapperIDs: nil, Blobs: blobs,
 		Version: "", SQLSHA256: "", Format: 0, SchemaVersion: 0, SQLSize: 0, RowCounts: nil, SQLFormat: "",
-		SQLFiles: nil, InstallationKind: "", Unverified: nil,
+		SQLFiles: nil, InstallationKind: "", Unverified: nil, Damaged: nil,
 	}
 }
