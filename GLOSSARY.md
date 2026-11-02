@@ -489,11 +489,15 @@ What a sign-in method returns. It holds the provider ID, the subject at the iden
 _Avoid_: Identity, claims (alone), SAML assertion (that is one input of the SAML method)
 
 **Group claim**:
-The list of groups that an identity provider gives for a person at a sign-in. It is a claim of OIDC or OAuth 2.0, or an attribute of SAML or CAS. It is also the groups of an LDAP directory, or a header of a trusted proxy. One function applies it to the memberships of the person, with the rules for groups from an identity provider. It changes only the memberships of its own provider, and never makes a group (ADR 320).
-_Avoid_: Group mapping, role claim, team sync
+The list of groups that an identity provider gives for a person at a sign-in. It is a claim of OIDC or OAuth 2.0, or an attribute of SAML or CAS. It is also the groups of an LDAP directory, or a header of a trusted proxy. A group mapping turns each value into groups. One function applies them to the memberships of the person, with the rules for groups from an identity provider. With no group mapping, it joins no group. It changes only the memberships of its own provider, and never makes a group (ADR 320).
+_Avoid_: Role claim, team sync
+
+**Group mapping**:
+The stored setting of one identity provider that turns a group value into zero or more groups of the home of the person. It is a sensitive setting. The server never infers it from a group name (ADR 320).
+_Avoid_: Group link, claim rule
 
 **Proxy proof**:
-The second proof that a request of the trusted header comes from the trusted proxy. The first proof is the address of the peer. The second proof is a signed JWT of the proxy, a shared secret header, or a TLS client certificate of the proxy. A header from a trusted address alone is never enough (ADR 321).
+The second proof that a request of the trusted header comes from the trusted proxy. The first proof is the address of the peer, which must be in the proxy list of the provider. The second proof is a signed JWT of the proxy, a shared secret header, or a TLS client certificate of the proxy. A header from a trusted address alone is never enough (ADR 321).
 _Avoid_: Proxy secret (alone), header auth
 
 **Session**:

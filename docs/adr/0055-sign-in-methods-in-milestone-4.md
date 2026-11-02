@@ -17,10 +17,10 @@ Changed by:
 - ADR 320 changes decisions 1 and 2: the port of a sign-in method is one of
   three method ports in `pkg/session`, not `identity.Authenticator`.
 - ADR 321 extends decision 1: the design of the LDAP, SAML and CAS adapters.
-- ADR 321 extends decision 6: two modes of the trusted header, each with two
-  layers, and groups from a header.
-- ADR 321 extends decision 7: a groups claim for a plain OAuth 2.0 provider,
-  and the egress rules on its user-info URL.
+- ADR 321 extends decision 6: two modes of the trusted header with two layers
+  each. Each provider has its own list of proxies. Groups can come from a header.
+- ADR 321 extends decision 7: a groups claim for a plain OAuth 2.0 provider.
+  Each outbound connection of a sign-in method uses the egress rules.
 - ADR 321 extends decision 9: the server finds an LDAP removal at each sign-in
   and with an hourly sync.
 

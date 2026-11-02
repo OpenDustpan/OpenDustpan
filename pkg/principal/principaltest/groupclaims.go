@@ -10,14 +10,51 @@ import (
 // implementation has yet.
 const designOnly = "design only: no implementation of this port exists yet"
 
+// GroupMapperFixture is an implementation of principal.GroupMapper over a
+// fresh store, with a way to set the mapping of a source.
+type GroupMapperFixture struct {
+	// Mapper is the implementation under test.
+	Mapper principal.GroupMapper
+	// Store is the store of the principals and the groups.
+	Store principal.Store
+	// SetMapping stores the mapping of value to the group IDs for the
+	// source and the source ID, in the form that the implementation uses.
+	SetMapping func(t *testing.T, source principal.MembershipSource, sourceID, value string, groupIDs ...string)
+}
+
+// RunGroupMapper runs the conformance suite of a principal.GroupMapper. Each
+// case names one rule and is skipped until an implementation exists. The
+// cases hold for each form of a mapping: an explicit map from a value to a
+// group, or a match that a group turns on for one provider.
+func RunGroupMapper(t *testing.T, _ func(t *testing.T) GroupMapperFixture) {
+	t.Helper()
+
+	skipAll(t, []string{
+		"AMappedValueReturnsItsGroups",
+		"AValueCanMapToMoreThanOneGroup",
+		"AnUnmappedValueHasNoKey",
+		"ASourceWithNoMappingIsErrNoGroupMapping",
+		"TheMappingOfOneSourceIDNeverAppliesToAnother",
+		"TheMappingOfOneSourceNeverAppliesToAnother",
+		"AGroupOfAnotherHomeIsNeverReturned",
+		"AGroupRenameDoesNotChangeTheMapping",
+		"ANewGroupDoesNotJoinAMapping",
+		"ADeletedGroupIsNeverReturned",
+		"AValueThatDiffersOnlyInCaseIsAnotherValue",
+		"AFailedReadIsAnErrorAndNotAnEmptyMapping",
+	})
+}
+
 // GroupClaimsFixture is an implementation of principal.GroupClaimApplier
-// over a fresh store, with the store so that a case can make principals and
-// groups and read the memberships and the audit entries.
+// over a fresh store and a mapper, with the store so that a case can make
+// principals and groups and read the memberships and the audit entries.
 type GroupClaimsFixture struct {
 	// Applier is the implementation under test.
 	Applier principal.GroupClaimApplier
 	// Store is the store of the principals and the groups.
 	Store principal.Store
+	// Mapping sets the mapping of the mapper that Applier uses.
+	Mapping GroupMapperFixture
 }
 
 // RunGroupClaims runs the conformance suite of a
@@ -27,19 +64,20 @@ type GroupClaimsFixture struct {
 func RunGroupClaims(t *testing.T, _ func(t *testing.T) GroupClaimsFixture) {
 	t.Helper()
 
-	for _, name := range []string{
+	skipAll(t, []string{
 		"ClaimsNotPresentChangeNothing",
+		"NoMappingJoinsNoGroupAndChangesNothing",
+		"NoMappingWritesOneAuditEntry",
 		"AnEmptyPresentListEndsEachMembershipOfTheSource",
-		"ANameAddsAnActiveMembershipToTheGroupOfThatName",
-		"ANameMatchesOnlyAGroupOfTheHomeOfThePrincipal",
-		"ANameThatMatchesNoGroupIsUnknownAndMakesNoGroup",
+		"AMappedValueAddsAnActiveMembership",
+		"AnUnmappedValueIsListedAndJoinsNoGroup",
+		"TheCallNeverMakesAGroup",
 		"TheMembershipRecordsTheSourceAndTheSourceID",
 		"AMembershipThatIsAlreadyActiveIsNotAddedAgain",
 		"AGroupMissingFromTheClaimsEndsTheMembership",
 		"ALocalMembershipNeverChanges",
 		"AMembershipOfAnotherSourceIDNeverChanges",
 		"APinnedMembershipNeverChanges",
-		"AClaimOnlyJoinsALocalGroupOrADirectoryGroupOfItsSource",
 		// The rules for groups from an identity provider.
 		"AProtectedGroupRefusesTheAdd",
 		"AProtectedGroupThatTrustsTheIdentityProviderAcceptsTheAdd",
@@ -52,11 +90,11 @@ func RunGroupClaims(t *testing.T, _ func(t *testing.T) GroupClaimsFixture) {
 		// Audit entries.
 		"EachAddRemovalSuspensionAndRefusalWritesAnAuditEntry",
 		"TheAuditEntriesAreInTheTransactionOfTheChanges",
-		"AnUnknownNameWritesOneAuditEntryWithTheBoundedList",
+		"UnmappedValuesWriteOneAuditEntryWithTheBoundedList",
 		// Layer 1: the boundary.
 		"MoreThanTheLimitOfGroupsIsErrInvalid",
-		"AGroupNameLongerThanTheLimitIsErrInvalid",
-		"AGroupNameWithControlCharactersIsErrInvalid",
+		"AGroupValueLongerThanTheLimitIsErrInvalid",
+		"AGroupValueWithControlCharactersIsErrInvalid",
 		"TheSourceLocalIsErrInvalid",
 		"AnEmptySourceIDIsErrInvalid",
 		// Layer 4: the principal of the claims.
@@ -65,10 +103,19 @@ func RunGroupClaims(t *testing.T, _ func(t *testing.T) GroupClaimsFixture) {
 		"AServicePrincipalIsErrNotSignInTarget",
 		"ABreakGlassAccountIsErrNotSignInTarget",
 		"ATemporaryAdministratorIsErrNotSignInTarget",
+		"AGroupIDOfAnotherHomeFromTheMapperIsRefused",
 		// Layer 5: fail closed.
+		"AFailedMapperReadChangesNothingAndReturnsTheError",
 		"AFailedWriteChangesNothingAndReturnsTheError",
 		"AFailedAuditWriteChangesNothing",
-	} {
+	})
+}
+
+// skipAll runs one skipped subtest for each name.
+func skipAll(t *testing.T, names []string) {
+	t.Helper()
+
+	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			t.Skip(designOnly)
