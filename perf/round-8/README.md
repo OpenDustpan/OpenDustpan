@@ -41,4 +41,4 @@ The budget holds (never above 81920 KiB). It counts live hash memory only: heap 
 - Observation, not a regression: the server runs one prune per hour, so it deletes at most 10,000 rows per hour. A sustained rate of more than about 2.8 new aged-out rows per second makes the table grow with no limit.
 
 ## Limits
-Go benchmarks (`make bench` scope) were not run this round; the round-7 allocation benchmarks have no changed code in scope. Load numbers on SQLite carry about +-20% run noise on this host.
+Go benchmarks (`make bench` scope) were not run this round, so allocation counts for the store and journal benchmarks are not compared. Load numbers on SQLite carry about +-20% run noise on this host.
