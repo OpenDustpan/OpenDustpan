@@ -77,8 +77,8 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 // put serves PUT on the route. It answers 200 with the filter as stored. A body
 // that is not one object with each field, or a filter that fails the checks of
 // a filter, answers 400 and changes nothing. The change and its audit entry
-// are one transaction in the store. A new filter applies to the fetches that
-// start later. It changes no snapshot that exists.
+// are one transaction in the store. The server stores the filter. No fetch
+// reads it yet.
 func (h *Handler) put(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
@@ -144,8 +144,8 @@ func unreadable(err error) error {
 
 // readFilter decodes the body of a change. It refuses an unknown field, a body
 // that is not one object, a field that is missing or null, and a value of the
-// wrong type. The checks of a filter run on the result in the service and in the
-// store.
+// wrong type. The checks of a filter run on the result in source.EncodeFilter,
+// which put calls, and again in the store.
 func readFilter(w http.ResponseWriter, r *http.Request) (source.Filter, error) {
 	var in request
 	if err := route.DecodeBody(w, r, maxBodyBytes, &in); err != nil {
