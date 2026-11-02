@@ -15,7 +15,8 @@ const refusedMessage = "the server refused the request"
 // TestAnswerTextHintOnlyForServerFaults proves that each command prints the
 // message of an error answer once. A 4xx answer has its cause in the request,
 // so the text has no step to check the server log or to run the same command
-// again. A 5xx answer keeps that step.
+// again. A 5xx answer keeps that step. For the read of a restore that started,
+// the step says that the server resumes the restore.
 func TestAnswerTextHintOnlyForServerFaults(t *testing.T) {
 	t.Parallel()
 
@@ -44,7 +45,8 @@ func TestAnswerTextHintOnlyForServerFaults(t *testing.T) {
 				t.Errorf("%s, status %d: error %q, want the server message once", name, tc.status, text)
 			}
 
-			if hint := strings.Contains(text, " again"); hint != tc.hint {
+			hint := strings.Contains(text, " again") || strings.Contains(text, "resumes restore")
+			if hint != tc.hint {
 				t.Errorf("%s, status %d: error %q, want a retry hint %v", name, tc.status, text, tc.hint)
 			}
 		}

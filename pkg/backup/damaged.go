@@ -18,6 +18,12 @@ import (
 // can cause it.
 var ErrLiveBlobDamaged = errors.New("live blob does not match its record")
 
+// ErrLiveBlobUnopened reports a sealed live blob whose bytes do not open. A
+// StateOpener wraps it. Damaged bytes and a wrong key both cause it, so the
+// backup before a restore records the blob and the restore stops: it never
+// writes over the blob. Every other backup stops at it.
+var ErrLiveBlobUnopened = errors.New("sealed live blob does not open")
+
 // DamageState says what the backup before a restore found at a live key.
 type DamageState string
 
@@ -43,6 +49,9 @@ const (
 	// ReasonSealed says that the plain bytes of a sealed live blob opened and
 	// do not match the size or the MD5 of the row.
 	ReasonSealed DamageReason = "sealed"
+	// ReasonUnopened says that the bytes of a sealed live blob do not open.
+	// Damaged bytes and a wrong key both cause it.
+	ReasonUnopened DamageReason = "unopened"
 )
 
 // DamagedBlob names one live blob that the backup before a restore found
@@ -121,7 +130,7 @@ func validDamagedEntry(entry DamagedBlob) error {
 			return fmt.Errorf("%w: a missing entry has the reason %q", errDamagedEntry, ReasonAbsent)
 		}
 	case DamageMismatch:
-		if !slices.Contains([]DamageReason{ReasonSize, ReasonChecksum, ReasonSealed}, entry.Reason) {
+		if !slices.Contains([]DamageReason{ReasonSize, ReasonChecksum, ReasonSealed, ReasonUnopened}, entry.Reason) {
 			return fmt.Errorf("%w: unknown reason of a damaged entry", errDamagedEntry)
 		}
 	default:
@@ -329,8 +338,9 @@ func (e *LiveBlobsError) Error() string {
 	}
 
 	return fmt.Sprintf("the backup before the restore found %d live blobs whose bytes do not match their "+
-		"records: %s. A restore never writes over a live blob, so it changed no live data. Put the good "+
-		"bytes back at these keys from a copy of the blob store, then run opendustpan restore again: %s: %s",
+		"records or do not open: %s. A restore never writes over a live blob, so it changed no live data. "+
+		"Put the good bytes back at these keys from a copy of the blob store, then run opendustpan restore "+
+		"again. Sealed bytes that do not open can also come from a wrong key-encryption key: %s: %s",
 		e.Findings.Damaged, keys, ErrLiveBlobsDamaged, ErrCorrupt)
 }
 
