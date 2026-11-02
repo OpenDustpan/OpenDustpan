@@ -488,10 +488,10 @@ func (d gateDomain) CreateUnit(
 }
 
 // DeleteUnit implements gatetest.Lifecycle.
-func (d gateDomain) DeleteUnit(ctx context.Context, ns namespace.Name, tool, name string) error {
+func (d gateDomain) DeleteUnit(ctx context.Context, ns namespace.Name, tool, name string) (string, error) {
 	n, err := d.s.GetNamespace(ctx, ns)
 	if err != nil {
-		return fmt.Errorf("get namespace %s: %w", ns, err)
+		return "", fmt.Errorf("get namespace %s: %w", ns, err)
 	}
 
 	del := inventory.Deletion{Entry: gateEntry(ns, "unit:delete"), PurgeAfter: gateTime()}
@@ -501,22 +501,33 @@ func (d gateDomain) DeleteUnit(ctx context.Context, ns namespace.Name, tool, nam
 
 		ref, rerr := stack.ParseRef(ns.String(), project, stackName)
 		if rerr != nil {
-			return fmt.Errorf("parse stack reference: %w", rerr)
+			return "", fmt.Errorf("parse stack reference: %w", rerr)
+		}
+
+		st, gerr := d.s.GetStack(ctx, ref)
+		if gerr != nil {
+			return "", fmt.Errorf("get stack %s: %w", name, gerr)
 		}
 
 		if err = d.s.ForceDeleteStack(ctx, ref, n.Fence(), del); err != nil {
-			return fmt.Errorf("delete stack %s: %w", name, err)
+			return "", fmt.Errorf("delete stack %s: %w", name, err)
 		}
 
-		return nil
+		return st.ID.String(), nil
 	}
 
 	ref := workspace.Ref{Namespace: ns, Name: workspace.Name(name)}
-	if err = d.s.DeleteWorkspace(ctx, ref, n.Fence(), del); err != nil {
-		return fmt.Errorf("delete workspace %s: %w", name, err)
+
+	w, err := d.s.GetWorkspace(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("get workspace %s: %w", name, err)
 	}
 
-	return nil
+	if err = d.s.DeleteWorkspace(ctx, ref, n.Fence(), del); err != nil {
+		return "", fmt.Errorf("delete workspace %s: %w", name, err)
+	}
+
+	return w.ID.String(), nil
 }
 
 // RenameUnit implements gatetest.Lifecycle. Only a Pulumi stack has a rename.

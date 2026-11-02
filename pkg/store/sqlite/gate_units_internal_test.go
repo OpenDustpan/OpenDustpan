@@ -18,9 +18,10 @@ import (
 // as if the other checks had failed.
 //
 // TestGateUnitChecks checks that a write of the transaction at a unit scope
-// with no live unit returns gate.ErrUnitNotFound, that an empty unit ID in the
-// inventory, a unit row that names no unit and a purge with no unit ID fail
-// closed with gate.ErrInvalid.
+// with no live unit returns gate.ErrUnitNotFound, and that a write at a unit
+// scope with a unit ID, a read with an ID that names no unit, an empty unit ID
+// in the inventory, a unit row that names no unit and a purge with no unit ID
+// fail closed with gate.ErrInvalid.
 func TestGateUnitChecks(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +65,24 @@ func TestGateUnitChecks(t *testing.T) {
 		{"references at a unit with no live unit", func(tx *gateTx) error {
 			return tx.SetReferences(t.Context(), ghost, row.Kind, row.ID, nil)
 		}, gate.ErrUnitNotFound},
+		{"an insert at a unit scope with a unit ID", func(tx *gateTx) error {
+			byID, err := gateUnitScope(t, "net").WithUnitID("ws-net")
+			if err != nil {
+				return err
+			}
+
+			return tx.Insert(t.Context(), byID, row, time.Now())
+		}, gate.ErrInvalid},
+		{"a read with the ID of another unit", func(tx *gateTx) error {
+			byID, err := gateUnitScope(t, "net").WithUnitID("ws-gone")
+			if err != nil {
+				return err
+			}
+
+			_, err = tx.List(t.Context(), byID, row.Kind)
+
+			return err
+		}, gate.ErrInvalid},
 		{"a unit with an empty ID in the inventory", func(tx *gateTx) error {
 			_, _, err := tx.Get(t.Context(), gateUnitScope(t, "blank"), row.Kind, row.ID)
 
@@ -130,4 +149,56 @@ func gateUnitScope(t *testing.T, name string) gate.Scope {
 	}
 
 	return scope
+}
+
+// gateObjectInsert returns an INSERT of one gate_objects row of acme.
+func gateObjectInsert(id, scopeKey, level, unitID string) string {
+	return "INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, unit_id, version, body, updated_at_ms) " +
+		"SELECT id, '" + scopeKey + "', 'gate', '" + id + "', '" + level + "', '" + unitID + "', 1, '{}', 1 " +
+		"FROM namespaces WHERE name = 'acme'"
+}
+
+// White-box: the store writes a unit row only through writeScopeOf, which
+// builds the key from the ID, so a black-box test never writes a bad row. The
+// cases write rows straight to the table, as if every check of the store had
+// failed.
+//
+// TestGateObjectChecks checks that the CHECK constraints of gate_objects
+// refuse a unit row with no unit ID, a unit row whose key is not the key of
+// its ID, and a row of another level with a unit ID, and take a good unit row.
+func TestGateObjectChecks(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+
+	gateUnitFixture(t, s)
+
+	tests := []struct {
+		name   string
+		stmt   string
+		refuse bool
+	}{
+		{"a unit row with no unit ID", gateObjectInsert("a", "unit/", "unit", ""), true},
+		{"a unit row whose key names another ID", gateObjectInsert("b", "unit/ws-blank", "unit", "ws-net"), true},
+		{"a unit row whose key is a name key", gateObjectInsert("c", "unit/acme/opentofu/net", "unit", "ws-net"), true},
+		{"a namespace row with a unit ID", gateObjectInsert("d", "namespace/acme", "namespace", "ws-net"), true},
+		{"a good unit row", gateObjectInsert("e", "unit/ws-net", "unit", "ws-net"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stmt := tt.stmt
+			_, err := s.conn.ExecContext(t.Context(), stmt)
+
+			if tt.refuse && err == nil {
+				t.Fatalf("%s: the insert passed, want the CHECK constraint to refuse it", tt.name)
+			}
+
+			if !tt.refuse && err != nil {
+				t.Fatalf("%s: %v, want the insert to pass", tt.name, err)
+			}
+		})
+	}
 }

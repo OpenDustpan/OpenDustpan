@@ -5411,6 +5411,60 @@ func (q *Queries) GetFailoverVersion(ctx context.Context, name string) (int64, e
 	return failover_version, err
 }
 
+const getGateDeletedUnit = `-- name: GetGateDeletedUnit :one
+SELECT n.name AS namespace, d.tool, d.name
+FROM namespaces AS n
+JOIN inventory_deleted AS d ON d.namespace = n.name
+WHERE n.id = ?1 AND d.unit_id = ?2
+`
+
+type GetGateDeletedUnitParams struct {
+	NamespaceID string
+	UnitID      string
+}
+
+type GetGateDeletedUnitRow struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+// The namespace, the tool and the name of the deleted unit of a stable ID.
+func (q *Queries) GetGateDeletedUnit(ctx context.Context, arg GetGateDeletedUnitParams) (GetGateDeletedUnitRow, error) {
+	row := q.db.QueryRowContext(ctx, getGateDeletedUnit, arg.NamespaceID, arg.UnitID)
+	var i GetGateDeletedUnitRow
+	err := row.Scan(&i.Namespace, &i.Tool, &i.Name)
+	return i, err
+}
+
+const getGateLiveUnit = `-- name: GetGateLiveUnit :one
+SELECT n.name AS namespace, i.tool, i.name
+FROM namespaces AS n
+JOIN inventory AS i ON i.namespace = n.name
+WHERE n.id = ?1 AND i.unit_id = ?2
+`
+
+type GetGateLiveUnitParams struct {
+	NamespaceID string
+	UnitID      string
+}
+
+type GetGateLiveUnitRow struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+// The namespace, the tool and the name of the live unit of a stable ID. A gate
+// row of a unit names the unit by its ID only, and a check that names the
+// scope of the row reads the name here.
+func (q *Queries) GetGateLiveUnit(ctx context.Context, arg GetGateLiveUnitParams) (GetGateLiveUnitRow, error) {
+	row := q.db.QueryRowContext(ctx, getGateLiveUnit, arg.NamespaceID, arg.UnitID)
+	var i GetGateLiveUnitRow
+	err := row.Scan(&i.Namespace, &i.Tool, &i.Name)
+	return i, err
+}
+
 const getGateObject = `-- name: GetGateObject :one
 SELECT version, body
 FROM gate_objects
@@ -5473,40 +5527,6 @@ func (q *Queries) GetGateRecordByID(ctx context.Context, id string) (string, err
 	var namespace_id string
 	err := row.Scan(&namespace_id)
 	return namespace_id, err
-}
-
-const getGateUnitName = `-- name: GetGateUnitName :one
-SELECT n.name AS namespace, i.tool, i.name
-FROM namespaces AS n
-JOIN inventory AS i ON i.namespace = n.name
-WHERE n.id = ?1 AND i.unit_id = ?2
-UNION ALL
-SELECT n.name AS namespace, d.tool, d.name
-FROM namespaces AS n
-JOIN inventory_deleted AS d ON d.namespace = n.name
-WHERE n.id = ?1 AND d.unit_id = ?2
-LIMIT 1
-`
-
-type GetGateUnitNameParams struct {
-	NamespaceID string
-	UnitID      string
-}
-
-type GetGateUnitNameRow struct {
-	Namespace string
-	Tool      string
-	Name      string
-}
-
-// The namespace, the tool and the name of the unit of a stable ID: the live
-// unit, or else the deleted unit. A gate row of a unit names the unit by its ID
-// only, and a check that names the scope of the row reads the name here.
-func (q *Queries) GetGateUnitName(ctx context.Context, arg GetGateUnitNameParams) (GetGateUnitNameRow, error) {
-	row := q.db.QueryRowContext(ctx, getGateUnitName, arg.NamespaceID, arg.UnitID)
-	var i GetGateUnitNameRow
-	err := row.Scan(&i.Namespace, &i.Tool, &i.Name)
-	return i, err
 }
 
 const getGitHostConnection = `-- name: GetGitHostConnection :one

@@ -171,6 +171,31 @@ func unitCases(fx *fixtures) []StoreCase {
 				"(ErrNotFound), and its carry-over setting is off with version 0.",
 		},
 		{
+			Name: "unit-id-scope-reads-the-deleted-unit", Port: PortObjects, Method: gate.Objects[gate.Gate].List,
+			Kinds: nil, Scopes: []gate.Scope{fx.webProd}, Policies: nil, Want: nil,
+			Checks: "A unit scope with the stable ID of a deleted unit reads the objects of that unit, with no live " +
+				"unit of the name and with a new live unit of the name. The scope by name reads the new unit only.",
+		},
+		{
+			Name: "unit-id-scope-refused", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.webProd, fx.acmeNet}, Policies: nil, Want: gate.ErrInvalid,
+			Checks: "Put at a unit scope with a stable ID returns ErrInvalid: a write names a unit by its name. A " +
+				"read with an ID that names no unit, or a unit of another tool, returns ErrInvalid.",
+		},
+		{
+			Name: "deleted-unit-reader-label", Port: PortObjects, Method: gate.Objects[gate.ApprovalRule].Delete,
+			Kinds: []Kind{KindApprovalRule}, Scopes: []gate.Scope{fx.acme, fx.webProd}, Policies: nil,
+			Want: gate.ErrInvalid,
+			Checks: "Delete of an approval rule that a gate of a deleted unit names is refused, and the refusal " +
+				"names the deleted unit as deleted-unit/<tool>/<unit ID>, not by the name that a new unit holds.",
+		},
+		{
+			Name: "snapshot-deleted-unit-by-id", Port: PortStore, Method: gate.Store.Snapshot, Kinds: nil,
+			Scopes: []gate.Scope{fx.installation, fx.acme, fx.webProd}, Policies: nil, Want: nil,
+			Checks: "Snapshot of a chain whose unit scope carries the stable ID of a deleted unit holds the objects " +
+				"and the settings of that unit, and none of a new unit with its name.",
+		},
+		{
 			Name: "snapshot-reused-name-starts-clean", Port: PortStore, Method: gate.Store.Snapshot, Kinds: nil,
 			Scopes: []gate.Scope{fx.installation, fx.acme, fx.prod, fx.webProd}, Policies: nil, Want: nil,
 			Checks: "Snapshot of the chain of a new unit with the name of a deleted unit holds no object and no " +
