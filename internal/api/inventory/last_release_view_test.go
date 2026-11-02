@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -56,8 +57,8 @@ func lastReleaseEntries() map[namespace.Name][]coreinventory.Entry {
 	}
 }
 
-// listBody returns the status and body of the unit list of acme.
-func listBody(t *testing.T, h http.Handler) (int, string) {
+// listBody returns the body of the unit list of acme.
+func listBody(t *testing.T, h http.Handler) string {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(
@@ -68,7 +69,7 @@ func listBody(t *testing.T, h http.Handler) (int, string) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	return rec.Code, rec.Body.String()
+	return rec.Body.String()
 }
 
 // TestLastReleaseNeedsUnitRead proves that a caller who cannot read a unit
@@ -78,16 +79,14 @@ func TestLastReleaseNeedsUnitRead(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		allow       map[string]bool
-		name        string
-		wantRecord  bool
-		wantListSee []string
+		allow map[string]bool
+		name  string
+		want  callerSees
 	}{
 		{
-			name:        "no grant",
-			allow:       map[string]bool{},
-			wantRecord:  false,
-			wantListSee: nil,
+			name:  "no grant",
+			allow: map[string]bool{},
+			want:  callerSees{listUnits: nil, record: false},
 		},
 		{
 			name: "a grant on another unit",
@@ -95,8 +94,7 @@ func TestLastReleaseNeedsUnitRead(t *testing.T) {
 				grant(identity.ActionNamespaceRead, "acme"):           true,
 				grant(identity.ActionUnitRead, "opentofu:acme/fresh"): true,
 			},
-			wantRecord:  false,
-			wantListSee: []string{freshUnitID},
+			want: callerSees{listUnits: []string{freshUnitID}, record: false},
 		},
 		{
 			name: "a grant on the unit",
@@ -104,8 +102,7 @@ func TestLastReleaseNeedsUnitRead(t *testing.T) {
 				grant(identity.ActionNamespaceRead, "acme"):              true,
 				grant(identity.ActionUnitRead, "opentofu:acme/released"): true,
 			},
-			wantRecord:  true,
-			wantListSee: []string{releasedUnitID},
+			want: callerSees{listUnits: []string{releasedUnitID}, record: true},
 		},
 	}
 
@@ -113,33 +110,49 @@ func TestLastReleaseNeedsUnitRead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler := newUnitHandlerWithEntries(t, grantAuthorizer{allow: tc.allow}, lastReleaseEntries())
-
-			_, list := listBody(t, handler)
-			if got := strings.Contains(list, releaseMarker); got != tc.wantRecord {
-				t.Fatalf("list shows the last release = %v, want %v (%s)", got, tc.wantRecord, list)
-			}
-
-			for _, id := range tc.wantListSee {
-				if !strings.Contains(list, id) {
-					t.Fatalf("list does not hold unit %s (%s)", id, list)
-				}
-			}
-
-			rec := getUnitByID(t, handler, releasedUnitID, "test-token")
-			if got := strings.Contains(rec.Body.String(), releaseMarker); got != tc.wantRecord {
-				t.Fatalf("unit view shows the last release = %v, want %v (%s)", got, tc.wantRecord, rec.Body.String())
-			}
-
-			wantStatus := http.StatusNotFound
-			if tc.wantRecord {
-				wantStatus = http.StatusOK
-			}
-
-			if rec.Code != wantStatus {
-				t.Fatalf("unit view status = %d, want %d (%s)", rec.Code, wantStatus, rec.Body.String())
-			}
+			checkCallerSees(t, grantAuthorizer{allow: tc.allow}, tc.want)
 		})
+	}
+}
+
+// callerSees is what a caller sees: the record of the released unit, and the
+// IDs of the units that the list holds.
+type callerSees struct {
+	listUnits []string
+	record    bool
+}
+
+// checkCallerSees checks that the list and the unit view of the released unit
+// show the last release exactly when want.record is true, and that the list
+// holds the units of want.listUnits.
+func checkCallerSees(t *testing.T, authz identity.Authorizer, want callerSees) {
+	t.Helper()
+
+	handler := newUnitHandlerWithEntries(t, authz, lastReleaseEntries())
+
+	list := listBody(t, handler)
+	if got := strings.Contains(list, releaseMarker); got != want.record {
+		t.Fatalf("list shows the last release = %v, want %v (%s)", got, want.record, list)
+	}
+
+	for _, id := range want.listUnits {
+		if !strings.Contains(list, id) {
+			t.Fatalf("list does not hold unit %s (%s)", id, list)
+		}
+	}
+
+	rec := getUnitByID(t, handler, releasedUnitID, "test-token")
+	if got := strings.Contains(rec.Body.String(), releaseMarker); got != want.record {
+		t.Fatalf("unit view shows the last release = %v, want %v (%s)", got, want.record, rec.Body.String())
+	}
+
+	wantStatus := http.StatusNotFound
+	if want.record {
+		wantStatus = http.StatusOK
+	}
+
+	if rec.Code != wantStatus {
+		t.Fatalf("unit view status = %d, want %d (%s)", rec.Code, wantStatus, rec.Body.String())
 	}
 }
 
@@ -162,7 +175,7 @@ func TestGetUnitByIDLastRelease(t *testing.T) {
 	}
 
 	tests := []struct {
-		want map[string]any
+		want any
 		name string
 		id   string
 	}{
@@ -182,27 +195,9 @@ func TestGetUnitByIDLastRelease(t *testing.T) {
 				t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 			}
 
-			got, present := decodeObject(t, rec)["lastRelease"]
-			if tc.want == nil {
-				if present {
-					t.Fatalf("unit view shows lastRelease %v, want the field omitted", got)
-				}
-
-				return
-			}
-
-			encoded, err := json.Marshal(got)
-			if err != nil {
-				t.Fatalf("encode lastRelease: %v", err)
-			}
-
-			want, err := json.Marshal(tc.want)
-			if err != nil {
-				t.Fatalf("encode want: %v", err)
-			}
-
-			if string(encoded) != string(want) {
-				t.Fatalf("lastRelease = %s, want %s", encoded, want)
+			got := decodeObject(t, rec)["lastRelease"]
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("lastRelease = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -220,7 +215,7 @@ func TestListAndUnitViewAgreeOnLastRelease(t *testing.T) {
 	handler := newUnitHandlerWithEntries(t, allow, lastReleaseEntries())
 
 	for range 2 {
-		_, list := listBody(t, handler)
+		list := listBody(t, handler)
 
 		var doc struct {
 			Units []map[string]any `json:"units"`
@@ -231,11 +226,9 @@ func TestListAndUnitViewAgreeOnLastRelease(t *testing.T) {
 
 		view := decodeObject(t, getUnitByID(t, handler, releasedUnitID, "test-token"))
 
-		a, _ := json.Marshal(doc.Units[0]["lastRelease"])
-		b, _ := json.Marshal(view["lastRelease"])
-
-		if string(a) != string(b) || string(a) == "null" {
-			t.Fatalf("list lastRelease = %s, unit view lastRelease = %s: want equal and set", a, b)
+		inList, inView := doc.Units[0]["lastRelease"], view["lastRelease"]
+		if inList == nil || !reflect.DeepEqual(inList, inView) {
+			t.Fatalf("list lastRelease = %v, unit view lastRelease = %v: want equal and set", inList, inView)
 		}
 	}
 }
