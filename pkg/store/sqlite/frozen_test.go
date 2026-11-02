@@ -26,9 +26,10 @@ var frozenMigrations embed.FS
 func TestFrozenMigrations(t *testing.T) {
 	t.Parallel()
 
-	// TODO: enable again at the first tag. Until then the schema of each
-	// dialect is one baseline file, and a change to the schema edits it in
-	// place. Write its hash file again before the test runs again.
+	// Disabled until the first tag. Until then the schema of each dialect is
+	// one baseline file, and a change to the schema edits it in place. At the
+	// first tag, write the hash file of the baseline again and enable this
+	// test again.
 	t.Skip("disabled until the first tag: the baseline is edited in place until then")
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

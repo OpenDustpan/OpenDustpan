@@ -13,10 +13,17 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
+
+// ignoreChecks lets a test write a value that the CHECK constraints refuse.
+const ignoreChecks = `PRAGMA ignore_check_constraints = ON`
+
+// errDevResetTestOther is an error that is not a schema refusal.
+var errDevResetTestOther = errors.New("another error")
 
 // resetTestDir makes a data directory of dev with a key file and a database
 // that the command of kind made. An empty kind leaves the kind unclaimed.
@@ -116,12 +123,12 @@ func TestDevResetRefusesADatabaseThatIsNotDev(t *testing.T) {
 		{name: "no kind", kind: "", change: nil, want: errDevResetUnknownKind},
 		{
 			name: "garbled kind", kind: installation.KindDev,
-			change: []string{`PRAGMA ignore_check_constraints = ON`, `UPDATE installation SET kind = 'dev ' WHERE id = 1`},
+			change: []string{ignoreChecks, `UPDATE installation SET kind = 'dev ' WHERE id = 1`},
 			want:   errDevResetUnknownKind,
 		},
 		{
 			name: "unknown kind", kind: installation.KindDev,
-			change: []string{`PRAGMA ignore_check_constraints = ON`, `UPDATE installation SET kind = 'staging' WHERE id = 1`},
+			change: []string{ignoreChecks, `UPDATE installation SET kind = 'staging' WHERE id = 1`},
 			want:   errDevResetUnknownKind,
 		},
 		{
@@ -337,7 +344,8 @@ func checkResetDatabase(t *testing.T, dir, kept string) {
 
 	ctx := context.WithoutCancel(t.Context())
 
-	opened, err := openStore(ctx, "sqlite:"+filepath.Join(dir, devDBName), slog.New(slog.DiscardHandler), openMigrate, "")
+	opened, err := openStore(ctx, "sqlite:"+filepath.Join(dir, devDBName),
+		slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("open the new database: %v", err)
 	}
@@ -359,23 +367,27 @@ func checkResetDatabase(t *testing.T, dir, kept string) {
 		t.Fatalf("namespaces of the new database = %v, %v; want none", names, err)
 	}
 
-	found := false
+	if !namesKept(hostServerEntries(ctx, t, st.Store), kept) {
+		t.Fatalf("the new database has no audit entry of the reset that names %s", kept)
+	}
+}
 
-	for _, entry := range hostServerEntries(ctx, t, st.Store) {
-		if entry.Subject != devResetSubject {
+// namesKept reports whether an audit entry of a reset in entries names the
+// kept path.
+func namesKept(entries []audit.Entry, kept string) bool {
+	for i := range entries {
+		if entries[i].Subject != devResetSubject {
 			continue
 		}
 
-		for _, change := range entry.Changes {
+		for _, change := range entries[i].Changes {
 			if change.Key == "dev-reset-kept" && slices.Contains(strings.Split(change.New, ", "), kept) {
-				found = true
+				return true
 			}
 		}
 	}
 
-	if !found {
-		t.Fatalf("the new database has no audit entry of the reset that names %s", kept)
-	}
+	return false
 }
 
 // TestSchemaRefusalNamesTheStepOfTheCommand proves that the refusal of a
@@ -400,7 +412,7 @@ func TestSchemaRefusalNamesTheStepOfTheCommand(t *testing.T) {
 		}
 	}
 
-	other := errors.New("another error")
+	other := errDevResetTestOther
 	if got := schemaRefusal(other, commandDev, ""); !errors.Is(got, other) || got.Error() != other.Error() {
 		t.Fatalf("schemaRefusal of another error = %v, want it unchanged", got)
 	}

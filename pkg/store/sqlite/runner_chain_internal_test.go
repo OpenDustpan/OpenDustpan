@@ -43,8 +43,8 @@ func TestRunnerAppliesAFixtureChain(t *testing.T) {
 
 	all := slices.Concat(base, chain)
 
-	if err := s.migrateAll(ctx, all); err != nil {
-		t.Fatalf("apply the fixture chain: %v", err)
+	if applyErr := s.migrateAll(ctx, all); applyErr != nil {
+		t.Fatalf("apply the fixture chain: %v", applyErr)
 	}
 
 	recorded, err := s.recordedMigrations(ctx)
@@ -52,15 +52,7 @@ func TestRunnerAppliesAFixtureChain(t *testing.T) {
 		t.Fatalf("read the recorded migrations: %v", err)
 	}
 
-	if len(recorded) != len(all) {
-		t.Fatalf("recorded %d migrations, want %d", len(recorded), len(all))
-	}
-
-	for i, m := range all {
-		if recorded[i].Version != m.Version || recorded[i].Name != m.Name || recorded[i].SHA256 != m.SHA256 {
-			t.Fatalf("recorded %+v, want version %d, name %s and SHA-256 %s", recorded[i], m.Version, m.Name, m.SHA256)
-		}
-	}
+	checkRecordedChain(t, recorded, all)
 
 	var note string
 	if err := s.conn.QueryRowContext(ctx, `SELECT note FROM runner_fixture WHERE id = 1`).Scan(&note); err != nil {
@@ -82,5 +74,21 @@ func TestRunnerAppliesAFixtureChain(t *testing.T) {
 
 	if err := s.migrateAll(ctx, edited); !errors.Is(err, schema.ErrSchemaDiverged) {
 		t.Fatalf("run with an edited applied migration = %v, want %v", err, schema.ErrSchemaDiverged)
+	}
+}
+
+// checkRecordedChain fails the test unless recorded holds each migration of
+// all, in order, with its version, its name and its SHA-256.
+func checkRecordedChain(t *testing.T, recorded []schema.AppliedMigration, all []migrate.Migration) {
+	t.Helper()
+
+	if len(recorded) != len(all) {
+		t.Fatalf("recorded %d migrations, want %d", len(recorded), len(all))
+	}
+
+	for i, m := range all {
+		if recorded[i].Version != m.Version || recorded[i].Name != m.Name || recorded[i].SHA256 != m.SHA256 {
+			t.Fatalf("recorded %+v, want version %d, name %s and SHA-256 %s", recorded[i], m.Version, m.Name, m.SHA256)
+		}
 	}
 }

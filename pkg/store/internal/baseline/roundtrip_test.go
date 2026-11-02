@@ -40,8 +40,9 @@ func committedBaseline(t *testing.T, dialect string) baselineFile {
 func TestSQLiteBaselineRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	// TODO: enable again at the first tag. Until then a change to the schema
-	// edits the baseline by hand, so it no longer has the form of a dump.
+	// Disabled until the first tag. Until then a change to the schema edits
+	// the baseline by hand, so it no longer has the form of a dump. At the
+	// first tag, run make regenerate-baseline and enable this test again.
 	t.Skip("disabled until the first tag: the baseline is edited by hand until then")
 
 	body := committedBaseline(t, "sqlite").body
@@ -68,8 +69,9 @@ func TestSQLiteBaselineRoundTrip(t *testing.T) {
 func TestPostgresBaselineRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	// TODO: enable again at the first tag. Until then a change to the schema
-	// edits the baseline by hand, so it no longer has the form of a dump.
+	// Disabled until the first tag. Until then a change to the schema edits
+	// the baseline by hand, so it no longer has the form of a dump. At the
+	// first tag, run make regenerate-baseline and enable this test again.
 	t.Skip("disabled until the first tag: the baseline is edited by hand until then")
 
 	base := os.Getenv(envPostgres)

@@ -82,15 +82,15 @@ func devResetMoves() []devResetMove {
 func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProcess) error {
 	var dataDir string
 
-	fs := flag.NewFlagSet("dev reset", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	cli.DevByFlag("data-dir").String(fs, &dataDir)
+	flags := flag.NewFlagSet("dev reset", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	cli.DevByFlag("data-dir").String(flags, &dataDir)
 
-	if err := fs.Parse(args); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	if fs.NArg() > 0 {
+	if flags.NArg() > 0 {
 		return errDevArgs
 	}
 
@@ -123,8 +123,8 @@ func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProc
 	app.logger.WarnContext(ctx, "dev reset moved the development data aside",
 		slog.String("database", db), slog.Any("kept", moved))
 
-	if err := remakeDevDatabase(ctx, db, app.logger, proc, moved); err != nil {
-		return err
+	if remakeErr := remakeDevDatabase(ctx, db, app.logger, proc, moved); remakeErr != nil {
+		return remakeErr
 	}
 
 	_, err = fmt.Fprintf(stderr, "dev reset: the old data is kept as %s. Run opendustpan dev to start.\n",

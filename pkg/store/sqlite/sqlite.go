@@ -370,7 +370,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 
 	var extra url.Values
 	if probe.noMigrate {
-		extra = url.Values{"mode": {"rw"}}
+		extra = url.Values{dsnModeKey: {"rw"}}
 	}
 
 	conn, err := openDatabase(ctx, resolved, extra)
@@ -1568,6 +1568,13 @@ type sqlQueryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// dsnModeKey is the key of the open mode of a database file in its URL.
+const dsnModeKey = "mode"
+
+// versionSumColumn is the column of schema_migrations that holds the SHA-256
+// of each migration.
+const versionSumColumn = "sha256"
+
 // hasVersionColumn reports whether schema_migrations has the column. The
 // baseline adds the min_binary_version and the sha256 columns, so a version
 // table from before it lacks them.
@@ -1594,7 +1601,7 @@ func appliedQuery(ctx context.Context, q sqlQueryer) (string, error) {
 		return "", err
 	}
 
-	hasSum, err := hasVersionColumn(ctx, q, "sha256")
+	hasSum, err := hasVersionColumn(ctx, q, versionSumColumn)
 	if err != nil {
 		return "", err
 	}
@@ -1605,7 +1612,7 @@ func appliedQuery(ctx context.Context, q sqlQueryer) (string, error) {
 	}
 
 	if hasSum {
-		digest = "sha256"
+		digest = versionSumColumn
 	}
 
 	return "SELECT version, name, " + minimum + ", " + digest + " FROM schema_migrations ORDER BY version", nil
@@ -1620,7 +1627,7 @@ func appliedQuery(ctx context.Context, q sqlQueryer) (string, error) {
 // check refuses a database from before the baseline; this check stays so
 // that a new caller of Check, or a change to it, cannot skip the comparison.
 func verifyRecorded(ctx context.Context, q sqlQueryer, embedded []migrate.Migration) error {
-	hasSum, err := hasVersionColumn(ctx, q, "sha256")
+	hasSum, err := hasVersionColumn(ctx, q, versionSumColumn)
 	if err != nil {
 		return err
 	}
@@ -1748,7 +1755,7 @@ func (s *Store) apply(ctx context.Context, m migrate.Migration) error {
 // version table without them is one from before the baseline. The checks
 // refuse such a database before any migration runs, and the record fails too.
 func recordMigration(ctx context.Context, tx *sql.Tx, m migrate.Migration) error {
-	for _, column := range []string{"min_binary_version", "sha256"} {
+	for _, column := range []string{"min_binary_version", versionSumColumn} {
 		exists, err := hasVersionColumn(ctx, tx, column)
 		if err != nil {
 			return err

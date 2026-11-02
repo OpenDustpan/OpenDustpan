@@ -147,7 +147,7 @@ func StoredKind(ctx context.Context, path string) (installation.Kind, error) {
 		return "", err
 	}
 
-	conn, err := openDatabase(ctx, resolved, url.Values{"mode": {"ro"}})
+	conn, err := openDatabase(ctx, resolved, url.Values{dsnModeKey: {"ro"}})
 	if err != nil {
 		return "", errors.Join(err, guard.release())
 	}
@@ -169,7 +169,8 @@ func readStoredKind(ctx context.Context, conn *sql.DB) (installation.Kind, error
 	}
 
 	if !raw.Valid {
-		return "", fmt.Errorf("read installation kind: no command claimed the database: %w", installation.ErrUnavailable)
+		return "", fmt.Errorf("read installation kind: no command claimed the database: %w",
+			installation.ErrUnavailable)
 	}
 
 	return installation.FromStored(raw.String)
