@@ -115,8 +115,9 @@ func TestGrowthRuleHidesSchemaNames(t *testing.T) {
 // count is the measured count minus the bookkeeping of the flow at the current
 // commit: 24 round trips for a backup and 102 for a restore, the same for 3 and
 // for 30 units. A commit with other restore steps had a little less
-// bookkeeping, and fitTolerance covers that. The first three commits fitted the coefficients of the models. The last one
-// did not: the models predict it, and heldOut marks it.
+// bookkeeping, and fitTolerance covers that. The first three commits fitted the
+// coefficients of the models. The last one did not: the models predict it, and
+// heldOut marks it.
 func measuredHistory() []measuredPoint {
 	return []measuredPoint{
 		{"a839dc5", schemaCounts{tables: 76, otherTables: 18, migrations: 48, units: 3}, 277, 896, false},
