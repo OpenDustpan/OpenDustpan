@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/servertest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
@@ -895,6 +896,37 @@ func (h *rtHarness) settle(path string, running ...string) {
 	h.t.Fatalf("%s did not end in time", path)
 }
 
+// settleOperations waits until every durable operation of kind has ended its
+// claim. The state of a backup or a restore reads "succeeded" before the runner
+// ends the claim of the operation, and the end of the claim makes 4 more round
+// trips (lock, clock, end, commit). A trace that ends on the state alone misses
+// them in some runs, so the count changes between runs. The operation state is
+// the last write of the flow, so after this wait the trace holds all of them.
+func (h *rtHarness) settleOperations(kind durable.Kind) {
+	h.t.Helper()
+
+	deadline := time.Now().Add(settleLimit)
+
+	for time.Now().Before(deadline) {
+		ops, err := h.cluster.Operations(h.t, 0).List(h.t.Context(), durable.Filter{Kind: kind, States: nil, Limit: 0})
+		if err != nil {
+			h.t.Fatalf("list %s operations: %v", kind, err)
+		}
+
+		if len(ops) > 0 && !slices.ContainsFunc(ops, func(op durable.Operation) bool { return !op.State.Terminal() }) {
+			return
+		}
+
+		select {
+		case <-h.t.Context().Done():
+			h.t.Fatalf("wait for the %s operation: %v", kind, h.t.Context().Err())
+		case <-time.After(settleEvery):
+		}
+	}
+
+	h.t.Fatalf("the %s operation did not end its claim in time", kind)
+}
+
 // backupRun holds the round trips of a backup and of the restore of it.
 type backupRun struct {
 	backup  []roundTrip
@@ -923,6 +955,7 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 
 	h.decode(h.call(http.MethodPost, "/api/server/backups", "", http.StatusAccepted), &started)
 	h.settle("/api/server/backups/"+started.ID, string(backup.StateRunning))
+	h.settleOperations(backup.OperationKind)
 
 	out.backup = h.tracer.end()
 
@@ -935,6 +968,7 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 	h.decode(h.call(http.MethodPost, "/api/server/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
 		&restore)
 	h.settle("/api/server/restores/"+restore.ID, "running", "checking", "applying")
+	h.settleOperations(backup.RestoreOperationKind)
 
 	out.restore = h.tracer.end()
 
@@ -994,6 +1028,59 @@ func TestRoundTripsOfBackup(t *testing.T) {
 				restore:       counted(run.restore),
 				backupGrowth:  withoutTimerLoops(withoutPrepares(run.backup)),
 				restoreGrowth: withoutTimerLoops(withoutPrepares(run.restore)),
+			}
+		})
+	}
+}
+
+// stableRuns is the number of backup and restore runs that
+// TestRoundTripsOfBackupAreStable compares.
+const stableRuns = 10
+
+// TestRoundTripsOfBackupAreStable runs the smallest data set of the backup flow
+// stableRuns times, each on its own server, and checks that every run counts
+// the same round trips for the backup and for the restore. A count that changes
+// between runs for the same code lets a ceiling fail at random, and it hides a
+// change of 1 or 2 round trips.
+func TestRoundTripsOfBackupAreStable(t *testing.T) {
+	t.Parallel()
+
+	size := backupSizes()[0]
+	runs := make([]measuredRun, stableRuns)
+
+	// The parallel subtests end before the cleanup functions of this test run,
+	// so the check reads the runs after every write.
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+
+		for i, run := range runs[1:] {
+			if got, want := len(run.backup), len(runs[0].backup); got != want {
+				t.Errorf("run %d: backup counted %d round trips, run 0 counted %d", i+1, got, want)
+			}
+
+			if got, want := len(run.restore), len(runs[0].restore); got != want {
+				t.Errorf("run %d: restore counted %d round trips, run 0 counted %d", i+1, got, want)
+			}
+		}
+	})
+
+	for i := range runs {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			t.Parallel()
+
+			target, err := fs.Open(t.TempDir())
+			if err != nil {
+				t.Fatalf("open backup target: %v", err)
+			}
+
+			h := newRoundTripHarness(t, traceBackup, dustpan.WithBackupTarget(target, "test"))
+			h.seedUnits(size.units)
+
+			run := h.runBackupAndRestore()
+			runs[i] = measuredRun{
+				backup: counted(run.backup), restore: counted(run.restore), backupGrowth: nil, restoreGrowth: nil,
 			}
 		})
 	}
