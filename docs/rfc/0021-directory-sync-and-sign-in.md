@@ -1565,7 +1565,8 @@ Accepted on 2026-11-02:
   uses the lockout by name of ADR 285 on the typed name and on the person. A
   passkey sign-in counts by client address.
 - ADR 321: the designs of LDAP (with a check at each sign-in and an hourly
-  sync that disables nobody above a bound), SAML, CAS, the OAuth 2.0 groups
+  sync that applies a disabled entry at once and holds a large set of
+  missing entries for a site administrator), SAML, CAS, the OAuth 2.0 groups
   claim and the trusted header (two modes with two layers each, a proxy list
   of each provider, and groups from a header). The start of a SAML
   sign-in (O4) waits for the owner.
