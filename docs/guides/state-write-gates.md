@@ -257,6 +257,11 @@ error: [403] Writes to pulumi are frozen. (error gate.denied, decision record gd
 `could not import deployment:`. A refused `pulumi cancel` leaves the update
 running, so the stack stays locked.
 
+To free a stack when a gate refuses `pulumi cancel`, a person who may change
+the gates of that stack edits the gate or deletes it. For example, the person
+sets the `unless` clause of the gate to `context.operation.kind == "unlock"`.
+Then `pulumi cancel` works again. The audit log records each change of a gate.
+
 The server log has the line `state write refused` with the unit, the error
 code and the ID of the decision record. The audit log has a `denied` entry
 with the action of the write and the unit (see the [audit log](audit-log.md)).
