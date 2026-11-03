@@ -47,7 +47,8 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 	for rows.Next() {
 		var applied schema.AppliedMigration
 
-		if scanErr := rows.Scan(&applied.Version, &applied.Name, &applied.MinBinaryVersion); scanErr != nil {
+		scanErr := rows.Scan(&applied.Version, &applied.Name, &applied.MinBinaryVersion, &applied.SHA256)
+		if scanErr != nil {
 			return nil, fmt.Errorf("read schema migrations: %w", scanErr)
 		}
 
