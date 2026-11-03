@@ -125,8 +125,9 @@ func (b *Budget) serve() {
 		b.used += head.kib
 		head.granted = true
 		close(head.ready)
-		b.waiters[0] = nil
-		b.waiters = b.waiters[1:]
+		// slices.Delete clears the slot that it frees, so the list keeps no
+		// reference to a served waiter.
+		b.waiters = slices.Delete(b.waiters, 0, 1)
 	}
 }
 
