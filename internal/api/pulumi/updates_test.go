@@ -660,8 +660,13 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("updates service: %v", err)
 	}
 
+	var guard stategate.Guard = stategate.Off("the test keeps no gates")
+	if opts.guard != nil {
+		guard = opts.guard
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		StateGuard:              guardOrOff(opts.guard),
+		StateGuard:              guard,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -691,15 +696,6 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem, sealer: sealer, audit: auditLog}
-}
-
-// guardOrOff returns g, or the guard of stategate.Off when g is nil.
-func guardOrOff(g stategate.Guard) stategate.Guard {
-	if g == nil {
-		return stategate.Off("the test keeps no gates")
-	}
-
-	return g
 }
 
 // allowAll authorizes every action.

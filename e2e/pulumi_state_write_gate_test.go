@@ -167,7 +167,8 @@ func (g *pulumiGateRun) restoreGate() {
 
 	if err := json.Unmarshal([]byte(body), &refused); err != nil || status != http.StatusForbidden ||
 		refused.Code != http.StatusForbidden || refused.ErrorCode != "gate.denied" ||
-		!strings.Contains(refused.Message, pulumiFreezeText) || !strings.Contains(refused.Message, "decision record gdr-") {
+		!strings.Contains(refused.Message, pulumiFreezeText) ||
+		!strings.Contains(refused.Message, "decision record gdr-") {
 		g.t.Fatalf("POST %s = %d %s (%v), want 403 in the Pulumi shape with the gate message", path, status, body, err)
 	}
 

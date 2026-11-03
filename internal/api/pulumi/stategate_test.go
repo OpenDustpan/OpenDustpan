@@ -176,8 +176,8 @@ func runCancel(t *testing.T, guard stategate.Guard) routeRun {
 		t.Fatalf("create: %v", err)
 	}
 
-	if _, err := f.updates.Start(t.Context(), f.ref, u.ID); err != nil {
-		t.Fatalf("start: %v", err)
+	if _, startErr := f.updates.Start(t.Context(), f.ref, u.ID); startErr != nil {
+		t.Fatalf("start: %v", startErr)
 	}
 
 	status, body := f.doUpdate(t, accessRequest(http.MethodPost,
@@ -191,12 +191,19 @@ func runCancel(t *testing.T, guard stategate.Guard) routeRun {
 	return routeRun{status: status, body: body, wrote: after.Status != stack.StatusRunning, denied: deniedCount(f)}
 }
 
+// stackRequest is one request to a stack route, and the read of its write
+// from the stack store.
+type stackRequest struct {
+	method, target, body string
+	wrote                func(*recordingStackStore) bool
+}
+
 // runStackRoute sends one request to a stack route of a handler with guard,
 // and reads the writes from the stack store.
-func runStackRoute(
-	t *testing.T, guard stategate.Guard, method, target, body string, wrote func(*recordingStackStore) bool,
-) routeRun {
+func runStackRoute(t *testing.T, guard stategate.Guard, sr stackRequest) routeRun {
 	t.Helper()
+
+	method, target, body, wrote := sr.method, sr.target, sr.body, sr.wrote
 
 	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
 	handler, stores := newGuardedEnforcingHandler(t, allowAll(), entries, guard)
@@ -215,16 +222,20 @@ func runStackRoute(
 func runRename(t *testing.T, guard stategate.Guard) routeRun {
 	t.Helper()
 
-	return runStackRoute(t, guard, http.MethodPost, "/api/stacks/acme/web/prod/rename",
-		`{"newName":"renamed","newProject":"web"}`,
-		func(s *recordingStackStore) bool { return len(s.renamed) != 0 })
+	return runStackRoute(t, guard, stackRequest{
+		method: http.MethodPost, target: "/api/stacks/acme/web/prod/rename",
+		body:  `{"newName":"renamed","newProject":"web"}`,
+		wrote: func(s *recordingStackStore) bool { return len(s.renamed) != 0 },
+	})
 }
 
 func runDelete(t *testing.T, guard stategate.Guard) routeRun {
 	t.Helper()
 
-	return runStackRoute(t, guard, http.MethodDelete, "/api/stacks/acme/web/prod", "",
-		func(s *recordingStackStore) bool { return len(s.deleted) != 0 || len(s.forced) != 0 })
+	return runStackRoute(t, guard, stackRequest{
+		method: http.MethodDelete, target: "/api/stacks/acme/web/prod", body: "",
+		wrote: func(s *recordingStackStore) bool { return len(s.deleted) != 0 || len(s.forced) != 0 },
+	})
 }
 
 // pulumiError is the Pulumi error shape with the code of the catalog.
@@ -252,24 +263,31 @@ func TestStateWriteGuardAllows(t *testing.T) {
 				t.Fatalf("run = %+v, want a success, a write and no denied entry", got)
 			}
 
-			seen := guard.checks()
-			if len(seen) != 1 {
-				t.Fatalf("guard checks = %d, want 1", len(seen))
-			}
-
-			c := seen[0]
-			if c.Operation != rt.op || c.Action != rt.action || c.Source != gate.SourceCLI ||
-				c.Unit.String() != "pulumi:acme/web/prod" || c.Principal.Subject != "tester" {
-				t.Errorf("check = %+v, want operation %q, action %q, source cli, unit pulumi:acme/web/prod",
-					c, rt.op, rt.action)
-			}
-
-			// The server does not read a Pulumi state for the gates: the
-			// state facts stay not available, and no fact is invented.
-			if c.State != nil || c.PlanLock {
-				t.Errorf("check state = %+v, plan lock %v, want no state change and no plan lock", c.State, c.PlanLock)
-			}
+			checkGuardSaw(t, rt, guard.checks())
 		})
+	}
+}
+
+// checkGuardSaw checks that the guard saw one check, with the operation kind,
+// the action, the unit and the source of rt, and with no state change.
+func checkGuardSaw(t *testing.T, rt guardedRoute, seen []gate.StateWrite) {
+	t.Helper()
+
+	if len(seen) != 1 {
+		t.Fatalf("guard checks = %d, want 1", len(seen))
+	}
+
+	c := seen[0]
+	if c.Operation != rt.op || c.Action != rt.action || c.Source != gate.SourceCLI ||
+		c.Unit.String() != "pulumi:acme/web/prod" || c.Principal.Subject != "tester" {
+		t.Errorf("check = %+v, want operation %q, action %q, source cli, unit pulumi:acme/web/prod",
+			c, rt.op, rt.action)
+	}
+
+	// The server does not read a Pulumi state for the gates: the state facts
+	// stay not available, and no fact is invented.
+	if c.State != nil || c.PlanLock {
+		t.Errorf("check state = %+v, plan lock %v, want no state change and no plan lock", c.State, c.PlanLock)
 	}
 }
 
@@ -335,24 +353,30 @@ func TestStateWriteGuardRefuses(t *testing.T) {
 			t.Run(rt.name+"/"+ans.name, func(t *testing.T) {
 				t.Parallel()
 
-				got := rt.run(t, newStateGuard(ans.result, ans.err))
-
-				if got.status != ans.status || got.wrote || got.denied != 1 {
-					t.Fatalf("run = %+v, want status %d, no write and one denied entry", got, ans.status)
-				}
-
-				var e pulumiError
-				if err := json.Unmarshal([]byte(got.body), &e); err != nil {
-					t.Fatalf("decode %q: %v", got.body, err)
-				}
-
-				if e.Code != ans.status || e.ErrorCode != ans.code || !strings.Contains(e.Message, ans.text) ||
-					strings.ContainsAny(e.Message, "\r\n") {
-					t.Errorf("error = %+v, want code %d, errorCode %s and %q on one line",
-						e, ans.status, ans.code, ans.text)
-				}
+				checkRefused(t, ans, rt.run(t, newStateGuard(ans.result, ans.err)))
 			})
 		}
+	}
+}
+
+// checkRefused checks that got is the refusal of ans: its status, no write,
+// one denied entry, and the Pulumi error shape with the code and the text on
+// one line.
+func checkRefused(t *testing.T, ans guardAnswer, got routeRun) {
+	t.Helper()
+
+	if got.status != ans.status || got.wrote || got.denied != 1 {
+		t.Fatalf("run = %+v, want status %d, no write and one denied entry", got, ans.status)
+	}
+
+	var e pulumiError
+	if err := json.Unmarshal([]byte(got.body), &e); err != nil {
+		t.Fatalf("decode %q: %v", got.body, err)
+	}
+
+	if e.Code != ans.status || e.ErrorCode != ans.code || !strings.Contains(e.Message, ans.text) ||
+		strings.ContainsAny(e.Message, "\r\n") {
+		t.Errorf("error = %+v, want code %d, errorCode %s and %q on one line", e, ans.status, ans.code, ans.text)
 	}
 }
 
@@ -416,7 +440,9 @@ func newHandlerWithGuard(t *testing.T, guard stategate.Guard) (*pulumi.Handler, 
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stubStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
+		stack.Config{
+			Store: stubStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)

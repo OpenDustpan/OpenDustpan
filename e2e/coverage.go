@@ -240,16 +240,9 @@ func (coverageAuthorizer) ListObjects(
 func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
-	stacks, err := stack.NewService(
-		stack.Config{
-			Store:       coverageStackStore{},
-			Namespaces:  namespaces,
-			Now:         nil,
-			State:       nil,
-			Retention:   0,
-			ManualLocks: nil,
-		},
-	)
+	stacks, err := stack.NewService(stack.Config{
+		Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil,
+	})
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
 	}
