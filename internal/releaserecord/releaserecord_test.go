@@ -83,23 +83,25 @@ func TestParseRefuses(t *testing.T) {
 	}
 
 	for name, data := range map[string]string{
-		"three fields":         both("v0.1.0 sqlite " + baseline),
-		"five fields":          both("v0.1.0 sqlite " + baseline + " " + sum + " extra"),
-		"two spaces":           both("v0.1.0  sqlite " + baseline + " " + sum),
-		"tab separator":        both("v0.1.0\tsqlite " + baseline + " " + sum),
-		"leading space":        both(" v0.1.0 sqlite " + baseline + " " + sum),
-		"trailing space":       both("v0.1.0 sqlite " + baseline + " " + sum + " "),
-		"carriage return":      both("v0.1.0 sqlite " + baseline + " " + sum + "\r"),
-		"tag without v":        both("0.1.0 sqlite " + baseline + " " + sum),
-		"tag with suffix":      both("v0.1.0-rc1 sqlite " + baseline + " " + sum),
-		"tag with zero":        both("v0.01.0 sqlite " + baseline + " " + sum),
-		"unknown dialect":      both("v0.1.0 mysql " + baseline + " " + sum),
-		"file with path":       both("v0.1.0 sqlite ../" + baseline + " " + sum),
-		"file without number":  both("v0.1.0 sqlite baseline.sql " + sum),
-		"file not sql":         both("v0.1.0 sqlite 0168_baseline.txt " + sum),
-		"short sum":            both("v0.1.0 sqlite " + baseline + " abc"),
-		"upper-case sum":       both("v0.1.0 sqlite " + baseline + " " + strings.ToUpper(sum)),
-		"file listed twice":    both("v0.1.0 sqlite " + baseline + " " + sum + "\nv0.2.0 sqlite " + baseline + " " + sum),
+		"three fields":        both("v0.1.0 sqlite " + baseline),
+		"five fields":         both("v0.1.0 sqlite " + baseline + " " + sum + " extra"),
+		"two spaces":          both("v0.1.0  sqlite " + baseline + " " + sum),
+		"tab separator":       both("v0.1.0\tsqlite " + baseline + " " + sum),
+		"leading space":       both(" v0.1.0 sqlite " + baseline + " " + sum),
+		"trailing space":      both("v0.1.0 sqlite " + baseline + " " + sum + " "),
+		"carriage return":     both("v0.1.0 sqlite " + baseline + " " + sum + "\r"),
+		"tag without v":       both("0.1.0 sqlite " + baseline + " " + sum),
+		"tag with suffix":     both("v0.1.0-rc1 sqlite " + baseline + " " + sum),
+		"tag with zero":       both("v0.01.0 sqlite " + baseline + " " + sum),
+		"unknown dialect":     both("v0.1.0 mysql " + baseline + " " + sum),
+		"file with path":      both("v0.1.0 sqlite ../" + baseline + " " + sum),
+		"file without number": both("v0.1.0 sqlite baseline.sql " + sum),
+		"file not sql":        both("v0.1.0 sqlite 0168_baseline.txt " + sum),
+		"short sum":           both("v0.1.0 sqlite " + baseline + " abc"),
+		"upper-case sum":      both("v0.1.0 sqlite " + baseline + " " + strings.ToUpper(sum)),
+		"line listed twice":   both("v0.1.0 sqlite " + baseline + " " + sum + "\nv0.1.0 sqlite " + baseline + " " + sum),
+		"one file, two sums": both("v0.1.0 sqlite " + baseline + " " + sum +
+			"\nv0.2.0 sqlite " + baseline + " " + sumOf("edited") + "\nv0.2.0 postgres " + baseline + " " + sum),
 		"one dialect only":     "v0.1.0 sqlite " + baseline + " " + sum + "\n",
 		"comment not at start": both("v0.1.0 sqlite " + baseline + " " + sum + " # note"),
 	} {
@@ -186,11 +188,18 @@ func guards() []guard {
 		{"../../pkg/store/internal/baseline/roundtrip_test.go", "TestSQLiteBaselineRoundTrip", "Off"},
 		{"../../pkg/store/internal/baseline/roundtrip_test.go", "TestPostgresBaselineRoundTrip", "Off"},
 		{"../../internal/api/apidesc/version_test.go", "TestVersionFollowsTheDescription", "Off"},
+		{"../../pkg/store/sqlite/frozen_test.go", "TestTagCopiesHaveTheirLines", "TagCopies"},
+		{"../../pkg/store/postgres/frozen_test.go", "TestTagCopiesHaveTheirLines", "TagCopies"},
 	}
 }
 
-// TestEachGuardAsksTheRecord proves that each guard asks the record, and that
-// none skips with no condition. A guard that ignores the record fails here.
+// TestEachGuardAsksTheRecord proves that each guard asks the record. A guard
+// that calls Off must start with t.Parallel() and then the if statement that
+// skips on the reason from Off. After it, each skip and each return must be
+// inside an if statement. A guard that calls MigrationFiles has no skip and
+// no return. So a guard that ignores the record, skips with no condition,
+// or returns early with no condition fails here. A skip inside a helper
+// function is out of the reach of this test.
 func TestEachGuardAsksTheRecord(t *testing.T) {
 	t.Parallel()
 
@@ -204,50 +213,122 @@ func TestEachGuardAsksTheRecord(t *testing.T) {
 				t.Errorf("%s in %s does not call the %s method of the release record", g.fn, g.file, g.method)
 			}
 
-			for _, stmt := range body.List {
-				if isSkip(stmt) {
-					t.Errorf(
-						"%s in %s skips with no condition: skip only on the reason of the release record",
-						g.fn,
-						g.file,
-					)
+			if g.method != "Off" {
+				for _, stop := range stops(body.List) {
+					t.Errorf("%s in %s: a skip or a return at %d; this guard has none", g.fn, g.file, stop)
 				}
+
+				return
 			}
 
-			if g.method == "Off" {
-				checkFirstSkip(t, g, body)
-			}
+			checkOffGuard(t, g, body)
 		})
 	}
 }
 
-// checkFirstSkip fails t unless the first if statement of body that skips
-// gets the reason from Off in its init and tests that reason in its condition.
-func checkFirstSkip(t *testing.T, g guard, body *ast.BlockStmt) {
+// checkOffGuard fails t unless body starts with t.Parallel() and the if
+// statement that skips on the reason from Off, and each later skip or return
+// is inside an if statement.
+func checkOffGuard(t *testing.T, g guard, body *ast.BlockStmt) {
 	t.Helper()
 
-	for _, stmt := range body.List {
-		ifStmt, ok := stmt.(*ast.IfStmt)
-		if !ok || !slices.ContainsFunc(ifStmt.Body.List, isSkip) {
-			continue
-		}
-
-		assign, ok := ifStmt.Init.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || !callsMethod(assign, "Off") {
-			t.Errorf("%s in %s: the first skip does not take its reason from Off", g.fn, g.file)
-
-			return
-		}
-
-		reason, ok := assign.Lhs[0].(*ast.Ident)
-		if !ok || !testsReason(ifStmt.Cond, reason.Name) {
-			t.Errorf("%s in %s: the first skip does not test the reason from Off", g.fn, g.file)
-		}
+	if len(body.List) < 2 || !isCall(body.List[0], "Parallel") {
+		t.Errorf("%s in %s does not start with t.Parallel()", g.fn, g.file)
 
 		return
 	}
 
-	t.Errorf("%s in %s has no if statement that skips on the reason from Off", g.fn, g.file)
+	ifStmt, ok := body.List[1].(*ast.IfStmt)
+	if !ok || !slices.ContainsFunc(ifStmt.Body.List, isSkip) {
+		t.Errorf("%s in %s: the statement after t.Parallel() is not the if statement that skips", g.fn, g.file)
+
+		return
+	}
+
+	assign, ok := ifStmt.Init.(*ast.AssignStmt)
+	if !ok || len(assign.Lhs) != 1 || !callsMethod(assign, "Off") {
+		t.Errorf("%s in %s: the first skip does not take its reason from Off", g.fn, g.file)
+
+		return
+	}
+
+	reason, ok := assign.Lhs[0].(*ast.Ident)
+	if !ok || !testsReason(ifStmt.Cond, reason.Name) {
+		t.Errorf("%s in %s: the first skip does not test the reason from Off", g.fn, g.file)
+	}
+
+	rest := body.List[2:]
+	guarded := ifBodies(rest)
+
+	for _, stop := range stops(rest) {
+		if !slices.ContainsFunc(guarded, func(r [2]token.Pos) bool { return r[0] <= stop && stop < r[1] }) {
+			t.Errorf("%s in %s: a skip or a return at %d is not inside an if statement", g.fn, g.file, stop)
+		}
+	}
+}
+
+// stops returns the position of each skip call and each return statement in
+// stmts, outside function literals.
+func stops(stmts []ast.Stmt) []token.Pos {
+	var out []token.Pos
+
+	for _, stmt := range stmts {
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncLit:
+				return false
+			case *ast.ReturnStmt:
+				out = append(out, n.Pos())
+			case *ast.ExprStmt:
+				if isSkip(n) {
+					out = append(out, n.Pos())
+				}
+			}
+
+			return true
+		})
+	}
+
+	return out
+}
+
+// ifBodies returns the range of the body and the else part of each if
+// statement in stmts.
+func ifBodies(stmts []ast.Stmt) [][2]token.Pos {
+	var out [][2]token.Pos
+
+	for _, stmt := range stmts {
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			if ifStmt, ok := n.(*ast.IfStmt); ok {
+				out = append(out, [2]token.Pos{ifStmt.Body.Pos(), ifStmt.Body.End()})
+
+				if ifStmt.Else != nil {
+					out = append(out, [2]token.Pos{ifStmt.Else.Pos(), ifStmt.Else.End()})
+				}
+			}
+
+			return true
+		})
+	}
+
+	return out
+}
+
+// isCall reports whether stmt is a call of a method named method.
+func isCall(stmt ast.Stmt, method string) bool {
+	expr, ok := stmt.(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+
+	call, ok := expr.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+
+	return ok && sel.Sel.Name == method
 }
 
 // testsReason reports whether cond is `name != ""`, or a chain of && whose
@@ -376,6 +457,13 @@ func TestRegenerateBaselineFollowsTheRecord(t *testing.T) {
 func readScript(t *testing.T) string {
 	t.Helper()
 
+	return readScriptFile(t, "regenerate-baseline.sh")
+}
+
+// readScriptFile returns the text of the script name in scripts/.
+func readScriptFile(t *testing.T, name string) string {
+	t.Helper()
+
 	root, err := os.OpenRoot("../../scripts")
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +471,7 @@ func readScript(t *testing.T) string {
 
 	defer closeRoot(t, root)
 
-	data, err := root.ReadFile("regenerate-baseline.sh")
+	data, err := root.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,5 +546,230 @@ func closeRoot(t *testing.T, root *os.Root) {
 
 	if err := root.Close(); err != nil {
 		t.Error(err)
+	}
+}
+
+// twoTags returns a record that the documented step writes at v0.1.0 and
+// again at v0.2.0: each tag lists every file at the tag, so the baseline
+// appears under both tags.
+func twoTags(t *testing.T) releaserecord.Record {
+	t.Helper()
+
+	var data strings.Builder
+
+	for _, dialect := range releaserecord.Dialects() {
+		data.WriteString("v0.1.0 " + dialect + " " + baseline + " " + sumOf("base") + "\n")
+	}
+
+	for _, dialect := range releaserecord.Dialects() {
+		data.WriteString("v0.2.0 " + dialect + " " + baseline + " " + sumOf("base") + "\n")
+		data.WriteString("v0.2.0 " + dialect + " 0169_next.sql " + sumOf("next") + "\n")
+	}
+
+	rec, err := releaserecord.Parse([]byte(data.String()))
+	if err != nil {
+		t.Fatalf("Parse() of a record of two tags: %v", err)
+	}
+
+	return rec
+}
+
+// TestTwoTagsFollowTheRecord proves that the documented step works at a
+// second tag, and that the files of both tags stay frozen.
+func TestTwoTagsFollowTheRecord(t *testing.T) {
+	t.Parallel()
+
+	rec := twoTags(t)
+
+	tests := []struct {
+		name     string
+		files    map[string]string
+		problems int
+	}{
+		{"the files of both tags", map[string]string{baseline: "base", "0169_next.sql": "next"}, 0},
+		{"a new file after the second tag", map[string]string{
+			baseline: "base", "0169_next.sql": "next", "0170_more.sql": "more",
+		}, 0},
+		{"an edited file of the second tag", map[string]string{baseline: "base", "0169_next.sql": "edited"}, 1},
+		{"a removed file of the second tag", map[string]string{baseline: "base"}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := rec.MigrationFiles("postgres", baseline, tt.files)
+			if len(problems) != tt.problems {
+				t.Errorf("MigrationFiles() = %v, want %d problems", problems, tt.problems)
+			}
+		})
+	}
+}
+
+// TestTagCopiesFollowTheRecord sends tag copies directly to the check that
+// each copy has its line in the record.
+func TestTagCopiesFollowTheRecord(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		rec      releaserecord.Record
+		tag      string
+		files    map[string]string
+		problems int
+	}{
+		{"the copies of the first tag", twoTags(t), "v0.1.0", map[string]string{baseline: "base"}, 0},
+		{
+			"the copies of the second tag", twoTags(t), "v0.2.0",
+			map[string]string{baseline: "base", "0169_next.sql": "next"},
+			0,
+		},
+		{"the lines of the tag are removed", notReleased(t), "v0.1.0", map[string]string{baseline: "base"}, 1},
+		{"a tag that the record does not list", twoTags(t), "v0.3.0", map[string]string{baseline: "base"}, 1},
+		{"an edited copy", twoTags(t), "v0.1.0", map[string]string{baseline: "edited"}, 1},
+		{
+			"a copy that the tag did not ship", twoTags(t), "v0.1.0",
+			map[string]string{baseline: "base", "0169_next.sql": "next"},
+			1,
+		},
+		{"a listed file with no copy", twoTags(t), "v0.2.0", map[string]string{baseline: "base"}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := tt.rec.TagCopies("sqlite", tt.tag, tt.files)
+			if len(problems) != tt.problems {
+				t.Errorf("TagCopies() = %v, want %d problems", problems, tt.problems)
+			}
+		})
+	}
+}
+
+// TestCheckReleaseRecordRefuses runs scripts/check-release-record.sh in a new
+// repository with each state of the record and the migration files. It
+// passes only when the lines of the version match the files of each dialect.
+func TestCheckReleaseRecordRefuses(t *testing.T) {
+	t.Parallel()
+
+	script := readScriptFile(t, "check-release-record.sh")
+	lines := func(version, sqliteSum string) string {
+		return version + " sqlite " + baseline + " " + sqliteSum + "\n" +
+			version + " postgres " + baseline + " " + sumOf("base") + "\n"
+	}
+
+	tests := []struct {
+		name    string
+		version string
+		record  *string
+		extra   bool
+		want    string
+		pass    bool
+	}{
+		{
+			"the lines match",
+			"v0.1.0",
+			new("# comment\n" + lines("v0.1.0", sumOf("base"))),
+			false,
+			"lists the migrations",
+			true,
+		},
+		{"an empty record", "v0.1.0", new("# comments only\n"), false, "has no sqlite line for v0.1.0", false},
+		{
+			"the lines of another version",
+			"v0.2.0",
+			new(lines("v0.1.0", sumOf("base"))),
+			false,
+			"has no sqlite line",
+			false,
+		},
+		{"another SHA-256", "v0.1.0", new(lines("v0.1.0", sumOf("edited"))), false, "differ from", false},
+		{"a file with no line", "v0.1.0", new(lines("v0.1.0", sumOf("base"))), true, "differ from", false},
+		{"no record", "v0.1.0", nil, false, "is missing", false},
+		{"a version with a suffix", "v0.1.0-rc1", new(lines("v0.1.0", sumOf("base"))), false, "is not vMAJOR", false},
+		{
+			"a version with a newline",
+			"v0.1.0\nv0.2.0",
+			new(lines("v0.1.0", sumOf("base"))),
+			false,
+			"is not vMAJOR",
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := newRepository(t, tt.record)
+			writeMigrations(t, dir, tt.extra)
+
+			cmd := exec.CommandContext(t.Context(), "bash", "-s", tt.version)
+			cmd.Stdin = strings.NewReader(script)
+
+			out, err := run(cmd, dir)
+			if (err == nil) != tt.pass {
+				t.Fatalf("the script returned %v, want pass = %v:\n%s", err, tt.pass, out)
+			}
+
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("the script said:\n%s\nwant %q", out, tt.want)
+			}
+		})
+	}
+}
+
+// writeMigrations writes the baseline "base" of each dialect in dir, and a
+// second migration of SQLite when extra is set.
+func writeMigrations(t *testing.T, dir string, extra bool) {
+	t.Helper()
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer closeRoot(t, root)
+
+	files := map[string]string{}
+	for _, dialect := range releaserecord.Dialects() {
+		files["pkg/store/"+dialect+"/migrations/"+baseline] = "base"
+	}
+
+	if extra {
+		files["pkg/store/sqlite/migrations/0169_next.sql"] = "next"
+	}
+
+	for name, sql := range files {
+		if err := root.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := root.WriteFile(name, []byte(sql), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestReleaseBuildChecksTheRecordFirst proves that scripts/release-build.sh
+// runs the record check before it builds anything.
+func TestReleaseBuildChecksTheRecordFirst(t *testing.T) {
+	t.Parallel()
+
+	script := readScriptFile(t, "release-build.sh")
+
+	check := strings.Index(script, `"$root/scripts/check-release-record.sh" "$version"`)
+	build := strings.Index(script, "go build")
+
+	if check < 0 || build < 0 || check > build {
+		t.Errorf("release-build.sh runs the record check at %d and go build at %d: "+
+			"run check-release-record.sh before the build", check, build)
+	}
+
+	for _, line := range strings.Split(script[:max(check, 0)], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "exit 0") {
+			t.Errorf("release-build.sh can exit before the record check: %q", line)
+		}
 	}
 }

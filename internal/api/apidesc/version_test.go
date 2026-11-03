@@ -157,12 +157,7 @@ func TestVersionFollowsTheDescription(t *testing.T) {
 	// Off until the release record lists a shipped migration. Until then
 	// info.version stays at one value while the description changes. The
 	// variable runs the check on demand; it cannot turn the check off.
-	rec, err := releaserecord.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if why := rec.Off("TestVersionFollowsTheDescription"); why != "" && os.Getenv(pinCheckEnv) == "" {
+	if why := currentRecord(t).Off("TestVersionFollowsTheDescription"); why != "" && os.Getenv(pinCheckEnv) == "" {
 		t.Skip(why + "; set " + pinCheckEnv + "=1 to run it")
 	}
 
@@ -192,6 +187,19 @@ func TestVersionFollowsTheDescription(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+// currentRecord returns the release record of the tree. A record that does
+// not parse fails the test: it never counts as "not released".
+func currentRecord(t *testing.T) releaserecord.Record {
+	t.Helper()
+
+	rec, err := releaserecord.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rec
 }
 
 // TestJudgeSeesEachChange sends each combination of a change of the bytes and

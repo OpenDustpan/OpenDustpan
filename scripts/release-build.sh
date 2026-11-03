@@ -5,7 +5,9 @@
 # cross-builds the server for four platform pairs, packs each binary with
 # LICENSE, README.md and third_party_licenses/ (the license files of the code
 # linked into that binary, see scripts/third-party-licenses.sh), and writes
-# SHA256SUMS in the output directory.
+# SHA256SUMS in the output directory. It first runs
+# scripts/check-release-record.sh, which refuses a version that the release
+# record does not list with the migration files of the work tree.
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
@@ -22,6 +24,14 @@ if [[ -z "$version" || -z "$outdir" ]]; then
 fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The release record must list the migrations of this version before any
+# build. Without its lines the checks of the shipped migrations stay off.
+# Defense in depth: TestTagCopiesHaveTheirLines and
+# TestMigrationFilesFollowTheRecord check the record after the tag; this
+# check stays so that a release with an empty record fails before its tag.
+(cd "$root" && "$root/scripts/check-release-record.sh" "$version")
+
 mkdir -p "$outdir"
 outdir_abs="$(cd "$outdir" && pwd)"
 cd "$root"
