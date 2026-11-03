@@ -289,6 +289,22 @@ func staleRows(
 	return out
 }
 
+// isExempt reports whether dir, a directory relative to apiDir, has its own row
+// in contract. Only the full relative path matches. An exempt top-level
+// directory does not exempt its subdirectories, and "" is never exempt.
+//
+// Defense in depth: a directory without its own row is checked. This rule does
+// not rely on the directory list that the caller passes.
+func isExempt(contract map[string]string, dir string) bool {
+	if dir == "" {
+		return false
+	}
+
+	_, ok := contract[filepath.ToSlash(dir)]
+
+	return ok
+}
+
 // TestToolNeutralAdaptersUseProblemWriter fails when an adapter under
 // internal/api writes an error body without problem.Writer, or when a row of
 // the exception lists no longer matches the source.
@@ -303,9 +319,7 @@ func TestToolNeutralAdaptersUseProblemWriter(t *testing.T) {
 	contract := ownContractDirs()
 
 	for _, d := range dirs {
-		// Defense in depth: the exemption needs the full relative path. An exempt
-		// top-level directory does not exempt its subdirectories.
-		if _, ok := contract[filepath.ToSlash(d)]; ok {
+		if isExempt(contract, d) {
 			continue
 		}
 
@@ -530,6 +544,71 @@ func TestRelDirKey(t *testing.T) {
 				t.Errorf("relDirKey(%q) = %q, want %q", tt.dir, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestIsExempt checks the exemption rule on the full relative path.
+func TestIsExempt(t *testing.T) {
+	t.Parallel()
+
+	contract := map[string]string{"pulumi": "reason"}
+
+	tests := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{name: "exempt top-level directory", dir: "pulumi", want: true},
+		{name: "subdirectory of an exempt directory", dir: "pulumi/sub", want: false},
+		{name: "deeper subdirectory", dir: "pulumi/sub/deeper", want: false},
+		{name: "trailing slash is not the row", dir: "pulumi/", want: false},
+		{name: "other top-level directory", dir: "problem", want: false},
+		{name: "prefix of a row", dir: "pul", want: false},
+		{name: "empty path", dir: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isExempt(contract, tt.dir); got != tt.want {
+				t.Errorf("isExempt(%q) = %t, want %t", tt.dir, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("nil contract", func(t *testing.T) {
+		t.Parallel()
+
+		if isExempt(nil, "pulumi") {
+			t.Error("isExempt with a nil contract = true, want false")
+		}
+	})
+}
+
+// TestWriterViolationsNestedDir checks that a nested directory is checked by
+// writerViolations, and that its violation is reported with the file name.
+func TestWriterViolationsNestedDir(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "a", "b")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create nested fixture directory: %v", err)
+	}
+
+	src := "package b\n\nimport \"net/http\"\n\nfunc f(w http.ResponseWriter) { http.Error(w, \"x\", 500) }\n"
+	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte(src), 0o600); err != nil {
+		t.Fatalf("write nested fixture: %v", err)
+	}
+
+	got, err := writerViolations(dir)
+	if err != nil {
+		t.Fatalf("writerViolations: %v", err)
+	}
+
+	want := []string{"b.go: http.Error"}
+	if !slices.Equal(got, want) {
+		t.Errorf("writerViolations = %q, want %q", got, want)
 	}
 }
 
