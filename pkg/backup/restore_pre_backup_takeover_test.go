@@ -27,10 +27,12 @@ func TestRestoreThatStopsDuringItsPreBackupFinishesWithTheSameBackup(t *testing.
 	setup.exporter.hook.Store(&hook)
 
 	id := backup.MintRestoreID()
-	if err := setup.service.Start(t.Context(), id, backup.RestoreRequest{
+	req := backup.RestoreRequest{
 		BackupID: setup.id, PreBackupID: "", CheckOnly: false, Force: true, RequestedBy: "tester",
 		KeepAccessTables: false,
-	}); err != nil {
+	}
+
+	if err := setup.service.Start(t.Context(), id, req); err != nil {
 		t.Fatalf("start restore: %v", err)
 	}
 
@@ -48,8 +50,19 @@ func TestRestoreThatStopsDuringItsPreBackupFinishesWithTheSameBackup(t *testing.
 		t.Fatalf("restore state = %q, want succeeded (%q)", row.State, row.Error)
 	}
 
+	checkPreBackupTakenOver(t, setup, row, pre[0])
+}
+
+// checkPreBackupTakenOver checks that the restore row applied with the backup
+// of the operation first, and that this backup succeeded in its second
+// attempt.
+func checkPreBackupTakenOver(
+	t *testing.T, setup *restoreServiceSetup, row backup.RestoreRecord, first durable.Operation,
+) {
+	t.Helper()
+
 	after := backupOperations(t, setup.backupOps)
-	if len(after) != 1 || after[0].ID != pre[0].ID || after[0].State != durable.StateSucceeded ||
+	if len(after) != 1 || after[0].ID != first.ID || after[0].State != durable.StateSucceeded ||
 		after[0].Attempt != 2 {
 		t.Fatalf("backup operations after the restore = %+v, want the same operation, succeeded in attempt 2", after)
 	}
@@ -58,7 +71,8 @@ func TestRestoreThatStopsDuringItsPreBackupFinishesWithTheSameBackup(t *testing.
 		t.Fatalf("restore applied with the backup %q, want the backup of operation %s", row.PreBackupID, after[0].Key)
 	}
 
-	if got, err := setup.backups.Get(t.Context(), row.PreBackupID); err != nil || got.State != backup.StateSucceeded {
+	got, err := setup.backups.Get(t.Context(), row.PreBackupID)
+	if err != nil || got.State != backup.StateSucceeded {
 		t.Fatalf("backup before restore %s = %+v, %v; want succeeded", row.PreBackupID, got, err)
 	}
 }
