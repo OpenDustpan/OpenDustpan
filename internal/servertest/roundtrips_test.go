@@ -751,6 +751,11 @@ type requestFlow struct {
 // first reads the stable ID of the unit from the inventory, because the gate
 // rows of a unit key on that ID and not on its name. So "lock" and "lock,
 // upload and unlock" each hold 2 round trips for those reads.
+//
+// Each save of a workspace lock also writes the last released lock of the
+// workspace to its inventory row, with one update in the same transaction.
+// So "lock" and "unlock" each hold 1 round trip for that write, and "lock,
+// upload and unlock" holds 2.
 func requestFlows() []requestFlow {
 	return []requestFlow{
 		{"opentofu upload", 41, func(h *rtHarness) {
@@ -758,15 +763,15 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 44, func(h *rtHarness) {
+		{"lock", 45, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
-		{"unlock", 10, func(h *rtHarness) {
+		{"unlock", 11, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 99, func(h *rtHarness) {
+		{"lock, upload and unlock", 101, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()

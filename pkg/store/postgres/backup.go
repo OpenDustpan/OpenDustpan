@@ -245,6 +245,8 @@ func pgCopyScopeTables() []pgCopyTable {
 				pgColNamespace, pgColTool, pgColName, pgColUnitID, pgColDisplayName,
 				"last_changed_ms", pgColStatus, "resource_count",
 				"lock_holder", "lock_since_ms", "lock_operation",
+				"last_release_lock_id", "last_release_holder", "last_release_by", "last_release_kind",
+				"last_release_at_ms",
 			},
 			orderBy: []string{pgColNamespace, pgColTool, pgColName},
 		},

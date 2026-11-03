@@ -51,7 +51,10 @@ own, then commits the row that names the blob.
 | Plans and log chunks of a job | the schedule `job.artifact-sweep` | one time each hour, on one instance |
 
 The schedule `job.artifact-sweep` sweeps each job that has not ended, and
-each job whose state changed in the last 25 hours. Only a job that runs
+each job whose state changed in the last 25 hours. One run reads at most 2,000
+jobs in each of the two passes (10 pages of 200). When a pass stops at this
+bound, the audit entry of the run says `capped at the page limit`, and the
+next run starts again from the newest jobs. Only a job that runs
 writes plan and log blobs, so an ended job gets about 24 runs after its last
 blob. The sweep keeps these blobs:
 

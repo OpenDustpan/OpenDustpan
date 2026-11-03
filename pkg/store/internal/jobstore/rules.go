@@ -2,6 +2,7 @@ package jobstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -95,8 +96,8 @@ func checkDispatch(ctx context.Context, tx Tx, j *job.Job, at dispatchTimes) err
 
 // checkManualLock returns ErrLocked when a manual lock covers the unit of j.
 // It reads the lock in the transaction of the dispatch, with the coverage of
-// manuallock.Store.CoveringLock, and fails closed for a unit that is not in
-// the inventory.
+// manuallock.Store.CoveringLock. It returns job.ErrUnitGone for a unit that is
+// not in the inventory, and fails closed.
 func checkManualLock(ctx context.Context, tx Tx, j *job.Job) error {
 	unit := j.Spec.Unit
 
@@ -104,6 +105,10 @@ func checkManualLock(ctx context.Context, tx Tx, j *job.Job) error {
 	// the start: a rename of the unit must not hide its locks. A unit that
 	// is not in the inventory fails the dispatch, because no lock can be read.
 	locks, err := tx.CoveringLocks(ctx, unit.Namespace(), unit.UnitID())
+	if errors.Is(err, ErrUnitNotInInventory) {
+		return fmt.Errorf("check the manual locks of unit %s: %w: %w", unit, job.ErrUnitGone, err)
+	}
+
 	if err != nil {
 		return fmt.Errorf("check the manual locks of unit %s: %w", unit, err)
 	}

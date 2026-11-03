@@ -22,11 +22,7 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 		return nil, fmt.Errorf("begin read-only transaction: %w", err)
 	}
 
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			_ = rollbackErr
-		}
-	}()
+	defer rollbackRead(ctx, tx)
 
 	var exists bool
 

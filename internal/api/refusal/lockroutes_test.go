@@ -4,11 +4,91 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 )
+
+// TestLockedTextKeepsTheRouteOfALongReason proves that a long lock reason never
+// cuts the route that removes the lock. The text of the answer stays within the
+// message limit, the route sentence is whole, and the text is valid UTF-8.
+func TestLockedTextKeepsTheRouteOfALongReason(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		target manuallock.Target
+		reason string
+		remove string
+	}{
+		{
+			name:   "unit, 500 ASCII bytes",
+			target: manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"}),
+			reason: strings.Repeat("x", 500),
+			remove: "/api/inventory/unit-lock?unit=opentofu:acme/web",
+		},
+		{
+			name:   "collection, 500 two-byte runes",
+			target: manuallock.CollectionTarget(collection.Ref{Namespace: "acme", Name: "payments"}),
+			reason: strings.Repeat("é", 500),
+			remove: "/api/dustpan/v1/namespaces/acme/collections/payments/lock",
+		},
+		{
+			name:   "namespace, 500 ASCII bytes",
+			target: manuallock.NamespaceTarget("acme"),
+			reason: strings.Repeat("x", 500),
+			remove: "/api/dustpan/v1/namespaces/acme/lock",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := &manuallock.LockedError{
+				Lock: manuallock.Lock{
+					Since:  time.Date(2026, time.October, 19, 10, 0, 0, 0, time.UTC),
+					Target: tc.target, Holder: "alice", Reason: tc.reason,
+				},
+				Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+				Noun: "workspace", Name: "acme/web",
+			}
+
+			got := refusal.LockedText(e)
+
+			if len(got) > problem.MaxMessageBytes {
+				t.Fatalf("LockedText has %d bytes, want at most %d", len(got), problem.MaxMessageBytes)
+			}
+
+			want := ". To remove the lock, the holder sends DELETE " + tc.remove + "."
+			if !strings.HasSuffix(got, want) {
+				t.Fatalf("LockedText = %q, want it to end with %q", got, want)
+			}
+
+			if !utf8.ValidString(got) {
+				t.Fatalf("LockedText = %q, want valid UTF-8", got)
+			}
+
+			if refusal.Clean(got, problem.MaxMessageBytes) != got {
+				t.Fatal("Clean changes LockedText, so a later cut would remove the route")
+			}
+		})
+	}
+}
+
+// TestMaxLockedTextBytesIsTheMessageLimit proves that the bound of a locked text
+// is the limit of the message of an answer.
+func TestMaxLockedTextBytesIsTheMessageLimit(t *testing.T) {
+	t.Parallel()
+
+	if refusal.MaxLockedTextBytes != problem.MaxMessageBytes {
+		t.Fatalf("MaxLockedTextBytes = %d, want problem.MaxMessageBytes = %d",
+			refusal.MaxLockedTextBytes, problem.MaxMessageBytes)
+	}
+}
 
 // TestRemovalRoutesNameTheLockAPI proves the routes that remove the manual
 // lock of each kind of object: the holder route and the force-unlock route.

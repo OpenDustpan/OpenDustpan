@@ -40,6 +40,11 @@ type Entry struct {
 	Status        string
 	ResourceCount *int64
 	Lock          *Lock
+	// LastRelease is the last released lock of the unit, or nil when the unit
+	// has no record. Only an OpenTofu workspace has one. It is the record that
+	// lets a repeated unlock succeed, so a user can name it when the platform
+	// answers such a repeat with success.
+	LastRelease *LastRelease
 	// ManualLock is the manual lock that covers the unit, or nil when none
 	// does. Like Lock, it is a flag and not a status. A lock on the unit or on
 	// its collection sets it.
@@ -63,6 +68,18 @@ type Lock struct {
 	Since     time.Time
 	Holder    string
 	Operation string
+}
+
+// LastRelease is the last released lock of a unit. LockID is the ID of the
+// lock. Holder is the subject of the principal that held it. By is the subject
+// of the principal that released it. At is the time of the release. Kind is
+// "normal" or "forced". A subject is never a token or a secret.
+type LastRelease struct {
+	At     time.Time
+	LockID string
+	Holder string
+	By     string
+	Kind   string
 }
 
 // ManualLock is a manual lock that covers a unit: who holds it, why, since

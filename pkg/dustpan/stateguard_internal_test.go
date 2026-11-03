@@ -56,6 +56,7 @@ func (f fakeInventory) GetUnit(_ context.Context, unitID string) (inventory.Entr
 
 func gateTestEntry() inventory.Entry {
 	return inventory.Entry{
+		LastRelease: nil,
 		LastChanged: time.Time{}, Namespace: "acme", Tool: "opentofu", Name: "web", UnitID: "ws-1", DisplayName: "",
 		Status: "", ResourceCount: nil, Lock: nil, ManualLock: nil, Collection: "prod",
 		Labels: map[string]string{"team": "core", "env": "prod"},

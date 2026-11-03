@@ -3010,6 +3010,7 @@ func (s *fakeBackupStore) stackIDOf(ref stack.Ref) (string, error) {
 func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed time.Time) {
 	name := ref.Project.String() + "/" + ref.Stack.String()
 	s.data.entries[inventoryKey(ref.Namespace, "pulumi", name)] = inventory.Entry{
+		LastRelease:   nil,
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,
@@ -3030,6 +3031,7 @@ func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed tim
 func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, changed time.Time) {
 	name := ref.Name.String()
 	s.data.entries[inventoryKey(ref.Namespace, "opentofu", name)] = inventory.Entry{
+		LastRelease:   nil,
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,
