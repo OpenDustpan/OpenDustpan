@@ -47,8 +47,8 @@ func TestGrowthRule(t *testing.T) {
 
 	cases := []growthCase{
 		newGrowthCase("no growth", map[string]int{"GetStack": 5, "begin": 20, "commit": 20}, nil),
-		newGrowthCase("a handover repeats a few statements",
-			map[string]int{"GetStack": 5, "begin": 22, "commit": 23}, nil),
+		newGrowthCase("one more transaction in the large run",
+			map[string]int{"GetStack": 5, "begin": 21, "commit": 21}, nil, "query begin", "query commit"),
 		newGrowthCase("a loop that queries once for each stack",
 			map[string]int{"GetStack": 32, "begin": 20, "commit": 20}, nil, "query GetStack"),
 		newGrowthCase("a new statement for each row",
@@ -134,22 +134,33 @@ type measuredPoint struct {
 	heldOut                  bool
 }
 
-// fitTolerance is the number of round trips by which a model may differ from a
-// measured count. Two things move a count: the handover of the operation under
-// load, and a change that is not a table, such as a new step. The held-out
+// fitTolerance is the number of round trips by which the change that a model
+// gives between two commits may differ from the measured change. Two things
+// move a measured change: the handover of the operation under load, which the
+// history still shows because it was measured before the counts became
+// exact, and a change that is not a table, such as a new step. The held-out
 // commit added a restore step, and the model is 5 below it.
 const fitTolerance = 6
 
-// TestCostModelFitsMeasuredHistory checks the models against the measured
-// counts. For each point the ceiling must be above the count, and the model
-// without its margin must be near the count. The held-out point is a count that
-// the fit did not use, so it tests what the models predict and not what they
-// remember. A model that is far above the data would not catch a change that
-// adds round trips.
+// TestCostModelFitsMeasuredHistory checks the coefficients of the models
+// against the measured counts. The fixed part of a model holds the steps of
+// the flow, which change between commits, so the check compares the change
+// from the first commit to each later commit, with the same data set: the
+// fixed part drops out, and the change that the coefficients give must be
+// near the measured change. The held-out point is a count that the fit did
+// not use, so it tests what the models predict and not what they remember.
+// TestRoundTripsOfBackup checks the fixed part, with the exact count of the
+// current commit.
 func TestCostModelFitsMeasuredHistory(t *testing.T) {
 	t.Parallel()
 
-	for _, point := range measuredHistory() {
+	history := measuredHistory()
+
+	for _, point := range history {
+		base := history[slices.IndexFunc(history, func(p measuredPoint) bool {
+			return p.schema.units == point.schema.units
+		})]
+
 		name := fmt.Sprintf("%s with %d units", point.commit, point.schema.units)
 		if point.heldOut {
 			name += " (held out)"
@@ -159,22 +170,19 @@ func TestCostModelFitsMeasuredHistory(t *testing.T) {
 			t.Parallel()
 
 			for _, flow := range []struct {
-				name  string
-				model costModel
-				trips int
+				name        string
+				model       costModel
+				trips, from int
 			}{
-				{"backup", backupModel(), point.backupTrips},
-				{"restore", restoreModel(), point.restoreTrip},
+				{"backup", backupModel(), point.backupTrips, base.backupTrips},
+				{"restore", restoreModel(), point.restoreTrip, base.restoreTrip},
 			} {
-				ceiling := flow.model.ceiling(point.schema)
+				predicted := flow.model.count(point.schema) - flow.model.count(base.schema)
+				measured := flow.trips - flow.from
 
-				if flow.trips > ceiling {
-					t.Errorf("%s: measured %d round trips, ceiling %d", flow.name, flow.trips, ceiling)
-				}
-
-				if gap := ceiling - flow.model.margin - flow.trips; gap < -fitTolerance || gap > fitTolerance {
-					t.Errorf("%s: the model predicts %d round trips and the measured count is %d, tolerance %d",
-						flow.name, ceiling-flow.model.margin, flow.trips, fitTolerance)
+				if gap := predicted - measured; gap < -fitTolerance || gap > fitTolerance {
+					t.Errorf("%s: from %s the model predicts %d more round trips and the measured change is %d, "+
+						"tolerance %d", flow.name, base.commit, predicted, measured, fitTolerance)
 				}
 			}
 		})

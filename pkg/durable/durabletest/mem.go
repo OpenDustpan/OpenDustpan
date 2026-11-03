@@ -41,6 +41,60 @@ func (m *Mem) Harness() Harness {
 	return m.db.harness()
 }
 
+// StartClaimedWith starts the operation of req with the rules of
+// durable.Store.Start and, when the start creates it, claims it for claim
+// with the rules of durable.StartClaim, as a store method of another port
+// does. After both writes, inside the transaction, it calls hooks.After. An
+// error of hooks.After rolls both writes back. It returns
+// durable.ErrKeyConflict when req.Key names an operation already and
+// hooks.After accepts, and
+// durable.ErrInvalid for a request or a claim that fails Validate.
+func (m *Mem) StartClaimedWith(
+	_ context.Context, req durable.StartRequest, claim durable.StartClaim, hooks Hooks,
+) (durable.Operation, error) {
+	if err := claim.Validate(); err != nil {
+		return durable.Operation{}, err
+	}
+
+	d := m.db
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// A copy of the operations stands in for the transaction: a rollback
+	// puts it back.
+	ops, byKey, nextID := maps.Clone(d.ops), maps.Clone(d.byKey), d.nextID
+
+	now := d.now()
+
+	op, created, err := d.start(req, now)
+
+	if err == nil && created {
+		d.take(d.ops[op.ID], durable.ClaimRequest{
+			Owner: claim.Owner, Kinds: []durable.Kind{req.Kind}, MaxVersions: nil, Lease: claim.Lease,
+			TakeCanceled: false,
+		}, now)
+	}
+
+	// The domain write runs also for a key that exists, as StartWith does,
+	// so its own refusal comes first.
+	if err == nil {
+		err = hooks.Run(hooks.After)
+	}
+
+	if err == nil && !created {
+		err = durable.ErrKeyConflict
+	}
+
+	if err != nil {
+		d.ops, d.byKey, d.nextID = ops, byKey, nextID
+
+		return durable.Operation{}, err
+	}
+
+	return copyOp(d.ops[op.ID]), nil
+}
+
 // errUnknownState reports an operation state that memDB does not know.
 var errUnknownState = errors.New("unknown operation state")
 

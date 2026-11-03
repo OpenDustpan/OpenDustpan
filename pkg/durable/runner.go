@@ -371,13 +371,37 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("claim a durable operation: %w", err)
 	}
 
-	return r.runClaimed(ctx, op, claimedAt)
+	return r.runHeld(ctx, op, claimedAt)
 }
 
-// runClaimed checks op, runs its steps under its claim with a renewal in
+// StartClaim returns the claim that a start takes for this runner: its owner
+// and its lease. A caller that starts an operation with it then runs the
+// operation with RunClaimed.
+func (r *Runner) StartClaim() StartClaim {
+	return StartClaim{Owner: r.cfg.Owner, Lease: r.cfg.Lease}
+}
+
+// RunClaimed runs op, which the caller started with the claim of StartClaim,
+// as RunOnce runs an operation that it claimed: until it ends, until the
+// runner loses its claim, or until ctx ends. claimedAt is a time from before
+// the start, so that the local deadline of the claim ends before the expiry
+// that the store set. It returns ErrInvalid, and changes nothing, when op is
+// not a running operation of a kind of this runner with a claim of its owner.
+// Its other results are those of RunOnce.
+func (r *Runner) RunClaimed(ctx context.Context, op Operation, claimedAt time.Time) error {
+	if _, ok := r.kinds[op.Kind]; !ok || op.State != StateRunning || op.Claim.Owner != r.cfg.Owner ||
+		op.Claim.Operation != op.ID || op.Claim.Token <= 0 {
+		return fmt.Errorf("%w: operation %s is not a running operation of this runner with its claim", ErrInvalid,
+			op.ID)
+	}
+
+	return r.runHeld(ctx, op, claimedAt)
+}
+
+// runHeld checks op, runs its steps under its claim with a renewal in
 // the background, and ends the attempt. It returns ErrNewerVersion when it
 // released op for a newer instance.
-func (r *Runner) runClaimed(ctx context.Context, op Operation, claimedAt time.Time) error {
+func (r *Runner) runHeld(ctx context.Context, op Operation, claimedAt time.Time) error {
 	log := r.cfg.Logger.With(slog.String("operation", string(op.ID)), slog.String("kind", string(op.Kind)),
 		slog.Int("attempt", op.Attempt), slog.String("owner", r.cfg.Owner))
 	claim := op.Claim
@@ -603,7 +627,7 @@ func (r *Runner) recorded(ctx context.Context, id ID, name string) ([]byte, erro
 }
 
 // leaseState is what the renewal knows about the lease. The renewal
-// goroutine writes it, and runClaimed reads it after the goroutine ended.
+// goroutine writes it, and runHeld reads it after the goroutine ended.
 type leaseState struct {
 	// lastStart is the start of the last successful Extend, or of the
 	// claim, on the monotonic clock.
