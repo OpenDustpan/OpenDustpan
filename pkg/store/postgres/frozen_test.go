@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"errors"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -242,6 +243,52 @@ func TestMigrationFilesFollowTheRecord(t *testing.T) {
 
 	for _, problem := range currentRecord(t).MigrationFiles("postgres", schema.BaselineName, files) {
 		t.Error(problem)
+	}
+}
+
+// TestTagCopiesHaveTheirLines proves that each tag directory under
+// testdata/tag-migrations has its lines in the release record, with the
+// SHA-256 of each copy. It runs before and after the first tag.
+//
+// Defense in depth: the release build refuses a tag without its lines, and
+// TestMigrationFilesFollowTheRecord holds the shipped files to the record.
+// This check stays so that a later removal of the lines of a tag fails even
+// when both of those layers see an empty record.
+func TestTagCopiesHaveTheirLines(t *testing.T) {
+	t.Parallel()
+
+	rec := currentRecord(t)
+	copies := os.DirFS("testdata/tag-migrations")
+
+	tags, err := fs.ReadDir(copies, ".")
+	if err != nil {
+		t.Fatalf("read the tag copies: %v", err)
+	}
+
+	for _, tag := range tags {
+		if !tag.IsDir() {
+			continue
+		}
+
+		files := map[string]string{}
+
+		sqlFiles, err := fs.Glob(copies, tag.Name()+"/*.sql")
+		if err != nil {
+			t.Fatalf("list the copies of %s: %v", tag.Name(), err)
+		}
+
+		for _, name := range sqlFiles {
+			data, err := fs.ReadFile(copies, name)
+			if err != nil {
+				t.Fatalf("read the copy %s: %v", name, err)
+			}
+
+			files[path.Base(name)] = string(data)
+		}
+
+		for _, problem := range rec.TagCopies("postgres", tag.Name(), files) {
+			t.Error(problem)
+		}
 	}
 }
 
