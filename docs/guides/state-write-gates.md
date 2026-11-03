@@ -82,7 +82,7 @@ with the `context.` prefix:
 | --- | --- |
 | `context.principal.kind` | `person` or `service`. A principal of an unknown kind counts as `person`. The kind `agent` exists, but the server does not set it at `state.write` yet. |
 | `context.principal.credential` | `session`, `access-token`, `job-token` or `trust-token`. |
-| `context.source.kind` | `cli` for a write through the API of a tool (the TFE-compatible API, the OpenTofu HTTP backend or the Pulumi Cloud-compatible API), `api` for a call of the tool-neutral API. |
+| `context.source.kind` | `cli` for a write through the API of a tool: the TFE-compatible API, the OpenTofu HTTP backend or the Pulumi Cloud-compatible API. `api` for a call of the tool-neutral API. |
 | `context.unit.tool` | The tool code of the unit, `opentofu` or `pulumi`. |
 | `context.unit.collection` | The collection of the unit, or an empty text. |
 | `context.unit.labels` | The labels of the unit, as `key=value` texts. |
@@ -235,6 +235,27 @@ of these texts:
 | `tofu plan`, `tofu apply` (the lock) | `Error acquiring the state lock` and `HTTP remote state endpoint invalid auth` |
 | `tofu state push -lock=false` | `Failed to persist state: HTTP error: 403` |
 | `tofu force-unlock` | `Failed to unlock state: Unexpected HTTP response code 403` |
+
+The Pulumi Cloud-compatible API answers 403 for each refusal, in the error
+shape of the Pulumi CLI with the code of the catalog:
+
+```json
+{
+  "message": "Writes to pulumi are frozen. (error gate.denied, decision record gdr-yzimt6xg4xkiu4ewx7ng)",
+  "code": 403,
+  "errorCode": "gate.denied"
+}
+```
+
+The Pulumi CLI prints the status and the message:
+
+```text
+error: [403] Writes to pulumi are frozen. (error gate.denied, decision record gdr-yzimt6xg4xkiu4ewx7ng)
+```
+
+`pulumi stack import` and the `pulumi state` commands add the prefix
+`could not import deployment:`. A refused `pulumi cancel` leaves the update
+running, so the stack stays locked.
 
 The server log has the line `state write refused` with the unit, the error
 code and the ID of the decision record. The audit log has a `denied` entry
