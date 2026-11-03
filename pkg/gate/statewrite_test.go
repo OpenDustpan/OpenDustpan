@@ -327,7 +327,7 @@ func swWrite(t *testing.T, subject, unit string, op gate.OperationKind) gate.Sta
 
 	return gate.StateWrite{
 		Principal: principal(subject, false), Unit: swUnit(t, unit), Operation: op,
-		Action: identity.ActionUnitWrite, Source: gate.SourceCLI, PlanLock: false,
+		Action: identity.ActionUnitWrite, Source: gate.SourceCLI, PlanLock: false, State: nil,
 	}
 }
 
@@ -635,7 +635,7 @@ func swChange(t *testing.T, fence namespace.Fence) gate.Change {
 		},
 		Source: gate.SourceCLI, Author: "alice", Operation: gate.OperationLock,
 		Units:   []identity.Object{swUnit(t, "web")},
-		Holders: nil, PlanLock: false, BreakGlass: "", Fence: fence,
+		Holders: nil, PlanLock: false, BreakGlass: "", Fence: fence, State: nil,
 	}
 }
 

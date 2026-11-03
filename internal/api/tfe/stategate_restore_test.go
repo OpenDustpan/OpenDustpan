@@ -73,7 +73,8 @@ func TestRestoreGivesTheGuardTheStateChange(t *testing.T) {
 	}
 
 	got := guard.seen[0].State
-	if got == nil || got.Current != "sv-test123" || got.Resources != 4 || !slices.Equal(got.Removed, []string{"a.b", "c.d"}) {
+	if got == nil || got.Current != "sv-test123" || got.Resources != 4 ||
+		!slices.Equal(got.Removed, []string{"a.b", "c.d"}) {
 		t.Fatalf("guard saw state change %+v, want current sv-test123, 4 resources, removed a.b and c.d", got)
 	}
 }
@@ -98,8 +99,11 @@ func TestRestoreRefusesAStateThatCannotBeRead(t *testing.T) {
 			t.Parallel()
 
 			ws := &rollbackWorkspaces{
-				writeCounter: newWriteCounter(), change: workspace.RollbackChange{Current: "", Resources: 0, Removed: nil},
-				readErr: tc.err, restoreErr: nil, reads: 0,
+				writeCounter: newWriteCounter(),
+				change:       workspace.RollbackChange{Current: "", Resources: 0, Removed: nil},
+				readErr:      tc.err,
+				restoreErr:   nil,
+				reads:        0,
 			}
 			guard, entries := newFakeGuard(nil), newTestAudit()
 
@@ -125,8 +129,11 @@ func TestRestoreRefusesWhenTheCurrentVersionChanged(t *testing.T) {
 	t.Parallel()
 
 	ws := &rollbackWorkspaces{
-		writeCounter: newWriteCounter(), change: workspace.RollbackChange{Current: "sv-test123", Resources: 1, Removed: nil},
-		readErr: nil, restoreErr: workspace.ErrConcurrentModification, reads: 0,
+		writeCounter: newWriteCounter(),
+		change:       workspace.RollbackChange{Current: "sv-test123", Resources: 1, Removed: nil},
+		readErr:      nil,
+		restoreErr:   workspace.ErrConcurrentModification,
+		reads:        0,
 	}
 	entries := newTestAudit()
 
