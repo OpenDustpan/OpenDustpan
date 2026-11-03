@@ -3,6 +3,7 @@
 //	opendustpan --version
 //	opendustpan serve [flags]
 //	opendustpan dev [flags]
+//	opendustpan dev reset [--data-dir <dir>]
 //	opendustpan key generate --out <path>
 //	opendustpan doctor [flags]
 //	opendustpan health [flags]
@@ -247,7 +248,7 @@ func serveWithIO(ctx context.Context, args []string, stderr io.Writer, terminal 
 		return err
 	}
 
-	return kindRefusal(f.run(ctx, stderr), commandServe)
+	return schemaRefusal(kindRefusal(f.run(ctx, stderr), commandServe), commandServe, "")
 }
 
 // serveFlags holds the settings of the serve subcommand.
@@ -1814,7 +1815,8 @@ const (
 )
 
 // openStore opens the persistence adapter that --database names. Only serve,
-// dev and host create-temp-admin call it: serve and dev run the server, and
+// dev, dev reset and host create-temp-admin call it: serve and dev run the
+// server, dev reset makes the schema of a dev database again, and
 // host create-temp-admin recovers a lost administrator through the database,
 // after its off switch and the recovery mode allow it. Every other command
 // is a client of the REST API. The gate test swaps it for a function that

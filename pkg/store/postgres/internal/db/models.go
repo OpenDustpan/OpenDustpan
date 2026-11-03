@@ -982,6 +982,7 @@ type SchemaMigration struct {
 	Version          int64
 	Name             string
 	MinBinaryVersion string
+	Sha256           string
 }
 
 type SecretKey struct {

@@ -144,6 +144,7 @@ func (s stubSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigrat
 	for _, migration := range s.migrations {
 		out = append(out, schema.AppliedMigration{
 			Version: migration.Version, Name: migration.Name, MinBinaryVersion: migration.MinBinaryVersion,
+			SHA256: "",
 		})
 	}
 

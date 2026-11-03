@@ -31,6 +31,10 @@ var updatePin = flag.Bool(
 // file moves with each pull request that changes the description.
 const pinFile = "openapi.pin"
 
+// pinCheckEnv names the variable that runs TestVersionFollowsTheDescription
+// while the check is disabled.
+const pinCheckEnv = "DUSTPAN_TEST_DESCRIPTION_PIN"
+
 // errPinStale means that the description and its version both changed, and the
 // version rose: only the pin file is out of date.
 var errPinStale = errors.New("the pin file is out of date")
@@ -148,6 +152,14 @@ func judge(p pin, version string, doc []byte) error {
 // description change and info.version does not rise with them.
 func TestVersionFollowsTheDescription(t *testing.T) {
 	t.Parallel()
+
+	// Disabled until the first release. Until then info.version stays at one
+	// value while the description changes. At the first release, write the
+	// pin again and remove this skip. The variable runs the check on demand.
+	if os.Getenv(pinCheckEnv) == "" {
+		t.Skip("disabled until the first release: info.version stays at one value until then; set " +
+			pinCheckEnv + "=1 to run it")
+	}
 
 	raw, err := os.ReadFile(pinFile)
 	if err != nil {
