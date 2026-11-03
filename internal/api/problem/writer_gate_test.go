@@ -37,6 +37,14 @@ func okStatuses() []string {
 	}
 }
 
+// maxOwnContractDirs is the row count of ownContractDirs. A new row fails
+// TestExemptionListsOnlyShrink until this pin changes.
+const maxOwnContractDirs = 4
+
+// maxOwnBodyRows is the row count of ownBodies, summed over all directories.
+// A new row fails TestExemptionListsOnlyShrink until this pin changes.
+const maxOwnBodyRows = 9
+
 // ownContractDirs returns the adapters that keep their own wire contract. The
 // gate does not check them. Each value is the reason. The list only shrinks.
 func ownContractDirs() map[string]string {
@@ -263,6 +271,86 @@ func TestToolNeutralAdaptersUseProblemWriter(t *testing.T) {
 			t.Error(msg)
 		}
 	})
+}
+
+// checkPin returns "" when got equals pin. It returns a message when the list
+// is longer than its pin, because a row was added, and when it is shorter,
+// because the pin must follow a removed row.
+func checkPin(got, pin int) string {
+	switch {
+	case got > pin:
+		return "an exemption row was added: the lists only shrink; remove a row or ask the owner"
+	case got < pin:
+		return fmt.Sprintf("lower the pin to %d", got)
+	default:
+		return ""
+	}
+}
+
+// bodyRows returns the number of rows of ownBodies, summed over all directories.
+func bodyRows() int {
+	n := 0
+
+	for _, rows := range ownBodies() {
+		n += len(rows)
+	}
+
+	return n
+}
+
+// TestExemptionListsOnlyShrink fails when a row is added to ownContractDirs or
+// ownBodies, and when a pin is higher than its list.
+func TestExemptionListsOnlyShrink(t *testing.T) {
+	t.Parallel()
+
+	if msg := checkPin(len(ownContractDirs()), maxOwnContractDirs); msg != "" {
+		t.Errorf("ownContractDirs: %s", msg)
+	}
+
+	if msg := checkPin(bodyRows(), maxOwnBodyRows); msg != "" {
+		t.Errorf("ownBodies: %s", msg)
+	}
+}
+
+// TestCheckPin checks the pin rule on equal, longer and shorter lists.
+func TestCheckPin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		got  int
+		pin  int
+		want string
+	}{
+		{
+			name: "equal",
+			got:  3,
+			pin:  3,
+			want: "",
+		},
+		{
+			name: "over",
+			got:  4,
+			pin:  3,
+			want: "an exemption row was added: the lists only shrink; remove a row or ask the owner",
+		},
+		{
+			name: "under",
+			got:  2,
+			pin:  3,
+			want: "lower the pin to 2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := checkPin(tt.got, tt.pin); got != tt.want {
+				t.Errorf("checkPin(%d, %d) = %q, want %q", tt.got, tt.pin, got, tt.want)
+			}
+		})
+	}
 }
 
 // checkFixture writes the files of one fixture package and compares the
