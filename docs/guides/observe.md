@@ -1,8 +1,6 @@
 # Observe the server
 
 This guide shows how to check liveness and readiness, scrape metrics, and read request logs.
-It follows ADR 32.
-Probe paths follow ADR 34.
 The end-to-end suite covers the metrics route and both probes.
 
 ## Liveness and readiness
@@ -61,7 +59,7 @@ scrape_configs:
       - targets: ['dustpan.example:8080']
 ```
 
-The static admin token holds every right until RFC 20, so the scrape job holds that token.
+The static admin token holds every right until a later change, so the scrape job holds that token.
 The server has no second listener.
 Serve metrics on a private port through a proxy rule for now.
 
@@ -193,7 +191,7 @@ Values are `json` and `text`.
 ## Send the application log to other targets
 
 The server writes its log to stderr by default.
-`--log-sink` (`DUSTPAN_LOG_SINK`) sends it to other targets instead (ADR 60 decision 14).
+`--log-sink` (`DUSTPAN_LOG_SINK`) sends it to other targets instead.
 Give `--log-sink` once for each target.
 In `DUSTPAN_LOG_SINK` and in the key `log-sink` of the configuration file, separate the targets with spaces or line breaks.
 The start log shows only whether `log-sink` is set, because a webhook URL can hold a token.
