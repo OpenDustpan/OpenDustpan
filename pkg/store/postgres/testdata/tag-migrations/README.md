@@ -18,5 +18,7 @@ Copy the `.sql.sha256` hash file of each migration too, or run
 `scripts/copy-tag-migrations.sh "$tag"`, which copies both. `frozen_test.go`
 checks each copy against its hash file. These copies come after the tag.
 The commit that the release tags already lists each migration file in
-`internal/releaserecord/shipped.txt`, which turns the checks on. The schema upgrade test applies the copies of each tag and then the
-current migrations, and compares the result with a fresh install.
+`internal/releaserecord/shipped.txt`, which turns the checks on.
+`TestTagCopiesHaveTheirLines` fails when a tag directory here has no lines
+in that file. The schema upgrade test applies the copies of each tag and
+then the current migrations, and compares the result with a fresh install.
