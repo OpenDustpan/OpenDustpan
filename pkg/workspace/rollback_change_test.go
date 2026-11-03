@@ -80,8 +80,6 @@ func TestReadRollbackChangeFailsClosed(t *testing.T) {
 	}{
 		{"a resource entry that the server cannot read", `{"resources":[{"x":1}]}`, stateA, workspace.ErrInvalidState},
 		{"a resource list of the wrong type", `{"resources":"x"}`, stateA, workspace.ErrInvalidState},
-		{"a restored state that the client encrypted", `{"encrypted_data":"x"}`, stateA, workspace.ErrClientEncrypted},
-		{"a current state that the client encrypted", stateA, `{"encrypted_data":"x"}`, workspace.ErrClientEncrypted},
 	}
 
 	for _, tc := range tests {
@@ -183,4 +181,37 @@ func TestRestoreExpecting(t *testing.T) {
 
 		checkCurrentID(t, f, versions[1].ID)
 	})
+}
+
+// TestReadRollbackChangeOfAnEncryptedState proves that a state the client
+// encrypted is a known condition and not an error: the read names the current
+// version, says Encrypted and holds no resource data.
+func TestReadRollbackChangeOfAnEncryptedState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		first, last string
+	}{
+		{"a restored state that the client encrypted", `{"encrypted_data":"x"}`, stateA},
+		{"a current state that the client encrypted", stateA, `{"encrypted_data":"x"}`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			versions := pushStates(t, f, tc.first, tc.last)
+
+			got, err := f.svc.ReadRollbackChange(t.Context(), f.ws.ID, versions[0].ID)
+			if err != nil {
+				t.Fatalf("ReadRollbackChange() = %v", err)
+			}
+
+			if !got.Encrypted || got.Current != versions[1].ID || got.Resources != 0 || got.Removed != nil {
+				t.Fatalf("change = %+v, want Encrypted, current %s and no resource data", got, versions[1].ID)
+			}
+		})
+	}
 }

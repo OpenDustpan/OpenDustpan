@@ -25,9 +25,10 @@ func rollbackWrite(t *testing.T, sc *gate.StateChange) gate.StateWrite {
 
 func okChange() *gate.StateChange {
 	return &gate.StateChange{
-		Current:   "sv-current",
-		Resources: 3,
-		Removed:   []string{"aws_s3_bucket.data", "aws_iam_role.app"},
+		Current:     "sv-current",
+		Resources:   3,
+		Removed:     []string{"aws_s3_bucket.data", "aws_iam_role.app"},
+		Unavailable: "",
 	}
 }
 
@@ -44,6 +45,7 @@ func TestStateFactsAreFilledFromTheStateChange(t *testing.T) {
 		wantRefuse bool
 		message    string
 		wantFacts  gate.StateFacts
+		wantWarn   string
 	}{
 		{
 			name: "a removal that the gate denies", state: okChange(),
@@ -52,6 +54,7 @@ func TestStateFactsAreFilledFromTheStateChange(t *testing.T) {
 			wantFacts: gate.StateFacts{
 				Available: true, Resources: 3, Removed: []string{"aws_iam_role.app", "aws_s3_bucket.data"},
 			},
+			wantWarn: "",
 		},
 		{
 			name: "the resource count is filled", state: okChange(),
@@ -60,28 +63,42 @@ func TestStateFactsAreFilledFromTheStateChange(t *testing.T) {
 			wantFacts: gate.StateFacts{
 				Available: true, Resources: 3, Removed: []string{"aws_iam_role.app", "aws_s3_bucket.data"},
 			},
+			wantWarn: "",
 		},
 		{
 			name:       "a removal that no gate names is allowed",
-			state:      &gate.StateChange{Current: "sv-current", Resources: 5, Removed: []string{}},
+			state:      &gate.StateChange{Current: "sv-current", Resources: 5, Removed: []string{}, Unavailable: ""},
 			condition:  `context.state.available && context.state.removed.contains("aws_s3_bucket.data")`,
 			wantRefuse: false, message: "",
 			wantFacts: gate.StateFacts{Available: true, Resources: 5, Removed: []string{}},
+			wantWarn:  "",
 		},
 		{
 			name: "no state change gives available false and the zero facts", state: nil,
 			condition:  `context.state.available && context.state.removed.contains("aws_s3_bucket.data")`,
 			wantRefuse: false, message: "",
 			wantFacts: gate.StateFacts{Available: false, Resources: 0, Removed: nil},
+			wantWarn:  "",
+		},
+		{
+			name: "a client-encrypted state gives available false and the reason in the record",
+			state: &gate.StateChange{
+				Current: "sv-current", Resources: 0, Removed: nil, Unavailable: "state is client-encrypted",
+			},
+			condition:  `context.state.available && context.state.removed.contains("aws_s3_bucket.data")`,
+			wantRefuse: false, message: "",
+			wantFacts: gate.StateFacts{Available: false, Resources: 0, Removed: nil},
+			wantWarn:  "state.* facts are not available: state is client-encrypted",
 		},
 		{
 			name: "duplicate addresses count once and the list is sorted",
 			state: &gate.StateChange{
-				Current: "sv-current", Resources: 1, Removed: []string{"b.x", "a.x", "b.x"},
+				Current: "sv-current", Resources: 1, Removed: []string{"b.x", "a.x", "b.x"}, Unavailable: "",
 			},
 			condition:  `context.state.available && context.state.removed.contains("a.x")`,
 			wantRefuse: true, message: "Removes a.x, b.x from 1 resources",
 			wantFacts: gate.StateFacts{Available: true, Resources: 1, Removed: []string{"a.x", "b.x"}},
+			wantWarn:  "",
 		},
 	}
 
@@ -102,7 +119,12 @@ func TestStateFactsAreFilledFromTheStateChange(t *testing.T) {
 				t.Fatalf("error = %q, want the facts %q in the message", err, tc.message)
 			}
 
-			checkStateRecord(t, e.newestRecord(t), stateExpect{facts: tc.wantFacts, matched: tc.wantRefuse})
+			rec := e.newestRecord(t)
+			checkStateRecord(t, rec, stateExpect{facts: tc.wantFacts, matched: tc.wantRefuse})
+
+			if got := strings.Join(rec.Warnings, "|"); got != tc.wantWarn {
+				t.Fatalf("record warnings = %q, want %q", got, tc.wantWarn)
+			}
 		})
 	}
 }
@@ -204,41 +226,85 @@ func TestStateChangeHostileInputIsRefused(t *testing.T) {
 		{"an unlock never holds a state change", gate.OperationUnlock, okChange(), gate.ErrInvalid},
 		{
 			"no current version", gate.OperationRollback,
-			&gate.StateChange{Current: "", Resources: 1, Removed: nil}, gate.ErrInvalid,
+			&gate.StateChange{Current: "", Resources: 1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
 		},
 		{
 			"a current version with a newline", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1\nx", Resources: 1, Removed: nil}, gate.ErrInvalid,
+			&gate.StateChange{Current: "sv-1\nx", Resources: 1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
 		},
 		{
 			"a negative resource count", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: -1, Removed: nil}, gate.ErrInvalid,
+			&gate.StateChange{Current: "sv-1", Resources: -1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
 		},
 		{
 			"an empty address", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{""}}, gate.ErrInvalid,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{""}, Unavailable: ""}, gate.ErrInvalid,
 		},
 		{
-			"an address with CR and LF", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{"a.b\r\nforged"}}, gate.ErrInvalid,
+			"an address with CR and LF",
+			gate.OperationRollback,
+			&gate.StateChange{
+				Current:     "sv-1",
+				Resources:   1,
+				Removed:     []string{"a.b\r\nforged"},
+				Unavailable: "",
+			},
+			gate.ErrInvalid,
 		},
 		{
-			"an address that is not UTF-8", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{"a\xff.b"}}, gate.ErrInvalid,
+			"an address that is not UTF-8",
+			gate.OperationRollback,
+			&gate.StateChange{
+				Current:     "sv-1",
+				Resources:   1,
+				Removed:     []string{"a\xff.b"},
+				Unavailable: "",
+			},
+			gate.ErrInvalid,
+		},
+		{
+			"a reason with a resource count", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: nil, Unavailable: "state is client-encrypted"},
+			gate.ErrInvalid,
+		},
+		{
+			"a reason with removed addresses", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 0, Removed: []string{"a.b"}, Unavailable: "x"},
+			gate.ErrInvalid,
+		},
+		{
+			"a reason with a newline", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 0, Removed: nil, Unavailable: "x\nforged"}, gate.ErrInvalid,
+		},
+		{
+			"a reason above its limit", gate.OperationRollback,
+			&gate.StateChange{
+				Current:     "sv-1",
+				Resources:   0,
+				Removed:     nil,
+				Unavailable: strings.Repeat("a", gate.MaxUnavailableBytes+1),
+			}, gate.ErrInvalid,
+		},
+		{
+			"a reason with no current version", gate.OperationRollback,
+			&gate.StateChange{Current: "", Resources: 0, Removed: nil, Unavailable: "x"}, gate.ErrInvalid,
 		},
 		{
 			"too many addresses", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: many}, gate.ErrLimit,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: many, Unavailable: ""}, gate.ErrLimit,
 		},
 		{
 			"an address above its limit", gate.OperationRollback,
 			&gate.StateChange{
-				Current: "sv-1", Resources: 1, Removed: []string{strings.Repeat("a", gate.MaxAddressBytes+1)},
+				Current:     "sv-1",
+				Resources:   1,
+				Removed:     []string{strings.Repeat("a", gate.MaxAddressBytes+1)},
+				Unavailable: "",
 			}, gate.ErrLimit,
 		},
 		{
 			"addresses above the total limit", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: big}, gate.ErrLimit,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: big, Unavailable: ""}, gate.ErrLimit,
 		},
 	}
 

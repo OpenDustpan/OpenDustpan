@@ -801,7 +801,18 @@ func (h *Handler) rollbackState(
 		return nil, fmt.Errorf("read the state change of the restore: %w", err)
 	}
 
-	return &gate.StateChange{Current: string(rc.Current), Resources: rc.Resources, Removed: rc.Removed}, nil
+	if rc.Encrypted {
+		// A state that the client encrypted is a known condition. The facts
+		// are not available, the record says why, and the restore goes on
+		// under the gates that apply.
+		return &gate.StateChange{
+			Current: string(rc.Current), Resources: 0, Removed: nil, Unavailable: "state is client-encrypted",
+		}, nil
+	}
+
+	return &gate.StateChange{
+		Current: string(rc.Current), Resources: rc.Resources, Removed: rc.Removed, Unavailable: "",
+	}, nil
 }
 
 // restoreVersion restores the version from. An empty expect restores with no
