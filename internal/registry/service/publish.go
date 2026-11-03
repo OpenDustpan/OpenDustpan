@@ -180,7 +180,8 @@ type measured struct {
 
 // Publish publishes one provider release from the staged files of req. It
 // returns the release as stored. A publish of a version that exists with the
-// same content returns that release and changes nothing. It returns
+// same content returns that release and changes nothing. A version that exists
+// with other content is refused before any file is copied to a content key. It returns
 // registry.ErrInvalid or ErrBadRequest for a request that fails its checks,
 // ErrNotStaged, ErrTooLarge, ErrNoKeys, registry.ErrBadSignature,
 // registry.ErrUntrustedKey (also for a key removed during the publish),
@@ -213,6 +214,10 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 	rel, err := s.verify(ctx, c, p)
 	if err != nil {
 		return registry.Release{}, err
+	}
+
+	if refuseErr := s.refuseOtherContent(ctx, p, rel); refuseErr != nil {
+		return registry.Release{}, refuseErr
 	}
 
 	if promoteErr := s.promote(ctx, p.view, p.rec.ID, p.files); promoteErr != nil {
@@ -277,10 +282,34 @@ func (s *Service) verify(ctx context.Context, c *Caller, p publishing) (registry
 	return rel, nil
 }
 
+// refuseOtherContent returns registry.ErrVersionExists when the version of
+// rel is published with other content. It runs before promote, so a
+// refused publish writes no content key. A repeat with the same content
+// passes, and the store answers it.
+func (s *Service) refuseOtherContent(ctx context.Context, p publishing, rel registry.Release) error {
+	existing, err := s.store.Get(ctx, p.addr, rel.Version)
+	if errors.Is(err, registry.ErrNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read the published release: %w", err)
+	}
+
+	if !existing.SameContent(rel) {
+		return registry.ErrVersionExists
+	}
+
+	return nil
+}
+
 // record stores rel with its fence and audit entry, and returns the release as
 // the store holds it. A repeat of a published version changes nothing, so the
 // answer is the first release, with the first publisher and time.
 func (s *Service) record(ctx context.Context, c *Caller, p publishing, rel registry.Release) (registry.Release, error) {
+	// Defense in depth: refuseOtherContent refuses a known version with other
+	// content before promote. The store checks it again in the transaction of
+	// the write, so a publish that races with another one is still refused.
 	err := s.store.Publish(ctx, rel, p.rec.Fence(), s.releaseEntry(c, rel))
 	if errors.Is(err, registry.ErrKeyNotFound) {
 		// A key removed between the check and the commit. The store checked it in

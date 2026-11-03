@@ -1032,6 +1032,15 @@ func (m *memStore) ListStateVersions(
 	return all[offset:end], total, nil
 }
 
+// memLastRelease returns the inventory record of r, or nil when r is no record.
+func memLastRelease(r workspace.Release) *inventory.LastRelease {
+	if !r.Recorded() {
+		return nil
+	}
+
+	return &inventory.LastRelease{At: r.At, LockID: r.LockID, Holder: r.Holder, By: r.By, Kind: string(r.Kind)}
+}
+
 // memLock returns the inventory lock a workspace holds, or nil when it is
 // unlocked, as the store adapters publish it.
 func memLock(lock workspace.Lock) *inventory.Lock {
@@ -5382,6 +5391,7 @@ func (m *memStore) publish(w workspace.Workspace) {
 	name := w.Ref.Name.String()
 
 	m.entries[memInventoryKey{namespace: w.Ref.Namespace, tool: memInventoryTool, name: name}] = inventory.Entry{
+		LastRelease:   memLastRelease(w.LastRelease),
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   w.UpdatedAt,

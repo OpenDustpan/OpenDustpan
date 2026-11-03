@@ -551,6 +551,15 @@ func (h *Handler) readStateOutput(
 		return
 	}
 
+	// Defense in depth: authorizeOutputRead checks unit:read for an older state
+	// version again below. This check stays so that the answer for an older
+	// state version does not depend on whether the output name exists.
+	if err = h.authorizeVersionRead(ctx, r, p, obj, sv); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	outputs, err := stateOutputs(sv)
 	if err != nil {
 		h.writeError(ctx, w, err)

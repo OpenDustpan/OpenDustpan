@@ -78,6 +78,7 @@ func (s *outputsSource) Outputs(_ context.Context, _ identity.Object, _ string) 
 // outputsEntry returns the inventory entry of a unit.
 func outputsEntry(ns namespace.Name, tool, name, id string) coreinventory.Entry {
 	return coreinventory.Entry{
+		LastRelease: nil,
 		LastChanged: time.Time{}, Namespace: ns, Tool: tool, Name: name, UnitID: id, DisplayName: "", Status: "",
 		ResourceCount: nil, Lock: nil, ManualLock: nil, Collection: "", Labels: map[string]string{},
 	}

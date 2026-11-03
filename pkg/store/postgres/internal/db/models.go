@@ -425,17 +425,22 @@ type InstanceVersion struct {
 }
 
 type Inventory struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount pgtype.Int8
-	LockHolder    pgtype.Text
-	LockSinceMs   pgtype.Int8
-	LockOperation pgtype.Text
+	Namespace         string
+	Tool              string
+	Name              string
+	UnitID            string
+	DisplayName       string
+	LastChangedMs     int64
+	Status            string
+	ResourceCount     pgtype.Int8
+	LockHolder        pgtype.Text
+	LockSinceMs       pgtype.Int8
+	LockOperation     pgtype.Text
+	LastReleaseLockID string
+	LastReleaseHolder string
+	LastReleaseBy     string
+	LastReleaseKind   string
+	LastReleaseAtMs   int64
 }
 
 type InventoryChange struct {
@@ -977,6 +982,7 @@ type SchemaMigration struct {
 	Version          int64
 	Name             string
 	MinBinaryVersion string
+	Sha256           string
 }
 
 type SecretKey struct {

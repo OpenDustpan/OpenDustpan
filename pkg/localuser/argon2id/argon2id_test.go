@@ -497,3 +497,303 @@ func TestReserveTakesNoBudgetForAMalformedHash(t *testing.T) {
 		t.Fatalf("reserve a malformed hash on a full budget: err = %v, want ErrInvalid", err)
 	}
 }
+
+// acquired is the result of one Acquire call that runs in its own goroutine.
+type acquired struct {
+	release func()
+	err     error
+}
+
+// acquireAsync starts one goroutine that calls b.Acquire and sends the result
+// on the returned channel.
+func acquireAsync(ctx context.Context, b *argon2id.Budget, kib uint32) <-chan acquired {
+	out := make(chan acquired, 1)
+
+	go func() {
+		release, err := b.Acquire(ctx, kib)
+		out <- acquired{release: release, err: err}
+	}()
+
+	return out
+}
+
+// waitForAcquired reads the result of an acquireAsync call, and fails the
+// test when the call does not return within 5 seconds.
+func waitForAcquired(t *testing.T, ch <-chan acquired) acquired {
+	t.Helper()
+
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case got := <-ch:
+		return got
+	case <-timer.C:
+		t.Fatal("acquire did not return within 5 seconds")
+
+		return acquired{release: nil, err: nil}
+	}
+}
+
+// waitForWaiting checks b.Waiting every millisecond until it is n. It fails
+// the test after 5 seconds or when the test ends.
+func waitForWaiting(t *testing.T, b *argon2id.Budget, n int) {
+	t.Helper()
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if b.Waiting() == n {
+			return
+		}
+
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatalf("waiting = %d after 5 seconds, want %d", b.Waiting(), n)
+		case <-t.Context().Done():
+			t.Fatalf("test ended while waiting for %d waiters: %v", n, t.Context().Err())
+		}
+	}
+}
+
+func TestBudgetServesWaitersInOrder(t *testing.T) {
+	t.Parallel()
+
+	b, err := argon2id.NewBudgetWithWait(localuser.MinHashMemoryBudgetKiB, 5*time.Second)
+	if err != nil {
+		t.Fatalf("new budget: %v", err)
+	}
+
+	hold, err := b.Acquire(t.Context(), localuser.MaxMemoryKiB)
+	if err != nil {
+		t.Fatalf("acquire the hold: %v", err)
+	}
+
+	large := acquireAsync(t.Context(), b, localuser.MaxMemoryKiB)
+	waitForWaiting(t, b, 1)
+
+	small := acquireAsync(t.Context(), b, localuser.MinMemoryKiB)
+	waitForWaiting(t, b, 2)
+
+	hold()
+
+	gotLarge := waitForAcquired(t, large)
+	if gotLarge.err != nil {
+		t.Fatalf("large waiter: %v", gotLarge.err)
+	}
+
+	if b.InUse() != localuser.MaxMemoryKiB {
+		t.Errorf("in use after the large waiter got the memory = %d, want %d", b.InUse(), localuser.MaxMemoryKiB)
+	}
+
+	if b.Waiting() != 1 {
+		t.Errorf("waiting after the large waiter got the memory = %d, want 1", b.Waiting())
+	}
+
+	gotLarge.release()
+
+	gotSmall := waitForAcquired(t, small)
+	if gotSmall.err != nil {
+		t.Fatalf("small waiter: %v", gotSmall.err)
+	}
+
+	if b.InUse() != localuser.MinMemoryKiB {
+		t.Errorf("in use after the small waiter got the memory = %d, want %d", b.InUse(), localuser.MinMemoryKiB)
+	}
+
+	gotSmall.release()
+
+	if b.InUse() != 0 {
+		t.Errorf("in use at the end = %d, want 0", b.InUse())
+	}
+}
+
+func TestBudgetNewAcquireDoesNotPassAWaiter(t *testing.T) {
+	t.Parallel()
+
+	b, err := argon2id.NewBudgetWithWait(localuser.MinHashMemoryBudgetKiB, 5*time.Second)
+	if err != nil {
+		t.Fatalf("new budget: %v", err)
+	}
+
+	hold, err := b.Acquire(t.Context(), localuser.MaxMemoryKiB)
+	if err != nil {
+		t.Fatalf("acquire the hold: %v", err)
+	}
+
+	first := acquireAsync(t.Context(), b, localuser.DefaultMemoryKiB)
+	waitForWaiting(t, b, 1)
+
+	second := acquireAsync(t.Context(), b, localuser.DefaultMemoryKiB)
+	waitForWaiting(t, b, 2)
+
+	large := acquireAsync(t.Context(), b, localuser.MaxMemoryKiB)
+	waitForWaiting(t, b, 3)
+
+	hold()
+
+	gotFirst := waitForAcquired(t, first)
+	if gotFirst.err != nil {
+		t.Fatalf("first default waiter: %v", gotFirst.err)
+	}
+
+	gotSecond := waitForAcquired(t, second)
+	if gotSecond.err != nil {
+		t.Fatalf("second default waiter: %v", gotSecond.err)
+	}
+
+	// The free memory is now 26624 KiB, which fits a small hash. The large
+	// waiter at the head of the list still waits, so the new call must join
+	// the list and must not take the memory.
+	inUse := b.InUse()
+
+	newcomer := acquireAsync(t.Context(), b, localuser.MinMemoryKiB)
+	waitForWaiting(t, b, 2)
+
+	select {
+	case got := <-newcomer:
+		t.Fatalf("new acquire returned while a waiter is in the list: err = %v", got.err)
+	default:
+	}
+
+	if b.InUse() != inUse {
+		t.Errorf("in use after the new acquire joins = %d, want %d", b.InUse(), inUse)
+	}
+
+	gotFirst.release()
+	gotSecond.release()
+
+	gotLarge := waitForAcquired(t, large)
+	if gotLarge.err != nil {
+		t.Fatalf("large waiter: %v", gotLarge.err)
+	}
+
+	gotLarge.release()
+
+	gotNewcomer := waitForAcquired(t, newcomer)
+	if gotNewcomer.err != nil {
+		t.Fatalf("new acquire: %v", gotNewcomer.err)
+	}
+
+	gotNewcomer.release()
+
+	if b.InUse() != 0 {
+		t.Errorf("in use at the end = %d, want 0", b.InUse())
+	}
+}
+
+func TestBudgetReleaseServesOnlyWhatFits(t *testing.T) {
+	t.Parallel()
+
+	b, err := argon2id.NewBudgetWithWait(localuser.MinHashMemoryBudgetKiB, 5*time.Second)
+	if err != nil {
+		t.Fatalf("new budget: %v", err)
+	}
+
+	hold, err := b.Acquire(t.Context(), localuser.MaxMemoryKiB)
+	if err != nil {
+		t.Fatalf("acquire the hold: %v", err)
+	}
+
+	first := acquireAsync(t.Context(), b, localuser.DefaultMemoryKiB)
+	waitForWaiting(t, b, 1)
+
+	second := acquireAsync(t.Context(), b, localuser.DefaultMemoryKiB)
+	waitForWaiting(t, b, 2)
+
+	large := acquireAsync(t.Context(), b, localuser.MaxMemoryKiB)
+	waitForWaiting(t, b, 3)
+
+	hold()
+
+	gotFirst := waitForAcquired(t, first)
+	if gotFirst.err != nil {
+		t.Fatalf("first default waiter: %v", gotFirst.err)
+	}
+
+	gotSecond := waitForAcquired(t, second)
+	if gotSecond.err != nil {
+		t.Fatalf("second default waiter: %v", gotSecond.err)
+	}
+
+	if b.InUse() != 2*localuser.DefaultMemoryKiB {
+		t.Errorf("in use = %d, want %d", b.InUse(), 2*localuser.DefaultMemoryKiB)
+	}
+
+	if b.Waiting() != 1 {
+		t.Errorf("waiting = %d, want 1", b.Waiting())
+	}
+
+	gotFirst.release()
+	gotSecond.release()
+
+	gotLarge := waitForAcquired(t, large)
+	if gotLarge.err != nil {
+		t.Fatalf("large waiter: %v", gotLarge.err)
+	}
+
+	if b.InUse() != localuser.MaxMemoryKiB {
+		t.Errorf("in use after the large waiter got the memory = %d, want %d", b.InUse(), localuser.MaxMemoryKiB)
+	}
+
+	gotLarge.release()
+
+	if b.InUse() != 0 {
+		t.Errorf("in use at the end = %d, want 0", b.InUse())
+	}
+}
+
+func TestBudgetWaiterThatLeavesDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	b, err := argon2id.NewBudgetWithWait(localuser.MinHashMemoryBudgetKiB, 5*time.Second)
+	if err != nil {
+		t.Fatalf("new budget: %v", err)
+	}
+
+	hold, err := b.Acquire(t.Context(), localuser.MinHashMemoryBudgetKiB-localuser.DefaultMemoryKiB)
+	if err != nil {
+		t.Fatalf("acquire the hold: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	large := acquireAsync(ctx, b, localuser.MaxMemoryKiB)
+	waitForWaiting(t, b, 1)
+
+	small := acquireAsync(t.Context(), b, localuser.DefaultMemoryKiB)
+	waitForWaiting(t, b, 2)
+
+	cancel()
+
+	gotLarge := waitForAcquired(t, large)
+	if !errors.Is(gotLarge.err, context.Canceled) {
+		t.Fatalf("large waiter after cancel: err = %v, want context.Canceled", gotLarge.err)
+	}
+
+	gotSmall := waitForAcquired(t, small)
+	if gotSmall.err != nil {
+		t.Fatalf("small waiter behind the large one: %v", gotSmall.err)
+	}
+
+	if b.InUse() != localuser.MinHashMemoryBudgetKiB {
+		t.Errorf("in use = %d, want %d", b.InUse(), localuser.MinHashMemoryBudgetKiB)
+	}
+
+	if b.Waiting() != 0 {
+		t.Errorf("waiting = %d, want 0", b.Waiting())
+	}
+
+	gotSmall.release()
+	hold()
+
+	if b.InUse() != 0 {
+		t.Errorf("in use at the end = %d, want 0", b.InUse())
+	}
+}

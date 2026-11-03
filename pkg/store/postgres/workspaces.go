@@ -742,6 +742,10 @@ func publishFencedState(
 		return lockErr
 	}
 
+	if releaseErr := writeWorkspaceLastRelease(ctx, q, w); releaseErr != nil {
+		return releaseErr
+	}
+
 	// The change log row comes last, after every other lock.
 	return appendWorkspaceChange(
 		ctx,
@@ -1286,13 +1290,18 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 
 		// The lock moves with the write in the same transaction: lock,
 		// unlock and force-unlock all save here.
-		return writeInventoryLock(
+		lockErr := writeInventoryLock(
 			ctx, q, inventoryLockKey{
 				namespace: w.Ref.Namespace.String(),
 				tool:      inventoryToolOpenTofu,
 				name:      w.Ref.Name.String(),
 			}, workspaceLock(w.Lock),
 		)
+		if lockErr != nil {
+			return lockErr
+		}
+
+		return writeWorkspaceLastRelease(ctx, q, w)
 	}
 
 	exists, err := q.WorkspaceExists(ctx, row.ID)
@@ -1320,4 +1329,30 @@ func (s *Store) DiscardStateVersion(
 
 		return nil
 	})
+}
+
+// writeWorkspaceLastRelease publishes the last released lock of w to its
+// inventory entry, in the caller's transaction. A workspace with no record
+// publishes empty columns.
+func writeWorkspaceLastRelease(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
+	r := w.LastRelease
+	if !r.Recorded() {
+		r = workspace.NoRelease()
+	}
+
+	err := q.UpdateInventoryLastRelease(ctx, db.UpdateInventoryLastReleaseParams{
+		LastReleaseLockID: r.LockID,
+		LastReleaseHolder: r.Holder,
+		LastReleaseBy:     r.By,
+		LastReleaseKind:   string(r.Kind),
+		LastReleaseAtMs:   codec.OptionalMillis(r.At),
+		Namespace:         w.Ref.Namespace.String(),
+		Tool:              inventoryToolOpenTofu,
+		Name:              w.Ref.Name.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("update inventory last release: %w", err)
+	}
+
+	return nil
 }

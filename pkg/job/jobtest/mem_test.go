@@ -775,7 +775,7 @@ func (m *memDB) checkManualLock(j *job.Job) error {
 
 	ref, ok := m.units[unit.UnitID()]
 	if !ok || ref.Namespace != unit.Namespace() {
-		return fmt.Errorf("check the manual locks of unit %s: %w", unit, errNotInInventory)
+		return fmt.Errorf("check the manual locks of unit %s: %w: %w", unit, job.ErrUnitGone, errNotInInventory)
 	}
 
 	for _, t := range []manuallock.Target{manuallock.UnitTarget(ref), manuallock.NamespaceTarget(unit.Namespace())} {

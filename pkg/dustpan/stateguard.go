@@ -234,6 +234,7 @@ func (f inventoryFacts) deletedEntry(ctx context.Context, unit identity.Object) 
 	}
 
 	return inventory.Entry{
+		LastRelease: nil,
 		LastChanged: time.Time{}, Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName(),
 		UnitID: unit.UnitID(), DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, ManualLock: nil,
 		Collection: facts.Collection, Labels: facts.Labels,
