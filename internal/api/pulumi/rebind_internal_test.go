@@ -204,8 +204,8 @@ func providerState(t *testing.T, deployment []byte) map[string]string {
 
 	var providers providersDoc
 
-	if err := json.Unmarshal(doc[secretsProvidersMember], &providers); err != nil {
-		t.Fatalf("decode %s: %v", secretsProvidersMember, err)
+	if err := json.Unmarshal(doc[stack.SecretsProvidersMember], &providers); err != nil {
+		t.Fatalf("decode %s: %v", stack.SecretsProvidersMember, err)
 	}
 
 	return providers.State

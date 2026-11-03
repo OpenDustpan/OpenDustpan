@@ -36,9 +36,9 @@ var ErrOtherSecretsProvider = errors.New("stack uses another secrets provider")
 // this only guards the Go switch. It carries no value.
 var errUnexpectedValue = errors.New("unexpected value")
 
-// serviceSecretsProvider is the only provider the server decrypts: the
+// ServiceSecretsProvider is the only provider the server decrypts: the
 // service secrets provider of ADR 23.
-const serviceSecretsProvider = "service"
+const ServiceSecretsProvider = "service"
 
 // ciphertextField is the field of a secret object that holds the ciphertext.
 const ciphertextField = "ciphertext"
@@ -61,24 +61,24 @@ func SecretsProvider(deployment []byte) string {
 
 	open, err := openStreamedObject(dec)
 	if err != nil || !open {
-		return serviceSecretsProvider
+		return ServiceSecretsProvider
 	}
 
-	provider := serviceSecretsProvider
+	provider := ServiceSecretsProvider
 
 	for {
 		name, end, err := streamedMember(dec)
 		if err != nil {
-			return serviceSecretsProvider
+			return ServiceSecretsProvider
 		}
 
 		if end {
 			return provider
 		}
 
-		if name != secretsProvidersMember {
+		if name != SecretsProvidersMember {
 			if skipErr := skipStreamed(dec); skipErr != nil {
-				return serviceSecretsProvider
+				return ServiceSecretsProvider
 			}
 
 			continue
@@ -94,13 +94,13 @@ func SecretsProvider(deployment []byte) string {
 func streamedProviderType(dec *jsontext.Decoder) string {
 	raw, err := dec.ReadValue()
 	if err != nil {
-		return serviceSecretsProvider
+		return ServiceSecretsProvider
 	}
 
 	var providers providersDoc
 
 	if err := json.Unmarshal([]byte(raw), &providers); err != nil || providers.Type == "" {
-		return serviceSecretsProvider
+		return ServiceSecretsProvider
 	}
 
 	return providers.Type
