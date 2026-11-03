@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // errNoHomeTest is the error of a platform with no home directory.
@@ -375,5 +377,104 @@ func TestCheckDevFileModes(t *testing.T) {
 
 	if err := checkDevFile(filepath.Join(t.TempDir(), "missing"), privateSecret); err != nil {
 		t.Fatalf("a file that does not exist: %v", err)
+	}
+}
+
+// fakeFileInfo is an os.FileInfo whose Sys value the test chooses.
+type fakeFileInfo struct {
+	sys any
+}
+
+func (fakeFileInfo) Name() string       { return "dev" }
+func (fakeFileInfo) Size() int64        { return 0 }
+func (fakeFileInfo) Mode() os.FileMode  { return os.ModeDir | 0o700 }
+func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fakeFileInfo) IsDir() bool        { return true }
+func (f fakeFileInfo) Sys() any         { return f.sys }
+
+// probeStat answers the stat value of a file that the test makes. Its owner
+// is the current user.
+func probeStat(t *testing.T) *syscall.Stat_t {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "probe")
+	writeFile(t, path, 0o600)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("the probe file has no stat value")
+	}
+
+	return stat
+}
+
+// statWithOwner answers a copy of the probe stat value with its owner set to
+// uid. The copy keeps every other field of the platform.
+func statWithOwner(t *testing.T, uid uint32) *syscall.Stat_t {
+	t.Helper()
+
+	stat := *probeStat(t)
+	stat.Uid = uid
+
+	return &stat
+}
+
+// checkOwnerCase runs checkDevOwner on a path with the given Sys value and
+// checks the sentinel and the path in the error. A nil wantErr means no error.
+func checkOwnerCase(t *testing.T, sys any, wantErr error) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dev")
+
+	err := checkDevOwner(path, fakeFileInfo{sys: sys})
+	if wantErr == nil {
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+
+		return
+	}
+
+	if err == nil {
+		t.Fatalf("err = nil, want it to match %v", wantErr)
+	}
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want it to match %v", err, wantErr)
+	}
+
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("err = %q, want it to name %q", err, path)
+	}
+}
+
+func TestCheckDevOwner(t *testing.T) {
+	t.Parallel()
+
+	// The owner of a file that the test makes is the current user.
+	current := probeStat(t).Uid
+
+	tests := []struct {
+		name string
+		sys  any
+		// wantErr is the sentinel the error matches, or nil for no error.
+		wantErr error
+	}{
+		{name: "owner unknown when Sys is not a stat value", sys: nil, wantErr: errDevOwnerUnknown},
+		{name: "owner is another user", sys: statWithOwner(t, current+1), wantErr: errDevOwner},
+		{name: "owner is the current user", sys: statWithOwner(t, current), wantErr: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkOwnerCase(t, tt.sys, tt.wantErr)
+		})
 	}
 }
