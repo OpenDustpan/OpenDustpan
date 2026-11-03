@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -257,7 +258,14 @@ func checkOffGuard(t *testing.T, g guard, body *ast.BlockStmt) {
 		t.Errorf("%s in %s: the first skip does not test the reason from Off", g.fn, g.file)
 	}
 
-	rest := body.List[2:]
+	checkTailStops(t, g, body.List[2:])
+}
+
+// checkTailStops fails t for each skip or return in rest that is not inside
+// an if statement.
+func checkTailStops(t *testing.T, g guard, rest []ast.Stmt) {
+	t.Helper()
+
 	guarded := ifBodies(rest)
 
 	for _, stop := range stops(rest) {
@@ -283,6 +291,8 @@ func stops(stmts []ast.Stmt) []token.Pos {
 				if isSkip(n) {
 					out = append(out, n.Pos())
 				}
+			default:
+				// Other nodes hold no skip or return of their own.
 			}
 
 			return true
@@ -530,10 +540,10 @@ func addTag(t *testing.T, dir string) {
 }
 
 // run runs cmd in dir with no system or user Git configuration and no other
-// variable than PATH, and returns its combined output.
-func run(cmd *exec.Cmd, dir string) (string, error) {
+// variable than PATH and extraEnv, and returns its combined output.
+func run(cmd *exec.Cmd, dir string, extraEnv ...string) (string, error) {
 	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1"}
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1"}, extraEnv...)
 
 	out, err := cmd.CombinedOutput()
 
@@ -659,11 +669,13 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			version + " postgres " + baseline + " " + sumOf("base") + "\n"
 	}
 
+	next := map[string]string{"pkg/store/sqlite/migrations/0169_next.sql": "next"}
+
 	tests := []struct {
 		name    string
 		version string
 		record  *string
-		extra   bool
+		extra   map[string]string
 		want    string
 		pass    bool
 	}{
@@ -671,28 +683,28 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			"the lines match",
 			"v0.1.0",
 			new("# comment\n" + lines("v0.1.0", sumOf("base"))),
-			false,
+			nil,
 			"lists the migrations",
 			true,
 		},
-		{"an empty record", "v0.1.0", new("# comments only\n"), false, "has no sqlite line for v0.1.0", false},
+		{"an empty record", "v0.1.0", new("# comments only\n"), nil, "has no sqlite line for v0.1.0", false},
 		{
 			"the lines of another version",
 			"v0.2.0",
 			new(lines("v0.1.0", sumOf("base"))),
-			false,
+			nil,
 			"has no sqlite line",
 			false,
 		},
-		{"another SHA-256", "v0.1.0", new(lines("v0.1.0", sumOf("edited"))), false, "differ from", false},
-		{"a file with no line", "v0.1.0", new(lines("v0.1.0", sumOf("base"))), true, "differ from", false},
-		{"no record", "v0.1.0", nil, false, "is missing", false},
-		{"a version with a suffix", "v0.1.0-rc1", new(lines("v0.1.0", sumOf("base"))), false, "is not vMAJOR", false},
+		{"another SHA-256", "v0.1.0", new(lines("v0.1.0", sumOf("edited"))), nil, "differ from", false},
+		{"a file with no line", "v0.1.0", new(lines("v0.1.0", sumOf("base"))), next, "differ from", false},
+		{"no record", "v0.1.0", nil, nil, "is missing", false},
+		{"a version with a suffix", "v0.1.0-rc1", new(lines("v0.1.0", sumOf("base"))), nil, "is not vMAJOR", false},
 		{
 			"a version with a newline",
 			"v0.1.0\nv0.2.0",
 			new(lines("v0.1.0", sumOf("base"))),
-			false,
+			nil,
 			"is not vMAJOR",
 			false,
 		},
@@ -705,10 +717,12 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			dir := newRepository(t, tt.record)
 			writeMigrations(t, dir, tt.extra)
 
-			cmd := exec.CommandContext(t.Context(), "bash", "-s", tt.version)
-			cmd.Stdin = strings.NewReader(script)
+			// The script and its argument go in on standard input, so that
+			// the command line holds no variable.
+			cmd := exec.CommandContext(t.Context(), "bash", "-s")
+			cmd.Stdin = strings.NewReader(`set -- "$RELEASE_VERSION"` + "\n" + script)
 
-			out, err := run(cmd, dir)
+			out, err := run(cmd, dir, "RELEASE_VERSION="+tt.version)
 			if (err == nil) != tt.pass {
 				t.Fatalf("the script returned %v, want pass = %v:\n%s", err, tt.pass, out)
 			}
@@ -720,9 +734,9 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 	}
 }
 
-// writeMigrations writes the baseline "base" of each dialect in dir, and a
-// second migration of SQLite when extra is set.
-func writeMigrations(t *testing.T, dir string, extra bool) {
+// writeMigrations writes the baseline "base" of each dialect in dir, and the
+// files of extra, a map from path to SQL.
+func writeMigrations(t *testing.T, dir string, extra map[string]string) {
 	t.Helper()
 
 	root, err := os.OpenRoot(dir)
@@ -737,9 +751,7 @@ func writeMigrations(t *testing.T, dir string, extra bool) {
 		files["pkg/store/"+dialect+"/migrations/"+baseline] = "base"
 	}
 
-	if extra {
-		files["pkg/store/sqlite/migrations/0169_next.sql"] = "next"
-	}
+	maps.Copy(files, extra)
 
 	for name, sql := range files {
 		if err := root.MkdirAll(filepath.Dir(name), 0o700); err != nil {
@@ -767,7 +779,7 @@ func TestReleaseBuildChecksTheRecordFirst(t *testing.T) {
 			"run check-release-record.sh before the build", check, build)
 	}
 
-	for _, line := range strings.Split(script[:max(check, 0)], "\n") {
+	for line := range strings.SplitSeq(script[:max(check, 0)], "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "exit 0") {
 			t.Errorf("release-build.sh can exit before the record check: %q", line)
 		}
