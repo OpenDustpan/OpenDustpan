@@ -240,7 +240,7 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 		Invalid:       false,
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, checkImport) {
+	if !h.guardStateWrite(w, r, p, obj, checkImport()) {
 		return
 	}
 
@@ -291,7 +291,7 @@ func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identit
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, checkRestore) {
+	if !h.guardStateWrite(w, r, p, obj, checkRestore()) {
 		return
 	}
 
@@ -632,7 +632,7 @@ func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, p identit
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, checkCancel) {
+	if !h.guardStateWrite(w, r, p, obj, checkCancel()) {
 		return
 	}
 
