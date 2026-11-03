@@ -752,7 +752,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 		return
 	}
 
-	entries, err := s.afterApplyEntries(ctx, op, in, true)
+	entries, err := s.afterApplyEntries(ctx, op, in, swappedFailed)
 	if err != nil {
 		s.logger.ErrorContext(
 			ctx,
