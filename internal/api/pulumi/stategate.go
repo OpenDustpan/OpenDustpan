@@ -19,23 +19,33 @@ type stateCheck struct {
 	op     gate.OperationKind
 }
 
-// The checks of the Pulumi routes that write state, end the update of another
-// holder or remove a stack.
-var (
-	// checkImport is a `pulumi stack import` and each `pulumi state` command
-	// that sends a new deployment: it replaces the state of the stack.
-	checkImport = stateCheck{action: identity.ActionUnitWrite, op: gate.OperationStateImport}
-	// checkRestore copies the checkpoint of an earlier stack version into a
-	// new update.
-	checkRestore = stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback}
-	// checkRename gives the stack and its state a new name.
-	checkRename = stateCheck{action: identity.ActionUnitManage, op: gate.OperationRename}
-	// checkDelete is a `pulumi stack rm`: it removes the stack.
-	checkDelete = stateCheck{action: identity.ActionUnitManage, op: gate.OperationDelete}
-	// checkCancel is a `pulumi cancel`: it ends the update of a holder with no
-	// lease, so it frees the stack.
-	checkCancel = stateCheck{action: identity.ActionUnitWrite, op: gate.OperationUnlock}
-)
+// checkImport is a `pulumi stack import` and each `pulumi state` command that
+// sends a new deployment: it replaces the state of the stack.
+func checkImport() stateCheck {
+	return stateCheck{action: identity.ActionUnitWrite, op: gate.OperationStateImport}
+}
+
+// checkRestore copies the checkpoint of an earlier stack version into a new
+// update.
+func checkRestore() stateCheck {
+	return stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback}
+}
+
+// checkRename gives the stack and its state a new name.
+func checkRename() stateCheck {
+	return stateCheck{action: identity.ActionUnitManage, op: gate.OperationRename}
+}
+
+// checkDelete is a `pulumi stack rm`: it removes the stack.
+func checkDelete() stateCheck {
+	return stateCheck{action: identity.ActionUnitManage, op: gate.OperationDelete}
+}
+
+// checkCancel is a `pulumi cancel`: it ends the update of a holder with no
+// lease, so it frees the stack.
+func checkCancel() stateCheck {
+	return stateCheck{action: identity.ActionUnitWrite, op: gate.OperationUnlock}
+}
 
 // guardStateWrite asks the state guard before the write of the route. It
 // returns true when the write may go on. When it returns false, the answer is
