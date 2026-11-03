@@ -58,6 +58,7 @@ func (h *Handler) guardStateWrite(
 
 	out := h.admit.Admit(ctx, stategate.Write{
 		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceAPI,
+		State: nil, StateErr: nil,
 	}, func(ctx context.Context, reason string) {
 		h.guard.Record(ctx, r, p, refusal.Denial{Action: check.action, Object: obj, Reason: reason, Window: 0})
 	})

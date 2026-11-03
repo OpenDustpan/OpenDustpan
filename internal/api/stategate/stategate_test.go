@@ -105,6 +105,7 @@ func write(t *testing.T, op gate.OperationKind, p identity.Principal) stategate.
 
 	return stategate.Write{
 		Principal: p, Unit: unit, Operation: op, Action: identity.ActionUnitWrite, Source: gate.SourceCLI,
+		State: nil, StateErr: nil,
 	}
 }
 
@@ -544,7 +545,8 @@ func TestDetailIsOneLine(t *testing.T) {
 func TestAdmitRefusesWhenTheStateCannotBeRead(t *testing.T) {
 	t.Parallel()
 
-	guard, rec := &fakeGuard{}, &recorder{}
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
 	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
 	w.StateErr = errStateDown
 

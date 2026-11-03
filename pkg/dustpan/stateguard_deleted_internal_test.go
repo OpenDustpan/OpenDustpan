@@ -155,7 +155,7 @@ func (d deletedGuard) guard(t *testing.T, unitID string, action identity.Action,
 
 	_, err := d.svc.GuardStateWrite(t.Context(), gate.StateWrite{
 		Principal: d.p, Unit: d.unit.WithUnitID(unitID), Operation: op, Action: action,
-		Source: gate.SourceAPI, PlanLock: false,
+		Source: gate.SourceAPI, PlanLock: false, State: nil,
 	})
 
 	return err
