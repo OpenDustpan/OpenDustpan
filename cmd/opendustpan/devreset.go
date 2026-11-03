@@ -24,8 +24,8 @@ import (
 const devResetCommand = "reset"
 
 // devResetSuffix ends the name of each path that dev reset keeps. dev reset
-// keeps the data of one reset only: a new reset deletes the paths of the
-// reset before.
+// keeps the data of one reset only: after the new database exists, a new reset
+// deletes the paths of the reset before.
 const devResetSuffix = ".reset.bak"
 
 // devBlobsName is the blob directory of dev, next to the database.
@@ -118,7 +118,7 @@ func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProc
 		return err
 	}
 
-	moved, err := moveDevData(dir)
+	moved, err := moveDevData(dir, os.Rename)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,11 @@ func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProc
 		slog.String("database", db), slog.Any("kept", moved))
 
 	if remakeErr := remakeDevDatabase(ctx, db, app.logger, proc, moved); remakeErr != nil {
-		return remakeErr
+		return keptCopiesError(dir, remakeErr)
+	}
+
+	if dropErr := dropOldDevCopies(dir); dropErr != nil {
+		return dropErr
 	}
 
 	_, err = fmt.Fprintf(stderr, "dev reset: the old data is kept as %s. Run opendustpan dev to start.\n",
@@ -273,15 +277,42 @@ func checkDevResetBlobs(path string) error {
 	return nil
 }
 
-// moveDevData deletes the copies that the reset before kept, then moves each
-// path of devResetMoves in dir aside, and answers the new paths. A path that
-// does not exist is skipped. The names are fixed, and each path stays in dir.
-func moveDevData(dir string) ([]string, error) {
+// devResetOldSuffix ends the name of a copy of the reset before while dev reset
+// needs it. dev reset deletes these copies only after the new database exists.
+const devResetOldSuffix = ".old"
+
+// moveDevData keeps the copies of the reset before under the suffix
+// devResetOldSuffix, then moves each path of devResetMoves in dir aside with
+// rename, and answers the new paths. A path that does not exist is skipped.
+// The names are fixed, and each path stays in dir. An error names the paths
+// that moved and the copies of the reset before, so that no data is lost.
+func moveDevData(dir string, rename func(from, to string) error) ([]string, error) {
+	var copies []string
+
 	for _, move := range devResetMoves() {
-		kept := filepath.Join(dir, move.to)
-		if err := os.RemoveAll(kept); err != nil {
-			return nil, fmt.Errorf("delete the data of the reset before, %s: %w", kept, err)
+		to := filepath.Join(dir, move.to)
+		old := to + devResetOldSuffix
+
+		_, statErr := os.Lstat(to)
+		if errors.Is(statErr, fs.ErrNotExist) {
+			continue
 		}
+
+		if statErr != nil {
+			return nil, fmt.Errorf("read %s: %w", to, statErr)
+		}
+
+		// A copy under the old suffix is left by a reset that stopped before it
+		// finished. The copy of the reset before is at to, and rename keeps it.
+		if err := os.RemoveAll(old); err != nil {
+			return nil, fmt.Errorf("delete the stale copy %s: %w", old, err)
+		}
+
+		if err := rename(to, old); err != nil {
+			return nil, moveDevDataError(fmt.Errorf("keep the copy of the reset before: %w", err), to, nil, copies)
+		}
+
+		copies = append(copies, old)
 	}
 
 	var moved []string
@@ -289,19 +320,78 @@ func moveDevData(dir string) ([]string, error) {
 	for _, move := range devResetMoves() {
 		from, to := filepath.Join(dir, move.from), filepath.Join(dir, move.to)
 
-		err := os.Rename(from, to)
+		err := rename(from, to)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 
 		if err != nil {
-			return moved, fmt.Errorf("move %s aside: %w", from, err)
+			return moved, moveDevDataError(fmt.Errorf("move %s aside: %w", from, err), from, moved, copies)
 		}
 
 		moved = append(moved, to)
 	}
 
 	return moved, nil
+}
+
+// moveDevDataError names the path that failed, the paths already moved and the
+// copies of the reset before, and the one command that helps.
+func moveDevDataError(cause error, failed string, moved, copies []string) error {
+	return fmt.Errorf("%w. Failed path: %s. Moved: %s. Copies of the reset before: %s. "+
+		"Run opendustpan dev reset again after you check these paths",
+		cause, failed, joinOrNone(moved), joinOrNone(copies))
+}
+
+// joinOrNone joins paths with a comma, or answers none for no path.
+func joinOrNone(paths []string) string {
+	if len(paths) == 0 {
+		return "none"
+	}
+
+	return strings.Join(paths, ", ")
+}
+
+// dropOldDevCopies deletes the copies of the reset before that moveDevData
+// kept under devResetOldSuffix. The caller calls it only after the new database
+// exists.
+func dropOldDevCopies(dir string) error {
+	for _, move := range devResetMoves() {
+		old := filepath.Join(dir, move.to+devResetOldSuffix)
+		if err := os.RemoveAll(old); err != nil {
+			return fmt.Errorf("delete the copy of the reset before, %s: %w", old, err)
+		}
+	}
+
+	return nil
+}
+
+// devResetOldPaths answers the copies of the reset before that stay in dir
+// under devResetOldSuffix.
+func devResetOldPaths(dir string) []string {
+	var paths []string
+
+	for _, move := range devResetMoves() {
+		old := filepath.Join(dir, move.to+devResetOldSuffix)
+
+		_, err := os.Lstat(old)
+		if err == nil || !errors.Is(err, fs.ErrNotExist) {
+			paths = append(paths, old)
+		}
+	}
+
+	return paths
+}
+
+// keptCopiesError adds the names of the copies of the reset before to the error
+// of a failed remake. Those copies stay in dir.
+func keptCopiesError(dir string, err error) error {
+	paths := devResetOldPaths(dir)
+	if len(paths) == 0 {
+		return err
+	}
+
+	return fmt.Errorf("%w. The copies of the reset before stay at: %s", err, strings.Join(paths, ", "))
 }
 
 // remakeDevDatabase makes the schema of the binary on a new database at db,
