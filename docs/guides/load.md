@@ -1,7 +1,6 @@
 # Run the load harness
 
 This guide shows how to run the load harness and how to read its JSON report.
-It follows ADR 40.
 
 ## What the harness does
 
