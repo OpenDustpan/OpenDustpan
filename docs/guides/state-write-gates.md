@@ -79,9 +79,45 @@ with the `context.` prefix:
 | `context.operation.kind` | The operation kind in the table above. |
 | `context.document.truncated` | The fact paths that the server emptied to fit the facts into 256 KiB. At `state.write` the only path is `unit.labels`. An empty list means that the server emptied nothing. |
 | `context.plan.available` | Always `false`: the CLI sends no plan. |
-| `context.state.available` | Always `false`: the server holds no new state yet. |
-| `context.state.resources` | The count of resources in the new state. The server does not fill this fact yet, so it is always `0`. |
-| `context.state.removed` | The resource addresses in the current state and not in the new state. The server does not fill this fact yet, so it is always an empty list. |
+| `context.state.available` | `true` when the server read the current state and the new state for this write. Only the restore of a state version fills it. For each other write it is `false` (see the table below). |
+| `context.state.resources` | The count of resources in the new state. `0` when `context.state.available` is `false`. |
+| `context.state.removed` | The resource addresses in the current state and not in the new state, without an instance key, sorted. An empty list when `context.state.available` is `false`. |
+
+A gate that reads `context.state.resources` or `context.state.removed` must
+also read `context.state.available`. When the flag is `false`, the two facts
+hold the zero value, and a condition such as `context.state.removed.contains("x")`
+never matches. The condition does not fail and the server does not warn.
+
+### Which write fills which fact
+
+| Write | `state.available` | `state.resources` and `state.removed` |
+| --- | --- | --- |
+| The restore of a state version (`rollback`, TFE-compatible API) | `true` | Filled from the current state and from the state version that the restore brings back |
+| The restore of a deleted unit (`rollback`, tool-neutral API) | `false` | Zero value: a deleted unit has no current state |
+| The lock of a workspace (`lock`) | `false` | Zero value: the new state does not exist yet |
+| A force-unlock (`unlock`) | `false` | Zero value |
+| The removal of a workspace or the final delete of a deleted unit (`delete`) | `false` | Zero value |
+| A state version with no lock (`unlocked-write`) | `false` | Zero value |
+
+The facts `context.plan.available` and `context.cost.available` are always
+`false` at `state.write`, because the CLI sends no plan.
+
+The server reads both states in the same request, just before it checks the
+gates, and it writes the facts that it read into the decision record. The restore writes only
+if the current state version is still the version that the facts came from. If
+another version became current after the gate decision, the server refuses the
+restore with `409` and the code `workspace.changed-concurrently`, and writes a
+denied audit entry. Repeat the restore to decide again.
+
+The server refuses a restore when it cannot read one of the two states: the
+store fails, the client encrypted the state, or the state holds a resource
+entry that the server cannot read. The refusal has the code `gate.unavailable`
+and a denied audit entry. No gate sees an empty fact for such a state. A server
+that runs with the gates off reads no state for a restore.
+
+The decision record of a restore holds `state.available`, `state.resources` and
+`state.removed` under the facts of the unit, so a person can see which facts a
+gate used.
 
 This gate body denies an unlock:
 

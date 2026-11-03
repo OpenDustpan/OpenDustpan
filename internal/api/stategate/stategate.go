@@ -195,6 +195,13 @@ type Write struct {
 	Operation gate.OperationKind
 	Action    identity.Action
 	Source    gate.SourceKind
+	// State is what the write changes in the state of the unit, or nil when
+	// the server holds no new state for the write. See gate.StateChange.
+	State *gate.StateChange
+	// StateErr is the error of the adapter when it could not read the state
+	// that the write changes, and the write needs it. The Admitter refuses
+	// the write and writes the audit entry. State must be nil then.
+	StateErr error
 }
 
 // Recorder writes the audit entry of a refused write. The adapter binds it to
@@ -232,6 +239,9 @@ const (
 	// NoRecorderText is the message when the adapter cannot write the audit
 	// entry of a refusal.
 	NoRecorderText = "The server cannot record a refusal of this write, so the write is refused."
+	// StateUnreadableText is the message when the server could not read the
+	// state that the write changes.
+	StateUnreadableText = "The server could not read the state that this write changes, so the write is refused."
 	// DeniedText is the message when the credential may not make the write.
 	DeniedText = "The credential of the caller may not make this write."
 )
@@ -279,6 +289,7 @@ func StateWrite(w Write) gate.StateWrite {
 		// A job token takes the lock of its plan with the operation kind
 		// lock. Every adapter computes the flag here, in the same way.
 		PlanLock: w.Operation == gate.OperationLock && w.Principal.JobTokenID() != "",
+		State:    w.State,
 	}
 }
 
@@ -325,6 +336,16 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 		log.ErrorContext(ctx, "state write refused: no audit recorder", slog.String("object", w.Unit.String()))
 
 		return refuse(ctx, log, w, nil, unavailable(errNoRecorder, "", NoRecorderText)), true
+	}
+
+	// The adapter could not read the state facts. A gate may read them, so the
+	// write is refused and no gate sees an empty fact. The refusal and the
+	// audit entry name the cause.
+	if w.StateErr != nil {
+		log.ErrorContext(ctx, "state write refused: the state could not be read",
+			slog.String("object", w.Unit.String()), slog.Any("error", w.StateErr))
+
+		return refuse(ctx, log, w, record, unavailable(w.StateErr, "", StateUnreadableText)), true
 	}
 
 	return Outcome{Allowed: false, Unavailable: nil, Refusal: nil, Code: "", Detail: ""}, false

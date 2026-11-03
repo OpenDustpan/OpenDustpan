@@ -819,6 +819,45 @@ func (stubWorkspaces) Restore(
 	return restored, nil
 }
 
+// ReadRollbackChange answers a change of the stub state: the current version
+// of the stub, no removed address and one resource.
+func (stubWorkspaces) ReadRollbackChange(
+	ctx context.Context, id workspace.ID, to workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	src, err := stubWorkspaces{}.ReadState(ctx, to)
+	if err != nil {
+		return workspace.RollbackChange{}, err
+	}
+
+	if src.Workspace != id {
+		return workspace.RollbackChange{}, workspace.ErrStateVersionNotFound
+	}
+
+	cur, err := stubWorkspaces{}.Current(ctx, id)
+	if err != nil {
+		return workspace.RollbackChange{}, err
+	}
+
+	return workspace.RollbackChange{Current: cur.ID, Resources: 1, Removed: []string{}}, nil
+}
+
+// RestoreExpecting restores as Restore does, and fails when expectCurrent is
+// not the current version of the stub.
+func (stubWorkspaces) RestoreExpecting(
+	ctx context.Context, id workspace.ID, from workspace.StateVersionID, by string, expectCurrent workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	cur, err := stubWorkspaces{}.Current(ctx, id)
+	if err != nil {
+		return workspace.StateVersion{}, err
+	}
+
+	if cur.ID != expectCurrent {
+		return workspace.StateVersion{}, workspace.ErrConcurrentModification
+	}
+
+	return stubWorkspaces{}.Restore(ctx, id, from, by)
+}
+
 // History serves the stub state of ws-test123 as a list of one, so the list
 // route test proves authorization, not the state rules.
 func (stubWorkspaces) History(
@@ -1850,6 +1889,18 @@ func (errorWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.Rea
 
 func (errorWorkspaces) Restore(
 	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, errTestInternal
+}
+
+func (errorWorkspaces) ReadRollbackChange(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	return workspace.RollbackChange{}, errTestInternal
+}
+
+func (errorWorkspaces) RestoreExpecting(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string, _ workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, errTestInternal
 }
