@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -96,7 +97,7 @@ func writerViolations(dir string) ([]string, error) {
 		return nil, fmt.Errorf("read directory %s: %w", dir, err)
 	}
 
-	owned := ownBodies()[filepath.Base(dir)]
+	owned := ownBodies()[relDirKey(dir)]
 
 	var out []string
 
@@ -129,12 +130,13 @@ func fileViolations(path string, bodies []string, owned map[string]string) ([]st
 	}
 
 	name := filepath.Base(path)
+	names := httpNames(file)
 
 	var out []string
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
-			out = append(out, callViolations(name, call)...)
+			out = append(out, callViolations(name, call, names)...)
 		}
 
 		if ts, ok := n.(*ast.TypeSpec); ok {
@@ -151,30 +153,94 @@ func fileViolations(path string, bodies []string, owned map[string]string) ([]st
 }
 
 // callViolations returns the violations of one call expression in file.
-func callViolations(file string, call *ast.CallExpr) []string {
+func callViolations(file string, call *ast.CallExpr, httpNames []string) []string {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return nil
 	}
 
-	if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "http" &&
+	if pkg, ok := sel.X.(*ast.Ident); ok && slices.Contains(httpNames, pkg.Name) &&
 		(sel.Sel.Name == "Error" || sel.Sel.Name == "NotFound") {
 		return []string{file + ": http.Error"}
 	}
 
 	if sel.Sel.Name == "WriteHeader" && len(call.Args) == 1 {
-		arg, ok := call.Args[0].(*ast.SelectorExpr)
-		if !ok {
-			return nil
-		}
-
-		if pkg, ok := arg.X.(*ast.Ident); ok && pkg.Name == "http" &&
-			!slices.Contains(okStatuses(), arg.Sel.Name) {
-			return []string{file + ": error status in WriteHeader"}
-		}
+		return statusViolations(file, call.Args[0], httpNames)
 	}
 
 	return nil
+}
+
+// statusViolations returns the violation of the status argument arg of a
+// WriteHeader call. A net/http status name must be a success status, and an
+// integer literal must be below 400.
+func statusViolations(file string, arg ast.Expr, httpNames []string) []string {
+	const violation = "error status in WriteHeader"
+
+	if sel, ok := arg.(*ast.SelectorExpr); ok {
+		pkg, isIdent := sel.X.(*ast.Ident)
+		if isIdent && slices.Contains(httpNames, pkg.Name) && !slices.Contains(okStatuses(), sel.Sel.Name) {
+			return []string{file + ": " + violation}
+		}
+
+		return nil
+	}
+
+	lit, ok := arg.(*ast.BasicLit)
+	if !ok || lit.Kind != token.INT {
+		return nil
+	}
+
+	// Base 0 reads hexadecimal, octal and underscore forms too. Defense in
+	// depth: a literal that cannot be read is flagged, so it cannot pass.
+	code, err := strconv.ParseInt(lit.Value, 0, 0)
+	if err != nil || code >= 400 {
+		return []string{file + ": " + violation}
+	}
+
+	return nil
+}
+
+// httpNames returns the local names of the net/http imports of file. An import
+// without a name uses "http". The blank and dot imports have no name that a
+// selector can use, so they are skipped.
+func httpNames(file *ast.File) []string {
+	var out []string
+
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != "net/http" {
+			continue
+		}
+
+		name := "http"
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+
+		if name == "_" || name == "." {
+			continue
+		}
+
+		out = append(out, name)
+	}
+
+	return out
+}
+
+// relDirKey returns the key of dir in the exemption lists: its path relative to
+// apiDir, with slashes. It returns "" when dir cannot be made relative, and no
+// list has the key "", so no exemption applies.
+//
+// Defense in depth: a directory outside apiDir gets no exemption. This check
+// does not rely on the callers, which pass only the directories of apiDir.
+func relDirKey(dir string) string {
+	rel, err := filepath.Rel(apiDir, dir)
+	if err != nil {
+		return ""
+	}
+
+	return filepath.ToSlash(rel)
 }
 
 // staleRows returns a message for each row of contract and bodies that no
@@ -237,12 +303,9 @@ func TestToolNeutralAdaptersUseProblemWriter(t *testing.T) {
 	contract := ownContractDirs()
 
 	for _, d := range dirs {
-		first, _, _ := strings.Cut(filepath.ToSlash(d), "/")
-		if _, ok := contract[d]; ok {
-			continue
-		}
-
-		if _, ok := contract[first]; ok {
+		// Defense in depth: the exemption needs the full relative path. An exempt
+		// top-level directory does not exempt its subdirectories.
+		if _, ok := contract[filepath.ToSlash(d)]; ok {
 			continue
 		}
 
@@ -348,6 +411,123 @@ func TestCheckPin(t *testing.T) {
 
 			if got := checkPin(tt.got, tt.pin); got != tt.want {
 				t.Errorf("checkPin(%d, %d) = %q, want %q", tt.got, tt.pin, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCallViolations checks the call rules on source text. Each source is parsed,
+// and its net/http names are read from its imports, as the gate does.
+func TestCallViolations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "aliased import with http.Error",
+			src:  `package a; import nethttp "net/http"; func f(w nethttp.ResponseWriter) { nethttp.Error(w, "x", 500) }`,
+			want: []string{"a.go: http.Error"},
+		},
+		{
+			name: "aliased import with an error status name",
+			src:  `package a; import nethttp "net/http"; func f(w nethttp.ResponseWriter) { w.WriteHeader(nethttp.StatusInternalServerError) }`,
+			want: []string{"a.go: error status in WriteHeader"},
+		},
+		{
+			name: "other package named http",
+			src:  `package a; import http "example.com/other"; func f(w http.ResponseWriter) { http.Error(w, "x", 500) }`,
+			want: nil,
+		},
+		{
+			name: "other package named http with a status name",
+			src:  `package a; import http "example.com/other"; func f(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) }`,
+			want: nil,
+		},
+		{
+			name: "literal 500",
+			src:  `package a; import "net/http"; func f(w http.ResponseWriter) { w.WriteHeader(500) }`,
+			want: []string{"a.go: error status in WriteHeader"},
+		},
+		{
+			name: "literal 204",
+			src:  `package a; import "net/http"; func f(w http.ResponseWriter) { w.WriteHeader(204) }`,
+			want: nil,
+		},
+		{
+			name: "literal 400 in hexadecimal",
+			src:  `package a; import "net/http"; func f(w http.ResponseWriter) { w.WriteHeader(0x190) }`,
+			want: []string{"a.go: error status in WriteHeader"},
+		},
+		{
+			name: "blank import has no name",
+			src:  `package a; import _ "net/http"; func f(w w) { http.Error(w, "x", 500) }`,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := parser.ParseFile(token.NewFileSet(), "a.go", tt.src, 0)
+			if err != nil {
+				t.Fatalf("parse fixture: %v", err)
+			}
+
+			names := httpNames(file)
+
+			var got []string
+
+			ast.Inspect(file, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					got = append(got, callViolations("a.go", call, names)...)
+				}
+
+				return true
+			})
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("callViolations = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRelDirKey checks that the exemption key is the path relative to apiDir.
+func TestRelDirKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		dir  string
+		want string
+	}{
+		{
+			name: "top-level directory",
+			dir:  filepath.Join(apiDir, "problem"),
+			want: "problem",
+		},
+		{
+			name: "subdirectory of an exempt adapter",
+			dir:  filepath.Join(apiDir, "pulumi", "sub"),
+			want: "pulumi/sub",
+		},
+		{
+			name: "directory outside apiDir",
+			dir:  t.TempDir(),
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := relDirKey(tt.dir); got != tt.want {
+				t.Errorf("relDirKey(%q) = %q, want %q", tt.dir, got, tt.want)
 			}
 		})
 	}
