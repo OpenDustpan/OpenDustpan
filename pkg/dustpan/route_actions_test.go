@@ -1,10 +1,14 @@
 package dustpan_test
 
 import (
+	"context"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -63,6 +67,17 @@ var rootPrefixes = map[string]string{
 	"/v1/modules/":    "tfe",
 }
 
+// rootMethods lists the patterns with a method that code may register
+// directly on the root mux without being on the public list, and the adapter
+// that owns each. A process without the api component serves the metrics of
+// the server adapter this way. Any other pattern with a method on the root mux
+// must be on the public list.
+//
+//nolint:gochecknoglobals // A fixed table; Go has no constant maps.
+var rootMethods = map[string]string{
+	"GET /api/server/metrics": "server",
+}
+
 // routeFacts is what the check reads about the routes of one server.
 type routeFacts struct {
 	// sources holds the patterns that each adapter lists.
@@ -73,6 +88,9 @@ type routeFacts struct {
 	declarations []dustpan.RouteDeclaration
 	// root holds the patterns registered directly on the root mux.
 	root []string
+	// mounted holds the paths that the root mux took from the patterns of an
+	// adapter.
+	mounted []string
 }
 
 // factsOf reads the route facts of a server.
@@ -89,6 +107,7 @@ func factsOf(t *testing.T, srv *dustpan.Server) routeFacts {
 		operations:   srv.Operations(),
 		declarations: declarations,
 		root:         srv.RootPatterns().Direct,
+		mounted:      srv.RootPatterns().Mounted,
 	}
 }
 
@@ -139,7 +158,9 @@ func checkFacts(public map[string]string, f routeFacts, served map[string]bool) 
 		}
 	}
 
-	return append(problems, checkRoot(f, public, rows, served)...)
+	problems = append(problems, checkRoot(f, public, rows, served)...)
+
+	return append(problems, checkMounted(f)...)
 }
 
 // checkPattern checks one route of an adapter against the public list, the
@@ -251,11 +272,7 @@ func checkRoot(
 
 		method, _, hasMethod := strings.Cut(pattern, " ")
 		if hasMethod && method != "" {
-			if _, isRow := rows[pattern]; !isRow {
-				problems = append(problems, fmt.Sprintf(
-					"root mux: %q is neither on the public list nor a row of an adapter", pattern,
-				))
-			}
+			problems = append(problems, checkRootMethod(pattern, rows)...)
 
 			continue
 		}
@@ -273,6 +290,90 @@ func checkRoot(
 			problems = append(problems, fmt.Sprintf(
 				"root mux: %q reaches the adapter %s, which lists no route under it", pattern, adapter,
 			))
+		}
+	}
+
+	return problems
+}
+
+// checkRootMethod checks a pattern with a method that code registered on the
+// root mux and that is not on the public list. The pattern must be on
+// rootMethods, and the row with the same pattern must belong to the adapter
+// that owns it. A row of another adapter with the same pattern proves nothing:
+// the root mux serves the pattern before the prefix of that adapter, with the
+// handler that code registered.
+func checkRootMethod(pattern string, rows map[string]dustpan.RouteDeclaration) []string {
+	owner, allowed := rootMethods[pattern]
+	if !allowed {
+		return []string{fmt.Sprintf(
+			"root mux: %q is neither on the public list nor on the list of root methods", pattern,
+		)}
+	}
+
+	if row, isRow := rows[pattern]; !isRow || row.Adapter != owner {
+		return []string{fmt.Sprintf("root mux: %q is not a row of its owner %s", pattern, owner)}
+	}
+
+	return nil
+}
+
+// checkMounted checks that each path that the root mux took from an adapter is
+// the path of a route that an adapter lists.
+func checkMounted(f routeFacts) []string {
+	listed := map[string]bool{}
+
+	for _, source := range f.sources {
+		for _, pattern := range source.Patterns {
+			if _, path, found := strings.Cut(pattern, " "); found {
+				listed[path] = true
+			}
+		}
+	}
+
+	var problems []string
+
+	for _, path := range f.mounted {
+		if !listed[path] {
+			problems = append(problems, fmt.Sprintf("root mux: the mounted path %q is listed by no adapter", path))
+		}
+	}
+
+	return problems
+}
+
+// wildcardPattern matches a wildcard of a path.
+var wildcardPattern = regexp.MustCompile(`\{[^}]*\}`)
+
+// probeUnauthenticated sends one request with no credential to each route of
+// the adapters that is not on the public list, through the real handler, and
+// returns one text for each route that answers with a success status. The
+// check does not rely on the rows or the root mux: it asks the served handler.
+func probeUnauthenticated(handler http.Handler, f routeFacts, public map[string]string) []string {
+	var problems []string
+
+	for _, source := range f.sources {
+		for _, pattern := range source.Patterns {
+			if _, isPublic := public[pattern]; isPublic {
+				continue
+			}
+
+			method, path, found := strings.Cut(pattern, " ")
+			if !found {
+				continue
+			}
+
+			req := httptest.NewRequestWithContext(
+				context.Background(), method, wildcardPattern.ReplaceAllString(path, "zz"), http.NoBody,
+			)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code >= 200 && rec.Code < 300 {
+				problems = append(problems, fmt.Sprintf(
+					"%s: a request with no credential got the status %d", pattern, rec.Code,
+				))
+			}
 		}
 	}
 
@@ -298,16 +399,25 @@ func listsUnder(sources []dustpan.RouteSource, adapter, prefix string) bool {
 	return false
 }
 
+// consoleDir returns a directory that holds a web console.
+func consoleDir(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
+		t.Fatalf("write the console index: %v", err)
+	}
+
+	return dir
+}
+
 // allShapes reads the route facts of the server shapes that differ in their
 // routes: every module on, the installation kind dev, the web console on, and
 // a process without the api component.
 func allShapes(t *testing.T) []routeFacts {
 	t.Helper()
 
-	console := t.TempDir()
-	if err := os.WriteFile(filepath.Join(console, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
-		t.Fatalf("write the console index: %v", err)
-	}
+	console := consoleDir(t)
 
 	return []routeFacts{
 		factsOf(t, newEveryModuleServer(t)),
@@ -334,6 +444,24 @@ func TestEveryRouteDeclaresActionsOrIsPublic(t *testing.T) {
 
 	if problems := checkRouteActions(publicRoutes, shapes...); len(problems) > 0 {
 		t.Fatalf("routes that break the rule:\n%s", strings.Join(problems, "\n"))
+	}
+}
+
+// TestNoRouteAnswersWithoutACredential proves with the served handler that a
+// route which is not on the public list refuses a request with no
+// credential. It sends the request through the whole handler chain, so it sees
+// a handler that code registered on the root mux in place of an adapter, and a
+// wrapper that answers for a route by itself.
+func TestNoRouteAnswersWithoutACredential(t *testing.T) {
+	t.Parallel()
+
+	for name, srv := range map[string]*dustpan.Server{
+		"every module": newEveryModuleServer(t),
+		"console":      newModuleServer(t, dustpan.WithConsoleDir(consoleDir(t))),
+	} {
+		if problems := probeUnauthenticated(srv.UngatedHandler(), factsOf(t, srv), publicRoutes); len(problems) > 0 {
+			t.Fatalf("%s: routes that answer with no credential:\n%s", name, strings.Join(problems, "\n"))
+		}
 	}
 }
 
@@ -444,7 +572,37 @@ func TestRouteActionsCheckFailsOnAMutation(t *testing.T) {
 			facts: mutate(base, func(f *routeFacts) {
 				f.root = append(f.root, "GET /zz-root")
 			}),
-			want: `root mux: "GET /zz-root" is neither on the public list nor a row of an adapter`,
+			want: `root mux: "GET /zz-root" is neither on the public list nor on the list of root methods`,
+		},
+		{
+			name:   "a root handler in place of a row of an adapter",
+			public: publicRoutes,
+			facts: mutate(base, func(f *routeFacts) {
+				f.root = append(f.root, "GET /api/user")
+			}),
+			want: `root mux: "GET /api/user" is neither on the public list nor on the list of root methods`,
+		},
+		{
+			name:   "a root method that another adapter owns",
+			public: publicRoutes,
+			facts: mutate(base, func(f *routeFacts) {
+				f.root = append(f.root, "GET /api/server/metrics")
+				f.declarations = slices.Clone(f.declarations)
+				for i := range f.declarations {
+					if f.declarations[i].Pattern == "GET /api/server/metrics" {
+						f.declarations[i].Adapter = "pulumi"
+					}
+				}
+			}),
+			want: `root mux: "GET /api/server/metrics" is not a row of its owner server`,
+		},
+		{
+			name:   "a mounted path that no adapter lists",
+			public: publicRoutes,
+			facts: mutate(base, func(f *routeFacts) {
+				f.mounted = append(f.mounted, "/api/dustpan/v1/zz-mounted")
+			}),
+			want: `the mounted path "/api/dustpan/v1/zz-mounted" is listed by no adapter`,
 		},
 		{
 			name:   "the console files removed from the list",
@@ -534,6 +692,7 @@ func mutate(f routeFacts, change func(*routeFacts)) routeFacts {
 		operations:   slices.Clone(f.operations),
 		declarations: slices.Clone(f.declarations),
 		root:         slices.Clone(f.root),
+		mounted:      slices.Clone(f.mounted),
 	}
 	change(&out)
 
