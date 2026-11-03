@@ -64,6 +64,11 @@ type Store struct {
 	// Tests set it to prove the live access tables stay locked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// swapHook, when set, runs in the swap transaction of a restore after
+	// the checks and before the first rename. Tests set it to hold a swap
+	// open and prove that the claim of the restore stays renewable. Nil in
+	// production.
+	swapHook func(ctx context.Context)
 	// betweenProfileReads, when set, runs once in the next read of a profile
 	// revision, between the read of the profile and the read of the revision,
 	// inside the snapshot. Tests run a restore swap there. Nil in production.
@@ -232,6 +237,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		stagingMu:           sync.Mutex{},
 		stagingSchema:       "",
 		keepAccessHook:      nil,
+		swapHook:            nil,
 		betweenProfileReads: atomic.Pointer[func()]{},
 		snapshotBegin:       snapshotBeginQuery(live),
 		beforeLockDelete:    nil,

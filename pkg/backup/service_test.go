@@ -375,6 +375,29 @@ func (f *fakeRegistry) StartBackup(ctx context.Context, r backup.Record, start d
 	return nil
 }
 
+// StartBackupClaimed starts r as StartBackup does, and claims the new
+// operation for claim in the same write.
+func (f *fakeRegistry) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	r.State = backup.StateRunning
+
+	op, err := f.mem.StartClaimedWith(ctx, start, claim, durabletest.Hooks{
+		Before: nil,
+		After: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+
+			return f.insertLocked(r)
+		},
+	})
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup %s: %w", r.ID, err)
+	}
+
+	return op, nil
+}
+
 // FinishBackup checks the fence first, as the port documents: the store
 // transaction checks the claim, the cancel and the step before the After
 // hook runs, and the hook then checks the row. A refused hook rolls the

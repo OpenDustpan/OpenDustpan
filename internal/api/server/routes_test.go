@@ -1715,6 +1715,14 @@ func (stubBackupRegistry) StartBackup(_ context.Context, _ backup.Record, _ dura
 	return nil
 }
 
+func (stubBackupRegistry) StartBackupClaimed(
+	_ context.Context, _ backup.Record, _ durable.StartRequest, _ durable.StartClaim,
+) (durable.Operation, error) {
+	var none durable.Operation
+
+	return none, nil
+}
+
 func (stubBackupRegistry) FailEndedBackups(_ context.Context, _ time.Time) (int, error) {
 	return 0, nil
 }

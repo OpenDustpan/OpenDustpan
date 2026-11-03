@@ -712,8 +712,10 @@ func canceledOf(res maintenance.EnterResult, err error) []string {
 }
 
 // stepPreBackup takes the backup of the live data as its own durable
-// operation, waits for it, and moves the restore to applying with its ID. A
-// takeover waits for the same backup.
+// operation, runs it on this step, waits for it, and moves the restore to
+// applying with its ID. The start claims the backup for this instance, so a
+// backup worker never runs it while this step does. A takeover waits for
+// the same backup, and runs it when no instance holds it.
 //
 // The backup records each live blob that it found missing or damaged, and
 // this step stores one audit event of the restore with the counts. Then it
@@ -761,14 +763,15 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 	return nil, nil
 }
 
-// startPreBackup starts the backup before restore in. A backup with that ID
+// startPreBackup starts the backup before restore in and runs it to its end
+// on this step. A backup with that ID
 // that exists already counts only when the input of its operation names this
 // restore: an earlier try of this step, before a takeover. Any other backup,
 // for example one that another restore or a person started, stops the
 // restore with ErrPreBackupForeign and its audit event: the restore must not
 // take the findings of a backup that did not read the live data for it.
 func (s *RestoreService) startPreBackup(ctx context.Context, fence durable.StepFence, in restoreInput) error {
-	err := s.backups.StartBeforeRestore(ctx, in.PreBackupID, in.ID)
+	err := s.backups.RunBeforeRestore(ctx, in.PreBackupID, in.ID)
 	if err == nil {
 		return nil
 	}

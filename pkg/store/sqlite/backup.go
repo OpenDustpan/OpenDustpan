@@ -107,6 +107,58 @@ func (s *Store) ListBackups(ctx context.Context) ([]backup.Record, error) {
 // when the ID is taken, and ErrAlreadyRunning when the unique index on
 // running backups refuses the row. A failed start changes nothing.
 func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error {
+	if err := checkBackupStart(r, start); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
+		_, err := startBackupTx(ctx, q, r, start)
+
+		return err
+	})
+}
+
+// StartBackupClaimed implements backup.Registry: it starts backup r as
+// StartBackup does, and claims the new operation for claim in the same
+// transaction. It returns the claimed operation.
+func (s *Store) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	if err := claim.Validate(); err != nil {
+		return durable.Operation{}, err
+	}
+
+	if err := checkBackupStart(r, start); err != nil {
+		return durable.Operation{}, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var op durable.Operation
+
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
+		started, err := startBackupTx(ctx, q, r, start)
+		if err != nil {
+			return err
+		}
+
+		op, err = claimStarted(ctx, q, started.ID, claim)
+
+		return err
+	})
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	return op, nil
+}
+
+// checkBackupStart checks the operation start of backup r before a start.
+func checkBackupStart(r backup.Record, start durable.StartRequest) error {
 	if err := start.Validate(); err != nil {
 		return err
 	}
@@ -119,41 +171,44 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return nil
+}
 
+// startBackupTx stores r as a running backup and starts the operation start,
+// in the transaction of q, and returns the new operation.
+func startBackupTx(
+	ctx context.Context, q *db.Queries, r backup.Record, start durable.StartRequest,
+) (durable.Operation, error) {
 	row := codec.ToBackupRow(r)
 
-	return s.inMinimumTx(ctx, func(q *db.Queries) error {
-		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
-			ID:          row.ID,
-			State:       string(backup.StateRunning),
-			StartedAtMs: row.StartedAtMs,
-			EndedAtMs:   row.EndedAtMs,
-			Target:      row.Target,
-			Error:       "",
-		})
-		if err != nil {
-			return fmt.Errorf("insert backup: %w", err)
-		}
-
-		if n == 0 {
-			return backupConflict(ctx, q, r.ID)
-		}
-
-		_, created, err := startDurable(ctx, q, start)
-		if err != nil {
-			return err
-		}
-
-		if !created {
-			// A new row needs a new operation: a taken key is a start of
-			// another backup.
-			return fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
-		}
-
-		return nil
+	n, err := q.CreateBackup(ctx, db.CreateBackupParams{
+		ID:          row.ID,
+		State:       string(backup.StateRunning),
+		StartedAtMs: row.StartedAtMs,
+		EndedAtMs:   row.EndedAtMs,
+		Target:      row.Target,
+		Error:       "",
 	})
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("insert backup: %w", err)
+	}
+
+	if n == 0 {
+		return durable.Operation{}, backupConflict(ctx, q, r.ID)
+	}
+
+	op, created, err := startDurable(ctx, q, start)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	if !created {
+		// A new row needs a new operation: a taken key is a start of
+		// another backup.
+		return durable.Operation{}, fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
+	}
+
+	return op, nil
 }
 
 // FinishBackup implements backup.Registry: it checks the fence f, records

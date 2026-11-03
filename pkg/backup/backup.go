@@ -386,6 +386,15 @@ type Registry interface {
 	// if the ID is taken, and ErrAlreadyRunning when another backup is
 	// running. A failed start changes nothing.
 	StartBackup(ctx context.Context, r Record, start durable.StartRequest) error
+	// StartBackupClaimed stores r and starts the operation start as
+	// StartBackup does, and claims the new operation for claim in the same
+	// transaction, with the rules of durable.StartClaim. It returns the
+	// claimed operation. It returns durable.ErrInvalid for a claim that
+	// fails Validate, and the errors of StartBackup. A failed start changes
+	// nothing.
+	StartBackupClaimed(
+		ctx context.Context, r Record, start durable.StartRequest, claim durable.StartClaim,
+	) (durable.Operation, error)
 	// FinishBackup moves the running backup id to state, which is
 	// StateSucceeded or StateFailed, with the error text and the end time,
 	// and records the step f.Step, in one transaction that checks the claim
