@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 // restoreEndAuditCases are the cases that prove the audit entry of the end of
@@ -98,10 +99,65 @@ func testRestoreEndAuditEntries(t *testing.T, newStore RestoreFactory) {
 			r, id, _ := cancelBefore(t, newStore, cancelSpec{step: tc.step, checkOnly: false, maintOf: nil})
 
 			endAuditWant{
-				outcome: audit.OutcomeFailure, has: "canceled before the swap", hasNot: "replaced",
+				outcome: audit.OutcomeFailure,
+				has:     "canceled before the swap. The live state, history and access tables did not change.",
+				hasNot:  "replaced",
 			}.check(t, r.restoreEntryOf(t, id))
 		})
 	}
+
+	t.Run("a restore that fails before the swap", func(t *testing.T) {
+		r := newWorkerRig(t, newStore)
+		putBlob(t, r.target, mustBlobKey(t, "blobs/"+r.seed.liveBlob.String()), []byte("corrupt"))
+
+		a := r.service(t, workerService{
+			owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil,
+		})
+		id := r.start(t, a, false, false)
+
+		if row := r.driveToEnd(t, a, id); row.State != backup.RestoreFailed {
+			t.Fatalf("restore of a corrupt backup = %q, want failed", row.State)
+		}
+
+		want := endAuditWant{
+			outcome: audit.OutcomeFailure,
+			has:     "failed before the swap. The live state, history and access tables did not change.",
+			hasNot:  "replaced",
+		}
+		want.check(t, r.restoreEntryOf(t, id))
+	})
+
+	t.Run("a restore whose operation ended with no end write", func(t *testing.T) {
+		r := newWorkerRig(t, newStore)
+		a := r.service(t, workerService{
+			owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil,
+		})
+		id := r.start(t, a, false, false)
+
+		// A holder claims the operation and ends it failed, with no write of
+		// the restore row: the sweep of the workers ends the row.
+		claim, err := r.ops.Claim(t.Context(), durable.ClaimRequest{
+			Owner: "instance-x", Kinds: []durable.Kind{backup.RestoreOperationKind}, MaxVersions: nil,
+			Lease: workerLease, TakeCanceled: false,
+		})
+		if err != nil {
+			t.Fatalf("claim the operation of restore %s: %v", id, err)
+		}
+
+		failure := durable.Failure{Message: "holder stopped", Final: true, RetryAfter: 0}
+		if err := r.ops.Fail(t.Context(), claim.Claim, failure); err != nil {
+			t.Fatalf("fail the operation of restore %s: %v", id, err)
+		}
+
+		r.driveToEnd(t, a, id)
+
+		want := endAuditWant{
+			outcome: audit.OutcomeFailure,
+			has:     "stopped before the swap. The live state, history and access tables did not change.",
+			hasNot:  "replaced",
+		}
+		want.check(t, r.restoreEntryOf(t, id))
+	})
 
 	t.Run("a restore that a takeover finishes", func(t *testing.T) {
 		r := newWorkerRig(t, newStore)
