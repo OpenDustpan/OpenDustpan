@@ -10,8 +10,8 @@ func checkDevOwner(string, os.FileInfo) error {
 	return nil
 }
 
-// devOneLink answers false for known on Windows: dev reset then refuses the
-// database, as it cannot count its names.
-func devOneLink(os.FileInfo) (one, known bool) {
-	return false, false
+// devOneLink answers false on Windows: dev reset then refuses the database,
+// as it cannot count its names.
+func devOneLink(os.FileInfo) bool {
+	return false
 }

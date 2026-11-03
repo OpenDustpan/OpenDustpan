@@ -78,7 +78,9 @@ func TestPostgresRegenerationIsStable(t *testing.T) {
 	}
 
 	conn := connectPostgres(t, base)
-	if dumpMajor, server := pgDumpMajor(t), serverMajor(context.WithoutCancel(t.Context()), t, conn); dumpMajor != server {
+
+	dumpMajor, server := pgDumpMajor(t), serverMajor(context.WithoutCancel(t.Context()), t, conn)
+	if dumpMajor != server {
 		t.Skipf("pg_dump %d differs from the PostgreSQL %d server: install postgresql-client-%d to run this test",
 			dumpMajor, server, server)
 	}

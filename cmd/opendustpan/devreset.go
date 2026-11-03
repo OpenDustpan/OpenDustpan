@@ -150,76 +150,103 @@ func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProc
 
 // checkDevReset answers the database of the data directory dir when dev reset
 // can move it aside, and the refusal otherwise. Each check refuses alone:
-// the directory must hold the key file of dev, no dev server may run on it,
-// the database must be a regular file, and its stored kind must be dev.
+// the directory must be a real directory with the key file of dev and no
+// live dev server, the database must be a regular file with one name, the
+// blob directory must be private, and the stored kind must be dev.
 func checkDevReset(ctx context.Context, dir string, proc devProcess) (string, error) {
-	// Defense in depth: inspectDevDir follows a symbolic link, so this check
-	// refuses a linked data directory on its own. The checks of the database
-	// below do not rely on it.
-	if dirInfo, statErr := os.Lstat(dir); statErr == nil && dirInfo.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("%s: %w", dir, errDevResetLinkedDir)
-	}
-
-	claimed, err := inspectDevDir(dir)
-	if err != nil {
+	if err := checkDevResetDir(dir, proc); err != nil {
 		return "", err
-	}
-
-	if !claimed {
-		return "", fmt.Errorf("%s: %w", dir, errDevResetNoDir)
-	}
-
-	if addr, ok := readDevAddr(dir); ok && devAddrLive(addr, proc.processStart) {
-		return "", fmt.Errorf("%s: %w", dir, errDevResetLive)
 	}
 
 	db := filepath.Join(dir, devDBName)
 
+	if err := checkDevResetDatabase(dir, db); err != nil {
+		return "", err
+	}
+
+	if err := checkDevResetBlobs(filepath.Join(dir, devBlobsName)); err != nil {
+		return "", err
+	}
+
+	if err := checkDevResetKind(ctx, db); err != nil {
+		return "", err
+	}
+
+	return db, nil
+}
+
+// checkDevResetDir refuses a data directory that is a symbolic link, that
+// holds no key file of dev, or that a live dev server uses.
+func checkDevResetDir(dir string, proc devProcess) error {
+	// Defense in depth: inspectDevDir follows a symbolic link, so this check
+	// refuses a linked data directory on its own. The checks of the database
+	// do not rely on it.
+	if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s: %w", dir, errDevResetLinkedDir)
+	}
+
+	claimed, err := inspectDevDir(dir)
+	if err != nil {
+		return err
+	}
+
+	if !claimed {
+		return fmt.Errorf("%s: %w", dir, errDevResetNoDir)
+	}
+
+	if addr, ok := readDevAddr(dir); ok && devAddrLive(addr, proc.processStart) {
+		return fmt.Errorf("%s: %w", dir, errDevResetLive)
+	}
+
+	return nil
+}
+
+// checkDevResetDatabase refuses a database at db that does not exist, that is
+// not a regular file, that has a second name, or that others can write.
+func checkDevResetDatabase(dir, db string) error {
 	info, err := os.Lstat(db)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("%s: %w", dir, errDevResetNoDatabase)
+		return fmt.Errorf("%s: %w", dir, errDevResetNoDatabase)
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", db, err)
+		return fmt.Errorf("read %s: %w", db, err)
 	}
 
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%s: %w", db, errDevResetNotFile)
+		return fmt.Errorf("%s: %w", db, errDevResetNotFile)
 	}
 
 	// Defense in depth: a hard link passes the regular-file check above. This
 	// check refuses a second name of the file on its own, and the kind check
-	// below does not rely on it.
-	if one, known := devOneLink(info); !known || !one {
-		return "", fmt.Errorf("%s: %w", db, errDevResetHardLink)
+	// does not rely on it.
+	if !devOneLink(info) {
+		return fmt.Errorf("%s: %w", db, errDevResetHardLink)
 	}
 
-	if checkErr := checkDevPath(db, info, plainFile); checkErr != nil {
-		return "", checkErr
-	}
+	return checkDevPath(db, info, plainFile)
+}
 
-	if blobsErr := checkDevResetBlobs(filepath.Join(dir, devBlobsName)); blobsErr != nil {
-		return "", blobsErr
-	}
-
+// checkDevResetKind refuses a database whose stored kind is not dev, also a
+// database that another process holds or whose kind cannot be read.
+func checkDevResetKind(ctx context.Context, db string) error {
 	// Defense in depth: StoredKind refuses a value that is not a known kind,
 	// and this check refuses every kind but dev, also a kind that a later
-	// change adds. The checks of the directory above do not decide it.
+	// change adds. The checks of the paths do not decide it.
 	kind, err := sqlite.StoredKind(ctx, db)
 	if errors.Is(err, sqlite.ErrInUse) {
-		return "", fmt.Errorf("%s: %w: %w", db, errDevResetInUse, err)
+		return fmt.Errorf("%s: %w: %w", db, errDevResetInUse, err)
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("%s: %w: %w", db, errDevResetUnknownKind, err)
+		return fmt.Errorf("%s: %w: %w", db, errDevResetUnknownKind, err)
 	}
 
 	if kind != installation.KindDev {
-		return "", fmt.Errorf("%s: opendustpan %s made this database: %w", db, commandOfKind(kind), errDevResetKind)
+		return fmt.Errorf("%s: opendustpan %s made this database: %w", db, commandOfKind(kind), errDevResetKind)
 	}
 
-	return db, nil
+	return nil
 }
 
 // checkDevResetBlobs refuses the blob directory at path unless it is a real

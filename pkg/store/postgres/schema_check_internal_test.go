@@ -89,7 +89,8 @@ func TestVerifyRecordedRefusesARowThatIsNotASum(t *testing.T) {
 				t.Fatalf("embedded migrations: %v", err)
 			}
 
-			if _, execErr := s.pool.Exec(t.Context(), `UPDATE schema_migrations SET sha256 = $1`, value); execErr != nil {
+			_, execErr := s.pool.Exec(t.Context(), `UPDATE schema_migrations SET sha256 = $1`, value)
+			if execErr != nil {
 				t.Fatalf("record %q: %v", value, execErr)
 			}
 

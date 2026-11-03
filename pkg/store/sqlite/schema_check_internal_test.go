@@ -84,33 +84,43 @@ func TestVerifyRecordedRefusesARowThatIsNotASum(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-
-			s, err := Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-			if err != nil {
-				t.Fatalf("open: %v", err)
-			}
-
-			t.Cleanup(func() {
-				if closeErr := s.Close(); closeErr != nil {
-					t.Errorf("close: %v", closeErr)
-				}
-			})
-
-			all, err := migrate.Load(migrations, "migrations")
-			if err != nil {
-				t.Fatalf("embedded migrations: %v", err)
-			}
-
-			if _, execErr := s.conn.ExecContext(t.Context(), `UPDATE schema_migrations SET sha256 = ?`, value); execErr != nil {
-				t.Fatalf("record %q: %v", value, execErr)
-			}
-
-			embedded := all[0]
-			embedded.SHA256 = value
-
-			if err := verifyRecorded(t.Context(), s.conn, []migrate.Migration{embedded}); !errors.Is(err, schema.ErrSchemaDiverged) {
-				t.Fatalf("verifyRecorded of %q = %v, want %v", value, err, schema.ErrSchemaDiverged)
-			}
+			checkVerifyRefusesTheSum(t, value)
 		})
+	}
+}
+
+// checkVerifyRefusesTheSum records value as the SHA-256 of the baseline of a
+// new database and fails the test unless verifyRecorded refuses an embedded
+// baseline with the same value.
+func checkVerifyRefusesTheSum(t *testing.T, value string) {
+	t.Helper()
+
+	s, err := Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
+
+	all, err := migrate.Load(migrations, "migrations")
+	if err != nil {
+		t.Fatalf("embedded migrations: %v", err)
+	}
+
+	_, execErr := s.conn.ExecContext(t.Context(), `UPDATE schema_migrations SET sha256 = ?`, value)
+	if execErr != nil {
+		t.Fatalf("record %q: %v", value, execErr)
+	}
+
+	embedded := all[0]
+	embedded.SHA256 = value
+
+	err = verifyRecorded(t.Context(), s.conn, []migrate.Migration{embedded})
+	if !errors.Is(err, schema.ErrSchemaDiverged) {
+		t.Fatalf("verifyRecorded of %q = %v, want %v", value, err, schema.ErrSchemaDiverged)
 	}
 }
