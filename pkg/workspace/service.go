@@ -173,6 +173,16 @@ type StateStore interface {
 	// be current. Callers record the attempt key with RecordUploadAttempt
 	// before finalizing, so the row names sv.Content when the write runs.
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
+	// FinalizeStateVersionExpecting works as FinalizeStateVersion, and also
+	// checks in the same transaction, after it locks the workspace row, that
+	// the current state version of the workspace is expect (the empty ID when
+	// the workspace has no state), else ErrConcurrentModification. A write by
+	// the same holder under the same lock cannot slip in between a read of the
+	// current version and this finalize. The expected version adds a check and
+	// removes none. ErrConcurrentModification means nothing was written.
+	FinalizeStateVersionExpecting(
+		ctx context.Context, sv StateVersion, fence namespace.Fence, expect StateVersionID,
+	) error
 	// FenceAndUnlock releases the lock of w and makes sv the workspace's current
 	// state, in one fenced transaction. sv is a finalized fence version of w:
 	// it names the content, the new lineage, its serial and FenceBy. The
@@ -1765,13 +1775,9 @@ func (s *Service) restoreChecked(
 		return StateVersion{}, err
 	}
 
-	var sv StateVersion
-
-	if err = s.checkExpectedCurrent(ctx, id, expect); err == nil {
-		sv, err = s.copyState(ctx, w, src)
-		if errors.Is(err, ErrAlreadyRestored) {
-			sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
-		}
+	sv, err := s.copyState(ctx, w, src, expect)
+	if errors.Is(err, ErrAlreadyRestored) {
+		sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
 	}
 
 	if !release {
@@ -2099,7 +2105,14 @@ func (s *Service) mapRestoreLockError(ctx context.Context, id ID, holder string,
 // version that records src. The pending row records the attempt before the
 // copy, and the blob lands before the finalize, so a committed version
 // never names a missing blob.
-func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) (StateVersion, error) {
+//
+// A non-nil expect names the current version that the caller read. The finalize
+// checks it in its own transaction, so a write by the same holder under the
+// same lock cannot slip in between: a mismatch gives ErrConcurrentModification
+// and writes nothing.
+func (s *Service) copyState(
+	ctx context.Context, w Workspace, src StateVersion, expect *StateVersionID,
+) (StateVersion, error) {
 	outputs, err := s.openRestoreOutputs(ctx, w, src)
 	if err != nil {
 		return StateVersion{}, err
@@ -2161,7 +2174,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Size = size
 	sv.Content = key
 
-	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
+	if err := s.finalizeRestore(ctx, sv, fence, expect); err != nil {
 		return StateVersion{}, s.refusedRestore(ctx, w, sv, fence, err)
 	}
 
@@ -2170,6 +2183,18 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Outputs = outputs
 
 	return sv, nil
+}
+
+// finalizeRestore finalizes the restored version sv. With expect set, it also
+// checks the current version in the finalize transaction.
+func (s *Service) finalizeRestore(
+	ctx context.Context, sv StateVersion, fence namespace.Fence, expect *StateVersionID,
+) error {
+	if expect == nil {
+		return s.states.FinalizeStateVersion(ctx, sv, fence)
+	}
+
+	return s.states.FinalizeStateVersionExpecting(ctx, sv, fence, *expect)
 }
 
 // refusedRestore cleans up after the failed finalize of the restored version
@@ -2183,7 +2208,7 @@ func (s *Service) refusedRestore(
 	err := fmt.Errorf("finalize restored state %s: %w", sv.ID, finalizeErr)
 
 	switch {
-	case errors.Is(err, ErrAlreadyRestored):
+	case errors.Is(err, ErrAlreadyRestored), errors.Is(err, ErrConcurrentModification):
 		return errors.Join(
 			err,
 			s.blobs.delete(ctx, w.NamespaceID, w.ID, sv.Content),
@@ -3056,24 +3081,4 @@ func (s *Service) repeatedForceUnlock(
 	}
 
 	return w, false, nil
-}
-
-// checkExpectedCurrent fails with ErrConcurrentModification when expect is set
-// and the current state version is another one. The caller holds the lock of
-// the workspace, so no write can change the current version after the check.
-func (s *Service) checkExpectedCurrent(ctx context.Context, id ID, expect *StateVersionID) error {
-	if expect == nil {
-		return nil
-	}
-
-	current, err := s.states.CurrentStateVersion(ctx, id)
-	if err != nil {
-		return fmt.Errorf("current state of %s: %w", id, err)
-	}
-
-	if current.ID != *expect {
-		return fmt.Errorf("restore %s: %w: %w", id, ErrConcurrentModification, errStateChanged)
-	}
-
-	return nil
 }

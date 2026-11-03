@@ -80,8 +80,8 @@ with the `context.` prefix:
 | `context.document.truncated` | The fact paths that the server emptied to fit the facts into 256 KiB. At `state.write` the only path is `unit.labels`. An empty list means that the server emptied nothing. |
 | `context.plan.available` | Always `false`: the CLI sends no plan. |
 | `context.state.available` | `true` when the server read the current state and the new state for this write. Only the restore of a state version fills it. For each other write it is `false` (see the table below). |
-| `context.state.resources` | The count of resources in the new state. `0` when `context.state.available` is `false`. |
-| `context.state.removed` | The resource addresses in the current state and not in the new state, without an instance key, sorted. An empty list when `context.state.available` is `false`. |
+| `context.state.resources` | The count of resource instances in the new state. A resource with `count` or `for_each` counts once for each index key. `0` when `context.state.available` is `false`. |
+| `context.state.removed` | The instance addresses in the current state and not in the new state, sorted. An address has the index key of its instance, for example `aws_instance.web[1]` or `aws_instance.web["a"]`, so the removal of `web[1]` to `web[9]` shows when `web[0]` stays. An empty list when `context.state.available` is `false`. A resource block with no instance (`count = 0`) has no address. |
 
 A gate that reads `context.state.resources` or `context.state.removed` must
 also read `context.state.available`. When the flag is `false`, the two facts
@@ -105,18 +105,28 @@ The facts `context.plan.available` and `context.cost.available` are always
 
 The server reads both states in the same request, just before it checks the
 gates, and it writes the facts that it read into the decision record. The restore writes only
-if the current state version is still the version that the facts came from. If
-another version became current after the gate decision, the server refuses the
-restore with `409` and the code `workspace.changed-concurrently`, and writes a
-denied audit entry. Repeat the restore to decide again.
+if the current state version is still the version that the facts came from. The
+store checks this in the same transaction as the write, so a write by the same
+lock holder cannot slip in between. If another version became current after the
+gate decision, the server refuses the restore with `409` and the code
+`workspace.changed-concurrently`, and writes a denied audit entry. Repeat the
+restore to decide again.
 
 A state that the client encrypted is a known condition, not an error: the
 restore goes on, `context.state.available` is `false`, and the warning above is
-in the decision record. The server refuses a restore when it cannot read one of
-the two states for another reason: the store fails, the state holds a resource
-entry that the server cannot read, or the state is above the size limit. The
-refusal has the code `gate.unavailable` and a denied audit entry. No gate sees
-an empty fact for such a state. A server that runs with the gates off reads no
+in the decision record. The server reads a state as encrypted only when it is
+exactly the encryption envelope of OpenTofu: the members `meta`,
+`encrypted_data` and `encryption_version`, and the plain `serial` and
+`lineage`. A document that has the member `encrypted_data` and any other shape
+is refused as not valid, so a plaintext state never reads as encrypted.
+
+The server refuses a restore when it cannot read one of the two states for
+another reason: the store fails, the state holds a resource or an instance
+entry that the server cannot read, or the state is above a limit. A state above
+the size limit (`--max-state-bytes`), or with more than 100,000 resource
+instances, gives the code `gate.limit`. Any other failure gives
+`gate.unavailable`. Each refusal writes a denied audit entry. No gate sees an
+empty fact for such a state. A server that runs with the gates off reads no
 state for a restore.
 
 The decision record of a restore holds `state.available`, `state.resources` and

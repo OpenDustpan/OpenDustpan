@@ -651,6 +651,21 @@ func (m *memStore) FenceAndUnlock(
 func (m *memStore) FinalizeStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
+	return memFinalize(m, sv, fence, nil)
+}
+
+// FinalizeStateVersionExpecting finalizes as FinalizeStateVersion does, and
+// also checks the current version under the same lock.
+func (m *memStore) FinalizeStateVersionExpecting(
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	return memFinalize(m, sv, fence, &expect)
+}
+
+// memFinalize finalizes sv, and checks the current version when expect is set.
+func memFinalize(
+	m *memStore, sv workspace.StateVersion, fence namespace.Fence, expect *workspace.StateVersionID,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -687,6 +702,10 @@ func (m *memStore) FinalizeStateVersion(
 
 	if err := checkMemFinalize(m, w, sv); err != nil {
 		return err
+	}
+
+	if expect != nil && m.current[sv.Workspace] != *expect {
+		return workspace.ErrConcurrentModification
 	}
 
 	m.versions[sv.ID] = sv
@@ -1129,6 +1148,13 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 func newFixtureGuarded(t *testing.T, blobs blob.Store, guard blobguard.Watch) fixture {
 	t.Helper()
 
+	return newFixtureSized(t, blobs, guard, 64)
+}
+
+// newFixtureSized is newFixtureGuarded with a state size limit of maxState.
+func newFixtureSized(t *testing.T, blobs blob.Store, guard blobguard.Watch, maxState int64) fixture {
+	t.Helper()
+
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
@@ -1163,7 +1189,7 @@ func newFixtureGuarded(t *testing.T, blobs blob.Store, guard blobguard.Watch) fi
 		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
-		MaxStateBytes:      64,
+		MaxStateBytes:      maxState,
 		MaxPendingVersions: 0,
 		Retention:          0,
 	})
@@ -4267,6 +4293,12 @@ func (f fencedStates) FenceAndUnlock(
 
 func (f fencedStates) FinalizeStateVersion(
 	_ context.Context, _ workspace.StateVersion, _ namespace.Fence,
+) error {
+	return namespace.ErrFenced
+}
+
+func (f fencedStates) FinalizeStateVersionExpecting(
+	_ context.Context, _ workspace.StateVersion, _ namespace.Fence, _ workspace.StateVersionID,
 ) error {
 	return namespace.ErrFenced
 }

@@ -9,8 +9,11 @@ import (
 )
 
 const (
-	stateAB = `{"resources":[{"type":"t","name":"a"},{"type":"t","name":"b"}]}`
-	stateA  = `{"resources":[{"type":"t","name":"a"}]}`
+	// envelope is the state that the client encrypted: the envelope of
+	// OpenTofu, and no resource.
+	envelope = `{"meta":{},"encrypted_data":"x","encryption_version":"v0"}`
+	stateAB  = `{"resources":[{"type":"t","name":"a","instances":[{}]},{"type":"t","name":"b","instances":[{}]}]}`
+	stateA   = `{"resources":[{"type":"t","name":"a","instances":[{}]}]}`
 )
 
 // pushStates pushes the contents in order and returns the versions.
@@ -27,6 +30,14 @@ func pushStates(t *testing.T, f fixture, contents ...string) []workspace.StateVe
 	mustUnlock(t, f)
 
 	return out
+}
+
+// newRollbackFixture returns a fixture whose state limit holds the states of
+// these tests.
+func newRollbackFixture(t *testing.T) fixture {
+	t.Helper()
+
+	return newFixtureSized(t, openFixtureBlobs(t), nil, 512)
 }
 
 // TestReadRollbackChange proves that the change comes from the two states: the
@@ -51,7 +62,7 @@ func TestReadRollbackChange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t)
+			f := newRollbackFixture(t)
 			versions := pushStates(t, f, tc.first, tc.last)
 
 			got, err := f.svc.ReadRollbackChange(t.Context(), f.ws.ID, versions[0].ID)
@@ -80,13 +91,34 @@ func TestReadRollbackChangeFailsClosed(t *testing.T) {
 	}{
 		{"a resource entry that the server cannot read", `{"resources":[{"x":1}]}`, stateA, workspace.ErrInvalidState},
 		{"a resource list of the wrong type", `{"resources":"x"}`, stateA, workspace.ErrInvalidState},
+		{
+			"a plaintext restored state with an encrypted_data member",
+			`{"encrypted_data":"x","resources":[{"type":"t","name":"a"}]}`, stateA, workspace.ErrInvalidState,
+		},
+		{
+			"a plaintext current state with an encrypted_data member",
+			stateA, `{"encrypted_data":"x","resources":[{"type":"t","name":"a"}]}`, workspace.ErrInvalidState,
+		},
+		{"encrypted_data alone is no envelope", `{"encrypted_data":"x"}`, stateA, workspace.ErrInvalidState},
+		{
+			"an envelope with another member", `{"meta":{},"encrypted_data":"x","encryption_version":"v0","a":1}`,
+			stateA, workspace.ErrInvalidState,
+		},
+		{
+			"an envelope whose encrypted_data is not text", `{"meta":{},"encrypted_data":{},"encryption_version":"v0"}`,
+			stateA, workspace.ErrInvalidState,
+		},
+		{
+			"an instance list of the wrong type", `{"resources":[{"type":"t","name":"a","instances":"x"}]}`, stateA,
+			workspace.ErrInvalidState,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t)
+			f := newRollbackFixture(t)
 			versions := pushStates(t, f, tc.first, tc.last)
 
 			got, err := f.svc.ReadRollbackChange(t.Context(), f.ws.ID, versions[0].ID)
@@ -107,7 +139,7 @@ func TestReadRollbackChangeFailsClosed(t *testing.T) {
 func TestReadRollbackChangeRefusesOtherWorkspaceAndMissingState(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newRollbackFixture(t)
 	versions := pushStates(t, f, stateA, stateAB)
 
 	name, err := workspace.ParseName("other")
@@ -139,7 +171,7 @@ func TestRestoreExpecting(t *testing.T) {
 	t.Run("the expected current version restores", func(t *testing.T) {
 		t.Parallel()
 
-		f := newFixture(t)
+		f := newRollbackFixture(t)
 		versions := pushStates(t, f, stateA, stateAB)
 
 		restored, err := f.svc.RestoreExpecting(t.Context(), f.ws.ID, versions[0].ID, "alice", versions[1].ID)
@@ -154,7 +186,7 @@ func TestRestoreExpecting(t *testing.T) {
 	t.Run("another current version writes nothing and releases the lock", func(t *testing.T) {
 		t.Parallel()
 
-		f := newFixture(t)
+		f := newRollbackFixture(t)
 		versions := pushStates(t, f, stateA, stateAB, stateA)
 
 		// The decision read versions[1] as current; versions[2] became current after.
@@ -170,7 +202,7 @@ func TestRestoreExpecting(t *testing.T) {
 	t.Run("an empty expected version is refused", func(t *testing.T) {
 		t.Parallel()
 
-		f := newFixture(t)
+		f := newRollbackFixture(t)
 		versions := pushStates(t, f, stateA, stateAB)
 
 		if _, err := f.svc.RestoreExpecting(t.Context(), f.ws.ID, versions[0].ID, "alice", ""); !errors.Is(
@@ -193,15 +225,15 @@ func TestReadRollbackChangeOfAnEncryptedState(t *testing.T) {
 		name        string
 		first, last string
 	}{
-		{"a restored state that the client encrypted", `{"encrypted_data":"x"}`, stateA},
-		{"a current state that the client encrypted", stateA, `{"encrypted_data":"x"}`},
+		{"a restored state that the client encrypted", envelope, stateA},
+		{"a current state that the client encrypted", stateA, envelope},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t)
+			f := newRollbackFixture(t)
 			versions := pushStates(t, f, tc.first, tc.last)
 
 			got, err := f.svc.ReadRollbackChange(t.Context(), f.ws.ID, versions[0].ID)

@@ -575,3 +575,23 @@ func TestStateWriteCarriesTheStateChange(t *testing.T) {
 		t.Fatalf("StateWrite().State = %+v, want %+v", got.State, w.State)
 	}
 }
+
+// TestAdmitRefusesAStateAboveALimitWithTheLimitCode proves that a state read
+// error that wraps gate.ErrLimit gives the code gate.limit, with the audit
+// entry, and that the guard is not asked.
+func TestAdmitRefusesAStateAboveALimitWithTheLimitCode(t *testing.T) {
+	t.Parallel()
+
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+	w.StateErr = fmt.Errorf("%w: the state is above the limit", gate.ErrLimit)
+
+	out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)
+
+	checkRefused(t, out, rec, "gate.limit")
+
+	if len(guard.asked()) != 0 {
+		t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
+	}
+}

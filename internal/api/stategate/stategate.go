@@ -345,10 +345,21 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 		log.ErrorContext(ctx, "state write refused: the state could not be read",
 			slog.String("object", w.Unit.String()), slog.Any("error", w.StateErr))
 
-		return refuse(ctx, log, w, record, unavailable(w.StateErr, "", StateUnreadableText)), true
+		return refuse(ctx, log, w, record, stateUnreadable(w.StateErr)), true
 	}
 
 	return Outcome{Allowed: false, Unavailable: nil, Refusal: nil, Code: "", Detail: ""}, false
+}
+
+// stateUnreadable returns the refusal of a write whose state the adapter could
+// not read. A state above a limit gives gate.limit, because the cause is a
+// limit and not a fault. Any other cause gives gate.unavailable.
+func stateUnreadable(cause error) *gate.RefusalError {
+	if errors.Is(cause, gate.ErrLimit) {
+		return &gate.RefusalError{Err: cause, Record: "", Messages: []string{StateUnreadableText}}
+	}
+
+	return unavailable(cause, "", StateUnreadableText)
 }
 
 // guardError returns the Outcome of a guard error. Every guard error refuses
