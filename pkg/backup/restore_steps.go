@@ -1422,11 +1422,11 @@ func canceledAuditObject(id RestoreID, token int64, unit string) string {
 }
 
 // endBeforeSwapAuditObject names the end of restore in before its swap, for
-// its audit entry. It makes no claim about the access tables: the swap did
-// not run, so the live data did not change.
+// its audit entry. The swap did not run, so the live state, the history and
+// the access tables did not change. The text names no table as replaced.
 func endBeforeSwapAuditObject(in restoreInput, end string) string {
 	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() + " " + end +
-		" before the swap, the live data did not change"
+		" before the swap. The live state, history and access tables did not change."
 }
 
 // restoreAuditObject names one restore that swapped for its audit entry, with
