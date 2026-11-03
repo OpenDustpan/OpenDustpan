@@ -295,31 +295,9 @@ func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
 // the ID.
 func (s *Service) Await(ctx context.Context, id ID) (Record, error) {
 	for {
-		// An operation that ended with no finish write (a step that
-		// panicked, too many holders) leaves its row running. When no worker
-		// runs, nothing else marks it failed, so the loop does it before it
-		// reads the row.
-		if _, err := s.registry.FailEndedBackups(ctx, s.now().UTC()); err != nil {
-			if ctx.Err() != nil {
-				return Record{}, fmt.Errorf("wait for backup %s: %w", id, ctx.Err())
-			}
-
-			return Record{}, fmt.Errorf("fail ended backups while backup %s runs: %w", id, err)
-		}
-
-		row, err := s.registry.GetBackup(ctx, id)
-		if err != nil {
-			return Record{}, fmt.Errorf("read backup %s: %w", id, err)
-		}
-
-		switch row.State {
-		case StateSucceeded:
-			return row, nil
-		case StateFailed:
-			return Record{}, fmt.Errorf("%w: %s", ErrFailed, row.Error)
-		case StateRunning:
-		default:
-			return Record{}, fmt.Errorf("backup %s has the state %q: %w", id, row.State, ErrCorrupt)
+		row, ended, err := s.readEnd(ctx, id)
+		if ended || err != nil {
+			return row, err
 		}
 
 		// A caller that stopped claims nothing: a claim would only end in a
@@ -573,6 +551,41 @@ func (s *Service) StartedForRestore(ctx context.Context, id ID) (RestoreID, erro
 	}
 
 	return "", nil
+}
+
+// readEnd reads the row of backup id for Await. ended is true, with the
+// result of Await, when the backup ended or the row cannot be read. It is
+// false while the backup runs.
+func (s *Service) readEnd(ctx context.Context, id ID) (Record, bool, error) {
+	// An operation that ended with no finish write (a step that panicked,
+	// too many holders) leaves its row running. When no worker runs,
+	// nothing else marks it failed, so the wait does it before it reads the
+	// row.
+	if _, err := s.registry.FailEndedBackups(ctx, s.now().UTC()); err != nil {
+		if ctx.Err() != nil {
+			return Record{}, true, fmt.Errorf("wait for backup %s: %w", id, ctx.Err())
+		}
+
+		return Record{}, true, fmt.Errorf("fail ended backups while backup %s runs: %w", id, err)
+	}
+
+	row, err := s.registry.GetBackup(ctx, id)
+	if err != nil {
+		return Record{}, true, fmt.Errorf("read backup %s: %w", id, err)
+	}
+
+	switch row.State {
+	case StateSucceeded:
+		return row, true, nil
+	case StateFailed:
+		return Record{}, true, fmt.Errorf("%w: %s", ErrFailed, row.Error)
+	case StateRunning:
+		var running Record
+
+		return running, false, nil
+	default:
+		return Record{}, true, fmt.Errorf("backup %s has the state %q: %w", id, row.State, ErrCorrupt)
+	}
 }
 
 // restoreOfInput returns the restore that the operation input raw of backup id

@@ -137,30 +137,15 @@ func testBackupStartClaimedTakeover(t *testing.T, newStore BackupFactory) {
 	}
 
 	ops := s.DurableOperationsPort()
-	req := durable.ClaimRequest{
+	taken := waitForClaim(t, ops, durable.ClaimRequest{
 		Owner: "worker", Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: backupLongLease,
 		TakeCanceled: false,
-	}
-	deadline := time.Now().Add(startClaimExpiryWait)
+	})
 
-	for {
-		taken, claimErr := ops.Claim(ctx, req)
-		if claimErr == nil {
-			if taken.ID != started.ID || taken.Attempt != 2 || taken.Claim.Owner != "worker" ||
-				taken.Claim.Token <= started.Claim.Token {
-				t.Fatalf("takeover = %+v, want the second attempt of %s with a token above %d", taken, started.ID,
-					started.Claim.Token)
-			}
-
-			break
-		}
-
-		if !errors.Is(claimErr, durable.ErrNoWork) || time.Now().After(deadline) {
-			t.Fatalf("claim after the expiry of the claimed start = %v, want the operation within %v", claimErr,
-				startClaimExpiryWait)
-		}
-
-		time.Sleep(startClaimPoll)
+	if taken.ID != started.ID || taken.Attempt != 2 || taken.Claim.Owner != "worker" ||
+		taken.Claim.Token <= started.Claim.Token {
+		t.Fatalf("takeover = %+v, want the second attempt of %s with a token above %d", taken, started.ID,
+			started.Claim.Token)
 	}
 
 	// The starter lost its claim: its renewal is refused.
@@ -170,5 +155,31 @@ func testBackupStartClaimedTakeover(t *testing.T, newStore BackupFactory) {
 
 	if got := mustGetBackup(t, s, r.ID); got.State != backup.StateRunning {
 		t.Fatalf("backup row after the takeover = %+v, want running", got)
+	}
+}
+
+// waitForClaim claims with req until an operation is due, and fails after
+// startClaimExpiryWait.
+func waitForClaim(t *testing.T, ops durable.Store, req durable.ClaimRequest) durable.Operation {
+	t.Helper()
+
+	deadline := time.Now().Add(startClaimExpiryWait)
+
+	for {
+		taken, err := ops.Claim(t.Context(), req)
+		if err == nil {
+			return taken
+		}
+
+		if !errors.Is(err, durable.ErrNoWork) || time.Now().After(deadline) {
+			t.Fatalf("claim after the expiry of the claimed start = %v, want the operation within %v", err,
+				startClaimExpiryWait)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("wait for the expiry of the claimed start: %v", t.Context().Err())
+		case <-time.After(startClaimPoll):
+		}
 	}
 }
