@@ -261,22 +261,26 @@ type swapNames struct {
 }
 
 // finishSwap ends the swap in tx: it keeps the audit chain state of this
-// installation, applies the journaled revocations again, drops the control
-// schema of the staging area, fences the restored schema live (see
-// fenceRestored), keeps the durable control tables of the live installation,
-// and drops the schema previous when names.drop says so. The installation,
-// backups, restores and revocation journal tables live in the control
-// schema, which the swap never renames, so they stay across the swap with no
-// copy.
+// installation, keeps the durable control tables of the live installation,
+// applies the journaled revocations again, drops the schema previous when
+// names.drop says so and the control schema of the staging area, and fences
+// the restored schema live (see fenceRestored). The installation, backups,
+// restores and revocation journal tables live in the control schema, which
+// the swap never renames, so they stay across the swap with no copy.
 //
-// The copy of the durable control tables comes last, after all other work of
-// the swap. Its lock holds every write to the durable tables, also the claim
-// renewal of the restore that runs this swap. So the renewal waits only for
-// the copy and the end of the transaction, not for the whole swap.
+// The check of the step fence under the lock of the row of the operation
+// comes after all of this, at the end of the swap transaction. So a renewal
+// of the claim of the restore does not wait for the checks of the staging
+// area and the renames: it waits only from the copy of the durable control
+// tables, which takes their lock, to the commit.
 func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) error {
 	live, previous, staging := names.live, names.previous, names.staging
 
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
+	if err := keepControlTables(ctx, tx, live, previous); err != nil {
 		return err
 	}
 
@@ -287,38 +291,21 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) erro
 		return err
 	}
 
-	if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
-		return fmt.Errorf("drop staging control schema: %w", err)
-	}
-
-	if err := fenceRestored(ctx, tx, live); err != nil {
-		return err
-	}
-
-	return keepControlAndDrop(ctx, tx, names)
-}
-
-// keepControlAndDrop keeps the durable control tables of the live
-// installation in the restored schema, and then drops the schema previous
-// when names.drop says so. The copy reads the schema previous, so the drop
-// comes after it.
-//
-// The drop stays in the swap transaction. It waits for each statement in
-// flight that still reads an old table, so no statement reads the old tables
-// after the swap commits. A restore that runs as a durable operation keeps
-// the old schema for its cleanup step instead.
-func keepControlAndDrop(ctx context.Context, tx pgx.Tx, names swapNames) error {
-	if err := keepControlTables(ctx, tx, names.live, names.previous); err != nil {
-		return err
-	}
-
+	// The drop stays in the swap transaction. It waits for each statement in
+	// flight that still reads an old table, so no statement reads the old
+	// tables after the swap commits. A restore that runs as a durable
+	// operation keeps the old schema for its cleanup step instead.
 	if names.drop {
-		if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(names.previous)+" CASCADE"); err != nil {
+		if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
 			return fmt.Errorf("drop previous schema: %w", err)
 		}
 	}
 
-	return nil
+	if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
+		return fmt.Errorf("drop staging control schema: %w", err)
+	}
+
+	return fenceRestored(ctx, tx, live)
 }
 
 // fenceRestored increments the failover version of every namespace of the
