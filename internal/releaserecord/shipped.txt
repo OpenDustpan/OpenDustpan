@@ -10,6 +10,10 @@
 #
 #   <tag> <dialect> <file> <sha256>
 #
+# Each tag lists every migration file at the tag. A file that an earlier tag
+# shipped appears again under each later tag, with the same SHA-256. The
+# parser refuses one file with two SHA-256 values.
+#
 # For example:
 #
 #   v0.1.0 sqlite 0168_baseline.sql 43e3a6c1894e2f6dd5ebe0c0a5df76bce52a109c9ef88c1ad51f5a0f65b111ed
@@ -21,4 +25,10 @@
 #       awk -v tag=v0.1.0 -v d=$d '{print tag, d, $2, $1}'
 #   done >> internal/releaserecord/shipped.txt
 #
-# Never edit or remove a line after its tag.
+# Then run scripts/check-release-record.sh <tag>. scripts/release-build.sh
+# runs it too, and refuses a version that has no lines here, or whose lines
+# differ from the migration files of the work tree.
+#
+# Never edit or remove a line after its tag. TestTagCopiesHaveTheirLines
+# fails when a tag copy in pkg/store/<dialect>/testdata/tag-migrations has
+# no lines here.

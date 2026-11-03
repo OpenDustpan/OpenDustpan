@@ -42,13 +42,15 @@ that the decision "shouldn't cause production issues in the future".
 
 1. **The release record is the one fact.** The committed file
    `internal/releaserecord/shipped.txt` lists each migration file of each
-   dialect that a tag shipped. Each line is `<tag> <dialect> <file>
-   <sha256>`. Lines that start with `#` and blank lines are comments. The
-   package `internal/releaserecord` embeds and parses it. A test of any
-   package reads it with no network and no Git history.
+   dialect at each tag. Each line is `<tag> <dialect> <file> <sha256>`.
+   Lines that start with `#` and blank lines are comments. The package
+   `internal/releaserecord` embeds and parses it. A test of any package
+   reads it with no network and no Git history.
 2. **The release writes it.** The release adds the lines of its tag in the
-   commit that it tags. So the checks turn on in the same change that
-   records the tag. A line never changes or goes after its tag.
+   commit that it tags. Each tag lists every migration file at the tag, so a
+   file that an earlier tag shipped appears again under each later tag, with
+   the same SHA-256. So the checks turn on in the same change that records
+   the tag. A line never changes or goes after its tag.
 3. **Not released: the current behavior stays.** While the record lists no
    file, the five checks skip. Each skip message names the check and the
    record. `DUSTPAN_TEST_DESCRIPTION_PIN=1` still runs the version test on
@@ -65,19 +67,39 @@ that the decision "shouldn't cause production issues in the future".
    of `testdata/tag-migrations/` stays.
 6. **Fail closed.** A record that does not parse fails each guard. It never
    counts as "not released". The parser refuses an unknown dialect, a field
-   outside its allowlist, a file that a dialect lists twice and a tag that
-   does not list a file of each dialect.
-7. **Proof of both states.** The tests of `internal/releaserecord` give each
-   state of the record to the decision and to the migration file check
-   directly. They run the collapse script in a new repository with each
-   state. They parse each guard and fail when a guard skips with no
-   condition, or does not skip on the reason from the record.
+   outside its allowlist, a line that a tag lists twice, one file of a
+   dialect with two SHA-256 values, and a tag that does not list a file of
+   each dialect.
+7. **A tag cannot lose its record.** Two layers stop an empty record or a
+   later removal of its lines. Each stops it alone:
+   - `scripts/release-build.sh <version>` runs
+     `scripts/check-release-record.sh <version>` before it builds anything.
+     The check refuses a version that is not `vMAJOR.MINOR.PATCH`, a version
+     with no lines in the record, and lines whose files or SHA-256 values
+     differ from the migration files of the work tree.
+   - `TestTagCopiesHaveTheirLines` of each dialect runs before and after the
+     first tag. Each `testdata/tag-migrations/<tag>/` directory must have
+     the lines of `<tag>` in the record, with the SHA-256 of each copy, and
+     each listed file must have a copy.
+8. **Proof of both states.** The tests of `internal/releaserecord` give each
+   state of the record to the decision, to the migration file check and to
+   the tag copy check directly, with a record of one tag and a record of two
+   tags. They run the collapse script and the release record check in a new
+   repository with each state. They parse each guard. A guard that calls
+   `Off` must start with `t.Parallel()` and then the `if` statement that
+   skips on the reason from `Off`. Each later skip or `return` must be
+   inside an `if` statement. A guard of the migration files or the tag
+   copies has no skip and no `return`. A skip inside a helper function is
+   out of the reach of this test.
 
 ## Consequences
 
 - The release adds one step before the tag: run `make regenerate-baseline`
-  so that the round trips pass, write the pin of the description, then
-  write the lines of the record. The gate in `docs/roadmap.md` lists it.
+  so that the round trips pass, set `DocumentVersion` in
+  `internal/api/apidesc/document.go` for the release, write the pin of the
+  description with `-update-description-pin`, then write the lines of the
+  record. `scripts/release-build.sh` refuses the build until the record
+  has the lines. The gate in `docs/roadmap.md` lists the step.
 - The record repeats the SHA-256 of each shipped file. A change that edits a
   shipped migration and its `.sha256` file together still fails, because
   the record holds the shipped value.

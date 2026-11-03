@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -72,13 +73,17 @@ func Current() (Record, error) {
 }
 
 // Parse reads a record. Blank lines and lines that start with "#" are
-// comments. Each other line is "<tag> <dialect> <file> <sha256>". Parse
-// refuses any other form, an unknown dialect, a file that a dialect lists
-// twice, and a tag that does not list a file of each dialect.
+// comments. Each other line is "<tag> <dialect> <file> <sha256>". Each tag
+// lists every migration file of each dialect at the tag, so a file that an
+// earlier tag shipped appears again under each later tag. Parse refuses any
+// other form, an unknown dialect, a line that a tag lists twice, one file of
+// a dialect with two SHA-256 values, and a tag that does not list a file of
+// each dialect.
 func Parse(data []byte) (Record, error) {
 	var rec Record
 
-	seen := map[string]bool{}
+	seen := map[Entry]bool{}
+	sums := map[string]string{}
 
 	for i, line := range strings.Split(string(data), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -90,18 +95,21 @@ func Parse(data []byte) (Record, error) {
 			return Record{}, fmt.Errorf("line %d: %w", i+1, err)
 		}
 
-		key := entry.Dialect + " " + entry.File
+		key := Entry{Tag: entry.Tag, Dialect: entry.Dialect, File: entry.File}
 		if seen[key] {
-			return Record{}, fmt.Errorf(
-				"%w: line %d: %s %s is listed twice",
-				ErrBadRecord,
-				i+1,
-				entry.Dialect,
-				entry.File,
-			)
+			return Record{}, fmt.Errorf("%w: line %d: %s lists %s %s twice",
+				ErrBadRecord, i+1, entry.Tag, entry.Dialect, entry.File)
 		}
 
 		seen[key] = true
+
+		file := entry.Dialect + " " + entry.File
+		if sum, ok := sums[file]; ok && sum != entry.SHA256 {
+			return Record{}, fmt.Errorf("%w: line %d: %s has the SHA-256 %s here and %s on an earlier line",
+				ErrBadRecord, i+1, file, entry.SHA256, sum)
+		}
+
+		sums[file] = entry.SHA256
 		rec.entries = append(rec.entries, entry)
 	}
 
@@ -174,6 +182,65 @@ func (r Record) Shipped(dialect string) []Entry {
 	}
 
 	return out
+}
+
+// TagCopies checks the copies of the migrations of one tag, a map from file
+// name to SQL, against the lines of that tag and dialect in the record. It
+// returns one error for each problem: a copy that the record does not list
+// for the tag, a copy with another SHA-256, and a listed file with no copy.
+//
+// Defense in depth: the release build refuses a tag without its lines, and
+// the record parser refuses one file with two SHA-256 values. This check
+// stays so that lines removed from the record after the tag fail too, while
+// the copies of the tag are in the tree.
+func (r Record) TagCopies(dialect, tag string, files map[string]string) []error {
+	listed := map[string]string{}
+
+	for _, entry := range r.Shipped(dialect) {
+		if entry.Tag == tag {
+			listed[entry.File] = entry.SHA256
+		}
+	}
+
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	var problems []error
+
+	for _, name := range names {
+		digest := sha256.Sum256([]byte(files[name]))
+		got := hex.EncodeToString(digest[:])
+
+		want, ok := listed[name]
+
+		switch {
+		case !ok:
+			problems = append(problems, fmt.Errorf(
+				"%w: the %s copy %s of %s has no line in %s: never remove a line of a tag",
+				ErrMigrationFiles, dialect, name, tag, Path,
+			))
+		case got != want:
+			problems = append(problems, fmt.Errorf(
+				"%w: the %s copy %s of %s has the SHA-256 %s and %s lists %s: never edit a tag copy or a line of a tag",
+				ErrMigrationFiles, dialect, name, tag, got, Path, want,
+			))
+		}
+
+		delete(listed, name)
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(listed)) {
+		problems = append(problems, fmt.Errorf(
+			"%w: %s lists the %s file %s for %s, and the tag copies have no such file",
+			ErrMigrationFiles, Path, dialect, name, tag,
+		))
+	}
+
+	return problems
 }
 
 // Off returns the reason that check is off: the record lists no shipped
