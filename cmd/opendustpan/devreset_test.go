@@ -284,6 +284,10 @@ func TestDevResetRefusesADirectoryWithAnOldCopy(t *testing.T) {
 		writeResetFiles(t, dir, map[string]string{name: "last good backup"})
 
 		_, err := runReset(t, dir)
+		if err == nil {
+			t.Fatalf("reset with the copy %s = nil, want a refusal that names it", name)
+		}
+
 		if !errors.Is(err, errDevResetOldCopy) || !strings.Contains(err.Error(), filepath.Join(dir, name)) {
 			t.Fatalf("reset with the copy %s = %v, want a refusal that names it", name, err)
 		}
@@ -533,6 +537,10 @@ func TestFinishDevResetFailedRemakeKeepsCopies(t *testing.T) {
 		dir: dir, db: filepath.Join(dir, devDBName), moved: moved, stderr: io.Discard,
 		logger: slog.New(slog.DiscardHandler), proc: proc,
 	}, failRemake)
+	if err == nil {
+		t.Fatal("finish with a failed remake = nil, want it to wrap the remake error")
+	}
+
 	if !errors.Is(err, errInjectedRemake) {
 		t.Fatalf("finish with a failed remake = %v, want it to wrap the remake error", err)
 	}
