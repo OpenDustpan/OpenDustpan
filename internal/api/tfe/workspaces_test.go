@@ -845,6 +845,18 @@ func (p pagingWorkspaces) Restore(
 	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 }
 
+func (p pagingWorkspaces) ReadRollbackChange(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	return workspace.RollbackChange{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) RestoreExpecting(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string, _ workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+}
+
 func (p pagingWorkspaces) History(
 	_ context.Context, _ workspace.ID, _ workspace.Page,
 ) ([]workspace.StateVersion, int, error) {
