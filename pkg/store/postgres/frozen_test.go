@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -152,6 +153,41 @@ func checkTagDir(t *testing.T, dir string) {
 			}
 		}
 	}
+
+	copies, countErr := countTagCopies(dir)
+	if countErr != nil {
+		t.Fatal(countErr)
+	}
+
+	if copies == 0 {
+		t.Errorf(
+			"tag migration dir %s holds no .sql copy: run scripts/copy-tag-migrations.sh <tag>",
+			dir,
+		)
+	}
+}
+
+// countTagCopies returns the number of regular files in dir whose name ends in
+// .sql. A hash file (NAME.sql.sha256) and a subdirectory do not count.
+func countTagCopies(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("read tag migration dir %s: %w", dir, err)
+	}
+
+	count := 0
+
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+
+		if strings.HasSuffix(entry.Name(), ".sql") {
+			count++
+		}
+	}
+
+	return count, nil
 }
 
 // checkTagCopy proves one tag migration copy matches the hash file next to it.
@@ -289,6 +325,62 @@ func TestTagCopiesHaveTheirLines(t *testing.T) {
 		for _, problem := range rec.TagCopies("postgres", tag.Name(), files) {
 			t.Error(problem)
 		}
+	}
+}
+
+// TestCountTagCopies pins the count of tag migration copies. checkTagDir fails
+// on a count of 0, so this test is the check of what counts as a copy.
+func TestCountTagCopies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		files []string
+		dirs  []string
+		want  int
+	}{
+		{name: "empty", files: nil, dirs: nil, want: 0},
+		{name: "hash file only", files: []string{"0001_x.sql.sha256"}, dirs: nil, want: 0},
+		{name: "copy only", files: []string{"0001_x.sql"}, dirs: nil, want: 1},
+		{name: "copy and hash file", files: []string{"0001_x.sql", "0001_x.sql.sha256"}, dirs: nil, want: 1},
+		{name: "subdirectory named like a copy", files: nil, dirs: []string{"x.sql"}, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkCountTagCopies(t, tt.files, tt.dirs, tt.want)
+		})
+	}
+}
+
+// checkCountTagCopies builds the fixture of one case in a new directory and
+// checks the count that countTagCopies returns for it.
+func checkCountTagCopies(t *testing.T, files, dirs []string, want int) {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, name := range dirs {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := countTagCopies(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got != want {
+		t.Errorf("countTagCopies() = %d, want %d", got, want)
 	}
 }
 
