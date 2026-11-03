@@ -683,6 +683,22 @@ func (coverageWorkspaces) Restore(
 	return none, workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) ReadRollbackChange(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	var none workspace.RollbackChange
+
+	return none, workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) RestoreExpecting(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string, _ workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	var none workspace.StateVersion
+
+	return none, workspace.ErrStateVersionNotFound
+}
+
 func (coverageWorkspaces) ReadState(
 	_ context.Context, _ workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
