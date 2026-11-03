@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +72,10 @@ type restoreServiceSetup struct {
 	maint   *restoreServiceMaintenance
 	order   *orderLog
 	id      backup.ID
+	// exporter is the exporter of the backup before the restore.
+	exporter *stubBackupExporter
+	// backupOps holds the operations of the backup service.
+	backupOps durable.Store
 }
 
 // restoreServiceLive is a fake backup.RestoreLive: the check store with an
@@ -612,6 +617,8 @@ type stubBackupExporter struct {
 	sum   backup.Summary
 	data  []byte
 	order *orderLog
+	// hook, when set, runs at the start of each export.
+	hook atomic.Pointer[func()]
 }
 
 func (e *stubBackupExporter) ExportPortable(
@@ -619,6 +626,10 @@ func (e *stubBackupExporter) ExportPortable(
 ) (backup.Summary, []backup.PortableFile, error) {
 	if e.order != nil {
 		e.order.add("export")
+	}
+
+	if hook := e.hook.Load(); hook != nil {
+		(*hook)()
 	}
 
 	// Every table gets a file, as the real export does: a backup without a
@@ -654,8 +665,11 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 	live.maint = maint
 
 	backupRegs := newFakeRegistry()
+	exporter := &stubBackupExporter{
+		sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
+	}
 	backups, err := backup.NewService(backup.Config{
-		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
 		Operations:  backupRegs.ops,
@@ -704,15 +718,17 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 	regs.setWorker(service)
 
 	return &restoreServiceSetup{
-		service: service,
-		target:  setup.target,
-		live:    live,
-		blobs:   blobs,
-		backups: backups,
-		regs:    regs,
-		maint:   maint,
-		order:   order,
-		id:      setup.id,
+		service:   service,
+		target:    setup.target,
+		live:      live,
+		blobs:     blobs,
+		backups:   backups,
+		regs:      regs,
+		maint:     maint,
+		order:     order,
+		id:        setup.id,
+		exporter:  exporter,
+		backupOps: backupRegs.ops,
 	}
 }
 
@@ -1309,7 +1325,9 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	live.maint = maint
 
 	backups, err := backup.NewService(backup.Config{
-		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: nil},
+		Exporter: &stubBackupExporter{
+			sum: testSummary(), data: []byte("pre-backup-sql"), order: nil, hook: atomic.Pointer[func()]{},
+		},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
 		Operations:  backupRegs.ops,

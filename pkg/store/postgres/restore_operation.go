@@ -834,8 +834,9 @@ func (s *Store) ApplyRestoreArea(
 			// so a cancel before the swap and the swap have one winner: a
 			// cancel that committed before the copy fails the check, and a
 			// cancel after it waits for the commit and finds the step
-			// recorded. The renewals of the claim do not wait for the rest of
-			// the swap: the swap takes the row only here, at its end.
+			// recorded. The swap takes the row only here, at its end, so a
+			// renewal of the claim does not wait for the checks and the
+			// renames. It waits from the lock of the copy to the commit.
 			q := s.queries.WithTx(tx)
 
 			row, now, fenceErr := fencedRestore(ctx, q, f, a.Restore)

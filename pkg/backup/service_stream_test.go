@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,7 +169,9 @@ func restoreStreamedBackup(
 	live := newRestoreServiceLive(liveChecks, regs)
 	live.maint = maint
 	backups, err := backup.NewService(backup.Config{
-		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Exporter: &stubBackupExporter{
+			sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
+		},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
 		Operations:  backupRegs.ops,

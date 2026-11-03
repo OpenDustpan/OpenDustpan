@@ -271,8 +271,10 @@ type swapNames struct {
 // The check of the step fence under the lock of the row of the operation
 // comes after all of this, at the end of the swap transaction. So a renewal
 // of the claim of the restore does not wait for the checks of the staging
-// area and the renames: it waits only from the copy of the durable control
-// tables, which takes their lock, to the commit.
+// area and the renames. It still waits from the lock of the durable control
+// tables in keepControlTables to the commit: through the copy of those
+// tables, the replay of the revocations and the fence of the namespaces.
+// That time grows with the size of the installation.
 func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) error {
 	live, previous, staging := names.live, names.previous, names.staging
 

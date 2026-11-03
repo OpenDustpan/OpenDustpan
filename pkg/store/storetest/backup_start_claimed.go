@@ -111,3 +111,64 @@ func testBackupStartClaimedRefused(t *testing.T, newStore BackupFactory) {
 			first.ID)
 	}
 }
+
+// Durations of the takeover of a claimed start: a lease that expires inside
+// the case, and the longest wait for its expiry on the store clock.
+const (
+	startClaimShortLease = 300 * time.Millisecond
+	startClaimExpiryWait = 10 * time.Second
+	startClaimPoll       = 25 * time.Millisecond
+)
+
+// testBackupStartClaimedTakeover lets the claim of a claimed start expire,
+// as when the starter stops without an end write. Then a worker claims the
+// operation: a second attempt with a higher token, which runs it to its end.
+func testBackupStartClaimedTakeover(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ctx := t.Context()
+	r := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
+
+	started, err := s.StartBackupClaimed(ctx, r, backupStartRequest(r.ID),
+		durable.StartClaim{Owner: startClaimOwner, Lease: startClaimShortLease})
+	if err != nil {
+		t.Fatalf("start backup with a short claim: %v", err)
+	}
+
+	ops := s.DurableOperationsPort()
+	req := durable.ClaimRequest{
+		Owner: "worker", Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: backupLongLease,
+		TakeCanceled: false,
+	}
+	deadline := time.Now().Add(startClaimExpiryWait)
+
+	for {
+		taken, claimErr := ops.Claim(ctx, req)
+		if claimErr == nil {
+			if taken.ID != started.ID || taken.Attempt != 2 || taken.Claim.Owner != "worker" ||
+				taken.Claim.Token <= started.Claim.Token {
+				t.Fatalf("takeover = %+v, want the second attempt of %s with a token above %d", taken, started.ID,
+					started.Claim.Token)
+			}
+
+			break
+		}
+
+		if !errors.Is(claimErr, durable.ErrNoWork) || time.Now().After(deadline) {
+			t.Fatalf("claim after the expiry of the claimed start = %v, want the operation within %v", claimErr,
+				startClaimExpiryWait)
+		}
+
+		time.Sleep(startClaimPoll)
+	}
+
+	// The starter lost its claim: its renewal is refused.
+	if _, err := ops.Extend(ctx, started.Claim, backupLongLease); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("renewal by the starter after the takeover = %v, want ErrClaimLost", err)
+	}
+
+	if got := mustGetBackup(t, s, r.ID); got.State != backup.StateRunning {
+		t.Fatalf("backup row after the takeover = %+v, want running", got)
+	}
+}
