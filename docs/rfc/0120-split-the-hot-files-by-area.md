@@ -1,14 +1,16 @@
 ---
 rfc: 120
 title: Split the hot files by area, with one explicit list of the areas
-status: draft
+status: accepted
+adr: 326
 created: 2026-11-03
 ---
 
 # RFC 120. Split the hot files by area, with one explicit list of the areas
 
-Status: draft. This RFC changes no code. It needs an architecture review and
-the owner's decision before any code.
+Status: accepted (ADR 326). The project owner accepted it on 3 November 2026
+in the form that its architecture review recommended. That form differs from
+this text: see "Outcome".
 
 ## Problem
 
@@ -527,4 +529,20 @@ a new term must be seen next to the others.
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Accepted on 3 November 2026. [ADR 326](../adr/0326-split-the-hot-files-by-area-in-small-steps.md)
+records the decisions. They follow the architecture review of this RFC, not
+every proposal above:
+
+- Section 1: a placement rule first. A new query block goes in its place in
+  the name order of `queries.sql`, never at the end. The split by area comes
+  only if the data after one week shows the need, with the areas of ADR 274,
+  after RFC 103 step 8, and with a new ADR that changes ADR 274 decision 7.
+- Section 2: the smaller form. Each area's options, defaults, checks and
+  constructor move to their own file. The assembly stays plain sequential
+  calls in one function, and `mountAPI` stays. The `area` type and the
+  `areas()` list are dropped: their order has a meaning that the compiler
+  cannot check, and they spread the security wrappers of `mountAPI`.
+- Section 3: the route test reads the root mux of the built server, not
+  `e2e.ServedRoutes`.
+- Section 4a: accepted, with `//go:build e2e` on each new file.
+- Sections 4b, 4c and 5, and the action constants: not split.

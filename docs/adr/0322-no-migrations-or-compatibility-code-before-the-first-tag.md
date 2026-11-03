@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-02. Decisions 1, 2, 4 and 5 are owner decisions. Decisions 3 and 6 are PM decisions, taken on the owner's behalf, marked "(PM)"
 
+Changed by:
+
+- ADR 326 extends decision 1: the name-order placement rule applies to the `queries.sql` file of each dialect too.
+
 Changes:
 
 - Changes ADR 73 decision 6: until the first tag, each dialect keeps one numbered baseline. A change to the schema edits it in place. The runner records and compares the SHA-256 of each migration.
