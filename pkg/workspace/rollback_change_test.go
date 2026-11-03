@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -193,6 +194,37 @@ func TestRestoreExpecting(t *testing.T) {
 		_, err := f.svc.RestoreExpecting(t.Context(), f.ws.ID, versions[0].ID, "alice", versions[1].ID)
 		if !errors.Is(err, workspace.ErrConcurrentModification) {
 			t.Fatalf("RestoreExpecting() = %v, want ErrConcurrentModification", err)
+		}
+
+		checkCurrentID(t, f, versions[2].ID)
+		checkUnlocked(t, f)
+	})
+
+	t.Run("repeated refusals leave no attempt blob and no pending row", func(t *testing.T) {
+		t.Parallel()
+
+		blobs, dir := openDirBlobs(t)
+		f := newFixtureSized(t, blobs, blobguardtest.None{}, 512)
+		versions := pushStates(t, f, stateA, stateAB, stateA)
+		blobsBefore := listBlobDir(t, dir)
+
+		// The decision read versions[1] as current; versions[2] became current
+		// after. More refusals than the cap of pending versions prove that each
+		// refusal discards its own pending row: a leaked row fills the cap, and
+		// the next restore fails with ErrTooManyPending.
+		for i := range workspace.DefaultMaxPendingVersions + 2 {
+			_, err := f.svc.RestoreExpecting(t.Context(), f.ws.ID, versions[0].ID, "alice", versions[1].ID)
+			if !errors.Is(err, workspace.ErrConcurrentModification) {
+				t.Fatalf("refusal %d: RestoreExpecting() = %v, want ErrConcurrentModification", i, err)
+			}
+		}
+
+		if got := listBlobDir(t, dir); !slices.Equal(got, blobsBefore) {
+			t.Fatalf("blobs after the refusals = %q, want the blobs before: %q", got, blobsBefore)
+		}
+
+		if n := pendingCount(f.store); n != 0 {
+			t.Fatalf("%d pending versions after the refusals, want 0", n)
 		}
 
 		checkCurrentID(t, f, versions[2].ID)
