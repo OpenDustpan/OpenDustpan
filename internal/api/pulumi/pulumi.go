@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/stategate"
@@ -980,8 +981,7 @@ func unmatched() failure {
 // server.internal and logs the code.
 func (h *Handler) writeFailure(ctx context.Context, w http.ResponseWriter, f failure) {
 	if f.err != nil {
-		problem.LogInternal(ctx, h.logger, "error answer is not valid", problem.CauseUnclassified,
-			slog.String("error_code", f.code))
+		faultlog.LogInternal(ctx, h.logger, "error answer is not valid", faultlog.CauseUnclassified, f.code)
 		h.writeAnswer(ctx, w, http.StatusInternalServerError, "internal error", errcode.Internal())
 
 		return
@@ -1007,8 +1007,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		// The log names the status, a cause from the closed list, the request
 		// ID and the code, never the error text: the text may hold driver
 		// detail, a token, or state.
-		problem.LogInternal(ctx, h.logger, "request failed", problem.Cause(err),
-			slog.String("error_code", f.code))
+		faultlog.LogInternal(ctx, h.logger, "request failed", faultlog.Cause(err), f.code)
 	} else {
 		h.logRefusal(ctx, err)
 	}

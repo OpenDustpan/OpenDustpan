@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 )
@@ -72,8 +73,10 @@ type Error struct {
 	Message string
 	// cause is the failure of errcode.New when the refusal answers
 	// server.internal in place of its own code, or nil. Handle logs it.
-	cause  error
-	Status int
+	cause error
+	// refusedCode is the code that the catalog refused, or "". Handle logs it.
+	refusedCode string
+	Status      int
 }
 
 // Error implements error.
@@ -88,11 +91,11 @@ func refuse(status int, code, message string, values ...errcode.Value) *Error {
 	if err != nil {
 		return &Error{
 			Status: http.StatusInternalServerError, Message: "internal error", Answer: errcode.Internal(),
-			cause: fmt.Errorf("answer %s: %w", code, err),
+			cause: fmt.Errorf("answer %s: %w", code, err), refusedCode: code,
 		}
 	}
 
-	return &Error{Status: status, Message: message, Answer: answer, cause: nil}
+	return &Error{Status: status, Message: message, Answer: answer, cause: nil, refusedCode: ""}
 }
 
 // Lost returns the refusal for a request whose pending record another request
@@ -180,8 +183,13 @@ type Call struct {
 func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) error {
 	err := m.serveCall(w, r, c)
 	if refusal, ok := errors.AsType[*Error](err); ok && refusal != nil && refusal.cause != nil {
-		m.logger.ErrorContext(r.Context(), "idempotent refusal has no catalog answer: answered server.internal",
-			slog.String("error", refusal.cause.Error()))
+		faultlog.LogInternal(
+			r.Context(),
+			m.logger,
+			"idempotent refusal has no catalog answer: answered server.internal",
+			faultlog.Cause(refusal.cause),
+			refusal.refusedCode,
+		)
 	}
 
 	return err
@@ -331,8 +339,8 @@ func (m *Middleware) run(w http.ResponseWriter, r *http.Request, ref idempotency
 	// outside that transaction could keep an answer for an operation that
 	// rolled back, so the middleware keeps nothing and frees the key.
 	if !completion.Stored() && rec.code() >= http.StatusOK && rec.code() < http.StatusMultipleChoices {
-		m.logger.ErrorContext(r.Context(), "keyed route answered success and its store did not call Finish",
-			slog.String("method", ref.Method), slog.String("path", ref.Path))
+		faultlog.LogFault(r.Context(), m.logger, "keyed route answered success and its store did not call Finish",
+			faultlog.CauseUnclassified, "idempotent.finish")
 		m.end(r, ref, token, nil, 0)
 
 		return

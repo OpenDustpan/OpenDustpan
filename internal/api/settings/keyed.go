@@ -9,12 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/textbody"
@@ -272,14 +272,14 @@ func (c *bulkCall) end(ctx context.Context, h *Handler) {
 
 	done := idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: nil}
 	if err := h.records.Complete(endCtx, c.ref, c.token, done); err != nil && !errors.Is(err, idempotency.ErrLost) {
-		h.logger.ErrorContext(ctx, "store the record of a bulk call failed", slog.String("error", err.Error()))
+		faultlog.LogFault(ctx, h.logger, "store the record of a bulk call failed", faultlog.Cause(err), "bulk.complete")
 	}
 }
 
 // abandon frees the key of a record that ended with no stored answer.
 func (h *Handler) abandon(ctx context.Context, ref idempotency.Ref, token string) {
 	if err := h.records.Abandon(ctx, ref, token); err != nil {
-		h.logger.ErrorContext(ctx, "free an Idempotency-Key failed", slog.String("error", err.Error()))
+		faultlog.LogFault(ctx, h.logger, "free an Idempotency-Key failed", faultlog.Cause(err), "bulk.abandon")
 	}
 }
 
@@ -403,7 +403,13 @@ func (h *Handler) writeItem(
 	if !completion.Stored() {
 		// The store kept no answer: free the key, so a retry does the item
 		// again.
-		h.logger.ErrorContext(r.Context(), "the store kept no answer for a bulk item")
+		faultlog.LogFault(
+			r.Context(),
+			h.logger,
+			"the store kept no answer for a bulk item",
+			faultlog.CauseUnclassified,
+			"bulk.item",
+		)
 		h.endItem(r.Context(), pending.ref, pending.token)
 	}
 

@@ -126,3 +126,27 @@ func check500Log(t *testing.T, rec *httptest.ResponseRecorder, log string, want,
 		}
 	}
 }
+
+// TestRefusedCodeLogsThroughFaultlog checks that a failure whose code the
+// catalog refuses answers 500, and logs the code in the fields of a 500 line
+// with the request ID, and no error text.
+func TestRefusedCodeLogsThroughFaultlog(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	h := new(Handler)
+	h.logger = slog.New(slog.NewTextHandler(&buf, nil))
+
+	status, _, _ := h.answer(requestid.WithContext(t.Context(), "0123abcd"),
+		failure{status: 409, message: "m", code: "no.such.code", args: nil})
+	if status != 500 {
+		t.Fatalf("status = %d, want 500", status)
+	}
+
+	for _, want := range []string{"status=500", "error_code=no.such.code", "request_id=0123abcd"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log = %q, want it to hold %q", buf.String(), want)
+		}
+	}
+}
