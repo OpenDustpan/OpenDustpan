@@ -1346,7 +1346,10 @@ func TestValidateRefusesHiddenRunes(t *testing.T) {
 		t.Fatalf("valid record: %v", err)
 	}
 
-	for _, bad := range []string{"lost\u202eaccess", "lost\u200baccess", "lost\x07access", "lost\u0085access"} {
+	for _, bad := range []string{
+		"lost\u202eaccess", "lost\u200baccess", "lost\x07access", "lost\u0085access",
+		"lost\u2028access", "lost\u2029access",
+	} {
 		reason := base
 		reason.Reason = bad
 
