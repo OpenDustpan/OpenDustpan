@@ -60,6 +60,9 @@ var (
 	errDevResetBlobs = errors.New(
 		"the blob directory is not a directory of the current user: dev reset changes nothing",
 	)
+	errDevResetOldCopy = errors.New(
+		"a copy of a reset that did not finish is in the data directory: remove or rename it, then run opendustpan dev reset again",
+	)
 	errDevResetInUse = errors.New(
 		"a server holds the database: stop it, then run opendustpan dev reset again",
 	)
@@ -116,6 +119,10 @@ func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProc
 	db, err := checkDevReset(ctx, dir, proc)
 	if err != nil {
 		return err
+	}
+
+	if oldErr := checkDevResetOldCopies(dir); oldErr != nil {
+		return oldErr
 	}
 
 	moved, err := moveDevData(dir, os.Rename)
@@ -350,6 +357,21 @@ func joinOrNone(paths []string) string {
 	}
 
 	return strings.Join(paths, ", ")
+}
+
+// checkDevResetOldCopies refuses a data directory that holds a copy under
+// devResetOldSuffix. Such a copy is left by a reset that did not finish, and
+// the reset would move it aside and delete it, so the last good backup would be
+// lost.
+func checkDevResetOldCopies(dir string) error {
+	// Defense in depth: moveDevData replaces a stale copy under the suffix. This
+	// check refuses the directory before any move, so the copy is never deleted
+	// by a rerun on its own.
+	if paths := devResetOldPaths(dir); len(paths) > 0 {
+		return fmt.Errorf("%s: %w", strings.Join(paths, ", "), errDevResetOldCopy)
+	}
+
+	return nil
 }
 
 // dropOldDevCopies deletes the copies of the reset before that moveDevData

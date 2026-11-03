@@ -269,6 +269,34 @@ func TestDevResetKeepsTheOldData(t *testing.T) {
 	}
 }
 
+// TestDevResetRefusesADirectoryWithAnOldCopy leaves a copy under the old suffix
+// in a dev directory. dev reset refuses the directory before it moves any
+// data, names the copy, and keeps the database and the copy.
+func TestDevResetRefusesADirectoryWithAnOldCopy(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		devDBName + devResetSuffix + devResetOldSuffix,
+		devBlobsName + devResetSuffix + devResetOldSuffix,
+	} {
+		dir := resetTestDir(t, installation.KindDev)
+		writeResetFiles(t, dir, map[string]string{name: "last good backup"})
+
+		_, err := runReset(t, dir)
+		if !errors.Is(err, errDevResetOldCopy) || !strings.Contains(err.Error(), filepath.Join(dir, name)) {
+			t.Fatalf("reset with the copy %s = %v, want a refusal that names it", name, err)
+		}
+
+		if got := readResetFile(t, filepath.Join(dir, name)); got != "last good backup" {
+			t.Fatalf("copy %s = %q after the refusal, want it kept", name, got)
+		}
+
+		if _, statErr := os.Lstat(filepath.Join(dir, devDBName)); statErr != nil {
+			t.Fatalf("database after the refusal: %v, want it in place", statErr)
+		}
+	}
+}
+
 // errInjectedRename is the error of a rename that a test makes fail.
 var errInjectedRename = errors.New("injected rename failure")
 
