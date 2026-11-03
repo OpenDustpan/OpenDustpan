@@ -1,7 +1,7 @@
 # Gates and access limits on state writes
 
 This guide shows what the server checks before it lets a person's own OpenTofu
-CLI, or a call of the tool-neutral API, write state. It shows which writes the
+CLI or Pulumi CLI, or a call of the tool-neutral API, write state. It shows which writes the
 server checks, the facts that a gate reads, what a refusal looks like, and what
 the server records.
 
@@ -24,6 +24,11 @@ the write, and before the OpenTofu CLI changes any resource.
 | The lock of the OpenTofu HTTP backend | `LOCK /tofu/state/{namespace}/{workspace}` | `lock` |
 | A force-unlock on the HTTP backend: an `UNLOCK` by a principal that does not hold the lock | `UNLOCK /tofu/state/{namespace}/{workspace}` | `unlock` |
 | A state version with no lock on the HTTP backend (no `?ID=`, through the unlocked override) | `POST /tofu/state/{namespace}/{workspace}` | `unlocked-write` |
+| A Pulumi stack import: `pulumi stack import`, and `pulumi state delete`, `unprotect`, `move` and `rename` | `POST /api/stacks/{organization}/{project}/{stack}/import` | `state-import` |
+| A restore of the checkpoint of a Pulumi stack version | `POST /api/stacks/{organization}/{project}/{stack}/restore/{version}` | `rollback` |
+| A Pulumi stack rename: `pulumi stack rename` | `POST /api/stacks/{organization}/{project}/{stack}/rename` | `rename` |
+| The removal of a Pulumi stack: `pulumi stack rm` | `DELETE /api/stacks/{organization}/{project}/{stack}` | `delete` |
+| A Pulumi update cancel: `pulumi cancel` | `POST /api/stacks/{organization}/{project}/{stack}/update/{update}/cancel` | `unlock` |
 
 OpenTofu writes a state version after it changed the resources. A refusal at
 that time would leave resources that no stored state records. So the server
@@ -43,9 +48,14 @@ The first `LOCK` of a workspace that does not exist creates the workspace
 before the check, because a gate reads the facts of a unit that exists. A
 refused first lock leaves the workspace with no state and no lock.
 
-The server does not check these writes yet: a Pulumi update, stack import,
-restore, rename or removal, a Pulumi update cancel, and a state version with no
-lock through the TFE-compatible API. They keep their earlier behavior. The
+The gates of the source stack decide a Pulumi stack rename. The new name has no
+gates of its own before the rename. Each `pulumi cancel` meets the check: the
+CLI sends an access token and no lease, so the server cannot tell the holder of
+the update from another person.
+
+The server does not check these writes yet: a Pulumi update (the create of an
+update, a refresh or a destroy) and a state version with no lock through the
+TFE-compatible API. They keep their earlier behavior. The
 `unchecked` list of the effective value names them (see
 [Check that the gates are on](#check-that-the-gates-are-on)).
 
@@ -72,8 +82,8 @@ with the `context.` prefix:
 | --- | --- |
 | `context.principal.kind` | `person` or `service`. A principal of an unknown kind counts as `person`. The kind `agent` exists, but the server does not set it at `state.write` yet. |
 | `context.principal.credential` | `session`, `access-token`, `job-token` or `trust-token`. |
-| `context.source.kind` | `cli` for a write from the CLI of a tool, `api` for a call of the tool-neutral API. |
-| `context.unit.tool` | The tool code of the unit, for example `opentofu`. |
+| `context.source.kind` | `cli` for a write through the API of a tool (the TFE-compatible API, the OpenTofu HTTP backend or the Pulumi Cloud-compatible API), `api` for a call of the tool-neutral API. |
+| `context.unit.tool` | The tool code of the unit, `opentofu` or `pulumi`. |
 | `context.unit.collection` | The collection of the unit, or an empty text. |
 | `context.unit.labels` | The labels of the unit, as `key=value` texts. |
 | `context.operation.kind` | The operation kind in the table above. |
@@ -99,6 +109,8 @@ never matches. The condition does not fail and the server does not warn.
 | A force-unlock (`unlock`) | `false` | Zero value |
 | The removal of a workspace or the final delete of a deleted unit (`delete`) | `false` | Zero value |
 | A state version with no lock (`unlocked-write`) | `false` | Zero value |
+| A Pulumi stack import (`state-import`) or a restore of a Pulumi checkpoint (`rollback`) | `false` | Zero value: the server does not read the resources of a Pulumi state for the gates |
+| A Pulumi stack rename (`rename`), a `pulumi stack rm` (`delete`) or a `pulumi cancel` (`unlock`) | `false` | Zero value: the write holds no new state |
 
 The facts `context.plan.available` and `context.cost.available` are always
 `false` at `state.write`, because the CLI sends no plan.
@@ -287,16 +299,16 @@ curl -H "Authorization: Bearer $TOKEN" https://dustpan.example.com/api/dustpan/v
       "opentofu.http.force-unlock",
       "opentofu.http.unlocked-write",
       "inventory.restore",
-      "inventory.purge"
-    ],
-    "unchecked": [
-      "opentofu.tfe.state-version-without-lock",
-      "pulumi.update",
+      "inventory.purge",
       "pulumi.import",
       "pulumi.restore",
       "pulumi.rename",
       "pulumi.delete",
       "pulumi.cancel"
+    ],
+    "unchecked": [
+      "opentofu.tfe.state-version-without-lock",
+      "pulumi.update"
     ]
   }
 }

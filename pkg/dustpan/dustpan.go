@@ -2642,6 +2642,7 @@ func newPulumiHandler(
 		DenialLimiter:           cfg.denialLimiter,
 		CheckpointDeltaCutoff:   cfg.checkpointDeltaCutoff,
 		DisablePulumiJournaling: cfg.disablePulumiJournaling,
+		StateGuard:              svc.stateWrite.guard,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
