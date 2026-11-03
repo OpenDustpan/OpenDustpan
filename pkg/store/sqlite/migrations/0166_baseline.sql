@@ -1,10 +1,10 @@
 -- minimum-binary-version: v0.1.0
--- This baseline replaced every migration before it. No binary opens a
--- database or restores a backup from before it. Until the first tag, a
--- change to the schema edits this file in place and adds no numbered
--- migration. The server refuses a database that another version of this
--- file made. make regenerate-baseline wrote the first version of this file
--- from the sqlite migrations of origin/main (04c979d834b7).
+-- The baseline of the sqlite store. It replaced every migration
+-- before it. No binary opens a database or restores a backup from before it.
+-- Until the first tag, a change to the schema edits this file in place and
+-- adds no numbered migration. The server refuses a database that another
+-- version of this file made. make regenerate-baseline writes it again from
+-- the numbered migrations of a Git ref.
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER NOT NULL PRIMARY KEY,
