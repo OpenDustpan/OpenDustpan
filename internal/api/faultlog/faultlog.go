@@ -39,21 +39,19 @@ const (
 // checks that. The helper takes no free attribute and no error: the line can
 // never hold an error text, a path or an input value.
 func LogInternal(ctx context.Context, logger *slog.Logger, msg, cause, code string) {
-	LogServer(ctx, logger, ServerLog{
-		Message: msg, Status: http.StatusInternalServerError, Cause: cause, Code: code, Op: "",
-	})
+	LogServer(ctx, logger, msg, Fields{Status: http.StatusInternalServerError, Cause: cause, Code: code, Op: ""})
 }
 
 // LogFault logs a failure that is not an answer of status 5xx, for example a
 // lost audit entry or a broken invariant, with the fields of LogInternal and
 // no status. op is a constant that names the operation, or "".
 func LogFault(ctx context.Context, logger *slog.Logger, msg, cause, op string) {
-	LogServer(ctx, logger, ServerLog{Message: msg, Status: 0, Cause: cause, Code: "", Op: op})
+	LogServer(ctx, logger, msg, Fields{Status: 0, Cause: cause, Code: "", Op: op})
 }
 
-// ServerLog is one failure log line. It holds no free attribute.
-type ServerLog struct {
-	Message string
+// Fields are the fields of one failure log line. It holds no free text: every
+// field is checked against a closed list or a fixed form before it is logged.
+type Fields struct {
 	// Status is the status of the answer, or 0 when the failure has no answer.
 	Status int
 	// Cause is a class from the closed list of Cause. Any other value, and an
@@ -67,9 +65,10 @@ type ServerLog struct {
 	Op string
 }
 
-// LogServer logs entry at Error level. It is the one place of internal/api
+// LogServer logs msg and entry at Error level. msg must be a string literal at
+// the call site, and a gate test checks that. It is the one place of internal/api
 // that writes a failure log line, and a gate test checks that.
-func LogServer(ctx context.Context, logger *slog.Logger, entry ServerLog) {
+func LogServer(ctx context.Context, logger *slog.Logger, msg string, entry Fields) {
 	if !logger.Enabled(ctx, slog.LevelError) {
 		return
 	}
@@ -79,7 +78,7 @@ func LogServer(ctx context.Context, logger *slog.Logger, entry ServerLog) {
 		cause = CauseUnclassified
 	}
 
-	rec := slog.NewRecord(time.Now(), slog.LevelError, entry.Message, 0)
+	rec := slog.NewRecord(time.Now(), slog.LevelError, msg, 0)
 
 	if entry.Status != 0 {
 		rec.AddAttrs(slog.Int("status", entry.Status))
