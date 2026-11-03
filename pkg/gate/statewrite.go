@@ -46,6 +46,10 @@ type StateWrite struct {
 	// PlanLock is true when the write takes or ends the lock or the update
 	// lease of the plan of a job. Only a job token uses it.
 	PlanLock bool
+	// State is what the write changes in the state of the unit, read by the
+	// adapter, or nil when the server holds no new state for the write. The
+	// guard puts it into the facts state.resources and state.removed.
+	State *StateChange
 }
 
 // GuardStateWrite checks the access limits of the action of w, then
@@ -92,6 +96,7 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 			PlanLock:   w.PlanLock,
 			BreakGlass: "",
 			Fence:      namespace.Fence{Namespace: w.Unit.Namespace(), FailoverVersion: 0},
+			State:      nil,
 		})
 	}
 
@@ -104,6 +109,7 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 		Point: PointStateWrite, Namespace: w.Unit.Namespace(), Ref: ChangeRef{Kind: ChangeStateWrite, ID: ""},
 		Subject: subject, Source: w.Source, Author: subject.ID, Operation: w.Operation,
 		Units: []identity.Object{w.Unit}, Holders: nil, PlanLock: w.PlanLock, BreakGlass: "", Fence: fence,
+		State: w.State,
 	})
 }
 
@@ -171,6 +177,14 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change) (Decision, e
 	// namespace.
 	if !sameNamespaceFence(c.Fence, c.Namespace) {
 		return Decision{}, fmt.Errorf("%w: the fence is not the fence of namespace %q", ErrInvalid, c.Namespace)
+	}
+
+	// Boundary check of the state change. It runs before any read of the
+	// configuration, so a hostile change costs no store call. Defense in
+	// depth: the adapter reads the state from the store, and the facts
+	// builder checks the change again. This check does not rely on either.
+	if err := checkStateChange(c); err != nil {
+		return Decision{}, &RefusalError{Err: err, Record: "", Messages: []string{cleanText(err.Error())}}
 	}
 
 	run, err := s.newStateWriteRun(ctx, c)
@@ -340,9 +354,25 @@ func (s *Service) stateWriteUnits(ctx context.Context, c Change) ([]unitEval, []
 	return units, scopes, nil
 }
 
+// checkStateChange checks the state change of c. A change is valid for a
+// rollback of exactly one unit. It returns ErrInvalid or ErrLimit.
+func checkStateChange(c Change) error {
+	if c.State == nil {
+		return nil
+	}
+
+	if len(c.Units) != 1 {
+		return fmt.Errorf("%w: a state change needs exactly one unit, not %d", ErrInvalid, len(c.Units))
+	}
+
+	return c.State.validate(c.Operation)
+}
+
 // stateWriteFacts builds the fact document of one unit at state.write. The
-// plan facts and the state facts are not available: the write comes from a
-// CLI that sends no plan.
+// plan facts are not available: the write comes from a CLI that sends no
+// plan. The state facts are available only when c holds a state change, which
+// the adapter read from the current state and the new state. Without it,
+// state.available is false and the other state facts are the zero value.
 func stateWriteFacts(
 	c Change,
 	u identity.Object,
@@ -361,6 +391,17 @@ func stateWriteFacts(
 	f.Source = SourceFacts{Kind: source, Ref: "", Protected: false, Commit: "", UpstreamUnit: ""}
 	f.Unit = UnitFacts{Tool: u.Tool(), Collection: coll.String(), Labels: labels}
 	f.Operation = OperationFacts{Kind: c.Operation}
+
+	if c.State != nil {
+		// Defense in depth: the evaluation checked the change before. The
+		// facts builder checks it again, so that no other caller of this
+		// function builds a fact from a change that is not valid.
+		if err := checkStateChange(c); err != nil {
+			return Facts{}, nil, err
+		}
+
+		f.State = c.State.facts()
+	}
 
 	raw, err := json.Marshal(f)
 	if err != nil {

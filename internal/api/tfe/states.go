@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -442,12 +444,38 @@ func (h *Handler) restoreStateVersion(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback}) {
+	check := stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback, state: nil, stateErr: nil}
+
+	// With the gates off no gate reads a fact, so the server reads no state
+	// and the restore checks no current version. With the gates on, the
+	// facts come from the current state and the restored state, and the
+	// restore writes only if the current version is still the one the facts
+	// came from.
+	expect := workspace.StateVersionID("")
+
+	if h.admit.Effective().Mode != stategate.ModeOff {
+		check.state, check.stateErr = h.rollbackState(ctx, src.Workspace, from)
+		if check.state != nil {
+			expect = workspace.StateVersionID(check.state.Current)
+		}
+	}
+
+	if !h.guardStateWrite(w, r, p, obj, check) {
 		return
 	}
 
-	restored, err := h.workspaces.Restore(ctx, src.Workspace, from, p.Subject)
+	restored, err := h.restoreVersion(ctx, src.Workspace, from, p.Subject, expect)
 	if err != nil {
+		if expect != "" && errors.Is(err, workspace.ErrConcurrentModification) {
+			// The state changed between the gate decision and the write.
+			// The decision used facts of a state that is no longer current,
+			// so the write is refused and the refusal is in the audit log.
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: check.action, Object: obj, Window: 0,
+				Reason: "state.write refused: the current state version changed after the gate decision",
+			})
+		}
+
 		if errors.Is(err, workspace.ErrLockedByOther) {
 			holder := h.refusingHolder(ctx, src.Workspace, err)
 			if holder == "" {
@@ -790,4 +818,33 @@ func (h *Handler) resolveStateVersion(
 	}
 
 	return unitObject(ws.Ref)
+}
+
+// rollbackState reads what a restore of the version from changes in the state
+// of the workspace id: the tool-neutral change that the gates read as the
+// facts state.resources and state.removed. It returns the error of the read
+// and a nil change when it cannot read the state; the guard then refuses the
+// write.
+func (h *Handler) rollbackState(
+	ctx context.Context, id workspace.ID, from workspace.StateVersionID,
+) (*gate.StateChange, error) {
+	rc, err := h.workspaces.ReadRollbackChange(ctx, id, from)
+	if err != nil {
+		return nil, fmt.Errorf("read the state change of the restore: %w", err)
+	}
+
+	return &gate.StateChange{Current: string(rc.Current), Resources: rc.Resources, Removed: rc.Removed}, nil
+}
+
+// restoreVersion restores the version from. An empty expect restores with no
+// check of the current version (the gates are off). A set expect restores only
+// if that version is still the current one.
+func (h *Handler) restoreVersion(
+	ctx context.Context, id workspace.ID, from workspace.StateVersionID, holder string, expect workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	if expect == "" {
+		return h.workspaces.Restore(ctx, id, from, holder)
+	}
+
+	return h.workspaces.RestoreExpecting(ctx, id, from, holder, expect)
 }
