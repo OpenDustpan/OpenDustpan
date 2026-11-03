@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/stategate"
@@ -324,7 +325,7 @@ func unitObject(ref workspace.Ref) (identity.Object, error) {
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
-		problem.LogInternal(ctx, h.logger, "request failed", problem.Cause(err))
+		faultlog.LogInternal(ctx, h.logger, "request failed", faultlog.Cause(err), "")
 	}
 
 	if errors.Is(err, namespace.ErrFenced) {

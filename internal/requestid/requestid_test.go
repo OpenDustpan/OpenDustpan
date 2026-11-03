@@ -1,6 +1,8 @@
 package requestid_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -24,5 +26,26 @@ func TestFromContextRoundTrip(t *testing.T) {
 
 	if got := requestid.FromContext(t.Context()); got != "" {
 		t.Fatalf("ID = %q, want empty", got)
+	}
+}
+
+func TestWithRouteStoresThePattern(t *testing.T) {
+	t.Parallel()
+
+	var got string
+
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got = requestid.RouteFromContext(r.Context())
+	})
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x/secret", http.NoBody)
+	requestid.WithRoute("GET /x/{name}", next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if got != "GET /x/{name}" {
+		t.Fatalf("route = %q, want the pattern", got)
+	}
+
+	if got := requestid.RouteFromContext(t.Context()); got != "" {
+		t.Fatalf("route = %q, want empty", got)
 	}
 }
