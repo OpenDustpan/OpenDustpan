@@ -1,0 +1,24 @@
+# The release record: the migration files that each release tag shipped.
+#
+# The release adds the lines of its tag to this file in the commit that it
+# tags. Until the file holds a line, the tree counts as not released: the
+# checks that hold the shipped migrations and the API description version
+# stay off, and scripts/regenerate-baseline.sh can collapse the migrations.
+# From the first line on, those checks run and the collapse is refused.
+#
+# One line for each migration file of each store dialect at the tag:
+#
+#   <tag> <dialect> <file> <sha256>
+#
+# For example:
+#
+#   v0.1.0 sqlite 0168_baseline.sql 43e3a6c1894e2f6dd5ebe0c0a5df76bce52a109c9ef88c1ad51f5a0f65b111ed
+#
+# Write the lines with:
+#
+#   for d in sqlite postgres; do
+#     (cd pkg/store/$d/migrations && sha256sum [0-9]*.sql) |
+#       awk -v tag=v0.1.0 -v d=$d '{print tag, d, $2, $1}'
+#   done >> internal/releaserecord/shipped.txt
+#
+# Never edit or remove a line after its tag.

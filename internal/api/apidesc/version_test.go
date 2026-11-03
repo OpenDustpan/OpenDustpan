@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/releaserecord"
 )
 
 // updatePin writes openapi.pin after a change of the description and of its
@@ -32,7 +33,7 @@ var updatePin = flag.Bool(
 const pinFile = "openapi.pin"
 
 // pinCheckEnv names the variable that runs TestVersionFollowsTheDescription
-// while the check is disabled.
+// on demand before the first tag. After the first tag the test always runs.
 const pinCheckEnv = "DUSTPAN_TEST_DESCRIPTION_PIN"
 
 // errPinStale means that the description and its version both changed, and the
@@ -153,12 +154,16 @@ func judge(p pin, version string, doc []byte) error {
 func TestVersionFollowsTheDescription(t *testing.T) {
 	t.Parallel()
 
-	// Disabled until the first release. Until then info.version stays at one
-	// value while the description changes. At the first release, write the
-	// pin again and remove this skip. The variable runs the check on demand.
-	if os.Getenv(pinCheckEnv) == "" {
-		t.Skip("disabled until the first release: info.version stays at one value until then; set " +
-			pinCheckEnv + "=1 to run it")
+	// Off until the release record lists a shipped migration. Until then
+	// info.version stays at one value while the description changes. The
+	// variable runs the check on demand; it cannot turn the check off.
+	rec, err := releaserecord.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if why := rec.Off("TestVersionFollowsTheDescription"); why != "" && os.Getenv(pinCheckEnv) == "" {
+		t.Skip(why + "; set " + pinCheckEnv + "=1 to run it")
 	}
 
 	raw, err := os.ReadFile(pinFile)
