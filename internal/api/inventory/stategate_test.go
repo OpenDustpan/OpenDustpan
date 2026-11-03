@@ -417,7 +417,7 @@ func auditedFixture(t *testing.T, guard stategate.Guard, entries *testAudit) del
 		t.Fatalf("handler: %v", err)
 	}
 
-	return deletedFixture{handler: handler, pulumi: pulumi}
+	return deletedFixture{handler: handler, pulumi: pulumi, deleted: nil}
 }
 
 // checkGuardDenied fails t unless entries holds one denied entry with action.

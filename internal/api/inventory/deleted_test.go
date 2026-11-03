@@ -40,6 +40,37 @@ type memDeleted struct {
 	entries []coreinventory.DeletedEntry
 }
 
+// countingDeleted is an inventory.DeletedReader that counts the calls it passes
+// to inner, so a test can prove that the store was not read.
+type countingDeleted struct {
+	inner coreinventory.DeletedReader
+	reads int
+}
+
+func (c *countingDeleted) ListDeletedUnits(
+	ctx context.Context, ns namespace.Name,
+) ([]coreinventory.DeletedEntry, error) {
+	c.reads++
+
+	return c.inner.ListDeletedUnits(ctx, ns)
+}
+
+func (c *countingDeleted) QueryDeletedUnits(
+	ctx context.Context, q coreinventory.DeletedQuery,
+) (coreinventory.DeletedPage, error) {
+	c.reads++
+
+	return c.inner.QueryDeletedUnits(ctx, q)
+}
+
+func (c *countingDeleted) GetDeletedUnit(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (coreinventory.DeletedEntry, error) {
+	c.reads++
+
+	return c.inner.GetDeletedUnit(ctx, ns, tool, unitID)
+}
+
 func (m *memDeleted) ListDeletedUnits(
 	_ context.Context, ns namespace.Name,
 ) ([]coreinventory.DeletedEntry, error) {
@@ -150,6 +181,7 @@ func testLifecycles() map[string]coreinventory.Lifecycle {
 type deletedFixture struct {
 	handler testHandler
 	pulumi  *memLifecycle
+	deleted *countingDeleted
 }
 
 // newDeletedFixture builds a deletedFixture with the deleted units entries.
@@ -195,12 +227,15 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 
 	cfg, pulumi := guardedConfig(t, spec)
 
+	deleted := &countingDeleted{inner: cfg.Deleted, reads: 0}
+	cfg.Deleted = deleted
+
 	handler, err := newCheckedHandler(t, cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return deletedFixture{handler: handler, pulumi: pulumi}
+	return deletedFixture{handler: handler, pulumi: pulumi, deleted: deleted}
 }
 
 // guardedConfig returns the config of a handler over the deleted units of
@@ -508,9 +543,10 @@ func rewriteToken(t *testing.T, token string, change func(m map[string]any)) str
 	return base64.RawURLEncoding.EncodeToString(out)
 }
 
-// TestListDeletedUnitsHostileCursor proves that a cursor which the server did
-// not make, or which another query made, answers 400 at the boundary, before
-// the store reads it. The unchanged cursor of the first page answers 200.
+// TestListDeletedUnitsHostileCursor proves that a cursor which is not
+// well-formed, or which another query made, answers 400 at the boundary, before
+// the store reads it. The unchanged cursor and a cursor with a normal name
+// answer 200.
 func TestListDeletedUnitsHostileCursor(t *testing.T) {
 	t.Parallel()
 
@@ -549,6 +585,42 @@ func TestListDeletedUnitsHostileCursor(t *testing.T) {
 			raw:    "",
 			change: func(m map[string]any) { m["u"] = strings.Repeat("a", 1025) },
 			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "long name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = strings.Repeat("a", 1025) },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "bell character U+0007 in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\x07prod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "right-to-left override U+202E in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\u202eprod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "line separator U+2028 in unit ID",
+			raw:    "",
+			change: func(m map[string]any) { m["u"] = "stk\u20281" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "paragraph separator U+2029 in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\u2029prod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "normal name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web/staging" },
+			want:   http.StatusOK,
 		},
 		{
 			name:   "empty unit ID",
@@ -591,6 +663,9 @@ func TestListDeletedUnitsHostileCursor(t *testing.T) {
 				token = firstPageToken(t, f)
 			}
 
+			// The first page above reads the store once. Count only the reads of the request.
+			f.deleted.reads = 0
+
 			rec := f.serve(t, http.MethodGet, listTarget(url.Values{"pageSize": {"1"}, "pageToken": {token}}), "")
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
@@ -598,6 +673,10 @@ func TestListDeletedUnitsHostileCursor(t *testing.T) {
 
 			if tc.want == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "request.invalid-query") {
 				t.Fatalf("body does not hold request.invalid-query: %s", rec.Body.String())
+			}
+
+			if tc.want == http.StatusBadRequest && f.deleted.reads != 0 {
+				t.Fatalf("store was called %d times for a hostile cursor, want 0", f.deleted.reads)
 			}
 		})
 	}
