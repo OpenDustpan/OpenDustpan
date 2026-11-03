@@ -29,20 +29,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
-	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -76,18 +73,6 @@ type Problem struct {
 	// or "" for an answer that is not a 500.
 	cause string
 }
-
-// The cause classes of a 500. Each value is a fixed string that the code
-// writes. A cause class never holds a part of an error text.
-const (
-	CauseDeadlineExceeded = "deadline_exceeded"
-	CauseCanceled         = "canceled"
-	CauseNetwork          = "network"
-	CauseUnexpectedEOF    = "unexpected_eof"
-	CauseFileMissing      = "file_missing"
-	CauseFilePermission   = "file_permission"
-	CauseUnclassified     = "unclassified"
-)
 
 // Unit is a unit that an answer names: its ID, the label of its tool and its
 // name.
@@ -209,7 +194,7 @@ type Writer struct {
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	p := wr.Problem(err)
 	if p.Status == http.StatusInternalServerError {
-		p.cause = Cause(err)
+		p.cause = faultlog.Cause(err)
 	}
 
 	switch {
@@ -240,14 +225,14 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 	if codeErr != nil {
 		// A code or a value that the catalog refuses is a bug of the adapter.
 		// The log names the code only.
-		wr.Logger.ErrorContext(ctx, "error code refused", slog.String("error_code", p.Code))
+		faultlog.LogInternal(ctx, wr.Logger, "error code refused", faultlog.CauseUnclassified, p.Code)
 
 		p = Internal()
 		made = errcode.Internal()
 	}
 
 	if p.Status == http.StatusInternalServerError {
-		LogInternal(ctx, wr.Logger, "request failed", p.cause)
+		faultlog.LogInternal(ctx, wr.Logger, "request failed", p.cause, "")
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -506,119 +491,6 @@ func answer(status int, code, message string) Problem {
 		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 		Units: nil, answer: errcode.Answer{}, cause: "",
 	}
-}
-
-// Cause returns the cause class of err: one value of the closed list of the
-// Cause constants, never a part of err.Error(). The order is part of the
-// contract, because context.DeadlineExceeded also implements net.Error. A nil
-// error returns CauseUnclassified.
-func Cause(err error) string {
-	switch {
-	case err == nil:
-		return CauseUnclassified
-	case errors.Is(err, context.DeadlineExceeded):
-		return CauseDeadlineExceeded
-	case errors.Is(err, context.Canceled):
-		return CauseCanceled
-	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
-		return CauseUnexpectedEOF
-	case errors.Is(err, fs.ErrNotExist):
-		return CauseFileMissing
-	case errors.Is(err, fs.ErrPermission):
-		return CauseFilePermission
-	}
-
-	// Defense in depth: AsType returns a non-nil error when ok is true. The nil
-	// check stays so that a future change to the match cannot return the class
-	// for an empty match.
-	if netErr, ok := errors.AsType[net.Error](err); ok && netErr != nil {
-		return CauseNetwork
-	}
-
-	return CauseUnclassified
-}
-
-// LogInternal logs one 500 at Error level with msg, the status, a cause class
-// from the closed list of Cause and the request ID when it is safe, then
-// attrs. Every adapter that answers a 500 calls it, so every 500 log line has
-// the same fields. cause is a class from the closed list; any other value,
-// and an empty one, logs CauseUnclassified, so the log never holds a part of
-// an error text. attrs must hold no error text.
-func LogInternal(ctx context.Context, logger *slog.Logger, msg, cause string, attrs ...slog.Attr) {
-	LogServer(ctx, logger, ServerLog{
-		Message: msg, Status: http.StatusInternalServerError, Cause: cause, Attrs: attrs,
-	})
-}
-
-// ServerLog is one 5xx log line. Attrs must hold no error text.
-type ServerLog struct {
-	Message string
-	Status  int
-	// Cause is a class from the closed list of Cause. Any other value, and an
-	// empty one, logs CauseUnclassified.
-	Cause string
-	Attrs []slog.Attr
-}
-
-// LogServer is LogInternal for a 5xx status other than 500, for example a 503
-// of a protocol that has its own statuses. It has the same fields.
-func LogServer(ctx context.Context, logger *slog.Logger, entry ServerLog) {
-	if !logger.Enabled(ctx, slog.LevelError) {
-		return
-	}
-
-	cause := entry.Cause
-	if !knownCause(cause) {
-		cause = CauseUnclassified
-	}
-
-	rec := slog.NewRecord(time.Now(), slog.LevelError, entry.Message, 0)
-	rec.AddAttrs(slog.Int("status", entry.Status), slog.String("cause", cause))
-
-	// Defense in depth: the root middleware makes the request ID, and this
-	// check does not rely on it. A value that is not safe is left out.
-	if id, ok := safeRequestID(requestid.FromContext(ctx)); ok {
-		rec.AddAttrs(slog.String("request_id", id))
-	}
-
-	rec.AddAttrs(entry.Attrs...)
-
-	if err := logger.Handler().Handle(ctx, rec); err != nil {
-		// The answer is already decided. The log names no text of the failure.
-		logger.WarnContext(ctx, "error log line was not written")
-	}
-}
-
-// knownCause returns true when cause is one value of the closed list.
-func knownCause(cause string) bool {
-	switch cause {
-	case CauseUnclassified, CauseDeadlineExceeded, CauseCanceled, CauseUnexpectedEOF,
-		CauseFileMissing, CauseFilePermission, CauseNetwork:
-		return true
-	default:
-		return false
-	}
-}
-
-// safeRequestID returns id and true only when id is 1 to 64 lowercase hex
-// bytes, the form that requestid.New makes. Otherwise it returns "" and false.
-func safeRequestID(id string) (string, bool) {
-	if id == "" || len(id) > 64 {
-		return "", false
-	}
-
-	// Defense in depth: requestid.New makes hex only, but the context value may
-	// come from a caller that is not the root middleware. This check stays so
-	// that a value with CR, LF or a secret never reaches the log, and it does
-	// not rely on the slog handler quoting.
-	for i := range len(id) {
-		c := id[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return "", false
-		}
-	}
-
-	return id, true
 }
 
 // WriteJSON writes body as JSON with status. A failed write logs a warning:

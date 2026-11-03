@@ -2,9 +2,9 @@ package tfe
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -62,7 +62,7 @@ func (h *Handler) guardStateWrite(
 
 	answer, err := errcode.New(out.Code)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", out.Code))
+		faultlog.LogInternal(ctx, h.logger, "error code failed", faultlog.CauseUnclassified, out.Code)
 		h.writeInternal(ctx, w)
 
 		return false
