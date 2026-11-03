@@ -118,6 +118,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "a refused start leaves no operation", test: testBackupStartRefused},
 		{name: "a claimed start runs the operation under the claim of the starter", test: testBackupStartClaimed},
 		{name: "a refused claimed start leaves no row and no operation", test: testBackupStartClaimedRefused},
+		{name: "a worker takes a claimed start after its claim expires", test: testBackupStartClaimedTakeover},
 		{name: "a start with an invalid request stores no row", test: testBackupStartInvalid},
 		{name: "a start with a foreign key or kind stores no row", test: testBackupStartForeign},
 		{name: "finishing a backup records the step in the same call", test: testBackupFinishRecordsStep},

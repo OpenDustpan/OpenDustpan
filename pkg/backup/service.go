@@ -322,6 +322,12 @@ func (s *Service) Await(ctx context.Context, id ID) (Record, error) {
 			return Record{}, fmt.Errorf("backup %s has the state %q: %w", id, row.State, ErrCorrupt)
 		}
 
+		// A caller that stopped claims nothing: a claim would only end in a
+		// release.
+		if err := ctx.Err(); err != nil {
+			return Record{}, fmt.Errorf("wait for backup %s: %w", id, err)
+		}
+
 		runErr := s.runner.RunOnce(ctx)
 		if ctx.Err() != nil {
 			return Record{}, fmt.Errorf("wait for backup %s: %w", id, ctx.Err())

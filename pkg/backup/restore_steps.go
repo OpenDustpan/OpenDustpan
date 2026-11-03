@@ -714,8 +714,11 @@ func canceledOf(res maintenance.EnterResult, err error) []string {
 // stepPreBackup takes the backup of the live data as its own durable
 // operation, runs it on this step, waits for it, and moves the restore to
 // applying with its ID. The start claims the backup for this instance, so a
-// backup worker never runs it while this step does. A takeover waits for
-// the same backup, and runs it when no instance holds it.
+// backup worker never runs it while this step does. A takeover finds the
+// backup started and waits for it with Await. When no instance holds a
+// claim, Await runs a pending backup operation: the next one that the
+// runner claims, not one that it picks by ID. That is this backup, because
+// only one backup runs at a time.
 //
 // The backup records each live blob that it found missing or damaged, and
 // this step stores one audit event of the restore with the counts. Then it
