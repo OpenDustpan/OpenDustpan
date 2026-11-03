@@ -5472,3 +5472,19 @@ func (m *memStore) checkDeclareSwitches(w workspace.Workspace, sv workspace.Stat
 
 	return nil
 }
+
+// pendingCount returns the number of state versions of m that are pending.
+func pendingCount(m *memStore) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	n := 0
+
+	for id := range m.versions {
+		if m.versions[id].Status == workspace.StatusPending {
+			n++
+		}
+	}
+
+	return n
+}
