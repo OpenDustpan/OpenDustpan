@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -171,4 +173,92 @@ func mustGetOperation(t *testing.T, ops durable.Store, id durable.ID) durable.Op
 	}
 
 	return op
+}
+
+// TestRestoreSwapRefusesAChangeDuringTheSwap proves that the check of the
+// fence under the row lock, at the end of the swap transaction, refuses a
+// cancel or a takeover that commits while the swap runs, after its first
+// check. The swap then rolls back fully: the staging area stays and no step
+// is recorded.
+func TestRestoreSwapRefusesAChangeDuringTheSwap(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		change func(t *testing.T, ops *DurableOperations, held durable.Operation)
+		want   error
+	}{
+		{name: "a cancel", want: durable.ErrCanceled, change: func(t *testing.T, ops *DurableOperations, held durable.Operation) {
+			t.Helper()
+
+			if err := ops.CancelBefore(t.Context(), held.ID, backup.RestoreStepSwap); err != nil {
+				t.Fatalf("cancel during the swap: %v", err)
+			}
+		}},
+		{name: "a takeover", want: durable.ErrClaimLost, change: func(t *testing.T, ops *DurableOperations, held durable.Operation) {
+			t.Helper()
+
+			if err := ops.Release(t.Context(), held.Claim); err != nil {
+				t.Fatalf("release during the swap: %v", err)
+			}
+
+			if _, err := ops.Claim(t.Context(), durable.ClaimRequest{
+				Owner: "instance-b", Kinds: []durable.Kind{backup.RestoreOperationKind}, MaxVersions: nil,
+				Lease: time.Hour, TakeCanceled: false,
+			}); err != nil {
+				t.Fatalf("takeover during the swap: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkChangeDuringSwap(t, tc.change, tc.want)
+		})
+	}
+}
+
+// checkChangeDuringSwap holds a swap after its checks, commits change from
+// outside, and requires that the swap ends with want and changes nothing.
+func checkChangeDuringSwap(
+	t *testing.T, change func(t *testing.T, ops *DurableOperations, held durable.Operation), want error,
+) {
+	t.Helper()
+
+	s := openAt(t, membershipURL(t), "")
+	staged := storetest.StageRestoreArea(t, s)
+	ops := s.DurableOperations()
+	held := mustGetOperation(t, ops, staged.Swap.Operation)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
+	s.swapHook = func(context.Context) {
+		close(entered)
+		<-release
+	}
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false)
+		done <- applyErr
+	}()
+
+	<-entered
+	change(t, ops, held)
+	close(release)
+
+	if err := <-done; !errors.Is(err, want) {
+		t.Fatalf("swap after the change = %v, want %v", err, want)
+	}
+
+	areas, err := s.ListRestoreAreas(t.Context())
+	if err != nil || !slices.Contains(areas, staged.Area) {
+		t.Fatalf("restore areas = %v, %v; want %s kept", areas, err, staged.Area)
+	}
+
+	if _, ok := mustGetOperation(t, ops, staged.Swap.Operation).Step(backup.RestoreStepSwap); ok {
+		t.Fatal("swap step is recorded after a refused swap")
+	}
 }
