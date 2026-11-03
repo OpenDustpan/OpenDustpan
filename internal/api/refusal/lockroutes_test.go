@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // TestLockedTextKeepsTheRouteOfALongReason proves that a long lock reason never
@@ -87,6 +88,62 @@ func TestMaxLockedTextBytesIsTheMessageLimit(t *testing.T) {
 	if refusal.MaxLockedTextBytes != problem.MaxMessageBytes {
 		t.Fatalf("MaxLockedTextBytes = %d, want problem.MaxMessageBytes = %d",
 			refusal.MaxLockedTextBytes, problem.MaxMessageBytes)
+	}
+}
+
+// TestRemovalRouteOfTheLongestUnit proves that the removal route of the longest
+// legal unit reference is whole in the text of the refusal, and that the text
+// stays within MaxLockedTextBytes. The longest namespace is 100 bytes, the
+// longest tool code is 100 bytes, and the longest Pulumi unit name is a project
+// and a stack of 100 bytes each, joined by a slash.
+func TestRemovalRouteOfTheLongestUnit(t *testing.T) {
+	t.Parallel()
+
+	longestNamespace, err := namespace.ParseName(strings.Repeat("n", 100))
+	if err != nil {
+		t.Fatalf("ParseName of 100 bytes: %v", err)
+	}
+
+	longest := collection.UnitRef{
+		Namespace: longestNamespace,
+		Tool:      strings.Repeat("t", 100),
+		Name:      strings.Repeat("p", 100) + "/" + strings.Repeat("s", 100),
+	}
+
+	cases := []struct {
+		name   string
+		target manuallock.Target
+	}{
+		{
+			name:   "short unit",
+			target: manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"}),
+		},
+		{
+			name:   "longest unit",
+			target: manuallock.UnitTarget(longest),
+		},
+		{
+			name:   "unit with colon, slash and reserved characters",
+			target: manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web:a/b&c%d"}),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := refusal.WithRemoval(strings.Repeat("x", 1000), tc.target)
+
+			suffix := ". To remove the lock, the holder sends DELETE " + refusal.RemovalRoutes(tc.target).Remove + "."
+			if !strings.HasSuffix(got, suffix) {
+				t.Fatalf("WithRemoval has %d bytes and does not end with the whole route sentence %q", len(got), suffix)
+			}
+
+			if len(got) > refusal.MaxLockedTextBytes {
+				t.Fatalf("WithRemoval has %d bytes, want at most %d; the route sentence alone is %d bytes",
+					len(got), refusal.MaxLockedTextBytes, len(suffix))
+			}
+		})
 	}
 }
 
