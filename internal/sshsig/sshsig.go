@@ -1,7 +1,7 @@
 // Package sshsig parses and verifies signatures in the format that
 // "ssh-keygen -Y sign" writes (the SSHSIG format of OpenSSH). It accepts the
-// key types ssh-ed25519 and sk-ssh-ed25519@openssh.com, and the hash
-// algorithms sha256 and sha512. It refuses each other value.
+// key types ssh-ed25519, sk-ssh-ed25519@openssh.com and ecdsa-sha2-nistp256,
+// and the hash algorithms sha256 and sha512. It refuses each other value.
 //
 // A signature holds the public key of the signer. Verify compares that key
 // with the key that the caller gives and verifies with the caller's key
@@ -10,14 +10,18 @@ package sshsig
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 )
 
@@ -36,6 +40,8 @@ const (
 const (
 	TypeEd25519   = "ssh-ed25519"
 	TypeSKEd25519 = "sk-ssh-ed25519@openssh.com"
+	// TypeECDSAP256 is the key type of an ECDSA key on the curve P-256.
+	TypeECDSAP256 = "ecdsa-sha2-nistp256"
 )
 
 // The hash algorithms that the package accepts.
@@ -68,11 +74,23 @@ const (
 	maxArmorLine       = 76
 	ed25519KeySize     = ed25519.PublicKeySize
 	ed25519SigSize     = ed25519.SignatureSize
-	magic              = "SSHSIG"
-	version            = 1
-	applicationPrefix  = "ssh:"
-	armorBegin         = "-----BEGIN SSH SIGNATURE-----"
-	armorEnd           = "-----END SSH SIGNATURE-----"
+	// ecdsaCurveName is the curve name of TypeECDSAP256 on the wire.
+	ecdsaCurveName = "nistp256"
+	// ecdsaPointSize is the size of an uncompressed P-256 point: 0x04, X
+	// and Y.
+	ecdsaPointSize = 65
+	// maxMPIntSize is the size of an mpint of a P-256 value: 32 bytes and
+	// a 0x00 prefix.
+	maxMPIntSize = 33
+	// ecdsaSigBlobSize is the size of the largest signature blob: the
+	// mpints r and s, each with its 4-byte length field and at most
+	// maxMPIntSize bytes.
+	ecdsaSigBlobSize  = 74
+	magic             = "SSHSIG"
+	version           = 1
+	applicationPrefix = "ssh:"
+	armorBegin        = "-----BEGIN SSH SIGNATURE-----"
+	armorEnd          = "-----END SSH SIGNATURE-----"
 )
 
 // Errors of the package.
@@ -104,13 +122,16 @@ var (
 
 // PublicKey is a public key of an accepted type.
 type PublicKey struct {
-	// Type is TypeEd25519 or TypeSKEd25519.
+	// Type is TypeEd25519, TypeSKEd25519 or TypeECDSAP256.
 	Type string
-	// Key is the Ed25519 public key.
+	// Key is the Ed25519 public key. It is empty for TypeECDSAP256.
 	Key ed25519.PublicKey
 	// Application is the application of a security key, for example
-	// "ssh:". It is empty for TypeEd25519.
+	// "ssh:". It is empty for the other types.
 	Application string
+	// ECDSA is the P-256 public key of TypeECDSAP256. It is nil for the
+	// other types.
+	ECDSA *ecdsa.PublicKey
 }
 
 // Signature is a parsed signature.
@@ -123,10 +144,11 @@ type Signature struct {
 	HashAlgorithm string
 	// Type is the signature type: the key type of the signer.
 	Type string
-	// Blob is the Ed25519 signature.
+	// Blob is the signature. For an Ed25519 type it is the 64-byte Ed25519
+	// signature. For TypeECDSAP256 it is the mpint r followed by the mpint s.
 	Blob []byte
 	// Flags and Counter are the flags and the signature counter of a
-	// security key signature. Both are 0 for TypeEd25519.
+	// security key signature. Both are 0 unless Type is TypeSKEd25519.
 	Flags   byte
 	Counter uint32
 }
@@ -134,8 +156,8 @@ type Signature struct {
 // Result is what a verified signature says about the key.
 type Result struct {
 	// UserPresent and UserVerified are the flags of a security key
-	// signature. Both are false for TypeEd25519. A software middleware can
-	// set them, so they prove no hardware.
+	// signature. Both are false for a key that is not a security key. A
+	// software middleware can set them, so they prove no hardware.
 	UserPresent  bool
 	UserVerified bool
 	// Counter is the signature counter of a security key signature.
@@ -152,20 +174,44 @@ func ParsePublicKey(wire []byte) (PublicKey, error) {
 
 	r := reader{b: wire, err: nil}
 	keyType := string(r.str(maxTypeSize))
-	key := r.str(ed25519KeySize)
 
-	var app string
+	var (
+		pk  PublicKey
+		err error
+	)
 
 	switch keyType {
-	case TypeEd25519:
-	case TypeSKEd25519:
-		app = string(r.str(MaxApplicationSize))
+	case TypeEd25519, TypeSKEd25519:
+		pk, err = parseEd25519Key(&r, keyType)
+	case TypeECDSAP256:
+		pk, err = parseECDSAKey(&r)
 	default:
 		if r.err != nil {
 			return PublicKey{}, r.err
 		}
 
 		return PublicKey{}, fmt.Errorf("%w: %q", ErrKeyType, printable(keyType))
+	}
+
+	if err != nil {
+		return PublicKey{}, err
+	}
+
+	if err := pk.check(); err != nil {
+		return PublicKey{}, err
+	}
+
+	return pk, nil
+}
+
+// parseEd25519Key reads the fields of an Ed25519 key or a security key after
+// the type. It does not check the key; ParsePublicKey does.
+func parseEd25519Key(r *reader, keyType string) (PublicKey, error) {
+	key := r.str(ed25519KeySize)
+
+	var app string
+	if keyType == TypeSKEd25519 {
+		app = string(r.str(MaxApplicationSize))
 	}
 
 	if err := r.end(); err != nil {
@@ -176,48 +222,108 @@ func ParsePublicKey(wire []byte) (PublicKey, error) {
 		return PublicKey{}, fmt.Errorf("%w: Ed25519 key of %d bytes", ErrMalformed, len(key))
 	}
 
-	pk := PublicKey{Type: keyType, Key: ed25519.PublicKey(bytes.Clone(key)), Application: app}
-	if err := pk.check(); err != nil {
+	return PublicKey{Type: keyType, Key: ed25519.PublicKey(bytes.Clone(key)), Application: app, ECDSA: nil}, nil
+}
+
+// parseECDSAKey reads the curve name and the point of a P-256 key after the
+// type. It returns the key with its point parsed.
+func parseECDSAKey(r *reader) (PublicKey, error) {
+	curve := r.str(maxTypeSize)
+	point := r.str(ecdsaPointSize)
+
+	if err := r.end(); err != nil {
 		return PublicKey{}, err
 	}
 
-	return pk, nil
-}
-
-// Marshal returns the key in its SSH wire form.
-func (k PublicKey) Marshal() []byte {
-	const lengths = 3 * 4
-
-	b := make([]byte, 0, lengths+len(k.Type)+len(k.Key)+len(k.Application))
-	b = appendString(b, []byte(k.Type))
-	b = appendString(b, k.Key)
-
-	if k.Type == TypeSKEd25519 {
-		b = appendString(b, []byte(k.Application))
+	if string(curve) != ecdsaCurveName {
+		return PublicKey{}, fmt.Errorf("%w: ECDSA curve %q", ErrMalformed, printable(string(curve)))
 	}
 
-	return b
+	ec, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+	if err != nil {
+		return PublicKey{}, fmt.Errorf("%w: ECDSA point", ErrMalformed)
+	}
+
+	return PublicKey{Type: TypeECDSAP256, Key: nil, Application: "", ECDSA: ec}, nil
+}
+
+// Marshal returns the key in its SSH wire form. For a key that check
+// refuses, it returns the type alone. A valid key always has more fields,
+// so that result never equals the wire of a key that parses.
+func (k PublicKey) Marshal() []byte {
+	b := appendString(nil, []byte(k.Type))
+
+	switch k.Type {
+	case TypeEd25519:
+		return appendString(b, k.Key)
+	case TypeSKEd25519:
+		b = appendString(b, k.Key)
+		return appendString(b, []byte(k.Application))
+	case TypeECDSAP256:
+		if k.ECDSA == nil {
+			return b
+		}
+
+		point, err := k.ECDSA.Bytes()
+		if err != nil {
+			return b
+		}
+
+		b = appendString(b, []byte(ecdsaCurveName))
+
+		return appendString(b, point)
+	default:
+		return b
+	}
 }
 
 // check checks the fields of a key.
 func (k PublicKey) check() error {
+	switch k.Type {
+	case TypeEd25519, TypeSKEd25519:
+		return k.checkEd25519()
+	case TypeECDSAP256:
+		return k.checkECDSA()
+	default:
+		return fmt.Errorf("%w: %q", ErrKeyType, printable(k.Type))
+	}
+}
+
+// checkEd25519 checks an Ed25519 key or a security key.
+func (k PublicKey) checkEd25519() error {
 	if len(k.Key) != ed25519KeySize {
 		return fmt.Errorf("%w: Ed25519 key of %d bytes", ErrMalformed, len(k.Key))
 	}
 
-	switch k.Type {
-	case TypeEd25519:
+	if k.ECDSA != nil {
+		return fmt.Errorf("%w: ECDSA point on an Ed25519 key", ErrMalformed)
+	}
+
+	if k.Type == TypeEd25519 {
 		if k.Application != "" {
 			return fmt.Errorf("%w: application on a key that is not a security key", ErrMalformed)
 		}
-	case TypeSKEd25519:
-		// ssh-keygen only enrolls an application that starts with "ssh:".
-		// Other applications are web origins, and the package refuses them.
-		if !strings.HasPrefix(k.Application, applicationPrefix) || !isToken(k.Application, MaxApplicationSize) {
-			return fmt.Errorf("%w: application %q", ErrMalformed, printable(k.Application))
-		}
-	default:
-		return fmt.Errorf("%w: %q", ErrKeyType, printable(k.Type))
+
+		return nil
+	}
+
+	// ssh-keygen only enrolls an application that starts with "ssh:".
+	// Other applications are web origins, and the package refuses them.
+	if !strings.HasPrefix(k.Application, applicationPrefix) || !isToken(k.Application, MaxApplicationSize) {
+		return fmt.Errorf("%w: application %q", ErrMalformed, printable(k.Application))
+	}
+
+	return nil
+}
+
+// checkECDSA checks a P-256 key.
+func (k PublicKey) checkECDSA() error {
+	if k.ECDSA == nil || k.ECDSA.Curve != elliptic.P256() {
+		return fmt.Errorf("%w: ECDSA key that is not on P-256", ErrMalformed)
+	}
+
+	if len(k.Key) != 0 || k.Application != "" {
+		return fmt.Errorf("%w: Ed25519 fields on an ECDSA key", ErrMalformed)
 	}
 
 	return nil
@@ -323,13 +429,13 @@ func ParseBlob(blob []byte) (Signature, error) {
 	return sig, nil
 }
 
-// parseInner parses the signature field: the signature type, the Ed25519
-// signature, and for a security key the flags and the counter. It returns
-// a Signature with these fields only.
+// parseInner parses the signature field: the signature type, the signature
+// blob, and for a security key the flags and the counter. It returns a
+// Signature with these fields only.
 func parseInner(inner []byte) (Signature, error) {
 	r := reader{b: inner, err: nil}
 	sigType := string(r.str(maxTypeSize))
-	blob := bytes.Clone(r.str(ed25519SigSize))
+	blob := bytes.Clone(r.str(ecdsaSigBlobSize))
 
 	var (
 		flags   byte
@@ -337,7 +443,7 @@ func parseInner(inner []byte) (Signature, error) {
 	)
 
 	switch sigType {
-	case TypeEd25519:
+	case TypeEd25519, TypeECDSAP256:
 	case TypeSKEd25519:
 		flags = r.byte()
 		counter = r.uint32()
@@ -353,7 +459,9 @@ func parseInner(inner []byte) (Signature, error) {
 		return Signature{}, err
 	}
 
-	if len(blob) != ed25519SigSize {
+	// The Ed25519 types have a fixed blob. The ECDSA blob has two mpints, so
+	// its length is checked when it is verified.
+	if sigType != TypeECDSAP256 && len(blob) != ed25519SigSize {
 		return Signature{}, fmt.Errorf("%w: Ed25519 signature of %d bytes", ErrMalformed, len(blob))
 	}
 
@@ -401,31 +509,58 @@ func (s Signature) Verify(key PublicKey, namespace string, message []byte) (Resu
 			ErrKeyType, printable(s.Type), key.Type)
 	}
 
-	if len(s.Blob) != ed25519SigSize {
-		return Result{}, fmt.Errorf("%w: Ed25519 signature of %d bytes", ErrMalformed, len(s.Blob))
-	}
+	return s.verifyKey(key, namespace, digest)
+}
 
+// verifyKey verifies the signed data of the signature with key, by the rules
+// of the key type. digest is the hash of the message.
+func (s Signature) verifyKey(key PublicKey, namespace string, digest []byte) (Result, error) {
 	signed := signedData(namespace, s.HashAlgorithm, digest)
 
-	if key.Type == TypeEd25519 {
+	switch key.Type {
+	case TypeEd25519:
+		return s.verifyEd25519(key, signed)
+	case TypeSKEd25519:
+		return s.verifySK(key, signed)
+	case TypeECDSAP256:
 		if s.Flags != 0 || s.Counter != 0 {
 			return Result{}, fmt.Errorf("%w: flags on a key that is not a security key", ErrFlags)
 		}
 
-		if !ed25519.Verify(key.Key, signed, s.Blob) {
-			return Result{}, ErrVerify
-		}
+		return s.verifyECDSA(key, signed)
+	default:
+		// Defense in depth: checkKey refuses another type too; this case
+		// stays so that a new type cannot verify before it has its own branch.
+		return Result{}, fmt.Errorf("%w: %q", ErrKeyType, printable(key.Type))
+	}
+}
 
-		return Result{UserPresent: false, UserVerified: false, Counter: 0}, nil
+// verifyEd25519 verifies an Ed25519 signature. It refuses flags and a
+// counter, which only a security key has.
+func (s Signature) verifyEd25519(key PublicKey, signed []byte) (Result, error) {
+	if len(s.Blob) != ed25519SigSize {
+		return Result{}, fmt.Errorf("%w: Ed25519 signature of %d bytes", ErrMalformed, len(s.Blob))
 	}
 
-	return s.verifySK(key, signed)
+	if s.Flags != 0 || s.Counter != 0 {
+		return Result{}, fmt.Errorf("%w: flags on a key that is not a security key", ErrFlags)
+	}
+
+	if !ed25519.Verify(key.Key, signed, s.Blob) {
+		return Result{}, ErrVerify
+	}
+
+	return Result{UserPresent: false, UserVerified: false, Counter: 0}, nil
 }
 
 // verifySK verifies a security key signature. The security key signs the
 // SHA-256 of the application, the flags, the counter and the SHA-256 of the
 // signed data.
 func (s Signature) verifySK(key PublicKey, signed []byte) (Result, error) {
+	if len(s.Blob) != ed25519SigSize {
+		return Result{}, fmt.Errorf("%w: Ed25519 signature of %d bytes", ErrMalformed, len(s.Blob))
+	}
+
 	if s.Flags&^(FlagUserPresent|FlagUserVerified) != 0 {
 		return Result{}, fmt.Errorf("%w: flags 0x%02x", ErrFlags, s.Flags)
 	}
@@ -454,6 +589,46 @@ func (s Signature) verifySK(key PublicKey, signed []byte) (Result, error) {
 		UserVerified: s.Flags&FlagUserVerified != 0,
 		Counter:      s.Counter,
 	}, nil
+}
+
+// verifyECDSA verifies an ECDSA signature. The blob holds the mpint r and
+// the mpint s. The key signs the SHA-256 of the signed data.
+func (s Signature) verifyECDSA(key PublicKey, signed []byte) (Result, error) {
+	// Defense in depth: check refuses a key without a point; this check stays
+	// so that a caller that builds a PublicKey cannot reach the verifier with
+	// no point.
+	if key.ECDSA == nil {
+		return Result{}, fmt.Errorf("%w: ECDSA key without a point", ErrMalformed)
+	}
+
+	br := reader{b: s.Blob, err: nil}
+	rv := br.mpint()
+	sv := br.mpint()
+
+	if err := br.end(); err != nil {
+		return Result{}, err
+	}
+
+	n := elliptic.P256().Params().N
+
+	// Defense in depth: VerifyASN1 checks the range too; this check stays so
+	// that a change of the library cannot accept a zero or a large value.
+	if rv.Sign() == 0 || sv.Sign() == 0 || rv.Cmp(n) >= 0 || sv.Cmp(n) >= 0 {
+		return Result{}, fmt.Errorf("%w: r or s out of range", ErrVerify)
+	}
+
+	der, err := asn1.Marshal(struct{ R, S *big.Int }{R: rv, S: sv})
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %w", ErrVerify, err)
+	}
+
+	digest := sha256.Sum256(signed)
+
+	if !ecdsa.VerifyASN1(key.ECDSA, digest[:], der) {
+		return Result{}, ErrVerify
+	}
+
+	return Result{UserPresent: false, UserVerified: false, Counter: 0}, nil
 }
 
 // Verify parses the public key wire and the armored signature, and checks
@@ -613,6 +788,31 @@ func (r *reader) str(maxLen int) []byte {
 	}
 
 	return r.take(int(n))
+}
+
+// mpint returns the next SSH mpint as a non-negative value. It refuses a
+// negative value, a 0x00 prefix that the next byte does not need, and a
+// value of more than maxMPIntSize bytes. An empty mpint is zero. After a
+// fault it returns zero, and err holds the fault.
+func (r *reader) mpint() *big.Int {
+	v := new(big.Int)
+
+	b := r.str(maxMPIntSize)
+	if r.err != nil {
+		return v
+	}
+
+	if len(b) > 0 && b[0]&0x80 != 0 {
+		r.err = fmt.Errorf("%w: negative mpint", ErrMalformed)
+		return v
+	}
+
+	if len(b) > 1 && b[0] == 0 && b[1]&0x80 == 0 {
+		r.err = fmt.Errorf("%w: mpint with a zero byte that is not needed", ErrMalformed)
+		return v
+	}
+
+	return v.SetBytes(b)
 }
 
 // end returns the first fault, or ErrMalformed for bytes after the last
