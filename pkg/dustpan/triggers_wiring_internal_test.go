@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/trigger"
@@ -62,6 +63,95 @@ func (noFences) Fence(context.Context, namespace.Name) (namespace.Fence, error) 
 	var f namespace.Fence
 
 	return f, nil
+}
+
+// noJobStarter is the job.Starter of a server that starts no job. The test
+// never starts one: it has no followers.
+type noJobStarter struct {
+	job.Starter
+}
+
+// TestNewTriggerManagerReadsFinalVersionFromJobStore goes through
+// newTriggerManager. The dispatcher that the manager builds reads the last final
+// state version of a unit from the job store, and it fails closed without the
+// port.
+func TestNewTriggerManagerReadsFinalVersionFromJobStore(t *testing.T) {
+	t.Parallel()
+
+	unit := graph.Unit{Namespace: "acme", Tool: "opentofu", ID: "u-1"}
+	row := job.FinalVersion{UnitID: "u-1", VersionID: "sv-9", Commit: "", Job: "", At: time.Time{}}
+
+	tests := []struct {
+		name    string
+		hasPort bool
+		version string
+		wantErr error
+	}{
+		{
+			name:    "the last final version is accepted",
+			hasPort: true,
+			version: "sv-9",
+			wantErr: nil,
+		},
+		{
+			name:    "an older version is refused",
+			hasPort: true,
+			version: "sv-8",
+			wantErr: trigger.ErrVersionMismatch,
+		},
+		{
+			name:    "a store without the port fails closed",
+			hasPort: false,
+			version: "sv-9",
+			wantErr: trigger.ErrVersionMismatch,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var js job.Store = plainStore{Store: nil}
+			if tc.hasPort {
+				js = finalsStore{Store: nil, reader: &fakeReader{
+					row: row, ok: true, err: nil, gotNS: "", gotID: "",
+				}}
+			}
+
+			// The dispatcher that the manager builds is kept here, so that the test
+			// can call its Upstream.
+			var built trigger.Dispatcher
+
+			capture := func(cfg trigger.DispatcherConfig) (trigger.Dispatcher, error) {
+				d, err := trigger.NewDispatcher(cfg)
+				built = d
+
+				return d, err
+			}
+
+			cfg := new(settings)
+			cfg.triggerStore = noTriggers{Store: nil}
+			cfg.jobStore = js
+			cfg.authorizer = identity.AdminOnly{}
+			ports := &triggerPorts{records: nil, entries: noAudit{Store: nil}}
+
+			var svc services
+
+			manager, err := newTriggerManager(svc, cfg, ports, noJobStarter{Starter: nil}, capture)
+			if err != nil {
+				t.Fatalf("newTriggerManager: %v", err)
+			}
+
+			if manager == nil || built == nil {
+				t.Fatal("newTriggerManager built no dispatcher")
+			}
+
+			_, err = built.Upstream(t.Context(), trigger.Applied{Unit: unit, Version: tc.version})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Upstream error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
 }
 
 // TestTriggerDispatcherReadsFinalVersionFromJobStore checks the wiring of the
