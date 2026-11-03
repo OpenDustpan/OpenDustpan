@@ -906,11 +906,11 @@ func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
 		deny map[identity.Action]bool
 		want string
 	}{
-		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables replaced"},
+		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables will be replaced"},
 		{
 			name: "keeps without restore-access",
 			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
-			want: "access tables kept",
+			want: "access tables will be kept",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

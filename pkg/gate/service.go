@@ -112,6 +112,10 @@ type Change struct {
 	// Fence is the fence of Namespace. The record of a refusal is written
 	// with it.
 	Fence namespace.Fence
+	// State is what the write changes in the state of the unit, or nil when
+	// the server holds no new state. It is valid at state.write for a rollback
+	// of one unit only. Nil gives state.available false.
+	State *StateChange
 }
 
 // Decision is the result of one evaluation. Record is empty for a decision

@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-02. Decisions 1, 2 and 4 are owner decisions. Decision 3 is a PM decision, taken on the owner's behalf, marked "(PM)"
 
+Changed by:
+
+- ADR 325 changes decision 2: the version test of the description skips only while the release record lists no shipped migration file.
+
 Changes:
 
 - Changes ADR 264 decision 5: until the first release, the description has one fixed version. A pin of the version does not name one change of the description.

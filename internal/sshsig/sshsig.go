@@ -260,11 +260,7 @@ func (k PublicKey) Marshal() []byte {
 		b = appendString(b, k.Key)
 		return appendString(b, []byte(k.Application))
 	case TypeECDSAP256:
-		if k.ECDSA == nil {
-			return b
-		}
-
-		point, err := k.ECDSA.Bytes()
+		point, err := ecdsaPoint(k.ECDSA)
 		if err != nil {
 			return b
 		}
@@ -322,11 +318,54 @@ func (k PublicKey) checkECDSA() error {
 		return fmt.Errorf("%w: ECDSA key that is not on P-256", ErrMalformed)
 	}
 
+	// Defense in depth: parseECDSAKey parses the point with a check of the
+	// curve too, and VerifyASN1 refuses a point that is not on the curve; this
+	// check stays so that a key that a caller builds by hand, with no
+	// coordinates, with the point at infinity or with a point off the curve,
+	// never reaches Marshal or the verifier.
+	if _, err := ecdsaPoint(k.ECDSA); err != nil {
+		return err
+	}
+
 	if len(k.Key) != 0 || k.Application != "" {
 		return fmt.Errorf("%w: Ed25519 fields on an ECDSA key", ErrMalformed)
 	}
 
 	return nil
+}
+
+// ecdsaPoint returns the uncompressed encoding of the point of pub. It is the
+// one encoder of the package: Marshal, checkECDSA and verifyECDSA all use it.
+// It fails closed: it returns an error for no key, for a key without
+// coordinates (Bytes panics on it), for the point at infinity and for a point
+// that is not on P-256. It never panics.
+func ecdsaPoint(pub *ecdsa.PublicKey) ([]byte, error) {
+	if pub == nil {
+		return nil, fmt.Errorf("%w: ECDSA key without a point", ErrMalformed)
+	}
+
+	point := make([]byte, 0, ecdsaPointSize)
+
+	encoded := false
+
+	func() {
+		defer func() {
+			if recover() != nil {
+				encoded = false
+			}
+		}()
+
+		var err error
+
+		point, err = pub.Bytes()
+		encoded = err == nil
+	}()
+
+	if !encoded {
+		return nil, fmt.Errorf("%w: ECDSA point is not on the curve", ErrMalformed)
+	}
+
+	return point, nil
 }
 
 // Parse parses an armored signature, exactly as "ssh-keygen -Y sign"
@@ -597,11 +636,13 @@ func (s Signature) verifySK(key PublicKey, signed []byte) (Result, error) {
 // verifyECDSA verifies an ECDSA signature. The blob holds the mpint r and
 // the mpint s. The key signs the SHA-256 of the signed data.
 func (s Signature) verifyECDSA(key PublicKey, signed []byte) (Result, error) {
-	// Defense in depth: check refuses a key without a point; this check stays
-	// so that a caller that builds a PublicKey cannot reach the verifier with
-	// no point.
-	if key.ECDSA == nil {
-		return Result{}, fmt.Errorf("%w: ECDSA key without a point", ErrMalformed)
+	// Defense in depth: check refuses a key without a point and a point that
+	// is not on the curve; this check stays so that a caller that builds a
+	// PublicKey cannot reach the verifier with no point, with no coordinates,
+	// with a point off the curve or with the point at infinity. It does not
+	// rely on check or on Marshal.
+	if _, err := ecdsaPoint(key.ECDSA); err != nil {
+		return Result{}, err
 	}
 
 	br := reader{b: s.Blob, err: nil}

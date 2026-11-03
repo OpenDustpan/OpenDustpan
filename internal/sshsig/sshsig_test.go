@@ -44,6 +44,10 @@ func TestVerifyVectors(t *testing.T) {
 		{"sk", "sk-flag-0x02", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrFlags},
 		{"sk", "sk-flag-0x40", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrFlags},
 		{"sk", "sk-flag-0x80", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrFlags},
+		{"ecdsa-p256", "ecdsa-p256", sshsig.NamespaceStepUp, result(false, false, 0), nil},
+		{"ecdsa-p256", "ecdsa-p256-sha256", sshsig.NamespaceStepUp, result(false, false, 0), nil},
+		{"ecdsa-p256", "ecdsa-p256", sshsig.NamespaceKeyAdd, result(false, false, 0), sshsig.ErrNamespace},
+		{"ed25519", "ecdsa-p256", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrKeyMismatch},
 		{"ecdsa-p384", "ecdsa-p384", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrKeyType},
 		{"rsa-3072", "rsa-3072", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrKeyType},
 	}

@@ -35,6 +35,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -130,6 +131,11 @@ type Config struct {
 	// the version gate answers the journal version. Until that item lands,
 	// every update answers journalVersion 0.
 	DisablePulumiJournaling bool
+	// StateGuard checks each write of state at the decision point
+	// state.write: an import, a restore, a rename, a delete and a cancel of a
+	// stack. It is required. A server whose store keeps no gates gives the
+	// guard of stategate.Off with its reason.
+	StateGuard stategate.Guard
 }
 
 // Handler serves the Pulumi CLI API under /api/.
@@ -150,7 +156,10 @@ type Handler struct {
 	onAuditFailure func()
 	// guard checks the declared actions of the routes and writes the entry of
 	// each refusal.
-	guard  *refusal.Recorder
+	guard *refusal.Recorder
+	// admit asks the state guard about each write of state and writes the
+	// audit entry of each refusal.
+	admit  *stategate.Admitter
 	mux    *patternMux
 	routes []Route
 	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
@@ -191,6 +200,7 @@ func (cfg Config) validate() error {
 }
 
 // NewHandler returns a Handler. Every Config field but Sessions is required.
+// A nil StateGuard is ErrMissingDependency.
 func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -199,6 +209,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
 	if err != nil {
 		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
+	admit, err := stategate.New(cfg.StateGuard, cfg.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("%w: state guard: %w", ErrMissingDependency, err)
 	}
 
 	h := &Handler{
@@ -217,6 +232,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
+		admit:          admit,
 		mux:            newPatternMux(),
 		routes:         nil,
 		deltaCutoff:    cfg.CheckpointDeltaCutoff,
@@ -728,7 +744,8 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 // mutating update runs answers 409. The checkpoint blobs stay, because a
 // restore reads them. Each delete writes an audit entry of the kind change in
 // the delete transaction: if the append fails, the delete rolls back and the
-// route answers 500 (ADR 60, fail closed).
+// route answers 500 (ADR 60, fail closed). The delete meets the gates of
+// state.write with the operation kind delete before its transaction.
 func (h *Handler) deleteStack(
 	w http.ResponseWriter, r *http.Request, principal identity.Principal, obj identity.Object,
 ) {
@@ -747,6 +764,10 @@ func (h *Handler) deleteStack(
 		object:    obj,
 		action:    identity.ActionUnitManage,
 	})
+
+	if !h.guardStateWrite(w, r, principal, obj, checkDelete()) {
+		return
+	}
 
 	if deleteForce(r) {
 		err = h.stacks.ForceDelete(ctx, ref, entry)
@@ -792,7 +813,10 @@ func parseRenameStackRequest(body []byte) (renameStackRequest, error) {
 
 type renameStackResponse struct{}
 
-func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+// renameStack gives the stack a new name in the same project. The rename meets
+// the gates of state.write of the source unit with the operation kind rename
+// before its transaction.
+func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
 	oldRef, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
@@ -841,6 +865,12 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 	if err := h.authorizeRenameDestination(r, p, oldRef, name); err != nil {
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	// The gates of the source unit decide: the rename moves its state. The
+	// destination unit has no state before the rename.
+	if !h.guardStateWrite(w, r, p, obj, checkRename()) {
 		return
 	}
 

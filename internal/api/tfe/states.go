@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -442,12 +444,15 @@ func (h *Handler) restoreStateVersion(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback}) {
+	expect, ok := h.guardRestore(w, r, p, obj, src)
+	if !ok {
 		return
 	}
 
-	restored, err := h.workspaces.Restore(ctx, src.Workspace, from, p.Subject)
+	restored, err := h.restoreVersion(ctx, src.Workspace, from, p.Subject, expect)
 	if err != nil {
+		h.recordChangedRestore(r, p, obj, expect, err)
+
 		if errors.Is(err, workspace.ErrLockedByOther) {
 			holder := h.refusingHolder(ctx, src.Workspace, err)
 			if holder == "" {
@@ -790,4 +795,87 @@ func (h *Handler) resolveStateVersion(
 	}
 
 	return unitObject(ws.Ref)
+}
+
+// rollbackState reads what a restore of the version from changes in the state
+// of the workspace id: the tool-neutral change that the gates read as the
+// facts state.resources and state.removed. It returns the error of the read
+// and a nil change when it cannot read the state; the guard then refuses the
+// write.
+func (h *Handler) rollbackState(
+	ctx context.Context, id workspace.ID, from workspace.StateVersionID,
+) (*gate.StateChange, error) {
+	rc, err := h.workspaces.ReadRollbackChange(ctx, id, from)
+	if err != nil {
+		// A state over a size limit is a limit and not a fault of the store.
+		// The refusal then has the code gate.limit.
+		if errors.Is(err, workspace.ErrTooManyResources) || errors.Is(err, workspace.ErrTooLarge) {
+			return nil, fmt.Errorf("%w: read the state change of the restore: %w", gate.ErrLimit, err)
+		}
+
+		return nil, fmt.Errorf("read the state change of the restore: %w", err)
+	}
+
+	if rc.Encrypted {
+		// A state that the client encrypted is a known condition. The facts
+		// are not available, the record says why, and the restore goes on
+		// under the gates that apply.
+		return &gate.StateChange{
+			Current: string(rc.Current), Resources: 0, Removed: nil, Unavailable: "state is client-encrypted",
+		}, nil
+	}
+
+	return &gate.StateChange{
+		Current: string(rc.Current), Resources: rc.Resources, Removed: rc.Removed, Unavailable: "",
+	}, nil
+}
+
+// restoreVersion restores the version from. An empty expect restores with no
+// check of the current version (the gates are off). A set expect restores only
+// if that version is still the current one.
+func (h *Handler) restoreVersion(
+	ctx context.Context, id workspace.ID, from workspace.StateVersionID, holder string, expect workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	if expect == "" {
+		return h.workspaces.Restore(ctx, id, from, holder)
+	}
+
+	return h.workspaces.RestoreExpecting(ctx, id, from, holder, expect)
+}
+
+// guardRestore asks the state guard about the restore of the version from. It
+// returns the current version that the facts came from, which the restore must
+// still find, and true when the restore may go on. With the gates off no gate
+// reads a fact, so the server reads no state and the expected version is empty.
+func (h *Handler) guardRestore(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+	src workspace.StateVersion,
+) (workspace.StateVersionID, bool) {
+	check := newStateCheck(identity.ActionUnitWrite, gate.OperationRollback)
+	expect := workspace.StateVersionID("")
+
+	if h.admit.Effective().Mode != stategate.ModeOff {
+		check.state, check.stateErr = h.rollbackState(r.Context(), src.Workspace, src.ID)
+		if check.state != nil {
+			expect = workspace.StateVersionID(check.state.Current)
+		}
+	}
+
+	return expect, h.guardStateWrite(w, r, p, obj, check)
+}
+
+// recordChangedRestore writes the denied audit entry of a restore that found
+// another current version than the one the gate decision used. The decision
+// used facts of a state that is no longer current, so the write is refused.
+func (h *Handler) recordChangedRestore(
+	r *http.Request, p identity.Principal, obj identity.Object, expect workspace.StateVersionID, err error,
+) {
+	if expect == "" || !errors.Is(err, workspace.ErrConcurrentModification) {
+		return
+	}
+
+	h.guard.Record(r.Context(), r, p, refusal.Denial{
+		Action: identity.ActionUnitWrite, Object: obj, Window: 0,
+		Reason: "state.write refused: the current state version changed after the gate decision",
+	})
 }

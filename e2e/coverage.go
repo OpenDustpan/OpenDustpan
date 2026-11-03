@@ -240,16 +240,9 @@ func (coverageAuthorizer) ListObjects(
 func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
-	stacks, err := stack.NewService(
-		stack.Config{
-			Store:       coverageStackStore{},
-			Namespaces:  namespaces,
-			Now:         nil,
-			State:       nil,
-			Retention:   0,
-			ManualLocks: nil,
-		},
-	)
+	stacks, err := stack.NewService(stack.Config{
+		Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil,
+	})
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
 	}
@@ -306,6 +299,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Audit:                coverageAuditStore{},
 		OnAuditFailure:       nil,
 		DenialLimiter:        nil,
+		StateGuard:           stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		tb.Fatalf("pulumi handler: %v", err)
@@ -677,6 +671,22 @@ func (coverageWorkspaces) History(
 
 func (coverageWorkspaces) Restore(
 	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string,
+) (workspace.StateVersion, error) {
+	var none workspace.StateVersion
+
+	return none, workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) ReadRollbackChange(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	var none workspace.RollbackChange
+
+	return none, workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) RestoreExpecting(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string, _ workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
 	var none workspace.StateVersion
 

@@ -305,6 +305,10 @@ _Avoid_: Partial backup, namespace export
 The one migration of each dialect that replaced every migration before it, before the first tag. Until the first tag, a change to the schema edits it in place, and the store refuses a database that another version of it made. Its version is 168. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
 _Avoid_: Squash, initial migration
 
+**Release record**:
+The committed file `internal/releaserecord/shipped.txt` that lists each migration file that a release tag shipped, with its SHA-256 (ADR 325). The release adds its lines in the commit that it tags. It is the one fact in the tree that tells whether a tag shipped. While it lists no file, the checks that hold the shipped migrations and the description version are off, and the baseline collapse can run. From its first line on, the checks run and the collapse is refused.
+_Avoid_: Release marker, tag file
+
 **Portable format**:
 The dialect-neutral format of the SQL part of a backup: one compressed file of JSON rows for each table (ADR 42). It is the only backup format. It replaces the native format of ADR 30.
 _Avoid_: Export format, dump format

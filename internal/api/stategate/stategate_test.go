@@ -22,6 +22,9 @@ import (
 // errEngineDown is a guard error that is not a decision.
 var errEngineDown = errors.New("engine down")
 
+// errStateDown is the error of a read of a state that fails.
+var errStateDown = errors.New("blob store down")
+
 // errLineBreak is a guard error whose text adds a line.
 var errLineBreak = errors.New("down\r\nFAKE: allowed")
 
@@ -102,6 +105,7 @@ func write(t *testing.T, op gate.OperationKind, p identity.Principal) stategate.
 
 	return stategate.Write{
 		Principal: p, Unit: unit, Operation: op, Action: identity.ActionUnitWrite, Source: gate.SourceCLI,
+		State: nil, StateErr: nil,
 	}
 }
 
@@ -532,5 +536,62 @@ func TestDetailIsOneLine(t *testing.T) {
 				t.Fatalf("Detail = %q, want one line", got)
 			}
 		})
+	}
+}
+
+// TestAdmitRefusesWhenTheStateCannotBeRead proves that a write whose state the
+// adapter could not read is refused before the guard is asked, with the audit
+// entry and a catalog code, and that the guard is never asked.
+func TestAdmitRefusesWhenTheStateCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+	w.StateErr = errStateDown
+
+	out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)
+
+	checkRefused(t, out, rec, "gate.unavailable")
+
+	if !strings.Contains(out.Detail, stategate.StateUnreadableText) {
+		t.Fatalf("detail = %q, want %q", out.Detail, stategate.StateUnreadableText)
+	}
+
+	if len(guard.asked()) != 0 {
+		t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
+	}
+}
+
+// TestStateWriteCarriesTheStateChange proves that the one place that builds the
+// question for the guard passes the state change on.
+func TestStateWriteCarriesTheStateChange(t *testing.T) {
+	t.Parallel()
+
+	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+	w.State = &gate.StateChange{Current: "sv-1", Resources: 2, Removed: []string{"a.b"}, Unavailable: ""}
+
+	if got := stategate.StateWrite(w); got.State != w.State {
+		t.Fatalf("StateWrite().State = %+v, want %+v", got.State, w.State)
+	}
+}
+
+// TestAdmitRefusesAStateAboveALimitWithTheLimitCode proves that a state read
+// error that wraps gate.ErrLimit gives the code gate.limit, with the audit
+// entry, and that the guard is not asked.
+func TestAdmitRefusesAStateAboveALimitWithTheLimitCode(t *testing.T) {
+	t.Parallel()
+
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+	w.StateErr = fmt.Errorf("%w: the state is above the limit", gate.ErrLimit)
+
+	out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)
+
+	checkRefused(t, out, rec, "gate.limit")
+
+	if len(guard.asked()) != 0 {
+		t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
 	}
 }

@@ -733,7 +733,12 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 	_, applied := op.Step(RestoreStepAfterApply)
 
 	if !swapped {
-		s.appendEvents(ctx, in)
+		end := restoreEndStopped
+		if op.State == durable.StateCanceled {
+			end = restoreEndCanceled
+		}
+
+		s.appendEvents(ctx, in, end)
 
 		return
 	}
@@ -747,7 +752,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 		return
 	}
 
-	entries, err := s.afterApplyEntries(ctx, op, in)
+	entries, err := s.afterApplyEntries(ctx, op, in, swappedFailed)
 	if err != nil {
 		s.logger.ErrorContext(
 			ctx,

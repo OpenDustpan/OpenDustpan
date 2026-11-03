@@ -272,7 +272,15 @@ curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
 
 Each cancel of a known restore writes an audit entry. A canceled restore
 leaves the live data unchanged, and leaves the maintenance mode that it
-entered. The server increments the failover version of every namespace after
+entered. The audit log of a restore that stopped before the swap holds an
+entry with the outcome `failure` and the text `canceled before the swap` (or
+`failed before the swap`, or `stopped before the swap` for a restore that
+ended with no end write). The text says that the live state, history and
+access tables did not change. The entry that the
+server writes when it accepts the start says `requested`, with the outcome
+`success`, because it records the accepted request only. A restore that fails
+after the swap writes an entry with the outcome `failure` and the text
+`failed after the swap`. The server increments the failover version of every namespace after
 a restore that stopped with no end, also after a cancel.
 
 ### Staging areas and temporary blobs

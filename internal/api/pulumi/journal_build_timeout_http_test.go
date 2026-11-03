@@ -36,7 +36,9 @@ func TestJournalCompleteAnswers503OnBuildTimeoutHTTP(t *testing.T) {
 		t,
 		allowAll(),
 		tokenAuthenticator{},
-		fixtureOptions{manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: buildTimeoutStallReplayer{}},
+		fixtureOptions{
+			manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: buildTimeoutStallReplayer{}, guard: nil,
+		},
 	)
 
 	u, err := f.updates.Create(

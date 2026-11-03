@@ -544,6 +544,14 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
 - [ ] Release workflows for the binaries, the image and the console tarball
   ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
+- [ ] In the commit that it tags: `make regenerate-baseline`, `DocumentVersion`
+  in `internal/api/apidesc/document.go` set for the release, a new pin of
+  the description, and the lines of the tag in
+  `internal/releaserecord/shipped.txt`. The record turns on the checks of
+  the shipped migrations and of the description version, and the collapse
+  script refuses from then on. `scripts/release-build.sh` refuses a version
+  that the record does not list
+  ([ADR 325](adr/0325-the-release-record-turns-the-shipped-migration-checks-on.md)).
 
 ## Milestone 8. Concurrent applies on one state
 
