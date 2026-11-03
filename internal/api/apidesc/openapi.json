@@ -5074,13 +5074,13 @@
           "opentofu.http.unlocked-write",
           "inventory.restore",
           "inventory.purge",
-          "opentofu.tfe.state-version-without-lock",
-          "pulumi.update",
           "pulumi.import",
           "pulumi.restore",
           "pulumi.rename",
           "pulumi.delete",
-          "pulumi.cancel"
+          "pulumi.cancel",
+          "opentofu.tfe.state-version-without-lock",
+          "pulumi.update"
         ],
         "type": "string"
       },

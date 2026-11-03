@@ -1416,6 +1416,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	pulumiRestoreScenario(t, env, org)
 
+	pulumiStateWriteGateScenario(t, env, org)
+
 	scratchID := stackIDOf(t, env, org, softDeleted)
 
 	for _, s := range pulumiTeardownSteps(scratch, resourced) {

@@ -28,6 +28,7 @@ func replayBoundFixture(t *testing.T) updateFixture {
 			limit:    0,
 			cutoff:   0,
 			replayer: pulumijournal.NewReplayer(time.Now, ""),
+			guard:    nil,
 		},
 	)
 }
