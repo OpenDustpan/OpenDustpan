@@ -330,20 +330,33 @@ func checkStep(ctx context.Context, q *db.Queries, f durable.StepFence) (db.Dura
 		return db.DurableOperation{}, 0, err
 	}
 
-	if row.CancelRequested {
-		return db.DurableOperation{}, 0, durable.ErrCanceled
-	}
-
-	done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: f.Step})
-	if err != nil {
-		return db.DurableOperation{}, 0, fmt.Errorf("read step: %w", err)
-	}
-
-	if done {
-		return db.DurableOperation{}, 0, durable.ErrStepDone
+	if err := checkStepRow(ctx, q, row, f.Step); err != nil {
+		return db.DurableOperation{}, 0, err
 	}
 
 	return row, now, nil
+}
+
+// checkStepRow checks the row of an operation for step. It returns
+// durable.ErrCanceled when the row has a cancel request, durable.ErrStepDone
+// when the step is recorded, and nil otherwise. The cancel check comes first.
+// The caller reads the row and decides on the lock. checkStep and peekStep
+// both call it.
+func checkStepRow(ctx context.Context, q *db.Queries, row db.DurableOperation, step string) error {
+	if row.CancelRequested {
+		return durable.ErrCanceled
+	}
+
+	done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: step})
+	if err != nil {
+		return fmt.Errorf("read step: %w", err)
+	}
+
+	if done {
+		return durable.ErrStepDone
+	}
+
+	return nil
 }
 
 // stepAt is the row of an operation that checkStep returned, and the time of
@@ -670,20 +683,7 @@ func peekStep(ctx context.Context, q *db.Queries, f durable.StepFence) error {
 		return durable.ErrClaimLost
 	}
 
-	if row.CancelRequested {
-		return durable.ErrCanceled
-	}
-
-	done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: f.Step})
-	if err != nil {
-		return fmt.Errorf("read step: %w", err)
-	}
-
-	if done {
-		return durable.ErrStepDone
-	}
-
-	return nil
+	return checkStepRow(ctx, q, row, f.Step)
 }
 
 // withSteps reads the steps of row and returns the operation.
