@@ -31,8 +31,9 @@ func RunGroupMapper(t *testing.T, fixture func(t *testing.T) GroupMapperFixture)
 	t.Helper()
 
 	// Defense in depth: a fixture would pass without testing anything, so a
-	// non-nil fixture stops the run. This check stays so that a new caller
-	// cannot skip it.
+	// non-nil fixture stops the run. The suite does not rely on the caller to
+	// pass nil, or on the designOnlyRefusal helper alone, so this check stays
+	// for a new caller that could pass a fixture.
 	if msg := designOnlyRefusal("RunGroupMapper", fixture); msg != "" {
 		t.Fatal(msg)
 	}
@@ -74,8 +75,9 @@ func RunGroupClaims(t *testing.T, fixture func(t *testing.T) GroupClaimsFixture)
 	t.Helper()
 
 	// Defense in depth: a fixture would pass without testing anything, so a
-	// non-nil fixture stops the run. This check stays so that a new caller
-	// cannot skip it.
+	// non-nil fixture stops the run. The suite does not rely on the caller to
+	// pass nil, or on the designOnlyRefusal helper alone, so this check stays
+	// for a new caller that could pass a fixture.
 	if msg := designOnlyRefusal("RunGroupClaims", fixture); msg != "" {
 		t.Fatal(msg)
 	}
