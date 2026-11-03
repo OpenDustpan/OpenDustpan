@@ -61,7 +61,7 @@ var (
 		"the blob directory is not a directory of the current user: dev reset changes nothing",
 	)
 	errDevResetOldCopy = errors.New(
-		"a copy of a reset that did not finish is in the data directory: remove or rename it, then run opendustpan dev reset again",
+		"a copy of a reset that did not finish is in the data directory. Move each copy out of the data directory to keep it, do not delete it. Then run opendustpan dev reset again",
 	)
 	errDevResetInUse = errors.New(
 		"a server holds the database: stop it, then run opendustpan dev reset again",
@@ -142,16 +142,38 @@ func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProc
 	app.logger.WarnContext(ctx, "dev reset moved the development data aside",
 		slog.String("database", db), slog.Any("kept", moved))
 
-	if remakeErr := remakeDevDatabase(ctx, db, app.logger, proc, moved); remakeErr != nil {
-		return keptCopiesError(dir, remakeErr)
+	return finishDevReset(ctx, devFinish{
+		dir: dir, db: db, moved: moved, stderr: stderr, logger: app.logger, proc: proc,
+	}, remakeDevDatabase)
+}
+
+// devRemake makes the new database at db. devReset passes remakeDevDatabase.
+type devRemake func(ctx context.Context, db string, logger *slog.Logger, proc devProcess, moved []string) error
+
+// devFinish holds the values that devReset passes to finishDevReset.
+type devFinish struct {
+	dir    string
+	db     string
+	moved  []string
+	stderr io.Writer
+	logger *slog.Logger
+	proc   devProcess
+}
+
+// finishDevReset makes the new database with remake, deletes the copies of the
+// reset before only after that succeeds, and writes the result. When the remake
+// fails, the copies stay, and the error names them.
+func finishDevReset(ctx context.Context, f devFinish, remake devRemake) error {
+	if remakeErr := remake(ctx, f.db, f.logger, f.proc, f.moved); remakeErr != nil {
+		return keptCopiesError(f.dir, remakeErr)
 	}
 
-	if dropErr := dropOldDevCopies(dir); dropErr != nil {
+	if dropErr := dropOldDevCopies(f.dir); dropErr != nil {
 		return dropErr
 	}
 
-	_, err = fmt.Fprintf(stderr, "dev reset: the old data is kept as %s. Run opendustpan dev to start.\n",
-		filepath.Join(dir, devDBName+devResetSuffix))
+	_, err := fmt.Fprintf(f.stderr, "dev reset: the old data is kept as %s. Run opendustpan dev to start.\n",
+		filepath.Join(f.dir, devDBName+devResetSuffix))
 	if err != nil {
 		return fmt.Errorf("write the result: %w", err)
 	}
@@ -346,7 +368,7 @@ func moveDevData(dir string, rename func(from, to string) error) ([]string, erro
 // copies of the reset before, and the one command that helps.
 func moveDevDataError(cause error, failed string, moved, copies []string) error {
 	return fmt.Errorf("%w. Failed path: %s. Moved: %s. Copies of the reset before: %s. "+
-		"Run opendustpan dev reset again after you check these paths",
+		"Move each copy out of the data directory to keep it, do not delete it. Then run opendustpan dev reset again",
 		cause, failed, joinOrNone(moved), joinOrNone(copies))
 }
 
