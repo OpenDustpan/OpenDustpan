@@ -3,6 +3,9 @@ package faultlog_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +15,39 @@ import (
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/requestid"
 )
+
+// errUnknown is an error that no cause class matches.
+var errUnknown = errors.New("driver text")
+
+// TestCause checks the class of each error. A plain io.EOF is the eof class,
+// and an io.ErrUnexpectedEOF, also inside a joined error, is the unexpected
+// class.
+func TestCause(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"plain EOF", io.EOF, faultlog.CauseEOF},
+		{"wrapped plain EOF", fmt.Errorf("read body: %w", io.EOF), faultlog.CauseEOF},
+		{"unexpected EOF", io.ErrUnexpectedEOF, faultlog.CauseUnexpectedEOF},
+		{"joined EOF and unexpected EOF", errors.Join(io.EOF, io.ErrUnexpectedEOF), faultlog.CauseUnexpectedEOF},
+		{"unknown error", errUnknown, faultlog.CauseUnclassified},
+		{"nil", nil, faultlog.CauseUnclassified},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := faultlog.Cause(tc.err); got != tc.want {
+				t.Errorf("Cause() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 // TestLogServer checks that a cause outside the closed list logs the
 // unclassified class, never the value, and that the status is the one given.
@@ -29,6 +65,11 @@ func TestLogServer(t *testing.T) {
 			"known cause", http.StatusInternalServerError, faultlog.CauseNetwork,
 			[]string{"status=500", "cause=network", "request_id=0123abcd"},
 			nil,
+		},
+		{
+			"eof cause", http.StatusInternalServerError, faultlog.CauseEOF,
+			[]string{"status=500", "cause=eof"},
+			[]string{"cause=unclassified"},
 		},
 		{
 			"free text cause", http.StatusInternalServerError, "password=hunter2",

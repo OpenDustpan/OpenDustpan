@@ -52,12 +52,12 @@ func TestCause(t *testing.T) {
 		{
 			name: "EOF",
 			err:  io.EOF,
-			want: faultlog.CauseUnexpectedEOF,
+			want: faultlog.CauseEOF,
 		},
 		{
 			name: "EOF wrapped",
 			err:  fmt.Errorf("read: %w", io.EOF),
-			want: faultlog.CauseUnexpectedEOF,
+			want: faultlog.CauseEOF,
 		},
 		{
 			name: "missing file",
