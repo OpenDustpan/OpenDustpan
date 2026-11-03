@@ -59,7 +59,8 @@ func TestReadRollbackChange(t *testing.T) {
 				t.Fatalf("ReadRollbackChange() = %v", err)
 			}
 
-			if got.Current != versions[1].ID || got.Resources != tc.wantRes || !slices.Equal(got.Removed, tc.wantRemoved) {
+			if got.Current != versions[1].ID || got.Resources != tc.wantRes ||
+				!slices.Equal(got.Removed, tc.wantRemoved) {
 				t.Fatalf("change = %+v, want current %s resources %d removed %v",
 					got, versions[1].ID, tc.wantRes, tc.wantRemoved)
 			}

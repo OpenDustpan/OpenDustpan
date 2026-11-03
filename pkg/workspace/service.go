@@ -1722,12 +1722,12 @@ func (s *Service) DiffStates(
 // the version the first call made current and writes nothing new, but still
 // needs the workspace unlocked or held by holder.
 func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holder string) (StateVersion, error) {
-	return s.restore(ctx, id, from, holder, nil)
+	return s.restoreChecked(ctx, id, from, holder, nil)
 }
 
-// restore is Restore with an optional expected current version. A nil expect
+// restoreChecked is Restore with an optional expected current version. A nil expect
 // skips the check.
-func (s *Service) restore(
+func (s *Service) restoreChecked(
 	ctx context.Context, id ID, from StateVersionID, holder string, expect *StateVersionID,
 ) (StateVersion, error) {
 	if holder == "" {
