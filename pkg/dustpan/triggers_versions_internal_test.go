@@ -105,7 +105,7 @@ func TestFinalVersionsLastFinal(t *testing.T) {
 	}
 }
 
-func TestFinalVersionsOf(t *testing.T) {
+func TestTriggerDispatcherVersionsOfJobStore(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -132,10 +132,14 @@ func TestFinalVersionsOf(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := finalVersionsOf(tc.st)
+			cfg := new(settings)
+			cfg.jobStore = tc.st
+			got := triggerDispatcherConfig(cfg, &triggerPorts{records: nil, entries: nil}, triggerParts{
+				starter: nil, savers: nil, units: nil, fences: nil,
+			}).Versions
 
 			if (got == nil) != tc.wantNil {
-				t.Fatalf("finalVersionsOf nil = %t, want %t", got == nil, tc.wantNil)
+				t.Fatalf("Versions nil = %t, want %t", got == nil, tc.wantNil)
 			}
 		})
 	}
