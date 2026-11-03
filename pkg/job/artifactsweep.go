@@ -329,12 +329,29 @@ func (s *ArtifactSweeper) sweepOne(ctx context.Context, j *Job, now time.Time, r
 // pages of them.
 func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter, res *ArtifactSweepResult) error {
 	for range maxArtifactSweepPages {
-		jobs, err := s.jobs.List(ctx, f)
+		// The query reads one row more than a page. That row tells whether a
+		// job is left after this page, so no second query is needed.
+		read := f
+		read.Limit = f.Limit + 1
+
+		jobs, err := s.jobs.List(ctx, read)
 		if err != nil {
 			return fmt.Errorf("list jobs: %w", err)
 		}
 
+		more := len(jobs) > f.Limit
+
+		// last is the ID of the last job of this page: the next page starts
+		// after it.
+		var last ID
+
 		for i := range jobs {
+			if i == f.Limit {
+				break
+			}
+
+			last = jobs[i].ID
+
 			var one ArtifactSweepResult
 
 			sweepErr := s.sweepOne(ctx, &jobs[i], now, &one)
@@ -353,16 +370,15 @@ func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter
 			}
 		}
 
-		if len(jobs) < f.Limit {
+		if !more {
 			return nil
 		}
 
-		f.After = jobs[len(jobs)-1].ID
+		f.After = last
 	}
 
-	// The loop ended without a short page: the pages were full and the cap
-	// stopped the pass. Defense in depth: this flag is set only here, and the
-	// result reports it on its own, so a caller does not have to infer it.
+	// The pass stopped at the page cap and the last read held a row after the
+	// page, so the result reports that jobs are left.
 	res.Capped = true
 
 	return nil

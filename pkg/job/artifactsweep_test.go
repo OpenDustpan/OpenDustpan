@@ -217,13 +217,52 @@ func (noWatch) Running(context.Context) (blobguard.Work, bool, error) {
 
 // sweepSetup is the setup of one sweep case: the names that the rows give,
 // how far the clock of the database runs ahead of the clock of the test, how
-// far the clock of the instance runs ahead of the database, and a wrapper of
-// the blob store.
+// far the clock of the instance runs ahead of the database, a wrapper of
+// the blob store, and the job store when a case needs its own.
 type sweepSetup struct {
 	names    job.ArtifactKeyStore
 	ahead    time.Duration
 	instance time.Duration
 	wrap     func(blob.Store) blob.Store
+	jobs     job.Store
+}
+
+// pagedJobs is a job store that holds one job for each of ids, in the order of
+// their IDs. Its List honors Limit and After. It answers the live pass only, so
+// the pass that uses StateChangedAfter lists nothing.
+type pagedJobs struct {
+	job.Store
+
+	j   job.Job
+	ids []job.ID
+	mu  sync.Mutex
+}
+
+func (p *pagedJobs) List(_ context.Context, f job.Filter) ([]job.Job, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !f.StateChangedAfter.IsZero() {
+		return nil, nil
+	}
+
+	var out []job.Job
+
+	for _, id := range p.ids {
+		if id <= f.After {
+			continue
+		}
+
+		if len(out) == f.Limit {
+			break
+		}
+
+		one := p.j
+		one.ID = id
+		out = append(out, one)
+	}
+
+	return out, nil
 }
 
 // sweepRig is one sweep case: the sweeper, the blob store, the job store and
@@ -243,7 +282,7 @@ func sweepCase(t *testing.T, names job.ArtifactKeyStore, ahead time.Duration) (*
 ) {
 	t.Helper()
 
-	r := newSweepRig(t, sweepSetup{names: names, ahead: ahead, instance: 0, wrap: nil})
+	r := newSweepRig(t, sweepSetup{names: names, ahead: ahead, instance: 0, wrap: nil, jobs: nil})
 
 	return r.s, r.store, r.jobs
 }
@@ -276,8 +315,13 @@ func newSweepRig(t *testing.T, setup sweepSetup) *sweepRig {
 		audit: &recordedAudit{mu: sync.Mutex{}, entries: nil},
 	}
 
+	var jobStore job.Store = r.jobs
+	if setup.jobs != nil {
+		jobStore = setup.jobs
+	}
+
 	r.s, err = job.NewArtifactSweeper(job.ArtifactSweeperConfig{
-		Jobs: r.jobs, Names: setup.names, Blobs: b, Namespaces: sweepNamespaces{}, Guard: noWatch{},
+		Jobs: jobStore, Names: setup.names, Blobs: b, Namespaces: sweepNamespaces{}, Guard: noWatch{},
 		Clock: aheadClock{ahead: setup.ahead}, Audit: r.audit, Logger: nil,
 		Now: func() time.Time { return time.Now().Add(setup.ahead + setup.instance) },
 	})
@@ -471,7 +515,7 @@ func TestSweepRecordsItsRun(t *testing.T) {
 	t.Parallel()
 
 	named := sweepNames{names: job.ArtifactNames{Plans: []string{"pln-1"}, ChunkKeys: nil}, err: nil}
-	r := newSweepRig(t, sweepSetup{names: named, ahead: sweepAhead, instance: 0, wrap: nil})
+	r := newSweepRig(t, sweepSetup{names: named, ahead: sweepAhead, instance: 0, wrap: nil, jobs: nil})
 
 	res, err := r.s.Sweep(t.Context())
 	if err != nil {
@@ -522,7 +566,7 @@ func TestSweepDeletesNothingOnClockSkew(t *testing.T) {
 	nothing := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
 
 	for _, skew := range []time.Duration{blob.AttemptSkew + time.Minute, -blob.AttemptSkew - time.Minute} {
-		r := newSweepRig(t, sweepSetup{names: nothing, ahead: sweepAhead, instance: skew, wrap: nil})
+		r := newSweepRig(t, sweepSetup{names: nothing, ahead: sweepAhead, instance: skew, wrap: nil, jobs: nil})
 
 		res, err := r.s.Sweep(t.Context())
 		if err != nil || res.Deleted != 0 || res.Jobs != 0 || !strings.Contains(res.Skipped, "do not agree") {
@@ -568,6 +612,7 @@ func TestSweepKeepsABlobWithNoModificationTime(t *testing.T) {
 		ahead:    sweepAhead,
 		instance: 0,
 		wrap:     func(s blob.Store) blob.Store { return zeroTimes{Store: s} },
+		jobs:     nil,
 	})
 
 	res, err := r.s.SweepJob(t.Context(), &r.jobs.j)
@@ -576,6 +621,51 @@ func TestSweepKeepsABlobWithNoModificationTime(t *testing.T) {
 	}
 
 	requireStored(t, r.store, chunkKey, planPart)
+}
+
+// TestSweepCapsOnlyWhenJobsRemain shows that a pass reports the cap only when
+// a job is left after its last page. The page size is 200 and the pass reads
+// 10 pages, the values of artifactSweepBatch and maxArtifactSweepPages.
+func TestSweepCapsOnlyWhenJobsRemain(t *testing.T) {
+	t.Parallel()
+
+	const pageCap = 10 * 200
+
+	cases := []struct {
+		name       string
+		jobs       int
+		wantJobs   int
+		wantCapped bool
+	}{
+		{name: "no job", jobs: 0, wantJobs: 0, wantCapped: false},
+		{name: "one job", jobs: 1, wantJobs: 1, wantCapped: false},
+		{name: "exact fit", jobs: pageCap, wantJobs: pageCap, wantCapped: false},
+		{name: "one more", jobs: pageCap + 1, wantJobs: pageCap, wantCapped: true},
+	}
+
+	for _, tc := range cases {
+		ids := make([]job.ID, tc.jobs)
+		for i := range ids {
+			ids[i] = job.ID(fmt.Sprintf("job-%05d", i))
+		}
+
+		store := &pagedJobs{Store: nil, j: sweepJobOf(t), ids: ids, mu: sync.Mutex{}}
+		named := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
+		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, wrap: nil, jobs: store})
+
+		res, err := r.s.Sweep(t.Context())
+		if err != nil {
+			t.Fatalf("%s: Sweep = %v", tc.name, err)
+		}
+
+		if res.Jobs != tc.wantJobs {
+			t.Errorf("%s: swept %d jobs, want %d", tc.name, res.Jobs, tc.wantJobs)
+		}
+
+		if res.Capped != tc.wantCapped {
+			t.Errorf("%s: Capped = %t, want %t", tc.name, res.Capped, tc.wantCapped)
+		}
+	}
 }
 
 // TestSweepReportsACappedPass shows that a pass whose pages are all full
@@ -596,7 +686,7 @@ func TestSweepReportsACappedPass(t *testing.T) {
 
 	for _, tc := range cases {
 		named := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
-		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, wrap: nil})
+		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, wrap: nil, jobs: nil})
 		r.jobs.full = tc.full
 
 		res, err := r.s.Sweep(t.Context())
