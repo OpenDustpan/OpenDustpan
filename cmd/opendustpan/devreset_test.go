@@ -688,8 +688,10 @@ func TestSchemaRefusalNamesTheStepOfTheCommand(t *testing.T) {
 	} {
 		dev := schemaRefusal(cause, commandDev, "/tmp/the trial")
 		if !strings.Contains(dev.Error(), "run opendustpan dev reset --data-dir '/tmp/the trial' to start again") ||
-			!strings.Contains(dev.Error(), devDBName+devResetSuffix) || !errors.Is(dev, cause) {
-			t.Fatalf("dev refusal = %q, want the reset command and the kept file", dev)
+			!strings.Contains(dev.Error(), "moves the old data aside") ||
+			!strings.Contains(dev.Error(), devDBName+devResetSuffix) || !errors.Is(dev, cause) ||
+			strings.Contains(dev.Error(), "is kept as") {
+			t.Fatalf("dev refusal = %q, want the reset command and the move of the old data", dev)
 		}
 
 		serve := schemaRefusal(cause, commandServe, "")
