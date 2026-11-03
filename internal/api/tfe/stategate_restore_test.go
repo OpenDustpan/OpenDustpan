@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -88,16 +89,25 @@ func TestRestoreGivesTheGuardTheStateChange(t *testing.T) {
 
 // TestRestoreRefusesAStateThatCannotBeRead proves the fail-closed layer of
 // the adapter: a state that the server cannot read gives no guard call and no
-// write, and the refusal has a catalog code and an audit entry.
+// write, and the refusal has a catalog code and an audit entry. A state above
+// a limit gives gate.limit, any other fault gives gate.unavailable.
 func TestRestoreRefusesAStateThatCannotBeRead(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
 		err  error
+		code string
 	}{
-		{"the store fails", errReadFailed},
-		{"the state holds an entry the server cannot read", workspace.ErrInvalidState},
+		{"the store fails", errReadFailed, "gate.unavailable"},
+		{"the state holds an entry the server cannot read", workspace.ErrInvalidState, "gate.unavailable"},
+		{
+			"a look-alike of the encryption envelope",
+			fmt.Errorf("%w: state sv-1 has encrypted_data", workspace.ErrInvalidState),
+			"gate.unavailable",
+		},
+		{"the state is over the size limit", workspace.ErrTooLarge, "gate.limit"},
+		{"the state has too many resource instances", workspace.ErrTooManyResources, "gate.limit"},
 	}
 
 	for _, tc := range tests {
@@ -115,7 +125,7 @@ func TestRestoreRefusesAStateThatCannotBeRead(t *testing.T) {
 
 			rec := serveGuarded(t, newAuditedHandler(t, ws, guard, entries), restoreRoute())
 			checkRefusalDocument(t, rec, guardRefusal{
-				name: "unreadable", code: "gate.unavailable", message: stategate.StateUnreadableText,
+				name: "unreadable", code: tc.code, message: stategate.StateUnreadableText,
 				err: &gate.RefusalError{Err: gate.ErrUnavailable, Record: "", Messages: nil},
 			})
 

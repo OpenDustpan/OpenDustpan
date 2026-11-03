@@ -1622,6 +1622,20 @@ func (s *fakeBackupStore) FenceAndUnlock(
 func (s *fakeBackupStore) FinalizeStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
+	return backupFinalize(s, sv, fence, nil)
+}
+
+// FinalizeStateVersionExpecting implements workspace.StateStore.
+func (s *fakeBackupStore) FinalizeStateVersionExpecting(
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	return backupFinalize(s, sv, fence, &expect)
+}
+
+// backupFinalize finalizes sv, and checks the current version when expect is set.
+func backupFinalize(
+	s *fakeBackupStore, sv workspace.StateVersion, fence namespace.Fence, expect *workspace.StateVersionID,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1655,6 +1669,10 @@ func (s *fakeBackupStore) FinalizeStateVersion(
 
 	if err := checkBackupFinalize(s.data, w, sv); err != nil {
 		return err
+	}
+
+	if expect != nil && s.data.current[w.ID.String()] != expect.String() {
+		return workspace.ErrConcurrentModification
 	}
 
 	s.data.states[sv.ID.String()] = sv

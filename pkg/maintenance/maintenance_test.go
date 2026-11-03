@@ -427,6 +427,12 @@ func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, 
 	return nil
 }
 
+func (fakeStates) FinalizeStateVersionExpecting(
+	context.Context, workspace.StateVersion, namespace.Fence, workspace.StateVersionID,
+) error {
+	return nil
+}
+
 func (fakeStates) FenceAndUnlock(
 	context.Context, workspace.Workspace, workspace.StateVersion, workspace.StateVersionID, namespace.Fence,
 	audit.Entry,
