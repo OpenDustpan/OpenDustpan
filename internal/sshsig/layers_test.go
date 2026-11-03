@@ -143,8 +143,7 @@ func TestVerifyRefusesHandBuiltKey(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	gx, gy := coordX(t, &signer.PublicKey), coordY(t, &signer.PublicKey)
-	_ = gx
+	gy := coordY(t, &signer.PublicKey)
 
 	keys := map[string]sshsig.PublicKey{
 		"no point":      ecdsaKey(nil),
@@ -325,10 +324,10 @@ func TestVerifySignatureTypeLayer(t *testing.T) {
 	}
 }
 
-// TestParsePublicKeyPointLayer sends hostile points to the parser. The key
-// check that ParsePublicKey calls after the parser refuses a key with no
-// point too, so the text of the error tells that the point parser refused it.
-func TestParsePublicKeyPointLayer(t *testing.T) {
+// TestParseECDSAKeyLayer calls the key parser alone with hostile fields. The
+// parser must refuse each of them with its own error, whatever the key check
+// does after it.
+func TestParseECDSAKeyLayer(t *testing.T) {
 	t.Parallel()
 
 	point, err := ecdsaTestKey(t).PublicKey.Bytes()
@@ -339,22 +338,142 @@ func TestParsePublicKeyPointLayer(t *testing.T) {
 	yPlusOne := bytes.Clone(point)
 	yPlusOne[len(yPlusOne)-1]++
 
-	points := map[string][]byte{
-		"a point off the curve": yPlusOne,
-		"the point at infinity": append([]byte{0x04}, make([]byte, 64)...),
-		"a compressed point":    append([]byte{0x02}, point[1:33]...),
-		"a point of 64 bytes":   point[:64],
-		"an empty point":        nil,
+	fields := func(curve string, p []byte) []byte {
+		return appendString(appendString(nil, []byte(curve)), p)
 	}
 
-	for name, p := range points {
+	tests := []struct {
+		name   string
+		fields []byte
+		want   error
+	}{
+		{"a valid key", fields("nistp256", point), nil},
+		{"a point off the curve", fields("nistp256", yPlusOne), sshsig.ErrMalformed},
+		{"the point at infinity", fields("nistp256", append([]byte{0x04}, make([]byte, 64)...)), sshsig.ErrMalformed},
+		{"a compressed point", fields("nistp256", append([]byte{0x02}, point[1:33]...)), sshsig.ErrMalformed},
+		{"a point of 64 bytes", fields("nistp256", point[:64]), sshsig.ErrMalformed},
+		{"an empty point", fields("nistp256", nil), sshsig.ErrMalformed},
+		{"another curve name", fields("nistp384", point), sshsig.ErrMalformed},
+		{"a byte after the point", append(fields("nistp256", point), 0), sshsig.ErrMalformed},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkParsedFields(t, tc.fields, tc.want)
+		})
+	}
+}
+
+// checkParsedFields parses fields with the parser alone. Fields of a valid
+// key must give a key. Any other fields must give ErrMalformed and no key.
+func checkParsedFields(t *testing.T, fields []byte, want error) {
+	t.Helper()
+
+	got, err := sshsig.ParseECDSAFields(fields)
+	if want == nil {
+		if err != nil || got.ECDSA == nil {
+			t.Fatalf("ParseECDSAFields = %+v, %v, want a key", got, err)
+		}
+
+		return
+	}
+
+	if !errors.Is(err, want) {
+		t.Fatalf("ParseECDSAFields error = %v, want %v", err, want)
+	}
+
+	if got.ECDSA != nil {
+		t.Fatalf("ParseECDSAFields returned a key with an error: %+v", got)
+	}
+}
+
+// TestMarshalHostileKeys sends keys that a caller builds by hand to Marshal.
+// Marshal must not panic, and it returns the type alone for a key it cannot
+// encode, which never equals the wire of a key that parses.
+func TestMarshalHostileKeys(t *testing.T) {
+	t.Parallel()
+
+	signer := ecdsaTestKey(t)
+	gx, gy := coordX(t, &signer.PublicKey), coordY(t, &signer.PublicKey)
+	typeOnly := appendString(nil, []byte(sshsig.TypeECDSAP256))
+
+	keys := map[string]*ecdsa.PublicKey{
+		"no point":      nil,
+		"no X":          rawKey(nil, gy),
+		"no Y":          rawKey(gx, nil),
+		"no coordinate": rawKey(nil, nil),
+		"off the curve": rawKey(big.NewInt(1), big.NewInt(2)),
+		"infinity":      rawKey(new(big.Int), new(big.Int)),
+	}
+
+	for name, pub := range keys {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			wire := appendString(appendString(appendString(nil, []byte(sshsig.TypeECDSAP256)), []byte("nistp256")), p)
+			if got := ecdsaKey(pub).Marshal(); !bytes.Equal(got, typeOnly) {
+				t.Fatalf("Marshal = %x, want the type alone %x", got, typeOnly)
+			}
 
-			_, err := sshsig.ParsePublicKey(wire)
-			checkLayerError(t, err, "ECDSA point", sshsig.ErrMalformed)
+			text := "not on the curve"
+			if pub == nil {
+				text = "without a point"
+			}
+
+			_, err := sshsig.EncodeECDSAPoint(pub)
+			checkLayerError(t, err, text, sshsig.ErrMalformed)
+		})
+	}
+
+	if got := ecdsaKey(&signer.PublicKey).Marshal(); !bytes.Equal(got, ecdsaWire(t, &signer.PublicKey)) {
+		t.Fatalf("Marshal of a valid key = %x, want its wire", got)
+	}
+}
+
+// TestVerifyRefusesMixedKeyFields sends hand-built keys with the fields of
+// another key type to Verify.
+func TestVerifyRefusesMixedKeyFields(t *testing.T) {
+	t.Parallel()
+
+	signer := ecdsaTestKey(t)
+
+	sig, err := sshsig.Parse(ecdsaArmored(t, signer, ecdsaOpts{
+		namespace: sshsig.NamespaceStepUp, hash: "", sigType: "", rawBlob: nil,
+	}))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384 key: %v", err)
+	}
+
+	withKey := ecdsaKey(&signer.PublicKey)
+	withKey.Key = bytes.Repeat([]byte{1}, 32)
+
+	withApp := ecdsaKey(&signer.PublicKey)
+	withApp.Application = "ssh:"
+
+	keys := map[string]sshsig.PublicKey{
+		"a P-384 point":         ecdsaKey(&p384.PublicKey),
+		"Ed25519 key bytes set": withKey,
+		"an application set":    withApp,
+	}
+
+	for name, key := range keys {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := sig.Verify(key, sshsig.NamespaceStepUp, testMessage())
+			if !errors.Is(err, sshsig.ErrMalformed) {
+				t.Fatalf("Verify error = %v, want ErrMalformed", err)
+			}
+
+			if got != (sshsig.Result{UserPresent: false, UserVerified: false, Counter: 0}) {
+				t.Fatalf("Verify result = %+v, want the zero result", got)
+			}
 		})
 	}
 }
