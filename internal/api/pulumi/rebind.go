@@ -9,14 +9,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
-// secretsProvidersMember is the top-level member of a checkpoint that names
-// the secrets provider of the stack.
-const secretsProvidersMember = "secrets_providers"
-
-// serviceSecretsProvider is the type of the secrets provider that the server
-// holds for the stack.
-const serviceSecretsProvider = "service"
-
 // providerOwnerKey, providerProjectKey and providerStackKey are the members of
 // the state of the service secrets provider that name the stack.
 const (
@@ -98,7 +90,7 @@ func providersSpans(deployment []byte) ([]byteSpan, bool) {
 			return nil, false
 		}
 
-		if name.String() != secretsProvidersMember {
+		if name.String() != stack.SecretsProvidersMember {
 			if skipErr := dec.SkipValue(); skipErr != nil {
 				return nil, false
 			}
@@ -130,7 +122,7 @@ func openObject(dec *jsontext.Decoder) bool {
 func readSpan(dec *jsontext.Decoder) (byteSpan, error) {
 	raw, err := dec.ReadValue()
 	if err != nil {
-		return byteSpan{}, fmt.Errorf("read a value of %s: %w", secretsProvidersMember, err)
+		return byteSpan{}, fmt.Errorf("read a value of %s: %w", stack.SecretsProvidersMember, err)
 	}
 
 	stop := int(dec.InputOffset())
@@ -149,7 +141,7 @@ func reboundProviders(raw []byte, ref stack.Ref) ([]byte, bool) {
 
 	var kind string
 
-	if err := json.Unmarshal(providers["type"], &kind); err != nil || kind != serviceSecretsProvider {
+	if err := json.Unmarshal(providers["type"], &kind); err != nil || kind != stack.ServiceSecretsProvider {
 		return nil, false
 	}
 
