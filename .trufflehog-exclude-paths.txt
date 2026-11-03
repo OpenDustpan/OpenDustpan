@@ -11,6 +11,7 @@
 ^internal/api/drift/location_credentials_test\.go$
 ^internal/api/jobs/location_answer_test\.go$
 ^internal/api/jobs/location_credentials_test\.go$
+^pkg/job/jobtest/claimgate\.go$
 ^pkg/job/location_test\.go$
 # a fake credential in a test fixture in an old commit, removed from the tree later
 ^pkg/source/filters_test\.go$
