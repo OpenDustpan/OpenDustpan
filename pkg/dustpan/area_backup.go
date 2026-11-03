@@ -45,7 +45,7 @@ type backupSettings struct {
 	allowDevHint    string
 }
 
-// defaultBackupSettings answers the backup settings before the options: no
+// defaultBackupSettings returns the backup settings before the options: no
 // backup target and no restore of a dev backup.
 func defaultBackupSettings() backupSettings {
 	return backupSettings{target: nil, targetName: "", allowDevBackups: false, allowDevHint: ""}
