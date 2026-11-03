@@ -598,18 +598,20 @@ func faultCallRules(name string, call *ast.CallExpr) []string {
 	const firstLogged = 2
 
 	if len(call.Args) <= firstLogged {
-		if name == "LogServer" {
-			return nil
-		}
-
 		return []string{"faultlog call with too few arguments"}
 	}
 
 	var out []string
 
-	if lit, isLit := call.Args[firstLogged].(*ast.BasicLit); name != "LogServer" &&
-		(!isLit || lit.Kind != token.STRING) {
+	// Every faultlog call has a message at the same place, and it is a literal.
+	if !isStringLiteral(call.Args[firstLogged]) {
 		out = append(out, "faultlog message is not a string literal")
+	}
+
+	// The op of a fault names a call site, so it is a literal too.
+	const opIndex = 4
+	if name == "LogFault" && len(call.Args) > opIndex && !isStringLiteral(call.Args[opIndex]) {
+		out = append(out, "faultlog op is not a string literal")
 	}
 
 	for _, arg := range call.Args[firstLogged:] {
@@ -617,6 +619,13 @@ func faultCallRules(name string, call *ast.CallExpr) []string {
 	}
 
 	return out
+}
+
+// isStringLiteral returns true when e is a string literal.
+func isStringLiteral(e ast.Expr) bool {
+	lit, ok := e.(*ast.BasicLit)
+
+	return ok && lit.Kind == token.STRING
 }
 
 // callsInArgument returns one rule for each call in arg, except the calls of
@@ -776,7 +785,31 @@ func TestFaultLogViolations(t *testing.T) {
 			name: "formatted error in a faultlog argument",
 			src: `func f(c context.Context, l *slog.Logger, err error) { ` +
 				`faultlog.LogFault(c, l, "x", faultlog.CauseNetwork, fmt.Sprint(err)) }`,
+			want: []string{"a.go: call in an argument of faultlog", "a.go: faultlog op is not a string literal"},
+		},
+		{
+			name: "LogServer with an error text in the message",
+			src: `func f(c context.Context, l *slog.Logger, err error) { ` +
+				`msg := "x: " + err.Error(); faultlog.LogServer(c, l, msg, faultlog.Fields{Status: 500}) }`,
+			want: []string{"a.go: faultlog message is not a string literal"},
+		},
+		{
+			name: "LogServer with a call in the message",
+			src: `func f(c context.Context, l *slog.Logger, err error) { ` +
+				`faultlog.LogServer(c, l, err.Error(), faultlog.Fields{Status: 500}) }`,
+			want: []string{"a.go: call in an argument of faultlog", "a.go: faultlog message is not a string literal"},
+		},
+		{
+			name: "LogServer with an error text in a field",
+			src: `func f(c context.Context, l *slog.Logger, err error) { ` +
+				`faultlog.LogServer(c, l, "x", faultlog.Fields{Status: 500, Op: err.Error()}) }`,
 			want: []string{"a.go: call in an argument of faultlog"},
+		},
+		{
+			name: "LogFault op from a variable",
+			src: `func f(c context.Context, l *slog.Logger, op string) { ` +
+				`faultlog.LogFault(c, l, "x", faultlog.CauseNetwork, op) }`,
+			want: []string{"a.go: faultlog op is not a string literal"},
 		},
 		{
 			name: "message that is not a literal",

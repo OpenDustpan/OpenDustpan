@@ -106,9 +106,8 @@ func refusedLevel(err error) slog.Level {
 // switch knows.
 func (h *Handler) logFailure(ctx context.Context, status int, err error) {
 	if status >= http.StatusInternalServerError {
-		faultlog.LogServer(ctx, h.logger, faultlog.ServerLog{
-			Message: "runner request failed", Status: status, Cause: faultlog.Cause(err), Code: "", Op: "",
-		})
+		faultlog.LogServer(ctx, h.logger, "runner request failed",
+			faultlog.Fields{Status: status, Cause: faultlog.Cause(err), Code: "", Op: ""})
 	}
 }
 
