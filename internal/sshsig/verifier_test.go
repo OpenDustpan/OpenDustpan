@@ -160,7 +160,7 @@ func TestVerifierKeyCheck(t *testing.T) {
 	}{
 		{"an OpenPGP factor", func(k *stepup.Key) { k.Factor = stepup.FactorOpenPGP }, stepup.ScopeWrite},
 		{"an empty factor", func(k *stepup.Key) { k.Factor = "" }, stepup.ScopeWrite},
-		{"a type outside the allowlist", func(k *stepup.Key) { k.Type = "ecdsa-sha2-nistp256" }, stepup.ScopeWrite},
+		{"a type outside the allowlist", func(k *stepup.Key) { k.Type = "ecdsa-sha2-nistp384" }, stepup.ScopeWrite},
 		{"an empty type", func(k *stepup.Key) { k.Type = "" }, stepup.ScopeWrite},
 		{"a stored type that is not the type of the key", func(k *stepup.Key) {
 			k.Type = sshsig.TypeSKEd25519

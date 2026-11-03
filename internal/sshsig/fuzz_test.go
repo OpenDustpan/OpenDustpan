@@ -44,6 +44,8 @@ func FuzzParse(f *testing.F) {
 		f.Add(s)
 	}
 
+	f.Add(ecdsaSeedSignature(f))
+
 	f.Fuzz(func(t *testing.T, armored []byte) {
 		sig, err := sshsig.Parse(armored)
 		if err != nil {
@@ -54,7 +56,7 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("Parse accepted the hash %q", sig.HashAlgorithm)
 		}
 
-		if sig.Type != sshsig.TypeEd25519 && sig.Type != sshsig.TypeSKEd25519 {
+		if sig.Type != sshsig.TypeEd25519 && sig.Type != sshsig.TypeSKEd25519 && sig.Type != sshsig.TypeECDSAP256 {
 			t.Fatalf("Parse accepted the type %q", sig.Type)
 		}
 
@@ -62,7 +64,7 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("Parse accepted the namespace %q", sig.Namespace)
 		}
 
-		if len(sig.Blob) != 64 {
+		if sig.Type != sshsig.TypeECDSAP256 && len(sig.Blob) != 64 {
 			t.Fatalf("Parse accepted a signature of %d bytes", len(sig.Blob))
 		}
 	})
@@ -79,6 +81,8 @@ func FuzzParsePublicKey(f *testing.F) {
 
 		f.Add(b)
 	}
+
+	f.Add(ecdsaSeedKey(f))
 
 	f.Fuzz(func(t *testing.T, wire []byte) {
 		k, err := sshsig.ParsePublicKey(wire)
@@ -101,6 +105,8 @@ func FuzzVerifier(f *testing.F) {
 	for _, s := range seeds(f) {
 		f.Add(s, uint8(0))
 	}
+
+	f.Add(ecdsaSeedSignature(f), uint8(0))
 
 	f.Fuzz(func(t *testing.T, sig []byte, scope uint8) {
 		v := vector(t, "sk", "sk-presence", stepup.ScopeWrite)
