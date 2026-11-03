@@ -103,6 +103,37 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 	return handler, nil
 }
 
+// finalVersions gives the dispatcher the last final state version of a unit,
+// read from the job store.
+type finalVersions struct {
+	reader job.FinalVersionReader
+}
+
+// LastFinal implements trigger.Versions.
+func (f finalVersions) LastFinal(ctx context.Context, unit graph.Unit) (string, bool, error) {
+	row, ok, err := f.reader.FinalVersion(ctx, unit.Namespace, unit.ID)
+	if err != nil {
+		return "", false, fmt.Errorf("final state version of %s: %w", unit, err)
+	}
+
+	return row.VersionID, ok, nil
+}
+
+// finalVersionsOf returns the source of final state versions for the
+// dispatcher, or nil when the store lacks the port. A store without the port
+// gives no versions, so Dispatcher.Upstream fails closed with
+// trigger.ErrVersionMismatch.
+//
+//nolint:ireturn // The dispatcher takes the port trigger.Versions; nil is its fail-closed value.
+func finalVersionsOf(st job.Store) trigger.Versions {
+	r, ok := st.(job.FinalVersionReader)
+	if !ok {
+		return nil
+	}
+
+	return finalVersions{reader: r}
+}
+
 // newTriggerManager builds the manager of triggers over the ports of the
 // server and the job service.
 func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs job.Starter,
@@ -125,7 +156,7 @@ func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs jo
 
 	dispatcher, err := trigger.NewDispatcher(trigger.DispatcherConfig{
 		Store: cfg.triggerStore, Starter: starter, Savers: savers, Units: units, Audit: ports.entries,
-		Fences: fences, Versions: nil, Now: cfg.now,
+		Fences: fences, Versions: finalVersionsOf(cfg.jobStore), Now: cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("trigger dispatcher: %w", err)
