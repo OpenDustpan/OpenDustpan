@@ -57,13 +57,17 @@ marks the command that made a database (ADR 237 decisions 23 to 31).
 2. **One explicit reset for dev (owner).** `opendustpan dev reset
    [--data-dir <dir>]` starts a data directory of `dev` again. It does these
    steps, and each check refuses alone:
-   - It refuses a directory without the key file of `dev`, a directory that a
-     live `dev` server uses (`dev.addr`), and a database that is not a
-     regular file.
+   - It refuses a directory without the key file of `dev`, a data directory
+     that is a symbolic link, and a directory that a live `dev` server uses
+     (`dev.addr`).
+   - It refuses a database that is not a regular file, and a database with a
+     second name (a hard link). It refuses a `blobs` directory that is a
+     symbolic link, that another user owns, or that the group or others can
+     access.
    - It reads the stored kind with `sqlite.StoredKind`: read-only, under the
-     guard of the store, with no schema check. It refuses a database of
-     `serve`, a database with no kind, and a value that is not a known kind.
-     It then changes nothing.
+     guard of the store, with no schema check. It refuses a database that
+     another process holds, a database of `serve`, a database with no kind,
+     and a value that is not a known kind. It then changes nothing.
    - It moves `dev.db`, its log files and `blobs` aside as
      `dev.db.reset.bak` and `blobs.reset.bak`. It first removes the copies of
      the reset before, so the directory keeps the data of one reset only.
@@ -94,8 +98,9 @@ marks the command that made a database (ADR 237 decisions 23 to 31).
   baseline. The key file, the token and the certificate stay.
 - The tests cover each layer: a database of `serve`, a database with no
   kind, an unknown kind, a garbled kind and no installation row are refused.
-  So are a directory without the key file, a linked database and a live
-  server. A reset keeps the copy and names it in the log line and the audit
+  So are a directory without the key file, a linked data directory, a
+  symbolic link and a hard link of the database, a linked or open `blobs`
+  directory, a database in use and a live server. A reset keeps the copy and names it in the log line and the audit
   entry, and a second reset replaces the copy of the first only. The refusal
   of `dev` names the command, and the refusal of `serve` does not.
 - The dev server guide shows the command.

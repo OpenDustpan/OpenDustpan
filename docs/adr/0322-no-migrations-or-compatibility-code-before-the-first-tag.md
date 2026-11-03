@@ -57,7 +57,9 @@ database that recorded a version with other SQL in it opened with no error.
    `pkg/store/<dialect>/migrations/<NNNN>_baseline.sql`. Its number is above
    each file that it replaced, as ADR 73 decision 6 says. Until the first
    tag, a pull request changes the schema by an edit of the baseline of each
-   dialect, in place. It adds no numbered migration.
+   dialect, in place. It adds no numbered migration. It puts a new object in
+   its place in the name order of the baseline, not at the end, so that
+   parallel changes edit different lines.
    `TestOneMigrationFileUntilTheFirstTag` fails when a `migrations` directory
    holds another file.
 2. **No migration or compatibility code for untagged shapes (owner).**
@@ -95,6 +97,12 @@ database that recorded a version with other SQL in it opened with no error.
 
 ## Consequences
 
+- The SHA-256 covers each byte of the baseline. An edit of a comment alone
+  also makes each dev database refuse, and its developer runs
+  `opendustpan dev reset`.
+- A regeneration with no change of the schema gives the same bytes: the
+  header names no Git ref, and the baseline keeps its version when it
+  replaces no other file.
 - Parallel pull requests that change the schema edit the same file. Git
   merges edits to different tables without a conflict. A person resolves a
   conflict in the same lines by hand. The baseline is source, not a

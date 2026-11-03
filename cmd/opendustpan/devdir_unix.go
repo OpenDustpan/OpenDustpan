@@ -29,3 +29,14 @@ func checkDevOwner(path string, info os.FileInfo) error {
 
 	return nil
 }
+
+// devOneLink reports whether the file that info describes has one name
+// only, and false for known when the platform does not tell it.
+func devOneLink(info os.FileInfo) (one, known bool) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, false
+	}
+
+	return stat.Nlink == 1, true
+}

@@ -203,7 +203,10 @@ The platform must be observable and intuitive. A user must be able to see and ex
   and generate them with sqlc. Dynamic queries are hand-written in the adapter.
   Until the first tag, each dialect has one migration file, the baseline in
   `pkg/store/<dialect>/migrations/` (ADR 322). To change the schema, edit the
-  baseline of each dialect in place. Do not add a numbered migration. Do not
+  baseline of each dialect in place. Put a new object in its place in the
+  name order of the baseline, not at the end, so that parallel changes edit
+  different lines. An edit of a comment changes the SHA-256 too, and forces
+  a `dev reset`. Do not add a numbered migration. Do not
   write migration, upgrade, alias or data-conversion code for a shape that no
   tag shipped. The store records the SHA-256 of each migration and refuses a
   database of another version of the baseline with `ErrSchemaDiverged`. For

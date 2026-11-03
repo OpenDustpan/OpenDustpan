@@ -30,9 +30,12 @@ A change to the architecture starts as an RFC in `docs/rfc/`.
 6. To change the database schema, edit the baseline of each dialect in
    `pkg/store/sqlite/migrations/` and `pkg/store/postgres/migrations/`, then
    run `make generate`. Until the first tag, do not add a numbered migration,
-   and do not write code that converts data of an earlier build. A dev
-   database of an earlier build does not open after the change: run
-   `opendustpan dev reset`.
+   and do not write code that converts data of an earlier build. Put a new
+   table, index or other object in its place in the name order of the
+   baseline, not at the end of the file, so that parallel changes edit
+   different lines. The store records the SHA-256 of all bytes of the file,
+   so an edit of a comment alone also changes it. A dev database of an
+   earlier build does not open after any edit: run `opendustpan dev reset`.
 7. Before 1.0, the tool-neutral API can change in a way that breaks a client,
    and its version stays the same. Do not raise the version of the API
    description. When a merge conflicts in a generated file, run the generator

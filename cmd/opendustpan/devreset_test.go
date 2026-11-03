@@ -451,3 +451,109 @@ func TestDevResetRefusesADirectoryOfALiveServer(t *testing.T) {
 
 	checkNothingKept(t, dir)
 }
+
+// TestDevResetRefusesALinkedPath sends a hard link of the database of serve,
+// a symbolic link of the blob directory, a blob directory that the group can
+// read and a symbolic link of the data directory to dev reset. Each layer
+// refuses alone, and the data that a link names stays in place.
+func TestDevResetRefusesALinkedPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hard link of the database", func(t *testing.T) {
+		t.Parallel()
+
+		serveDir := resetTestDir(t, installation.KindProduction)
+		dir := resetTestDir(t, installation.KindDev)
+
+		if err := os.Remove(filepath.Join(dir, devDBName)); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+
+		if err := os.Link(filepath.Join(serveDir, devDBName), filepath.Join(dir, devDBName)); err != nil {
+			t.Fatalf("link: %v", err)
+		}
+
+		if _, err := runReset(t, dir); !errors.Is(err, errDevResetHardLink) {
+			t.Fatalf("dev reset of a hard link = %v, want %v", err, errDevResetHardLink)
+		}
+
+		checkNothingKept(t, dir)
+	})
+
+	t.Run("symbolic link of the blob directory", func(t *testing.T) {
+		t.Parallel()
+
+		dir := resetTestDir(t, installation.KindDev)
+		target := t.TempDir()
+
+		if err := os.Symlink(target, filepath.Join(dir, devBlobsName)); err != nil {
+			t.Fatalf("link: %v", err)
+		}
+
+		if _, err := runReset(t, dir); !errors.Is(err, errDevResetBlobs) {
+			t.Fatalf("dev reset with a linked blob directory = %v, want %v", err, errDevResetBlobs)
+		}
+
+		checkNothingKept(t, dir)
+	})
+
+	t.Run("blob directory that the group can read", func(t *testing.T) {
+		t.Parallel()
+
+		dir := resetTestDir(t, installation.KindDev)
+
+		blobs := filepath.Join(dir, devBlobsName)
+		if err := os.Mkdir(blobs, 0o750); err != nil {
+			t.Fatalf("make the blob directory: %v", err)
+		}
+
+		if err := os.Chmod(blobs, 0o750); err != nil {
+			t.Fatalf("give the group access to the blob directory: %v", err)
+		}
+
+		if _, err := runReset(t, dir); !errors.Is(err, errDevResetBlobs) {
+			t.Fatalf("dev reset with an open blob directory = %v, want %v", err, errDevResetBlobs)
+		}
+
+		checkNothingKept(t, dir)
+	})
+
+	t.Run("symbolic link of the data directory", func(t *testing.T) {
+		t.Parallel()
+
+		dir := resetTestDir(t, installation.KindDev)
+
+		linked := filepath.Join(t.TempDir(), "linked")
+		if err := os.Symlink(dir, linked); err != nil {
+			t.Fatalf("link: %v", err)
+		}
+
+		if _, err := runReset(t, linked); !errors.Is(err, errDevResetLinkedDir) {
+			t.Fatalf("dev reset of a linked data directory = %v, want %v", err, errDevResetLinkedDir)
+		}
+
+		checkNothingKept(t, dir)
+	})
+}
+
+// TestDevResetRefusesADatabaseInUse holds the database open in a store, with
+// no dev.addr, and proves that dev reset says that a server holds it.
+func TestDevResetRefusesADatabaseInUse(t *testing.T) {
+	t.Parallel()
+
+	dir := resetTestDir(t, installation.KindDev)
+
+	st, err := openStore(t.Context(), "sqlite:"+filepath.Join(dir, devDBName),
+		slog.New(slog.DiscardHandler), openMigrate, installation.KindDev)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	defer st.close()
+
+	if _, err := runReset(t, dir); !errors.Is(err, errDevResetInUse) {
+		t.Fatalf("dev reset of a database in use = %v, want %v", err, errDevResetInUse)
+	}
+
+	checkNothingKept(t, dir)
+}
