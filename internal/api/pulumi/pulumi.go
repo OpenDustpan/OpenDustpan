@@ -765,7 +765,7 @@ func (h *Handler) deleteStack(
 		action:    identity.ActionUnitManage,
 	})
 
-	if !h.guardStateWrite(w, r, principal, obj, checkDelete) {
+	if !h.guardStateWrite(w, r, principal, obj, checkDelete()) {
 		return
 	}
 
@@ -870,7 +870,7 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 
 	// The gates of the source unit decide: the rename moves its state. The
 	// destination unit has no state before the rename.
-	if !h.guardStateWrite(w, r, p, obj, checkRename) {
+	if !h.guardStateWrite(w, r, p, obj, checkRename()) {
 		return
 	}
 
