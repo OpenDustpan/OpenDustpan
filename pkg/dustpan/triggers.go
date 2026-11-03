@@ -182,9 +182,8 @@ func triggerDispatcherConfig(cfg *settings, ports *triggerPorts, parts triggerPa
 	if r, ok := cfg.jobStore.(job.FinalVersionReader); ok {
 		versions = finalVersions{reader: r}
 	} else {
-		// Runs at server construction, so the start context is the background context.
-		cfg.logger.WarnContext(context.Background(),
-			"the job store has no final version reader: run triggers refuse every upstream check")
+		// Runs at server construction, which has no context.
+		cfg.logger.Warn("the job store has no final version reader: run triggers refuse every upstream check")
 	}
 
 	return trigger.DispatcherConfig{
