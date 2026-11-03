@@ -62,6 +62,13 @@ type Entry struct {
 	SHA256  string
 }
 
+// lineKey names one line of the record: a tag lists a file of a dialect once.
+type lineKey struct {
+	tag     string
+	dialect string
+	file    string
+}
+
 // Record is the parsed release record.
 type Record struct {
 	entries []Entry
@@ -82,7 +89,7 @@ func Current() (Record, error) {
 func Parse(data []byte) (Record, error) {
 	var rec Record
 
-	seen := map[Entry]bool{}
+	seen := map[lineKey]bool{}
 	sums := map[string]string{}
 
 	for i, line := range strings.Split(string(data), "\n") {
@@ -95,7 +102,7 @@ func Parse(data []byte) (Record, error) {
 			return Record{}, fmt.Errorf("line %d: %w", i+1, err)
 		}
 
-		key := Entry{Tag: entry.Tag, Dialect: entry.Dialect, File: entry.File}
+		key := lineKey{tag: entry.Tag, dialect: entry.Dialect, file: entry.File}
 		if seen[key] {
 			return Record{}, fmt.Errorf("%w: line %d: %s lists %s %s twice",
 				ErrBadRecord, i+1, entry.Tag, entry.Dialect, entry.File)
@@ -228,6 +235,8 @@ func (r Record) TagCopies(dialect, tag string, files map[string]string) []error 
 				"%w: the %s copy %s of %s has the SHA-256 %s and %s lists %s: never edit a tag copy or a line of a tag",
 				ErrMigrationFiles, dialect, name, tag, got, Path, want,
 			))
+		default:
+			// The copy matches its line.
 		}
 
 		delete(listed, name)
