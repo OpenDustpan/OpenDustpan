@@ -294,7 +294,7 @@ The command does these steps:
 1. It refuses the directory when it is not a data directory of `dev`, or when it is a symbolic link. It also refuses it when a `dev` server or another process holds the database.
 2. It refuses a database that is not a regular file or that has a second name (a hard link). It refuses a `blobs` directory that is a symbolic link, that another user owns, or that the group or others can access.
 3. It reads the installation kind of the database. It refuses a database of `serve`, a database with no kind and a database with a kind that it does not know. It then changes nothing.
-4. It moves `dev.db`, its log files and the `blobs` directory aside, as `dev.db.reset.bak` and `blobs.reset.bak`. It deletes the copies of the reset before, so the directory keeps the data of one reset only.
+4. It moves `dev.db`, its log files and the `blobs` directory aside, as `dev.db.reset.bak` and `blobs.reset.bak`. It keeps the copies of the reset before until the new `dev.db` exists. Then it deletes them, so the directory keeps the data of one reset only.
 5. It writes a log line that names the copies, makes the schema of the binary on a new `dev.db`, and claims the kind `dev`.
 6. It writes an audit entry that names the copies.
 
