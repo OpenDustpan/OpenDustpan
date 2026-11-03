@@ -55,16 +55,32 @@ func (s *Store) ClaimKind(ctx context.Context, kind installation.Kind) (installa
 
 // checkKind compares the kind in the database with the kind of the command
 // before Open applies a migration. It does nothing without a command kind,
-// and when the installation table has no kind column yet: the migrations add
-// the column, and the claim decides.
+// and on a new database with no installation table: the baseline makes the
+// table, and the claim decides. An installation table without the kind
+// column fails closed with installation.ErrUnavailable: the baseline makes
+// the column, so such a table is damaged, and an unknown kind is never a dev
+// kind.
 func (s *Store) checkKind(ctx context.Context) error {
 	if s.kind == "" {
 		return nil
 	}
 
-	var columns int64
+	var tables int64
 
 	err := s.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'installation'`,
+	).Scan(&tables)
+	if err != nil {
+		return fmt.Errorf("check installation table: %w", err)
+	}
+
+	if tables == 0 {
+		return nil
+	}
+
+	var columns int64
+
+	err = s.conn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM pragma_table_info('installation') WHERE name = 'kind'`,
 	).Scan(&columns)
 	if err != nil {
@@ -72,7 +88,8 @@ func (s *Store) checkKind(ctx context.Context) error {
 	}
 
 	if columns == 0 {
-		return nil
+		return fmt.Errorf("read installation kind: the installation table has no kind column: %w",
+			installation.ErrUnavailable)
 	}
 
 	raw, err := s.queries.GetInstallationKind(ctx)

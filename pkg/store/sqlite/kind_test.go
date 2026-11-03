@@ -203,3 +203,38 @@ func TestKindUnknownStoredValue(t *testing.T) {
 		t.Fatalf("claim with an unknown stored kind: err = %v, want ErrUnavailable", err)
 	}
 }
+
+// TestOpenKindOnDatabaseWithoutColumn proves that an installation table
+// without the kind column fails closed: the baseline makes the column, so
+// such a table is damaged, and its unknown kind is never the kind of the
+// command. Open refuses it with installation.ErrUnavailable and claims
+// nothing.
+func TestOpenKindOnDatabaseWithoutColumn(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	first, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open the database: %v", err)
+	}
+
+	if closeErr := first.Close(); closeErr != nil {
+		t.Fatalf("close the database: %v", closeErr)
+	}
+
+	execRaw(t, path, `ALTER TABLE installation DROP COLUMN kind`)
+
+	for _, kind := range []installation.Kind{installation.KindDev, installation.KindProduction} {
+		second, err := sqlite.Open(t.Context(), path, sqlite.WithInstallationKind(kind))
+		if err == nil {
+			if closeErr := second.Close(); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
+		}
+
+		if !errors.Is(err, installation.ErrUnavailable) {
+			t.Fatalf("open as %s without the kind column = %v, want %v", kind, err, installation.ErrUnavailable)
+		}
+	}
+}

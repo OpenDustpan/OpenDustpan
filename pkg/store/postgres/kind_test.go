@@ -193,3 +193,27 @@ func TestKindUnknownStoredValue(t *testing.T) {
 		t.Fatalf("claim with an unknown stored kind: err = %v, want ErrUnavailable", err)
 	}
 }
+
+// TestOpenKindOnDatabaseWithoutColumn proves that an installation table
+// without the kind column fails closed: the baseline makes the column, so
+// such a table is damaged, and its unknown kind is never the kind of the
+// command. Open refuses it with installation.ErrUnavailable and claims
+// nothing.
+func TestOpenKindOnDatabaseWithoutColumn(t *testing.T) {
+	t.Parallel()
+
+	schemaURL := openKindFixture(t, "")
+
+	execInSchema(t, schemaURL, `ALTER TABLE installation DROP COLUMN kind`)
+
+	for _, kind := range []installation.Kind{installation.KindDev, installation.KindProduction} {
+		second, err := postgres.Open(t.Context(), schemaURL, postgres.WithInstallationKind(kind))
+		if err == nil {
+			second.Close()
+		}
+
+		if !errors.Is(err, installation.ErrUnavailable) {
+			t.Fatalf("open as %s without the kind column = %v, want %v", kind, err, installation.ErrUnavailable)
+		}
+	}
+}

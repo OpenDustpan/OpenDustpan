@@ -3,6 +3,7 @@ package sqlite
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
@@ -65,5 +66,51 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 
 	if err := verifyRecorded(t.Context(), s.conn, all); !errors.Is(err, schema.ErrSchemaDiverged) {
 		t.Fatalf("verifyRecorded without the sha256 column = %v, want %v", err, schema.ErrSchemaDiverged)
+	}
+}
+
+// TestVerifyRecordedRefusesARowThatIsNotASum records a value that is not a
+// SHA-256 and passes an embedded migration with the same value, as a caller
+// with an empty or a broken sum would. verifyRecorded refuses each one alone,
+// without migrate.Check.
+func TestVerifyRecordedRefusesARowThatIsNotASum(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range map[string]string{
+		"empty sum":  "",
+		"not hex":    strings.Repeat("z", 64),
+		"upper case": strings.Repeat("A", 64),
+		"line end":   strings.Repeat("a", 62) + "\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+
+			t.Cleanup(func() {
+				if closeErr := s.Close(); closeErr != nil {
+					t.Errorf("close: %v", closeErr)
+				}
+			})
+
+			all, err := migrate.Load(migrations, "migrations")
+			if err != nil {
+				t.Fatalf("embedded migrations: %v", err)
+			}
+
+			if _, execErr := s.conn.ExecContext(t.Context(), `UPDATE schema_migrations SET sha256 = ?`, value); execErr != nil {
+				t.Fatalf("record %q: %v", value, execErr)
+			}
+
+			embedded := all[0]
+			embedded.SHA256 = value
+
+			if err := verifyRecorded(t.Context(), s.conn, []migrate.Migration{embedded}); !errors.Is(err, schema.ErrSchemaDiverged) {
+				t.Fatalf("verifyRecorded of %q = %v, want %v", value, err, schema.ErrSchemaDiverged)
+			}
+		})
 	}
 }

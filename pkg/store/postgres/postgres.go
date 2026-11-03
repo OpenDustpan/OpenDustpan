@@ -1594,6 +1594,14 @@ func verifyRecorded(ctx context.Context, tx pgx.Tx, embedded []migrate.Migration
 			return fmt.Errorf("read migration %s: %w", m.Name, readErr)
 		}
 
+		// Defense in depth: migrate.Check refuses a value that is not a
+		// SHA-256 too; this check stays so that an embedded migration with an
+		// empty sum cannot let an empty recorded sum through.
+		if !schema.ValidSHA256(digest) {
+			return fmt.Errorf("%w: migration %s records the SHA-256 %q, which is not 64 lowercase hex digits",
+				schema.ErrSchemaDiverged, m.Name, digest)
+		}
+
 		if name != m.Name || digest != m.SHA256 {
 			return fmt.Errorf("%w: the database records migration %s with SHA-256 %q, and this binary has %s "+
 				"with SHA-256 %s: another build of the schema made the database",

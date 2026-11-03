@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -62,5 +63,45 @@ func TestVerifyRecordedRefusesAlone(t *testing.T) {
 
 	if err := verify(all); !errors.Is(err, schema.ErrSchemaDiverged) {
 		t.Fatalf("verifyRecorded without the sha256 column = %v, want %v", err, schema.ErrSchemaDiverged)
+	}
+}
+
+// TestVerifyRecordedRefusesARowThatIsNotASum records a value that is not a
+// SHA-256 and passes an embedded migration with the same value, as a caller
+// with an empty or a broken sum would. verifyRecorded refuses each one alone,
+// without migrate.Check.
+func TestVerifyRecordedRefusesARowThatIsNotASum(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range map[string]string{
+		"empty sum":  "",
+		"not hex":    strings.Repeat("z", 64),
+		"upper case": strings.Repeat("A", 64),
+		"line end":   strings.Repeat("a", 62) + "\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openAt(t, membershipURL(t), "dev")
+
+			all, err := migrate.Load(migrations, "migrations")
+			if err != nil {
+				t.Fatalf("embedded migrations: %v", err)
+			}
+
+			if _, execErr := s.pool.Exec(t.Context(), `UPDATE schema_migrations SET sha256 = $1`, value); execErr != nil {
+				t.Fatalf("record %q: %v", value, execErr)
+			}
+
+			embedded := all[0]
+			embedded.SHA256 = value
+
+			err = pgx.BeginFunc(t.Context(), s.pool, func(tx pgx.Tx) error {
+				return verifyRecorded(t.Context(), tx, []migrate.Migration{embedded})
+			})
+			if !errors.Is(err, schema.ErrSchemaDiverged) {
+				t.Fatalf("verifyRecorded of %q = %v, want %v", value, err, schema.ErrSchemaDiverged)
+			}
+		})
 	}
 }
