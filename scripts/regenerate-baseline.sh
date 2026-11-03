@@ -32,9 +32,34 @@
 set -eu
 
 REF="${1:-origin/main}"
-: "${DUSTPAN_TEST_POSTGRES_URL:?set DUSTPAN_TEST_POSTGRES_URL to a PostgreSQL database}"
 
 ROOT="$(git rev-parse --show-toplevel)"
+
+# A tag shipped the baseline when the release record lists a migration file.
+# A collapse then changes the SHA-256 of a shipped migration, and every
+# database of the tag refuses to open. A missing record also refuses: the
+# script fails closed. This check runs first, so that it refuses with no
+# database and no ref.
+RECORD="$ROOT/internal/releaserecord/shipped.txt"
+if [ ! -f "$RECORD" ]; then
+	echo "regenerate-baseline: $RECORD is missing; the script cannot see whether a tag shipped" >&2
+	exit 1
+fi
+if grep -q -v -e '^#' -e '^$' "$RECORD"; then
+	echo "regenerate-baseline: internal/releaserecord/shipped.txt lists a shipped migration; a tag shipped the baseline, so add a new numbered migration instead of a collapse" >&2
+	exit 1
+fi
+
+# Defense in depth: the release record above refuses a collapse after a tag.
+# This check stays so that a tag without its record lines, for example one
+# that a person pushed by hand, also refuses. A shallow clone can have no
+# tags, so this check alone is not enough.
+if [ -n "$(git -C "$ROOT" tag --list 'v[0-9]*')" ]; then
+	echo "regenerate-baseline: the repository has a release tag; add a new numbered migration instead of a collapse" >&2
+	exit 1
+fi
+
+: "${DUSTPAN_TEST_POSTGRES_URL:?set DUSTPAN_TEST_POSTGRES_URL to a PostgreSQL database}"
 
 for dialect in sqlite postgres; do
 	if [ -n "$(find "$ROOT/pkg/store/$dialect/testdata/tag-migrations" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
