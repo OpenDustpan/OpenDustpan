@@ -2,7 +2,8 @@
 // owns the error body, the classes of error that every tool-neutral API
 // shares (authentication, a fixed answer, the Idempotency-Key, the
 // namespace and maintenance), the headers of an error answer and the log
-// rules: a 500 logs its status only, a fenced write logs its wrap, and a
+// rules: a 500 logs its status, a cause class from a closed list and the
+// request ID, never the error text; a fenced write logs its wrap, and a
 // refusal whose answer is not its error text logs that text at Debug.
 //
 // Every answer has a code of the catalog. The package writes no code of its
@@ -28,7 +29,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,6 +42,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -67,7 +72,22 @@ type Problem struct {
 	// answer is the finished code and arguments of an error that already
 	// holds them, or the zero Answer.
 	answer errcode.Answer
+	// cause is the safe cause class of a 500, from the closed list of Cause,
+	// or "" for an answer that is not a 500.
+	cause string
 }
+
+// The cause classes of a 500. Each value is a fixed string that the code
+// writes. A cause class never holds a part of an error text.
+const (
+	CauseDeadlineExceeded = "deadline_exceeded"
+	CauseCanceled         = "canceled"
+	CauseNetwork          = "network"
+	CauseUnexpectedEOF    = "unexpected_eof"
+	CauseFileMissing      = "file_missing"
+	CauseFilePermission   = "file_permission"
+	CauseUnclassified     = "unclassified"
+)
 
 // Unit is a unit that an answer names: its ID, the label of its tool and its
 // name.
@@ -188,6 +208,9 @@ type Writer struct {
 // carries Cache-Control: no-store. WriteProblem holds the rest.
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	p := wr.Problem(err)
+	if p.Status == http.StatusInternalServerError {
+		p.cause = Cause(err)
+	}
 
 	switch {
 	case errors.Is(err, namespace.ErrFenced):
@@ -203,9 +226,10 @@ func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 }
 
 // WriteProblem writes the answer p, for a route that builds its own answer.
-// A 500 logs its status only, never the error text: the text may hold driver
-// detail, a token or state. A code or a value that the catalog refuses logs
-// the code and answers server.internal.
+// A 500 logs its status, a cause class from the closed list of Cause and the
+// request ID when it is safe. It never logs the error text: the text may hold
+// driver detail, a token or state. A code or a value that the catalog refuses
+// logs the code and answers server.internal.
 func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Problem) {
 	var (
 		made    errcode.Answer
@@ -223,7 +247,17 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 	}
 
 	if p.Status == http.StatusInternalServerError {
-		wr.Logger.ErrorContext(ctx, "request failed", slog.Int("status", p.Status))
+		cause := p.cause
+		if cause == "" {
+			cause = CauseUnclassified
+		}
+
+		attrs := []any{slog.Int("status", p.Status), slog.String("cause", cause)}
+		if id, ok := safeRequestID(requestid.FromContext(ctx)); ok {
+			attrs = append(attrs, slog.String("request_id", id))
+		}
+
+		wr.Logger.ErrorContext(ctx, "request failed", attrs...)
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -480,8 +514,59 @@ func Built(status int, message, code string, a errcode.Answer, err error) Proble
 func answer(status int, code, message string) Problem {
 	return Problem{
 		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
-		Units: nil, answer: errcode.Answer{},
+		Units: nil, answer: errcode.Answer{}, cause: "",
 	}
+}
+
+// Cause returns the cause class of err: one value of the closed list of the
+// Cause constants, never a part of err.Error(). The order is part of the
+// contract, because context.DeadlineExceeded also implements net.Error. A nil
+// error returns CauseUnclassified.
+func Cause(err error) string {
+	switch {
+	case err == nil:
+		return CauseUnclassified
+	case errors.Is(err, context.DeadlineExceeded):
+		return CauseDeadlineExceeded
+	case errors.Is(err, context.Canceled):
+		return CauseCanceled
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+		return CauseUnexpectedEOF
+	case errors.Is(err, fs.ErrNotExist):
+		return CauseFileMissing
+	case errors.Is(err, fs.ErrPermission):
+		return CauseFilePermission
+	}
+
+	// Defense in depth: AsType returns a non-nil error when ok is true. The nil
+	// check stays so that a future change to the match cannot return the class
+	// for an empty match.
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr != nil {
+		return CauseNetwork
+	}
+
+	return CauseUnclassified
+}
+
+// safeRequestID returns id and true only when id is 1 to 64 lowercase hex
+// bytes, the form that requestid.New makes. Otherwise it returns "" and false.
+func safeRequestID(id string) (string, bool) {
+	if id == "" || len(id) > 64 {
+		return "", false
+	}
+
+	// Defense in depth: requestid.New makes hex only, but the context value may
+	// come from a caller that is not the root middleware. This check stays so
+	// that a value with CR, LF or a secret never reaches the log, and it does
+	// not rely on the slog handler quoting.
+	for i := range len(id) {
+		c := id[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", false
+		}
+	}
+
+	return id, true
 }
 
 // WriteJSON writes body as JSON with status. A failed write logs a warning:
