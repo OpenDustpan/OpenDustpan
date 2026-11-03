@@ -82,7 +82,9 @@ func testRestoreEndAuditEntries(t *testing.T, newStore RestoreFactory) {
 		id := r.start(t, a, false, false)
 		r.driveToEnd(t, a, id)
 
-		endAuditWant{outcome: audit.OutcomeSuccess, has: "(access tables replaced"}.check(t, r.restoreEntryOf(t, id))
+		endAuditWant{outcome: audit.OutcomeSuccess, has: "(access tables replaced", hasNot: ""}.check(
+			t, r.restoreEntryOf(t, id),
+		)
 	})
 
 	for _, tc := range []struct {
@@ -117,7 +119,9 @@ func testRestoreEndAuditEntries(t *testing.T, newStore RestoreFactory) {
 		waitReached(t, gate, aDone)
 		r.driveToEnd(t, b, id)
 
-		endAuditWant{outcome: audit.OutcomeSuccess, has: "(access tables replaced"}.check(t, r.restoreEntryOf(t, id))
+		endAuditWant{outcome: audit.OutcomeSuccess, has: "(access tables replaced", hasNot: ""}.check(
+			t, r.restoreEntryOf(t, id),
+		)
 	})
 
 	t.Run("a restore that fails after the swap", func(t *testing.T) {
@@ -129,7 +133,9 @@ func testRestoreEndAuditEntries(t *testing.T, newStore RestoreFactory) {
 		id := r.start(t, a, false, false)
 		r.driveToEnd(t, a, id)
 
-		endAuditWant{outcome: audit.OutcomeFailure, has: "failed after the swap (access tables replaced"}.check(
-			t, r.restoreEntryOf(t, id))
+		want := endAuditWant{
+			outcome: audit.OutcomeFailure, has: "failed after the swap (access tables replaced", hasNot: "",
+		}
+		want.check(t, r.restoreEntryOf(t, id))
 	})
 }
