@@ -1160,8 +1160,9 @@ func backupModel() costModel {
 // restoreModel is the cost model of a restore, fitted the same way. The cost of
 // a migration and of a unit (the maintenance scans and the state version
 // reads) come from the statement counts of a run, and the commits fit the
-// rest. A migration costs 3 round trips in the staging schema: the
-// migration, its record in schema_migrations and the check of its columns.
+// rest. A migration costs 2 round trips in the staging schema: the migration
+// and its record in schema_migrations. The fixed part holds the 2 reads of
+// the columns of schema_migrations, which the apply makes once.
 //
 // The fixed part holds the backup before the swap, with the work of its
 // durable operation: the restore starts that backup with its own claim and
@@ -1172,10 +1173,10 @@ func backupModel() costModel {
 // lockout, and each kept table costs one delete and one copy.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        330,
+		fixed:        332,
 		perTable:     7,
 		perOther:     2,
-		perMigration: 3,
+		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
