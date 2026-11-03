@@ -259,7 +259,7 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 	switch {
 	case finishErr == nil, errors.Is(finishErr, durable.ErrStepDone), errors.Is(finishErr, ErrRestoreNotRunning):
 		if !swapped && finishErr == nil {
-			s.appendEvents(ctx, in)
+			s.appendEvents(ctx, in, restoreEndFailed)
 		}
 
 		s.logRestore(ctx, restoreOutcome{
@@ -306,7 +306,7 @@ func (s *RestoreService) auditAfterSwap(
 		return nil
 	}
 
-	entries, err := s.afterApplyEntries(ctx, sc.Operation, in)
+	entries, err := s.afterApplyEntries(ctx, sc.Operation, in, true)
 	if err == nil {
 		_, err = s.live.AppendRestoreAudit(ctx, sc.Operation.Claim.Step(RestoreStepAfterApply), in.ID, entries)
 	}
@@ -331,11 +331,24 @@ func (s *RestoreService) auditAfterSwap(
 	return nil
 }
 
+// Values of the end of a restore before its swap, for its audit entry.
+const (
+	// restoreEndFailed is a restore that a failure stopped before its swap.
+	restoreEndFailed = "failed"
+	// restoreEndCanceled is a restore that a cancel stopped before its swap.
+	restoreEndCanceled = "canceled"
+	// restoreEndStopped is a restore that stopped before its swap with no
+	// end write and no cancel.
+	restoreEndStopped = "stopped"
+)
+
 // appendEvents writes the audit entries of the audit events of restore in
 // into the audit log of the installation, for a restore that ended before
-// its swap: the audit log is still the one from before the restore. A lost
+// its swap: the audit log is still the one from before the restore. Then it
+// writes the entry of the end, with the outcome failure, which says how the
+// restore ended and that the live data did not change. A lost
 // entry does not change the end: the log line keeps the record.
-func (s *RestoreService) appendEvents(ctx context.Context, in restoreInput) {
+func (s *RestoreService) appendEvents(ctx context.Context, in restoreInput, end string) {
 	store, ok := s.live.(serverAuditAppender)
 	if !ok {
 		return
@@ -352,6 +365,13 @@ func (s *RestoreService) appendEvents(ctx context.Context, in restoreInput) {
 		if _, err := store.AppendServer(ctx, s.restoreAuditEntry(in, object)); err != nil {
 			s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", in.ID.String()))
 		}
+	}
+
+	last := s.restoreAuditEntry(in, endBeforeSwapAuditObject(in, end))
+	last.Outcome = audit.OutcomeFailure
+
+	if _, err := store.AppendServer(ctx, last); err != nil {
+		s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", in.ID.String()))
 	}
 }
 
@@ -1015,7 +1035,7 @@ func (s *RestoreService) stepAfterApply(ctx context.Context, sc durable.StepCont
 		return nil, err
 	}
 
-	entries, err := s.afterApplyEntries(ctx, sc.Operation, in)
+	entries, err := s.afterApplyEntries(ctx, sc.Operation, in, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1062,7 +1082,7 @@ func (s *RestoreService) afterApplyChecks(ctx context.Context, sc durable.StepCo
 // and the live blobs that it refused to overwrite), which the swap removed with the old
 // audit log, and the entries of the dev data report.
 func (s *RestoreService) afterApplyEntries(
-	ctx context.Context, op durable.Operation, in restoreInput,
+	ctx context.Context, op durable.Operation, in restoreInput, failed bool,
 ) ([]audit.Entry, error) {
 	st, _, err := stageResultOf(op)
 	if err != nil {
@@ -1074,7 +1094,12 @@ func (s *RestoreService) afterApplyEntries(
 		return nil, fmt.Errorf("read the audit events of restore %s: %w", in.ID, err)
 	}
 
-	entries := []audit.Entry{s.restoreAuditEntry(in, s.restoreAuditObject(in))}
+	own := s.restoreAuditEntry(in, s.restoreAuditObject(in, failed))
+	if failed {
+		own.Outcome = audit.OutcomeFailure
+	}
+
+	entries := []audit.Entry{own}
 
 	for _, object := range events {
 		entries = append(entries, s.restoreAuditEntry(in, object))
@@ -1386,15 +1411,29 @@ func canceledAuditObject(id RestoreID, token int64, unit string) string {
 		" canceled the active work: " + unit
 }
 
-// restoreAuditObject names one restore for its audit entry, with whether
-// the access tables were replaced or kept.
-func (s *RestoreService) restoreAuditObject(in restoreInput) string {
+// endBeforeSwapAuditObject names the end of restore in before its swap, for
+// its audit entry. It makes no claim about the access tables: the swap did
+// not run, so the live data did not change.
+func endBeforeSwapAuditObject(in restoreInput, end string) string {
+	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() + " " + end +
+		" before the swap, the live data did not change"
+}
+
+// restoreAuditObject names one restore that swapped for its audit entry, with
+// whether the access tables were replaced or kept, and, when failed is true,
+// that the restore failed after the swap.
+func (s *RestoreService) restoreAuditObject(in restoreInput, failed bool) string {
 	mode := "replaced"
 	if in.KeepAccessTables {
 		mode = "kept"
 	}
 
-	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() + " (access tables " + mode +
+	verb := ""
+	if failed {
+		verb = " failed after the swap"
+	}
+
+	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() + verb + " (access tables " + mode +
 		s.devFlagText() + ")"
 }
 
