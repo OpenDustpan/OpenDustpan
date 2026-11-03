@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
 	"time"
 
@@ -186,3 +187,10 @@ func ManualLockPhaseStart(
 }
 
 var errNoManualLockService = errors.New("no manual lock service")
+
+// UngatedHandler returns the root handler before the start gate and the
+// component gate, so that a test can send a request to a server that did not
+// start.
+func (s *Server) UngatedHandler() http.Handler {
+	return s.ungated
+}
