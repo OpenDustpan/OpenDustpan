@@ -33,8 +33,8 @@ func RunGroupMapper(t *testing.T, fixture func(t *testing.T) GroupMapperFixture)
 	// Defense in depth: a fixture would pass without testing anything, so a
 	// non-nil fixture stops the run. This check stays so that a new caller
 	// cannot skip it.
-	if fixture != nil {
-		t.Fatal("RunGroupMapper is design only: its cases need an implementation first")
+	if msg := designOnlyRefusal("RunGroupMapper", fixture); msg != "" {
+		t.Fatal(msg)
 	}
 
 	skipAll(t, []string{
@@ -76,8 +76,8 @@ func RunGroupClaims(t *testing.T, fixture func(t *testing.T) GroupClaimsFixture)
 	// Defense in depth: a fixture would pass without testing anything, so a
 	// non-nil fixture stops the run. This check stays so that a new caller
 	// cannot skip it.
-	if fixture != nil {
-		t.Fatal("RunGroupClaims is design only: its cases need an implementation first")
+	if msg := designOnlyRefusal("RunGroupClaims", fixture); msg != "" {
+		t.Fatal(msg)
 	}
 
 	skipAll(t, []string{
@@ -125,6 +125,15 @@ func RunGroupClaims(t *testing.T, fixture func(t *testing.T) GroupClaimsFixture)
 		"AFailedWriteChangesNothingAndReturnsTheError",
 		"AFailedAuditWriteChangesNothing",
 	})
+}
+
+// designOnlyRefusal returns the failure text of a design-only suite that
+// received a fixture, or "" when it received none.
+func designOnlyRefusal[F ~func(*testing.T) T, T any](suite string, fixture F) string {
+	if fixture == nil {
+		return ""
+	}
+	return suite + " is design only: its cases need an implementation first"
 }
 
 // skipAll runs one skipped subtest for each name.
