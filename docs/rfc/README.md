@@ -163,3 +163,4 @@ both together.
 | [114](0114-review-requests-and-change-orders.md) | Review requests and change orders, one integration with the Git host | accepted (ADR 299) |
 | [115](0115-terragrunt-run-all-fan-out-on-runners.md) | Terragrunt run-all fan-out on runners | draft |
 | [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
+| [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | draft |
