@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
@@ -144,7 +145,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		// The log names the status, a cause from the closed list and the
 		// request ID, never the error text: the text may hold driver detail,
 		// a token, or state.
-		problem.LogInternal(ctx, h.logger, "request failed", problem.Cause(err))
+		faultlog.LogInternal(ctx, h.logger, "request failed", faultlog.Cause(err), "")
 		h.writeInternal(ctx, w)
 
 		return
@@ -168,7 +169,7 @@ func (h *Handler) writeManualLock(
 ) {
 	answer, err := refusal.Locked(manual)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", errcode.LockLocked))
+		faultlog.LogInternal(ctx, h.logger, "error code failed", faultlog.Cause(err), errcode.LockLocked)
 		h.writeInternal(ctx, w)
 
 		return
@@ -200,7 +201,7 @@ func (h *Handler) writeClassError(ctx context.Context, w http.ResponseWriter, cl
 func (h *Handler) writeCoded(ctx context.Context, w http.ResponseWriter, class errorClass, reauthenticate string) {
 	answer, err := errcode.New(class.code, class.args...)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", class.code))
+		faultlog.LogInternal(ctx, h.logger, "error code failed", faultlog.Cause(err), class.code)
 		h.writeInternal(ctx, w)
 
 		return

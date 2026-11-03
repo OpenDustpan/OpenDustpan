@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -326,7 +327,13 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 	// caller that skips New, cannot let a write through. It does not rely on
 	// the start check.
 	if a == nil || a.guard == nil {
-		log.ErrorContext(ctx, "state write refused: no state.write guard", slog.String("object", w.Unit.String()))
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state write refused: no state.write guard",
+			faultlog.CauseUnclassified,
+			"stategate.no_guard",
+		)
 
 		return refuse(ctx, log, w, record, unavailable(ErrNoGuard, "", NoGuardText)), true
 	}
@@ -335,7 +342,13 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 	// that a write is never allowed or refused with no audit entry: with no
 	// recorder, the write is refused and the log has the refusal.
 	if record == nil {
-		log.ErrorContext(ctx, "state write refused: no audit recorder", slog.String("object", w.Unit.String()))
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state write refused: no audit recorder",
+			faultlog.CauseUnclassified,
+			"stategate.no_recorder",
+		)
 
 		return refuse(ctx, log, w, nil, unavailable(errNoRecorder, "", NoRecorderText)), true
 	}
@@ -344,8 +357,13 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 	// write is refused and no gate sees an empty fact. The refusal and the
 	// audit entry name the cause.
 	if w.StateErr != nil {
-		log.ErrorContext(ctx, "state write refused: the state could not be read",
-			slog.String("object", w.Unit.String()), slog.Any("error", w.StateErr))
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state write refused: the state could not be read",
+			faultlog.Cause(w.StateErr),
+			"stategate.state_read",
+		)
 
 		return refuse(ctx, log, w, record, stateUnreadable(w.StateErr)), true
 	}
@@ -371,7 +389,13 @@ func guardError(ctx context.Context, log *slog.Logger, w Write, record Recorder,
 	// read. The guard gave no decision, so the write is refused before any
 	// read of the chain.
 	if refused, ok := errors.AsType[*gate.RefusalError](err); ok && refused == nil {
-		log.ErrorContext(ctx, "state guard gave a nil refusal", slog.String("object", w.Unit.String()))
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state guard gave a nil refusal",
+			faultlog.CauseUnclassified,
+			"stategate.nil_refusal",
+		)
 
 		return refuse(ctx, log, w, record, unavailable(errNilRefusal, "", GuardFailedText))
 	}
@@ -392,7 +416,7 @@ func guardError(ctx context.Context, log *slog.Logger, w Write, record Recorder,
 
 	refused, ok := errors.AsType[*gate.RefusalError](err)
 	if !ok || refused.Err == nil {
-		refused = notDecided(ctx, log, w, err)
+		refused = notDecided(ctx, log, err)
 	}
 
 	return refuse(ctx, log, w, record, refused)
@@ -412,8 +436,13 @@ func (a *Admitter) admitDecision(
 		return Outcome{Allowed: true, Unavailable: nil, Refusal: nil, Code: "", Detail: ""}
 	}
 
-	log.ErrorContext(ctx, "state guard gave an unknown result",
-		slog.String("object", w.Unit.String()), slog.String("result", oneLine(string(d.Result))))
+	faultlog.LogFault(
+		ctx,
+		log,
+		"state guard gave an unknown result",
+		faultlog.CauseUnclassified,
+		"stategate.unknown_result",
+	)
 
 	return refuse(ctx, log, w, record,
 		unavailable(fmt.Errorf("%w: %q", errUnknownResult, d.Result), d.Record, UnknownResultText))
@@ -422,7 +451,7 @@ func (a *Admitter) admitDecision(
 // notDecided returns the refusal of an error that is not a decision: the guard
 // could not decide (the store, the fence or the decision record failed), or a
 // job token may not make the write.
-func notDecided(ctx context.Context, log *slog.Logger, w Write, err error) *gate.RefusalError {
+func notDecided(ctx context.Context, log *slog.Logger, err error) *gate.RefusalError {
 	if errors.Is(err, identity.ErrDenied) {
 		return &gate.RefusalError{
 			Err:      fmt.Errorf("%w: %w", gate.ErrDenied, err),
@@ -431,7 +460,7 @@ func notDecided(ctx context.Context, log *slog.Logger, w Write, err error) *gate
 		}
 	}
 
-	log.ErrorContext(ctx, "state guard failed", slog.String("object", w.Unit.String()), slog.Any("error", err))
+	faultlog.LogFault(ctx, log, "state guard failed", faultlog.Cause(err), "stategate.guard")
 
 	return unavailable(err, "", GuardFailedText)
 }

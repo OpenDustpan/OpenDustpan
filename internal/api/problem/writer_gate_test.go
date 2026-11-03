@@ -450,18 +450,43 @@ func TestStaleRows(t *testing.T) {
 	}
 }
 
-// statusLogViolations parses the non-test Go files of dir and returns the
-// sorted violations of the 500 log rule, each as "<file>: <rule>". A log call
-// at Error level with its own status attribute is a hand-written 500 log line:
-// it has no cause and no request ID. A 500 log line goes through
-// problem.LogInternal, or through problem.Writer, which calls it.
+// faultLogExceptions returns the files that may write an error-level log line
+// without internal/api/faultlog. Each key is a path under internal/api and
+// each value is the reason. The list only shrinks.
+func faultLogExceptions() map[string]string {
+	return map[string]string{
+		"apidesc/request.go": "a developer message about a handler that reads an undeclared name; it is no failed request and has no context",
+	}
+}
+
+// faultCalls returns the functions of faultlog that write a failure log line.
+func faultCalls() []string {
+	return []string{"LogInternal", "LogFault", "LogServer"}
+}
+
+// faultLogViolations parses the non-test Go files of dir and returns the
+// sorted violations of the failure log rules, each as "<file>: <rule>":
 //
-// Defense in depth: the writer rule above checks who writes the body. This
-// rule checks who writes the log line. Neither one relies on the other.
-func statusLogViolations(dir string) ([]string, error) {
+//   - an error-level log call (ErrorContext, Error, Log, LogAttrs), a reference
+//     to slog.LevelError, slog.NewRecord or slog.Handler, a conversion
+//     slog.Level(x), or a call of Handler, outside internal/api/faultlog;
+//   - a call of faultlog.LogInternal or faultlog.LogFault whose message is
+//     not a string literal;
+//   - any call in the arguments of a faultlog call, except faultlog.Cause,
+//     because a call can return an error text.
+//
+// Defense in depth: the writer rule above checks who writes the body. These
+// rules check who writes the log line, and the helper takes no free
+// attribute. Neither one relies on the other.
+func faultLogViolations(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("read directory %s: %w", dir, err)
+	}
+
+	rel, relErr := filepath.Rel(apiDir, dir)
+	if relErr != nil {
+		rel = dir
 	}
 
 	var out []string
@@ -472,14 +497,18 @@ func statusLogViolations(dir string) ([]string, error) {
 			continue
 		}
 
+		if _, ok := faultLogExceptions()[filepath.ToSlash(filepath.Join(rel, name))]; ok {
+			continue
+		}
+
 		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", name, err)
 		}
 
 		ast.Inspect(file, func(n ast.Node) bool {
-			if call, ok := n.(*ast.CallExpr); ok && isStatusErrorLog(call) {
-				out = append(out, name+": 500 log line without problem.LogInternal")
+			for _, rule := range nodeFaultRules(n) {
+				out = append(out, name+": "+rule)
 			}
 
 			return true
@@ -491,33 +520,135 @@ func statusLogViolations(dir string) ([]string, error) {
 	return out, nil
 }
 
-// isStatusErrorLog returns true for a call of ErrorContext that has an
-// attribute call with "status" as its first argument, for example
-// slog.Int("status", ...).
-func isStatusErrorLog(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "ErrorContext" {
-		return false
+// nodeFaultRules returns the failure log rules that n breaks.
+func nodeFaultRules(n ast.Node) []string {
+	switch x := n.(type) {
+	case *ast.SelectorExpr:
+		return selectorFaultRules(x)
+	case *ast.CallExpr:
+		return callFaultRules(x)
+	default:
+		return nil
 	}
-
-	for _, arg := range call.Args {
-		inner, ok := arg.(*ast.CallExpr)
-		if !ok || len(inner.Args) < 1 {
-			continue
-		}
-
-		if lit, ok := inner.Args[0].(*ast.BasicLit); ok && lit.Value == `"status"` {
-			return true
-		}
-	}
-
-	return false
 }
 
-// TestAdaptersLog500WithLogInternal fails when an adapter under internal/api,
-// the adapters with their own wire contract included, logs a 500 with its own
-// status attribute instead of problem.LogInternal.
-func TestAdaptersLog500WithLogInternal(t *testing.T) {
+// selectorFaultRules returns the failure log rules that sel breaks.
+func selectorFaultRules(sel *ast.SelectorExpr) []string {
+	// A method value, as in f := l.ErrorContext, is a bypass too.
+	if slices.Contains([]string{"ErrorContext", "LogAttrs"}, sel.Sel.Name) {
+		return []string{"error-level log call without faultlog"}
+	}
+
+	if identName(sel.X) == "slog" && slices.Contains([]string{"LevelError", "NewRecord", "Handler"}, sel.Sel.Name) {
+		return []string{"slog." + sel.Sel.Name + " outside faultlog"}
+	}
+
+	return nil
+}
+
+// identName returns the name of e when e is an identifier, and "" otherwise.
+func identName(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
+
+	return ""
+}
+
+// callFaultRules returns the failure log rules that call breaks.
+func callFaultRules(call *ast.CallExpr) []string {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+
+	recv := identName(sel.X)
+	name := sel.Sel.Name
+	args := len(call.Args)
+
+	switch {
+	case recv == "faultlog" && slices.Contains(faultCalls(), name):
+		return faultCallRules(name, call)
+	case recv == "slog" && name == "Level":
+		return []string{"slog.Level conversion outside faultlog"}
+	case name == "Handler" && args == 0:
+		return []string{"Handler() outside faultlog"}
+	default:
+		return logCallRules(recv, name, args)
+	}
+}
+
+// logCallRules returns the rule that a call of Log or Error breaks. A call of
+// Log has a context and a level, and a call of Error has a message. An error
+// text has no arguments, and http.Error and errors.* are not log calls.
+func logCallRules(recv, name string, args int) []string {
+	isLog := name == "Log" && args > 1
+	isError := name == "Error" && args > 0 && recv != "http" && recv != "errors"
+
+	if isLog || isError {
+		return []string{"error-level log call without faultlog"}
+	}
+
+	return nil
+}
+
+// faultCallRules returns the rules that a call of a faultlog function breaks.
+func faultCallRules(name string, call *ast.CallExpr) []string {
+	// The context and the logger are not logged. Every other argument is.
+	const firstLogged = 2
+
+	if len(call.Args) <= firstLogged {
+		if name == "LogServer" {
+			return nil
+		}
+
+		return []string{"faultlog call with too few arguments"}
+	}
+
+	var out []string
+
+	if lit, isLit := call.Args[firstLogged].(*ast.BasicLit); name != "LogServer" &&
+		(!isLit || lit.Kind != token.STRING) {
+		out = append(out, "faultlog message is not a string literal")
+	}
+
+	for _, arg := range call.Args[firstLogged:] {
+		out = append(out, callsInArgument(arg)...)
+	}
+
+	return out
+}
+
+// callsInArgument returns one rule for each call in arg, except the calls of
+// faultlog.Cause, because a call can return an error text.
+func callsInArgument(arg ast.Expr) []string {
+	var out []string
+
+	ast.Inspect(arg, func(n ast.Node) bool {
+		inner, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		if fn, isSel := inner.Fun.(*ast.SelectorExpr); isSel && identName(fn.X) == "faultlog" &&
+			fn.Sel.Name == "Cause" {
+			// The cause class is from a closed list: do not look inside.
+			return false
+		}
+
+		out = append(out, "call in an argument of faultlog")
+
+		return true
+	})
+
+	return out
+}
+
+// TestAdaptersLogFailuresWithFaultlog fails when an adapter under
+// internal/api writes an error-level log line without internal/api/faultlog,
+// the adapters with their own wire contract included, or when a row of the
+// exception list no longer matches the source.
+func TestAdaptersLogFailuresWithFaultlog(t *testing.T) {
 	t.Parallel()
 
 	dirs, err := errcodetest.SourceDirs(apiDir)
@@ -526,24 +657,42 @@ func TestAdaptersLog500WithLogInternal(t *testing.T) {
 	}
 
 	for _, d := range dirs {
+		if d == "faultlog" {
+			continue
+		}
+
 		t.Run(d, func(t *testing.T) {
 			t.Parallel()
 
-			violations, err := statusLogViolations(filepath.Join(apiDir, d))
+			violations, err := faultLogViolations(filepath.Join(apiDir, d))
 			if err != nil {
 				t.Fatalf("check %s: %v", d, err)
 			}
 
 			for _, v := range violations {
-				t.Errorf("%s: log the 500 with problem.LogInternal", v)
+				t.Errorf("%s: log the failure with faultlog.LogInternal or faultlog.LogFault", v)
 			}
 		})
 	}
+
+	t.Run("stale rows", func(t *testing.T) {
+		t.Parallel()
+
+		for key := range faultLogExceptions() {
+			if _, err := os.Stat(filepath.Join(apiDir, filepath.FromSlash(key))); err != nil {
+				t.Errorf("faultLogExceptions row %q is not a source file; remove the row", key)
+			}
+		}
+	})
 }
 
-// TestStatusLogViolations checks the 500 log rule on fixture packages.
-func TestStatusLogViolations(t *testing.T) {
+// TestFaultLogViolations checks the failure log rules on fixture files, one
+// for each way to bypass the rule that a reviewer named.
+func TestFaultLogViolations(t *testing.T) {
 	t.Parallel()
+
+	const head = `import ("context"; "log/slog"; "errors"; "opendustpan.org/opendustpan/internal/api/faultlog"); ` +
+		`var _ = errors.New; var _ = faultlog.CauseNetwork; `
 
 	tests := []struct {
 		name string
@@ -551,14 +700,89 @@ func TestStatusLogViolations(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "own status attribute",
-			src:  `import ("context"; "log/slog"); func f(c context.Context, l *slog.Logger) { l.ErrorContext(c, "x", slog.Int("status", 500)) }`,
-			want: []string{"a.go: 500 log line without problem.LogInternal"},
+			name: "faultlog call is clean",
+			src: `func f(c context.Context, l *slog.Logger, err error) { ` +
+				`faultlog.LogInternal(c, l, "x", faultlog.Cause(err), "server.internal") }`,
+			want: nil,
 		},
 		{
-			name: "no status attribute",
-			src:  `import ("context"; "log/slog"); func f(c context.Context, l *slog.Logger) { l.ErrorContext(c, "x") }`,
+			name: "warn level is not checked",
+			src:  `func f(c context.Context, l *slog.Logger, err error) { l.WarnContext(c, "x", slog.String("error", err.Error())) }`,
 			want: nil,
+		},
+		{
+			name: "own status attribute",
+			src:  `func f(c context.Context, l *slog.Logger) { l.ErrorContext(c, "x", slog.Int("status", 500)) }`,
+			want: []string{"a.go: error-level log call without faultlog"},
+		},
+		{
+			name: "status key in a constant",
+			src: `const key = "status"; func f(c context.Context, l *slog.Logger) { ` +
+				`l.ErrorContext(c, "x", slog.Int(key, 500)) }`,
+			want: []string{"a.go: error-level log call without faultlog"},
+		},
+		{
+			name: "Log with LevelError",
+			src:  `func f(c context.Context, l *slog.Logger) { l.Log(c, slog.LevelError, "x") }`,
+			want: []string{"a.go: error-level log call without faultlog", "a.go: slog.LevelError outside faultlog"},
+		},
+		{
+			name: "Log with a level from a variable",
+			src:  `func f(c context.Context, l *slog.Logger, lvl slog.Level) { l.Log(c, lvl, "x") }`,
+			want: []string{"a.go: error-level log call without faultlog"},
+		},
+		{
+			name: "ErrorContext with an error text in the message",
+			src:  `func f(c context.Context, l *slog.Logger, err error) { l.ErrorContext(c, err.Error()) }`,
+			want: []string{"a.go: error-level log call without faultlog"},
+		},
+		{
+			name: "method value",
+			src: `func f(c context.Context, l *slog.Logger) { g := l.ErrorContext; ` +
+				`g(c, "x") }`,
+			want: []string{"a.go: error-level log call without faultlog"},
+		},
+		{
+			name: "Error without context",
+			src:  `func f(l *slog.Logger) { l.Error("x") }`,
+			want: []string{"a.go: error-level log call without faultlog"},
+		},
+		{
+			name: "record written to the handler",
+			src: `func f(c context.Context, l *slog.Logger, r slog.Record) { ` +
+				`_ = l.Handler().Handle(c, r) }`,
+			want: []string{"a.go: Handler() outside faultlog"},
+		},
+		{
+			name: "level from a number",
+			src:  `func f(c context.Context, l *slog.Logger) { l.Log(c, slog.Level(8), "x") }`,
+			want: []string{
+				"a.go: error-level log call without faultlog",
+				"a.go: slog.Level conversion outside faultlog",
+			},
+		},
+		{
+			name: "new record",
+			src:  `func f() slog.Record { return slog.NewRecord(time.Time{}, 0, "x", 0) }`,
+			want: []string{"a.go: slog.NewRecord outside faultlog"},
+		},
+		{
+			name: "error text in a faultlog argument",
+			src: `func f(c context.Context, l *slog.Logger, err error) { ` +
+				`faultlog.LogInternal(c, l, "x", faultlog.CauseNetwork, err.Error()) }`,
+			want: []string{"a.go: call in an argument of faultlog"},
+		},
+		{
+			name: "formatted error in a faultlog argument",
+			src: `func f(c context.Context, l *slog.Logger, err error) { ` +
+				`faultlog.LogFault(c, l, "x", faultlog.CauseNetwork, fmt.Sprint(err)) }`,
+			want: []string{"a.go: call in an argument of faultlog"},
+		},
+		{
+			name: "message that is not a literal",
+			src: `func f(c context.Context, l *slog.Logger, m string) { ` +
+				`faultlog.LogInternal(c, l, m, faultlog.CauseNetwork, "") }`,
+			want: []string{"a.go: faultlog message is not a string literal"},
 		},
 	}
 
@@ -567,17 +791,20 @@ func TestStatusLogViolations(t *testing.T) {
 			t.Parallel()
 
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n\n"+tt.src+"\n"), 0o600); err != nil {
+			body := []byte("package a\n\n" + head + tt.src + "\n")
+
+			err := os.WriteFile(filepath.Join(dir, "a.go"), body, 0o600)
+			if err != nil {
 				t.Fatalf("write fixture: %v", err)
 			}
 
-			got, err := statusLogViolations(dir)
+			got, err := faultLogViolations(dir)
 			if err != nil {
-				t.Fatalf("statusLogViolations: %v", err)
+				t.Fatalf("faultLogViolations: %v", err)
 			}
 
 			if !slices.Equal(got, tt.want) {
-				t.Errorf("statusLogViolations = %q, want %q", got, tt.want)
+				t.Errorf("faultLogViolations = %q, want %q", got, tt.want)
 			}
 		})
 	}

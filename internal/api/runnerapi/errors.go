@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -78,7 +79,13 @@ func (h *Handler) logRefused(ctx context.Context, err error, sent string) {
 		return
 	}
 
-	h.logger.Log(ctx, refusedLevel(err), "runner request refused", slog.String("error", err.Error()))
+	if refusedLevel(err) == slog.LevelDebug {
+		h.logger.DebugContext(ctx, "runner request refused", slog.String("error", err.Error()))
+
+		return
+	}
+
+	h.logger.WarnContext(ctx, "runner request refused", slog.String("error", err.Error()))
 }
 
 // refusedLevel returns the log level of a refusal. Debug is for the errors
@@ -99,8 +106,8 @@ func refusedLevel(err error) slog.Level {
 // switch knows.
 func (h *Handler) logFailure(ctx context.Context, status int, err error) {
 	if status >= http.StatusInternalServerError {
-		problem.LogServer(ctx, h.logger, problem.ServerLog{
-			Message: "runner request failed", Status: status, Cause: problem.Cause(err), Attrs: nil,
+		faultlog.LogServer(ctx, h.logger, faultlog.ServerLog{
+			Message: "runner request failed", Status: status, Cause: faultlog.Cause(err), Code: "", Op: "",
 		})
 	}
 }
