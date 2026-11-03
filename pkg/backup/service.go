@@ -380,6 +380,44 @@ func (s *Service) StartBeforeRestore(ctx context.Context, id ID, restore Restore
 	return s.begin(ctx, id, recordDamage, restore)
 }
 
+// RunBeforeRestore starts backup id for restore as StartBeforeRestore does,
+// and runs it on the goroutine of the caller. The start claims the operation
+// for the runner of this service in its own transaction, so no worker can
+// take it while the caller runs it: the backup before a restore always runs
+// on the restore that starts it. When the caller stops before the end, the
+// claim ends or expires, and a worker or a later Await continues the backup.
+// The result lands in the registry row, where Await reads it. It returns
+// ErrAlreadyExists when the ID is taken, and then runs nothing.
+func (s *Service) RunBeforeRestore(ctx context.Context, id ID, restore RestoreID) error {
+	if _, err := ParseRestoreID(restore.String()); err != nil {
+		return fmt.Errorf("begin backup %s: %w", id, err)
+	}
+
+	// The local deadline of the claim counts from before the start, so it
+	// ends before the expiry that the store sets.
+	claimedAt := time.Now()
+
+	create, start, err := s.request(ctx, id, recordDamage, restore)
+	if err != nil {
+		return err
+	}
+
+	op, err := s.registry.StartBackupClaimed(ctx, create, start, s.runner.StartClaim())
+	if err != nil {
+		return fmt.Errorf("create backup %s: %w", id, err)
+	}
+
+	// The outcome of the operation is in the store. A claim that the runner
+	// lost, or a stop of ctx, leaves the operation to the next claimer, and
+	// Await reads the row.
+	if runErr := s.runner.RunClaimed(ctx, op, claimedAt); runErr != nil && ctx.Err() == nil {
+		s.logger.WarnContext(ctx, "the backup before a restore did not run to its end on the restore",
+			slog.String("backup", id.String()), slog.String("error", durable.ErrorClass(runErr)))
+	}
+
+	return nil
+}
+
 // Work claims and runs backup operations until ctx ends, and marks failed
 // the backup rows whose operation ended without a finish write. A worker
 // process calls it. When ctx ends during a backup, the runner releases the
@@ -510,7 +548,7 @@ func (s *Service) PreserveAfterRestore(ctx context.Context, rec Record) error {
 }
 
 // StartedForRestore returns the restore that started backup id with
-// StartBeforeRestore, as the input of its durable operation names it. It
+// StartBeforeRestore or RunBeforeRestore, as the input of its durable operation names it. It
 // returns an empty ID when no operation of backup id exists, when the input
 // names no restore, or when the input does not decode or names an ID that is
 // not valid: the caller then treats the backup as one that it did not start.
@@ -553,13 +591,35 @@ func restoreOfInput(raw []byte, id ID) RestoreID {
 // begin stores id as a running row and starts its durable operation. See
 // Start and StartBeforeRestore.
 func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy, restore RestoreID) error {
+	create, start, err := s.request(ctx, id, policy, restore)
+	if err != nil {
+		return err
+	}
+
+	if err := s.registry.StartBackup(ctx, create, start); err != nil {
+		return fmt.Errorf("create backup %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// request returns the running row and the operation start of backup id,
+// with policy and the restore that starts it, if any.
+func (s *Service) request(
+	ctx context.Context, id ID, policy damagePolicy, restore RestoreID,
+) (Record, durable.StartRequest, error) {
+	var (
+		none      Record
+		noneStart durable.StartRequest
+	)
+
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("begin backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	id, err := ParseID(id.String())
 	if err != nil {
-		return fmt.Errorf("begin backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	startedAt := s.now().UTC()
@@ -568,12 +628,12 @@ func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy, restore
 		ID: id, StartedAt: startedAt, RecordDamaged: policy == recordDamage, Restore: restore,
 	})
 	if err != nil {
-		return fmt.Errorf("encode input of backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("encode input of backup %s: %w", id, err)
 	}
 
 	start, err := s.runner.StartRequest(OperationKind, OperationKey(id), input)
 	if err != nil {
-		return fmt.Errorf("begin backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	create := Record{
@@ -585,11 +645,7 @@ func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy, restore
 		State:     StateRunning,
 	}
 
-	if err := s.registry.StartBackup(ctx, create, start); err != nil {
-		return fmt.Errorf("create backup %s: %w", id, err)
-	}
-
-	return nil
+	return create, start, nil
 }
 
 // newRunner builds the runner that claims and runs the backup operations.

@@ -313,6 +313,41 @@ func claimNext(
 	}
 }
 
+// claimStarted claims the pending operation id that the transaction of q
+// started, for claim, as takeClaim claims an operation for a ClaimRequest.
+// It returns durable.ErrClaimLost when the operation is not pending.
+func claimStarted(
+	ctx context.Context,
+	q *db.Queries,
+	id durable.ID,
+	claim durable.StartClaim,
+) (durable.Operation, error) {
+	row, err := q.GetDurableOperation(ctx, string(id))
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("read the started durable operation: %w", err)
+	}
+
+	// The start created the operation in this transaction, so it is pending.
+	if row.State != string(durable.StatePending) {
+		return durable.Operation{}, fmt.Errorf("claim the started durable operation %s: %w", id, durable.ErrClaimLost)
+	}
+
+	now, err := storeNow(ctx, q)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	row = takeClaim(row, durable.ClaimRequest{
+		Owner: claim.Owner, Kinds: nil, MaxVersions: nil, Lease: claim.Lease, TakeCanceled: false,
+	}, now)
+
+	if err := writeDurable(ctx, q, row); err != nil {
+		return durable.Operation{}, err
+	}
+
+	return loadDurable(ctx, q, row)
+}
+
 // takeClaim gives row a new claim for req at now.
 func takeClaim(row db.DurableOperation, req durable.ClaimRequest, now int64) db.DurableOperation {
 	if row.State == string(durable.StateRunning) {
