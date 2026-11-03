@@ -27,7 +27,7 @@ that the named part applies, and the later ADR adds to it.
 | [14](0014-write-in-simplified-technical-english.md) | Write in Simplified Technical English | accepted | - | ADR 214 extends; ADR 251 extends | this ADR, with ADR 214, 251 |
 | [15](0015-rfcs-for-questions-adrs-for-decisions.md) | RFCs for open questions, ADRs for decisions | accepted | extends ADR 1; extends ADR 12 | - | this ADR |
 | [16](0016-us-spelling.md) | US spelling for English text | accepted | changes ADR 1 | - | this ADR |
-| [17](0017-api-authorization-and-policy-for-every-feature.md) | Every feature has a REST API, authorization and policy | accepted | changes ADR 5; changes ADR 6 | ADR 30 changes; ADR 210 extends; ADR 222 changes; ADR 224 changes; ADR 266 extends; ADR 305 extends | this ADR, with ADR 30, 210, 222, 224, 266, 305 |
+| [17](0017-api-authorization-and-policy-for-every-feature.md) | Every feature has a REST API, authorization and policy | accepted | changes ADR 5; changes ADR 6 | ADR 30 changes; ADR 210 extends; ADR 222 changes; ADR 224 changes; ADR 266 extends; ADR 305 extends; ADR 326 extends | this ADR, with ADR 30, 210, 222, 224, 266, 305, 326 |
 | [18](0018-organizations-are-namespaces.md) | Organizations are namespaces | accepted | - | ADR 248 changes | this ADR, with ADR 248 |
 | [19](0019-a-stack-has-a-stable-id.md) | A stack has a stable ID | accepted | extends ADR 13 | ADR 47 extends; ADR 248 changes | this ADR, with ADR 47, 248 |
 | [20](0020-the-pulumi-update-cycle.md) | The Pulumi update cycle | accepted | - | ADR 24 extends decision 6; ADR 28 extends decision 1; ADR 37 changes decision 5; ADR 43 changes decision 5; ADR 151 changes; ADR 213 extends | this ADR, with ADR 24, 28, 37, 43, 151, 213 |
