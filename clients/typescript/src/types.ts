@@ -1390,7 +1390,7 @@ export const StateWriteGatesModeValues = ["on", "off"] as const;
 export type StateWriteGatesMode = (typeof StateWriteGatesModeValues)[number] | (string & {});
 
 /** The known values of StateWritePath. */
-export const StateWritePathValues = ["opentofu.tfe.lock", "opentofu.tfe.force-unlock", "opentofu.tfe.rollback", "opentofu.tfe.delete", "opentofu.http.lock", "opentofu.http.force-unlock", "opentofu.http.unlocked-write", "inventory.restore", "inventory.purge", "opentofu.tfe.state-version-without-lock", "pulumi.update", "pulumi.import", "pulumi.restore", "pulumi.rename", "pulumi.delete", "pulumi.cancel"] as const;
+export const StateWritePathValues = ["opentofu.tfe.lock", "opentofu.tfe.force-unlock", "opentofu.tfe.rollback", "opentofu.tfe.delete", "opentofu.http.lock", "opentofu.http.force-unlock", "opentofu.http.unlocked-write", "inventory.restore", "inventory.purge", "pulumi.import", "pulumi.restore", "pulumi.rename", "pulumi.delete", "pulumi.cancel", "opentofu.tfe.state-version-without-lock", "pulumi.update"] as const;
 
 export type StateWritePath = (typeof StateWritePathValues)[number] | (string & {});
 
