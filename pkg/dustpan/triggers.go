@@ -119,21 +119,6 @@ func (f finalVersions) LastFinal(ctx context.Context, unit graph.Unit) (string, 
 	return row.VersionID, ok, nil
 }
 
-// finalVersionsOf returns the source of final state versions for the
-// dispatcher, or nil when the store lacks the port. A store without the port
-// gives no versions, so Dispatcher.Upstream fails closed with
-// trigger.ErrVersionMismatch.
-//
-//nolint:ireturn // The dispatcher takes the port trigger.Versions; nil is its fail-closed value.
-func finalVersionsOf(st job.Store) trigger.Versions {
-	r, ok := st.(job.FinalVersionReader)
-	if !ok {
-		return nil
-	}
-
-	return finalVersions{reader: r}
-}
-
 // newTriggerManager builds the manager of triggers over the ports of the
 // server and the job service.
 func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs job.Starter,
@@ -154,10 +139,9 @@ func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs jo
 
 	fences := jobFences{namespaces: svc.namespaces}
 
-	dispatcher, err := trigger.NewDispatcher(trigger.DispatcherConfig{
-		Store: cfg.triggerStore, Starter: starter, Savers: savers, Units: units, Audit: ports.entries,
-		Fences: fences, Versions: finalVersionsOf(cfg.jobStore), Now: cfg.now,
-	})
+	parts := triggerParts{starter: starter, savers: savers, units: units, fences: fences}
+
+	dispatcher, err := trigger.NewDispatcher(triggerDispatcherConfig(cfg, ports, parts))
 	if err != nil {
 		return nil, fmt.Errorf("trigger dispatcher: %w", err)
 	}
@@ -171,6 +155,32 @@ func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs jo
 	}
 
 	return manager, nil
+}
+
+// triggerParts are the ports of the trigger wiring that the server builds
+// before the dispatcher.
+type triggerParts struct {
+	starter trigger.Starter
+	savers  trigger.SaverCheck
+	units   trigger.Units
+	fences  trigger.Fences
+}
+
+// triggerDispatcherConfig returns the ports of the dispatcher of triggers. The
+// versions come from the job store when it has the final version reader. A
+// store without the port gives no versions, so Dispatcher.Upstream fails closed
+// with trigger.ErrVersionMismatch.
+func triggerDispatcherConfig(cfg *settings, ports *triggerPorts, parts triggerParts) trigger.DispatcherConfig {
+	var versions trigger.Versions
+
+	if r, ok := cfg.jobStore.(job.FinalVersionReader); ok {
+		versions = finalVersions{reader: r}
+	}
+
+	return trigger.DispatcherConfig{
+		Store: cfg.triggerStore, Starter: parts.starter, Savers: parts.savers, Units: parts.units,
+		Audit: ports.entries, Fences: parts.fences, Versions: versions, Now: cfg.now,
+	}
 }
 
 // triggerUnits is the trigger.Units over the inventory.
