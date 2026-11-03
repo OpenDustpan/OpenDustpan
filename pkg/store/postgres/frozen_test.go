@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/releaserecord"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
@@ -26,11 +27,12 @@ var frozenMigrations embed.FS
 func TestFrozenMigrations(t *testing.T) {
 	t.Parallel()
 
-	// Disabled until the first tag. Until then the schema of each dialect is
-	// one baseline file, and a change to the schema edits it in place. At the
-	// first tag, write the hash file of the baseline again and enable this
-	// test again.
-	t.Skip("disabled until the first tag: the baseline is edited in place until then")
+	// Off until the release record lists a shipped migration. Until then the
+	// schema of each dialect is one baseline file, and a change to the schema
+	// edits it in place.
+	if why := currentRecord(t).Off("TestFrozenMigrations"); why != "" {
+		t.Skip(why)
+	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")
 	if err != nil {
@@ -221,10 +223,11 @@ func readFrozenHash(t *testing.T, name string) (string, bool) {
 	return want, true
 }
 
-// TestOneMigrationFileUntilTheFirstTag proves that the migrations directory
-// holds the baseline alone. Until the first tag, a change to the schema edits
-// the baseline in place and adds no numbered migration.
-func TestOneMigrationFileUntilTheFirstTag(t *testing.T) {
+// TestMigrationFilesFollowTheRecord checks the migrations directory against
+// the release record. Before the first tag, it must hold the baseline alone.
+// After the first tag, each shipped file stays as it shipped, and a change to
+// the schema adds a new numbered file above them.
+func TestMigrationFilesFollowTheRecord(t *testing.T) {
 	t.Parallel()
 
 	all, err := migrate.Load(frozenMigrations, "migrations")
@@ -232,13 +235,25 @@ func TestOneMigrationFileUntilTheFirstTag(t *testing.T) {
 		t.Fatalf("load embedded migrations: %v", err)
 	}
 
-	names := make([]string, 0, len(all))
+	files := make(map[string]string, len(all))
 	for _, m := range all {
-		names = append(names, m.Name)
+		files[m.Name] = m.SQL
 	}
 
-	if len(names) != 1 || names[0] != schema.BaselineName {
-		t.Fatalf("migration files = %v, want [%s]: until the first tag, edit %s and add no numbered migration",
-			names, schema.BaselineName, schema.BaselineName)
+	for _, problem := range currentRecord(t).MigrationFiles("postgres", schema.BaselineName, files) {
+		t.Error(problem)
 	}
+}
+
+// currentRecord returns the release record of the tree. A record that does
+// not parse fails the test: it never counts as "not released".
+func currentRecord(t *testing.T) releaserecord.Record {
+	t.Helper()
+
+	rec, err := releaserecord.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rec
 }

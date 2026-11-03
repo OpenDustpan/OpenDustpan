@@ -14,6 +14,9 @@ cp /tmp/tag-migrations/pkg/store/postgres/migrations/*.sql \
   pkg/store/postgres/testdata/tag-migrations/"$tag"/
 ```
 
-Then record the SHA-256 of each copied file in `frozen_test.go` in the same
-change. The schema upgrade test applies the copies of each tag and then the
+Copy the `.sql.sha256` hash file of each migration too, or run
+`scripts/copy-tag-migrations.sh "$tag"`, which copies both. `frozen_test.go`
+checks each copy against its hash file. These copies come after the tag.
+The commit that the release tags already lists each migration file in
+`internal/releaserecord/shipped.txt`, which turns the checks on. The schema upgrade test applies the copies of each tag and then the
 current migrations, and compares the result with a fresh install.
