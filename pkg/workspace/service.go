@@ -1722,6 +1722,14 @@ func (s *Service) DiffStates(
 // the version the first call made current and writes nothing new, but still
 // needs the workspace unlocked or held by holder.
 func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holder string) (StateVersion, error) {
+	return s.restore(ctx, id, from, holder, nil)
+}
+
+// restore is Restore with an optional expected current version. A nil expect
+// skips the check.
+func (s *Service) restore(
+	ctx context.Context, id ID, from StateVersionID, holder string, expect *StateVersionID,
+) (StateVersion, error) {
 	if holder == "" {
 		return StateVersion{}, fmt.Errorf("%w: restore without a holder", ErrNotLocked)
 	}
@@ -1757,9 +1765,13 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 		return StateVersion{}, err
 	}
 
-	sv, err := s.copyState(ctx, w, src)
-	if errors.Is(err, ErrAlreadyRestored) {
-		sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
+	var sv StateVersion
+
+	if err = s.checkExpectedCurrent(ctx, id, expect); err == nil {
+		sv, err = s.copyState(ctx, w, src)
+		if errors.Is(err, ErrAlreadyRestored) {
+			sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
+		}
 	}
 
 	if !release {
@@ -3044,4 +3056,24 @@ func (s *Service) repeatedForceUnlock(
 	}
 
 	return w, false, nil
+}
+
+// checkExpectedCurrent fails with ErrConcurrentModification when expect is set
+// and the current state version is another one. The caller holds the lock of
+// the workspace, so no write can change the current version after the check.
+func (s *Service) checkExpectedCurrent(ctx context.Context, id ID, expect *StateVersionID) error {
+	if expect == nil {
+		return nil
+	}
+
+	current, err := s.states.CurrentStateVersion(ctx, id)
+	if err != nil {
+		return fmt.Errorf("current state of %s: %w", id, err)
+	}
+
+	if current.ID != *expect {
+		return fmt.Errorf("restore %s: %w: %w", id, ErrConcurrentModification, errStateChanged)
+	}
+
+	return nil
 }

@@ -87,6 +87,14 @@ func (c *writeCounter) Restore(
 	return c.stubWorkspaces.Restore(ctx, id, from, by)
 }
 
+func (c *writeCounter) RestoreExpecting(
+	ctx context.Context, id workspace.ID, from workspace.StateVersionID, by string, expect workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	c.bump()
+
+	return c.stubWorkspaces.RestoreExpecting(ctx, id, from, by, expect)
+}
+
 func (c *writeCounter) Delete(ctx context.Context, ref workspace.Ref, e audit.Entry) error {
 	c.bump()
 

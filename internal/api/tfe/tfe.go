@@ -202,6 +202,23 @@ type StateWriter interface {
 		tok token.Token,
 		content io.Reader,
 	) error
+	// ReadRollbackChange reads what a restore of the version to changes in the
+	// workspace: the current version, the count of resources in the restored
+	// state and the addresses that the restore removes. It fails when the
+	// server cannot read either state.
+	ReadRollbackChange(
+		ctx context.Context, id workspace.ID, to workspace.StateVersionID,
+	) (workspace.RollbackChange, error)
+	// RestoreExpecting works as Restore, and writes only if expectCurrent is
+	// still the current version; otherwise it fails with
+	// workspace.ErrConcurrentModification.
+	RestoreExpecting(
+		ctx context.Context,
+		id workspace.ID,
+		from workspace.StateVersionID,
+		holder string,
+		expectCurrent workspace.StateVersionID,
+	) (workspace.StateVersion, error)
 	// Restore makes the finalized state version from current again as a new,
 	// forced version. The workspace must be unlocked or locked by holder.
 	Restore(
