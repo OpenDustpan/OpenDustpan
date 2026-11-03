@@ -16,7 +16,7 @@ import (
 
 // Each test in this file sends hostile input to one layer of the ECDSA path,
 // as if every other layer had failed. A layer that another layer also stops
-// is called through a hook of export_test.go, or it is told apart by the text
+// is called through a hook of hooks_internal_test.go, or it is told apart by the text
 // of its error.
 
 // ecdsaKey returns a PublicKey of TypeECDSAP256 with the point pub.
