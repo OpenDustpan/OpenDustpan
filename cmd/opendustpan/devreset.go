@@ -490,7 +490,7 @@ func schemaRefusal(err error, command, dataDir string) error {
 	}
 
 	return &refusalError{
-		text: "the schema changed: run " + reset + " to start again. The old data is kept as " +
+		text: "the schema changed: run " + reset + " to start again. That command moves the old data aside as " +
 			devDBName + devResetSuffix + " in the data directory: " + err.Error(),
 		cause: err,
 	}
