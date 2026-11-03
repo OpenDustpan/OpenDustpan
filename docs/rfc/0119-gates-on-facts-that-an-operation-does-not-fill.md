@@ -30,17 +30,24 @@ These stay unfilled for now. The reasons: the lock is the point of the gate for
 OpenTofu, and at the lock no new state exists; the unlocked write would need
 the server to parse a body before the write, which is a new read path with its
 own limits; and the Pulumi writes are not guarded yet. The owner may weigh
-each of them.
+each of them. The follow-up issue lists them.
 
-ADR 224 decision 16 says the `state` group has facts "for a tool-neutral
-operation, where the server holds both the current and the new state". This
-change reads that sentence for an operation where the server holds both
-states, and the restore of a state version is such an operation. The
-tool-neutral restore of a deleted unit has no current state, so it has nothing
-to remove. This is a reading of the ADR and not a change of it. The owner may
-decide that the sentence means another path. For each other operation,
-`state.available` is `false`, `state.resources` is `0` and `state.removed` is
-the empty list.
+### How this change reads ADR 224 decision 16
+
+ADR 224 decision 16 says that the `state` group has facts "only for a
+tool-neutral operation, where the server holds both the current and the new
+state", and that for a CLI write `state.available` is `false`. The product
+manager reads "tool-neutral operation" as an operation that the server
+performs while it holds both states, in contrast to a write that a tool CLI
+sends. The restore of a state version is such an operation: the server reads
+the current state and the old state, and no OpenTofu CLI write is involved.
+The restore of a deleted unit has no current state, so it has nothing to
+remove. This is a reading of the ADR and not a change of it. The owner
+confirms this reading or corrects it. If the owner means another path, the
+fill moves there.
+
+For each other operation, `state.available` is `false`, `state.resources` is
+`0` and `state.removed` is the empty list.
 
 So the silent fallback still exists for those operations. A gate with the
 condition `context.state.removed.contains("x")` is valid at `state.write`.
