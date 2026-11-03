@@ -319,11 +319,12 @@ func unitObject(ref workspace.Ref) (identity.Object, error) {
 }
 
 // writeError answers an error with a plain status and a message that holds no
-// driver or request detail. The log keeps the status only.
+// driver or request detail. The log keeps the status, a cause from the closed
+// list and the request ID.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+		problem.LogInternal(ctx, h.logger, "request failed", problem.Cause(err))
 	}
 
 	if errors.Is(err, namespace.ErrFenced) {

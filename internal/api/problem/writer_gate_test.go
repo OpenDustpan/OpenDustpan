@@ -449,3 +449,136 @@ func TestStaleRows(t *testing.T) {
 		})
 	}
 }
+
+// statusLogViolations parses the non-test Go files of dir and returns the
+// sorted violations of the 500 log rule, each as "<file>: <rule>". A log call
+// at Error level with its own status attribute is a hand-written 500 log line:
+// it has no cause and no request ID. A 500 log line goes through
+// problem.LogInternal, or through problem.Writer, which calls it.
+//
+// Defense in depth: the writer rule above checks who writes the body. This
+// rule checks who writes the log line. Neither one relies on the other.
+func statusLogViolations(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read directory %s: %w", dir, err)
+	}
+
+	var out []string
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", name, err)
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok && isStatusErrorLog(call) {
+				out = append(out, name+": 500 log line without problem.LogInternal")
+			}
+
+			return true
+		})
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
+// isStatusErrorLog returns true for a call of ErrorContext that has an
+// attribute call with "status" as its first argument, for example
+// slog.Int("status", ...).
+func isStatusErrorLog(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "ErrorContext" {
+		return false
+	}
+
+	for _, arg := range call.Args {
+		inner, ok := arg.(*ast.CallExpr)
+		if !ok || len(inner.Args) < 1 {
+			continue
+		}
+
+		if lit, ok := inner.Args[0].(*ast.BasicLit); ok && lit.Value == `"status"` {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestAdaptersLog500WithLogInternal fails when an adapter under internal/api,
+// the adapters with their own wire contract included, logs a 500 with its own
+// status attribute instead of problem.LogInternal.
+func TestAdaptersLog500WithLogInternal(t *testing.T) {
+	t.Parallel()
+
+	dirs, err := errcodetest.SourceDirs(apiDir)
+	if err != nil {
+		t.Fatalf("list source directories: %v", err)
+	}
+
+	for _, d := range dirs {
+		t.Run(d, func(t *testing.T) {
+			t.Parallel()
+
+			violations, err := statusLogViolations(filepath.Join(apiDir, d))
+			if err != nil {
+				t.Fatalf("check %s: %v", d, err)
+			}
+
+			for _, v := range violations {
+				t.Errorf("%s: log the 500 with problem.LogInternal", v)
+			}
+		})
+	}
+}
+
+// TestStatusLogViolations checks the 500 log rule on fixture packages.
+func TestStatusLogViolations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "own status attribute",
+			src:  `import ("context"; "log/slog"); func f(c context.Context, l *slog.Logger) { l.ErrorContext(c, "x", slog.Int("status", 500)) }`,
+			want: []string{"a.go: 500 log line without problem.LogInternal"},
+		},
+		{
+			name: "no status attribute",
+			src:  `import ("context"; "log/slog"); func f(c context.Context, l *slog.Logger) { l.ErrorContext(c, "x") }`,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n\n"+tt.src+"\n"), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+
+			got, err := statusLogViolations(dir)
+			if err != nil {
+				t.Fatalf("statusLogViolations: %v", err)
+			}
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("statusLogViolations = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
