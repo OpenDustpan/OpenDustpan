@@ -1,0 +1,8 @@
+=== RUN   TestPerf9NameLocks
+    perf9_namelock_test.go:63: failed sign-ins=100000 (2 counts each) workers=16 wall=40.383895291s rate=2476/s add-pair p50=6.187991ms p95=9.027403ms p99=10.954586ms
+    perf9_namelock_test.go:74: name_locks rows=200000 total_size=32.9 MiB
+    perf9_namelock_test.go:104: prune: deleted=200000 runs=21 (limit 10000 each) per-run p50=79.172734ms max=127.962834ms total=1.759024994s
+    perf9_namelock_test.go:107: name_locks rows after prune=0
+--- PASS: TestPerf9NameLocks (44.73s)
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/postgres	45.784s

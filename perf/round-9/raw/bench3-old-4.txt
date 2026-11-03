@@ -1,0 +1,35 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeploymentShape1M-4   	     248	   1475325 ns/op	 710.83 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     267	   1538971 ns/op	 681.43 MB/s	   51893 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     186	   1640435 ns/op	 639.28 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     247	   1531547 ns/op	 684.73 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     266	   1452141 ns/op	 722.18 MB/s	   51872 B/op	    8038 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	1.905s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    1420	    335293 ns/op	9861.91 MB/s	   11081 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1560	    374893 ns/op	8820.18 MB/s	   11003 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	     708	    437146 ns/op	7564.14 MB/s	   11007 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1174	    335473 ns/op	9856.63 MB/s	   11001 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1240	    339835 ns/op	9730.10 MB/s	   11004 B/op	     270 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	3.231s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/workspace
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 139510731 ns/op	46074429 B/op	  501252 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 135944865 ns/op	46054568 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 135262727 ns/op	46054600 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       2	 163118646 ns/op	46054560 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 120023806 ns/op	46054568 B/op	  501250 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/workspace	2.042s
+PASS
+ok  	opendustpan.org/opendustpan/internal/pulumijournal	0.007s

@@ -1,0 +1,18 @@
+# opendustpan.org/opendustpan/pkg/store/postgres_test [opendustpan.org/opendustpan/pkg/store/postgres.test]
+pkg/store/postgres/perf8_namelock_test.go:43:64: too many arguments in call to s.AddNameFailure
+	have (context.Context, string, string, string, authgate.LockRule)
+	want (context.Context, authgate.NameFailure)
+pkg/store/postgres/perf8_namelock_test.go:47:68: too many arguments in call to s.AddNameFailure
+	have (context.Context, string, string, string, authgate.LockRule)
+	want (context.Context, authgate.NameFailure)
+pkg/store/postgres/perf8_namelock_test.go:88:85: not enough arguments in call to s.PruneNameLocks
+	have (context.Context, "time".Duration, number, audit.Entry)
+	want (context.Context, "time".Duration, int, int, audit.Entry)
+FAIL	opendustpan.org/opendustpan/pkg/store/postgres [build failed]
+=== RUN   TestPerf9Migrate
+    perf9_migrate_sqlite_test.go:37: sqlite fresh-migrate n=20 p50=21.020984ms p95=34.87356ms p99=34.87356ms
+    perf9_migrate_sqlite_test.go:38: sqlite reopen(no-op) n=20 p50=3.774961ms p95=6.359096ms p99=6.359096ms
+--- PASS: TestPerf9Migrate (0.88s)
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	0.892s
+FAIL

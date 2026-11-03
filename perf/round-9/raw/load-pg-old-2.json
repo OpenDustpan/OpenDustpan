@@ -1,0 +1,112 @@
+{
+  "time": "2026-11-03T12:43:59Z",
+  "store": "postgres",
+  "namespace": "load",
+  "units": 10000,
+  "durationMs": 29070.754054,
+  "seedMs": 24436.625767,
+  "checkpoints": [
+    {
+      "sizeBytes": 262409,
+      "fullMs": 10.444429,
+      "deltaMs": 9.56081,
+      "fullPeakAllocBytes": 6271472,
+      "deltaPeakAllocBytes": 7329304
+    },
+    {
+      "sizeBytes": 1048999,
+      "fullMs": 19.493231,
+      "deltaMs": 16.635406,
+      "fullPeakAllocBytes": 12611416,
+      "deltaPeakAllocBytes": 15744632
+    },
+    {
+      "sizeBytes": 4194519,
+      "fullMs": 48.364913,
+      "deltaMs": 36.993623,
+      "fullPeakAllocBytes": 32381200,
+      "deltaPeakAllocBytes": 31093792
+    }
+  ],
+  "imports": [
+    {
+      "sizeBytes": 262382,
+      "importMs": 20.430042,
+      "peakAllocBytes": 16810472,
+      "checkpointBytes": 262382
+    },
+    {
+      "sizeBytes": 1048972,
+      "importMs": 28.386291,
+      "peakAllocBytes": 12638688,
+      "checkpointBytes": 1048972
+    },
+    {
+      "sizeBytes": 4194492,
+      "importMs": 109.475753,
+      "peakAllocBytes": 29668184,
+      "checkpointBytes": 4194492
+    }
+  ],
+  "workspaceLocks": {
+    "goroutines": 16,
+    "rounds": 8,
+    "locks": 6,
+    "conflicts": 122,
+    "p50Ms": 2.438954
+  },
+  "updateConflicts": {
+    "attempts": 64,
+    "started": 1,
+    "conflicts": 63,
+    "p50Ms": 120.254918
+  },
+  "namespaceUpdates": {
+    "attempts": 64,
+    "started": 64,
+    "conflicts": 0,
+    "p50Ms": 103.211159
+  },
+  "database": {
+    "instances": 2,
+    "storesOpen": 2,
+    "firstP50Ms": 2.576191,
+    "secondP50Ms": 3.611331,
+    "secondPresent": true
+  },
+  "lists": {
+    "units": 10000,
+    "unitsListed": 100,
+    "workspaceListP50Ms": 42.643658,
+    "workspaceListFullMs": 2074.953873,
+    "inventoryMs": 2.908509
+  },
+  "journal": {
+    "supported": false,
+    "runs": []
+  },
+  "access": {
+    "requests": 200,
+    "listEntries": 16,
+    "runnerRoute": {
+      "method": "GET",
+      "path": "/api/runners/{namespace}/pools",
+      "gateOffP50Ms": 0.392785,
+      "gateNoListP50Ms": 0.621005,
+      "gateListP50Ms": 0.823449,
+      "gateRefusedP50Ms": 0.480386,
+      "refusedStatus": 403,
+      "refusedCode": "access.ip-not-allowed"
+    },
+    "jobsRoute": {
+      "method": "GET",
+      "path": "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
+      "gateOffP50Ms": 0.718355,
+      "gateNoListP50Ms": 1.069858,
+      "gateListP50Ms": 1.085494,
+      "gateRefusedP50Ms": 0.49056,
+      "refusedStatus": 403,
+      "refusedCode": "access.ip-not-allowed"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+=== RUN   TestPerf9Burst
+    perf9_burst_test.go:51: burst conc=4 bursts=30 samples=120 errs=0 verify p50=43.338482ms p95=187.265984ms p99=231.509639ms burst-wall p50=45.127411ms p95=52.929879ms
+    perf9_burst_test.go:51: burst conc=8 bursts=30 samples=240 errs=0 verify p50=51.634885ms p95=75.688195ms p99=81.739226ms burst-wall p50=70.735056ms p95=84.760132ms
+    perf9_burst_test.go:51: burst conc=16 bursts=30 samples=480 errs=0 verify p50=83.297533ms p95=140.860557ms p99=152.327586ms burst-wall p50=133.872268ms p95=159.510853ms
+    perf9_burst_test.go:51: burst conc=32 bursts=30 samples=960 errs=0 verify p50=145.123666ms p95=267.177288ms p99=330.496012ms burst-wall p50=267.29029ms p95=319.99774ms
+--- PASS: TestPerf9Burst (16.34s)
+PASS
+ok  	opendustpan.org/opendustpan/pkg/localuser/argon2id	16.365s

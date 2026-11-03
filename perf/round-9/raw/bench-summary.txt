@@ -1,0 +1,49 @@
+bench | ns/op old -> new (median of 3) | B/op | allocs/op | flag
+BenchmarkAuthorizer/check-4 | 3465525 -> 3688912 (+6.4%) | 61475 -> 61458 | 792 -> 793 |  spread 11.69/15.13
+BenchmarkAuthorizer/list_objects-4 | 2943155 -> 2980503 (+1.3%) | 386371 -> 386368 | 4842 -> 4841 |  spread 1.19/1.19
+BenchmarkCallerGrants/others=0-4 | 7083752 -> 6548768 (-7.6%) | 341286 -> 341278 | 3148 -> 3148 |  spread 3.03/2.57
+BenchmarkCallerGrants/others=100000-4 | 4817632 -> 4928344 (+2.3%) | 341350 -> 341330 | 3145 -> 3145 |  spread 1.77/1.40
+BenchmarkCallerGrants/others=20000-4 | 113714735 -> 4774900 (-95.8%) | 341342 -> 341349 | 3146 -> 3145 |  spread 68.12/1.36
+BenchmarkCheckpointSaveDelta1000-4 | 480800 -> 476747 (-0.8%) | 13205 -> 13208 | 326 -> 326 |  spread 1.06/1.11
+BenchmarkCheckpointSaveDelta3000-4 | 469580 -> 450091 (-4.2%) | 13194 -> 13192 | 326 -> 326 |  spread 1.17/1.12
+BenchmarkCheckpointSaveFull1000-4 | 231797 -> 360803 (+55.7%) | 11003 -> 11004 | 270 -> 270 | TIME+56% spread 1.19/1.15
+BenchmarkCheckpointSaveFull3000-4 | 254653 -> 259779 (+2.0%) | 11001 -> 11000 | 270 -> 270 |  spread 1.16/1.58
+BenchmarkCountManagedResources1000-4 | 10152050 -> 9656174 (-4.9%) | 3883256 -> 3883259 | 51319 -> 51319 |  spread 1.13/1.12
+BenchmarkCountManagedResources3000-4 | 26955415 -> 28741637 (+6.6%) | 11693177 -> 11693174 | 153879 -> 153879 |  spread 1.21/1.20
+BenchmarkDeltaApply1M-4 | 712243 -> 702295 (-1.4%) | 1059355 -> 1059370 | 14 -> 14 |  spread 1.22/1.09
+BenchmarkDeltaApply256K-4 | 80638 -> 101782 (+26.2%) | 271710 -> 271723 | 11 -> 11 | TIME+26% spread 1.03/1.03
+BenchmarkDeploymentShape1M-4 | 1242461 -> 1636800 (+31.7%) | 51872 -> 51872 | 8038 -> 8038 | TIME+32% spread 1.15/1.11
+BenchmarkDeploymentShapeSequenced1M-4 | 1235436 -> 1398303 (+13.2%) | 51968 -> 51968 | 8041 -> 8041 | TIME+13% spread 1.01/1.18
+BenchmarkDeploymentShapeSequenced4M-4 | 5045169 -> 4983874 (-1.2%) | 205888 -> 205888 | 32091 -> 32091 |  spread 1.02/1.26
+BenchmarkFencedWrite/check/parallel8-4 | 105819 -> 86651 (-18.1%) | 6843 -> 6843 | 135 -> 135 |  spread 1.11/1.15
+BenchmarkFencedWrite/check/serial-4 | 534711 -> 377692 (-29.4%) | 6670 -> 6670 | 132 -> 132 |  spread 1.16/1.08
+BenchmarkFencedWrite/fence_only/parallel8-4 | 94844 -> 72856 (-23.2%) | 5505 -> 5507 | 88 -> 88 |  spread 1.13/1.20
+BenchmarkFencedWrite/fence_only/serial-4 | 401731 -> 376659 (-6.2%) | 5332 -> 5332 | 85 -> 85 |  spread 1.19/1.20
+BenchmarkGzipBestSpeedCompress-4 | 686364 -> 549178 (-20.0%) | 821920 -> 821907 | 21 -> 21 |  spread 1.23/1.07
+BenchmarkGzipBestSpeedDecompress-4 | 83439 -> 89710 (+7.5%) | 41294 -> 41291 | 8 -> 8 |  spread 1.12/1.00
+BenchmarkIPAllowlistAuthorize1000Stacks-4 | 17963202 -> 25303661 (+40.9%) | 1154714 -> 1154520 | 33021 -> 33022 | TIME+41% spread 1.31/1.08
+BenchmarkIPAllowlistServeNamespaceRead-4 | 68936 -> 104939 (+52.2%) | 13040 -> 13053 | 158 -> 158 | TIME+52% spread 1.18/1.10
+BenchmarkIPAllowlistServeNamespaceReadOff-4 | 51486 -> 67102 (+30.3%) | 11882 -> 11886 | 125 -> 125 | TIME+30% spread 1.14/1.10
+BenchmarkJournalBuildChange10000-4 | 356909592 -> 368270703 (+3.2%) | 85539824 -> 85547664 | 689975 -> 690022 |  spread 1.36/1.29
+BenchmarkJournalBuildChange10in10000-4 | 131651544 -> 159221016 (+20.9%) | 36209680 -> 36208884 | 111110 -> 111110 | TIME+21% spread 1.12/1.02
+BenchmarkJournalBuildChange3000-4 | 85765469 -> 106814993 (+24.5%) | 24207168 -> 24204586 | 206756 -> 206733 | TIME+25% spread 1.26/1.06
+BenchmarkJournalBuildCreate10000-4 | 259770606 -> 341378113 (+31.4%) | 79205688 -> 79212256 | 629897 -> 629896 | TIME+31% spread 1.12/1.30
+BenchmarkJournalBuildCreate3000-4 | 88392117 -> 108720663 (+23.0%) | 22354826 -> 22360840 | 188723 -> 188753 | TIME+23% spread 1.30/1.11
+BenchmarkJournalBuildSmallestState-4 | 226502575 -> 236144718 (+4.3%) | 69883044 -> 69880768 | 599844 -> 599827 |  spread 1.25/1.11
+BenchmarkLeaseCheck/postgres/with-check-4 | 1045718 -> 1424301 (+36.2%) | 29213 -> 29177 | 326 -> 326 | TIME+36% spread 1.01/1.08
+BenchmarkLeaseCheck/postgres/without-check-4 | 803114 -> 966434 (+20.3%) | 24753 -> 24736 | 269 -> 269 | TIME+20% spread 1.16/1.11
+BenchmarkLeaseCheck/sqlite/with-check-4 | 600416 -> 737328 (+22.8%) | 30970 -> 30985 | 616 -> 616 | TIME+23% spread 1.20/1.34
+BenchmarkLeaseCheck/sqlite/without-check-4 | 464248 -> 693608 (+49.4%) | 26928 -> 26932 | 495 -> 495 | TIME+49% spread 1.11/1.04
+BenchmarkPrincipalLists/groups-4 | 1103909 -> 1281741 (+16.1%) | 66216 -> 66207 | 952 -> 952 | TIME+16% spread 1.48/2.18
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4 | 1310056 -> 1163604 (-11.2%) | 59764 -> 59768 | 801 -> 801 |  spread 1.95/1.58
+BenchmarkPrincipalLists/members_of_a_group-4 | 446110 -> 431787 (-3.2%) | 14351 -> 14354 | 196 -> 196 |  spread 2.65/2.41
+BenchmarkPrincipalLists/principals-4 | 2807014 -> 1775720 (-36.7%) | 101791 -> 101792 | 1111 -> 1110 |  spread 4.21/1.99
+BenchmarkPrincipalLists/principals_with_a_prefix-4 | 1866530 -> 1469827 (-21.3%) | 101866 -> 101867 | 1114 -> 1114 |  spread 2.27/1.37
+BenchmarkPrincipalLists/services_with_a_prefix-4 | 2324114 -> 2277194 (-2.0%) | 101214 -> 101210 | 1106 -> 1106 |  spread 1.16/1.30
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4 | 2823224 -> 2898078 (+2.7%) | 101557 -> 101551 | 1102 -> 1102 |  spread 1.20/1.19
+BenchmarkScanPointersManyPointersManyMembers-4 | 110809624 -> 140510325 (+26.8%) | 46054706 -> 46054568 | 501251 -> 501250 | TIME+27% spread 1.11/1.21
+BenchmarkUpload32MiB-4 | 325263304 -> 366133921 (+12.6%) | 6732168 -> 6732120 | 226011 -> 226011 | TIME+13% spread 1.18/1.04
+BenchmarkWriteCheck/state,_fence_and_minimum,_one_set-4 | 274728 -> 265047 (-3.5%) | 5438 -> 5438 | 116 -> 116 |  spread 1.04/1.09
+BenchmarkWriteCheck/state_and_minimum,_none_set-4 | 155347 -> 161796 (+4.2%) | 2430 -> 2431 | 63 -> 63 |  spread 5.52/5.83
+BenchmarkWriteCheck/state_and_minimum,_one_set-4 | 154148 -> 159064 (+3.2%) | 2527 -> 2528 | 66 -> 66 |  spread 6.80/6.42
+BenchmarkWriteCheck/state_only-4 | 127640 -> 120252 (-5.8%) | 1940 -> 1948 | 47 -> 47 |  spread 10.81/9.02

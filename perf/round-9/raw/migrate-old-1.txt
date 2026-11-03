@@ -1,0 +1,12 @@
+=== RUN   TestPerf9Migrate
+    perf9_migrate_pg_test.go:41: postgres fresh-migrate n=20 p50=345.892035ms p95=470.093932ms p99=470.093932ms
+    perf9_migrate_pg_test.go:42: postgres reopen(no-op) n=20 p50=16.671889ms p95=22.798022ms p99=22.798022ms
+--- PASS: TestPerf9Migrate (7.88s)
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/postgres	8.807s
+=== RUN   TestPerf9Migrate
+    perf9_migrate_sqlite_test.go:37: sqlite fresh-migrate n=20 p50=117.824611ms p95=151.370275ms p99=151.370275ms
+    perf9_migrate_sqlite_test.go:38: sqlite reopen(no-op) n=20 p50=3.998014ms p95=5.973497ms p99=5.973497ms
+--- PASS: TestPerf9Migrate (2.89s)
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	2.905s

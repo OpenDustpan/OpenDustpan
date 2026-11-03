@@ -1,0 +1,231 @@
+=== RUN   TestRoundTripsOfRequests
+=== PAUSE TestRoundTripsOfRequests
+=== CONT  TestRoundTripsOfRequests
+=== RUN   TestRoundTripsOfRequests/opentofu_upload
+=== PAUSE TestRoundTripsOfRequests/opentofu_upload
+=== RUN   TestRoundTripsOfRequests/lock
+=== PAUSE TestRoundTripsOfRequests/lock
+=== RUN   TestRoundTripsOfRequests/unlock
+=== PAUSE TestRoundTripsOfRequests/unlock
+=== RUN   TestRoundTripsOfRequests/lock,_upload_and_unlock
+=== PAUSE TestRoundTripsOfRequests/lock,_upload_and_unlock
+=== RUN   TestRoundTripsOfRequests/pulumi_checkpoint_save
+=== PAUSE TestRoundTripsOfRequests/pulumi_checkpoint_save
+=== RUN   TestRoundTripsOfRequests/pulumi_update_cycle
+=== PAUSE TestRoundTripsOfRequests/pulumi_update_cycle
+=== RUN   TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+=== PAUSE TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+=== CONT  TestRoundTripsOfRequests/opentofu_upload
+=== CONT  TestRoundTripsOfRequests/pulumi_checkpoint_save
+=== CONT  TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+=== CONT  TestRoundTripsOfRequests/pulumi_update_cycle
+=== NAME  TestRoundTripsOfRequests/pulumi_checkpoint_save
+    time=2026-11-03T12:36:55.035Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-03T12:36:55.053Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-03T12:36:55.060Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-03T12:36:55.060Z level=INFO msg=listening server=0 addr=127.0.0.1:42121
+    time=2026-11-03T12:36:55.080Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=6 bytes=138 request_id=b52bac6568728eb51490ed5c9c3f5485 adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.090Z level=INFO msg=request server=0 method=POST route="POST /api/v2/organizations/{organization}/workspaces" status=201 duration_ms=9 bytes=515 request_id=1c3f5e47bc1680e0f3dbf9266a92f460 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.097Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=6 bytes=3 request_id=3dbcda081b0138f2a1faad6c0d594ab8 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.100Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=a90a63bd52167e0d7ca47dc99ae3079a adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.195Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=93 bytes=36 request_id=6a8584cfdf4bd7d91e53cdb4ca6525eb adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.203Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=8 bytes=116 request_id=9fdd8c6c93d41c939cf52a6b985a29b4 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.212Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=8 bytes=3 request_id=df992700faae7368549bfbd79c1ef18c adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.216Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=4 bytes=3 request_id=59ffaf72cc87c812560df53a139310d1 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.220Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=d94bfdd8bf159facf364fbcbc33e2505 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.225Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=5 bytes=36 request_id=a1d9210c47d67691c2602c7f9a3b49e3 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.231Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=5 bytes=116 request_id=9661fcc2323bfe437f0afee62c10f87c adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.238Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=7 bytes=3 request_id=a3aab7218b85c930d607e537d1634f3d adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.245Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=6 bytes=3 request_id=a8396fb5883c107c3702d440f94fa365 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.248Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=2 bytes=3 request_id=cf810e04d8e87e3037adacf966dbe2e9 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.252Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=4 bytes=36 request_id=b52968cd1e0ad94914c65e55084ada45 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.256Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=4 bytes=116 request_id=4515546f263d4e78dbf7394d1e53369c adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.262Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=5 bytes=3 request_id=386ad39d9d877fd1a076d600fc9df9d2 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.265Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=2 bytes=3 request_id=47a006980232c1fa7d7f6073f62a6fc1 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.267Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=2 bytes=3 request_id=ae0a7c1df7cfc36545e85e0aab9e6b01 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.271Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=3 bytes=36 request_id=69cc63353dd0ea4f48e73255d5c3f666 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.275Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=3 bytes=116 request_id=9c53fe35b75ab237802dc24aa9233c6a adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.283Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=7 bytes=3 request_id=8a1d17a404564891ede4bbbf192b8fd9 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.286Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=2 bytes=3 request_id=64c0dd96d900ad89f834183de78d22ef adapter=pulumi client_ip=127.0.0.1
+    roundtrips_test.go:835: pulumi checkpoint save: 13 round trips, budget 13
+    time=2026-11-03T12:36:55.286Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-03T12:36:55.287Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+=== CONT  TestRoundTripsOfRequests/lock,_upload_and_unlock
+=== NAME  TestRoundTripsOfRequests/pulumi_update_cycle
+    time=2026-11-03T12:36:55.473Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-03T12:36:55.487Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-03T12:36:55.490Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-03T12:36:55.491Z level=INFO msg=listening server=0 addr=127.0.0.1:40615
+    time=2026-11-03T12:36:55.502Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=3 bytes=138 request_id=ff9dfa111ba52e383c90a4c1b0111d29 adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.510Z level=INFO msg=request server=0 method=POST route="POST /api/v2/organizations/{organization}/workspaces" status=201 duration_ms=8 bytes=515 request_id=6967328f6529f540400049ffe8015611 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.514Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=94187ffe660394aba928b7a393616030 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.520Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=5 bytes=3 request_id=811eb622b6e89479aa31f4d2832a8996 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.527Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=6 bytes=36 request_id=89cb9f27364b499fc7975e43b2c0ce92 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.533Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=6 bytes=116 request_id=e4a1fb3b5edadb645250722957997aed adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.542Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=8 bytes=3 request_id=2deb942ffc9b1f1cc4181ee2028bcb07 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.552Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=9 bytes=3 request_id=7c0dbe3cea323d30e4742c1c3f42ff23 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.558Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=5 bytes=3 request_id=57c654618d43ef9086def7d9601369de adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.560Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=1 bytes=3 request_id=d8e0eb47fdb7b3ff061b73d5ba804de8 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.565Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=5 bytes=36 request_id=83e27b12e40f3e995d671722a30ce40e adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.570Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=4 bytes=116 request_id=a3449dc1301aec83154312ab27960d86 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.575Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=5 bytes=3 request_id=92705c9437cab5b924511e33679cce5b adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.582Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=6 bytes=3 request_id=55d3de2955f1408a5418d95dbae6ecce adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.586Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=3 bytes=3 request_id=17b046cf63848a6c8583b8d17d3e2bc6 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.589Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=884318cbde2716d3e10d06792c27224f adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.593Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=3 bytes=36 request_id=351281b8a6d9eee3853b9c279bfdcc52 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.597Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=3 bytes=116 request_id=3621228bb395e07cd495feee9665f19d adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.604Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=6 bytes=3 request_id=c9d1bfd7d1802a9a95c1ffe18a4a2ccb adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.610Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=5 bytes=3 request_id=1bd941b32c0c3b74fef2f3860bcae167 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.612Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=2 bytes=3 request_id=4a852348dc70112112c79621426219ab adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.615Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=1 bytes=3 request_id=0d084a8a20a2882156c97c8a563cf686 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.619Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=4 bytes=36 request_id=52f45fd5ded0e05cc923cc7b87636c79 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.625Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=5 bytes=116 request_id=a79e32c25d36003bd87ce6c67dc67e89 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.650Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=24 bytes=3 request_id=f022aa5453b143cb1a6803cf9e83d3db adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.666Z level=INFO msg=request server=0 method=PATCH route="PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim" status=200 duration_ms=14 bytes=3 request_id=f66817a244ce4f706d538c03cc24005c adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:55.671Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=4 bytes=3 request_id=71b5857601429f8a29368d6fb7cdebfc adapter=pulumi client_ip=127.0.0.1
+    roundtrips_test.go:835: pulumi update cycle: 62 round trips, budget 62
+    time=2026-11-03T12:36:55.671Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-03T12:36:55.673Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+=== CONT  TestRoundTripsOfRequests/unlock
+=== NAME  TestRoundTripsOfRequests/opentofu_upload
+    time=2026-11-03T12:36:55.905Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-03T12:36:55.919Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-03T12:36:55.923Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-03T12:36:55.923Z level=INFO msg=listening server=0 addr=127.0.0.1:44989
+    time=2026-11-03T12:36:55.934Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=5 bytes=138 request_id=906d42058afe9bdb22794c9f8d1d0a9d adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.944Z level=INFO msg=request server=0 method=POST route="POST /api/v2/organizations/{organization}/workspaces" status=201 duration_ms=9 bytes=513 request_id=043a332a3f0dd02a2b95e3cd8bf1cb61 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.948Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=9f68d52099c1b30bc2f8c90261406f85 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.969Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=20 bytes=568 request_id=f1455008d67e4c035261fa28b23f732e adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:55.977Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=7 bytes=887 request_id=1ec3c3e0dd871792e0d2d366cb31c7cd adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.026Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=48 bytes=0 request_id=ded202e83d581e368c29a10b807ffeb2 adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.029Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=3 bytes=561 request_id=8ebf946832a11916ebdd761b99b9581c adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.041Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=11 bytes=621 request_id=f78acea4f418d59586407add9b6dfc10 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.046Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=4 bytes=887 request_id=1b545215ebbb0d4b2e11979a63fa8060 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.073Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=26 bytes=0 request_id=d9e10c87e8baa1769495a83c8fb58369 adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.076Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=561 request_id=e9b6deb22b711c42c50a5f391b3b4413 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.087Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=10 bytes=620 request_id=6868b36919aeffe89f447dc3a29bfe86 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.091Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=3 bytes=887 request_id=6447e61fbc0529b8918f68a1bb44a693 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.100Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=8 bytes=0 request_id=75a6d5918ead1601b732de0e7ec9f312 adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.103Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=561 request_id=9a4d647bd93a48d76af3676dbe99985b adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.115Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=11 bytes=621 request_id=edf62baf520a796e1d6c9ee2b6c1d869 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.121Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=5 bytes=887 request_id=f16d7e086c3c12e1dfed8dda57c96292 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.129Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=7 bytes=0 request_id=6b70f23958208adeffbb5629df482e50 adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.131Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=561 request_id=7f3806e567ef25181baf4e709eb12fbf adapter=opentofu client_ip=127.0.0.1 subject=admin
+    roundtrips_test.go:835: opentofu upload: 41 round trips, budget 41
+    time=2026-11-03T12:36:56.131Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-03T12:36:56.133Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+=== CONT  TestRoundTripsOfRequests/lock
+=== NAME  TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+    time=2026-11-03T12:36:56.291Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-03T12:36:56.308Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-03T12:36:56.311Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-03T12:36:56.311Z level=INFO msg=listening server=0 addr=127.0.0.1:34703
+    time=2026-11-03T12:36:56.323Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=8 bytes=138 request_id=f8bcb1f3b8157ec8b10642c22eced960 adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.335Z level=INFO msg=request server=0 method=POST route="POST /api/v2/organizations/{organization}/workspaces" status=201 duration_ms=11 bytes=513 request_id=fcaa32ed12c36f1a6a80783691abda4e adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.341Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=4 bytes=3 request_id=32e9d97a57942643b26e18a8aa57d373 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.346Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=5 bytes=3 request_id=c8f296ee01f0e943a59a2678117147f7 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.354Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=7 bytes=36 request_id=794f3ffc9d9b76a8b5a971ab47f17903 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.360Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=5 bytes=116 request_id=a8b93ff1615116c0c645d0331d24eae2 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.513Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch" status=200 duration_ms=152 bytes=3 request_id=f8353be80cff3c5bf50b65e539726775 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.519Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=5 bytes=3 request_id=9248c2f82c7fde4f43cd874e7e771ba6 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.521Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=2 bytes=3 request_id=e2dec23621d14236f42984adf0926567 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.526Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=4 bytes=36 request_id=f84cfdd9e0c0e92552a131d8af5369be adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.532Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=5 bytes=116 request_id=68b8f4bd9451bcfb3a3a534648de091c adapter=pulumi client_ip=127.0.0.1 subject=admin
+=== NAME  TestRoundTripsOfRequests/lock,_upload_and_unlock
+    time=2026-11-03T12:36:56.638Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-03T12:36:56.653Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-03T12:36:56.659Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-03T12:36:56.659Z level=INFO msg=listening server=0 addr=127.0.0.1:36689
+    time=2026-11-03T12:36:56.673Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=5 bytes=138 request_id=bff2421bd4b38bc2f66abfb3d5213ce9 adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.683Z level=INFO msg=request server=0 method=POST route="POST /api/v2/organizations/{organization}/workspaces" status=201 duration_ms=10 bytes=515 request_id=2ecec5dde460b765b17345ac01bbe6fc adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.687Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=eeeb56f929309e6084da46917bad510e adapter=pulumi client_ip=127.0.0.1 subject=admin
+=== NAME  TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+    time=2026-11-03T12:36:56.699Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch" status=200 duration_ms=166 bytes=3 request_id=d59681e3edbe15c7437445c3b7995cc0 adapter=pulumi client_ip=127.0.0.1
+=== NAME  TestRoundTripsOfRequests/lock,_upload_and_unlock
+    time=2026-11-03T12:36:56.707Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=20 bytes=569 request_id=927de6590268fc8fe048cb2d5480d580 adapter=opentofu client_ip=127.0.0.1 subject=admin
+=== NAME  TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+    time=2026-11-03T12:36:56.709Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=9 bytes=3 request_id=36a84a0ac5277435f5fa9cca219db795 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.716Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=7 bytes=3 request_id=c4330ca99a91b00ccff5ace65c062d0b adapter=pulumi client_ip=127.0.0.1 subject=admin
+=== NAME  TestRoundTripsOfRequests/lock,_upload_and_unlock
+    time=2026-11-03T12:36:56.717Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=8 bytes=887 request_id=75df88c65bdace7c63f1dea47c34cd5b adapter=opentofu client_ip=127.0.0.1 subject=admin
+=== NAME  TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+    time=2026-11-03T12:36:56.722Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=5 bytes=36 request_id=61cbc673f82b677696c25b114d8ffa99 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.727Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=5 bytes=116 request_id=dbb0fee2d5696498db76a892244b48b0 adapter=pulumi client_ip=127.0.0.1 subject=admin
+=== NAME  TestRoundTripsOfRequests/lock,_upload_and_unlock
+    time=2026-11-03T12:36:56.731Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=13 bytes=0 request_id=f88c05b75cd8b8d365d2d48f40a63aa6 adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.738Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=6 bytes=560 request_id=de6a101db389f7eab954c444d6639fd1 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.764Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=25 bytes=621 request_id=880b7be7d76e2c78568f22e1a3556b02 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.771Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=6 bytes=887 request_id=6702c0fe33715cecbfb2d1bd34ce9a11 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.787Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=15 bytes=0 request_id=f70d9d2b4bf18c40d2e6ad41c8cf27ef adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.791Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=3 bytes=561 request_id=5b7463c9b9cf46ec977aee8940b817d9 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.809Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=18 bytes=621 request_id=ca2d024445695306746692740b110d06 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.816Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=6 bytes=887 request_id=d10ae9cd9c7dfd0e82af0c6bd98eb2dd adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.825Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=8 bytes=0 request_id=a08f1d608bbc469b45206627f294ebc5 adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.828Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=561 request_id=792db188ea24739c355c325f7531f65e adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.848Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=19 bytes=621 request_id=b5a762c1db593f94a890ae74aab241a9 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.855Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/state-versions" status=201 duration_ms=6 bytes=887 request_id=5cbe33052d7e1e8c866e58e82161d0da adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.863Z level=INFO msg=request server=0 method=PUT route="PUT /api/v2/state-uploads/{id}/{token}" status=200 duration_ms=8 bytes=0 request_id=04ac717cd39b3a2e69e77b380419234f adapter=opentofu client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.867Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=3 bytes=561 request_id=b61d80db81e89eb31189d3ddb982b7f3 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    roundtrips_test.go:835: lock, upload and unlock: 97 round trips, budget 97
+    time=2026-11-03T12:36:56.867Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-03T12:36:56.868Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+=== NAME  TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+    time=2026-11-03T12:36:56.954Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch" status=200 duration_ms=223 bytes=3 request_id=a2a719a66c4ec9d306a894543237ee44 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.957Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=3 bytes=3 request_id=111631c70884fae470e6d1d66d76d207 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:56.959Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=1 bytes=3 request_id=732b4639b2a9dafa85c0e375b29b0896 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.963Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update" status=200 duration_ms=3 bytes=36 request_id=b8ab5686fb8bf98b5baf227522c13eac adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:56.967Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}" status=200 duration_ms=3 bytes=116 request_id=3fd0fb4d5b7582d3772358de1e1fd56c adapter=pulumi client_ip=127.0.0.1 subject=admin
+=== NAME  TestRoundTripsOfRequests/unlock
+    time=2026-11-03T12:36:57.024Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-03T12:36:57.050Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-03T12:36:57.055Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-03T12:36:57.055Z level=INFO msg=listening server=0 addr=127.0.0.1:46381
+    time=2026-11-03T12:36:57.066Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=4 bytes=138 request_id=d4caa87994c4fc042e41b975151edd7d adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.076Z level=INFO msg=request server=0 method=POST route="POST /api/v2/organizations/{organization}/workspaces" status=201 duration_ms=9 bytes=515 request_id=071f384e9db9037e4274b1b6d44f7244 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.080Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=253f921f9ee2d4d35d103ffe39c736ab adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.097Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=17 bytes=569 request_id=9e0187539b1a3448606d6bf95bc54e74 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.101Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=509 request_id=caac3d6d24ff4e73f00c3152c9d4f03b adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.114Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=13 bytes=569 request_id=51327f66bdcd6b6c67132061b67628dc adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.117Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=509 request_id=0ce3c84320a2254eb627b530f273b5b7 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.132Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=14 bytes=569 request_id=b1eba5260ebb5798ca5a5aff72aef01f adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.135Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=509 request_id=689a97722c04ffee7f055c5007244d9a adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.149Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=13 bytes=568 request_id=ea0793d0209486dd6b06686705a11fda adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.151Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=509 request_id=5d6f87afc246f58eeb320392312b4981 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    roundtrips_test.go:835: unlock: 10 round trips, budget 10
+    time=2026-11-03T12:36:57.152Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-03T12:36:57.152Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+=== NAME  TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events
+    time=2026-11-03T12:36:57.231Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch" status=200 duration_ms=262 bytes=3 request_id=2c7c0854d46ee01d34769c0a28146b45 adapter=pulumi client_ip=127.0.0.1
+    time=2026-11-03T12:36:57.239Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete" status=200 duration_ms=7 bytes=3 request_id=b2acdf6566825a6fd91234b1dee03feb adapter=pulumi client_ip=127.0.0.1
+    roundtrips_test.go:835: pulumi event batch of 1000 events: 1010 round trips, budget 1010
+    time=2026-11-03T12:36:57.239Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-03T12:36:57.241Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+=== NAME  TestRoundTripsOfRequests/lock
+    time=2026-11-03T12:36:57.426Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-03T12:36:57.444Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-03T12:36:57.450Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-03T12:36:57.451Z level=INFO msg=listening server=0 addr=127.0.0.1:46207
+    time=2026-11-03T12:36:57.456Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=4 bytes=138 request_id=4a9ebb07c1a1fbee9b33967f394181ae adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.465Z level=INFO msg=request server=0 method=POST route="POST /api/v2/organizations/{organization}/workspaces" status=201 duration_ms=8 bytes=515 request_id=5dc17d79c569e8b08d8286a172c2597a adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.469Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=65127c1ab7d28b434b6037261310091c adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.485Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=16 bytes=569 request_id=bcbd1cfd27f06544a73fe5564f4ea84d adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.488Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=509 request_id=e8785d4bbb371560bcbcab18334cba9b adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.501Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=13 bytes=569 request_id=f2798defd2e5fa2870ef1a20378024d7 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.504Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=508 request_id=9c73457cd9aefe296208bb7ca1ed6af4 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.519Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=14 bytes=569 request_id=42f8b09988755572016cef388cf1a1d4 adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.522Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=2 bytes=509 request_id=c0242ff947a00260561332971d90015c adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.537Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/lock" status=200 duration_ms=15 bytes=569 request_id=a293cb23e515cd67be0f586bf7d0523a adapter=opentofu client_ip=127.0.0.1 subject=admin
+    time=2026-11-03T12:36:57.540Z level=INFO msg=request server=0 method=POST route="POST /api/v2/workspaces/{id}/actions/unlock" status=200 duration_ms=1 bytes=509 request_id=bdc9b35f3e1ae71114ffd2c4c6497c0e adapter=opentofu client_ip=127.0.0.1 subject=admin
+    roundtrips_test.go:835: lock: 42 round trips, budget 42
+    time=2026-11-03T12:36:57.540Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-03T12:36:57.541Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+--- PASS: TestRoundTripsOfRequests (0.00s)
+    --- PASS: TestRoundTripsOfRequests/pulumi_checkpoint_save (0.81s)
+    --- PASS: TestRoundTripsOfRequests/pulumi_update_cycle (1.20s)
+    --- PASS: TestRoundTripsOfRequests/opentofu_upload (1.66s)
+    --- PASS: TestRoundTripsOfRequests/lock,_upload_and_unlock (1.62s)
+    --- PASS: TestRoundTripsOfRequests/unlock (1.48s)
+    --- PASS: TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events (2.76s)
+    --- PASS: TestRoundTripsOfRequests/lock (1.40s)
+PASS
+ok  	opendustpan.org/opendustpan/internal/servertest	3.076s

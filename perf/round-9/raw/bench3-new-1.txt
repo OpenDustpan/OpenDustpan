@@ -1,0 +1,35 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeploymentShape1M-4   	     264	   1376105 ns/op	 762.08 MB/s	   51893 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     256	   1677139 ns/op	 625.29 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     285	   1241763 ns/op	 844.53 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     246	   1546354 ns/op	 678.18 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4   	     182	   1915222 ns/op	 547.56 MB/s	   51872 B/op	    8038 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	1.950s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    1719	    379261 ns/op	8718.62 MB/s	   11231 B/op	     271 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1767	    275137 ns/op	12018.13 MB/s	   11002 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1726	    267911 ns/op	12342.25 MB/s	   11006 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1760	    234435 ns/op	14104.65 MB/s	   11005 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1713	    237852 ns/op	13902.04 MB/s	   11002 B/op	     270 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	2.886s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/workspace
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 119523047 ns/op	46074440 B/op	  501252 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 102581944 ns/op	46054616 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 129264231 ns/op	46054610 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 105721775 ns/op	46074397 B/op	  501251 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 114747158 ns/op	46054562 B/op	  501250 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/workspace	1.831s
+PASS
+ok  	opendustpan.org/opendustpan/internal/pulumijournal	0.006s

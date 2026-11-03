@@ -1,0 +1,81 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	    3897	     93083 ns/op	2820.47 MB/s	  271746 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	    2908	    143518 ns/op	1829.30 MB/s	  271676 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	    2856	    168474 ns/op	1558.33 MB/s	  271734 B/op	      11 allocs/op
+BenchmarkDeploymentShape1M-4            	     266	   1610374 ns/op	 651.22 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     290	   1407016 ns/op	 745.34 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     289	   1225855 ns/op	 855.49 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     282	   1260989 ns/op	 831.67 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     277	   1284109 ns/op	 816.70 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     254	   1362704 ns/op	 769.59 MB/s	   51968 B/op	    8041 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	3.590s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCheckpointSaveFull1000-4   	    1375	    286664 ns/op	11534.84 MB/s	   11103 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1230	    252335 ns/op	13104.13 MB/s	   11005 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4   	    1302	    287588 ns/op	11497.80 MB/s	   11007 B/op	     270 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	6.188s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/workspace
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 110577668 ns/op	46054584 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 139075298 ns/op	46054658 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       3	 125783171 ns/op	46054664 B/op	  501250 allocs/op
+BenchmarkUpload32MiB-4                           	       1	 332497821 ns/op	 6733696 B/op	  226034 allocs/op
+BenchmarkUpload32MiB-4                           	       1	 386587912 ns/op	 6732488 B/op	  226014 allocs/op
+BenchmarkUpload32MiB-4                           	       1	 363500790 ns/op	 6726984 B/op	  226010 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/workspace	2.756s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/internal/pulumijournal
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkJournalBuildCreate3000-4        	       4	  88259349 ns/op	  13.86 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7450168 peak-heap-bytes	22367588 B/op	  188855 allocs/op
+BenchmarkJournalBuildCreate3000-4        	       4	  76425372 ns/op	  16.01 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7908208 peak-heap-bytes	22348756 B/op	  188691 allocs/op
+BenchmarkJournalBuildCreate3000-4        	       4	  79385612 ns/op	  15.41 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7452912 peak-heap-bytes	22350466 B/op	  188705 allocs/op
+BenchmarkJournalBuildChange3000-4        	       4	 104397903 ns/op	  11.97 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	   9007192 peak-heap-bytes	24206904 B/op	  206757 allocs/op
+BenchmarkJournalBuildChange3000-4        	       4	  85479099 ns/op	  14.62 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	   9015448 peak-heap-bytes	24208690 B/op	  206765 allocs/op
+BenchmarkJournalBuildChange3000-4        	       4	  83388956 ns/op	  14.98 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	   9044376 peak-heap-bytes	24212834 B/op	  206781 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       1	 303782412 ns/op	  13.49 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  21578248 peak-heap-bytes	79215312 B/op	  629958 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       1	 313601072 ns/op	  13.06 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  20794160 peak-heap-bytes	79199440 B/op	  629847 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       1	 304270036 ns/op	  13.46 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  21580928 peak-heap-bytes	79218928 B/op	  629940 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	       2	 165577854 ns/op	   0.02 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  13361616 peak-heap-bytes	36205704 B/op	  111094 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	       3	 148616882 ns/op	   0.03 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  13358248 peak-heap-bytes	36206154 B/op	  111101 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	       3	 125021015 ns/op	   0.03 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  13626160 peak-heap-bytes	36205976 B/op	  111099 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/internal/pulumijournal	4.554s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/dustpan
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIPAllowlistServeNamespaceRead-4      	    3991	     77957 ns/op	   13067 B/op	     158 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	    4591	     79888 ns/op	   13043 B/op	     158 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	    5025	     73512 ns/op	   13038 B/op	     158 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	    6570	     55674 ns/op	   11883 B/op	     125 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	    7779	     47799 ns/op	   11881 B/op	     125 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	    6262	     54432 ns/op	   11883 B/op	     125 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      24	  17528922 ns/op	 1165292 B/op	   33040 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      19	  19974229 ns/op	 1154514 B/op	   33022 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      18	  19796334 ns/op	 1154047 B/op	   33018 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	     573	    706297 ns/op	   30947 B/op	     616 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	     571	    717500 ns/op	   30992 B/op	     616 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	     585	    649780 ns/op	   31007 B/op	     616 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	     771	    412769 ns/op	   26884 B/op	     495 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	     708	    535466 ns/op	   26996 B/op	     495 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	     915	    510580 ns/op	   26864 B/op	     495 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	     360	    958660 ns/op	   29180 B/op	     326 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	     382	    920735 ns/op	   29237 B/op	     326 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	     390	    974356 ns/op	   29113 B/op	     326 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	     637	    704506 ns/op	   24775 B/op	     269 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	     546	    682280 ns/op	   24742 B/op	     269 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	     535	    631367 ns/op	   24737 B/op	     269 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/dustpan	11.234s
