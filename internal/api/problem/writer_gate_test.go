@@ -61,6 +61,8 @@ func ownBodies() map[string]map[string]string {
 			"codedResponse":        "an own error writer of the installation API that has not moved to problem.Writer yet",
 			"enterRefusedResponse": "an own error writer of the installation API that has not moved to problem.Writer yet",
 			"devCodeRequest":       "the request body of the dev sign-in; code is the sign-in code",
+			"getRestoreResponse":   "a 200 row; errorCode repeats the stored catalog code of a restore",
+			"restoreSummaryJSON":   "a 200 row; errorCode repeats the stored catalog code of a restore",
 			"restoreWarningJSON":   "a warning in the report of a restore that succeeded; it is no error answer",
 		},
 		"settings": {
