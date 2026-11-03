@@ -276,8 +276,7 @@ entered. The audit log of a restore that stopped before the swap holds an
 entry with the outcome `failure` and the text `canceled before the swap` (or
 `failed before the swap`, or `stopped before the swap` for a restore that
 ended with no end write). The text says that the live state, history and
-access tables did not change. That entry makes no claim about the access
-tables. The entry that the
+access tables did not change. The entry that the
 server writes when it accepts the start says `requested`, with the outcome
 `success`, because it records the accepted request only. A restore that fails
 after the swap writes an entry with the outcome `failure` and the text
