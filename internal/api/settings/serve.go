@@ -3,7 +3,6 @@ package settings
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -523,7 +523,7 @@ func (h *Handler) bulkFailure(r *http.Request, id string, err error) bulkResult 
 	}
 
 	if pr.Status >= http.StatusInternalServerError {
-		h.logger.ErrorContext(r.Context(), "bulk item failed", slog.Int("status", pr.Status))
+		problem.LogInternal(r.Context(), h.logger, "bulk item failed", problem.CauseUnclassified)
 	}
 
 	return bulkResult{ID: id, Status: statusError, Version: 0, Error: &failure}

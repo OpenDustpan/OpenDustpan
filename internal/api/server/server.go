@@ -480,17 +480,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		return
 	}
 
-	wr := problemWriter(h.logger)
-
-	if wr.Problem(err).Status == http.StatusInternalServerError {
-		// The log names the status, the code and the type of the cause,
-		// never the error text: the text may hold driver detail, a token,
-		// or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", http.StatusInternalServerError),
-			slog.String("error_code", errcode.ServerInternal), slog.String("cause", causeType(err)))
-	}
-
-	wr.Write(ctx, w, err)
+	// problem.Writer logs a 500 with a cause from the closed list and the
+	// request ID, and never the error text.
+	problemWriter(h.logger).Write(ctx, w, err)
 }
 
 // problemWriter returns the writer of the error answers of the installation

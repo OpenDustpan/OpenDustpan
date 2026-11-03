@@ -40,7 +40,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	}
 
 	status, body := classifyProtocol(err)
-	h.logFailure(ctx, status)
+	h.logFailure(ctx, status, err)
 
 	h.logFenced(ctx, err)
 	h.logRefused(ctx, err, body.Message)
@@ -97,9 +97,11 @@ func refusedLevel(err error) slog.Level {
 // text, which may hold driver detail, a token or a key. Only logFenced and
 // logRefused log the text of an error, and only for an error that a case of a
 // switch knows.
-func (h *Handler) logFailure(ctx context.Context, status int) {
+func (h *Handler) logFailure(ctx context.Context, status int, err error) {
 	if status >= http.StatusInternalServerError {
-		h.logger.ErrorContext(ctx, "runner request failed", slog.Int("status", status))
+		problem.LogServer(ctx, h.logger, problem.ServerLog{
+			Message: "runner request failed", Status: status, Cause: problem.Cause(err), Attrs: nil,
+		})
 	}
 }
 

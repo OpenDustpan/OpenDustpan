@@ -980,7 +980,8 @@ func unmatched() failure {
 // server.internal and logs the code.
 func (h *Handler) writeFailure(ctx context.Context, w http.ResponseWriter, f failure) {
 	if f.err != nil {
-		h.logger.ErrorContext(ctx, "error answer is not valid", slog.String("error_code", f.code))
+		problem.LogInternal(ctx, h.logger, "error answer is not valid", problem.CauseUnclassified,
+			slog.String("error_code", f.code))
 		h.writeAnswer(ctx, w, http.StatusInternalServerError, "internal error", errcode.Internal())
 
 		return
@@ -1003,9 +1004,11 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	f := classify(err)
 
 	if f.status == http.StatusInternalServerError {
-		// The log names the status and the code only, never the error text:
-		// the text may hold driver detail, a token, or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status), slog.String("error_code", f.code))
+		// The log names the status, a cause from the closed list, the request
+		// ID and the code, never the error text: the text may hold driver
+		// detail, a token, or state.
+		problem.LogInternal(ctx, h.logger, "request failed", problem.Cause(err),
+			slog.String("error_code", f.code))
 	} else {
 		h.logRefusal(ctx, err)
 	}
