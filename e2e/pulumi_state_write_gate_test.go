@@ -120,15 +120,15 @@ func (g *pulumiGateRun) importGate() {
 	renamed := g.qualified("renamed")
 	exported := g.step(step("gate: stack export before the import", nil, "stack", "export", "--stack", renamed))
 	path := writeImportFile(g.t, exported.Stdout)
-	history := len(readHistory(g.t.Context(), g.t, g.env, g.org))
+	latest := latestHistoryVersion(g.t, g.env, g.org)
 
 	id := g.put("renamed", "state-import", gate.OutcomeDeny)
 	g.step(failStep("gate: stack import stops at a deny gate", cliRefused(),
 		"stack", "import", "--file", path, "--stack", renamed))
 	g.remove("renamed", id)
 
-	if got := len(readHistory(g.t.Context(), g.t, g.env, g.org)); got != history {
-		g.t.Fatalf("history = %d updates after a refused import, want %d", got, history)
+	if got := latestHistoryVersion(g.t, g.env, g.org); got != latest {
+		g.t.Fatalf("latest version = %d after a refused import, want %d", got, latest)
 	}
 
 	id = g.put("renamed", "state-import", gate.OutcomeWarn)
@@ -136,8 +136,8 @@ func (g *pulumiGateRun) importGate() {
 		"stack", "import", "--file", path, "--stack", renamed))
 	g.remove("renamed", id)
 
-	if got := len(readHistory(g.t.Context(), g.t, g.env, g.org)); got != history+1 {
-		g.t.Fatalf("history = %d updates after the import, want %d", got, history+1)
+	if got := latestHistoryVersion(g.t, g.env, g.org); got != latest+1 {
+		g.t.Fatalf("latest version = %d after the import, want %d", got, latest+1)
 	}
 }
 
@@ -148,7 +148,7 @@ func (g *pulumiGateRun) restoreGate() {
 	ctx := g.t.Context()
 	path := fmt.Sprintf("/api/stacks/%s/%s/renamed/restore/1", g.org, e2e.Project)
 	renamed := g.qualified("renamed")
-	history := len(readHistory(g.t.Context(), g.t, g.env, g.org))
+	latest := latestHistoryVersion(g.t, g.env, g.org)
 
 	id := g.put("renamed", "rollback", gate.OutcomeDeny)
 
@@ -171,8 +171,8 @@ func (g *pulumiGateRun) restoreGate() {
 		g.t.Fatalf("POST %s = %d %s (%v), want 403 in the Pulumi shape with the gate message", path, status, body, err)
 	}
 
-	if got := len(readHistory(g.t.Context(), g.t, g.env, g.org)); got != history {
-		g.t.Fatalf("history = %d updates after a refused restore, want %d", got, history)
+	if got := latestHistoryVersion(g.t, g.env, g.org); got != latest {
+		g.t.Fatalf("latest version = %d after a refused restore, want %d", got, latest)
 	}
 
 	id = g.put("renamed", "rollback", gate.OutcomeWarn)
@@ -224,7 +224,9 @@ func (g *pulumiGateRun) renameAndRemoveGate() {
 
 	id = g.put("gated", "rename", gate.OutcomeWarn)
 	g.step(step("gate: stack rename goes on under a warn gate", nil, "stack", "rename", after, "--stack", before))
-	g.remove("gated", id)
+	// A gate of a unit holds for the unit and not for its name, so the gate
+	// follows the stack to its new name.
+	g.remove("gated-renamed", id)
 
 	id = g.put("gated-renamed", "delete", gate.OutcomeDeny)
 	g.step(failStep("gate: stack rm stops at a deny gate", cliRefused(), "stack", "rm", "--yes", "--stack", after))
@@ -232,9 +234,11 @@ func (g *pulumiGateRun) renameAndRemoveGate() {
 	g.step(step("gate: the stack is still there after a refused rm", contains(`gated-renamed`),
 		"stack", "ls", "--json"))
 
-	id = g.put("gated-renamed", "delete", gate.OutcomeWarn)
+	// The gate stays with the deleted stack: its name no longer names a unit,
+	// so the gate route cannot find the gate by that name.
+	g.put("gated-renamed", "delete", gate.OutcomeWarn)
 	g.step(step("gate: stack rm goes on under a warn gate", nil, "stack", "rm", "--yes", "--stack", after))
-	g.remove("gated-renamed", id)
+	g.step(step("gate: the stack is gone after the rm", lacks(`gated-renamed`), "stack", "ls", "--json"))
 }
 
 // lacks returns a check that stdout does not hold text.
@@ -246,4 +250,19 @@ func lacks(text string) func(e2e.Result) error {
 
 		return nil
 	}
+}
+
+// latestHistoryVersion returns the highest version in the history of the
+// renamed stack. The history route answers one page, so the test reads the
+// version and not the count of updates.
+func latestHistoryVersion(t *testing.T, env *e2e.Env, org string) int {
+	t.Helper()
+
+	latest := 0
+
+	for _, u := range readHistory(t.Context(), t, env, org) {
+		latest = max(latest, u.Version)
+	}
+
+	return latest
 }
