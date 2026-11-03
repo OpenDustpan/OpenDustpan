@@ -28,6 +28,7 @@ type JobStore interface {
 	job.FreezeStore
 	job.RecordStore
 	job.ArtifactKeyStore
+	job.FinalVersionReader
 }
 
 // Jobs returns the stores of jobs and change freezes. Each write checks the
