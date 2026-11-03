@@ -25,9 +25,17 @@ type GroupMapperFixture struct {
 // RunGroupMapper runs the conformance suite of a principal.GroupMapper. Each
 // case names one rule and is skipped until an implementation exists. The
 // cases hold for each form of a mapping: an explicit map from a value to a
-// group, or a match that a group turns on for one provider.
-func RunGroupMapper(t *testing.T, _ func(t *testing.T) GroupMapperFixture) {
+// group, or a match that a group turns on for one provider. A non-nil
+// fixture fails the run until the cases exist.
+func RunGroupMapper(t *testing.T, fixture func(t *testing.T) GroupMapperFixture) {
 	t.Helper()
+
+	// Defense in depth: a fixture would pass without testing anything, so a
+	// non-nil fixture stops the run. This check stays so that a new caller
+	// cannot skip it.
+	if fixture != nil {
+		t.Fatal("RunGroupMapper is design only: its cases need an implementation first")
+	}
 
 	skipAll(t, []string{
 		"AMappedValueReturnsItsGroups",
@@ -60,9 +68,17 @@ type GroupClaimsFixture struct {
 // RunGroupClaims runs the conformance suite of a
 // principal.GroupClaimApplier. Each case names one rule and is skipped
 // until an implementation exists. A case that sends hostile input tests one
-// defense-in-depth layer alone, as if every other layer had failed.
-func RunGroupClaims(t *testing.T, _ func(t *testing.T) GroupClaimsFixture) {
+// defense-in-depth layer alone, as if every other layer had failed. A
+// non-nil fixture fails the run until the cases exist.
+func RunGroupClaims(t *testing.T, fixture func(t *testing.T) GroupClaimsFixture) {
 	t.Helper()
+
+	// Defense in depth: a fixture would pass without testing anything, so a
+	// non-nil fixture stops the run. This check stays so that a new caller
+	// cannot skip it.
+	if fixture != nil {
+		t.Fatal("RunGroupClaims is design only: its cases need an implementation first")
+	}
 
 	skipAll(t, []string{
 		"ClaimsNotPresentChangeNothing",
