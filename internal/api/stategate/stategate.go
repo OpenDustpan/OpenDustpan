@@ -1,6 +1,7 @@
 // Package stategate is the admission of a write of state at the decision
 // point state.write. Each HTTP adapter that writes state (the OpenTofu HTTP
-// backend, the TFE-compatible API and the tool-neutral inventory API) asks
+// backend, the TFE-compatible API, the Pulumi Cloud-compatible API and the
+// tool-neutral inventory API) asks
 // one Admitter before the write, and keeps only the wire encoding of the
 // answer.
 //
@@ -75,6 +76,11 @@ const (
 	PathHTTPUnlocked     WritePath = "opentofu.http.unlocked-write"
 	PathInventoryRestore WritePath = "inventory.restore"
 	PathInventoryPurge   WritePath = "inventory.purge"
+	PathPulumiImport     WritePath = "pulumi.import"
+	PathPulumiRestore    WritePath = "pulumi.restore"
+	PathPulumiRename     WritePath = "pulumi.rename"
+	PathPulumiDelete     WritePath = "pulumi.delete"
+	PathPulumiCancel     WritePath = "pulumi.cancel"
 )
 
 // The write paths that write state and that no adapter checks at state.write
@@ -82,11 +88,6 @@ const (
 const (
 	PathTFEStateVersionNoLock WritePath = "opentofu.tfe.state-version-without-lock"
 	PathPulumiUpdate          WritePath = "pulumi.update"
-	PathPulumiImport          WritePath = "pulumi.import"
-	PathPulumiRestore         WritePath = "pulumi.restore"
-	PathPulumiRename          WritePath = "pulumi.rename"
-	PathPulumiDelete          WritePath = "pulumi.delete"
-	PathPulumiCancel          WritePath = "pulumi.cancel"
 )
 
 // CheckedPaths returns the write paths that the adapters check at
@@ -97,6 +98,7 @@ func CheckedPaths() []WritePath {
 		PathTFELock, PathTFEForceUnlock, PathTFERollback, PathTFEDelete,
 		PathHTTPLock, PathHTTPForceUnlock, PathHTTPUnlocked,
 		PathInventoryRestore, PathInventoryPurge,
+		PathPulumiImport, PathPulumiRestore, PathPulumiRename, PathPulumiDelete, PathPulumiCancel,
 	}
 }
 
@@ -106,7 +108,7 @@ func CheckedPaths() []WritePath {
 func UncheckedPaths() []WritePath {
 	return []WritePath{
 		PathTFEStateVersionNoLock,
-		PathPulumiUpdate, PathPulumiImport, PathPulumiRestore, PathPulumiRename, PathPulumiDelete, PathPulumiCancel,
+		PathPulumiUpdate,
 	}
 }
 
