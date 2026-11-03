@@ -247,10 +247,11 @@ func canReplaceAccess(
 	return true
 }
 
-// restoreAuditObject names one restore for its audit entry, with whether the
-// access tables were replaced or kept.
+// restoreAuditObject names the request of one restore for its audit entry,
+// with whether the restore will replace or keep the access tables. The entry
+// records that the server accepted the request, not how the restore ends.
 func restoreAuditObject(restoreID, backupID, accessMode string) string {
-	return "restore " + restoreID + " of backup " + backupID + " (access tables " + accessMode + ")"
+	return "restore " + restoreID + " of backup " + backupID + " requested (access tables will be " + accessMode + ")"
 }
 
 // parseStartRestoreRequest decodes the start body: the whole body must be one
