@@ -322,11 +322,41 @@ func (k PublicKey) checkECDSA() error {
 		return fmt.Errorf("%w: ECDSA key that is not on P-256", ErrMalformed)
 	}
 
+	// Defense in depth: parseECDSAKey parses the point with a check of the
+	// curve too, and VerifyASN1 refuses a point that is not on the curve; this
+	// check stays so that a key that a caller builds by hand, with no
+	// coordinates, with the point at infinity or with a point off the curve,
+	// never reaches Marshal or the verifier.
+	if !pointOnCurve(k.ECDSA) {
+		return fmt.Errorf("%w: ECDSA point is not on the curve", ErrMalformed)
+	}
+
 	if len(k.Key) != 0 || k.Application != "" {
 		return fmt.Errorf("%w: Ed25519 fields on an ECDSA key", ErrMalformed)
 	}
 
 	return nil
+}
+
+// pointOnCurve reports whether pub holds a point of P-256 that is not the
+// point at infinity. Bytes encodes only such a point. A key without
+// coordinates makes Bytes panic, and the function fails closed on it: it
+// returns false.
+func pointOnCurve(pub *ecdsa.PublicKey) bool {
+	ok := false
+
+	func() {
+		defer func() {
+			if recover() != nil {
+				ok = false
+			}
+		}()
+
+		_, err := pub.Bytes()
+		ok = err == nil
+	}()
+
+	return ok
 }
 
 // Parse parses an armored signature, exactly as "ssh-keygen -Y sign"
@@ -599,9 +629,17 @@ func (s Signature) verifySK(key PublicKey, signed []byte) (Result, error) {
 func (s Signature) verifyECDSA(key PublicKey, signed []byte) (Result, error) {
 	// Defense in depth: check refuses a key without a point; this check stays
 	// so that a caller that builds a PublicKey cannot reach the verifier with
-	// no point.
+	// no point. It does not rely on check or on Marshal.
 	if key.ECDSA == nil {
 		return Result{}, fmt.Errorf("%w: ECDSA key without a point", ErrMalformed)
+	}
+
+	// Defense in depth: check refuses a point that is not on the curve; this
+	// check stays so that a caller that builds a PublicKey cannot reach the
+	// verifier with a point off the curve, with no coordinates or with the
+	// point at infinity.
+	if !pointOnCurve(key.ECDSA) {
+		return Result{}, fmt.Errorf("%w: ECDSA point is not on the curve", ErrMalformed)
 	}
 
 	br := reader{b: s.Blob, err: nil}

@@ -207,6 +207,7 @@ func TestParsePublicKeyECDSA(t *testing.T) {
 		{"a P-256 key", ecdsaWire(t, &k.PublicKey), nil},
 		{"the curve name nistp384", build(typ, []byte("nistp384"), point), sshsig.ErrMalformed},
 		{"a point of zero bytes", build(typ, curve, make([]byte, 65)), sshsig.ErrMalformed},
+		{"the point at infinity", build(typ, curve, append([]byte{0x04}, make([]byte, 64)...)), sshsig.ErrMalformed},
 		{"a compressed point", build(typ, curve, compressed), sshsig.ErrMalformed},
 		{"a point of 64 bytes", build(typ, curve, point[:64]), sshsig.ErrMalformed},
 		{"a point of one zero byte", build(typ, curve, []byte{0}), sshsig.ErrMalformed},
