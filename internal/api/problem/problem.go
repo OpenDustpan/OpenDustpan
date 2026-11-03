@@ -247,17 +247,7 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 	}
 
 	if p.Status == http.StatusInternalServerError {
-		cause := p.cause
-		if cause == "" {
-			cause = CauseUnclassified
-		}
-
-		attrs := []any{slog.Int("status", p.Status), slog.String("cause", cause)}
-		if id, ok := safeRequestID(requestid.FromContext(ctx)); ok {
-			attrs = append(attrs, slog.String("request_id", id))
-		}
-
-		wr.Logger.ErrorContext(ctx, "request failed", attrs...)
+		LogInternal(ctx, wr.Logger, "request failed", p.cause)
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -546,6 +536,68 @@ func Cause(err error) string {
 	}
 
 	return CauseUnclassified
+}
+
+// LogInternal logs one 500 at Error level with msg, the status, a cause class
+// from the closed list of Cause and the request ID when it is safe, then
+// attrs. Every adapter that answers a 500 calls it, so every 500 log line has
+// the same fields. cause is a class from the closed list; any other value,
+// and an empty one, logs CauseUnclassified, so the log never holds a part of
+// an error text. attrs must hold no error text.
+func LogInternal(ctx context.Context, logger *slog.Logger, msg, cause string, attrs ...slog.Attr) {
+	LogServer(ctx, logger, ServerLog{
+		Message: msg, Status: http.StatusInternalServerError, Cause: cause, Attrs: attrs,
+	})
+}
+
+// ServerLog is one 5xx log line. Attrs must hold no error text.
+type ServerLog struct {
+	Message string
+	Status  int
+	// Cause is a class from the closed list of Cause. Any other value, and an
+	// empty one, logs CauseUnclassified.
+	Cause string
+	Attrs []slog.Attr
+}
+
+// LogServer is LogInternal for a 5xx status other than 500, for example a 503
+// of a protocol that has its own statuses. It has the same fields.
+func LogServer(ctx context.Context, logger *slog.Logger, entry ServerLog) {
+	if !logger.Enabled(ctx, slog.LevelError) {
+		return
+	}
+
+	cause := entry.Cause
+	if !knownCause(cause) {
+		cause = CauseUnclassified
+	}
+
+	rec := slog.NewRecord(time.Now(), slog.LevelError, entry.Message, 0)
+	rec.AddAttrs(slog.Int("status", entry.Status), slog.String("cause", cause))
+
+	// Defense in depth: the root middleware makes the request ID, and this
+	// check does not rely on it. A value that is not safe is left out.
+	if id, ok := safeRequestID(requestid.FromContext(ctx)); ok {
+		rec.AddAttrs(slog.String("request_id", id))
+	}
+
+	rec.AddAttrs(entry.Attrs...)
+
+	if err := logger.Handler().Handle(ctx, rec); err != nil {
+		// The answer is already decided. The log names no text of the failure.
+		logger.WarnContext(ctx, "error log line was not written")
+	}
+}
+
+// knownCause returns true when cause is one value of the closed list.
+func knownCause(cause string) bool {
+	switch cause {
+	case CauseUnclassified, CauseDeadlineExceeded, CauseCanceled, CauseUnexpectedEOF,
+		CauseFileMissing, CauseFilePermission, CauseNetwork:
+		return true
+	default:
+		return false
+	}
 }
 
 // safeRequestID returns id and true only when id is 1 to 64 lowercase hex
