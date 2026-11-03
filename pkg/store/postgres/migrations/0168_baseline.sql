@@ -239,11 +239,12 @@ CREATE TABLE gate_objects (
     kind text NOT NULL,
     id text NOT NULL,
     level text NOT NULL,
-    tool text NOT NULL,
-    unit_name text NOT NULL,
+    unit_id text NOT NULL,
     version bigint NOT NULL,
     body text NOT NULL,
     updated_at_ms bigint NOT NULL,
+    CONSTRAINT gate_objects_check CHECK (((level = 'unit'::text) = (unit_id <> ''::text))),
+    CONSTRAINT gate_objects_check1 CHECK (((level <> 'unit'::text) OR (scope_key = ('unit/'::text || unit_id)))),
     CONSTRAINT gate_objects_kind_check CHECK ((kind = ANY (ARRAY['gate'::text, 'access-limit'::text, 'approval-rule'::text, 'ownership-rule'::text, 'path-set'::text, 'approval-default'::text, 'carry-over'::text]))),
     CONSTRAINT gate_objects_level_check CHECK ((level = ANY (ARRAY['installation'::text, 'namespace'::text, 'collection'::text, 'unit'::text]))),
     CONSTRAINT gate_objects_version_check CHECK ((version >= 1))
@@ -452,7 +453,13 @@ CREATE TABLE inventory (
     resource_count bigint,
     lock_holder text,
     lock_since_ms bigint,
-    lock_operation text
+    lock_operation text,
+    last_release_lock_id text DEFAULT ''::text NOT NULL,
+    last_release_holder text DEFAULT ''::text NOT NULL,
+    last_release_by text DEFAULT ''::text NOT NULL,
+    last_release_kind text DEFAULT ''::text NOT NULL,
+    last_release_at_ms bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT inventory_last_release_kind_check CHECK ((last_release_kind = ANY (ARRAY[''::text, 'normal'::text, 'forced'::text])))
 );
 
 CREATE TABLE inventory_change_heads (
@@ -1759,6 +1766,8 @@ CREATE INDEX durable_operations_open ON durable_operations USING btree (created_
 CREATE INDEX gate_objects_kind_id ON gate_objects USING btree (kind, id);
 
 CREATE INDEX gate_objects_namespace ON gate_objects USING btree (namespace_id, level);
+
+CREATE INDEX gate_objects_unit ON gate_objects USING btree (namespace_id, unit_id);
 
 CREATE INDEX gate_records_change ON gate_records USING btree (namespace_id, change_kind, change_id, at_ms, id);
 

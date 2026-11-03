@@ -85,7 +85,8 @@ CREATE TABLE inventory (
     display_name    TEXT NOT NULL,
     last_changed_ms INTEGER NOT NULL,
     status          TEXT NOT NULL DEFAULT '',
-    resource_count  INTEGER, lock_holder TEXT, lock_since_ms INTEGER, lock_operation TEXT,
+    resource_count  INTEGER, lock_holder TEXT, lock_since_ms INTEGER, lock_operation TEXT, last_release_lock_id TEXT NOT NULL DEFAULT '', last_release_holder TEXT NOT NULL DEFAULT '', last_release_by TEXT NOT NULL DEFAULT '', last_release_kind TEXT NOT NULL DEFAULT ''
+    CHECK (last_release_kind IN ('', 'normal', 'forced')), last_release_at_ms INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (namespace, tool, name)
 ) STRICT;
 
@@ -535,37 +536,6 @@ CREATE TABLE temp_admins (
   reason TEXT NOT NULL,
   ended_at_ms BIGINT
 , review_opened_at_ms BIGINT);
-
-CREATE TABLE gate_objects (
-    namespace_id  TEXT    NOT NULL,
-    scope_key     TEXT    NOT NULL,
-    kind          TEXT    NOT NULL,
-    id            TEXT    NOT NULL,
-    level         TEXT    NOT NULL,
-    tool          TEXT    NOT NULL,
-    unit_name     TEXT    NOT NULL,
-    version       INTEGER NOT NULL,
-    body          TEXT    NOT NULL,
-    updated_at_ms INTEGER NOT NULL,
-    PRIMARY KEY (namespace_id, scope_key, kind, id),
-    CHECK (kind IN ('gate', 'access-limit', 'approval-rule', 'ownership-rule', 'path-set',
-                    'approval-default', 'carry-over')),
-    CHECK (level IN ('installation', 'namespace', 'collection', 'unit')),
-    CHECK (version >= 1)
-) STRICT;
-
-CREATE TABLE gate_references (
-    ref_kind     TEXT NOT NULL,
-    ref_id       TEXT NOT NULL,
-    namespace_id TEXT NOT NULL,
-    scope_key    TEXT NOT NULL,
-    owner_kind   TEXT NOT NULL,
-    owner_id     TEXT NOT NULL,
-    PRIMARY KEY (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id),
-    FOREIGN KEY (namespace_id, scope_key, owner_kind, owner_id)
-        REFERENCES gate_objects (namespace_id, scope_key, kind, id) ON DELETE CASCADE,
-    CHECK (ref_kind IN ('approval-rule', 'path-set'))
-) STRICT;
 
 CREATE TABLE gate_records (
     id            TEXT    NOT NULL PRIMARY KEY,
@@ -1353,6 +1323,38 @@ CREATE TABLE name_lock_key (
     key BLOB    NOT NULL CHECK (length(key) = 32)
 ) STRICT;
 
+CREATE TABLE gate_objects (
+    namespace_id  TEXT NOT NULL,
+    scope_key     TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    id            TEXT NOT NULL,
+    level         TEXT NOT NULL,
+    unit_id       TEXT NOT NULL,
+    version       INTEGER NOT NULL,
+    body          TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (namespace_id, scope_key, kind, id),
+    CHECK (kind IN ('gate', 'access-limit', 'approval-rule', 'ownership-rule', 'path-set',
+                    'approval-default', 'carry-over')),
+    CHECK (level IN ('installation', 'namespace', 'collection', 'unit')),
+    CHECK ((level = 'unit') = (unit_id <> '')),
+    CHECK (level <> 'unit' OR scope_key = 'unit/' || unit_id),
+    CHECK (version >= 1)
+) STRICT;
+
+CREATE TABLE gate_references (
+    ref_kind     TEXT NOT NULL,
+    ref_id       TEXT NOT NULL,
+    namespace_id TEXT NOT NULL,
+    scope_key    TEXT NOT NULL,
+    owner_kind   TEXT NOT NULL,
+    owner_id     TEXT NOT NULL,
+    PRIMARY KEY (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id),
+    FOREIGN KEY (namespace_id, scope_key, owner_kind, owner_id)
+        REFERENCES gate_objects (namespace_id, scope_key, kind, id) ON DELETE CASCADE,
+    CHECK (ref_kind IN ('approval-rule', 'path-set'))
+) STRICT;
+
 CREATE UNIQUE INDEX stacks_id ON stacks (id);
 
 CREATE UNIQUE INDEX updates_one_running ON updates (stack_id)
@@ -1428,12 +1430,6 @@ CREATE INDEX object_context_owners_entry
     ON object_context_owners (namespace_id, object_kind, object_id, resource_key, source);
 
 CREATE INDEX inventory_changes_unit ON inventory_changes (namespace_id, tool, unit_id, seq, at_ms);
-
-CREATE INDEX gate_objects_kind_id ON gate_objects (kind, id);
-
-CREATE INDEX gate_objects_namespace ON gate_objects (namespace_id, level);
-
-CREATE INDEX gate_references_owner ON gate_references (namespace_id, scope_key, owner_kind, owner_id);
 
 CREATE INDEX gate_records_change ON gate_records (namespace_id, change_kind, change_id, at_ms, id);
 
@@ -1546,6 +1542,14 @@ CREATE INDEX unit_settings_namespace ON unit_settings (namespace_id);
 CREATE INDEX placement_rules_order ON placement_rules (namespace, position);
 
 CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
+
+CREATE INDEX gate_objects_kind_id ON gate_objects (kind, id);
+
+CREATE INDEX gate_objects_namespace ON gate_objects (namespace_id, level);
+
+CREATE INDEX gate_objects_unit ON gate_objects (namespace_id, unit_id);
+
+CREATE INDEX gate_references_owner ON gate_references (namespace_id, scope_key, owner_kind, owner_id);
 
 CREATE TRIGGER namespaces_id_insert BEFORE INSERT ON namespaces
 WHEN NEW.id NOT GLOB 'ns-?*'

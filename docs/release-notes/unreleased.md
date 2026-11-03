@@ -7,8 +7,8 @@ that the first release notes must hold.
 
 ### One baseline migration for each database
 
-- The 62 numbered migrations of each store dialect are now one baseline
-  migration, `0166_baseline.sql`, in `pkg/store/sqlite/migrations/` and
+- The 64 numbered migrations of each store dialect are now one baseline
+  migration, `0168_baseline.sql`, in `pkg/store/sqlite/migrations/` and
   `pkg/store/postgres/migrations/`.
 - Until the first tag, a change to the schema edits the baseline in place.
 - The server records the SHA-256 of each migration. It refuses at start a
@@ -16,8 +16,8 @@ that the first release notes must hold.
   version, and changes nothing in it. The error is
   `database schema and binary have diverged`.
 - A database from the earlier numbered migrations records a schema version
-  below 166. The server refuses it with `database schema version N is older
-  than baseline schema version 166`.
+  below 168. The server refuses it with `database schema version N is older
+  than baseline schema version 168`.
 - A backup of an earlier build does not restore.
 - What to do:
   - For `serve`, restore a backup of the same build, or set `--database` to a

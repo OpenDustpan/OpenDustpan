@@ -412,10 +412,10 @@ func CheckMinimum(minimum, binaryVersion string) error {
 // BaselineVersion is the version of the baseline migration. The baseline
 // replaced every migration before it, so a database that records a version
 // below it is from before the baseline, and no binary can upgrade it.
-const BaselineVersion int64 = 166
+const BaselineVersion int64 = 168
 
 // BaselineName is the file name of the baseline migration.
-const BaselineName = "0166_baseline.sql"
+const BaselineName = "0168_baseline.sql"
 
 // ErrSchemaBeforeBaseline reports a database that records a migration
 // version from before the baseline.

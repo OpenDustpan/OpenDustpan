@@ -302,7 +302,7 @@ The copy of the rows and blobs of one namespace in the portable format (ADR 218 
 _Avoid_: Partial backup, namespace export
 
 **Baseline migration**:
-The one migration of each dialect that replaced every migration before it, before the first tag. Until the first tag, a change to the schema edits it in place, and the store refuses a database that another version of it made. Its version is 166. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
+The one migration of each dialect that replaced every migration before it, before the first tag. Until the first tag, a change to the schema edits it in place, and the store refuses a database that another version of it made. Its version is 168. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
 _Avoid_: Squash, initial migration
 
 **Portable format**:
