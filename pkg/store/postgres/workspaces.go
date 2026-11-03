@@ -621,7 +621,20 @@ func (s *Store) FinalizeStateVersion(
 	row := codec.ToStateVersionRow(sv)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return finalizeInTx(ctx, q, sv, row)
+		return finalizeInTx(ctx, q, sv, row, nil)
+	})
+}
+
+// FinalizeStateVersionExpecting implements workspace.StateStore. It runs the
+// checks of FinalizeStateVersion and also checks, in the same transaction and
+// under the workspace row lock, that the current state version is expect.
+func (s *Store) FinalizeStateVersionExpecting(
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	row := codec.ToStateVersionRow(sv)
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		return finalizeInTx(ctx, q, sv, row, &expect)
 	})
 }
 
@@ -768,8 +781,9 @@ func finalizeFenceRow(ctx context.Context, q *db.Queries, row codec.StateVersion
 // the workspace row FOR UPDATE throughout.
 func finalizeInTx(
 	ctx context.Context, q *db.Queries, sv workspace.StateVersion, row codec.StateVersionRow,
+	expect *workspace.StateVersionID,
 ) error {
-	wrow, err := checkFinalizeGuards(ctx, q, sv, row)
+	wrow, err := checkFinalizeGuards(ctx, q, sv, row, expect)
 	if err != nil {
 		return err
 	}
@@ -781,6 +795,7 @@ func finalizeInTx(
 // finalize, returning the locked workspace row the finalize stamps.
 func checkFinalizeGuards(
 	ctx context.Context, q *db.Queries, sv workspace.StateVersion, row codec.StateVersionRow,
+	expect *workspace.StateVersionID,
 ) (db.Workspace, error) {
 	wrow, err := lockWorkspace(ctx, q, row.WorkspaceID)
 	if err != nil {
@@ -793,6 +808,12 @@ func checkFinalizeGuards(
 
 	if lockErr := checkFinalizeHolder(ctx, q, row, wrow); lockErr != nil {
 		return db.Workspace{}, lockErr
+	}
+
+	// The expected current version is read from the locked workspace row, so
+	// a write by the same holder under the same lock cannot slip in between.
+	if expect != nil && wrow.CurrentStateVersionID != expect.String() {
+		return db.Workspace{}, workspace.ErrConcurrentModification
 	}
 
 	if forcedErr := checkFinalizeForced(ctx, q, sv, wrow); forcedErr != nil {
