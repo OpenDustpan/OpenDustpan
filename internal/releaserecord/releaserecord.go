@@ -14,6 +14,7 @@ package releaserecord
 import (
 	"crypto/sha256"
 	_ "embed" // The record is embedded so that a test of any package reads the same bytes.
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -38,10 +39,17 @@ var shipped []byte
 // "not released".
 var ErrBadRecord = errors.New("the release record is not valid")
 
+// ErrMigrationFiles reports a migrations directory that the release record
+// does not allow.
+var ErrMigrationFiles = errors.New("the migration files do not follow the release record")
+
+// fieldCount is the number of fields of a line of the record.
+const fieldCount = 4
+
 // The allowlists of the four fields of a line.
 var (
-	tagPattern  = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-	filePattern = regexp.MustCompile(`^[0-9]{4}_[a-z0-9_]+\.sql$`)
+	tagPattern  = regexp.MustCompile(`^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
+	filePattern = regexp.MustCompile(`^\d{4}_[a-z0-9_]+\.sql$`)
 	sumPattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
@@ -71,7 +79,6 @@ func Parse(data []byte) (Record, error) {
 	var rec Record
 
 	seen := map[string]bool{}
-	dialectsOfTag := map[string]map[string]bool{}
 
 	for i, line := range strings.Split(string(data), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -80,53 +87,72 @@ func Parse(data []byte) (Record, error) {
 
 		entry, err := parseLine(line)
 		if err != nil {
-			return Record{}, fmt.Errorf("%w: line %d: %w", ErrBadRecord, i+1, err)
+			return Record{}, fmt.Errorf("line %d: %w", i+1, err)
 		}
 
 		key := entry.Dialect + " " + entry.File
 		if seen[key] {
-			return Record{}, fmt.Errorf("%w: line %d: %s %s is listed twice", ErrBadRecord, i+1, entry.Dialect, entry.File)
+			return Record{}, fmt.Errorf(
+				"%w: line %d: %s %s is listed twice",
+				ErrBadRecord,
+				i+1,
+				entry.Dialect,
+				entry.File,
+			)
 		}
 
 		seen[key] = true
-
-		if dialectsOfTag[entry.Tag] == nil {
-			dialectsOfTag[entry.Tag] = map[string]bool{}
-		}
-
-		dialectsOfTag[entry.Tag][entry.Dialect] = true
 		rec.entries = append(rec.entries, entry)
 	}
 
-	for tag, dialects := range dialectsOfTag {
-		for _, dialect := range Dialects() {
-			if !dialects[dialect] {
-				return Record{}, fmt.Errorf("%w: tag %s lists no %s migration", ErrBadRecord, tag, dialect)
-			}
-		}
+	if err := checkEachDialect(rec.entries); err != nil {
+		return Record{}, err
 	}
 
 	return rec, nil
 }
 
+// checkEachDialect refuses a tag that does not list a file of each dialect.
+func checkEachDialect(entries []Entry) error {
+	dialectsOfTag := map[string]map[string]bool{}
+
+	for _, entry := range entries {
+		if dialectsOfTag[entry.Tag] == nil {
+			dialectsOfTag[entry.Tag] = map[string]bool{}
+		}
+
+		dialectsOfTag[entry.Tag][entry.Dialect] = true
+	}
+
+	for tag, dialects := range dialectsOfTag {
+		for _, dialect := range Dialects() {
+			if !dialects[dialect] {
+				return fmt.Errorf("%w: tag %s lists no %s migration", ErrBadRecord, tag, dialect)
+			}
+		}
+	}
+
+	return nil
+}
+
 // parseLine reads one line of four fields, each checked by its allowlist.
 func parseLine(line string) (Entry, error) {
 	fields := strings.Split(line, " ")
-	if len(fields) != 4 {
-		return Entry{}, errors.New("want 4 fields separated by one space")
+	if len(fields) != fieldCount {
+		return Entry{}, fmt.Errorf("%w: want %d fields separated by one space", ErrBadRecord, fieldCount)
 	}
 
 	entry := Entry{Tag: fields[0], Dialect: fields[1], File: fields[2], SHA256: fields[3]}
 
 	switch {
 	case !tagPattern.MatchString(entry.Tag):
-		return Entry{}, fmt.Errorf("tag %q is not vMAJOR.MINOR.PATCH", entry.Tag)
+		return Entry{}, fmt.Errorf("%w: tag %q is not vMAJOR.MINOR.PATCH", ErrBadRecord, entry.Tag)
 	case !slices.Contains(Dialects(), entry.Dialect):
-		return Entry{}, fmt.Errorf("dialect %q is not one of %v", entry.Dialect, Dialects())
+		return Entry{}, fmt.Errorf("%w: dialect %q is not one of %v", ErrBadRecord, entry.Dialect, Dialects())
 	case !filePattern.MatchString(entry.File):
-		return Entry{}, fmt.Errorf("file %q is not NNNN_name.sql", entry.File)
+		return Entry{}, fmt.Errorf("%w: file %q is not NNNN_name.sql", ErrBadRecord, entry.File)
 	case !sumPattern.MatchString(entry.SHA256):
-		return Entry{}, fmt.Errorf("sha256 %q is not 64 lowercase hex digits", entry.SHA256)
+		return Entry{}, fmt.Errorf("%w: sha256 %q is not 64 lowercase hex digits", ErrBadRecord, entry.SHA256)
 	}
 
 	return entry, nil
@@ -181,8 +207,9 @@ func (r Record) MigrationFiles(dialect, baseline string, files map[string]string
 	if !r.Released() {
 		if len(names) != 1 || names[0] != baseline {
 			return []error{fmt.Errorf(
-				"%s migration files = %v, want [%s]: until the first tag, edit %s and add no numbered migration",
-				dialect, names, baseline, baseline)}
+				"%w: %s migration files = %v, want [%s]: until the first tag, edit %s and add no numbered migration",
+				ErrMigrationFiles, dialect, names, baseline, baseline,
+			)}
 		}
 
 		return nil
@@ -200,18 +227,20 @@ func (r Record) MigrationFiles(dialect, baseline string, files map[string]string
 		sql, ok := files[entry.File]
 		if !ok {
 			problems = append(problems, fmt.Errorf(
-				"%s migration %s shipped in %s and is missing: never remove a shipped migration",
-				dialect, entry.File, entry.Tag))
+				"%w: %s migration %s shipped in %s and is missing: never remove a shipped migration",
+				ErrMigrationFiles, dialect, entry.File, entry.Tag,
+			))
 
 			continue
 		}
 
 		digest := sha256.Sum256([]byte(sql))
-		if got := fmt.Sprintf("%x", digest); got != entry.SHA256 {
+		if got := hex.EncodeToString(digest[:]); got != entry.SHA256 {
 			problems = append(problems, fmt.Errorf(
-				"%s migration %s shipped in %s with SHA-256 %s and now has %s: "+
+				"%w: %s migration %s shipped in %s with SHA-256 %s and now has %s: "+
 					"never edit a shipped migration; add a new numbered file",
-				dialect, entry.File, entry.Tag, entry.SHA256, got))
+				ErrMigrationFiles, dialect, entry.File, entry.Tag, entry.SHA256, got,
+			))
 		}
 	}
 
@@ -222,8 +251,9 @@ func (r Record) MigrationFiles(dialect, baseline string, files map[string]string
 
 		if fileVersion(name) <= highest {
 			problems = append(problems, fmt.Errorf(
-				"%s migration %s is not above the shipped migrations: number a new file above %04d",
-				dialect, name, highest))
+				"%w: %s migration %s is not above the shipped migrations: number a new file above %04d",
+				ErrMigrationFiles, dialect, name, highest,
+			))
 		}
 	}
 
