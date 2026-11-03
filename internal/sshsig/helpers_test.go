@@ -77,7 +77,7 @@ func newKey(t *testing.T, keyType string) testKey {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	k := sshsig.PublicKey{Type: keyType, Key: pub, Application: ""}
+	k := sshsig.PublicKey{Type: keyType, Key: pub, Application: "", ECDSA: nil}
 	if keyType == sshsig.TypeSKEd25519 {
 		k.Application = "ssh:"
 	}
