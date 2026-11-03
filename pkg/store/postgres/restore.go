@@ -121,7 +121,8 @@ type swapPlan struct {
 	// keepAccess keeps the current rows of the access tables.
 	keepAccess bool
 	// before runs in the swap transaction after the swap lock and before
-	// the first change: the check of the installation state.
+	// the first change: the first check of the step fence, with no lock on
+	// the row of the operation, and the check of the installation state.
 	before func(tx pgx.Tx) error
 	// after runs at the end of the swap transaction, after the copy of the
 	// durable control tables, with the result of the swap: the check of the

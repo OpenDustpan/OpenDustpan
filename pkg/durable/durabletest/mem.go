@@ -70,10 +70,19 @@ func (m *Mem) StartClaimedWith(
 	op, created, err := d.start(req, now)
 
 	if err == nil && created {
-		d.take(d.ops[op.ID], durable.ClaimRequest{
-			Owner: claim.Owner, Kinds: []durable.Kind{req.Kind}, MaxVersions: nil, Lease: claim.Lease,
-			TakeCanceled: false,
-		}, now)
+		started := d.ops[op.ID]
+		if started == nil {
+			// The start stored the operation under its ID, so this is a
+			// fault of the store in memory.
+			err = fmt.Errorf("started operation %s: %w", op.ID, durable.ErrNotFound)
+		} else {
+			d.take(started, durable.ClaimRequest{
+				Owner: claim.Owner, Kinds: []durable.Kind{req.Kind}, MaxVersions: nil, Lease: claim.Lease,
+				TakeCanceled: false,
+			}, now)
+
+			op = copyOp(started)
+		}
 	}
 
 	// The domain write runs also for a key that exists, as StartWith does,
@@ -92,7 +101,7 @@ func (m *Mem) StartClaimedWith(
 		return durable.Operation{}, err
 	}
 
-	return copyOp(d.ops[op.ID]), nil
+	return op, nil
 }
 
 // errUnknownState reports an operation state that memDB does not know.
