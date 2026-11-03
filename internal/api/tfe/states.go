@@ -444,37 +444,14 @@ func (h *Handler) restoreStateVersion(
 		return
 	}
 
-	check := stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback, state: nil, stateErr: nil}
-
-	// With the gates off no gate reads a fact, so the server reads no state
-	// and the restore checks no current version. With the gates on, the
-	// facts come from the current state and the restored state, and the
-	// restore writes only if the current version is still the one the facts
-	// came from.
-	expect := workspace.StateVersionID("")
-
-	if h.admit.Effective().Mode != stategate.ModeOff {
-		check.state, check.stateErr = h.rollbackState(ctx, src.Workspace, from)
-		if check.state != nil {
-			expect = workspace.StateVersionID(check.state.Current)
-		}
-	}
-
-	if !h.guardStateWrite(w, r, p, obj, check) {
+	expect, ok := h.guardRestore(w, r, p, obj, src)
+	if !ok {
 		return
 	}
 
 	restored, err := h.restoreVersion(ctx, src.Workspace, from, p.Subject, expect)
 	if err != nil {
-		if expect != "" && errors.Is(err, workspace.ErrConcurrentModification) {
-			// The state changed between the gate decision and the write.
-			// The decision used facts of a state that is no longer current,
-			// so the write is refused and the refusal is in the audit log.
-			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: check.action, Object: obj, Window: 0,
-				Reason: "state.write refused: the current state version changed after the gate decision",
-			})
-		}
+		h.recordChangedRestore(r, p, obj, expect, err)
 
 		if errors.Is(err, workspace.ErrLockedByOther) {
 			holder := h.refusingHolder(ctx, src.Workspace, err)
@@ -838,4 +815,41 @@ func (h *Handler) restoreVersion(
 	}
 
 	return h.workspaces.RestoreExpecting(ctx, id, from, holder, expect)
+}
+
+// guardRestore asks the state guard about the restore of the version from. It
+// returns the current version that the facts came from, which the restore must
+// still find, and true when the restore may go on. With the gates off no gate
+// reads a fact, so the server reads no state and the expected version is empty.
+func (h *Handler) guardRestore(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+	src workspace.StateVersion,
+) (workspace.StateVersionID, bool) {
+	check := newStateCheck(identity.ActionUnitWrite, gate.OperationRollback)
+	expect := workspace.StateVersionID("")
+
+	if h.admit.Effective().Mode != stategate.ModeOff {
+		check.state, check.stateErr = h.rollbackState(r.Context(), src.Workspace, src.ID)
+		if check.state != nil {
+			expect = workspace.StateVersionID(check.state.Current)
+		}
+	}
+
+	return expect, h.guardStateWrite(w, r, p, obj, check)
+}
+
+// recordChangedRestore writes the denied audit entry of a restore that found
+// another current version than the one the gate decision used. The decision
+// used facts of a state that is no longer current, so the write is refused.
+func (h *Handler) recordChangedRestore(
+	r *http.Request, p identity.Principal, obj identity.Object, expect workspace.StateVersionID, err error,
+) {
+	if expect == "" || !errors.Is(err, workspace.ErrConcurrentModification) {
+		return
+	}
+
+	h.guard.Record(r.Context(), r, p, refusal.Denial{
+		Action: identity.ActionUnitWrite, Object: obj, Window: 0,
+		Reason: "state.write refused: the current state version changed after the gate decision",
+	})
 }

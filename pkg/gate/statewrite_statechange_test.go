@@ -24,7 +24,11 @@ func rollbackWrite(t *testing.T, sc *gate.StateChange) gate.StateWrite {
 }
 
 func okChange() *gate.StateChange {
-	return &gate.StateChange{Current: "sv-current", Resources: 3, Removed: []string{"aws_s3_bucket.data", "aws_iam_role.app"}}
+	return &gate.StateChange{
+		Current:   "sv-current",
+		Resources: 3,
+		Removed:   []string{"aws_s3_bucket.data", "aws_iam_role.app"},
+	}
 }
 
 // TestStateFactsAreFilledFromTheStateChange proves that each state fact comes
@@ -98,18 +102,31 @@ func TestStateFactsAreFilledFromTheStateChange(t *testing.T) {
 				t.Fatalf("error = %q, want the facts %q in the message", err, tc.message)
 			}
 
-			rec := e.newestRecord(t)
-			got := rec.Units[0].Facts.State
-
-			if got.Available != tc.wantFacts.Available || got.Resources != tc.wantFacts.Resources ||
-				!slices.Equal(got.Removed, tc.wantFacts.Removed) {
-				t.Fatalf("record facts state = %+v, want %+v", got, tc.wantFacts)
-			}
-
-			if len(rec.Units[0].Gates) != 1 || rec.Units[0].Gates[0].Matched != tc.wantRefuse {
-				t.Fatalf("record gates = %+v, want one gate with matched %v", rec.Units[0].Gates, tc.wantRefuse)
-			}
+			checkStateRecord(t, e.newestRecord(t), stateExpect{facts: tc.wantFacts, matched: tc.wantRefuse})
 		})
+	}
+}
+
+// stateExpect is what a decision record must hold: the state facts and whether
+// its one gate matched.
+type stateExpect struct {
+	facts   gate.StateFacts
+	matched bool
+}
+
+// checkStateRecord checks that the decision record names the state facts that
+// the gate read, and that its one gate matched as wantMatched says.
+func checkStateRecord(t *testing.T, rec gate.Record, want stateExpect) {
+	t.Helper()
+
+	got := rec.Units[0].Facts.State
+	if got.Available != want.facts.Available || got.Resources != want.facts.Resources ||
+		!slices.Equal(got.Removed, want.facts.Removed) {
+		t.Fatalf("record facts state = %+v, want %+v", got, want.facts)
+	}
+
+	if len(rec.Units[0].Gates) != 1 || rec.Units[0].Gates[0].Matched != want.matched {
+		t.Fatalf("record gates = %+v, want one gate with matched %v", rec.Units[0].Gates, want.matched)
 	}
 }
 
@@ -185,26 +202,44 @@ func TestStateChangeHostileInputIsRefused(t *testing.T) {
 	}{
 		{"a lock never holds a state change", gate.OperationLock, okChange(), gate.ErrInvalid},
 		{"an unlock never holds a state change", gate.OperationUnlock, okChange(), gate.ErrInvalid},
-		{"no current version", gate.OperationRollback,
-			&gate.StateChange{Current: "", Resources: 1, Removed: nil}, gate.ErrInvalid},
-		{"a current version with a newline", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1\nx", Resources: 1, Removed: nil}, gate.ErrInvalid},
-		{"a negative resource count", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: -1, Removed: nil}, gate.ErrInvalid},
-		{"an empty address", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{""}}, gate.ErrInvalid},
-		{"an address with CR and LF", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{"a.b\r\nforged"}}, gate.ErrInvalid},
-		{"an address that is not UTF-8", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{"a\xff.b"}}, gate.ErrInvalid},
-		{"too many addresses", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: many}, gate.ErrLimit},
-		{"an address above its limit", gate.OperationRollback,
+		{
+			"no current version", gate.OperationRollback,
+			&gate.StateChange{Current: "", Resources: 1, Removed: nil}, gate.ErrInvalid,
+		},
+		{
+			"a current version with a newline", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1\nx", Resources: 1, Removed: nil}, gate.ErrInvalid,
+		},
+		{
+			"a negative resource count", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: -1, Removed: nil}, gate.ErrInvalid,
+		},
+		{
+			"an empty address", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{""}}, gate.ErrInvalid,
+		},
+		{
+			"an address with CR and LF", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{"a.b\r\nforged"}}, gate.ErrInvalid,
+		},
+		{
+			"an address that is not UTF-8", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: []string{"a\xff.b"}}, gate.ErrInvalid,
+		},
+		{
+			"too many addresses", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: many}, gate.ErrLimit,
+		},
+		{
+			"an address above its limit", gate.OperationRollback,
 			&gate.StateChange{
 				Current: "sv-1", Resources: 1, Removed: []string{strings.Repeat("a", gate.MaxAddressBytes+1)},
-			}, gate.ErrLimit},
-		{"addresses above the total limit", gate.OperationRollback,
-			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: big}, gate.ErrLimit},
+			}, gate.ErrLimit,
+		},
+		{
+			"addresses above the total limit", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 1, Removed: big}, gate.ErrLimit,
+		},
 	}
 
 	for _, tc := range tests {

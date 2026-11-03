@@ -24,6 +24,11 @@ type stateCheck struct {
 	stateErr error
 }
 
+// newStateCheck returns the check of a write that holds no state change.
+func newStateCheck(action identity.Action, op gate.OperationKind) stateCheck {
+	return stateCheck{action: action, op: op, state: nil, stateErr: nil}
+}
+
 // guardStateWrite asks the state guard before the write of the route. It
 // returns true when the write may go on. When it returns false, the answer is
 // written: a refusal of a gate or an access limit answers 403 as a JSON:API

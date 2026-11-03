@@ -108,7 +108,7 @@ func jobWrite(t *testing.T, unit string, passedApply, planLock bool) gate.Change
 		},
 		Author: "alice", Operation: gate.OperationLock, Units: []identity.Object{unitObject(t, unit)},
 		Holders: nil, PlanLock: planLock, BreakGlass: "",
-		Fence: namespace.Fence{Namespace: "acme", FailoverVersion: 1},
+		Fence: namespace.Fence{Namespace: "acme", FailoverVersion: 1}, State: nil,
 	}
 }
 

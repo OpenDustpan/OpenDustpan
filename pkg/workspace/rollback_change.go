@@ -126,5 +126,5 @@ func (s *Service) RestoreExpecting(
 		return StateVersion{}, fmt.Errorf("%w: restore %s without the expected current version", ErrInvalidState, id)
 	}
 
-	return s.restore(ctx, id, from, holder, &expectCurrent)
+	return s.restoreChecked(ctx, id, from, holder, &expectCurrent)
 }

@@ -844,7 +844,11 @@ func (stubWorkspaces) ReadRollbackChange(
 // RestoreExpecting restores as Restore does, and fails when expectCurrent is
 // not the current version of the stub.
 func (stubWorkspaces) RestoreExpecting(
-	ctx context.Context, id workspace.ID, from workspace.StateVersionID, by string, expectCurrent workspace.StateVersionID,
+	ctx context.Context,
+	id workspace.ID,
+	from workspace.StateVersionID,
+	by string,
+	expectCurrent workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
 	cur, err := stubWorkspaces{}.Current(ctx, id)
 	if err != nil {
