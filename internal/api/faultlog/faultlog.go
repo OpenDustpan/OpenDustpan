@@ -26,6 +26,7 @@ const (
 	CauseCanceled         = "canceled"
 	CauseNetwork          = "network"
 	CauseUnexpectedEOF    = "unexpected_eof"
+	CauseEOF              = "eof"
 	CauseFileMissing      = "file_missing"
 	CauseFilePermission   = "file_permission"
 	CauseUnclassified     = "unclassified"
@@ -134,8 +135,12 @@ func Cause(err error) string {
 		return CauseDeadlineExceeded
 	case errors.Is(err, context.Canceled):
 		return CauseCanceled
-	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+	// The order is part of the contract: a joined error can hold both io.EOF and
+	// io.ErrUnexpectedEOF, and it must return the unexpected class.
+	case errors.Is(err, io.ErrUnexpectedEOF):
 		return CauseUnexpectedEOF
+	case errors.Is(err, io.EOF):
+		return CauseEOF
 	case errors.Is(err, fs.ErrNotExist):
 		return CauseFileMissing
 	case errors.Is(err, fs.ErrPermission):
@@ -156,7 +161,7 @@ func Cause(err error) string {
 func knownCause(cause string) bool {
 	switch cause {
 	case CauseUnclassified, CauseDeadlineExceeded, CauseCanceled, CauseUnexpectedEOF,
-		CauseFileMissing, CauseFilePermission, CauseNetwork:
+		CauseEOF, CauseFileMissing, CauseFilePermission, CauseNetwork:
 		return true
 	default:
 		return false
