@@ -7,6 +7,7 @@ Changed by:
 - ADR 325 changes decision 1: the test of the one baseline becomes `TestMigrationFilesFollowTheRecord`, with a second form after the first tag.
 - ADR 325 changes decision 5: the disabled checks skip only while the release record lists no shipped migration file.
 - ADR 325 changes decision 6: the release record turns the checks on, and the collapse script refuses from the record.
+- ADR 326 extends decision 1: the name-order placement rule applies to the `queries.sql` file of each dialect too.
 
 Changes:
 
