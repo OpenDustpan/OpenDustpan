@@ -206,7 +206,11 @@ func TestEachGuardAsksTheRecord(t *testing.T) {
 
 			for _, stmt := range body.List {
 				if isSkip(stmt) {
-					t.Errorf("%s in %s skips with no condition: skip only on the reason of the release record", g.fn, g.file)
+					t.Errorf(
+						"%s in %s skips with no condition: skip only on the reason of the release record",
+						g.fn,
+						g.file,
+					)
 				}
 			}
 
@@ -325,10 +329,7 @@ func isSkip(stmt ast.Stmt) bool {
 func TestRegenerateBaselineFollowsTheRecord(t *testing.T) {
 	t.Parallel()
 
-	script, err := filepath.Abs("../../scripts/regenerate-baseline.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
+	script := readScript(t)
 
 	sum := sumOf("base")
 	shippedLines := "v0.1.0 sqlite " + baseline + " " + sum + "\nv0.1.0 postgres " + baseline + " " + sum + "\n"
@@ -336,85 +337,126 @@ func TestRegenerateBaselineFollowsTheRecord(t *testing.T) {
 	tests := []struct {
 		name   string
 		record *string
-		tag    bool
+		setup  func(t *testing.T, dir string)
 		want   string
 	}{
-		{"not released", ptr("# comments only\n"), false, "set DUSTPAN_TEST_POSTGRES_URL"},
-		{"released", ptr("# a comment\n" + shippedLines), false, "lists a shipped migration"},
-		{"no record", nil, false, "is missing"},
-		{"a tag without record lines", ptr("# comments only\n"), true, "has a release tag"},
+		{"not released", new("# comments only\n"), nil, "set DUSTPAN_TEST_POSTGRES_URL"},
+		{"released", new("# a comment\n" + shippedLines), nil, "lists a shipped migration"},
+		{"no record", nil, nil, "is missing"},
+		{"a tag without record lines", new("# comments only\n"), addTag, "has a release tag"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			dir := newRepository(t, tt.record, tt.tag)
+			dir := newRepository(t, tt.record)
+			if tt.setup != nil {
+				tt.setup(t, dir)
+			}
 
-			cmd := exec.CommandContext(t.Context(), "bash", script)
-			cmd.Dir = dir
-			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1"}
+			// The script goes in on standard input, so that the command
+			// line holds no variable.
+			cmd := exec.CommandContext(t.Context(), "bash", "-s")
+			cmd.Stdin = strings.NewReader(script)
 
-			out, err := cmd.CombinedOutput()
+			out, err := run(cmd, dir)
 			if err == nil {
 				t.Fatalf("the script passed, want a refusal:\n%s", out)
 			}
 
-			if !strings.Contains(string(out), tt.want) {
+			if !strings.Contains(out, tt.want) {
 				t.Errorf("the script said:\n%s\nwant %q", out, tt.want)
 			}
 		})
 	}
 }
 
-func ptr(s string) *string {
-	return &s
+// readScript returns the text of scripts/regenerate-baseline.sh.
+func readScript(t *testing.T) string {
+	t.Helper()
+
+	root, err := os.OpenRoot("../../scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer closeRoot(t, root)
+
+	data, err := root.ReadFile("regenerate-baseline.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(data)
 }
 
-// newRepository makes a Git repository with the record, when record is not
-// nil, and a release tag, when tag is true.
-func newRepository(t *testing.T, record *string, tag bool) string {
+// newRepository makes a Git repository that holds the record, when record is
+// not nil.
+func newRepository(t *testing.T, record *string) string {
 	t.Helper()
 
 	dir := t.TempDir()
 
-	git(t, dir, "init", "--quiet")
-
-	if record != nil {
-		root, err := os.OpenRoot(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		defer root.Close()
-
-		if err := root.MkdirAll("internal/releaserecord", 0o700); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := root.WriteFile(releaserecord.Path, []byte(*record), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if out, err := run(exec.CommandContext(t.Context(), "git", "init", "--quiet"), dir); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
 	}
 
-	if tag {
-		git(t, dir, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
-			"commit", "--quiet", "--allow-empty", "-m", "first")
-		git(t, dir, "-c", "tag.gpgsign=false", "tag", "v0.1.0")
+	if record == nil {
+		return dir
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer closeRoot(t, root)
+
+	if err := root.MkdirAll("internal/releaserecord", 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := root.WriteFile(releaserecord.Path, []byte(*record), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	return dir
 }
 
-// git runs git in dir with no system or user configuration.
-func git(t *testing.T, dir string, args ...string) {
+// addTag commits nothing and tags the commit v0.1.0.
+func addTag(t *testing.T, dir string) {
 	t.Helper()
 
-	cmd := exec.CommandContext(t.Context(), "git", args...)
+	commit := exec.CommandContext(t.Context(), "git",
+		"-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+		"commit", "--quiet", "--allow-empty", "-m", "first")
+	if out, err := run(commit, dir); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	tag := exec.CommandContext(t.Context(), "git", "-c", "tag.gpgsign=false", "tag", "v0.1.0")
+	if out, err := run(tag, dir); err != nil {
+		t.Fatalf("git tag: %v\n%s", err, out)
+	}
+}
+
+// run runs cmd in dir with no system or user Git configuration and no other
+// variable than PATH, and returns its combined output.
+func run(cmd *exec.Cmd, dir string) (string, error) {
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1"}
 
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
+	out, err := cmd.CombinedOutput()
+
+	return string(out), err
+}
+
+// closeRoot closes root and fails t on an error.
+func closeRoot(t *testing.T, root *os.Root) {
+	t.Helper()
+
+	if err := root.Close(); err != nil {
+		t.Error(err)
 	}
 }
