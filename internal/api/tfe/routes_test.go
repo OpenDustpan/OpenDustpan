@@ -838,7 +838,7 @@ func (stubWorkspaces) ReadRollbackChange(
 		return workspace.RollbackChange{}, err
 	}
 
-	return workspace.RollbackChange{Current: cur.ID, Resources: 1, Removed: []string{}}, nil
+	return workspace.RollbackChange{Current: cur.ID, Resources: 1, Removed: []string{}, Encrypted: false}, nil
 }
 
 // RestoreExpecting restores as Restore does, and fails when expectCurrent is

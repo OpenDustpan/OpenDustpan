@@ -569,7 +569,7 @@ func TestStateWriteCarriesTheStateChange(t *testing.T) {
 	t.Parallel()
 
 	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
-	w.State = &gate.StateChange{Current: "sv-1", Resources: 2, Removed: []string{"a.b"}}
+	w.State = &gate.StateChange{Current: "sv-1", Resources: 2, Removed: []string{"a.b"}, Unavailable: ""}
 
 	if got := stategate.StateWrite(w); got.State != w.State {
 		t.Fatalf("StateWrite().State = %+v, want %+v", got.State, w.State)

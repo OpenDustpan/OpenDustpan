@@ -93,6 +93,7 @@ never matches. The condition does not fail and the server does not warn.
 | Write | `state.available` | `state.resources` and `state.removed` |
 | --- | --- | --- |
 | The restore of a state version (`rollback`, TFE-compatible API) | `true` | Filled from the current state and from the state version that the restore brings back |
+| The restore of a state version when the client encrypted the current state or the restored state | `false` | Zero value: the server cannot read the resources of an encrypted state. The decision record warns: `state.* facts are not available: state is client-encrypted`. The restore goes on under the gates that apply |
 | The restore of a deleted unit (`rollback`, tool-neutral API) | `false` | Zero value: a deleted unit has no current state |
 | The lock of a workspace (`lock`) | `false` | Zero value: the new state does not exist yet |
 | A force-unlock (`unlock`) | `false` | Zero value |
@@ -109,11 +110,14 @@ another version became current after the gate decision, the server refuses the
 restore with `409` and the code `workspace.changed-concurrently`, and writes a
 denied audit entry. Repeat the restore to decide again.
 
-The server refuses a restore when it cannot read one of the two states: the
-store fails, the client encrypted the state, or the state holds a resource
-entry that the server cannot read. The refusal has the code `gate.unavailable`
-and a denied audit entry. No gate sees an empty fact for such a state. A server
-that runs with the gates off reads no state for a restore.
+A state that the client encrypted is a known condition, not an error: the
+restore goes on, `context.state.available` is `false`, and the warning above is
+in the decision record. The server refuses a restore when it cannot read one of
+the two states for another reason: the store fails, the state holds a resource
+entry that the server cannot read, or the state is above the size limit. The
+refusal has the code `gate.unavailable` and a denied audit entry. No gate sees
+an empty fact for such a state. A server that runs with the gates off reads no
+state for a restore.
 
 The decision record of a restore holds `state.available`, `state.resources` and
 `state.removed` under the facts of the unit, so a person can see which facts a

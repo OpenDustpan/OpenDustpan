@@ -22,6 +22,11 @@ type RollbackChange struct {
 	// Removed holds the addresses that the current state holds and the
 	// restored state does not hold, sorted. An address has no instance key.
 	Removed []string
+	// Encrypted is true when the client encrypted the current state or the
+	// restored state. The server cannot read the resources of such a state,
+	// so Resources and Removed hold no value. This is a known condition and
+	// not an error: Current is set, so the restore still checks it.
+	Encrypted bool
 }
 
 // ReadRollbackChange reads the change that a restore of the finalized state
@@ -30,7 +35,8 @@ type RollbackChange struct {
 // are the only source of the change, so a state that the server cannot read
 // gives an error and no partial change. A version of another workspace fails
 // with ErrStateVersionNotFound as if it did not exist. A state that the client
-// encrypted fails with ErrClientEncrypted. A workspace with no current state
+// encrypted is a known condition: the read gives Encrypted true and no
+// resource data. A workspace with no current state
 // fails with ErrNoState. A state that holds a resource entry the server cannot
 // read fails with ErrInvalidState, because the count would be too low.
 func (s *Service) ReadRollbackChange(ctx context.Context, id ID, to StateVersionID) (RollbackChange, error) {
@@ -56,6 +62,15 @@ func (s *Service) ReadRollbackChange(ctx context.Context, id ID, to StateVersion
 		return RollbackChange{}, err
 	}
 
+	encrypted, err := eitherEncrypted(next, cur)
+	if err != nil {
+		return RollbackChange{}, fmt.Errorf("read the state of %s: %w", id, err)
+	}
+
+	if encrypted {
+		return RollbackChange{Current: current.ID, Resources: 0, Removed: nil, Encrypted: true}, nil
+	}
+
 	nextAddresses, err := stateAddresses(next, to)
 	if err != nil {
 		return RollbackChange{}, err
@@ -76,7 +91,26 @@ func (s *Service) ReadRollbackChange(ctx context.Context, id ID, to StateVersion
 
 	slices.Sort(removed)
 
-	return RollbackChange{Current: current.ID, Resources: int64(len(nextAddresses)), Removed: removed}, nil
+	return RollbackChange{
+		Current: current.ID, Resources: int64(len(nextAddresses)), Removed: removed, Encrypted: false,
+	}, nil
+}
+
+// eitherEncrypted reports whether the client encrypted one of the two states.
+// A document that is not a JSON state is an error.
+func eitherEncrypted(states ...[]byte) (bool, error) {
+	for _, st := range states {
+		enc, err := IsClientEncrypted(st)
+		if err != nil {
+			return false, fmt.Errorf("%w: %w", ErrInvalidState, err)
+		}
+
+		if enc {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // stateAddresses returns the resource addresses of a state, without
