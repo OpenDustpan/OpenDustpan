@@ -285,6 +285,27 @@ type Store interface {
 	Orphans(ctx context.Context, limit int) ([]Orphan, error)
 }
 
+// FinalVersion is the last final state version of one unit, as
+// Store.ObserveStateVersion recorded it.
+type FinalVersion struct {
+	UnitID    string
+	VersionID string
+	Commit    string
+	Job       ID
+	At        time.Time
+}
+
+// FinalVersionReader reads the last final state version of a unit. It is a
+// separate port, so that other implementations of Store stay valid, as for
+// FreezeStore.
+type FinalVersionReader interface {
+	// FinalVersion returns the last final state version of the unit unitID
+	// in ns. It returns false and no error when the store recorded no final
+	// version for the unit in ns. It returns an error that wraps ErrInvalid
+	// for an empty ns or an empty unitID. It changes nothing.
+	FinalVersion(ctx context.Context, ns namespace.Name, unitID string) (FinalVersion, bool, error)
+}
+
 // Orphan is a job that Store.Orphans returns. Missing is true when the
 // operation of its current phase does not exist, and false when it ended.
 type Orphan struct {
