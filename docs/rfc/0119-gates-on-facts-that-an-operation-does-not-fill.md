@@ -17,11 +17,30 @@ gate such as `context.state.removed.contains("aws_s3_bucket.data")` never
 matched, and nothing showed that.
 
 The change that closes the issue fills `state.resources` and `state.removed`
-for the restore of a state version (operation kind `rollback` on the
-TFE-compatible API). This is the only write where the server holds both the
-current state and the new state (ADR 224, "Facts with no plan"). For each
-other operation, `state.available` is `false`, `state.resources` is `0` and
-`state.removed` is the empty list.
+for one write: the restore of a state version (operation kind `rollback` on
+the TFE-compatible API). It is the only write that this change fills. It is not
+the only write where the server holds a new state:
+
+- An `unlocked-write` on the OpenTofu HTTP backend has the full new state in
+  its body before the gate runs.
+- A Pulumi stack import and a Pulumi restore also hold a new state. They are
+  not guarded at `state.write` yet.
+
+These stay unfilled for now. The reasons: the lock is the point of the gate for
+OpenTofu, and at the lock no new state exists; the unlocked write would need
+the server to parse a body before the write, which is a new read path with its
+own limits; and the Pulumi writes are not guarded yet. The owner may weigh
+each of them.
+
+ADR 224 decision 16 says the `state` group has facts "for a tool-neutral
+operation, where the server holds both the current and the new state". This
+change reads that sentence for an operation where the server holds both
+states, and the restore of a state version is such an operation. The
+tool-neutral restore of a deleted unit has no current state, so it has nothing
+to remove. This is a reading of the ADR and not a change of it. The owner may
+decide that the sentence means another path. For each other operation,
+`state.available` is `false`, `state.resources` is `0` and `state.removed` is
+the empty list.
 
 So the silent fallback still exists for those operations. A gate with the
 condition `context.state.removed.contains("x")` is valid at `state.write`.
@@ -43,7 +62,12 @@ gate.
   where `state.*` is not available. The restore goes on, and the decision
   record warns with the reason "state is client-encrypted". The server does not
   add the reason to the fact document, because a new fact field is a new
-  schema version (ADR 226).
+  schema version (ADR 226). The server reads a state as encrypted only when it
+  is exactly the OpenTofu envelope; any other document with the member
+  `encrypted_data` is refused as not valid.
+- `state.resources` and `state.removed` count resource instances and name
+  instance addresses, for example `web[1]`, because a removed instance is a
+  removed object.
 - The guide `docs/guides/state-write-gates.md` lists, for each operation, which
   facts the server fills.
 - A gate evaluates a fact that is not available as the zero value, as ADR 226
