@@ -6,6 +6,10 @@ Changed by:
 
 - ADR 252 changes decision 12: who the session of the dev link belongs to.
 - ADR 285 changes decision 3: the flag --demo of dev.
+- ADR 324 extends decision 8: `opendustpan dev reset` moves the data of a dev
+  database aside.
+- ADR 324 extends decision 30: the refusal of another schema names the step
+  that helps.
 
 ## Context
 

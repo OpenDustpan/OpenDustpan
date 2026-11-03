@@ -299,7 +299,7 @@ type Summary struct {
 // backup with a lower schema version cannot be restored by any binary. It
 // equals schema.BaselineVersion of the store package, which this package
 // cannot import; a test pins the two.
-const BaselineSchemaVersion = 100
+const BaselineSchemaVersion = 168
 
 // EndedWithoutFinishText is the error text of a backup row that
 // Registry.FailEndedBackups marks failed when its operation holds no error

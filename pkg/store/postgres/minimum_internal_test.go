@@ -27,6 +27,7 @@ func TestContractMigrationRaisesMinimum(t *testing.T) {
 		Name:             "9999_contract.sql",
 		SQL:              "SELECT 1",
 		MinBinaryVersion: "v0.5.0",
+		SHA256:           "",
 		Version:          9999,
 	}
 

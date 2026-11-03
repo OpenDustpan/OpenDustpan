@@ -8,7 +8,9 @@
 # in both dialects, and at least 100. So a database from an untagged build
 # records versions that the new binary does not embed, and the server
 # refuses it. The script also sets the baseline constants of the Go code to
-# the new version.
+# the new version. When the ref holds one baseline alone in each dialect, the
+# new baseline keeps its version, and a regeneration with no change of the
+# schema gives the same bytes.
 #
 # The script takes the migration files of the ref, not of the work tree, so
 # it gives the same baseline when the work tree already holds one. A Go test
@@ -52,8 +54,11 @@ trap 'rm -rf "$IN"' EXIT
 git -C "$ROOT" archive "$REF" pkg/store/sqlite/migrations pkg/store/postgres/migrations | tar -x -C "$IN"
 
 SHA="$(git -C "$ROOT" rev-parse --short=12 "$REF^{commit}")"
+echo "regenerate-baseline: collapse the migrations of $REF ($SHA)"
 
-DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" DUSTPAN_TEST_BASELINE_REF="$REF ($SHA)" \
+# The baseline names no Git ref: its SHA-256 covers its header, so a
+# regeneration with no change of the schema gives the same bytes.
+DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" \
 	go -C "$ROOT" test -count=1 -run '^TestWrite(SQLite|Postgres)Baseline$' ./pkg/store/internal/baseline/
 
 # The new baseline is the baseline file with the highest version. Both

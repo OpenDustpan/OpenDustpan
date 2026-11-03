@@ -954,7 +954,7 @@ func openSnapshot(ctx context.Context, path string) (*sql.DB, error) {
 	}
 
 	query := url.Values{}
-	query.Set("mode", "ro")
+	query.Set(dsnModeKey, "ro")
 	query.Add("_pragma", "query_only(on)")
 	query.Add("_pragma", "busy_timeout(10000)")
 

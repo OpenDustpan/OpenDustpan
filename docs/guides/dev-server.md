@@ -273,6 +273,36 @@ A production server refuses to restore a backup of a dev installation, unless yo
 Also then, the restore deletes the person `dev:admin` and all other data of dev people.
 The [backup guide](backup-restore-upgrade.md#restore-a-backup-of-a-dev-installation) shows the steps.
 
+## Start again after a schema change
+
+Until the first release, a new build of OpenDustpan can change the database schema.
+`dev` then refuses the database of an earlier build and names the command that helps:
+
+```text
+opendustpan: the schema changed: run opendustpan dev reset to start again. The old data is kept as dev.db.reset.bak in the data directory: ...
+```
+
+`dev` never resets a database on its own. To start again on an empty database, stop `dev` and run:
+
+```sh
+opendustpan dev reset
+```
+
+Add `--data-dir` when `dev` runs with `--data-dir`.
+The command does these steps:
+
+1. It refuses the directory when it is not a data directory of `dev`, or when it is a symbolic link. It also refuses it when a `dev` server or another process holds the database.
+2. It refuses a database that is not a regular file or that has a second name (a hard link). It refuses a `blobs` directory that is a symbolic link, that another user owns, or that the group or others can access.
+3. It reads the installation kind of the database. It refuses a database of `serve`, a database with no kind and a database with a kind that it does not know. It then changes nothing.
+4. It moves `dev.db`, its log files and the `blobs` directory aside, as `dev.db.reset.bak` and `blobs.reset.bak`. It deletes the copies of the reset before, so the directory keeps the data of one reset only.
+5. It writes a log line that names the copies, makes the schema of the binary on a new `dev.db`, and claims the kind `dev`.
+6. It writes an audit entry that names the copies.
+
+The key file, the token and the certificate stay. The next `dev` starts on the new database.
+To look at the old data, open `dev.db.reset.bak` with an earlier build.
+
+`serve` never offers a reset. It refuses a database with another schema. It says to restore a backup of the same build, or to set `--database` to a new database.
+
 ## Keep the stacks and workspaces of a trial
 
 No command and no flag turns a dev installation into a production installation.
