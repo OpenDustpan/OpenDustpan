@@ -49,9 +49,8 @@ func TestLogServer(t *testing.T) {
 			var buf bytes.Buffer
 
 			ctx := requestid.WithContext(t.Context(), "0123abcd")
-			faultlog.LogServer(ctx, slog.New(slog.NewTextHandler(&buf, nil)), faultlog.ServerLog{
-				Message: "failed", Status: tc.status, Cause: tc.cause, Code: "", Op: "",
-			})
+			faultlog.LogServer(ctx, slog.New(slog.NewTextHandler(&buf, nil)), "failed",
+				faultlog.Fields{Status: tc.status, Cause: tc.cause, Code: "", Op: ""})
 
 			for _, want := range tc.wantLog {
 				if !strings.Contains(buf.String(), want) {
@@ -78,19 +77,18 @@ func TestLogServerFields(t *testing.T) {
 	tests := []struct {
 		name    string
 		route   string
-		entry   faultlog.ServerLog
+		entry   faultlog.Fields
 		wantLog []string
 		noLog   []string
 	}{
 		{
 			name:  "constant route, op and code",
 			route: "POST /api/stacks/{org}/{stack}",
-			entry: faultlog.ServerLog{
-				Message: "m",
-				Status:  500,
-				Cause:   "",
-				Code:    "server.internal",
-				Op:      "audit.append",
+			entry: faultlog.Fields{
+				Status: 500,
+				Cause:  "",
+				Code:   "server.internal",
+				Op:     "audit.append",
 			},
 			wantLog: []string{
 				`route="POST /api/stacks/{org}/{stack}"`, "op=audit.append", "error_code=server.internal", "status=500",
@@ -100,28 +98,28 @@ func TestLogServerFields(t *testing.T) {
 		{
 			name:    "no status",
 			route:   "",
-			entry:   faultlog.ServerLog{Message: "m", Status: 0, Cause: "", Code: "", Op: ""},
+			entry:   faultlog.Fields{Status: 0, Cause: "", Code: "", Op: ""},
 			wantLog: []string{"cause=unclassified"},
 			noLog:   []string{"status", "route", "op=", "error_code"},
 		},
 		{
 			name:    "route with CR and LF",
 			route:   "GET /x\r\nlevel=ERROR forged",
-			entry:   faultlog.ServerLog{Message: "m", Status: 500, Cause: "", Code: "", Op: ""},
+			entry:   faultlog.Fields{Status: 500, Cause: "", Code: "", Op: ""},
 			wantLog: []string{"cause=unclassified"},
 			noLog:   []string{"route", "forged"},
 		},
 		{
 			name:    "op and code with a space and a quote",
 			route:   "",
-			entry:   faultlog.ServerLog{Message: "m", Status: 500, Cause: "", Code: "a b", Op: `x"y`},
+			entry:   faultlog.Fields{Status: 500, Cause: "", Code: "a b", Op: `x"y`},
 			wantLog: []string{"cause=unclassified"},
 			noLog:   []string{"op=", "error_code"},
 		},
 		{
 			name:    "route of 201 bytes",
 			route:   "GET /" + strings.Repeat("a", 200),
-			entry:   faultlog.ServerLog{Message: "m", Status: 500, Cause: "", Code: "", Op: ""},
+			entry:   faultlog.Fields{Status: 500, Cause: "", Code: "", Op: ""},
 			wantLog: []string{"cause=unclassified"},
 			noLog:   []string{"route"},
 		},
@@ -134,7 +132,7 @@ func TestLogServerFields(t *testing.T) {
 			var buf bytes.Buffer
 
 			ctx := routeContext(t, tc.route)
-			faultlog.LogServer(ctx, slog.New(slog.NewTextHandler(&buf, nil)), tc.entry)
+			faultlog.LogServer(ctx, slog.New(slog.NewTextHandler(&buf, nil)), "m", tc.entry)
 			checkLogLine(t, buf.String(), tc.wantLog, tc.noLog)
 		})
 	}
