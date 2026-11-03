@@ -77,7 +77,7 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 		return nil, nil //nolint:nilnil // No trigger API: there is no job service to start a plan.
 	}
 
-	manager, err := newTriggerManager(svc, cfg, &ports, jobs)
+	manager, err := newTriggerManager(svc, cfg, &ports, jobs, trigger.NewDispatcher)
 	if err != nil {
 		return nil, err
 	}
@@ -120,8 +120,10 @@ func (f finalVersions) LastFinal(ctx context.Context, unit graph.Unit) (string, 
 }
 
 // newTriggerManager builds the manager of triggers over the ports of the
-// server and the job service.
+// server and the job service. It builds the dispatcher with newDispatcher, which
+// the server passes as trigger.NewDispatcher.
 func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs job.Starter,
+	newDispatcher func(trigger.DispatcherConfig) (trigger.Dispatcher, error),
 ) (*trigger.Manager, error) {
 	units := triggerUnits{reader: cfg.inventoryReader}
 
@@ -141,7 +143,7 @@ func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs jo
 
 	parts := triggerParts{starter: starter, savers: savers, units: units, fences: fences}
 
-	dispatcher, err := trigger.NewDispatcher(triggerDispatcherConfig(cfg, ports, parts))
+	dispatcher, err := newDispatcher(triggerDispatcherConfig(cfg, ports, parts))
 	if err != nil {
 		return nil, fmt.Errorf("trigger dispatcher: %w", err)
 	}
