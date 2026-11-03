@@ -467,3 +467,68 @@ func TestVerifierECDSA(t *testing.T) {
 		})
 	}
 }
+
+// TestSignatureVerifyECDSAFlags builds exported signatures by hand, with the
+// flags or the counter that an ECDSA signature never has, and sends each one
+// to Verify. Parse never sets them for this type, so these rows reach the
+// check that a caller-built Signature must not skip.
+func TestSignatureVerifyECDSAFlags(t *testing.T) {
+	t.Parallel()
+
+	signer := ecdsaTestKey(t)
+
+	key, err := sshsig.ParsePublicKey(ecdsaWire(t, &signer.PublicKey))
+	if err != nil {
+		t.Fatalf("ParsePublicKey: %v", err)
+	}
+
+	armored := ecdsaArmored(t, signer, ecdsaOpts{
+		namespace: sshsig.NamespaceStepUp,
+		hash:      sshsig.HashSHA512,
+		sigType:   "",
+		rawBlob:   nil,
+	})
+
+	tests := []struct {
+		name string
+		edit func(s *sshsig.Signature)
+		want error
+	}{
+		{"a signature with no flags and no counter", func(*sshsig.Signature) {}, nil},
+		{"a flag of user presence", func(s *sshsig.Signature) {
+			s.Flags = sshsig.FlagUserPresent
+		}, sshsig.ErrFlags},
+		{"a flag outside the allowlist", func(s *sshsig.Signature) {
+			s.Flags = 0xff
+		}, sshsig.ErrFlags},
+		{"a counter of one", func(s *sshsig.Signature) {
+			s.Counter = 1
+		}, sshsig.ErrFlags},
+		{"a flag and a counter", func(s *sshsig.Signature) {
+			s.Flags = sshsig.FlagUserPresent
+			s.Counter = 1
+		}, sshsig.ErrFlags},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := sshsig.Parse(armored)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+
+			tc.edit(&s)
+
+			got, err := s.Verify(key, sshsig.NamespaceStepUp, testMessage())
+			if !errors.Is(err, tc.want) || (err == nil) != (tc.want == nil) {
+				t.Fatalf("Verify error = %v, want %v", err, tc.want)
+			}
+
+			if got != (sshsig.Result{UserPresent: false, UserVerified: false, Counter: 0}) {
+				t.Fatalf("Verify result = %+v, want the zero result", got)
+			}
+		})
+	}
+}
