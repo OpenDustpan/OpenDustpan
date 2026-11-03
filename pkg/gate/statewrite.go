@@ -281,6 +281,13 @@ func (r *stateWriteRun) record() Record {
 		total.warns = append(total.warns, eff.warns...)
 	}
 
+	// A state change with a reason says why state.available is false. The
+	// record and the decision name the reason, so a person can see that a gate
+	// on state.* read no fact.
+	if sc := r.change.State; sc != nil && sc.Unavailable != "" {
+		total.warns = append(total.warns, "state.* facts are not available: "+cleanText(sc.Unavailable))
+	}
+
 	rec.Requirements, rec.Warnings = r.requires, total.warns
 	r.warnings = total.warns
 

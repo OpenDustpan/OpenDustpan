@@ -62,8 +62,15 @@ func TestRestoreGivesTheGuardTheStateChange(t *testing.T) {
 
 	ws := &rollbackWorkspaces{
 		writeCounter: newWriteCounter(),
-		change:       workspace.RollbackChange{Current: "sv-test123", Resources: 4, Removed: []string{"a.b", "c.d"}},
-		readErr:      nil, restoreErr: nil, reads: 0,
+		change: workspace.RollbackChange{
+			Current:   "sv-test123",
+			Resources: 4,
+			Removed:   []string{"a.b", "c.d"},
+			Encrypted: false,
+		},
+		readErr:    nil,
+		restoreErr: nil,
+		reads:      0,
 	}
 	guard := newFakeGuard(nil)
 
@@ -90,7 +97,6 @@ func TestRestoreRefusesAStateThatCannotBeRead(t *testing.T) {
 		err  error
 	}{
 		{"the store fails", errReadFailed},
-		{"the client encrypted the state", workspace.ErrClientEncrypted},
 		{"the state holds an entry the server cannot read", workspace.ErrInvalidState},
 	}
 
@@ -100,7 +106,7 @@ func TestRestoreRefusesAStateThatCannotBeRead(t *testing.T) {
 
 			ws := &rollbackWorkspaces{
 				writeCounter: newWriteCounter(),
-				change:       workspace.RollbackChange{Current: "", Resources: 0, Removed: nil},
+				change:       workspace.RollbackChange{Current: "", Resources: 0, Removed: nil, Encrypted: false},
 				readErr:      tc.err,
 				restoreErr:   nil,
 				reads:        0,
@@ -130,7 +136,7 @@ func TestRestoreRefusesWhenTheCurrentVersionChanged(t *testing.T) {
 
 	ws := &rollbackWorkspaces{
 		writeCounter: newWriteCounter(),
-		change:       workspace.RollbackChange{Current: "sv-test123", Resources: 1, Removed: nil},
+		change:       workspace.RollbackChange{Current: "sv-test123", Resources: 1, Removed: nil, Encrypted: false},
 		readErr:      nil,
 		restoreErr:   workspace.ErrConcurrentModification,
 		reads:        0,
@@ -161,12 +167,40 @@ func TestRestoreWithGatesOffReadsNoState(t *testing.T) {
 	t.Parallel()
 
 	ws := &rollbackWorkspaces{
-		writeCounter: newWriteCounter(), change: workspace.RollbackChange{Current: "", Resources: 0, Removed: nil},
-		readErr: errReadFailed, restoreErr: nil, reads: 0,
+		writeCounter: newWriteCounter(),
+		change:       workspace.RollbackChange{Current: "", Resources: 0, Removed: nil, Encrypted: false},
+		readErr:      errReadFailed,
+		restoreErr:   nil,
+		reads:        0,
 	}
 
 	rec := serveGuarded(t, newGuardedHandler(t, ws, stategate.Off("the test keeps no gates")), restoreRoute())
 	if rec.Code != http.StatusOK || ws.reads != 0 || ws.count() != 1 || strings.Contains(rec.Body.String(), "errors") {
 		t.Fatalf("restore answers %d with %d reads and %d writes: %s", rec.Code, ws.reads, ws.count(), rec.Body)
+	}
+}
+
+// TestRestoreOfAnEncryptedStateGoesOnWithTheReason proves that a state the
+// client encrypted does not refuse the restore: the guard sees a state change
+// with the reason and the current version, and the restore goes on.
+func TestRestoreOfAnEncryptedStateGoesOnWithTheReason(t *testing.T) {
+	t.Parallel()
+
+	ws := &rollbackWorkspaces{
+		writeCounter: newWriteCounter(),
+		change:       workspace.RollbackChange{Current: "sv-test123", Resources: 0, Removed: nil, Encrypted: true},
+		readErr:      nil, restoreErr: nil, reads: 0,
+	}
+	guard := newFakeGuard(nil)
+
+	rec := serveGuarded(t, newGuardedHandler(t, ws, guard), restoreRoute())
+	if rec.Code != http.StatusOK || len(guard.seen) != 1 || ws.count() != 1 {
+		t.Fatalf("restore answers %d with %d checks and %d writes: %s", rec.Code, len(guard.seen), ws.count(), rec.Body)
+	}
+
+	got := guard.seen[0].State
+	if got == nil || got.Unavailable != "state is client-encrypted" || got.Current != "sv-test123" ||
+		got.Resources != 0 || len(got.Removed) != 0 {
+		t.Fatalf("guard saw state change %+v, want the reason, the current version and no resource data", got)
 	}
 }

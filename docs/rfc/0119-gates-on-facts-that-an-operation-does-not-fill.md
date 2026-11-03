@@ -39,6 +39,11 @@ gate.
 - The server fills the state facts for the restore of a state version, and
   records them in the decision record.
 - The server gives `state.available` `false` for each other operation.
+- A restore of a state version that the client encrypted is one more case
+  where `state.*` is not available. The restore goes on, and the decision
+  record warns with the reason "state is client-encrypted". The server does not
+  add the reason to the fact document, because a new fact field is a new
+  schema version (ADR 226).
 - The guide `docs/guides/state-write-gates.md` lists, for each operation, which
   facts the server fills.
 - A gate evaluates a fact that is not available as the zero value, as ADR 226

@@ -36,7 +36,17 @@ type StateChange struct {
 	// Removed holds the addresses in the current state and not in the new
 	// state.
 	Removed []string
+	// Unavailable is empty when the facts are filled. It holds the reason
+	// when the server knows that it cannot give the facts for this write, for
+	// example "state is client-encrypted". Then Resources is 0, Removed is
+	// empty and state.available is false. Current is still set, so that the
+	// adapter can check it before it writes. The decision record names the
+	// reason.
+	Unavailable string
 }
+
+// MaxUnavailableBytes is the largest size of the reason in StateChange.
+const MaxUnavailableBytes = 200
 
 // validate checks the change for operation op. It returns ErrInvalid for a
 // value that is not valid and ErrLimit for a value above a limit. It rejects
@@ -55,10 +65,29 @@ func (sc *StateChange) validate(op OperationKind) error {
 		return fmt.Errorf("%w: the state change names no valid current state version", ErrInvalid)
 	}
 
+	if sc.Unavailable != "" {
+		return sc.validateReason()
+	}
+
 	if sc.Resources < 0 {
 		return fmt.Errorf("%w: the state change has a negative resource count", ErrInvalid)
 	}
 
+	return sc.validateRemoved()
+}
+
+// validateReason checks a change that gives a reason and no resource data.
+func (sc *StateChange) validateReason() error {
+	if len(sc.Unavailable) > MaxUnavailableBytes || hasControl(sc.Unavailable) ||
+		sc.Resources != 0 || len(sc.Removed) != 0 {
+		return fmt.Errorf("%w: a state change with a reason holds no resource data", ErrInvalid)
+	}
+
+	return nil
+}
+
+// validateRemoved checks the removed addresses against the limits.
+func (sc *StateChange) validateRemoved() error {
 	if len(sc.Removed) > MaxRemovedAddresses {
 		return fmt.Errorf("%w: the state change removes more than %d resources", ErrLimit, MaxRemovedAddresses)
 	}
@@ -87,6 +116,10 @@ func (sc *StateChange) validate(op OperationKind) error {
 // facts returns the state facts of the change, with the removed addresses
 // sorted and without duplicates, in a copy.
 func (sc *StateChange) facts() StateFacts {
+	if sc.Unavailable != "" {
+		return StateFacts{Available: false, Resources: 0, Removed: nil}
+	}
+
 	removed := slices.Clone(sc.Removed)
 	slices.Sort(removed)
 
