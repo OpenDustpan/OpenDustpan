@@ -375,9 +375,13 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 // not read. A state above a limit gives gate.limit, because the cause is a
 // limit and not a fault. Any other cause gives gate.unavailable.
 func stateUnreadable(cause error) *gate.RefusalError {
-	// Defense in depth: gate.Code ranks gate.limit first, but this branch keeps
-	// the limit refusal with no record ID and with the one message that the
-	// client shows. It does not rely on the order of the code list.
+	// Defense in depth: this branch keeps a limit apart from an outage. A limit
+	// refusal does not wrap gate.ErrUnavailable, because a limit is a refusal
+	// and not an outage. The record and the message are the same as those of
+	// the unavailable refusal below, which gives the same record and message
+	// for any other cause. gate.Code ranks gate.limit first, so the code would
+	// also stay gate.limit without this branch. This branch does not rely on
+	// that ranking.
 	if errors.Is(cause, gate.ErrLimit) {
 		return &gate.RefusalError{Err: cause, Record: "", Messages: []string{StateUnreadableText}}
 	}

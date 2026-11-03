@@ -597,20 +597,23 @@ func TestAdmitRefusesAStateAboveALimitWithTheLimitCode(t *testing.T) {
 }
 
 // TestStateUnreadableLimit proves the refusal of a state read error by its
-// cause. A limit cause refuses with gate.limit, and any other cause refuses with
-// gate.unavailable. Both refusals carry the state text, no record, one audit
-// entry, and the guard is not asked.
+// cause. A limit cause refuses with gate.limit and does not wrap
+// gate.ErrUnavailable, because a limit is a refusal and not an outage. Any other
+// cause refuses with gate.unavailable and wraps gate.ErrUnavailable. Both
+// refusals carry the state text, no record, one audit entry, and the guard is
+// not asked.
 func TestStateUnreadableLimit(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name  string
-		cause error
-		code  string
+		name        string
+		cause       error
+		code        string
+		unavailable bool
 	}{
-		{"limit", gate.ErrLimit, "gate.limit"},
-		{"wrapped limit", fmt.Errorf("x: %w", gate.ErrLimit), "gate.limit"},
-		{"other read error", errStateDown, "gate.unavailable"},
+		{"limit", gate.ErrLimit, "gate.limit", false},
+		{"wrapped limit", fmt.Errorf("x: %w", gate.ErrLimit), "gate.limit", false},
+		{"other read error", errStateDown, "gate.unavailable", true},
 	}
 
 	for _, tc := range cases {
@@ -632,6 +635,12 @@ func TestStateUnreadableLimit(t *testing.T) {
 
 			if out.Refusal.Record != "" {
 				t.Fatalf("record = %q, want none", out.Refusal.Record)
+			}
+
+			got := errors.Is(out.Refusal, gate.ErrUnavailable)
+			if got != tc.unavailable {
+				t.Fatalf("errors.Is(refusal, gate.ErrUnavailable) = %v, want %v: "+
+					"a limit is a refusal, not an outage", got, tc.unavailable)
 			}
 
 			if len(guard.asked()) != 0 {
