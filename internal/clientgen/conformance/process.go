@@ -83,6 +83,9 @@ type ProcessAdapter struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	killed   atomic.Bool
+	// killProcess stops the process group of the adapter. It is killGroup; a
+	// test replaces it to count the calls.
+	killProcess func(p *os.Process) error
 	// readErr and waitErr are set before done is closed.
 	readErr error
 	waitErr error
@@ -111,6 +114,7 @@ func StartAdapter(ctx context.Context, opts ProcessOptions) (*ProcessAdapter, er
 
 	a := new(ProcessAdapter)
 	a.cmd, a.stdin, a.stderr, a.timeout = cmd, stdin, new(tailBuffer), opts.CallTimeout
+	a.killProcess = killGroup
 	a.lines, a.done, a.stop = make(chan []byte), make(chan struct{}), make(chan struct{})
 
 	a.stderr.max = stderrKeepBytes
@@ -252,9 +256,15 @@ func (a *ProcessAdapter) kill() {
 	a.killed.Store(true)
 	a.stopOnce.Do(func() { close(a.stop) })
 
-	if a.cmd.Process != nil {
-		if err := killGroup(a.cmd.Process); err != nil {
-			a.stderr.note(err)
+	select {
+	case <-a.done:
+		// Wait reaped the adapter. Its process ID, and so the ID of its
+		// group, can now belong to another process: send no signal.
+	default:
+		if a.cmd.Process != nil {
+			if err := a.killProcess(a.cmd.Process); err != nil {
+				a.stderr.note(err)
+			}
 		}
 	}
 

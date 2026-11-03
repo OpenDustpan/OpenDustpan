@@ -224,8 +224,7 @@ type GateObject struct {
 	Kind        string
 	ID          string
 	Level       string
-	Tool        string
-	UnitName    string
+	UnitID      string
 	Version     int64
 	Body        string
 	UpdatedAtMs int64
@@ -426,17 +425,22 @@ type InstanceVersion struct {
 }
 
 type Inventory struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount sql.NullInt64
-	LockHolder    sql.NullString
-	LockSinceMs   sql.NullInt64
-	LockOperation sql.NullString
+	Namespace         string
+	Tool              string
+	Name              string
+	UnitID            string
+	DisplayName       string
+	LastChangedMs     int64
+	Status            string
+	ResourceCount     sql.NullInt64
+	LockHolder        sql.NullString
+	LockSinceMs       sql.NullInt64
+	LockOperation     sql.NullString
+	LastReleaseLockID string
+	LastReleaseHolder string
+	LastReleaseBy     string
+	LastReleaseKind   string
+	LastReleaseAtMs   int64
 }
 
 type InventoryChange struct {

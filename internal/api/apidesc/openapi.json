@@ -1384,6 +1384,9 @@
           "request.precondition-required",
           "restore.blobs-missing",
           "restore.ended",
+          "restore.live-blobs-damaged",
+          "restore.live-blobs-missing",
+          "restore.pre-backup-foreign",
           "restore.swapped",
           "runner.immutable",
           "runner.invalid",
@@ -5601,6 +5604,9 @@
           "lastChange": {
             "type": "string"
           },
+          "lastRelease": {
+            "$ref": "#/components/schemas/UnitLastRelease"
+          },
           "lock": {
             "$ref": "#/components/schemas/UnitLock"
           },
@@ -5719,6 +5725,33 @@
           "status",
           "truncated",
           "unit"
+        ],
+        "type": "object"
+      },
+      "UnitLastRelease": {
+        "properties": {
+          "holder": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "releasedAt": {
+            "type": "string"
+          },
+          "releasedBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "holder",
+          "id",
+          "kind",
+          "releasedAt",
+          "releasedBy"
         ],
         "type": "object"
       },
@@ -6509,7 +6542,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.34.0"
+    "version": "0.36.0"
   },
   "openapi": "3.1.0",
   "paths": {

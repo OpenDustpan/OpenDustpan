@@ -95,6 +95,36 @@ func parseManifestBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
 	return out, nil
 }
 
+// restoreWantBlobs returns the blob references that the staged data of the
+// backup id must name: the blobs of manifest and its damaged keys. The
+// backup holds no copy of a damaged key, and a restore leaves that key as it
+// is, but the rows of the backup still name it with the reference of the
+// live row.
+func restoreWantBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
+	out, err := parseManifestBlobs(manifest, id)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range manifest.Damaged {
+		// Defense in depth: readManifest checks each damaged entry. This
+		// check stays so that a manifest from another reader cannot add a
+		// reference that is not valid.
+		if err := validDamagedEntry(entry); err != nil {
+			return nil, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
+		}
+
+		ref, err := damagedRef(entry)
+		if err != nil {
+			return nil, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
+		}
+
+		out = append(out, ref)
+	}
+
+	return out, nil
+}
+
 // checkRestoreSchema refuses a backup from before the baseline schema, and a
 // backup of another schema version. The error names both versions, so the
 // operator knows which release to use.

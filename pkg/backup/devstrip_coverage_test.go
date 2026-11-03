@@ -168,6 +168,14 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "history text of a released lock; a repeated unlock needs its own authorization",
 	},
+	"inventory.last_release_holder": {
+		strip:  false,
+		reason: "copy of the history text of a released lock; a repeated unlock needs its own authorization",
+	},
+	"inventory.last_release_by": {
+		strip:  false,
+		reason: "copy of the history text of a released lock; a repeated unlock needs its own authorization",
+	},
 }
 
 // TestDevStripCoversEveryPrincipalColumn lists the columns of the backup that

@@ -85,8 +85,10 @@ type Manifest struct {
 	// omits it.
 	Unverified []string `json:"unverified,omitempty"`
 	// Damaged holds the live blobs that a backup before a restore found
-	// missing or damaged, ordered by key. The backup holds no copy of them,
-	// so a restore of this backup refuses. The key is optional: a backup
+	// missing or damaged, ordered by key, with the reference of the live row
+	// of each. The backup holds no copy of them. A restore of this backup
+	// leaves those keys as they are, so it brings back the state from before
+	// the restore, and its answer names them. The key is optional: a backup
 	// with no such blob omits it. Only a backup before a restore records
 	// damage; every other backup fails at the first damaged blob.
 	Damaged []DamagedBlob `json:"damaged,omitempty"`
@@ -364,12 +366,12 @@ func (s *Service) Start(ctx context.Context, id ID) error {
 // StartBeforeRestore starts backup id as Start does, for the backup of the
 // live data before a restore. This backup does not stop at a live blob that
 // is missing or that does not match its own live row: it records the blob in
-// the Damaged list of its manifest and goes on, so the restore can repair it.
-// Every other read error still stops the backup.
+// the Damaged list of its manifest and goes on, so that the restore can name
+// every such blob before it changes live data, and so that this backup can
+// still undo the restore. Every other read error still stops the backup.
 //
-// The operation input names restore, so a takeover of the restore can tell the
-// backup that it started from a backup that another restore started. See
-// StartedForRestore.
+// The operation input names restore, so the record of the operation tells
+// which restore started the backup. See StartedForRestore.
 func (s *Service) StartBeforeRestore(ctx context.Context, id ID, restore RestoreID) error {
 	if _, err := ParseRestoreID(restore.String()); err != nil {
 		return fmt.Errorf("begin backup %s: %w", id, err)
@@ -457,6 +459,15 @@ func (s *Service) Get(ctx context.Context, id ID) (Record, error) {
 // reads no target.
 func (s *Service) Check(ctx context.Context, id ID) error {
 	if err := Check(ctx, s.target, id); err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
+	manifest, err := readManifest(ctx, s.target, id)
+	if err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
+	if err := checkDamagedOrigin(ctx, s, manifest); err != nil {
 		return fmt.Errorf("check backup %s: %w", id, err)
 	}
 
@@ -1208,7 +1219,7 @@ func (s *Service) copyPlainBlob(
 	copied, err := s.streamCopy(ctx, dest, source, ref)
 	if err != nil {
 		if sourceMissing(err) {
-			return ManifestBlob{}, missingDamage(ref.Key, err)
+			return ManifestBlob{}, missingDamage(ref, err)
 		}
 
 		return ManifestBlob{}, err
@@ -1216,7 +1227,7 @@ func (s *Service) copyPlainBlob(
 
 	if copied.size != ref.Size || !bytes.Equal(copied.sum, ref.MD5[:]) {
 		corrupt := corruptBlobError(ref.Key, copied.size, copied.sum, ref)
-		damage := mismatchDamage(ref.Key, plainDamageReason(copied.size, ref), copied.size, copied.sum, corrupt)
+		damage := mismatchDamage(ref, plainDamageReason(copied.size, ref), corrupt)
 
 		if copied.kept {
 			return ManifestBlob{}, damage
@@ -1262,13 +1273,13 @@ func (s *Service) copySealedBlob(
 
 	size, sum, err := s.hashPlainCopy(ctx, source, ref)
 	if err != nil {
-		return ManifestBlob{}, s.sealedDamage(ctx, source, ref, err)
+		return ManifestBlob{}, sealedDamage(ref, err)
 	}
 
 	if size != ref.Size || !bytes.Equal(sum, ref.MD5[:]) {
 		mismatch := fmt.Errorf("%w: %w", ErrLiveBlobDamaged, corruptBlobError(ref.Key, size, sum, ref))
 
-		return ManifestBlob{}, s.sealedDamage(ctx, source, ref, mismatch)
+		return ManifestBlob{}, sealedDamage(ref, mismatch)
 	}
 
 	copied, err := s.streamCopy(ctx, dest, source, ref)
@@ -1287,29 +1298,21 @@ func (s *Service) copySealedBlob(
 // sealedDamage classifies the error of the check of one sealed blob. A
 // missing live object is missing damage. Plain bytes that opened and do not
 // match the size or the MD5 of the row are damaged: the error wraps
-// ErrLiveBlobDamaged, and the entry names the size and the MD5 of the stored
-// sealed bytes, read again here. Any other error, for example sealed bytes
-// that do not open or a row that cannot be read, returns as it is: the code
-// cannot tell damage from it, so the backup stops.
-func (s *Service) sealedDamage(ctx context.Context, source blob.Key, ref BlobRef, cause error) error {
-	if sourceMissing(cause) {
-		return missingDamage(ref.Key, cause)
-	}
-
-	if !errors.Is(cause, ErrLiveBlobDamaged) {
+// ErrLiveBlobDamaged. Sealed bytes that do not open are damaged with the
+// reason unopened: the error wraps ErrLiveBlobUnopened. A restore stops at
+// both and writes over neither. Any other error, for example a row that
+// cannot be read, returns as it is, so the backup stops.
+func sealedDamage(ref BlobRef, cause error) error {
+	switch {
+	case sourceMissing(cause):
+		return missingDamage(ref, cause)
+	case errors.Is(cause, ErrLiveBlobDamaged):
+		return mismatchDamage(ref, ReasonSealed, cause)
+	case errors.Is(cause, ErrLiveBlobUnopened):
+		return mismatchDamage(ref, ReasonUnopened, cause)
+	default:
 		return cause
 	}
-
-	size, sum, err := s.hashStoredBlob(ctx, source, ref)
-	if err != nil {
-		if sourceMissing(err) {
-			return missingDamage(ref.Key, errors.Join(cause, err))
-		}
-
-		return errors.Join(cause, err)
-	}
-
-	return mismatchDamage(ref.Key, ReasonSealed, size, sum, cause)
 }
 
 // copyResult holds the size and MD5 of one streamed blob copy. Kept reports
@@ -1542,10 +1545,6 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 		return err
 	}
 
-	if err := refuseDamagedBackup(manifest); err != nil {
-		return err
-	}
-
 	for _, file := range manifest.SQLFiles {
 		key, err := blob.ParseKey("backups/" + id.String() + "/" + file.Path)
 		if err != nil {
@@ -1653,6 +1652,10 @@ func parseManifest(id ID, data []byte) (Manifest, error) {
 	}
 
 	if err := validDamaged(manifest.Damaged); err != nil {
+		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
+	}
+
+	if err := damagedOnce(manifest); err != nil {
 		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
 	}
 

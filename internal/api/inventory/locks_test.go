@@ -733,7 +733,8 @@ func TestListUnitsManualLockField(t *testing.T) {
 	since := changeTime()
 	entry := func(name, id string, lock *coreinventory.ManualLock) coreinventory.Entry {
 		return coreinventory.Entry{
-			ManualLock: lock, Collection: "", LastChanged: since, Namespace: ns, Tool: "pulumi", Name: name,
+			LastRelease: nil,
+			ManualLock:  lock, Collection: "", LastChanged: since, Namespace: ns, Tool: "pulumi", Name: name,
 			UnitID: id, DisplayName: name, Status: "", ResourceCount: nil, Lock: nil, Labels: nil,
 		}
 	}

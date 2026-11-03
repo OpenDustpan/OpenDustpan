@@ -152,6 +152,7 @@ func TestEntryLockedState(t *testing.T) {
 			t.Parallel()
 
 			e := inventory.Entry{
+				LastRelease: nil,
 				LastChanged: time.Time{}, Namespace: "", Tool: "", Name: "", UnitID: "", DisplayName: "",
 				Status: "", ResourceCount: nil, Lock: tt.lock, ManualLock: tt.manual, Collection: "", Labels: nil,
 			}

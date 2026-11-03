@@ -163,6 +163,13 @@ func readCases() []readCase {
 			},
 		),
 		readRow("older sensitive output, both grants", outputsOlder+"secret", func(*readCase) {}),
+		readRow("older unknown output, outputs only", outputsOlder+"missing", func(c *readCase) {
+			c.without(identity.ActionUnitRead)
+			c.fails(http.StatusForbidden, "")
+		}),
+		readRow("older unknown output, unit:read holder", outputsOlder+"missing", func(c *readCase) {
+			c.fails(http.StatusNotFound, "")
+		}),
 		readRow("unknown output", outputsCurrent+"missing", func(c *readCase) { c.fails(http.StatusNotFound, "") }),
 	}
 }
@@ -320,6 +327,10 @@ func TestOutputRoutesKeepWholeStateChecksForAJobToken(t *testing.T) {
 		},
 		{
 			"plain output without unit:read", "/api/v2/state-version-outputs/sv-test123.greeting",
+			identity.ActionUnitRead, http.StatusForbidden,
+		},
+		{
+			"unknown output without unit:read", "/api/v2/state-version-outputs/sv-test123.missing",
 			identity.ActionUnitRead, http.StatusForbidden,
 		},
 	}

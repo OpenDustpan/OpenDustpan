@@ -538,6 +538,15 @@ UPDATE inventory
 SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
 WHERE namespace = $4 AND tool = $5 AND name = $6;
 
+-- name: UpdateInventoryLastRelease :exec
+-- Publishes the last released lock of one workspace unit. The caller writes it
+-- in the same transaction as the record on the workspace. An empty kind, empty
+-- text and the time 0 mean no record.
+UPDATE inventory
+SET last_release_lock_id = $1, last_release_holder = $2, last_release_by = $3,
+    last_release_kind = $4, last_release_at_ms = $5
+WHERE namespace = $6 AND tool = $7 AND name = $8;
+
 -- name: InsertDeletedInventory :exec
 -- Records a deleted unit (ADR 47). The delete transaction removes the live
 -- entry of the unit with DeleteInventory.
@@ -724,6 +733,8 @@ ORDER BY seq;
 -- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -744,6 +755,8 @@ ORDER BY i.tool, i.name;
 -- One live unit by its stable ID, which is unique in the installation.
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -3194,9 +3207,9 @@ FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind);
 
 -- name: InsertGateObject :exec
-INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
-VALUES (sqlc.arg(namespace_id), sqlc.arg(scope_key), sqlc.arg(kind), sqlc.arg(id), sqlc.arg(level), sqlc.arg(tool),
-        sqlc.arg(unit_name), sqlc.arg(version), sqlc.arg(body), sqlc.arg(updated_at_ms));
+INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, unit_id, version, body, updated_at_ms)
+VALUES (sqlc.arg(namespace_id), sqlc.arg(scope_key), sqlc.arg(kind), sqlc.arg(id), sqlc.arg(level), sqlc.arg(unit_id),
+        sqlc.arg(version), sqlc.arg(body), sqlc.arg(updated_at_ms));
 
 -- name: UpdateGateObject :execrows
 -- Replaces an object when its version is the expected one.
@@ -3226,9 +3239,10 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
 -- The objects of one kind and ID in the scope and in the scopes after it: for
 -- the installation, every scope; for a namespace, every scope of the
 -- namespace; for a collection, the collection and the units that it holds
--- now; for a unit, the unit. level, namespace_id, scope_key and
--- collection_key describe the scope.
-SELECT o.scope_key, o.version, o.body
+-- now, by the stable ID of the unit; for a unit, the unit. level,
+-- namespace_id, scope_key and collection_key describe the scope. The
+-- namespace_id and the unit_id of a row name the unit of a unit row.
+SELECT o.scope_key, o.namespace_id, o.unit_id, o.version, o.body
 FROM gate_objects AS o
 WHERE o.kind = sqlc.arg(kind) AND o.id = sqlc.arg(id)
   AND (
@@ -3239,9 +3253,8 @@ WHERE o.kind = sqlc.arg(kind) AND o.id = sqlc.arg(id)
           AND EXISTS (
               SELECT 1
               FROM namespaces AS n
-              JOIN inventory AS i ON i.namespace = n.name
-              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+              JOIN collection_members AS m ON m.namespace = n.name
+              WHERE n.id = o.namespace_id AND m.unit_id = o.unit_id
                 AND m.collection_key = sqlc.arg(collection_key)))
   )
 ORDER BY o.scope_key COLLATE "C";
@@ -3249,7 +3262,7 @@ ORDER BY o.scope_key COLLATE "C";
 -- name: ListGateReferrers :many
 -- The objects, in the scope and in the scopes after it (see
 -- ListNarrowerGateObjects), that name the approval rule or the path set.
-SELECT o.scope_key, o.kind, o.id, o.version, o.body
+SELECT o.scope_key, o.namespace_id, o.unit_id, o.kind, o.id, o.version, o.body
 FROM gate_references AS r
 JOIN gate_objects AS o
     ON o.namespace_id = r.namespace_id AND o.scope_key = r.scope_key AND o.kind = r.owner_kind AND o.id = r.owner_id
@@ -3262,29 +3275,42 @@ WHERE r.ref_kind = sqlc.arg(ref_kind) AND r.ref_id = sqlc.arg(ref_id)
           AND EXISTS (
               SELECT 1
               FROM namespaces AS n
-              JOIN inventory AS i ON i.namespace = n.name
-              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+              JOIN collection_members AS m ON m.namespace = n.name
+              WHERE n.id = o.namespace_id AND m.unit_id = o.unit_id
                 AND m.collection_key = sqlc.arg(collection_key)))
   )
 ORDER BY o.scope_key COLLATE "C", o.kind COLLATE "C", o.id COLLATE "C";
 
 -- name: GateUnitCollection :one
--- The key of the collection that holds a unit now. A unit in no collection has
--- no row.
+-- The key of the collection that holds the unit of a stable ID. A unit in no
+-- collection has no row.
 SELECT m.collection_key
 FROM namespaces AS n
+JOIN collection_members AS m ON m.namespace = n.name
+WHERE n.id = sqlc.arg(namespace_id) AND m.unit_id = sqlc.arg(unit_id);
+
+-- name: GetGateLiveUnit :one
+-- The namespace, the tool and the name of the live unit of a stable ID. A gate
+-- row of a unit names the unit by its ID only, and a check that names the
+-- scope of the row reads the name here.
+SELECT n.name AS namespace, i.tool, i.name
+FROM namespaces AS n
 JOIN inventory AS i ON i.namespace = n.name
-JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-WHERE n.id = sqlc.arg(namespace_id) AND i.tool = sqlc.arg(tool) AND i.name = sqlc.arg(unit_name);
+WHERE n.id = sqlc.arg(namespace_id) AND i.unit_id = sqlc.arg(unit_id);
+
+-- name: GetGateDeletedUnit :one
+-- The namespace, the tool and the name of the deleted unit of a stable ID.
+SELECT n.name AS namespace, d.tool, d.name
+FROM namespaces AS n
+JOIN inventory_deleted AS d ON d.namespace = n.name
+WHERE n.id = sqlc.arg(namespace_id) AND d.unit_id = sqlc.arg(unit_id);
 
 -- name: ListUnitGateObjectKeys :many
--- The kind, ID and scope key of the configuration of a unit that a purge
--- removes, for the audit entry of the purge.
-SELECT kind, id, scope_key
+-- The kind and ID of the configuration of a unit that a purge removes, for
+-- the audit entry of the purge.
+SELECT kind, id
 FROM gate_objects
-WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
-  AND unit_name = sqlc.arg(unit_name)
+WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND unit_id = sqlc.arg(unit_id)
 ORDER BY kind, id;
 
 -- name: ListScopeGateObjectKeys :many
@@ -3295,37 +3321,11 @@ FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
 ORDER BY kind, id;
 
--- name: CountUnitGateObjects :one
--- The count of configuration objects that the unit called unit_name holds.
-SELECT COUNT(*)
-FROM gate_objects
-WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
-  AND unit_name = sqlc.arg(unit_name);
-
--- name: CopyUnitGateObjects :exec
--- Copies the configuration of a unit to the scope of its new name, in the
--- transaction of a rename.
-INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
-SELECT o.namespace_id, CAST(sqlc.arg(new_scope_key) AS TEXT), o.kind, o.id, o.level, o.tool,
-       CAST(sqlc.arg(new_unit_name) AS TEXT), o.version, o.body, o.updated_at_ms
-FROM gate_objects AS o
-WHERE o.namespace_id = sqlc.arg(namespace_id) AND o.level = 'unit' AND o.tool = sqlc.arg(tool)
-  AND o.unit_name = sqlc.arg(old_unit_name);
-
--- name: CopyUnitGateReferences :exec
--- Copies the references of the configuration of a unit to the scope of its
--- new name, in the transaction of a rename.
-INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
-SELECT r.ref_kind, r.ref_id, r.namespace_id, CAST(sqlc.arg(new_scope_key) AS TEXT), r.owner_kind, r.owner_id
-FROM gate_references AS r
-WHERE r.namespace_id = sqlc.arg(namespace_id) AND r.scope_key = sqlc.arg(old_scope_key);
-
 -- name: DeleteUnitGateObjects :exec
 -- Deletes the configuration of a unit that a purge removes. The references go
 -- with it.
 DELETE FROM gate_objects
-WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
-  AND unit_name = sqlc.arg(unit_name);
+WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND unit_id = sqlc.arg(unit_id);
 
 -- name: DeleteScopeGateObjects :exec
 -- Deletes the configuration of one scope, for example a collection that a

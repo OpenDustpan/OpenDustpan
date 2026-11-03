@@ -88,6 +88,9 @@ const (
 	approvalRulesPath     = "/api/dustpan/v1/namespaces/{namespace}/approval-rules"
 	approvalRuleItemPath  = "/api/dustpan/v1/namespaces/{namespace}/approval-rules/{id}"
 	gateConfigNotFoundMsg = "no such gate, access limit, approval rule or approval default"
+	// gateUnitNotFoundMsg is the answer to a write for a name that no live
+	// stack or workspace has in the namespace.
+	gateUnitNotFoundMsg = "no stack or workspace has this name in the namespace: create it first"
 )
 
 // errIfMatchInvalid answers an If-Match header that is not one version in
@@ -623,6 +626,8 @@ func (h *Handler) existingVersion(r *http.Request, stored func() (int64, error))
 // namespace error, which classifyNamespace maps.
 func classifyGateConfig(err error) (failure, bool) {
 	switch {
+	case errors.Is(err, gate.ErrUnitNotFound):
+		return failCoded(http.StatusNotFound, gateUnitNotFoundMsg, errcode.UnitNotFound), true
 	case errors.Is(err, gate.ErrNotFound):
 		return failCoded(http.StatusNotFound, gateConfigNotFoundMsg, errcode.GateNotFound), true
 	case errors.Is(err, gate.ErrConflict):

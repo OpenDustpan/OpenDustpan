@@ -92,6 +92,15 @@ func Reason(e audit.Entry) string {
 //     set that a stored gate, approval default or ownership rule reads,
 //     returns ErrInvalid. The error names each reader.
 //
+// The units. The configuration of a unit scope keys on the stable ID of the
+// live unit that has the name of the scope, in the transaction of the read or
+// the write. A rename and a move between collections keep it with no write.
+// A unit scope whose name no live unit holds has no configuration: a read
+// returns none, and a write returns ErrNotFound and changes nothing. The
+// configuration of a deleted unit stays until its purge, and a restore keeps
+// the ID, so it gets the configuration back. A new unit with the name of a
+// deleted unit starts with none.
+//
 // A check for a narrower scope reads the namespaces that this installation
 // holds. A check across installations is not part of this version.
 type Objects[T Object] interface {

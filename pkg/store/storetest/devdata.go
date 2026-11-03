@@ -1350,7 +1350,10 @@ func testDevRecordReport(t *testing.T, env *devEnv) {
 		Approvers: []backup.DevApproverRemoval{
 			{Kind: "approval-rule", Scope: "installation", ID: "rule-a", Replaced: true},
 		},
-		Warnings: []backup.RestoreWarningCode{backup.WarnDevBackupIntoProduction},
+		Warnings:       []backup.RestoreWarningCode{backup.WarnDevBackupIntoProduction},
+		PreBackupFound: nil,
+		NotHeld:        nil,
+		ErrorCode:      "",
 	}
 
 	fence := restoreClaim(t, dst, record.ID).Step(backup.RestoreStepCheck)

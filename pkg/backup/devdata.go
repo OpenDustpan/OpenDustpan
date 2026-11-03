@@ -204,6 +204,19 @@ type DevStripReport struct {
 	// Warnings holds the codes of the warnings that the answer of the restore
 	// carries. The restore service sets them. A strip leaves them empty.
 	Warnings []RestoreWarningCode `json:"warnings"`
+	// PreBackupFound is what the backup before the restore found at the live
+	// blobs. It is nil until the restore took that backup, and nil when the
+	// backup found every live blob whole. The restore service sets it.
+	PreBackupFound *BlobFindings `json:"preBackupFound,omitempty"`
+	// NotHeld is the damaged list of the restored backup: the blobs that its
+	// data names and that it holds no copy of. The restore leaves those live
+	// keys as they are. It is nil for a backup with no such blob. The restore
+	// service sets it.
+	NotHeld *BlobFindings `json:"notHeld,omitempty"`
+	// ErrorCode is the catalog code of the refusal that ended the restore,
+	// empty for a restore that succeeded or that ended with an error that
+	// has no code. The restore service sets it.
+	ErrorCode RestoreErrorCode `json:"errorCode,omitempty"`
 }
 
 // HasDev reports whether the report names dev data: a principal, or a class
@@ -292,11 +305,15 @@ const (
 	// WarnAuditAppendFailed says that the restore finished but an audit
 	// entry could not be written. The restore record holds the report.
 	WarnAuditAppendFailed RestoreWarningCode = "audit-append-failed"
-	// WarnDamagedLiveBlobs says that the backup before the restore found
-	// live blobs that were missing or that did not match their records. The
-	// restore wrote the checked bytes of the backup there, and the audit log
-	// names each blob.
-	WarnDamagedLiveBlobs RestoreWarningCode = "damaged-live-blobs"
+	// WarnMissingLiveBlobs says that the backup before the restore found live
+	// blobs missing, within the bound of the restore. The restore wrote the
+	// checked bytes of the backup at each of those keys that the backup holds.
+	WarnMissingLiveBlobs RestoreWarningCode = "missing-live-blobs"
+	// WarnBlobsNotHeld says that the restored backup holds no copy of some
+	// blobs that its data names: it is a backup before an earlier restore,
+	// and that backup found them missing or damaged. The restore leaves those
+	// live keys as they are.
+	WarnBlobsNotHeld RestoreWarningCode = "blobs-not-held"
 )
 
 // RestoreWarning is a warning in the answer of the restore API. The restore

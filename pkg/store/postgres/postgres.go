@@ -576,12 +576,6 @@ func (s *Store) RenameStack(
 		}
 
 		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
-		from := unitGate{ns: oldRef.Namespace, tool: inventoryTool, name: stackUnitName(oldRef)}
-
-		if gateErr := moveUnitGate(ctx, q, from, stackUnitName(newRef)); gateErr != nil {
-			return gateErr
-		}
-
 		row, err := q.GetStack(ctx, db.GetStackParams{
 			Namespace: newRef.Namespace.String(),
 			Project:   newRef.Project.String(),

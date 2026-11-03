@@ -1067,56 +1067,6 @@ func (q *Queries) CopyStackTagsToInventoryLabels(ctx context.Context, stackID st
 	return err
 }
 
-const copyUnitGateObjects = `-- name: CopyUnitGateObjects :exec
-INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
-SELECT o.namespace_id, CAST($1 AS TEXT), o.kind, o.id, o.level, o.tool,
-       CAST($2 AS TEXT), o.version, o.body, o.updated_at_ms
-FROM gate_objects AS o
-WHERE o.namespace_id = $3 AND o.level = 'unit' AND o.tool = $4
-  AND o.unit_name = $5
-`
-
-type CopyUnitGateObjectsParams struct {
-	NewScopeKey string
-	NewUnitName string
-	NamespaceID string
-	Tool        string
-	OldUnitName string
-}
-
-// Copies the configuration of a unit to the scope of its new name, in the
-// transaction of a rename.
-func (q *Queries) CopyUnitGateObjects(ctx context.Context, arg CopyUnitGateObjectsParams) error {
-	_, err := q.db.Exec(ctx, copyUnitGateObjects,
-		arg.NewScopeKey,
-		arg.NewUnitName,
-		arg.NamespaceID,
-		arg.Tool,
-		arg.OldUnitName,
-	)
-	return err
-}
-
-const copyUnitGateReferences = `-- name: CopyUnitGateReferences :exec
-INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
-SELECT r.ref_kind, r.ref_id, r.namespace_id, CAST($1 AS TEXT), r.owner_kind, r.owner_id
-FROM gate_references AS r
-WHERE r.namespace_id = $2 AND r.scope_key = $3
-`
-
-type CopyUnitGateReferencesParams struct {
-	NewScopeKey string
-	NamespaceID string
-	OldScopeKey string
-}
-
-// Copies the references of the configuration of a unit to the scope of its
-// new name, in the transaction of a rename.
-func (q *Queries) CopyUnitGateReferences(ctx context.Context, arg CopyUnitGateReferencesParams) error {
-	_, err := q.db.Exec(ctx, copyUnitGateReferences, arg.NewScopeKey, arg.NamespaceID, arg.OldScopeKey)
-	return err
-}
-
 const countAccessToken = `-- name: CountAccessToken :one
 SELECT COUNT(*) FROM access_tokens WHERE id = $1
 `
@@ -2015,27 +1965,6 @@ SELECT COUNT(*) FROM trust_rules WHERE namespace = $1
 
 func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRow(ctx, countTrustRulesInNamespace, namespace)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const countUnitGateObjects = `-- name: CountUnitGateObjects :one
-SELECT COUNT(*)
-FROM gate_objects
-WHERE namespace_id = $1 AND level = 'unit' AND tool = $2
-  AND unit_name = $3
-`
-
-type CountUnitGateObjectsParams struct {
-	NamespaceID string
-	Tool        string
-	UnitName    string
-}
-
-// The count of configuration objects that the unit called unit_name holds.
-func (q *Queries) CountUnitGateObjects(ctx context.Context, arg CountUnitGateObjectsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countUnitGateObjects, arg.NamespaceID, arg.Tool, arg.UnitName)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -4050,20 +3979,18 @@ func (q *Queries) DeleteUnitContext(ctx context.Context, arg DeleteUnitContextPa
 
 const deleteUnitGateObjects = `-- name: DeleteUnitGateObjects :exec
 DELETE FROM gate_objects
-WHERE namespace_id = $1 AND level = 'unit' AND tool = $2
-  AND unit_name = $3
+WHERE namespace_id = $1 AND level = 'unit' AND unit_id = $2
 `
 
 type DeleteUnitGateObjectsParams struct {
 	NamespaceID string
-	Tool        string
-	UnitName    string
+	UnitID      string
 }
 
 // Deletes the configuration of a unit that a purge removes. The references go
 // with it.
 func (q *Queries) DeleteUnitGateObjects(ctx context.Context, arg DeleteUnitGateObjectsParams) error {
-	_, err := q.db.Exec(ctx, deleteUnitGateObjects, arg.NamespaceID, arg.Tool, arg.UnitName)
+	_, err := q.db.Exec(ctx, deleteUnitGateObjects, arg.NamespaceID, arg.UnitID)
 	return err
 }
 
@@ -4922,21 +4849,19 @@ func (q *Queries) FirstWorkspaceStateFinalize(ctx context.Context, workspaceID s
 const gateUnitCollection = `-- name: GateUnitCollection :one
 SELECT m.collection_key
 FROM namespaces AS n
-JOIN inventory AS i ON i.namespace = n.name
-JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-WHERE n.id = $1 AND i.tool = $2 AND i.name = $3
+JOIN collection_members AS m ON m.namespace = n.name
+WHERE n.id = $1 AND m.unit_id = $2
 `
 
 type GateUnitCollectionParams struct {
 	NamespaceID string
-	Tool        string
-	UnitName    string
+	UnitID      string
 }
 
-// The key of the collection that holds a unit now. A unit in no collection has
-// no row.
+// The key of the collection that holds the unit of a stable ID. A unit in no
+// collection has no row.
 func (q *Queries) GateUnitCollection(ctx context.Context, arg GateUnitCollectionParams) (string, error) {
-	row := q.db.QueryRow(ctx, gateUnitCollection, arg.NamespaceID, arg.Tool, arg.UnitName)
+	row := q.db.QueryRow(ctx, gateUnitCollection, arg.NamespaceID, arg.UnitID)
 	var collection_key string
 	err := row.Scan(&collection_key)
 	return collection_key, err
@@ -5987,6 +5912,60 @@ func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) 
 	return failover_version, err
 }
 
+const getGateDeletedUnit = `-- name: GetGateDeletedUnit :one
+SELECT n.name AS namespace, d.tool, d.name
+FROM namespaces AS n
+JOIN inventory_deleted AS d ON d.namespace = n.name
+WHERE n.id = $1 AND d.unit_id = $2
+`
+
+type GetGateDeletedUnitParams struct {
+	NamespaceID string
+	UnitID      string
+}
+
+type GetGateDeletedUnitRow struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+// The namespace, the tool and the name of the deleted unit of a stable ID.
+func (q *Queries) GetGateDeletedUnit(ctx context.Context, arg GetGateDeletedUnitParams) (GetGateDeletedUnitRow, error) {
+	row := q.db.QueryRow(ctx, getGateDeletedUnit, arg.NamespaceID, arg.UnitID)
+	var i GetGateDeletedUnitRow
+	err := row.Scan(&i.Namespace, &i.Tool, &i.Name)
+	return i, err
+}
+
+const getGateLiveUnit = `-- name: GetGateLiveUnit :one
+SELECT n.name AS namespace, i.tool, i.name
+FROM namespaces AS n
+JOIN inventory AS i ON i.namespace = n.name
+WHERE n.id = $1 AND i.unit_id = $2
+`
+
+type GetGateLiveUnitParams struct {
+	NamespaceID string
+	UnitID      string
+}
+
+type GetGateLiveUnitRow struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+// The namespace, the tool and the name of the live unit of a stable ID. A gate
+// row of a unit names the unit by its ID only, and a check that names the
+// scope of the row reads the name here.
+func (q *Queries) GetGateLiveUnit(ctx context.Context, arg GetGateLiveUnitParams) (GetGateLiveUnitRow, error) {
+	row := q.db.QueryRow(ctx, getGateLiveUnit, arg.NamespaceID, arg.UnitID)
+	var i GetGateLiveUnitRow
+	err := row.Scan(&i.Namespace, &i.Tool, &i.Name)
+	return i, err
+}
+
 const getGateObject = `-- name: GetGateObject :one
 SELECT version, body
 FROM gate_objects
@@ -6429,6 +6408,8 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 const getInventoryEntryByUnitID = `-- name: GetInventoryEntryByUnitID :one
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -6457,6 +6438,11 @@ type GetInventoryEntryByUnitIDRow struct {
 	LockHolder              pgtype.Text
 	LockSinceMs             pgtype.Int8
 	LockOperation           pgtype.Text
+	LastReleaseLockID       string
+	LastReleaseHolder       string
+	LastReleaseBy           string
+	LastReleaseKind         string
+	LastReleaseAtMs         int64
 	Collection              string
 	UnitManualHolder        pgtype.Text
 	UnitManualReason        pgtype.Text
@@ -6485,6 +6471,11 @@ func (q *Queries) GetInventoryEntryByUnitID(ctx context.Context, unitID string) 
 		&i.LockHolder,
 		&i.LockSinceMs,
 		&i.LockOperation,
+		&i.LastReleaseLockID,
+		&i.LastReleaseHolder,
+		&i.LastReleaseBy,
+		&i.LastReleaseKind,
+		&i.LastReleaseAtMs,
 		&i.Collection,
 		&i.UnitManualHolder,
 		&i.UnitManualReason,
@@ -9920,9 +9911,9 @@ func (q *Queries) InsertFirstSessionGeneration(ctx context.Context, principalID 
 }
 
 const insertGateObject = `-- name: InsertGateObject :exec
-INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
+INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, unit_id, version, body, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10)
+        $7, $8, $9)
 `
 
 type InsertGateObjectParams struct {
@@ -9931,8 +9922,7 @@ type InsertGateObjectParams struct {
 	Kind        string
 	ID          string
 	Level       string
-	Tool        string
-	UnitName    string
+	UnitID      string
 	Version     int64
 	Body        string
 	UpdatedAtMs int64
@@ -9945,8 +9935,7 @@ func (q *Queries) InsertGateObject(ctx context.Context, arg InsertGateObjectPara
 		arg.Kind,
 		arg.ID,
 		arg.Level,
-		arg.Tool,
-		arg.UnitName,
+		arg.UnitID,
 		arg.Version,
 		arg.Body,
 		arg.UpdatedAtMs,
@@ -13023,7 +13012,7 @@ func (q *Queries) ListGateRecordsByChange(ctx context.Context, arg ListGateRecor
 }
 
 const listGateReferrers = `-- name: ListGateReferrers :many
-SELECT o.scope_key, o.kind, o.id, o.version, o.body
+SELECT o.scope_key, o.namespace_id, o.unit_id, o.kind, o.id, o.version, o.body
 FROM gate_references AS r
 JOIN gate_objects AS o
     ON o.namespace_id = r.namespace_id AND o.scope_key = r.scope_key AND o.kind = r.owner_kind AND o.id = r.owner_id
@@ -13036,9 +13025,8 @@ WHERE r.ref_kind = $1 AND r.ref_id = $2
           AND EXISTS (
               SELECT 1
               FROM namespaces AS n
-              JOIN inventory AS i ON i.namespace = n.name
-              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+              JOIN collection_members AS m ON m.namespace = n.name
+              WHERE n.id = o.namespace_id AND m.unit_id = o.unit_id
                 AND m.collection_key = $6))
   )
 ORDER BY o.scope_key COLLATE "C", o.kind COLLATE "C", o.id COLLATE "C"
@@ -13054,11 +13042,13 @@ type ListGateReferrersParams struct {
 }
 
 type ListGateReferrersRow struct {
-	ScopeKey string
-	Kind     string
-	ID       string
-	Version  int64
-	Body     string
+	ScopeKey    string
+	NamespaceID string
+	UnitID      string
+	Kind        string
+	ID          string
+	Version     int64
+	Body        string
 }
 
 // The objects, in the scope and in the scopes after it (see
@@ -13081,6 +13071,8 @@ func (q *Queries) ListGateReferrers(ctx context.Context, arg ListGateReferrersPa
 		var i ListGateReferrersRow
 		if err := rows.Scan(
 			&i.ScopeKey,
+			&i.NamespaceID,
+			&i.UnitID,
 			&i.Kind,
 			&i.ID,
 			&i.Version,
@@ -13736,6 +13728,8 @@ func (q *Queries) ListInstanceVersions(ctx context.Context) ([]InstanceVersion, 
 const listInventory = `-- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -13765,6 +13759,11 @@ type ListInventoryRow struct {
 	LockHolder              pgtype.Text
 	LockSinceMs             pgtype.Int8
 	LockOperation           pgtype.Text
+	LastReleaseLockID       string
+	LastReleaseHolder       string
+	LastReleaseBy           string
+	LastReleaseKind         string
+	LastReleaseAtMs         int64
 	Collection              string
 	UnitManualHolder        pgtype.Text
 	UnitManualReason        pgtype.Text
@@ -13798,6 +13797,11 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 			&i.LockHolder,
 			&i.LockSinceMs,
 			&i.LockOperation,
+			&i.LastReleaseLockID,
+			&i.LastReleaseHolder,
+			&i.LastReleaseBy,
+			&i.LastReleaseKind,
+			&i.LastReleaseAtMs,
 			&i.Collection,
 			&i.UnitManualHolder,
 			&i.UnitManualReason,
@@ -14700,7 +14704,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 }
 
 const listNarrowerGateObjects = `-- name: ListNarrowerGateObjects :many
-SELECT o.scope_key, o.version, o.body
+SELECT o.scope_key, o.namespace_id, o.unit_id, o.version, o.body
 FROM gate_objects AS o
 WHERE o.kind = $1 AND o.id = $2
   AND (
@@ -14711,9 +14715,8 @@ WHERE o.kind = $1 AND o.id = $2
           AND EXISTS (
               SELECT 1
               FROM namespaces AS n
-              JOIN inventory AS i ON i.namespace = n.name
-              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+              JOIN collection_members AS m ON m.namespace = n.name
+              WHERE n.id = o.namespace_id AND m.unit_id = o.unit_id
                 AND m.collection_key = $6))
   )
 ORDER BY o.scope_key COLLATE "C"
@@ -14729,16 +14732,19 @@ type ListNarrowerGateObjectsParams struct {
 }
 
 type ListNarrowerGateObjectsRow struct {
-	ScopeKey string
-	Version  int64
-	Body     string
+	ScopeKey    string
+	NamespaceID string
+	UnitID      string
+	Version     int64
+	Body        string
 }
 
 // The objects of one kind and ID in the scope and in the scopes after it: for
 // the installation, every scope; for a namespace, every scope of the
 // namespace; for a collection, the collection and the units that it holds
-// now; for a unit, the unit. level, namespace_id, scope_key and
-// collection_key describe the scope.
+// now, by the stable ID of the unit; for a unit, the unit. level,
+// namespace_id, scope_key and collection_key describe the scope. The
+// namespace_id and the unit_id of a row name the unit of a unit row.
 func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerGateObjectsParams) ([]ListNarrowerGateObjectsRow, error) {
 	rows, err := q.db.Query(ctx, listNarrowerGateObjects,
 		arg.Kind,
@@ -14755,7 +14761,13 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 	var items []ListNarrowerGateObjectsRow
 	for rows.Next() {
 		var i ListNarrowerGateObjectsRow
-		if err := rows.Scan(&i.ScopeKey, &i.Version, &i.Body); err != nil {
+		if err := rows.Scan(
+			&i.ScopeKey,
+			&i.NamespaceID,
+			&i.UnitID,
+			&i.Version,
+			&i.Body,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -16881,29 +16893,26 @@ func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace strin
 }
 
 const listUnitGateObjectKeys = `-- name: ListUnitGateObjectKeys :many
-SELECT kind, id, scope_key
+SELECT kind, id
 FROM gate_objects
-WHERE namespace_id = $1 AND level = 'unit' AND tool = $2
-  AND unit_name = $3
+WHERE namespace_id = $1 AND level = 'unit' AND unit_id = $2
 ORDER BY kind, id
 `
 
 type ListUnitGateObjectKeysParams struct {
 	NamespaceID string
-	Tool        string
-	UnitName    string
+	UnitID      string
 }
 
 type ListUnitGateObjectKeysRow struct {
-	Kind     string
-	ID       string
-	ScopeKey string
+	Kind string
+	ID   string
 }
 
-// The kind, ID and scope key of the configuration of a unit that a purge
-// removes, for the audit entry of the purge.
+// The kind and ID of the configuration of a unit that a purge removes, for
+// the audit entry of the purge.
 func (q *Queries) ListUnitGateObjectKeys(ctx context.Context, arg ListUnitGateObjectKeysParams) ([]ListUnitGateObjectKeysRow, error) {
-	rows, err := q.db.Query(ctx, listUnitGateObjectKeys, arg.NamespaceID, arg.Tool, arg.UnitName)
+	rows, err := q.db.Query(ctx, listUnitGateObjectKeys, arg.NamespaceID, arg.UnitID)
 	if err != nil {
 		return nil, err
 	}
@@ -16911,7 +16920,7 @@ func (q *Queries) ListUnitGateObjectKeys(ctx context.Context, arg ListUnitGateOb
 	var items []ListUnitGateObjectKeysRow
 	for rows.Next() {
 		var i ListUnitGateObjectKeysRow
-		if err := rows.Scan(&i.Kind, &i.ID, &i.ScopeKey); err != nil {
+		if err := rows.Scan(&i.Kind, &i.ID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -21021,6 +21030,41 @@ func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateInventoryLastRelease = `-- name: UpdateInventoryLastRelease :exec
+UPDATE inventory
+SET last_release_lock_id = $1, last_release_holder = $2, last_release_by = $3,
+    last_release_kind = $4, last_release_at_ms = $5
+WHERE namespace = $6 AND tool = $7 AND name = $8
+`
+
+type UpdateInventoryLastReleaseParams struct {
+	LastReleaseLockID string
+	LastReleaseHolder string
+	LastReleaseBy     string
+	LastReleaseKind   string
+	LastReleaseAtMs   int64
+	Namespace         string
+	Tool              string
+	Name              string
+}
+
+// Publishes the last released lock of one workspace unit. The caller writes it
+// in the same transaction as the record on the workspace. An empty kind, empty
+// text and the time 0 mean no record.
+func (q *Queries) UpdateInventoryLastRelease(ctx context.Context, arg UpdateInventoryLastReleaseParams) error {
+	_, err := q.db.Exec(ctx, updateInventoryLastRelease,
+		arg.LastReleaseLockID,
+		arg.LastReleaseHolder,
+		arg.LastReleaseBy,
+		arg.LastReleaseKind,
+		arg.LastReleaseAtMs,
+		arg.Namespace,
+		arg.Tool,
+		arg.Name,
+	)
+	return err
 }
 
 const updateInventoryLock = `-- name: UpdateInventoryLock :exec

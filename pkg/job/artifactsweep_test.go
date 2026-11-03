@@ -179,13 +179,15 @@ func (sweepNamespaces) GetNamespace(_ context.Context, name namespace.Name) (nam
 }
 
 // listedJobs is a job store that answers List with one job and records each
-// filter it gets.
+// filter it gets. When full is true, each list answers a full page of copies
+// of the job, so that a pass runs into the page limit.
 type listedJobs struct {
 	job.Store
 
 	j       job.Job
 	mu      sync.Mutex
 	filters []job.Filter
+	full    bool
 }
 
 func (l *listedJobs) List(_ context.Context, f job.Filter) ([]job.Job, error) {
@@ -193,6 +195,15 @@ func (l *listedJobs) List(_ context.Context, f job.Filter) ([]job.Job, error) {
 	defer l.mu.Unlock()
 
 	l.filters = append(l.filters, f)
+
+	if l.full {
+		page := make([]job.Job, f.Limit)
+		for i := range page {
+			page[i] = l.j
+		}
+
+		return page, nil
+	}
 
 	return []job.Job{l.j}, nil
 }
@@ -260,7 +271,8 @@ func newSweepRig(t *testing.T, setup sweepSetup) *sweepRig {
 	}
 
 	r := &sweepRig{
-		s: nil, store: store, jobs: &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil},
+		s: nil, store: store,
+		jobs:  &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil, full: false},
 		audit: &recordedAudit{mu: sync.Mutex{}, entries: nil},
 	}
 
@@ -418,7 +430,7 @@ func TestNewArtifactSweeperNeedsItsPorts(t *testing.T) {
 
 	b, _, _ := newArtifactBlobs(t)
 	full := job.ArtifactSweeperConfig{
-		Jobs:  &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil},
+		Jobs:  &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil, full: false},
 		Names: sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil},
 		Blobs: b, Namespaces: sweepNamespaces{}, Guard: noWatch{}, Clock: aheadClock{ahead: 0},
 		Audit: &recordedAudit{mu: sync.Mutex{}, entries: nil}, Logger: nil, Now: nil,
@@ -564,4 +576,55 @@ func TestSweepKeepsABlobWithNoModificationTime(t *testing.T) {
 	}
 
 	requireStored(t, r.store, chunkKey, planPart)
+}
+
+// TestSweepReportsACappedPass shows that a pass whose pages are all full
+// reports the cap in the result and in the audit reason, and that a short page
+// reports neither.
+func TestSweepReportsACappedPass(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		full        bool
+		wantCapped  bool
+		wantFilters int
+	}{
+		{name: "short page", full: false, wantCapped: false, wantFilters: 2},
+		{name: "full pages", full: true, wantCapped: true, wantFilters: 20},
+	}
+
+	for _, tc := range cases {
+		named := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
+		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, wrap: nil})
+		r.jobs.full = tc.full
+
+		res, err := r.s.Sweep(t.Context())
+		if err != nil {
+			t.Fatalf("%s: Sweep = %v", tc.name, err)
+		}
+
+		if res.Capped != tc.wantCapped {
+			t.Errorf("%s: Capped = %t, want %t", tc.name, res.Capped, tc.wantCapped)
+		}
+
+		if got := len(r.jobs.filters); got != tc.wantFilters {
+			t.Errorf("%s: Sweep made %d lists, want %d", tc.name, got, tc.wantFilters)
+		}
+
+		e := r.audit.only(t)
+		if strings.Contains(e.Reason, "capped at the page limit") != tc.wantCapped {
+			t.Errorf("%s: audit reason = %q, want the cap: %t", tc.name, e.Reason, tc.wantCapped)
+		}
+
+		out, err := json.Marshal(&res)
+		wantJSON := `"capped":false`
+		if tc.wantCapped {
+			wantJSON = `"capped":true`
+		}
+
+		if err != nil || !strings.Contains(string(out), wantJSON) {
+			t.Errorf("%s: step output = %s, %v; want %s", tc.name, out, err, wantJSON)
+		}
+	}
 }
