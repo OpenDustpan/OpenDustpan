@@ -202,10 +202,12 @@ func TestRestoreSwapRefusesAChangeDuringTheSwap(t *testing.T) {
 				t.Fatalf("release during the swap: %v", err)
 			}
 
-			if _, err := ops.Claim(t.Context(), durable.ClaimRequest{
+			req := durable.ClaimRequest{
 				Owner: "instance-b", Kinds: []durable.Kind{backup.RestoreOperationKind}, MaxVersions: nil,
 				Lease: time.Hour, TakeCanceled: false,
-			}); err != nil {
+			}
+
+			if _, err := ops.Claim(t.Context(), req); err != nil {
 				t.Fatalf("takeover during the swap: %v", err)
 			}
 		}},
