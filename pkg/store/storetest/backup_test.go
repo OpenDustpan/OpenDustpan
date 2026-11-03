@@ -2014,6 +2014,37 @@ func (s *fakeBackupStore) StartBackup(ctx context.Context, r backup.Record, star
 	return nil
 }
 
+// StartBackupClaimed implements backup.Registry as StartBackup does, and
+// claims the new operation for claim in the same write.
+func (s *fakeBackupStore) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return durable.Operation{}, errFakeClosed
+	}
+
+	if err := start.Validate(); err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup operation: %w", err)
+	}
+
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return durable.Operation{}, fmt.Errorf("start backup %s: operation %q: %w", r.ID, start.Key,
+			durable.ErrKeyConflict)
+	}
+
+	hooks := durabletest.Hooks{Before: nil, After: func() error { return s.createBackupLocked(r) }}
+
+	op, err := s.mem.StartClaimedWith(ctx, start, claim, hooks)
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup operation: %w", err)
+	}
+
+	return op, nil
+}
+
 // FinishBackup implements backup.Registry. The row change runs inside the
 // step write of the durable harness, which checks the claim first and records
 // the step only when the row change succeeds. The ignoreFence knob skips the

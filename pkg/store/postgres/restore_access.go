@@ -71,10 +71,11 @@ func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, live string, plan s
 }
 
 // swapSchemas moves the live schema aside, moves the staged schema live,
-// drops the old live schema when names.drop says so and the control schema
-// of the staging area, and fences the restored namespaces, in tx. The
-// installation, backups and restores tables live in the control schema,
-// which the swap never renames.
+// drops the control schema of the staging area, fences the restored
+// namespaces, keeps the durable control tables and drops the old live schema
+// when names.drop says so, in tx. The installation, backups and restores
+// tables live in the control schema, which the swap never renames. The copy
+// of the durable control tables comes last, as in finishSwap.
 func swapSchemas(ctx context.Context, tx pgx.Tx, names swapNames) error {
 	live, previous, staging := names.live, names.previous, names.staging
 
@@ -86,21 +87,15 @@ func swapSchemas(ctx context.Context, tx pgx.Tx, names swapNames) error {
 		return fmt.Errorf("move staged schema live: %w", err)
 	}
 
-	if err := keepControlTables(ctx, tx, live, previous); err != nil {
-		return err
-	}
-
-	if names.drop {
-		if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
-			return fmt.Errorf("drop previous schema: %w", err)
-		}
-	}
-
 	if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
 		return fmt.Errorf("drop staging control schema: %w", err)
 	}
 
-	return fenceRestored(ctx, tx, live)
+	if err := fenceRestored(ctx, tx, live); err != nil {
+		return err
+	}
+
+	return keepControlAndDrop(ctx, tx, names)
 }
 
 // lockLiveAccessTables locks every live access table in share mode, so no

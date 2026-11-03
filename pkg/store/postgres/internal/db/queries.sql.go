@@ -862,6 +862,54 @@ func (q *Queries) ClaimSinkOperation(ctx context.Context, arg ClaimSinkOperation
 	return i, err
 }
 
+const claimStartedDurableOperation = `-- name: ClaimStartedDurableOperation :one
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+)
+UPDATE durable_operations o
+SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
+  claim_owner = $1::text, claim_expires_at_ms = c.now_ms + $2::bigint,
+  updated_at_ms = c.now_ms
+FROM c
+WHERE o.id = $3::text AND o.state = 'pending'
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
+`
+
+type ClaimStartedDurableOperationParams struct {
+	Owner   string
+	LeaseMs int64
+	ID      string
+}
+
+// Claims the pending operation id that the transaction started, for the
+// starter: the claim of a durable.StartClaim. The expiry is the database
+// clock plus the lease.
+func (q *Queries) ClaimStartedDurableOperation(ctx context.Context, arg ClaimStartedDurableOperationParams) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, claimStartedDurableOperation, arg.Owner, arg.LeaseMs, arg.ID)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const clearGitHostDefault = `-- name: ClearGitHostDefault :execrows
 UPDATE git_host_connections
 SET is_default = false, version = version + 1, updated_at_ms = GREATEST($1, git_host_connections.created_at_ms)
