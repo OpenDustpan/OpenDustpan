@@ -220,7 +220,7 @@ func openRestoreBlobs(t *testing.T, name string) *fs.Store {
 func addBackupTarget(t *testing.T, cfg *settings) *settings {
 	t.Helper()
 
-	cfg.backupTarget = openRestoreBlobs(t, "target")
+	cfg.backup.target = openRestoreBlobs(t, "target")
 	cfg.blobStore = openRestoreBlobs(t, "live-blobs")
 
 	return cfg
