@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -224,4 +225,130 @@ func coverageSignIn(sessions *session.Sessions, admin *session.ProviderAdmin, co
 		DevCode:         code,
 		DevAdmin:        identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
 	}
+}
+
+// coverageSessionPolicyStore holds the default session policy: the route
+// table needs a session policy service, and the coverage gate never serves
+// a request.
+type coverageSessionPolicyStore struct{}
+
+func (coverageSessionPolicyStore) GetSessionPolicy(_ context.Context) (session.Policy, error) {
+	return session.DefaultPolicy(), nil
+}
+
+func (coverageSessionPolicyStore) UpdateSessionPolicy(
+	_ context.Context, _ session.PolicyUpdate,
+) (session.Policy, error) {
+	return session.DefaultPolicy(), nil
+}
+
+// coverageSessionPolicies returns the session policy service of the route
+// table.
+func coverageSessionPolicies(tb testing.TB) *session.Policies {
+	tb.Helper()
+
+	svc, err := session.NewPolicies(session.PolicyConfig{Store: coverageSessionPolicyStore{}, Now: nil})
+	if err != nil {
+		tb.Fatalf("session policy service: %v", err)
+	}
+
+	return svc
+}
+
+// devCoveringTest names the test that proves the routes of the dev command
+// instead of a CLI: no CLI reads the capabilities document or signs in with
+// the code of the first run.
+const devCoveringTest = "TestDevCommand"
+
+// devAllowEntries returns the capabilities document and the sign-in with the
+// one-time code of the dev command. The steps of devCoveringTest start the
+// real binary on a pseudo terminal, play the browser with the code from the
+// banner, and read the document with and without the token.
+func devAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/capabilities", CoveringTest: devCoveringTest,
+			Reason: "Console and client route: no CLI reads the capabilities document. The harness " +
+				"step reads it from a dev server with and without the token.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/sign-in/dev-code", CoveringTest: devCoveringTest,
+			Reason: "Console route: only the one-time link of the dev command signs in with the code. " +
+				"The harness step plays the browser with the code from the banner of the real binary.",
+		},
+	}
+}
+
+// signInAllowEntries returns the console sign-in routes. The steps of
+// TestSignIn drive each one in the browser flow against a test OpenID
+// provider, on each store.
+func signInAllowEntries() []AllowEntry {
+	reason := "Console route: no CLI signs in through a browser. " +
+		"The harness plays the browser with a cookie jar against a test OpenID provider and checks each answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/sign-in/{provider}"},
+		{http.MethodGet, "/api/server/sign-in/{provider}/callback"},
+		{http.MethodGet, "/api/server/session"},
+		{http.MethodPost, "/api/server/sign-out"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSignIn", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// signInProviderAllowEntries returns the operator and console routes of
+// the sign-in providers. The steps of TestSignIn drive each one through the
+// real binary on each store: a create, the list, a read, a change, a
+// refused delete and a delete.
+func signInProviderAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages sign-in providers. " +
+		"The harness calls each route through the real binary and checks the answer."
+
+	const list, one = "/api/server/sign-in-providers", "/api/server/sign-in-providers/{id}"
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, list},
+		{http.MethodPost, list},
+		{http.MethodGet, one},
+		{http.MethodPatch, one},
+		{http.MethodDelete, one},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSignIn", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// sessionPolicyAllowEntries returns the operator and console routes of the
+// session policy. The harness steps of TestSessionPolicy drive each one
+// through the real binary on each store.
+func sessionPolicyAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI reads or changes the session policy. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/session-policy"},
+		{http.MethodPatch, "/api/server/session-policy"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSessionPolicy", Reason: reason,
+		})
+	}
+
+	return out
 }
