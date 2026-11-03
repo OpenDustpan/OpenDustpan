@@ -523,6 +523,9 @@ func (s Signature) verifyKey(key PublicKey, namespace string, digest []byte) (Re
 	case TypeSKEd25519:
 		return s.verifySK(key, signed)
 	case TypeECDSAP256:
+		// Defense in depth: parseInner never sets flags or a counter for this
+		// type, and Verify does not rely on it; this check stays so that a
+		// Signature that a caller builds cannot verify with them.
 		if s.Flags != 0 || s.Counter != 0 {
 			return Result{}, fmt.Errorf("%w: flags on a key that is not a security key", ErrFlags)
 		}
