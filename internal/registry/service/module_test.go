@@ -226,6 +226,75 @@ func TestPublishModuleRepeatAndConflict(t *testing.T) {
 	}
 }
 
+// TestPublishModuleVersionRows proves that a version that exists with other
+// content is refused before a content key is written. The key count and the
+// audit count show what each publish wrote.
+func TestPublishModuleVersionRows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		version    string
+		data       string
+		wantErr    error
+		wantKeys   int
+		wantAudits int
+	}{
+		{
+			name:       "new version",
+			version:    "1.1.0",
+			data:       "two",
+			wantErr:    nil,
+			wantKeys:   1,
+			wantAudits: 1,
+		},
+		{
+			name:       "same version with the same content",
+			version:    "1.0.0",
+			data:       "one",
+			wantErr:    nil,
+			wantKeys:   0,
+			wantAudits: 0,
+		},
+		{
+			name:       "same version with other content",
+			version:    "1.0.0",
+			data:       "two",
+			wantErr:    registry.ErrVersionExists,
+			wantKeys:   0,
+			wantAudits: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t, false)
+
+			if _, err := e.publishModule("1.0.0", moduleTarGz(t, "one")); err != nil {
+				t.Fatalf("PublishModule: %v", err)
+			}
+
+			keysBefore := len(e.listing(t, e.ids[acme], "sha256"))
+			auditsBefore := len(e.store.audits)
+
+			_, err := e.publishModule(tc.version, moduleTarGz(t, tc.data))
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("PublishModule = %v, want %v", err, tc.wantErr)
+			}
+
+			if got := len(e.listing(t, e.ids[acme], "sha256")) - keysBefore; got != tc.wantKeys {
+				t.Fatalf("new content keys = %d, want %d", got, tc.wantKeys)
+			}
+
+			if got := len(e.store.audits) - auditsBefore; got != tc.wantAudits {
+				t.Fatalf("new audit entries = %d, want %d", got, tc.wantAudits)
+			}
+		})
+	}
+}
+
 func TestModulesAreNotProviders(t *testing.T) {
 	t.Parallel()
 

@@ -181,8 +181,11 @@ type measured struct {
 // Publish publishes one provider release from the staged files of req. It
 // returns the release as stored. A publish of a version that exists with the
 // same content returns that release and changes nothing. A version that exists
-// with other content is refused before any file is copied to a content key. It returns
-// registry.ErrInvalid or ErrBadRequest for a request that fails its checks,
+// with other content is refused before any file is copied to a content key. A
+// second publish of the same version that runs at the same time can pass this
+// check; the store then refuses its record with registry.ErrVersionExists, and
+// the copied content key stays unreferenced. It returns registry.ErrInvalid or
+// ErrBadRequest for a request that fails its checks,
 // ErrNotStaged, ErrTooLarge, ErrNoKeys, registry.ErrBadSignature,
 // registry.ErrUntrustedKey (also for a key removed during the publish),
 // releasecheck.ErrRefused, registry.ErrVersionExists,
