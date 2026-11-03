@@ -279,7 +279,7 @@ Until the first release, a new build of OpenDustpan can change the database sche
 `dev` then refuses the database of an earlier build and names the command that helps:
 
 ```text
-opendustpan: the schema changed: run opendustpan dev reset to start again. The old data is kept as dev.db.reset.bak in the data directory: ...
+opendustpan: the schema changed: run opendustpan dev reset to start again. That command moves the old data aside as dev.db.reset.bak in the data directory: ...
 ```
 
 `dev` never resets a database on its own. To start again on an empty database, stop `dev` and run:
