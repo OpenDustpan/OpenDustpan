@@ -919,10 +919,10 @@ func (c *countingStore) Snapshot(ctx context.Context, scopes []gate.Scope) (gate
 func newCountingSWEnv(t *testing.T, fail error) (swEnv, *countingStore) {
 	t.Helper()
 
-	var counting *countingStore
+	counting := &countingStore{Store: nil, mu: sync.Mutex{}, snapshots: 0, fail: fail}
 
 	e := newWrappedSWEnv(t, swUnitsOfTests(), nil, func(st *sqlite.Store) gate.Store {
-		counting = &countingStore{Store: st, mu: sync.Mutex{}, snapshots: 0, fail: fail}
+		counting.Store = st
 
 		return counting
 	})
