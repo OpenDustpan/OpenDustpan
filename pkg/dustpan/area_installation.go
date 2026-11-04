@@ -56,11 +56,11 @@ type serverHandlerInputs struct {
 	signIn   *serverapi.SignIn
 
 	// The parts that the assembly builds after the principals.
-	principals  *principal.Service
-	gates       *gate.ConfigService
-	gitHost     *forge.Service
-	idempotency *idempotent.Middleware
-	extras      serverExtras
+	principals   *principal.Service
+	gates        *gate.ConfigService
+	forgeService *forge.Service
+	idempotency  *idempotent.Middleware
+	extras       serverExtras
 
 	// shipper ships the audit entries to the audit sinks, or is nil.
 	shipper          *audit.Shipper
@@ -82,7 +82,7 @@ type serverHandlerInputs struct {
 // principals.
 func newServerHandler(in serverHandlerInputs) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		GitHost:          in.gitHost,
+		GitHost:          in.forgeService,
 		Idempotency:      in.idempotency,
 		Authenticator:    in.authenticator,
 		Authorizer:       in.authorizer,

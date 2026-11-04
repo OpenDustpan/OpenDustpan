@@ -2940,7 +2940,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
-		principals: principals, gates: gates, gitHost: gitHost, idempotency: idem, extras: extras,
+		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
 		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
 		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
 		version: cfg.version, logger: cfg.logger, now: cfg.now,
