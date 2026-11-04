@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"syscall"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -29,6 +30,7 @@ const (
 	CauseEOF              = "eof"
 	CauseFileMissing      = "file_missing"
 	CauseFilePermission   = "file_permission"
+	CauseStorage          = "storage"
 	CauseUnclassified     = "unclassified"
 )
 
@@ -125,8 +127,9 @@ var (
 
 // Cause returns the cause class of err: one value of the closed list of the
 // Cause constants, never a part of err.Error(). The order is part of the
-// contract, because context.DeadlineExceeded also implements net.Error. A nil
-// error returns CauseUnclassified.
+// contract, because context.DeadlineExceeded and every syscall.Errno also
+// implement net.Error. An unknown error and a nil error return
+// CauseUnclassified: the function never returns CauseNetwork by default.
 func Cause(err error) string {
 	switch {
 	case err == nil:
@@ -147,21 +150,53 @@ func Cause(err error) string {
 		return CauseFilePermission
 	}
 
-	// Defense in depth: AsType returns a non-nil error when ok is true. The nil
-	// check stays so that a future change to the match cannot return the class
-	// for an empty match.
-	if netErr, ok := errors.AsType[net.Error](err); ok && netErr != nil {
+	// Local storage errors come before the network test. Every syscall.Errno
+	// implements net.Error, so a test for net.Error would class a full disk as
+	// a network failure.
+	if isStorageErrno(err) {
+		return CauseStorage
+	}
+
+	if isNetworkError(err) {
 		return CauseNetwork
 	}
 
 	return CauseUnclassified
 }
 
+// isNetworkError returns true when err wraps a *net.OpError or a
+// *net.DNSError. The net.Error interface is not a test: syscall.Errno and
+// other local errors satisfy it. A *url.Error unwraps to the error it wraps,
+// so a url.Error around a network error is found here, and one around any
+// other error is not.
+func isNetworkError(err error) bool {
+	// Defense in depth: AsType returns a non-nil pointer when ok is true. The
+	// nil checks stay so that a future change to the match cannot return true
+	// for an empty match.
+	if opErr, ok := errors.AsType[*net.OpError](err); ok && opErr != nil {
+		return true
+	}
+
+	dnsErr, ok := errors.AsType[*net.DNSError](err)
+
+	return ok && dnsErr != nil
+}
+
+// isStorageErrno returns true when err wraps an error number of a full or
+// failed local store: no space, quota exceeded, read-only file system or an
+// I/O error.
+func isStorageErrno(err error) bool {
+	return errors.Is(err, syscall.ENOSPC) ||
+		errors.Is(err, syscall.EDQUOT) ||
+		errors.Is(err, syscall.EROFS) ||
+		errors.Is(err, syscall.EIO)
+}
+
 // knownCause returns true when cause is one value of the closed list.
 func knownCause(cause string) bool {
 	switch cause {
 	case CauseUnclassified, CauseDeadlineExceeded, CauseCanceled, CauseUnexpectedEOF,
-		CauseEOF, CauseFileMissing, CauseFilePermission, CauseNetwork:
+		CauseEOF, CauseFileMissing, CauseFilePermission, CauseStorage, CauseNetwork:
 		return true
 	default:
 		return false
