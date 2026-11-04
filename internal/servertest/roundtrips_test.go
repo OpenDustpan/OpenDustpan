@@ -736,6 +736,15 @@ func (h *rtHarness) newStack() {
 	h.createStack(h.stack)
 }
 
+// measureStackCall measures one call of the admin to the stack of the harness,
+// at the path of the stack with suffix.
+func (h *rtHarness) measureStackCall(method, suffix, body string, want int) {
+	h.t.Helper()
+
+	path := "/api/stacks/acme/web/" + h.stack + suffix
+	h.measure(func() { h.call(method, path, body, want) })
+}
+
 // requestFlow is one request flow and its budget. The run measures its body
 // only: the setup and the cleanup of a flow do not count.
 type requestFlow struct {
@@ -809,6 +818,36 @@ func requestFlows() []requestFlow {
 			run := h.startUpdate()
 			h.measure(func() { h.events(run, eventBatchSize) })
 			h.complete(run)
+		}},
+		// The stack rm, import, restore, rename and cancel each meet the gates
+		// of state.write before the write: the reads of the unit facts and the
+		// gate configuration, and the write of the decision record in its own
+		// transaction, are part of each budget.
+		{"pulumi stack rm", 51, func(h *rtHarness) {
+			h.newStack()
+			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
+		}},
+		{"pulumi stack import", 78, func(h *rtHarness) {
+			h.newStack()
+			body := `{"version":3,"deployment":` + deployment(3) + `}`
+			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
+		}},
+		{"pulumi stack restore", 79, func(h *rtHarness) {
+			h.newStack()
+			run := h.startUpdate()
+			h.save(run, 1)
+			h.complete(run)
+			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
+		}},
+		{"pulumi stack rename", 48, func(h *rtHarness) {
+			h.newStack()
+			body := `{"newName":"` + h.stack + `-renamed"}`
+			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
+		}},
+		{"pulumi cancel", 44, func(h *rtHarness) {
+			h.newStack()
+			run := h.startUpdate()
+			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
 		}},
 	}
 }
