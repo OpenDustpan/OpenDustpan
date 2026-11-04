@@ -31,7 +31,7 @@ type serverExtras struct {
 func newServerExtras(cfg *settings, deps installationDeps, principals *principal.Service) (serverExtras, error) {
 	none := serverExtras{allow: nil, audit: nil, settings: nil, localUsers: nil}
 
-	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
+	allow, err := newIPAllowlistService(cfg.ipAllowlists, deps.services.namespaces, cfg.now)
 	if err != nil {
 		return none, err
 	}
