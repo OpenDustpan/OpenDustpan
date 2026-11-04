@@ -62,7 +62,7 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 // The metrics route of a worker-only process takes the CORS rule, and the
 // request log of that process takes the client address rule, so buildMux and
 // newClientIPResolver are "all". The IP allowlists check the namespace of an
-// object, and the metrics route has none, so wireTokens stays "api".
+// object, and the metrics route has none, so newAuthPorts stays "api".
 var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals // A fixed declaration table.
 	"consoleDir":     {"mountAPI": "api"},
 	"consoleHeaders": {"checkSettings": "api", "mountAPI": "api"},
@@ -81,7 +81,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	"proxies":       {"newClientIPResolver": "all"},
 	"ipAllowlists": {
 		"checkTLSAndAllowlist": "api", "newIPAllowlistService": "api", "newPulumiHandler": "api",
-		"newTFEHandler": "api", "wireTokens": "api",
+		"newAuthPorts": "api", "newTFEHandler": "api",
 	},
 	// The ranges apply to the connections that the routes of a namespace make.
 	"gitHost": {"newGitHostService": "api", "newUnitSettingsHandler": "api"},

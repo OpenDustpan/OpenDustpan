@@ -53,9 +53,12 @@ func TestWireDevGuard(t *testing.T) {
 			cfg.installationKind = tt.kind
 			cfg.authenticator = devPersonAuthenticator{}
 
-			wireDevGuard(cfg)
+			ports, err := newAuthPorts(cfg, nil)
+			if err != nil {
+				t.Fatalf("auth ports: %v", err)
+			}
 
-			if _, err := cfg.authenticator.AuthenticateToken(t.Context(), "token"); !errors.Is(err, tt.wantErr) {
+			if _, err := ports.authenticator.AuthenticateToken(t.Context(), "token"); !errors.Is(err, tt.wantErr) {
 				t.Fatalf("AuthenticateToken = %v, want %v", err, tt.wantErr)
 			}
 		})

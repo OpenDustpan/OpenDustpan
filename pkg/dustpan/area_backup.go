@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -79,44 +82,63 @@ func WithAllowDevHint(hint string) Option {
 	return func(o *settings) { o.backup.allowDevHint = hint }
 }
 
+// backupInputs holds the values that newBackupService reads. The assembly
+// fills each field; the backup area reads no other value.
+type backupInputs struct {
+	// settings holds the backup target and its name.
+	settings backupSettings
+	// store is the namespace store. It must also capture exports, track
+	// backups, read the installation kind and keep durable operations.
+	store      namespace.Store
+	blobs      blob.Store
+	workspaces *workspace.Service
+	// watch records the claims of the backup operations, or is nil.
+	watch   *workerWatch
+	owner   string
+	lease   time.Duration
+	version string
+	now     func() time.Time
+	logger  *slog.Logger
+}
+
 // newBackupService builds the installation backup service when a backup
 // target is configured, else returns nil. The exporter and the registry come
 // from the namespace store: every SQL adapter serves all ports from one
 // database connection. A nil target means no backup target is configured.
-func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
-	if cfg.backup.target == nil {
+func newBackupService(in backupInputs) (*backup.Service, error) {
+	if in.settings.target == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
 	}
 
-	exporter, ok := cfg.namespaceStore.(backup.PortableExporter)
+	exporter, ok := in.store.(backup.PortableExporter)
 	if !ok {
 		return nil, errBackupNeedsExporter
 	}
 
-	registry, ok := cfg.namespaceStore.(backup.Registry)
+	registry, ok := in.store.(backup.Registry)
 	if !ok {
 		return nil, errBackupNeedsRegistry
 	}
 
 	// A store that cannot read its kind cannot run a restore either: the
 	// error names every port of backup.RestoreLive that the store lacks.
-	kinds, ok := cfg.namespaceStore.(backup.KindReader)
+	kinds, ok := in.store.(backup.KindReader)
 	if !ok {
-		return nil, restoreLiveError(cfg.namespaceStore)
+		return nil, restoreLiveError(in.store)
 	}
 
 	maxSQL := int64(0)
-	if strings.HasPrefix(strings.TrimSpace(cfg.backup.targetName), "s3://") {
+	if strings.HasPrefix(strings.TrimSpace(in.settings.targetName), "s3://") {
 		maxSQL = backup.S3ObjectLimit
 	}
 
 	var opener backup.StateOpener
-	if svc.workspaces != nil {
-		opener = uncachedStateOpener{workspaces: svc.workspaces}
+	if in.workspaces != nil {
+		opener = uncachedStateOpener{workspaces: in.workspaces}
 	}
 
-	ops, err := backupOperations(cfg)
+	ops, err := backupOperations(in.store, in.watch)
 	if err != nil {
 		return nil, err
 	}
@@ -125,17 +147,17 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 		Exporter:    exporter,
 		Kinds:       kinds,
 		Registry:    registry,
-		Blobs:       cfg.blobStore,
+		Blobs:       in.blobs,
 		StateOpener: opener,
-		Target:      cfg.backup.target,
-		TargetName:  cfg.backup.targetName,
-		Now:         cfg.now,
-		Version:     cfg.version,
+		Target:      in.settings.target,
+		TargetName:  in.settings.targetName,
+		Now:         in.now,
+		Version:     in.version,
 		MaxSQLBytes: maxSQL,
 		Operations:  ops,
-		Owner:       durableOwner(cfg),
-		Lease:       cfg.operationLease,
-		Logger:      cfg.logger,
+		Owner:       in.owner,
+		Lease:       in.lease,
+		Logger:      in.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup service: %w", err)
@@ -145,13 +167,13 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 }
 
 // backupOperations returns the durable operations of the namespace store,
-// where the backup operations live next to the backup rows. Its claims go
-// through the claim recorder of the worker watch, so a worker that runs only
-// a backup still writes its heartbeat.
+// where the backup operations live next to the backup rows. With a watch,
+// its claims go through the claim recorder of the worker watch, so a worker
+// that runs only a backup still writes its heartbeat.
 //
 //nolint:ireturn // The port is the result: the store adapters and the tracking wrapper both serve it.
-func backupOperations(cfg *settings) (durable.Store, error) {
-	p, ok := cfg.namespaceStore.(durableStoreProvider)
+func backupOperations(store namespace.Store, watch *workerWatch) (durable.Store, error) {
+	p, ok := store.(durableStoreProvider)
 	if !ok || p == nil {
 		return nil, errBackupNeedsOperations
 	}
@@ -161,11 +183,38 @@ func backupOperations(cfg *settings) (durable.Store, error) {
 		return nil, errBackupNeedsOperations
 	}
 
-	if cfg.watch != nil {
-		return trackingOps{Store: ops, watch: cfg.watch}, nil
+	if watch != nil {
+		return trackingOps{Store: ops, watch: watch}, nil
 	}
 
 	return ops, nil
+}
+
+// restoreInputs holds the values that newRestoreService reads. The assembly
+// fills each field; the backup area reads no other value.
+type restoreInputs struct {
+	// settings holds the backup target and the switches of a restore of a
+	// dev backup.
+	settings backupSettings
+	// store is the namespace store. It must also serve each port of
+	// backup.RestoreLive and keep durable operations that cancel before a
+	// step.
+	store namespace.Store
+	blobs blob.Store
+	// watch records the claims of the restore operations, or is nil.
+	watch *workerWatch
+	// backups takes the backup of the live data before the apply. maint is
+	// the maintenance service. chain is the audit chain, or nil when the
+	// chain is off.
+	backups      *backup.Service
+	maint        *maintenance.Service
+	chain        *auditChain
+	key          secret.Wrapper
+	installation string
+	owner        string
+	lease        time.Duration
+	now          func() time.Time
+	logger       *slog.Logger
 }
 
 // newRestoreService builds the installation restore service when a backup
@@ -174,15 +223,13 @@ func backupOperations(cfg *settings) (durable.Store, error) {
 // all ports from one database connection. The backup service takes the
 // backup of the live data before the apply. A nil target means no backup
 // target is configured.
-func newRestoreService(
-	cfg *settings, deps installationDeps, maint *maintenance.Service,
-) (*backup.RestoreService, error) {
-	if cfg.backup.target == nil {
+func newRestoreService(in restoreInputs) (*backup.RestoreService, error) {
+	if in.settings.target == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
 	}
 
-	if deps.backups == nil {
+	if in.backups == nil {
 		return nil, errBackupNeedsRegistry
 	}
 
@@ -191,12 +238,12 @@ func newRestoreService(
 	// A store that lacks one of them cannot run a restore, and the server does
 	// not start: a production restore never skips the kind check, the strip or
 	// the report because a port is missing.
-	live, ok := cfg.namespaceStore.(backup.RestoreLive)
+	live, ok := in.store.(backup.RestoreLive)
 	if !ok {
-		return nil, restoreLiveError(cfg.namespaceStore)
+		return nil, restoreLiveError(in.store)
 	}
 
-	ops, err := backupOperations(cfg)
+	ops, err := backupOperations(in.store, in.watch)
 	if err != nil {
 		return nil, err
 	}
@@ -205,43 +252,43 @@ func newRestoreService(
 		return nil, errRestoreNeedsOperations
 	}
 
-	admit := restoreMinimumAdmit(cfg.namespaceStore)
+	admit := restoreMinimumAdmit(in.store)
 
 	var steps []restoreStep
-	if deps.chain != nil {
-		admit = admitBoth(admit, deps.chain.admitRestore)
-		steps = append(steps, deps.chain.afterRestore)
+	if in.chain != nil {
+		admit = admitBoth(admit, in.chain.admitRestore)
+		steps = append(steps, in.chain.afterRestore)
 
-		if deps.chain.checkpoints != nil {
-			serverAudit, auditErr := serverAuditOf(cfg.namespaceStore)
+		if in.chain.checkpoints != nil {
+			serverAudit, auditErr := serverAuditOf(in.store)
 			if auditErr != nil {
 				return nil, auditErr
 			}
 
-			steps = append(steps, newEpochAfterRestore(deps.chain.checkpoints, serverAudit, cfg.now))
+			steps = append(steps, newEpochAfterRestore(in.chain.checkpoints, serverAudit, in.now))
 		}
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:         live,
 		Operations:   ops,
-		Backups:      deps.backups,
-		Maintenance:  maint,
-		Blobs:        cfg.blobStore,
-		Target:       cfg.backup.target,
-		Key:          cfg.secretWrapper,
-		Installation: cfg.installation.String(),
+		Backups:      in.backups,
+		Maintenance:  in.maint,
+		Blobs:        in.blobs,
+		Target:       in.settings.target,
+		Key:          in.key,
+		Installation: in.installation,
 		AfterApply:   afterRestore(steps...),
 		Admit:        admit,
 
-		AllowDevBackups: cfg.backup.allowDevBackups,
-		AllowDevHint:    cfg.backup.allowDevHint,
-		Owner:           durableOwner(cfg),
-		Lease:           cfg.operationLease,
+		AllowDevBackups: in.settings.allowDevBackups,
+		AllowDevHint:    in.settings.allowDevHint,
+		Owner:           in.owner,
+		Lease:           in.lease,
 		CleanupLockWait: 0,
 		RetryBase:       0,
-		Now:             cfg.now,
-		Logger:          cfg.logger,
+		Now:             in.now,
+		Logger:          in.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)
