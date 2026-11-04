@@ -1,0 +1,11 @@
+    perf10_latency_test.go:127: PERF10 backup-restore units=3 run=0 backup=1216.2ms restore=1504.9ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=3 run=1 backup=1189.7ms restore=1575.1ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=3 run=2 backup=1192.6ms restore=1710.8ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=3 run=3 backup=1176.7ms restore=1563.9ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=3 run=4 backup=1152.7ms restore=1537.0ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=30 run=0 backup=1341.7ms restore=1582.4ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=30 run=1 backup=1318.8ms restore=1452.0ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=30 run=2 backup=1388.8ms restore=1506.3ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=30 run=3 backup=1443.9ms restore=1423.2ms
+    perf10_latency_test.go:127: PERF10 backup-restore units=30 run=4 backup=1442.8ms restore=1652.7ms
+ok  	opendustpan.org/opendustpan/internal/servertest	38.955s

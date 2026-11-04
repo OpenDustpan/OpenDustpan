@@ -1,0 +1,10 @@
+BenchmarkPerf10LogInternal-4    	  846286	      1447 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPerf10LogInternal-4    	 1000000	      1193 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPerf10LogInternal-4    	 1000000	      1074 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPerf10LogInternal-4    	 1000000	      1123 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPerf10LogInternal-4    	 1000000	      1161 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPerf10OldStyleLine-4   	 1394504	       849.3 ns/op	      96 B/op	       2 allocs/op
+BenchmarkPerf10OldStyleLine-4   	 1464805	       832.5 ns/op	      96 B/op	       2 allocs/op
+BenchmarkPerf10OldStyleLine-4   	 1335498	       886.4 ns/op	      96 B/op	       2 allocs/op
+BenchmarkPerf10OldStyleLine-4   	 1452180	       854.9 ns/op	      96 B/op	       2 allocs/op
+BenchmarkPerf10OldStyleLine-4   	 1249820	      1009 ns/op	      96 B/op	       2 allocs/op

@@ -1,0 +1,5 @@
+    perf10_latency_test.go:24: PERF10 tofu-lock n=400 p50=6.897ms p95=11.053ms p99=14.992ms
+    perf10_latency_test.go:24: PERF10 tofu-unlock n=400 p50=2.041ms p95=3.554ms p99=4.608ms
+    perf10_latency_test.go:24: PERF10 pulumi-checkpoint-save n=400 p50=4.059ms p95=7.506ms p99=11.603ms
+    perf10_latency_test.go:24: PERF10 pulumi-update-cycle n=100 p50=15.313ms p95=20.106ms p99=33.492ms
+    perf10_latency_test.go:24: PERF10 pulumi-stack-rm n=200 p50=6.861ms p95=10.800ms p99=13.813ms

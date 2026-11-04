@@ -1,0 +1,6 @@
+    perf10_latency_test.go:24: PERF10 tofu-lock n=400 p50=5.532ms p95=7.984ms p99=11.542ms
+    perf10_latency_test.go:24: PERF10 tofu-unlock n=400 p50=1.732ms p95=2.618ms p99=3.609ms
+    perf10_latency_test.go:24: PERF10 pulumi-checkpoint-save n=400 p50=3.743ms p95=5.908ms p99=7.308ms
+    perf10_latency_test.go:24: PERF10 pulumi-update-cycle n=100 p50=14.763ms p95=18.300ms p99=19.827ms
+    perf10_latency_test.go:24: PERF10 pulumi-stack-rm n=200 p50=6.263ms p95=8.930ms p99=9.660ms
+ok  	opendustpan.org/opendustpan/internal/servertest	9.113s

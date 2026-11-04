@@ -1,0 +1,2 @@
+    perf9_migrate_pg_test.go:41: postgres fresh-migrate n=20 p50=217.840279ms p95=383.541329ms p99=383.541329ms
+    perf9_migrate_pg_test.go:42: postgres reopen(no-op) n=20 p50=17.172738ms p95=21.611006ms p99=21.611006ms

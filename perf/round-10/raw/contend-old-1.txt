@@ -1,0 +1,3 @@
+    perf10_latency_test.go:24: PERF10 contended-lock-winner n=60 p50=27.932ms p95=33.184ms p99=33.347ms
+    perf10_latency_test.go:24: PERF10 contended-lock-refused n=900 p50=28.939ms p95=34.827ms p99=36.251ms
+    perf10_latency_test.go:24: PERF10 contended-lock-all n=960 p50=28.850ms p95=34.743ms p99=36.227ms

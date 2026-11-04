@@ -1,0 +1,52 @@
+    perf10_rmtrips_test.go:21: PERF10 stack-rm round trips: 51
+    perf10_rmtrips_test.go:23: PERF10    1 query UnitStackID
+    perf10_rmtrips_test.go:23: PERF10    2 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_e54f3d5e4ed3e780_control".maintenance_revoca...
+    perf10_rmtrips_test.go:23: PERF10    3 query GetInventoryEntryByUnitID
+    perf10_rmtrips_test.go:23: PERF10    4 query ListInventoryUnitLabels
+    perf10_rmtrips_test.go:23: PERF10    5 query commit
+    perf10_rmtrips_test.go:23: PERF10    6 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_e54f3d5e4ed3e780_control".maintenance_revoca...
+    perf10_rmtrips_test.go:23: PERF10    7 query ListGateObjectsOfScope
+    perf10_rmtrips_test.go:23: PERF10    8 query GetNamespaceID
+    perf10_rmtrips_test.go:23: PERF10    9 query ListGateObjectsOfScope
+    perf10_rmtrips_test.go:23: PERF10   10 query GetInventoryUnit
+    perf10_rmtrips_test.go:23: PERF10   11 query ListGateObjectsOfScope
+    perf10_rmtrips_test.go:23: PERF10   12 query commit
+    perf10_rmtrips_test.go:23: PERF10   13 query GetNamespace
+    perf10_rmtrips_test.go:23: PERF10   14 query UnitStackID
+    perf10_rmtrips_test.go:23: PERF10   15 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_e54f3d5e4ed3e780_control".maintenance_revoca...
+    perf10_rmtrips_test.go:23: PERF10   16 query GetInventoryEntryByUnitID
+    perf10_rmtrips_test.go:23: PERF10   17 query ListInventoryUnitLabels
+    perf10_rmtrips_test.go:23: PERF10   18 query commit
+    perf10_rmtrips_test.go:23: PERF10   19 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_e54f3d5e4ed3e780_control".maintenance_revoca...
+    perf10_rmtrips_test.go:23: PERF10   20 query ListGateObjectsOfScope
+    perf10_rmtrips_test.go:23: PERF10   21 query GetNamespaceID
+    perf10_rmtrips_test.go:23: PERF10   22 query ListGateObjectsOfScope
+    perf10_rmtrips_test.go:23: PERF10   23 query GetInventoryUnit
+    perf10_rmtrips_test.go:23: PERF10   24 query ListGateObjectsOfScope
+    perf10_rmtrips_test.go:23: PERF10   25 query commit
+    perf10_rmtrips_test.go:23: PERF10   26 query begin
+    perf10_rmtrips_test.go:23: PERF10   27 batch batch of 2 statements
+    perf10_rmtrips_test.go:23: PERF10   28 query GetGateRecordByID
+    perf10_rmtrips_test.go:23: PERF10   29 query GetNamespaceID
+    perf10_rmtrips_test.go:23: PERF10   30 query InsertGateRecord
+    perf10_rmtrips_test.go:23: PERF10   31 query commit
+    perf10_rmtrips_test.go:23: PERF10   32 query GetNamespace
+    perf10_rmtrips_test.go:23: PERF10   33 query GetCoveringManualLocks
+    perf10_rmtrips_test.go:23: PERF10   34 query ActiveUpdate
+    perf10_rmtrips_test.go:23: PERF10   35 query GetLatestCheckpointByRef
+    perf10_rmtrips_test.go:23: PERF10   36 query begin
+    perf10_rmtrips_test.go:23: PERF10   37 batch batch of 2 statements
+    perf10_rmtrips_test.go:23: PERF10   38 query GetFailoverVersionForUpdate
+    perf10_rmtrips_test.go:23: PERF10   39 query LockStackForUpdates
+    perf10_rmtrips_test.go:23: PERF10   40 query GetCoveringManualLocks
+    perf10_rmtrips_test.go:23: PERF10   41 query RunningMutatingUpdate
+    perf10_rmtrips_test.go:23: PERF10   42 query GetLatestCheckpoint
+    perf10_rmtrips_test.go:23: PERF10   43 query SoftDeleteStack
+    perf10_rmtrips_test.go:23: PERF10   44 query InsertDeletedInventory
+    perf10_rmtrips_test.go:23: PERF10   45 query DeleteInventoryLabelsByName
+    perf10_rmtrips_test.go:23: PERF10   46 query DeleteInventory
+    perf10_rmtrips_test.go:23: PERF10   47 query AppendInventoryChange
+    perf10_rmtrips_test.go:23: PERF10   48 query GetNamespace
+    perf10_rmtrips_test.go:23: PERF10   49 query LastAuditEntry
+    perf10_rmtrips_test.go:23: PERF10   50 query InsertAuditEntry
+    perf10_rmtrips_test.go:23: PERF10   51 query commit

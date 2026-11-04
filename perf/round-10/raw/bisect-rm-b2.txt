@@ -1,0 +1,2 @@
+76ad8cb6 Check the Pulumi import, restore, rename, rm and cancel at state.write
+    perf10_rmtrips_test.go:21: PERF10 stack-rm round trips: 51

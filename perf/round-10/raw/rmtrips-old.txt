@@ -1,0 +1,21 @@
+    perf10_rmtrips_test.go:21: PERF10 stack-rm round trips: 20
+    perf10_rmtrips_test.go:23: PERF10    1 query GetNamespace
+    perf10_rmtrips_test.go:23: PERF10    2 query GetCoveringManualLocks
+    perf10_rmtrips_test.go:23: PERF10    3 query ActiveUpdate
+    perf10_rmtrips_test.go:23: PERF10    4 query GetLatestCheckpointByRef
+    perf10_rmtrips_test.go:23: PERF10    5 query begin
+    perf10_rmtrips_test.go:23: PERF10    6 batch batch of 2 statements
+    perf10_rmtrips_test.go:23: PERF10    7 query GetFailoverVersionForUpdate
+    perf10_rmtrips_test.go:23: PERF10    8 query LockStackForUpdates
+    perf10_rmtrips_test.go:23: PERF10    9 query GetCoveringManualLocks
+    perf10_rmtrips_test.go:23: PERF10   10 query RunningMutatingUpdate
+    perf10_rmtrips_test.go:23: PERF10   11 query GetLatestCheckpoint
+    perf10_rmtrips_test.go:23: PERF10   12 query SoftDeleteStack
+    perf10_rmtrips_test.go:23: PERF10   13 query InsertDeletedInventory
+    perf10_rmtrips_test.go:23: PERF10   14 query DeleteInventoryLabelsByName
+    perf10_rmtrips_test.go:23: PERF10   15 query DeleteInventory
+    perf10_rmtrips_test.go:23: PERF10   16 query AppendInventoryChange
+    perf10_rmtrips_test.go:23: PERF10   17 query GetNamespace
+    perf10_rmtrips_test.go:23: PERF10   18 query LastAuditEntry
+    perf10_rmtrips_test.go:23: PERF10   19 query InsertAuditEntry
+    perf10_rmtrips_test.go:23: PERF10   20 query commit

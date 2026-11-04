@@ -1,0 +1,2 @@
+bed01bdf Fix the lint findings of the Pulumi state.write checks
+    perf10_rmtrips_test.go:21: PERF10 stack-rm round trips: 51

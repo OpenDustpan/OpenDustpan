@@ -1,0 +1,6 @@
+median over runs of p50/p95/p99 in ms; runs per commit: 7 7
+pulumi-checkpoint-save   old   3.65   5.97   7.14  new   3.65   5.56   7.23   -0% -7% +1%
+pulumi-stack-rm          old   2.73   3.88   4.89  new   6.44   9.21  10.76   +135% +137% +120%
+pulumi-update-cycle      old  15.37  20.41  22.94  new  16.54  20.87  22.86   +8% +2% -0%
+tofu-lock                old   5.67   7.97   9.78  new   5.64   8.31  11.54   -0% +4% +18%
+tofu-unlock              old   1.72   2.55   3.27  new   1.76   2.61   3.62   +3% +2% +11%
