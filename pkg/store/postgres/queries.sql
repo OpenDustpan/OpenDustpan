@@ -3354,6 +3354,17 @@ INSERT INTO gate_records (id, namespace_id, point, change_kind, change_id, at_ms
 VALUES (sqlc.arg(id), sqlc.arg(namespace_id), sqlc.arg(point), sqlc.arg(change_kind), sqlc.arg(change_id),
         sqlc.arg(at_ms), sqlc.arg(last_at_ms), sqlc.arg(count), sqlc.arg(refusal_key), sqlc.arg(body));
 
+-- name: InsertGateRecordInNamespace :execrows
+-- The insert of a record of the namespace with the name, in one statement. It
+-- inserts no row when no namespace has the name or when a record has the ID.
+INSERT INTO gate_records (id, namespace_id, point, change_kind, change_id, at_ms, last_at_ms, count, refusal_key, body)
+SELECT sqlc.arg(id)::text, n.id, sqlc.arg(point)::text, sqlc.arg(change_kind)::text, sqlc.arg(change_id)::text,
+       sqlc.arg(at_ms)::bigint, sqlc.arg(last_at_ms)::bigint, sqlc.arg(count)::bigint, sqlc.arg(refusal_key)::text,
+       sqlc.arg(body)::text
+FROM namespaces n
+WHERE n.name = sqlc.arg(namespace)::text
+  AND NOT EXISTS (SELECT 1 FROM gate_records r WHERE r.id = sqlc.arg(id)::text);
+
 -- name: GetGateRecord :one
 SELECT body
 FROM gate_records

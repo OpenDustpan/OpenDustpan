@@ -404,6 +404,30 @@ func (t *gateTx) InsertRecord(ctx context.Context, ns namespace.Name, r gatestor
 	return nil
 }
 
+func (t *gateTx) InsertNewRecord(ctx context.Context, ns namespace.Name, r gatestore.RecordRow) (bool, error) {
+	// Defense in depth: the record check of the port refuses an empty name,
+	// and the caller sends a record of the installation to InsertRecord. This
+	// check stays so that a new caller cannot store a record with no
+	// namespace through this statement.
+	if ns == "" || ns == audit.ServerScope {
+		return false, fmt.Errorf("%w: a record of a namespace needs the name of a namespace", gate.ErrInvalid)
+	}
+
+	n, err := t.q.InsertGateRecordInNamespace(ctx, db.InsertGateRecordInNamespaceParams{
+		ID: r.ID, Point: r.Point, ChangeKind: r.ChangeKind, ChangeID: r.ChangeID, AtMs: r.AtMs, LastAtMs: r.LastAtMs,
+		Count: r.Count, RefusalKey: r.RefusalKey, Body: r.Body, Namespace: ns.String(),
+	})
+	if isUniqueViolation(err) {
+		return false, fmt.Errorf("%w: the record ID %s is used", gate.ErrConflict, r.ID)
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("insert gate record: %w", err)
+	}
+
+	return n == 1, nil
+}
+
 func (t *gateTx) Record(ctx context.Context, ns namespace.Name, id string) (string, bool, error) {
 	nsID, ok, err := t.namespaceID(ctx, ns)
 	if err != nil || !ok {
