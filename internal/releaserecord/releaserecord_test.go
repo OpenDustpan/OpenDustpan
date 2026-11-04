@@ -817,3 +817,68 @@ func TestReleaseBuildChecksTheRecordFirst(t *testing.T) {
 		}
 	}
 }
+
+// TestReleaseRecordTargetMode proves that only VERSION on the make command
+// line turns on the tag mode of make release-record-check. A VERSION in the
+// environment must not. The test runs make with -n, so no recipe runs, and
+// gives the child a small environment of its own.
+func TestReleaseRecordTargetMode(t *testing.T) {
+	t.Parallel()
+
+	const script = "check-release-record.sh"
+
+	tests := []struct {
+		name string
+		env  []string
+		cli  bool
+		want string
+		deny string
+	}{
+		{"no VERSION", nil, false, "go test", script},
+		{"VERSION in the environment", []string{"VERSION=v9.9.9"}, false, "go test", script},
+		{"VERSION on the command line", nil, true, script + " 'v0.1.0'", "go test"},
+		{
+			"VERSION in both",
+			[]string{"VERSION=v9.9.9"},
+			true,
+			script + " 'v0.1.0'",
+			"v9.9.9",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The arguments are fixed strings of the test.
+			cmd := exec.CommandContext(
+				t.Context(),
+				"make",
+				"-n",
+				"--no-print-directory",
+				"-C",
+				"../..",
+				"release-record-check",
+			)
+			if tt.cli {
+				cmd = exec.CommandContext(t.Context(), "make", "-n", "--no-print-directory", "-C", "../..",
+					"release-record-check", "VERSION=v0.1.0")
+			}
+
+			cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, tt.env...)
+
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("make -n failed: %v\n%s", err, out)
+			}
+
+			if !strings.Contains(string(out), tt.want) {
+				t.Errorf("make printed:\n%s\nwant %q", out, tt.want)
+			}
+
+			if strings.Contains(string(out), tt.deny) {
+				t.Errorf("make printed:\n%s\nwant no %q", out, tt.deny)
+			}
+		})
+	}
+}
