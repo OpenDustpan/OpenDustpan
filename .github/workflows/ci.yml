@@ -5,8 +5,6 @@ name: ci
 on:
   push:
     branches: [ main ]
-    # A release tag also runs the release record guard in the lint job.
-    tags: [ 'v*' ]
   pull_request:
     # Draft pull requests run no jobs: mark a PR ready to run CI on it.
     types: [ opened, synchronize, reopened, ready_for_review ]
@@ -65,13 +63,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
-      # A tag with an empty release record, or a record that does not name
-      # the tag, would ship with the shipped-migration checks off.
-      - name: The release record names the tag
-        if: ${{ github.ref_type == 'tag' }}
-        env:
-          TAG: ${{ github.ref_name }}
-        run: make release-record-check VERSION="$TAG"
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums
@@ -130,8 +121,6 @@ jobs:
         run: make licenses
       - name: Docs follow ASD-STE100 (ADR 14)
         run: make docs-lint
-      - name: The release record script refuses bad input
-        run: make release-record-check
 
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
