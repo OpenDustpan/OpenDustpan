@@ -117,7 +117,7 @@ func (f budgetFixture) spend(t *testing.T, tc budgetCase) {
 	t.Helper()
 
 	for range tc.signIns {
-		f.cfg.signInGate.Fail(authgate.WithRequest(t.Context(), budgetAddress))
+		f.cfg.signInGates.signInGate.Fail(authgate.WithRequest(t.Context(), budgetAddress))
 	}
 
 	for range tc.guesses {
@@ -136,7 +136,7 @@ func (f budgetFixture) spend(t *testing.T, tc budgetCase) {
 func (f budgetFixture) tokenLimited(t *testing.T) bool {
 	t.Helper()
 
-	err := f.cfg.gate.Admit(canceledContext(t))
+	err := f.cfg.signInGates.gate.Admit(canceledContext(t))
 	if err != nil && !errors.Is(err, identity.ErrRateLimited) {
 		t.Fatalf("token admit: err = %v, want nil or ErrRateLimited", err)
 	}
@@ -191,7 +191,7 @@ func TestSignInBudgetIsApartFromTokenLookups(t *testing.T) {
 				}
 			}
 
-			err := f.cfg.signInGate.Admit(canceledContext(t))
+			err := f.cfg.signInGates.signInGate.Admit(canceledContext(t))
 			if limited := errors.Is(err, identity.ErrRateLimited); limited != tc.signInLimited {
 				t.Errorf("sign-in admit: err = %v, want limited = %v", err, tc.signInLimited)
 			}
