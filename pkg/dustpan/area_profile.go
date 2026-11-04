@@ -29,28 +29,6 @@ func WithProfileStore(st profile.Store) Option {
 	return func(o *settings) { o.profiles.store = st }
 }
 
-// newProfileAPIs builds the profiles API, the issuer API and the sinks API.
-func newProfileAPIs(
-	svc services, cfg *settings, onFailure func(), policies *session.Policies,
-) (profileAPIs, error) {
-	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
-	if err != nil {
-		return profileAPIs{}, err
-	}
-
-	issuer, err := newIssuerHandler(svc, cfg, onFailure, policies)
-	if err != nil {
-		return profileAPIs{}, err
-	}
-
-	sinks, err := newSinksHandler(svc, cfg, onFailure)
-	if err != nil {
-		return profileAPIs{}, err
-	}
-
-	return profileAPIs{profiles: profiles, issuer: issuer, sinkAPI: sinks}, nil
-}
-
 // newProfileHandler builds the profile API, or returns nil when no profile
 // store is set.
 func newProfileHandler(
@@ -108,11 +86,4 @@ func newProfileHandler(
 	}
 
 	return handler, nil
-}
-
-// profileAPIs holds the profiles API, the issuer API and the sinks API.
-type profileAPIs struct {
-	profiles http.Handler
-	issuer   http.Handler
-	sinkAPI  http.Handler
 }

@@ -1353,6 +1353,35 @@ func newNeutralHandlers(
 	}, nil
 }
 
+// profileAPIs holds the profiles API, the issuer API and the sinks API.
+type profileAPIs struct {
+	profiles http.Handler
+	issuer   http.Handler
+	sinkAPI  http.Handler
+}
+
+// newProfileAPIs builds the profiles API, the issuer API and the sinks API.
+func newProfileAPIs(
+	svc services, cfg *settings, onFailure func(), policies *session.Policies,
+) (profileAPIs, error) {
+	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	issuer, err := newIssuerHandler(svc, cfg, onFailure, policies)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	sinks, err := newSinksHandler(svc, cfg, onFailure)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	return profileAPIs{profiles: profiles, issuer: issuer, sinkAPI: sinks}, nil
+}
+
 // namespaceSettingHandlers holds the source filter API and the trust rule
 // API. Each is nil when its store is not set.
 type namespaceSettingHandlers struct {
