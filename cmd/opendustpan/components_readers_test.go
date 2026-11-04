@@ -80,7 +80,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	"issuerBaseURL": {"checkSettings": "api", "newIssuerService": "api"},
 	"proxies":       {"newClientIPResolver": "all"},
 	"ipAllowlists": {
-		"checkTLSAndAllowlist": "api", "newIPAllowlistService": "api", "newPulumiHandler": "api",
+		"checkTLSAndAllowlist": "api", "newServerExtras": "api", "newPulumiHandler": "api",
 		"newAuthPorts": "api", "newTFEHandler": "api",
 	},
 	// The ranges apply to the connections that the routes of a namespace make.
