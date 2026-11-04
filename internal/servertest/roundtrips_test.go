@@ -1001,6 +1001,15 @@ type measuredRun struct {
 func (h *rtHarness) runBackupAndRestore() backupRun {
 	h.t.Helper()
 
+	return h.runBackupAndRestoreWith(nil)
+}
+
+// runBackupAndRestoreWith runs a backup, then a restore of it. When
+// beforeRestore is set, the restore starts after it, and the function that it
+// returns runs after the restore ends, outside of the count.
+func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupRun {
+	h.t.Helper()
+
 	var out backupRun
 
 	h.tracer.begin(traceBackup)
@@ -1015,6 +1024,11 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 
 	out.backup = h.tracer.end()
 
+	finish := func() {}
+	if beforeRestore != nil {
+		finish = beforeRestore()
+	}
+
 	h.tracer.begin(traceBackup)
 
 	var restore struct {
@@ -1027,6 +1041,8 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 	h.settleOperations()
 
 	out.restore = h.tracer.end()
+
+	finish()
 
 	return out
 }
@@ -1084,7 +1100,7 @@ func TestRoundTripsOfBackup(t *testing.T) {
 				backup:        counted(run.backup),
 				restore:       counted(run.restore),
 				backupGrowth:  withoutTimerLoops(withoutPrepares(run.backup)),
-				restoreGrowth: withoutTimerLoops(withoutPrepares(run.restore)),
+				restoreGrowth: withoutSwapRetries(withoutTimerLoops(withoutPrepares(run.restore))),
 			}
 		})
 	}
@@ -1131,7 +1147,38 @@ func checkBackupRuns(t *testing.T, sizes []backupSize, runs []measuredRun) {
 // counted returns the round trips of a backup or a restore that depend on its
 // work and not on the clock.
 func counted(trips []roundTrip) []roundTrip {
-	return withoutTimerReads(withoutPrepares(trips))
+	return withoutSwapRetries(withoutTimerReads(withoutPrepares(trips)))
+}
+
+// swapStartSQL is the first statement of each attempt of the swap step of a
+// restore: the read that checks that the staged schema exists.
+const swapStartSQL = "SELECT count(*) FROM pg_namespace WHERE nspname = $1"
+
+// withoutSwapRetries returns the round trips of the last attempt of the swap
+// step of a restore, and drops each earlier attempt. The swap transaction
+// rolls back when PostgreSQL ends it to break a deadlock with another
+// transaction on the durable tables, and the runner of durable operations
+// then ends the claim of the step and runs the step again. Whether a
+// transaction of the runner overlaps the swap depends on the timing of the
+// machine, so a failed attempt is not work of the restore. An attempt runs
+// from its first statement to the first statement of the next attempt, so
+// the end of the claim after a failed attempt goes with it.
+func withoutSwapRetries(trips []roundTrip) []roundTrip {
+	var starts []int
+
+	for i, trip := range trips {
+		if strings.HasPrefix(trip.sql, swapStartSQL) {
+			starts = append(starts, i)
+		}
+	}
+
+	if len(starts) < 2 {
+		return trips
+	}
+
+	last := starts[len(starts)-1]
+
+	return slices.Concat(trips[:starts[0]], trips[last:])
 }
 
 // schemaCounts holds the sizes that the cost of a backup and of a restore
