@@ -418,11 +418,11 @@ func signInProvider(
 // in: a nil gate in a non-nil interface would pass the nil checks of the
 // handler.
 func setSignInLimiters(cfg *settings, in *serverapi.SignIn) {
-	if cfg.signInGate != nil {
-		in.Limiter = cfg.signInGate
+	if cfg.signInGates.signInGate != nil {
+		in.Limiter = cfg.signInGates.signInGate
 	}
 
-	if cfg.passwordGate != nil {
-		in.PasswordLimiter = cfg.passwordGate
+	if cfg.signInGates.passwordGate != nil {
+		in.PasswordLimiter = cfg.signInGates.passwordGate
 	}
 }
