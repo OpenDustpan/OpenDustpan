@@ -756,10 +756,12 @@ type requestFlow struct {
 // requestFlows returns the request flows and their budgets, in the order that
 // they run.
 //
-// A lock reads the gate rows of its unit in two read transactions. Each one
-// first reads the stable ID of the unit from the inventory, because the gate
-// rows of a unit key on that ID and not on its name. So "lock" and "lock,
-// upload and unlock" each hold 2 round trips for those reads.
+// A lock reads the facts of its unit in one read transaction and the gate
+// rows of its unit in a second one, one time for the access limits and the
+// gates together. Both key on the stable ID of the unit and not on its name:
+// the read of the facts first reads that ID from the inventory, and the read
+// of the gate rows finds it in its transaction. So "lock" and "lock, upload
+// and unlock" each hold 2 round trips for those reads.
 //
 // Each save of a workspace lock also writes the last released lock of the
 // workspace to its inventory row, with one update in the same transaction.
@@ -772,7 +774,7 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 45, func(h *rtHarness) {
+		{"lock", 31, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -780,7 +782,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 101, func(h *rtHarness) {
+		{"lock, upload and unlock", 87, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
@@ -820,31 +822,32 @@ func requestFlows() []requestFlow {
 			h.complete(run)
 		}},
 		// The stack rm, import, restore, rename and cancel each meet the gates
-		// of state.write before the write: the reads of the unit facts and the
-		// gate configuration, and the write of the decision record in its own
-		// transaction, are part of each budget.
-		{"pulumi stack rm", 51, func(h *rtHarness) {
+		// of state.write before the write: one read of the unit facts, one read
+		// of the gate configuration for the access limits and the gates
+		// together, and the write of the decision record with one statement in
+		// its own fenced transaction are part of each budget.
+		{"pulumi stack rm", 37, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 78, func(h *rtHarness) {
+		{"pulumi stack import", 64, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 79, func(h *rtHarness) {
+		{"pulumi stack restore", 65, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
 			h.complete(run)
 			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
 		}},
-		{"pulumi stack rename", 48, func(h *rtHarness) {
+		{"pulumi stack rename", 34, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
-		{"pulumi cancel", 44, func(h *rtHarness) {
+		{"pulumi cancel", 30, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })

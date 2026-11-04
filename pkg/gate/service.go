@@ -58,12 +58,22 @@ type SubjectSource interface {
 	Subject(ctx context.Context, p identity.Principal) (Subject, error)
 }
 
-// UnitSource gives the labels of a unit. The collection of the unit comes
-// from Membership, so one port owns each fact.
+// UnitInfo is what the server keeps about a unit for the gates and the
+// access limits: its collection and its labels.
+type UnitInfo struct {
+	// Collection is the collection of the unit, or the empty name for a unit
+	// in no collection.
+	Collection collection.Name
+	// Labels holds the key=value labels of the unit, sorted.
+	Labels []string
+}
+
+// UnitSource gives the collection and the labels of a unit with one read, so
+// that both facts come from one state of the unit.
 type UnitSource interface {
-	// Labels returns the key=value labels of unit, sorted. It returns
+	// Unit returns the collection and the labels of unit. It returns
 	// ErrNotFound for a unit that does not exist.
-	Labels(ctx context.Context, unit identity.Object) ([]string, error)
+	Unit(ctx context.Context, unit identity.Object) (UnitInfo, error)
 }
 
 // Membership gives the collection of a unit. A unit is in at most one
@@ -149,7 +159,6 @@ type Service struct {
 	store     Store
 	engine    Engine
 	producers []Producer
-	members   Membership
 	units     UnitSource
 	subjects  SubjectSource
 	fences    FenceSource
@@ -162,7 +171,6 @@ type ServiceConfig struct {
 	Store     Store
 	Engine    Engine
 	Producers []Producer
-	Members   Membership
 	Units     UnitSource
 	Subjects  SubjectSource
 	Fences    FenceSource
@@ -174,8 +182,8 @@ type ServiceConfig struct {
 // NewService returns a Service. It returns ErrInvalid when a port or the
 // logger is nil.
 func NewService(cfg ServiceConfig) (*Service, error) {
-	if cfg.Store == nil || cfg.Engine == nil || cfg.Members == nil || cfg.Units == nil || cfg.Subjects == nil ||
-		cfg.Fences == nil || cfg.Log == nil {
+	if cfg.Store == nil || cfg.Engine == nil || cfg.Units == nil || cfg.Subjects == nil || cfg.Fences == nil ||
+		cfg.Log == nil {
 		return nil, fmt.Errorf("%w: the gate service needs each port and a logger", ErrInvalid)
 	}
 
@@ -185,8 +193,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, engine: cfg.Engine, producers: slices.Clone(cfg.Producers), members: cfg.Members,
-		units: cfg.Units, subjects: cfg.Subjects, fences: cfg.Fences, now: now, log: cfg.Log,
+		store: cfg.Store, engine: cfg.Engine, producers: slices.Clone(cfg.Producers), units: cfg.Units,
+		subjects: cfg.Subjects, fences: cfg.Fences, now: now, log: cfg.Log,
 	}, nil
 }
 
