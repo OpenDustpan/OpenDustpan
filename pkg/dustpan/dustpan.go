@@ -291,6 +291,12 @@ type ipAllowlistSettings struct {
 	includeBootstrap bool
 }
 
+// defaultIPAllowlistSettings returns the IP allowlist settings before the
+// options: the feature off, the bootstrap admin token exempt and no store.
+func defaultIPAllowlistSettings() *ipAllowlistSettings {
+	return &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false}
+}
+
 // Option configures a Server.
 type Option func(*settings)
 
@@ -571,7 +577,7 @@ func WithIPAllowlistStore(s ipallow.Store) Option {
 // them when an Option runs on zero settings.
 func ipAllowlistConfig(o *settings) *ipAllowlistSettings {
 	if o.ipAllowlists == nil {
-		o.ipAllowlists = &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false}
+		o.ipAllowlists = defaultIPAllowlistSettings()
 	}
 
 	return o.ipAllowlists
@@ -787,7 +793,7 @@ func defaultSettings() *settings {
 		auditChain:              audit.ChainOn,
 		auditChainInterval:      auditChainCheckInterval,
 		drainPeriod:             0,
-		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
+		ipAllowlists:            defaultIPAllowlistSettings(),
 		auditSinks:              nil,
 		instanceID:              "",
 		auditShipper:            nil,
@@ -1980,14 +1986,15 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 // newIPAllowlistService builds the IP allowlist service from validated
 // settings, or nil when no allowlist store is configured: an SDK user who
 // did not pass WithIPAllowlistStore gets no allowlist routes.
-func newIPAllowlistService(cfg *settings, namespaces *namespace.Service) (*ipallow.Service, error) {
-	allow := cfg.ipAllowlists
+func newIPAllowlistService(
+	allow *ipAllowlistSettings, namespaces *namespace.Service, now func() time.Time,
+) (*ipallow.Service, error) {
 	if allow == nil || allow.store == nil {
 		return nil, nil //nolint:nilnil // No allowlist store is a valid setup: the routes stay unmounted.
 	}
 
 	svc, err := ipallow.NewService(ipallow.Config{
-		Store: allow.store, Namespaces: namespaces, Now: cfg.now, Enabled: allow.enabled,
+		Store: allow.store, Namespaces: namespaces, Now: now, Enabled: allow.enabled,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ip allowlist service: %w", err)
