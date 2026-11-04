@@ -139,12 +139,13 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 # With no VERSION there is no tag to check, so the target runs the cases that
 # exist without one: the script against an empty record, a record of another
 # version, a record with a CR or a NUL byte, and a missing record. With
-# VERSION=vX.Y.Z it checks the record for that tag, as a release does.
+# VERSION=vX.Y.Z on the command line it checks the record for that tag, as a
+# release does. A VERSION in the environment does not change the mode.
 release-record-check: ## Check the release record: the cases that need no tag, or VERSION=vX.Y.Z for a tag.
-ifdef VERSION
-	./scripts/check-release-record.sh $(VERSION)
+ifeq ($(origin VERSION),command line)
+	./scripts/check-release-record.sh '$(VERSION)'
 else
-	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst' -count=1
+	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
