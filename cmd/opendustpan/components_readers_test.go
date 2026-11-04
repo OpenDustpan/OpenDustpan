@@ -61,7 +61,7 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 // builds a service for the routes is "api" even though every process builds it.
 // The metrics route of a worker-only process takes the CORS rule, and the
 // request log of that process takes the client address rule, so buildMux and
-// newClientIPResolver are "all". The IP allowlists check the namespace of an
+// routes are "all". The IP allowlists check the namespace of an
 // object, and the metrics route has none, so newAuthPorts stays "api".
 var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals // A fixed declaration table.
 	"consoleDir":     {"mountAPI": "api"},
@@ -78,7 +78,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 		"storedSignInReady":   "api",
 	},
 	"issuerBaseURL": {"checkSettings": "api", "newIssuerService": "api"},
-	"proxies":       {"newClientIPResolver": "all"},
+	"proxies":       {"routes": "all"},
 	"ipAllowlists": {
 		"checkTLSAndAllowlist": "api", "newServerExtras": "api", "newPulumiHandler": "api",
 		"newAuthPorts": "api", "newTFEHandler": "api",
