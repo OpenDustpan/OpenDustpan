@@ -48,7 +48,6 @@ import (
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
-	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
@@ -174,7 +173,7 @@ type settings struct {
 	// blobStore. Every other user reads blobStore.
 	workspaceBlobs  blob.Store
 	inventoryReader inventory.Reader
-	profileStore    profile.Store
+	profiles        profileSettings
 	// issuerStore keeps the signing keys and the settings of the OIDC issuer
 	// of each namespace, or is nil. issuerBaseURL is the host of the issuer URL,
 	// and issuerOutbox receives its notices.
@@ -369,12 +368,6 @@ func WithBlobStore(s blob.Store) Option {
 // object takes at most one eighth of maxBytes.
 func WithBlobCache(maxBytes int64) Option {
 	return func(o *settings) { o.blobCacheBytes = maxBytes }
-}
-
-// WithProfileStore sets the store of profiles. It is optional: without it the
-// server serves no profile route.
-func WithProfileStore(st profile.Store) Option {
-	return func(o *settings) { o.profileStore = st }
 }
 
 // WithIdempotencyStore sets the store of the replay records of the
@@ -751,7 +744,7 @@ func defaultSettings() *settings {
 		blobCacheBytes:          0,
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
-		profileStore:            nil,
+		profiles:                defaultProfileSettings(),
 		issuerStore:             nil,
 		issuerBaseURL:           "",
 		issuerOutbox:            nil,
@@ -1358,35 +1351,6 @@ func newNeutralHandlers(
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
 	}, nil
-}
-
-// profileAPIs holds the profiles API, the issuer API and the sinks API.
-type profileAPIs struct {
-	profiles http.Handler
-	issuer   http.Handler
-	sinkAPI  http.Handler
-}
-
-// newProfileAPIs builds the profiles API, the issuer API and the sinks API.
-func newProfileAPIs(
-	svc services, cfg *settings, onFailure func(), policies *session.Policies,
-) (profileAPIs, error) {
-	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
-	if err != nil {
-		return profileAPIs{}, err
-	}
-
-	issuer, err := newIssuerHandler(svc, cfg, onFailure, policies)
-	if err != nil {
-		return profileAPIs{}, err
-	}
-
-	sinks, err := newSinksHandler(svc, cfg, onFailure)
-	if err != nil {
-		return profileAPIs{}, err
-	}
-
-	return profileAPIs{profiles: profiles, issuer: issuer, sinkAPI: sinks}, nil
 }
 
 // namespaceSettingHandlers holds the source filter API and the trust rule
@@ -2669,65 +2633,6 @@ func newContextHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 	})
 	if err != nil {
 		return nil, fmt.Errorf("context api: %w", err)
-	}
-
-	return handler, nil
-}
-
-// newProfileHandler builds the profile API, or returns nil when no profile
-// store is set.
-func newProfileHandler(
-	svc services, cfg *settings, onFailure func(), policies *session.Policies,
-) (http.Handler, error) {
-	if cfg.profileStore == nil {
-		return nil, nil //nolint:nilnil // No profile API: no profile store is set.
-	}
-
-	entries, ok := cfg.namespaceStore.(audit.Store)
-	if !ok {
-		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
-	}
-
-	profiles, err := profile.NewService(profile.Config{
-		Store:      cfg.profileStore,
-		Namespaces: cfg.namespaceStore,
-		Sealer:     svc.secrets,
-		Audit:      entries,
-		Authorizer: cfg.authorizer,
-		Now:        cfg.now,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("profile service: %w", err)
-	}
-
-	idem, err := idempotencyMiddleware(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	// A nil *session.Policies must not become a non-nil interface.
-	var sessionPolicy profileapi.SessionPolicy
-	if policies != nil {
-		sessionPolicy = policies
-	}
-
-	handler, err := profileapi.NewHandler(profileapi.Config{
-		Idempotency:   idem,
-		SessionPolicy: sessionPolicy,
-		Profiles:      profiles,
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Sessions:      cfg.sessionCookies,
-		Logger:        cfg.logger,
-		Now:           cfg.now,
-
-		Namespaces:     svc.namespaces,
-		Audit:          entries,
-		OnAuditFailure: onFailure,
-		DenialLimiter:  cfg.denialLimiter,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("profile api: %w", err)
 	}
 
 	return handler, nil
