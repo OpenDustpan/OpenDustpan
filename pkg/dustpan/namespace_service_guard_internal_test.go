@@ -37,9 +37,12 @@ func TestWireNamespaceServiceGuard(t *testing.T) {
 			cfg.installationKind = kind
 			cfg.authenticator = namespaceServiceAuthenticator{}
 
-			wireNamespaceServiceGuard(cfg)
+			ports, err := newAuthPorts(cfg, nil)
+			if err != nil {
+				t.Fatalf("auth ports: %v", err)
+			}
 
-			p, err := cfg.authenticator.AuthenticateToken(t.Context(), "token")
+			p, err := ports.authenticator.AuthenticateToken(t.Context(), "token")
 			if !errors.Is(err, identity.ErrUnauthenticated) {
 				t.Fatalf("AuthenticateToken = %v, want ErrUnauthenticated", err)
 			}

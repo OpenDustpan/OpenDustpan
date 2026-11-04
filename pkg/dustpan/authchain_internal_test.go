@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -203,5 +205,50 @@ func TestGatedAuthenticatorPutsTheConfiguredOneFirst(t *testing.T) {
 
 	if _, second := chain[1].(*authgate.Gate); !second {
 		t.Errorf("chain[1] = %T, want *authgate.Gate", chain[1])
+	}
+}
+
+// TestNewSignInRefusesTokensWithoutGates proves the fail-closed layer of
+// newSignIn on its own: when the store keeps access tokens, a sign-in with a
+// missing failure gate does not start. A nil limit would mean no limit.
+func TestNewSignInRefusesTokensWithoutGates(t *testing.T) {
+	t.Parallel()
+
+	f := newBudgetFixture(t)
+	f.cfg.publicURL = "https://dustpan.example"
+	f.cfg.devSignIn = &devsignin.Config{Code: nil, Admin: noDevAdmin}
+
+	policies, err := newSessionPolicyService(f.cfg)
+	if err != nil {
+		t.Fatalf("session policies: %v", err)
+	}
+
+	noSignIn, noPassword := f.gates, f.gates
+	noSignIn.signInGate, noPassword.passwordGate = nil, nil
+
+	tests := []struct {
+		name  string
+		gates signInGates
+		want  error
+	}{
+		{name: "no gate", gates: noSignInGates(), want: errSignInUngated},
+		{name: "no sign-in gate", gates: noSignIn, want: errSignInUngated},
+		{name: "no password gate", gates: noPassword, want: errSignInUngated},
+		{name: "every gate", gates: f.gates, want: nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			in, err := newSignIn(f.cfg, policies, f.tokens, tc.gates)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("newSignIn = %v, want %v", err, tc.want)
+			}
+
+			if tc.want != nil && in != nil {
+				t.Fatal("newSignIn returned a sign-in with its error")
+			}
+		})
 	}
 }
