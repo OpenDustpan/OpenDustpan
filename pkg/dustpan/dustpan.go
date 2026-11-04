@@ -465,6 +465,12 @@ type proxySettings struct {
 	header   string
 }
 
+// defaultProxySettings returns the trusted proxy settings before the options:
+// no trusted proxy and the default header.
+func defaultProxySettings() proxySettings {
+	return proxySettings{prefixes: nil, header: ""}
+}
+
 // WithTrustedProxies names the proxies whose forwarding headers the server
 // trusts. Empty means none: every request reads as its TCP peer. List a proxy
 // only when it always overwrites or appends the header named by
@@ -724,7 +730,7 @@ func defaultSettings() *settings {
 		consoleDir:              "",
 		allowedOrigins:          nil,
 		consoleHeaders:          noConsoleHeaders(),
-		proxies:                 proxySettings{prefixes: nil, header: ""},
+		proxies:                 defaultProxySettings(),
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
@@ -3768,7 +3774,7 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 		return routeHandlers{}, err
 	}
 
-	resolver, err := newClientIPResolver(cfg)
+	resolver, err := newClientIPResolver(cfg.proxies)
 	if err != nil {
 		return routeHandlers{}, err
 	}
@@ -3789,13 +3795,13 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 // newClientIPResolver builds the client address resolver of the server from
 // the trusted proxy settings. An unknown header or a refused proxy list
 // fails the build, so the server never starts with them.
-func newClientIPResolver(cfg *settings) (*clientip.Resolver, error) {
-	header, err := clientip.ParseHeader(cfg.proxies.header)
+func newClientIPResolver(proxies proxySettings) (*clientip.Resolver, error) {
+	header, err := clientip.ParseHeader(proxies.header)
 	if err != nil {
 		return nil, fmt.Errorf("trusted proxy header: %w", err)
 	}
 
-	resolver, err := clientip.NewResolver(cfg.proxies.prefixes, header)
+	resolver, err := clientip.NewResolver(proxies.prefixes, header)
 	if err != nil {
 		return nil, fmt.Errorf("trusted proxies: %w", err)
 	}
