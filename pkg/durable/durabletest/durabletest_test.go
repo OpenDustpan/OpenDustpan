@@ -8,12 +8,12 @@ package durabletest_test
 
 import (
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/testchild"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 )
@@ -181,15 +181,10 @@ func TestSuiteSensitivity(t *testing.T) {
 func runSuiteCaseAgainstFake(t *testing.T, top, rule, catcher string) string {
 	t.Helper()
 
-	//nolint:gosec // The child is this test binary with a fixed filter; both come from the test itself.
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+top+"$/^"+catcher+"$",
-		"-test.v", "-test.count=1")
-	cmd.Env = append(os.Environ(), durabletestFake+"="+rule)
-
-	out, err := cmd.CombinedOutput()
+	out, err := testchild.Run(t, "^"+top+"$/^"+catcher+"$", durabletestFake+"="+rule)
 	if err == nil {
 		t.Fatalf("the case %s passed against the store that breaks %q, want failure:\n%s", catcher, rule, out)
 	}
 
-	return string(out)
+	return out
 }
