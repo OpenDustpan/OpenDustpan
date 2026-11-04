@@ -226,7 +226,7 @@ func (s *Service) newStateWriteRun(ctx context.Context, c Change) (*stateWriteRu
 		return nil, err
 	}
 
-	cfg, err := s.store.Snapshot(ctx, scopes)
+	cfg, err := s.snapshot(ctx, scopes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: gate configuration: %w", ErrUnavailable, err)
 	}
