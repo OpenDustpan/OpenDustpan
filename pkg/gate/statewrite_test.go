@@ -29,16 +29,8 @@ type swUnits struct {
 	labels      map[string][]string
 }
 
-func (u swUnits) Collection(_ context.Context, unit identity.Object) (collection.Name, error) {
-	if c, ok := u.collections[unit.String()]; ok {
-		return c, nil
-	}
-
-	return "", gate.ErrNotFound
-}
-
-func (u swUnits) Labels(_ context.Context, unit identity.Object) ([]string, error) {
-	return u.labels[unit.String()], nil
+func (u swUnits) Unit(_ context.Context, unit identity.Object) (gate.UnitInfo, error) {
+	return gate.UnitInfo{Collection: u.collections[unit.String()], Labels: u.labels[unit.String()]}, nil
 }
 
 // swSubjects gives the Subject of a principal by its subject: "alice" is a
@@ -113,13 +105,17 @@ type swEnv struct {
 	fence namespace.Fence
 }
 
-// swFacts gives the collection and the labels of the units of a test.
-type swFacts interface {
-	gate.Membership
-	gate.UnitSource
+func newSWEnv(t *testing.T, units gate.UnitSource, engineErr error) swEnv {
+	t.Helper()
+
+	return newWrappedSWEnv(t, units, engineErr, nil)
 }
 
-func newSWEnv(t *testing.T, units swFacts, engineErr error) swEnv {
+// newWrappedSWEnv is newSWEnv with a gate store that wrap makes from the real
+// store, or the real store when wrap is nil.
+func newWrappedSWEnv(
+	t *testing.T, units gate.UnitSource, engineErr error, wrap func(*sqlite.Store) gate.Store,
+) swEnv {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -161,11 +157,15 @@ func newSWEnv(t *testing.T, units swFacts, engineErr error) swEnv {
 		}
 	}
 
+	var gates gate.Store = st
+	if wrap != nil {
+		gates = wrap(st)
+	}
+
 	svc, err := gate.NewService(gate.ServiceConfig{
-		Store:     st,
+		Store:     gates,
 		Engine:    swEngine{Engine: cedargo.New(cedargo.WithAccessActions("unit:write", "unit:read")), fail: engineErr},
 		Producers: nil,
-		Members:   units,
 		Units:     units,
 		Subjects:  swSubjects{},
 		Fences:    swFences{nss: nss},
@@ -860,31 +860,22 @@ func TestMessageTemplateNeverRendersEmpty(t *testing.T) {
 type countingUnits struct {
 	swUnits
 
-	mu          sync.Mutex
-	collections int
-	labels      int
+	mu    sync.Mutex
+	reads int
 }
 
-func (c *countingUnits) Collection(ctx context.Context, unit identity.Object) (collection.Name, error) {
+func (c *countingUnits) Unit(ctx context.Context, unit identity.Object) (gate.UnitInfo, error) {
 	c.mu.Lock()
-	c.collections++
+	c.reads++
 	c.mu.Unlock()
 
-	return c.swUnits.Collection(ctx, unit)
-}
-
-func (c *countingUnits) Labels(ctx context.Context, unit identity.Object) ([]string, error) {
-	c.mu.Lock()
-	c.labels++
-	c.mu.Unlock()
-
-	return c.swUnits.Labels(ctx, unit)
+	return c.swUnits.Unit(ctx, unit)
 }
 
 func TestGuardReadsTheUnitFactsOnce(t *testing.T) {
 	t.Parallel()
 
-	units := &countingUnits{swUnits: swUnitsOfTests(), mu: sync.Mutex{}, collections: 0, labels: 0}
+	units := &countingUnits{swUnits: swUnitsOfTests(), mu: sync.Mutex{}, reads: 0}
 	e := newSWEnv(t, units, nil)
 	e.putLimit(t, swUnitScope(t, "web"), "limit-1", forbidServices)
 	e.putGate(t, newSWGate(atUnit, "watch", "", gate.OutcomeWarn, "careful"))
@@ -896,9 +887,135 @@ func TestGuardReadsTheUnitFactsOnce(t *testing.T) {
 	units.mu.Lock()
 	defer units.mu.Unlock()
 
-	if units.collections != 1 || units.labels != 1 {
-		t.Fatalf("reads = %d collections and %d labels, want 1 and 1 for one check of the limits and the gates",
-			units.collections, units.labels)
+	if units.reads != 1 {
+		t.Fatalf("reads = %d, want 1 for one check of the limits and the gates", units.reads)
+	}
+}
+
+// countingStore counts the reads of the gate configuration, and fails each
+// read with fail when fail is set.
+type countingStore struct {
+	*sqlite.Store
+
+	mu        sync.Mutex
+	snapshots int
+	fail      error
+}
+
+func (c *countingStore) Snapshot(ctx context.Context, scopes []gate.Scope) (gate.Config, error) {
+	c.mu.Lock()
+	c.snapshots++
+	fail := c.fail
+	c.mu.Unlock()
+
+	if fail != nil {
+		return gate.Config{}, fail
+	}
+
+	return c.Store.Snapshot(ctx, scopes)
+}
+
+// newCountingSWEnv returns an env whose gate store counts its reads.
+func newCountingSWEnv(t *testing.T, fail error) (swEnv, *countingStore) {
+	t.Helper()
+
+	var counting *countingStore
+
+	e := newWrappedSWEnv(t, swUnitsOfTests(), nil, func(st *sqlite.Store) gate.Store {
+		counting = &countingStore{Store: st, mu: sync.Mutex{}, snapshots: 0, fail: fail}
+
+		return counting
+	})
+
+	return e, counting
+}
+
+// TestGuardReadsTheGateConfigurationOnce checks that one guard call reads the
+// configuration of the unit once for the access limits and the gates, and
+// that both checks still decide on it: the limit refuses a service, and the
+// gate denies a person.
+func TestGuardReadsTheGateConfigurationOnce(t *testing.T) {
+	t.Parallel()
+
+	e, counting := newCountingSWEnv(t, nil)
+	e.putLimit(t, swUnitScope(t, "web"), "limit-1", forbidServices)
+	e.putGate(t, newSWGate(atUnit, "no-person", `context.principal.kind == "person"`, gate.OutcomeDeny, "no"))
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "ci", "web", gate.OperationLock))
+	if !errors.Is(err, gate.ErrLimited) {
+		t.Fatalf("GuardStateWrite(service) = %v, want ErrLimited by the access limit", err)
+	}
+
+	_, err = e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock))
+	if !errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("GuardStateWrite(person) = %v, want ErrDenied by the gate", err)
+	}
+
+	counting.mu.Lock()
+	defer counting.mu.Unlock()
+
+	// The service stops at the limit, before the gates: 1 read. The person
+	// passes the limit and meets the gate with the same read: 1 read.
+	if counting.snapshots != 2 {
+		t.Fatalf("configuration reads = %d, want 1 for each of the 2 guard calls", counting.snapshots)
+	}
+}
+
+// errSnapshotDown is the error of a gate store that cannot read the
+// configuration.
+var errSnapshotDown = errors.New("snapshot down")
+
+// TestGuardFailsClosedWhenTheConfigurationCannotBeRead checks that a store
+// that cannot read the configuration refuses the write, at the access limits
+// and, for a break-glass account that skips the limits, at the gates.
+func TestGuardFailsClosedWhenTheConfigurationCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{"alice", "glass"} {
+		e, counting := newCountingSWEnv(t, errSnapshotDown)
+
+		_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, subject, "web", gate.OperationLock))
+		if !errors.Is(err, gate.ErrUnavailable) || !errors.Is(err, errSnapshotDown) {
+			t.Fatalf("GuardStateWrite(%s) = %v, want ErrUnavailable with the store error", subject, err)
+		}
+
+		counting.mu.Lock()
+		reads := counting.snapshots
+		counting.mu.Unlock()
+
+		if reads != 1 {
+			t.Fatalf("configuration reads of %s = %d, want 1: a failed read is not read again", subject, reads)
+		}
+
+		if rs := e.records(t); len(rs) != 0 {
+			t.Fatalf("records = %d after a failed read, want none: no decision was made", len(rs))
+		}
+	}
+}
+
+// errUnitsDown is the error of a unit source that does not answer.
+var errUnitsDown = errors.New("units down")
+
+// swFailingUnits is a unit source that does not answer.
+type swFailingUnits struct{}
+
+func (swFailingUnits) Unit(context.Context, identity.Object) (gate.UnitInfo, error) {
+	return gate.UnitInfo{Collection: "", Labels: nil}, errUnitsDown
+}
+
+// TestGuardFailsClosedWhenTheUnitFactsCannotBeRead checks that a unit source
+// that does not answer refuses the write, at the access limits and, for a
+// break-glass account that skips the limits, at the gates.
+func TestGuardFailsClosedWhenTheUnitFactsCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{"alice", "glass"} {
+		e := newSWEnv(t, swFailingUnits{}, nil)
+
+		_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, subject, "web", gate.OperationLock))
+		if !errors.Is(err, gate.ErrUnavailable) || !errors.Is(err, errUnitsDown) {
+			t.Fatalf("GuardStateWrite(%s) = %v, want ErrUnavailable with the source error", subject, err)
+		}
 	}
 }
 
@@ -921,13 +1038,13 @@ func TestHugeLabelSetIsTruncatedInTheFactDocument(t *testing.T) {
 	}
 }
 
-// swUnknownUnits knows no unit: its labels are not found.
+// swUnknownUnits knows no unit.
 type swUnknownUnits struct {
 	swUnits
 }
 
-func (swUnknownUnits) Labels(context.Context, identity.Object) ([]string, error) {
-	return nil, gate.ErrNotFound
+func (swUnknownUnits) Unit(context.Context, identity.Object) (gate.UnitInfo, error) {
+	return gate.UnitInfo{Collection: "", Labels: nil}, gate.ErrNotFound
 }
 
 // A unit reference that resolves to nothing fails closed at state.write. The

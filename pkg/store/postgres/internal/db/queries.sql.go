@@ -10026,6 +10026,50 @@ func (q *Queries) InsertGateRecord(ctx context.Context, arg InsertGateRecordPara
 	return err
 }
 
+const insertGateRecordInNamespace = `-- name: InsertGateRecordInNamespace :execrows
+INSERT INTO gate_records (id, namespace_id, point, change_kind, change_id, at_ms, last_at_ms, count, refusal_key, body)
+SELECT $1::text, n.id, $2::text, $3::text, $4::text,
+       $5::bigint, $6::bigint, $7::bigint, $8::text,
+       $9::text
+FROM namespaces n
+WHERE n.name = $10::text
+  AND NOT EXISTS (SELECT 1 FROM gate_records r WHERE r.id = $1::text)
+`
+
+type InsertGateRecordInNamespaceParams struct {
+	ID         string
+	Point      string
+	ChangeKind string
+	ChangeID   string
+	AtMs       int64
+	LastAtMs   int64
+	Count      int64
+	RefusalKey string
+	Body       string
+	Namespace  string
+}
+
+// The insert of a record of the namespace with the name, in one statement. It
+// inserts no row when no namespace has the name or when a record has the ID.
+func (q *Queries) InsertGateRecordInNamespace(ctx context.Context, arg InsertGateRecordInNamespaceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertGateRecordInNamespace,
+		arg.ID,
+		arg.Point,
+		arg.ChangeKind,
+		arg.ChangeID,
+		arg.AtMs,
+		arg.LastAtMs,
+		arg.Count,
+		arg.RefusalKey,
+		arg.Body,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertGateReference = `-- name: InsertGateReference :exec
 INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
 VALUES ($1, $2, $3, $4,
