@@ -235,9 +235,6 @@ type settings struct {
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
-	// signInGates holds the failure gates of the token lookups, the sign-in
-	// routes and the password routes. See signInGateSettings.
-	signInGates signInGateSettings
 	// sessionCookies checks the console session cookie on the inventory,
 	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
 	// means no console sign-in.
@@ -773,7 +770,6 @@ func defaultSettings() *settings {
 		publicURL:               "",
 		oidcProviders:           nil,
 		signInHTTPClient:        nil,
-		signInGates:             defaultSignInGateSettings(),
 		sessionCookies:          nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
@@ -852,106 +848,142 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	backups, err := newBackupService(cfg, svc)
+	// The worker watch does not exist yet: prepareBackground makes it in
+	// assemble. So the claims of the backup service do not go through the
+	// claim recorder of the watch. The restore service and the store checks
+	// get the watch.
+	backups, err := newBackupService(backupInputs{
+		settings: cfg.backup, store: cfg.namespaceStore, blobs: cfg.blobStore, workspaces: svc.workspaces,
+		watch: nil, owner: durableOwner(cfg), lease: cfg.operationLease, version: cfg.version,
+		now: cfg.now, logger: cfg.logger,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	if tokensErr := wireTokens(cfg, svc.tokens); tokensErr != nil {
-		return nil, tokensErr
+	ports, err := newAuthPorts(cfg, svc.tokens)
+	if err != nil {
+		return nil, err
 	}
 
-	if tempErr := wireTempAdmins(cfg); tempErr != nil {
-		return nil, tempErr
-	}
-
-	wireDevGuard(cfg)
-	wireNamespaceServiceGuard(cfg)
+	// The adapter code that reads cfg.authenticator and cfg.authorizer gets
+	// the wrapped ports from here. The services that newServices built above
+	// keep the configured authorizer. This is the one write of the chain into
+	// cfg: an area constructor takes the ports as arguments instead.
+	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	return assemble(cfg, base, svc, backups)
+	return assemble(cfg, base, svc, earlyParts{backups: backups, gates: ports.gates})
 }
 
-// wireTokens puts the stored access tokens behind the configured
-// authenticator, and lets every authenticated person list and revoke its
-// own personal tokens with no grant. The namespace service rule decides the
-// principals that the server builds before the self actions and the
-// configured authorizer, so no authorizer of an embedder can widen them.
-func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
-	authn, err := gatedAuthenticator(cfg, tokens)
+// earlyParts holds what NewServer builds before assemble: the installation
+// backup service, or nil when no backup target is configured, and the failure
+// gates of the console sign-in.
+type earlyParts struct {
+	backups *backup.Service
+	gates   signInGates
+}
+
+// authPorts holds what newAuthPorts builds: the authenticator and the
+// authorizer of the adapters, and the failure gates of the console sign-in.
+type authPorts struct {
+	authenticator identity.Authenticator
+	authorizer    identity.Authorizer
+	gates         signInGates
+}
+
+// newAuthPorts builds the authenticator chain and the authorizer chain of the
+// adapters from the configured ports. The authenticator chain, from the
+// inside out, is:
+//
+//  1. the configured authenticator, then the stored access tokens behind
+//     their failure gate;
+//  2. the marks of the temporary administrators;
+//  3. the refusal of dev subjects on an installation that is not dev;
+//  4. the refusal of the subjects of namespace service principals.
+//
+// The authorizer chain, from the inside out, is the configured authorizer,
+// the self actions, the namespace service rule and the IP allowlist gate.
+// Each step is one statement here, in this order.
+func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error) {
+	var none authPorts
+
+	authn, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
 	if err != nil {
-		return err
+		return none, err
 	}
 
-	cfg.authenticator = authn
-	cfg.authorizer = allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
+	// The namespace service rule decides the principals that the server
+	// builds before the self actions and the configured authorizer, so no
+	// authorizer of an embedder can widen them. Every authenticated person
+	// lists and revokes its own personal tokens with no grant.
+	authz := allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
 			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences, identity.ActionCallerManageSignIn,
 		},
 	}}, cfg.ipAllowlists)
 
-	return nil
+	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)
+	if err != nil {
+		return none, err
+	}
+
+	if marked {
+		authn = marks
+	}
+
+	// Only opendustpan dev makes a person with a dev subject (a subject that
+	// starts with principal.DevSubjectPrefix), so one on another
+	// installation comes from a restored dev backup.
+	if cfg.installationKind != installation.KindDev && authn != nil {
+		authn = principal.RefuseDevSubjects(authn).OnRefused(devRefusalAudit(cfg))
+	}
+
+	// The server builds the namespace service principals itself, so no
+	// authenticator gives one, on every kind of installation.
+	if authn != nil {
+		authn = principal.RefuseNamespaceServiceSubjects(authn)
+	}
+
+	return authPorts{authenticator: authn, authorizer: authz, gates: gates}, nil
 }
 
-// wireTempAdmins marks the temporary administrators among the callers that
-// the configured authenticator resolves, with a sign-in entry for each use
-// and an expiry entry at the first use after the expiry. Without a store
-// that keeps the records, or without an audit store for the entries, the
-// authenticator stays as it is.
-func wireTempAdmins(cfg *settings) error {
-	store, ok := cfg.namespaceStore.(tempadmin.Store)
+// tempAdminDecorator marks the temporary administrators among the callers
+// that next resolves, with a sign-in entry for each use and an expiry entry
+// at the first use after the expiry. The second result is false when the
+// store keeps no records or no principals: then next stays as it is. A store
+// with records and no audit entries is an error.
+func tempAdminDecorator(
+	next identity.Authenticator, store namespace.Store, now func() time.Time, logger *slog.Logger,
+) (*tempadmin.Decorator, bool, error) {
+	records, ok := store.(tempadmin.Store)
 	if !ok {
-		return nil
+		return nil, false, nil
 	}
 
-	principals, ok := cfg.namespaceStore.(tempadmin.Principals)
+	principals, ok := store.(tempadmin.Principals)
 	if !ok {
-		return nil
+		return nil, false, nil
 	}
 
-	entries, err := serverAuditOf(cfg.namespaceStore)
+	entries, err := serverAuditOf(store)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 
 	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
-		Next: cfg.authenticator, Records: store, Principals: principals, Request: requestOf,
-		Expirer: store, Audit: entries, Now: cfg.now, Logger: cfg.logger,
+		Next: next, Records: records, Principals: principals, Request: requestOf,
+		Expirer: records, Audit: entries, Now: now, Logger: logger,
 	})
 	if err != nil {
-		return fmt.Errorf("temporary administrator authenticator: %w", err)
+		return nil, false, fmt.Errorf("temporary administrator authenticator: %w", err)
 	}
 
-	cfg.authenticator = dec
-
-	return nil
-}
-
-// wireDevGuard makes the authenticator refuse a caller with a dev subject
-// (a subject that starts with principal.DevSubjectPrefix) on a server that
-// is not of the kind dev. Only opendustpan dev makes such a person, so one
-// on another installation comes from a restored dev backup.
-func wireDevGuard(cfg *settings) {
-	if cfg.installationKind == installation.KindDev || cfg.authenticator == nil {
-		return
-	}
-
-	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator).OnRefused(devRefusalAudit(cfg))
-}
-
-// wireNamespaceServiceGuard makes the authenticator refuse a caller with the
-// subject of a namespace service principal, on every kind of installation.
-// The server builds that principal itself, so no authenticator gives it.
-func wireNamespaceServiceGuard(cfg *settings) {
-	if cfg.authenticator == nil {
-		return
-	}
-
-	cfg.authenticator = principal.RefuseNamespaceServiceSubjects(cfg.authenticator)
+	return dec, true, nil
 }
 
 // requestOf answers the client address and the request ID that the server
@@ -1032,16 +1064,15 @@ func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, erro
 	return observed, nil
 }
 
-// assemble mounts the adapters and routes around the services. backups is
-// the installation backup service, or nil when no backup target is
-// configured.
-func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
+// assemble mounts the adapters and routes around the services and the parts
+// that NewServer built before it.
+func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyParts) (*Server, error) {
 	observed, shipper, err := prepareBackground(cfg, &svc)
 	if err != nil {
 		return nil, err
 	}
 
-	mount, err := newAdapters(svc, cfg, base, backups, observed)
+	mount, err := newAdapters(svc, cfg, base, early, observed)
 	if err != nil {
 		return nil, err
 	}
@@ -1075,7 +1106,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		secretKeys:    cfg.secretKeys,
 		secretWrapper: cfg.secretWrapper,
 		workspaces:    svc.workspaces,
-		backups:       backups,
+		backups:       early.backups,
 		restores:      mount.restores,
 		storeChecks:   mount.storeChecks,
 		now:           cfg.now,
@@ -1179,7 +1210,7 @@ func newAdapters(
 	svc services,
 	cfg *settings,
 	base baseurl.Resolver,
-	backups *backup.Service,
+	early earlyParts,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
 	chain, err := newAuditChain(cfg, observed)
@@ -1194,7 +1225,7 @@ func newAdapters(
 
 	gate := bodygate.New(cfg.maxBodyBytesInFlight)
 
-	sessionPolicies, signIn, err := newConsoleSignIn(cfg, svc.tokens)
+	sessionPolicies, signIn, err := newConsoleSignIn(cfg, svc.tokens, early.gates)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -1220,8 +1251,8 @@ func newAdapters(
 	}
 
 	parts, err := newInstallationAPI(cfg, installationDeps{
-		services: svc, backups: backups, maint: maint, observed: observed, chain: chain, policies: sessionPolicies,
-		signIn: signIn,
+		services: svc, backups: early.backups, maint: maint, observed: observed, chain: chain,
+		policies: sessionPolicies, signIn: signIn,
 	})
 	if err != nil {
 		return adapters{}, err
@@ -1364,7 +1395,17 @@ type profileAPIs struct {
 func newProfileAPIs(
 	svc services, cfg *settings, onFailure func(), policies *session.Policies,
 ) (profileAPIs, error) {
-	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
+	idem, err := idempotencyMiddleware(cfg)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	profiles, err := newProfileHandler(profileInputs{
+		store: cfg.profiles.store, entries: cfg.namespaceStore, namespaces: svc.namespaces, sealer: svc.secrets,
+		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
+		sessions: cfg.sessionCookies, policies: policies, idempotency: idem,
+		denialLimiter: cfg.denialLimiter, onFailure: onFailure, logger: cfg.logger, now: cfg.now,
+	})
 	if err != nil {
 		return profileAPIs{}, err
 	}
@@ -2849,24 +2890,63 @@ type installationDeps struct {
 	signIn   *serverapi.SignIn
 }
 
-// newInstallationAPI builds the restore service and the tool-neutral
-// installation API from the backup service and the maintenance service.
+// newInstallationAPI builds the restore service, the store check service, the
+// parts of the installation API that need the principals, and the
+// tool-neutral installation API, in this order. It is assembly: it calls the
+// constructors of the backup area and of the installation area.
 func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts, error) {
-	restores, err := newRestoreService(cfg, deps, deps.maint)
+	none := installationParts{handler: nil, restores: nil, storeChecks: nil}
+
+	restores, err := newRestoreService(restoreInputs{
+		settings: cfg.backup, store: cfg.namespaceStore, blobs: cfg.blobStore, watch: cfg.watch,
+		backups: deps.backups, maint: deps.maint, chain: deps.chain, key: cfg.secretWrapper,
+		installation: cfg.installation.String(), owner: durableOwner(cfg), lease: cfg.operationLease,
+		now: cfg.now, logger: cfg.logger,
+	})
 	if err != nil {
-		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+		return none, err
 	}
 
 	bindAuditChain(deps.chain, deps.maint, restores, cfg)
 
 	checks, _, err := newStoreCheckService(cfg, deps.maint)
 	if err != nil {
-		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+		return none, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, deps, restores, checks)
+	principals, err := newPrincipalService(cfg, deps.services.access)
 	if err != nil {
-		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+		return none, err
+	}
+
+	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
+	if err != nil {
+		return none, err
+	}
+
+	gitHost, idem, err := newGitHostParts(cfg, deps)
+	if err != nil {
+		return none, err
+	}
+
+	extras, err := newServerExtras(cfg, deps, principals)
+	if err != nil {
+		return none, err
+	}
+
+	serverAPI, err := newServerHandler(serverHandlerInputs{
+		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
+		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
+		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
+		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
+		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
+		principals: principals, gates: gates, gitHost: gitHost, idempotency: idem, extras: extras,
+		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
+		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
+		version: cfg.version, logger: cfg.logger, now: cfg.now,
+	})
+	if err != nil {
+		return none, err
 	}
 
 	return installationParts{handler: serverAPI, restores: restores, storeChecks: checks}, nil
