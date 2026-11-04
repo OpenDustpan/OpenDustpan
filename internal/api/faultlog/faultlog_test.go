@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/faultlog"
@@ -36,6 +40,44 @@ func TestCause(t *testing.T) {
 		{"joined EOF and unexpected EOF", errors.Join(io.EOF, io.ErrUnexpectedEOF), faultlog.CauseUnexpectedEOF},
 		{"unknown error", errUnknown, faultlog.CauseUnclassified},
 		{"nil", nil, faultlog.CauseUnclassified},
+		{"ENOSPC", syscall.ENOSPC, faultlog.CauseStorage},
+		{"EDQUOT", syscall.EDQUOT, faultlog.CauseStorage},
+		{"EROFS", syscall.EROFS, faultlog.CauseStorage},
+		{"EIO", syscall.EIO, faultlog.CauseStorage},
+		{"wrapped ENOSPC", fmt.Errorf("write blob: %w", syscall.ENOSPC), faultlog.CauseStorage},
+		{
+			"ENOSPC in a path error",
+			&os.PathError{Op: "write", Path: "/blobs/x", Err: syscall.ENOSPC},
+			faultlog.CauseStorage,
+		},
+		{
+			"ECONNREFUSED in a net.OpError",
+			&net.OpError{Op: "dial", Net: "tcp", Source: nil, Addr: nil, Err: syscall.ECONNREFUSED},
+			faultlog.CauseNetwork,
+		},
+		{
+			"DNS error",
+			&net.DNSError{
+				UnwrapErr: nil, Err: "no such host", Name: "x.invalid", Server: "",
+				IsTimeout: false, IsTemporary: false, IsNotFound: true,
+			},
+			faultlog.CauseNetwork,
+		},
+		{
+			"url error around a net.OpError",
+			&url.Error{
+				Op: "Get", URL: "http://x.invalid",
+				Err: &net.OpError{Op: "dial", Net: "tcp", Source: nil, Addr: nil, Err: syscall.ECONNREFUSED},
+			},
+			faultlog.CauseNetwork,
+		},
+		{
+			"url error around an unknown error",
+			&url.Error{Op: "Get", URL: "http://x.invalid", Err: errUnknown},
+			faultlog.CauseUnclassified,
+		},
+		{"ECONNREFUSED alone", syscall.ECONNREFUSED, faultlog.CauseUnclassified},
+		{"EMFILE alone", syscall.EMFILE, faultlog.CauseUnclassified},
 	}
 
 	for _, tc := range tests {
@@ -69,6 +111,11 @@ func TestLogServer(t *testing.T) {
 		{
 			"eof cause", http.StatusInternalServerError, faultlog.CauseEOF,
 			[]string{"status=500", "cause=eof"},
+			[]string{"cause=unclassified"},
+		},
+		{
+			"storage cause", http.StatusInternalServerError, faultlog.CauseStorage,
+			[]string{"status=500", "cause=storage"},
 			[]string{"cause=unclassified"},
 		},
 		{
