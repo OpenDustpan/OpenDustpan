@@ -9,9 +9,9 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -135,6 +135,17 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+
+# With no VERSION there is no tag to check, so the target runs the cases that
+# exist without one: the script against an empty record, a record of another
+# version, a record with a CR or a NUL byte, and a missing record. With
+# VERSION=vX.Y.Z it checks the record for that tag, as a release does.
+release-record-check: ## Check the release record: the cases that need no tag, or VERSION=vX.Y.Z for a tag.
+ifdef VERSION
+	./scripts/check-release-record.sh $(VERSION)
+else
+	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst' -count=1
+endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
 	$(ADR_INDEX)
