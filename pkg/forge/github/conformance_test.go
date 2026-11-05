@@ -33,6 +33,15 @@ func (x *hostFixture) Push(_ context.Context, branch string, files map[string][]
 	return commitOf(c), nil
 }
 
+func (x *hostFixture) Rewrite(_ context.Context, branch string, files map[string][]byte) (forge.Commit, error) {
+	c, err := x.host.Rewrite(x.repo, branch, files, "Force push to "+branch)
+	if err != nil {
+		return forge.Commit{}, fmt.Errorf("rewrite in the fake: %w", err)
+	}
+
+	return commitOf(c), nil
+}
+
 func (x *hostFixture) Tag(_ context.Context, name, commitID string) error {
 	if err := x.host.Tag(x.repo, name, commitID); err != nil {
 		return fmt.Errorf("tag in the fake: %w", err)

@@ -2,6 +2,7 @@ package githubfake_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -122,6 +123,18 @@ func TestCreateRef(t *testing.T) {
 			userValue,
 			http.StatusUnprocessableEntity,
 		},
+		{
+			"a name under a branch",
+			func(id string) string { return ref("refs/heads/main/x", id) },
+			userValue,
+			http.StatusUnprocessableEntity,
+		},
+		{
+			"a name above a branch",
+			func(id string) string { return ref("refs/heads/ma", id) },
+			userValue,
+			http.StatusCreated,
+		},
 		{"a body that does not parse", func(string) string { return `{` }, userValue, http.StatusBadRequest},
 		{"no credential", func(id string) string { return ref("refs/heads/c", id) }, "", http.StatusUnauthorized},
 	}
@@ -159,5 +172,67 @@ func TestReadRef(t *testing.T) {
 
 	for _, ref := range []string{"heads/none", "tags/v1"} {
 		wantStatus(t, c.do(http.MethodGet, "/repos/acme/infra/git/ref/"+ref, userValue, ""), http.StatusNotFound)
+	}
+}
+
+func TestCompare(t *testing.T) {
+	t.Parallel()
+
+	f, first := newFake(t)
+	c := newClient(t, f)
+	second := mustPush(t, f, "main", map[string][]byte{"a.txt": []byte("a")})
+
+	rewritten, err := f.Rewrite("acme/infra", "other", map[string][]byte{"a.txt": []byte("a")}, "Force push")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		base      string
+		head      string
+		status    int
+		want      string
+		mergeBase string
+	}{
+		{"head ahead of base", first.ID, second.ID, http.StatusOK, "ahead", first.ID},
+		{"head behind base", second.ID, first.ID, http.StatusOK, "behind", first.ID},
+		{"the same commit", second.ID, second.ID, http.StatusOK, "identical", second.ID},
+		{"another history", first.ID, rewritten.ID, http.StatusOK, "diverged", ""},
+		{"a branch name", "main", "other", http.StatusOK, "diverged", ""},
+		{"a commit that does not exist", strings.Repeat("0", 40), second.ID, http.StatusNotFound, "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := c.do(http.MethodGet, "/repos/acme/infra/compare/"+tt.base+"..."+tt.head, userValue, "")
+			if got.status != tt.status {
+				t.Fatalf("status %d, want %d: %s", got.status, tt.status, got.body)
+			}
+
+			if tt.want == "" {
+				return
+			}
+
+			var out map[string]json.RawMessage
+			if err := json.Unmarshal(got.body, &out); err != nil {
+				t.Fatal(err)
+			}
+
+			var (
+				status    string
+				mergeBase refObject
+			)
+
+			err := errors.Join(
+				json.Unmarshal(out["status"], &status),
+				json.Unmarshal(out["merge_base_commit"], &mergeBase),
+			)
+			if err != nil || status != tt.want || mergeBase.SHA != tt.mergeBase {
+				t.Fatalf("answer %s, want %s with the merge base %q (%v)", got.body, tt.want, tt.mergeBase, err)
+			}
+		})
 	}
 }
