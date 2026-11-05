@@ -89,6 +89,9 @@ const (
 	// not a permission level of GitHub: it asks for the write of the contents
 	// and of the pull requests.
 	levelReview = "review"
+	// levelReviewRead is the level of a token for a review request call that
+	// only reads: the read of the contents and of the pull requests.
+	levelReviewRead = "review-read"
 )
 
 // installation is the part of the installation answer that Check reads.

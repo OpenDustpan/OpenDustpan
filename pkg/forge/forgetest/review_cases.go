@@ -511,6 +511,42 @@ func caseReviewCloseForeign(t *testing.T, h Harness) {
 	}
 }
 
+func caseReviewCloseForeignClosed(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	person := openReview(t, h, "feature/y")
+
+	if err := h.Fixture.Close(ctx, person.ID); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if err := h.Forge.CloseReview(ctx, h.Repo, person.ID); !errors.Is(err, forge.ErrRefused) {
+		t.Fatalf("CloseReview of a closed review request outside the write-back = %v, want ErrRefused", err)
+	}
+}
+
+func caseDeleteBranchBaseOfOpenReview(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	pushBranch(t, h, "dustpan/base")
+	pushBranch(t, h, "feature/z")
+
+	// A review request from feature/z into the write-back branch.
+	if _, err := h.Forge.OpenReview(ctx, h.Repo, reviewOn("feature/z", "dustpan/base")); err != nil {
+		t.Fatalf("OpenReview = %v", err)
+	}
+
+	if err := h.Forge.DeleteBranch(ctx, h.Repo, "dustpan/base"); !errors.Is(err, forge.ErrRefused) {
+		t.Fatalf("DeleteBranch of the base of an open review request = %v, want ErrRefused", err)
+	}
+
+	if !branchExists(t, h, "dustpan/base") {
+		t.Fatal("the branch is gone after a refused delete")
+	}
+}
+
 func caseDeleteBranch(t *testing.T, h Harness) {
 	t.Helper()
 
