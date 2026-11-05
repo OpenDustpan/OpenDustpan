@@ -148,7 +148,7 @@ func newProviderEnv(t *testing.T) providerEnv {
 	stale := &atomic.Bool{}
 
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, authz: nil, namespaces: nil,
+		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, authz: nil, namespaces: nil, hostile: nil,
 		stored: func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders) {
 			beta = oauthtest.New(t, oauthtest.Config{
 				Now: clock.Now, ClientID: "dustpan-beta", ClientSecret: betaSecret, RedirectURI: betaCallback,

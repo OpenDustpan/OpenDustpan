@@ -337,9 +337,15 @@ provider names before it finds the principal:
   more than 1 minute before the start of the sign-in.
 
 The server refuses an answer that breaks a limit. It never cuts a value to
-the limit. The audit entry of the refused sign-in has the reason
-`ID token was refused`, also for a plain OAuth 2.0 provider. The server log
-has the rule that failed.
+the limit. The audit entry of the refused sign-in has one of these reasons:
+
+- `ID token was refused`: the sign-in method refused the answer of the
+  provider. This reason is the same for a plain OAuth 2.0 provider.
+- `sign-in assertion is not valid`: the sign-in method accepted the answer,
+  and the second check of the server refused it. The password sign-in of a
+  local user has this check and this reason too.
+
+The server log has the rule that failed.
 
 ## Audit entries
 
