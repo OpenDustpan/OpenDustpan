@@ -61,8 +61,9 @@ type Config struct {
 	Sweeps     runner.SweepClaimer
 	Operations durable.Store
 	// Recorder records the steps and the log chunks of a launcher. Without
-	// it, the step and log paths of a job session answer not-found.
-	Recorder job.Recorder
+	// it, the step and log paths of a job session answer not-found. A
+	// Recorder needs Jobs: NewHandler refuses the one without the other.
+	Recorder job.CheckedRecorder
 	// Jobs reads the job of a session, for its assignment. Without it, the
 	// session exchange answers not-found before it uses the handoff token.
 	Jobs JobReader
@@ -112,7 +113,7 @@ type Handler struct {
 	claimer    job.Claimer
 	sweeps     runner.SweepClaimer
 	operations durable.Store
-	recorder   job.Recorder
+	recorder   job.CheckedRecorder
 	jobs       JobReader
 	authn      identity.Authenticator
 	authz      identity.Authorizer
@@ -149,6 +150,10 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: logger", ErrMissingDependency)
 	case cfg.ServerURL == "":
 		return fmt.Errorf("%w: server URL", ErrMissingDependency)
+	case cfg.Recorder != nil && cfg.Jobs == nil:
+		// A recorder with no job reader would let a step end skip the check of
+		// its phase, so the server does not start.
+		return fmt.Errorf("%w: job reader, which a recorder needs", ErrMissingDependency)
 	}
 
 	return nil

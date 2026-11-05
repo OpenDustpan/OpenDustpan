@@ -252,6 +252,16 @@ func (h *Handler) phaseOf(r *http.Request, sess *runner.Session) (sessionPhase, 
 // jobPhaseOf is phaseOf for a route that writes the record of a job phase. A
 // session of a sweep writes no step, log or finish.
 func (h *Handler) jobPhaseOf(r *http.Request, c *call) (sessionPhase, error) {
+	// Fail closed: a handler with no recorder or no job reader records nothing
+	// and checks nothing, so it answers before it reads the claim.
+	//
+	// Defense in depth: NewHandler refuses a recorder without a job reader.
+	// This check stays so that a handler built another way never records a
+	// step without the reader.
+	if h.recorder == nil || h.jobs == nil {
+		return sessionPhase{}, fmt.Errorf("%w: this server records no steps", runner.ErrNotFound)
+	}
+
 	sp, err := h.phaseOf(r, &c.session)
 	if err != nil {
 		return sessionPhase{}, err
@@ -259,10 +269,6 @@ func (h *Handler) jobPhaseOf(r *http.Request, c *call) (sessionPhase, error) {
 
 	if sp.sweep {
 		return sessionPhase{}, fmt.Errorf("%w: the claim of a sweep has no steps, logs or finish", runner.ErrInvalid)
-	}
-
-	if h.recorder == nil {
-		return sessionPhase{}, fmt.Errorf("%w: this server records no steps", runner.ErrNotFound)
 	}
 
 	return sp, nil
@@ -407,13 +413,15 @@ func (h *Handler) sessionRenew(w http.ResponseWriter, r *http.Request, c *call) 
 }
 
 // stepOf returns the step name of the path. The error never holds the name:
-// the launcher chose it, and the log of the server must not carry it.
+// the launcher chose it. Only a name that passed this check reaches the
+// recorder, the store and an error text, so no later error holds an unchecked
+// name.
 //
 // Defense in depth: the recorder checks the name too; this check stays so
 // that a name never reaches the store or a log line unchecked.
 func stepOf(r *http.Request) (string, error) {
 	name := r.PathValue("step")
-	if !runner.ValidName(name) {
+	if !job.ValidStepName(name) {
 		return "", fmt.Errorf("%w: the step name is 1 to %d lowercase letters, digits and '-'", runner.ErrInvalid,
 			job.MaxStepName)
 	}
@@ -491,13 +499,10 @@ func (h *Handler) stepEnd(w http.ResponseWriter, r *http.Request, c *call) {
 		FinishedAt: time.Time{},
 		Log:        nil,
 	}
-	if err = h.recorder.EndStep(ctx, sp.claim, rec); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
-
-		return
-	}
-
-	if err = h.checkLogOfStep(r, &sp, name, &req); err != nil {
+	// The recorder compares the log with the count and the hash before it
+	// writes, so a launcher that sends a wrong end changes nothing.
+	want := job.LogExpectation{Chunks: req.LogChunks, SHA256: req.LogSHA256}
+	if err = h.recorder.EndStepChecked(ctx, sp.claim, rec, want); err != nil {
 		h.writeError(ctx, w, ScopeSessionKey, err)
 
 		return
@@ -519,45 +524,6 @@ func checkStepEnd(req *protocol.StepEnd) error {
 	default:
 		return nil
 	}
-}
-
-// checkLogOfStep compares the closed log of the step with the number of
-// chunks and the hash that the launcher gave. The recorder closes the log from
-// the chunks that it holds, so a difference means that the launcher sent
-// chunks that the server did not keep, or the reverse.
-func (h *Handler) checkLogOfStep(r *http.Request, sp *sessionPhase, name string, req *protocol.StepEnd) error {
-	if h.jobs == nil {
-		return nil
-	}
-
-	j, err := h.jobs.Get(r.Context(), sp.claim.Job)
-	if err != nil {
-		return fmt.Errorf("get job: %w", err)
-	}
-
-	if sp.claim.Phase < 0 || sp.claim.Phase >= len(j.Phases) {
-		return fmt.Errorf("%w: job %s has no phase %d", runner.ErrInvalid, j.ID, sp.claim.Phase)
-	}
-
-	for i := range j.Phases[sp.claim.Phase].Steps {
-		rec := &j.Phases[sp.claim.Phase].Steps[i]
-		if rec.Name != name || rec.Token != sp.claim.Claim.Token {
-			continue
-		}
-
-		chunks, sum := 0, ""
-		if rec.Log != nil {
-			chunks, sum = rec.Log.Chunks, rec.Log.SHA256
-		}
-
-		if chunks != req.LogChunks || (chunks > 0 && sum != req.LogSHA256) {
-			return fmt.Errorf("%w: the log of step %s is not the log that the launcher sent", runner.ErrConflict, name)
-		}
-
-		return nil
-	}
-
-	return fmt.Errorf("%w: step %s has no record", runner.ErrInvalid, name)
 }
 
 // putLog stores one chunk of the log of a step. The proof signed the hash of
@@ -670,7 +636,8 @@ func (h *Handler) finish(w http.ResponseWriter, r *http.Request, c *call) {
 
 // checkFinishMessage checks the reason of a failed phase: valid text of at
 // most maxFinishMessage bytes with no control character but a line feed or a
-// tab, so that it can never add a line to a log or a header.
+// tab. The server never writes the reason to its log or to a header; the line
+// feed stays because a reason can have more than one line.
 func checkFinishMessage(m string) error {
 	if len(m) > maxFinishMessage || !utf8.ValidString(m) {
 		return fmt.Errorf("%w: the reason is at most %d bytes of text", runner.ErrInvalid, maxFinishMessage)
