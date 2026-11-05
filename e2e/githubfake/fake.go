@@ -66,6 +66,7 @@ func Epoch() time.Time {
 // The defaults of Config.
 const (
 	DefaultAppID          = "4242"
+	DefaultAppSlug        = "dustpan-sync"
 	DefaultInstallationID = "9001"
 	DefaultUserToken      = ""
 	rsaBits               = 2048
@@ -89,6 +90,9 @@ type Config struct {
 	// InstallationID is the ID of the one installation that the fake knows
 	// (DefaultInstallationID).
 	InstallationID string
+	// AppSlug is the slug of the app. The bot account of the app has the login
+	// slug + "[bot]" (DefaultAppSlug).
+	AppSlug string
 	// Owner is the account of the installation (ID 99, login "acme-org").
 	Owner Account
 	// User is the account that the user token belongs to (ID 777, login
@@ -172,6 +176,10 @@ func withDefaults(cfg Config) Config {
 		cfg.AppID = DefaultAppID
 	}
 
+	if cfg.AppSlug == "" {
+		cfg.AppSlug = DefaultAppSlug
+	}
+
 	if cfg.InstallationID == "" {
 		cfg.InstallationID = DefaultInstallationID
 	}
@@ -200,6 +208,14 @@ func (f *Fake) URL() string { return f.srv.URL }
 
 // AppID is the ID of the app that the fake knows.
 func (f *Fake) AppID() string { return f.cfg.AppID }
+
+// AppLogin is the login of the bot account of the app: the author of a commit
+// that an installation token makes.
+func (f *Fake) AppLogin() string { return f.cfg.AppSlug + "[bot]" }
+
+// UserLogin is the login of the user of the token: the author of a commit that
+// the token makes.
+func (f *Fake) UserLogin() string { return f.cfg.User.Login }
 
 // InstallationID is the ID of the installation that the fake knows.
 func (f *Fake) InstallationID() string { return f.cfg.InstallationID }

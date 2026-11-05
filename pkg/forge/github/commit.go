@@ -200,15 +200,21 @@ func (f *gitHub) requireAncestor(ctx context.Context, r repoName, bearer, base, 
 	return nil
 }
 
-// changedSince reports whether a file of the changes of req is not the same
-// at req.Base and at head. A file that is too large to compare counts as
-// different, so that the check fails closed.
+// changedSince reports whether a path of the changes of req is not the same
+// at req.Base and at head. It compares the tree entry of the path, its mode
+// and its object ID, so that a symlink, a submodule and a directory count as
+// what they are. An entry that is not a regular file, at the base or at the
+// head, counts as changed, and so does a tree that the adapter cannot read
+// whole. The check fails closed: only two equal entries of regular files, or
+// two missing entries, are the same.
 func (f *gitHub) changedSince(
 	ctx context.Context, r repoName, bearer string, req forge.CommitRequest, head string,
 ) (bool, error) {
+	trees := newTreeReader(f, r, bearer)
+
 	for _, c := range req.Changes {
-		before, err := f.blobAt(ctx, r, bearer, req.Base, c.Path)
-		if errors.Is(err, forge.ErrTooLarge) {
+		before, err := trees.entryAt(ctx, req.Base, c.Path)
+		if unreadableTree(err) {
 			return true, nil
 		}
 
@@ -216,8 +222,8 @@ func (f *gitHub) changedSince(
 			return false, err
 		}
 
-		after, err := f.blobAt(ctx, r, bearer, head, c.Path)
-		if errors.Is(err, forge.ErrTooLarge) {
+		after, err := trees.entryAt(ctx, head, c.Path)
+		if unreadableTree(err) {
 			return true, nil
 		}
 
@@ -225,29 +231,15 @@ func (f *gitHub) changedSince(
 			return false, err
 		}
 
-		if before != after {
+		// Defense in depth: entryAt reads only entries that it knows. These
+		// checks stay so that an entry that is not a regular file never counts
+		// as the same, also when the two sides are equal.
+		if !before.regularOrMissing() || !after.regularOrMissing() || before != after {
 			return true, nil
 		}
 	}
 
 	return false, nil
-}
-
-// blobAt returns the blob ID of the file at the commit, or "" when the commit
-// has no such file.
-func (f *gitHub) blobAt(ctx context.Context, r repoName, bearer, commit, filePath string) (string, error) {
-	file, err := f.readContents(ctx, fileRead{
-		base: r.path(), bearer: bearer, commit: commit, path: filePath, limit: MaxFileBytes,
-	})
-	if errors.Is(err, forge.ErrNotFound) {
-		return "", nil
-	}
-
-	if err != nil {
-		return "", err
-	}
-
-	return file.BlobID, nil
 }
 
 // commitAllowed returns forge.ErrUnsupported for a connection that
@@ -774,7 +766,10 @@ func (f *gitHub) branchHead(ctx context.Context, r repoName, bearer, branch stri
 // retried write-back finds its own commit. A line of the text of a message
 // that is not in the last paragraph is not a trailer. It returns
 // forge.ErrNotFound when no such commit exists, and for a missing repository
-// or ref. It returns forge.ErrInvalid for a trailer, a ref or a repository
+// or ref. A commit that has the trailer counts only when the connection made
+// it (see trustedCommit). The newest commit with the trailer that fails a
+// check gives forge.ErrUntrustedCommit, not a commit and not ErrNotFound. It
+// returns forge.ErrInvalid for a trailer, a ref or a repository
 // path that fails the checks, before any call, and forge.ErrUnavailable when
 // there are more commits since the time than the adapter reads, so that it
 // never answers "not found" for a commit that it did not look at.
@@ -809,10 +804,13 @@ func (f *gitHub) FindCommit(
 			return forge.Commit{}, f.forget(r, listErr)
 		}
 
-		for _, c := range list {
-			if hasTrailer(c.Commit.Message, trailer) {
-				return forge.Commit{ID: c.SHA, Time: c.Commit.Committer.Date.UTC()}, nil
-			}
+		found, delivered, deliveryErr := f.deliveryIn(ctx, list, trailer)
+		if deliveryErr != nil {
+			return forge.Commit{}, f.forget(r, deliveryErr)
+		}
+
+		if delivered {
+			return found, nil
 		}
 
 		if !full {
@@ -826,15 +824,58 @@ func (f *gitHub) FindCommit(
 	return forge.Commit{}, forge.Unavailable(0, "more commits since the time than the adapter reads")
 }
 
+// deliveryIn returns the first commit of list that has the trailer, and true.
+// A commit with the trailer is the delivery only when the connection made it
+// (see trustedCommit). Any other commit with the trailer stops the search with
+// forge.ErrUntrustedCommit, so that the caller never records it and never
+// makes a second commit on top of it. It returns false when no commit of the
+// list has the trailer.
+func (f *gitHub) deliveryIn(ctx context.Context, list []listedCommit, trailer string) (forge.Commit, bool, error) {
+	for _, c := range list {
+		if !hasTrailer(c.Commit.Message, trailer) {
+			continue
+		}
+
+		identity, err := f.commitIdentity(ctx)
+		if err != nil {
+			return forge.Commit{}, false, err
+		}
+
+		if trustErr := trustedCommit(c, identity); trustErr != nil {
+			return forge.Commit{}, false, trustErr
+		}
+
+		return forge.Commit{ID: c.SHA, Time: c.Commit.Committer.Date.UTC()}, true, nil
+	}
+
+	return forge.Commit{ID: "", Time: time.Time{}}, false, nil
+}
+
 // listedCommit is a commit of the list that FindCommit reads.
 type listedCommit struct {
 	SHA    string          `json:"sha"`
 	Commit listedCommitRef `json:"commit"`
+	// Author and Committer are the accounts of GitHub for the author and the
+	// committer. They are nil when no account has the email of the commit.
+	Author    *listedAccount `json:"author"`
+	Committer *listedAccount `json:"committer"`
 }
 
 type listedCommitRef struct {
 	Message   string       `json:"message"`
 	Committer committerRef `json:"committer"`
+	// Verification is nil when the host reports no verification.
+	Verification *listedVerification `json:"verification"`
+}
+
+// listedAccount is the account of an author or a committer in the list.
+type listedAccount struct {
+	Login string `json:"login"`
+}
+
+// listedVerification is the verification of a commit in the list.
+type listedVerification struct {
+	Verified *bool `json:"verified"`
 }
 
 // search is a search of FindCommit: the commits of ref in repo since a time.
@@ -910,8 +951,10 @@ func (f *gitHub) listCommits(ctx context.Context, q search, page int) ([]listedC
 }
 
 // hasTrailer reports whether the last paragraph of message has the line
-// trailer. The message is host data that is not trusted. A message with one
-// paragraph has no trailer, because that paragraph is its first line.
+// trailer. The line must equal trailer: a line with more or fewer characters
+// is another trailer, so the job "j-1" never matches the job "j-10". The
+// message is host data that is not trusted. A message with one paragraph has
+// no trailer, because that paragraph is its first line.
 func hasTrailer(message, trailer string) bool {
 	message = strings.TrimRight(strings.ReplaceAll(message, "\r\n", "\n"), " \t\n")
 

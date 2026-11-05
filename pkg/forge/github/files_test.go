@@ -389,6 +389,7 @@ func TestReadsRefuseARedirect(t *testing.T) {
 		host, fg := o.host, o.fg
 		other := githubfake.New(t, githubfake.Config{
 			AppID:          "",
+			AppSlug:        "",
 			InstallationID: "",
 			Owner:          githubfake.Account{ID: 0, Login: ""},
 			ContentsLimit:  0,

@@ -71,6 +71,13 @@ var (
 	// adapter calls the forge, or connection parameters that the adapter
 	// cannot use.
 	ErrInvalid = errors.New("invalid Git host request")
+	// ErrUntrustedCommit reports a commit that has the trailer of a write-back
+	// but that the connection did not make: another author, another
+	// committer, or a commit that the host does not show as verified. The
+	// commit is not the delivery of the job. A caller must not record it as
+	// the delivery, and must not retry: an operator reads the audit record
+	// and decides.
+	ErrUntrustedCommit = errors.New("a commit with the trailer was not made by the connection")
 )
 
 // UnavailableError is an ErrUnavailable with the wait time that the forge
@@ -251,8 +258,14 @@ type Commits interface {
 	// FindCommit returns the newest commit on ref, at or after since,
 	// whose message has the trailer line trailer, for example
 	// "Dustpan-Job: j-123", in its last paragraph. A line of the text of a
-	// message is not a trailer. It returns ErrNotFound when no such commit
-	// exists, and ErrInvalid for a trailer that is not one line of the form
+	// message is not a trailer, and the line must equal trailer: a longer
+	// or shorter line is another trailer. Only a commit that the connection
+	// made counts: its author is the identity that the connection commits
+	// as, its committer is the Git host or that identity, and the host
+	// shows it as verified when the host reports verification. It returns
+	// ErrNotFound when no such commit exists, ErrUntrustedCommit when the
+	// newest commit with the trailer fails one of these checks, and
+	// ErrInvalid for a trailer that is not one line of the form
 	// "Key: value". A takeover of a write-back calls it before a second
 	// commit.
 	FindCommit(ctx context.Context, repo, ref, trailer string, since time.Time) (Commit, error)

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/forge/forgetest"
 )
 
 const (
@@ -153,6 +154,14 @@ func (f *fake) Push(context.Context, string, map[string][]byte) (forge.Commit, e
 }
 
 func (f *fake) Rewrite(context.Context, string, map[string][]byte) (forge.Commit, error) {
+	return forge.Commit{}, errNotImplemented
+}
+
+func (f *fake) PushAs(context.Context, string, map[string][]byte, string, forgetest.Origin) (forge.Commit, error) {
+	return forge.Commit{}, errNotImplemented
+}
+
+func (f *fake) PushEntry(context.Context, string, string, forgetest.EntryKind, string) (forge.Commit, error) {
 	return forge.Commit{}, errNotImplemented
 }
 
