@@ -272,6 +272,9 @@ type settings struct {
 	// jobClaimer builds the claimer of the phases of runner jobs for the
 	// runners of the protocol, or is nil. See WithJobClaimer.
 	jobClaimer JobClaimerFunc
+	// jobRecorder records the steps and the log chunks of the launchers of
+	// the runner protocol, or is nil. See WithJobRecorder.
+	jobRecorder job.Recorder
 	// components are the components this process runs. See WithComponents.
 	components Components
 	// operationLease is the lease period of a claim on a durable operation,
@@ -733,6 +736,7 @@ func defaultSettings() *settings {
 		sourceFilters:           nil,
 		trustRules:              trustRuleSettings{store: nil, cas: nil, loopback: false},
 		jobClaimer:              nil,
+		jobRecorder:             nil,
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,

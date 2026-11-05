@@ -168,19 +168,26 @@ func classifyProtocolOther(
 	err error, mk func(status int, code string, sentinels ...error) (int, protocol.Error),
 ) (int, protocol.Error) {
 	switch {
-	case errors.Is(err, runner.ErrClaimLost), errors.Is(err, durable.ErrClaimLost):
-		return mk(http.StatusConflict, protocol.ErrorClaimLost, runner.ErrClaimLost, durable.ErrClaimLost)
+	case errors.Is(err, runner.ErrClaimLost), errors.Is(err, durable.ErrClaimLost), errors.Is(err, job.ErrClaimLost):
+		return mk(
+			http.StatusConflict, protocol.ErrorClaimLost, runner.ErrClaimLost, durable.ErrClaimLost, job.ErrClaimLost,
+		)
 	case errors.Is(err, job.ErrCanceled), errors.Is(err, durable.ErrCanceled):
 		return mk(http.StatusConflict, protocol.ErrorCanceled, job.ErrCanceled, durable.ErrCanceled)
-	case errors.Is(err, runner.ErrConflict), errors.Is(err, runner.ErrRunnerOnline):
-		return mk(http.StatusConflict, protocol.ErrorConflict, runner.ErrConflict, runner.ErrRunnerOnline)
-	case errors.Is(err, runner.ErrNotFound), errors.Is(err, durable.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
+	case errors.Is(err, runner.ErrConflict), errors.Is(err, runner.ErrRunnerOnline), errors.Is(err, job.ErrConflict),
+		errors.Is(err, durable.ErrStepDone):
+		return mk(
+			http.StatusConflict, protocol.ErrorConflict,
+			runner.ErrConflict, runner.ErrRunnerOnline, job.ErrConflict, durable.ErrStepDone,
+		)
+	case errors.Is(err, runner.ErrNotFound), errors.Is(err, durable.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
+		errors.Is(err, job.ErrNotFound):
 		return mk(
 			http.StatusNotFound, protocol.ErrorNotFound,
-			runner.ErrNotFound, durable.ErrNotFound, namespace.ErrNotFound,
+			runner.ErrNotFound, durable.ErrNotFound, namespace.ErrNotFound, job.ErrNotFound,
 		)
-	case errors.Is(err, runner.ErrInvalid), errors.Is(err, errBadBody):
-		return mk(http.StatusBadRequest, protocol.ErrorInvalid, runner.ErrInvalid, errBadBody)
+	case errors.Is(err, runner.ErrInvalid), errors.Is(err, job.ErrInvalid), errors.Is(err, errBadBody):
+		return mk(http.StatusBadRequest, protocol.ErrorInvalid, runner.ErrInvalid, job.ErrInvalid, errBadBody)
 	case errors.Is(err, runner.ErrLimit):
 		return mk(http.StatusTooManyRequests, protocol.ErrorRateLimited, runner.ErrLimit)
 	case errors.Is(err, namespace.ErrFenced):

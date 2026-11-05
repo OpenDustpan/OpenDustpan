@@ -9,8 +9,10 @@ import (
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 
@@ -87,6 +89,13 @@ func claimGates(cfg *settings, gates stateWriteGates) (claimGuard, error) {
 	return claimGuard{gates: jobGates{snapshots: store, members: newInventoryFacts(cfg)}, offReason: ""}, nil
 }
 
+// WithJobRecorder sets the recorder that the steps and the log chunks of a
+// launcher call. It replaces the recorder that the server builds itself
+// (see newDurableRecorder). The session exchange also needs WithJobStore.
+func WithJobRecorder(r job.Recorder) Option {
+	return func(o *settings) { o.jobRecorder = r }
+}
+
 // newRunnerHandler builds the runner protocol and the runner management API,
 // or returns nil when the server has no runner stores or no public URL. The
 // join challenge names the public URL without a trailing slash, so a runner
@@ -122,9 +131,23 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		claimer = cfg.jobClaimer(guard)
 	}
 
+	recorder := cfg.jobRecorder
+
+	if recorder == nil {
+		built, ok, buildErr := newDurableRecorder(cfg, svc.namespaces)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+
+		if ok {
+			recorder = built
+		}
+	}
+
 	handler, err := runnerapi.NewHandler(runnerapi.Config{
 		Namespaces: svc.namespaces, Pools: cfg.runners, Members: cfg.runners, Handoffs: cfg.runners,
-		Claimer: claimer, Sweeps: nil, Operations: cfg.durableStore, Authenticator: cfg.authenticator,
+		Claimer: claimer, Sweeps: nil, Operations: cfg.durableStore,
+		Recorder: recorder, Jobs: cfg.jobStore, Authenticator: cfg.authenticator,
 		Authorizer: cfg.authorizer, Sessions: cfg.sessionCookies, Logger: cfg.logger, Release: release,
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
@@ -134,4 +157,44 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	}
 
 	return handler, nil
+}
+
+// newDurableRecorder returns the recorder that the steps and the log chunks of
+// a launcher call, for a server with no recorder from WithJobRecorder. It
+// builds the durable recorder over the record store of the job store, the
+// blob store and the item key sealer. It returns nil when the server lacks one
+// of these (the bool is false), so the step and log paths of a job session answer not-found and
+// no launcher writes a byte. A job store that keeps jobs but cannot record is
+// not an error: the server then serves no steps and no logs.
+func newDurableRecorder(cfg *settings, namespaces *namespace.Service) (*job.DurableRecorder, bool, error) {
+	records, ok := cfg.jobStore.(job.RecordStore)
+	if !ok || cfg.blobStore == nil || namespaces == nil || cfg.updateStore == nil {
+		return nil, false, nil
+	}
+
+	refusals, err := blobRefusals(cfg, job.ArtifactBlobFamily())
+	if err != nil {
+		return nil, false, err
+	}
+
+	blobs, err := job.NewArtifactBlobs(cfg.blobStore, refusals)
+	if err != nil {
+		return nil, false, fmt.Errorf("job recorder blobs: %w", err)
+	}
+
+	sealer, err := newItemSealer(cfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("job recorder: %w", err)
+	}
+
+	recorder, err := job.NewRecorder(job.RecorderConfig{
+		Store: records, Jobs: cfg.jobStore, Blobs: blobs, Sealer: sealer,
+		Namespaces: jobNamespaces{namespaces: namespaces}, Retention: history.DefaultRetentionSettings(),
+		Now: cfg.now,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("job recorder: %w", err)
+	}
+
+	return recorder, true, nil
 }

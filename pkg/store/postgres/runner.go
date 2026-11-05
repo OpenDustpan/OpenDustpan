@@ -1234,6 +1234,84 @@ func (r *Runners) RunnerRenew(
 	return out, nil
 }
 
+// lockSessionClaim returns the claim of the job session id, locked for the
+// write of the transaction of q. It returns runner.ErrNotFound for an unknown
+// session, runner.ErrRetired for a session of a retired runner, and
+// runner.ErrClaimLost when the claim of the session is not live.
+func lockSessionClaim(ctx context.Context, q *db.Queries, id string) (durable.Claim, error) {
+	row, err := q.GetRunnerSession(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return durable.Claim{}, runner.ErrNotFound
+	}
+
+	if err != nil {
+		return durable.Claim{}, fmt.Errorf("select job session: %w", err)
+	}
+
+	if row.RunnerRetiredAtMs != 0 {
+		return durable.Claim{}, runner.ErrRetired
+	}
+
+	c := durable.Claim{
+		Operation: durable.ID(row.OperationID), Owner: row.RunnerID, Token: row.Token, ExpiresAt: time.Time{},
+	}
+
+	_, live, err := lockClaim(ctx, q, c)
+	if err != nil {
+		return durable.Claim{}, err
+	}
+
+	if !live {
+		return durable.Claim{}, runner.ErrClaimLost
+	}
+
+	return c, nil
+}
+
+// SessionRenew implements runner.SessionStore.
+func (r *Runners) SessionRenew(
+	ctx context.Context, id string, fence namespace.Fence, d time.Duration,
+) (durable.Claim, error) {
+	if d <= 0 {
+		return durable.Claim{}, fmt.Errorf("%w: a renewal needs a positive lease", runner.ErrInvalid)
+	}
+
+	var out durable.Claim
+
+	err := r.store.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		c, err := lockSessionClaim(ctx, q, id)
+		if err != nil {
+			return err
+		}
+
+		dbNow, err := storeNow(ctx, q)
+		if err != nil {
+			return err
+		}
+
+		expires := dbNow + d.Milliseconds()
+
+		// No check of a requested cancel: durable.Store.Extend would refuse
+		// it, and the launcher still needs its claim for its last writes.
+		err = q.SetRunnerClaimExpiry(ctx, db.SetRunnerClaimExpiryParams{
+			ID: string(c.Operation), Token: c.Token, ExpiresAtMs: pgtype.Int8{Int64: expires, Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("move claim expiry: %w", err)
+		}
+
+		out = c
+		out.ExpiresAt = codec.RunnerTime(expires)
+
+		return nil
+	})
+	if err != nil {
+		return durable.Claim{}, err
+	}
+
+	return out, nil
+}
+
 // renewState checks the renewal of the claim c at now. It returns
 // true when the claim must be released, and any other refusal as an error.
 func renewState(ctx context.Context, q *db.Queries, c durable.Claim, now time.Time) (bool, error) {
