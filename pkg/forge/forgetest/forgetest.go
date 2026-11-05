@@ -9,8 +9,8 @@
 //
 // The cases come before the first adapter. A case with no body skips with
 // "not implemented", and gets its body before an adapter implements the
-// methods that it covers. The cases of the groups "The connection" and
-// "Files" have bodies, and so do most cases of the group "Commits".
+// methods that it covers. The cases of the groups "The connection", "Files",
+// "Commits" and "Review requests" have bodies.
 // CaseNamesWithBody lists the cases that have a body. A case whose capability the forge does not list
 // skips for that forge, and the case "an operation outside the
 // capabilities is unsupported" checks that such a method returns
@@ -72,6 +72,26 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	Tag(ctx context.Context, name, commitID string) error
 	// Merge merges the review request id, as a person does in the forge.
 	Merge(ctx context.Context, id string) error
+	// Close closes the review request id with no merge, as a person does in
+	// the forge.
+	Close(ctx context.Context, id string) error
+	// Branch makes the branch name at the head of main with no new commit.
+	Branch(ctx context.Context, name string) error
+	// SetDefaultBranch makes branch the default branch that the forge
+	// answers for the repository. The forge does not refuse a delete of it.
+	SetDefaultBranch(ctx context.Context, branch string) error
+	// ForkReview makes a fork of the repository, in the account of another
+	// person, with the branch of the same name as branch and its commits. The
+	// person opens a review request from the branch of the fork into target
+	// of the repository, and the method returns its ID.
+	ForkReview(ctx context.Context, branch, target string) (string, error)
+	// SetMergeState makes the forge answer the merge state state, as a text of
+	// the forge, for the review request id. The text "unknown" is the state
+	// before the forge computes the merge.
+	SetMergeState(ctx context.Context, id, state string) error
+	// Oversize makes the forge answer each review request with a body above
+	// the size limit of the adapter, until the returned function restores it.
+	Oversize(ctx context.Context) (restore func(), err error)
 	// Event returns a request of kind as the forge sends it, signed with
 	// secret. The kind may be one that the port does not name, to test
 	// ErrUnsupported.
@@ -175,18 +195,61 @@ func cases() []testCase {
 		{"find commit with a bad trailer or ref is invalid and makes no call", forge.CapCommit, caseFindCommitInvalid},
 
 		// Review requests.
-		{"open review request", forge.CapReview, nil},
-		{"open review request twice answers the first", forge.CapReview, nil},
-		{"open review request of the same branch into another target opens another", forge.CapReview, nil},
-		{"open review request of a missing branch is not found", forge.CapReview, nil},
-		{"open review request that the forge does not allow is refused", forge.CapReview, nil},
-		{"read an open review request has its head", forge.CapReview, nil},
-		{"read review request after a merge has the merge time and commit", forge.CapReview, nil},
-		{"read review request after a close with no merge", forge.CapReview, nil},
-		{"read a missing review request is not found", forge.CapReview, nil},
-		{"close review request twice is nil", forge.CapReview, nil},
-		{"close a missing review request is not found", forge.CapReview, nil},
-		{"close of a merged review request is a conflict", forge.CapReview, nil},
+		{"open review request", forge.CapReview, caseReviewOpen},
+		{"open review request twice answers the first", forge.CapReview, caseReviewOpenTwice},
+		{
+			"open review request of the same branch into another target opens another",
+			forge.CapReview,
+			caseReviewOpenOtherTarget,
+		},
+		{
+			"open review request of a missing branch or target is not found",
+			forge.CapReview,
+			caseReviewOpenMissingBranch,
+		},
+		{"open review request that the forge does not allow is refused", forge.CapReview, caseReviewOpenRefused},
+		{
+			"open review request that fails validation is invalid and makes no call",
+			forge.CapReview,
+			caseReviewOpenInvalid,
+		},
+		{"open review request never answers the review request of a fork", forge.CapReview, caseReviewOpenIgnoresFork},
+		{"read an open review request has its head, base and test merge", forge.CapReview, caseReviewReadHead},
+		{"read review request after a merge has the merge time and commit", forge.CapReview, caseReviewReadMerged},
+		{"read review request after a close with no merge", forge.CapReview, caseReviewReadClosed},
+		{"read a missing review request is not found", forge.CapReview, caseReviewReadMissing},
+		{
+			"read or close with an ID that is not a number is invalid and makes no call",
+			forge.CapReview,
+			caseReviewIDInvalid,
+		},
+		{"read review request from a fork shows another head repository", forge.CapReview, caseReviewReadFork},
+		{
+			"read review request maps each merge state, and an unknown one is unknown",
+			forge.CapReview,
+			caseReviewMergeStates,
+		},
+		{
+			"read review request with an unknown merge state has no test merge",
+			forge.CapReview,
+			caseReviewUnknownHasNoTestMerge,
+		},
+		{"close review request twice is nil", forge.CapReview, caseReviewCloseTwice},
+		{"close a missing review request is not found", forge.CapReview, caseReviewCloseMissing},
+		{"close of a merged review request is a conflict", forge.CapReview, caseReviewCloseMerged},
+		{"close of a review request outside the write-back is refused", forge.CapReview, caseReviewCloseForeign},
+		{"delete branch of a write-back", forge.CapReview, caseDeleteBranch},
+		{"delete a missing branch is not found", forge.CapReview, caseDeleteBranchMissing},
+		{
+			"delete a branch outside the write-back is invalid and makes no call",
+			forge.CapReview,
+			caseDeleteBranchOutsideWriteBack,
+		},
+		{"delete the default branch is refused", forge.CapReview, caseDeleteDefaultBranch},
+		{"delete a protected branch is refused", forge.CapReview, caseDeleteProtectedBranch},
+		{"review methods on a forge that fails are ErrUnavailable", forge.CapReview, caseReviewServerError},
+		{"review methods on an answer that does not parse are ErrUnavailable", forge.CapReview, caseReviewGarbled},
+		{"review methods on an answer above the size limit are ErrUnavailable", forge.CapReview, caseReviewOversize},
 
 		// Tokens.
 		{"repo token of an app reads its repository only", forge.CapRepoToken, nil},

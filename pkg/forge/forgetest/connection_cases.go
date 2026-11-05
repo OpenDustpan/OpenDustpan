@@ -73,6 +73,9 @@ func methods(secret []byte) []method {
 		{"CloseReview", forge.CapReview, func(ctx context.Context, f forge.Forge, repo string) error {
 			return f.CloseReview(ctx, repo, "1")
 		}},
+		{"DeleteBranch", forge.CapReview, func(ctx context.Context, f forge.Forge, repo string) error {
+			return f.DeleteBranch(ctx, repo, "dustpan/j-1")
+		}},
 		{"RepoToken", forge.CapGitAccess, func(ctx context.Context, f forge.Forge, repo string) error {
 			_, err := f.RepoToken(ctx, repo)
 

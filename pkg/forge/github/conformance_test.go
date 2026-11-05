@@ -2,7 +2,10 @@ package github_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,7 +61,103 @@ func (x *hostFixture) Protect(_ context.Context, branch string) error {
 	return nil
 }
 
-func (x *hostFixture) Merge(context.Context, string) error { return errNotImplemented }
+func reviewNumber(id string) (int, error) {
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return 0, fmt.Errorf("the review ID %q is not a number: %w", id, err)
+	}
+
+	return n, nil
+}
+
+func (x *hostFixture) Merge(_ context.Context, id string) error {
+	n, err := reviewNumber(id)
+	if err != nil {
+		return err
+	}
+
+	if mergeErr := x.host.MergePull(x.repo, n); mergeErr != nil {
+		return fmt.Errorf("merge in the fake: %w", mergeErr)
+	}
+
+	return nil
+}
+
+func (x *hostFixture) Close(_ context.Context, id string) error {
+	n, err := reviewNumber(id)
+	if err != nil {
+		return err
+	}
+
+	if closeErr := x.host.ClosePull(x.repo, n); closeErr != nil {
+		return fmt.Errorf("close in the fake: %w", closeErr)
+	}
+
+	return nil
+}
+
+func (x *hostFixture) Branch(_ context.Context, name string) error {
+	if err := x.host.Branch(x.repo, name); err != nil {
+		return fmt.Errorf("branch in the fake: %w", err)
+	}
+
+	return nil
+}
+
+func (x *hostFixture) SetDefaultBranch(_ context.Context, branch string) error {
+	if err := x.host.SetDefaultBranch(x.repo, branch); err != nil {
+		return fmt.Errorf("set the default branch in the fake: %w", err)
+	}
+
+	return nil
+}
+
+// forkOwner returns the account of the person who forks the repository.
+func forkOwner() githubfake.Account { return githubfake.Account{ID: 31337, Login: "forker"} }
+
+func (x *hostFixture) ForkReview(_ context.Context, branch, target string) (string, error) {
+	_, name, _ := strings.Cut(x.repo, "/")
+	fork := forkOwner().Login + "/" + name
+
+	if err := x.host.AddFork(x.repo, fork); err != nil && !errors.Is(err, githubfake.ErrExists) {
+		return "", fmt.Errorf("fork in the fake: %w", err)
+	}
+
+	files := map[string][]byte{"stacks/fork.yaml": []byte("f: 1\n")}
+	if _, err := x.host.Push(fork, branch, files, "Fork change"); err != nil {
+		return "", fmt.Errorf("push to the fork: %w", err)
+	}
+
+	n, err := x.host.OpenPull(githubfake.PullSpec{
+		Base: x.repo, BaseRef: target, Head: fork, HeadRef: branch, Title: "Change from a fork", Body: "",
+		Author: forkOwner(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("open the pull request of the fork: %w", err)
+	}
+
+	return strconv.Itoa(n), nil
+}
+
+func (x *hostFixture) SetMergeState(_ context.Context, id, state string) error {
+	n, err := reviewNumber(id)
+	if err != nil {
+		return err
+	}
+
+	if setErr := x.host.SetMergeState(x.repo, n, state); setErr != nil {
+		return fmt.Errorf("set the merge state in the fake: %w", setErr)
+	}
+
+	return nil
+}
+
+// oversizeBytes is above the body limit of the egress rules.
+const oversizeBytes = 5 << 20
+
+func (x *hostFixture) Oversize(context.Context) (func(), error) {
+	return x.host.Oversize(oversizeBytes), nil
+}
 
 func (x *hostFixture) Event(context.Context, forge.EventKind, []byte) (forge.EventRequest, error) {
 	return forge.EventRequest{}, errNotImplemented
@@ -97,7 +196,7 @@ func newHost(t *testing.T) *githubfake.Fake {
 	t.Helper()
 
 	return newHostWith(t, func(c *githubfake.Config) {
-		c.Permissions = map[string]string{"contents": "write", "metadata": "read"}
+		c.Permissions = map[string]string{"contents": "write", "metadata": "read", "pull_requests": "write"}
 	})
 }
 
