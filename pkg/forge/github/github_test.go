@@ -478,14 +478,15 @@ func TestStatusMapping(t *testing.T) {
 
 // TestUnusedMethodsAreUnsupported checks that the methods that are not in
 // this version name GitHub in their error, and that the adapter lists the
-// capabilities of the files and of the commits only.
+// capabilities of the files, of the commits and of the review requests only.
 func TestUnusedMethodsAreUnsupported(t *testing.T) {
 	t.Parallel()
 
 	h := harness(forge.AuthApp)(t)
 
-	if caps := h.Forge.Capabilities(); len(caps) != 2 || !caps.Has(forge.CapFiles) || !caps.Has(forge.CapCommit) {
-		t.Fatalf("Capabilities = %v, want files and commit only", caps)
+	caps := h.Forge.Capabilities()
+	if len(caps) != 3 || !caps.Has(forge.CapFiles) || !caps.Has(forge.CapCommit) || !caps.Has(forge.CapReview) {
+		t.Fatalf("Capabilities = %v, want files, commit and review only", caps)
 	}
 
 	_, err := h.Forge.Compare(t.Context(), "acme/infra", "a", "b", 1)

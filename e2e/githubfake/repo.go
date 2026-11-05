@@ -26,6 +26,10 @@ var (
 // DefaultBranch is the default branch of each repository.
 const DefaultBranch = "main"
 
+// repoIDBase is added to a counter to make the ID of a repository, so that an
+// ID does not look like the ID of an account.
+const repoIDBase = 700000
+
 // Commit is a commit of a repository of the fake.
 type Commit struct {
 	ID      string
@@ -42,12 +46,18 @@ type commit struct {
 
 // repo is one repository: its commits, blobs, branches and tags.
 type repo struct {
-	name      string
-	commits   map[string]*commit
-	blobs     map[string][]byte
-	branches  map[string]string
-	tags      map[string]string
-	protected map[string]bool
+	name string
+	// id is the number that GitHub gives to the repository. It stays the same
+	// when the repository is renamed.
+	id int64
+	// defaultBranch is the default branch that the repository call answers.
+	defaultBranch string
+	pulls         []*pull
+	commits       map[string]*commit
+	blobs         map[string][]byte
+	branches      map[string]string
+	tags          map[string]string
+	protected     map[string]bool
 }
 
 // idLength is the number of hex digits in an ID of a blob or a commit. It
@@ -106,12 +116,15 @@ func (f *Fake) AddRepo(fullName string, files map[string][]byte) (Commit, error)
 	}
 
 	r := &repo{
-		name:      fullName,
-		commits:   map[string]*commit{},
-		blobs:     map[string][]byte{},
-		branches:  map[string]string{},
-		tags:      map[string]string{},
-		protected: map[string]bool{},
+		name:          fullName,
+		id:            f.nextRepoID(),
+		defaultBranch: DefaultBranch,
+		pulls:         nil,
+		commits:       map[string]*commit{},
+		blobs:         map[string][]byte{},
+		branches:      map[string]string{},
+		tags:          map[string]string{},
+		protected:     map[string]bool{},
 	}
 	f.repos[fullName] = r
 

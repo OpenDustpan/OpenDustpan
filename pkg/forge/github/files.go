@@ -324,7 +324,7 @@ func (f *gitHub) mintStatus(level string) func(response) error {
 
 		var e errorBody
 		if decode(r.body, &e) == nil && strings.Contains(e.Message, "permissions requested") {
-			if level == levelWrite {
+			if level == levelWrite || level == levelReview {
 				return fmt.Errorf(
 					"%w: the installation does not have the permission to write the contents",
 					forge.ErrRefused,
@@ -357,13 +357,20 @@ func (f *gitHub) writeBearer(ctx context.Context, r repoName) (string, error) {
 	return f.bearer(ctx, r, levelWrite)
 }
 
+// reviewBearer returns the credential for the review request calls on the
+// repository r: the token of a token connection, or an installation token that
+// writes the contents and the pull requests of that repository only.
+func (f *gitHub) reviewBearer(ctx context.Context, r repoName) (string, error) {
+	return f.bearer(ctx, r, levelReview)
+}
+
 // tokenKey is the key of the installation token of repository r at level in
 // the token map. A repository name has no "#", so the keys of two levels never
 // meet.
 func tokenKey(r repoName, level string) string {
 	key := r.owner + "/" + r.name
-	if level == levelWrite {
-		key += "#" + levelWrite
+	if level == levelWrite || level == levelReview {
+		key += "#" + level
 	}
 
 	return key
@@ -482,9 +489,7 @@ func (f *gitHub) mintToken(ctx context.Context, name, level string) (readToken, 
 		return readToken{}, err
 	}
 
-	body, err := json.Marshal(readTokenRequest{
-		Repositories: []string{name}, Permissions: map[string]string{permContents: level},
-	})
+	body, err := json.Marshal(readTokenRequest{Repositories: []string{name}, Permissions: tokenPermissions(level)})
 	if err != nil {
 		return readToken{}, fmt.Errorf("%w: the GitHub token request does not encode", forge.ErrInvalid)
 	}
@@ -521,6 +526,17 @@ func (f *gitHub) mintToken(ctx context.Context, name, level string) (readToken, 
 	return readToken{value: value, expires: expires}, nil
 }
 
+// tokenPermissions returns the permissions that a token of the level asks for.
+// The level review is the write of the contents, which the branch of a review
+// request needs, and the write of the pull requests.
+func tokenPermissions(level string) map[string]string {
+	if level == levelReview {
+		return map[string]string{permContents: levelWrite, permPulls: levelWrite}
+	}
+
+	return map[string]string{permContents: level}
+}
+
 // Fields of the answer to a token request.
 const (
 	keyPermissions  = "permissions"
@@ -544,8 +560,10 @@ func checkGranted(fields map[string]json.RawMessage, name, level string) error {
 		return wide
 	}
 
+	asked := tokenPermissions(level)
+
 	for perm, got := range perms {
-		if (perm != permContents || got != level) && (perm != permMetadata || got != levelRead) {
+		if (asked[perm] == "" || got != asked[perm]) && (perm != permMetadata || got != levelRead) {
 			return wide
 		}
 	}
@@ -574,6 +592,7 @@ func (f *gitHub) forget(r repoName, err error) error {
 		f.mu.Lock()
 		delete(f.readTokens, tokenKey(r, levelRead))
 		delete(f.readTokens, tokenKey(r, levelWrite))
+		delete(f.readTokens, tokenKey(r, levelReview))
 		f.mu.Unlock()
 	}
 

@@ -35,6 +35,12 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("POST /repos/{owner}/{repo}/git/refs", f.createRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/blobs/{sha}", f.getBlob)
+	mux.HandleFunc("GET /repos/{owner}/{repo}", f.getRepo)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/pulls", f.createPull)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls", f.listPulls)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls/{number}", f.getPull)
+	mux.HandleFunc("PATCH /repos/{owner}/{repo}/pulls/{number}", f.patchPull)
+	mux.HandleFunc("DELETE /repos/{owner}/{repo}/git/refs/{ref...}", f.deleteRef)
 	mux.HandleFunc("POST /graphql", f.graphql)
 	// GitHub answers a path that it does not have, and a method that a path does
 	// not have, with the same JSON 404. Without this pattern, the mux answers
