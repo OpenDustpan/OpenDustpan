@@ -150,15 +150,15 @@ func judgeFind(got forge.Commit, err error, wantID string, wantErr error) string
 	}
 }
 
-// anyOf returns the first of wants that err matches, or the first of wants.
-func anyOf(err error, wants ...error) error {
-	for _, w := range wants {
-		if errors.Is(err, w) {
-			return w
-		}
+// notFoundOrInvalid returns the sentinel that err matches, forge.ErrInvalid or
+// else forge.ErrNotFound, so that a case accepts either for a trailer that the
+// commit does not have.
+func notFoundOrInvalid(err error) error {
+	if errors.Is(err, forge.ErrInvalid) {
+		return forge.ErrInvalid
 	}
 
-	return wants[0]
+	return forge.ErrNotFound
 }
 
 // errText returns the text of err, or "none" for nil.
@@ -241,7 +241,7 @@ func caseFindCommitTrailerIsExact(t *testing.T, h Harness) {
 		if !tt.want {
 			// A trailer that the commit does not have is not found. A trailer
 			// with a space at its end is not valid, and no call is made.
-			wantErr = anyOf(findErr, forge.ErrNotFound, forge.ErrInvalid)
+			wantErr = notFoundOrInvalid(findErr)
 		}
 
 		if problem := judgeFind(found, findErr, got.ID, wantErr); problem != "" {
