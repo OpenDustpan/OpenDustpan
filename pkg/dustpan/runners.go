@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 // RunnerStores are the ports of runner pools, runners, join tokens and job
@@ -92,7 +96,7 @@ func claimGates(cfg *settings, gates stateWriteGates) (claimGuard, error) {
 // WithJobRecorder sets the recorder that the steps and the log chunks of a
 // launcher call. It replaces the recorder that the server builds itself
 // (see newDurableRecorder). The session exchange also needs WithJobStore.
-func WithJobRecorder(r job.Recorder) Option {
+func WithJobRecorder(r job.CheckedRecorder) Option {
 	return func(o *settings) { o.jobRecorder = r }
 }
 
@@ -134,7 +138,10 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	recorder := cfg.jobRecorder
 
 	if recorder == nil {
-		built, ok, buildErr := newDurableRecorder(cfg, svc.namespaces)
+		built, ok, buildErr := newDurableRecorder(&jobRecorderInputs{
+			jobs: cfg.jobStore, blobs: cfg.blobStore, updates: cfg.updateStore, namespaceStore: cfg.namespaceStore,
+			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces,
+		})
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -159,38 +166,51 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	return handler, nil
 }
 
+// jobRecorderInputs are the values that newDurableRecorder reads.
+type jobRecorderInputs struct {
+	jobs           job.Store
+	blobs          blob.Store
+	updates        stack.UpdateStore
+	namespaceStore namespace.Store
+	wrapper        secret.Wrapper
+	now            func() time.Time
+	namespaces     *namespace.Service
+}
+
 // newDurableRecorder returns the recorder that the steps and the log chunks of
 // a launcher call, for a server with no recorder from WithJobRecorder. It
 // builds the durable recorder over the record store of the job store, the
-// blob store and the item key sealer. It returns nil when the server lacks one
-// of these (the bool is false), so the step and log paths of a job session answer not-found and
-// no launcher writes a byte. A job store that keeps jobs but cannot record is
-// not an error: the server then serves no steps and no logs.
-func newDurableRecorder(cfg *settings, namespaces *namespace.Service) (*job.DurableRecorder, bool, error) {
-	records, ok := cfg.jobStore.(job.RecordStore)
-	if !ok || cfg.blobStore == nil || namespaces == nil || cfg.updateStore == nil {
+// blob store and the item key sealer. It returns false when the server lacks
+// one of these, so the step and log paths of a job session answer not-found
+// and no launcher writes a byte. A job store that keeps jobs but cannot record
+// is not an error: the server then serves no steps and no logs.
+func newDurableRecorder(in *jobRecorderInputs) (*job.DurableRecorder, bool, error) {
+	records, ok := in.jobs.(job.RecordStore)
+	if !ok || in.blobs == nil || in.namespaces == nil || in.updates == nil || in.namespaceStore == nil {
 		return nil, false, nil
 	}
 
-	refusals, err := blobRefusals(cfg, job.ArtifactBlobFamily())
+	refusals, err := blobRefusalsOf(in.namespaceStore, job.ArtifactBlobFamily(), in.now)
 	if err != nil {
 		return nil, false, err
 	}
 
-	blobs, err := job.NewArtifactBlobs(cfg.blobStore, refusals)
+	blobs, err := job.NewArtifactBlobs(in.blobs, refusals)
 	if err != nil {
 		return nil, false, fmt.Errorf("job recorder blobs: %w", err)
 	}
 
-	sealer, err := newItemSealer(cfg)
+	sealer, err := newItemSealerOf(&itemSealerInputs{
+		updates: in.updates, blobs: in.blobs, namespaces: in.namespaceStore, wrapper: in.wrapper, now: in.now,
+	})
 	if err != nil {
 		return nil, false, fmt.Errorf("job recorder: %w", err)
 	}
 
 	recorder, err := job.NewRecorder(job.RecorderConfig{
-		Store: records, Jobs: cfg.jobStore, Blobs: blobs, Sealer: sealer,
-		Namespaces: jobNamespaces{namespaces: namespaces}, Retention: history.DefaultRetentionSettings(),
-		Now: cfg.now,
+		Store: records, Jobs: in.jobs, Blobs: blobs, Sealer: sealer,
+		Namespaces: jobNamespaces{namespaces: in.namespaces}, Retention: history.DefaultRetentionSettings(),
+		Now: in.now,
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("job recorder: %w", err)

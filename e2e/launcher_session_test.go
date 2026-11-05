@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,17 +23,61 @@ var errLauncherFlow = errors.New("the launcher flow did not end as expected")
 // pollWait is the longest wait of the poll of the fake runner for a phase.
 const pollWait = 10 * time.Second
 
+// launched is the state of a launcher that opened the session of a claim.
+type launched struct {
+	env      *e2e.Env
+	job      string
+	handoff  string
+	launcher *e2e.FakeLauncher
+}
+
 // sessionRoundTrip drives the job session of one claim with a fake runner and
 // a fake launcher over HTTP: the exchange, a step, one log chunk, the end of
-// the step and the finish. It reads the stored log back through the job log
-// reader, and checks that a second finish gets claim-lost and that the server
-// log holds none of the secrets of the run.
+// the step and the finish. It sends hostile calls to the real recorder and
+// store, checks that a second finish gets claim-lost, and, on the binary
+// server, that the server log holds none of the secrets of the run, that the
+// job log reader returns the stored log, and that the blobs hold no
+// plaintext.
 func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
+	run := openLaunchedSession(t, env)
+	step := run.launcher.Assignment.Steps[0].Name
+	secretText := "log-secret-line-" + run.job
+	chunk := []byte(secretText + "\n")
+	finishReason := "finish-secret-reason-" + run.job
+
+	run.refusedBeforeTheStepBegan(t, step, chunk)
+	run.writesTheStep(t, step, chunk)
+	run.finishesTwice(t, finishReason)
+
 	if env.InProcess() {
-		t.Skip("the read of the stored log needs the binary server")
+		// The server log, the database and the blob directory of the stopped
+		// server are the parts of the binary server.
+		return
 	}
+
+	// The server log is read before the server stops, and holds none of the
+	// secrets of the run.
+	if found := env.ServerLogHolds(t, run.handoff, secretText, finishReason); len(found) > 0 {
+		t.Fatalf("the server log holds %d secrets of the run: %q", len(found), found)
+	}
+
+	if got := env.JobStepLog(t.Context(), t, e2e.Namespace, run.job, step); got != string(chunk) {
+		t.Fatalf("stored log = %q, want %q", got, chunk)
+	}
+
+	// The stored blobs hold the log sealed: no file of the blob directory holds
+	// the text of the log.
+	if env.BlobDirHolds(t, secretText) {
+		t.Fatal("a blob of the blob directory holds the plaintext of the log")
+	}
+}
+
+// openLaunchedSession makes the unit and the pool, starts a job, joins a fake
+// runner, claims the phase and opens the session of the claim.
+func openLaunchedSession(t *testing.T, env *e2e.Env) *launched {
+	t.Helper()
 
 	ctx := t.Context()
 
@@ -78,46 +123,106 @@ func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 		t.Fatalf("assignment = %+v, want the steps of the job %s", launcher.Assignment, started.ID)
 	}
 
-	step := launcher.Assignment.Steps[0].Name
-	secretText := "log-secret-line-" + started.ID
-	chunk := []byte(secretText + "\n")
-	sum := sha256.Sum256(chunk)
+	return &launched{env: env, job: started.ID, handoff: handoff, launcher: launcher}
+}
+
+// pathOf returns the path of a step route with the step and the chunk number
+// filled in.
+func pathOf(pattern, step string, seq int) string {
+	return strings.NewReplacer("{step}", step, "{seq}", strconv.Itoa(seq)).Replace(pattern)
+}
+
+// refusedBeforeTheStepBegan sends the calls that the real recorder and store
+// refuse because the step has no begin record. Each is refused and writes
+// nothing.
+func (r *launched) refusedBeforeTheStepBegan(t *testing.T, step string, chunk []byte) {
+	t.Helper()
+
+	ctx := t.Context()
 	now := time.Now().UTC()
-	stepPath := func(p string) string { return strings.NewReplacer("{step}", step, "{seq}", "0").Replace(p) }
+	badEnd := protocol.StepEnd{ExitCode: 0, StartedAt: now, FinishedAt: now, LogChunks: 0, LogSHA256: ""}
+
+	wantInvalid(t, "end a step that never began", func() (int, []byte) {
+		return r.launcher.Post(ctx, t, pathOf(protocol.PathSessionStepEnd, step, 0), badEnd)
+	})
+	wantInvalid(t, "store a chunk for a step that never began", func() (int, []byte) {
+		return r.launcher.PutLog(ctx, t, pathOf(protocol.PathSessionLog, step, 0), chunk)
+	})
+}
+
+// writesTheStep begins the step, refuses a chunk out of sequence, stores one
+// chunk, refuses an end with another hash, and ends the step with the right
+// count and hash.
+func (r *launched) writesTheStep(t *testing.T, step string, chunk []byte) {
+	t.Helper()
+
+	ctx := t.Context()
+	now := time.Now().UTC()
+	sum := hex.EncodeToString(sha256Of(chunk))
 
 	wantNoContent(t, "begin the step", func() (int, []byte) {
-		return launcher.Post(ctx, t, stepPath(protocol.PathSessionStepBegin), nil)
+		return r.launcher.Post(ctx, t, pathOf(protocol.PathSessionStepBegin, step, 0), nil)
+	})
+	wantInvalid(t, "store a chunk out of sequence", func() (int, []byte) {
+		return r.launcher.PutLog(ctx, t, pathOf(protocol.PathSessionLog, step, outOfSequence), chunk)
 	})
 	wantNoContent(t, "store one log chunk", func() (int, []byte) {
-		return launcher.PutLog(ctx, t, stepPath(protocol.PathSessionLog), chunk)
+		return r.launcher.PutLog(ctx, t, pathOf(protocol.PathSessionLog, step, 0), chunk)
 	})
+
+	// An end with another hash is refused and writes nothing: the right end
+	// that follows still succeeds, and the log it closes is the one stored.
+	wrongEnd := protocol.StepEnd{
+		ExitCode: 0, StartedAt: now, FinishedAt: now, LogChunks: 1, LogSHA256: strings.Repeat("0", len(sum)),
+	}
+	endPath := pathOf(protocol.PathSessionStepEnd, step, 0)
+	if status, body := r.launcher.Post(ctx, t, endPath, wrongEnd); status != http.StatusConflict {
+		t.Fatalf("end with another hash = %d %s, want 409", status, body)
+	}
+
 	wantNoContent(t, "end the step", func() (int, []byte) {
-		return launcher.Post(ctx, t, stepPath(protocol.PathSessionStepEnd), protocol.StepEnd{
-			ExitCode: 0, StartedAt: now, FinishedAt: now.Add(time.Second), LogChunks: 1,
-			LogSHA256: hex.EncodeToString(sum[:]),
+		return r.launcher.Post(ctx, t, pathOf(protocol.PathSessionStepEnd, step, 0), protocol.StepEnd{
+			ExitCode: 0, StartedAt: now, FinishedAt: now.Add(time.Second), LogChunks: 1, LogSHA256: sum,
 		})
 	})
+}
 
-	finishReason := "finish-secret-reason-" + started.ID
-	finish := protocol.Finish{Succeeded: true, Message: finishReason}
+// finishesTwice finishes the phase, and then finishes it again: the second
+// finish gets claim-lost.
+func (r *launched) finishesTwice(t *testing.T, reason string) {
+	t.Helper()
+
+	ctx := t.Context()
+	finish := protocol.Finish{Succeeded: true, Message: reason}
 
 	wantNoContent(t, "finish the phase", func() (int, []byte) {
-		return launcher.Post(ctx, t, protocol.PathSessionFinish, finish)
+		return r.launcher.Post(ctx, t, protocol.PathSessionFinish, finish)
 	})
 
-	status, body := launcher.Post(ctx, t, protocol.PathSessionFinish, finish)
+	status, body := r.launcher.Post(ctx, t, protocol.PathSessionFinish, finish)
 	if status != http.StatusConflict || !strings.Contains(string(body), protocol.ErrorClaimLost) {
 		t.Fatalf("second finish = %d %s, want 409 %s", status, body, protocol.ErrorClaimLost)
 	}
+}
 
-	// The server log is read before the server stops, and holds none of the
-	// secrets of the run.
-	if found := env.ServerLogHolds(t, handoff, secretText, finishReason); len(found) > 0 {
-		t.Fatalf("the server log holds %d secrets of the run: %q", len(found), found)
-	}
+// outOfSequence is a chunk number above the next one of a log with no chunk.
+const outOfSequence = 5
 
-	if got := env.JobStepLog(ctx, t, e2e.Namespace, started.ID, step); got != string(chunk) {
-		t.Fatalf("stored log = %q, want %q", got, chunk)
+// sha256Of returns the SHA-256 of data.
+func sha256Of(data []byte) []byte {
+	sum := sha256.Sum256(data)
+
+	return sum[:]
+}
+
+// wantInvalid calls send and fails the test when its status is not 400 with
+// the code invalid.
+func wantInvalid(t *testing.T, name string, send func() (int, []byte)) {
+	t.Helper()
+
+	status, body := send()
+	if status != http.StatusBadRequest || !strings.Contains(string(body), protocol.ErrorInvalid) {
+		t.Fatalf("%s = %d %s, want 400 %s", name, status, body, protocol.ErrorInvalid)
 	}
 }
 

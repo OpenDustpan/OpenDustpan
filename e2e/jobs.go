@@ -22,11 +22,13 @@ func jobStoreOptions(st serverStore) []dustpan.Option {
 	switch s := any(st).(type) {
 	case *sqlite.Store:
 		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters()),
+			dustpan.WithDurableStore(s.DurableOperations()),
 			dustpan.WithTriggerStore(s.Triggers()),
 			dustpan.WithUnitSettingsStore(s.UnitSettings()),
 			dustpan.WithDriftStore(s.DriftResults()))
 	case *postgres.Store:
 		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters()),
+			dustpan.WithDurableStore(s.DurableOperations()),
 			dustpan.WithTriggerStore(s.Triggers()),
 			dustpan.WithUnitSettingsStore(s.UnitSettings()),
 			dustpan.WithDriftStore(s.DriftResults()))
