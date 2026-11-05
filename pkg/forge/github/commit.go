@@ -51,8 +51,9 @@ const mutation = `mutation($input: CreateCommitOnBranchInput!) {` +
 // GraphQL mutation createCommitOnBranch. The commit is the commit of the
 // connection (the app or the owner of the token), and the person of
 // req.Author is a Co-authored-by trailer at the end of the message. The
-// expected head of the branch is req.Base, so a branch that moved gives
-// forge.ErrConflict, also when the change is in another file. With
+// expected head of the branch is req.Base. A branch that moved gives
+// forge.ErrConflict when a file of the changes differs at the new head from
+// req.Base, and else the commit goes on top of the new head. With
 // req.NewBranch, it first makes the branch at req.Base.
 //
 // It returns forge.ErrInvalid for a request that fails the checks, before any
@@ -88,11 +89,110 @@ func (f *gitHub) Commit(ctx context.Context, repo string, req forge.CommitReques
 	}
 
 	c, err := f.createCommit(ctx, r, bearer, req, msg)
+	if errors.Is(err, forge.ErrConflict) {
+		c, err = f.commitAfterMove(ctx, r, bearer, req, msg)
+	}
+
 	if err != nil {
 		return forge.Commit{}, f.forget(r, err)
 	}
 
 	return c, nil
+}
+
+// maxMoves is how many times Commit follows a branch that moved while it
+// worked, before it returns forge.ErrConflict.
+const maxMoves = 3
+
+// commitAfterMove runs after GitHub said that the head of the branch is not
+// req.Base. The commit goes on when no file of the changes differs between
+// req.Base and the new head, with the new head as the expected head. It
+// returns forge.ErrConflict when a file differs, or when the branch moves
+// maxMoves times.
+func (f *gitHub) commitAfterMove(
+	ctx context.Context, r repoName, bearer string, req forge.CommitRequest, msg message,
+) (forge.Commit, error) {
+	conflict := fmt.Errorf("%w: the branch moved after the base commit", forge.ErrConflict)
+
+	for range maxMoves {
+		head, err := f.branchHead(ctx, r, bearer, req.Branch)
+		if err != nil {
+			return forge.Commit{}, err
+		}
+
+		if head == req.Base {
+			return forge.Commit{}, conflict
+		}
+
+		differs, err := f.changedSince(ctx, r, bearer, req, head)
+		if err != nil {
+			return forge.Commit{}, err
+		}
+
+		if differs {
+			return forge.Commit{}, conflict
+		}
+
+		onHead := req
+		onHead.Base = head
+
+		c, err := f.createCommit(ctx, r, bearer, onHead, msg)
+		if !errors.Is(err, forge.ErrConflict) {
+			return c, err
+		}
+	}
+
+	return forge.Commit{}, fmt.Errorf("%w: the branch moved again and again", forge.ErrConflict)
+}
+
+// changedSince reports whether a file of the changes of req is not the same
+// at req.Base and at head. A file that is too large to compare counts as
+// different, so that the check fails closed.
+func (f *gitHub) changedSince(
+	ctx context.Context, r repoName, bearer string, req forge.CommitRequest, head string,
+) (bool, error) {
+	for _, c := range req.Changes {
+		before, err := f.blobAt(ctx, r, bearer, req.Base, c.Path)
+		if errors.Is(err, forge.ErrTooLarge) {
+			return true, nil
+		}
+
+		if err != nil {
+			return false, err
+		}
+
+		after, err := f.blobAt(ctx, r, bearer, head, c.Path)
+		if errors.Is(err, forge.ErrTooLarge) {
+			return true, nil
+		}
+
+		if err != nil {
+			return false, err
+		}
+
+		if before != after {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// blobAt returns the blob ID of the file at the commit, or "" when the commit
+// has no such file.
+func (f *gitHub) blobAt(ctx context.Context, r repoName, bearer, commit, filePath string) (string, error) {
+	file, err := f.readContents(ctx, fileRead{
+		base: r.path(), bearer: bearer, commit: commit, path: filePath, limit: MaxFileBytes,
+	})
+	if errors.Is(err, forge.ErrNotFound) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	return file.BlobID, nil
 }
 
 // commitAllowed returns forge.ErrUnsupported for a connection that
@@ -580,28 +680,38 @@ func (f *gitHub) startBranch(ctx context.Context, r repoName, bearer string, req
 		return err
 	}
 
-	resp, err := f.send(ctx, call{
-		method: http.MethodGet, path: r.path() + "/git/ref/heads/" + escapePath(req.Branch), bearer: bearer, body: nil,
-		status: f.commitStatus, oversize: nil, target: "",
-	})
+	head, err := f.branchHead(ctx, r, bearer, req.Branch)
 	if err != nil {
 		return err
 	}
 
-	var head refAnswer
-	if decodeErr := decode(resp.body, &head); decodeErr != nil {
-		return decodeErr
-	}
-
-	if forge.ValidateCommitID(head.Object.SHA) != nil {
-		return forge.Unavailable(0, "GitHub gave an answer with no commit")
-	}
-
-	if head.Object.SHA != req.Base {
+	if head != req.Base {
 		return fmt.Errorf("%w: the new branch exists with another head", forge.ErrConflict)
 	}
 
 	return nil
+}
+
+// branchHead returns the commit at the head of the branch.
+func (f *gitHub) branchHead(ctx context.Context, r repoName, bearer, branch string) (string, error) {
+	resp, err := f.send(ctx, call{
+		method: http.MethodGet, path: r.path() + "/git/ref/heads/" + escapePath(branch), bearer: bearer, body: nil,
+		status: f.commitStatus, oversize: nil, target: "",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	var head refAnswer
+	if decodeErr := decode(resp.body, &head); decodeErr != nil {
+		return "", decodeErr
+	}
+
+	if forge.ValidateCommitID(head.Object.SHA) != nil {
+		return "", forge.Unavailable(0, "GitHub gave an answer with no commit")
+	}
+
+	return head.Object.SHA, nil
 }
 
 // FindCommit returns the newest commit on ref, at or after since, whose
