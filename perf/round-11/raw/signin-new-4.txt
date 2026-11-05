@@ -1,9 +1,11 @@
 === RUN   TestPerf11OIDC
-    perf11_signin_test.go:28: callback = 403, want 303: {"message":"permission denied: sign-in refused: no principal","code":403,"errorCode":"sign-in.refused"}
---- FAIL: TestPerf11OIDC (0.14s)
+    perf11_signin_test.go:55: PERF11 oidc-start n=300 p50=0.229ms p95=0.390ms p99=0.871ms allocs/op=0 bytes/op=0 heapInuseMB=3.4
+    perf11_signin_test.go:56: PERF11 oidc-callback n=300 p50=2.585ms p95=3.644ms p99=13.352ms allocs/op=0 bytes/op=0 heapInuseMB=3.4
+    perf11_signin_test.go:57: PERF11 oidc-callback allocs/op=933 bytes/op=66126 (callback only, process-wide counters)
+    perf11_signin_test.go:58: PERF11 oidc-whole-flow allocs/op=1213 bytes/op=93237 heapInuseMB=3.9
+--- PASS: TestPerf11OIDC (1.26s)
 === RUN   TestPerf11Password
-    perf11_signin_test.go:92: PERF11 password-signin n=100 p50=30.877ms p95=43.417ms p99=47.864ms allocs/op=1030 bytes/op=19979045 heapInuseMB=45.0
---- PASS: TestPerf11Password (3.51s)
-FAIL
-FAIL	opendustpan.org/opendustpan/internal/api/server	3.667s
-FAIL
+    perf11_signin_test.go:92: PERF11 password-signin n=100 p50=31.077ms p95=40.611ms p99=43.553ms allocs/op=1029 bytes/op=19978947 heapInuseMB=45.1
+--- PASS: TestPerf11Password (3.53s)
+PASS
+ok  	opendustpan.org/opendustpan/internal/api/server	4.805s
