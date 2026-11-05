@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -632,5 +633,91 @@ func TestNewRefusesAMissingPort(t *testing.T) {
 
 	if _, err := signinsvc.New(cfg); !errors.Is(err, signinsvc.ErrMissingDependency) {
 		t.Fatalf("New() = %v, want ErrMissingDependency", err)
+	}
+}
+
+// lookupCase is one principal that a faulty lookup returns with a nil error.
+type lookupCase struct {
+	change func(p *principal.Principal)
+	name   string
+}
+
+// hostileLookups returns the principals that the service must never sign in
+// or disable for the subject corp:sub-1, one for each condition of the check.
+func hostileLookups() []lookupCase {
+	return []lookupCase{
+		{func(p *principal.Principal) { p.Subject = "other:sub-9" }, "other subject"},
+		{func(p *principal.Principal) { p.Kind = principal.KindService }, "not a person"},
+		{func(p *principal.Principal) { p.Namespace = "team-a" }, "principal of a namespace"},
+		{func(p *principal.Principal) { p.BreakGlass = true }, "break-glass account"},
+	}
+}
+
+// TestCompleteSubjectDisabledChecksTheLookup sends a principal that the
+// lookup should never return, with a nil error, to the disable step. The
+// step must disable and bump nothing, as if the lookup layer had failed.
+func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range hostileLookups() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			tc.change(&w.principal)
+
+			_, err := w.service(t).Complete(t.Context(),
+				requestOf(oidcProvider(), disabledAssertion(), session.ErrSubjectDisabled))
+			if r := refusalOf(t, err); r.Reason != signinsvc.ReasonDisableNotTarget {
+				t.Fatalf("reason = %q, want %q", r.Reason, signinsvc.ReasonDisableNotTarget)
+			}
+
+			if len(w.disabled) != 0 || len(w.bumped) != 0 {
+				t.Fatalf("disabled %v, bumped %v, want none", w.disabled, w.bumped)
+			}
+
+			checkRefusedEntry(t, w, signinsvc.ReasonDisableNotTarget, "corp", session.MethodOIDC)
+		})
+	}
+}
+
+// TestCompleteChecksTheLookup sends the same principals to the success path.
+// The service must refuse and start no session.
+func TestCompleteChecksTheLookup(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range hostileLookups() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			tc.change(&w.principal)
+
+			_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), oidcAssertion(), nil))
+			if r := refusalOf(t, err); r.Reason != signinsvc.ReasonNotTarget {
+				t.Fatalf("reason = %q, want %q", r.Reason, signinsvc.ReasonNotTarget)
+			}
+
+			checkRefusedEntry(t, w, signinsvc.ReasonNotTarget, "corp", session.MethodOIDC)
+		})
+	}
+}
+
+// TestCompleteDisableLastAdministrator checks that a disable that the store
+// refuses to keep the last administrator is a refusal with an audit entry.
+func TestCompleteDisableLastAdministrator(t *testing.T) {
+	t.Parallel()
+
+	for _, storeErr := range []error{access.ErrLastSiteAdministrator, principal.ErrLastBreakGlass} {
+		w := newWorld()
+		w.disableErr = fmt.Errorf("disable: %w", storeErr)
+
+		_, err := w.service(t).Complete(t.Context(),
+			requestOf(oidcProvider(), disabledAssertion(), session.ErrSubjectDisabled))
+		if r := refusalOf(t, err); r.Reason != signinsvc.ReasonDisableLastAdmin || r.Answer != signinsvc.AnswerFailed {
+			t.Fatalf("refusal = %q %d, want %q failed", r.Reason, r.Answer, signinsvc.ReasonDisableLastAdmin)
+		}
+
+		checkRefusedEntry(t, w, signinsvc.ReasonDisableLastAdmin, "corp", session.MethodOIDC)
 	}
 }

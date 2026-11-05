@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -197,7 +198,27 @@ func (s *Service) subjectDisabled(ctx context.Context, req *Request) error {
 		return s.disableRefusal(ctx, req, err)
 	}
 
+	// Defense in depth: SignInPrincipal refuses a break-glass account, a
+	// principal of a namespace and a principal that is not a person, and the
+	// store refuses the last administrator. This check does not rely on any of
+	// them: the raw store disables any principal that it gets, so a faulty
+	// lookup must never reach it with a principal of another subject or kind.
+	if !isTarget(&p, subject) {
+		return s.refuse(ctx, req, &refusal{
+			reason: ReasonDisableNotTarget, answer: AnswerFailed, idpSubject: a.Subject, cause: cause,
+		})
+	}
+
 	if disableErr := s.disable(ctx, e, &p); disableErr != nil {
+		if errors.Is(disableErr, principal.ErrLastBreakGlass) ||
+			errors.Is(disableErr, access.ErrLastSiteAdministrator) {
+			// The server keeps the last administrator. The sign-in is refused
+			// as every other refusal is.
+			return s.refuse(ctx, req, &refusal{
+				reason: ReasonDisableLastAdmin, answer: AnswerFailed, idpSubject: a.Subject, cause: cause,
+			})
+		}
+
 		s.record(ctx, req, &refusal{
 			reason: ReasonDisableFailed, answer: AnswerFailed, idpSubject: a.Subject, cause: cause,
 		})

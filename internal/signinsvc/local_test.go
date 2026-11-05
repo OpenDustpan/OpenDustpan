@@ -147,7 +147,7 @@ func TestCompleteLocalStartRefusals(t *testing.T) {
 	}{
 		{session.ErrGenerationChanged, "generation changed", signinsvc.ReasonGenerationChanged},
 		{session.ErrPrincipalDisabled, "principal disabled", signinsvc.ReasonDisabled},
-		{session.ErrPrincipalNotFound, "principal gone", signinsvc.ReasonNotTarget},
+		{session.ErrPrincipalNotFound, "principal gone", signinsvc.ReasonLocalPrincipalGone},
 	}
 
 	for _, tc := range cases {
