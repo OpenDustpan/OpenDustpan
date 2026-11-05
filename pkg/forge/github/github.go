@@ -41,6 +41,11 @@ type Config struct {
 	RootCAs *x509.CertPool
 	// Now returns the time. Nil means time.Now.
 	Now func() time.Time
+	// Prover seals the proof that Commit adds to a commit, and opens the proof
+	// that FindCommit reads. Nil means that the adapter cannot prove a commit:
+	// Capabilities then does not list forge.CapCommit, and Commit and
+	// FindCommit return forge.ErrUnsupported.
+	Prover Prover
 }
 
 // Opener makes a forge.Forge for a GitHub connection. It implements
@@ -49,6 +54,7 @@ type Opener struct {
 	rules  egress.Rules
 	client *http.Client
 	now    func() time.Time
+	prover Prover
 }
 
 var _ forge.Opener = (*Opener)(nil)
@@ -75,7 +81,7 @@ func NewOpener(cfg Config) (*Opener, error) {
 
 	keepRedirectStatus(client)
 
-	return &Opener{rules: cfg.Rules, client: client, now: now}, nil
+	return &Opener{rules: cfg.Rules, client: client, now: now, prover: cfg.Prover}, nil
 }
 
 // redirectError is the error of a redirect that the rules refuse. It keeps
@@ -230,7 +236,7 @@ const (
 //
 // It lists forge.CapFiles unless the last Check showed an installation
 // without the permission to read the contents. It lists forge.CapCommit for a
-// connection with push access, unless the last Check showed an installation
+// connection with push access and a Prover in the Config, unless the last Check showed an installation
 // without the permission to write the contents. Before a Check, the
 // permissions are not known, and the capabilities are listed. A token
 // connection always lists them, because a token shows no permissions.
@@ -245,7 +251,7 @@ func (f *gitHub) Capabilities() forge.Capabilities {
 		caps = append(caps, forge.CapFiles)
 	}
 
-	if f.push && (!app || f.writes != contentsMissing) {
+	if f.push && f.o.prover != nil && (!app || f.writes != contentsMissing) {
 		caps = append(caps, forge.CapCommit)
 	}
 

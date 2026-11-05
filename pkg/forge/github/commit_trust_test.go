@@ -25,10 +25,14 @@ type listed struct {
 	verification any
 }
 
-// json returns the commit as the list of GitHub shows it.
+// json returns the commit as the list of GitHub shows it. The message gets the
+// proof line of the job j-1 on the base rawBase after its last line, as a commit
+// of the connection has.
 func (l listed) json(at time.Time) map[string]any {
+	message := strings.TrimRight(l.message, " \t\r\n") + "\n" + testProofLine(rawRepoID, "Dustpan-Job: j-1", rawBase)
+
 	inner := map[string]any{
-		"message":   l.message,
+		"message":   message,
 		"committer": map[string]any{"date": at.UTC().Format(time.RFC3339)},
 	}
 
@@ -60,7 +64,7 @@ func findTrusted(t *testing.T, list []listed, trailer string) (forge.Commit, err
 
 	fg := rawForge(t, "", func(w http.ResponseWriter, _ *http.Request) { answer(w, http.StatusOK, string(data)) })
 
-	return fg.FindCommit(t.Context(), "acme/infra", "main", trailer, since)
+	return fg.FindCommit(t.Context(), "acme/infra", "main", forge.Delivery{Trailer: trailer, Base: rawBase}, since)
 }
 
 // wantFound checks the answer of FindCommit: the commit wantID when wantErr is
@@ -260,7 +264,9 @@ func TestFindCommitFailsClosedWhenTheIdentityIsUnknown(t *testing.T) {
 				answer(w, http.StatusOK, string(data))
 			})
 
-			got, findErr := fg.FindCommit(t.Context(), "acme/infra", "main", trailer, since)
+			got, findErr := fg.FindCommit(
+				t.Context(), "acme/infra", "main", forge.Delivery{Trailer: trailer, Base: rawBase}, since,
+			)
 			wantFound(t, got, findErr, "", tt.wantErr)
 		})
 	}
@@ -504,6 +510,12 @@ func TestFindCommitAcceptsTheLoginOfAnEnterpriseManagedUser(t *testing.T) {
 		},
 	)
 
-	got, findErr := fg.FindCommit(t.Context(), "acme/infra", "main", trailer, since)
+	got, findErr := fg.FindCommit(
+		t.Context(),
+		"acme/infra",
+		"main",
+		forge.Delivery{Trailer: trailer, Base: rawBase},
+		since,
+	)
 	wantFound(t, got, findErr, shaN(1), nil)
 }
