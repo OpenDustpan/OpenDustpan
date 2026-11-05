@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -79,8 +80,16 @@ func newTreeReader(f *gitHub, r repoName, bearer string) *treeReader {
 // the commit has no such path. A parent name that is not a directory makes the
 // entry modeBlocked. It reads one tree for each directory on the path.
 func (t *treeReader) entryAt(ctx context.Context, commit, filePath string) (treeEntry, error) {
-	id := commit
+	// Defense in depth: checkChanges rejects these paths before a commit
+	// request gets here. This check stays so that a new caller cannot make a
+	// path with an empty, "." or ".." part read as missing on both sides,
+	// which would count as unchanged. It does not rely on that check.
 	parts := strings.Split(filePath, "/")
+	if slices.ContainsFunc(parts, func(p string) bool { return p == "" || p == "." || p == ".." }) {
+		return missingEntry(), fmt.Errorf("%w: the path has an empty, \".\" or \"..\" part", errUnreadableTree)
+	}
+
+	id := commit
 
 	for i, name := range parts {
 		entries, err := t.list(ctx, id)
