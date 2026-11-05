@@ -82,7 +82,11 @@ func TestCommitProverOpensOnlyItsOwnProof(t *testing.T) {
 
 	ctx := t.Context()
 	secrets := newProofSecrets(t)
-	p := commitProver{secrets: secrets}
+	p := commitProver{secrets: secrets, keyed: true}
+
+	if !p.Ready() {
+		t.Fatal("a Prover with a key is not ready")
+	}
 	binding := []byte("repository 7\x00Dustpan-Job: j-1\x00base")
 
 	proof, err := p.Seal(ctx, binding)
@@ -139,19 +143,35 @@ func TestCommitProverOpensOnlyItsOwnProof(t *testing.T) {
 }
 
 // TestCommitProverFailsWithNoKey checks that a server with no key-encryption
-// key neither seals a proof nor says that a proof is good.
+// key is not ready, and that Seal and Open fail with an error. Open must not
+// answer false with no error: the commit of the connection would then look like
+// a forged commit. The proof below is a good proof from a server with a key.
 func TestCommitProverFailsWithNoKey(t *testing.T) {
 	t.Parallel()
 
-	p := commitProver{secrets: proofSecretsWith(t, nil)}
+	binding := []byte("binding")
 
-	if _, err := p.Seal(t.Context(), []byte("binding")); !errors.Is(err, secret.ErrKeyNotConfigured) {
-		t.Fatalf("Seal = %v, want ErrKeyNotConfigured", err)
+	keyed := commitProver{secrets: newProofSecrets(t), keyed: true}
+
+	good, err := keyed.Seal(t.Context(), binding)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// The secret package reports each failure to open as a value that does not
-	// open, so Open is false, with or without an error. It is never true.
-	if ok, err := p.Open(t.Context(), []byte("binding"), []byte("proof")); ok {
-		t.Fatalf("Open = %v, %v; want false", ok, err)
+	p := commitProver{secrets: proofSecretsWith(t, nil), keyed: false}
+
+	if p.Ready() {
+		t.Fatal("a Prover with no key is ready")
+	}
+
+	if _, sealErr := p.Seal(t.Context(), binding); !errors.Is(sealErr, secret.ErrKeyNotConfigured) {
+		t.Fatalf("Seal = %v, want ErrKeyNotConfigured", sealErr)
+	}
+
+	for name, proof := range map[string][]byte{"a good proof": good, "junk": []byte("proof"), "no proof": nil} {
+		ok, openErr := p.Open(t.Context(), binding, proof)
+		if ok || !errors.Is(openErr, secret.ErrKeyNotConfigured) {
+			t.Errorf("Open of %s = %v, %v; want false and ErrKeyNotConfigured", name, ok, openErr)
+		}
 	}
 }

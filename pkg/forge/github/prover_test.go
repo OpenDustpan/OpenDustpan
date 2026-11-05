@@ -16,6 +16,8 @@ const proofTestKey = "key of the proofs of the tests"
 // proof, and a proof opens for its binding only.
 type testProver struct{}
 
+func (testProver) Ready() bool { return true }
+
 func (testProver) Seal(_ context.Context, binding []byte) ([]byte, error) {
 	return testMAC(binding), nil
 }
