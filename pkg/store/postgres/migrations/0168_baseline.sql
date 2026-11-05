@@ -813,6 +813,47 @@ CREATE TABLE oidc_providers (
     created_at_ms bigint NOT NULL
 );
 
+CREATE TABLE passkey_challenges (
+    digest text NOT NULL,
+    kind text NOT NULL,
+    principal_id text DEFAULT ''::text NOT NULL,
+    pending_id text DEFAULT ''::text NOT NULL,
+    session_id text DEFAULT ''::text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    expires_at_ms bigint NOT NULL,
+    CONSTRAINT passkey_challenges_check CHECK (((expires_at_ms > created_at_ms) AND ((expires_at_ms - created_at_ms) <= 300000))),
+    CONSTRAINT passkey_challenges_check1 CHECK (((kind = 'sign-in'::text) = (principal_id = ''::text))),
+    CONSTRAINT passkey_challenges_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT passkey_challenges_kind_check CHECK ((kind = ANY (ARRAY['register'::text, 'sign-in'::text, 'second-factor'::text, 'fresh'::text]))),
+    CONSTRAINT passkey_challenges_pending_id_check CHECK ((length(pending_id) <= 128)),
+    CONSTRAINT passkey_challenges_principal_id_check CHECK ((length(principal_id) <= 128)),
+    CONSTRAINT passkey_challenges_session_id_check CHECK ((length(session_id) <= 128))
+);
+
+CREATE TABLE passkeys (
+    id text NOT NULL,
+    principal_id text NOT NULL,
+    name text NOT NULL,
+    credential_id bytea NOT NULL,
+    public_key bytea NOT NULL,
+    transports text DEFAULT ''::text NOT NULL,
+    aaguid bytea NOT NULL,
+    sign_count bigint DEFAULT 0 NOT NULL,
+    backup_eligible boolean DEFAULT false NOT NULL,
+    created_at_ms bigint NOT NULL,
+    last_used_at_ms bigint DEFAULT 0 NOT NULL,
+    suspended_at_ms bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT passkeys_aaguid_check CHECK ((length(aaguid) = 16)),
+    CONSTRAINT passkeys_credential_id_check CHECK (((length(credential_id) >= 1) AND (length(credential_id) <= 1023))),
+    CONSTRAINT passkeys_id_check CHECK ((("left"(id, 4) = 'pky-'::text) AND (length(id) <= 128))),
+    CONSTRAINT passkeys_last_used_at_ms_check CHECK ((last_used_at_ms >= 0)),
+    CONSTRAINT passkeys_name_check CHECK (((char_length(name) >= 1) AND (char_length(name) <= 100))),
+    CONSTRAINT passkeys_public_key_check CHECK (((length(public_key) >= 1) AND (length(public_key) <= 4096))),
+    CONSTRAINT passkeys_sign_count_check CHECK (((sign_count >= 0) AND (sign_count <= '4294967295'::bigint))),
+    CONSTRAINT passkeys_suspended_at_ms_check CHECK ((suspended_at_ms >= 0)),
+    CONSTRAINT passkeys_transports_check CHECK (((length(transports) <= 64) AND (transports ~ '^[a-z,-]*$'::text)))
+);
+
 CREATE TABLE person_preferences (
     principal_id text NOT NULL,
     document text NOT NULL,
@@ -1586,6 +1627,15 @@ ALTER TABLE ONLY object_context
 ALTER TABLE ONLY oidc_providers
     ADD CONSTRAINT oidc_providers_pkey PRIMARY KEY (provider_id);
 
+ALTER TABLE ONLY passkey_challenges
+    ADD CONSTRAINT passkey_challenges_pkey PRIMARY KEY (digest);
+
+ALTER TABLE ONLY passkeys
+    ADD CONSTRAINT passkeys_credential_id_key UNIQUE (credential_id);
+
+ALTER TABLE ONLY passkeys
+    ADD CONSTRAINT passkeys_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY person_preferences
     ADD CONSTRAINT person_preferences_pkey PRIMARY KEY (principal_id);
 
@@ -1861,6 +1911,10 @@ CREATE INDEX notification_subscriptions_sink ON notification_subscriptions USING
 
 CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (namespace_id, object_kind, object_id, resource_key, source);
 
+CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
+
+CREATE INDEX passkeys_principal ON passkeys USING btree (principal_id, created_at_ms, id COLLATE "C");
+
 CREATE INDEX placement_rules_order ON placement_rules USING btree (namespace, "position");
 
 CREATE UNIQUE INDEX principal_groups_name_key ON principal_groups USING btree (name_key COLLATE "C") WHERE (deleted_at_ms IS NULL);
@@ -2001,6 +2055,9 @@ ALTER TABLE ONLY object_context
 
 ALTER TABLE ONLY object_context_owners
     ADD CONSTRAINT object_context_owners_namespace_id_object_kind_object_id_r_fkey FOREIGN KEY (namespace_id, object_kind, object_id, resource_key, source) REFERENCES object_context(namespace_id, object_kind, object_id, resource_key, source) ON DELETE CASCADE;
+
+ALTER TABLE ONLY passkeys
+    ADD CONSTRAINT passkeys_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
 
 ALTER TABLE ONLY person_preferences
     ADD CONSTRAINT person_preferences_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);

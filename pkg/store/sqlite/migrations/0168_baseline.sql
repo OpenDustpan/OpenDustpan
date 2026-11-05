@@ -1300,6 +1300,32 @@ CREATE TABLE local_user_resets (
     FOREIGN KEY (user_id, principal_id) REFERENCES local_users (id, principal_id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE passkey_challenges (
+    digest        TEXT    NOT NULL PRIMARY KEY CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'),
+    kind          TEXT    NOT NULL CHECK (kind IN ('register', 'sign-in', 'second-factor', 'fresh')),
+    principal_id  TEXT    NOT NULL DEFAULT '' CHECK (length(principal_id) <= 128),
+    pending_id    TEXT    NOT NULL DEFAULT '' CHECK (length(pending_id) <= 128),
+    session_id    TEXT    NOT NULL DEFAULT '' CHECK (length(session_id) <= 128),
+    created_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > created_at_ms AND expires_at_ms - created_at_ms <= 300000),
+    CHECK ((kind = 'sign-in') = (principal_id = ''))
+) STRICT;
+
+CREATE TABLE passkeys (
+    id              TEXT    NOT NULL PRIMARY KEY CHECK (substr(id, 1, 4) = 'pky-' AND length(id) <= 128),
+    principal_id    TEXT    NOT NULL REFERENCES principals (id),
+    name            TEXT    NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+    credential_id   BLOB    NOT NULL UNIQUE CHECK (length(credential_id) BETWEEN 1 AND 1023),
+    public_key      BLOB    NOT NULL CHECK (length(public_key) BETWEEN 1 AND 4096),
+    transports      TEXT    NOT NULL DEFAULT '' CHECK (length(transports) <= 64 AND transports NOT GLOB '*[^a-z,-]*'),
+    aaguid          BLOB    NOT NULL CHECK (length(aaguid) = 16),
+    sign_count      INTEGER NOT NULL DEFAULT 0 CHECK (sign_count BETWEEN 0 AND 4294967295),
+    backup_eligible INTEGER NOT NULL DEFAULT 0 CHECK (backup_eligible IN (0, 1)),
+    created_at_ms   INTEGER NOT NULL,
+    last_used_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (last_used_at_ms >= 0),
+    suspended_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (suspended_at_ms >= 0)
+) STRICT;
+
 CREATE TABLE principal_session_generations (
     principal_id TEXT    NOT NULL PRIMARY KEY REFERENCES principals (id),
     generation   INTEGER NOT NULL CHECK (generation >= 2)
@@ -1542,6 +1568,10 @@ CREATE INDEX unit_settings_namespace ON unit_settings (namespace_id);
 CREATE INDEX placement_rules_order ON placement_rules (namespace, position);
 
 CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
+
+CREATE INDEX passkey_challenges_expiry ON passkey_challenges (expires_at_ms);
+
+CREATE INDEX passkeys_principal ON passkeys (principal_id, created_at_ms, id);
 
 CREATE INDEX gate_objects_kind_id ON gate_objects (kind, id);
 

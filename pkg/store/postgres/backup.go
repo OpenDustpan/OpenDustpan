@@ -515,6 +515,11 @@ func pgEmptiedTables() []pgCopyTable {
 			columns: pgLocalUserResetColumns(),
 			orderBy: []string{"id"},
 		},
+		{
+			table:   backup.TablePasskeyChallenges,
+			columns: pgPasskeyChallengeColumns(),
+			orderBy: []string{pgColDigest},
+		},
 	}
 }
 
