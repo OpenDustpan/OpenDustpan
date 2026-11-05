@@ -89,6 +89,9 @@ type Reads interface {
 	// LocalUserOf reads the local user of the person principalID.
 	LocalUserOf(ctx context.Context, principalID string) (LocalUser, error)
 	CountPasskeys(ctx context.Context, principalID string) (int64, error)
+	// CountLivePasskeys counts the passkeys of the person that are not
+	// suspended.
+	CountLivePasskeys(ctx context.Context, principalID string) (int64, error)
 	PasskeyByID(ctx context.Context, id string) (Row, error)
 	PasskeyByCredentialID(ctx context.Context, credentialID []byte) (Row, error)
 	ListPasskeys(ctx context.Context, principalID string) ([]Row, error)
@@ -373,8 +376,9 @@ func RemovePasskey(ctx context.Context, tx Tx, personID, id string) error {
 		return err
 	}
 
-	if ownErr := owned(ctx, tx, personID, id); ownErr != nil {
-		return ownErr
+	removed, err := owned(ctx, tx, personID, id)
+	if err != nil {
+		return err
 	}
 
 	u, found, err := localUser(ctx, tx, personID)
@@ -387,7 +391,7 @@ func RemovePasskey(ctx context.Context, tx Tx, personID, id string) error {
 	}
 
 	if needsPasskey(p, u, found) {
-		if lastErr := keepsOne(ctx, tx, personID); lastErr != nil {
+		if lastErr := leavesLive(ctx, tx, personID, removed); lastErr != nil {
 			return lastErr
 		}
 	}
@@ -404,25 +408,29 @@ func RemovePasskey(ctx context.Context, tx Tx, personID, id string) error {
 	return nil
 }
 
-// owned returns mfa.ErrNotFound unless the passkey id exists and belongs to
-// the person personID.
-func owned(ctx context.Context, tx Tx, personID, id string) error {
+// owned returns the row of the passkey id, or mfa.ErrNotFound unless it
+// exists and belongs to the person personID.
+func owned(ctx context.Context, tx Tx, personID, id string) (Row, error) {
+	var none Row
+
 	r, err := tx.PasskeyByID(ctx, id)
 	if errors.Is(err, ErrNoRow) {
-		return mfa.ErrNotFound
+		return none, mfa.ErrNotFound
 	}
 
 	if err != nil {
-		return fmt.Errorf("select passkey: %w", err)
+		return none, fmt.Errorf("select passkey: %w", err)
 	}
 
-	// Defense in depth: the delete names the person too. This check stays so
-	// that the count of the removal is of the person of the passkey.
+	// Defense in depth: the delete names the person too, and the service
+	// passes the person of the session. This check stays so that the count of
+	// the removal is of the person of the passkey, also for a new caller or a
+	// delete that names no person.
 	if r.PrincipalID != personID {
-		return mfa.ErrNotFound
+		return none, mfa.ErrNotFound
 	}
 
-	return nil
+	return r, nil
 }
 
 // needsPasskey reports whether the person p keeps at least one passkey: a
@@ -432,15 +440,22 @@ func needsPasskey(p Principal, u LocalUser, found bool) bool {
 	return p.BreakGlass || (found && u.PasswordHash == "")
 }
 
-// keepsOne returns mfa.ErrLastCredential when the person personID holds one
-// passkey or none. The caller holds the lock of the principal.
-func keepsOne(ctx context.Context, tx Tx, personID string) error {
-	count, err := tx.CountPasskeys(ctx, personID)
+// leavesLive returns mfa.ErrLastCredential when the removal of the passkey
+// removed leaves the person personID with no passkey that is not suspended. A
+// suspended passkey cannot sign in, so it does not count. When no passkey of
+// the person is live, each removal fails closed. The caller holds the lock of
+// the principal.
+func leavesLive(ctx context.Context, tx Tx, personID string, removed Row) error {
+	live, err := tx.CountLivePasskeys(ctx, personID)
 	if err != nil {
-		return fmt.Errorf("count passkeys: %w", err)
+		return fmt.Errorf("count passkeys that are not suspended: %w", err)
 	}
 
-	if count <= 1 {
+	if removed.SuspendedAtMs == 0 {
+		live--
+	}
+
+	if live < 1 {
 		return mfa.ErrLastCredential
 	}
 

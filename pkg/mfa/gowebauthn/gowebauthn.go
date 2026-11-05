@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +34,12 @@ var ErrConfig = errors.New("the external URL cannot give a passkey relying party
 // DisplayName is the name of the relying party that an authenticator shows.
 const DisplayName = "OpenDustpan"
 
-// maxUserHandleBytes is the most bytes of a WebAuthn user handle.
+// attestationNone is the one attestation format that the adapter accepts.
+const attestationNone = "none"
+
+// maxUserHandleBytes is the most bytes of a WebAuthn user handle. WebAuthn
+// sets this limit. A person whose principal ID is longer cannot register a
+// passkey: the principal IDs that the server makes have 24 characters.
 const maxUserHandleBytes = 64
 
 // RelyingParty is the adapter. Make it with New.
@@ -466,6 +472,15 @@ func (r *RelyingParty) VerifyCreation(p mfa.Person, c, response []byte) (mfa.Reg
 		return none, fmt.Errorf("%w: the response does not parse", mfa.ErrInvalid)
 	}
 
+	// The relying party asks for attestation "none" and keeps no allowlist
+	// of authenticator models. A response of another format would make the
+	// module parse and check a statement that the server does not use, so
+	// the adapter refuses it before any check of a statement runs.
+	if format := parsed.Response.AttestationObject.Format; format != attestationNone {
+		return none, fmt.Errorf("%w: attestation format %s, want %s", mfa.ErrVerification,
+			strconv.Quote(strings.Map(printable, format)), attestationNone)
+	}
+
 	s := r.session(c, []byte(p.ID), nil, mfa.VerificationRequired)
 
 	cred, err := r.lib.CreateCredential(user{person: p, keys: nil}, s, parsed)
@@ -561,15 +576,7 @@ func (r *RelyingParty) VerifyAssertion(
 
 	if k == mfa.CeremonySignIn {
 		s := r.session(c, nil, nil, v)
-		handler := func(rawID, userHandle []byte) (webauthn.User, error) {
-			if !bytes.Equal(rawID, key.CredentialID) || !bytes.Equal(userHandle, []byte(owner.ID)) {
-				return nil, errNotThePasskey
-			}
-
-			return u, nil
-		}
-
-		_, _, err = r.lib.ValidatePasskeyLogin(handler, s, parsed)
+		_, _, err = r.lib.ValidatePasskeyLogin(discoverable(owner, key, u), s, parsed)
 	} else {
 		s := r.session(c, []byte(owner.ID), [][]byte{key.CredentialID}, v)
 		_, err = r.lib.ValidateLogin(u, s, parsed)
@@ -604,6 +611,25 @@ func (r *RelyingParty) session(c, userID []byte, allow [][]byte, v mfa.UserVerif
 		CredParams:                webauthn.CredentialParametersDefault(),
 		Mediation:                 protocol.MediationDefault,
 		AuthorizeUVInitialization: false,
+	}
+}
+
+// discoverable returns the handler of a discoverable assertion: it gives
+// the module the user u of the passkey key of owner, and refuses a response
+// whose credential ID is not the ID of key or whose user handle is not the ID
+// of owner.
+//
+// Defense in depth: the service finds key by the credential ID of the
+// response and compares the user handle, and the module compares the user
+// handle and the credential with the user again. This check stays so that the
+// adapter never gives the module a user that the response does not name.
+func discoverable(owner mfa.Person, key mfa.Passkey, u webauthn.User) webauthn.DiscoverableUserHandler {
+	return func(rawID, userHandle []byte) (webauthn.User, error) {
+		if !bytes.Equal(rawID, key.CredentialID) || !bytes.Equal(userHandle, []byte(owner.ID)) {
+			return nil, errNotThePasskey
+		}
+
+		return u, nil
 	}
 }
 
