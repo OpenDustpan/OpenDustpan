@@ -721,7 +721,9 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
 	tb.Helper()
 
-	return append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+	opts := append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+
+	return append(opts, dustpan.WithComponents(apiOnly(tb)))
 }
 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
@@ -788,7 +790,6 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 				dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
 				dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 				dustpan.WithDisablePulumiJournaling(args.disableJournaling),
-				dustpan.WithComponents(apiOnly(tb)),
 			}...,
 		),
 	), args.signIn.options()...)...)
