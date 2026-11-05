@@ -17,8 +17,10 @@ import (
 // the password method and the request method. Each method proves who a
 // person is and returns an Assertion. A method never makes a principal, a
 // membership or a session. The sign-in service does that, in one order, for
-// every method, after CheckAssertion. The conformance suites in package
-// sessiontest check each adapter.
+// every method, after CheckAssertion. The local password and the passkey are
+// not methods of these ports: they make the same Assertion from their own
+// records, and the sign-in service starts their session in its own entry. The
+// conformance suites in package sessiontest check each adapter.
 
 // Errors of the sign-in methods. Each adapter translates the errors of its
 // protocol, its library and its network into these errors. The sign-in
@@ -338,7 +340,11 @@ type Credentials struct {
 }
 
 // PasswordMethod is a sign-in method that checks a user name and a
-// password at a directory: LDAP. The method never reads or compares a
+// password at a directory: LDAP. The password of a local user and the
+// passkey are not adapters of this port: they read their own records, make
+// the same Assertion with the kinds MethodLocalPassword and MethodPasskey,
+// and give it to the sign-in service with the session generation of the
+// record. The method never reads or compares a
 // password hash, and never follows a referral, because a referral sends the
 // password to another server. The lockout is not part of the method: the
 // sign-in service counts the typed name before it calls Verify, and counts

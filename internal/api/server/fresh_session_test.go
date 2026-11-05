@@ -10,6 +10,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -137,6 +138,7 @@ type storeSessions struct {
 	svc        *session.Sessions
 	principals *principal.Service
 	st         *sqlite.Store
+	service    *signinsvc.Service
 }
 
 // newStoreSessions returns the sessions over st.
@@ -155,7 +157,9 @@ func newStoreSessions(t *testing.T, st *sqlite.Store) storeSessions {
 		t.Fatalf("principal service: %v", err)
 	}
 
-	return storeSessions{svc: svc, principals: principals, st: st}
+	return storeSessions{
+		svc: svc, principals: principals, st: st, service: newTestSignInService(t, st, svc, principals),
+	}
 }
 
 // seedTester makes the person "prn-tester" in the store when it is not there.
@@ -178,6 +182,7 @@ func (s storeSessions) seedTester(t *testing.T) {
 // signIn returns the sign-in configuration that reads these sessions.
 func (s storeSessions) signIn() *apiserver.SignIn {
 	return &apiserver.SignIn{
+		Service:      s.service,
 		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: s.svc, Limiter: nil,
 		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: nil,
 	}

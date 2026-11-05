@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -89,7 +90,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
-		SignIn:           coverageSignIn(sessions, admin, code),
+		SignIn:           coverageSignIn(coverageSignInService(tb, st, principals, sessions), sessions, admin, code),
 		CheckpointEpochs: nil,
 		InstallationKind: installation.KindDev,
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -209,11 +210,31 @@ func (coveragePasswordLimiter) Admit(context.Context) error { return nil }
 
 func (coveragePasswordLimiter) Fail(context.Context) {}
 
+// coverageSignInService returns the sign-in service over st.
+func coverageSignInService(
+	tb testing.TB, st *sqlite.Store, principals *principal.Service, sessions *session.Sessions,
+) *signinsvc.Service {
+	tb.Helper()
+
+	service, err := signinsvc.New(signinsvc.Config{
+		Principals: principals, Disabler: st, Generations: st, Sessions: sessions, Audit: st, Groups: nil,
+		Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+	})
+	if err != nil {
+		tb.Fatalf("sign-in service: %v", err)
+	}
+
+	return service
+}
+
 // coverageSignIn returns the sign-in of the coverage handler: the dev
 // sign-in code mounts the dev route, and the password budget mounts the
 // password routes.
-func coverageSignIn(sessions *session.Sessions, admin *session.ProviderAdmin, code *devcode.Code) *serverapi.SignIn {
+func coverageSignIn(
+	service *signinsvc.Service, sessions *session.Sessions, admin *session.ProviderAdmin, code *devcode.Code,
+) *serverapi.SignIn {
 	return &serverapi.SignIn{
+		Service:         service,
 		OnDevRefused:    nil,
 		Sessions:        sessions,
 		Limiter:         nil,

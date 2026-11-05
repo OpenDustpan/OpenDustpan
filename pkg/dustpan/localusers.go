@@ -48,6 +48,16 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 		return none, err
 	}
 
+	if deps.signIn != nil {
+		deps.signIn.Service, err = newSignInService(signInServiceInputs{
+			principals: principals, store: cfg.namespaceStore, sessions: deps.signIn.Sessions, audit: serverAudit,
+			logger: cfg.logger, onAuditFailure: deps.observed.IncAuditAppendFailure,
+		})
+		if err != nil {
+			return none, err
+		}
+	}
+
 	return serverExtras{allow: allow, audit: serverAudit, settings: settingsSvc, localUsers: localUsers.service}, nil
 }
 

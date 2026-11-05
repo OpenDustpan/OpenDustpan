@@ -6,7 +6,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -31,10 +34,6 @@ type SignedIn struct {
 	ChangeRequired    bool
 }
 
-// errBindGate marks the error of a session.BindGate that stopped the check
-// of a password.
-var errBindGate = errors.New("the sign-in service stopped the check of the password")
-
 // SignIn checks the user name and the password. It returns
 // localuser.ErrSignInFailed for an unknown user name, a wrong password, a
 // disabled principal and a user with no password, after the same work, and
@@ -44,19 +43,9 @@ var errBindGate = errors.New("the sign-in service stopped the check of the passw
 // localuser.ErrUnavailable when a store or the hasher cannot answer.
 //
 // base is the entry of the caller: the source address, the user agent and
-// the request ID.
+// the request ID. The caller gives the result to the sign-in service, which
+// starts the session.
 func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, password string) (SignedIn, error) {
-	return s.checkPassword(ctx, base, userName, password, nil)
-}
-
-// checkPassword is SignIn with the gate of a password method. When gate is not nil,
-// it calls gate.BeforeBind with the ID of the local user of a known user name
-// before the compare of the password. An error of the gate stops the check:
-// checkPassword writes the refusal and returns the error of the gate, wrapped with
-// errBindGate. A name with no user or no password calls no gate.
-func (s *Service) checkPassword(
-	ctx context.Context, base audit.Entry, userName, password string, gate session.BindGate,
-) (SignedIn, error) {
 	base.Subject = "sign-in:" + localuser.ProviderID
 
 	p, err := s.requireEnabled(ctx)
@@ -68,6 +57,14 @@ func (s *Service) checkPassword(
 			"password sign-in is off",
 			err,
 		)
+	}
+
+	// The boundary check comes before the read of any record, and no hash
+	// runs for input that no user name or password can match. The checks of
+	// the form below stay as the second layer.
+	if boundaryErr := checkCredentials(userName, password); boundaryErr != nil {
+		return SignedIn{}, s.refuse(ctx, base, on(ActionSignInPasswordFails, unknownObject), ReasonBoundary,
+			localuser.ErrSignInFailed)
 	}
 
 	in := &attempt{
@@ -96,14 +93,27 @@ func (s *Service) checkPassword(
 		}
 	}
 
-	if gate != nil && in.reason == "" {
-		if gateErr := gate.BeforeBind(ctx, in.cred.User.ID); gateErr != nil {
-			return SignedIn{}, s.refuse(ctx, base, on(ActionSignInPasswordFails, in.object), ReasonBindGate,
-				fmt.Errorf("%w: %w", errBindGate, gateErr))
-		}
-	}
-
 	return s.verify(ctx, in, nfc, p)
+}
+
+// errBoundary marks the input that fails the boundary check of a sign-in.
+var errBoundary = errors.New("sign-in input fails the boundary check")
+
+// checkCredentials is the boundary check of the user name and the password
+// of a sign-in: a user name of 1 to session.MaxUserName bytes of UTF-8 with
+// no control character, and a password that is not empty. The checks of the
+// form in SignIn stay as a second layer.
+func checkCredentials(userName, password string) error {
+	switch {
+	case userName == "" || len(userName) > session.MaxUserName || !utf8.ValidString(userName) ||
+		strings.ContainsFunc(userName, unicode.IsControl):
+		return fmt.Errorf("%w: the user name must have 1 to %d bytes of UTF-8 and no control character",
+			errBoundary, session.MaxUserName)
+	case password == "":
+		return fmt.Errorf("%w: the password is empty", errBoundary)
+	default:
+		return nil
+	}
 }
 
 // attempt is the state of one password sign-in between its steps.
