@@ -115,21 +115,36 @@ func checkStepName(name string) error {
 // one the store recorded, the end time is the time of the store, and the log
 // version is the one that the chunks made.
 func (r *DurableRecorder) EndStep(ctx context.Context, c PhaseClaim, rec StepRecord) error {
-	if err := checkStepName(rec.Name); err != nil {
-		return err
-	}
+	return r.finishStep(ctx, c, rec, nil)
+}
 
-	if rec.Token != c.Claim.Token {
-		return fmt.Errorf("%w: the record of step %q carries token %d, the claim has token %d", ErrInvalid, rec.Name,
-			rec.Token, c.Claim.Token)
-	}
+// LogExpectation is the log that a caller says a step ends with: the number of
+// chunks and the hex SHA-256 of the whole plaintext. The SHA-256 is empty for a
+// step with no chunk.
+type LogExpectation struct {
+	Chunks int
+	SHA256 string
+}
 
-	closing, err := r.closeLog(ctx, c, rec.Name)
-	if err != nil {
-		return err
-	}
+// CheckedRecorder is a Recorder that ends a step only when the log of the step
+// is the log that the caller expects.
+type CheckedRecorder interface {
+	Recorder
+	// EndStepChecked is EndStep with a check that comes before the write: when
+	// the log that the chunks made is not the log of want, it returns
+	// ErrConflict and changes nothing, so the step stays open and its log stays
+	// open. A step that has no begin record under c is ErrInvalid, as for
+	// EndStep. A retry after a successful end compares the stored closed log.
+	EndStepChecked(ctx context.Context, c PhaseClaim, rec StepRecord, want LogExpectation) error
+}
 
-	return r.store.EndStep(ctx, c, rec.Name, rec.ExitCode, closing)
+var _ CheckedRecorder = (*DurableRecorder)(nil)
+
+// EndStepChecked implements CheckedRecorder.
+func (r *DurableRecorder) EndStepChecked(
+	ctx context.Context, c PhaseClaim, rec StepRecord, want LogExpectation,
+) error {
+	return r.finishStep(ctx, c, rec, &want)
 }
 
 // stepRecordOf returns the record of the step called name under the claim c
@@ -454,6 +469,82 @@ func deliveryEntry(j *Job, unit identity.Object, d *DeliveryResult, c PhaseClaim
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: d.AuditReason(),
 	}
+}
+
+// finishStep ends the step of rec. With want, it compares the log before the
+// write of the store.
+func (r *DurableRecorder) finishStep(ctx context.Context, c PhaseClaim, rec StepRecord, want *LogExpectation) error {
+	if err := checkStepName(rec.Name); err != nil {
+		return err
+	}
+
+	if rec.Token != c.Claim.Token {
+		return fmt.Errorf("%w: the record of step %q carries token %d, the claim has token %d", ErrInvalid, rec.Name,
+			rec.Token, c.Claim.Token)
+	}
+
+	closing, err := r.closeLog(ctx, c, rec.Name)
+	if err != nil {
+		return err
+	}
+
+	if want != nil {
+		if checkErr := r.compareLog(ctx, c, rec.Name, closing, *want); checkErr != nil {
+			return checkErr
+		}
+	}
+
+	return r.store.EndStep(ctx, c, rec.Name, rec.ExitCode, closing)
+}
+
+// compareLog compares the log that the end of the step closes with want. The
+// closing record is nil when the step has no open log: the log is then the
+// closed log of an earlier end of the step, or no log. A step with no record
+// passes: the store refuses it.
+func (r *DurableRecorder) compareLog(
+	ctx context.Context, c PhaseClaim, name string, closing *LogClose, want LogExpectation,
+) error {
+	var (
+		chunks int
+		sum    string
+	)
+
+	if closing != nil {
+		chunks, sum = closing.Chunks, closing.SHA256
+	} else {
+		j, err := r.jobOf(ctx, c)
+		if err != nil {
+			return err
+		}
+
+		var found bool
+
+		if chunks, sum, found = closedLogOf(&j, c, name); !found {
+			return nil
+		}
+	}
+
+	if chunks != want.Chunks || (chunks > 0 && sum != want.SHA256) {
+		return fmt.Errorf("%w: the log of the step is not the log that the caller sent", ErrConflict)
+	}
+
+	return nil
+}
+
+// closedLogOf returns the number of chunks and the SHA-256 of the log of the
+// step called name in j, or 0 and "" for a step with no log. Found is false
+// for a step with no record.
+func closedLogOf(j *Job, c PhaseClaim, name string) (int, string, bool) {
+	rec, ok := stepRecordOf(j, c, name)
+	if !ok {
+		return 0, "", false
+	}
+
+	if rec.Log == nil {
+		return 0, "", true
+	}
+
+	return rec.Log.Chunks, rec.Log.SHA256, true
 }
 
 // closeLog reads the open log version of the step called name back, and

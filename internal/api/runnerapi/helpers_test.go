@@ -320,7 +320,7 @@ type serveOptions struct {
 	claimer job.Claimer
 	// recorder and jobs are the recorder and the job reader of the session
 	// paths. Nil leaves them out.
-	recorder job.Recorder
+	recorder job.CheckedRecorder
 	jobs     runnerapi.JobReader
 	// logger replaces the logger that discards.
 	logger *slog.Logger
@@ -332,6 +332,24 @@ type serveOptions struct {
 // serve returns a handler over s on a test server. Two calls with the stores
 // of two instances of one installation give two replicas of the server.
 func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *httptest.Server, *opsClaimer) {
+	t.Helper()
+
+	cfg, claimer := configFor(t, s, opts)
+
+	h, err := runnerapi.NewHandler(cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	return h, srv, claimer
+}
+
+// configFor returns the configuration of the handler that serve builds, with
+// the change of opts.mutate.
+func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *opsClaimer) {
 	t.Helper()
 
 	service, err := namespace.NewService(
@@ -375,15 +393,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		opts.mutate(&cfg)
 	}
 
-	h, err := runnerapi.NewHandler(cfg)
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
-
-	return h, srv, claimer
+	return cfg, claimer
 }
 
 // admin sends a request of the management API as the administrator.

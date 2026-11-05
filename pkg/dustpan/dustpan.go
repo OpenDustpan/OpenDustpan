@@ -274,7 +274,7 @@ type settings struct {
 	jobClaimer JobClaimerFunc
 	// jobRecorder records the steps and the log chunks of the launchers of
 	// the runner protocol, or is nil. See WithJobRecorder.
-	jobRecorder job.Recorder
+	jobRecorder job.CheckedRecorder
 	// components are the components this process runs. See WithComponents.
 	components Components
 	// operationLease is the lease period of a claim on a durable operation,
