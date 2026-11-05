@@ -268,7 +268,16 @@ type Commits interface {
 	// ErrInvalid for a trailer that is not one line of the form
 	// "Key: value". A takeover of a write-back calls it before a second
 	// commit.
-	FindCommit(ctx context.Context, repo, ref, trailer string, since time.Time) (Commit, error)
+	//
+	// d names the commit by the Trailer and the Base of the CommitRequest
+	// that made it. Commit adds a proof to the commit that binds the
+	// trailer, the base and the repository, and FindCommit counts a commit
+	// only when its proof opens for the same three values. A commit with no
+	// proof, or with the proof of another trailer, base or repository, is
+	// ErrUntrustedCommit. It returns ErrInvalid for a base that is not a
+	// full commit ID, and ErrUnsupported when the connection has no key to
+	// open the proof.
+	FindCommit(ctx context.Context, repo, ref string, d Delivery, since time.Time) (Commit, error)
 }
 
 // Reviews manages review requests: a pull request of GitHub or a merge
@@ -438,13 +447,27 @@ const (
 // adapter writes it as the git author, or as a Co-authored-by trailer when
 // the forge makes the commit as the account of the connection. The
 // committer is always the connection.
+//
+// Trailer is the trailer line that FindCommit searches for, for example
+// "Dustpan-Job: j-123". It must be a line of the last paragraph of Message.
+// The adapter adds a proof next to it that binds Trailer, Base and the
+// repository, so that FindCommit can tell this commit from a commit that a
+// person pushed with the same line.
 type CommitRequest struct {
 	Branch    string
 	NewBranch bool
 	Base      string
 	Message   string
+	Trailer   string
 	Author    Person
 	Changes   []FileChange
+}
+
+// Delivery names a commit that a write-back made: the trailer line and the base
+// commit of its CommitRequest. FindCommit takes it.
+type Delivery struct {
+	Trailer string
+	Base    string
 }
 
 // ValidateCommit checks req before an adapter calls the forge. It returns
@@ -460,6 +483,10 @@ func ValidateCommit(req CommitRequest) error {
 
 	if req.Message == "" {
 		return fmt.Errorf("%w: the commit message is empty", ErrInvalid)
+	}
+
+	if req.Trailer == "" {
+		return fmt.Errorf("%w: the commit has no trailer line", ErrInvalid)
 	}
 
 	if len(req.Message) > MaxMessageBytes {

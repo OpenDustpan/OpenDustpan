@@ -161,6 +161,12 @@ func (f *fake) PushAs(context.Context, string, map[string][]byte, string, forget
 	return forge.Commit{}, errNotImplemented
 }
 
+func (f *fake) CommitMessage(context.Context, string, string) (string, error) {
+	return "", errNotImplemented
+}
+
+func (f *fake) Clone(context.Context) (string, error) { return "", errNotImplemented }
+
 func (f *fake) PushEntry(context.Context, string, string, forgetest.EntryKind, string) (forge.Commit, error) {
 	return forge.Commit{}, errNotImplemented
 }

@@ -72,6 +72,14 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 		message string,
 		origin Origin,
 	) (forge.Commit, error)
+	// CommitMessage returns the full message of the commit commitID in the
+	// repository repo, as the forge shows it. A case copies the message of a
+	// commit of the connection, with its proof, into a commit that it pushes.
+	CommitMessage(ctx context.Context, repo, commitID string) (string, error)
+	// Clone makes another repository on the forge, in the same account, with
+	// the commits and the branches of the repository of the case and another
+	// repository ID, and returns its path. The connection can commit to it.
+	Clone(ctx context.Context) (string, error)
 	// PushEntry commits an entry that is not a regular file at path on
 	// branch with no check, as another author does, and returns the commit.
 	// The entry replaces the file or the entry that the path has. The
@@ -224,6 +232,16 @@ func cases() []testCase {
 			"find commit needs the trailer line to equal the line of the commit",
 			forge.CapCommit,
 			caseFindCommitTrailerIsExact,
+		},
+		{
+			"find commit needs a proof for the trailer, the base commit and the job",
+			forge.CapCommit,
+			caseFindCommitNeedsTheProof,
+		},
+		{
+			"find commit never counts the proof of a commit in another repository",
+			forge.CapCommit,
+			caseFindCommitProofIsOfThisRepository,
 		},
 		{
 			"commit after a symlink, a submodule or a directory at a changed path is a conflict",

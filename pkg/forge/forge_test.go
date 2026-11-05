@@ -17,6 +17,7 @@ func validCommit() forge.CommitRequest {
 		NewBranch: true,
 		Base:      "0123456789abcdef0123456789abcdef01234567",
 		Message:   "Set the instance size\n\nDustpan-Job: j-1",
+		Trailer:   "Dustpan-Job: j-1",
 		Author:    forge.Person{Name: "Ada", Email: "ada@example.com"},
 		Changes: []forge.FileChange{
 			{Path: "infra/prod.tfvars.json", Content: []byte(`{"size":"large"}`), Delete: false},

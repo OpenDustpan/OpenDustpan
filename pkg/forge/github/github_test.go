@@ -27,7 +27,7 @@ func newOpener(t *testing.T, f *fake, rules egress.Rules) *github.Opener {
 	pool := x509.NewCertPool()
 	pool.AddCert(f.srv.Certificate())
 
-	o, err := github.NewOpener(github.Config{Rules: rules, RootCAs: pool, Now: nil})
+	o, err := github.NewOpener(github.Config{Rules: rules, RootCAs: pool, Now: nil, Prover: testProver{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestKind(t *testing.T) {
 	t.Parallel()
 
 	o, err := github.NewOpener(
-		github.Config{Rules: egress.Rules{Allow: nil, LoopbackForTests: false}, RootCAs: nil, Now: nil},
+		github.Config{Rules: egress.Rules{Allow: nil, LoopbackForTests: false}, RootCAs: nil, Now: nil, Prover: nil},
 	)
 	if err != nil {
 		t.Fatal(err)
