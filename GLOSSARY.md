@@ -1085,7 +1085,7 @@ The static binary `dustpan-launcher` that runs the steps of one claim inside the
 _Avoid_: Executor (that is write-back or runners, ADR 100 decision 19), runner binary, shim
 
 **Job proxy**:
-A proxy between one runner job and the network (ADR 327). A unit turns it on with a proxy rule set. A proxy rule for the unit and the operation must allow the host, the method and the path of a request. Else the job proxy refuses the request. It can add a credential to an allowed request, so that the job never holds that credential. It holds the credentials and the CA key of the claim, and runs as its own process, apart from the steps. It is the only exit of the sandbox. Its outbound connections go through the outbound guard, and through an upstream proxy when the pool names one.
+A proxy between one runner job and the network (ADR 327). A unit turns it on with a proxy rule set. A proxy rule for the unit and the operation must allow the host, the method and the path of a request. Else the job proxy refuses the request. It can add a credential to an allowed request, so that the job never holds that credential. It holds the credentials and the CA key of the claim, and runs as its own process, apart from the steps. Its outbound connections go through the outbound guard, and through an upstream proxy when the pool names one.
 _Avoid_: Egress proxy, egress gateway, sidecar (as the name of the feature), firewall
 
 **Proxy rule**:
