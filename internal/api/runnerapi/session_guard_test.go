@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -391,13 +392,35 @@ func TestNewHandlerRefusesARecorderWithoutAJobReader(t *testing.T) {
 	}
 }
 
-// TestJobPhaseRefusesWithoutAJobReader proves the second layer: a handler that
-// has the recorder and no job reader answers not-found before it reads the
-// claim.
+// TestJobPhaseRefusesWithoutAJobReader proves the second layer, alone: the
+// handler has every dependency of the claim, and the claim is live, so the
+// phase resolves. With only the job reader cleared, the same call answers
+// not-found with the text of this check, before it reads the claim. The control
+// call shows that nothing else makes the second call fail: without the check,
+// the second call resolves the phase too.
 func TestJobPhaseRefusesWithoutAJobReader(t *testing.T) {
 	t.Parallel()
 
-	if err := runnerapi.JobPhaseWithoutReader(t.Context(), newSessionJobs()); !errors.Is(err, runner.ErrNotFound) {
-		t.Fatalf("jobPhaseOf error = %v, want ErrNotFound", err)
+	for _, b := range backends() {
+		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSessionEnv(t, b)
+			s.launch()
+
+			sess := runner.Session{
+				ID: "", Operation: s.work.Operation, Token: s.work.Token, Runner: s.runner.id,
+				Key: runner.Key{Public: nil, CreatedAt: time.Time{}}, CreatedAt: time.Time{},
+			}
+
+			if err := runnerapi.JobPhaseOf(t.Context(), s.handler, sess, false); err != nil {
+				t.Fatalf("jobPhaseOf with the job reader = %v, want the live phase", err)
+			}
+
+			err := runnerapi.JobPhaseOf(t.Context(), s.handler, sess, true)
+			if !errors.Is(err, runner.ErrNotFound) || !strings.Contains(err.Error(), "records no steps") {
+				t.Fatalf("jobPhaseOf without the job reader = %v, want not-found with \"records no steps\"", err)
+			}
+		})
 	}
 }

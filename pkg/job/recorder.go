@@ -525,7 +525,7 @@ func (r *DurableRecorder) compareLog(
 	}
 
 	if chunks != want.Chunks || (chunks > 0 && sum != want.SHA256) {
-		return fmt.Errorf("%w: the log of the step is not the log that the caller sent", ErrConflict)
+		return fmt.Errorf("log of step %q: %w", name, ErrLogDiffers)
 	}
 
 	return nil
