@@ -84,7 +84,7 @@ func caseFindCommitIgnoresPushedTrailer(t *testing.T, h Harness) {
 		{
 			"the connection as author and as committer",
 			Origin{Author: PartyConnection, Committer: PartyConnection, Verified: true},
-			nil,
+			forge.ErrUntrustedCommit,
 		},
 		{"another author", Origin{Author: PartyOther, Committer: PartyForge, Verified: true}, forge.ErrUntrustedCommit},
 		{

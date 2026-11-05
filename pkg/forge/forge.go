@@ -261,8 +261,8 @@ type Commits interface {
 	// message is not a trailer, and the line must equal trailer: a longer
 	// or shorter line is another trailer. Only a commit that the connection
 	// made counts: its author is the identity that the connection commits
-	// as, its committer is the Git host or that identity, and the host
-	// shows it as verified when the host reports verification. It returns
+	// as, its committer is the Git host, and the host reports it as
+	// verified. It returns
 	// ErrNotFound when no such commit exists, ErrUntrustedCommit when the
 	// newest commit with the trailer fails one of these checks, and
 	// ErrInvalid for a trailer that is not one line of the form
