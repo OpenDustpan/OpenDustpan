@@ -330,16 +330,16 @@ The server checks the person that an OpenID provider or a plain OAuth 2.0
 provider names before it finds the principal:
 
 - The subject has 1 to 255 bytes and no control character.
-- The display name, the user name and the email each have at most 256
-  bytes and no control character.
+- The name, the user name and the email each have at most 256 bytes and
+  no control character.
 - The `auth_time` claim of an OpenID provider is not more than 1 minute
   after the time of the server. For a sign-in with `fresh=1`, it is not
   more than 1 minute before the start of the sign-in.
 
 The server refuses an answer that breaks a limit. It never cuts a value to
-the limit. The audit entry of the refused sign-in has the reason `ID token
-was refused`, also for a plain OAuth 2.0 provider, and the server log has
-the rule that failed.
+the limit. The audit entry of the refused sign-in has the reason
+`ID token was refused`, also for a plain OAuth 2.0 provider. The server log
+has the rule that failed.
 
 ## Audit entries
 
