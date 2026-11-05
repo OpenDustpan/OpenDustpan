@@ -72,6 +72,8 @@ const (
 	ReasonDisableNoPrincipal = "identity provider reports a person with no principal as disabled"
 	ReasonDisableNotTarget   = "identity provider reports a principal as disabled that it cannot manage"
 	ReasonDisableFailed      = "identity provider reports the person as disabled, and the disable failed"
+	ReasonLocalPrincipalGone = "principal of the local user was not found"
+	ReasonDisableLastAdmin   = "identity provider reports the last administrator as disabled, and the server keeps the person"
 	ReasonGenerationChanged  = "session generation changed during the sign-in"
 )
 
@@ -323,6 +325,15 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 		return none, fmt.Errorf("find the principal of a sign-in: %w", err)
 	}
 
+	// Defense in depth: SignInPrincipal returns only a person of this subject.
+	// This check does not rely on it, so that a faulty lookup can never start a
+	// session for another person or for a principal of another kind.
+	if !isTarget(&p, subject) {
+		return none, s.refuse(ctx, req, &refusal{
+			reason: ReasonNotTarget, answer: AnswerRefused, idpSubject: a.Subject, cause: nil,
+		})
+	}
+
 	// Step 5.
 	note, err := s.applyGroups(ctx, e, &req.Provider, a, p.ID)
 	if err != nil {
@@ -444,6 +455,13 @@ func (s *Service) admit(ctx context.Context, req *Request) (principal.Source, *r
 	return source, nil
 }
 
+// isTarget reports whether the principal p is the person of the subject that
+// an identity provider may sign in or disable: a person of exactly this
+// subject, in no namespace, and not a break-glass account.
+func isTarget(p *principal.Principal, subject string) bool {
+	return p.Subject == subject && p.Kind == principal.KindPerson && p.Namespace == "" && !p.BreakGlass
+}
+
 // checkLocal returns the reason for which the Assertion of req is not the
 // Assertion of the local password of the person of the record, or "".
 func checkLocal(req *LocalRequest) string {
@@ -493,8 +511,14 @@ func (s *Service) started(ctx context.Context, req *Request, idpSubject string, 
 			reason: ReasonDisabled, answer: AnswerRefused, idpSubject: idpSubject, cause: nil,
 		})
 	case errors.Is(out.err, session.ErrPrincipalNotFound):
+		reason := ReasonNotTarget
+		if req.Provider.ID == session.LocalProviderID {
+			// The local password has no identity provider.
+			reason = ReasonLocalPrincipalGone
+		}
+
 		return none, s.refuse(ctx, req, &refusal{
-			reason: ReasonNotTarget, answer: AnswerRefused, idpSubject: idpSubject, cause: nil,
+			reason: reason, answer: AnswerRefused, idpSubject: idpSubject, cause: nil,
 		})
 	default:
 		return none, fmt.Errorf("start the session: %w", out.err)
