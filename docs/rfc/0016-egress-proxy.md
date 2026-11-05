@@ -1,18 +1,22 @@
 ---
 rfc: 16
 title: Job proxy, with request rules and credential injection
-status: discussing
+status: accepted
+adr: 327
 created: 2026-10-10
 ---
 
 # RFC 16. Job proxy, with request rules and credential injection
 
-Status: discussing. The owner decided two points on 2026-10-18: a research spike
-comes first, and the names are "job proxy", "outbound guard" and "upstream
-proxy" (see `GLOSSARY.md`). Where the proxy runs is a proposal. How people
-write rules, and how policies (RFC 13) apply to them, is to be decided. The
-section "Prototype findings" gives the result of the spike. The section
-"Proposal (2026-10-30)" is ready to accept, with two owner decisions.
+Status: accepted (ADR 327). The owner decided on 2026-10-18 that a research
+spike comes first, and that the names are "job proxy", "outbound guard" and
+"upstream proxy" (see `GLOSSARY.md`). The owner accepted the recommendation
+of the spike on 2026-10-26, kept all of this RFC in milestone 6 on
+2026-11-01, and chose the word "proxy rule" on 2026-11-01 (D4). The PM
+answered D5 on 2026-10-31. ADR 327 records the decisions of the section
+"Proposal (2026-10-30)". The section "Open questions" lists the questions
+that stay open. The example rules below say "egress rule", the word of the
+first draft.
 
 **This is an escape hatch, not a default.** When a product has native RBAC or
 ABAC and short-lived credentials (OIDC, dynamic credentials), use those first:
@@ -323,7 +327,8 @@ The owner decided the names "job proxy", "outbound guard" and "upstream
 proxy" on 2026-10-18. `GLOSSARY.md` holds the three entries. Each says
 "Avoid: egress proxy". This RFC used "egress proxy" before that decision.
 
-Two names stay proposals:
+The owner chose "proxy rule" and "proxy rule set" on 2026-11-01 (ADR 327
+decision 18). The entry below is the first draft, kept as the record:
 
 **Egress rule**:
 A rule that allows requests from a job, for some units and operations, by
@@ -334,6 +339,8 @@ The word "egress" now names the server's own outbound rules (the outbound
 guard, `pkg/egress`) and the egress allowlist of model calls. A rule of the
 job proxy with the same word can cause confusion. "Proxy rule" is one
 option (see "Open questions").
+
+One name stays a proposal:
 
 **Release mode**:
 Where a credential source in a profile delivers its credential: to the job,
@@ -880,6 +887,9 @@ is not canonical, and a credential that the job never holds.
 
 ### Owner decisions
 
+Answered: D4, option 1, by the owner on 2026-11-01. D5, option 1, by the PM
+on 2026-10-31. ADR 327 decisions 18 and 19 record them.
+
 - **D4. The name of a rule.** In short: what do we call one allow line of
   the job proxy? Options:
   1. "proxy rule" and "proxy rule set" (recommended). Short, and it names
@@ -1055,8 +1065,20 @@ adds the risk of one process that holds the credentials of many units.
 
 ## Open questions
 
-The section "Proposal (2026-10-30)" answers each question below, except
-the owner decisions D4 and D5.
+ADR 327 accepts the section "Proposal (2026-10-30)" and answers D4 and D5.
+These questions stay open:
+
+- **Open:** the name "release mode". The proposal of decision 5 uses the
+  export key `proxy` and the consumer `job-proxy`, and the owner did not
+  choose a word for the concept. Is "release mode" a glossary term, or
+  does the glossary need no word for it?
+- **Open:** the cost of the response scan for large bodies. Decision 7
+  sets the forms that the scan looks for. Nobody measured the cost of the
+  window on a large response. The proxy core work measures it.
+- **Open:** which clients other than Go honor the name constraint of the
+  CA of a claim. The spike tested Go only.
+
+The questions below are answered (ADR 327):
 
 
 - The name of a rule of the job proxy: "egress rule", "proxy rule", or
@@ -1083,4 +1105,4 @@ the owner decisions D4 and D5.
 
 ## Outcome
 
-None yet.
+Accepted. [ADR 327](../adr/0327-the-job-proxy.md) records the decisions.
