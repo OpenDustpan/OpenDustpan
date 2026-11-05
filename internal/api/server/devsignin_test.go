@@ -189,6 +189,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 		Now:              nil,
 		AuditSinks:       nil,
 		SignIn: &apiserver.SignIn{
+			Service:      newTestSignInService(t, d.st, d.sessions, d.principals),
 			OnDevRefused: nil,
 			Sessions:     d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
 			PasswordLimiter: nil,

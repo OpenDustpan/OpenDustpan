@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
@@ -360,7 +361,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	base := signInEntry(r, passwordSignInAuditActor, "", session.ActionSignIn)
+	base := signInEntry(r, passwordSignInAuditActor, session.ActionSignIn)
 
 	in, err := h.localUsers.SignIn(ctx, base, req.UserName, req.Password)
 	if err != nil {
@@ -373,37 +374,45 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	if !h.acceptLocalAssertion(w, r, in) {
-		return
-	}
-
-	e := signInEntry(r, principal.LocalSubjectPrefix+in.UserID, "", session.ActionSignIn)
-
-	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
-		AuthTime: in.Assertion.AuthTime, PrincipalID: in.PrincipalID, Provider: localuser.ProviderID,
-		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: in.SessionGeneration, Stored: false,
-	})
-	if err != nil {
-		// A reset, a password change or a disable after the check of the
-		// password changed the generation or the principal: the sign-in fails
-		// closed with the answer of a wrong password.
-		if errors.Is(err, session.ErrGenerationChanged) || errors.Is(err, session.ErrPrincipalDisabled) ||
-			errors.Is(err, session.ErrPrincipalNotFound) {
-			h.failPassword(ctx)
-			h.writeError(ctx, w, localUserError(localuser.ErrSignInFailed))
-
-			return
-		}
-
-		h.writeError(ctx, w, err)
-
+	res, ok := h.completeLocal(w, r, in)
+	if !ok {
 		return
 	}
 
 	h.clearNameCounts(ctx, in)
 
-	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
+	http.SetCookie(w, sessionCookie(res.Secret.Reveal(), h.sessionLength(ctx, res.Session)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// completeLocal gives the password sign-in in to the sign-in service. It
+// returns false after it answered a refusal or an error. A refusal has its
+// audit entry already. A failed Assertion, a reset, a password change or a
+// disable after the check of the password fails closed with the answer of a
+// wrong password.
+func (h *Handler) completeLocal(
+	w http.ResponseWriter, r *http.Request, in localusersvc.SignedIn,
+) (signinsvc.Result, bool) {
+	ctx := r.Context()
+
+	res, err := h.signIn.service.CompleteLocal(ctx, &signinsvc.LocalRequest{
+		Entry: signInEntry(r, "", session.ActionSignIn), PrincipalID: in.PrincipalID, UserID: in.UserID,
+		Assertion: in.Assertion, Generation: in.SessionGeneration, ChangeRequired: in.ChangeRequired,
+	})
+	if err == nil {
+		return res, true
+	}
+
+	if signinsvc.IsRefusal(err) {
+		h.failPassword(ctx)
+		h.writeError(ctx, w, localUserError(localuser.ErrSignInFailed))
+
+		return res, false
+	}
+
+	h.writeError(ctx, w, err)
+
+	return res, false
 }
 
 // clearNameCounts clears the counts of the name of the password sign-in in.
@@ -415,27 +424,6 @@ func (h *Handler) clearNameCounts(ctx context.Context, in localusersvc.SignedIn)
 		h.logger.WarnContext(ctx, "the counts of a user name were not cleared after a sign-in",
 			slog.String("cause", causeType(clearErr)))
 	}
-}
-
-// acceptLocalAssertion reports whether the Assertion of the password sign-in
-// in passes the check of a sign-in and names the person of in. Else it counts
-// the failure, writes the refusal and answers the error of a wrong password.
-func (h *Handler) acceptLocalAssertion(w http.ResponseWriter, r *http.Request, in localusersvc.SignedIn) bool {
-	// Defense in depth: the service builds the Assertion from the record of
-	// the check. This check stays so that a change of the service cannot
-	// start a session from an Assertion that fails the limits of a sign-in.
-	err := session.CheckAssertion(in.Assertion, h.signIn.sessions.Now())
-	if err == nil && in.Assertion.PrincipalID == in.PrincipalID {
-		return true
-	}
-
-	h.failPassword(r.Context())
-	h.refuseSignIn(w, r, refusal{
-		err: localUserError(localuser.ErrSignInFailed), providerID: localuser.ProviderID, idpSubject: "",
-		reason: reasonAssertion,
-	})
-
-	return false
 }
 
 // redeemLocalUserCode sets a password with a set-up code or a reset code. It
@@ -459,7 +447,7 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 
-	base := signInEntry(r, passwordSignInAuditActor, "", session.ActionSignIn)
+	base := signInEntry(r, passwordSignInAuditActor, session.ActionSignIn)
 
 	if err := h.localUsers.Redeem(ctx, base, req.OneTimeCode, req.Password); err != nil {
 		if errors.Is(err, localuser.ErrNotFound) {
@@ -722,7 +710,7 @@ func (h *Handler) renewSession(
 	}
 
 	old := caller.Match.Session
-	e := signInEntry(r, caller.Match.Owner.Subject, "", session.ActionSignIn)
+	e := signInEntry(r, caller.Match.Owner.Subject, session.ActionSignIn)
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
 		AuthTime: old.AuthTime, PrincipalID: old.PrincipalID, Provider: old.Provider, SourceIP: e.SourceIP,

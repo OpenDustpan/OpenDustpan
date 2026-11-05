@@ -196,6 +196,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn: &apiserver.SignIn{
+			Service:      newTestSignInService(t, st, sessions, principals),
 			OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
 			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
 		},
