@@ -16,6 +16,7 @@ func TestCaseNames(t *testing.T) {
 		names []string
 	}{
 		{name: "store", names: mfatest.CaseNames()},
+		{name: "passkey store", names: mfatest.PasskeyCaseNames()},
 	}
 
 	for _, s := range suites {

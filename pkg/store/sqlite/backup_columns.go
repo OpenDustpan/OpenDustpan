@@ -610,6 +610,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TableLocalUserResets,
 			columns: sqliteLocalUserResetColumns(),
 		},
+		{
+			table:   backup.TablePasskeyChallenges,
+			columns: sqlitePasskeyChallengeColumns(),
+		},
 	}
 }
 

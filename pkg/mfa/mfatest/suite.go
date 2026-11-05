@@ -1,24 +1,32 @@
 // Package mfatest is the conformance suite of the mfa ports. A store adapter
 // runs it:
 //
+//	func TestPasskeyConformance(t *testing.T) {
+//		t.Parallel()
+//		mfatest.RunPasskeys(t, func(t *testing.T) mfatest.PasskeyStore { return newMyStore(t) })
+//	}
+//
 //	func TestMFAConformance(t *testing.T) {
 //		t.Parallel()
 //		mfatest.Run(t, func(t *testing.T) mfatest.Store { return newMyStore(t) })
 //	}
 //
-// The suite holds the names of its cases only. Each case skips until an
-// adapter implements the ports, so that the names are the contract that the
-// first adapter meets.
+// RunPasskeys runs the cases of PasskeyStore. Run holds the names of the
+// cases of the other ports. Each of them skips until an adapter implements
+// its port, so that the names are the contract that the first adapter meets.
 package mfatest
 
 import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/mfa"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
-// Store is every persistence port the suite exercises.
+// Store is every persistence port the suite of Run exercises.
 type Store interface {
 	mfa.PasskeyStore
 	mfa.RecoveryCodeStore
@@ -26,28 +34,28 @@ type Store interface {
 	audit.Store
 }
 
+// PasskeyStore is every persistence port the suite of RunPasskeys
+// exercises: the passkey port, and the ports that make the persons, the
+// local users and the installation kind of the cases and read the audit log.
+type PasskeyStore interface {
+	mfa.PasskeyStore
+	audit.Store
+	principal.RecordStore
+	localuser.Store
+	localuser.PasswordStore
+	installation.KindStore
+}
+
 // Factory returns a fresh, empty store for one subtest.
 type Factory func(t *testing.T) Store
 
-// CaseNames returns the names of the cases, in the order of the run.
+// PasskeyFactory returns a fresh, empty store for one subtest of
+// RunPasskeys.
+type PasskeyFactory func(t *testing.T) PasskeyStore
+
+// CaseNames returns the names of the cases of Run, in the order of the run.
 func CaseNames() []string {
 	return []string{
-		// PasskeyStore.
-		"an added passkey reads back by person and by credential ID with its audit entry",
-		"a passkey with an empty field or a name that the principal rules refuse fails with ErrInvalid",
-		"a credential ID that another person holds fails with ErrAlreadyExists",
-		"an add above MaxPasskeys fails with ErrLimit and stores nothing",
-		"two adds at the same time at the limit: one wins",
-		"a use with a higher counter records the counter and the time",
-		"a use with a counter of 0 on a passkey with a counter of 0 is no regression",
-		"a use with a lower or equal counter suspends the passkey, appends one entry and fails with ErrCounterRegressed",
-		"a use of a suspended passkey fails with ErrSuspended",
-		"a remove of the last passkey of a user with no password fails with ErrLastCredential",
-		"a remove of a passkey of another person fails with ErrNotFound",
-		"a remove of the last passkey and of the password at the same time: one wins and the person keeps a credential",
-		"a challenge works once",
-		"a challenge after its expiry fails with ErrNotFound",
-		"two takes of one challenge at the same time: one wins",
 		// RecoveryCodeStore.
 		"a replace stores the digests and deletes the earlier set",
 		"a replace with a count other than RecoveryCodeCount fails with ErrInvalid",
@@ -70,8 +78,21 @@ func CaseNames() []string {
 		"a prune deletes the expired pending sign-ins only",
 		// All ports.
 		"a change with an entry of another scope fails with audit.ErrInvalidEntry and changes nothing",
-		"the store keeps the digest of a challenge, a code and a pending secret, never the secret",
+		"the store keeps the digest of a code and a pending secret, never the secret",
 	}
+}
+
+// PasskeyCaseNames returns the names of the cases of RunPasskeys, in the
+// order of the run.
+func PasskeyCaseNames() []string {
+	cases := passkeyCases()
+	names := make([]string, 0, len(cases))
+
+	for _, c := range cases {
+		names = append(names, c.name)
+	}
+
+	return names
 }
 
 // Run runs every case of the suite against the stores that newStore returns.
@@ -86,7 +107,24 @@ func Run(t *testing.T, newStore Factory) {
 				t.Fatal("mfatest.Run needs a store factory")
 			}
 
-			t.Skip("no adapter implements the mfa ports yet")
+			t.Skip("no adapter implements the recovery code and pending sign-in ports yet")
+		})
+	}
+}
+
+// RunPasskeys runs every case of the PasskeyStore suite against the stores
+// that newStore returns.
+func RunPasskeys(t *testing.T, newStore PasskeyFactory) {
+	t.Helper()
+
+	if newStore == nil {
+		t.Fatal("mfatest.RunPasskeys needs a store factory")
+	}
+
+	for _, c := range passkeyCases() {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.test(t, newStore(t))
 		})
 	}
 }

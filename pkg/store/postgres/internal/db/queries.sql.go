@@ -1633,6 +1633,18 @@ func (q *Queries) CountOpenRunnerJoinTokens(ctx context.Context, arg CountOpenRu
 	return count, err
 }
 
+const countPasskeys = `-- name: CountPasskeys :one
+SELECT COUNT(*) FROM passkeys WHERE principal_id = $1
+`
+
+// The passkeys of a person, read under the lock of the principal.
+func (q *Queries) CountPasskeys(ctx context.Context, principalID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countPasskeys, principalID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -2415,6 +2427,79 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 	return result.RowsAffected(), nil
 }
 
+const createPasskey = `-- name: CreatePasskey :execrows
+INSERT INTO passkeys (id, principal_id, name, credential_id, public_key, transports, aaguid, sign_count,
+                      backup_eligible, created_at_ms, last_used_at_ms, suspended_at_ms)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8, $9,
+        $10, 0, 0)
+ON CONFLICT DO NOTHING
+`
+
+type CreatePasskeyParams struct {
+	ID             string
+	PrincipalID    string
+	Name           string
+	CredentialID   []byte
+	PublicKey      []byte
+	Transports     string
+	Aaguid         []byte
+	SignCount      int64
+	BackupEligible bool
+	CreatedAtMs    int64
+}
+
+func (q *Queries) CreatePasskey(ctx context.Context, arg CreatePasskeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createPasskey,
+		arg.ID,
+		arg.PrincipalID,
+		arg.Name,
+		arg.CredentialID,
+		arg.PublicKey,
+		arg.Transports,
+		arg.Aaguid,
+		arg.SignCount,
+		arg.BackupEligible,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createPasskeyChallenge = `-- name: CreatePasskeyChallenge :execrows
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING
+`
+
+type CreatePasskeyChallengeParams struct {
+	Digest      string
+	Kind        string
+	PrincipalID string
+	PendingID   string
+	SessionID   string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) CreatePasskeyChallenge(ctx context.Context, arg CreatePasskeyChallengeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createPasskeyChallenge,
+		arg.Digest,
+		arg.Kind,
+		arg.PrincipalID,
+		arg.PendingID,
+		arg.SessionID,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createPlacementRule = `-- name: CreatePlacementRule :exec
 INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -3150,6 +3235,18 @@ func (q *Queries) DeleteExpiredLocalUserReset(ctx context.Context, arg DeleteExp
 	return result.RowsAffected(), nil
 }
 
+const deleteExpiredPasskeyChallenges = `-- name: DeleteExpiredPasskeyChallenges :execrows
+DELETE FROM passkey_challenges WHERE expires_at_ms <= $1
+`
+
+func (q *Queries) DeleteExpiredPasskeyChallenges(ctx context.Context, expiresAtMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredPasskeyChallenges, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredRunnerNonces = `-- name: DeleteExpiredRunnerNonces :exec
 DELETE FROM runner_nonces WHERE expires_at_ms < $1
 `
@@ -3673,6 +3770,23 @@ func (q *Queries) DeleteObjectOwners(ctx context.Context, arg DeleteObjectOwners
 		arg.Source,
 	)
 	return err
+}
+
+const deletePasskey = `-- name: DeletePasskey :execrows
+DELETE FROM passkeys WHERE id = $1 AND principal_id = $2
+`
+
+type DeletePasskeyParams struct {
+	ID          string
+	PrincipalID string
+}
+
+func (q *Queries) DeletePasskey(ctx context.Context, arg DeletePasskeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePasskey, arg.ID, arg.PrincipalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deletePendingNotificationDeliveriesOfSubscription = `-- name: DeletePendingNotificationDeliveriesOfSubscription :exec
@@ -7621,6 +7735,54 @@ func (q *Queries) GetOIDCProviderIssuer(ctx context.Context, providerID string) 
 	var issuer string
 	err := row.Scan(&issuer)
 	return issuer, err
+}
+
+const getPasskey = `-- name: GetPasskey :one
+SELECT id, principal_id, name, credential_id, public_key, transports, aaguid, sign_count, backup_eligible, created_at_ms, last_used_at_ms, suspended_at_ms FROM passkeys WHERE id = $1
+`
+
+func (q *Queries) GetPasskey(ctx context.Context, id string) (Passkey, error) {
+	row := q.db.QueryRow(ctx, getPasskey, id)
+	var i Passkey
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Name,
+		&i.CredentialID,
+		&i.PublicKey,
+		&i.Transports,
+		&i.Aaguid,
+		&i.SignCount,
+		&i.BackupEligible,
+		&i.CreatedAtMs,
+		&i.LastUsedAtMs,
+		&i.SuspendedAtMs,
+	)
+	return i, err
+}
+
+const getPasskeyByCredentialID = `-- name: GetPasskeyByCredentialID :one
+SELECT id, principal_id, name, credential_id, public_key, transports, aaguid, sign_count, backup_eligible, created_at_ms, last_used_at_ms, suspended_at_ms FROM passkeys WHERE credential_id = $1
+`
+
+func (q *Queries) GetPasskeyByCredentialID(ctx context.Context, credentialID []byte) (Passkey, error) {
+	row := q.db.QueryRow(ctx, getPasskeyByCredentialID, credentialID)
+	var i Passkey
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Name,
+		&i.CredentialID,
+		&i.PublicKey,
+		&i.Transports,
+		&i.Aaguid,
+		&i.SignCount,
+		&i.BackupEligible,
+		&i.CreatedAtMs,
+		&i.LastUsedAtMs,
+		&i.SuspendedAtMs,
+	)
+	return i, err
 }
 
 const getPersonPreferences = `-- name: GetPersonPreferences :one
@@ -15335,6 +15497,43 @@ func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int32) ([]ListOrph
 	return items, nil
 }
 
+const listPasskeys = `-- name: ListPasskeys :many
+SELECT id, principal_id, name, credential_id, public_key, transports, aaguid, sign_count, backup_eligible, created_at_ms, last_used_at_ms, suspended_at_ms FROM passkeys WHERE principal_id = $1 ORDER BY created_at_ms, id COLLATE "C"
+`
+
+func (q *Queries) ListPasskeys(ctx context.Context, principalID string) ([]Passkey, error) {
+	rows, err := q.db.Query(ctx, listPasskeys, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Passkey
+	for rows.Next() {
+		var i Passkey
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrincipalID,
+			&i.Name,
+			&i.CredentialID,
+			&i.PublicKey,
+			&i.Transports,
+			&i.Aaguid,
+			&i.SignCount,
+			&i.BackupEligible,
+			&i.CreatedAtMs,
+			&i.LastUsedAtMs,
+			&i.SuspendedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPlacementRuleIDs = `-- name: ListPlacementRuleIDs :many
 SELECT id
 FROM placement_rules
@@ -18706,6 +18905,30 @@ func (q *Queries) RecordNotificationAttempt(ctx context.Context, arg RecordNotif
 	return result.RowsAffected(), nil
 }
 
+const recordPasskeyUse = `-- name: RecordPasskeyUse :execrows
+UPDATE passkeys SET sign_count = $1, last_used_at_ms = $2
+WHERE id = $3 AND suspended_at_ms = 0
+  AND (sign_count < $1 OR (sign_count = 0 AND $1::bigint = 0))
+`
+
+type RecordPasskeyUseParams struct {
+	SignCount int64
+	AtMs      int64
+	ID        string
+}
+
+// The use of a passkey that is not suspended, when the new counter is above
+// the stored counter or both are 0. A use that changes no row is a
+// regression, a suspended passkey or no passkey. The update takes the lock of
+// the row, so of two uses with one counter, one passes.
+func (q *Queries) RecordPasskeyUse(ctx context.Context, arg RecordPasskeyUseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordPasskeyUse, arg.SignCount, arg.AtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const redeliverNotificationDelivery = `-- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
 SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
@@ -20624,6 +20847,23 @@ func (q *Queries) SuspendNotificationSubscription(ctx context.Context, arg Suspe
 	return err
 }
 
+const suspendPasskey = `-- name: SuspendPasskey :execrows
+UPDATE passkeys SET suspended_at_ms = $1 WHERE id = $2 AND suspended_at_ms = 0
+`
+
+type SuspendPasskeyParams struct {
+	AtMs int64
+	ID   string
+}
+
+func (q *Queries) SuspendPasskey(ctx context.Context, arg SuspendPasskeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, suspendPasskey, arg.AtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const sweepIdempotencyRecords = `-- name: SweepIdempotencyRecords :execrows
 DELETE FROM idempotency_records
 WHERE created_at_ms < (
@@ -20648,6 +20888,27 @@ func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempote
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const takePasskeyChallenge = `-- name: TakePasskeyChallenge :one
+DELETE FROM passkey_challenges WHERE digest = $1 RETURNING digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms
+`
+
+// The delete of a challenge returns it, so that a challenge works once,
+// also after its expiry: the caller checks the expiry.
+func (q *Queries) TakePasskeyChallenge(ctx context.Context, digest string) (PasskeyChallenge, error) {
+	row := q.db.QueryRow(ctx, takePasskeyChallenge, digest)
+	var i PasskeyChallenge
+	err := row.Scan(
+		&i.Digest,
+		&i.Kind,
+		&i.PrincipalID,
+		&i.PendingID,
+		&i.SessionID,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
 }
 
 const takeSignInRequest = `-- name: TakeSignInRequest :one
