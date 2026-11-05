@@ -1,0 +1,74 @@
+=== RUN   TestPerf11RmTrips
+    time=2026-11-05T12:34:10.286Z level=INFO msg="instance version row written" server=0 instance_id=server-0 binary_version=dev
+    time=2026-11-05T12:34:10.310Z level=INFO msg="state.write gates: on" server=0 reason="the store keeps gates: the server checks the write paths in checked, and does not check the write paths in unchecked yet"
+    time=2026-11-05T12:34:10.313Z level=INFO msg="retention sweep starts after one period" server=0 units_due=0 first_sweep_in=1h0m0s
+    time=2026-11-05T12:34:10.313Z level=INFO msg=listening server=0 addr=127.0.0.1:33945
+    time=2026-11-05T12:34:10.323Z level=INFO msg=request server=0 method=POST route="POST /api/server/namespaces" status=201 duration_ms=5 bytes=138 request_id=c9bcb08cad5572feaf9dcf3116c62c9e adapter=server client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.332Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=9 bytes=3 request_id=5c77b60263ccdc3a5649cc0bb86b7110 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.337Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=5 bytes=3 request_id=765fef29cd5852e20651cbd0380947a3 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.365Z level=INFO msg=request server=0 method=DELETE route="DELETE /api/stacks/{namespace}/{project}/{stack}" status=204 duration_ms=27 bytes=0 request_id=80c9fdcf8bdafc88f9fb16aaf5fc4459 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.370Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=77702fd304000de02f95a8119fb21eab adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.390Z level=INFO msg=request server=0 method=DELETE route="DELETE /api/stacks/{namespace}/{project}/{stack}" status=204 duration_ms=20 bytes=0 request_id=36fb93dfe74918dffb35e221c644fb05 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.394Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=236ce9e915e7984ca66af9a726601f49 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.421Z level=INFO msg=request server=0 method=DELETE route="DELETE /api/stacks/{namespace}/{project}/{stack}" status=204 duration_ms=26 bytes=0 request_id=01268eb8ec59932327dd17c76aad9d02 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.425Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=3 bytes=3 request_id=40b81122f1b8a9a1e26e57eea029662a adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.444Z level=INFO msg=request server=0 method=DELETE route="DELETE /api/stacks/{namespace}/{project}/{stack}" status=204 duration_ms=18 bytes=0 request_id=bad90c248e48a27e32cea48aea8f93cb adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.446Z level=INFO msg=request server=0 method=POST route="POST /api/stacks/{namespace}/{project}" status=200 duration_ms=1 bytes=3 request_id=07f2661829094ef9559c91b5e90d137e adapter=pulumi client_ip=127.0.0.1 subject=admin
+    time=2026-11-05T12:34:10.462Z level=INFO msg=request server=0 method=DELETE route="DELETE /api/stacks/{namespace}/{project}/{stack}" status=204 duration_ms=15 bytes=0 request_id=a970372041d9eda2a23eef2be636a745 adapter=pulumi client_ip=127.0.0.1 subject=admin
+    perf11_rmtrips_test.go:21: PERF11 stack-rm round trips: 51
+    perf11_rmtrips_test.go:23: PERF11    1 query UnitStackID
+    perf11_rmtrips_test.go:23: PERF11    2 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_517e57b8bb1d59d2_control".maintenance_revoca...
+    perf11_rmtrips_test.go:23: PERF11    3 query GetInventoryEntryByUnitID
+    perf11_rmtrips_test.go:23: PERF11    4 query ListInventoryUnitLabels
+    perf11_rmtrips_test.go:23: PERF11    5 query commit
+    perf11_rmtrips_test.go:23: PERF11    6 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_517e57b8bb1d59d2_control".maintenance_revoca...
+    perf11_rmtrips_test.go:23: PERF11    7 query ListGateObjectsOfScope
+    perf11_rmtrips_test.go:23: PERF11    8 query GetNamespaceID
+    perf11_rmtrips_test.go:23: PERF11    9 query ListGateObjectsOfScope
+    perf11_rmtrips_test.go:23: PERF11   10 query GetInventoryUnit
+    perf11_rmtrips_test.go:23: PERF11   11 query ListGateObjectsOfScope
+    perf11_rmtrips_test.go:23: PERF11   12 query commit
+    perf11_rmtrips_test.go:23: PERF11   13 query GetNamespace
+    perf11_rmtrips_test.go:23: PERF11   14 query UnitStackID
+    perf11_rmtrips_test.go:23: PERF11   15 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_517e57b8bb1d59d2_control".maintenance_revoca...
+    perf11_rmtrips_test.go:23: PERF11   16 query GetInventoryEntryByUnitID
+    perf11_rmtrips_test.go:23: PERF11   17 query ListInventoryUnitLabels
+    perf11_rmtrips_test.go:23: PERF11   18 query commit
+    perf11_rmtrips_test.go:23: PERF11   19 query BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; LOCK TABLE "test_517e57b8bb1d59d2_control".maintenance_revoca...
+    perf11_rmtrips_test.go:23: PERF11   20 query ListGateObjectsOfScope
+    perf11_rmtrips_test.go:23: PERF11   21 query GetNamespaceID
+    perf11_rmtrips_test.go:23: PERF11   22 query ListGateObjectsOfScope
+    perf11_rmtrips_test.go:23: PERF11   23 query GetInventoryUnit
+    perf11_rmtrips_test.go:23: PERF11   24 query ListGateObjectsOfScope
+    perf11_rmtrips_test.go:23: PERF11   25 query commit
+    perf11_rmtrips_test.go:23: PERF11   26 query begin
+    perf11_rmtrips_test.go:23: PERF11   27 batch batch of 2 statements
+    perf11_rmtrips_test.go:23: PERF11   28 query GetGateRecordByID
+    perf11_rmtrips_test.go:23: PERF11   29 query GetNamespaceID
+    perf11_rmtrips_test.go:23: PERF11   30 query InsertGateRecord
+    perf11_rmtrips_test.go:23: PERF11   31 query commit
+    perf11_rmtrips_test.go:23: PERF11   32 query GetNamespace
+    perf11_rmtrips_test.go:23: PERF11   33 query GetCoveringManualLocks
+    perf11_rmtrips_test.go:23: PERF11   34 query ActiveUpdate
+    perf11_rmtrips_test.go:23: PERF11   35 query GetLatestCheckpointByRef
+    perf11_rmtrips_test.go:23: PERF11   36 query begin
+    perf11_rmtrips_test.go:23: PERF11   37 batch batch of 2 statements
+    perf11_rmtrips_test.go:23: PERF11   38 query GetFailoverVersionForUpdate
+    perf11_rmtrips_test.go:23: PERF11   39 query LockStackForUpdates
+    perf11_rmtrips_test.go:23: PERF11   40 query GetCoveringManualLocks
+    perf11_rmtrips_test.go:23: PERF11   41 query RunningMutatingUpdate
+    perf11_rmtrips_test.go:23: PERF11   42 query GetLatestCheckpoint
+    perf11_rmtrips_test.go:23: PERF11   43 query SoftDeleteStack
+    perf11_rmtrips_test.go:23: PERF11   44 query InsertDeletedInventory
+    perf11_rmtrips_test.go:23: PERF11   45 query DeleteInventoryLabelsByName
+    perf11_rmtrips_test.go:23: PERF11   46 query DeleteInventory
+    perf11_rmtrips_test.go:23: PERF11   47 query AppendInventoryChange
+    perf11_rmtrips_test.go:23: PERF11   48 query GetNamespace
+    perf11_rmtrips_test.go:23: PERF11   49 query LastAuditEntry
+    perf11_rmtrips_test.go:23: PERF11   50 query InsertAuditEntry
+    perf11_rmtrips_test.go:23: PERF11   51 query commit
+    time=2026-11-05T12:34:10.463Z level=INFO msg="draining: readiness answers 503" server=0 period=0s
+    time=2026-11-05T12:34:10.464Z level=INFO msg="instance version row deleted at stop" server=0 instance_id=server-0
+--- PASS: TestPerf11RmTrips (0.72s)
+PASS
+ok  	opendustpan.org/opendustpan/internal/servertest	0.732s

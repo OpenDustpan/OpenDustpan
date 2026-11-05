@@ -1,0 +1,9 @@
+=== RUN   TestPerf11OIDC
+    perf11_signin_test.go:28: callback = 403, want 303: {"message":"permission denied: sign-in refused: no principal","code":403,"errorCode":"sign-in.refused"}
+--- FAIL: TestPerf11OIDC (0.12s)
+=== RUN   TestPerf11Password
+    perf11_signin_test.go:92: PERF11 password-signin n=100 p50=30.702ms p95=41.031ms p99=44.230ms allocs/op=1030 bytes/op=19979446 heapInuseMB=45.0
+--- PASS: TestPerf11Password (3.49s)
+FAIL
+FAIL	opendustpan.org/opendustpan/internal/api/server	3.631s
+FAIL
