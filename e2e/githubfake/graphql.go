@@ -132,6 +132,22 @@ func (f *Fake) commitOnBranch(w http.ResponseWriter, rp *repo, in commitInput) {
 		return
 	}
 
+	tip := rp.commits[head]
+	if tip == nil {
+		f.gqlError(w, gqlNotFound, "No such commit: "+head)
+
+		return
+	}
+
+	// GitHub refuses the delete of a file that the branch does not have.
+	for _, d := range in.FileChanges.Deletions {
+		if _, has := tip.tree[d.Path]; !has {
+			f.gqlError(w, gqlBadInput, "the file "+d.Path+" is not in the branch")
+
+			return
+		}
+	}
+
 	files := map[string][]byte{}
 
 	for _, a := range in.FileChanges.Additions {
