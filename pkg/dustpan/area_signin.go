@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // signInGates holds the failure gates that gatedAuthenticator builds for the
@@ -112,4 +114,28 @@ func (refuseAll) AuthenticateToken(context.Context, string) (identity.Principal,
 	var none identity.Principal
 
 	return none, identity.ErrUnauthenticated
+}
+
+// redirectMethod returns the sign-in method of kind over client for the
+// provider id. enabled reports whether the provider is on: the method reads
+// it at each start and each callback, and fails closed when it cannot.
+func redirectMethod(
+	client oauth.MethodClient, id string, kind session.MethodKind,
+	enabled func(ctx context.Context) (bool, error), now func() time.Time,
+) (*oauth.Method, error) {
+	m, err := oauth.NewMethod(oauth.MethodConfig{
+		Client: client, Enabled: enabled, Now: now, ProviderID: id, Kind: kind,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sign-in method of provider %s: %w", id, err)
+	}
+
+	return m, nil
+}
+
+// configuredProviderOn is the switch of a provider of the configuration of
+// the server. No API turns such a provider off: a change of the
+// configuration and a restart remove it.
+func configuredProviderOn(context.Context) (bool, error) {
+	return true, nil
 }

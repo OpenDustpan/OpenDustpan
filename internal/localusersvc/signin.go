@@ -13,19 +13,27 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // SignedIn is the result of a good password sign-in: the person, the local
 // user, and the session generation that the read of the hash returned. The
 // session of the sign-in must carry this generation, never one that a later
-// read returns.
+// read returns. Assertion is the sign-in Assertion of the check: the
+// provider "local", the principal, the ID of the local user as the subject,
+// the factor password and the time of the check.
 type SignedIn struct {
+	Assertion         session.Assertion
 	PrincipalID       string
 	UserID            string
 	locks             lockKeys
 	SessionGeneration uint64
 	ChangeRequired    bool
 }
+
+// errBindGate marks the error of a session.BindGate that stopped the check
+// of a password.
+var errBindGate = errors.New("the sign-in service stopped the check of the password")
 
 // SignIn checks the user name and the password. It returns
 // localuser.ErrSignInFailed for an unknown user name, a wrong password, a
@@ -38,6 +46,17 @@ type SignedIn struct {
 // base is the entry of the caller: the source address, the user agent and
 // the request ID.
 func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, password string) (SignedIn, error) {
+	return s.checkPassword(ctx, base, userName, password, nil)
+}
+
+// checkPassword is SignIn with the gate of a password method. When gate is not nil,
+// it calls gate.BeforeBind with the ID of the local user of a known user name
+// before the compare of the password. An error of the gate stops the check:
+// checkPassword writes the refusal and returns the error of the gate, wrapped with
+// errBindGate. A name with no user or no password calls no gate.
+func (s *Service) checkPassword(
+	ctx context.Context, base audit.Entry, userName, password string, gate session.BindGate,
+) (SignedIn, error) {
 	base.Subject = "sign-in:" + localuser.ProviderID
 
 	p, err := s.requireEnabled(ctx)
@@ -74,6 +93,13 @@ func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, passwo
 	default:
 		if readErr := s.readCredential(ctx, in, name); readErr != nil {
 			return SignedIn{}, readErr
+		}
+	}
+
+	if gate != nil && in.reason == "" {
+		if gateErr := gate.BeforeBind(ctx, in.cred.User.ID); gateErr != nil {
+			return SignedIn{}, s.refuse(ctx, base, on(ActionSignInPasswordFails, in.object), ReasonBindGate,
+				fmt.Errorf("%w: %w", errBindGate, gateErr))
 		}
 	}
 
@@ -162,6 +188,12 @@ func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy)
 	}
 
 	return SignedIn{
+		Assertion: session.Assertion{
+			AuthTime: s.Now(), ProviderID: session.LocalProviderID, PrincipalID: in.cred.User.PrincipalID,
+			Subject: in.cred.User.ID, UserName: in.cred.User.UserName, Email: "", Method: session.MethodLocalPassword,
+			Names: nil, Groups: nil, Factors: []session.Factor{session.FactorPassword}, EmailVerified: false,
+			GroupsPresent: false, AuthTimeKnown: true,
+		},
 		PrincipalID: in.cred.User.PrincipalID, UserID: in.cred.User.ID, locks: keys,
 		SessionGeneration: in.cred.SessionGeneration, ChangeRequired: in.cred.User.ChangeRequired,
 	}, nil

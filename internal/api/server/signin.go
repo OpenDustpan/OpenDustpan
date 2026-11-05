@@ -59,6 +59,7 @@ const (
 	reasonState         = "state does not match"
 	reasonRequest       = "sign-in request is unknown or expired"
 	reasonIDCheck       = "ID token was refused"
+	reasonAssertion     = "sign-in assertion is not valid"
 	reasonNoPrincipal   = "no principal"
 	reasonDisabled      = "principal is disabled"
 	reasonNotTarget     = "principal cannot sign in through an identity provider"
@@ -84,17 +85,6 @@ var (
 	errFreshParam      = errors.New(`the query parameter fresh must be "1" or absent`)
 )
 
-// OIDCClient is the client of one OpenID Connect provider. *oauth.Lazy
-// meets it.
-type OIDCClient interface {
-	// Begin returns the authorization URL and the pending request. It
-	// returns an error that wraps oauth.ErrProvider when the provider
-	// cannot be reached.
-	Begin(ctx context.Context, opts oauth.Options) (string, oauth.Pending, error)
-	// Finish exchanges the code and checks the ID token against p.
-	Finish(ctx context.Context, code string, p oauth.Pending) (oauth.Identity, error)
-}
-
 // SignInLimiter is the per-address limit of the sign-in routes. It has its
 // own budget, apart from the token lookups. *authgate.Gate meets it.
 type SignInLimiter interface {
@@ -105,13 +95,14 @@ type SignInLimiter interface {
 	Fail(ctx context.Context)
 }
 
-// SignInProvider is one OpenID Connect provider of the console sign-in.
-// ID is part of the subject of each principal that signs in through it,
-// so it must never change after the first sign-in. AutoCreate makes a
-// principal at the first sign-in of a person; with false, an
+// SignInProvider is one redirect provider of the console sign-in: OpenID
+// Connect or plain OAuth 2.0. Method is its sign-in method, for example an
+// *oauth.Method. ID is part of the subject of each principal that signs in
+// through it, so it must never change after the first sign-in. AutoCreate
+// makes a principal at the first sign-in of a person; with false, an
 // administrator makes each principal first.
 type SignInProvider struct {
-	Client      OIDCClient
+	Method      session.RedirectMethod
 	ID          string
 	DisplayName string
 	AutoCreate  bool
@@ -190,7 +181,7 @@ func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, 
 
 	if s.stored == nil {
 		return SignInProvider{
-			Client:      nil,
+			Method:      nil,
 			ID:          "",
 			DisplayName: "",
 			AutoCreate:  false,
@@ -219,8 +210,8 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 
 	providers := make(map[string]SignInProvider, len(cfg.Providers))
 	for _, p := range cfg.Providers {
-		if p.Client == nil {
-			return nil, fmt.Errorf("%w: client of sign-in provider %q", ErrMissingDependency, p.ID)
+		if p.Method == nil {
+			return nil, fmt.Errorf("%w: method of sign-in provider %q", ErrMissingDependency, p.ID)
 		}
 
 		providers[p.ID] = p
@@ -345,9 +336,9 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	authURL, pending, err := provider.Client.Begin(
+	redirect, err := provider.Method.Begin(
 		ctx,
-		oauth.Options{State: state.Reveal(), MaxAge: 0, HasMaxAge: fresh},
+		session.BeginInput{ProviderID: provider.ID, State: state.Reveal(), Fresh: fresh},
 	)
 	if err != nil {
 		h.logger.WarnContext(ctx, "identity provider not available", slog.String("provider", provider.ID),
@@ -357,9 +348,14 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	// The stored request has a max_age only when the start sent one: a
+	// fresh start of an OIDC provider sends max_age=0. A plain OAuth 2.0
+	// provider has no such parameter.
+	pending := redirect.Pending
+
 	err = h.signIn.sessions.BeginRequest(ctx, session.Begin{
 		State: state, Provider: provider.ID, Nonce: pending.Nonce, Verifier: pending.Verifier, ReturnPath: returnPath,
-		MaxAge: pending.MaxAge, HasMaxAge: pending.HasMaxAge,
+		MaxAge: 0, HasMaxAge: pending.Fresh && provider.Method.Kind() == session.MethodOIDC,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -369,7 +365,7 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 
 	noStore(w)
 	http.SetCookie(w, browserCookie(SignInCookie, state.Reveal(), session.RequestLifetime, http.SameSiteLaxMode))
-	http.Redirect(w, r, authURL, http.StatusFound)
+	http.Redirect(w, r, redirect.URL, http.StatusFound)
 }
 
 // finishSignIn is the callback of a sign-in: it checks the state against
@@ -403,13 +399,13 @@ func (h *Handler) finishSignIn(w http.ResponseWriter, r *http.Request, _ identit
 		return
 	}
 
-	h.startSession(w, r, provider, cb.identity, cb.returnPath)
+	h.startSession(w, r, provider, cb.assertion, cb.returnPath)
 }
 
-// callback is what a valid callback gives: the identity that the provider
-// signed in and the return path of the sign-in request.
+// callback is what a valid callback gives: the Assertion of the person that
+// the provider signed in and the return path of the sign-in request.
 type callback struct {
-	identity   oauth.Identity
+	assertion  session.Assertion
 	returnPath string
 }
 
@@ -436,8 +432,9 @@ func (h *Handler) callbackIdentity(r *http.Request, provider SignInProvider) (ca
 		return refused(reasonState)
 	}
 
-	pending := oauth.Pending{State: cookie.Value, Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false}
-	if oauth.CheckState(q.Get("state"), pending) != nil {
+	if oauth.CheckState(q.Get("state"), oauth.Pending{
+		State: cookie.Value, Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false,
+	}) != nil {
 		return refused(reasonState)
 	}
 
@@ -452,29 +449,42 @@ func (h *Handler) callbackIdentity(r *http.Request, provider SignInProvider) (ca
 		return refused(reasonRequest)
 	}
 
-	pending.Nonce, pending.Verifier, pending.MaxAge, pending.HasMaxAge = req.Nonce, req.Verifier, req.MaxAge,
-		req.HasMaxAge
-
-	id, err := provider.Client.Finish(ctx, q.Get("code"), pending)
+	a, err := provider.Method.Finish(ctx, session.Callback{
+		Pending: &session.PendingRedirect{
+			StartedAt: req.CreatedAt, ProviderID: req.Provider, State: cookie.Value, Nonce: req.Nonce,
+			Verifier: req.Verifier, RequestID: "", PrincipalID: "", SignInID: "", Fresh: req.HasMaxAge,
+		},
+		State: q.Get("state"), Code: q.Get("code"), Ticket: "", ProviderError: q.Get("error"), SAMLResponse: nil,
+	})
 	if err != nil {
-		// The oauth errors hold no code, token, state or nonce.
+		// The errors of a method hold no code, token, state or nonce.
 		h.logger.WarnContext(ctx, "sign-in refused", slog.String("provider", provider.ID),
 			slog.String("error", err.Error()))
 
 		return refused(reasonIDCheck)
 	}
 
-	return callback{identity: id, returnPath: req.ReturnPath}, ""
+	// Defense in depth: the method checks the answer of its protocol. This
+	// check stays so that a new method cannot pass an Assertion that fails
+	// the limits of a sign-in.
+	if checkErr := session.CheckAssertion(a, h.signIn.sessions.Now()); checkErr != nil {
+		h.logger.WarnContext(ctx, "sign-in refused", slog.String("provider", provider.ID),
+			slog.String("error", checkErr.Error()))
+
+		return refused(reasonAssertion)
+	}
+
+	return callback{assertion: a, returnPath: req.ReturnPath}, ""
 }
 
-// startSession finds or makes the principal of id, starts its session,
-// sets the session cookie and sends the browser to returnPath.
+// startSession finds or makes the principal of the Assertion a, starts its
+// session, sets the session cookie and sends the browser to returnPath.
 func (h *Handler) startSession(
-	w http.ResponseWriter, r *http.Request, provider SignInProvider, id oauth.Identity, returnPath string,
+	w http.ResponseWriter, r *http.Request, provider SignInProvider, a session.Assertion, returnPath string,
 ) {
 	ctx := r.Context()
 
-	subject := provider.ID + ":" + id.Subject
+	subject := provider.ID + ":" + a.Subject
 	// Refuse before the subject reaches the audit entry: the entry keeps
 	// the composed subject. The refusal names the provider only.
 	if len(subject) > maxSubjectLen {
@@ -485,17 +495,16 @@ func (h *Handler) startSession(
 		return
 	}
 
-	e := signInEntry(r, subject, id.Subject, session.ActionSignIn)
+	e := signInEntry(r, subject, a.Subject, session.ActionSignIn)
 
 	p, _, err := h.principals.SignInPrincipal(ctx, e, principal.SignInInput{
-		Subject: subject, Source: provider.Source, Names: []string{id.Name, id.PreferredUsername, id.Email},
-		Create: provider.AutoCreate,
+		Subject: subject, Source: provider.Source, Names: a.Names, Create: provider.AutoCreate,
 	})
 	if reason := principalRefusal(err); reason != "" {
 		h.refuseSignIn(
 			w,
 			r,
-			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: id.Subject, reason: reason},
+			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: a.Subject, reason: reason},
 		)
 
 		return
@@ -508,8 +517,8 @@ func (h *Handler) startSession(
 	}
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
-		AuthTime: id.AuthTime, PrincipalID: p.ID, Provider: provider.ID, SourceIP: e.SourceIP, UserAgent: e.UserAgent,
-		Generation: 0, Stored: provider.Stored,
+		AuthTime: sessionAuthTime(a, h.signIn.sessions.Now()), PrincipalID: p.ID, Provider: provider.ID,
+		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: 0, Stored: provider.Stored,
 	})
 
 	switch {
@@ -524,7 +533,7 @@ func (h *Handler) startSession(
 		h.refuseSignIn(
 			w,
 			r,
-			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: id.Subject, reason: reasonDisabled},
+			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: a.Subject, reason: reasonDisabled},
 		)
 
 		return
@@ -532,7 +541,7 @@ func (h *Handler) startSession(
 		h.refuseSignIn(
 			w,
 			r,
-			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: id.Subject, reason: reasonNotTarget},
+			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: a.Subject, reason: reasonNotTarget},
 		)
 
 		return
@@ -546,6 +555,18 @@ func (h *Handler) startSession(
 	// The return path passed session.ValidReturnPath when the request was
 	// stored: it is a path of this server.
 	http.Redirect(w, r, returnPath, http.StatusSeeOther)
+}
+
+// sessionAuthTime returns the time of the authentication of a session of
+// the Assertion a. A method that proves no time of the authentication, such
+// as plain OAuth 2.0, starts a session whose time of the authentication is
+// now, the time of this sign-in.
+func sessionAuthTime(a session.Assertion, now time.Time) time.Time {
+	if a.AuthTimeKnown {
+		return a.AuthTime
+	}
+
+	return now
 }
 
 // principalRefusal returns the reason for which a sign-in cannot name a
