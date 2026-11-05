@@ -119,7 +119,13 @@ func (f *gitHub) openOrFind(
 		}
 
 		if !found {
-			return forge.Review{}, forge.Unavailable(0, "GitHub said that the pull request exists and lists none")
+			// A pull request exists for the head, and it is not the one of the
+			// write-back, for example a pull request of a fork with a branch of
+			// the same name. A retry fails the same way, so this is a conflict.
+			return forge.Review{}, fmt.Errorf(
+				"%w: a pull request exists for the branch, and it is not a review request of the base repository",
+				forge.ErrConflict,
+			)
 		}
 
 		return f.readOwn(ctx, r, bearer, id, req)
@@ -265,7 +271,7 @@ func (f *gitHub) ReadReview(ctx context.Context, repo, id string) (forge.Review,
 		return forge.Review{}, idErr
 	}
 
-	bearer, err := f.reviewBearer(ctx, r)
+	bearer, err := f.reviewReadBearer(ctx, r)
 	if err != nil {
 		return forge.Review{}, f.forget(r, err)
 	}
@@ -329,6 +335,15 @@ func (f *gitHub) closePull(ctx context.Context, r repoName, bearer, id string) e
 	got, err := f.fetchReview(ctx, r, bearer, id)
 	if err != nil {
 		return err
+	}
+
+	// Defense in depth: the caller names the review request that it made. This
+	// check stays so that a number of the pull request of a person, or of a
+	// fork, is never closed through the write-back. It runs for each state, so
+	// that the answer does not depend on the state of a pull request that is not
+	// ours.
+	if !forge.IsWriteBackBranch(got.Branch) || got.FromFork() {
+		return fmt.Errorf("%w: the pull request is not one of the write-back", forge.ErrRefused)
 	}
 
 	switch got.State {
@@ -509,14 +524,21 @@ func (f *gitHub) guardBranch(ctx context.Context, r repoName, bearer, branch str
 		return fmt.Errorf("%w: the branch is protected", forge.ErrRefused)
 	}
 
+	for _, side := range []string{"head=" + url.QueryEscape(r.owner+":"+branch), "base=" + url.QueryEscape(branch)} {
+		if openErr := f.refuseOpenReview(ctx, r, bearer, side); openErr != nil {
+			return openErr
+		}
+	}
+
+	return nil
+}
+
+// refuseOpenReview returns forge.ErrRefused when an open pull request matches the
+// query side ("head=owner:branch" or "base=branch"). A delete would close it.
+func (f *gitHub) refuseOpenReview(ctx context.Context, r repoName, bearer, side string) error {
 	open, err := f.send(ctx, call{
-		method:   http.MethodGet,
-		path:     r.path() + "/pulls?state=open&per_page=1&head=" + url.QueryEscape(r.owner+":"+branch),
-		bearer:   bearer,
-		body:     nil,
-		status:   f.reviewStatus,
-		oversize: nil,
-		target:   "",
+		method: http.MethodGet, path: r.path() + "/pulls?state=open&per_page=1&" + side, bearer: bearer, body: nil,
+		status: f.reviewStatus, oversize: nil, target: "",
 	})
 	if err != nil {
 		return err
@@ -528,7 +550,7 @@ func (f *gitHub) guardBranch(ctx context.Context, r repoName, bearer, branch str
 	}
 
 	if len(list) > 0 {
-		return fmt.Errorf("%w: an open review request has the branch as its head", forge.ErrRefused)
+		return fmt.Errorf("%w: an open review request has the branch as its head or its base", forge.ErrRefused)
 	}
 
 	return nil

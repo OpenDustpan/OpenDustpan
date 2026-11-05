@@ -364,12 +364,19 @@ func (f *gitHub) reviewBearer(ctx context.Context, r repoName) (string, error) {
 	return f.bearer(ctx, r, levelReview)
 }
 
+// reviewReadBearer returns the credential for the review request calls that only
+// read: the token of a token connection, or an installation token that reads the
+// contents and the pull requests of that repository only.
+func (f *gitHub) reviewReadBearer(ctx context.Context, r repoName) (string, error) {
+	return f.bearer(ctx, r, levelReviewRead)
+}
+
 // tokenKey is the key of the installation token of repository r at level in
 // the token map. A repository name has no "#", so the keys of two levels never
 // meet.
 func tokenKey(r repoName, level string) string {
 	key := r.owner + "/" + r.name
-	if level == levelWrite || level == levelReview {
+	if level == levelWrite || level == levelReview || level == levelReviewRead {
 		key += "#" + level
 	}
 
@@ -530,8 +537,11 @@ func (f *gitHub) mintToken(ctx context.Context, name, level string) (readToken, 
 // The level review is the write of the contents, which the branch of a review
 // request needs, and the write of the pull requests.
 func tokenPermissions(level string) map[string]string {
-	if level == levelReview {
+	switch level {
+	case levelReview:
 		return map[string]string{permContents: levelWrite, permPulls: levelWrite}
+	case levelReviewRead:
+		return map[string]string{permContents: levelRead, permPulls: levelRead}
 	}
 
 	return map[string]string{permContents: level}
@@ -593,6 +603,7 @@ func (f *gitHub) forget(r repoName, err error) error {
 		delete(f.readTokens, tokenKey(r, levelRead))
 		delete(f.readTokens, tokenKey(r, levelWrite))
 		delete(f.readTokens, tokenKey(r, levelReview))
+		delete(f.readTokens, tokenKey(r, levelReviewRead))
 		f.mu.Unlock()
 	}
 
