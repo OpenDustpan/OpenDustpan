@@ -279,23 +279,34 @@ func (p *pull) refreshHead() {
 // the files of both sides. The head wins a file that both sides have. The
 // caller holds the lock.
 func (r *repo) mergeCommit(p *pull, message string, at time.Time) *commit {
-	tree := map[string]string{}
+	tree, modes := map[string]string{}, map[string]string{}
 
 	if tip := r.commits[r.branches[p.baseRef]]; tip != nil {
 		maps.Copy(tree, tip.tree)
+		maps.Copy(modes, tip.modes)
 	}
 
 	if head := p.headRepo.commits[p.headSHA]; head != nil {
 		for path, blob := range head.tree {
 			tree[path] = blob
 			r.blobs[blob] = p.headRepo.blobs[blob]
+
+			if mode, found := head.modes[path]; found {
+				modes[path] = mode
+			} else {
+				delete(modes, path)
+			}
 		}
 	}
 
 	parent := r.branches[p.baseRef]
 	c := &commit{
-		meta: Commit{ID: commitID(parent, tree, message, at), Parent: parent, Message: message, Time: at},
-		tree: tree,
+		meta: Commit{
+			ID: commitIDWithModes(parent, tree, modes, message, at), Parent: parent, Message: message, Time: at,
+			Author: "", Committer: WebFlow, Verified: true,
+		},
+		tree:  tree,
+		modes: modes,
 	}
 	r.commits[c.meta.ID] = c
 
@@ -314,8 +325,12 @@ func (r *repo) testMerge(p *pull) string {
 
 		if tip != nil && head != nil {
 			r.commits[id] = &commit{
-				meta: Commit{ID: id, Parent: tip.meta.ID, Message: "Test merge", Time: tip.meta.Time},
-				tree: maps.Clone(head.tree),
+				meta: Commit{
+					ID: id, Parent: tip.meta.ID, Message: "Test merge", Time: tip.meta.Time,
+					Author: "", Committer: WebFlow, Verified: true,
+				},
+				tree:  maps.Clone(head.tree),
+				modes: maps.Clone(head.modes),
 			}
 		}
 	}

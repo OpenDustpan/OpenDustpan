@@ -26,9 +26,10 @@ type wirePerson struct {
 }
 
 type wireCommitBody struct {
-	Message   string     `json:"message"`
-	Author    wirePerson `json:"author"`
-	Committer wirePerson `json:"committer"`
+	Message      string           `json:"message"`
+	Author       wirePerson       `json:"author"`
+	Committer    wirePerson       `json:"committer"`
+	Verification wireVerification `json:"verification"`
 }
 
 type wireParent struct {
@@ -39,6 +40,38 @@ type wireCommit struct {
 	SHA     string         `json:"sha"`
 	Commit  wireCommitBody `json:"commit"`
 	Parents []wireParent   `json:"parents"`
+	// Author and Committer are the accounts of GitHub, or null for an email
+	// that no account has.
+	Author    *wireLogin `json:"author"`
+	Committer *wireLogin `json:"committer"`
+}
+
+type wireLogin struct {
+	Login string `json:"login"`
+}
+
+type wireVerification struct {
+	Verified bool   `json:"verified"`
+	Reason   string `json:"reason"`
+}
+
+// wireTree is the answer of the call that reads a tree.
+type wireTree struct {
+	SHA       string          `json:"sha"`
+	Tree      []wireTreeEntry `json:"tree"`
+	Truncated bool            `json:"truncated"`
+}
+
+type wireTreeEntry struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	Type string `json:"type"`
+	SHA  string `json:"sha"`
+}
+
+type wireApp struct {
+	ID   json.Number `json:"id"`
+	Slug string      `json:"slug"`
 }
 
 // wireEntry is a file or a directory in the answer of the contents call.
