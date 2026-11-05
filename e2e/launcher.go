@@ -74,7 +74,9 @@ func (e *Env) JoinFakeRunner(ctx context.Context, tb testing.TB, ns, poolID, nam
 		tb.Fatalf("encode the join request: %v", err)
 	}
 
-	status, body := e.launcherSend(ctx, tb, http.MethodPost, protocol.PathJoin, raw, "", nil)
+	status, body := e.launcherSend(ctx, tb, launcherRequest{
+		Method: http.MethodPost, Path: protocol.PathJoin, Body: raw, Proof: "", Extra: nil,
+	})
 	if status != http.StatusOK {
 		tb.Fatalf("join = %d %s, want 200", status, body)
 	}
@@ -92,7 +94,7 @@ func (e *Env) JoinFakeRunner(ctx context.Context, tb testing.TB, ns, poolID, nam
 func (e *Env) apiCreated(ctx context.Context, tb testing.TB, method, path string, out any) {
 	tb.Helper()
 
-	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, http.NoBody)
 	if err != nil {
 		tb.Fatalf("build %s %s: %v", method, path, err)
 	}
@@ -118,15 +120,24 @@ func (e *Env) apiCreated(ctx context.Context, tb testing.TB, method, path string
 	}
 }
 
+// launcherRequest is one request of the runner protocol. A non-empty Proof goes
+// in the proof header, and a non-nil Extra map adds headers.
+type launcherRequest struct {
+	Method string
+	Path   string
+	Body   []byte
+	Proof  string
+	Extra  map[string]string
+}
+
 // launcherSend sends one request of the runner protocol and returns the status
-// and the body. A non-empty proof goes in the proof header, and a non-nil
-// extra map adds headers.
-func (e *Env) launcherSend(
-	ctx context.Context, tb testing.TB, method, path string, raw []byte, proof string, extra map[string]string,
-) (int, []byte) {
+// and the body.
+func (e *Env) launcherSend(ctx context.Context, tb testing.TB, lr launcherRequest) (int, []byte) {
 	tb.Helper()
 
-	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, bytes.NewReader(raw))
+	method, path, proof, extra := lr.Method, lr.Path, lr.Proof, lr.Extra
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, bytes.NewReader(lr.Body))
 	if err != nil {
 		tb.Fatalf("build %s %s: %v", method, path, err)
 	}
@@ -154,10 +165,20 @@ func (e *Env) launcherSend(
 	return resp.StatusCode, body
 }
 
+// signedCall names what a proof signs besides the body: the subject that signs
+// and the method and the path of the request.
+type signedCall struct {
+	Subject string
+	Method  string
+	Path    string
+}
+
 // signProof returns the proof header of a request: the subject signs the
 // method, the path and the hash of the signed body with key.
-func signProof(tb testing.TB, key ed25519.PrivateKey, subject, method, path string, signedBody []byte) string {
+func signProof(tb testing.TB, key ed25519.PrivateKey, call signedCall, signedBody []byte) string {
 	tb.Helper()
+
+	subject, method, path := call.Subject, call.Method, call.Path
 
 	nonce := make([]byte, nonceBytes)
 	if _, err := rand.Read(nonce); err != nil {
@@ -172,24 +193,6 @@ func signProof(tb testing.TB, key ed25519.PrivateKey, subject, method, path stri
 
 	return fmt.Sprintf("v1 sub=%s t=%d n=%s sig=%s", subject, proof.At.UnixMilli(), proof.Nonce,
 		base64.RawURLEncoding.EncodeToString(proof.Signature))
-}
-
-// call sends a signed POST of the runner with a JSON body (nil sends none).
-func (r *FakeRunner) call(ctx context.Context, tb testing.TB, path string, body any) (int, []byte) {
-	tb.Helper()
-
-	var raw []byte
-
-	if body != nil {
-		var err error
-
-		if raw, err = json.Marshal(body); err != nil {
-			tb.Fatalf("encode the body of %s: %v", path, err)
-		}
-	}
-
-	return r.env.launcherSend(ctx, tb, http.MethodPost, path, raw,
-		signProof(tb, r.priv, r.id, http.MethodPost, path, raw), nil)
 }
 
 // Poll long-polls for one phase and returns it, or nil when the poll answers 204.
@@ -236,6 +239,26 @@ func (r *FakeRunner) Handoff(ctx context.Context, tb testing.TB, operation strin
 	return resp.HandoffToken
 }
 
+// call sends a signed POST of the runner with a JSON body (nil sends none).
+func (r *FakeRunner) call(ctx context.Context, tb testing.TB, path string, body any) (int, []byte) {
+	tb.Helper()
+
+	var raw []byte
+
+	if body != nil {
+		var err error
+
+		if raw, err = json.Marshal(body); err != nil {
+			tb.Fatalf("encode the body of %s: %v", path, err)
+		}
+	}
+
+	return r.env.launcherSend(ctx, tb, launcherRequest{
+		Method: http.MethodPost, Path: path, Body: raw, Extra: nil,
+		Proof: signProof(tb, r.priv, signedCall{Subject: r.id, Method: http.MethodPost, Path: path}, raw),
+	})
+}
+
 // FakeLauncher is the launcher of a claim: it holds the key of its job
 // session and signs each call with it.
 type FakeLauncher struct {
@@ -267,8 +290,12 @@ func (e *Env) OpenSession(ctx context.Context, tb testing.TB, handoff string) *F
 	token := sha256.Sum256([]byte(handoff))
 	subject := hex.EncodeToString(token[:])
 
-	status, body := e.launcherSend(ctx, tb, http.MethodPost, protocol.PathSession, raw,
-		signProof(tb, priv, subject, http.MethodPost, protocol.PathSession, raw), nil)
+	status, body := e.launcherSend(ctx, tb, launcherRequest{
+		Method: http.MethodPost, Path: protocol.PathSession, Body: raw, Extra: nil,
+		Proof: signProof(tb, priv, signedCall{
+			Subject: subject, Method: http.MethodPost, Path: protocol.PathSession,
+		}, raw),
+	})
 	if status != http.StatusOK {
 		tb.Fatalf("session exchange = %d %s, want 200", status, body)
 	}
@@ -296,8 +323,10 @@ func (l *FakeLauncher) Post(ctx context.Context, tb testing.TB, path string, bod
 		}
 	}
 
-	return l.env.launcherSend(ctx, tb, http.MethodPost, path, raw,
-		signProof(tb, l.priv, l.ID, http.MethodPost, path, raw), nil)
+	return l.env.launcherSend(ctx, tb, launcherRequest{
+		Method: http.MethodPost, Path: path, Body: raw, Extra: nil,
+		Proof: signProof(tb, l.priv, signedCall{Subject: l.ID, Method: http.MethodPost, Path: path}, raw),
+	})
 }
 
 // PutLog uploads one chunk of a log. The header and the proof carry the hash
@@ -307,9 +336,11 @@ func (l *FakeLauncher) PutLog(ctx context.Context, tb testing.TB, path string, c
 
 	sum := sha256.Sum256(chunk)
 
-	return l.env.launcherSend(ctx, tb, http.MethodPut, path, chunk,
-		signProof(tb, l.priv, l.ID, http.MethodPut, path, chunk),
-		map[string]string{protocol.HeaderContentSHA256: hex.EncodeToString(sum[:])})
+	return l.env.launcherSend(ctx, tb, launcherRequest{
+		Method: http.MethodPut, Path: path, Body: chunk,
+		Proof: signProof(tb, l.priv, signedCall{Subject: l.ID, Method: http.MethodPut, Path: path}, chunk),
+		Extra: map[string]string{protocol.HeaderContentSHA256: hex.EncodeToString(sum[:])},
+	})
 }
 
 // ServerLogHolds reports which of the secrets the output of the stopped or
@@ -378,20 +409,46 @@ func (e *Env) JobStepLog(ctx context.Context, tb testing.TB, ns, jobID, step str
 		tb.Fatalf("read the job %s: %v", jobID, err)
 	}
 
-	var version string
+	version := stepLogVersion(&got, step)
+	if version == "" {
+		tb.Fatalf("the job %s holds no log of the step %s", jobID, step)
+	}
 
-	for p := range got.Phases {
-		for i := range got.Phases[p].Steps {
-			rec := &got.Phases[p].Steps[i]
+	reader := e.newJobLogReader(tb, parts)
+
+	rc, err := reader.OpenLog(ctx, namespace.Name(ns), version)
+	if err != nil {
+		tb.Fatalf("open the log %s: %v", version, err)
+	}
+
+	text, readErr := io.ReadAll(rc)
+	if closeErr := rc.Close(); readErr != nil || closeErr != nil {
+		tb.Fatalf("read the log %s: %v %v", version, readErr, closeErr)
+	}
+
+	return string(text)
+}
+
+// stepLogVersion returns the ID of the log version of the step in j, or "".
+func stepLogVersion(j *job.Job, step string) string {
+	version := ""
+
+	for p := range j.Phases {
+		for i := range j.Phases[p].Steps {
+			rec := &j.Phases[p].Steps[i]
 			if rec.Name == step && rec.Log != nil {
 				version = rec.Log.ID
 			}
 		}
 	}
 
-	if version == "" {
-		tb.Fatalf("the job %s holds no log of the step %s", jobID, step)
-	}
+	return version
+}
+
+// newJobLogReader builds the job log reader over parts and the blob directory
+// of the binary server, with the key-encryption key of the suite.
+func (e *Env) newJobLogReader(tb testing.TB, parts jobParts) *job.ArtifactReads {
+	tb.Helper()
 
 	blobStore, err := fs.Open(e.backendCfg.blobDir)
 	if err != nil {
@@ -425,17 +482,7 @@ func (e *Env) JobStepLog(ctx context.Context, tb testing.TB, ns, jobID, step str
 		tb.Fatalf("job log reader: %v", err)
 	}
 
-	rc, err := reader.OpenLog(ctx, namespace.Name(ns), version)
-	if err != nil {
-		tb.Fatalf("open the log %s: %v", version, err)
-	}
-
-	text, readErr := io.ReadAll(rc)
-	if closeErr := rc.Close(); readErr != nil || closeErr != nil {
-		tb.Fatalf("read the log %s: %v %v", version, readErr, closeErr)
-	}
-
-	return string(text)
+	return reader
 }
 
 // openJobParts opens the database of the stopped binary server.

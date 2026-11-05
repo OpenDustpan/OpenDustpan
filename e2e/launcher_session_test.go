@@ -85,13 +85,13 @@ func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 	now := time.Now().UTC()
 	stepPath := func(p string) string { return strings.NewReplacer("{step}", step, "{seq}", "0").Replace(p) }
 
-	wantStatus(t, "begin the step", http.StatusNoContent, func() (int, []byte) {
+	wantNoContent(t, "begin the step", func() (int, []byte) {
 		return launcher.Post(ctx, t, stepPath(protocol.PathSessionStepBegin), nil)
 	})
-	wantStatus(t, "store one log chunk", http.StatusNoContent, func() (int, []byte) {
+	wantNoContent(t, "store one log chunk", func() (int, []byte) {
 		return launcher.PutLog(ctx, t, stepPath(protocol.PathSessionLog), chunk)
 	})
-	wantStatus(t, "end the step", http.StatusNoContent, func() (int, []byte) {
+	wantNoContent(t, "end the step", func() (int, []byte) {
 		return launcher.Post(ctx, t, stepPath(protocol.PathSessionStepEnd), protocol.StepEnd{
 			ExitCode: 0, StartedAt: now, FinishedAt: now.Add(time.Second), LogChunks: 1,
 			LogSHA256: hex.EncodeToString(sum[:]),
@@ -101,7 +101,7 @@ func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 	finishReason := "finish-secret-reason-" + started.ID
 	finish := protocol.Finish{Succeeded: true, Message: finishReason}
 
-	wantStatus(t, "finish the phase", http.StatusNoContent, func() (int, []byte) {
+	wantNoContent(t, "finish the phase", func() (int, []byte) {
 		return launcher.Post(ctx, t, protocol.PathSessionFinish, finish)
 	})
 
@@ -121,11 +121,11 @@ func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 	}
 }
 
-// wantStatus calls send and fails the test when its status is not want.
-func wantStatus(t *testing.T, name string, want int, send func() (int, []byte)) {
+// wantNoContent calls send and fails the test when its status is not 204.
+func wantNoContent(t *testing.T, name string, send func() (int, []byte)) {
 	t.Helper()
 
-	if status, body := send(); status != want {
-		t.Fatalf("%s = %d %s, want %d", name, status, body, want)
+	if status, body := send(); status != http.StatusNoContent {
+		t.Fatalf("%s = %d %s, want %d", name, status, body, http.StatusNoContent)
 	}
 }
