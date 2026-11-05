@@ -202,12 +202,13 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 	// (see the package comment). It gives its slot back when it ends, not
 	// when the caller stops waiting.
 	done := make(chan runResult, 1)
+	owned := cloneEnv(env)
 
 	go func() {
 		defer func() { <-e.limiter.slots }()
 
 		machine := vm.VM{Stack: nil, Scopes: nil, Variables: nil, MemoryBudget: catalog.ExprMemoryBudget}
-		out, err := machine.Run(program, *env)
+		out, err := machine.Run(program, owned)
 		done <- runResult{out: out, err: err}
 	}()
 
