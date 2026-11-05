@@ -6,8 +6,6 @@ Changed by:
 
 - ADR 199 changes decisions 4 and 6: a file set in the run order and
   DUSTPAN_SNAPSHOT.
-- ADR 327 changes decision 6: `HTTPS_PROXY` and the path of the CA of the
-  job for a unit with proxy rules.
 
 ## Context
 

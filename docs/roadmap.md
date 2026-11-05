@@ -390,14 +390,15 @@ version in its matrix:
    request on the fake forge that changes the pin. Its plan runs as in
    milestone 5 step 7. Design needed: RFC 56 is a draft. The step proves the
    behavior that the design gives.
-7. **The job proxy.** A job of a unit with the job proxy on can reach only
-   the job proxy. A request that a proxy rule allows reaches the test endpoint
-   with the credential that the job proxy adds. The job never holds that
-   credential, and the job log does not show it. A request that no proxy
-   rule allows is refused. The refusal writes a record of the job proxy, and
-   the audit entry of the phase counts it. A plan phase
-   cannot make a write that only the proxy rule of the apply allows (ADR
-   327).
+7. **The job proxy.** A job of a unit with proxy rules runs next to its
+   job proxy. The job proxy applies the outbound guard to each rule host. A
+   request that no proxy rule allows is refused, and the job log shows
+   "blocked by the job proxy" with the host and the path. Design needed
+   (RFC 16 P2, P4, P5, P10): the job reaches only the job proxy, the job
+   proxy adds the credential and the job never holds it, the record and
+   the audit entry of a phase, and a plan phase that cannot make a write
+   that only the proxy rule of the apply allows. The step proves the
+   behavior that the design gives.
 8. **Console.** The browser tests of the console repository run against the
    server of the suite. They open the catalog, fill the create form of a
    blueprint, see the error of a bad input, and make a unit.
