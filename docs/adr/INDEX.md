@@ -114,7 +114,7 @@ that the named part applies, and the later ADR adds to it.
 | [131](0131-the-runner-protocol.md) | The runner protocol | accepted | extends ADR 101 decisions 2, 13 and 15 | ADR 139 extends decision 6 | this ADR, with ADR 139 |
 | [132](0132-runner-protocol-versions-and-skew.md) | Versions of the runner protocol and the skew between releases | accepted | - | - | this ADR |
 | [133](0133-runner-identities-and-tokens.md) | Runner identities, join tokens, handoff tokens and job sessions | accepted | changes ADR 101 decision 10; extends ADR 101 | ADR 204 extends | this ADR, with ADR 204 |
-| [134](0134-the-launcher-contract.md) | The launcher contract | accepted | extends ADR 101 decisions 7, 10 and 13 | ADR 199 changes decisions 4 and 6; ADR 327 changes decision 6; ADR 327 extends decision 2; ADR 327 extends decision 10 | this ADR, with ADR 199, 327 |
+| [134](0134-the-launcher-contract.md) | The launcher contract | accepted | extends ADR 101 decisions 7, 10 and 13 | ADR 199 changes decisions 4 and 6; ADR 327 changes decision 6 | this ADR, with ADR 199, 327 |
 | [135](0135-the-source-pipeline.md) | The source pipeline: snapshots of git packs | accepted | extends ADR 100 decision 5 | ADR 199 extends decision 1; ADR 213 extends decision 6; ADR 220 changes decision 9; ADR 222 changes decision 6; ADR 226 changes decision 6 | this ADR, with ADR 199, 213, 220, 222, 226 |
 | [136](0136-the-kubernetes-coordinator.md) | The Kubernetes coordinator | accepted | - | ADR 139 extends decision 9; ADR 305 extends | this ADR, with ADR 139, 305 |
 | [137](0137-the-machine-coordinator.md) | The machine coordinator | accepted | - | ADR 139 extends decision 4; ADR 327 changes decision 6 | this ADR, with ADR 139, 327 |
@@ -292,5 +292,5 @@ that the named part applies, and the later ADR adds to it.
 | [324](0324-a-schema-mismatch-refuses-and-dev-reset-starts-again.md) | A schema mismatch refuses, and `opendustpan dev reset` starts again | accepted | extends ADR 237 decision 8; extends ADR 237 decision 30 | - | this ADR |
 | [325](0325-the-release-record-turns-the-shipped-migration-checks-on.md) | The release record turns the shipped-migration checks on | accepted | changes ADR 322 decision 1; changes ADR 322 decision 5; changes ADR 322 decision 6; changes ADR 323 decision 2 | - | this ADR |
 | [326](0326-split-the-hot-files-by-area-in-small-steps.md) | Split the hot files by area, in small steps | accepted | extends ADR 17; extends ADR 322 decision 1 | - | this ADR |
-| [327](0327-the-job-proxy.md) | The job proxy | accepted | changes ADR 134 decision 6; extends ADR 134 decision 2; extends ADR 134 decision 10; changes ADR 137 decision 6 | - | this ADR |
+| [327](0327-the-job-proxy.md) | The job proxy | accepted | changes ADR 134 decision 6; changes ADR 137 decision 6 | - | this ADR |
 | [328](0328-the-review-modes-by-milestone.md) | The review modes by milestone | accepted | extends ADR 299 decision 1 | - | this ADR |
