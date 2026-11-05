@@ -37,7 +37,7 @@ type sessionJobs struct {
 	failure map[string]error
 }
 
-var _ job.Recorder = (*sessionJobs)(nil)
+var _ job.CheckedRecorder = (*sessionJobs)(nil)
 
 func newSessionJobs() *sessionJobs {
 	return &sessionJobs{
@@ -72,6 +72,39 @@ func (f *sessionJobs) EndStep(_ context.Context, c job.PhaseClaim, r job.StepRec
 	f.ended[r.Name] = r.ExitCode
 
 	return nil
+}
+
+// EndStepChecked compares the log that it holds with want before it records
+// the end, as the durable recorder does: a log that differs is ErrConflict and
+// changes nothing.
+func (f *sessionJobs) EndStepChecked(
+	ctx context.Context, c job.PhaseClaim, r job.StepRecord, want job.LogExpectation,
+) error {
+	f.mu.Lock()
+
+	chunks, sum := len(f.logs[r.Name]), ""
+	if chunks > 0 {
+		all := sha256.New()
+
+		for i := range chunks {
+			all.Write(f.logs[r.Name][i])
+		}
+
+		sum = hex.EncodeToString(all.Sum(nil))
+	}
+
+	refused := chunks != want.Chunks || (chunks > 0 && sum != want.SHA256)
+	if refused {
+		f.calls = append(f.calls, "refused:"+r.Name)
+	}
+
+	f.mu.Unlock()
+
+	if refused {
+		return job.ErrConflict
+	}
+
+	return f.EndStep(ctx, c, r)
 }
 
 func (f *sessionJobs) AppendLog(_ context.Context, _ job.PhaseClaim, step string, seq int, chunk io.Reader) error {

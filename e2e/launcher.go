@@ -13,7 +13,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -510,4 +512,52 @@ func (e *Env) openJobParts(ctx context.Context, tb testing.TB) (jobParts, func()
 
 		return jobParts{jobs: nil, index: nil, names: nil}, nil
 	}
+}
+
+// BlobDirHolds reports whether a file of the blob directory of the binary
+// server holds needle. It needs E2E_SERVER=binary and the blob directory, and
+// the server may run: it only reads files, through a root so that a link in
+// the directory leads nowhere outside it.
+func (e *Env) BlobDirHolds(tb testing.TB, needle string) bool {
+	tb.Helper()
+
+	if e.backendCfg.blobDir == "" {
+		tb.Fatal("BlobDirHolds needs E2E_SERVER=binary and the blob directory")
+	}
+
+	root, err := os.OpenRoot(e.backendCfg.blobDir)
+	if err != nil {
+		tb.Fatalf("open the blob directory: %v", err)
+	}
+
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			tb.Errorf("close the blob directory: %v", closeErr)
+		}
+	}()
+
+	found := false
+	want := []byte(needle)
+
+	walkErr := iofs.WalkDir(root.FS(), ".", func(path string, d iofs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+
+		raw, readErr := iofs.ReadFile(root.FS(), path)
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", path, readErr)
+		}
+
+		if bytes.Contains(raw, want) {
+			found = true
+		}
+
+		return nil
+	})
+	if walkErr != nil {
+		tb.Fatalf("walk the blob directory: %v", walkErr)
+	}
+
+	return found
 }
