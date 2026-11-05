@@ -178,7 +178,7 @@ func classifyProtocolOther(
 		errors.Is(err, durable.ErrStepDone):
 		return mk(
 			http.StatusConflict, protocol.ErrorConflict,
-			runner.ErrConflict, runner.ErrRunnerOnline, job.ErrConflict, durable.ErrStepDone,
+			job.ErrLogDiffers, runner.ErrConflict, runner.ErrRunnerOnline, job.ErrConflict, durable.ErrStepDone,
 		)
 	case errors.Is(err, runner.ErrNotFound), errors.Is(err, durable.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
 		errors.Is(err, job.ErrNotFound):

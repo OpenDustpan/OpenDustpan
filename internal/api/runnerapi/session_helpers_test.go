@@ -101,7 +101,7 @@ func (f *sessionJobs) EndStepChecked(
 	f.mu.Unlock()
 
 	if refused {
-		return job.ErrConflict
+		return job.ErrLogDiffers
 	}
 
 	return f.EndStep(ctx, c, r)
