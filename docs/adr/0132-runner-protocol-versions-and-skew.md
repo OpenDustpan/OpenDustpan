@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18
 
+Changed by:
+
+- ADR 327 extends decisions 6 and 7: the proxy fields raise the assignment
+  version, and the runner protocol gets the proxy session paths.
+
 ## Context
 
 The runners and the launchers of a team update on the schedule of the
