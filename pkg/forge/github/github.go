@@ -3,9 +3,9 @@
 // kinds app (a GitHub App installation) and token (a fine-grained
 // personal access token).
 //
-// The adapter does Check, Head and ReadFile now. Each other method returns
-// forge.ErrUnsupported, and Capabilities does not list it, until the method
-// lands. Every request
+// The adapter does Check, Head, ReadFile, Commit and FindCommit now. Each other
+// method returns forge.ErrUnsupported, and Capabilities does not list it, until
+// the method lands. Every request
 // goes through the egress rules: the address of the API passes the URL
 // check when a connection opens and the address check when the network
 // connection opens, and the adapter follows no redirect.
@@ -140,6 +140,7 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 	f := &gitHub{
 		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
 		mu: sync.Mutex{}, readTokens: map[string]readToken{}, owner: "", contents: contentsUnknown,
+		writes: contentsUnknown,
 	}
 
 	switch c.Auth {
@@ -195,12 +196,14 @@ type gitHub struct {
 	// mu guards the fields below. readTokens holds the installation tokens
 	// of an app connection for reads: a token reads one repository, and the
 	// adapter keeps it in memory only. owner is the login of the account of
-	// the installation, and contents says whether the installation has the
-	// permission to read the contents. Check and the first read set them.
+	// the installation. contents says whether the installation has the
+	// permission to read the contents, and writes whether it has the
+	// permission to write them. Check and the first read set them.
 	mu         sync.Mutex
 	readTokens map[string]readToken
 	owner      string
 	contents   contentsAccess
+	writes     contentsAccess
 }
 
 // contentsAccess says whether an installation has the permission to read
@@ -221,18 +224,27 @@ const (
 // forge.CapCommit nor forge.CapReview.
 //
 // It lists forge.CapFiles unless the last Check showed an installation
-// without the permission to read the contents. Before a Check, the
-// permissions are not known, and the capability is listed. A token connection
-// always lists it, because a token shows no permissions.
+// without the permission to read the contents. It lists forge.CapCommit for a
+// connection with push access, unless the last Check showed an installation
+// without the permission to write the contents. Before a Check, the
+// permissions are not known, and the capabilities are listed. A token
+// connection always lists them, because a token shows no permissions.
 func (f *gitHub) Capabilities() forge.Capabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if f.auth == forge.AuthApp && f.contents == contentsMissing {
-		return forge.Capabilities{}
+	app := f.auth == forge.AuthApp
+	caps := forge.Capabilities{}
+
+	if !app || f.contents != contentsMissing {
+		caps = append(caps, forge.CapFiles)
 	}
 
-	return forge.Capabilities{forge.CapFiles}
+	if f.push && (!app || f.writes != contentsMissing) {
+		caps = append(caps, forge.CapCommit)
+	}
+
+	return caps
 }
 
 // unsupported returns the error of a method that the adapter does not have.
@@ -243,16 +255,6 @@ func unsupported(method string) error {
 // Compare returns forge.ErrUnsupported.
 func (*gitHub) Compare(context.Context, string, string, string, int64) (forge.Comparison, error) {
 	return forge.Comparison{}, unsupported("Compare")
-}
-
-// Commit returns forge.ErrUnsupported.
-func (*gitHub) Commit(context.Context, string, forge.CommitRequest) (forge.Commit, error) {
-	return forge.Commit{}, unsupported("Commit")
-}
-
-// FindCommit returns forge.ErrUnsupported.
-func (*gitHub) FindCommit(context.Context, string, string, string, time.Time) (forge.Commit, error) {
-	return forge.Commit{}, unsupported("FindCommit")
 }
 
 // OpenReview returns forge.ErrUnsupported.
