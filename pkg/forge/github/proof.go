@@ -17,13 +17,18 @@ import (
 // but not the key, cannot make a commit that FindCommit counts. The adapter
 // holds no key: the Prover keeps it.
 type Prover interface {
+	// Ready reports whether the Prover has the key that it needs. It makes no
+	// call, because Capabilities uses it. A Prover that is not ready fails each
+	// Seal and Open with an error: it never says that a proof is bad because it
+	// has no key.
+	Ready() bool
 	// Seal returns the proof for binding. Two calls with the same binding may
 	// return different proofs; both open.
 	Seal(ctx context.Context, binding []byte) ([]byte, error)
 	// Open reports whether proof is a proof that Seal made for binding. A
 	// proof that does not open, for any reason, is false and a nil error. An
-	// error means that the Prover cannot decide, for example when its key
-	// store does not answer.
+	// error means that the Prover cannot decide, for example when it has no
+	// key or when its key store does not answer.
 	Open(ctx context.Context, binding, proof []byte) (bool, error)
 }
 
@@ -142,7 +147,7 @@ type delivery struct {
 func (f *gitHub) checkProof(ctx context.Context, d delivery, c listedCommit) error {
 	// Defense in depth: commitAllowed refuses a connection with no Prover. This
 	// check stays so that a new caller cannot skip the proof.
-	if f.o.prover == nil {
+	if !canProve(f.o.prover) {
 		return fmt.Errorf("%w: the connection has no key to open the proof", forge.ErrUnsupported)
 	}
 

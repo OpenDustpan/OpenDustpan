@@ -114,7 +114,7 @@ func (f *gitHub) withProof(
 ) (message, error) {
 	// Defense in depth: commitAllowed refuses a connection with no Prover. This
 	// check stays so that a commit never leaves with no proof.
-	if f.o.prover == nil {
+	if !canProve(f.o.prover) {
 		return message{}, fmt.Errorf("%w: the connection has no key to seal the proof", forge.ErrUnsupported)
 	}
 

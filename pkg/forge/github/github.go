@@ -42,9 +42,9 @@ type Config struct {
 	// Now returns the time. Nil means time.Now.
 	Now func() time.Time
 	// Prover seals the proof that Commit adds to a commit, and opens the proof
-	// that FindCommit reads. Nil means that the adapter cannot prove a commit:
-	// Capabilities then does not list forge.CapCommit, and Commit and
-	// FindCommit return forge.ErrUnsupported.
+	// that FindCommit reads. Nil, or a Prover that is not Ready, means that the
+	// adapter cannot prove a commit: Capabilities then does not list
+	// forge.CapCommit, and Commit and FindCommit return forge.ErrUnsupported.
 	Prover Prover
 }
 
@@ -113,6 +113,11 @@ func keepRedirectStatus(client *http.Client) {
 
 		return err
 	}
+}
+
+// canProve reports whether p is a Prover that has its key.
+func canProve(p Prover) bool {
+	return p != nil && p.Ready()
 }
 
 // CloseIdleConnections closes the idle network connections of the adapter.
@@ -251,7 +256,7 @@ func (f *gitHub) Capabilities() forge.Capabilities {
 		caps = append(caps, forge.CapFiles)
 	}
 
-	if f.push && f.o.prover != nil && (!app || f.writes != contentsMissing) {
+	if f.push && canProve(f.o.prover) && (!app || f.writes != contentsMissing) {
 		caps = append(caps, forge.CapCommit)
 	}
 

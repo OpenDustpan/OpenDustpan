@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/forge/github"
 )
 
 // proofTrailer is the trailer of the commits of the tests of the proof.
@@ -121,8 +122,10 @@ func TestFindCommitNeedsTheProof(t *testing.T) {
 // errKeyStore is the error of failingProver.
 var errKeyStore = errors.New("the key store does not answer")
 
-// failingProver cannot decide.
+// failingProver is ready, and cannot decide.
 type failingProver struct{}
+
+func (failingProver) Ready() bool { return true }
 
 func (failingProver) Seal(context.Context, []byte) ([]byte, error) { return nil, errKeyStore }
 
@@ -179,38 +182,102 @@ func TestFindCommitFailsClosedWhenTheProofCannotBeChecked(t *testing.T) {
 	}
 }
 
-// TestCommitNeedsAProver checks that a connection with no Prover does not list
-// the capability to commit, and refuses Commit and FindCommit with no call.
-func TestCommitNeedsAProver(t *testing.T) {
+// unreadyProver has no key. Each Seal and Open fails, as the Prover of a server
+// with no key-encryption key does.
+type unreadyProver struct{}
+
+func (unreadyProver) Ready() bool { return false }
+
+func (unreadyProver) Seal(context.Context, []byte) ([]byte, error) { return nil, errKeyStore }
+
+func (unreadyProver) Open(context.Context, []byte, []byte) (bool, error) { return false, errKeyStore }
+
+// TestCommitNeedsAProverThatIsReady checks that a connection with no Prover, or
+// with a Prover that has no key, does not list the capability to commit, and
+// refuses Commit and FindCommit with no call. A Prover with a key lists it.
+func TestCommitNeedsAProverThatIsReady(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		prover github.Prover
+		want   bool
+	}{
+		{"no Prover", nil, false},
+		{"a Prover that has no key", unreadyProver{}, false},
+		{"a Prover that has its key", testProver{}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := goodOptions()
+			opts.prover = tt.prover
+
+			calls := 0
+			fg := rawForgeWith(t, "", opts, func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+
+				answer(w, http.StatusInternalServerError, `{}`)
+			})
+
+			if got := fg.Capabilities().Has(forge.CapCommit); got != tt.want {
+				t.Fatalf("CapCommit listed = %v, want %v", got, tt.want)
+			}
+
+			if !tt.want {
+				refuseWithNoCall(t, fg)
+
+				if calls != 0 {
+					t.Fatalf("%d calls, want none", calls)
+				}
+			}
+		})
+	}
+}
+
+// refuseWithNoCall checks that Commit and FindCommit return ErrUnsupported.
+func refuseWithNoCall(t *testing.T, fg rawClient) {
+	t.Helper()
+
+	_, commitErr := fg.Commit(t.Context(), "acme/infra", oneCommit(rawBase))
+	if !errors.Is(commitErr, forge.ErrUnsupported) {
+		t.Errorf("Commit = %v, want ErrUnsupported", commitErr)
+	}
+
+	d := forge.Delivery{Trailer: proofTrailer, Base: rawBase}
+
+	_, findErr := fg.FindCommit(t.Context(), "acme/infra", "main", d, time.Unix(0, 0))
+	if !errors.Is(findErr, forge.ErrUnsupported) {
+		t.Errorf("FindCommit = %v, want ErrUnsupported", findErr)
+	}
+}
+
+// TestCommitFailsClosedWhenTheProofCannotBeSealed checks that a Prover that is
+// ready but cannot seal gives ErrUnavailable, and that the adapter makes no
+// mutation: a commit never leaves with no proof.
+func TestCommitFailsClosedWhenTheProofCannotBeSealed(t *testing.T) {
 	t.Parallel()
 
 	opts := goodOptions()
-	opts.prover = nil
+	opts.prover = failingProver{}
 
-	calls := 0
-	fg := rawForgeWith(t, "", opts, func(w http.ResponseWriter, _ *http.Request) {
-		calls++
+	mutations := 0
+	fg := rawForgeWith(t, "", opts, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			mutations++
+		}
 
-		answer(w, http.StatusInternalServerError, `{}`)
+		answer(w, http.StatusOK, goodAnswer())
 	})
 
-	if fg.Capabilities().Has(forge.CapCommit) {
-		t.Fatal("a connection with no Prover lists CapCommit")
+	if _, err := fg.Commit(t.Context(), "acme/infra", oneCommit(rawBase)); !errors.Is(err, forge.ErrUnavailable) {
+		t.Fatalf("Commit = %v, want ErrUnavailable", err)
 	}
 
-	if _, err := fg.Commit(t.Context(), "acme/infra", oneCommit(rawBase)); !errors.Is(err, forge.ErrUnsupported) {
-		t.Fatalf("Commit = %v, want ErrUnsupported", err)
-	}
-
-	_, err := fg.FindCommit(
-		t.Context(), "acme/infra", "main", forge.Delivery{Trailer: proofTrailer, Base: rawBase}, time.Unix(0, 0),
-	)
-	if !errors.Is(err, forge.ErrUnsupported) {
-		t.Fatalf("FindCommit = %v, want ErrUnsupported", err)
-	}
-
-	if calls != 0 {
-		t.Fatalf("%d calls, want none", calls)
+	if mutations != 0 {
+		t.Fatalf("%d mutations, want none", mutations)
 	}
 }
 
