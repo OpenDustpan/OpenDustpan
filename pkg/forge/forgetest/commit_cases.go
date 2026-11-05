@@ -207,6 +207,59 @@ func caseCommitNewBranchRace(t *testing.T, h Harness) {
 	}
 }
 
+func caseCommitForcePushed(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	base := push(t, h, map[string][]byte{"stacks/prod.yaml": []byte("a: 1\n")})
+
+	// The history of main is replaced. The file that the commit changes has the
+	// same content as at the base, so only the history shows the change.
+	rewritten, err := h.Fixture.Rewrite(ctx, "main", map[string][]byte{
+		"stacks/prod.yaml": []byte("a: 1\n"), "new.txt": []byte("new\n"),
+	})
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	_, err = h.Forge.Commit(ctx, h.Repo, commitOn("main", base.ID, "j-18", writeFile("stacks/prod.yaml", "a: 2\n")))
+	if !errors.Is(err, forge.ErrConflict) {
+		t.Fatalf("Commit after a force push = %v, want ErrConflict", err)
+	}
+
+	if now := mainHead(t, h); now.ID != rewritten.ID {
+		t.Fatalf("head of main = %q, want %q", now.ID, rewritten.ID)
+	}
+}
+
+func caseCommitRefused422(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	head := mainHead(t, h)
+
+	// GitHub cannot have the branches "dustpan" and "dustpan/j-19" together, and
+	// answers 422.
+	if _, err := h.Fixture.Push(ctx, "dustpan", map[string][]byte{"b.txt": []byte("b")}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	req := commitOn("dustpan/j-19", head.ID, "j-19", writeFile("a.txt", "a"))
+	req.NewBranch = true
+
+	if _, err := h.Forge.Commit(ctx, h.Repo, req); !errors.Is(err, forge.ErrInvalid) {
+		t.Fatalf("Commit on a new branch with a name that collides = %v, want ErrInvalid", err)
+	}
+
+	// A base that the repository does not have is not found, also with 422.
+	req = commitOn("dustpan2/j-19", missingCommit(), "j-19", writeFile("a.txt", "a"))
+	req.NewBranch = true
+
+	if _, err := h.Forge.Commit(ctx, h.Repo, req); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("Commit on a new branch at a missing base = %v, want ErrNotFound", err)
+	}
+}
+
 func caseCommitInvalidDelete(t *testing.T, h Harness) {
 	t.Helper()
 

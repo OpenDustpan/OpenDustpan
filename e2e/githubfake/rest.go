@@ -30,6 +30,7 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("GET /user", f.getUser)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits", f.listCommits)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{ref...}", f.getCommit)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/compare/{spec...}", f.compare)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/ref/{ref...}", f.getRef)
 	mux.HandleFunc("POST /repos/{owner}/{repo}/git/refs", f.createRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
@@ -370,6 +371,75 @@ func pageOf(raw string, fallback int) int {
 	return min(n, maxPerPage)
 }
 
+// depthOf returns the number of steps from c back to the commit with the ID
+// ancestor, and false when ancestor is not on the chain of parents of c.
+func (r *repo) depthOf(c *commit, ancestor string) (int, bool) {
+	steps := 0
+
+	for cur := c; cur != nil; cur = r.commits[cur.meta.Parent] {
+		if cur.meta.ID == ancestor {
+			return steps, true
+		}
+
+		steps++
+	}
+
+	return 0, false
+}
+
+// compare answers the call "compare base...head": whether head is ahead of
+// base, behind it, the same, or on another line of history, and the commit
+// where the two meet. The chain of first parents is the history.
+func (f *Fake) compare(w http.ResponseWriter, r *http.Request) {
+	rp, ok := f.repoOf(w, r, levelNameRead)
+	if !ok {
+		return
+	}
+
+	baseRef, headRef, found := strings.Cut(r.PathValue("spec"), "...")
+	base, baseFound := rp.resolve(baseRef)
+	head, headFound := rp.resolve(headRef)
+
+	if !found || !baseFound || !headFound {
+		f.message(w, http.StatusNotFound, "Not Found")
+
+		return
+	}
+
+	status, mergeBase, aheadBy, behindBy := "diverged", "", 0, 0
+
+	// The merge base is the first commit on the chain of head that is also on
+	// the chain of base.
+	for cur := head; cur != nil; cur = rp.commits[cur.meta.Parent] {
+		behind, onBase := rp.depthOf(base, cur.meta.ID)
+		if !onBase {
+			aheadBy++
+
+			continue
+		}
+
+		behindBy, mergeBase = behind, cur.meta.ID
+
+		switch {
+		case aheadBy == 0 && behind == 0:
+			status = "identical"
+		case behind == 0:
+			status = "ahead"
+		case aheadBy == 0:
+			status = "behind"
+		default:
+			status = "diverged"
+		}
+
+		break
+	}
+
+	f.writeJSON(w, http.StatusOK, map[string]any{
+		"status": status, "ahead_by": aheadBy, "behind_by": behindBy,
+		"merge_base_commit": map[string]string{"sha": mergeBase},
+	})
+}
+
 // refPrefix starts the full name of a branch.
 const refPrefix = "refs/heads/"
 
@@ -390,6 +460,18 @@ func (f *Fake) getRef(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f.writeJSON(w, http.StatusOK, wireRef{Ref: refPrefix + name, Object: wireRefObject{SHA: head, Type: "commit"}})
+}
+
+// collides reports whether a branch is on the path of name: GitHub cannot
+// have the branches "a" and "a/b" at the same time.
+func (r *repo) collides(name string) bool {
+	for other := range r.branches {
+		if strings.HasPrefix(name, other+"/") || strings.HasPrefix(other, name+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // createRefRequest is the body of the call that makes a branch.
@@ -417,7 +499,7 @@ func (f *Fake) createRef(w http.ResponseWriter, r *http.Request) {
 	name, isBranch := strings.CutPrefix(req.Ref, refPrefix)
 
 	switch _, taken := rp.branches[name]; {
-	case !isBranch || name == "":
+	case !isBranch || name == "" || rp.collides(name):
 		f.message(w, http.StatusUnprocessableEntity, "Reference update failed")
 	case taken:
 		f.message(w, http.StatusUnprocessableEntity, "Reference already exists")
