@@ -52,6 +52,10 @@ var (
 	// ErrConflict reports a write that read an older version of the job.
 	// The caller reads the job again and decides again.
 	ErrConflict = errors.New("job changed since it was read")
+	// ErrLogDiffers reports the end of a step whose log is not the log that
+	// the caller says it sent. It is an ErrConflict (errors.Is is true for
+	// both), with a text that names the cause.
+	ErrLogDiffers error = logDiffersError{}
 	// ErrUnsupported reports an operation that the executor of the job
 	// cannot do, for example a destroy through write-back.
 	ErrUnsupported = errors.New("executor does not support this operation")
@@ -658,3 +662,12 @@ func (d *DeliveryResult) validateReview() error {
 		return nil
 	}
 }
+
+// logDiffersError is the type of ErrLogDiffers.
+type logDiffersError struct{}
+
+// Error implements error.
+func (logDiffersError) Error() string { return "the log differs from the stored chunks" }
+
+// Is makes ErrLogDiffers an ErrConflict.
+func (logDiffersError) Is(target error) bool { return target == ErrConflict }

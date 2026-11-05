@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // ErrBadBody is the error of a body that is not the JSON object of its path.
@@ -30,14 +30,18 @@ func WriteManagementError(ctx context.Context, w http.ResponseWriter, err error)
 // precedence.
 var ErrNotFound = errNotFound
 
-// JobPhaseWithoutReader calls the check that every step route makes first, on a
-// handler that has the recorder and no job reader, which NewHandler never
-// builds. It returns the error of the check.
-func JobPhaseWithoutReader(ctx context.Context, recorder job.CheckedRecorder) error {
-	h := new(Handler)
-	h.recorder = recorder
+// JobPhaseOf calls the check that every step route makes first, on the
+// handler h and the session sess. With dropReader, it clears the job reader of
+// h for the call and puts it back after. It returns the error of the check.
+func JobPhaseOf(ctx context.Context, h *Handler, sess runner.Session, dropReader bool) error {
+	if dropReader {
+		reader := h.jobs
+		h.jobs = nil
 
-	var c call
+		defer func() { h.jobs = reader }()
+	}
+
+	c := call{session: sess}
 
 	_, err := h.jobPhaseOf(httptest.NewRequestWithContext(ctx, http.MethodPost, "/", http.NoBody), &c)
 

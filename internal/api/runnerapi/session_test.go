@@ -657,10 +657,10 @@ func TestLogAndStepEnd(t *testing.T) {
 
 			checkStepEnd(t, l, chunks)
 
-			// The two refused ends write nothing. Only the last end writes.
+			// The three refused ends write nothing. Only the last end writes.
 			want := []string{
 				"begin:init", "log:init:0", "log:init:1", "log:init:0", "log:init:0", "refused:init", "refused:init",
-				"end:init",
+				"refused:init", "end:init",
 			}
 			if got := s.jobs.called(); !slices.Equal(got[:len(want)], want) {
 				t.Fatalf("recorder calls = %v, want %v first", got, want)
@@ -689,6 +689,12 @@ func checkStepEnd(t *testing.T, l *launcher, chunks [][]byte) {
 	path := stepPath(protocol.PathSessionStepEnd, "init")
 
 	l.expect(t, "end with another log hash", l.post(path, badHash), http.StatusConflict, protocol.ErrorConflict)
+
+	// The text names the cause: the log differs, not the job.
+	if status, body := l.do(l.post(path, badHash)); status != http.StatusConflict ||
+		!strings.Contains(string(body), "the log differs from the stored chunks") {
+		t.Fatalf("end with another log hash = %d %s, want the text about the log", status, body)
+	}
 	l.expect(t, "end with another chunk count", l.post(path, badCount), http.StatusConflict,
 		protocol.ErrorConflict)
 	l.expect(t, "end", l.post(path, end), 204, "")
