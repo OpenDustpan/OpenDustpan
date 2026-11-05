@@ -47,6 +47,28 @@ is on.
 `TestNewServerAuthenticatorChain` checks this order through a real request.
 When you change the chain, change the test in the same commit.
 
+Every service authorizes through the one chain. A service that checks an
+action gets the wrapped authorizer from `newAuthPorts` as an argument. It
+does not get `cfg.authorizer` before `NewServer` writes the chain into it.
+`NewServer` builds the auth ports before `newServices` for this reason. The
+manual lock service is one example: its lock, unlock and manage checks pass
+the IP allowlist gate and the namespace service rule.
+
+The test checks each recorded `Authorize` call. A call that does not come
+through the whole chain fails the test, unless a function of its stack is
+named in `bareAuthorizerCallers` (`pkg/dustpan/authchain_internal_test.go`).
+The named exceptions are:
+
+- `access.(*Service)`: it holds the `access.Authorizer`, the policy of the
+  stored grants, to check who may change a role or a grant. The routes in
+  front of it call the wrapped authorizer.
+- `accesstoken.(*Service)`: it gets the authorizer of the access service for
+  the escalation check of a token for another principal.
+
+To add an exception, add the name and the reason to that list in the same
+commit. A new service that is not in the list must use the wrapped
+authorizer.
+
 `NewServer` writes the two chains into `cfg.authenticator` and
 `cfg.authorizer` one time, for the adapter code that is not in an area file
 yet. An area file must not read them from `settings`. Its caller passes them
