@@ -1,21 +1,21 @@
 ---
 rfc: 16
 title: Job proxy, with request rules and credential injection
-status: accepted
+status: discussing
 adr: 327
 created: 2026-10-10
 ---
 
 # RFC 16. Job proxy, with request rules and credential injection
 
-Status: accepted (ADR 327). The owner decided on 2026-10-18 that a research
+Status: discussing, accepted in part (ADR 327). The owner decided on 2026-10-18 that a research
 spike comes first, and that the names are "job proxy", "outbound guard" and
 "upstream proxy" (see `GLOSSARY.md`). The owner accepted the recommendation
 of the spike on 2026-10-26, kept all of this RFC in milestone 6 on
-2026-11-01, and chose the word "proxy rule" on 2026-11-01 (D4). The PM
-answered D5 on 2026-10-31. ADR 327 records the decisions of the section
-"Proposal (2026-10-30)". The section "Open questions" lists the questions
-that stay open. The example rules below say "egress rule", the word of the
+2026-11-01, and chose the word "proxy rule" on 2026-11-01 (D4). ADR 327 records the decisions of the section
+"Proposal (2026-10-30)" that have an owner source. The section "Proposed
+(PM), waiting for the owner" holds the other items, D5 included. The
+section "Open questions" lists the questions that stay open. The example rules below say "egress rule", the word of the
 first draft.
 
 **This is an escape hatch, not a default.** When a product has native RBAC or
@@ -887,8 +887,9 @@ is not canonical, and a credential that the job never holds.
 
 ### Owner decisions
 
-Answered: D4, option 1, by the owner on 2026-11-01. D5, option 1, by the PM
-on 2026-10-31. ADR 327 decisions 18 and 19 record them.
+Answered: D4, option 1, by the owner on 2026-11-01 (ADR 327 decision 18).
+D5 waits for the owner. The PM proposes option 1 (item P19 of the section
+"Proposed (PM), waiting for the owner").
 
 - **D4. The name of a rule.** In short: what do we call one allow line of
   the job proxy? Options:
@@ -1063,10 +1064,131 @@ The cost of decisions 13 to 17, in work items: about 5 sessions (X12 to
 X16), and no new dependency. The shared gateway (X16) is the largest, and it
 adds the risk of one process that holds the credentials of many units.
 
+## Proposed (PM), waiting for the owner
+
+The PM proposed the items below. The owner has not accepted them, so ADR
+327 does not hold them. Each item has the number of its decision in the
+section "Proposal (2026-10-30)". An item that the owner accepts goes into a
+new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
+
+- **P3. One exit.** The job proxy is the only exit of the sandbox. The
+   launcher and the tool reach the OpenDustpan server through it too, with
+   a built-in tunnel rule for the host of the server only. The launcher
+   keeps its own TLS check of the server.
+
+- **P5. Credentials for the job proxy only.** A profile document gets the
+   export key `proxy`: a map from a name to a `header` (name and value),
+   `basic` (user and password), `query` (name and value),
+   `client-certificate` (certificate and key) or `ca` (certificates). Only
+   the consumer `job-proxy` gets `exports.proxy`. The consumer `launcher`
+   never gets it, and a test checks the answer for each consumer. A proxy
+   rule that names an export that no attached profile gives fails the job
+   start with `jobproxy.ErrCredential`. The tool gets a placeholder, for
+   example `dustpan-placeholder`, in the variable that the proxy rule names.
+- **P9. Gates read a fact.** The fact schemas of `change.propose`,
+   `change.planned` and `change.apply` get the group `proxy`, as a minor
+   version: `enabled`, `rules` (the count), `ruleSetDigest`,
+   `credentialHosts` (a set of hosts), `plainHttp` and `learnMode`. A gate
+   decides on the change. A gate never matches one request of a job.
+- **P11. Actions.** `namespace:manage-proxy-rules` on the namespace and
+    `unit:manage-proxy-rules` on the unit save a proxy rule set. The save
+    needs a fresh authentication, and writes an audit entry with the old
+    and the new digest. A blueprint version holds proxy rules through
+    `blueprint:publish`. `namespace:manage-runners` sets the allowed ranges
+    and the upstream proxy of a pool.
+- **P12. Routes.** `GET` and `PUT .../namespaces/{namespace}/proxy-rules`,
+    `GET` and `PUT .../units/{unit_id}/proxy-rules`,
+    `GET .../units/{unit_id}/proxy-rules/rendered?operation=plan` (the
+    proxy rules of the unit with their values, for a person who debugs),
+    and `GET .../jobs/{id}/proxy-records`. The runner protocol gets the
+    proxy session paths under `/runner/v1`. The proxy fields raise the
+    assignment version.
+
+- **P13. The rule tester.** `POST .../units/{unit_id}/proxy-rules/tests`
+    takes a changed proxy rule set and a list of at most 50 past jobs of the
+    unit. It replays the stored records of those jobs against the changed
+    set, and answers `allowed`, `denied` or `changed` (another proxy rule
+    matches) for each record. It reads stored records only and sends no
+    request. It needs `unit:manage-proxy-rules`. The records hold no query
+    value and no body, so the tester matches the method, the host and the
+    path only. It marks a proxy rule with a body condition as
+    `not-testable`.
+- **P14. Body matching.** A proxy rule of the mode `inspect` can add
+    `body` conditions. Each condition names one field and the value that it
+    must equal. A template value fills one whole field value.
+    - The formats are `json` (a field by JSON pointer, compared in the
+      canonical form of RFC 8785), `form` (an
+      `application/x-www-form-urlencoded` field) and `protobuf` (a field by
+      its number path, for example `1.3`, read from the wire format with no
+      descriptor and no new dependency).
+    - The job proxy buffers at most 1 MiB of a body. A larger body, a body
+      that does not parse, a duplicate JSON key, a field that is missing or
+      that occurs two times, and a streaming gRPC call each deny the
+      request.
+    - The `Content-Type` of the request selects the format. A request with
+      a type of another format than the proxy rule is denied.
+    - The record holds the names or numbers of the fields that matched,
+      never their values.
+- **P15. SPIFFE identities.** A proxy rule can name `spiffe` in place of
+    `clientCertificate`. The job proxy then presents an X.509 SVID to the
+    endpoint. It reads the SVID, its key and the trust bundle from a
+    directory that a SPIFFE helper of the team writes, and reads them again
+    when the files change. So the job proxy needs no Workload API client
+    and no new dependency. The machine coordinator mounts the directory into
+    the proxy process only, and the Kubernetes coordinator into the proxy
+    pod only. The SPIRE registration decides the SPIFFE ID, never
+    OpenDustpan. `serverTrust` can name `spiffe:<ID>`: the job proxy then
+    checks the URI SAN of the endpoint certificate against that ID, and the
+    chain against the trust bundle. A SPIFFE file that is missing, expired
+    or not signed by the bundle denies each request of that proxy rule.
+- **P16. Learn mode.** A person with `unit:manage-proxy-rules`, with a
+    fresh authentication, turns on learn mode for a unit for at most 7 days.
+    - In learn mode, a job of the operations `plan` and `refresh` goes
+      through the job proxy with a built-in `tunnel` proxy rule for each
+      host that the job asks for. The outbound guard still applies, and the
+      job proxy records each CONNECT. The job start opens no
+      `exports.proxy`, so learn mode gives no credential.
+    - A job of `apply` or `destroy` on a unit in learn mode fails at start
+      with `jobproxy.ErrLearnMode`.
+    - For a host that already has an `inspect` proxy rule, the job proxy
+      keeps the TLS end and records each method and path.
+    - `POST .../units/{unit_id}/proxy-rules/proposals` turns the records of
+      the learn jobs into a proposed proxy rule set, grouped by host and by
+      path prefix. The server never saves a proposal by itself. A person
+      reads it and saves it through the normal route.
+    - The fact `proxy.learnMode` is true for such a job, so a gate can deny
+      learn mode.
+- **P17. A shared gateway.** A team that needs fixed egress addresses can
+    run the job proxy as a shared gateway: one process of the mode
+    `proxy --gateway` for a runner pool, as a service that the team runs.
+    - Each claim still gets its own proxy session, its own CA, its own
+      rendered proxy rules and its own credentials inside the gateway. No
+      two claims share a CA, a proxy rule set or a credential.
+    - The gateway gives each claim its own listening port. The coordinator
+      lets the job pod or the sandbox reach only that port.
+    - The gateway checks the source address of each connection against the
+      address that the coordinator reported for the claim, and refuses a
+      connection from another address. The port and the source address are
+      two layers. Each one alone stops a job from using the claim of
+      another job.
+    - The gateway holds the credentials of many units at one time. The docs
+      say so, and the pool shows "shared gateway" as a warning.
+    - The job proxy next to each job stays the default.
+
+- **P19. The RBAC of the Kubernetes coordinator (D5).** The
+    service account of the coordinator gets `create`, `get`, `list`,
+    `watch` and `delete` on `networkpolicies` (API group
+    `networking.k8s.io`), in the namespace of the coordinator only. It gets
+    no other new permission. The Helm chart creates exactly this role. A
+    NetworkPolicy that the team creates by hand cannot limit a job pod to
+    the proxy pod of its own claim, so the project does not use one.
+
 ## Open questions
 
-ADR 327 accepts the section "Proposal (2026-10-30)" and answers D4 and D5.
-These questions stay open:
+ADR 327 accepts the decisions of the section "Proposal (2026-10-30)" that
+have an owner source, and answers D4. The items of the section "Proposed
+(PM), waiting for the owner" are open until the owner accepts them. These
+questions stay open too:
 
 - **Open:** the name "release mode". The proposal of decision 5 uses the
   export key `proxy` and the consumer `job-proxy`, and the owner did not
@@ -1105,4 +1227,6 @@ The questions below are answered (ADR 327):
 
 ## Outcome
 
-Accepted. [ADR 327](../adr/0327-the-job-proxy.md) records the decisions.
+Accepted in part. [ADR 327](../adr/0327-the-job-proxy.md) records the
+decisions with an owner source. The items of the section "Proposed (PM),
+waiting for the owner" wait for the owner.
