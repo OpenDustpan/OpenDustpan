@@ -1,0 +1,9 @@
+6 6
+seedMs                         old med   61498.8 new med   59679.3   -3.0%  old [59509, 61586, 61700, 61736, 60998, 61412] new [58893, 59991, 59368, 61785, 61377, 57845]
+updateConflicts.p50Ms          old med     441.6 new med     493.6  +11.8%  old [399, 470, 536, 584, 413, 406] new [567, 485, 502, 387, 611, 445]
+namespaceUpdates.p50Ms         old med     514.0 new med     536.7   +4.4%  old [468, 812, 485, 635, 533, 495] new [537, 537, 481, 542, 506, 689]
+workspaceLocks.p50Ms           old med       4.9 new med       8.6  +74.4%  old [4, 5, 5, 6, 8, 4] new [15, 11, 5, 6, 5, 11]
+lists.workspaceListP50Ms       old med      20.6 new med      21.2   +2.7%  old [16, 20, 22, 22, 23, 17] new [19, 21, 23, 21, 17, 26]
+imports.0.importMs             old med      15.1 new med      13.4  -11.5%  old [16, 21, 12, 18, 14, 14] new [15, 11, 14, 14, 11, 13]
+imports.1.importMs             old med      24.8 new med      22.9   -7.7%  old [27, 28, 22, 23, 23, 26] new [24, 26, 23, 23, 21, 20]
+imports.2.importMs             old med      73.0 new med      61.6  -15.6%  old [99, 67, 54, 79, 88, 57] new [69, 59, 63, 82, 60, 56]
