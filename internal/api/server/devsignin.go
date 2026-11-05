@@ -115,7 +115,7 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 		return
 	}
 
-	e := signInEntry(r, devSubject, "", session.ActionSignIn)
+	e := signInEntry(r, devSubject, session.ActionSignIn)
 
 	// A grant that fails after this call leaves the person in place. The
 	// person holds no role and no session, so it can do nothing, and the

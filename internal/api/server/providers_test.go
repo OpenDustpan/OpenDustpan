@@ -101,7 +101,6 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		DisplayName: p.DisplayName,
 		AutoCreate:  p.AutoCreate,
 		Stored:      true,
-		Source:      sourceOf(p.Mode),
 	}, true, nil
 }
 
@@ -130,14 +129,6 @@ func (s testStored) openIDClient(p *session.ProviderConfig, clientSecret string)
 
 // sourceOf returns the principal source of a provider in mode, as the
 // server sets it.
-func sourceOf(mode session.ProviderMode) principal.Source {
-	if mode == session.ModeOAuth {
-		return principal.SourceOAuth
-	}
-
-	return principal.SourceOIDC
-}
-
 func newProviderEnv(t *testing.T) providerEnv {
 	t.Helper()
 
