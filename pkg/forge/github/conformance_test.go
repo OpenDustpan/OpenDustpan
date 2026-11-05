@@ -33,6 +33,15 @@ func (x *hostFixture) Push(_ context.Context, branch string, files map[string][]
 	return commitOf(c), nil
 }
 
+func (x *hostFixture) Rewrite(_ context.Context, branch string, files map[string][]byte) (forge.Commit, error) {
+	c, err := x.host.Rewrite(x.repo, branch, files, "Force push to "+branch)
+	if err != nil {
+		return forge.Commit{}, fmt.Errorf("rewrite in the fake: %w", err)
+	}
+
+	return commitOf(c), nil
+}
+
 func (x *hostFixture) Tag(_ context.Context, name, commitID string) error {
 	if err := x.host.Tag(x.repo, name, commitID); err != nil {
 		return fmt.Errorf("tag in the fake: %w", err)
@@ -82,11 +91,14 @@ func (x *hostFixture) Unavailable(_ context.Context, retryAfter time.Duration) (
 const conformanceRepo = "acme/infra"
 
 // newHost starts a fake GitHub host with the repository of the suite, one
-// commit on main, and a token for the user.
+// commit on main, and a token for the user. The installation may write the
+// contents, so that the suite can commit.
 func newHost(t *testing.T) *githubfake.Fake {
 	t.Helper()
 
-	return newHostWith(t, func(*githubfake.Config) {})
+	return newHostWith(t, func(c *githubfake.Config) {
+		c.Permissions = map[string]string{"contents": "write", "metadata": "read"}
+	})
 }
 
 // newHostWith is newHost with a change of the settings of the host.

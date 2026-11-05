@@ -88,7 +88,7 @@ func providerOf(t *testing.T, st consoleBackend, publicURL string) *oauthtest.Pr
 			WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
 			AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
 			IssuedIn: 0, IgnoreMaxAge: false, TokenType: "", UserinfoStatus: 0, UserinfoBody: "",
-			UserinfoType: "", UserinfoRedirect: "", TokenRedirect: "",
+			UserinfoType: "", UserinfoRedirect: "", TokenRedirect: "", AuthTime: time.Time{},
 		},
 		TLS: true,
 	})

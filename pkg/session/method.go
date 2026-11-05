@@ -6,15 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // This file holds the ports of the sign-in methods: the redirect method,
 // the password method and the request method. Each method proves who a
 // person is and returns an Assertion. A method never makes a principal, a
 // membership or a session. The sign-in service does that, in one order, for
-// every method. No adapter implements these ports yet. The conformance
-// suites in package sessiontest skip each case until an adapter exists.
+// every method, after CheckAssertion. The conformance suites in package
+// sessiontest check each adapter.
 
 // Errors of the sign-in methods. Each adapter translates the errors of its
 // protocol, its library and its network into these errors. The sign-in
@@ -439,4 +443,192 @@ func CheckFreshSubject(want FreshTarget, a Assertion) error {
 	}
 
 	return nil
+}
+
+// AssertionSkew is the clock skew that CheckAssertion allows for the
+// authentication time of an Assertion.
+const AssertionSkew = time.Minute
+
+// CheckAssertion returns ErrInvalidAssertion when the Assertion a fails the
+// limits of this package at the time now. The sign-in service calls it for
+// each Assertion before it uses it. The error names the rule and never a
+// value of a. It checks these rules:
+//   - the method is a known kind;
+//   - a local password or a passkey has the provider ID "local" and a
+//     principal ID; each other method has a valid provider ID that is not
+//     "local" or "dev", and no principal ID;
+//   - the subject has 1 to MaxAssertionSubject bytes of UTF-8 and no control
+//     character;
+//   - the user name, the email and each name have at most MaxAssertionName
+//     bytes of UTF-8 and no control character, and a verified email is not
+//     empty;
+//   - groups only with GroupsPresent, at most MaxAssertionGroups of them,
+//     each of 1 to MaxAssertionGroup bytes of UTF-8 with no control
+//     character;
+//   - the factors are known: none for a redirect method or a request
+//     method, the password for a password method and a local password, and
+//     the passkey for a passkey sign-in;
+//   - a known authentication time is not zero and not after now with the
+//     skew; an unknown one is zero; plain OAuth 2.0 and the trusted header
+//     never know it, and a password method and a passkey always do.
+func CheckAssertion(a Assertion, now time.Time) error {
+	for _, check := range []func(Assertion, time.Time) error{
+		checkAssertionMethod, checkAssertionPerson, checkAssertionGroups, checkAssertionFactors,
+		checkAssertionAuthTime,
+	} {
+		if err := check(a, now); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// invalidAssertion returns ErrInvalidAssertion with the rule that failed.
+func invalidAssertion(rule string) error {
+	return fmt.Errorf("%w: %s", ErrInvalidAssertion, rule)
+}
+
+// localMethod reports whether k reads its own records: the local password
+// and the passkey. Only these methods name a principal.
+func localMethod(k MethodKind) bool {
+	return k == MethodLocalPassword || k == MethodPasskey
+}
+
+// checkAssertionMethod checks the kind, the provider ID and the principal
+// ID of a.
+func checkAssertionMethod(a Assertion, _ time.Time) error {
+	switch a.Method {
+	case MethodOIDC, MethodOAuth, MethodSAML, MethodCAS, MethodLDAP, MethodHeader:
+		if !ValidProviderID(a.ProviderID) || a.ProviderID == LocalProviderID || a.ProviderID == DevProviderID {
+			return invalidAssertion("the provider ID is not valid for the method")
+		}
+
+		if a.PrincipalID != "" {
+			return invalidAssertion("the method cannot name a principal")
+		}
+
+		return nil
+	case MethodLocalPassword, MethodPasskey:
+		if a.ProviderID != LocalProviderID {
+			return invalidAssertion("the provider ID of a local method must be " + LocalProviderID)
+		}
+
+		if !validAssertionText(a.PrincipalID, 1, MaxAssertionSubject) {
+			return invalidAssertion("a local method must name a principal")
+		}
+
+		return nil
+	default:
+		return invalidAssertion("the method is not a known kind")
+	}
+}
+
+// checkAssertionPerson checks the subject, the names and the email of a.
+func checkAssertionPerson(a Assertion, _ time.Time) error {
+	if !validAssertionText(a.Subject, 1, MaxAssertionSubject) {
+		return invalidAssertion(fmt.Sprintf(
+			"the subject must have 1 to %d bytes of UTF-8 and no control character", MaxAssertionSubject,
+		))
+	}
+
+	for _, v := range append([]string{a.UserName, a.Email}, a.Names...) {
+		if !validAssertionText(v, 0, MaxAssertionName) {
+			return invalidAssertion(fmt.Sprintf(
+				"a name, a user name or an email must have at most %d bytes of UTF-8 and no control character",
+				MaxAssertionName,
+			))
+		}
+	}
+
+	if a.EmailVerified && a.Email == "" {
+		return invalidAssertion("a verified email is empty")
+	}
+
+	return nil
+}
+
+// checkAssertionGroups checks the groups of a.
+func checkAssertionGroups(a Assertion, _ time.Time) error {
+	if !a.GroupsPresent && len(a.Groups) > 0 {
+		return invalidAssertion("the groups are set, and GroupsPresent is false")
+	}
+
+	if len(a.Groups) > MaxAssertionGroups {
+		return invalidAssertion(fmt.Sprintf("more than %d groups", MaxAssertionGroups))
+	}
+
+	for _, g := range a.Groups {
+		if !validAssertionText(g, 1, MaxAssertionGroup) {
+			return invalidAssertion(fmt.Sprintf(
+				"a group must have 1 to %d bytes of UTF-8 and no control character", MaxAssertionGroup,
+			))
+		}
+	}
+
+	return nil
+}
+
+// checkAssertionFactors checks the factors of a against its method.
+func checkAssertionFactors(a Assertion, _ time.Time) error {
+	for _, f := range a.Factors {
+		switch f {
+		case FactorPassword, FactorPasskey, FactorTOTP, FactorRecoveryCode, FactorSSHSignature:
+		default:
+			return invalidAssertion("a factor is not a known factor")
+		}
+	}
+
+	switch a.Method {
+	case MethodOIDC, MethodOAuth, MethodSAML, MethodCAS, MethodHeader:
+		if len(a.Factors) > 0 {
+			return invalidAssertion("a redirect method or a request method checks no factor")
+		}
+	case MethodLDAP, MethodLocalPassword:
+		if !slices.Contains(a.Factors, FactorPassword) {
+			return invalidAssertion("a password method must hold the factor " + string(FactorPassword))
+		}
+	case MethodPasskey:
+		if !slices.Contains(a.Factors, FactorPasskey) {
+			return invalidAssertion("a passkey sign-in must hold the factor " + string(FactorPasskey))
+		}
+	default:
+		// Fail closed: checkAssertionMethod refuses an unknown kind first.
+		// This check stays so that a new order of the checks cannot pass
+		// one.
+		return invalidAssertion("the method is not a known kind")
+	}
+
+	return nil
+}
+
+// checkAssertionAuthTime checks the authentication time of a at now. It has
+// no lower bound: an old authentication is a valid answer to a sign-in that
+// asks for no fresh authentication, for example a person with a long session
+// at the identity provider. The method checks the window of a fresh
+// authentication against the start of its request, and the session policy
+// limits how long the session of an old authentication is fresh.
+func checkAssertionAuthTime(a Assertion, now time.Time) error {
+	switch {
+	case !a.AuthTimeKnown && !a.AuthTime.IsZero():
+		return invalidAssertion("an unknown authentication time must be zero")
+	case !a.AuthTimeKnown && (a.Method == MethodLDAP || localMethod(a.Method)):
+		return invalidAssertion("a password method or a passkey must know the authentication time")
+	case !a.AuthTimeKnown:
+		return nil
+	case a.Method == MethodOAuth || a.Method == MethodHeader:
+		return invalidAssertion("plain OAuth 2.0 and the trusted header cannot know the authentication time")
+	case a.AuthTime.IsZero():
+		return invalidAssertion("a known authentication time is zero")
+	case a.AuthTime.After(now.Add(AssertionSkew)):
+		return invalidAssertion("the authentication time is in the future")
+	default:
+		return nil
+	}
+}
+
+// validAssertionText reports whether s is UTF-8 with no control character,
+// C1 controls included, and has minLen to maxLen bytes.
+func validAssertionText(s string, minLen, maxLen int) bool {
+	return len(s) >= minLen && len(s) <= maxLen && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
 }

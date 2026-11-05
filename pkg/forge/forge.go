@@ -250,8 +250,11 @@ type Commits interface {
 	Commit(ctx context.Context, repo string, req CommitRequest) (Commit, error)
 	// FindCommit returns the newest commit on ref, at or after since,
 	// whose message has the trailer line trailer, for example
-	// "Dustpan-Job: j-123". It returns ErrNotFound when no such commit
-	// exists. A takeover of a write-back calls it before a second commit.
+	// "Dustpan-Job: j-123", in its last paragraph. A line of the text of a
+	// message is not a trailer. It returns ErrNotFound when no such commit
+	// exists, and ErrInvalid for a trailer that is not one line of the form
+	// "Key: value". A takeover of a write-back calls it before a second
+	// commit.
 	FindCommit(ctx context.Context, repo, ref, trailer string, since time.Time) (Commit, error)
 }
 

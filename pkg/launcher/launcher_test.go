@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/launcher"
+	"opendustpan.org/opendustpan/pkg/launcher"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 

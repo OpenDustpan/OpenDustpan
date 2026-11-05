@@ -1,11 +1,11 @@
 package dustpan
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -93,7 +93,7 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 	}
 
 	again, _, againErr := f.lookup.Provider(ctx, "beta")
-	if againErr != nil || again.Client != first.Client {
+	if againErr != nil || again.Method != first.Method {
 		t.Fatalf("a second lookup of the same version made a new client (%v)", againErr)
 	}
 
@@ -108,7 +108,7 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 	})
 
 	changed, ok, err := f.lookup.Provider(ctx, "beta")
-	if err != nil || !ok || changed.DisplayName != name || changed.Client == first.Client {
+	if err != nil || !ok || changed.DisplayName != name || changed.Method == first.Method {
 		t.Fatalf("lookup after a change = %+v, %t, %v; want the new name and a new client", changed, ok, err)
 	}
 
@@ -173,8 +173,8 @@ func TestStoredProvidersPlainOAuth(t *testing.T) {
 		t.Fatalf("lookup = %+v, %t, %v; want the stored provider hub", got, ok, err)
 	}
 
-	if _, plain := got.Client.(*oauth.PlainClient); !plain {
-		t.Fatalf("client of hub = %T, want *oauth.PlainClient", got.Client)
+	if kind := got.Method.Kind(); kind != session.MethodOAuth {
+		t.Fatalf("method of hub = %q, want %q", kind, session.MethodOAuth)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestStoredProvidersRecreatedID(t *testing.T) {
 	}
 
 	again, ok, err := f.lookup.Provider(ctx, "beta")
-	if err != nil || !ok || again.AutoCreate || again.Client == first.Client {
+	if err != nil || !ok || again.AutoCreate || again.Method == first.Method {
 		t.Fatalf("lookup after a delete and a create = %+v, %t, %v; want a new client with no autoCreate",
 			again, ok, err)
 	}
@@ -232,5 +232,76 @@ func TestStoredProviderRefusesDevID(t *testing.T) {
 	got, found, err := f.lookup.Provider(t.Context(), session.DevProviderID)
 	if err != nil || found || got.ID != "" {
 		t.Fatalf("Provider(dev) = %+v, found %v, %v; want no provider", got, found, err)
+	}
+}
+
+// TestStoredProvidersRefuseAModeWithNoMethod sends a stored record of each
+// mode with no sign-in method straight to the build of a provider, as if the
+// validation of the store had let it through. The build refuses it before
+// it opens the client secret, and never builds the client of another mode.
+func TestStoredProvidersRefuseAModeWithNoMethod(t *testing.T) {
+	t.Parallel()
+
+	f := newStoredFixture(t)
+
+	for _, mode := range []session.ProviderMode{
+		session.ModeSAML, session.ModeCAS, session.ModeLDAP, session.ModeHeader, "", "kerberos",
+	} {
+		p := session.ProviderConfig{
+			CreatedAt: time.Now(), UpdatedAt: time.Now(), ID: "beta", Mode: mode, Issuer: "https://beta.example",
+			DisplayName: "Beta", ClientID: "dustpan", SealedSecret: nil, Scopes: nil, AutoCreate: true,
+			Enabled: true, Version: 1, OAuth: session.OAuthSettings{
+				AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "",
+				UsernameClaim: "", EmailClaim: "",
+			},
+		}
+
+		got, err := f.lookup.build(t.Context(), &p)
+		if !errors.Is(err, session.ErrInvalidProvider) || got.Method != nil {
+			t.Fatalf("build of mode %q = %+v, %v, want ErrInvalidProvider", mode, got, err)
+		}
+	}
+}
+
+// TestStoredProviderSwitchFailsClosed checks the switch of a stored
+// provider that its method reads: on for an enabled provider, off for a
+// disabled or unknown one, and an error when the store cannot answer.
+func TestStoredProviderSwitchFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	f := newStoredFixture(t)
+
+	_, err := f.admin.Create(ctx, adminEntry(), session.ProviderInput{
+		ID: "beta", Mode: session.ModeOIDC, Issuer: "https://beta.example", DisplayName: "Beta", ClientID: "dustpan",
+		ClientSecret: "secret", Scopes: nil, AutoCreate: true, Enabled: true, OAuth: session.OAuthSettings{
+			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+			EmailClaim: "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if on, err := f.lookup.enabled("beta")(ctx); !on || err != nil {
+		t.Fatalf("switch of an enabled provider = %v, %v, want on", on, err)
+	}
+
+	if on, err := f.lookup.enabled("gone")(ctx); on || err != nil {
+		t.Fatalf("switch of an unknown provider = %v, %v, want off", on, err)
+	}
+
+	off := false
+	f.update(t, session.ProviderChange{
+		Mode: nil, Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		OAuth: session.OAuthChange{
+			AuthorizationURL: nil, TokenURL: nil, UserinfoURL: nil, SubjectClaim: nil, NameClaim: nil,
+			UsernameClaim: nil, EmailClaim: nil,
+		},
+		Enabled: &off, Version: 1,
+	})
+
+	if on, err := f.lookup.enabled("beta")(ctx); on || err != nil {
+		t.Fatalf("switch of a disabled provider = %v, %v, want off", on, err)
 	}
 }

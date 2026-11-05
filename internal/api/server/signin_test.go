@@ -117,6 +117,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 
 	return newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: autoCreate, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
+		hostile: nil,
 	})
 }
 
@@ -131,6 +132,10 @@ type signInEnvOptions struct {
 	namespaces     []namespace.Name
 	autoCreate     bool
 	noPolicyRoutes bool
+	// hostile, when set, changes each Assertion that the method of the
+	// provider corp returns, as a method that fails to check its answer
+	// would.
+	hostile func(a *session.Assertion)
 	// noGateEngine leaves the gate config service without a policy engine.
 	noGateEngine bool
 }
@@ -272,7 +277,9 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 			Origins:         []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
 				{
-					Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false,
+					Method: hostileMethod(redirectMethod(t, client, "corp", clock.Now), opts.hostile), ID: "corp",
+					DisplayName: "Corp",
+					AutoCreate:  opts.autoCreate, Stored: false,
 					Source: principal.SourceOIDC,
 				},
 			},
@@ -1082,6 +1089,23 @@ func TestSignInSessionCookieOnlyForSignIn(t *testing.T) {
 	}
 }
 
+// redirectMethod returns the OIDC sign-in method over client for the
+// provider id with the clock now, as the server makes it. The provider is
+// always on.
+func redirectMethod(t *testing.T, client oauth.MethodClient, id string, now func() time.Time) *oauth.Method {
+	t.Helper()
+
+	m, err := oauth.NewMethod(oauth.MethodConfig{
+		Client: client, Enabled: func(context.Context) (bool, error) { return true, nil }, Now: now,
+		ProviderID: id, Kind: session.MethodOIDC,
+	})
+	if err != nil {
+		t.Fatalf("sign-in method: %v", err)
+	}
+
+	return m
+}
+
 // downOIDC is a provider that cannot be reached.
 type downOIDC struct{}
 
@@ -1090,8 +1114,9 @@ func (downOIDC) Begin(context.Context, oauth.Options) (string, oauth.Pending, er
 }
 
 func (downOIDC) Finish(context.Context, string, oauth.Pending) (oauth.Identity, error) {
-	return oauth.Identity{AuthTime: time.Time{}, Subject: "", Name: "", PreferredUsername: "", Email: ""},
-		oauth.ErrProvider
+	return oauth.Identity{
+		AuthTime: time.Time{}, Subject: "", Name: "", PreferredUsername: "", Email: "", AuthTimeKnown: false,
+	}, oauth.ErrProvider
 }
 
 func TestSignInProviderDown(t *testing.T) {
@@ -1168,7 +1193,10 @@ func TestSignInProviderDown(t *testing.T) {
 			Origins:         nil,
 			PasswordLimiter: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true, Stored: false, Source: ""},
+				{
+					Method: redirectMethod(t, downOIDC{}, "corp", time.Now), ID: "corp", DisplayName: "Corp",
+					AutoCreate: true, Stored: false, Source: "",
+				},
 			},
 		},
 		CheckpointEpochs: nil,
@@ -1304,6 +1332,7 @@ func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: true, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
+		hostile: nil,
 	})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
@@ -1602,4 +1631,123 @@ func newSignInAccess(
 	}
 
 	return grants, allowlists
+}
+
+// TestSignInJoinsNoGroup proves the rule of the group claims while the
+// server has no group mapping: a sign-in joins no group, also when groups
+// exist whose names an identity provider could send. The methods of today
+// return no groups, and no mapping exists, so no membership changes.
+func TestSignInJoinsNoGroup(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	for _, name := range []string{"engineering", "corp", alice().PreferredUsername} {
+		g := principal.Group{
+			CreatedAt: e.clock.Now(), UpdatedAt: e.clock.Now(), ID: "grp-" + name, Name: name, Description: "",
+			Source: principal.SourceLocal, MemberCount: 0,
+		}
+		if err := e.store.CreateGroup(t.Context(), g, policyChangeEntry(e.clock.Now())); err != nil {
+			t.Fatalf("create group %s: %v", name, err)
+		}
+	}
+
+	e.signIn(t)
+
+	p, err := e.store.GetPrincipalBySubject(t.Context(), "corp:"+alice().Subject)
+	if err != nil {
+		t.Fatalf("principal of the sign-in: %v", err)
+	}
+
+	groups, total, err := e.store.ListGroupsOf(
+		t.Context(),
+		p.ID,
+		principal.Query{After: "", Low: "", High: "", Limit: 10},
+	)
+	if err != nil || total != 0 || len(groups) != 0 {
+		t.Fatalf("groups of the person = %v (%d), %v, want none", groups, total, err)
+	}
+}
+
+// hostileRedirect is a sign-in method that changes each Assertion of the
+// method it wraps, as a method that fails to check the answer of its
+// provider would.
+type hostileRedirect struct {
+	session.RedirectMethod
+
+	change func(a *session.Assertion)
+}
+
+func (m hostileRedirect) Finish(ctx context.Context, cb session.Callback) (session.Assertion, error) {
+	a, err := m.RedirectMethod.Finish(ctx, cb)
+	if err == nil && m.change != nil {
+		m.change(&a)
+	}
+
+	return a, err
+}
+
+// hostileMethod returns m behind hostileRedirect, which changes each
+// Assertion of m with change. A nil change changes nothing.
+func hostileMethod(m *oauth.Method, change func(a *session.Assertion)) hostileRedirect {
+	return hostileRedirect{RedirectMethod: m, change: change}
+}
+
+// TestSignInCallbackRefusesAHostileAssertion sends a hostile Assertion of a
+// method straight to the check of the callback, as if the method had failed
+// to refuse the answer of its provider. The callback refuses it with the
+// reason of an Assertion that is not valid, sets no session cookie and makes
+// no principal.
+func TestSignInCallbackRefusesAHostileAssertion(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		change func(a *session.Assertion)
+		name   string
+	}{
+		{func(a *session.Assertion) { a.Subject = "" }, "empty subject"},
+		{func(a *session.Assertion) { a.AuthTime = time.Now().Add(24 * time.Hour) }, "future auth time"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newSignInEnvWith(t, signInEnvOptions{
+				autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
+				namespaces: nil, hostile: tc.change,
+			})
+
+			binding, authURL := e.start(t, "/console/tokens")
+			rec := e.callback(t, e.authorize(t, authURL), binding)
+
+			checkHostileRefusal(t, e, rec)
+		})
+	}
+}
+
+// checkHostileRefusal fails unless the callback rec refused the sign-in with
+// the reason of an Assertion that is not valid, set no session cookie and
+// made no principal.
+func checkHostileRefusal(t *testing.T, e signInEnv, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "sign-in failed") {
+		t.Fatalf("callback = %d %s, want 400 and the refusal of the sign-in", rec.Code, rec.Body.String())
+	}
+
+	if c := cookieOf(rec, apiserver.SessionCookie); c != nil && c.Value != "" {
+		t.Fatal("the callback of a hostile Assertion set a session cookie")
+	}
+
+	if reason, _ := e.refusedReason(t); reason != "sign-in assertion is not valid" {
+		t.Fatalf("audit reason = %q, want the reason of an Assertion that is not valid", reason)
+	}
+
+	for _, subject := range []string{"corp:" + alice().Subject, "corp:"} {
+		p, err := e.store.GetPrincipalBySubject(t.Context(), subject)
+		if !errors.Is(err, principal.ErrNotFound) {
+			t.Fatalf("principal of %q = %+v, %v, want none", subject, p, err)
+		}
+	}
 }

@@ -54,7 +54,9 @@ func (l *Lazy) Begin(ctx context.Context, opts Options) (string, Pending, error)
 func (l *Lazy) Finish(ctx context.Context, code string, p Pending) (Identity, error) {
 	c, err := l.get(ctx)
 	if err != nil {
-		return Identity{AuthTime: time.Time{}, Subject: "", Name: "", PreferredUsername: "", Email: ""}, err
+		return Identity{
+			AuthTime: time.Time{}, Subject: "", Name: "", PreferredUsername: "", Email: "", AuthTimeKnown: false,
+		}, err
 	}
 
 	return c.Finish(ctx, code, p)
@@ -71,7 +73,7 @@ func (l *Lazy) get(ctx context.Context) (*Client, error) {
 	select {
 	case l.turn <- struct{}{}:
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: wait for the discovery document: %w", ErrProvider, ctx.Err())
+		return nil, unavailableError{err: fmt.Errorf("%w: wait for the discovery document: %w", ErrProvider, ctx.Err())}
 	}
 
 	defer func() { <-l.turn }()
@@ -85,7 +87,7 @@ func (l *Lazy) get(ctx context.Context) (*Client, error) {
 
 	c, err := New(readCtx, l.cfg)
 	if err != nil {
-		return nil, err
+		return nil, unavailableError{err: err}
 	}
 
 	l.mu.Lock()

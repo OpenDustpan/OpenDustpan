@@ -10,8 +10,8 @@
 // The cases come before the first adapter. A case with no body skips with
 // "not implemented", and gets its body before an adapter implements the
 // methods that it covers. The cases of the groups "The connection" and
-// "Files" have bodies. CaseNamesWithBody lists the
-// cases that have a body. A case whose capability the forge does not list
+// "Files" have bodies, and so do most cases of the group "Commits".
+// CaseNamesWithBody lists the cases that have a body. A case whose capability the forge does not list
 // skips for that forge, and the case "an operation outside the
 // capabilities is unsupported" checks that such a method returns
 // forge.ErrUnsupported.
@@ -61,6 +61,10 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	// Push commits files on branch with no check, as another author does,
 	// and returns the commit. A nil value deletes the file.
 	Push(ctx context.Context, branch string, files map[string][]byte) (forge.Commit, error)
+	// Rewrite replaces the history of branch with one new commit that has no
+	// parent and holds exactly files, as a force push does, and returns it.
+	// The commits before stay in the repository.
+	Rewrite(ctx context.Context, branch string, files map[string][]byte) (forge.Commit, error)
 	// Protect turns on branch protection for branch, so that a commit
 	// through the port is refused.
 	Protect(ctx context.Context, branch string) error
@@ -145,23 +149,30 @@ func cases() []testCase {
 		{"compare of an unknown commit is not found", forge.CapCompare, nil},
 
 		// Commits.
-		{"commit of many files is one commit", forge.CapCommit, nil},
-		{"commit of a delete removes the file", forge.CapCommit, nil},
-		{"commit on a new branch starts at the base", forge.CapCommit, nil},
-		{"commit after a change of an edited file is a conflict", forge.CapCommit, nil},
-		{"commit after a change of another file passes", forge.CapCommit, nil},
-		{"commit to a new branch that exists with another head is a conflict", forge.CapCommit, nil},
-		{"two commits to the same new branch: one passes, one is a conflict", forge.CapCommit, nil},
-		{"commit to a protected branch is refused", forge.CapCommit, nil},
-		{"commit to a missing branch is not found", forge.CapCommit, nil},
+		{"commit lands with its files and its trailer", forge.CapCommit, caseCommitLands},
+		{"commit of a delete removes the file", forge.CapCommit, caseCommitDelete},
+		{"commit on a new branch starts at the base", forge.CapCommit, caseCommitNewBranch},
+		{"commit after a change of an edited file is a conflict", forge.CapCommit, caseCommitStale},
+		{"commit after a change of another file passes", forge.CapCommit, caseCommitOtherFile},
+		{
+			"commit to a new branch that exists with another head is a conflict",
+			forge.CapCommit,
+			caseCommitNewBranchTaken,
+		},
+		{"two commits to the same new branch: one passes, one is a conflict", forge.CapCommit, caseCommitNewBranchRace},
+		{"commit to a protected branch is refused", forge.CapCommit, caseCommitProtected},
+		{"commit to a missing branch is not found", forge.CapCommit, caseCommitMissingBranch},
+		{"commit of a delete of a missing file is invalid", forge.CapCommit, caseCommitInvalidDelete},
+		{"commit after a force push that keeps the files is a conflict", forge.CapCommit, caseCommitForcePushed},
+		{"commit that the forge refuses with status 422 is invalid", forge.CapCommit, caseCommitRefused422},
 		{"a connection with no push access lists no commit and no review", "", caseNoPushNoWrite},
-		{"commit that fails validation makes no call", forge.CapCommit, nil},
-		{"commit above the size limit is too large and makes no call", forge.CapCommit, nil},
-		{"commit keeps the author and the trailer", forge.CapCommit, nil},
-		{"find commit by its trailer", forge.CapCommit, nil},
-		{"find commit before the since time is not found", forge.CapCommit, nil},
-		{"find commit with no such trailer is not found", forge.CapCommit, nil},
-		{"find commit on a missing ref is not found", forge.CapCommit, nil},
+		{"commit that fails validation is invalid and makes no call", forge.CapCommit, caseCommitInvalid},
+		{"commit above a size limit is too large and makes no call", forge.CapCommit, caseCommitTooLarge},
+		{"find commit by its trailer", forge.CapCommit, caseFindCommit},
+		{"find commit before the since time is not found", forge.CapCommit, caseFindCommitSince},
+		{"find commit with no such trailer is not found", forge.CapCommit, caseFindCommitNoTrailer},
+		{"find commit on a missing ref is not found", forge.CapCommit, caseFindCommitMissingRef},
+		{"find commit with a bad trailer or ref is invalid and makes no call", forge.CapCommit, caseFindCommitInvalid},
 
 		// Review requests.
 		{"open review request", forge.CapReview, nil},

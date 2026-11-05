@@ -174,6 +174,24 @@ func (f *Fake) Push(fullName, branch string, files map[string][]byte, message st
 	return c.meta, nil
 }
 
+// Rewrite replaces the history of branch with one commit that has no parent
+// and holds exactly files, as a force push does, and returns that commit. The
+// old commits stay in the repository. A branch that does not exist is made.
+func (f *Fake) Rewrite(fullName, branch string, files map[string][]byte, message string) (Commit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	r, found := f.repos[fullName]
+	if !found {
+		return Commit{}, fmt.Errorf("%w: %s", ErrNoRepo, fullName)
+	}
+
+	c := r.commit("", files, message, f.now())
+	r.branches[branch] = c.meta.ID
+
+	return c.meta, nil
+}
+
 // Tag makes the tag name at commitID.
 func (f *Fake) Tag(fullName, name, commitID string) error {
 	f.mu.Lock()

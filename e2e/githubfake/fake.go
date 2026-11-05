@@ -23,7 +23,11 @@
 //	POST   /app/installations/{id}/access_tokens       an installation token (JWT)
 //	DELETE /installation/token                         revoke an installation token
 //	GET    /user                                       the user of a token
+//	GET    /repos/{owner}/{repo}/commits?sha=&since=   the commits of a ref, newest first, with page and per_page
 //	GET    /repos/{owner}/{repo}/commits/{ref}         one commit by branch, tag or ID
+//	GET    /repos/{owner}/{repo}/compare/{base}...{head} how head and base relate, with the merge base
+//	GET    /repos/{owner}/{repo}/git/ref/heads/{name}  one branch
+//	POST   /repos/{owner}/{repo}/git/refs              a new branch at a commit
 //	GET    /repos/{owner}/{repo}/contents/{path}?ref=  a file, or a directory listing
 //	GET    /repos/{owner}/{repo}/git/blobs/{sha}       a blob
 //	POST   /graphql                                    the mutation createCommitOnBranch

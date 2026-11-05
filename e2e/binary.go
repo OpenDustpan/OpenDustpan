@@ -157,6 +157,10 @@ type backendConfig struct {
 	// is nil, so the provider registry of an OpenTofu run answers on the
 	// host of the recording proxy. The sign-in passes its own public URL.
 	publicURL string
+	// auditSinks passes --audit-sink items, with the variables that hold
+	// their secrets, when it is not nil. Nil starts the server with no
+	// audit sink.
+	auditSinks *AuditSinkSettings
 }
 
 // pemCertificate is the PEM block type of a certificate.
@@ -550,6 +554,8 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, "--public-url", cfg.publicURL)
 	}
 
+	args = append(args, cfg.auditSinks.args()...)
+
 	return append(args, cfg.signIn.args()...)
 }
 
@@ -593,6 +599,7 @@ func spawnBinaryBackend(ctx context.Context, cfg backendConfig, port string) (*e
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), cfg.signIn.env()...)
 	cmd.Env = append(cmd.Env, journalingServeEnv(cfg)...)
+	cmd.Env = append(cmd.Env, cfg.auditSinks.env()...)
 
 	var out lockedBuffer
 
@@ -715,6 +722,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		auditChain:        "",
 		components:        "",
 		publicURL:         "",
+		auditSinks:        nil,
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, "0")
@@ -1155,6 +1163,7 @@ func binaryBackendConfig(in envInput, bin, dbURL string, setup blobSetup, cert b
 		components:        "",
 		signIn:            nil,
 		publicURL:         "",
+		auditSinks:        nil,
 	}
 }
 
