@@ -525,14 +525,14 @@ func gatesAndLimitsRefuseAStart(ctx context.Context, t *testing.T, env *e2e.Env)
 	}
 
 	audited := func(reasonPrefix string) {
-		entries, auditErr := env.AuditEntries(ctx, ns)
+		entries, auditErr := fetchAuditEntries(ctx, env, string(ns))
 		if auditErr != nil {
 			t.Fatalf("audit entries: %v", auditErr)
 		}
 
 		for i := range entries {
 			e := &entries[i]
-			if e.Action == string(identity.ActionUnitRunPlan) && e.Outcome == audit.OutcomeDenied &&
+			if e.Action == string(identity.ActionUnitRunPlan) && e.Outcome == string(audit.OutcomeDenied) &&
 				strings.HasPrefix(e.Reason, reasonPrefix) {
 				return
 			}
