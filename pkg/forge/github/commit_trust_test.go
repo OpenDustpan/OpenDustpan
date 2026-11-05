@@ -16,11 +16,13 @@ import (
 // listed is a commit of the list that FindCommit reads. A nil author, committer
 // or verification is JSON null, or left out for the verification.
 type listed struct {
-	sha          string
-	message      string
-	author       any
-	committer    any
-	verification map[string]any
+	sha       string
+	message   string
+	author    any
+	committer any
+	// verification is left out when it is nil. json.RawMessage("null") makes a
+	// JSON null.
+	verification any
 }
 
 // json returns the commit as the list of GitHub shows it.
@@ -83,7 +85,7 @@ func identityRows() []struct {
 	own := login(rawIdentity)
 	untrusted := forge.ErrUntrustedCommit
 
-	row := func(name string, author, committer any, verification map[string]any, wantErr error) struct {
+	row := func(name string, author, committer, verification any, wantErr error) struct {
 		name    string
 		commit  listed
 		wantErr error
@@ -108,8 +110,11 @@ func identityRows() []struct {
 		wantErr error
 	}{
 		row("the commit of the connection", own, web, verified, nil),
-		row("the connection as committer", own, own, verified, nil),
-		row("a host that reports no verification", own, web, nil, nil),
+		// The verification check. GitHub sets the logins from the emails of the
+		// commit, so a push with the noreply emails passes the two checks
+		// below and only this check stops it.
+		row("a host that reports no verification", own, web, nil, untrusted),
+		row("a verification that is null", own, web, json.RawMessage("null"), untrusted),
 
 		// The author check.
 		row("another author", login("mallory"), web, verified, untrusted),
@@ -123,6 +128,7 @@ func identityRows() []struct {
 		// The committer check.
 		row("another committer", own, login("mallory"), verified, untrusted),
 		row("no account as committer", own, nil, verified, untrusted),
+		row("the connection as committer", own, own, verified, untrusted),
 		row("a committer with no login", own, map[string]any{}, verified, untrusted),
 		row("a committer that only looks like GitHub", own, login("web-flow2"), verified, untrusted),
 		row("a committer with the name of GitHub in capitals", own, login("WEB-FLOW"), verified, untrusted),
@@ -468,4 +474,36 @@ func TestCommitComparesTheTreeEntries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFindCommitAcceptsTheLoginOfAnEnterpriseManagedUser checks that the
+// identity of a token user whose login has "_" is the author of its own
+// commit. Without "_" in the allow list, a takeover never ends.
+func TestFindCommitAcceptsTheLoginOfAnEnterpriseManagedUser(t *testing.T) {
+	t.Parallel()
+
+	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	trailer := "Dustpan-Job: j-1"
+	own := listed{
+		sha: shaN(1), message: "Fix\n\n" + trailer, author: login("jdoe_acme"), committer: login("web-flow"),
+		verification: map[string]any{"verified": true},
+	}
+
+	data, err := json.Marshal([]map[string]any{own.json(since.Add(time.Minute))})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fg := rawForgeAs(
+		t,
+		"",
+		http.StatusOK,
+		`{"id":777,"login":"jdoe_acme"}`,
+		func(w http.ResponseWriter, _ *http.Request) {
+			answer(w, http.StatusOK, string(data))
+		},
+	)
+
+	got, findErr := fg.FindCommit(t.Context(), "acme/infra", "main", trailer, since)
+	wantFound(t, got, findErr, shaN(1), nil)
 }
