@@ -100,7 +100,7 @@ func TestSessionRefusesAnOperationThatDisagrees(t *testing.T) {
 		{"an operation that is gone", func(*durable.Operation) error { return durable.ErrNotFound }},
 	}
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		for _, rt := range sessionRoutes() {
 			for _, ch := range changes {
 				t.Run(b.name+"/"+rt.name+"/"+ch.name, func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestSessionFailsClosedWithoutADependency(t *testing.T) {
 		},
 	}
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		for _, tc := range tests {
 			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -203,7 +203,7 @@ func TestOpenSessionFailsClosedWithoutADependency(t *testing.T) {
 		{"no durable operations", func(cfg *runnerapi.Config) { cfg.Operations = nil }},
 	}
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		for _, tc := range tests {
 			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -311,7 +311,7 @@ func newSweepEnv(t *testing.T, b backend) *sessionEnv {
 func TestSweepSessionHasNoSteps(t *testing.T) {
 	t.Parallel()
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		for _, rt := range sessionRoutes() {
 			t.Run(b.name+"/"+rt.name, func(t *testing.T) {
 				t.Parallel()
@@ -337,7 +337,7 @@ func TestSweepSessionHasNoSteps(t *testing.T) {
 func TestSweepExchangeIsRefused(t *testing.T) {
 	t.Parallel()
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -374,7 +374,7 @@ func (s *sessionEnv) launchSweep() *launcher {
 func TestNewHandlerRefusesARecorderWithoutAJobReader(t *testing.T) {
 	t.Parallel()
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -401,7 +401,7 @@ func TestNewHandlerRefusesARecorderWithoutAJobReader(t *testing.T) {
 func TestJobPhaseRefusesWithoutAJobReader(t *testing.T) {
 	t.Parallel()
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 

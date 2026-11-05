@@ -73,6 +73,10 @@ type sessionScenario struct {
 	setup  func(s *sessionEnv, l *launcher, c *lcall)
 	status int
 	code   string
+	// requestOnly marks a scenario that the server decides from the request
+	// alone, before any read of the store: the dialect of the store does not
+	// change the answer, so the scenario runs on the first backend only.
+	requestOnly bool
 }
 
 func sessionScenarios() []sessionScenario {
@@ -85,20 +89,21 @@ func sessionScenarios() []sessionScenario {
 	}
 
 	return []sessionScenario{
-		{name: "valid session", setup: nil, status: 0, code: ""},
+		{name: "valid session", setup: nil, status: 0, code: "", requestOnly: false},
 		{
 			name: "wrong token: a proof of another key",
 			setup: func(s *sessionEnv, _ *launcher, c *lcall) {
 				c.key = other(s.t)
 			},
 			status: http.StatusUnauthorized, code: protocol.ErrorBadProof,
+			requestOnly: true,
 		},
 		{
 			name: "wrong token: an unknown session",
 			setup: func(_ *sessionEnv, _ *launcher, c *lcall) {
 				c.subject = runner.SessionIDPrefix + "unknown"
 			},
-			status: http.StatusUnauthorized, code: protocol.ErrorBadProof,
+			status: http.StatusUnauthorized, code: protocol.ErrorBadProof, requestOnly: false,
 		},
 		{
 			name: "wrong token: the runner key",
@@ -106,6 +111,7 @@ func sessionScenarios() []sessionScenario {
 				c.subject, c.key = s.runner.id, s.runner.priv
 			},
 			status: http.StatusUnauthorized, code: protocol.ErrorBadProof,
+			requestOnly: true,
 		},
 		{
 			name: "wrong token: a proof of another body",
@@ -113,6 +119,7 @@ func sessionScenarios() []sessionScenario {
 				c.signedBody = []byte("another body")
 			},
 			status: http.StatusUnauthorized, code: protocol.ErrorBadProof,
+			requestOnly: true,
 		},
 		{
 			name: "wrong token: a proof from two minutes ago",
@@ -120,30 +127,33 @@ func sessionScenarios() []sessionScenario {
 				c.at = s.clock.now().Add(-2 * time.Minute)
 			},
 			status: http.StatusUnauthorized, code: protocol.ErrorBadProof,
+			requestOnly: true,
 		},
 		{
 			name:   "no release header",
 			setup:  func(_ *sessionEnv, _ *launcher, c *lcall) { c.release = "-" },
 			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			requestOnly: true,
 		},
 		{
 			name:   "release outside the skew",
 			setup:  func(_ *sessionEnv, _ *launcher, c *lcall) { c.release = "9.9.9" },
 			status: http.StatusUpgradeRequired, code: "",
+			requestOnly: true,
 		},
 		{
 			name: "lost claim: another runner took the phase",
 			setup: func(s *sessionEnv, _ *launcher, _ *lcall) {
 				s.takeOver()
 			},
-			status: http.StatusConflict, code: protocol.ErrorClaimLost,
+			status: http.StatusConflict, code: protocol.ErrorClaimLost, requestOnly: false,
 		},
 		{
 			name: "expired session: the lease passed",
 			setup: func(s *sessionEnv, _ *launcher, _ *lcall) {
 				s.lapse(s.work.Operation)
 			},
-			status: http.StatusConflict, code: protocol.ErrorClaimLost,
+			status: http.StatusConflict, code: protocol.ErrorClaimLost, requestOnly: false,
 		},
 		{
 			name: "lost claim: the operation ended",
@@ -153,7 +163,7 @@ func sessionScenarios() []sessionScenario {
 					s.t.Fatalf("complete: %v", err)
 				}
 			},
-			status: http.StatusConflict, code: protocol.ErrorClaimLost,
+			status: http.StatusConflict, code: protocol.ErrorClaimLost, requestOnly: false,
 		},
 	}
 }
@@ -173,6 +183,10 @@ func routeRuns() []routeRun {
 	for _, b := range bs {
 		for _, rt := range sessionRoutes() {
 			for _, sc := range sessionScenarios() {
+				if sc.requestOnly && b.name != bs[0].name {
+					continue
+				}
+
 				out = append(out, routeRun{b: b, rt: rt, sc: sc})
 			}
 		}
@@ -609,7 +623,7 @@ func TestRecorderErrorsAnswerTheirCodes(t *testing.T) {
 		{"log", "log", func(l *launcher) lcall { return l.upload(logPath(0), []byte("x")) }},
 	}
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		for _, rt := range routes {
 			for _, tc := range errors {
 				t.Run(b.name+"/"+rt.name+"/"+tc.name, func(t *testing.T) {
@@ -793,7 +807,7 @@ func requestChecks() []requestCheck {
 func TestSessionRequestsAreChecked(t *testing.T) {
 	t.Parallel()
 
-	for _, b := range backends() {
+	for _, b := range wiringBackends() {
 		for _, tc := range requestChecks() {
 			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
