@@ -1121,3 +1121,94 @@ func tokenBodies(host *githubfake.Fake) []string {
 
 	return bodies
 }
+
+// TestMissingPullRequestPermissionIsNamed checks that the error of an
+// installation without the permission of the pull requests names the pull
+// requests, and not only the contents.
+func TestMissingPullRequestPermissionIsNamed(t *testing.T) {
+	t.Parallel()
+
+	host := newHostWith(t, func(c *githubfake.Config) {
+		c.Permissions = map[string]string{"contents": "write", "metadata": "read"}
+	})
+	o := newHostOpener(t, host)
+	conn, cred := hostConnection(t, host, forge.AuthApp)
+
+	f, err := o.Open(t.Context(), conn, cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No Check ran, so the adapter does not know the permissions and calls GitHub.
+	_, readErr := f.ReadReview(t.Context(), conformanceRepo, "1")
+	if !errors.Is(readErr, forge.ErrAuth) || !strings.Contains(readErr.Error(), "pull requests") {
+		t.Fatalf("ReadReview = %v, want ErrAuth that names the pull requests", readErr)
+	}
+
+	// The first refusal taught the adapter the permissions, and it lists no review
+	// capability now. A second connection has not learned them yet.
+	g, err := o.Open(t.Context(), conn, cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, openErr := g.OpenReview(t.Context(), conformanceRepo, reviewRequest())
+	if !errors.Is(openErr, forge.ErrRefused) || !strings.Contains(openErr.Error(), "pull requests") {
+		t.Fatalf("OpenReview = %v, want ErrRefused that names the pull requests", openErr)
+	}
+}
+
+// TestRefusedCallEvictsTheCachedToken checks that the adapter drops the cached
+// installation token of a level after GitHub refused it, so that the next call
+// asks for a new token.
+func TestRefusedCallEvictsTheCachedToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(ctx context.Context, f forge.Forge) error
+	}{
+		{"ReadReview", func(ctx context.Context, f forge.Forge) error {
+			return second(f.ReadReview(ctx, conformanceRepo, "1"))
+		}},
+		{"CloseReview", func(ctx context.Context, f forge.Forge) error {
+			return f.CloseReview(ctx, conformanceRepo, "1")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			host := newHost(t)
+			o := newHostOpener(t, host)
+			conn, cred := hostConnection(t, host, forge.AuthApp)
+
+			f, err := o.Open(t.Context(), conn, cred)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			wantCall(t, tt.name, tt.call(t.Context(), f), forge.ErrNotFound)
+
+			restore := host.Refuse()
+			wantCall(t, tt.name, tt.call(t.Context(), f), forge.ErrAuth)
+			restore()
+
+			wantCall(t, tt.name, tt.call(t.Context(), f), forge.ErrNotFound)
+
+			if got := len(tokenBodies(host)); got != 2 {
+				t.Fatalf("%s asked for %d installation tokens, want 2 (a new one after the refusal)", tt.name, got)
+			}
+		})
+	}
+}
+
+// wantCall fails the test unless err is want.
+func wantCall(t *testing.T, name string, err, want error) {
+	t.Helper()
+
+	if !errors.Is(err, want) {
+		t.Fatalf("%s = %v, want %v", name, err, want)
+	}
+}
