@@ -246,6 +246,7 @@ func cases() []testCase {
 			caseDeleteBranchOutsideWriteBack,
 		},
 		{"delete the default branch is refused", forge.CapReview, caseDeleteDefaultBranch},
+		{"delete the head of an open review request is refused", forge.CapReview, caseDeleteBranchWithOpenReview},
 		{"delete a protected branch is refused", forge.CapReview, caseDeleteProtectedBranch},
 		{"review methods on a forge that fails are ErrUnavailable", forge.CapReview, caseReviewServerError},
 		{"review methods on an answer that does not parse are ErrUnavailable", forge.CapReview, caseReviewGarbled},

@@ -36,6 +36,7 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/blobs/{sha}", f.getBlob)
 	mux.HandleFunc("GET /repos/{owner}/{repo}", f.getRepo)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/branches/{branch...}", f.getBranch)
 	mux.HandleFunc("POST /repos/{owner}/{repo}/pulls", f.createPull)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls", f.listPulls)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls/{number}", f.getPull)
