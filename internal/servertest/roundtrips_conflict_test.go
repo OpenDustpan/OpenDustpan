@@ -15,11 +15,13 @@ import (
 )
 
 // swapRetryTrips is the number of round trips that one failed attempt of the
-// swap step adds to a restore: the 40 statements of the attempt, from the
+// swap step adds to a restore: the 41 statements of the attempt, from the
 // read of the staged schema to the rollback, and the 6 statements of the
 // transaction that ends the claim of the step so that the runner runs it
-// again (begin, minimum version, lock, clock, end, commit).
-const swapRetryTrips = 46
+// again (begin, minimum version, lock, clock, end, commit). The attempt
+// counts the rows of each class of the dev strip once, so a new class adds
+// one statement.
+const swapRetryTrips = 47
 
 // sqlstateDeadlock is the SQLSTATE of a transaction that PostgreSQL ended to
 // break a deadlock.
