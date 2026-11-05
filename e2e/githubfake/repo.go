@@ -188,6 +188,37 @@ func (f *Fake) AddRepo(fullName string, files map[string][]byte) (Commit, error)
 	return c.meta, nil
 }
 
+// CloneRepo makes the repository dst ("owner/name") with every commit, blob,
+// branch and tag of the repository src and a new repository ID, as a copy of a
+// repository does before anyone commits to it.
+func (f *Fake) CloneRepo(src, dst string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	from, found := f.repos[src]
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNoRepo, src)
+	}
+
+	if _, found = f.repos[dst]; found {
+		return fmt.Errorf("%w: %s", ErrExists, dst)
+	}
+
+	f.repos[dst] = &repo{
+		name:          dst,
+		id:            f.nextRepoID(),
+		defaultBranch: from.defaultBranch,
+		pulls:         nil,
+		commits:       maps.Clone(from.commits),
+		blobs:         maps.Clone(from.blobs),
+		branches:      maps.Clone(from.branches),
+		tags:          maps.Clone(from.tags),
+		protected:     maps.Clone(from.protected),
+	}
+
+	return nil
+}
+
 // commit adds a commit on top of parent. A nil value in files deletes the
 // path. The caller holds the lock.
 func (r *repo) commit(parent string, files map[string][]byte, message string, at time.Time) *commit {

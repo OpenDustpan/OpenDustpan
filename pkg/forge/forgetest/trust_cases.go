@@ -75,6 +75,8 @@ func caseFindCommitIgnoresPushedTrailer(t *testing.T, h Harness) {
 	ctx := t.Context()
 	head := mainHead(t, h)
 
+	// Each row pushes a copy of the message of a commit of the connection, with
+	// its proof, so that the proof is good and only the origin differs.
 	tests := []struct {
 		name   string
 		origin Origin
@@ -120,16 +122,42 @@ func caseFindCommitIgnoresPushedTrailer(t *testing.T, h Harness) {
 	}
 
 	for i, tt := range tests {
-		trailer := jobTrailer("j-" + strconv.Itoa(30+i))
+		job := "j-" + strconv.Itoa(30+i)
+		base := mainHead(t, h)
+		_, message := genuine(t, h, base, job)
 
 		files := map[string][]byte{"f" + strconv.Itoa(i) + ".txt": []byte("x\n")}
-		pushed := pushAs(t, h, files, "Update the stacks\n\n"+trailer, tt.origin)
+		pushed := pushAs(t, h, files, message, tt.origin)
 
-		got, findErr := h.Forge.FindCommit(ctx, h.Repo, "main", trailer, head.Time)
+		got, findErr := h.Forge.FindCommit(
+			ctx,
+			h.Repo,
+			"main",
+			forge.Delivery{Trailer: jobTrailer(job), Base: base.ID},
+			head.Time,
+		)
 		if problem := judgeFind(got, findErr, pushed.ID, tt.want); problem != "" {
 			t.Errorf("%s: %s", tt.name, problem)
 		}
 	}
+}
+
+// genuine makes a commit of the job through the port, on top of base, and
+// returns it with its full message, which holds the proof.
+func genuine(t *testing.T, h Harness, base forge.Commit, job string) (forge.Commit, string) {
+	t.Helper()
+
+	c, err := h.Forge.Commit(t.Context(), h.Repo, commitOn("main", base.ID, job, writeFile("g-"+job+".txt", "x\n")))
+	if err != nil {
+		t.Fatalf("Commit of %s = %v", job, err)
+	}
+
+	message, err := h.Fixture.CommitMessage(t.Context(), h.Repo, c.ID)
+	if err != nil {
+		t.Fatalf("CommitMessage = %v", err)
+	}
+
+	return c, message
 }
 
 // judgeFind compares the answer of FindCommit with the answer that a case
@@ -148,17 +176,6 @@ func judgeFind(got forge.Commit, err error, wantID string, wantErr error) string
 	default:
 		return ""
 	}
-}
-
-// notFoundOrInvalid returns the sentinel that err matches, forge.ErrInvalid or
-// else forge.ErrNotFound, so that a case accepts either for a trailer that the
-// commit does not have.
-func notFoundOrInvalid(err error) error {
-	if errors.Is(err, forge.ErrInvalid) {
-		return forge.ErrInvalid
-	}
-
-	return forge.ErrNotFound
 }
 
 // errText returns the text of err, or "none" for nil.
@@ -191,13 +208,13 @@ func caseFindCommitPushedTrailerBeforeOwn(t *testing.T, h Harness) {
 	head := mainHead(t, h)
 	trailer := jobTrailer("j-50")
 
-	pushAs(t, h, map[string][]byte{"a.txt": []byte("1\n")}, "Update the stacks\n\n"+trailer, ownCommit())
+	_, message := genuine(t, h, head, "j-50")
 	pushAs(
-		t, h, map[string][]byte{"b.txt": []byte("2\n")}, "Cherry-pick\n\n"+trailer,
+		t, h, map[string][]byte{"b.txt": []byte("2\n")}, message,
 		Origin{Author: PartyOther, Committer: PartyOther, Verified: false},
 	)
 
-	got, err := h.Forge.FindCommit(ctx, h.Repo, "main", trailer, head.Time)
+	got, err := h.Forge.FindCommit(ctx, h.Repo, "main", forge.Delivery{Trailer: trailer, Base: head.ID}, head.Time)
 	if !errors.Is(err, forge.ErrUntrustedCommit) || got.ID != "" {
 		t.Fatalf("FindCommit = %+v, %v; want ErrUntrustedCommit", got, err)
 	}
@@ -219,32 +236,32 @@ func caseFindCommitTrailerIsExact(t *testing.T, h Harness) {
 		t.Fatalf("Commit = %v", err)
 	}
 
+	// The proof binds the trailer of the request. A line of the message that is
+	// not that trailer has no proof, also when the line is in the last paragraph.
 	tests := []struct {
 		trailer string
-		want    bool
+		want    error
 	}{
-		{jobTrailer("j-40"), true},
-		{"Dustpan-Phase: write-back-2", true},
-		{jobTrailer("j-4"), false},
-		{jobTrailer("j-400"), false},
-		{jobTrailer("j-40 "), false},
-		{jobTrailer("J-40"), false},
-		{"Dustpan-Phase: write-back", false},
-		{"Dustpan-Phase: write-back-20", false},
-		{"Dustpan-Phase: write-back-1", false},
+		{jobTrailer("j-40"), nil},
+		{"Dustpan-Phase: write-back-2", forge.ErrUntrustedCommit},
+		{jobTrailer("j-4"), forge.ErrNotFound},
+		{jobTrailer("j-400"), forge.ErrNotFound},
+		{jobTrailer("j-40 "), forge.ErrInvalid},
+		{jobTrailer("J-40"), forge.ErrNotFound},
+		{"Dustpan-Phase: write-back", forge.ErrNotFound},
+		{"Dustpan-Phase: write-back-20", forge.ErrNotFound},
+		{"Dustpan-Phase: write-back-1", forge.ErrNotFound},
 	}
 
 	for _, tt := range tests {
-		found, findErr := h.Forge.FindCommit(ctx, h.Repo, "main", tt.trailer, head.Time)
-
-		var wantErr error
-		if !tt.want {
-			// A trailer that the commit does not have is not found. A trailer
-			// with a space at its end is not valid, and no call is made.
-			wantErr = notFoundOrInvalid(findErr)
-		}
-
-		if problem := judgeFind(found, findErr, got.ID, wantErr); problem != "" {
+		found, findErr := h.Forge.FindCommit(
+			ctx,
+			h.Repo,
+			"main",
+			forge.Delivery{Trailer: tt.trailer, Base: head.ID},
+			head.Time,
+		)
+		if problem := judgeFind(found, findErr, got.ID, tt.want); problem != "" {
 			t.Errorf("trailer %q: %s", tt.trailer, problem)
 		}
 	}
