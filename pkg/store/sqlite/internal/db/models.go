@@ -764,6 +764,31 @@ type OidcProvider struct {
 	CreatedAtMs int64
 }
 
+type Passkey struct {
+	ID             string
+	PrincipalID    string
+	Name           string
+	CredentialID   []byte
+	PublicKey      []byte
+	Transports     string
+	Aaguid         []byte
+	SignCount      int64
+	BackupEligible bool
+	CreatedAtMs    int64
+	LastUsedAtMs   int64
+	SuspendedAtMs  int64
+}
+
+type PasskeyChallenge struct {
+	Digest      string
+	Kind        string
+	PrincipalID string
+	PendingID   string
+	SessionID   string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
 type PersonPreference struct {
 	PrincipalID string
 	Document    string

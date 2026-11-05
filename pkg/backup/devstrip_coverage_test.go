@@ -54,6 +54,7 @@ var devColumnDecisions = map[string]devDecision{
 	"principal_session_generations.principal_id": {
 		strip: true, reason: "session generation of a removed principal",
 	},
+	"passkeys.principal_id":        {strip: true, reason: "passkey of a removed principal"},
 	"trust_rules.created_by":       {strip: false, reason: "history text of who made the trust rule"},
 	"grants.subject_kind":          {strip: false, reason: "a kind word, not a subject"},
 	"grants.created_by":            {strip: false, reason: "history text of who made the grant"},
