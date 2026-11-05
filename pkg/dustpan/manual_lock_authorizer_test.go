@@ -292,13 +292,8 @@ func TestManualLockServiceKeepsTheNamespaceServiceRule(t *testing.T) {
 
 	// The refusals leave no lock behind.
 	for _, ns := range []namespace.Name{"acme", "other"} {
-		if _, got := locks.LockOn(
-			t.Context(),
-			manuallock.UnitTarget(lockUnit(ns)),
-		); !errors.Is(
-			got,
-			manuallock.ErrNotLocked,
-		) {
+		_, got := locks.LockOn(t.Context(), manuallock.UnitTarget(lockUnit(ns)))
+		if !errors.Is(got, manuallock.ErrNotLocked) {
 			t.Errorf("LockOn(%s) = %v, want ErrNotLocked", ns, got)
 		}
 	}
