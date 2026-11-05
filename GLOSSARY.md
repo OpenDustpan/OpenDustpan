@@ -1085,11 +1085,11 @@ The static binary `dustpan-launcher` that runs the steps of one claim inside the
 _Avoid_: Executor (that is write-back or runners, ADR 100 decision 19), runner binary, shim
 
 **Job proxy**:
-A proxy between one runner job and the network (ADR 327). A unit turns it on with proxy rules. A proxy rule must allow the host, the method and the path of a request. Else the job proxy refuses the request. It can add a credential to an allowed request, so that the job never holds that credential. It runs next to each job, in its own container or process, with its own user. Only the job proxy holds the key of the CA of the job. Its outbound connections go through the outbound guard, and through an upstream proxy when the team has one.
+A proxy between one runner job and the network (ADR 327). It runs next to each job of a unit with proxy rules. A proxy rule must allow the host, the method and the path of a request. Else the job proxy refuses the request. Only the job proxy holds the key of the CA of the job. It applies the outbound guard to each rule host, also through an upstream proxy. How it adds a credential, so that the job never holds that credential, is a proposal (RFC 16).
 _Avoid_: Egress proxy, egress gateway, sidecar (as the name of the feature), firewall
 
 **Proxy rule**:
-One allow line of the job proxy (ADR 327). It matches the host, the method and the path of a request, with `*` and `**` in a path pattern. It can name the credential to add. A proxy rule only allows. A request that no proxy rule allows is refused. Always write "proxy rule", not "rule" alone.
+One allow line of the job proxy (ADR 327). It matches the host, the method and the path of a request, with `*` and `**` in a path pattern. A proxy rule only allows. A request that no proxy rule allows is refused. Always write "proxy rule", not "rule" alone.
 _Avoid_: Egress rule (the egress words are for the outbound guard and the egress allowlist), request rule, ACL, network policy (that is Kubernetes' word), permission
 
 **Proxy rule set**:
@@ -1097,7 +1097,7 @@ The set of proxy rules of a unit (ADR 327). The job start renders their template
 _Avoid_: Egress policy, proxy policy, proxy config
 
 **Upstream proxy**:
-A proxy of the team's network that the job proxy sends its outbound connections through, with CONNECT (ADR 327). The team runs it, and OpenDustpan does not configure its rules. The job proxy is its only client in a job: the job itself never reaches it. Its proxy credential is a secret of the job proxy, never of the job.
+A proxy of the team's network that carries the outbound connections of the job proxy (ADR 327). The team runs it, and it applies its own rules. OpenDustpan does not configure them. How the job proxy finds it and its credential is a proposal (RFC 16).
 _Avoid_: Egress proxy, corporate proxy (alone), parent proxy, next hop
 
 **Runner protocol**:

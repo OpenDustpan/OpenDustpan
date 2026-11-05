@@ -5,8 +5,6 @@ Status: accepted · 2026-10-18
 Changed by:
 
 - ADR 139 extends decision 4: go-containerregistry to get and unpack images.
-- ADR 327 changes decision 6: for a unit with proxy rules, the sandbox can
-  reach only the job proxy.
 
 ## Context
 
