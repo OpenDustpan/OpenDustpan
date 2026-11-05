@@ -196,6 +196,7 @@ func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert
 		auditChain:        "",
 		components:        "",
 		publicURL:         "",
+		auditSinks:        nil,
 	}
 }
 
