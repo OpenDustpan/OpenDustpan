@@ -85,6 +85,24 @@ func oneCommit(base string) forge.CommitRequest {
 	}
 }
 
+// fixedAnswer serves status, headers and body for each call, except the read of
+// a branch: the head of the branch is the base, so a moved head is a conflict.
+func fixedAnswer(status int, headers map[string]string, body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/git/ref/heads/") {
+			answer(w, http.StatusOK, `{"object":{"sha":"`+rawBase+`"}}`)
+
+			return
+		}
+
+		for k, v := range headers {
+			w.Header().Set(k, v)
+		}
+
+		answer(w, status, body)
+	}
+}
+
 // typedErrors is an answer with one error for each type, each with the text.
 func typedErrors(text string, types ...string) string {
 	parts := make([]string, 0, len(types))
@@ -164,13 +182,7 @@ func TestCommitMapsTheAnswersOfGitHub(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			fg := rawForge(t, "", func(w http.ResponseWriter, _ *http.Request) {
-				for k, v := range tt.headers {
-					w.Header().Set(k, v)
-				}
-
-				answer(w, tt.status, tt.body)
-			})
+			fg := rawForge(t, "", fixedAnswer(tt.status, tt.headers, tt.body))
 
 			_, err := fg.Commit(t.Context(), "acme/infra", oneCommit(rawBase))
 			if !errors.Is(err, tt.want) {
@@ -766,5 +778,48 @@ func TestFindCommitListLongerThanAPageIsNotRead(t *testing.T) {
 	_, err = c.FindCommit(t.Context(), "acme/infra", "main", "Dustpan-Job: j-1", time.Unix(0, 0))
 	if !errors.Is(err, forge.ErrUnavailable) {
 		t.Fatalf("FindCommit = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestCommitFollowsAMovedBranchAtMostThreeTimes gives a branch that moves at
+// each call and has the same files at each head. The adapter tries four times
+// (one, and three after a move) and then returns ErrConflict.
+func TestCommitFollowsAMovedBranchAtMostThreeTimes(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu        sync.Mutex
+		mutations int
+		heads     int
+	)
+
+	c := rawForge(t, "", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch {
+		case strings.Contains(r.URL.Path, "/git/ref/heads/"):
+			heads++
+
+			answer(w, http.StatusOK, `{"object":{"sha":"`+shaN(1000+heads)+`"}}`)
+		case r.URL.Path == "/graphql":
+			mutations++
+
+			answer(w, http.StatusOK, typedErrors("x", "STALE_DATA"))
+		default:
+			answer(w, http.StatusNotFound, `{"message":"Not Found"}`)
+		}
+	})
+
+	_, err := c.Commit(t.Context(), "acme/infra", oneCommit(rawBase))
+	if !errors.Is(err, forge.ErrConflict) {
+		t.Fatalf("Commit = %v, want ErrConflict", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if mutations != 4 || heads != 3 {
+		t.Fatalf("%d mutations and %d reads of the head, want 4 and 3", mutations, heads)
 	}
 }
