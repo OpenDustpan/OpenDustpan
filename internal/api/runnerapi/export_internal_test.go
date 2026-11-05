@@ -31,19 +31,24 @@ func WriteManagementError(ctx context.Context, w http.ResponseWriter, err error)
 var ErrNotFound = errNotFound
 
 // JobPhaseOf calls the check that every step route makes first, on the
-// handler h and the session sess. With dropReader, it clears the job reader of
-// h for the call and puts it back after. It returns the error of the check.
-func JobPhaseOf(ctx context.Context, h *Handler, sess runner.Session, dropReader bool) error {
-	if dropReader {
-		reader := h.jobs
-		h.jobs = nil
+// handler h and the session sess. It returns the error of the check.
+func JobPhaseOf(ctx context.Context, h *Handler, sess runner.Session) error {
+	var c call
 
-		defer func() { h.jobs = reader }()
-	}
-
-	c := call{session: sess}
+	c.session = sess
 
 	_, err := h.jobPhaseOf(httptest.NewRequestWithContext(ctx, http.MethodPost, "/", http.NoBody), &c)
 
 	return err
+}
+
+// JobPhaseWithoutReader is JobPhaseOf with the job reader of h cleared for the
+// call and put back after it.
+func JobPhaseWithoutReader(ctx context.Context, h *Handler, sess runner.Session) error {
+	reader := h.jobs
+	h.jobs = nil
+
+	defer func() { h.jobs = reader }()
+
+	return JobPhaseOf(ctx, h, sess)
 }
