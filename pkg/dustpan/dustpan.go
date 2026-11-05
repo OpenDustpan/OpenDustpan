@@ -1840,7 +1840,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service, authz identity.Auth
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	manual, err := newManualLockService(cfg, authz)
+	manual, err := newManualLockService(cfg.namespaceStore, cfg.jobStore, cfg.now, authz)
 	if err != nil {
 		return services{}, err
 	}
@@ -3025,8 +3025,10 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 // chain, and this service checks them again with the authorizer that it gets.
 // It does not rely on the route check, so a caller that skips the route still
 // meets the IP allowlist gate and the namespace service rule.
-func newManualLockService(cfg *settings, authz identity.Authorizer) (*manuallock.Service, error) {
-	store, ok := cfg.namespaceStore.(manuallock.Store)
+func newManualLockService(
+	namespaces namespace.Store, jobs job.Store, now func() time.Time, authz identity.Authorizer,
+) (*manuallock.Service, error) {
+	store, ok := namespaces.(manuallock.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No manual lock service: the store holds no manual locks.
 	}
@@ -3035,15 +3037,15 @@ func newManualLockService(cfg *settings, authz identity.Authorizer) (*manuallock
 	// a phase that started before a manual lock pass that lock. Without a job
 	// store the clock stays nil, and no job token passes any lock.
 	var phases manuallock.PhaseClock
-	if cfg.jobStore != nil {
-		phases = job.PhaseClock{Jobs: cfg.jobStore}
+	if jobs != nil {
+		phases = job.PhaseClock{Jobs: jobs}
 	}
 
 	svc, err := manuallock.NewService(manuallock.Config{
 		Store:      store,
-		Namespaces: cfg.namespaceStore,
+		Namespaces: namespaces,
 		Authorizer: authz,
-		Now:        cfg.now,
+		Now:        now,
 		Phases:     phases,
 	})
 	if err != nil {
