@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -114,3 +115,11 @@ var (
 	ErrPageQueryForTest              = errPageQuery
 	ErrNoPrincipalStoreForTest       = errNoPrincipalStore
 )
+
+// AcceptLocalAssertionForTest runs the check of the Assertion of the password
+// sign-in in, as the password route runs it after the check of the password,
+// so that a test can send it a hostile Assertion that the service never
+// makes.
+func (h *Handler) AcceptLocalAssertionForTest(w http.ResponseWriter, r *http.Request, in localusersvc.SignedIn) bool {
+	return h.acceptLocalAssertion(w, r, in)
+}
