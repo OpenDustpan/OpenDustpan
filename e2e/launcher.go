@@ -243,19 +243,31 @@ func (r *FakeRunner) Handoff(ctx context.Context, tb testing.TB, operation strin
 func (r *FakeRunner) call(ctx context.Context, tb testing.TB, path string, body any) (int, []byte) {
 	tb.Helper()
 
+	return r.env.signedPost(ctx, tb, r.priv, signedCall{Subject: r.id, Method: "", Path: path}, body)
+}
+
+// signedPost sends a POST with a JSON body (nil sends none) to the path of
+// who, signed by the subject of who with key.
+func (e *Env) signedPost(
+	ctx context.Context, tb testing.TB, key ed25519.PrivateKey, who signedCall, body any,
+) (int, []byte) {
+	tb.Helper()
+
 	var raw []byte
 
 	if body != nil {
 		var err error
 
 		if raw, err = json.Marshal(body); err != nil {
-			tb.Fatalf("encode the body of %s: %v", path, err)
+			tb.Fatalf("encode the body of %s: %v", who.Path, err)
 		}
 	}
 
-	return r.env.launcherSend(ctx, tb, launcherRequest{
-		Method: http.MethodPost, Path: path, Body: raw, Extra: nil,
-		Proof: signProof(tb, r.priv, signedCall{Subject: r.id, Method: http.MethodPost, Path: path}, raw),
+	who.Method = http.MethodPost
+
+	return e.launcherSend(ctx, tb, launcherRequest{
+		Method: who.Method, Path: who.Path, Body: raw, Extra: nil,
+		Proof: signProof(tb, key, who, raw),
 	})
 }
 
@@ -281,7 +293,9 @@ func (e *Env) OpenSession(ctx context.Context, tb testing.TB, handoff string) *F
 
 	raw, err := json.Marshal(protocol.SessionRequest{
 		HandoffToken: handoff, PublicKey: pub, Release: launcherRelease,
-		Proof: ed25519.Sign(priv, runner.SessionChallenge(e.URL, handoff, runner.Key{Public: pub, CreatedAt: time.Time{}})),
+		Proof: ed25519.Sign(
+			priv, runner.SessionChallenge(e.URL, handoff, runner.Key{Public: pub, CreatedAt: time.Time{}}),
+		),
 	})
 	if err != nil {
 		tb.Fatalf("encode the exchange: %v", err)
@@ -313,20 +327,7 @@ func (e *Env) OpenSession(ctx context.Context, tb testing.TB, handoff string) *F
 func (l *FakeLauncher) Post(ctx context.Context, tb testing.TB, path string, body any) (int, []byte) {
 	tb.Helper()
 
-	var raw []byte
-
-	if body != nil {
-		var err error
-
-		if raw, err = json.Marshal(body); err != nil {
-			tb.Fatalf("encode the body of %s: %v", path, err)
-		}
-	}
-
-	return l.env.launcherSend(ctx, tb, launcherRequest{
-		Method: http.MethodPost, Path: path, Body: raw, Extra: nil,
-		Proof: signProof(tb, l.priv, signedCall{Subject: l.ID, Method: http.MethodPost, Path: path}, raw),
-	})
+	return l.env.signedPost(ctx, tb, l.priv, signedCall{Subject: l.ID, Method: "", Path: path}, body)
 }
 
 // PutLog uploads one chunk of a log. The header and the proof carry the hash
