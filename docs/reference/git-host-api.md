@@ -86,6 +86,12 @@ A check:
 `write-back-review`, `fetch`, `runner-git`, `catalog` and `cause-diff`. The list
 of a feature that the connection can serve is empty.
 
+For an app, `scopes` lists the permissions of the installation, for example
+`contents:write`, `metadata:read` and `pull_requests:write`. The capability
+`commit` needs `contents:write`. The capability `review` needs `contents:write`
+and `pull_requests:write`. See the guide "Connect GitHub" for the permissions of
+the app.
+
 ## Errors
 
 | Status | Cause |

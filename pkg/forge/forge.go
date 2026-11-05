@@ -278,22 +278,25 @@ type Reviews interface {
 	// An answer that the adapter cannot check is ErrUnavailable: the
 	// adapter never returns a review request that it did not check. A
 	// review request whose merge state the forge has not computed yet has
-	// Mergeable MergeUnknown, so the caller reads it again later.
+	// Mergeable MergeUnknown. ReadReview does not wait and does not retry:
+	// the caller reads the review request again later.
 	ReadReview(ctx context.Context, repo, id string) (Review, error)
 	// CloseReview closes the review request id with no merge. A review
 	// request that is closed already returns nil. It returns ErrNotFound
 	// for a review request that does not exist, ErrConflict for a
 	// review request that merged, and ErrRefused for a review request that
-	// is not one of the write-back: a head branch that IsWriteBackBranch
-	// does not accept, or a head repository other than the base.
+	// is not one of the write-back. The rule is fixed: CloseReview closes a
+	// review request only when its head branch passes IsWriteBackBranch and
+	// its head repository is the base repository (see Review.FromFork). A
+	// review request of a person, or from a fork, is never closed.
 	CloseReview(ctx context.Context, repo, id string) error
 	// DeleteBranch deletes the branch of a write-back after its review
 	// request closed or merged. It returns ErrInvalid for a name that
 	// fails IsWriteBackBranch, before any call, and ErrRefused for the
-	// default branch of the repository, for a protected branch and for a
-	// missing permission. It returns ErrNotFound for a missing repository
-	// or branch, so a caller that wants an idempotent delete ignores
-	// ErrNotFound.
+	// default branch of the repository, for a protected branch, for a
+	// branch that an open review request has as its head, and for a missing
+	// permission. It returns ErrNotFound for a missing repository or branch,
+	// so a caller that wants an idempotent delete ignores ErrNotFound.
 	DeleteBranch(ctx context.Context, repo, branch string) error
 }
 

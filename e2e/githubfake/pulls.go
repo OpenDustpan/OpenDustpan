@@ -450,6 +450,25 @@ func (f *Fake) getRepo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getBranch answers one branch with its protection flag.
+func (f *Fake) getBranch(w http.ResponseWriter, r *http.Request) {
+	rp, ok := f.repoOf(w, r, levelNameRead)
+	if !ok {
+		return
+	}
+
+	name := r.PathValue("branch")
+
+	sha, found := rp.branches[name]
+	if !found {
+		f.message(w, http.StatusNotFound, "Branch not found")
+
+		return
+	}
+
+	f.writeJSON(w, http.StatusOK, wireBranch{Name: name, Protected: rp.protected[name], Commit: wireParent{SHA: sha}})
+}
+
 // pullRequest is the body of the call that opens a pull request.
 type pullRequest struct {
 	Title string `json:"title"`

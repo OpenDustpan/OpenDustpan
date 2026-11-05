@@ -177,12 +177,13 @@ func pullEnd(p map[string]any, name string) map[string]any {
 }
 
 const (
-	pullPath  = "GET /repos/acme/infra/pulls/7"
-	patchPath = "PATCH /repos/acme/infra/pulls/7"
-	listPath  = "GET /repos/acme/infra/pulls"
-	postPath  = "POST /repos/acme/infra/pulls"
-	repoPath  = "GET /repos/acme/infra"
-	refPath   = "DELETE /repos/acme/infra/git/refs/heads/dustpan/j-1"
+	branchPath = "GET /repos/acme/infra/branches/dustpan/j-1"
+	pullPath   = "GET /repos/acme/infra/pulls/7"
+	patchPath  = "PATCH /repos/acme/infra/pulls/7"
+	listPath   = "GET /repos/acme/infra/pulls"
+	postPath   = "POST /repos/acme/infra/pulls"
+	repoPath   = "GET /repos/acme/infra"
+	refPath    = "DELETE /repos/acme/infra/git/refs/heads/dustpan/j-1"
 )
 
 // TestReadReviewRefusesAnswersThatFailACheck sends an answer to ReadReview
@@ -768,9 +769,9 @@ func TestDeleteBranchChecksTheDefaultBranch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := cannedForge(t, map[string]hostAnswer{
+			f := cannedForge(t, deletable(map[string]hostAnswer{
 				repoPath: tt.repo, refPath: {status: http.StatusNoContent, body: "", header: nil, next: nil},
-			})
+			}))
 
 			err := f.DeleteBranch(t.Context(), "acme/infra", "dustpan/j-1")
 			if !errors.Is(err, tt.want) && (tt.want != nil || err != nil) {
@@ -848,9 +849,9 @@ func TestDeleteBranchStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := cannedForge(t, map[string]hostAnswer{
+			f := cannedForge(t, deletable(map[string]hostAnswer{
 				repoPath: okAnswer(map[string]any{"default_branch": "main"}), refPath: tt.answer,
-			})
+			}))
 
 			err := f.DeleteBranch(t.Context(), "acme/infra", "dustpan/j-1")
 			if !errors.Is(err, tt.want) && (tt.want != nil || err != nil) {
@@ -933,11 +934,72 @@ func TestReviewTokenAsksForPullRequests(t *testing.T) {
 		}
 	}
 
-	want := []string{
-		`{"repositories":["infra"],"permissions":{"contents":"write","pull_requests":"write"}}`,
-		`{"repositories":["infra"],"permissions":{"contents":"write"}}`,
+	want := `{"repositories":["infra"],"permissions":{"contents":"write","pull_requests":"write"}}`
+	if len(bodies) != 1 || bodies[0] != want {
+		t.Fatalf("the token requests = %v, want one: %s", bodies, want)
 	}
-	if len(bodies) != len(want) || bodies[0] != want[0] || bodies[1] != want[1] {
-		t.Fatalf("the token requests = %v, want %v", bodies, want)
+}
+
+// deletable adds the answers of a branch that nothing protects and that no open
+// review request has as its head, to the answers of a delete test.
+func deletable(answers map[string]hostAnswer) map[string]hostAnswer {
+	answers[branchPath] = okAnswer(map[string]any{"name": "dustpan/j-1", "protected": false})
+	answers[listPath] = okAnswer([]any{})
+
+	return answers
+}
+
+// TestDeleteBranchGuardsTheBranch checks the read just before the delete: a
+// protected branch, a branch with an open review request, and answers that
+// cannot be read each stop the delete.
+func TestDeleteBranchGuardsTheBranch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		branch hostAnswer
+		list   hostAnswer
+		want   error
+	}{
+		{"a protected branch", okAnswer(map[string]any{"protected": true}), okAnswer([]any{}), forge.ErrRefused},
+		{"no protection flag", okAnswer(map[string]any{}), okAnswer([]any{}), forge.ErrUnavailable},
+		{"a flag that is text", okAnswer(map[string]any{"protected": "no"}), okAnswer([]any{}), forge.ErrUnavailable},
+		{"a missing branch", statusAnswer(404, ""), okAnswer([]any{}), forge.ErrNotFound},
+		{"a branch answer that does not parse", statusAnswer(200, "{"), okAnswer([]any{}), forge.ErrUnavailable},
+		{
+			"an open review request", okAnswer(map[string]any{"protected": false}),
+			okAnswer([]any{listItem(7, "dustpan/j-1", "main", 900)}), forge.ErrRefused,
+		},
+		{
+			"a list that does not parse",
+			okAnswer(map[string]any{"protected": false}),
+			statusAnswer(200, "{"),
+			forge.ErrUnavailable,
+		},
+		{
+			"a list that fails",
+			okAnswer(map[string]any{"protected": false}),
+			statusAnswer(500, ""),
+			forge.ErrUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := cannedForge(t, map[string]hostAnswer{
+				repoPath: okAnswer(map[string]any{"default_branch": "main"}), branchPath: tt.branch, listPath: tt.list,
+				refPath: {status: http.StatusNoContent, body: "", header: nil, next: nil},
+			})
+
+			if err := f.DeleteBranch(t.Context(), "acme/infra", "dustpan/j-1"); !errors.Is(err, tt.want) {
+				t.Fatalf("DeleteBranch = %v, want %v", err, tt.want)
+			}
+
+			if f.sent(http.MethodDelete) {
+				t.Fatalf("DeleteBranch sent a DELETE after the guard refused it; calls %v", f.calls())
+			}
+		})
 	}
 }
