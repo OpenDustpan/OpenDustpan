@@ -354,8 +354,9 @@ func TestReplayedChallenge(t *testing.T) {
 	_, err = f.finish(t, signIn(), bad)
 	f.wantRefusal(t, "bad signature", err, mfa.ErrVerification, mfasvc.ActionCeremonyRefused)
 
-	if got := f.entries(t, mfasvc.ActionCeremonyRefused); got[0].Kind != audit.KindSecurity {
-		t.Fatalf("entry of a bad signature has the kind %s, want security", got[0].Kind)
+	got := f.entries(t, mfasvc.ActionCeremonyRefused)
+	if len(got) == 0 || got[0].Kind != audit.KindSecurity {
+		t.Fatalf("entries of a bad signature = %+v, want a security entry first", got)
 	}
 
 	good, err := f.auth.Assert(cred, webauthntest.For(c))
