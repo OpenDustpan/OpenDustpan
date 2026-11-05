@@ -95,6 +95,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   history/             domain: unit history, redaction, item keys of history items, tombstones, retention
   job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
   runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
+  launcher/            domain: the launcher contract (Command, Parse, BuildEnv, the credential file rules); the runner module imports it
   objectcontext/       domain: context on every object and the context read API
   graph/               domain: the unit graph, blast radius and focus view
   drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
@@ -114,7 +115,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
-  agent/, dependency/, launcher/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
+  agent/, dependency/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
   calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
                        features with their own package and suite (<name>test/)
