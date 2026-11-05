@@ -369,10 +369,11 @@ func treeRows() []treeRow {
 			treeOf([3]string{"stacks", modeModule, idBlobOne})),
 
 		same("a tree that GitHub cuts", none, `{"tree":[],"truncated":true}`),
+		// Without the check, the last entry wins and equals the base.
 		same(
 			"a name twice",
-			none,
-			treeOf([3]string{"a.txt", modeFile, idBlobOne}, [3]string{"a.txt", modeFile, idBlobOne}),
+			entry(modeFile, idBlobOne),
+			treeOf([3]string{"a.txt", modeLink, idBlobTwo}, [3]string{"a.txt", modeFile, idBlobOne}),
 		),
 		same("a name with a slash", none, treeOf([3]string{"x/a.txt", modeFile, idBlobOne})),
 		same("a name that is two dots", none, treeOf([3]string{"..", modeFile, idBlobOne})),
