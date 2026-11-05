@@ -115,3 +115,10 @@ type wireValidationError struct {
 	Code     string `json:"code"`
 	Message  string `json:"message,omitempty"`
 }
+
+// wireBranch is the answer for one branch.
+type wireBranch struct {
+	Name      string     `json:"name"`
+	Protected bool       `json:"protected"`
+	Commit    wireParent `json:"commit"`
+}
