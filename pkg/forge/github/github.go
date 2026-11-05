@@ -141,7 +141,7 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 	f := &gitHub{
 		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
 		mu: sync.Mutex{}, readTokens: map[string]readToken{}, owner: "", contents: contentsUnknown,
-		writes: contentsUnknown, pulls: contentsUnknown,
+		writes: contentsUnknown, pulls: contentsUnknown, identity: "",
 	}
 
 	switch c.Auth {
@@ -206,6 +206,9 @@ type gitHub struct {
 	contents   contentsAccess
 	writes     contentsAccess
 	pulls      contentsAccess
+	// identity is the login that the connection commits as. FindCommit reads
+	// it once, see commitIdentity.
+	identity string
 }
 
 // contentsAccess says whether an installation has the permission to read

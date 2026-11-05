@@ -61,6 +61,23 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	// Push commits files on branch with no check, as another author does,
 	// and returns the commit. A nil value deletes the file.
 	Push(ctx context.Context, branch string, files map[string][]byte) (forge.Commit, error)
+	// PushAs commits files on branch with no check, with the message and the
+	// origin that the case gives, and returns the commit. It lets a case make
+	// a commit that poses as a commit of the connection. A nil value
+	// deletes the file.
+	PushAs(
+		ctx context.Context,
+		branch string,
+		files map[string][]byte,
+		message string,
+		origin Origin,
+	) (forge.Commit, error)
+	// PushEntry commits an entry that is not a regular file at path on
+	// branch with no check, as another author does, and returns the commit.
+	// The entry replaces the file or the entry that the path has. The
+	// variant makes two entries of one kind differ: the target of a symlink,
+	// the commit of a submodule, the name of the file in a directory.
+	PushEntry(ctx context.Context, branch, path string, kind EntryKind, variant string) (forge.Commit, error)
 	// Rewrite replaces the history of branch with one new commit that has no
 	// parent and holds exactly files, as a force push does, and returns it.
 	// The commits before stay in the repository.
@@ -193,6 +210,26 @@ func cases() []testCase {
 		{"find commit with no such trailer is not found", forge.CapCommit, caseFindCommitNoTrailer},
 		{"find commit on a missing ref is not found", forge.CapCommit, caseFindCommitMissingRef},
 		{"find commit with a bad trailer or ref is invalid and makes no call", forge.CapCommit, caseFindCommitInvalid},
+		{
+			"find commit never returns a pushed commit that has the trailer",
+			forge.CapCommit,
+			caseFindCommitIgnoresPushedTrailer,
+		},
+		{
+			"find commit stops at a pushed commit with the trailer that is newer than the own",
+			forge.CapCommit,
+			caseFindCommitPushedTrailerBeforeOwn,
+		},
+		{
+			"find commit needs the trailer line to equal the line of the commit",
+			forge.CapCommit,
+			caseFindCommitTrailerIsExact,
+		},
+		{
+			"commit after a symlink, a submodule or a directory at a changed path is a conflict",
+			forge.CapCommit,
+			caseCommitMovedHeadEntry,
+		},
 
 		// Review requests.
 		{"open review request", forge.CapReview, caseReviewOpen},

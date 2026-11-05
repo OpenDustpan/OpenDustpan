@@ -25,6 +25,8 @@ import (
 const (
 	rawBase   = "0123456789abcdef0123456789abcdef01234567"
 	rawCommit = "89abcdef0123456789abcdef0123456789abcdef"
+	// rawIdentity is the login of the user of the token of rawForge.
+	rawIdentity = "acme"
 )
 
 // rawClient is the forge for the server of rawForge.
@@ -38,7 +40,25 @@ type rawClient struct {
 func rawForge(t *testing.T, basePath string, h http.HandlerFunc) rawClient {
 	t.Helper()
 
-	srv := httptest.NewUnstartedServer(h)
+	return rawForgeAs(t, basePath, http.StatusOK, `{"id":777,"login":"`+rawIdentity+`"}`, h)
+}
+
+// rawForgeAs is rawForge with the answer of the call for the user of the token,
+// which is the identity that the connection commits as.
+func rawForgeAs(t *testing.T, basePath string, userStatus int, userBody string, h http.HandlerFunc) rawClient {
+	t.Helper()
+
+	withUser := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == basePath+"/user" {
+			answer(w, userStatus, userBody)
+
+			return
+		}
+
+		h(w, r)
+	}
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(withUser))
 	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
@@ -495,9 +515,12 @@ func commitJSON(sha, message string, at time.Time) map[string]any {
 	return map[string]any{
 		"sha": sha,
 		"commit": map[string]any{
-			"message":   message,
-			"committer": map[string]any{"date": at.UTC().Format(time.RFC3339)},
+			"message":      message,
+			"committer":    map[string]any{"date": at.UTC().Format(time.RFC3339)},
+			"verification": map[string]any{"verified": true},
 		},
+		"author":    map[string]any{"login": rawIdentity},
+		"committer": map[string]any{"login": "web-flow"},
 	}
 }
 
@@ -804,6 +827,8 @@ func TestCommitFollowsAMovedBranchAtMostThreeTimes(t *testing.T) {
 			answer(w, http.StatusOK, `{"object":{"sha":"`+shaN(1000+heads)+`"}}`)
 		case strings.Contains(r.URL.Path, "/compare/"):
 			answer(w, http.StatusOK, aheadOf(rawBase))
+		case strings.Contains(r.URL.Path, "/git/trees/"):
+			answer(w, http.StatusOK, `{"tree":[]}`)
 		case r.URL.Path == "/graphql":
 			mutations++
 
@@ -881,8 +906,8 @@ func TestCommitNeedsTheBaseToBeAnAncestor(t *testing.T) {
 					answer(w, http.StatusOK, `{"object":{"sha":"`+rawCommit+`"}}`)
 				case strings.Contains(r.URL.Path, "/compare/"):
 					answer(w, tt.status, tt.body)
-				case strings.Contains(r.URL.Path, "/contents/"):
-					answer(w, http.StatusNotFound, `{"message":"Not Found"}`)
+				case strings.Contains(r.URL.Path, "/git/trees/"):
+					answer(w, http.StatusOK, `{"tree":[]}`)
 				case mutations == 0:
 					mutations++
 
