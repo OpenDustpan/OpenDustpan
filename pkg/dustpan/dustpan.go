@@ -537,16 +537,15 @@ type Server struct {
 	secretKeys    secret.KeyStore
 	secretWrapper secret.Wrapper
 	workspaces    *workspace.Service
-	// manualLocks is the manual lock service, or nil. Only the tests read it.
-	manualLocks *manuallock.Service
-	backups     *backup.Service
-	restores    *backup.RestoreService
-	storeChecks *storecheck.Service
-	now         func() time.Time
-	registry    *metrics.Registry
-	tlsCertFile string
-	tlsKeyFile  string
-	observed    *metrics.ServerMetrics
+	manualLocks   *manuallock.Service // Only the tests read it.
+	backups       *backup.Service
+	restores      *backup.RestoreService
+	storeChecks   *storecheck.Service
+	now           func() time.Time
+	registry      *metrics.Registry
+	tlsCertFile   string
+	tlsKeyFile    string
+	observed      *metrics.ServerMetrics
 	// chain is the audit chain of the store, or nil when the store keeps
 	// its own chain.
 	chain *auditChain
@@ -779,12 +778,21 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	// The auth ports need only the token service, so they exist before the
-	// services. The manual lock service takes the wrapped authorizer of the
-	// one chain, and not the configured one.
+	// services. From the write below, each later reader of cfg.authenticator
+	// and cfg.authorizer gets the chain, and no constructor after this point
+	// can read the bare configured port. The bare port is visible only to
+	// newIdentityServices above (the access service and the token service),
+	// which are the named exceptions in bareAuthorizerCallers
+	// (authchain_internal_test.go). This is the one write of the chain into
+	// cfg: an area constructor takes the ports as arguments instead, and
+	// newServices gets the authorizer as an argument for the manual lock
+	// service.
 	ports, err := newAuthPorts(cfg, tokens)
 	if err != nil {
 		return nil, err
 	}
+
+	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
 
 	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
@@ -810,14 +818,6 @@ func NewServer(opts ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// The adapter code that reads cfg.authenticator and cfg.authorizer gets
-	// the wrapped ports from here. The services that the group helpers above
-	// built keep the configured authorizer on purpose: the list is in
-	// bareAuthorizerCallers (authchain_internal_test.go). This is the one
-	// write of the chain into cfg: an area constructor takes the ports as
-	// arguments instead.
-	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
@@ -1008,24 +1008,24 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		flushDenials: flushDenials,
 		handler:      withStartGate(handlers.served, started, cfg.logger),
 		started:      started,
-		ungated:      handlers.ungated, mounted: &mount, root: handlers.root,
+		ungated:      handlers.ungated, mounted: &mount, root: handlers.root, manualLocks: svc.manualLocks,
 		logger:        cfg.logger,
 		listenAddr:    cfg.listenAddr,
 		listener:      cfg.listener,
 		secrets:       svc.secrets,
 		secretKeys:    cfg.secretKeys,
 		secretWrapper: cfg.secretWrapper,
-		workspaces:    svc.workspaces, manualLocks: svc.manualLocks,
-		backups:     early.backups,
-		restores:    mount.restores,
-		storeChecks: mount.storeChecks,
-		now:         cfg.now,
-		registry:    observed.Registry(),
-		tlsCertFile: cfg.tlsCertFile,
-		tlsKeyFile:  cfg.tlsKeyFile,
-		observed:    observed,
-		chain:       mount.chain,
-		ready:       mount.ready, drainPeriod: cfg.drainPeriod,
+		workspaces:    svc.workspaces,
+		backups:       early.backups,
+		restores:      mount.restores,
+		storeChecks:   mount.storeChecks,
+		now:           cfg.now,
+		registry:      observed.Registry(),
+		tlsCertFile:   cfg.tlsCertFile,
+		tlsKeyFile:    cfg.tlsKeyFile,
+		observed:      observed,
+		chain:         mount.chain,
+		ready:         mount.ready, drainPeriod: cfg.drainPeriod,
 		tokens:           svc.tokens,
 		tempAdmins:       svc.tempAdmins,
 		shipper:          shipper,
