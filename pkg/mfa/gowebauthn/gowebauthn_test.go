@@ -456,6 +456,35 @@ func TestCreationChecks(t *testing.T) {
 	}
 }
 
+// TestCreationRefusesAttestation sends registrations with an attestation
+// format other than "none". The adapter refuses each one before the module
+// parses a statement.
+func TestCreationRefusesAttestation(t *testing.T) {
+	t.Parallel()
+
+	rp := newRP(t)
+	auth := webauthntest.New(rpID, origin)
+
+	for _, format := range []string{"packed", "tpm", "android-safetynet", "android-key", "fido-u2f", "apple", "x"} {
+		cred, err := webauthntest.NewCredential([]byte(person().ID), false)
+		if err != nil {
+			t.Fatalf("credential: %v", err)
+		}
+
+		c := challenge(t)
+
+		response, err := auth.Register(cred, webauthntest.For(c).WithFormat(format))
+		if err != nil {
+			t.Fatalf("%s: register: %v", format, err)
+		}
+
+		_, err = rp.VerifyCreation(person(), c, response)
+		if !errors.Is(err, mfa.ErrVerification) || !strings.Contains(err.Error(), "attestation format") {
+			t.Errorf("%s: err = %v, want ErrVerification for the attestation format", format, err)
+		}
+	}
+}
+
 // TestHeadRefusesBadJSON checks the boundary of the response: size, JSON,
 // base64url and the size of each value.
 func TestHeadRefusesBadJSON(t *testing.T) {

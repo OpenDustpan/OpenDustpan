@@ -5417,6 +5417,12 @@ DELETE FROM local_user_resets WHERE digest = sqlc.arg('digest') AND expires_at_m
 -- name: PruneLocalUserResets :execrows
 DELETE FROM local_user_resets WHERE expires_at_ms <= $1;
 
+-- name: CountLivePasskeys :one
+-- The passkeys of a person that are not suspended, read under the lock of the
+-- principal. A suspended passkey cannot sign in, so the rule of the last
+-- credential counts only these.
+SELECT COUNT(*) FROM passkeys WHERE principal_id = $1 AND suspended_at_ms = 0;
+
 -- name: CountPasskeys :one
 -- The passkeys of a person, read under the lock of the principal.
 SELECT COUNT(*) FROM passkeys WHERE principal_id = $1;
