@@ -174,6 +174,14 @@ func backends() []backend {
 	return list
 }
 
+// wiringBackends returns SQLite alone. A test of the wiring of the handler
+// replaces the store behind the check under test with a double, or refuses the
+// request before it reaches the store. The dialect of the store does not
+// change such a test, and an environment of PostgreSQL costs about a second.
+func wiringBackends() []backend {
+	return backends()[:1]
+}
+
 func openSQLite(t *testing.T) stores {
 	t.Helper()
 
@@ -268,8 +276,8 @@ func newEnvServing(t *testing.T, open func(t *testing.T) stores, set func(s stor
 // lapseLease is the lease that lapse sets, and lapseMargin is the time to
 // wait after its expiry.
 const (
-	lapseLease  = 200 * time.Millisecond
-	lapseMargin = 200 * time.Millisecond
+	lapseLease  = 20 * time.Millisecond
+	lapseMargin = 30 * time.Millisecond
 )
 
 // lapse ends the claim of the operation. A case polls with the lease of the
