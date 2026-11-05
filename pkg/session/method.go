@@ -602,7 +602,12 @@ func checkAssertionFactors(a Assertion, _ time.Time) error {
 	return nil
 }
 
-// checkAssertionAuthTime checks the authentication time of a at now.
+// checkAssertionAuthTime checks the authentication time of a at now. It has
+// no lower bound: an old authentication is a valid answer to a sign-in that
+// asks for no fresh authentication, for example a person with a long session
+// at the identity provider. The method checks the window of a fresh
+// authentication against the start of its request, and the session policy
+// limits how long the session of an old authentication is fresh.
 func checkAssertionAuthTime(a Assertion, now time.Time) error {
 	switch {
 	case !a.AuthTimeKnown && !a.AuthTime.IsZero():
