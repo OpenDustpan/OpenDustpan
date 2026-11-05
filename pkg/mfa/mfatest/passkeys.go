@@ -67,6 +67,19 @@ func passkeyCases() []passkeyCase {
 			name: "a remove of the last passkey of a break-glass person fails with ErrLastCredential",
 			test: testRemoveLastBreakGlass,
 		},
+		{
+			name: "a remove of the last live passkey of a user with no password fails with ErrLastCredential when " +
+				"the other passkey is suspended",
+			test: testRemoveLastLive,
+		},
+		{
+			name: "a remove of a suspended passkey of a user with no password deletes it while a live passkey stays",
+			test: testRemoveSuspended,
+		},
+		{
+			name: "a remove of a break-glass person whose passkeys are all suspended fails with ErrLastCredential",
+			test: testRemoveAllSuspended,
+		},
 		{name: "a remove of a passkey of another person fails with ErrNotFound", test: testRemoveOther},
 		{
 			name: "a remove of the last passkey and of the password at the same time: one wins and the person " +
@@ -838,6 +851,70 @@ func testRemoveLastBreakGlass(t *testing.T, s PasskeyStore) {
 
 	if n := count(t, s, "prn-bg"); n != 1 {
 		t.Fatalf("passkeys = %d, want 1", n)
+	}
+}
+
+// mustSuspend suspends the passkey n with a counter that goes back.
+func mustSuspend(t *testing.T, s PasskeyStore, n int) {
+	t.Helper()
+
+	err := s.RecordUse(t.Context(), use(n, 1, 90), regressedEntry(n, 90))
+	wantErr(t, "suspend passkey "+strconv.Itoa(n), err, mfa.ErrCounterRegressed)
+}
+
+func testRemoveLastLive(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustLocalUser(t, s, 1)
+	mustAdd(t, s, 1, pid)
+	mustAdd(t, s, 2, pid)
+	mustSuspend(t, s, 1)
+
+	err := s.RemovePasskey(t.Context(), pid, "pky-2", entry(passkeyObject(2), at(51)))
+	wantErr(t, "remove the live passkey next to a suspended one", err, mfa.ErrLastCredential)
+
+	if n := count(t, s, pid); n != 2 {
+		t.Fatalf("passkeys = %d, want 2", n)
+	}
+
+	wantEntries(t, s, passkeyObject(2), 1)
+}
+
+func testRemoveSuspended(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustLocalUser(t, s, 1)
+	mustAdd(t, s, 1, pid)
+	mustAdd(t, s, 2, pid)
+	mustSuspend(t, s, 1)
+
+	if err := s.RemovePasskey(t.Context(), pid, "pky-1", entry(passkeyObject(1), at(51))); err != nil {
+		t.Fatalf("remove the suspended passkey: %v", err)
+	}
+
+	if got := byCredential(t, s, 2); !got.SuspendedAt.IsZero() {
+		t.Fatalf("passkey that stays = %+v, want the live one", got)
+	}
+}
+
+func testRemoveAllSuspended(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	bg := principalOf("prn-bg", "break-glass-1", principal.KindPerson)
+	bg.BreakGlass = true
+	mustPrincipal(t, s, bg)
+	mustAdd(t, s, 1, "prn-bg")
+	mustAdd(t, s, 2, "prn-bg")
+	mustSuspend(t, s, 1)
+	mustSuspend(t, s, 2)
+
+	for _, id := range []string{"pky-1", "pky-2"} {
+		err := s.RemovePasskey(t.Context(), "prn-bg", id, entry("passkey:"+id, at(51)))
+		wantErr(t, "remove "+id+" when all are suspended", err, mfa.ErrLastCredential)
+	}
+
+	if n := count(t, s, "prn-bg"); n != 2 {
+		t.Fatalf("passkeys = %d, want 2", n)
 	}
 }
 

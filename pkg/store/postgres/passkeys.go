@@ -156,6 +156,12 @@ func (t passkeyTx) CountPasskeys(ctx context.Context, principalID string) (int64
 	return n, passkeyErr(err)
 }
 
+func (t passkeyTx) CountLivePasskeys(ctx context.Context, principalID string) (int64, error) {
+	n, err := t.q.CountLivePasskeys(ctx, principalID)
+
+	return n, passkeyErr(err)
+}
+
 func (t passkeyTx) CreatePasskey(ctx context.Context, r passkeystore.Row) (int64, error) {
 	n, err := t.q.CreatePasskey(ctx, db.CreatePasskeyParams{
 		ID:             r.ID,

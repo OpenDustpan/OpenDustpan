@@ -1441,6 +1441,20 @@ func (q *Queries) CountLiveCollectionMembers(ctx context.Context, arg CountLiveC
 	return count, err
 }
 
+const countLivePasskeys = `-- name: CountLivePasskeys :one
+SELECT COUNT(*) FROM passkeys WHERE principal_id = $1 AND suspended_at_ms = 0
+`
+
+// The passkeys of a person that are not suspended, read under the lock of the
+// principal. A suspended passkey cannot sign in, so the rule of the last
+// credential counts only these.
+func (q *Queries) CountLivePasskeys(ctx context.Context, principalID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countLivePasskeys, principalID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLivePrincipal = `-- name: CountLivePrincipal :one
 SELECT COUNT(*) FROM principals WHERE id = $1 AND deleted_at_ms IS NULL
 `

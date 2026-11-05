@@ -1,12 +1,14 @@
 package passkeystore_test
 
 import (
+	"context"
 	"errors"
 	"math"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/mfa"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/passkeystore"
 )
 
@@ -100,5 +102,77 @@ func TestChallengeOfRefusesAChangedRow(t *testing.T) {
 		if _, err := passkeystore.ChallengeOf(r); !errors.Is(err, mfa.ErrInvalid) {
 			t.Errorf("%s: err = %v, want ErrInvalid", c.name, err)
 		}
+	}
+}
+
+// looseTx is a Tx whose delete ignores the person, as a changed adapter
+// could. Each other method answers for one person prn-1 with no local user
+// and two live passkeys of prn-2.
+type looseTx struct {
+	deleted *int
+}
+
+func (looseTx) LockPrincipal(context.Context, string) (passkeystore.Principal, error) {
+	return passkeystore.Principal{Kind: string(principal.KindPerson), BreakGlass: false}, nil
+}
+
+func (looseTx) LocalUserOf(context.Context, string) (passkeystore.LocalUser, error) {
+	return passkeystore.LocalUser{PasswordHash: "", Demo: false}, passkeystore.ErrNoRow
+}
+
+func (looseTx) CountPasskeys(context.Context, string) (int64, error) { return 2, nil }
+
+func (looseTx) CountLivePasskeys(context.Context, string) (int64, error) { return 2, nil }
+
+func (looseTx) PasskeyByID(context.Context, string) (passkeystore.Row, error) {
+	r := row()
+	r.PrincipalID = "prn-2"
+
+	return r, nil
+}
+
+func (looseTx) PasskeyByCredentialID(context.Context, []byte) (passkeystore.Row, error) {
+	return passkeystore.Row{}, passkeystore.ErrNoRow
+}
+
+func (looseTx) ListPasskeys(context.Context, string) ([]passkeystore.Row, error) { return nil, nil }
+
+func (looseTx) CreatePasskey(context.Context, passkeystore.Row) (int64, error) { return 0, nil }
+
+func (t looseTx) DeletePasskey(context.Context, string, string) (int64, error) {
+	*t.deleted++
+
+	return 1, nil
+}
+
+func (looseTx) RecordUse(context.Context, string, int64, int64) (int64, error) { return 0, nil }
+
+func (looseTx) Suspend(context.Context, string, int64) (int64, error) { return 0, nil }
+
+func (looseTx) CreateChallenge(context.Context, passkeystore.ChallengeRow) (int64, error) {
+	return 0, nil
+}
+
+func (looseTx) DeleteExpiredChallenges(context.Context, int64) (int64, error) { return 0, nil }
+
+func (looseTx) TakeChallenge(context.Context, string) (passkeystore.ChallengeRow, error) {
+	return passkeystore.ChallengeRow{}, passkeystore.ErrNoRow
+}
+
+// TestRemoveChecksTheOwnerItself checks the owner check of a removal alone:
+// the delete of the Tx ignores the person, so only the check of the row
+// stops a removal of a passkey of another person.
+func TestRemoveChecksTheOwnerItself(t *testing.T) {
+	t.Parallel()
+
+	deleted := 0
+
+	err := passkeystore.RemovePasskey(t.Context(), looseTx{deleted: &deleted}, "prn-1", "pky-1")
+	if !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("remove a passkey of another person: err = %v, want ErrNotFound", err)
+	}
+
+	if deleted != 0 {
+		t.Fatalf("deletes = %d, want 0", deleted)
 	}
 }

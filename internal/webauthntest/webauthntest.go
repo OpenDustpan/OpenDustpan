@@ -97,6 +97,9 @@ type Ceremony struct {
 	UserHandle []byte
 	// CrossOrigin sets crossOrigin in the client data.
 	CrossOrigin bool
+	// Format replaces the attestation format "none" of a registration.
+	// The statement stays empty.
+	Format string
 }
 
 // For returns the ceremony of the challenge c with the values of the
@@ -105,6 +108,7 @@ func For(c []byte) Ceremony {
 	return Ceremony{
 		Challenge: append([]byte(nil), c...), Type: "", Origin: "", RPID: "", Flags: 0, SetFlags: false,
 		Counter: 0, SetCounter: false, BadSignature: false, UserHandle: nil, CrossOrigin: false,
+		Format: "",
 	}
 }
 
@@ -153,6 +157,14 @@ func (c Ceremony) WithBadSignature() Ceremony {
 // WithUserHandle returns c with the user handle h.
 func (c Ceremony) WithUserHandle(h []byte) Ceremony {
 	c.UserHandle = h
+
+	return c
+}
+
+// WithFormat returns c with the attestation format f and an empty
+// statement.
+func (c Ceremony) WithFormat(f string) Ceremony {
+	c.Format = f
 
 	return c
 }
@@ -249,8 +261,13 @@ func (a *Authenticator) Register(cred *Credential, c Ceremony) ([]byte, error) {
 	auth = append(auth, cred.ID...)
 	auth = append(auth, key...)
 
+	format := c.Format
+	if format == "" {
+		format = "none"
+	}
+
 	attestation := cborMap(
-		cborText("fmt"), cborText("none"),
+		cborText("fmt"), cborText(format),
 		cborText("attStmt"), cborMap(),
 		cborText("authData"), cborBytes(auth),
 	)
