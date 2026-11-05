@@ -413,11 +413,11 @@ func TestJobPhaseRefusesWithoutAJobReader(t *testing.T) {
 				Key: runner.Key{Public: nil, CreatedAt: time.Time{}}, CreatedAt: time.Time{},
 			}
 
-			if err := runnerapi.JobPhaseOf(t.Context(), s.handler, sess, false); err != nil {
+			if err := runnerapi.JobPhaseOf(t.Context(), s.handler, sess); err != nil {
 				t.Fatalf("jobPhaseOf with the job reader = %v, want the live phase", err)
 			}
 
-			err := runnerapi.JobPhaseOf(t.Context(), s.handler, sess, true)
+			err := runnerapi.JobPhaseWithoutReader(t.Context(), s.handler, sess)
 			if !errors.Is(err, runner.ErrNotFound) || !strings.Contains(err.Error(), "records no steps") {
 				t.Fatalf("jobPhaseOf without the job reader = %v, want not-found with \"records no steps\"", err)
 			}
