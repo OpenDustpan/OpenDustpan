@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -142,7 +143,7 @@ func NewToolServices(opts ...Option) (ToolServices, error) {
 
 	cfg.authorizer = identity.AdminOnly{}
 
-	svc, err := newServices(cfg, nil)
+	svc, err := newServices(cfg, nil, cfg.authorizer)
 	if err != nil {
 		return ToolServices{}, err
 	}
@@ -174,7 +175,7 @@ func ManualLockPhaseStart(
 
 	cfg.authorizer = identity.AdminOnly{}
 
-	svc, err := newManualLockService(cfg)
+	svc, err := newManualLockService(cfg, cfg.authorizer)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -187,6 +188,12 @@ func ManualLockPhaseStart(
 }
 
 var errNoManualLockService = errors.New("no manual lock service")
+
+// ManualLocks returns the manual lock service that the server wired, or nil.
+// A test calls it to reach the service layer with no route in front.
+func (s *Server) ManualLocks() *manuallock.Service {
+	return s.manualLocks
+}
 
 // UngatedHandler returns the root handler before the start gate and the
 // component gate, so that a test can send a request to a server that did not

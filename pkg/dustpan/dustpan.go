@@ -537,14 +537,16 @@ type Server struct {
 	secretKeys    secret.KeyStore
 	secretWrapper secret.Wrapper
 	workspaces    *workspace.Service
-	backups       *backup.Service
-	restores      *backup.RestoreService
-	storeChecks   *storecheck.Service
-	now           func() time.Time
-	registry      *metrics.Registry
-	tlsCertFile   string
-	tlsKeyFile    string
-	observed      *metrics.ServerMetrics
+	// manualLocks is the manual lock service, or nil. Only the tests read it.
+	manualLocks *manuallock.Service
+	backups     *backup.Service
+	restores    *backup.RestoreService
+	storeChecks *storecheck.Service
+	now         func() time.Time
+	registry    *metrics.Registry
+	tlsCertFile string
+	tlsKeyFile  string
+	observed    *metrics.ServerMetrics
 	// chain is the audit chain of the store, or nil when the store keeps
 	// its own chain.
 	chain *auditChain
@@ -776,7 +778,15 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc, err := newServices(cfg, tokens)
+	// The auth ports need only the token service, so they exist before the
+	// services. The manual lock service takes the wrapped authorizer of the
+	// one chain, and not the configured one.
+	ports, err := newAuthPorts(cfg, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
 		return nil, err
 	}
@@ -801,15 +811,12 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	ports, err := newAuthPorts(cfg, svc.tokens)
-	if err != nil {
-		return nil, err
-	}
-
 	// The adapter code that reads cfg.authenticator and cfg.authorizer gets
-	// the wrapped ports from here. The services that newServices built above
-	// keep the configured authorizer. This is the one write of the chain into
-	// cfg: an area constructor takes the ports as arguments instead.
+	// the wrapped ports from here. The services that the group helpers above
+	// built keep the configured authorizer on purpose: the list is in
+	// bareAuthorizerCallers (authchain_internal_test.go). This is the one
+	// write of the chain into cfg: an area constructor takes the ports as
+	// arguments instead.
 	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
@@ -1008,17 +1015,17 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		secrets:       svc.secrets,
 		secretKeys:    cfg.secretKeys,
 		secretWrapper: cfg.secretWrapper,
-		workspaces:    svc.workspaces,
-		backups:       early.backups,
-		restores:      mount.restores,
-		storeChecks:   mount.storeChecks,
-		now:           cfg.now,
-		registry:      observed.Registry(),
-		tlsCertFile:   cfg.tlsCertFile,
-		tlsKeyFile:    cfg.tlsKeyFile,
-		observed:      observed,
-		chain:         mount.chain,
-		ready:         mount.ready, drainPeriod: cfg.drainPeriod,
+		workspaces:    svc.workspaces, manualLocks: svc.manualLocks,
+		backups:     early.backups,
+		restores:    mount.restores,
+		storeChecks: mount.storeChecks,
+		now:         cfg.now,
+		registry:    observed.Registry(),
+		tlsCertFile: cfg.tlsCertFile,
+		tlsKeyFile:  cfg.tlsKeyFile,
+		observed:    observed,
+		chain:       mount.chain,
+		ready:       mount.ready, drainPeriod: cfg.drainPeriod,
 		tokens:           svc.tokens,
 		tempAdmins:       svc.tempAdmins,
 		shipper:          shipper,
@@ -1812,7 +1819,11 @@ func checkTLSAndAllowlist(cfg *settings) error {
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
+//
+// The authorizer is the wrapped authorizer of the one chain (newAuthPorts).
+// The manual lock service gets it, so its lock, unlock and manage checks pass
+// the IP allowlist gate and the namespace service rule too.
+func newServices(cfg *settings, tokens *accesstoken.Service, authz identity.Authorizer) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Installation: cfg.installation},
 	)
@@ -1829,7 +1840,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	manual, err := newManualLockService(cfg)
+	manual, err := newManualLockService(cfg, authz)
 	if err != nil {
 		return services{}, err
 	}
@@ -3009,7 +3020,12 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 // when that store also holds manual locks. A custom store without them gets no
 // service: the lock routes are not served and the tools take their own locks
 // as before.
-func newManualLockService(cfg *settings) (*manuallock.Service, error) {
+//
+// Defense in depth: the lock routes check the same actions with the same
+// chain, and this service checks them again with the authorizer that it gets.
+// It does not rely on the route check, so a caller that skips the route still
+// meets the IP allowlist gate and the namespace service rule.
+func newManualLockService(cfg *settings, authz identity.Authorizer) (*manuallock.Service, error) {
 	store, ok := cfg.namespaceStore.(manuallock.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No manual lock service: the store holds no manual locks.
@@ -3026,7 +3042,7 @@ func newManualLockService(cfg *settings) (*manuallock.Service, error) {
 	svc, err := manuallock.NewService(manuallock.Config{
 		Store:      store,
 		Namespaces: cfg.namespaceStore,
-		Authorizer: cfg.authorizer,
+		Authorizer: authz,
 		Now:        cfg.now,
 		Phases:     phases,
 	})
