@@ -13,8 +13,6 @@ Changed by:
 - ADR 241 extends decision 7: the login block key sourceHost.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
-- ADR 327 extends decision 9: the export key `proxy`, for the consumer
-  `job-proxy` only.
 
 ## Context
 
