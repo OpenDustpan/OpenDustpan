@@ -410,13 +410,18 @@ func signInProvider(
 		return none, fmt.Errorf("%w: provider %q: %w", errSignInSetup, p.ID, err)
 	}
 
+	method, err := redirectMethod(client, p.ID, session.MethodOIDC, configuredProviderOn, now)
+	if err != nil {
+		return none, fmt.Errorf("%w: %w", errSignInSetup, err)
+	}
+
 	displayName := p.DisplayName
 	if displayName == "" {
 		displayName = p.ID
 	}
 
 	return serverapi.SignInProvider{
-		Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
+		Method: method, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
 		Source: principal.SourceOIDC,
 	}, nil
 }

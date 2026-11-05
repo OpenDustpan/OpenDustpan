@@ -358,7 +358,7 @@ func newServiceBackedHandlerOf(
 			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
 			Providers: []apiserver.SignInProvider{
 				{
-					Client:      stubOIDC{},
+					Method:      redirectMethod(t, stubOIDC{}, testProvider, time.Now),
 					ID:          testProvider,
 					DisplayName: "Corp",
 					AutoCreate:  true,
