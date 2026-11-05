@@ -211,25 +211,37 @@ func TestNewServerAuthenticatorChain(t *testing.T) {
 }
 
 // bareAuthorizerCallers names the code that calls the configured authorizer
-// with no wrapper of the chain, on purpose. The key is the prefix of a
-// function name on the stack of the call. The value is the reason. A caller
-// that is not here must use the wrapped authorizer, so a new service cannot
-// use the bare port by mistake.
+// with no wrapper of the chain, on purpose. The key is the prefix of the name
+// of the function that calls the authorizer. The value is the reason.
+//
+// The entries are declared, and this test does not exercise them: with the
+// recording authorizer, these callers build their own *access.Authorizer, so
+// no call of theirs reaches the recorder. A stale entry is not found by the
+// test.
+//
+// Both callers hold the bare port because they run before NewServer writes
+// the chain into the settings (newIdentityServices). This layer has no IP
+// allowlist gate and no namespace service rule. The routes in front of them
+// use the chain, but this layer does not rely on that.
 func bareAuthorizerCallers() map[string]string {
 	return map[string]string{
-		// The access service holds the access.Authorizer itself, the policy of
-		// the stored grants, to check who may change a role or a grant. The
-		// routes in front of it call the wrapped authorizer.
-		"access.(*Service)": "grant changes are checked by the grant policy itself; the routes use the chain",
-		// The access token service gets the authorizer of the access service
+		// The grant check of the access service needs the grant model of the
+		// concrete *access.Authorizer (the stored roles and grants). It is a
+		// check of the escalation of a grant, and not a check of a request.
+		"access.(*Service)": "escalation check of a grant needs the concrete *access.Authorizer",
+		// The access token service gets that authorizer of the access service
 		// for the escalation check of a token for another principal.
-		"accesstoken.(*Service)": "token escalation is checked by the grant policy; the routes use the chain",
+		"accesstoken.(*Service)": "escalation check of a token needs the concrete *access.Authorizer",
 	}
 }
 
 // assertEveryCall fails t when a call of rec does not start with want, unless
-// a function on its stack starts with a key of bare. The manual lock service
-// is not in bare, so a service that holds the configured port fails here.
+// the function that makes the call starts with a key of bare. It checks only
+// the calls that the test makes: a service that holds the configured port and
+// that the test does not drive is not found here. NewServer closes that
+// window in its structure: it writes the chain into the settings before
+// newServices, so a later constructor cannot read the bare port. The manual
+// lock service is not in bare, so a call of it that skips the chain fails.
 func assertEveryCall(t *testing.T, name string, rec *callRecorder, want []string, bare map[string]string) {
 	t.Helper()
 
@@ -252,13 +264,28 @@ func assertEveryCall(t *testing.T, name string, rec *callRecorder, want []string
 	}
 }
 
-// onBareList reports whether a function of stack starts with a key of bare.
+// onBareList reports whether the function that makes the call starts with a
+// key of bare. stack starts with the recording method. The function that makes
+// the call is the first one after it that is not an Authorize method of a
+// wrapper. A frame further up the stack does not count, so a named caller
+// cannot exempt the call of another service that it calls.
 func onBareList(stack []string, bare map[string]string) bool {
-	for _, fn := range stack {
-		for prefix := range bare {
-			if strings.HasPrefix(fn, prefix) {
-				return true
-			}
+	rest := stack
+	if len(rest) > 0 {
+		rest = rest[1:]
+	}
+
+	for len(rest) > 0 && strings.HasSuffix(rest[0], ".Authorize") {
+		rest = rest[1:]
+	}
+
+	if len(rest) == 0 {
+		return false
+	}
+
+	for prefix := range bare {
+		if strings.HasPrefix(rest[0], prefix) {
+			return true
 		}
 	}
 

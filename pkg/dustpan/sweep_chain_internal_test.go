@@ -22,11 +22,12 @@ func sweepChainServer(
 	t.Helper()
 
 	return &Server{
-		kind:        kindState{store: nil, principals: nil, kind: ""},
-		instances:   instanceState{store: nil, id: "", version: "", registered: nil},
-		ready:       nil,
-		drainPeriod: 0,
-		tempAdmins:  nil, manualLocks: nil,
+		kind:             kindState{store: nil, principals: nil, kind: ""},
+		instances:        instanceState{store: nil, id: "", version: "", registered: nil},
+		ready:            nil,
+		drainPeriod:      0,
+		tempAdmins:       nil,
+		manualLocks:      nil,
 		reconciler:       nil,
 		artifactSweeper:  nil,
 		nameLocks:        nameLockPrune{locks: nil},
