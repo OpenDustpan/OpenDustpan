@@ -653,7 +653,7 @@ fact that it names.
    that starts meanwhile waits for it. The history shows the lock holder.
 7. **A runner-only feature in a local run.** Secret masking is a feature
    that works only in runners today: the launcher masks each secret value
-   of a phase in the step log (`Masker` in `internal/launcher`). Pass: a
+   of a phase in the step log (`Masker` in `pkg/launcher`). Pass: a
    local wrapper run of a change that prints a secret value of its profile
    shows the masked value in the log that the server stores, and the
    plain text appears nowhere in the log. The job token credential of the
