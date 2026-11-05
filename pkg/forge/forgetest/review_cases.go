@@ -576,6 +576,25 @@ func caseDeleteBranchOutsideWriteBack(t *testing.T, h Harness) {
 	}
 }
 
+func caseDeleteBranchWithOpenReview(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	opened := openReview(t, h, "dustpan/j-19")
+
+	if err := h.Forge.DeleteBranch(ctx, h.Repo, "dustpan/j-19"); !errors.Is(err, forge.ErrRefused) {
+		t.Fatalf("DeleteBranch of the head of an open review request = %v, want ErrRefused", err)
+	}
+
+	if !branchExists(t, h, "dustpan/j-19") {
+		t.Fatal("the branch is gone after a refused delete")
+	}
+
+	if got := readReview(t, h, opened.ID); got.State != forge.ReviewOpen {
+		t.Fatalf("ReadReview = %+v, want the review request still open", got)
+	}
+}
+
 func caseDeleteDefaultBranch(t *testing.T, h Harness) {
 	t.Helper()
 

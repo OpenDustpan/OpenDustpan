@@ -31,6 +31,7 @@
 //	GET    /repos/{owner}/{repo}/contents/{path}?ref=  a file, or a directory listing
 //	GET    /repos/{owner}/{repo}/git/blobs/{sha}       a blob
 //	GET    /repos/{owner}/{repo}                       the repository, with its ID and default branch
+//	GET    /repos/{owner}/{repo}/branches/{name}       one branch, with its protection flag
 //	POST   /repos/{owner}/{repo}/pulls                 a pull request from a branch of the repository
 //	GET    /repos/{owner}/{repo}/pulls?state=&head=&base= the pull requests, with per_page
 //	GET    /repos/{owner}/{repo}/pulls/{number}        one pull request, with its mergeable state

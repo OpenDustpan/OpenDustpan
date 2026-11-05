@@ -22,9 +22,13 @@ installation. A file is at most 2 MiB. The capability `files` is in the list
 only when the installation has the permission to read the contents. A
 connection with the auth kind `token` always lists it.
 
-This release does not write commits, compare commits, open review requests,
-take webhooks or give tokens to runners. The capabilities list of a check holds
-no other capability for that reason. The answer still names, for each feature, the
+A connection with push access can also make commits on a branch, open, read and
+close review requests (pull requests of GitHub), and delete the branch of a
+review request that the write-back made. The capabilities `commit` and `review`
+need the permissions in the section "Permissions of the app".
+
+This release does not compare commits, take webhooks or give tokens to runners.
+The capabilities list of a check holds no other capability for that reason. The answer still names, for each feature, the
 capabilities that the feature needs and the connection does not have. GitLab is
 not supported yet.
 
@@ -40,6 +44,37 @@ server, and not to one namespace.
 - **One app for each namespace.** A namespace can register its own app later. Its key
   and event secret then belong to the namespace. This option is not in this
   release.
+
+## Permissions of the app
+
+Set these repository permissions on the GitHub App, and accept them for each
+installation:
+
+| Permission | Level | What it allows | Capability |
+| --- | --- | --- | --- |
+| Metadata | Read | Reads the repository and its branches. GitHub gives it to each app. | all |
+| Contents | Read | Reads the head of a ref and the files at a commit. | `files` |
+| Contents | Read and write | Makes commits and branches. Deletes a branch of the write-back. | `commit` |
+| Pull requests | Read and write | Opens, reads and closes review requests. | `review` |
+
+The capability `review` needs the write of the contents and the write of the
+pull requests. A check lists the capability only when the installation has both
+permissions and the connection has push access. When the app lacks the
+permission to write the pull requests, the check does not list `review`, and the
+feature that needs it shows `review` in `missing`. A person who changes the
+permissions of the app must accept the new permissions on the installation in
+GitHub, and then check the connection again.
+
+For a review request call, the server asks GitHub for an installation token for
+one repository, with the permission to write the contents and the pull
+requests, and nothing else. The server keeps this token in memory until it is
+near its expiry. A connection with the auth kind `token` uses its own token,
+which needs the same permissions.
+
+The server only closes a review request when its head is a branch of the
+write-back (the name starts with `dustpan/`) in the repository of the base. It
+only deletes such a branch, and never the default branch, a protected branch, or
+a branch that an open review request has as its head.
 
 ## Step 1: the operator registers the app
 

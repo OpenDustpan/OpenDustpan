@@ -235,6 +235,16 @@ func TestDeleteRefAndRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	branch := c.do(http.MethodGet, "/repos/acme/infra/branches/dustpan/p", userValue, "")
+	if branch.status != http.StatusOK || !strings.Contains(string(branch.body), `"protected":true`) {
+		t.Fatalf("GET branch = %d %s, want a protected branch", branch.status, branch.body)
+	}
+
+	none := c.do(http.MethodGet, "/repos/acme/infra/branches/none", userValue, "")
+	if none.status != http.StatusNotFound {
+		t.Fatalf("GET of a missing branch = %d, want 404", none.status)
+	}
+
 	repo := c.do(http.MethodGet, "/repos/acme/infra", userValue, "")
 	if repo.status != http.StatusOK || !strings.Contains(string(repo.body), `"default_branch":"dustpan/j-1"`) {
 		t.Fatalf("GET repository = %d %s", repo.status, repo.body)

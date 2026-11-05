@@ -397,7 +397,9 @@ func (f *gitHub) patchClosed(ctx context.Context, r repoName, bearer string, got
 
 // DeleteBranch deletes a branch of the write-back. The branch name starts with
 // forge.WriteBackBranchPrefix, and the branch is not the default branch of the
-// repository, which the adapter reads before the delete.
+// repository, which the adapter reads before the delete. The adapter also reads
+// the branch just before the delete, and refuses a protected branch and a branch
+// that an open review request has as its head.
 //
 // It returns forge.ErrInvalid for a name that fails the checks, before any
 // call. It returns forge.ErrRefused for the default branch, for a protected
@@ -427,7 +429,7 @@ func (f *gitHub) DeleteBranch(ctx context.Context, repo, branch string) error {
 		)
 	}
 
-	bearer, err := f.writeBearer(ctx, r)
+	bearer, err := f.reviewBearer(ctx, r)
 	if err != nil {
 		return f.forget(r, err)
 	}
@@ -452,6 +454,10 @@ func (f *gitHub) removeBranch(ctx context.Context, r repoName, bearer, branch st
 		return fmt.Errorf("%w: the branch is the default branch of the repository", forge.ErrRefused)
 	}
 
+	if guardErr := f.guardBranch(ctx, r, bearer, branch); guardErr != nil {
+		return guardErr
+	}
+
 	resp, err := f.send(ctx, call{
 		method: http.MethodDelete, path: r.path() + "/git/refs/heads/" + escapePath(branch), bearer: bearer,
 		body: nil, status: f.deleteStatus, oversize: nil, target: "",
@@ -462,6 +468,67 @@ func (f *gitHub) removeBranch(ctx context.Context, r repoName, bearer, branch st
 
 	if resp.status != http.StatusNoContent {
 		return forge.Unavailable(0, "GitHub gave an answer for the delete that is not the expected one")
+	}
+
+	return nil
+}
+
+// keyProtected is the field of the answer for a branch that says whether a rule
+// protects it.
+const keyProtected = "protected"
+
+// guardBranch reads the state of the branch just before the delete, and refuses
+// the delete when the host says that a rule protects the branch, or that an
+// open review request has the branch as its head. A delete would close that
+// review request. This narrows the race window of the default branch read: the
+// answers are read in the same moment as the delete, and an answer that cannot
+// be read refuses the delete.
+//
+// Defense in depth: GitHub refuses to delete a protected branch too. This check
+// stays so that the adapter does not rely on that answer.
+func (f *gitHub) guardBranch(ctx context.Context, r repoName, bearer, branch string) error {
+	resp, err := f.send(ctx, call{
+		method: http.MethodGet, path: r.path() + "/branches/" + escapePath(branch), bearer: bearer, body: nil,
+		status: f.reviewStatus, oversize: nil, target: "",
+	})
+	if err != nil {
+		return err
+	}
+
+	var fields map[string]json.RawMessage
+	if decodeErr := decode(resp.body, &fields); decodeErr != nil {
+		return decodeErr
+	}
+
+	var protected bool
+	if json.Unmarshal(fields[keyProtected], &protected) != nil {
+		return forge.Unavailable(0, "GitHub gave a branch with no protection flag")
+	}
+
+	if protected {
+		return fmt.Errorf("%w: the branch is protected", forge.ErrRefused)
+	}
+
+	open, err := f.send(ctx, call{
+		method:   http.MethodGet,
+		path:     r.path() + "/pulls?state=open&per_page=1&head=" + url.QueryEscape(r.owner+":"+branch),
+		bearer:   bearer,
+		body:     nil,
+		status:   f.reviewStatus,
+		oversize: nil,
+		target:   "",
+	})
+	if err != nil {
+		return err
+	}
+
+	var list []json.RawMessage
+	if decodeErr := decode(open.body, &list); decodeErr != nil {
+		return decodeErr
+	}
+
+	if len(list) > 0 {
+		return fmt.Errorf("%w: an open review request has the branch as its head", forge.ErrRefused)
 	}
 
 	return nil
