@@ -1260,9 +1260,14 @@ func backupModel() costModel {
 // round trips for the name locks: the restore keeps the name_locks and
 // name_lock_key tables of the installation, so that a restore cannot clear a
 // lockout, and each kept table costs one delete and one copy.
+//
+// perOther counts 2 round trips for each table that a backup leaves out. An
+// emptied table that the restore only reads for its column check costs 1. So
+// the fixed part takes 1 off for passkey_challenges, the table of the open
+// passkey ceremonies, which a restore leaves empty.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        332,
+		fixed:        331,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
