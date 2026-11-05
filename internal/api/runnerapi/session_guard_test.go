@@ -3,6 +3,7 @@ package runnerapi_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -197,7 +198,7 @@ func TestOpenSessionFailsClosedWithoutADependency(t *testing.T) {
 		name   string
 		mutate func(cfg *runnerapi.Config)
 	}{
-		{"no job reader", func(cfg *runnerapi.Config) { cfg.Jobs = nil }},
+		{"no job reader", func(cfg *runnerapi.Config) { cfg.Jobs, cfg.Recorder = nil, nil }},
 		{"no durable operations", func(cfg *runnerapi.Config) { cfg.Operations = nil }},
 	}
 
@@ -364,4 +365,39 @@ func (s *sessionEnv) launchSweep() *launcher {
 	}
 
 	return &launcher{e: s, id: sess.ID, pub: x.pub, priv: x.priv}
+}
+
+// TestNewHandlerRefusesARecorderWithoutAJobReader proves that a server with a
+// recorder and no job reader does not start: the integrity check of a step end
+// would have no job to read.
+func TestNewHandlerRefusesARecorderWithoutAJobReader(t *testing.T) {
+	t.Parallel()
+
+	for _, b := range backends() {
+		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, _ := configFor(t, b.open(t), serveOptions{
+				now: time.Now, authz: identity.AdminOnly{}, claimer: nil, recorder: newSessionJobs(),
+				jobs: newSessionJobs(), logger: nil, mutate: nil,
+			})
+			cfg.Jobs = nil
+
+			_, err := runnerapi.NewHandler(cfg)
+			if !errors.Is(err, runnerapi.ErrMissingDependency) {
+				t.Fatalf("NewHandler error = %v, want ErrMissingDependency", err)
+			}
+		})
+	}
+}
+
+// TestJobPhaseRefusesWithoutAJobReader proves the second layer: a handler that
+// has the recorder and no job reader answers not-found before it reads the
+// claim.
+func TestJobPhaseRefusesWithoutAJobReader(t *testing.T) {
+	t.Parallel()
+
+	if err := runnerapi.JobPhaseWithoutReader(t.Context(), newSessionJobs()); !errors.Is(err, runner.ErrNotFound) {
+		t.Fatalf("jobPhaseOf error = %v, want ErrNotFound", err)
+	}
 }

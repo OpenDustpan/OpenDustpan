@@ -657,7 +657,11 @@ func TestLogAndStepEnd(t *testing.T) {
 
 			checkStepEnd(t, l, chunks)
 
-			want := []string{"begin:init", "log:init:0", "log:init:1", "log:init:0", "log:init:0", "end:init"}
+			// The two refused ends write nothing. Only the last end writes.
+			want := []string{
+				"begin:init", "log:init:0", "log:init:1", "log:init:0", "log:init:0", "refused:init", "refused:init",
+				"end:init",
+			}
 			if got := s.jobs.called(); !slices.Equal(got[:len(want)], want) {
 				t.Fatalf("recorder calls = %v, want %v first", got, want)
 			}
@@ -708,6 +712,31 @@ func requestChecks() []requestCheck {
 		}, protocol.ErrorInvalid},
 		{"step name with a leading dash", func(l *launcher) lcall {
 			return l.post(stepPath(protocol.PathSessionStepBegin, "-init"), nil)
+		}, protocol.ErrorInvalid},
+		{"step name with a NUL", func(l *launcher) lcall {
+			return l.post(stepPath(protocol.PathSessionStepBegin, "init%00"), nil)
+		}, protocol.ErrorInvalid},
+		{"step name with a CR", func(l *launcher) lcall {
+			return l.post(stepPath(protocol.PathSessionStepBegin, "init%0D"), nil)
+		}, protocol.ErrorInvalid},
+		{"step name with an LF", func(l *launcher) lcall {
+			return l.post(stepPath(protocol.PathSessionStepBegin, "init%0A"), nil)
+		}, protocol.ErrorInvalid},
+		{"step name with an encoded slash", func(l *launcher) lcall {
+			return l.post(stepPath(protocol.PathSessionStepBegin, "a%2Fb"), nil)
+		}, protocol.ErrorInvalid},
+		{"step name of an end with a NUL", func(l *launcher) lcall {
+			return l.post(stepPath(protocol.PathSessionStepEnd, "init%00"), protocol.StepEnd{
+				ExitCode: 0, StartedAt: time.Time{}, FinishedAt: time.Time{}, LogChunks: 0, LogSHA256: "",
+			})
+		}, protocol.ErrorInvalid},
+		{"step name of a chunk with a CR", func(l *launcher) lcall {
+			return l.upload(strings.NewReplacer("{step}", "init%0D", "{seq}", "0").Replace(protocol.PathSessionLog),
+				[]byte("x"))
+		}, protocol.ErrorInvalid},
+		{"step name of a chunk with an encoded slash", func(l *launcher) lcall {
+			return l.upload(strings.NewReplacer("{step}", "a%2Fb", "{seq}", "0").Replace(protocol.PathSessionLog),
+				[]byte("x"))
 		}, protocol.ErrorInvalid},
 		{"exit code above 255", func(l *launcher) lcall {
 			return l.post(stepPath(protocol.PathSessionStepEnd, "init"), protocol.StepEnd{
