@@ -1,6 +1,7 @@
 package github_test
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -73,6 +74,13 @@ func (c *canned) serve(w http.ResponseWriter, r *http.Request) {
 
 	c.mu.Lock()
 	c.seen = append(c.seen, key)
+
+	// An answer for the method, the path and the query is more specific than an
+	// answer for the method and the path.
+	if _, specific := c.answers[key+"?"+r.URL.RawQuery]; specific {
+		key += "?" + r.URL.RawQuery
+	}
+
 	a, found := c.answers[key]
 
 	if found && a.next != nil {
@@ -598,8 +606,8 @@ func TestOpenReviewStatus(t *testing.T) {
 		{"a refused credential", statusAnswer(401, ""), forge.ErrAuth},
 		{"an answer that does not parse", statusAnswer(201, "{"), forge.ErrUnavailable},
 		{
-			"a pull request that exists, and none in the list",
-			validation(`{"code":"custom","message":"A pull request already exists for acme:x."}`), forge.ErrUnavailable,
+			"a pull request that exists, and none of ours in the list",
+			validation(`{"code":"custom","message":"A pull request already exists for acme:x."}`), forge.ErrConflict,
 		},
 	}
 
@@ -902,41 +910,65 @@ func TestReviewMethodsNeedThePullRequestPermission(t *testing.T) {
 
 func second[T any](_ T, err error) error { return err }
 
-// TestReviewTokenAsksForPullRequests checks that the token of an app for the
-// review methods asks for the contents and the pull requests, both to write, for
-// one repository, and that the token for a branch delete asks for the contents
-// only.
-func TestReviewTokenAsksForPullRequests(t *testing.T) {
+// TestTokenPermissionsOfEachMethod checks the permissions in the token request
+// of an app for each method: a method that only reads asks for read
+// permissions, and a method that writes asks for the write of the contents and
+// of the pull requests.
+func TestTokenPermissionsOfEachMethod(t *testing.T) {
 	t.Parallel()
 
-	host := newHost(t)
-	o := newHostOpener(t, host)
-	conn, cred := hostConnection(t, host, forge.AuthApp)
+	const (
+		readOnly  = `{"repositories":["infra"],"permissions":{"contents":"read","pull_requests":"read"}}`
+		writeBoth = `{"repositories":["infra"],"permissions":{"contents":"write","pull_requests":"write"}}`
+		contents  = `{"repositories":["infra"],"permissions":{"contents":"read"}}`
+	)
 
-	f, err := o.Open(t.Context(), conn, cred)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name string
+		call func(ctx context.Context, f forge.Forge) error
+		want string
+	}{
+		{"Head", func(ctx context.Context, f forge.Forge) error {
+			return second(f.Head(ctx, conformanceRepo, "main"))
+		}, contents},
+		{"ReadReview", func(ctx context.Context, f forge.Forge) error {
+			return second(f.ReadReview(ctx, conformanceRepo, "1"))
+		}, readOnly},
+		{"OpenReview", func(ctx context.Context, f forge.Forge) error {
+			return second(f.OpenReview(ctx, conformanceRepo, reviewRequest()))
+		}, writeBoth},
+		{"CloseReview", func(ctx context.Context, f forge.Forge) error {
+			return f.CloseReview(ctx, conformanceRepo, "1")
+		}, writeBoth},
+		{"DeleteBranch", func(ctx context.Context, f forge.Forge) error {
+			return f.DeleteBranch(ctx, conformanceRepo, "dustpan/x")
+		}, writeBoth},
 	}
 
-	if _, readErr := f.ReadReview(t.Context(), conformanceRepo, "1"); !errors.Is(readErr, forge.ErrNotFound) {
-		t.Fatalf("ReadReview = %v, want ErrNotFound", readErr)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	if delErr := f.DeleteBranch(t.Context(), conformanceRepo, "dustpan/x"); !errors.Is(delErr, forge.ErrNotFound) {
-		t.Fatalf("DeleteBranch = %v, want ErrNotFound", delErr)
-	}
+			host := newHost(t)
+			o := newHostOpener(t, host)
+			conn, cred := hostConnection(t, host, forge.AuthApp)
 
-	var bodies []string
+			f, err := o.Open(t.Context(), conn, cred)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	for _, r := range host.Requests() {
-		if strings.HasSuffix(r.URI, "/access_tokens") {
-			bodies = append(bodies, string(r.Body))
-		}
-	}
+			// The call fails (the repository has no such object); only the token request counts.
+			if callErr := tt.call(t.Context(), f); callErr == nil && tt.name != "Head" {
+				t.Fatalf("%s = nil, want an error for an object that does not exist", tt.name)
+			}
 
-	want := `{"repositories":["infra"],"permissions":{"contents":"write","pull_requests":"write"}}`
-	if len(bodies) != 1 || bodies[0] != want {
-		t.Fatalf("the token requests = %v, want one: %s", bodies, want)
+			bodies := tokenBodies(host)
+
+			if len(bodies) != 1 || bodies[0] != tt.want {
+				t.Fatalf("%s: the token requests = %v, want one: %s", tt.name, bodies, tt.want)
+			}
+		})
 	}
 }
 
@@ -1002,4 +1034,90 @@ func TestDeleteBranchGuardsTheBranch(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDeleteBranchRefusesTheBaseOfAnOpenReview checks that a branch that an open
+// review request has as its base is not deleted: the delete would close it.
+func TestDeleteBranchRefusesTheBaseOfAnOpenReview(t *testing.T) {
+	t.Parallel()
+
+	answers := deletable(map[string]hostAnswer{
+		repoPath: okAnswer(map[string]any{"default_branch": "main"}),
+		refPath:  {status: http.StatusNoContent, body: "", header: nil, next: nil},
+		"GET /repos/acme/infra/pulls?state=open&per_page=1&base=dustpan%2Fj-1": okAnswer(
+			[]any{listItem(7, "feature/x", "dustpan/j-1", 900)},
+		),
+	})
+	f := cannedForge(t, answers)
+
+	if err := f.DeleteBranch(t.Context(), "acme/infra", "dustpan/j-1"); !errors.Is(err, forge.ErrRefused) {
+		t.Fatalf("DeleteBranch = %v, want ErrRefused", err)
+	}
+
+	if f.sent(http.MethodDelete) {
+		t.Fatalf("DeleteBranch sent a DELETE; calls %v", f.calls())
+	}
+}
+
+// TestCloseReviewChecksOwnershipOfAClosedReview checks that the prefix and the
+// fork checks run before the answer for a review request that is closed or
+// merged already.
+func TestCloseReviewChecksOwnershipOfAClosedReview(t *testing.T) {
+	t.Parallel()
+
+	closed := func(p map[string]any) { p["state"] = "closed" }
+	merged := func(p map[string]any) {
+		p["state"], p["merged"], p["merged_at"] = "closed", true, "2026-01-01T00:00:00Z"
+	}
+
+	tests := []struct {
+		name string
+		edit func(map[string]any)
+		want error
+	}{
+		{
+			"a closed branch of a person",
+			func(p map[string]any) { closed(p); pullEnd(p, "head")["ref"] = "feature/x" },
+			forge.ErrRefused,
+		},
+		{
+			"a closed fork",
+			func(p map[string]any) { closed(p); pullEnd(p, "head")["repo"] = map[string]any{"id": 901} },
+			forge.ErrRefused,
+		},
+		{
+			"a merged branch of a person",
+			func(p map[string]any) { merged(p); pullEnd(p, "head")["ref"] = "feature/x" },
+			forge.ErrRefused,
+		},
+		{"a closed pull request of the write-back", closed, nil},
+		{"a merged pull request of the write-back", merged, forge.ErrConflict},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := cannedForge(t, map[string]hostAnswer{pullPath: okAnswer(pullWith(tt.edit))})
+
+			err := f.CloseReview(t.Context(), "acme/infra", "7")
+			if !errors.Is(err, tt.want) && (tt.want != nil || err != nil) {
+				t.Fatalf("CloseReview = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+// tokenBodies returns the bodies of the requests for an installation token that
+// the fake got.
+func tokenBodies(host *githubfake.Fake) []string {
+	var bodies []string
+
+	for _, r := range host.Requests() {
+		if strings.HasSuffix(r.URI, "/access_tokens") {
+			bodies = append(bodies, string(r.Body))
+		}
+	}
+
+	return bodies
 }

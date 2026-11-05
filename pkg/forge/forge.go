@@ -263,7 +263,11 @@ type Commits interface {
 type Reviews interface {
 	// OpenReview opens a review request from req.Branch into req.Target.
 	// When an open review request for the same req.Branch and the same
-	// req.Target exists, it returns that one and opens no second one. It
+	// req.Target exists, it returns that one and opens no second one. When
+	// the forge says that a review request exists for the branch, and it is
+	// not one of the base repository (for example one from a fork with a
+	// branch of the same name), it returns ErrConflict: a retry fails the
+	// same way. It
 	// returns ErrInvalid for a request that fails ValidateReviewRequest,
 	// before any call. It returns ErrNotFound for a missing repository,
 	// branch or target, and ErrRefused when the forge does not allow the
@@ -285,16 +289,18 @@ type Reviews interface {
 	// request that is closed already returns nil. It returns ErrNotFound
 	// for a review request that does not exist, ErrConflict for a
 	// review request that merged, and ErrRefused for a review request that
-	// is not one of the write-back. The rule is fixed: CloseReview closes a
+	// is not one of the write-back. The rule is fixed: CloseReview acts on a
 	// review request only when its head branch passes IsWriteBackBranch and
-	// its head repository is the base repository (see Review.FromFork). A
-	// review request of a person, or from a fork, is never closed.
+	// its head repository is the base repository (see Review.FromFork). It
+	// checks this first, for each state: a review request of a person, or from
+	// a fork, is never closed, and also gets ErrRefused when it is closed or
+	// merged already.
 	CloseReview(ctx context.Context, repo, id string) error
 	// DeleteBranch deletes the branch of a write-back after its review
 	// request closed or merged. It returns ErrInvalid for a name that
 	// fails IsWriteBackBranch, before any call, and ErrRefused for the
 	// default branch of the repository, for a protected branch, for a
-	// branch that an open review request has as its head, and for a missing
+	// branch that an open review request has as its head or its base, and for a missing
 	// permission. It returns ErrNotFound for a missing repository or branch,
 	// so a caller that wants an idempotent delete ignores ErrNotFound.
 	DeleteBranch(ctx context.Context, repo, branch string) error

@@ -28,8 +28,9 @@ review request that the write-back made. The capabilities `commit` and `review`
 need the permissions in the section "Permissions of the app".
 
 This release does not compare commits, take webhooks or give tokens to runners.
-The capabilities list of a check holds no other capability for that reason. The answer still names, for each feature, the
-capabilities that the feature needs and the connection does not have. GitLab is
+The capabilities list of a check holds no other capability for that reason. The
+answer still names, for each feature, the capabilities that the feature needs and
+the connection does not have. GitLab is
 not supported yet.
 
 ## One app for the installation, or one for each namespace
@@ -66,15 +67,16 @@ permissions of the app must accept the new permissions on the installation in
 GitHub, and then check the connection again.
 
 For a review request call, the server asks GitHub for an installation token for
-one repository, with the permission to write the contents and the pull
-requests, and nothing else. The server keeps this token in memory until it is
+one repository, and nothing else. A call that only reads a review request gets a
+token that reads the contents and the pull requests. A call that opens or closes
+a review request, or deletes a branch, gets a token that writes both. The server keeps this token in memory until it is
 near its expiry. A connection with the auth kind `token` uses its own token,
 which needs the same permissions.
 
 The server only closes a review request when its head is a branch of the
 write-back (the name starts with `dustpan/`) in the repository of the base. It
 only deletes such a branch, and never the default branch, a protected branch, or
-a branch that an open review request has as its head.
+a branch that an open review request has as its head or its base.
 
 ## Step 1: the operator registers the app
 

@@ -238,7 +238,17 @@ func cases() []testCase {
 		{"close a missing review request is not found", forge.CapReview, caseReviewCloseMissing},
 		{"close of a merged review request is a conflict", forge.CapReview, caseReviewCloseMerged},
 		{"close of a review request outside the write-back is refused", forge.CapReview, caseReviewCloseForeign},
+		{
+			"close of a closed review request outside the write-back is refused",
+			forge.CapReview,
+			caseReviewCloseForeignClosed,
+		},
 		{"delete branch of a write-back", forge.CapReview, caseDeleteBranch},
+		{
+			"delete the base of an open review request is refused",
+			forge.CapReview,
+			caseDeleteBranchBaseOfOpenReview,
+		},
 		{"delete a missing branch is not found", forge.CapReview, caseDeleteBranchMissing},
 		{
 			"delete a branch outside the write-back is invalid and makes no call",
