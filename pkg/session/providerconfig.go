@@ -170,6 +170,11 @@ func (p ProviderConfig) validateMode() error {
 		}
 
 		return p.OAuth.validate()
+	case ModeSAML, ModeCAS, ModeLDAP, ModeHeader:
+		// Fail closed: the mode has no settings and no method yet, so a
+		// stored provider of the mode could sign no person in.
+		return fmt.Errorf("%w: the mode %q has no sign-in method in this version; the mode must be %q or %q",
+			ErrInvalidProvider, p.Mode, ModeOIDC, ModeOAuth)
 	default:
 		return fmt.Errorf("%w: the mode must be %q or %q", ErrInvalidProvider, ModeOIDC, ModeOAuth)
 	}

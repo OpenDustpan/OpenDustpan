@@ -416,13 +416,15 @@ func (c *Client) Begin(opts Options) (string, Pending) {
 
 // Identity is the person that the provider signed in. Subject is the sub
 // claim, which is never empty. AuthTime is the auth_time claim, or the
-// time of Finish when the ID token has none.
+// time of Finish when the ID token has none. AuthTimeKnown is true only
+// when AuthTime comes from the auth_time claim.
 type Identity struct {
 	AuthTime          time.Time
 	Subject           string
 	Name              string
 	PreferredUsername string
 	Email             string
+	AuthTimeKnown     bool
 }
 
 // Finish exchanges the code of the callback for tokens and checks the ID
@@ -460,15 +462,15 @@ func exchangeError(err error) error {
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) && re.Response != nil {
 		if re.ErrorCode != "" {
-			return fmt.Errorf(
+			return refusedError{err: fmt.Errorf(
 				"%w: code exchange: status %d, error %q",
 				ErrProvider,
 				re.Response.StatusCode,
 				re.ErrorCode,
-			)
+			)}
 		}
 
-		return fmt.Errorf("%w: code exchange: status %d", ErrProvider, re.Response.StatusCode)
+		return refusedError{err: fmt.Errorf("%w: code exchange: status %d", ErrProvider, re.Response.StatusCode)}
 	}
 
 	return fmt.Errorf("%w: code exchange: %w", ErrProvider, err)
@@ -524,6 +526,7 @@ func (c *Client) checkClaims(t *oidc.IDToken, p Pending) (Identity, error) {
 		Name:              claims.Name,
 		PreferredUsername: claims.PreferredUsername,
 		Email:             claims.Email,
+		AuthTimeKnown:     claims.AuthTime != nil,
 	}, nil
 }
 

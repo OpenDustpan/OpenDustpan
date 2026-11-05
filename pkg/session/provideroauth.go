@@ -19,7 +19,40 @@ const (
 	// user-info endpoint with the access token, and the subject claim of
 	// the answer identifies the person.
 	ModeOAuth ProviderMode = "oauth"
+	// ModeSAML is a SAML 2.0 identity provider. Validate refuses it until
+	// the SAML method and its settings exist.
+	ModeSAML ProviderMode = "saml"
+	// ModeCAS is a CAS 3.0 server. Validate refuses it until the CAS method
+	// and its settings exist.
+	ModeCAS ProviderMode = "cas"
+	// ModeLDAP is an LDAP directory. Validate refuses it until the LDAP
+	// method and its settings exist.
+	ModeLDAP ProviderMode = "ldap"
+	// ModeHeader is the trusted header of a proxy. Validate refuses it until
+	// the trusted-header method and its settings exist.
+	ModeHeader ProviderMode = "header"
 )
+
+// MethodKind returns the kind of the sign-in method of the mode m, and
+// false for a value that is not a mode.
+func (m ProviderMode) MethodKind() (MethodKind, bool) {
+	switch m {
+	case ModeOIDC:
+		return MethodOIDC, true
+	case ModeOAuth:
+		return MethodOAuth, true
+	case ModeSAML:
+		return MethodSAML, true
+	case ModeCAS:
+		return MethodCAS, true
+	case ModeLDAP:
+		return MethodLDAP, true
+	case ModeHeader:
+		return MethodHeader, true
+	default:
+		return "", false
+	}
+}
 
 // Limits of the settings of a provider in ModeOAuth.
 const (

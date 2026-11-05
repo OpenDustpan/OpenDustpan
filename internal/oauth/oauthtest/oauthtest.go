@@ -107,6 +107,9 @@ type Faults struct {
 	// TokenRedirect answers a token request with a redirect to this URL
 	// when it is not empty.
 	TokenRedirect string
+	// AuthTime sets the auth_time claim of an ID token when it is not the
+	// zero time.
+	AuthTime time.Time
 }
 
 // User is the person whom the provider signs in.
@@ -313,6 +316,12 @@ func (p *Provider) TokenEndpoint() string {
 // UserinfoEndpoint returns the URL of the user-info endpoint.
 func (p *Provider) UserinfoEndpoint() string {
 	return p.server.URL + "/userinfo"
+}
+
+// Close stops the provider: each later request fails to connect. The end
+// of the test closes it too.
+func (p *Provider) Close() {
+	p.server.Close()
 }
 
 // SetUser changes the person whom the next sign-in signs in.
@@ -710,6 +719,10 @@ func applyClaimFaults(claims map[string]any, f Faults, now time.Time) {
 	if f.Expired {
 		claims["iat"] = now.Add(-2 * time.Hour).Unix()
 		claims["exp"] = now.Add(-time.Hour).Unix()
+	}
+
+	if !f.AuthTime.IsZero() {
+		claims[claimAuthTime] = f.AuthTime.Unix()
 	}
 }
 

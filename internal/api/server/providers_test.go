@@ -71,10 +71,14 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		return none, false, err
 	}
 
-	var client apiserver.OIDCClient
+	var (
+		client oauth.MethodClient
+		kind   = session.MethodOIDC
+	)
 
 	if p.Mode == session.ModeOAuth {
 		client, err = s.plainClient(&p, clientSecret)
+		kind = session.MethodOAuth
 	} else {
 		client, err = s.openIDClient(&p, clientSecret)
 	}
@@ -83,8 +87,16 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		return none, false, err
 	}
 
+	method, err := oauth.NewMethod(oauth.MethodConfig{
+		Client: client, Enabled: func(context.Context) (bool, error) { return true, nil }, Now: s.now,
+		ProviderID: id, Kind: kind,
+	})
+	if err != nil {
+		return none, false, err
+	}
+
 	return apiserver.SignInProvider{
-		Client:      client,
+		Method:      method,
 		ID:          id,
 		DisplayName: p.DisplayName,
 		AutoCreate:  p.AutoCreate,
