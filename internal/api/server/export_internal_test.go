@@ -116,10 +116,12 @@ var (
 	ErrNoPrincipalStoreForTest       = errNoPrincipalStore
 )
 
-// AcceptLocalAssertionForTest runs the check of the Assertion of the password
-// sign-in in, as the password route runs it after the check of the password,
-// so that a test can send it a hostile Assertion that the service never
-// makes.
-func (h *Handler) AcceptLocalAssertionForTest(w http.ResponseWriter, r *http.Request, in localusersvc.SignedIn) bool {
-	return h.acceptLocalAssertion(w, r, in)
+// CompleteLocalForTest gives the password sign-in in to the sign-in service,
+// as the password route does after the check of the password, so that a test
+// can send it a hostile Assertion that the service never makes. It returns
+// true when the service started a session.
+func (h *Handler) CompleteLocalForTest(w http.ResponseWriter, r *http.Request, in localusersvc.SignedIn) bool {
+	_, ok := h.completeLocal(w, r, in)
+
+	return ok
 }

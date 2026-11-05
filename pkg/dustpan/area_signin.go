@@ -2,15 +2,19 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -138,4 +142,47 @@ func redirectMethod(
 // configuration and a restart remove it.
 func configuredProviderOn(context.Context) (bool, error) {
 	return true, nil
+}
+
+// signInServiceInputs holds the values that newSignInService reads.
+type signInServiceInputs struct {
+	principals *principal.Service
+	// store is the namespace store. It must keep the principal records and the
+	// session generations of the principals, else the sign-in service cannot
+	// disable a person that an identity provider reports as disabled.
+	store    any
+	sessions *session.Sessions
+	audit    audit.ServerStore
+	logger   *slog.Logger
+	// onAuditFailure is called when the audit entry of a refused sign-in is
+	// not written. nil means no call.
+	onAuditFailure func()
+}
+
+// errSignInStore reports a store that cannot serve the sign-in service.
+var errSignInStore = errors.New("the store cannot serve the sign-in service")
+
+// newSignInService builds the sign-in service of the console sign-in. It has
+// no group applier: no mapping from the group values of an identity provider
+// to groups exists, so no sign-in joins a group.
+func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
+	records, ok := in.store.(principal.RecordStore)
+	if !ok {
+		return nil, fmt.Errorf("%w: it keeps no principal records", errSignInStore)
+	}
+
+	generations, ok := in.store.(session.PrincipalStateStore)
+	if !ok {
+		return nil, fmt.Errorf("%w: it keeps no session generations", errSignInStore)
+	}
+
+	svc, err := signinsvc.New(signinsvc.Config{
+		Principals: in.principals, Disabler: records, Generations: generations, Sessions: in.sessions,
+		Audit: in.audit, Groups: nil, Logger: in.logger, OnAuditFailure: in.onAuditFailure,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sign-in service: %w", err)
+	}
+
+	return svc, nil
 }

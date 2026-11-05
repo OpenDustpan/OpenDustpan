@@ -64,7 +64,7 @@ const (
 	ReasonDevSubject     = "dev user on an installation that is not of the kind dev"
 	ReasonSecondFactor   = "second factor required"
 	ReasonPrincipalError = "principal cannot be read"
-	ReasonBindGate       = "sign-in service stopped the check before the password compare"
+	ReasonBoundary       = "user name or password fails the boundary check"
 )
 
 // codeBytes is the count of random bytes of a reset code, and codeLength the

@@ -19,7 +19,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -109,7 +108,7 @@ func newSignIn(
 	}
 
 	in := &serverapi.SignIn{
-		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
+		Service: nil, Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
 		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, DevCode: nil,
 		DevAdmin: noDevAdmin, OnDevRefused: devRefusalAudit(cfg),
 	}
@@ -422,7 +421,6 @@ func signInProvider(
 
 	return serverapi.SignInProvider{
 		Method: method, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
-		Source: principal.SourceOIDC,
 	}, nil
 }
 
