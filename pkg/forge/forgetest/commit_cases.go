@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,6 +134,76 @@ func caseCommitStale(t *testing.T, h Harness) {
 	// The commit did not happen.
 	if now := mainHead(t, h); now.ID != moved.ID {
 		t.Fatalf("head of main = %q, want %q", now.ID, moved.ID)
+	}
+}
+
+func caseCommitOtherFile(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	base := push(t, h, map[string][]byte{"stacks/prod.yaml": []byte("a: 1\n")})
+	moved := push(t, h, map[string][]byte{"other.txt": []byte("other\n")})
+
+	got, err := h.Forge.Commit(ctx, h.Repo, commitOn("main", base.ID, "j-16", writeFile("stacks/prod.yaml", "a: 2\n")))
+	if err != nil {
+		t.Fatalf("Commit after a change of another file = %v, want a commit", err)
+	}
+
+	if got.ID == moved.ID || mainHead(t, h).ID != got.ID {
+		t.Fatalf("head of main = %q, want the new commit %q on top of %q", mainHead(t, h).ID, got.ID, moved.ID)
+	}
+
+	// The commit keeps the other change and adds its own.
+	for path, want := range map[string]string{"other.txt": "other\n", "stacks/prod.yaml": "a: 2\n"} {
+		file, readErr := h.Forge.ReadFile(ctx, h.Repo, got.ID, path, 1<<20)
+		if readErr != nil || !bytes.Equal(file.Content, []byte(want)) {
+			t.Errorf("ReadFile of %q = %q, %v; want %q", path, file.Content, readErr, want)
+		}
+	}
+}
+
+func caseCommitNewBranchRace(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	head := mainHead(t, h)
+
+	var wg sync.WaitGroup
+
+	results := make([]error, 2)
+	commits := make([]forge.Commit, 2)
+
+	for i := range results {
+		wg.Go(func() {
+			req := commitOn("dustpan/j-17", head.ID, "j-17", writeFile("a.txt", strconv.Itoa(i)))
+			req.NewBranch = true
+			commits[i], results[i] = h.Forge.Commit(ctx, h.Repo, req)
+		})
+	}
+
+	wg.Wait()
+
+	passed, conflicts := 0, 0
+
+	for i, err := range results {
+		switch {
+		case err == nil:
+			passed++
+
+			onBranch, headErr := h.Forge.Head(ctx, h.Repo, "dustpan/j-17")
+			if headErr != nil || onBranch.ID != commits[i].ID {
+				t.Errorf("head of the branch = %+v, %v; want the commit %q", onBranch, headErr, commits[i].ID)
+			}
+
+		case errors.Is(err, forge.ErrConflict):
+			conflicts++
+		default:
+			t.Errorf("Commit %d = %v, want a commit or ErrConflict", i, err)
+		}
+	}
+
+	if passed != 1 || conflicts != 1 {
+		t.Fatalf("%d commits passed and %d were conflicts, want one of each", passed, conflicts)
 	}
 }
 
