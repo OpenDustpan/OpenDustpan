@@ -788,6 +788,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 				dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
 				dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 				dustpan.WithDisablePulumiJournaling(args.disableJournaling),
+				dustpan.WithComponents(apiOnly(tb)),
 			}...,
 		),
 	), args.signIn.options()...)...)
@@ -818,6 +819,22 @@ func startServing(ctx context.Context, tb testing.TB, srv *dustpan.Server) {
 	}
 
 	startBackupWorker(ctx, tb, srv)
+}
+
+// apiOnly returns the api component alone. The in-process server runs Start
+// and serves its handler, but it never runs the claim loop of the worker, so a
+// worker component would fail the claim-loop readiness check once the server
+// has a durable store and 2 claim intervals have passed. The real binary
+// covers the worker component.
+func apiOnly(tb testing.TB) dustpan.Components {
+	tb.Helper()
+
+	c, err := dustpan.ParseComponents(string(dustpan.ComponentAPI))
+	if err != nil {
+		tb.Fatalf("parse components: %v", err)
+	}
+
+	return c
 }
 
 // startBackupWorker runs the backup worker of srv until the test ends.
