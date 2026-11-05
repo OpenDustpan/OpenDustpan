@@ -102,3 +102,16 @@ type wireTooLarge struct {
 	Message string          `json:"message"`
 	Errors  []wireErrorCode `json:"errors"`
 }
+
+// wireValidation is the answer for a request that GitHub does not accept.
+type wireValidation struct {
+	Message string                `json:"message"`
+	Errors  []wireValidationError `json:"errors"`
+}
+
+type wireValidationError struct {
+	Resource string `json:"resource"`
+	Field    string `json:"field,omitempty"`
+	Code     string `json:"code"`
+	Message  string `json:"message,omitempty"`
+}

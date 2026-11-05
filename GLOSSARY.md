@@ -237,6 +237,14 @@ _Avoid_: VCS integration, VCS provider, app (alone)
 A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. One change order carries each review request. The review mode of its units decides which approvals count and who merges (ADR 299).
 _Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
 
+**Merge state**:
+What the Git host says about whether a review request can merge now: clean, conflict, blocked, behind, unstable, draft or unknown. Only clean means that the Git host lets the review request merge. Unknown means that the Git host did not compute the merge yet, or that the server does not know the value. A caller treats each state except clean as "not mergeable".
+_Avoid_: Mergeable (alone)
+
+**Test merge commit**:
+The commit that the Git host makes to test the merge of an open review request. It is not on a branch. It changes when the base or the head of the review request moves. The server reads it from the Git host and never makes one.
+_Avoid_: Preview merge
+
 **Forge capability**:
 One group of operations of the `Forge` port that a forge connection can do, for example `commit`, `review` or `repo-token`. A method outside the capabilities of a connection returns `ErrUnsupported`. The server checks the capabilities that a feature needs when a person names the connection for it.
 _Avoid_: Feature (alone), scope (that is a token permission of the forge), permission

@@ -3,7 +3,8 @@
 // kinds app (a GitHub App installation) and token (a fine-grained
 // personal access token).
 //
-// The adapter does Check, Head, ReadFile, Commit and FindCommit now. Each other
+// The adapter does Check, Head, ReadFile, Commit, FindCommit, OpenReview,
+// ReadReview, CloseReview and DeleteBranch now. Each other
 // method returns forge.ErrUnsupported, and Capabilities does not list it, until
 // the method lands. Every request
 // goes through the egress rules: the address of the API passes the URL
@@ -140,7 +141,7 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 	f := &gitHub{
 		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
 		mu: sync.Mutex{}, readTokens: map[string]readToken{}, owner: "", contents: contentsUnknown,
-		writes: contentsUnknown,
+		writes: contentsUnknown, pulls: contentsUnknown,
 	}
 
 	switch c.Auth {
@@ -204,6 +205,7 @@ type gitHub struct {
 	owner      string
 	contents   contentsAccess
 	writes     contentsAccess
+	pulls      contentsAccess
 }
 
 // contentsAccess says whether an installation has the permission to read
@@ -244,6 +246,10 @@ func (f *gitHub) Capabilities() forge.Capabilities {
 		caps = append(caps, forge.CapCommit)
 	}
 
+	if f.push && (!app || (f.writes != contentsMissing && f.pulls != contentsMissing)) {
+		caps = append(caps, forge.CapReview)
+	}
+
 	return caps
 }
 
@@ -255,21 +261,6 @@ func unsupported(method string) error {
 // Compare returns forge.ErrUnsupported.
 func (*gitHub) Compare(context.Context, string, string, string, int64) (forge.Comparison, error) {
 	return forge.Comparison{}, unsupported("Compare")
-}
-
-// OpenReview returns forge.ErrUnsupported.
-func (*gitHub) OpenReview(context.Context, string, forge.ReviewRequest) (forge.Review, error) {
-	return forge.Review{}, unsupported("OpenReview")
-}
-
-// ReadReview returns forge.ErrUnsupported.
-func (*gitHub) ReadReview(context.Context, string, string) (forge.Review, error) {
-	return forge.Review{}, unsupported("ReadReview")
-}
-
-// CloseReview returns forge.ErrUnsupported.
-func (*gitHub) CloseReview(context.Context, string, string) error {
-	return unsupported("CloseReview")
 }
 
 // RepoToken returns forge.ErrUnsupported.
