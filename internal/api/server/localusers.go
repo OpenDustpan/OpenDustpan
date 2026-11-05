@@ -373,10 +373,14 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
+	if !h.acceptLocalAssertion(w, r, in) {
+		return
+	}
+
 	e := signInEntry(r, principal.LocalSubjectPrefix+in.UserID, "", session.ActionSignIn)
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
-		AuthTime: h.signIn.sessions.Now(), PrincipalID: in.PrincipalID, Provider: localuser.ProviderID,
+		AuthTime: in.Assertion.AuthTime, PrincipalID: in.PrincipalID, Provider: localuser.ProviderID,
 		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: in.SessionGeneration, Stored: false,
 	})
 	if err != nil {
@@ -396,16 +400,42 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	// Only the end of a full sign-in clears the counts of the name, after the
-	// commit of the session. A failed clear leaves the counts, which is the
-	// safe direction, so the sign-in still succeeds.
+	h.clearNameCounts(ctx, in)
+
+	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clearNameCounts clears the counts of the name of the password sign-in in.
+// Only the end of a full sign-in clears them, after the commit of the
+// session. A failed clear leaves the counts, which is the safe direction, so
+// the sign-in still succeeds.
+func (h *Handler) clearNameCounts(ctx context.Context, in localusersvc.SignedIn) {
 	if clearErr := h.localUsers.ClearLocks(ctx, in); clearErr != nil {
 		h.logger.WarnContext(ctx, "the counts of a user name were not cleared after a sign-in",
 			slog.String("cause", causeType(clearErr)))
 	}
+}
 
-	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
-	w.WriteHeader(http.StatusNoContent)
+// acceptLocalAssertion reports whether the Assertion of the password sign-in
+// in passes the check of a sign-in and names the person of in. Else it counts
+// the failure, writes the refusal and answers the error of a wrong password.
+func (h *Handler) acceptLocalAssertion(w http.ResponseWriter, r *http.Request, in localusersvc.SignedIn) bool {
+	// Defense in depth: the service builds the Assertion from the record of
+	// the check. This check stays so that a change of the service cannot
+	// start a session from an Assertion that fails the limits of a sign-in.
+	err := session.CheckAssertion(in.Assertion, h.signIn.sessions.Now())
+	if err == nil && in.Assertion.PrincipalID == in.PrincipalID {
+		return true
+	}
+
+	h.failPassword(r.Context())
+	h.refuseSignIn(w, r, refusal{
+		err: localUserError(localuser.ErrSignInFailed), providerID: localuser.ProviderID, idpSubject: "",
+		reason: reasonAssertion,
+	})
+
+	return false
 }
 
 // redeemLocalUserCode sets a password with a set-up code or a reset code. It

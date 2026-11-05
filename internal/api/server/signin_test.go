@@ -272,7 +272,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 			Origins:         []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
 				{
-					Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false,
+					Method: redirectMethod(t, client, "corp", clock.Now), ID: "corp", DisplayName: "Corp",
+					AutoCreate: opts.autoCreate, Stored: false,
 					Source: principal.SourceOIDC,
 				},
 			},
@@ -1082,6 +1083,23 @@ func TestSignInSessionCookieOnlyForSignIn(t *testing.T) {
 	}
 }
 
+// redirectMethod returns the OIDC sign-in method over client for the
+// provider id with the clock now, as the server makes it. The provider is
+// always on.
+func redirectMethod(t *testing.T, client oauth.MethodClient, id string, now func() time.Time) *oauth.Method {
+	t.Helper()
+
+	m, err := oauth.NewMethod(oauth.MethodConfig{
+		Client: client, Enabled: func(context.Context) (bool, error) { return true, nil }, Now: now,
+		ProviderID: id, Kind: session.MethodOIDC,
+	})
+	if err != nil {
+		t.Fatalf("sign-in method: %v", err)
+	}
+
+	return m
+}
+
 // downOIDC is a provider that cannot be reached.
 type downOIDC struct{}
 
@@ -1090,8 +1108,9 @@ func (downOIDC) Begin(context.Context, oauth.Options) (string, oauth.Pending, er
 }
 
 func (downOIDC) Finish(context.Context, string, oauth.Pending) (oauth.Identity, error) {
-	return oauth.Identity{AuthTime: time.Time{}, Subject: "", Name: "", PreferredUsername: "", Email: ""},
-		oauth.ErrProvider
+	return oauth.Identity{
+		AuthTime: time.Time{}, Subject: "", Name: "", PreferredUsername: "", Email: "", AuthTimeKnown: false,
+	}, oauth.ErrProvider
 }
 
 func TestSignInProviderDown(t *testing.T) {
@@ -1168,7 +1187,10 @@ func TestSignInProviderDown(t *testing.T) {
 			Origins:         nil,
 			PasswordLimiter: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true, Stored: false, Source: ""},
+				{
+					Method: redirectMethod(t, downOIDC{}, "corp", time.Now), ID: "corp", DisplayName: "Corp",
+					AutoCreate: true, Stored: false, Source: "",
+				},
 			},
 		},
 		CheckpointEpochs: nil,
@@ -1602,4 +1624,40 @@ func newSignInAccess(
 	}
 
 	return grants, allowlists
+}
+
+// TestSignInJoinsNoGroup proves the rule of the group claims while the
+// server has no group mapping: a sign-in joins no group, also when groups
+// exist whose names an identity provider could send. The methods of today
+// return no groups, and no mapping exists, so no membership changes.
+func TestSignInJoinsNoGroup(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	for _, name := range []string{"engineering", "corp", alice().PreferredUsername} {
+		g := principal.Group{
+			CreatedAt: e.clock.Now(), UpdatedAt: e.clock.Now(), ID: "grp-" + name, Name: name, Description: "",
+			Source: principal.SourceLocal, MemberCount: 0,
+		}
+		if err := e.store.CreateGroup(t.Context(), g, policyChangeEntry(e.clock.Now())); err != nil {
+			t.Fatalf("create group %s: %v", name, err)
+		}
+	}
+
+	e.signIn(t)
+
+	p, err := e.store.GetPrincipalBySubject(t.Context(), "corp:"+alice().Subject)
+	if err != nil {
+		t.Fatalf("principal of the sign-in: %v", err)
+	}
+
+	groups, total, err := e.store.ListGroupsOf(
+		t.Context(),
+		p.ID,
+		principal.Query{After: "", Low: "", High: "", Limit: 10},
+	)
+	if err != nil || total != 0 || len(groups) != 0 {
+		t.Fatalf("groups of the person = %v (%d), %v, want none", groups, total, err)
+	}
 }
