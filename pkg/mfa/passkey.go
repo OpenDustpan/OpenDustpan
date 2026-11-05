@@ -26,9 +26,9 @@ const (
 	// MaxResponseBytes is the most bytes of the JSON of a ceremony response
 	// from a browser.
 	MaxResponseBytes = 64 << 10
-	// maxIDLength is the most characters of the ID of a person, a pending
-	// sign-in or a session in a record of this package.
-	maxIDLength = 128
+	// MaxIDLength is the most characters of the ID of a passkey, a person,
+	// a pending sign-in or a session in a record of this package.
+	MaxIDLength = 128
 )
 
 // Transports that a passkey can name. A browser sends them at the
@@ -66,10 +66,10 @@ func ValidatePasskeyName(name string) error {
 }
 
 // validID returns ErrInvalid unless s is an ID of the rules of an
-// identifier, with at most maxIDLength characters.
+// identifier, with at most MaxIDLength characters.
 func validID(field, s string) error {
-	if !ident.Valid(s, maxIDLength) {
-		return fmt.Errorf("%w: %s: %w", ErrInvalid, field, ident.Check(s, maxIDLength))
+	if !ident.Valid(s, MaxIDLength) {
+		return fmt.Errorf("%w: %s: %w", ErrInvalid, field, ident.Check(s, MaxIDLength))
 	}
 
 	return nil

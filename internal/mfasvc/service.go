@@ -179,6 +179,12 @@ func (s *Service) FinishRegistration(
 
 	// The challenge is gone now, so a response works once. The checks below
 	// tie the ceremony to the caller, the person and the session.
+	//
+	// Defense in depth: the store refuses a register challenge with no person
+	// or no session, and the relying party checks the type of the client
+	// data. This check stays so that a challenge of another kind, or a caller
+	// with no person or no session, never reaches the check of a
+	// registration.
 	if c.Kind != mfa.CeremonyRegister || a.PrincipalID == "" || a.SessionID == "" ||
 		c.PersonID != a.PrincipalID || c.SessionID != a.SessionID || p.ID != a.PrincipalID {
 		return none, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "ceremony of another person or session",
@@ -312,6 +318,10 @@ func bound(k mfa.Ceremony, c mfa.Challenge, a Actor, b Binding) bool {
 // new counter and time of use. A counter that goes back suspends the
 // passkey: the store writes the security entry, and the error is
 // mfa.ErrCounterRegressed.
+//
+// The service does not read the principal of the passkey. Before it makes a
+// session or gives a fresh step, the caller checks that the principal exists
+// and is not disabled.
 func (s *Service) FinishAssertion(
 	ctx context.Context, a Actor, k mfa.Ceremony, b Binding, response []byte,
 ) (mfa.Passkey, error) {
@@ -338,6 +348,9 @@ func (s *Service) FinishAssertion(
 		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey of another person", ownErr)
 	}
 
+	// Defense in depth: the store refuses the use of a suspended passkey in
+	// the transaction of the use. This check stays so that the relying party
+	// never checks a response of a suspended passkey.
 	if !key.SuspendedAt.IsZero() {
 		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey is suspended", mfa.ErrSuspended)
 	}
@@ -427,7 +440,7 @@ func (s *Service) RemovePasskey(ctx context.Context, a Actor, id string) error {
 	// Defense in depth: the HTTP adapter checks the ID of the path. This
 	// check stays so that no ID that no passkey can have reaches the store
 	// or the audit object.
-	if !ident.Valid(id, mfa.MaxPasskeyNameLength) {
+	if !ident.Valid(id, mfa.MaxIDLength) {
 		return s.refuse(ctx, a.Entry, on(ActionRemoveRefused, unknownObject), "passkey ID not valid", mfa.ErrNotFound)
 	}
 

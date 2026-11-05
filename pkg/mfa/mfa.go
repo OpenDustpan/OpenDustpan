@@ -171,8 +171,9 @@ type PasskeyStore interface {
 	RecordUse(ctx context.Context, u PasskeyUse, regressed audit.Entry) error
 	// RemovePasskey deletes the passkey id of the person personID and
 	// appends e, in one transaction. A local user with no password, and a
-	// break-glass person, keep at least one passkey: the store returns
-	// ErrLastCredential for the last one. It returns ErrNotFound for a
+	// break-glass person, keep at least one passkey that is not suspended:
+	// the store returns ErrLastCredential for a removal that leaves none, and
+	// for each removal when none is left. It returns ErrNotFound for a
 	// passkey of another person, and localuser.ErrDemoFixed for the demo
 	// person.
 	RemovePasskey(ctx context.Context, personID, id string, e audit.Entry) error
