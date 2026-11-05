@@ -13,16 +13,15 @@ and two read-only passes in parallel (the GitHub forge `Commit` and
 
 | # | Severity | Finding | Issue |
 | --- | --- | --- | --- |
-| 1 | Major | `FindCommit` accepts the job trailer from any author, so a pushed commit can pose as the delivery of a write-back | see PR |
-| 2 | Major | The moved-head check of `Commit` fails open for a symlink, a submodule or a directory at a changed path | see PR |
-| 3 | Major | The GitHub adapter decides the commit signing and authorship question that ADR 271 leaves open | see PR |
-| 4 | Major | The manual lock service keeps the bare configured authorizer, and `TestNewServerAuthenticatorChain` accepts it | see PR |
-| 5 | Major | The audit-sink webhook and the notification webhook use two signature algorithms under the same headers and the same `v1=` tag | see PR |
-| 6 | Major | ADR 320 decision 7 has no sign-in service: the order lives in two HTTP handlers, and the two copies already differ | see PR |
-| 7 | Major | `RunPasswordMethod` tests `localusersvc.PasswordMethod`, which no route of the server calls | see PR |
-| 8 to 27 | Minor, info | See "Minor findings" | see PR |
+| 1 | Major | `FindCommit` accepts the job trailer from any author, so a pushed commit can pose as the delivery of a write-back | #2448 |
+| 2 | Major | The moved-head check of `Commit` fails open for a symlink, a submodule or a directory at a changed path | #2449 |
+| 3 | Major | The GitHub adapter decides the commit signing and authorship question that ADR 271 leaves open | #2450 |
+| 4 | Major | The manual lock service keeps the bare configured authorizer, and `TestNewServerAuthenticatorChain` accepts it | #2451 |
+| 5 | Major | The audit-sink webhook and the notification webhook use two signature algorithms under the same headers and the same `v1=` tag | #2452 |
+| 6 | Major | ADR 320 decision 7 has no sign-in service: the order lives in two HTTP handlers, and the two copies already differ | #2453 |
+| 7 | Major | `RunPasswordMethod` tests `localusersvc.PasswordMethod`, which no route of the server calls | #2454 |
+| 8 to 27 | Minor, info | See "Minor findings" | #2455 |
 
-The issue numbers are in the pull request description.
 
 ## Major findings
 
@@ -244,7 +243,7 @@ no second factor of its own; update it when ADR 301 lands.
 
 ## Minor findings
 
-All go into the issue "Architecture review 11: minor findings".
+All go into #2455, "Architecture review 11: minor findings".
 
 ### Forge
 
