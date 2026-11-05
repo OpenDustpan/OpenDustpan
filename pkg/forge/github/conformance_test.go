@@ -82,11 +82,14 @@ func (x *hostFixture) Unavailable(_ context.Context, retryAfter time.Duration) (
 const conformanceRepo = "acme/infra"
 
 // newHost starts a fake GitHub host with the repository of the suite, one
-// commit on main, and a token for the user.
+// commit on main, and a token for the user. The installation may write the
+// contents, so that the suite can commit.
 func newHost(t *testing.T) *githubfake.Fake {
 	t.Helper()
 
-	return newHostWith(t, func(*githubfake.Config) {})
+	return newHostWith(t, func(c *githubfake.Config) {
+		c.Permissions = map[string]string{"contents": "write", "metadata": "read"}
+	})
 }
 
 // newHostWith is newHost with a change of the settings of the host.

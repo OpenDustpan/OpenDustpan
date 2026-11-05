@@ -60,6 +60,17 @@ type wireBlob struct {
 	Content  string `json:"content"`
 }
 
+// wireRef is a branch in the answer of the calls that read or make a ref.
+type wireRef struct {
+	Ref    string        `json:"ref"`
+	Object wireRefObject `json:"object"`
+}
+
+type wireRefObject struct {
+	SHA  string `json:"sha"`
+	Type string `json:"type"`
+}
+
 type wireGQLError struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`

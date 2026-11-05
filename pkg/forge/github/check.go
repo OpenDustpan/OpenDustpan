@@ -56,17 +56,21 @@ func (f *gitHub) Check(ctx context.Context) (forge.Account, error) {
 }
 
 // learn keeps the login of the account of the installation and whether the
-// installation can read the contents, for the reads and for Capabilities.
+// installation can read and write the contents, for the reads and for Capabilities.
 func (f *gitHub) learn(login string, permissions map[string]string) {
-	access := contentsMissing
+	read, write := contentsMissing, contentsMissing
 	if level := permissions[permContents]; level == levelRead || level == levelWrite {
-		access = contentsGranted
+		read = contentsGranted
+	}
+
+	if permissions[permContents] == levelWrite {
+		write = contentsGranted
 	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.owner, f.contents = login, access
+	f.owner, f.contents, f.writes = login, read, write
 }
 
 // The names of the permission and of its levels that the adapter reads.
@@ -255,18 +259,26 @@ type call struct {
 	// oversize is the error for an answer above the body limit. Nil means a
 	// GitHub that gave an answer that cannot be read.
 	oversize error
+	// target is the full address, for a call that is not under the API
+	// address. Empty means the API address and path.
+	target string
 }
 
 // do sends one request to GitHub with the bearer credential bearer and
 // returns the answer, or an error that wraps a sentinel of the port. The
 // text of an error holds no part of the credential or of the answer.
 func (f *gitHub) do(ctx context.Context, method, path, bearer string, body []byte) (response, error) {
-	return f.send(ctx, call{method: method, path: path, bearer: bearer, body: body, status: nil, oversize: nil})
+	return f.send(ctx, call{
+		method: method, path: path, bearer: bearer, body: body, status: nil, oversize: nil, target: "",
+	})
 }
 
 // send sends c, as do does.
 func (f *gitHub) send(ctx context.Context, c call) (response, error) {
 	target := f.base + c.path
+	if c.target != "" {
+		target = c.target
+	}
 
 	var reader io.Reader
 	if c.body != nil {

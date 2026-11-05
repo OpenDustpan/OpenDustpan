@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,7 +28,10 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("POST /app/installations/{id}/access_tokens", f.createInstallationToken)
 	mux.HandleFunc("DELETE /installation/token", f.revokeInstallationToken)
 	mux.HandleFunc("GET /user", f.getUser)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/commits", f.listCommits)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{ref...}", f.getCommit)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/git/ref/{ref...}", f.getRef)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/git/refs", f.createRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/blobs/{sha}", f.getBlob)
 	mux.HandleFunc("POST /graphql", f.graphql)
@@ -225,10 +229,10 @@ func (f *Fake) getUser(w http.ResponseWriter, r *http.Request) {
 	f.writeJSON(w, http.StatusOK, wireAccount{ID: f.cfg.User.ID, Login: f.cfg.User.Login})
 }
 
-// repoOf finds the repository of the path and checks that the credential can
-// read its contents. It answers 404 for a repository that does not exist and
+// repoOf finds the repository of the path and checks that the credential has the
+// permission level (read or write) on its contents. It answers 404 for a repository that does not exist and
 // for one that the credential cannot see. The caller holds the lock.
-func (f *Fake) repoOf(w http.ResponseWriter, r *http.Request, perm, level string) (*repo, bool) {
+func (f *Fake) repoOf(w http.ResponseWriter, r *http.Request, level string) (*repo, bool) {
 	if !f.authorize(w, r, BearerInstallation, BearerUser) {
 		return nil, false
 	}
@@ -250,7 +254,7 @@ func (f *Fake) repoOf(w http.ResponseWriter, r *http.Request, perm, level string
 		return nil, false
 	}
 
-	if !f.permitted(r, full, perm, level) {
+	if !f.permitted(r, full, "contents", level) {
 		f.message(w, http.StatusForbidden, "Resource not accessible by integration")
 
 		return nil, false
@@ -265,7 +269,7 @@ func person(at time.Time) wirePerson {
 }
 
 func (f *Fake) getCommit(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
+	rp, ok := f.repoOf(w, r, levelNameRead)
 	if !ok {
 		return
 	}
@@ -280,20 +284,154 @@ func (f *Fake) getCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	f.writeJSON(w, http.StatusOK, wireCommitOf(c))
+}
+
+// wireCommitOf is the answer for one commit.
+func wireCommitOf(c *commit) wireCommit {
 	parents := []wireParent{}
 	if c.meta.Parent != "" {
 		parents = append(parents, wireParent{SHA: c.meta.Parent})
 	}
 
-	f.writeJSON(w, http.StatusOK, wireCommit{
+	return wireCommit{
 		SHA:     c.meta.ID,
 		Commit:  wireCommitBody{Message: c.meta.Message, Author: person(c.meta.Time), Committer: person(c.meta.Time)},
 		Parents: parents,
-	})
+	}
+}
+
+// Limits of the list of commits, as GitHub has them.
+const (
+	defaultPerPage = 30
+	maxPerPage     = 100
+)
+
+// listCommits answers the list of the commits that lead to the commit of the
+// query sha (a branch, a tag or a commit ID; the default branch when it is
+// not set), newest first. The query since keeps the commits at or after that
+// time, page and per_page cut the list. The list holds the first parent
+// chain only.
+func (f *Fake) listCommits(w http.ResponseWriter, r *http.Request) {
+	rp, ok := f.repoOf(w, r, levelNameRead)
+	if !ok {
+		return
+	}
+
+	q := r.URL.Query()
+
+	ref := q.Get("sha")
+	if ref == "" {
+		ref = DefaultBranch
+	}
+
+	head, found := rp.resolve(ref)
+	if !found {
+		f.message(w, http.StatusNotFound, "Not Found")
+
+		return
+	}
+
+	var since time.Time
+
+	if raw := q.Get("since"); raw != "" {
+		var err error
+		if since, err = time.Parse(time.RFC3339, raw); err != nil {
+			f.message(w, http.StatusUnprocessableEntity, "Invalid since: "+raw)
+
+			return
+		}
+	}
+
+	perPage, page := pageOf(q.Get("per_page"), defaultPerPage), pageOf(q.Get("page"), 1)
+
+	all := []wireCommit{}
+
+	for c := head; c != nil; c = rp.commits[c.meta.Parent] {
+		if !c.meta.Time.Before(since) {
+			all = append(all, wireCommitOf(c))
+		}
+	}
+
+	from := min((page-1)*perPage, len(all))
+	to := min(from+perPage, len(all))
+
+	f.writeJSON(w, http.StatusOK, all[from:to])
+}
+
+// pageOf reads a positive number of a query, or fallback. The most for a
+// page size is maxPerPage.
+func pageOf(raw string, fallback int) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return fallback
+	}
+
+	return min(n, maxPerPage)
+}
+
+// refPrefix starts the full name of a branch.
+const refPrefix = "refs/heads/"
+
+// getRef answers a branch, by the path "heads/<name>".
+func (f *Fake) getRef(w http.ResponseWriter, r *http.Request) {
+	rp, ok := f.repoOf(w, r, levelNameRead)
+	if !ok {
+		return
+	}
+
+	name, isBranch := strings.CutPrefix(r.PathValue("ref"), "heads/")
+
+	head, found := rp.branches[name]
+	if !isBranch || !found {
+		f.message(w, http.StatusNotFound, "Not Found")
+
+		return
+	}
+
+	f.writeJSON(w, http.StatusOK, wireRef{Ref: refPrefix + name, Object: wireRefObject{SHA: head, Type: "commit"}})
+}
+
+// createRefRequest is the body of the call that makes a branch.
+type createRefRequest struct {
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
+}
+
+// createRef makes a branch at a commit. It answers 422 for a name that is
+// taken and for a commit that the repository does not have.
+func (f *Fake) createRef(w http.ResponseWriter, r *http.Request) {
+	rp, ok := f.repoOf(w, r, levelNameWrite)
+	if !ok {
+		return
+	}
+
+	var req createRefRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		f.message(w, http.StatusBadRequest, "Problems parsing JSON")
+
+		return
+	}
+
+	name, isBranch := strings.CutPrefix(req.Ref, refPrefix)
+
+	switch _, taken := rp.branches[name]; {
+	case !isBranch || name == "":
+		f.message(w, http.StatusUnprocessableEntity, "Reference update failed")
+	case taken:
+		f.message(w, http.StatusUnprocessableEntity, "Reference already exists")
+	case rp.commits[req.SHA] == nil:
+		f.message(w, http.StatusUnprocessableEntity, "Object does not exist")
+	default:
+		rp.branches[name] = req.SHA
+
+		f.writeJSON(w, http.StatusCreated, wireRef{Ref: req.Ref, Object: wireRefObject{SHA: req.SHA, Type: "commit"}})
+	}
 }
 
 func (f *Fake) getContents(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
+	rp, ok := f.repoOf(w, r, levelNameRead)
 	if !ok {
 		return
 	}
@@ -418,7 +556,7 @@ func dirEntries(rp *repo, c *commit, dir string) []wireEntry {
 }
 
 func (f *Fake) getBlob(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.repoOf(w, r, "contents", levelNameRead)
+	rp, ok := f.repoOf(w, r, levelNameRead)
 	if !ok {
 		return
 	}
