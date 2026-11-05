@@ -1,0 +1,24 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/dustpan
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIPAllowlistServeNamespaceRead-4      	   20000	     62604 ns/op	   13421 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   20000	     66489 ns/op	   13416 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   20000	     62486 ns/op	   13415 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   20000	     48097 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   20000	     43240 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   20000	     48490 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkPerf11Baseline-4                     	   20000	     51772 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkPerf11Baseline-4                     	   20000	     52176 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkPerf11Baseline-4                     	   20000	     47874 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkPerf11AllowlistOn-4                  	   20000	     65953 ns/op	   13415 B/op	     161 allocs/op
+BenchmarkPerf11AllowlistOn-4                  	   20000	     69571 ns/op	   13416 B/op	     161 allocs/op
+BenchmarkPerf11AllowlistOn-4                  	   20000	     70497 ns/op	   13417 B/op	     161 allocs/op
+BenchmarkPerf11ProxyOnly-4                    	   20000	     52572 ns/op	   12310 B/op	     131 allocs/op
+BenchmarkPerf11ProxyOnly-4                    	   20000	     46053 ns/op	   12310 B/op	     131 allocs/op
+BenchmarkPerf11ProxyOnly-4                    	   20000	     51883 ns/op	   12311 B/op	     131 allocs/op
+BenchmarkPerf11AllowlistAndProxy-4            	   20000	     64091 ns/op	   13464 B/op	     164 allocs/op
+BenchmarkPerf11AllowlistAndProxy-4            	   20000	     66399 ns/op	   13464 B/op	     164 allocs/op
+BenchmarkPerf11AllowlistAndProxy-4            	   20000	     75504 ns/op	   13465 B/op	     164 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/dustpan	21.714s

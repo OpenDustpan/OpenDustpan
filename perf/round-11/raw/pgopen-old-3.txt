@@ -1,0 +1,6 @@
+=== RUN   TestPerf11Migrate
+    perf11_migrate_pg_test.go:41: postgres fresh-migrate n=20 p50=228.663946ms p95=500.913593ms p99=500.913593ms
+    perf11_migrate_pg_test.go:42: postgres reopen(no-op) n=20 p50=18.79054ms p95=25.058559ms p99=25.058559ms
+--- PASS: TestPerf11Migrate (6.49s)
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/postgres	7.663s
