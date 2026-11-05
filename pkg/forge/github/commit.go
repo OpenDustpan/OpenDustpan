@@ -124,6 +124,12 @@ func (f *gitHub) commitAfterMove(
 			return forge.Commit{}, conflict
 		}
 
+		// Files that are the same at the base and at the head are not enough:
+		// a force push can keep the files and rewrite the history.
+		if ancestorErr := f.requireAncestor(ctx, r, bearer, req.Base, head); ancestorErr != nil {
+			return forge.Commit{}, ancestorErr
+		}
+
 		differs, err := f.changedSince(ctx, r, bearer, req, head)
 		if err != nil {
 			return forge.Commit{}, err
@@ -143,6 +149,55 @@ func (f *gitHub) commitAfterMove(
 	}
 
 	return forge.Commit{}, fmt.Errorf("%w: the branch moved again and again", forge.ErrConflict)
+}
+
+// Fields of the answer of the compare call.
+const (
+	keyStatus    = "status"
+	keyMergeBase = "merge_base_commit"
+)
+
+// requireAncestor returns nil when the commit base is an ancestor of the
+// commit head, and forge.ErrConflict when it is not, or when the answer of
+// GitHub does not show that it is. An error of the credential or a GitHub that
+// does not answer is returned as it is: no commit is made then either.
+func (f *gitHub) requireAncestor(ctx context.Context, r repoName, bearer, base, head string) error {
+	conflict := fmt.Errorf("%w: the base commit is not an ancestor of the head of the branch", forge.ErrConflict)
+
+	resp, err := f.send(ctx, call{
+		method: http.MethodGet, path: r.path() + "/compare/" + base + "..." + head + "?per_page=1", bearer: bearer,
+		body: nil, status: f.commitStatus, oversize: conflict, target: "",
+	})
+	if errors.Is(err, forge.ErrNotFound) {
+		return conflict
+	}
+
+	if err != nil {
+		return err
+	}
+
+	var fields map[string]json.RawMessage
+	if decode(resp.body, &fields) != nil {
+		return conflict
+	}
+
+	var (
+		status    string
+		mergeBase refObject
+	)
+
+	if json.Unmarshal(fields[keyStatus], &status) != nil || json.Unmarshal(fields[keyMergeBase], &mergeBase) != nil {
+		return conflict
+	}
+
+	// Defense in depth: "ahead" and "identical" say that the base is an
+	// ancestor. The merge base must be the base too, so that an answer for
+	// other commits never passes.
+	if (status != "ahead" && status != "identical") || mergeBase.SHA != base {
+		return conflict
+	}
+
+	return nil
 }
 
 // changedSince reports whether a file of the changes of req is not the same
