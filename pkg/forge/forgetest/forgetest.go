@@ -61,6 +61,10 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	// Push commits files on branch with no check, as another author does,
 	// and returns the commit. A nil value deletes the file.
 	Push(ctx context.Context, branch string, files map[string][]byte) (forge.Commit, error)
+	// Rewrite replaces the history of branch with one new commit that has no
+	// parent and holds exactly files, as a force push does, and returns it.
+	// The commits before stay in the repository.
+	Rewrite(ctx context.Context, branch string, files map[string][]byte) (forge.Commit, error)
 	// Protect turns on branch protection for branch, so that a commit
 	// through the port is refused.
 	Protect(ctx context.Context, branch string) error
@@ -159,6 +163,8 @@ func cases() []testCase {
 		{"commit to a protected branch is refused", forge.CapCommit, caseCommitProtected},
 		{"commit to a missing branch is not found", forge.CapCommit, caseCommitMissingBranch},
 		{"commit of a delete of a missing file is invalid", forge.CapCommit, caseCommitInvalidDelete},
+		{"commit after a force push that keeps the files is a conflict", forge.CapCommit, caseCommitForcePushed},
+		{"commit that the forge refuses with status 422 is invalid", forge.CapCommit, caseCommitRefused422},
 		{"a connection with no push access lists no commit and no review", "", caseNoPushNoWrite},
 		{"commit that fails validation is invalid and makes no call", forge.CapCommit, caseCommitInvalid},
 		{"commit above a size limit is too large and makes no call", forge.CapCommit, caseCommitTooLarge},

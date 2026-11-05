@@ -152,6 +152,10 @@ func (f *fake) Push(context.Context, string, map[string][]byte) (forge.Commit, e
 	return forge.Commit{}, errNotImplemented
 }
 
+func (f *fake) Rewrite(context.Context, string, map[string][]byte) (forge.Commit, error) {
+	return forge.Commit{}, errNotImplemented
+}
+
 func (f *fake) Tag(context.Context, string, string) error { return errNotImplemented }
 
 func (f *fake) Protect(context.Context, string) error { return errNotImplemented }

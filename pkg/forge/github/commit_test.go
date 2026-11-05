@@ -802,6 +802,8 @@ func TestCommitFollowsAMovedBranchAtMostThreeTimes(t *testing.T) {
 			heads++
 
 			answer(w, http.StatusOK, `{"object":{"sha":"`+shaN(1000+heads)+`"}}`)
+		case strings.Contains(r.URL.Path, "/compare/"):
+			answer(w, http.StatusOK, aheadOf(rawBase))
 		case r.URL.Path == "/graphql":
 			mutations++
 
@@ -821,5 +823,88 @@ func TestCommitFollowsAMovedBranchAtMostThreeTimes(t *testing.T) {
 
 	if mutations != 4 || heads != 3 {
 		t.Fatalf("%d mutations and %d reads of the head, want 4 and 3", mutations, heads)
+	}
+}
+
+// aheadOf is the answer of the compare call for a head that is ahead of base.
+func aheadOf(base string) string {
+	return `{"status":"ahead","merge_base_commit":{"sha":"` + base + `"}}`
+}
+
+// TestCommitNeedsTheBaseToBeAnAncestor gives a branch that moved and a compare
+// answer of each kind. Only a base that is an ancestor of the new head lets
+// the commit go on. Any other answer makes no second mutation.
+func TestCommitNeedsTheBaseToBeAnAncestor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		want    error
+		retries int
+	}{
+		{"ahead", 200, aheadOf(rawBase), nil, 1},
+		{"identical", 200, `{"status":"identical","merge_base_commit":{"sha":"` + rawBase + `"}}`, nil, 1},
+		{"diverged", 200, `{"status":"diverged","merge_base_commit":{"sha":"` + rawBase + `"}}`, forge.ErrConflict, 0},
+		{"behind", 200, `{"status":"behind","merge_base_commit":{"sha":"` + rawBase + `"}}`, forge.ErrConflict, 0},
+		{"ahead with another merge base", 200, aheadOf(rawCommit), forge.ErrConflict, 0},
+		{"ahead with no merge base", 200, `{"status":"ahead"}`, forge.ErrConflict, 0},
+		{
+			"a status that is not known",
+			200,
+			`{"status":"new","merge_base_commit":{"sha":"` + rawBase + `"}}`,
+			forge.ErrConflict,
+			0,
+		},
+		{"an answer that does not parse", 200, `not json`, forge.ErrConflict, 0},
+		{"a base that GitHub does not have", 404, `{"message":"Not Found"}`, forge.ErrConflict, 0},
+		{"a server error", 503, `{}`, forge.ErrUnavailable, 0},
+		{"a refused credential", 401, `{}`, forge.ErrAuth, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				mu        sync.Mutex
+				mutations int
+			)
+
+			c := rawForge(t, "", func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+
+				switch {
+				case strings.Contains(r.URL.Path, "/git/ref/heads/"):
+					answer(w, http.StatusOK, `{"object":{"sha":"`+rawCommit+`"}}`)
+				case strings.Contains(r.URL.Path, "/compare/"):
+					answer(w, tt.status, tt.body)
+				case strings.Contains(r.URL.Path, "/contents/"):
+					answer(w, http.StatusNotFound, `{"message":"Not Found"}`)
+				case mutations == 0:
+					mutations++
+
+					answer(w, http.StatusOK, typedErrors("x", "STALE_DATA"))
+				default:
+					mutations++
+
+					answer(w, http.StatusOK, goodAnswer())
+				}
+			})
+
+			_, err := c.Commit(t.Context(), "acme/infra", oneCommit(rawBase))
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Commit = %v, want %v", err, tt.want)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if mutations != 1+tt.retries {
+				t.Fatalf("%d mutations, want %d", mutations, 1+tt.retries)
+			}
+		})
 	}
 }
