@@ -58,6 +58,26 @@ func (x *hostFixture) PushAs(
 	return commitOf(c), nil
 }
 
+func (x *hostFixture) CommitMessage(_ context.Context, repo, commitID string) (string, error) {
+	c, err := x.host.Head(repo, commitID)
+	if err != nil {
+		return "", fmt.Errorf("read a commit of the fake: %w", err)
+	}
+
+	return c.Message, nil
+}
+
+func (x *hostFixture) Clone(_ context.Context) (string, error) {
+	owner, name, _ := strings.Cut(x.repo, "/")
+	clone := owner + "/" + name + "-clone"
+
+	if err := x.host.CloneRepo(x.repo, clone); err != nil {
+		return "", fmt.Errorf("clone in the fake: %w", err)
+	}
+
+	return clone, nil
+}
+
 func (x *hostFixture) PushEntry(
 	_ context.Context, branch, path string, kind forgetest.EntryKind, variant string,
 ) (forge.Commit, error) {
@@ -286,7 +306,13 @@ func newHostOpenerAt(t *testing.T, host *githubfake.Fake, now func() time.Time) 
 	t.Helper()
 
 	o, err := github.NewOpener(github.Config{
-		Rules: egress.Rules{Allow: nil, LoopbackForTests: true}, RootCAs: host.CertPool(), Now: now,
+		Rules: egress.Rules{
+			Allow:            nil,
+			LoopbackForTests: true,
+		},
+		RootCAs: host.CertPool(),
+		Now:     now,
+		Prover:  testProver{},
 	})
 	if err != nil {
 		t.Fatal(err)

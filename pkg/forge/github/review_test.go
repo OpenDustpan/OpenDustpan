@@ -132,7 +132,7 @@ func cannedForge(t *testing.T, answers map[string]hostAnswer) *canned {
 	pool.AddCert(srv.Certificate())
 
 	o, err := github.NewOpener(github.Config{
-		Rules: egress.Rules{Allow: nil, LoopbackForTests: true}, RootCAs: pool, Now: nil,
+		Rules: egress.Rules{Allow: nil, LoopbackForTests: true}, RootCAs: pool, Now: nil, Prover: testProver{},
 	})
 	if err != nil {
 		t.Fatal(err)

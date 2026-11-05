@@ -82,6 +82,11 @@ func (f *gitHub) Commit(ctx context.Context, repo string, req forge.CommitReques
 		return forge.Commit{}, f.forget(r, err)
 	}
 
+	msg, err = f.withProof(ctx, r, bearer, req, msg)
+	if err != nil {
+		return forge.Commit{}, f.forget(r, err)
+	}
+
 	if req.NewBranch {
 		if branchErr := f.startBranch(ctx, r, bearer, req); branchErr != nil {
 			return forge.Commit{}, f.forget(r, branchErr)
@@ -98,6 +103,32 @@ func (f *gitHub) Commit(ctx context.Context, repo string, req forge.CommitReques
 	}
 
 	return c, nil
+}
+
+// withProof adds the proof of the commit to the trailer block of msg. The
+// proof binds the trailer, the base commit and the repository. A commit that
+// follows a branch that moved keeps the base of the request, so that one proof
+// serves every try.
+func (f *gitHub) withProof(
+	ctx context.Context, r repoName, bearer string, req forge.CommitRequest, msg message,
+) (message, error) {
+	// Defense in depth: commitAllowed refuses a connection with no Prover. This
+	// check stays so that a commit never leaves with no proof.
+	if f.o.prover == nil {
+		return message{}, fmt.Errorf("%w: the connection has no key to seal the proof", forge.ErrUnsupported)
+	}
+
+	repoID, err := f.repositoryID(ctx, r, bearer)
+	if err != nil {
+		return message{}, err
+	}
+
+	proof, err := f.o.prover.Seal(ctx, proofBinding(repoID, req.Trailer, req.Base))
+	if err != nil || len(proof) == 0 {
+		return message{}, forge.Unavailable(0, "the proof of the commit cannot be sealed")
+	}
+
+	return message{headline: msg.headline, body: addTrailerLine(msg.body, proofLine(proof))}, nil
 }
 
 // maxMoves is how many times Commit follows a branch that moved while it
@@ -284,6 +315,10 @@ func checkCommit(req forge.CommitRequest) (message, error) {
 		return message{}, err
 	}
 
+	if err := checkRequestTrailer(req); err != nil {
+		return message{}, err
+	}
+
 	if len(req.Message) > forge.MaxMessageBytes {
 		return message{}, fmt.Errorf(
 			"%w: the commit message has more than %d bytes",
@@ -293,6 +328,35 @@ func checkCommit(req forge.CommitRequest) (message, error) {
 	}
 
 	return buildMessage(req.Message, req.Author)
+}
+
+// checkRequestTrailer checks that the trailer of the request is one trailer
+// line, that the last paragraph of the message has it, and that neither the
+// trailer nor the message has a line with the key of the proof, which only the
+// adapter writes.
+func checkRequestTrailer(req forge.CommitRequest) error {
+	if err := validTrailer(req.Trailer); err != nil {
+		return err
+	}
+
+	if hasProofKey(req.Trailer) || hasProofKey(req.Message) {
+		return fmt.Errorf("%w: the %s line is for the adapter only", forge.ErrInvalid, proofKey)
+	}
+
+	if !hasTrailer(req.Message, req.Trailer) {
+		return fmt.Errorf("%w: the last paragraph of the message has no line equal to the trailer", forge.ErrInvalid)
+	}
+
+	// The adapter adds the proof, and the person of the request, to the last
+	// paragraph. They join it only when each line of it is a trailer. Else they
+	// make a new paragraph, and the trailer of the request is no longer in the
+	// last paragraph, so FindCommit would never find the commit.
+	text := strings.TrimRight(strings.ReplaceAll(req.Message, "\r\n", "\n"), " \t\n")
+	if !isTrailerBlock(lastParagraph(text)) {
+		return fmt.Errorf("%w: each line of the last paragraph of the message must be a trailer", forge.ErrInvalid)
+	}
+
+	return nil
 }
 
 // checkChanges checks the file changes with the limits and the allow list of
@@ -366,8 +430,12 @@ func buildMessage(text string, author forge.Person) (message, error) {
 
 // addCoAuthor adds the Co-authored-by trailer of author to body.
 func addCoAuthor(body string, author forge.Person) string {
-	line := "Co-authored-by: " + author.Name + " <" + author.Email + ">"
+	return addTrailerLine(body, "Co-authored-by: "+author.Name+" <"+author.Email+">")
+}
 
+// addTrailerLine adds the trailer line to body. The line joins the trailer
+// block at the end of body when it has one, and else it makes one.
+func addTrailerLine(body, line string) string {
 	if body == "" {
 		return line
 	}
@@ -769,28 +837,24 @@ func (f *gitHub) branchHead(ctx context.Context, r repoName, bearer, branch stri
 // or ref. A commit that has the trailer counts only when the connection made
 // it (see trustedCommit). The newest commit with the trailer that fails a
 // check gives forge.ErrUntrustedCommit, not a commit and not ErrNotFound. It
-// returns forge.ErrInvalid for a trailer, a ref or a repository
+// returns forge.ErrInvalid for a trailer, a base commit, a ref or a repository
 // path that fails the checks, before any call, and forge.ErrUnavailable when
 // there are more commits since the time than the adapter reads, so that it
 // never answers "not found" for a commit that it did not look at.
+//
+// base is the base commit of the request that made the commit. The commit
+// must also have a proof that opens for the trailer, the base commit and the
+// repository (see checkProof).
 func (f *gitHub) FindCommit(
-	ctx context.Context, repo, ref, trailer string, since time.Time,
+	ctx context.Context, repo, ref string, d forge.Delivery, since time.Time,
 ) (forge.Commit, error) {
 	if err := f.commitAllowed("FindCommit"); err != nil {
 		return forge.Commit{}, err
 	}
 
-	r, err := splitRepo(repo)
+	r, err := checkFind(repo, ref, d)
 	if err != nil {
 		return forge.Commit{}, err
-	}
-
-	if refErr := validateRef(ref); refErr != nil {
-		return forge.Commit{}, refErr
-	}
-
-	if trailerErr := validTrailer(trailer); trailerErr != nil {
-		return forge.Commit{}, trailerErr
 	}
 
 	bearer, err := f.readBearer(ctx, r)
@@ -798,13 +862,15 @@ func (f *gitHub) FindCommit(
 		return forge.Commit{}, f.forget(r, err)
 	}
 
+	want := delivery{repo: r, bearer: bearer, trailer: d.Trailer, base: d.Base}
+
 	for page := 1; page <= maxCommitPages; page++ {
 		list, full, listErr := f.listCommits(ctx, search{repo: r, bearer: bearer, ref: ref, since: since}, page)
 		if listErr != nil {
 			return forge.Commit{}, f.forget(r, listErr)
 		}
 
-		found, delivered, deliveryErr := f.deliveryIn(ctx, list, trailer)
+		found, delivered, deliveryErr := f.deliveryIn(ctx, list, want)
 		if deliveryErr != nil {
 			return forge.Commit{}, f.forget(r, deliveryErr)
 		}
@@ -824,15 +890,42 @@ func (f *gitHub) FindCommit(
 	return forge.Commit{}, forge.Unavailable(0, "more commits since the time than the adapter reads")
 }
 
+// checkFind checks the arguments of FindCommit with allow lists, before any
+// call, and returns the repository.
+func checkFind(repo, ref string, d forge.Delivery) (repoName, error) {
+	r, err := splitRepo(repo)
+	if err != nil {
+		return repoName{}, err
+	}
+
+	if refErr := validateRef(ref); refErr != nil {
+		return repoName{}, refErr
+	}
+
+	if trailerErr := validTrailer(d.Trailer); trailerErr != nil {
+		return repoName{}, trailerErr
+	}
+
+	if hasProofKey(d.Trailer) {
+		return repoName{}, fmt.Errorf("%w: the %s line is for the adapter only", forge.ErrInvalid, proofKey)
+	}
+
+	if baseErr := forge.ValidateCommitID(d.Base); baseErr != nil {
+		return repoName{}, fmt.Errorf("the base commit: %w", baseErr)
+	}
+
+	return r, nil
+}
+
 // deliveryIn returns the first commit of list that has the trailer, and true.
 // A commit with the trailer is the delivery only when the connection made it
 // (see trustedCommit). Any other commit with the trailer stops the search with
 // forge.ErrUntrustedCommit, so that the caller never records it and never
 // makes a second commit on top of it. It returns false when no commit of the
 // list has the trailer.
-func (f *gitHub) deliveryIn(ctx context.Context, list []listedCommit, trailer string) (forge.Commit, bool, error) {
+func (f *gitHub) deliveryIn(ctx context.Context, list []listedCommit, d delivery) (forge.Commit, bool, error) {
 	for _, c := range list {
-		if !hasTrailer(c.Commit.Message, trailer) {
+		if !hasTrailer(c.Commit.Message, d.trailer) {
 			continue
 		}
 
@@ -843,6 +936,10 @@ func (f *gitHub) deliveryIn(ctx context.Context, list []listedCommit, trailer st
 
 		if trustErr := trustedCommit(c, identity); trustErr != nil {
 			return forge.Commit{}, false, trustErr
+		}
+
+		if proofErr := f.checkProof(ctx, d, c); proofErr != nil {
+			return forge.Commit{}, false, proofErr
 		}
 
 		return forge.Commit{ID: c.SHA, Time: c.Commit.Committer.Date.UTC()}, true, nil
