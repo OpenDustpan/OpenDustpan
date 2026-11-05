@@ -6,8 +6,8 @@ require (
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/go-webauthn/webauthn v0.18.2
 	github.com/expr-lang/expr v1.17.8
+	github.com/go-webauthn/webauthn v0.18.2
 	github.com/jackc/pgx/v5 v5.11.0
 	go.uber.org/goleak v1.3.0
 	go.yaml.in/yaml/v3 v3.0.6
