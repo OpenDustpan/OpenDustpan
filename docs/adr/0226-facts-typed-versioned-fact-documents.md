@@ -12,6 +12,7 @@ Changed by:
   check.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 327 extends decision 2: the fact group `proxy`, a minor version.
 
 ## Context
 

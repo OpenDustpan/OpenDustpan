@@ -8,6 +8,8 @@ Changed by:
   binary.
 - ADR 305 extends: the Kubernetes runner runs the jobs of the operator, and
   the operator ships in the chart and the binary of the coordinator.
+- ADR 327 changes decision 4: permissions on `networkpolicies` in the
+  namespace of the coordinator.
 
 ## Context
 
