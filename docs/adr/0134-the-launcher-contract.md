@@ -6,10 +6,8 @@ Changed by:
 
 - ADR 199 changes decisions 4 and 6: a file set in the run order and
   DUSTPAN_SNAPSHOT.
-- ADR 327 extends decision 2: a fifth mode of the launcher, `proxy`.
-- ADR 327 changes decision 6: the proxy variables and the CA bundle
-  variables for a unit with proxy rules.
-- ADR 327 extends decision 10: the exit code 72, `network-not-isolated`.
+- ADR 327 changes decision 6: `HTTPS_PROXY` and the path of the CA of the
+  job for a unit with proxy rules.
 
 ## Context
 

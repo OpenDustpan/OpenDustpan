@@ -16,11 +16,9 @@ ADR 299 decision 1 gives four review modes for a Git host connection:
 - mode 3, no review requests,
 - mode 4, no change orders.
 
-ADR 299 does not say in which milestone each mode ships. The PM asked the
-owner on 1 November 2026 to put modes 2 and 4 in milestone 5, and modes 1
-and 3 in milestone 6. The owner accepted this on 1 November 2026, at about
-02:10 UTC. Until this ADR, the answer was only in the record of owner
-decisions that the PM keeps.
+ADR 299 does not say in which milestone each mode ships. On 1 November
+2026, the owner decided that modes 2 and 4 ship in milestone 5, and modes 1
+and 3 ship in milestone 6.
 
 ## Decision
 
