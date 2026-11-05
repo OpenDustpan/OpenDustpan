@@ -85,6 +85,20 @@ func TestJobsAPI(t *testing.T) {
 			jobsScenario(t, env)
 		})
 	}
+
+	// The session round trip has its own server of each store: the read of
+	// the stored log stops the server.
+	t.Run("session_round_trip", func(t *testing.T) {
+		t.Parallel()
+
+		for _, store := range stores {
+			t.Run(string(store), func(t *testing.T) {
+				t.Parallel()
+
+				sessionRoundTrip(t, e2e.NewEnvWithSignIn(t.Context(), t, e2e.NoCLI(), store))
+			})
+		}
+	})
 }
 
 // jobPath returns the job route of the job id in the namespace ns.

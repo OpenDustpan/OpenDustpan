@@ -195,6 +195,25 @@ type SessionStore interface {
 	RunnerRenew(
 		ctx context.Context, c durable.Claim, fence namespace.Fence, d time.Duration, now time.Time,
 	) (durable.Claim, error)
+	// SessionRenew is the renewal of the claim of the job session id by its
+	// launcher, which holds the claim from the exchange of its session. In one
+	// transaction it checks the fence (namespace.ErrFenced for a stale fence)
+	// and then:
+	//   - returns ErrNotFound for an unknown session;
+	//   - returns ErrRetired when an administrator retired the runner of the
+	//     session;
+	//   - returns ErrClaimLost when the claim of the session is no longer
+	//     live, so the launcher of a claim that another claim replaced
+	//     renews nothing;
+	//   - else moves the expiry of the claim to the time of the database plus
+	//     d, also while a cancel is requested, and returns the claim.
+	//
+	// The renewal during a cancel is the difference from durable.Store.Extend,
+	// which refuses it: the launcher stops its step with the grace period of
+	// the step (up to 10 minutes) and then writes its last log chunks and its
+	// finish, so its claim must stay live until then. It returns ErrInvalid
+	// for a d that is not positive.
+	SessionRenew(ctx context.Context, id string, fence namespace.Fence, d time.Duration) (durable.Claim, error)
 	// Session returns the session id, or ErrNotFound. It returns
 	// ErrClaimLost when the claim of the session is no longer live, so a
 	// launcher of a claim that another claim replaced writes nothing, and
