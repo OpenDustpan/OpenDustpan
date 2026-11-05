@@ -21,6 +21,58 @@ import (
 type hostFixture struct {
 	host *githubfake.Fake
 	repo string
+	auth forge.AuthKind
+}
+
+// partyLogin returns the login that the fake shows for a party of a pushed
+// commit. A party with no account (forgetest.PartyNobody) has the empty login.
+func partyLogin(x *hostFixture, p forgetest.Party) string {
+	switch p {
+	case forgetest.PartyOther:
+		return githubfake.OtherAuthor
+	case forgetest.PartyForge:
+		return githubfake.WebFlow
+	case forgetest.PartyConnection:
+		if x.auth == forge.AuthApp {
+			return x.host.AppLogin()
+		}
+
+		return x.host.UserLogin()
+	case forgetest.PartyNobody:
+		return ""
+	}
+
+	return ""
+}
+
+func (x *hostFixture) PushAs(
+	_ context.Context, branch string, files map[string][]byte, message string, origin forgetest.Origin,
+) (forge.Commit, error) {
+	c, err := x.host.PushSigned(x.repo, branch, files, message, githubfake.Signature{
+		Author: partyLogin(x, origin.Author), Committer: partyLogin(x, origin.Committer), Verified: origin.Verified,
+	})
+	if err != nil {
+		return forge.Commit{}, fmt.Errorf("push as to the fake: %w", err)
+	}
+
+	return commitOf(c), nil
+}
+
+func (x *hostFixture) PushEntry(
+	_ context.Context, branch, path string, kind forgetest.EntryKind, variant string,
+) (forge.Commit, error) {
+	kinds := map[forgetest.EntryKind]githubfake.EntryKind{
+		forgetest.EntrySymlink:   githubfake.Symlink,
+		forgetest.EntrySubmodule: githubfake.Submodule,
+		forgetest.EntryDirectory: githubfake.Directory,
+	}
+
+	c, err := x.host.PushEntry(x.repo, branch, path, kinds[kind], variant)
+	if err != nil {
+		return forge.Commit{}, fmt.Errorf("push an entry to the fake: %w", err)
+	}
+
+	return commitOf(c), nil
 }
 
 func commitOf(c githubfake.Commit) forge.Commit {
@@ -205,7 +257,7 @@ func newHostWith(t *testing.T, change func(*githubfake.Config)) *githubfake.Fake
 	t.Helper()
 
 	cfg := githubfake.Config{
-		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 99, Login: "acme"},
+		AppID: "", AppSlug: "", InstallationID: "", Owner: githubfake.Account{ID: 99, Login: "acme"},
 		User: githubfake.Account{ID: 0, Login: ""}, UserToken: "github_pat_" + randomHex(t, 24), ClassicToken: false,
 		Permissions: nil, ContentsLimit: 0, Key: testKey(), Now: nil, WebhookClient: nil,
 	}
@@ -285,8 +337,14 @@ func conformanceHarness(auth forge.AuthKind) forgetest.Factory {
 		}
 
 		return forgetest.Harness{
-			Opener: o, Connection: conn, Credential: cred, EventSecret: []byte(randomHex(t, 32)), Forge: fg,
-			Account: account, Repo: conformanceRepo, Fixture: &hostFixture{host: host, repo: conformanceRepo},
+			Opener:      o,
+			Connection:  conn,
+			Credential:  cred,
+			EventSecret: []byte(randomHex(t, 32)),
+			Forge:       fg,
+			Account:     account,
+			Repo:        conformanceRepo,
+			Fixture:     &hostFixture{host: host, repo: conformanceRepo, auth: auth},
 		}
 	}
 }
