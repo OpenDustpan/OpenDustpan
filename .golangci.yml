@@ -118,6 +118,27 @@ linters:
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
             - pkg: github.com/jackc/pgx
               desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
+        launcher:
+          # The launcher contract is imported by the runner module, so it
+          # imports no part of this server. It never imports internal code,
+          # a SQL driver or the forge, so a move to another module is a move
+          # of files. Defense in depth: the domain rule also applies to it.
+          files:
+            - "**/pkg/launcher/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal
+              desc: The launcher contract never imports internal code.
+            - pkg: opendustpan.org/opendustpan/pkg/forge
+              desc: The launcher contract never imports the forge.
+            - pkg: database/sql
+              desc: The launcher contract never links a SQL driver.
+            - pkg: github.com/jackc/pgx
+              desc: The launcher contract never links a SQL driver.
+            - pkg: modernc.org/sqlite
+              desc: The launcher contract never links a SQL driver.
+            - pkg: github.com/mattn/go-sqlite3
+              desc: The launcher contract never links a SQL driver.
         githubfake:
           # The fake GitHub host is test infrastructure. No file of the binary
           # (cmd/, pkg/ and internal/) imports it, except a test file, so the
@@ -175,7 +196,7 @@ linters:
             - "**/pkg/registry/**"
             - "**/internal/registry/**"
             - "**/pkg/runner/**"
-            - "**/internal/launcher/**"
+            - "**/pkg/launcher/**"
             - "**/internal/source/**"
             - "**/pkg/source/**"
             - "**/pkg/forge/*.go"
