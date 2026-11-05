@@ -175,7 +175,7 @@ func ManualLockPhaseStart(
 
 	cfg.authorizer = identity.AdminOnly{}
 
-	svc, err := newManualLockService(cfg, cfg.authorizer)
+	svc, err := newManualLockService(cfg.namespaceStore, cfg.jobStore, cfg.now, cfg.authorizer)
 	if err != nil {
 		return time.Time{}, err
 	}
