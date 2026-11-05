@@ -358,6 +358,15 @@ the keys `reason`, `provider` and `method`. The reason is one of these:
 - `sign-in assertion is not valid`: the sign-in method accepted the answer,
   and the second check of the server refused it. The password sign-in of a
   local user has this check and this reason too.
+- `sign-in input is not valid`: the callback failed the form check of the
+  method.
+- `sign-in value was used before`: a one-use value came a second time.
+- `sign-in method failed for a reason that the service does not know`: the
+  method returned an error of no known class. The sign-in fails closed.
+- `no principal`, `principal is disabled`, `principal cannot sign in through
+  an identity provider`, `subject is not valid` and `subject over 255
+  bytes`: the answer was good, and the server refused the person. These
+  refusals answer `403` with the reason.
 - `assertion names another provider than the route` and `assertion method is
   not the method of the provider`: the method returned a person of another
   provider or of another kind than the provider of the route.
