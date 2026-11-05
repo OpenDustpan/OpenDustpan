@@ -324,17 +324,31 @@ func (f *gitHub) mintStatus(level string) func(response) error {
 
 		var e errorBody
 		if decode(r.body, &e) == nil && strings.Contains(e.Message, "permissions requested") {
+			missing := "the installation does not have the permission to " + missingPermission(level)
 			if level == levelWrite || level == levelReview {
-				return fmt.Errorf(
-					"%w: the installation does not have the permission to write the contents",
-					forge.ErrRefused,
-				)
+				return fmt.Errorf("%w: %s", forge.ErrRefused, missing)
 			}
 
-			return fmt.Errorf("%w: the installation does not have the permission to read the contents", forge.ErrAuth)
+			return fmt.Errorf("%w: %s", forge.ErrAuth, missing)
 		}
 
 		return fmt.Errorf("%w: the installation cannot see the repository", forge.ErrNotFound)
+	}
+}
+
+// missingPermission names the permission that a token of the level asks for, for
+// the text of an error. The levels for review requests name the pull requests
+// too, so that the text tells which permission of the app is missing.
+func missingPermission(level string) string {
+	switch level {
+	case levelReview:
+		return "write the contents and the pull requests"
+	case levelReviewRead:
+		return "read the contents and the pull requests"
+	case levelWrite:
+		return "write the contents"
+	default:
+		return "read the contents"
 	}
 }
 
