@@ -2,9 +2,11 @@
 # Local demo of OpenDustpan: run `make demo` from the repository root.
 #
 # It builds the console at CONSOLE_REF into a temporary directory, starts
-# the server from bin/opendustpan with a SQLite database in the same
-# directory, seeds demo namespaces, stacks, updates and one backup, prints
-# the URL with the sign-in token, and serves until Ctrl-C. Ctrl-C stops the
+# the dev server from bin/opendustpan (opendustpan dev --demo) with a SQLite
+# database in the same directory, seeds demo namespaces, stacks and updates,
+# prints the URL with the sign-in of the demo person and the sign-in token, and
+# serves until Ctrl-C. The dev server has no backup target, so the demo has no
+# backup. Ctrl-C stops the
 # server and removes the temporary directory.
 #
 # Environment:
@@ -70,20 +72,21 @@ if [ ! -f "$DEMO_TMP/console/dist/index.html" ]; then
   exit 1
 fi
 
-mkdir -p "$DEMO_TMP/data/blobs" "$DEMO_TMP/backups"
-
 DEMO_URL="http://127.0.0.1:$DEMO_PORT"
 
-./bin/opendustpan key generate --out "$DEMO_TMP/data/dustpan.key" >/dev/null
+# The administrator token goes to a file that only the owner can read. dev reads
+# it from the file, so the token is not in the process list.
+mkdir -p "$DEMO_TMP/data"
+(umask 077 && printf '%s\n' "$ADMIN_TOKEN" >"$DEMO_TMP/admin.token")
 
 echo "demo: starting the server on $DEMO_URL"
-DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" ./bin/opendustpan serve \
-  --database "sqlite:$DEMO_TMP/data/dustpan.db" \
+# dev prints the demo sign-in once to its stderr. The server log holds it, so the
+# script reads it from there and prints it with the URL.
+./bin/opendustpan dev --demo \
+  --data-dir "$DEMO_TMP/data" \
   --listen "127.0.0.1:$DEMO_PORT" \
-  --blob-dir "$DEMO_TMP/data/blobs" \
-  --backup-target "dir:$DEMO_TMP/backups" \
   --console-dir "$DEMO_TMP/console/dist" \
-  --key-encryption-key-file "$DEMO_TMP/data/dustpan.key" \
+  --admin-token-file "$DEMO_TMP/admin.token" \
   >"$SERVER_LOG" 2>&1 &
 server_pid=$!
 
@@ -105,7 +108,7 @@ if ! ./bin/opendustpan health --listen "127.0.0.1:$DEMO_PORT" >/dev/null 2>&1; t
 fi
 
 echo "demo: seeding demo data"
-DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" go run ./cmd/demo-seed -url "$DEMO_URL"
+DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" go run ./cmd/demo-seed -skip-backup -url "$DEMO_URL"
 
 # check_console_read sends one GET of the console's reads with the admin token
 # and fails when the answer is not 2xx. A 404 means that the console at
@@ -133,9 +136,14 @@ fetch(process.argv[1], {
 
 echo "demo: checking the console reads"
 check_console_read "/api/dustpan/v1/namespaces/demo-platform/units"
-check_console_read "/api/server/backups"
 
 printf 'OpenDustpan demo is ready at %s/\n' "$DEMO_URL"
+demo_line="$(grep -m 1 '^Demo user: ' "$SERVER_LOG" || true)"
+if [ -z "$demo_line" ]; then
+  echo "demo: the server did not print the demo sign-in: the server log is printed above" >&2
+  exit 1
+fi
+printf '%s\n' "$demo_line"
 printf 'Sign-in token for the sign-in page: %s\n' "$ADMIN_TOKEN"
 
 if command -v xdg-open >/dev/null 2>&1; then
