@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -631,21 +632,30 @@ func (s *Service) refuse(ctx context.Context, base audit.Entry, tg target, cause
 // which the HTTP adapter took with the trusted-proxy rules. Only a sign-in has
 // them: its start is public, so its open challenges are counted for each
 // source (an IPv4 address or the /64 of an IPv6 address) and for each site
-// group (the /48 of an IPv6 address). An address that is empty, or is not
-// valid text of at most mfa.MaxSourceBytes bytes, gets mfa.UnknownSource for
-// both, which has one shared budget, so a request that hides its address is
-// limited and never free.
+// group (the /48 of an IPv6 address).
 //
-// Defense in depth: the store checks both keys of the challenge again.
+// Defense in depth: this check does not rely on the HTTP adapter or on
+// clientip. Only text that parses as an IP address, with no zone, gets a key
+// of its own. Any other text, whatever its characters, gets mfa.UnknownSource
+// for both keys, which has one shared budget. A sender that varies the text
+// cannot open a new budget with each value, and a request that hides its
+// address is limited and never free. The store checks both keys again.
 func challengeSource(k mfa.Ceremony, address string) sourceKeys {
+	unknown := sourceKeys{source: mfa.UnknownSource, group: mfa.UnknownSource}
+
 	if k != mfa.CeremonySignIn {
 		return sourceKeys{source: "", group: ""}
 	}
 
-	keys := sourceKeys{source: authgate.SourceKey(address), group: authgate.SourceGroupKey(address)}
+	addr, err := netip.ParseAddr(address)
+	if err != nil || addr.Zone() != "" {
+		return unknown
+	}
+
+	keys := sourceKeys{source: authgate.SourceKey(addr.String()), group: authgate.SourceGroupKey(addr.String())}
 
 	if !mfa.ValidSource(keys.source) || !mfa.ValidSource(keys.group) {
-		return sourceKeys{source: mfa.UnknownSource, group: mfa.UnknownSource}
+		return unknown
 	}
 
 	return keys

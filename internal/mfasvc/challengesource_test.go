@@ -55,7 +55,16 @@ func TestSignInChallengeSource(t *testing.T) {
 		{"control character", "198.51.100.7\x00", mfa.UnknownSource, mfa.UnknownSource},
 		{"non-ASCII", "198.51.100.é", mfa.UnknownSource, mfa.UnknownSource},
 		{"over the length", strings.Repeat("a", mfa.MaxSourceBytes+1), mfa.UnknownSource, mfa.UnknownSource},
-		{"scope separator", "a|b", "|", "|"},
+		{"scope separator", "a|b", mfa.UnknownSource, mfa.UnknownSource},
+		{"printable text that is no address", "not-an-address", mfa.UnknownSource, mfa.UnknownSource},
+		{"another printable text", "x1", mfa.UnknownSource, mfa.UnknownSource},
+		{
+			"printable text of exactly 64 bytes",
+			strings.Repeat("a", mfa.MaxSourceBytes),
+			mfa.UnknownSource,
+			mfa.UnknownSource,
+		},
+		{"IPv6 address with a zone", "fe80::1%eth0", mfa.UnknownSource, mfa.UnknownSource},
 	}
 
 	for _, tc := range cases {

@@ -1,15 +1,17 @@
 package dustpan_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/mfa"
 )
 
 // Targets of the sign-in routes with a WebAuthn credential.
@@ -56,14 +58,38 @@ func webauthnPost(t *testing.T, h http.Handler, target, remote, forwarded string
 	return rec
 }
 
-// spendBudget sends limit requests from the peer untrusted, each with a new
-// X-Forwarded-For value, and fails the test if the budget refuses one of them.
-func spendBudget(t *testing.T, h http.Handler, target, untrusted string, limit int) {
+// errorCodeOf returns the error code of the JSON answer rec, or "".
+func errorCodeOf(rec *httptest.ResponseRecorder) string {
+	var doc struct {
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		return ""
+	}
+
+	return doc.ErrorCode
+}
+
+// budgetCase is a route of the sign-in with a WebAuthn credential and the
+// requests that spend its budget. A refusal with a code in allowed does not
+// end the spend.
+type budgetCase struct {
+	name    string
+	target  string
+	allowed []string
+	limit   int
+}
+
+// spendBudget sends the requests of tc from the peer untrusted, each with a new
+// X-Forwarded-For value. It fails the test if the budget refuses one of them,
+// except with a code in tc.allowed.
+func spendBudget(t *testing.T, h http.Handler, tc *budgetCase, untrusted string) {
 	t.Helper()
 
-	for i := range limit {
-		rec := webauthnPost(t, h, target, untrusted, "203.0.113."+strconv.Itoa(i+1))
-		if rec.Code == http.StatusTooManyRequests {
+	for i := range tc.limit {
+		rec := webauthnPost(t, h, tc.target, untrusted, "203.0.113."+strconv.Itoa(i+1))
+		if rec.Code == http.StatusTooManyRequests && !slices.Contains(tc.allowed, errorCodeOf(rec)) {
 			t.Fatalf("request %d was refused before the budget was spent: %s", i+1, rec.Body)
 		}
 	}
@@ -80,28 +106,26 @@ func TestWebauthnGatesUseTheResolvedSourceAddress(t *testing.T) {
 
 	const untrusted = "198.51.100.7:4000"
 
-	for _, tc := range []struct {
-		name   string
-		target string
-		limit  int
-	}{
+	for _, tc := range []budgetCase{
 		// 20 failed responses refuse the address on the next request.
-		{"failed responses", webauthnFinishRoute, 20},
-		// A start writes a challenge row, and one address holds at most 20 open
-		// ones, which is fewer than the budget of starts (30): the count of
-		// open challenges of the resolved address refuses the next start.
-		{"starts", webauthnBeginRoute, mfa.MaxOpenSignInChallengesPerSource},
+		{"failed responses", webauthnFinishRoute, nil, 20},
+		// A start spends a unit of a budget of 30, also when the count of open
+		// challenges of the address (20) refuses it. So 20 starts work, the
+		// next 10 are refused by that count and spend the budget, and the
+		// start after them is refused by the budget of starts.
+		{"starts", webauthnBeginRoute, []string{errcode.MFASignInSourceLimit}, 30},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			h := newWebauthnSourceServer(t)
 
-			spendBudget(t, h, tc.target, untrusted, tc.limit)
+			spendBudget(t, h, &tc, untrusted)
 
 			rec := webauthnPost(t, h, tc.target, untrusted, "203.0.113.200")
-			if rec.Code != http.StatusTooManyRequests {
-				t.Fatalf("request over the budget with a new header: status = %d, want 429: %s", rec.Code, rec.Body)
+			if rec.Code != http.StatusTooManyRequests || errorCodeOf(rec) != errcode.AuthRateLimited {
+				t.Fatalf("request over the budget with a new header: status = %d, code %q, want 429 %s: %s",
+					rec.Code, errorCodeOf(rec), errcode.AuthRateLimited, rec.Body)
 			}
 
 			for _, other := range []struct{ name, remote, forwarded string }{
