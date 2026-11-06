@@ -70,6 +70,7 @@ import type {
   ErrorCode,
   ErrorResponse,
   ExchangeWorkloadTokenRequest,
+  FinishPasskeyRegistrationRequest,
   FireTriggerRequest,
   FireTriggerResult,
   Gate,
@@ -113,6 +114,7 @@ import type {
   ListGitHostInstallationsResponse,
   ListModuleReleasesResponse,
   ListNotificationSinksResponse,
+  ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
   ListProfilesResponse,
@@ -136,6 +138,8 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   ManualLock,
+  MfaPasskeyLimitError,
+  MfaPasskeyLimitErrorArgs,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -146,6 +150,8 @@ import type {
   NotificationSinkTest,
   OutputSharing,
   OutputSharingRequest,
+  Passkey,
+  PasskeyCreationOptions,
   PasswordSignInRequest,
   PasswordTooShortError,
   PasswordTooShortErrorArgs,
@@ -624,6 +630,7 @@ export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("Error
   "gate.approvers-count-above": ref(() => decodeGateApproversCountAboveError),
   "lock.locked": ref(() => decodeLockLockedError),
   "maintenance.active-work": ref(() => decodeMaintenanceActiveWorkError),
+  "mfa.passkey-limit": ref(() => decodeMfaPasskeyLimitError),
   "password.too-short": ref(() => decodePasswordTooShortError),
   "preferences.field-invalid": ref(() => decodePreferencesFieldInvalidError),
   "preferences.field-read-only": ref(() => decodePreferencesFieldReadOnlyError),
@@ -659,6 +666,12 @@ export const decodeErrorResponse: Decoder<ErrorResponse> = object<ErrorResponse>
 export const decodeExchangeWorkloadTokenRequest: Decoder<ExchangeWorkloadTokenRequest> = object<ExchangeWorkloadTokenRequest>("ExchangeWorkloadTokenRequest", {
   rule: optional(string),
   token: string,
+});
+
+/** The validator of FinishPasskeyRegistrationRequest. */
+export const decodeFinishPasskeyRegistrationRequest: Decoder<FinishPasskeyRegistrationRequest> = object<FinishPasskeyRegistrationRequest>("FinishPasskeyRegistrationRequest", {
+  name: string,
+  response: anyValue,
 });
 
 /** The validator of FireTriggerRequest. */
@@ -1033,6 +1046,11 @@ export const decodeListNotificationSinksResponse: Decoder<ListNotificationSinksR
   sinks: array(ref(() => decodeNotificationSink)),
 });
 
+/** The validator of ListPasskeysResponse. */
+export const decodeListPasskeysResponse: Decoder<ListPasskeysResponse> = object<ListPasskeysResponse>("ListPasskeysResponse", {
+  passkeys: array(ref(() => decodePasskey)),
+});
+
 /** The validator of ListPlacementRulesResponse. */
 export const decodeListPlacementRulesResponse: Decoder<ListPlacementRulesResponse> = object<ListPlacementRulesResponse>("ListPlacementRulesResponse", {
   rules: array(ref(() => decodePlacementRule)),
@@ -1190,6 +1208,19 @@ export const decodeManualLock: Decoder<ManualLock> = object<ManualLock>("ManualL
   since: string,
 });
 
+/** The validator of MfaPasskeyLimitError. */
+export const decodeMfaPasskeyLimitError: Decoder<MfaPasskeyLimitError> = object<MfaPasskeyLimitError>("MfaPasskeyLimitError", {
+  code: int64,
+  errorArgs: ref(() => decodeMfaPasskeyLimitErrorArgs),
+  errorCode: literal("mfa.passkey-limit"),
+  message: string,
+});
+
+/** The validator of MfaPasskeyLimitErrorArgs. */
+export const decodeMfaPasskeyLimitErrorArgs: Decoder<MfaPasskeyLimitErrorArgs> = object<MfaPasskeyLimitErrorArgs>("MfaPasskeyLimitErrorArgs", {
+  limit: int64,
+});
+
 /** The validator of ModuleRelease. */
 export const decodeModuleRelease: Decoder<ModuleRelease> = object<ModuleRelease>("ModuleRelease", {
   archive: ref(() => decodeModuleReleaseArchive),
@@ -1266,6 +1297,22 @@ export const decodeOutputSharing: Decoder<OutputSharing> = object<OutputSharing>
 /** The validator of OutputSharingRequest. */
 export const decodeOutputSharingRequest: Decoder<OutputSharingRequest> = object<OutputSharingRequest>("OutputSharingRequest", {
   newUnitDefault: string,
+});
+
+/** The validator of Passkey. */
+export const decodePasskey: Decoder<Passkey> = object<Passkey>("Passkey", {
+  backupEligible: boolean,
+  createdAt: string,
+  id: string,
+  lastUsedAt: string,
+  name: string,
+  suspendedAt: string,
+  transports: array(string),
+});
+
+/** The validator of PasskeyCreationOptions. */
+export const decodePasskeyCreationOptions: Decoder<PasskeyCreationOptions> = object<PasskeyCreationOptions>("PasskeyCreationOptions", {
+  publicKey: anyValue,
 });
 
 /** The validator of PasswordSignInRequest. */

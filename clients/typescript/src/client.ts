@@ -5,6 +5,7 @@ import type { Answer } from "./execute.js";
 import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
+  BeginPasskeyRegistrationInput,
   BulkReplaceUnitSettingsInput,
   ChangeOwnPasswordInput,
   CheckGitHostConnectionInput,
@@ -42,6 +43,7 @@ import type {
   DeleteViewInput,
   ExchangeWorkloadTokenInput,
   ExportNamespaceIssuerInput,
+  FinishPasskeyRegistrationInput,
   FireTriggerInput,
   ForceUnlockCollectionInput,
   ForceUnlockNamespaceInput,
@@ -98,6 +100,7 @@ import type {
   ListGitHostInstallationsInput,
   ListModuleReleasesInput,
   ListNotificationSinksInput,
+  ListPasskeysInput,
   ListPlacementRulesInput,
   ListProfileRevisionsInput,
   ListProfilesInput,
@@ -121,6 +124,7 @@ import type {
   PutGitHostAppInput,
   PutGitHostInstallationInput,
   RedeemLocalUserCodeInput,
+  RemovePasskeyInput,
   RemoveRegistryKeyInput,
   ReplaceNotificationSinkInput,
   ReplaceTriggerInput,
@@ -208,6 +212,7 @@ import type {
   ErrorCode,
   ErrorResponse,
   ExchangeWorkloadTokenRequest,
+  FinishPasskeyRegistrationRequest,
   FireTriggerRequest,
   FireTriggerResult,
   Gate,
@@ -251,6 +256,7 @@ import type {
   ListGitHostInstallationsResponse,
   ListModuleReleasesResponse,
   ListNotificationSinksResponse,
+  ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
   ListProfilesResponse,
@@ -274,6 +280,8 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   ManualLock,
+  MfaPasskeyLimitError,
+  MfaPasskeyLimitErrorArgs,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -284,6 +292,8 @@ import type {
   NotificationSinkTest,
   OutputSharing,
   OutputSharingRequest,
+  Passkey,
+  PasskeyCreationOptions,
   PasswordSignInRequest,
   PasswordTooShortError,
   PasswordTooShortErrorArgs,
@@ -420,6 +430,10 @@ export class Client {
 
   addRegistryKey(input: AddRegistryKeyInput): Promise<Answer<RegistryKey>> {
     return execute(this.transport, operations.addRegistryKey, input);
+  }
+
+  beginPasskeyRegistration(input: BeginPasskeyRegistrationInput = {}): Promise<Answer<PasskeyCreationOptions>> {
+    return execute(this.transport, operations.beginPasskeyRegistration, input);
   }
 
   bulkReplaceUnitSettings(input: BulkReplaceUnitSettingsInput): Promise<Answer<BulkUnitSettingsResult>> {
@@ -568,6 +582,10 @@ export class Client {
 
   exportNamespaceIssuer(input: ExportNamespaceIssuerInput): Promise<Answer<NamespaceIssuerExport>> {
     return execute(this.transport, operations.exportNamespaceIssuer, input);
+  }
+
+  finishPasskeyRegistration(input: FinishPasskeyRegistrationInput): Promise<Answer<Passkey>> {
+    return execute(this.transport, operations.finishPasskeyRegistration, input);
   }
 
   fireTrigger(input: FireTriggerInput): Promise<Answer<FireTriggerResult>> {
@@ -794,6 +812,10 @@ export class Client {
     return execute(this.transport, operations.listNotificationSinks, input);
   }
 
+  listPasskeys(input: ListPasskeysInput = {}): Promise<Answer<ListPasskeysResponse>> {
+    return execute(this.transport, operations.listPasskeys, input);
+  }
+
   listPlacementRules(input: ListPlacementRulesInput): Promise<Answer<ListPlacementRulesResponse>> {
     return execute(this.transport, operations.listPlacementRules, input);
   }
@@ -884,6 +906,10 @@ export class Client {
 
   redeemLocalUserCode(input: RedeemLocalUserCodeInput): Promise<Answer<void>> {
     return execute(this.transport, operations.redeemLocalUserCode, input);
+  }
+
+  removePasskey(input: RemovePasskeyInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.removePasskey, input);
   }
 
   removeRegistryKey(input: RemoveRegistryKeyInput): Promise<Answer<void>> {

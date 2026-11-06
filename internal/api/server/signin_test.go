@@ -273,6 +273,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 			Sessions:        sessions,
 			Limiter:         limiter,
 			PasswordLimiter: nil,
+			Passkeys:        nil,
 			Stored:          stored,
 			Admin:           admin,
 			Origins:         []string{signInBase, consoleOrigin},
@@ -1199,6 +1200,7 @@ func TestSignInProviderDown(t *testing.T) {
 			Limiter:         limiter,
 			Origins:         nil,
 			PasswordLimiter: nil,
+			Passkeys:        nil,
 			Providers: []apiserver.SignInProvider{
 				{
 					Method: redirectMethod(t, downOIDC{}, "corp", time.Now), ID: "corp", DisplayName: "Corp",
