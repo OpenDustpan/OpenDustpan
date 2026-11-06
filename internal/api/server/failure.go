@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/errcode"
 )
 
@@ -41,8 +41,7 @@ func failCoded(status int, message, code string, args ...errcode.Value) failure 
 func (h *Handler) answer(ctx context.Context, f failure) (int, string, errcode.Answer) {
 	a, err := errcode.New(f.code, f.args...)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "error answer has no valid code",
-			slog.String("error_code", f.code), slog.String("error", err.Error()))
+		faultlog.LogInternal(ctx, h.logger, "error answer has no valid code", faultlog.CauseUnclassified, f.code)
 
 		return http.StatusInternalServerError, "internal error", errcode.Internal()
 	}

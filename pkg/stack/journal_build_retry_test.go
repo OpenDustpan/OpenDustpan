@@ -3,7 +3,6 @@ package stack_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -89,8 +88,8 @@ func newRetryFixture(t *testing.T, clk *clock, replayer stack.JournalReplayer) *
 
 // TestJournalBuildRetryAfterClockMoves checks that a complete retried after
 // a failed built checkpoint write succeeds when the clock moved between the
-// two builds. Only the manifest time of the two builds differs, so the retry
-// adopts the blob of the first build.
+// two builds. The first build never committed, so the retry writes its own
+// blob and the export serves the second build.
 func TestJournalBuildRetryAfterClockMoves(t *testing.T) {
 	t.Parallel()
 
@@ -106,7 +105,8 @@ func TestJournalBuildRetryAfterClockMoves(t *testing.T) {
 
 	clk.Advance(time.Second)
 
-	if bytes.Equal(f.replay(t), first) {
+	second := f.replay(t)
+	if bytes.Equal(second, first) {
 		t.Fatal("replay after the clock moved = the first replay, want a new manifest time")
 	}
 
@@ -119,8 +119,8 @@ func TestJournalBuildRetryAfterClockMoves(t *testing.T) {
 		t.Fatalf("export after retry: %v", err)
 	}
 
-	if !bytes.Equal(cp.Deployment, first) {
-		t.Fatalf("export after retry = %s, want the first build %s", cp.Deployment, first)
+	if !bytes.Equal(cp.Deployment, second) {
+		t.Fatalf("export after retry = %s, want the second build %s", cp.Deployment, second)
 	}
 
 	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 0 {
@@ -128,10 +128,11 @@ func TestJournalBuildRetryAfterClockMoves(t *testing.T) {
 	}
 }
 
-// TestJournalBuildRetryOtherContentConflicts checks that a retry whose build
-// differs from the stored blob in more than the manifest fails with
-// ErrConcurrentModification and keeps the journal.
-func TestJournalBuildRetryOtherContentConflicts(t *testing.T) {
+// TestJournalBuildRetryOtherContentCommits checks that a retry whose build
+// differs from the blob of the failed first attempt in more than the
+// manifest commits its own blob. No row named the first blob, so there is
+// nothing to conflict with, and the journal is deleted.
+func TestJournalBuildRetryOtherContentCommits(t *testing.T) {
 	t.Parallel()
 
 	clk := newClock()
@@ -144,20 +145,19 @@ func TestJournalBuildRetryOtherContentConflicts(t *testing.T) {
 		t.Fatal("complete with a failed write: err = nil, want an error")
 	}
 
-	_, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded)
-	if !errors.Is(err, stack.ErrConcurrentModification) {
-		t.Fatalf("retry complete with other content: err = %v, want ErrConcurrentModification", err)
+	if _, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("retry complete with other content: %v", err)
 	}
 
-	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 2 {
-		t.Fatalf("journal keys after refused retry = %v, want the two batches", keys)
+	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 0 {
+		t.Fatalf("journal keys after retry = %v, want none", keys)
 	}
 }
 
-// TestJournalBuildRetrySameBytesAdopts checks that a complete retried after
-// a failed built checkpoint write adopts the blob of the first build when
-// the retry builds the same bytes, and ends with the journal deleted.
-func TestJournalBuildRetrySameBytesAdopts(t *testing.T) {
+// TestJournalBuildRetrySameBytesCommits checks that a complete retried after
+// a failed built checkpoint write commits the retry build when it holds the
+// same bytes as the first build, and ends with the journal deleted.
+func TestJournalBuildRetrySameBytesCommits(t *testing.T) {
 	t.Parallel()
 
 	clk := newClock()

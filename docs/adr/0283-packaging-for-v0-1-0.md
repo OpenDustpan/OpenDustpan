@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-30. Decided by the project owner on 30 October 2026. Accepts [RFC 35](../rfc/0035-packaging.md). Decides ADR 27 decision 7. Narrows ADR 27 decision 8 for `v0.1.0`
 
+Changed by:
+
+- ADR 315 extends: the container registries of v0.1.0.
+
 ## Context
 
 [RFC 35](../rfc/0035-packaging.md) asks how the project ships the server and

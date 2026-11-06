@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/blob/blobfault"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -145,7 +146,7 @@ func listJobBlobs(t *testing.T, h *jobtest.RecorderHarness) []string {
 		t.Fatalf("GetNamespace = %v", err)
 	}
 
-	objects, err := h.Blobs.List(t.Context(), "namespaces/"+n.ID.String()+"/job/")
+	objects, err := blobtest.ListAll(t.Context(), h.Blobs, "namespaces/"+n.ID.String()+"/job/")
 	if err != nil {
 		t.Fatalf("List = %v", err)
 	}
@@ -313,8 +314,12 @@ func TestRecorderPutPlanCommitError(t *testing.T) {
 
 	h := jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
-			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Namespaces: db,
-			Domain: db,
+			Jobs:       db,
+			Durable:    db.durable,
+			Freezes:    db,
+			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
+			Namespaces: db,
+			Domain:     db,
 		},
 		Records:  commitThenFail{RecordStore: db},
 		ItemKeys: keys,

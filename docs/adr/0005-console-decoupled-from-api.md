@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-08 · repository layout amended by ADR 8 · console URL findings added 2026-10-08
 
+Changed by:
+
+- ADR 8 changes: the repository layout of the console.
+- ADR 17 changes: console-only endpoints.
+
 ## Context
 
 Embedding the console in the Go binary (`go:embed`) would force one hosting

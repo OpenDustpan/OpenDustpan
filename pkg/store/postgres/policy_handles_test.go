@@ -87,6 +87,7 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 
 		_, setErr := writer.SetPolicy(ctx, policyCaller(), accesstoken.PolicyChange{
 			MaxLifetime: nil, Inactivity: nil, DisableTokens: new(on), DisableAccounts: nil, DisableBreakGlass: nil,
+			ExchangeLifetime: nil,
 		})
 		if setErr != nil {
 			t.Fatalf("set policy through the first handle: %v", setErr)

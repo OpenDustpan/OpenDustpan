@@ -27,6 +27,8 @@ type JobStore interface {
 	job.Store
 	job.FreezeStore
 	job.RecordStore
+	job.ArtifactKeyStore
+	job.FinalVersionReader
 }
 
 // Jobs returns the stores of jobs and change freezes. Each write checks the
@@ -77,7 +79,7 @@ var _ jobstore.Runner = jobRunner{s: nil}
 // take the same row, so a lock that committed before is seen by the dispatch,
 // and a lock write that starts later waits for the dispatch.
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {
-	err := pgx.BeginFunc(ctx, r.s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, r.s.txs, func(tx pgx.Tx) error {
 		if _, err := readWritable(ctx, tx, readStateSQL, nil, r.s.binaryVersion); err != nil {
 			return err
 		}
@@ -98,7 +100,7 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 
 // Read implements jobstore.Runner.
 func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
-	err := pgx.BeginTxFunc(ctx, r.s.pool, r.s.snapshotOptions(), func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, r.s.txs, r.s.snapshotOptions(), func(tx pgx.Tx) error {
 		return fn(&jobTx{tx: tx, q: r.s.queries.WithTx(tx)})
 	})
 	if err != nil {
@@ -310,6 +312,10 @@ func (t *jobTx) List(ctx context.Context, q jobstore.Query) ([]jobstore.Row, err
 
 	if q.StateChangedBeforeMs > 0 {
 		where = append(where, "j.state_changed_at_ms < "+arg(q.StateChangedBeforeMs))
+	}
+
+	if q.StateChangedAfterMs > 0 {
+		where = append(where, "j.state_changed_at_ms > "+arg(q.StateChangedAfterMs))
 	}
 
 	query := `SELECT j.id, n.name, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
@@ -731,4 +737,24 @@ func (t *jobTx) ChunkKeys(ctx context.Context, ns namespace.Name, log string) ([
 	}
 
 	return out, nil
+}
+
+// JobPlanIDs implements jobstore.ChunkTx.
+func (t *jobTx) JobPlanIDs(ctx context.Context, ns namespace.Name, id job.ID) ([]string, error) {
+	ids, err := t.q.ListJobPlanIDs(ctx, db.ListJobPlanIDsParams{Namespace: ns.String(), JobID: string(id)})
+	if err != nil {
+		return nil, fmt.Errorf("select plan IDs of job: %w", err)
+	}
+
+	return ids, nil
+}
+
+// JobChunkKeys implements jobstore.ChunkTx.
+func (t *jobTx) JobChunkKeys(ctx context.Context, ns namespace.Name, id job.ID) ([]string, error) {
+	keys, err := t.q.ListJobChunkBlobKeys(ctx, db.ListJobChunkBlobKeysParams{Namespace: ns.String(), JobID: string(id)})
+	if err != nil {
+		return nil, fmt.Errorf("select chunk keys of job: %w", err)
+	}
+
+	return keys, nil
 }

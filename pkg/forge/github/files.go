@@ -75,7 +75,7 @@ func (f *gitHub) Head(ctx context.Context, repo, ref string) (forge.Commit, erro
 
 	resp, err := f.send(ctx, call{
 		method: http.MethodGet, path: r.path() + "/commits/" + escapePath(ref), bearer: bearer,
-		body: nil, status: f.notFound, oversize: nil,
+		body: nil, status: f.notFound, oversize: nil, target: "",
 	})
 	if err != nil {
 		return forge.Commit{}, f.forget(r, err)
@@ -175,7 +175,7 @@ func tooLarge(limit int64) error {
 func (f *gitHub) readContents(ctx context.Context, rd fileRead) (forge.File, error) {
 	resp, err := f.send(ctx, call{
 		method: http.MethodGet, path: rd.base + "/contents/" + escapePath(rd.path) + "?ref=" + rd.commit,
-		bearer: rd.bearer, body: nil, status: f.notFound, oversize: tooLarge(rd.limit),
+		bearer: rd.bearer, body: nil, status: f.notFound, oversize: tooLarge(rd.limit), target: "",
 	})
 	if err != nil {
 		return forge.File{}, err
@@ -232,7 +232,7 @@ func (f *gitHub) fileBytes(ctx context.Context, rd fileRead, c contents) ([]byte
 	case "none":
 		resp, err := f.send(ctx, call{
 			method: http.MethodGet, path: rd.base + "/git/blobs/" + c.SHA, bearer: rd.bearer,
-			body: nil, status: f.notFound, oversize: tooLarge(rd.limit),
+			body: nil, status: f.notFound, oversize: tooLarge(rd.limit), target: "",
 		})
 		if err != nil {
 			return nil, err
@@ -310,21 +310,46 @@ func hasErrorCode(body []byte, code string) bool {
 	return false
 }
 
-// mintStatus maps the status of the request for an installation token. GitHub
-// answers 422 for a repository that the installation cannot see, and also for
-// a permission that the installation does not have: the first is a missing
-// repository, and the second is a credential that cannot do what was asked.
-func (f *gitHub) mintStatus(r response) error {
-	if r.status != http.StatusUnprocessableEntity {
-		return f.notFound(r)
-	}
+// mintStatus returns the map of the status of the request for an installation
+// token with the permission level. GitHub answers 422 for a repository that
+// the installation cannot see, and also for a permission that the installation
+// does not have: the first is a missing repository. The second is a credential
+// that cannot read the contents (ErrAuth), or that cannot write them
+// (ErrRefused, because the push is what the installation does not allow).
+func (f *gitHub) mintStatus(level string) func(response) error {
+	return func(r response) error {
+		if r.status != http.StatusUnprocessableEntity {
+			return f.notFound(r)
+		}
 
-	var e errorBody
-	if decode(r.body, &e) == nil && strings.Contains(e.Message, "permissions requested") {
-		return fmt.Errorf("%w: the installation does not have the permission to read the contents", forge.ErrAuth)
-	}
+		var e errorBody
+		if decode(r.body, &e) == nil && strings.Contains(e.Message, "permissions requested") {
+			missing := "the installation does not have the permission to " + missingPermission(level)
+			if level == levelWrite || level == levelReview {
+				return fmt.Errorf("%w: %s", forge.ErrRefused, missing)
+			}
 
-	return fmt.Errorf("%w: the installation cannot see the repository", forge.ErrNotFound)
+			return fmt.Errorf("%w: %s", forge.ErrAuth, missing)
+		}
+
+		return fmt.Errorf("%w: the installation cannot see the repository", forge.ErrNotFound)
+	}
+}
+
+// missingPermission names the permission that a token of the level asks for, for
+// the text of an error. The levels for review requests name the pull requests
+// too, so that the text tells which permission of the app is missing.
+func missingPermission(level string) string {
+	switch level {
+	case levelReview:
+		return "write the contents and the pull requests"
+	case levelReviewRead:
+		return "read the contents and the pull requests"
+	case levelWrite:
+		return "write the contents"
+	default:
+		return "read the contents"
+	}
 }
 
 // MaxReadTokens is the most installation tokens that an app connection keeps
@@ -336,11 +361,49 @@ const MaxReadTokens = 64
 // of a token connection, or an installation token that reads that repository
 // only.
 func (f *gitHub) readBearer(ctx context.Context, r repoName) (string, error) {
+	return f.bearer(ctx, r, levelRead)
+}
+
+// writeBearer returns the credential for a write to the repository r: the
+// token of a token connection, or an installation token that writes the
+// contents of that repository only.
+func (f *gitHub) writeBearer(ctx context.Context, r repoName) (string, error) {
+	return f.bearer(ctx, r, levelWrite)
+}
+
+// reviewBearer returns the credential for the review request calls on the
+// repository r: the token of a token connection, or an installation token that
+// writes the contents and the pull requests of that repository only.
+func (f *gitHub) reviewBearer(ctx context.Context, r repoName) (string, error) {
+	return f.bearer(ctx, r, levelReview)
+}
+
+// reviewReadBearer returns the credential for the review request calls that only
+// read: the token of a token connection, or an installation token that reads the
+// contents and the pull requests of that repository only.
+func (f *gitHub) reviewReadBearer(ctx context.Context, r repoName) (string, error) {
+	return f.bearer(ctx, r, levelReviewRead)
+}
+
+// tokenKey is the key of the installation token of repository r at level in
+// the token map. A repository name has no "#", so the keys of two levels never
+// meet.
+func tokenKey(r repoName, level string) string {
+	key := r.owner + "/" + r.name
+	if level == levelWrite || level == levelReview || level == levelReviewRead {
+		key += "#" + level
+	}
+
+	return key
+}
+
+// bearer returns the credential for an access to the repository r at level.
+func (f *gitHub) bearer(ctx context.Context, r repoName, level string) (string, error) {
 	if f.auth != forge.AuthApp {
 		return f.token, nil
 	}
 
-	key := r.owner + "/" + r.name
+	key := tokenKey(r, level)
 
 	f.mu.Lock()
 	t, found := f.readTokens[key]
@@ -363,7 +426,7 @@ func (f *gitHub) readBearer(ctx context.Context, r repoName) (string, error) {
 		return "", fmt.Errorf("%w: the repository is not in the account of the installation", forge.ErrNotFound)
 	}
 
-	t, err = f.mintReadToken(ctx, r.name)
+	t, err = f.mintToken(ctx, r.name, level)
 	if err != nil {
 		return "", err
 	}
@@ -437,26 +500,24 @@ func (f *gitHub) installationOwner(ctx context.Context) (string, error) {
 	return acct.Login, nil
 }
 
-// mintReadToken asks for an installation token with the permission to read
-// the contents of the repository name, and nothing else. It refuses a token
-// that GitHub makes with more permission, or for more repositories, than it
-// asked for.
-func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, error) {
+// mintToken asks for an installation token with the permission level (read or
+// write) on the contents of the repository name, and nothing else. It refuses a
+// token that GitHub makes with more permission, or for more repositories, than
+// it asked for.
+func (f *gitHub) mintToken(ctx context.Context, name, level string) (readToken, error) {
 	jwt, err := signJWT(f.key, f.appID, f.o.now())
 	if err != nil {
 		return readToken{}, err
 	}
 
-	body, err := json.Marshal(readTokenRequest{
-		Repositories: []string{name}, Permissions: map[string]string{permContents: levelRead},
-	})
+	body, err := json.Marshal(readTokenRequest{Repositories: []string{name}, Permissions: tokenPermissions(level)})
 	if err != nil {
 		return readToken{}, fmt.Errorf("%w: the GitHub token request does not encode", forge.ErrInvalid)
 	}
 
 	resp, err := f.send(ctx, call{
 		method: http.MethodPost, path: "/app/installations/" + f.installationID + "/access_tokens", bearer: jwt,
-		body: body, status: f.mintStatus, oversize: nil,
+		body: body, status: f.mintStatus(level), oversize: nil, target: "",
 	})
 	if err != nil {
 		return readToken{}, err
@@ -472,7 +533,7 @@ func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, err
 		return readToken{}, forge.Unavailable(0, "GitHub gave an answer with no token")
 	}
 
-	if grantErr := checkGranted(fields, name); grantErr != nil {
+	if grantErr := checkGranted(fields, name, level); grantErr != nil {
 		return readToken{}, grantErr
 	}
 
@@ -486,6 +547,20 @@ func (f *gitHub) mintReadToken(ctx context.Context, name string) (readToken, err
 	return readToken{value: value, expires: expires}, nil
 }
 
+// tokenPermissions returns the permissions that a token of the level asks for.
+// The level review is the write of the contents, which the branch of a review
+// request needs, and the write of the pull requests.
+func tokenPermissions(level string) map[string]string {
+	switch level {
+	case levelReview:
+		return map[string]string{permContents: levelWrite, permPulls: levelWrite}
+	case levelReviewRead:
+		return map[string]string{permContents: levelRead, permPulls: levelRead}
+	}
+
+	return map[string]string{permContents: level}
+}
+
 // Fields of the answer to a token request.
 const (
 	keyPermissions  = "permissions"
@@ -495,13 +570,13 @@ const (
 )
 
 // checkGranted refuses an answer whose token is wider than the request: a
-// permission other than the read of the contents (GitHub adds the read of the
-// metadata), a level above read, or a repository other than name.
+// permission other than the contents at level (GitHub adds the read of the
+// metadata), a level above the request, or a repository other than name.
 //
 // Defense in depth: GitHub applies the request and the installation applies
 // its limits. This check stays so that an answer that is wider than the
 // request never becomes a token that the adapter uses.
-func checkGranted(fields map[string]json.RawMessage, name string) error {
+func checkGranted(fields map[string]json.RawMessage, name, level string) error {
 	wide := forge.Unavailable(0, "GitHub gave a token that is wider than the request")
 
 	var perms map[string]string
@@ -509,8 +584,10 @@ func checkGranted(fields map[string]json.RawMessage, name string) error {
 		return wide
 	}
 
-	for perm, level := range perms {
-		if (perm != permContents && perm != permMetadata) || level != levelRead {
+	asked := tokenPermissions(level)
+
+	for perm, got := range perms {
+		if (asked[perm] == "" || got != asked[perm]) && (perm != permMetadata || got != levelRead) {
 			return wide
 		}
 	}
@@ -532,12 +609,15 @@ type repositoryRef struct {
 	Name string `json:"name"`
 }
 
-// forget drops the installation token of owner/name after GitHub refused it,
-// so that the next read asks for a new one. It returns err.
+// forget drops the installation tokens of owner/name after GitHub refused one,
+// so that the next call asks for a new one. It returns err.
 func (f *gitHub) forget(r repoName, err error) error {
 	if f.auth == forge.AuthApp && errors.Is(err, forge.ErrAuth) {
 		f.mu.Lock()
-		delete(f.readTokens, r.owner+"/"+r.name)
+		delete(f.readTokens, tokenKey(r, levelRead))
+		delete(f.readTokens, tokenKey(r, levelWrite))
+		delete(f.readTokens, tokenKey(r, levelReview))
+		delete(f.readTokens, tokenKey(r, levelReviewRead))
 		f.mu.Unlock()
 	}
 

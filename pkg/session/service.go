@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -19,6 +21,10 @@ const (
 	ActionSignIn = "session:sign-in"
 	// ActionSignOut is the action of a sign-out.
 	ActionSignOut = "session:sign-out"
+	// ActionGenerationBumped is the action of a bump of the session
+	// generation of a person. Its changes name the cause and the new
+	// generation.
+	ActionGenerationBumped = "session:generation-bumped"
 )
 
 // TouchEvery is how often a use of a session records its last use. The
@@ -60,6 +66,9 @@ type Sessions struct {
 	providers  ProviderSessionStore
 	inactivity InactivityRule
 	now        func() time.Time
+	// breakGlass reads the limit of a break-glass session. Nil means
+	// DefaultBreakGlassMaxLength.
+	breakGlass BreakGlassLimit
 }
 
 // NewSessions returns a Sessions service. It returns ErrMissingDependency
@@ -76,6 +85,7 @@ func NewSessions(cfg SessionsConfig) (*Sessions, error) {
 
 	return &Sessions{
 		store: cfg.Store, providers: cfg.Providers, inactivity: cfg.Inactivity, now: now,
+		breakGlass: nil,
 	}, nil
 }
 
@@ -89,14 +99,37 @@ func (s *Sessions) Now() time.Time {
 // the identity provider; a time after the start of the session takes the
 // start. Stored reports that Provider is a stored provider: the session is
 // then created through ProviderSessionStore, which checks the provider in
-// the same write.
+// the same write. Generation is the session generation of the principal
+// that the sign-in read in the same read as the credential, or 0 to take the
+// stored generation in the write that stores the session. A generation that
+// is not the stored one makes Start fail with ErrGenerationChanged.
 type Start struct {
 	AuthTime    time.Time
 	PrincipalID string
 	Provider    string
 	SourceIP    string
 	UserAgent   string
+	Generation  uint64
 	Stored      bool
+	// Alert is a notification that the store appends to the outbox of the
+	// installation in the same transaction as the session: both commit, or
+	// neither. Start sets its object, its object ID and its dedupe key from
+	// the new session. Nil means no alert. A Start with an alert and a store
+	// that cannot write one fails with ErrMissingDependency, and writes no
+	// session. It cannot be used with Stored.
+	Alert *notify.Notification
+}
+
+// AlertStore is the part of a Store that starts a session and an alert in one
+// transaction. The stores of SQLite and PostgreSQL meet it.
+type AlertStore interface {
+	// CreateSessionWithAlert is CreateSession, and it appends n to the
+	// outbox of audit.ServerScope in the same transaction. A notification
+	// that fails validation, or that is not in audit.ServerScope, returns
+	// notify.ErrInvalid and changes nothing, no session included. A
+	// notification with the dedupe key of a stored one is skipped, as
+	// everywhere else in the outbox.
+	CreateSessionWithAlert(ctx context.Context, s Session, d Digest, e audit.Entry, n notify.Notification) error
 }
 
 // Start begins a session for in and returns it with its secret. e is the
@@ -127,6 +160,7 @@ func (s *Sessions) Start(ctx context.Context, e audit.Entry, in Start) (Session,
 		EndReason:   "",
 		SourceIP:    in.SourceIP,
 		UserAgent:   in.UserAgent,
+		Generation:  in.Generation,
 	}
 
 	if err := sess.Validate(); err != nil {
@@ -159,7 +193,7 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 	}
 
 	now := s.Now()
-	limits := m.Policy.Limits
+	limits := s.limitsFor(ctx, &m.Owner, m.Policy.Limits)
 
 	if status := m.Session.StatusAt(now, limits); status != StatusActive {
 		return Match{}, fmt.Errorf("%w: %s", ErrUnauthenticated, status)
@@ -167,6 +201,15 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 
 	if m.Owner.Kind != principal.KindPerson || !m.Owner.DisabledAt.IsZero() {
 		return Match{}, fmt.Errorf("%w: the principal cannot sign in", ErrUnauthenticated)
+	}
+
+	// A password write, a reset or another change of the credentials adds 1
+	// to the session generation of the person, so each session of the person
+	// that carries an older generation ends here. A generation of 0 is a
+	// session from before the generation existed: no principal has it, so it
+	// fails closed too.
+	if m.Session.Generation == 0 || m.Session.Generation != m.Generation {
+		return Match{}, fmt.Errorf("%w: %w", ErrUnauthenticated, ErrGenerationChanged)
 	}
 
 	if s.inactivity != nil && s.inactivity.AccountInactive(m.Owner, m.Accounts, now) {
@@ -268,6 +311,10 @@ func entry(e audit.Entry, at time.Time, object string) audit.Entry {
 
 // create stores sess, through the provider session store when in.Stored.
 func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest, e audit.Entry) error {
+	if in.Alert != nil {
+		return s.createWithAlert(ctx, in, sess, d, e)
+	}
+
 	if !in.Stored {
 		return s.store.CreateSession(ctx, sess, d, e)
 	}
@@ -277,6 +324,31 @@ func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest,
 	}
 
 	return s.providers.CreateProviderSession(ctx, sess, d, e)
+}
+
+// createWithAlert stores sess and the alert of the Start together. It
+// fails closed: a store that cannot write an alert, or a Start with a stored
+// provider, stores no session.
+func (s *Sessions) createWithAlert(ctx context.Context, in Start, sess Session, d Digest, e audit.Entry) error {
+	alerts, ok := s.store.(AlertStore)
+	if !ok || in.Stored {
+		return fmt.Errorf("%w: a store that writes a session and an alert in one transaction", ErrMissingDependency)
+	}
+
+	n := *in.Alert
+	n.ObjectID = sess.ID
+	n.DedupeKey = string(n.Type) + "/" + sess.ID
+
+	// Copy the map: the caller keeps its own notification.
+	n.Attributes = maps.Clone(n.Attributes)
+	if n.Attributes == nil {
+		n.Attributes = map[string]string{}
+	}
+
+	n.Attributes["session"] = sess.ID
+	n.Attributes["principal"] = sess.PrincipalID
+
+	return alerts.CreateSessionWithAlert(ctx, sess, d, e, n.Fit())
 }
 
 // touch records a use of sess at now. A use inside TouchEvery of the last

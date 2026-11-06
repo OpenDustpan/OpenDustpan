@@ -2,7 +2,9 @@ package runnerapi
 
 import (
 	"net/http"
+	"slices"
 
+	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
@@ -23,6 +25,15 @@ const (
 	// authenticates it, and the key holds identity.ActionRunnerClaim on its
 	// pool.
 	ScopeRunnerKey
+	// ScopeHandoffToken is the session exchange of a launcher: the handoff
+	// token and the signature of the new session key authenticate it, and
+	// the session holds identity.ActionRunnerClaim on the pool of its runner.
+	ScopeHandoffToken
+	// ScopeSessionKey is a request of a launcher: the proof of the key of its
+	// job session authenticates it, and the session holds
+	// identity.ActionRunnerClaim on the pool of its runner. A runner key
+	// never passes this scope, and a session key never passes ScopeRunnerKey.
+	ScopeSessionKey
 )
 
 // Route declares one endpoint: its ServeMux pattern, how it is protected,
@@ -66,10 +77,13 @@ const (
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
+	return slices.Concat(h.managementRoutes(), h.runnerRoutes(), h.launcherRoutes())
+}
+
+// managementRoutes returns the routes of the management API.
+func (h *Handler) managementRoutes() []Route {
 	read := []identity.Action{identity.ActionNamespaceReadRunners}
 	manage := []identity.Action{identity.ActionNamespaceManageRunners}
-	join := []identity.Action{identity.ActionRunnerJoin}
-	claim := []identity.Action{identity.ActionRunnerClaim}
 
 	return []Route{
 		{Method: http.MethodGet, Path: poolsPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listPools},
@@ -95,7 +109,15 @@ func (h *Handler) buildRoutes() []Route {
 		{Method: http.MethodGet, Path: poolRunnersPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listRunners},
 		{Method: http.MethodPost, Path: drainPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.drainRunner},
 		{Method: http.MethodPost, Path: retirePath, Scope: ScopeAuthorized, Actions: manage, Serve: h.retireRunner},
+	}
+}
 
+// runnerRoutes returns the routes of the runner side of the protocol.
+func (h *Handler) runnerRoutes() []Route {
+	join := []identity.Action{identity.ActionRunnerJoin}
+	claim := []identity.Action{identity.ActionRunnerClaim}
+
+	return []Route{
 		{Method: http.MethodPost, Path: protocol.PathJoin, Scope: ScopeJoinToken, Actions: join, Serve: h.join},
 		{Method: http.MethodPost, Path: protocol.PathRotate, Scope: ScopeRunnerKey, Actions: claim, Serve: h.rotate},
 		{
@@ -120,6 +142,56 @@ func (h *Handler) buildRoutes() []Route {
 			Scope:   ScopeRunnerKey,
 			Actions: claim,
 			Serve:   h.releaseClaim,
+		},
+	}
+}
+
+// launcherRoutes returns the routes of the launcher side of the protocol.
+func (h *Handler) launcherRoutes() []Route {
+	claim := []identity.Action{identity.ActionRunnerClaim}
+
+	return []Route{
+		{
+			Method:  http.MethodPost,
+			Path:    protocol.PathSession,
+			Scope:   ScopeHandoffToken,
+			Actions: claim,
+			Serve:   h.openSession,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    protocol.PathSessionRenew,
+			Scope:   ScopeSessionKey,
+			Actions: claim,
+			Serve:   h.sessionRenew,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    protocol.PathSessionStepBegin,
+			Scope:   ScopeSessionKey,
+			Actions: claim,
+			Serve:   h.stepBegin,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    protocol.PathSessionStepEnd,
+			Scope:   ScopeSessionKey,
+			Actions: claim,
+			Serve:   h.stepEnd,
+		},
+		{
+			Method:  http.MethodPut,
+			Path:    protocol.PathSessionLog,
+			Scope:   ScopeSessionKey,
+			Actions: claim,
+			Serve:   h.putLog,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    protocol.PathSessionFinish,
+			Scope:   ScopeSessionKey,
+			Actions: claim,
+			Serve:   h.finish,
 		},
 	}
 }
@@ -159,7 +231,7 @@ func newPatternMux() *patternMux {
 // HandleFunc registers pattern and records it.
 func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, http.HandlerFunc(handler)))
 }
 
 // ServeHTTP implements http.Handler.

@@ -119,6 +119,8 @@ type AccessTokenPolicyRow struct {
 	DisableTokens     bool
 	DisableAccounts   bool
 	DisableBreakGlass bool
+	// ExchangeLifetimeMs is the lifetime of an exchanged workload token.
+	ExchangeLifetimeMs int64
 }
 
 // FromAccessTokenPolicyRow converts a row into the policy. An update time
@@ -132,6 +134,7 @@ func FromAccessTokenPolicyRow(row AccessTokenPolicyRow) accesstoken.Policy {
 		DisableTokens:     row.DisableTokens,
 		DisableAccounts:   row.DisableAccounts,
 		DisableBreakGlass: false,
+		ExchangeLifetime:  time.Duration(row.ExchangeLifetimeMs) * time.Millisecond,
 	}
 }
 
@@ -139,11 +142,12 @@ func FromAccessTokenPolicyRow(row AccessTokenPolicyRow) accesstoken.Policy {
 // writes the break-glass disable as false.
 func ToAccessTokenPolicyRow(p accesstoken.Policy) AccessTokenPolicyRow {
 	return AccessTokenPolicyRow{
-		MaxLifetimeMs:     p.MaxLifetime.Milliseconds(),
-		InactivityMs:      p.Inactivity.Milliseconds(),
-		UpdatedAtMs:       OptionalMillis(p.UpdatedAt),
-		DisableTokens:     p.DisableTokens,
-		DisableAccounts:   p.DisableAccounts,
-		DisableBreakGlass: false,
+		MaxLifetimeMs:      p.MaxLifetime.Milliseconds(),
+		InactivityMs:       p.Inactivity.Milliseconds(),
+		UpdatedAtMs:        OptionalMillis(p.UpdatedAt),
+		DisableTokens:      p.DisableTokens,
+		DisableAccounts:    p.DisableAccounts,
+		DisableBreakGlass:  false,
+		ExchangeLifetimeMs: p.ExchangeLifetime.Milliseconds(),
 	}
 }

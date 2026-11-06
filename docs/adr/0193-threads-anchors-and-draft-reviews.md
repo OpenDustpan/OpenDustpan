@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-18 · part of ADR 190. Decisions 4 and 9 read the eligible approver of ADR 225 decision 7
 
+Changed by:
+
+- ADR 222 changes decisions 4 and 9: the eligible approver comes from approval
+  rules.
+- ADR 225 changes decisions 4 and 9: eligible approver comes from approval
+  rules.
+- ADR 299 changes: code comments of a review request live on the Git host.
+
 ## Context
 
 ADR 128 decision 11 to decision 14 give request-changes threads on a job:

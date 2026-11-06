@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18 · part of ADR 170
 
+Changed by:
+
+- ADR 316 extends: the dependencies of the provider kit.
+
 ## Context
 
 The project owner decided on 17 October 2026 that one description produces

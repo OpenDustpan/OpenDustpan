@@ -41,6 +41,7 @@ func gated() []errcodetest.Adapter {
 			Skip: []string{"writeMaintenanceHTTPBackend", "writeMaintenanceRunner"},
 		},
 		api("inventory", nil, nil),
+		api("issuer", nil, nil),
 		api("jobs", nil, nil),
 		api("notifications", nil, nil),
 		api("objectcontext", nil, nil),
@@ -53,10 +54,16 @@ func gated() []errcodetest.Adapter {
 		// The runner protocol has its own codes and its own versions.
 		api("runnerapi", nil,
 			[]string{"classifyProtocol", "classifyProtocolOther"}),
+		api("settings", []string{"bulkError"}, nil),
 		api("server", []string{
 			"errorResponse", "codedResponse", "codedError", "enterRefusedResponse",
 		}, nil),
 		api("sourcefilter", nil, nil),
+		// The package writes no error answer: it gives each adapter the
+		// outcome of a write of state, and the adapter writes the answer. It is
+		// gated with no body type and no known list, so a new answer in it
+		// needs a code.
+		api("stategate", nil, nil),
 		api("tfe", []string{"jsonAPIError", "errorClass", "registryErrors"}, nil),
 		// The package writes no error answer. It is gated with no body type
 		// and no known list, so a new answer in it needs a code.
@@ -81,6 +88,10 @@ func notBodies() map[string]map[string]string {
 		"server": {
 			"devCodeRequest":     "the request body of the dev sign-in; code is the sign-in code",
 			"restoreWarningJSON": "a warning in the report of a restore that succeeded; it is no error answer",
+			"getRestoreResponse": "the 200 row of a restore; errorCode repeats the catalog code that the restore " +
+				"stored when it ended, and a test checks that each such code is in the catalog",
+			"restoreSummaryJSON": "a 200 row of the list of restores; errorCode repeats the stored catalog code " +
+				"of the restore, as getRestoreResponse does",
 		},
 		"tfe": {
 			"jsonAPIDocument": "the JSON:API document around jsonAPIError, which is gated",
@@ -135,6 +146,7 @@ func ungated() map[string]string {
 		"admit":         "a helper of the adapters; its error reaches the error writer of each adapter",
 		"apidesc":       "the API description; it writes no error answer",
 		"auditrequired": "a helper of the adapters; it writes no error answer",
+		"faultlog":      "a helper of the adapters; it writes the log line of a failure and no error answer",
 		"idempotent":    "a helper of the adapters; its errors reach the error writer of each adapter",
 		"refusal":       "a helper of the adapters; its errors reach the classify functions of each adapter",
 		"tofuhttp":      "the OpenTofu HTTP backend; OpenTofu fixes its error shapes, which have no code field",

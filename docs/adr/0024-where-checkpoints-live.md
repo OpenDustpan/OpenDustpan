@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-10 · decisions 3, 6 and 7 superseded by ADR 37
 
+Changed by:
+
+- ADR 26 extends: the open item of a shared blob layout rule.
+- ADR 37 supersedes decisions 3, 6 and 7: storage, compression and backups of
+  checkpoints.
+- ADR 45 changes decision 3: the 256 MiB limit of a checkpoint.
+
 ## Context
 
 ADR 20 decides that the server stores whole checkpoints, that the last write

@@ -104,6 +104,19 @@ func recordedRestore(ctx context.Context, q *db.Queries, f durable.StepFence, id
 	return insertStep(ctx, q, stepAt{row: row, now: now}, f, nil)
 }
 
+// recordedRestoreWith checks f as fencedRestore does, and records the step of
+// f with result, in the transaction of q.
+func recordedRestoreWith(
+	ctx context.Context, q *db.Queries, f durable.StepFence, id backup.RestoreID, result []byte,
+) error {
+	row, now, err := fencedRestore(ctx, q, f, id)
+	if err != nil {
+		return err
+	}
+
+	return insertStep(ctx, q, stepAt{row: row, now: now}, f, result)
+}
+
 // runningRestore returns the state and the maintenance flag of the running
 // restore id in the transaction of q: ErrRestoreNotFound when it does not
 // exist, and ErrRestoreNotRunning when it ended.
@@ -312,13 +325,13 @@ func (s *Store) ConfirmRestoreMaintenance(
 
 // MarkRestoreApplying implements backup.RestoreOperations.
 func (s *Store) MarkRestoreApplying(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID,
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID, result []byte,
 ) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := recordedRestore(ctx, q, f, id); err != nil {
+		if err := recordedRestoreWith(ctx, q, f, id, result); err != nil {
 			return err
 		}
 
@@ -385,6 +398,22 @@ func (s *Store) RecordRestoreEvent(
 		}
 
 		return nil
+	})
+}
+
+// CheckRestoreFence implements backup.RestoreOperations.
+func (s *Store) CheckRestoreFence(ctx context.Context, f durable.StepFence, id backup.RestoreID) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		if _, _, err := fencedRestore(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		_, err := runningRestore(ctx, q, id)
+
+		return err
 	})
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -151,7 +152,7 @@ func (h *Handler) appendObjectChange(r *http.Request, p identity.Principal, obj 
 // failure metric through the wired callback. It names no error text: the
 // text may hold driver detail (ADR 32 decision 7).
 func (h *Handler) failAudit(ctx context.Context) {
-	h.logger.ErrorContext(ctx, "audit append failed")
+	faultlog.LogFault(ctx, h.logger, "audit append failed", faultlog.CauseUnclassified, "audit.append")
 
 	if h.onAuditFailure != nil {
 		h.onAuditFailure()

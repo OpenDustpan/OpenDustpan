@@ -48,6 +48,9 @@ const (
 	maxStagedPerSweep = 1000
 )
 
+// errSweepBound stops the walk of a sweep that reached maxStagedPerSweep files.
+var errSweepBound = errors.New("the sweep reached its bound")
+
 // Sentinel errors of the use cases.
 var (
 	// ErrMissingDependency reports a Config without a required port.

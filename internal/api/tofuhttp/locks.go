@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -154,6 +155,14 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 	if err != nil {
 		h.writeFirstRefusal(ctx, w, err, h.writeLockError)
 
+		return
+	}
+
+	// The gates run at the lock, before any plan or apply: a refusal of the
+	// state version after the apply would leave resources that no stored state
+	// records. The workspace must exist first, because the gates read its
+	// facts.
+	if !h.guardStateWrite(ctx, w, c, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
 		return
 	}
 
@@ -313,23 +322,68 @@ func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call
 		return
 	}
 
-	if !ws.Lock.Locked() || ws.Lock.ID != info.ID {
-		if ws.Lock.Locked() {
-			h.recordLockRefusal(ctx, r, c, "unlock names a lock that is not the current lock")
-		}
+	if !ws.Lock.Locked() {
+		h.unlockFree(w, r, c, ws, info.ID)
 
+		return
+	}
+
+	if ws.Lock.ID != info.ID {
+		h.recordLockRefusal(ctx, r, c, "unlock names a lock that is not the current lock")
 		h.writeConflict(w, ws.Lock)
 
 		return
 	}
 
 	if ws.Lock.Holder != c.principal.Subject {
-		h.forceUnlockWorkspace(w, r, c, ws)
+		h.forceUnlockWorkspace(w, r, c, ws, ws.Lock)
 
 		return
 	}
 
-	_, err = h.ws.UnlockLock(ctx, ws.ID, info.ID, c.principal.Subject)
+	h.unlockHeld(w, r, c, ws.ID, info.ID)
+}
+
+// unlockFree serves an UNLOCK of a workspace that holds no lock. OpenTofu
+// sends an UNLOCK again when the answer of a committed unlock or force-unlock
+// is lost. An UNLOCK that repeats the last release of the workspace succeeds
+// without a change: a normal release when the caller held the lock, a forced
+// release when the caller forced it. The request must name the lock ID of the
+// record. Any other UNLOCK answers 409 with no body, as before.
+//
+// The service applies the same rule again, with the record that it reads in
+// the release, so a lock that another request takes after this read is not
+// released here.
+func (h *Handler) unlockFree(w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace, lockID string) {
+	subject := c.principal.Subject
+
+	normal := workspace.ReleaseRepeat{LockID: lockID, Holder: "", Caller: subject, Kind: workspace.ReleaseNormal}
+	if h.ws.RepeatsRelease(ws, normal) {
+		h.unlockHeld(w, r, c, ws.ID, lockID)
+
+		return
+	}
+
+	forced := workspace.ReleaseRepeat{LockID: lockID, Holder: "", Caller: subject, Kind: workspace.ReleaseForced}
+	if h.ws.RepeatsRelease(ws, forced) {
+		// The force-unlock names the lock of the record, so the service matches
+		// the repeat on the lock ID and on the holder of the record.
+		expect := workspace.Lock{LockedAt: time.Time{}, ID: lockID, Holder: ws.LastRelease.Holder, Reason: ""}
+		h.forceUnlockWorkspace(w, r, c, ws, expect)
+
+		return
+	}
+
+	h.writeConflict(w, ws.Lock)
+}
+
+// unlockHeld releases the lock lockID of the caller, or answers the repeat of
+// its last release. A lock that changed, or that another principal holds,
+// answers 409 with the current lock info.
+func (h *Handler) unlockHeld(w http.ResponseWriter, r *http.Request, c call, id workspace.ID, lockID string) {
+	ctx := r.Context()
+
+	_, err := h.ws.UnlockLock(ctx, id, lockID, c.principal.Subject)
 	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
 		errors.Is(err, workspace.ErrLockMismatch) {
 		h.recordLockRefusal(ctx, r, c, "the lock changed or is held by another principal")

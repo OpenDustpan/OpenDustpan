@@ -330,20 +330,33 @@ func checkStep(ctx context.Context, q *db.Queries, f durable.StepFence) (db.Dura
 		return db.DurableOperation{}, 0, err
 	}
 
-	if row.CancelRequested {
-		return db.DurableOperation{}, 0, durable.ErrCanceled
-	}
-
-	done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: f.Step})
-	if err != nil {
-		return db.DurableOperation{}, 0, fmt.Errorf("read step: %w", err)
-	}
-
-	if done {
-		return db.DurableOperation{}, 0, durable.ErrStepDone
+	if err := checkStepRow(ctx, q, row, f.Step); err != nil {
+		return db.DurableOperation{}, 0, err
 	}
 
 	return row, now, nil
+}
+
+// checkStepRow checks the row of an operation for step. It returns
+// durable.ErrCanceled when the row has a cancel request, durable.ErrStepDone
+// when the step is recorded, and nil otherwise. The cancel check comes first.
+// The caller reads the row and decides on the lock. checkStep and peekStep
+// both call it.
+func checkStepRow(ctx context.Context, q *db.Queries, row db.DurableOperation, step string) error {
+	if row.CancelRequested {
+		return durable.ErrCanceled
+	}
+
+	done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: step})
+	if err != nil {
+		return fmt.Errorf("read step: %w", err)
+	}
+
+	if done {
+		return durable.ErrStepDone
+	}
+
+	return nil
 }
 
 // stepAt is the row of an operation that checkStep returned, and the time of
@@ -632,12 +645,45 @@ func lockLive(ctx context.Context, q *db.Queries, id durable.ID, token int64) (d
 		return db.DurableOperation{}, 0, fmt.Errorf("read the database clock: %w", err)
 	}
 
-	if row.State != string(durable.StateRunning) || !row.ClaimExpiresAtMs.Valid ||
-		row.ClaimExpiresAtMs.Int64 <= now || row.ClaimToken != token {
+	if !isLiveClaim(row, now, token) {
 		return db.DurableOperation{}, 0, durable.ErrClaimLost
 	}
 
 	return row, now, nil
+}
+
+// isLiveClaim reports whether row runs under the claim token, and the claim
+// has not expired at now.
+func isLiveClaim(row db.DurableOperation, now, token int64) bool {
+	return row.State == string(durable.StateRunning) && row.ClaimExpiresAtMs.Valid &&
+		row.ClaimExpiresAtMs.Int64 > now && row.ClaimToken == token
+}
+
+// peekStep checks f with the rules and the order of checkStep, but with a
+// read that takes no lock on the row of the operation. A long transaction
+// calls it at its start, so that it fails early with the error of the fence,
+// and calls checkStep at its end, under the lock. Between the two, a renewal
+// of the claim does not wait for the transaction.
+func peekStep(ctx context.Context, q *db.Queries, f durable.StepFence) error {
+	row, err := q.GetDurableOperation(ctx, string(f.Operation))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return durable.ErrClaimLost
+	}
+
+	if err != nil {
+		return fmt.Errorf("read operation: %w", err)
+	}
+
+	now, err := q.DatabaseNowMs(ctx)
+	if err != nil {
+		return fmt.Errorf("read the database clock: %w", err)
+	}
+
+	if !isLiveClaim(row, now, f.Token) {
+		return durable.ErrClaimLost
+	}
+
+	return checkStepRow(ctx, q, row, f.Step)
 }
 
 // withSteps reads the steps of row and returns the operation.

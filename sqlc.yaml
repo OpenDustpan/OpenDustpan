@@ -63,6 +63,14 @@ sql:
             go_type: bool
           - column: git_host_connections.is_default
             go_type: bool
+          - column: local_users.change_required
+            go_type: bool
+          - column: local_users.demo
+            go_type: bool
+          - column: local_user_resets.revoke_access_tokens
+            go_type: bool
+          - column: passkeys.backup_eligible
+            go_type: bool
   - engine: postgresql
     schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql

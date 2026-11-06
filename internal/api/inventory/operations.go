@@ -16,12 +16,15 @@ const (
 	tagLocks       = "locks"
 	tagViews       = "views"
 	tagSharing     = "output-sharing"
+	tagPlacement   = "placement"
 )
 
 const (
 	namespacePath  = v1Prefix + "/namespaces/{namespace}"
 	collectionPath = namespacePath + "/collections/{collection}"
 	viewPath       = namespacePath + "/views/{view_id}"
+	placementPath  = namespacePath + "/placement-rules"
+	placementOne   = placementPath + "/{rule}"
 )
 
 // operationLabels names the routes of this adapter that sit under
@@ -67,6 +70,25 @@ var operationLabels = map[string]apidesc.Label{
 		WithBodies(apidesc.NoBody, collectionBody),
 	apidesc.Pattern(http.MethodDelete, collectionPath): apidesc.Name("deleteCollection", tagCollections).
 		On(apidesc.KindCollection).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
+
+	apidesc.Pattern(http.MethodGet, placementPath): apidesc.Name("listPlacementRules", tagPlacement).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[placementRulesResponse](
+			"ListPlacementRulesResponse", apidesc.Named[placementRuleEntry]("PlacementRule"),
+		)),
+	apidesc.Pattern(http.MethodPost, placementPath): apidesc.Name("createPlacementRule", tagPlacement).
+		WithStatus(http.StatusCreated).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[placementRuleRequest]("PlacementRuleRequest"), placementRuleBody),
+	apidesc.Pattern(http.MethodGet, placementOne): apidesc.Name("getPlacementRule", tagPlacement).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, placementRuleBody),
+	apidesc.Pattern(http.MethodPut, placementOne): apidesc.Name("updatePlacementRule", tagPlacement).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[placementRuleRequest]("PlacementRuleRequest"), placementRuleBody),
+	apidesc.Pattern(http.MethodDelete, placementOne): apidesc.Name("deletePlacementRule", tagPlacement).
+		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
 
 	apidesc.Pattern(http.MethodPut, collectionPath+"/lock"): apidesc.Name("lockCollection", tagLocks).
@@ -154,11 +176,13 @@ var (
 		apidesc.Named[unitEntry]("Unit"),
 		apidesc.Named[stateEntry]("UnitState"),
 		apidesc.Named[lockEntry]("UnitLock"),
+		apidesc.Named[lastReleaseEntry]("UnitLastRelease"),
 	)
-	collectionBody  = apidesc.Typed[collectionEntry]("Collection")
-	lockRequestBody = apidesc.Typed[lockRequest]("LockRequest")
-	manualLockBody  = apidesc.Typed[lockEntryDocument]("ManualLock")
-	viewBody        = apidesc.Typed[viewDocument]("View", viewNames...)
+	collectionBody    = apidesc.Typed[collectionEntry]("Collection")
+	placementRuleBody = apidesc.Typed[placementRuleEntry]("PlacementRule")
+	lockRequestBody   = apidesc.Typed[lockRequest]("LockRequest")
+	manualLockBody    = apidesc.Typed[lockEntryDocument]("ManualLock")
+	viewBody          = apidesc.Typed[viewDocument]("View", viewNames...)
 	// outputSharingBody is the output sharing setting of a namespace.
 	outputSharingBody = apidesc.Typed[outputSharingDocument]("OutputSharing")
 	viewNames         = []apidesc.Declaration{

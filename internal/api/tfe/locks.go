@@ -165,7 +165,7 @@ type lockCall struct {
 // "is locked by User" and the holder, so the CLI waits and retries under
 // -lock-timeout.
 func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
-	if !h.guardStateWrite(c.w, c.r, c.p, c.obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
+	if !h.guardStateWrite(c.w, c.r, c.p, c.obj, lockCheck()) {
 		return false
 	}
 
@@ -201,7 +201,11 @@ func (h *Handler) writeLockRefusal(ctx context.Context, w http.ResponseWriter, i
 
 // unlockWorkspace serves POST /api/v2/workspaces/{id}/actions/unlock. The
 // holder unlocks. An unlock by another principal answers 409 with a detail
-// holding "is locked by User" and the holder.
+// holding "is locked by User" and the holder. On an unlocked workspace, an
+// unlock by the holder of the last normal release answers success with no
+// change, because OpenTofu sends an unlock again when its answer is lost. The
+// workspace service applies that rule: the protocol sends no lock ID, so the
+// handler has no check of its own to make before it.
 func (h *Handler) unlockWorkspace(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
@@ -287,7 +291,10 @@ func forceUnlockEntry(r *http.Request, p identity.Principal, obj identity.Object
 // hold data.attributes.reason, which the audit entry of the release keeps,
 // and data.attributes.lock-id and lock-holder, which name the lock that the
 // caller saw. A lock that differs answers 409 and changes nothing. A
-// force-unlock of an unlocked workspace answers 409. A success writes one
+// force-unlock of an unlocked workspace answers 409, except a repeat of the
+// last forced release by the same principal: the workspace service answers it
+// with success and no change, because OpenTofu sends a force-unlock again
+// when its answer is lost. A success writes one
 // audit entry of the kind change in the transaction of the release, and one
 // info log line with the action, the unit, the principal and the released
 // holder, and never with the request path or query. The handler owns the
@@ -333,7 +340,7 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWriteForced, op: gate.OperationUnlock}) {
+	if !h.guardStateWrite(w, r, p, obj, forceUnlockCheck()) {
 		return
 	}
 
@@ -355,6 +362,27 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
+	h.logForceUnlock(ctx, p, obj, holder)
+
+	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
+}
+
+// logForceUnlock writes the info line of a force-unlock that answered 200. A
+// release with no holder at the read is a repeat of the last forced release.
+// It changes nothing, so its line does not claim a release.
+func (h *Handler) logForceUnlock(ctx context.Context, p identity.Principal, obj identity.Object, holder string) {
+	if holder == "" {
+		h.logger.InfoContext(
+			ctx,
+			"force-unlock repeated with no change",
+			slog.String("action", "force-unlock"),
+			slog.String("object", obj.String()),
+			slog.String("principal", p.Subject),
+		)
+
+		return
+	}
+
 	h.logger.InfoContext(
 		ctx,
 		"force-unlock completed",
@@ -363,6 +391,14 @@ func (h *Handler) forceUnlockWorkspace(
 		slog.String("principal", p.Subject),
 		slog.String("released", holder),
 	)
+}
 
-	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
+// lockCheck is the state check of the lock of a workspace.
+func lockCheck() stateCheck {
+	return newStateCheck(identity.ActionUnitWrite, gate.OperationLock)
+}
+
+// forceUnlockCheck is the state check of a force-unlock of a workspace.
+func forceUnlockCheck() stateCheck {
+	return newStateCheck(identity.ActionUnitWriteForced, gate.OperationUnlock)
 }

@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"net/http"
 	"time"
 )
 
@@ -47,4 +48,29 @@ func FromContext(ctx context.Context) string {
 	}
 
 	return id
+}
+
+// routeKey holds the route pattern in the request context.
+type routeKey struct{}
+
+// WithRoute returns a handler that stores pattern, the constant pattern that
+// the route is registered with, in the context of each request, for the log
+// line of a failure. The pattern holds no request data: a path value stays as
+// its name, for example "GET /api/stacks/{org}". A mux wraps each of its
+// routes with it.
+func WithRoute(pattern string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), routeKey{}, pattern)))
+	})
+}
+
+// RouteFromContext returns the route pattern in ctx, or "" when ctx holds
+// none.
+func RouteFromContext(ctx context.Context) string {
+	pattern, ok := ctx.Value(routeKey{}).(string)
+	if !ok {
+		return ""
+	}
+
+	return pattern
 }

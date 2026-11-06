@@ -16,13 +16,16 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -437,6 +440,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -479,6 +483,16 @@ func newAuditedEnforcingHandler(
 ) (*pulumi.Handler, *recordingStackStore) {
 	t.Helper()
 
+	return newGuardedEnforcingHandler(t, authz, entries, stategate.Off("the test keeps no gates"))
+}
+
+// newGuardedEnforcingHandler is newAuditedEnforcingHandler with guard as the
+// state guard of the handler.
+func newGuardedEnforcingHandler(
+	t *testing.T, authz identity.Authorizer, entries audit.Store, guard stategate.Guard,
+) (*pulumi.Handler, *recordingStackStore) {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
@@ -504,6 +518,7 @@ func newAuditedEnforcingHandler(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              guard,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1552,7 +1567,7 @@ func (exportPanicsStore) CheckpointByVersion(
 // PutCheckpoint panics: the delete route never writes state.
 func (exportPanicsStore) PutCheckpoint(
 	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
-) error {
+) (bool, error) {
 	panic("delete must not write a checkpoint")
 }
 
@@ -1623,6 +1638,8 @@ func newDeleteHandlerWithAudit(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Tokens:             nil,
@@ -1643,6 +1660,7 @@ func newDeleteHandlerWithAudit(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1992,6 +2010,8 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 	stores := unusedUpdateStores{UpdateStore: nil, CheckpointStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,
@@ -2030,7 +2050,7 @@ func (emptyCheckpointStore) ActiveUpdate(_ context.Context, _ stack.Ref) (stack.
 
 func (emptyCheckpointStore) PutCheckpoint(
 	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
-) error {
+) (bool, error) {
 	panic("PutCheckpoint is not used by the delete route")
 }
 
@@ -2066,6 +2086,8 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 	stores := emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,

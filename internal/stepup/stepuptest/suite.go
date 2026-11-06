@@ -119,41 +119,10 @@ var caseNames = []string{
 	"a reset deletes the active and the pending factor, revokes the TOTP credentials and appends one entry",
 }
 
-// verifierCaseNames holds the name of each case of the Verifier suite, in
-// the order of the run.
-//
-//nolint:gochecknoglobals // A fixed list of case names.
-var verifierCaseNames = []string{
-	"a valid SSH signature returns its assertion",
-	"a valid sk- signature returns its user presence, user verification and counter",
-	"an SSH signature with another namespace fails with ErrBadAnswer",
-	"a key-add signature never verifies for a write or a window",
-	"a write signature never verifies for a key add",
-	"an SSH signature with a hash algorithm other than sha256 or sha512 fails with ErrBadAnswer",
-	"an SSH signature whose embedded key is not k fails with ErrBadAnswer",
-	"an SSH signature over another message fails with ErrBadAnswer",
-	"a key type outside the allowlist fails with ErrInvalid",
-	"an RSA key below 3072 bits fails with ErrInvalid",
-	"an sk- signature without user presence fails with ErrBadAnswer",
-	"a valid OpenPGP signature returns its assertion",
-	"an OpenPGP signature without the notation fails with ErrBadAnswer",
-	"an OpenPGP signature with the notation in the unhashed area fails with ErrBadAnswer",
-	"a text-mode OpenPGP signature fails with ErrBadAnswer",
-	"an OpenPGP signature whose issuer fingerprint is not k or a signing subkey of k fails with ErrBadAnswer",
-	"an OpenPGP signature by an expired or revoked key or subkey fails with ErrBadAnswer",
-	"a malformed signature fails with ErrBadAnswer and does not panic",
-}
-
 // CaseNames returns a copy of the names of the cases, in the order of the
 // run.
 func CaseNames() []string {
 	return append([]string(nil), caseNames...)
-}
-
-// VerifierCaseNames returns a copy of the names of the cases of the
-// Verifier suite, in the order of the run.
-func VerifierCaseNames() []string {
-	return append([]string(nil), verifierCaseNames...)
 }
 
 // Run runs every case of the suite against the stores that newStore returns.
@@ -169,32 +138,6 @@ func Run(t *testing.T, newStore Factory) {
 			}
 
 			t.Skip("no adapter implements the stepup ports yet")
-		})
-	}
-}
-
-// VerifierFactory returns the verifier under test for one subtest.
-type VerifierFactory func(t *testing.T) stepup.Verifier
-
-// RunVerifier runs every case of the Verifier suite against the verifiers
-// that newVerifier returns. Each Verifier adapter runs it:
-//
-//	func TestVerifierConformance(t *testing.T) {
-//		t.Parallel()
-//		stepuptest.RunVerifier(t, func(t *testing.T) stepup.Verifier { return sshsig.New() })
-//	}
-func RunVerifier(t *testing.T, newVerifier VerifierFactory) {
-	t.Helper()
-
-	for _, name := range verifierCaseNames {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			if newVerifier == nil {
-				t.Fatal("stepuptest.RunVerifier needs a verifier factory")
-			}
-
-			t.Skip("no adapter implements the Verifier port yet")
 		})
 	}
 }

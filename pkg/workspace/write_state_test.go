@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
@@ -573,6 +574,7 @@ func ctxAwareService(t *testing.T, f fixture) *workspace.Service {
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             ctxStates{StateStore: f.store},

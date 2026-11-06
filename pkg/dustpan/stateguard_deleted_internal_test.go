@@ -47,10 +47,17 @@ func seedDeletedWorkspace(t *testing.T, st *sqlite.Store, n namespace.Namespace)
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
-		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:   workspace.ID(ident.NewID("ws-")), NamespaceID: n.ID, Ref: workspace.Ref{Namespace: "acme", Name: name},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID: workspace.ID(
+			ident.NewID("ws-"),
+		),
+		NamespaceID: n.ID,
+		Ref:         workspace.Ref{Namespace: "acme", Name: name},
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:    1,
 	}
 	if err = st.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -112,10 +119,12 @@ func newDeletedGuard(t *testing.T) deletedGuard {
 	cfg := new(settings)
 	cfg.namespaceStore, cfg.inventoryReader, cfg.now = st, st, time.Now
 
-	svc, err := newGateService(cfg, nss)
-	if err != nil || svc == nil {
-		t.Fatalf("newGateService() = %v, %v", svc, err)
+	gates, err := newStateWriteGates(cfg, nss)
+	if err != nil || gates.svc == nil {
+		t.Fatalf("newStateWriteGates() = %v, %v", gates.svc, err)
 	}
+
+	svc := gates.svc
 
 	g := gate.Gate{
 		Scope: gate.CollectionScope("acme", "payments"), ID: "frozen", Version: 0, DecisionPoint: gate.PointStateWrite,
@@ -146,7 +155,7 @@ func (d deletedGuard) guard(t *testing.T, unitID string, action identity.Action,
 
 	_, err := d.svc.GuardStateWrite(t.Context(), gate.StateWrite{
 		Principal: d.p, Unit: d.unit.WithUnitID(unitID), Operation: op, Action: action,
-		Source: gate.SourceAPI, PlanLock: false,
+		Source: gate.SourceAPI, PlanLock: false, State: nil,
 	})
 
 	return err

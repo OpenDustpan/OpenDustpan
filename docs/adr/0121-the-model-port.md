@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-17 · decisions 1, 2, 4, 8 and 9, and one item of "Not decided here", superseded in part by ADR 129
 
+Changed by:
+
+- ADR 129 changes decisions 1, 2, 4, 8 and 9: the model port, adapters,
+  connection and the prompt caching item.
+
 ## Context
 
 ADR 120 records the built-in agent, Dusty. The project owner decided that

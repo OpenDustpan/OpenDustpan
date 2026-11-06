@@ -3,7 +3,7 @@ rfc: 21
 title: Directory sync and sign-in hardening
 status: discussing
 created: 2026-10-10
-adr: 46, 55, 56, 57
+adr: 46, 55, 56, 57, 285, 292, 301, 320, 321
 ---
 
 # RFC 21. Directory sync and sign-in hardening
@@ -14,7 +14,9 @@ the built-in MFA below on 2026-10-11.
 
 The part on built-in MFA is accepted as ADR 46. The sign-in methods for
 milestone 4 are accepted as ADR 55, MFA freshness as ADR 56 and break-glass
-recovery as ADR 57. The questions in "Open questions" stay open. The section
+recovery as ADR 57. The sign-in path of P1 is accepted as ADR 320, and the
+methods of P2 to P6 as ADR 321. The questions in "Open questions" that these
+ADRs do not answer stay open. The section
 "Proposal for the rest of milestone 4 (2026-10-30)" answers them, with the
 other identity items of milestone 4, for the owner to accept.
 
@@ -162,6 +164,10 @@ decisions 12 to 22: one membership function applies the rules for groups from
 an identity provider. ADR 216 decision 9: a sign-in finds or makes a principal
 of its own home only. ADR 227: one fresh-authentication window.
 
+**Accepted as [ADR 320](../adr/0320-one-sign-in-path-for-every-sign-in-method.md)
+on 2026-11-02**, with the sign-in failures below and the fresh
+authentication of each method.
+
 **Proposal.** Three shapes of method share one result:
 
 | Shape | Port (in `pkg/session`) | Methods |
@@ -212,6 +218,11 @@ back:
 | LDAP | a new bind with the password | the time of the bind | the password check is the authentication |
 | Plain OAuth 2.0 | no standard parameter | nothing | OAuth 2.0 has no authentication time |
 | Trusted header | no parameter | nothing | the signed JWT of Google IAP has `iat`, not an authentication time (fetched) |
+
+**O2 answered "yes" on 2026-11-01:
+[ADR 301](../adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md).**
+A passkey, a TOTP code or an SSH signature of the person gives the fresh step,
+for these two methods only.
 
 Plain OAuth 2.0 and trusted header cannot prove a recent authentication. So
 ADR 227 gives no fresh authentication to their sessions, and each write that
@@ -269,6 +280,10 @@ answer does not tell that a user exists.
 and a removal disables the sessions and tokens (revocation at once is
 opt-in). ADR 70 decision 19: a termination applies at once. ADR 46: built-in
 MFA applies to LDAP users.
+
+**Answered by [ADR 321](../adr/0321-ldap-saml-cas-oauth-groups-and-trusted-header-sign-in.md)
+on 2026-11-02: option C.** The rest of this section is the proposal that ADR
+321 accepts.
 
 **Open question: how does the server find that LDAP removed a user?**
 
@@ -359,6 +374,7 @@ ADR 46 decision 2: MFA is the job of the identity provider.
    the tile through a bookmark URL.
 2. **Fresh authentication.** `ForceAuthn="true"` and a check of
    `AuthnInstant`, as P1 says (PM decision, the same shape as ADR 71).
+   Accepted as ADR 320 decision 13 and ADR 321 decision 19.
 3. **Single logout.** Not in the milestone 4 list (ADR 55). A console session
    ends after 12 hours at most (ADR 69). This proposal adds no single logout.
    This is not a scope cut, because no plan names it.
@@ -458,6 +474,9 @@ names the proxies, and the server ignores the header from any other source.
 ADR 212 decision 3: trusted-header sign-in from off to on is a weaker
 setting. ADR 250: no layer alone.
 
+**Answered by ADR 321 on 2026-11-02:** two modes with two layers each, and
+groups from a header that the operator names.
+
 **Open question 1: a plain header, a signed header, or both?**
 
 Precedent:
@@ -546,6 +565,10 @@ A keeps a password store out of the product. If the owner reads the direction
 of 2026-10-11 as a promise of local passwords in milestone 4, the answer is
 "no", and B becomes a work item of its own (a password store with a
 memory-hard hash, the reset flow and the rules of PCI DSS 8.3.6).
+
+**Answered on 2026-10-31: "no" (option B).** The owner chose user name and
+password support next to passkeys. [ADR 285](../adr/0285-local-users-sign-in-with-a-password-and-a-passkey.md)
+records the decision and the design.
 
 **Open question 2: does "require MFA" apply to the bootstrap admin token?**
 Lead proposal: no.
@@ -1285,9 +1308,9 @@ Each question has a yes or no answer. "Yes" accepts the recommendation.
 
 | ID | Question | Recommendation |
 | --- | --- | --- |
-| O1 | Is a passkey the only sign-in of a local user in milestone 4, with no local password (P7)? Your direction of 2026-10-11 names "username+password" as an install with no identity provider. With "yes", a person with no SSO, no LDAP and no device that can hold a passkey cannot sign in. | Yes |
-| O2 | Plain OAuth 2.0 and trusted-header sign-in cannot prove a recent authentication. For these two methods, does a built-in factor (WebAuthn or TOTP) give the fresh authentication of ADR 227? This amends ADR 46 decision 2 and ADR 55 decision 10, for these two methods only. A person with no factor enrolls one in the window after the sign-in (P1). | Yes |
-| O3 | Does the server refuse an LDAP or SMTP connection with no TLS, except to a loopback address (P2, P11)? | Yes |
+| O1 (answered "no" on 2026-10-31, ADR 285) | Is a passkey the only sign-in of a local user in milestone 4, with no local password (P7)? Your direction of 2026-10-11 names "username+password" as an install with no identity provider. With "yes", a person with no SSO, no LDAP and no device that can hold a passkey cannot sign in. | Yes |
+| O2 (answered "yes" on 2026-11-01, ADR 301) | Plain OAuth 2.0 and trusted-header sign-in cannot prove a recent authentication. For these two methods, does a built-in factor (WebAuthn or TOTP) give the fresh authentication of ADR 227? This amends ADR 46 decision 2 and ADR 55 decision 10, for these two methods only. A person with no factor enrolls one in the window after the sign-in (P1). | Yes |
+| O3 (answered "yes", with an explicit opt-in, on 2026-10-31, ADR 292) | Does the server refuse an LDAP or SMTP connection with no TLS, except to a loopback address (P2, P11)? | Yes |
 | O4 | Does SAML accept only a sign-in that OpenDustpan starts, and refuse a sign-in that the identity provider starts (P3)? | Yes |
 | O5 | Do IP allowlists apply to every credential of a principal: sessions, access tokens, exchanged tokens, SCIM tokens, job tokens and runner tokens (P9)? This amends ADR 55 decision 8, which names console sign-in and access tokens only. | Yes |
 | O6 | Does the installation IP allowlist apply to break-glass accounts, with the host recovery as the fallback (P9)? This amends ADR 70 decision 24: the guard does not count an IP list as a block. So the guard can pass while no break-glass account can reach the server from outside the list. | Yes |
@@ -1309,7 +1332,7 @@ the recommendation.
   (not fetched). AWS accepts passkeys as a factor (fetched). No product has a
   passkey as the only local sign-in. Cost of "no": a password store, a reset
   flow, a hash function and password rules (PCI DSS 8.3.6, 12 characters, not
-  fetched) come into milestone 4.
+  fetched) come into milestone 4. Answered "no" on 2026-10-31: see ADR 285.
 - **O2, a built-in factor for a fresh step after plain OAuth 2.0 or a trusted
   header (amends ADR 46 decision 2 and ADR 55 decision 10).** Precedent: GitHub sudo mode accepts a passkey, a security key or
   TOTP for a sensitive action (fetched). OAuth 2.0 and the signed IAP header
@@ -1395,13 +1418,19 @@ default from the project lead for the owner to decide. It is not a decision.
   request must pass each list that applies to it, out of the scopes that
   opted in: the installation list, the namespace list and the token list.
 - How does the server find that LDAP removed a user? Lead proposal: at the
-  next sign-in, and with a sync at a configurable interval.
+  next sign-in, and with a sync at a configurable interval. **Answered by ADR
+  321 decision 8:** at each sign-in, and with a full sync each hour by
+  default.
 - Does trusted-header sign-in give groups as well as a user? Lead proposal:
   yes, from a second header that the operator names, off by default.
+  **Answered by ADR 321 decision 35:** yes, off by default. A missing header
+  with groups on refuses the sign-in.
 - How does MFA freshness work with an SSO identity provider, where MFA is the
   job of the provider (ADR 46)? Lead proposal: the server asks the provider
   for a new sign-in when the last one is older than the window of ADR 56.
-  Examples are OIDC `max_age` and SAML `ForceAuthn`.
+  Examples are OIDC `max_age` and SAML `ForceAuthn`. **Answered by ADR 227,
+  ADR 71 and ADR 320 decision 13:** each method asks with the parameter of its
+  protocol. ADR 301 covers plain OAuth 2.0 and the trusted header.
 - What are the defaults for the idle timeout and the maximum length of a
   console session? Lead proposal: 15 minutes idle (PCI DSS v4.0.1 8.2.8) and
   12 hours at most (NIST SP 800-63B-4, AAL3). An administrator can change
@@ -1525,4 +1554,21 @@ Accepted on 2026-10-13:
   Mode 1, the one-time bootstrap admin token, is the default, because no
   standard names a preferred option.
 
-The questions in "Open questions" have no outcome yet.
+Accepted on 2026-11-02:
+
+- ADR 320: one sign-in path for every method. Three method ports in
+  `pkg/session` return one `session.Assertion`. `principal.ApplyGroupClaims`
+  applies the groups of each method through a group mapping, with the rules
+  of ADR 70. The form of the mapping waits for the owner, and with no mapping
+  a sign-in joins no group. Each method asks for a fresh authentication with
+  the parameter of its protocol, bound to the person of the session. LDAP
+  uses the lockout by name of ADR 285 on the typed name and on the person. A
+  passkey sign-in counts by client address.
+- ADR 321: the designs of LDAP (with a check at each sign-in and an hourly
+  sync that applies a disabled entry at once and holds a large set of
+  missing entries for a site administrator), SAML, CAS, the OAuth 2.0 groups
+  claim and the trusted header (two modes with two layers each, a proxy list
+  of each provider, and groups from a header). The start of a SAML
+  sign-in (O4) waits for the owner.
+
+The other questions in "Open questions" have no outcome yet.

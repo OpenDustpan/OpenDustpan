@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -143,6 +144,7 @@ func (s stubSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigrat
 	for _, migration := range s.migrations {
 		out = append(out, schema.AppliedMigration{
 			Version: migration.Version, Name: migration.Name, MinBinaryVersion: migration.MinBinaryVersion,
+			SHA256: "",
 		})
 	}
 
@@ -155,7 +157,9 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -171,6 +175,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "",
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
@@ -220,7 +225,9 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -236,6 +243,7 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "v0.3.0",
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: "v0.1.0"},
 			{Version: 2, Name: "0002_contract.sql", MinBinaryVersion: "v0.10.0"},
@@ -279,11 +287,14 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -363,7 +374,9 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -379,6 +392,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
@@ -430,7 +444,9 @@ func newJournalHandler(t *testing.T, journaled int64) testHandler {
 	t.Helper()
 
 	cfg := apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
@@ -446,6 +462,7 @@ func newJournalHandler(t *testing.T, journaled int64) testHandler {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},

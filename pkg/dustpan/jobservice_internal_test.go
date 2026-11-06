@@ -33,6 +33,7 @@ func jobTestUnit(t *testing.T, ns, name string) identity.Object {
 // inventoryEntry returns the entry of a unit in the inventory.
 func inventoryEntry(name, unitID string) inventory.Entry {
 	return inventory.Entry{
+		LastRelease: nil,
 		LastChanged: time.Time{}, Namespace: "acme", Tool: "opentofu", Name: name, UnitID: unitID,
 		DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, ManualLock: nil, Collection: "", Labels: nil,
 	}

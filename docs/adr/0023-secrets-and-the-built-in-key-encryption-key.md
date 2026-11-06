@@ -2,6 +2,19 @@
 
 Status: accepted · 2026-10-10. Decision 8 superseded in part by ADR 217, which also makes the namespace key the wrapper of the data keys of a namespace. Decision 4: the rewrap command wraps namespace key versions (ADR 217 decision 21). Decision 2 superseded in part by ADR 237
 
+Changed by:
+
+- ADR 41 changes decisions 2, 3 and 6: key generation, start without a key and
+  the audit routes.
+- ADR 41 extends decision 1: a flag for the path of the key file.
+- ADR 45 changes decision 6: the batch limit of the secrets routes.
+- ADR 47 extends decision 5: the final delete happens when retention ends.
+- ADR 151 extends decision 3: item key wrapper IDs count in the start-up
+  check.
+- ADR 217 changes decisions 4 and 8: the namespace key wraps data keys, the
+  rewrap command.
+- ADR 237 changes decision 2: dev makes its own key in the data directory.
+
 ## Context
 
 The Pulumi CLI sends every secret config value to the server to be encrypted

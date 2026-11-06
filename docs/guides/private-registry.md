@@ -336,9 +336,8 @@ publish names the module, the version and the hash of the archive.
 
 - The registry serves modules that you upload. It does not read modules from
   git tags yet.
-- A backup holds the records of the releases and the keys. It does not copy
-  the files of the releases yet. Copy the blob store with your own tools until
-  a backup does.
+- A backup holds the records of the releases, the keys and the files of the
+  releases.
 - A signed file address is valid only on the server process that made it, because
   each server process makes its own signing key at start. Behind one address with
   several server processes, use one server process for the registry, or set one shared key

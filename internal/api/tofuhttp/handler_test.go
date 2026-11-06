@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -74,6 +75,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 			CreatedAt:   time.Time{},
 			UpdatedAt:   time.Time{},
 			Lock:        unlockedLock(),
+			LastRelease: workspace.NoRelease(),
 			Revision:    0,
 			Overrides:   on,
 		},
@@ -180,6 +182,11 @@ func (f *fakeUnits) UnlockLock(_ context.Context, _ workspace.ID, lockID, holder
 	f.ws.Lock = unlockedLock()
 
 	return f.ws, nil
+}
+
+// RepeatsRelease applies the rule of the domain with the wall clock.
+func (f *fakeUnits) RepeatsRelease(w workspace.Workspace, q workspace.ReleaseRepeat) bool {
+	return w.RepeatsRelease(time.Now().UTC(), q)
 }
 
 // ForceUnlockLock releases the lock whoever holds it, when lockID is the lock.
@@ -362,6 +369,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -836,6 +844,7 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 		Workspaces: newFakeUnits(true), Namespaces: fakeNamespaces{}, Audit: store,
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -879,6 +888,7 @@ func TestOverrideRefusalsAreAudited(t *testing.T) {
 		Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -957,6 +967,7 @@ func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
 				Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
 				Gate: nil, OnAuditFailure: nil,
 				DenialLimiter: nil,
+				StateGuard:    stategate.Off("the test keeps no gates"),
 			})
 			if err != nil {
 				t.Fatalf("new handler: %v", err)

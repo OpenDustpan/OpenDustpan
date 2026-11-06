@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -212,8 +213,9 @@ type updateResultEvent struct{}
 // sends, as `stack import` does. It runs as an update of kind import, so it
 // shows in history and respects the stack lock: while another update runs it
 // answers 409. The server always ends the update that it started. It records
-// the caller as the creator of the import update.
-func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+// the caller as the creator of the import update. The import meets the gates
+// of state.write with the operation kind state-import before the update starts.
+func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
 	ref, ok := h.updateRef(w, r)
@@ -238,6 +240,10 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 		Invalid:       false,
 	}
 
+	if !h.guardStateWrite(w, r, p, obj, checkImport()) {
+		return
+	}
+
 	u, err := h.updates.Import(ctx, ref, p.Subject, in)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -256,7 +262,9 @@ type restoreStackResponse struct {
 
 // restoreStack copies the checkpoint of one stack version into a new update
 // of kind restore, as the restore route does. It follows the rules of
-// importStack: the restore update shows in history with RestoredFrom set and
+// importStack: it meets the gates of state.write with the operation kind
+// rollback before the update starts, the restore update shows in history with
+// RestoredFrom set and
 // respects the stack lock, answering 409 while another update runs. A version
 // with no checkpoint answers 404. The version is a positive integer: any
 // other value answers 400. The update records the subject of the caller as
@@ -280,6 +288,10 @@ func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identit
 
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	if !h.guardStateWrite(w, r, p, obj, checkRestore()) {
 		return
 	}
 
@@ -510,12 +522,63 @@ func (h *Handler) recordEvents(w http.ResponseWriter, r *http.Request, call Leas
 	}
 
 	if err := h.updates.AppendEvents(ctx, call.Ref, call.ID, call.Token, events); err != nil {
+		if errors.Is(err, stack.ErrItemKeyUnavailable) {
+			h.auditItemKeyRefusal(r, call)
+		}
+
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
+// itemKeyRefusalReason is the reason of the audit entry of a refused event
+// batch. It names no key and no value.
+const itemKeyRefusalReason = "the item key of the update is shredded or missing: no event was stored"
+
+// auditItemKeyRefusal writes a security entry with the outcome denied for an
+// event batch that the server refused because the item key of the update is
+// shredded or missing. The lease authorized the batch, so the entry names the
+// creator and the access token of the update. The refusal stays when the
+// entry is lost: a lost entry is logged and counted.
+func (h *Handler) auditItemKeyRefusal(r *http.Request, call LeaseCall) {
+	ctx := r.Context()
+
+	obj, err := unitObject(call.Ref)
+	if err != nil {
+		h.failAudit(ctx)
+
+		return
+	}
+
+	u, err := h.updates.Get(ctx, call.Ref, call.ID)
+	if err != nil {
+		h.failAudit(ctx)
+
+		return
+	}
+
+	p := identity.Principal{
+		Subject: u.CreatedBy, DisplayName: "", Admin: false, TokenID: u.TokenID, TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+
+	entry := requestEntry(ctx, r, p, obj, auditDetail{
+		at:         time.Now().UTC(),
+		action:     string(identity.ActionUnitWrite),
+		version:    call.ID.String(),
+		valuePath:  "",
+		valueCount: nil,
+		kind:       audit.KindSecurity,
+		outcome:    audit.OutcomeDenied,
+	})
+	entry.Reason = itemKeyRefusalReason
+
+	if err := h.appendEntry(ctx, entry); err != nil {
+		h.failAudit(ctx)
+	}
 }
 
 // completeUpdate ends the update with the status its client reports.
@@ -555,7 +618,9 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, call Le
 // cancelUpdate ends the update without its lease, as `pulumi cancel` does.
 // It is the only way to release a stack whose client vanished. Canceling an
 // already canceled update succeeds. The CLI authorizes with its access token,
-// so this route needs no lease token. A success writes one info log line with
+// so this route needs no lease token. The cancel meets the gates of
+// state.write with the operation kind unlock before it ends the update. A
+// success writes one info log line with
 // the action, the unit, the principal and the freed update ID, and never with
 // the request path or query (ADR 28 decision 10, ADR 32 decision 7). The
 // handler owns the logger through its Config.
@@ -564,6 +629,10 @@ func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, p identit
 
 	ref, id, ok := h.updateTarget(w, r)
 	if !ok {
+		return
+	}
+
+	if !h.guardStateWrite(w, r, p, obj, checkCancel()) {
 		return
 	}
 
@@ -718,7 +787,7 @@ func (h *Handler) exportStack(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{
-		Deployment: stack.RebindSecretsProvider(cp.Deployment, ref),
+		Deployment: rebindSecretsProvider(cp.Deployment, ref),
 		Version:    cp.SchemaVersion,
 	})
 }
@@ -752,7 +821,7 @@ func (h *Handler) exportStackVersion(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{
-		Deployment: stack.RebindSecretsProvider(cp.Deployment, ref),
+		Deployment: rebindSecretsProvider(cp.Deployment, ref),
 		Version:    cp.SchemaVersion,
 	})
 }

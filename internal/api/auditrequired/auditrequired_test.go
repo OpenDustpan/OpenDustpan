@@ -19,6 +19,7 @@ import (
 	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
 	apirunner "opendustpan.org/opendustpan/internal/api/runnerapi"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	apisettings "opendustpan.org/opendustpan/internal/api/settings"
 	apitfe "opendustpan.org/opendustpan/internal/api/tfe"
 	apitofuhttp "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	apitriggers "opendustpan.org/opendustpan/internal/api/triggers"
@@ -91,6 +92,7 @@ func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 			zeroConfig(apiserver.NewHandler),
 			apiserver.ErrMissingDependency,
 		},
+		{"settings", zeroConfig(apisettings.NewHandler), apisettings.ErrMissingDependency},
 		{"tfe", zeroConfig(apitfe.NewHandler), apitfe.ErrMissingDependency},
 		{
 			"triggers",

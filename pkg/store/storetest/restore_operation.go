@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"bytes"
 	"errors"
 	"slices"
 	"strconv"
@@ -22,6 +23,7 @@ func restoreOperationCases() []restoreCase {
 	cases = append(cases, []restoreCase{
 		{name: "a restore start stores the row and the operation together", test: testRestoreOpStart},
 		{name: "a restore start refuses a second running restore", test: testRestoreOpStartRunning},
+		{name: "the running work read counts a checking or applying restore", test: testRunningRestore},
 		{name: "a restore start refuses a bad ID or a foreign operation", test: testRestoreOpStartRefused},
 		{name: "fenced restore writes record their steps", test: testRestoreOpFencedWrites},
 		{name: "a stale, canceled or foreign fence cannot write a restore row", test: testRestoreOpFenceRefused},
@@ -39,6 +41,7 @@ func restoreOperationCases() []restoreCase {
 		{name: "the audit entry of a restore commits once with its step", test: testRestoreOpAudit},
 		{name: "audit events are stored under the fence, once each, in order", test: testRestoreOpEvents},
 		{name: "audit events past the limit keep one summary and never fail", test: testRestoreOpEventsPastLimit},
+		{name: "the claim is checked with no write", test: testRestoreOpCheckFence},
 		{name: "ended operations fail their running restore rows", test: testRestoreOpFailEnded},
 		{name: "live operations keep their running restore rows", test: testRestoreOpFailEndedLive},
 	}...)
@@ -133,6 +136,22 @@ func mustHaveStep(t *testing.T, s durable.Store, id durable.ID, step string) {
 
 	if _, ok := op.Step(step); !ok {
 		t.Fatalf("operation %s has the steps %+v, want %q", id, op.Steps, step)
+	}
+}
+
+// mustStepResult fails the test unless operation id recorded step with
+// result.
+func mustStepResult(t *testing.T, s durable.Store, id durable.ID, step string, result []byte) {
+	t.Helper()
+
+	op, err := s.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get operation %s: %v", id, err)
+	}
+
+	rec, ok := op.Step(step)
+	if !ok || !bytes.Equal(rec.Result, result) {
+		t.Fatalf("result of step %q = %q (recorded %v), want %q", step, rec.Result, ok, result)
 	}
 }
 
@@ -289,6 +308,57 @@ func testRestoreOpEvents(t *testing.T, newStore RestoreFactory) {
 	}
 }
 
+func testRestoreOpCheckFence(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ops := restorePortsOf(t, s).ops
+	durableOps := s.DurableOperationsPort()
+	ctx := t.Context()
+	id := mustStartRestoreOp(t, ops)
+	held := mustClaimRestoreOp(t, durableOps, "instance-a")
+	fence := held.Claim.Step("check-fence")
+
+	for range 2 {
+		if err := ops.CheckRestoreFence(ctx, fence, id); err != nil {
+			t.Fatalf("check by the live holder: %v", err)
+		}
+	}
+
+	// The check writes nothing: no step and no audit event.
+	mustLackStep(t, durableOps, held.ID, "check-fence")
+
+	if events, err := ops.RestoreEvents(ctx, id); err != nil || len(events) != 0 {
+		t.Fatalf("events after the checks = %q, %v; want none", events, err)
+	}
+
+	if err := ops.CheckRestoreFence(ctx, fence, backup.MintRestoreID()); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("check of another restore under this fence: error = %v, want ErrClaimLost", err)
+	}
+
+	taken := replaceClaim(t, durableOps, held)
+
+	if err := ops.CheckRestoreFence(ctx, fence, id); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("check by the replaced holder: error = %v, want ErrClaimLost", err)
+	}
+
+	live := taken.Claim.Step("check-fence")
+	if err := ops.CheckRestoreFence(ctx, live, id); err != nil {
+		t.Fatalf("check by the new holder: %v", err)
+	}
+
+	_, err := ops.FinishRestore(ctx, taken.Claim.Step(backup.RestoreStepFinish), backup.RestoreEnd{
+		ID: id, State: backup.RestoreFailed, Error: "stopped", EndedAt: now(), DevReport: nil, LeaveMaintenance: false,
+	})
+	if err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	if err := ops.CheckRestoreFence(ctx, live, id); !errors.Is(err, backup.ErrRestoreNotRunning) {
+		t.Fatalf("check of a finished restore: error = %v, want ErrRestoreNotRunning", err)
+	}
+}
+
 func testRestoreOpEventsPastLimit(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -333,11 +403,20 @@ func testRestoreOpFencedWrites(t *testing.T, newStore RestoreFactory) {
 
 	mustHaveStep(t, durableOps, held.ID, backup.RestoreStepCheck)
 
-	if err := ops.MarkRestoreApplying(ctx, held.Claim.Step(backup.RestoreStepPreBackup), id, "bkp-pre"); err != nil {
+	result := []byte(`{"digest":"abc","damaged":1,"created":true}`)
+	err := ops.MarkRestoreApplying(
+		ctx,
+		held.Claim.Step(backup.RestoreStepPreBackup),
+		id,
+		"bkp-pre",
+		result,
+	)
+	if err != nil {
 		t.Fatalf("mark applying: %v", err)
 	}
 
 	mustHaveStep(t, durableOps, held.ID, backup.RestoreStepPreBackup)
+	mustStepResult(t, durableOps, held.ID, backup.RestoreStepPreBackup, result)
 
 	ended := now()
 	final := devReport(2)
@@ -370,6 +449,7 @@ func testRestoreOpFencedWrites(t *testing.T, newStore RestoreFactory) {
 func devReport(n int64) backup.DevStripReport {
 	return backup.DevStripReport{
 		Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Approvers: nil, Warnings: nil,
+		PreBackupFound: nil, NotHeld: nil, ErrorCode: "",
 		Classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: n},
 	}
 }
@@ -426,7 +506,7 @@ func testRestoreOpFenceRefused(t *testing.T, newStore RestoreFactory) {
 			held := mustClaimRestoreOp(t, durableOps, "instance-a")
 			fence := tc.fence(t, durableOps, held)
 
-			if err := ops.MarkRestoreApplying(t.Context(), fence, id, "bkp-pre"); !errors.Is(err, tc.want) {
+			if err := ops.MarkRestoreApplying(t.Context(), fence, id, "bkp-pre", nil); !errors.Is(err, tc.want) {
 				t.Fatalf("mark applying with %s: error = %v, want %v", tc.name, err, tc.want)
 			}
 
@@ -911,7 +991,14 @@ func testRestoreOpAudit(t *testing.T, newStore RestoreFactory) {
 	id := mustStartRestoreOp(t, ops)
 	held := mustClaimRestoreOp(t, durableOps, "instance-a")
 
-	if err := ops.MarkRestoreApplying(ctx, held.Claim.Step(backup.RestoreStepPreBackup), id, "bkp-pre"); err != nil {
+	err := ops.MarkRestoreApplying(
+		ctx,
+		held.Claim.Step(backup.RestoreStepPreBackup),
+		id,
+		"bkp-pre",
+		nil,
+	)
+	if err != nil {
 		t.Fatalf("mark applying: %v", err)
 	}
 

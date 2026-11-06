@@ -42,7 +42,11 @@ func moduleArchiveName(addr registry.Address, version string, format modulecheck
 // module has no signature: the authorization of the caller is the check of the
 // publisher, and the audit entry names the caller and the hash of the archive.
 // A publish of a version that exists with the same archive returns that
-// release and changes nothing. It returns registry.ErrInvalid or
+// release and changes nothing. A version that exists with other content is
+// refused before any file is copied to a content key. A second publish of the
+// same version that runs at the same time can pass this check; the store then
+// refuses its record with registry.ErrVersionExists, and the copied content key
+// stays unreferenced. It returns registry.ErrInvalid or
 // ErrBadRequest for a request that fails its checks, ErrNotStaged,
 // ErrTooLarge, modulecheck.ErrRefused, registry.ErrVersionExists,
 // namespace.ErrNotFound or namespace.ErrFenced. The staged file is removed
@@ -98,13 +102,29 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 		return registry.Release{}, fmt.Errorf("check the release: %w", err)
 	}
 
+	p := modulePublishing(view, req, addr, rec)
+
+	// The check runs before promote, so a refused publish writes no content key.
+	if refuseErr := s.refuseOtherContent(ctx, p, rel); refuseErr != nil {
+		return registry.Release{}, refuseErr
+	}
+
 	f.bytes = nil
 
 	if promoteErr := s.promote(ctx, view, rec.ID, []measured{f}); promoteErr != nil {
 		return registry.Release{}, promoteErr
 	}
 
-	return s.record(ctx, c, publishing{
+	return s.record(ctx, c, p, rel)
+}
+
+// modulePublishing returns what the publish of a module needs after its checks:
+// the namespace, the scoped view of the blob store and the address. A module
+// has no signature and no other file.
+func modulePublishing(
+	view *blob.Scoped, req ModulePublishRequest, addr registry.Address, rec namespace.Namespace,
+) publishing {
+	return publishing{
 		view: view,
 		req: PublishRequest{
 			Namespace: req.Namespace,
@@ -116,7 +136,7 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 		addr:  addr,
 		files: nil,
 		rec:   rec,
-	}, rel)
+	}
 }
 
 // checkModuleRequest checks the address and the version of req before any read

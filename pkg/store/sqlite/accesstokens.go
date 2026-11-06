@@ -113,6 +113,7 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 			MaxLifetimeMs: row.PolicyMaxLifetimeMs, InactivityMs: row.PolicyInactivityMs,
 			DisableTokens: row.PolicyDisableTokens, DisableAccounts: row.PolicyDisableAccounts,
 			DisableBreakGlass: row.PolicyDisableBreakGlass, UpdatedAtMs: row.PolicyUpdatedAtMs,
+			ExchangeLifetimeMs: row.PolicyExchangeLifetimeMs,
 		}),
 	}, nil
 }
@@ -279,12 +280,13 @@ func (s *Store) UpdatePolicy(ctx context.Context, update accesstoken.PolicyUpdat
 // policyOf maps the generated policy row to the policy.
 func policyOf(row db.GetAccessTokenPolicyRow) accesstoken.Policy {
 	return codec.FromAccessTokenPolicyRow(codec.AccessTokenPolicyRow{
-		MaxLifetimeMs:     row.MaxLifetimeMs,
-		InactivityMs:      row.InactivityMs,
-		UpdatedAtMs:       row.UpdatedAtMs,
-		DisableTokens:     row.DisableTokens,
-		DisableAccounts:   row.DisableAccounts,
-		DisableBreakGlass: row.DisableBreakGlass,
+		MaxLifetimeMs:      row.MaxLifetimeMs,
+		InactivityMs:       row.InactivityMs,
+		UpdatedAtMs:        row.UpdatedAtMs,
+		DisableTokens:      row.DisableTokens,
+		DisableAccounts:    row.DisableAccounts,
+		DisableBreakGlass:  row.DisableBreakGlass,
+		ExchangeLifetimeMs: row.ExchangeLifetimeMs,
 	})
 }
 
@@ -293,12 +295,13 @@ func setPolicy(ctx context.Context, q *db.Queries, p accesstoken.Policy) error {
 	row := codec.ToAccessTokenPolicyRow(p)
 
 	n, err := q.SetAccessTokenPolicy(ctx, db.SetAccessTokenPolicyParams{
-		MaxLifetimeMs:     row.MaxLifetimeMs,
-		InactivityMs:      row.InactivityMs,
-		DisableTokens:     row.DisableTokens,
-		DisableAccounts:   row.DisableAccounts,
-		DisableBreakGlass: row.DisableBreakGlass,
-		UpdatedAtMs:       row.UpdatedAtMs,
+		MaxLifetimeMs:      row.MaxLifetimeMs,
+		InactivityMs:       row.InactivityMs,
+		DisableTokens:      row.DisableTokens,
+		DisableAccounts:    row.DisableAccounts,
+		DisableBreakGlass:  row.DisableBreakGlass,
+		UpdatedAtMs:        row.UpdatedAtMs,
+		ExchangeLifetimeMs: row.ExchangeLifetimeMs,
 	})
 	if err != nil {
 		return fmt.Errorf("update access token policy: %w", err)

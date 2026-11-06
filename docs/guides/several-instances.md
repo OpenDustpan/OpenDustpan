@@ -2,7 +2,7 @@
 
 This guide gives the rules for several `opendustpan serve` processes on one PostgreSQL database and one S3-compatible bucket.
 
-This layout is not supported yet. The README gives the current status: the server runs on one node. The [architecture guide](architecture-and-sizing.md) shows the target design. Use this guide to prepare an installation for that design. Do not use several instances in an installation yet.
+The [high availability guide](high-availability.md) gives the supported layout and what the server does when a part stops. Use this guide for the settings and the details. The [architecture guide](architecture-and-sizing.md) shows the design.
 
 ## What each instance shares
 
@@ -87,8 +87,8 @@ Some flags matter to the `api` component only. For example, `--console-dir`, `--
 
 `/health/ready` answers for the components of the process and lists each one with its state in the field `components`. The fields `status` and `failed` keep their meaning: `failed` names each check that failed, and is absent when none failed. `/health/ready/api` and `/health/ready/worker` answer for one component. A component that the process does not run answers 404.
 
-- `api` is ready when the store and the blob store answer.
-- `worker` is ready when the store answers and its claim loop ran in the last 2 claim intervals. A claim interval is the longer of the poll period and the lease period.
+- `api` is ready when the store and the blob store answer, and the PostgreSQL database accepts writes.
+- `worker` is ready when the store answers, the PostgreSQL database accepts writes, and its claim loop ran in the last 2 claim intervals. A claim interval is the longer of the poll period and the lease period.
 
 The state of the audit chain is information only. While a change of the audit chain waits for approval, the body of the `api` component shows `"audit-chain": "waiting"` in the field `info`. The probe still answers 200. The approval needs the `api` processes in the pool of the Service. The Helm chart probes `/health/ready`.
 
@@ -156,6 +156,168 @@ These checks use the minimum:
 - **Restore.** A restore on a binary below the minimum fails when it starts and again in the swap. The error names both versions. The live data and the minimum stay as they were. Start the restore on an instance of the new binary.
 
 A dev build passes every minimum check: the write check, the migration check, the readiness check and the restore check. A restore never replaces the rows, and a backup does not hold them.
+
+## When the database does not answer
+
+The database can stop, restart or fail over to a replica. While an instance cannot reach the database, it does these things:
+
+- `/health/ready` answers 503. A load balancer with a health check on this route takes the instance out of its pool. When the database answers but refuses writes, for example an old primary after a failover, the `failed` list names the check `store-read-only`.
+- Each API answers a request that needs the database with 503 and the header `Retry-After: 5`, not 500. The Pulumi Cloud-compatible API answers `{"code": 503, "message": "..."}`. The TFE-compatible API answers a JSON:API error. The other APIs answer their usual error body. The error code is `namespace.unavailable`.
+- The instance does not restart. When the database answers again, `/health/ready` answers 200 and the instance serves requests again.
+
+The adapters treat these failures as a database that does not answer:
+
+- A failed connection.
+- The SQLSTATE codes 08000, 08001, 08003, 08004, 08006 and 08007 (a connection exception).
+- The SQLSTATE codes 57P01, 57P02 and 57P03 (the database server stops, crashes or does not accept connections yet).
+- The SQLSTATE code 25006 (a read-only database, for example after a failover to a replica).
+- The SQLSTATE code 57014 (the server ended a statement, for example at its statement timeout).
+- A round trip to the database that takes longer than 30 seconds. The server then closes the connection. A host can stop answering and keep the connection open. The request then ends after 30 seconds, not after the TCP timeout of the host.
+- The SQLSTATE code 53300 (too many connections). A session that ends frees a connection, so a new try can work.
+- A SQLite database that stays busy after its busy timeout.
+
+Other errors of the database stay errors with status 500. For example, 08P01 (protocol violation) is a bug. The codes 53200 (out of memory) and 53100 (disk full) are server faults. A new try is likely to meet them again.
+
+### How long a CLI command retries
+
+The Pulumi CLI and OpenTofu retry a request that gets 503. The retry has a limit. A database outage that is longer than the limit makes the running command fail. The command fails with a message that has the status 503.
+
+The e2e suite measured these times on 2026-10-28. For each version, the time is how long the CLI sent the same write again before the command failed. The suite measured them through its own proxy. The proxy answers 503 with `Retry-After: 1` when no instance is ready. The times are measurements. They are not a guarantee, and they may differ for another version, another proxy or another load.
+
+| CLI version | Time that it retried one write |
+| --- | --- |
+| Pulumi 3.200.0 | 14 s |
+| Pulumi 3.250.0 | 13 s |
+| Pulumi 3.272.0 | 14 s |
+| OpenTofu 1.11.14 | More than 30 s. The command did not fail in an outage of 60 s. It completed 6 s after the database came back. |
+| OpenTofu 1.12.7 | More than 30 s. The command did not fail in an outage of 60 s. It completed 7 s after the database came back. |
+| OpenTofu 1.13.2 | More than 30 s. The command did not fail in an outage of 60 s. It completed 6 s after the database came back. |
+
+In the same suite, an outage of 7 s to 8 s did not stop `pulumi up` or `tofu apply`. Both commands completed with exit 0.
+
+A database failover that is longer than these times makes running CLI commands fail. A command that failed leaves the state as it was before the write:
+
+- OpenTofu: no state version stays pending, and the workspace has no lock. The one exception is a lost answer to a lock through the TFE-compatible API. See the next section.
+- Pulumi: the update that the CLI could not complete stays running until its lease ends. A new `pulumi up` then answers 409 and names `pulumi cancel`. Run `pulumi cancel`, and run the command again. It completes.
+
+Run the same command again after the database answers. The next `pulumi preview` and `tofu plan` show no changes.
+
+### A lost answer to an OpenTofu lock request
+
+A write can commit while its answer does not get to the CLI. OpenTofu then sends the same request again. The server keeps a record of the last released lock of each workspace. The record holds the lock ID, the holder and the principal that released the lock. It also holds the time of the release and the kind of release: normal or forced. The server uses the record for 24 hours after the release.
+
+The unit list and the unit view of the inventory API show the record in the `lastRelease` field. Use it to see why a repeated unlock got success. The TFE-compatible API does not show it.
+
+These repeated requests succeed and change nothing:
+
+- A `LOCK` of the HTTP backend with the same lock ID from the same holder, while the holder still has that lock.
+- An `UNLOCK` of the HTTP backend with the lock ID of the record, from the holder, after a normal release.
+- An unlock through the TFE-compatible API (`actions/unlock`) from the holder of the record, after a normal release.
+- A force-unlock from the principal that forced the release of the record. For the HTTP backend, this is an `UNLOCK` with the lock ID of the record. For the TFE-compatible API, this is `actions/force-unlock`.
+
+A repeated request writes no audit entry, because nothing changes.
+
+After a forced release, an unlock from the original holder gets 409. The holder and the CLI see that another principal released the lock.
+
+One case stays 409. A lock through the TFE-compatible API (`actions/lock`) that OpenTofu sends again gets 409, because the workspace has a lock. That protocol sends no lock ID, so the server cannot tell a repeat from a second run. OpenTofu waits for the time of `-lock-timeout`, and then the command fails. The lock stays. The workspace shows the holder and the time of the lock. Make sure that no other run uses the workspace, and then run `tofu force-unlock <lock id>`.
+
+## Database settings for a failover
+
+After a failover, the old primary can stay up as a read-only database. A pool connection to it is open, but each write on it fails with the SQLSTATE code 25006. The server uses these settings of the `DUSTPAN_DATABASE` URL. When the URL does not name a setting, the server sets the default below:
+
+| Setting | Default | Allowed values | What it does |
+| --- | --- | --- | --- |
+| `target_session_attrs` | `read-write` | `read-write`, `primary` | A new connection must reach a server that is not in recovery and whose transactions are not read-only. The server applies this check for both values: `primary` gets the same check as `read-write`. |
+| `connect_timeout` | `5` | Whole seconds from 1 to 60 | The time limit to open one connection. |
+| `pool_max_conn_lifetime` | `30m` | `1m` to `24h` | The pool closes a connection when it is older than this time, and opens a new one. |
+| `pool_max_conn_lifetime_jitter` | `1m` | `0s` to the lifetime | A random part of the lifetime, so the instances do not open their connections again at the same time. |
+| `pool_health_check_period` | `10s` | `1s` to `10m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
+
+A duration is a number with a unit, for example `5m` or `30s`. A value outside the allowed values stops the start of the server with the error code `store.failover-setting-invalid`. The error names the setting and the allowed values. The server does not change a value to make it valid. A setting that appears two times in the URL also stops the start. The variables `PGTARGETSESSIONATTRS` and `PGCONNECT_TIMEOUT` of the environment do not apply: the URL or the default decides.
+
+At the start, the server writes the effective value of each setting to its log, with the word `url` or `default` for where the value came from. The log also gives the 30-second limit of each round trip.
+
+Example:
+
+```
+DUSTPAN_DATABASE='postgres://dustpan:<password>@db.example.com:5432/dustpan?sslmode=verify-full&pool_max_conn_lifetime=10m'
+```
+
+The defaults are values that the project chose. Nobody measured them against a managed database.
+
+The server also does these things to leave a read-only server:
+
+- **A write that fails with 25006.** The connection reached a server that refuses writes. So the server closes all connections of the pool. A connection in use closes when its request ends. New connections must pass the check of `target_session_attrs`. The server closes the pool at most one time in 5 seconds. Each time, it writes a warning to its log with the reason `read-only`.
+- **A 25006 in a read-only transaction of the server.** This can be a defect of the server, not a read-only database. So the server first checks its idle connections. It closes the pool only when one of them reaches a server that refuses writes.
+- **The readiness probe.** The check of the store reads whether the database accepts writes, in one statement. When the database refuses writes, the probe answers 503 with the check `store-read-only`. The server then closes the connections of the pool in the same way. When the check cannot run, the probe answers 503 with the check `store`.
+
+The server also sets the TCP keepalive of each connection. It sends a keepalive after 15 seconds without traffic, then every 5 seconds. After 3 keepalives with no answer, the connection closes. So an idle connection to a host that stopped answering closes in about 30 seconds.
+
+### Server timeouts
+
+The server sets these values on each connection to the database:
+
+| Setting of the database session | Value | What it does |
+| --- | --- | --- |
+| `statement_timeout` | 25 seconds | The database ends a statement that runs for longer. The request gets 503 with `Retry-After: 5`, and the log names the cause. The connection stays in the pool. |
+| `idle_in_transaction_session_timeout` | 60 seconds | The database ends a session that stays in a transaction with no statement for longer, and frees its locks. |
+| `client_connection_check_interval` | 5 seconds | The database checks that the client is still there while a statement runs, and stops the statement of a client that went away. |
+
+The URL cannot change these values. They act before the 30-second limit of each round trip. So a slow statement on a database that answers ends on the database, and its locks go free.
+
+Some work runs for longer than these values. It has its own limit for each statement, and for the time in a transaction with no statement:
+
+| Work | Statement limit | Limit with no statement |
+| --- | --- | --- |
+| A backup, a restore, and the copy of the rows of a backup | 1 hour | 15 minutes |
+| The migrations at the start | 15 minutes | 15 minutes |
+| The creation and the removal of a staging schema | 10 minutes | 1 minute |
+
+This work sets its limits for its own transaction only. The work then gives its connection back to the pool. The server resets the session of that connection (`RESET ALL`). So the next request gets the values of the table above. The reset has a limit of 2 seconds. When the reset fails, the server closes the connection.
+
+When a connection breaks, the driver closes it in the background. It first sends a cancel request on a new connection, which `connect_timeout` limits. A request can meet the 30-second limit. Its connection can then keep its slot of the pool for up to 15 seconds longer, while the driver closes the connection.
+
+### What was tested
+
+The tests ran on 2026-11-01 against PostgreSQL 18.6 on one host, with pgx 5.11.0 as the driver:
+
+- Each setting above gets its default when the URL does not name it. It gets the value of the URL when the value is inside its range. A value outside its range stops the start, and the error holds no part of the URL besides the value.
+- The server answers 503 with `Retry-After: 5` and the error code `namespace.unavailable` for each write while a proxy cuts all its database connections. After the proxy lets the connections through again, the same server accepts writes. Nobody restarted it.
+- A session that the database ended (`pg_terminate_backend`) gives the same 503 answer.
+- When the database turns read-only (`default_transaction_read_only = on`) and its sessions end, the server does not open a new read-only session. Reads and writes then answer 503 until the database accepts writes.
+- With the default settings, the server does not open against a read-only database. It opens against the same database when the database accepts writes.
+- A proxy held all bytes of a connection and closed nothing. Each kind of round trip then ended with 503 within the 30-second limit. The kinds are a statement, a read of rows, a batch, a copy, a savepoint, a commit and a rollback. The test used a shorter limit to run fast.
+- A statement that runs for longer than the statement timeout of the database answers 503, and the next statement on the same connection works.
+- Work with its own limits gets them inside its transaction. The next request on the same connection gets the values of the server again. A value that the work set for its session does not stay.
+- The reset of a connection to a host that stopped answering ended in about 2 seconds, and the pool had a free slot again.
+- A pool whose sessions are read-only closes its connections after one write fails with 25006. This is also true for a pool of one connection that the failed request still holds. A burst of such failures closes it only one time. A write in a read-only transaction of the server does not close a pool of writable connections.
+
+### What should work, and was not tested
+
+No test ran on these systems:
+
+- A managed database service.
+- A real promotion of a standby.
+- A proxy that pools connections.
+- A URL with more than one host.
+
+The notes below follow from how the services are documented to work. They are not results. Read the documentation of your service for the failover time, and test a failover before you rely on it.
+
+A URL can name more than one host, separated by commas. With `target_session_attrs=read-write`, the driver should try the hosts in order and use the first one that accepts writes. This is how the driver documents it. Nobody tested it here. Use this form only when the database service does not give one address that always names the primary.
+
+| Service | Address to use | What the vendor page says | Vendor page |
+| --- | --- | --- | --- |
+| Amazon RDS Multi-AZ | The endpoint name of the DB instance | The failover changes the DNS record of the DB instance to point to the standby. You must open the existing connections again. | [Failover process for Multi-AZ DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html) |
+| Google Cloud SQL, high availability | The IP address or the connection string of the instance | The standby shares the static IP address of the primary. The failover closes the existing connections. | [High availability](https://docs.cloud.google.com/sql/docs/postgres/high-availability) |
+| Azure Database for PostgreSQL flexible server, zone-redundant high availability | The server host name | Clients connect to the host name of the primary server. The failover updates the DNS record of that name to the IP address of the standby. | [High availability](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/concepts-high-availability) |
+| Patroni | The address of a proxy or a load balancer that sends traffic only to the leader. Use `GET /primary` of the Patroni REST API as its health check. | `GET /primary` answers 200 only on the node that runs as the primary with the leader lock. The page does not say what happens to open connections. | [REST API](https://patroni.readthedocs.io/en/latest/rest_api.html) |
+| CloudNativePG | The `rw` service of the cluster. Its name is `<cluster name>-rw`. | The `rw` service points to the primary instance. The `ro` service points to the replicas. The `r` service points to any instance of the cluster, the primary included. Use `rw`. Not checked against the vendor page on the documentation site: the check read the source file of the documentation in the project repository. | [Service management (source file)](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/docs/src/service_management.md) |
+
+The "What the vendor page says" column is a summary of the page on 2026-10-30. It is not a test result. Do not use the address of one node or a read-only service.
+
+For each service, keep the default `target_session_attrs=read-write`. A server that is not the primary then cannot hold a connection of the pool.
+
+During the failover, the instances answer 503 on the readiness probe. They also answer 503 on each request that needs the database. Section "When the database does not answer" describes this. This guide makes no claim about the failover time or about data loss. Both depend on the service and on its settings for synchronous replication.
 
 ## Settings that stay on one host
 

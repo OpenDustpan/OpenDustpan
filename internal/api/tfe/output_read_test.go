@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -57,7 +58,7 @@ func newOutputHandler(t *testing.T, authz identity.Authorizer, checker outputsha
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -162,6 +163,13 @@ func readCases() []readCase {
 			},
 		),
 		readRow("older sensitive output, both grants", outputsOlder+"secret", func(*readCase) {}),
+		readRow("older unknown output, outputs only", outputsOlder+"missing", func(c *readCase) {
+			c.without(identity.ActionUnitRead)
+			c.fails(http.StatusForbidden, "")
+		}),
+		readRow("older unknown output, unit:read holder", outputsOlder+"missing", func(c *readCase) {
+			c.fails(http.StatusNotFound, "")
+		}),
 		readRow("unknown output", outputsCurrent+"missing", func(c *readCase) { c.fails(http.StatusNotFound, "") }),
 	}
 }
@@ -321,6 +329,10 @@ func TestOutputRoutesKeepWholeStateChecksForAJobToken(t *testing.T) {
 			"plain output without unit:read", "/api/v2/state-version-outputs/sv-test123.greeting",
 			identity.ActionUnitRead, http.StatusForbidden,
 		},
+		{
+			"unknown output without unit:read", "/api/v2/state-version-outputs/sv-test123.missing",
+			identity.ActionUnitRead, http.StatusForbidden,
+		},
 	}
 
 	for _, tt := range tests {
@@ -339,7 +351,7 @@ func TestOutputRoutesKeepWholeStateChecksForAJobToken(t *testing.T) {
 				Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: workspaces,
 				OutputChecker: newTestOutputChecker(t, authz, workspaces), BaseURL: baseurl.Resolver{},
 				Audit: newTestAudit(), Gate: nil, MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
-				Sessions: nil, SessionPolicy: nil, StateGuard: nil,
+				Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 			})
 			if err != nil {
 				t.Fatalf("handler: %v", err)

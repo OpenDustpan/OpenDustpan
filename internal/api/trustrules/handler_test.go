@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -310,6 +311,9 @@ func ruleActions() map[string]identity.Action {
 		http.MethodPost + " " + trustrules.RulesPath:  identity.ActionNamespaceManageTrustRules,
 		http.MethodGet + " " + trustrules.RulePath:    identity.ActionNamespaceReadAccess,
 		http.MethodDelete + " " + trustrules.RulePath: identity.ActionNamespaceManageTrustRules,
+		// The public list: the exchange needs no sign-in, and declares no
+		// action. The token of the workload is its credential.
+		http.MethodPost + " " + trustrules.ExchangePath: "",
 	}
 }
 
@@ -363,6 +367,14 @@ func TestRouteTable(t *testing.T) {
 func checkRoute(t *testing.T, rt *trustrules.Route) (identity.Action, bool) {
 	t.Helper()
 
+	if rt.Scope == route.ScopePublic {
+		if rt.Pattern() != http.MethodPost+" "+trustrules.ExchangePath || len(rt.Actions) != 0 || rt.Serve == nil {
+			t.Errorf("route %s is public and not the exchange", rt.Pattern())
+		}
+
+		return "", true
+	}
+
 	if rt.Scope == 0 || rt.Resolve == nil || rt.Serve == nil || len(rt.Actions) != 1 {
 		t.Errorf("route %s is not complete: %+v", rt.Pattern(), rt.Actions)
 
@@ -390,7 +402,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: identity.AdminOnly{},
-		InstallationURLs: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -398,9 +410,17 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 
 	full := func() trustrules.Config {
 		return trustrules.Config{
-			Namespaces: namespaces, Rules: rules, Authenticator: tokenAuthenticator{}, Authorizer: identity.AdminOnly{},
-			Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
-			Logger: slog.New(slog.DiscardHandler), Now: nil,
+			Exchanger:      nil,
+			Namespaces:     namespaces,
+			Rules:          rules,
+			Authenticator:  tokenAuthenticator{},
+			Authorizer:     identity.AdminOnly{},
+			Audit:          newTestAudit(),
+			OnAuditFailure: nil,
+			DenialLimiter:  nil,
+			Sessions:       nil,
+			Logger:         slog.New(slog.DiscardHandler),
+			Now:            nil,
 		}
 	}
 

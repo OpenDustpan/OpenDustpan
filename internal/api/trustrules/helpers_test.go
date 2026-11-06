@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -92,6 +93,7 @@ type env struct {
 	audit   *testAudit
 	server  *httptest.Server
 	handler *trustrules.Handler
+	tokens  *accesstoken.Service
 	// worker is a service principal of acme, and stranger one of other.
 	worker, stranger string
 }
@@ -112,7 +114,9 @@ func newEnv(t *testing.T, authz identity.Authorizer) *env {
 		}
 	})
 
-	e := &env{t: t, store: s, audit: newTestAudit(), server: nil, handler: nil, worker: "", stranger: ""}
+	e := &env{
+		t: t, store: s, audit: newTestAudit(), server: nil, handler: nil, tokens: nil, worker: "", stranger: "",
+	}
 
 	for _, name := range []namespace.Name{"acme", "other"} {
 		ns := namespace.Namespace{
@@ -143,13 +147,33 @@ func (e *env) serve(authz identity.Authorizer) {
 
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: authz,
-		InstallationURLs: []string{publicURL}, CheckURL: nil, Now: nil,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("trust rule service: %v", err)
 	}
 
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil, Now: nil,
+		NewID: nil,
+	})
+	if err != nil {
+		e.t.Fatalf("token service: %v", err)
+	}
+
+	e.tokens = tokens
+
+	exchanger, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
+		Rules: e.store.TrustRules(), Exchanges: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store,
+		Tokens: tokens, Audit: e.store, ServerAudit: e.store, Refusals: nil, Keys: nil,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, Now: nil,
+	})
+	if err != nil {
+		e.t.Fatalf("exchanger: %v", err)
+	}
+
 	h, err := trustrules.NewHandler(trustrules.Config{
+		Exchanger:  exchanger,
 		Namespaces: namespaces, Rules: rules, Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Audit: e.audit, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,

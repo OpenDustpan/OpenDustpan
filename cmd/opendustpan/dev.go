@@ -150,6 +150,10 @@ func dev(ctx context.Context, args []string, stderr io.Writer) error {
 // devWithProcess runs dev with an explicit process, so a test drives it in
 // process.
 func devWithProcess(ctx context.Context, args []string, stderr io.Writer, proc devProcess) error {
+	if len(args) > 0 && args[0] == devResetCommand {
+		return devReset(ctx, args[1:], stderr, proc)
+	}
+
 	var f devFlags
 
 	fs := flag.NewFlagSet("dev", flag.ContinueOnError)
@@ -173,7 +177,7 @@ func devWithProcess(ctx context.Context, args []string, stderr io.Writer, proc d
 		fresh: false, token: devToken{value: "", file: "", source: tokenMade},
 	}
 
-	return kindRefusal(run.run(ctx), commandDev)
+	return schemaRefusal(kindRefusal(run.run(ctx), commandDev), commandDev, f.dataDir)
 }
 
 // gateWriter holds back what is written to it until open is called, then

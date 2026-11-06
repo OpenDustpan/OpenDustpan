@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 103 decision 2 (the approval gate), ADR 110 decision 9 and item 5 of its job model changes. Supersedes in part ADR 116 decisions 5 and 6, and ADR 190 decisions 6 and 7. Supersedes in part ADR 192 decisions 4 and 5, ADR 202 decisions 6 and 7, and ADR 203 decision 5. Amends ADR 191 decision 6 (decision 12)
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+- ADR 299 changes decisions 1, 7 and 12: review requests, mode 1 and the
+  binding level.
+
 ## Context
 
 Five approval systems exist (ADR 222). A job approval gate names a count,

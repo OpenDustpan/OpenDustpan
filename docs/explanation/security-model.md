@@ -85,6 +85,11 @@ persons and services.
   service token. An access token cannot create a rule: only a person after
   a sign-in can. A rule never names a principal of another namespace, a
   person or a disabled principal, and never names an issuer of this server.
+- **A token exchange issues a short-lived token of the principal of a
+  rule.** A workload with a token that a trust rule accepts gets an access
+  token of the kind `trust` for the principal of the rule. It lives one hour
+  by default, no rotation renews it, and it never creates a rule or another
+  token. A refused exchange answers the same 401 for each failed check.
 - **An account administrator can act as any service principal.** The
   built-in roles `account-administrator` and `site-administrator` hold
   `principal:manage-tokens` on the installation, which holds every
@@ -262,6 +267,7 @@ disk encryption and with access rules on the S3 bucket.
 | OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. Versions that an older server wrote stay plain: the server does not encrypt them later |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
+| Pulumi update events, for example the lines that a program prints | Database | Yes, each event with the key of its update. A printed line can hold a secret value in plain text, because the Pulumi CLI masks only the secret values that it knows |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
 | Audit entries, with no secret value | Database | No |
 | Backups | Backup target | Not as a whole. A backup holds the stored bytes: encrypted state stays encrypted. It holds no key-encryption key |
@@ -407,7 +413,15 @@ through each API and check that the log and the metrics do not hold them.
 
 ## Outbound connections
 
-The server sends no telemetry. It connects only to the PostgreSQL database
+The server never phones home. No data about your installation, its users or
+its use goes to the project, to a vendor or to any other party that you did
+not name. This is also true with no configuration, and no setting, also no opt-in
+setting, turns it on. In OpenDustpan Cloud, the project is the operator:
+its metrics, logs and traces of the installations that it runs stay in its
+own systems.
+Metrics and logs are for you, and they stay. You scrape the Prometheus
+metrics, and the server sends logs only to the log outputs that you
+configure. It connects only to the PostgreSQL database
 and the S3-compatible storage that you configure. The commands
 `namespace create`, `backup`, `backup check`, `upgrade check` and `restore`
 call only the server in `--server`. `health` calls only the listen address of the local

@@ -106,6 +106,17 @@ func scoped(err, sentinel error) error {
 	return err
 }
 
+// scopedID is scoped for a write that names a stored row by its ID. A fence of
+// another scope answers with the text of an unknown row, so a caller learns
+// nothing of the rows of another scope.
+func scopedID(err error, label string) error {
+	if errors.Is(err, opsmem.ErrScope) {
+		return fmt.Errorf("%s: %w", label, notify.ErrNotFound)
+	}
+
+	return err
+}
+
 // common returns a scope function for rows that all have one scope, and
 // ErrInvalid for rows of two scopes.
 func common(scopes []namespace.Name) func() (namespace.Name, error) {
@@ -271,7 +282,7 @@ func (m *memStore) SinkSecrets(_ context.Context, scope namespace.Name, id strin
 }
 
 func (m *memStore) DeleteSink(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
-	return scoped(m.writeEntry(fence, m.sinkScope(id), e, func() error {
+	return scopedID(m.writeEntry(fence, m.sinkScope(id), e, func() error {
 		for sid := range m.subs {
 			if m.subs[sid].Sink == id {
 				return fmt.Errorf("delete sink %s: %w", id, notify.ErrInUse)
@@ -283,17 +294,17 @@ func (m *memStore) DeleteSink(_ context.Context, id string, fence namespace.Fenc
 		delete(m.sinks, id)
 
 		return nil
-	}), notify.ErrNotFound)
+	}), "sink "+id)
 }
 
 func (m *memStore) RecordSinkTest(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
-	return scoped(m.writeEntry(fence, m.sinkScope(id), e, func() error {
+	return scopedID(m.writeEntry(fence, m.sinkScope(id), e, func() error {
 		if _, ok := m.sinks[id]; !ok {
 			return fmt.Errorf("record test of sink %s: %w", id, notify.ErrNotFound)
 		}
 
 		return nil
-	}), notify.ErrNotFound)
+	}), "sink "+id)
 }
 
 func (m *memStore) Sinks(_ context.Context, scope namespace.Name) ([]notify.Sink, error) {
@@ -354,14 +365,14 @@ func (m *memStore) DeleteSubscription(_ context.Context, id string, fence namesp
 		return s.Scope, nil
 	}
 
-	return scoped(m.writeEntry(fence, scope, e, func() error {
+	return scopedID(m.writeEntry(fence, scope, e, func() error {
 		delete(m.subs, id)
 		maps.DeleteFunc(m.deliveries, func(_ string, d notify.Delivery) bool {
 			return d.Subscription == id && d.State == notify.DeliveryPending
 		})
 
 		return nil
-	}), notify.ErrNotFound)
+	}), "subscription "+id)
 }
 
 func (m *memStore) Subscriptions(_ context.Context, scope namespace.Name) ([]notify.Subscription, error) {
@@ -489,7 +500,7 @@ func (m *memStore) Record(_ context.Context, fence namespace.Fence, a notify.Att
 		return err
 	}
 
-	return scoped(m.Write(fence, m.deliveryScope(a.ID), nil, func() error {
+	return scopedID(m.Write(fence, m.deliveryScope(a.ID), nil, func() error {
 		d := m.deliveries[a.ID]
 		if d.Version != a.Version || d.Owner != a.Owner || !d.LeaseUntil.After(a.Now) {
 			return fmt.Errorf("record %s: %w: no live claim", a.ID, notify.ErrConflict)
@@ -502,7 +513,7 @@ func (m *memStore) Record(_ context.Context, fence namespace.Fence, a notify.Att
 		m.deliveries[a.ID] = d
 
 		return nil
-	}), notify.ErrNotFound)
+	}), "delivery "+a.ID)
 }
 
 func (m *memStore) History(_ context.Context, scope namespace.Name, id string, limit int) ([]notify.Delivery, error) {
@@ -537,7 +548,7 @@ func (m *memStore) History(_ context.Context, scope namespace.Name, id string, l
 }
 
 func (m *memStore) Redeliver(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
-	return scoped(m.writeEntry(fence, m.deliveryScope(id), e, func() error {
+	return scopedID(m.writeEntry(fence, m.deliveryScope(id), e, func() error {
 		d := m.deliveries[id]
 		if d.State == notify.DeliveryPending {
 			return fmt.Errorf("redeliver %s: %w: the delivery is pending", id, notify.ErrConflict)
@@ -553,7 +564,7 @@ func (m *memStore) Redeliver(_ context.Context, id string, fence namespace.Fence
 		m.deliveries[id] = d
 
 		return nil
-	}), notify.ErrNotFound)
+	}), "delivery "+id)
 }
 
 // appendLocked appends ns to the outbox, each with the next sequence of
@@ -698,6 +709,10 @@ func (m *memStore) writeEntry(
 // returns ErrNotFound for the ID of a stored delivery of another scope,
 // and ErrInvalid for the ID of a stored delivery of the scope or of add.
 func (m *memStore) check(d notify.Delivery, add map[string]notify.Delivery) (bool, error) {
+	if err := m.checkReferences(d); err != nil {
+		return false, err
+	}
+
 	same := func(o notify.Delivery) bool {
 		return o.Scope == d.Scope && o.Notification == d.Notification && o.Subscription == d.Subscription &&
 			o.Contact == d.Contact
@@ -782,4 +797,25 @@ func (m *memStore) skipPending(sub notify.Subscription) {
 		d.Version++
 		m.deliveries[did] = d
 	}
+}
+
+// checkReferences returns ErrNotFound for a delivery that names a sink, a
+// subscription or a notification of another scope. A row that the store does
+// not hold is allowed.
+func (m *memStore) checkReferences(d notify.Delivery) error {
+	if s, ok := m.sinks[d.Sink]; ok && s.Scope != d.Scope {
+		return fmt.Errorf("enqueue %s: sink %s: %w", d.ID, d.Sink, notify.ErrNotFound)
+	}
+
+	if s, ok := m.subs[d.Subscription]; ok && s.Scope != d.Scope {
+		return fmt.Errorf("enqueue %s: subscription %s: %w", d.ID, d.Subscription, notify.ErrNotFound)
+	}
+
+	for i := range m.notifications {
+		if n := m.notifications[i]; n.ID == d.Notification && n.Scope != d.Scope {
+			return fmt.Errorf("enqueue %s: notification %s: %w", d.ID, d.Notification, notify.ErrNotFound)
+		}
+	}
+
+	return nil
 }
