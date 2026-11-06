@@ -3,6 +3,7 @@ package dustpan
 import (
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
@@ -24,6 +25,12 @@ func WithJobStore(st job.Store) Option {
 func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.Starter) (http.Handler, error) {
 	if cfg.jobStore == nil {
 		return nil, nil //nolint:nilnil // No jobs API: no job store is set.
+	}
+
+	// The log streams end when the process drains. The readiness probe sets the
+	// signal in drain, and the jobs API reads it.
+	if cfg.streamStop == nil {
+		cfg.streamStop = &streamStop{stopped: atomic.Bool{}}
 	}
 
 	// A namespace store that keeps no audit entries is an error: a refusal
@@ -54,10 +61,17 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 	}
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces:     svc.namespaces,
-		Jobs:           cfg.jobStore,
-		Artifacts:      artifacts,
-		Logs:           nil,
+		Namespaces: svc.namespaces,
+		Jobs:       cfg.jobStore,
+		Artifacts:  artifacts,
+		Logs: &jobsapi.LogOptions{
+			Poll:         0,
+			MaxLife:      0,
+			WriteTimeout: 0,
+			PerPrincipal: 0,
+			Total:        0,
+			Stopping:     cfg.streamStop.isStopping,
+		},
 		Cursors:        cfg.secretWrapper,
 		Starter:        starter,
 		Workers:        cfg.watch,
@@ -137,3 +151,16 @@ func (w *statusWriter) SetWriteDeadline(t time.Time) error {
 
 	return nil
 }
+
+// streamStop tells the log streams of the jobs API that the process stops.
+type streamStop struct{ stopped atomic.Bool }
+
+// stop sets the signal. A nil signal ignores it.
+func (s *streamStop) stop() {
+	if s != nil {
+		s.stopped.Store(true)
+	}
+}
+
+// isStopping reports whether the process stops.
+func (s *streamStop) isStopping() bool { return s != nil && s.stopped.Load() }
