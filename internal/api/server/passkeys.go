@@ -287,8 +287,15 @@ func (h *Handler) beginPasskey(w http.ResponseWriter, r *http.Request, p identit
 
 	if wait, allowed := h.passkeyBegins.allow(person.ID, h.now()); !allowed {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(wait/time.Second)+1, 10))
-		h.refusePasskey(w, r, p, passkeyRefusal{action: mfasvc.ActionAddRefused, object: principal.Ref(person.ID)},
-			errPasskeyRateLimited)
+
+		// One audit entry for each person and window: a person at the limit
+		// cannot fill the audit log with refusals.
+		if h.passkeyBegins.firstRefusal(person.ID) {
+			h.refusePasskey(w, r, p, passkeyRefusal{action: mfasvc.ActionAddRefused, object: principal.Ref(person.ID)},
+				errPasskeyRateLimited)
+		} else {
+			h.writeError(ctx, w, errPasskeyRateLimited)
+		}
 
 		return
 	}
@@ -485,10 +492,11 @@ func passkeyErrors() []passkeyMapping {
 			message: "the passkeys cannot answer: try again later",
 		}},
 		{mfa.ErrInvalid, &codedError{
-			status:  http.StatusBadRequest,
-			code:    errcode.MFAKeyInvalid,
-			args:    nil,
-			message: "a value of the request is not valid: a passkey name has 1 to 100 letters, digits, '.', '_' and '-'",
+			status: http.StatusBadRequest,
+			code:   errcode.MFAKeyInvalid,
+			args:   nil,
+			message: "the passkey name or the response is not valid: a name has 1 to 100 ASCII letters, digits, '.', '_' " +
+				"and '-', and does not start with '-' or '.'; a response has at most 65,536 bytes",
 		}},
 	}
 }
@@ -545,6 +553,8 @@ type beginLimiter struct {
 type beginWindow struct {
 	start time.Time
 	count int
+	// audited is true after the refusal of this window has an audit entry.
+	audited bool
 }
 
 // newBeginLimiter returns an empty limiter.
@@ -581,9 +591,28 @@ func (l *beginLimiter) allow(person string, now time.Time) (time.Duration, bool)
 		}
 	}
 
-	l.windows[person] = beginWindow{start: now, count: 1}
+	l.windows[person] = beginWindow{start: now, count: 1, audited: false}
 
 	return 0, true
+}
+
+// firstRefusal reports whether the refusal of the person is the first one in
+// the window, and marks the window. A person with no window, which is the
+// refusal of a full table, always counts as the first.
+func (l *beginLimiter) firstRefusal(person string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	w, found := l.windows[person]
+	if !found {
+		return true
+	}
+
+	first := !w.audited
+	w.audited = true
+	l.windows[person] = w
+
+	return first
 }
 
 // prune deletes the windows that ended at now.

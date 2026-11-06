@@ -95,7 +95,7 @@ func TestNewPasskeyService(t *testing.T) {
 		{"user information", false, "https://user@dustpan.example.com", false, noRelyingParty},
 		{"query", false, "https://dustpan.example.com/?a=b", false, noRelyingParty},
 		{"not a URL", false, "dustpan", false, noRelyingParty},
-		{"store without passkeys", true, "https://dustpan.example.com", false, ""},
+		{"store without passkeys", true, "https://dustpan.example.com", false, "the store keeps no passkeys"},
 	}
 
 	for _, tc := range tests {
