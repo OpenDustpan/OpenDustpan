@@ -518,8 +518,9 @@ func (d *Document) refReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth 
 	switch {
 	case m[2] != "":
 		// A provider or rotator output reads only a block that the document
-		// declares, or a block that an import can give.
-		return d.declaresBlock(m[2], segmentText(m[3])) || d.hasImports()
+		// declares. An expression reads the block of its own document, so
+		// an import cannot give it.
+		return d.declaresBlock(m[2], segmentText(m[3]))
 	case m[4] != "":
 		// imports[...] and profiles[...] read only a profile that imports
 		// of the document declares. So a profile cannot read a plain value
