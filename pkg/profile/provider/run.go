@@ -637,7 +637,7 @@ func (t *recordingTokens) record(tok *profile.Token, err error) (*Issued, bool) 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if tok.Value == "" {
+	if tok == nil || tok.Value == "" {
 		return nil, t.closed
 	}
 
