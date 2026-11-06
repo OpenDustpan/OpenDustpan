@@ -189,11 +189,15 @@ func buildLauncherBinary(t *testing.T) string {
 
 // runLauncher runs the launcher binary in the mode run against env, with the
 // handoff token on the pipe of file descriptor 3, and returns its exit code
-// and its messages. The program "tofu" on its PATH is a link to echo.
+// and its messages. The program "tofu" on its PATH is a test shim: a link to
+// echo in a temporary directory of this test, which no build ships.
 func runLauncher(t *testing.T, env *e2e.Env, bin, handoff string) (int, string) {
 	t.Helper()
 
-	tools := t.TempDir()
+	tools := filepath.Join(t.TempDir(), "test-shim-bin")
+	if err := os.Mkdir(tools, 0o700); err != nil {
+		t.Fatalf("make the test shim directory: %v", err)
+	}
 
 	echo, err := exec.LookPath("echo")
 	if err != nil {
@@ -201,7 +205,7 @@ func runLauncher(t *testing.T, env *e2e.Env, bin, handoff string) (int, string) 
 	}
 
 	if err = os.Symlink(echo, filepath.Join(tools, "tofu")); err != nil {
-		t.Fatalf("link tofu: %v", err)
+		t.Fatalf("link the tofu test shim: %v", err)
 	}
 
 	r, w, err := os.Pipe()
