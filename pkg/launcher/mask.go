@@ -42,9 +42,10 @@ var (
 // back the end of a write that could start a secret value, and writes it on
 // a later write or on Close. It is safe for concurrent use.
 type StreamMasker struct {
-	mu      sync.Mutex
-	out     io.Writer
-	secrets [][]byte
+	mu  sync.Mutex
+	out io.Writer
+	// hidden are the values to replace with MaskText, longest first.
+	hidden  [][]byte
 	pending []byte
 	closed  bool
 }
@@ -53,7 +54,7 @@ var _ Masker = (*StreamMasker)(nil)
 
 // NewMasker returns a masker that writes the masked stream to out.
 func NewMasker(out io.Writer) *StreamMasker {
-	return &StreamMasker{mu: sync.Mutex{}, out: out, secrets: nil, pending: nil, closed: false}
+	return &StreamMasker{mu: sync.Mutex{}, out: out, hidden: nil, pending: nil, closed: false}
 }
 
 // Add adds a secret value. A value shorter than MinMaskLen is not masked.
@@ -71,18 +72,18 @@ func (m *StreamMasker) Add(value []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if slices.ContainsFunc(m.secrets, func(s []byte) bool { return bytes.Equal(s, value) }) {
+	if slices.ContainsFunc(m.hidden, func(h []byte) bool { return bytes.Equal(h, value) }) {
 		return nil
 	}
 
-	if len(m.secrets) >= MaxMaskValues {
+	if len(m.hidden) >= MaxMaskValues {
 		return fmt.Errorf("%w: more than %d values", ErrMaskerFull, MaxMaskValues)
 	}
 
-	m.secrets = append(m.secrets, bytes.Clone(value))
+	m.hidden = append(m.hidden, bytes.Clone(value))
 	// The longest value is tried first, so a value that holds a shorter
 	// value is hidden as one.
-	slices.SortFunc(m.secrets, func(a, b []byte) int { return len(b) - len(a) })
+	slices.SortFunc(m.hidden, func(a, b []byte) int { return len(b) - len(a) })
 
 	return nil
 }
@@ -211,9 +212,9 @@ func (m *StreamMasker) maskAll(buf []byte) []byte {
 
 // matchAt returns the length of the secret value at the start of b, or 0.
 func (m *StreamMasker) matchAt(b []byte) int {
-	for _, s := range m.secrets {
-		if bytes.HasPrefix(b, s) {
-			return len(s)
+	for _, h := range m.hidden {
+		if bytes.HasPrefix(b, h) {
+			return len(h)
 		}
 	}
 
@@ -223,8 +224,8 @@ func (m *StreamMasker) matchAt(b []byte) int {
 // couldStart reports whether b, all of the rest of a write, is the start of
 // a secret value that a later write could complete.
 func (m *StreamMasker) couldStart(b []byte) bool {
-	for _, s := range m.secrets {
-		if len(b) < len(s) && bytes.HasPrefix(s, b) {
+	for _, h := range m.hidden {
+		if len(b) < len(h) && bytes.HasPrefix(h, b) {
 			return true
 		}
 	}
