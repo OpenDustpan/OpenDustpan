@@ -969,7 +969,7 @@ func (d *devServer) waitBanner(t *testing.T, want string) string {
 }
 
 // devDemoPasswordPattern finds the password in the demo line of dev.
-var devDemoPasswordPattern = regexp.MustCompile(`the user name demo and the password (\S+) `)
+var devDemoPasswordPattern = regexp.MustCompile(`the user name demo and the password ((?:[a-z0-9]{4}-){4}[a-z0-9]{4}) `)
 
 // TestDevDemoSignIn starts opendustpan dev --demo as a binary and proves the
 // demo person: it signs in with the printed password, reads the namespaces,
@@ -989,7 +989,8 @@ func TestDevDemoSignIn(t *testing.T) {
 	t.Cleanup(http.DefaultClient.CloseIdleConnections)
 
 	bin := e2e.BuildBinaryWithVersion(t.Context(), t, t.TempDir(), "")
-	server := startPlainDev(t, bin, "--demo")
+	// Debug level writes the most log records: none of them may hold the password.
+	server := startPlainDev(t, bin, "--demo", "--log-level", "debug")
 
 	match := devDemoPasswordPattern.FindStringSubmatch(server.out.String())
 	if match == nil {
@@ -1000,7 +1001,8 @@ func TestDevDemoSignIn(t *testing.T) {
 
 	password := match[1]
 
-	// The password is printed one time: the log of dev holds it nowhere else.
+	// The password is printed one time. The output holds the log records at
+	// the level debug, so no log record holds it.
 	if count := strings.Count(server.out.String(), password); count != 1 {
 		t.Fatalf("the output of dev holds the demo password %d times, want 1", count)
 	}
