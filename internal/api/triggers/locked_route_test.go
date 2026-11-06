@@ -9,9 +9,9 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/cron"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -58,20 +58,29 @@ func plantUnit(r *rig, ns, tool, name string) string {
 }
 
 // TestFireAnswerKeepsTheRemovalRouteOfTheLongestUnit proves that the answer of
-// a fire that a manual lock refuses holds the whole removal route for the
-// longest unit reference that the answer takes: a namespace of 100 bytes, the
-// tool code opentofu and a unit name in which each byte needs escaping in the
-// query. The route sentence of this unit is longer than the old limit of 300
-// bytes.
+// a fire that a manual lock refuses is 409 for the longest legal unit
+// reference: a namespace of 100 bytes and a unit name of 300 bytes in which
+// each byte needs escaping in the query. The arguments hold the whole names,
+// and the text holds the whole removal route within the bound.
 func TestFireAnswerKeepsTheRemovalRouteOfTheLongestUnit(t *testing.T) {
 	t.Parallel()
 
-	ns := strings.Repeat("n", 100)
-	tool := "opentofu"
-	// The answer names the unit as namespace/name in an argument of at most
-	// errcode.MaxIdentifier characters, so this is the longest name that the
-	// answer takes with a namespace of 100 bytes.
-	name := strings.Repeat("&", errcode.MaxIdentifier-len(ns)-1)
+	for _, tc := range []struct{ tool, noun string }{{"opentofu", "workspace"}, {"pulumi", "stack"}} {
+		t.Run(tc.tool, func(t *testing.T) {
+			t.Parallel()
+
+			checkLongestUnitFire(t, tc.tool, tc.noun)
+		})
+	}
+}
+
+// checkLongestUnitFire fires the trigger of the longest legal unit of tool,
+// which a manual lock on that unit refuses.
+func checkLongestUnitFire(t *testing.T, tool, noun string) {
+	t.Helper()
+
+	ns := strings.Repeat("n", namespace.MaxNameLength)
+	name := strings.Repeat("&", identity.MaxUnitLength)
 	unit := collection.UnitRef{Namespace: namespace.Name(ns), Tool: tool, Name: name}
 
 	r, path := longUnitRig(t, ns, tool, name)
@@ -80,7 +89,7 @@ func TestFireAnswerKeepsTheRemovalRouteOfTheLongestUnit(t *testing.T) {
 			Since: time.Date(2026, 10, 23, 9, 30, 0, 0, time.UTC), Target: manuallock.UnitTarget(unit),
 			Holder: "user-1", Reason: strings.Repeat("r", 2000),
 		},
-		Unit: unit, Noun: "workspace", Name: ns + "/" + name,
+		Unit: unit, Noun: noun, Name: ns + "/" + name,
 	})
 
 	code, body, _ := do(t, r, http.MethodPost, path, "")
@@ -89,21 +98,26 @@ func TestFireAnswerKeepsTheRemovalRouteOfTheLongestUnit(t *testing.T) {
 	}
 
 	got := decode[struct {
-		Message string `json:"message"`
-	}](t, body).Message
+		Message string         `json:"message"`
+		Args    map[string]any `json:"errorArgs"`
+	}](t, body)
+
+	for _, key := range []string{"locked", "refused"} {
+		if got.Args[key] != ns+"/"+name {
+			t.Errorf("argument %q = %v, want the whole namespace and unit name", key, got.Args[key])
+		}
+	}
 
 	route := refusal.RemovalRoutes(manuallock.UnitTarget(unit)).Remove
 	want := ". To remove the lock, the holder sends DELETE " + route + "."
-	if !strings.HasSuffix(got, want) {
-		t.Fatalf("message has %d bytes and does not end with the whole route sentence of %d bytes", len(got), len(want))
+
+	if !strings.HasSuffix(got.Message, want) {
+		t.Fatalf("message has %d bytes and does not end with the whole route sentence of %d bytes",
+			len(got.Message), len(want))
 	}
 
-	if len(want) <= 300 {
-		t.Fatalf("the route sentence has %d bytes, want a unit that needs more than 300", len(want))
-	}
-
-	if len(got) > refusal.MaxLockedTextBytes {
-		t.Fatalf("message has %d bytes, want at most %d", len(got), refusal.MaxLockedTextBytes)
+	if len(got.Message) > refusal.MaxLockedTextBytes {
+		t.Fatalf("message has %d bytes, want at most %d", len(got.Message), refusal.MaxLockedTextBytes)
 	}
 }
 
@@ -113,7 +127,7 @@ func TestFireAnswerKeepsTheRemovalRouteOfTheLongestUnit(t *testing.T) {
 func TestFireRefusesAUnitNameOfTooManyBytes(t *testing.T) {
 	t.Parallel()
 
-	r, path := longUnitRig(t, "acme", "pulumi", strings.Repeat("&", 301))
+	r, path := longUnitRig(t, "acme", "pulumi", strings.Repeat("&", identity.MaxUnitLength+1))
 
 	code, body, _ := do(t, r, http.MethodPost, path, "")
 	if code != http.StatusNotFound {
