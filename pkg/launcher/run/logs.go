@@ -50,9 +50,11 @@ func newLogSink(ctx context.Context, r *phaseRun, step string) *logSink {
 	}
 }
 
-// Write adds p to the log and sends each full chunk. It never fails, so the
-// output of the step keeps flowing after a failed upload.
-func (s *logSink) Write(p []byte) (int, error) {
+// add adds the masked bytes p to the log and sends each full chunk. It
+// never fails, so the output of the step keeps flowing after a failed
+// upload. The sink is not an io.Writer: only the masker of the step sends
+// it bytes.
+func (s *logSink) add(p []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -63,7 +65,7 @@ func (s *logSink) Write(p []byte) (int, error) {
 		s.buf = s.buf[s.size:]
 	}
 
-	return len(p), nil
+	return nil
 }
 
 // flush sends what the sink holds.

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"slices"
 	"sync"
@@ -24,9 +23,9 @@ const (
 	MaxMaskValues = 256
 	// MaxMaskLen is the longest secret value that a masker holds.
 	MaxMaskLen = 64 << 10
-	// maskPiece is the most bytes of a write that the masker handles at a
-	// time.
-	maskPiece = 64 << 10
+	// pieceSize is the most bytes of a call of Mask that the masker
+	// handles at a time.
+	pieceSize = 64 << 10
 )
 
 var (
@@ -37,13 +36,19 @@ var (
 	ErrMaskerFull = errors.New("the log masker cannot hold the secret value")
 )
 
+// Emit gets each part of the masked stream, in order.
+type Emit func(masked []byte) error
+
 // StreamMasker is the Masker of the launcher: it hides each secret value in
-// a stream of bytes, also when the value arrives in two writes. It holds
-// back the end of a write that could start a secret value, and writes it on
-// a later write or on Close. It is safe for concurrent use.
+// a stream of bytes, also when the value arrives in two calls. It holds back
+// the end of a call that could start a secret value, and sends it on a later
+// call or on Close. It is safe for concurrent use.
+//
+// It sends the masked stream to a function and is not an io.Writer: the
+// masked log goes only where the launcher sends it.
 type StreamMasker struct {
 	mu  sync.Mutex
-	out io.Writer
+	out Emit
 	// hidden are the values to replace with MaskText, longest first.
 	hidden  [][]byte
 	pending []byte
@@ -52,8 +57,8 @@ type StreamMasker struct {
 
 var _ Masker = (*StreamMasker)(nil)
 
-// NewMasker returns a masker that writes the masked stream to out.
-func NewMasker(out io.Writer) *StreamMasker {
+// NewMasker returns a masker that sends the masked stream to out.
+func NewMasker(out Emit) *StreamMasker {
 	return &StreamMasker{mu: sync.Mutex{}, out: out, hidden: nil, pending: nil, closed: false}
 }
 
@@ -88,29 +93,29 @@ func (m *StreamMasker) Add(value []byte) error {
 	return nil
 }
 
-// Write masks p and writes it, holding back the end of p that could start a
-// secret value. It returns len(p) when the write succeeds.
-func (m *StreamMasker) Write(p []byte) (int, error) {
+// Mask masks p and sends it to the emit function, holding back the end of p
+// that could start a secret value.
+func (m *StreamMasker) Mask(p []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.closed {
-		return 0, ErrMaskerClosed
+		return ErrMaskerClosed
 	}
 
 	for done := 0; done < len(p); {
-		piece := p[done:min(len(p), done+maskPiece)]
-		if err := m.writePiece(piece); err != nil {
-			return done, err
+		piece := p[done:min(len(p), done+pieceSize)]
+		if err := m.maskPiece(piece); err != nil {
+			return err
 		}
 
 		done += len(piece)
 	}
 
-	return len(p), nil
+	return nil
 }
 
-// Close masks and writes what Write held back. A second Close does
+// Close masks and sends what Mask held back. A second Close does
 // nothing.
 func (m *StreamMasker) Close() error {
 	m.mu.Lock()
@@ -128,8 +133,8 @@ func (m *StreamMasker) Close() error {
 		return nil
 	}
 
-	if _, err := m.out.Write(out); err != nil {
-		return fmt.Errorf("write the masked log: %w", err)
+	if err := m.out(out); err != nil {
+		return fmt.Errorf("send the masked log: %w", err)
 	}
 
 	return nil
@@ -138,13 +143,13 @@ func (m *StreamMasker) Close() error {
 // errMaskSize reports a buffer whose size does not fit an int.
 var errMaskSize = errors.New("the log masker buffer is too large")
 
-// writePiece masks one piece of at most maskPiece bytes. The caller holds
+// maskPiece masks one piece of at most pieceSize bytes. The caller holds
 // mu.
-func (m *StreamMasker) writePiece(piece []byte) error {
+func (m *StreamMasker) maskPiece(piece []byte) error {
 	// The held-back part is shorter than the longest value (MaxMaskLen),
-	// and a piece has at most maskPiece bytes, so the sum fits. The check
+	// and a piece has at most pieceSize bytes, so the sum fits. The check
 	// stays so that the size never overflows.
-	if len(piece) > maskPiece || len(m.pending) > math.MaxInt-maskPiece {
+	if len(piece) > pieceSize || len(m.pending) > math.MaxInt-pieceSize {
 		return errMaskSize
 	}
 
@@ -152,23 +157,23 @@ func (m *StreamMasker) writePiece(piece []byte) error {
 	buf = append(buf, m.pending...)
 	buf = append(buf, piece...)
 
-	out, keep := m.mask(buf)
+	out, keep := m.maskHeld(buf)
 	m.pending = bytes.Clone(buf[keep:])
 
 	if len(out) == 0 {
 		return nil
 	}
 
-	if _, err := m.out.Write(out); err != nil {
-		return fmt.Errorf("write the masked log: %w", err)
+	if err := m.out(out); err != nil {
+		return fmt.Errorf("send the masked log: %w", err)
 	}
 
 	return nil
 }
 
-// mask returns the masked text of buf and the index from which it held
+// maskHeld returns the masked text of buf and the index from which it held
 // back the end of buf that could start a secret value.
-func (m *StreamMasker) mask(buf []byte) ([]byte, int) {
+func (m *StreamMasker) maskHeld(buf []byte) ([]byte, int) {
 	out := make([]byte, 0, len(buf))
 
 	for i := 0; i < len(buf); {
