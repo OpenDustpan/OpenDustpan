@@ -1338,7 +1338,8 @@ func TestSettingsPlannerFailsClosed(t *testing.T) {
 			errJobStoreDown,
 		},
 		{
-			"a location and no pool, settings store down", forgeFailing(nil, nil), settingsFailing(nil, errJobStoreDown, nil),
+			"a location and no pool, settings store down", forgeFailing(nil, nil),
+			settingsFailing(nil, errJobStoreDown, nil),
 			func(*job.StartRequest) {}, errJobStoreDown,
 		},
 	}
