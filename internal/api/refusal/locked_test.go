@@ -1,13 +1,16 @@
 package refusal_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // webProd is the refused Pulumi stack of the tests.
@@ -158,5 +161,67 @@ func TestLockedRejectsAnEmptyHolder(t *testing.T) {
 
 	if a.Code() != errcode.ServerInternal {
 		t.Fatalf("answer code = %q, want %q", a.Code(), errcode.ServerInternal)
+	}
+}
+
+// TestLockedHoldsTheLongestLegalNames fails when the answer of a manual lock
+// refuses the longest legal namespace with the longest legal unit name, or
+// cuts one of them. The arguments locked and refused hold both names whole.
+func TestLockedHoldsTheLongestLegalNames(t *testing.T) {
+	t.Parallel()
+
+	ns := strings.Repeat("n", namespace.MaxNameLength)
+	name := strings.Repeat("u", identity.MaxUnitLength)
+	since := time.Date(2026, 10, 23, 9, 30, 0, 0, time.UTC)
+
+	for _, tool := range []string{"pulumi", "opentofu"} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+
+			unit := collection.UnitRef{Namespace: namespace.Name(ns), Tool: tool, Name: name}
+			e := &manuallock.LockedError{
+				Lock: manuallock.Lock{Since: since, Target: manuallock.UnitTarget(unit), Holder: "user-1", Reason: ""},
+				Unit: unit, Noun: "", Name: "",
+			}
+
+			a, err := refusal.Locked(e)
+			if err != nil {
+				t.Fatalf("Locked = %v, want an answer", err)
+			}
+
+			if a.Code() != errcode.LockLocked {
+				t.Fatalf("answer code = %q, want %q", a.Code(), errcode.LockLocked)
+			}
+
+			for _, key := range []string{"locked", "refused"} {
+				if a.Args()[key] != ns+"/"+name {
+					t.Errorf("argument %q = %v, want the whole namespace and unit name", key, a.Args()[key])
+				}
+			}
+		})
+	}
+}
+
+// TestLockedRefusesAUnitNameOverTheLimit fails when the answer of a manual lock
+// takes a unit name above the longest legal one. The answer is then the
+// internal failure with an error.
+func TestLockedRefusesAUnitNameOverTheLimit(t *testing.T) {
+	t.Parallel()
+
+	unit := collection.UnitRef{
+		Namespace: namespace.Name(strings.Repeat("n", namespace.MaxNameLength)), Tool: "pulumi",
+		Name: strings.Repeat("u", identity.MaxUnitLength+1),
+	}
+	e := &manuallock.LockedError{
+		Lock: manuallock.Lock{
+			Since: time.Date(2026, 10, 23, 9, 30, 0, 0, time.UTC), Target: manuallock.UnitTarget(unit),
+			Holder: "user-1", Reason: "",
+		},
+		Unit: unit, Noun: "", Name: "",
+	}
+
+	a, err := refusal.Locked(e)
+	if err == nil || a.Code() != errcode.ServerInternal {
+		t.Fatalf("Locked = %q %v, want server.internal with an error", a.Code(), err)
 	}
 }

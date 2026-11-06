@@ -97,7 +97,7 @@ last unit of a loop are the same unit.
 | 404 | `trigger.not-found` | The namespace, the unit or the trigger does not exist, or the caller cannot read it. One code answers all of these |
 | 421 | `namespace.not-home` | The namespace has another primary installation |
 | 503 | `maintenance.in-maintenance` | The installation is in maintenance mode |
-| 409 | `lock.locked` | A manual lock refuses the request. `errorArgs` names the `holder`, the time `since`, the locked object (`lockedKind`: `namespace`, `collection`, `stack` or `workspace`, and `locked`) and the refused unit (`refusedKind`: `stack` or `workspace`, and `refused`). Each name has the form `namespace` or `namespace/name`. It never holds the reason of the lock |
+| 409 | `lock.locked` | A manual lock refuses the request. `errorArgs` names the `holder`, the time `since`, the locked object (`lockedKind`: `namespace`, `collection`, `stack` or `workspace`, and `locked`) and the refused unit (`refusedKind`: `stack` or `workspace`, and `refused`). Each name has the form `namespace` or `namespace/name`, up to 401 characters for a unit. It never holds the reason of the lock |
 | 500 | `server.internal` | The server failed with an error that it does not classify |
 | 409 | `trigger.cycle` | The `follows` trigger closes a loop of units |
 | 409 | `trigger.disabled` | A fire of a trigger that is off |
