@@ -1076,18 +1076,25 @@ func TestPlanStepsPulumiErrorEchoIsBounded(t *testing.T) {
 type fakeSettings struct {
 	unitsettings.Store
 
-	record   *unitsettings.Settings
-	defaults unitsettings.NamespaceDefaults
+	record      *unitsettings.Settings
+	defaults    unitsettings.NamespaceDefaults
+	getErr      error
+	defaultsErr error
 }
 
 func newFakeSettings(record *unitsettings.Settings, pool string) fakeSettings {
 	return fakeSettings{
 		Store: nil, record: record,
 		defaults: unitsettings.NamespaceDefaults{Namespace: "acme", Pool: pool, Version: 0, UpdatedAt: time.Time{}},
+		getErr:   nil, defaultsErr: nil,
 	}
 }
 
 func (f fakeSettings) Get(context.Context, identity.Object) (unitsettings.Settings, error) {
+	if f.getErr != nil {
+		return unitsettings.Settings{}, f.getErr
+	}
+
 	if f.record == nil {
 		return unitsettings.Settings{}, unitsettings.ErrNotFound
 	}
@@ -1096,15 +1103,25 @@ func (f fakeSettings) Get(context.Context, identity.Object) (unitsettings.Settin
 }
 
 func (f fakeSettings) Defaults(context.Context, namespace.Name) (unitsettings.NamespaceDefaults, error) {
+	if f.defaultsErr != nil {
+		return unitsettings.NamespaceDefaults{}, f.defaultsErr
+	}
+
 	return f.defaults, nil
 }
 
 // fakeForge keeps the connection records of the planner tests.
 type fakeForge struct {
 	records []forge.ConnectionRecord
+	getErr  error
+	listErr error
 }
 
 func (f fakeForge) GetConnection(_ context.Context, ns namespace.Name, id string) (forge.ConnectionRecord, error) {
+	if f.getErr != nil {
+		return forge.ConnectionRecord{}, f.getErr
+	}
+
 	for i := range f.records {
 		if f.records[i].Namespace == ns && f.records[i].ID == id {
 			return f.records[i], nil
@@ -1115,6 +1132,10 @@ func (f fakeForge) GetConnection(_ context.Context, ns namespace.Name, id string
 }
 
 func (f fakeForge) ListConnections(_ context.Context, ns namespace.Name) ([]forge.ConnectionRecord, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+
 	var out []forge.ConnectionRecord
 
 	for i := range f.records {
@@ -1124,6 +1145,18 @@ func (f fakeForge) ListConnections(_ context.Context, ns namespace.Name) ([]forg
 	}
 
 	return out, nil
+}
+
+func forgeFailing(getErr, listErr error) fakeForge {
+	return fakeForge{records: nil, getErr: getErr, listErr: listErr}
+}
+
+func settingsFailing(record *unitsettings.Settings, getErr, defaultsErr error) fakeSettings {
+	fs := newFakeSettings(record, "")
+	fs.getErr = getErr
+	fs.defaultsErr = defaultsErr
+
+	return fs
 }
 
 func forgeRecord(ns, id string, isDefault bool) forge.ConnectionRecord {
@@ -1165,7 +1198,7 @@ func TestSettingsPlannerLocation(t *testing.T) {
 	)
 	conns := fakeForge{records: []forge.ConnectionRecord{
 		forgeRecord("acme", "conn-1", true), forgeRecord("other", "conn-2", true), forgeRecord("acme", "conn-3", false),
-	}}
+	}, getErr: nil, listErr: nil}
 	zero := plannerLocation("", "", "", "")
 	cleared := func(q *job.StartRequest) { q.Location = zero }
 
@@ -1246,7 +1279,9 @@ func TestSettingsPlannerLocation(t *testing.T) {
 func TestSettingsPlannerRefusalsMatch(t *testing.T) {
 	t.Parallel()
 
-	conns := fakeForge{records: []forge.ConnectionRecord{forgeRecord("other", "conn-2", true)}}
+	conns := fakeForge{
+		records: []forge.ConnectionRecord{forgeRecord("other", "conn-2", true)}, getErr: nil, listErr: nil,
+	}
 	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
 	p := newSettingsPlanner(pools, conns, nil, "")
 	unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
@@ -1265,5 +1300,84 @@ func TestSettingsPlannerRefusalsMatch(t *testing.T) {
 
 	if foreign, unknown := answer("conn-2"), answer("nope"); foreign != unknown {
 		t.Fatalf("answers differ: %q and %q", foreign, unknown)
+	}
+}
+
+// TestSettingsPlannerFailsClosed proves that a store that fails gives that
+// error and no spec, and that a request which names a full location reads no
+// connection list.
+func TestSettingsPlannerFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
+	record := unitRecord("", plannerLocation("", "acme/unit-repo", "dev", ""))
+	cleared := func(q *job.StartRequest) { q.Location = plannerLocation("", "", "", "") }
+	named := func(q *job.StartRequest) { q.Location.Connection = "conn-1" }
+
+	tests := []struct {
+		name     string
+		conns    fakeForge
+		settings fakeSettings
+		change   func(*job.StartRequest)
+		wantErr  error
+	}{
+		{
+			"the unit settings read fails", forgeFailing(nil, nil), settingsFailing(nil, errJobStoreDown, nil), cleared,
+			errJobStoreDown,
+		},
+		{
+			"the defaults read fails", forgeFailing(nil, nil), settingsFailing(record, nil, errJobStoreDown), cleared,
+			errJobStoreDown,
+		},
+		{
+			"the connection list fails", forgeFailing(nil, errJobStoreDown), settingsFailing(record, nil, nil), cleared,
+			errJobStoreDown,
+		},
+		{
+			"the connection lookup fails", forgeFailing(errJobStoreDown, nil), settingsFailing(record, nil, nil), named,
+			errJobStoreDown,
+		},
+		{
+			"a location and no pool, settings store down", forgeFailing(nil, nil), settingsFailing(nil, errJobStoreDown, nil),
+			func(*job.StartRequest) {}, errJobStoreDown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := settingsPlanner{
+				base:        jobPlanner{pools: pools, connections: storeConnections{connections: tt.conns}},
+				settings:    tt.settings,
+				connections: tt.conns,
+			}
+			unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+			req := plannerRequest(unit)
+			tt.change(&req)
+
+			spec, err := p.Plan(t.Context(), unit, &req)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Plan = %v, want %v", err, tt.wantErr)
+			}
+
+			if spec.Pool != "" || len(spec.Steps) != 0 {
+				t.Fatalf("spec = %+v, want no spec", spec)
+			}
+		})
+	}
+
+	// A full location and a pool: the connection list is not read.
+	p := settingsPlanner{
+		base:        jobPlanner{pools: pools, connections: nil},
+		settings:    newFakeSettings(nil, ""),
+		connections: fakeForge{records: nil, getErr: nil, listErr: errJobStoreDown},
+	}
+	unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+	req := plannerRequest(unit)
+
+	_, err := p.Plan(t.Context(), unit, &req)
+	if err != nil {
+		t.Fatalf("Plan with a location and the default pool = %v, want no read of the connections", err)
 	}
 }

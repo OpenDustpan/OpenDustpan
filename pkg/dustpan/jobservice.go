@@ -362,7 +362,20 @@ func (p settingsPlanner) Plan(ctx context.Context, unit identity.Object, req *jo
 		return p.base.Plan(ctx, unit, req)
 	}
 
-	eff, err := p.effective(ctx, unit)
+	// Only a request with no location uses the default connection of the
+	// namespace, so only then does the planner read the connections.
+	var defaultConn string
+
+	if req.Location.IsZero() {
+		var connErr error
+
+		defaultConn, connErr = p.defaultConnection(ctx, unit.Namespace())
+		if connErr != nil {
+			return job.Spec{}, connErr
+		}
+	}
+
+	eff, err := p.effective(ctx, unit, defaultConn)
 	if err != nil {
 		return job.Spec{}, err
 	}
@@ -393,7 +406,8 @@ func (p settingsPlanner) Plan(ctx context.Context, unit identity.Object, req *jo
 
 // effective returns the effective settings of unit. It fails closed: a store
 // that fails, or a record that the store refuses, gives an error and no job.
-func (p settingsPlanner) effective(ctx context.Context, unit identity.Object) (unitsettings.Effective, error) {
+func (p settingsPlanner) effective(ctx context.Context, unit identity.Object, defaultConn string,
+) (unitsettings.Effective, error) {
 	var none unitsettings.Effective
 
 	rec, err := p.settings.Get(ctx, unit)
@@ -413,13 +427,8 @@ func (p settingsPlanner) effective(ctx context.Context, unit identity.Object) (u
 		return none, fmt.Errorf("unit defaults of %s: %w", unit.Namespace(), err)
 	}
 
-	def, err := p.defaultConnection(ctx, unit.Namespace())
-	if err != nil {
-		return none, err
-	}
-
 	return unitsettings.Resolve(current, defaults, unitsettings.Context{
-		DefaultConnection: def, HasJobPool: true, DefaultFiles: nil,
+		DefaultConnection: defaultConn, HasJobPool: true, DefaultFiles: nil,
 	}), nil
 }
 
