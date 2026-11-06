@@ -122,9 +122,9 @@ exports:
   (`${ providers.<name>.<output> }`) that the document declares, a value of
   a profile that `imports` lists (`${ imports["<profile>"].values.<path> }`
   or `${ profiles["<profile>"].values.<path> }`), or a path that the
-  document does not hold. A block or a path that the document does not
-  declare passes only when the document has imports, because only an
-  import can give it. A field can read such a
+  document does not hold. A provider or rotator block must be in the
+  document itself. A path that the document does not hold passes only when
+  the document has imports, because only an import can give it. A field can read such a
   source through other values, but each value on the way must be exactly
   one reference, for example `${ values.token }`. A plain value, a literal,
   text around a reference, an operator, a function and a read of `$env`

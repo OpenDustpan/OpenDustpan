@@ -121,9 +121,9 @@ func TestCheckSecretTarget(t *testing.T) {
 		targetCase{"profiles read with no imports", false, "other", false},
 		targetCase{"profiles read of an import", true, "other", true},
 		targetCase{"undeclared provider with no imports", false, "undeclaredProvider", false},
-		targetCase{"undeclared provider with imports", true, "undeclaredProvider", true},
+		targetCase{"undeclared provider with imports", true, "undeclaredProvider", false},
 		targetCase{"undeclared rotator with no imports", false, "undeclaredRotator", false},
-		targetCase{"undeclared rotator with imports", true, "undeclaredRotator", true},
+		targetCase{"undeclared rotator with imports", true, "undeclaredRotator", false},
 	)
 
 	for _, imports := range []bool{false, true} {
