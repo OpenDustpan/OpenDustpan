@@ -34,6 +34,10 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{ref...}", f.getCommit)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/compare/{spec...}", f.compare)
 	mux.HandleFunc("POST /repos/{owner}/{repo}/statuses/{sha}", f.createStatus)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/issues/{first}/{second}", f.issuesGet)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/issues/{number}/comments", f.createComment)
+	mux.HandleFunc("PATCH /repos/{owner}/{repo}/issues/comments/{id}", f.patchComment)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/issues/comments/{id}/reactions", f.react)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/ref/{ref...}", f.getRef)
 	mux.HandleFunc("POST /repos/{owner}/{repo}/git/refs", f.createRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
@@ -669,7 +673,8 @@ func dirEntries(rp *repo, c *commit, dir string) []wireEntry {
 	for _, name := range names {
 		if kinds[name] == "" {
 			out = append(out, wireEntry{
-				Type: "dir", Name: name, Path: prefix + name, SHA: "", Size: 0, Encoding: nil, Content: nil,
+				Type: "dir", Name: name, Path: prefix + name, SHA: treeID(c, prefix+name), Size: 0, Encoding: nil,
+				Content: nil,
 			})
 
 			continue

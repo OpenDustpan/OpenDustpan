@@ -87,13 +87,16 @@ A check:
 of a feature that the connection can serve is empty.
 
 For an app, `scopes` lists the permissions of the installation, for example
-`contents:write`, `metadata:read`, `pull_requests:write` and `statuses:write`.
-The capabilities `files` and `compare` need `contents:read`. The capability
-`commit` needs `contents:write`. The capability `review` needs `contents:write`
-and `pull_requests:write`. The capability `status` needs `statuses:write`: the
-app permission "Commit statuses" with the access "Read and write". A connection
-with no push access has no `commit`, no `review` and no `status`. See the guide
-"Connect GitHub" for the permissions of the app.
+`contents:write`, `metadata:read`, `pull_requests:write`, `statuses:write` and
+`issues:write`. The capabilities `files`, `compare` and `tree` need
+`contents:read`. The capability `commit` needs `contents:write`. The capability
+`review` needs `contents:write` and `pull_requests:write`. The capability
+`status` needs `statuses:write`: the app permission "Commit statuses" with the
+access "Read and write". The capability `comment` needs `issues:write`: the app
+permission "Issues" with the access "Read and write". GitHub keeps the comments
+of a pull request in the issues. A connection with no push access has no
+`commit`, no `review`, no `status` and no `comment`. See the guide "Connect
+GitHub" for the permissions of the app.
 
 ## Errors
 
