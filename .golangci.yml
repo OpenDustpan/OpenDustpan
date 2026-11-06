@@ -159,6 +159,19 @@ linters:
           deny:
             - pkg: opendustpan.org/opendustpan/e2e/githubfake
               desc: The fake GitHub host is for tests; the binary never links it.
+        ldaptest:
+          # The in-process LDAP directory is test infrastructure. No file of
+          # the binary imports it, except a test file, so the binary never
+          # links it.
+          files:
+            - "**/cmd/**"
+            - "**/pkg/**"
+            - "**/internal/**"
+            - "!**/*_test.go"
+            - "!**/internal/ldaptest/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/ldaptest
+              desc: The test LDAP directory is for tests; the binary never links it.
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package

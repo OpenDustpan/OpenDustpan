@@ -7,6 +7,8 @@ require (
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/expr-lang/expr v1.17.8
+	github.com/go-asn1-ber/asn1-ber v1.5.8
+	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/jackc/pgx/v5 v5.11.0
 	go.uber.org/goleak v1.3.0
@@ -18,6 +20,7 @@ require (
 )
 
 require (
+	github.com/Azure/go-ntlmssp v0.1.1 // indirect
 	github.com/cloudflare/circl v1.6.5 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
