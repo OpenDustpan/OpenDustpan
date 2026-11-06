@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-13
 
+Changed by:
+
+- ADR 329 extends decisions 1 and 3: placement rules also match OpenTofu unit names, and a unit that no rule matches is refused.
+
 ## Context
 
 ADR 51 puts each unit in exactly one collection, with no default collection.

@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 199 changes decisions 4 and 6: a file set in the run order and
   DUSTPAN_SNAPSHOT.
+- ADR 330 extends decision 6: the CA bundle and the proxy variables of the tool steps.
 
 ## Context
 

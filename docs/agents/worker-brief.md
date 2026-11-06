@@ -55,7 +55,7 @@ If `opencode`, `go` or `trufflehog` (in PATH, usually /usr/local/bin, or ~/go/bi
 
 With N = <N> and SLUG = <SLUG>:
 ```
-cd REPO && git worktree add /home/user/wt-N -b N-SLUG origin/main
+cd REPO && git fetch origin main && git worktree add /home/user/wt-N -b N-SLUG origin/main
 ```
 
 ## Step 2. Check that the issue is still open and not already fixed
@@ -100,12 +100,15 @@ Files under `docs/adr/` and `docs/rfc/` may cite ADRs, RFCs and issues. Everythi
 
 c. `go build ./... && go vet ./...`
 
-d. If a, b and c are clean: make the FIRST commit and open the draft PR (Step 8, then Step 9). Then run the full check with `run_in_background: true`, timeout 3600000:
-```
-make check > /tmp/briefs/N.check 2>&1; echo "EXIT $?" >> /tmp/briefs/N.check; tail -60 /tmp/briefs/N.check
-```
-If the brief says "e2e: yes", also run `make e2e` the same way after `make check` passes.
-If anything fails, go to Step 7. If everything passes, go to Step 10.
+d. If a, b and c are clean, run the local gates. Use `run_in_background: true`, timeout 3600000, for the slow ones:
+   1. `golangci-lint run` on the touched packages, then `golangci-lint run ./...`.
+   2. `go test -race -timeout 60m` of every touched package. If a store package changes, run both stores (SQLite and PostgreSQL).
+   3. `sqlc diff` if `queries.sql` changed.
+   4. `make clients-check` if `openapi.json` changed.
+   5. `make docs-lint` if docs changed.
+
+   Write the output of each gate to `/tmp/briefs/N.check`. CI runs nilaway, semgrep, vuln, trivy, trufflehog, licenses, the full race suite and the e2e jobs, so do not run them locally. If the brief says "e2e: yes", also run `make e2e`.
+If anything fails, go to Step 7. If everything passes, go to Step 8, then Step 9.
 
 ## Step 7. Follow-up round with the implementer (at most 3 rounds)
 
@@ -147,7 +150,9 @@ It passes only when the last line reports `"chunks":` greater than 0 and there i
 
 ## Step 9. Open the pull request (once, after the first push)
 
-GitHub MCP `create_pull_request`: owner `OpenDustpan`, repo `OpenDustpan`, head `N-SLUG`, base `main`, draft `true`, title = the commit's first line, body:
+Open the pull request ready for review, not as a draft. CI runs on it.
+
+GitHub MCP `create_pull_request`: owner `OpenDustpan`, repo `OpenDustpan`, head `N-SLUG`, base `main`, draft `false`, title = the commit's first line, body:
 ```
 Closes #N
 
@@ -158,7 +163,7 @@ Closes #N
 <tests added or changed>
 
 ## Checks
-<which checks passed: make check, make e2e, TruffleHog chunks count>
+<which local gates passed, and the TruffleHog chunks count>
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -166,31 +171,34 @@ Closes #N
 ```
 Then call `subscribe_pr_activity` (claude-code-remote MCP server) for the new PR.
 
-## Step 10. Ready for review
+## Step 10. Report ready
 
-When `make check` passes (and `make e2e` if required):
+When the local gates pass:
 1. Commit any new changes (later commits may use a short message), TruffleHog, push.
-2. Mark the PR ready: `update_pull_request` with draft `false`. CI runs only on a ready PR.
-3. Update the PR body "Checks" section with the real results.
-4. Send the lead ONE message: `#N ready: PR <number>, head <full 40-char SHA from git rev-parse HEAD>, <one line on the change>`.
+2. Update the PR body "Checks" section with the real results.
+3. Send the lead ONE message: `#N ready: PR <number>, head <full 40-char SHA from git rev-parse HEAD>, <one line on the change>`.
+
+A review gives CLEAN or CHANGES. Fix CHANGES in new commits, with Step 7 and Step 8. Never amend, rebase or force-push.
 
 ## Step 11. CI results
 
-When a CI event says a check failed: CI tests your PR merged with main, so first run `git fetch origin main && git merge origin/main` and re-run the failing test locally. Then read the failing job log and do a Step 7 round with the failing lines. Push the fix and tell the lead the new head SHA. If the failure is in code your change does not touch, tell the lead and do not change it. Re-run a job only if it died before any test ran, at most once.
+When a CI event says a check failed: CI runs on your PR. First run `git fetch origin main && git merge origin/main` and re-run the failing test locally. Then read the failing job log and do a Step 7 round with the failing lines. Push the fix and tell the lead the new head SHA. If the merge queue removes your PR, read the failed queue run, fix it in new commits and push. The PR is then queued again. If the failure is in code your change does not touch, tell the lead and do not change it. Re-run a job only if it died before any test ran, at most once.
 
 ## Step 12. When main moves
 
 If the lead tells you to merge main: `git fetch origin main && git merge origin/main` (never rebase). Fix conflicts with the implementer if not trivial. Run `make generate` if `queries.sql` or migrations changed. Then Step 6 and Step 10 again.
 
+If your PR is stacked, its base is the branch of the previous PR. When the previous PR merges, move the base of your PR to `main` (`update_pull_request`, base `main`), then merge `main` into your branch.
+
 ## Step 13. Finish
 
-When the issue is ready (or blocked), send the lead one final message. Give the PR number or the blocker, and the number of implementer runs. Then stay idle. Your work ends when the lead merges your PR or tells you to stop.
+When the issue is ready (or blocked), send the lead one final message. Give the PR number or the blocker, and the number of implementer runs. Then stay idle. Your work ends when the maintainer's auto-merge lands your PR or the lead tells you to stop.
 
 ## Extra rules
 
 - The environment setup script installs the tools. If one is missing in Step 0, report it and stop.
 - The implementer cannot write to /tmp. That is fine: the brief goes to the implementer as text.
-- Under load, `make check` can time out in `pkg/store/sqlite` or `internal/api/server`. If that is the only failure, run `go test -race` on that package alone. If it passes alone, count the check as passed and say so in the PR "Checks" section. CI is the gate.
+- Under load, `go test -race` can time out in `pkg/store/sqlite` or `internal/api/server`. If that is the only failure, run `go test -race` on that package alone. If it passes alone, count the gate as passed and say so in the PR "Checks" section. CI is the gate.
 - Only send messages for: already done or taken, a blocker, PR ready, final summary. No progress messages.
 
 ## Your issue brief (copy this block EXACTLY into /tmp/briefs/<N>.md in Step 3)
