@@ -59,6 +59,7 @@ type devFlags struct {
 	maxState       int64
 	maxBodyFlight  int64
 	blobCache      int64
+	demo           bool
 	ephemeral      bool
 	tls            bool
 	noJournaling   bool
@@ -67,6 +68,7 @@ type devFlags struct {
 // register registers the flags of dev. The flags read no variable.
 func (f *devFlags) register(fs *flag.FlagSet) {
 	cli.DevByFlag("data-dir").String(fs, &f.dataDir)
+	cli.DevByFlag("demo").Bool(fs, &f.demo)
 	cli.DevByFlag("ephemeral").Bool(fs, &f.ephemeral)
 	cli.DevByFlag("listen").String(fs, &f.listen)
 	cli.DevByFlag("tls").Bool(fs, &f.tls)
@@ -742,6 +744,10 @@ func (r *devRun) beforeServe(in runInputs, instanceID string) func(context.Conte
 			return err
 		}
 
+		if err := r.seedDemo(ctx, in.st); err != nil {
+			return err
+		}
+
 		entry := cli.SettingsEntry(audit.ChannelStartup, instanceID, r.proc.now(), r.startChanges())
 		if _, err := in.st.AppendServer(ctx, entry); err != nil {
 			return fmt.Errorf("write the start audit entry: %w", err)
@@ -764,18 +770,23 @@ func (r *devRun) beforeServe(in runInputs, instanceID string) func(context.Conte
 
 // ensureNamespace makes the namespace dev when it does not exist.
 func (r *devRun) ensureNamespace(ctx context.Context, st store) error {
-	name := cli.ByFlag("installation").Default
+	return r.ensureNamed(ctx, st, devNamespace)
+}
+
+// ensureNamed makes the namespace name when it does not exist.
+func (r *devRun) ensureNamed(ctx context.Context, st store, name namespace.Name) error {
+	installationName := cli.ByFlag("installation").Default
 
 	svc, err := namespace.NewService(
-		namespace.Config{Store: st, Now: nil, Installation: namespace.InstallationName(name)},
+		namespace.Config{Store: st, Now: nil, Installation: namespace.InstallationName(installationName)},
 	)
 	if err != nil {
 		return fmt.Errorf("namespace service: %w", err)
 	}
 
-	_, err = svc.Create(ctx, devNamespace)
+	_, err = svc.Create(ctx, name)
 	if err != nil && !errors.Is(err, namespace.ErrAlreadyExists) {
-		return fmt.Errorf("make the namespace %s: %w", devNamespace, err)
+		return fmt.Errorf("make the namespace %s: %w", name, err)
 	}
 
 	return nil
@@ -794,6 +805,7 @@ func (r *devRun) startChanges() []audit.Change {
 		change("listen", r.flags.listen),
 		change("tls", strconv.FormatBool(r.flags.tls)),
 		change("ephemeral", strconv.FormatBool(r.flags.ephemeral)),
+		change("demo", strconv.FormatBool(r.flags.demo)),
 	}
 }
 

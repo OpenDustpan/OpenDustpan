@@ -253,6 +253,7 @@ The [dev server guide](../guides/dev-server.md) shows the steps.
 | Flag | Default |
 | --- | --- |
 | `--data-dir` | (none). The default is a directory for each user. On Linux and other Unix systems, it is `$XDG_DATA_HOME/opendustpan/dev`, or `~/.local/share/opendustpan/dev` when `XDG_DATA_HOME` is not set. On macOS, it is `~/Library/Application Support/opendustpan/dev`. On Windows, it is `%LocalAppData%\opendustpan\dev`. With `DUSTPAN_DATA_DIR` set, it is the directory `dev` in the one that the variable names. Not with `--ephemeral` |
+| `--demo` | (none: no demo person). Each start sets a new password for the local user `demo`. The person gets the admin role on the namespaces `dev`, `demo-platform` and `demo-data`. It gets the viewer role on the installation |
 | `--ephemeral` | (none: the data stays). A stop deletes the data, and with it the state that tracks the cloud resources of the trial. Not with `--data-dir` |
 | `--listen` | `127.0.0.1:8080`. Another address adds a line to the banner and to the log. With no `--tls`, the line also says that the token and the sign-in code cross the network in plain text |
 | `--tls` | (none: HTTP). The `cloud` block of OpenTofu needs it. The certificate lives 30 days |
