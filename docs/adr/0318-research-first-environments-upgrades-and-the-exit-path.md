@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-01. Records decisions of the project owner of 18 October 2026
 
+Changed by:
+
+- ADR 331 extends decisions 1 and 3: RFC 55 is in milestone 6, and the ordered rollout stays later.
+
 Changes:
 
 - None.
