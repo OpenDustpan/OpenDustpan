@@ -32,8 +32,8 @@ func (s *Store) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (wor
 		rows, err := qtx.ReadWorkspacePage(ctx, db.ReadWorkspacePageParams{
 			Namespace:    q.Namespace.String(),
 			NameContains: q.NameContains,
-			PageOffset:   int32(q.PageOffset()), //nolint:gosec // The offset is below the total, which fits in int32.
-			PageLimit:    int32(q.PageLimit()),  //nolint:gosec // PageLimit is at most MaxListLimit.
+			PageOffset:   clampInt32(q.PageOffset()),
+			PageLimit:    int32(q.PageLimit()), //nolint:gosec // PageLimit is at most MaxListLimit.
 		})
 		if err != nil {
 			return fmt.Errorf("select workspace page: %w", err)

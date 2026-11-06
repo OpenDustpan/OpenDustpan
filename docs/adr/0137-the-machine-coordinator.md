@@ -5,6 +5,7 @@ Status: accepted · 2026-10-18
 Changed by:
 
 - ADR 139 extends decision 4: go-containerregistry to get and unpack images.
+- ADR 330 extends decision 6: one route from a sandbox, to the job proxy.
 
 ## Context
 
