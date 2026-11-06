@@ -266,7 +266,7 @@ func TestFinishRefusesAReplay(t *testing.T) {
 
 	// The store holds the ticket already, as after a sign-in on another
 	// instance. The CAS server still holds it as unused.
-	if err := s.tickets.Use(t.Context(), ticket, s.now().Add(time.Hour)); err != nil {
+	if err := s.tickets.Use(t.Context(), provider, ticket, s.now().Add(time.Hour)); err != nil {
 		t.Fatalf("Use() = %v", err)
 	}
 
