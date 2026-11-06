@@ -180,10 +180,10 @@ type Masker interface {
 	// because they would hide common text. It returns an error when the
 	// masker cannot hold the value; the step then fails before it starts.
 	Add(value []byte) error
-	// Write masks p and writes it to the log, holding back the end of p
+	// Mask masks p and sends it to the log, holding back the end of p
 	// that could start a secret value.
-	Write(p []byte) (int, error)
-	// Close writes what Write held back.
+	Mask(p []byte) error
+	// Close sends what Mask held back.
 	Close() error
 }
 

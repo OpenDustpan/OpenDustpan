@@ -42,7 +42,7 @@ func (r *phaseRun) runStep(ctx context.Context, step *protocol.Step) stepResult 
 	}
 
 	logs := newLogSink(ctx, r, step.Name)
-	masker := launcher.NewMasker(logs)
+	masker := launcher.NewMasker(logs.add)
 
 	// Defense in depth: a handoff token has at most launcher.MaxHandoff
 	// bytes, so the masker holds it; this check stays so that a step whose
@@ -111,7 +111,7 @@ func (r *phaseRun) flushEvery() time.Duration {
 
 // execStep starts the process of the step and waits for its end, its
 // timeout, a cancel, a lost claim or a stop. The output goes to log.
-func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log io.Writer) stepResult {
+func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log launcher.Masker) stepResult {
 	cmd, err := r.command(step)
 	if err != nil {
 		r.note(log, err.Error())
@@ -145,12 +145,12 @@ func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log io.Wri
 	go func() {
 		defer close(pumped)
 
-		if _, copyErr := io.Copy(log, pr); copyErr != nil && !errors.Is(copyErr, os.ErrClosed) {
+		if pumpErr := pump(pr, log); pumpErr != nil {
 			r.log.WarnContext(
 				ctx,
 				"read the output of the step",
 				slog.String("step", step.Name),
-				slog.Any("error", copyErr),
+				slog.Any("error", pumpErr),
 			)
 		}
 	}()
@@ -183,14 +183,14 @@ func (r *phaseRun) closeFile(f *os.File) {
 }
 
 // note writes one line of the launcher to the log of a step.
-func (r *phaseRun) note(log io.Writer, text string) {
-	if _, err := io.WriteString(log, notePrefix+text+"\n"); err != nil {
+func (r *phaseRun) note(log launcher.Masker, text string) {
+	if err := log.Mask([]byte(notePrefix + text + "\n")); err != nil {
 		r.log.Warn("write to the log of a step", slog.Any("error", err))
 	}
 }
 
 // notes writes to the log what this release does not do for the step.
-func (r *phaseRun) notes(step *protocol.Step, log io.Writer) {
+func (r *phaseRun) notes(step *protocol.Step, log launcher.Masker) {
 	if step.Role == string(job.RoleTool) {
 		r.note(log, "this launcher release gives no credentials to a tool step")
 	}
@@ -326,4 +326,34 @@ func (r *phaseRun) grace(step *protocol.Step) time.Duration {
 	}
 
 	return runner.GraceOther
+}
+
+// readSize is the size of one read of the output of a step.
+const readSize = 32 << 10
+
+// pump reads the output of a step from r until its end and gives it to the
+// masker. The end of the pipe, also when the launcher closed it, is no
+// error. After a failed Mask it reads on and drops the output, so that the
+// step never waits on a full pipe; it returns the first error.
+func pump(r io.Reader, log launcher.Masker) error {
+	buf := make([]byte, readSize)
+
+	var maskErr error
+
+	for {
+		n, err := r.Read(buf)
+		if n > 0 && maskErr == nil {
+			if mErr := log.Mask(buf[:n]); mErr != nil {
+				maskErr = fmt.Errorf("mask the output: %w", mErr)
+			}
+		}
+
+		switch {
+		case err == nil:
+		case errors.Is(err, io.EOF), errors.Is(err, os.ErrClosed):
+			return maskErr
+		default:
+			return errors.Join(maskErr, fmt.Errorf("read the output: %w", err))
+		}
+	}
 }
