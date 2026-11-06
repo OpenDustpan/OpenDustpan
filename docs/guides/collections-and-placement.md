@@ -120,6 +120,10 @@ CLI sends no collection, and you do not set one.
   rules and the route that adds a rule. The server does not use a default
   collection. To allow every stack, add a last rule with the patterns `*` and
   `*`.
+- The server makes the stack and its place in the collection in one
+  transaction. A stack never exists without its collection.
+- A server that keeps no placement rules makes no stack. The answer is `501`
+  with the code `placement.unavailable`.
 
 ### Routes and actions
 
@@ -182,3 +186,4 @@ stack.
 | `unit.no-collection` | `409` | A step needs a unit that is in a collection, and the unit is in none. |
 | `placement.conflict` | `409` | A rule is hidden by an earlier rule. |
 | `placement.no-match` | `422` | No rule matches a new stack, so the server does not make it. |
+| `placement.unavailable` | `501` | The server keeps no placement rules, so it cannot place a new stack. |

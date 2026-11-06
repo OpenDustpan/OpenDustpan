@@ -86,6 +86,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,

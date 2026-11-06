@@ -617,6 +617,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -2858,6 +2859,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,

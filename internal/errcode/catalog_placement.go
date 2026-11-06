@@ -14,6 +14,9 @@ const (
 	// PlacementNoMatch means that no placement rule of the namespace matches a new unit, so the server refuses to make
 	// it.
 	PlacementNoMatch = "placement.no-match"
+	// PlacementUnavailable means that the server keeps no placement rules, so it cannot place a new unit and does not
+	// make it.
+	PlacementUnavailable = "placement.unavailable"
 	// PlacementRuleNotFound means that the namespace holds no placement rule with the ID.
 	PlacementRuleNotFound = "placement.rule-not-found"
 	// PlacementTooManyRules means that the namespace holds the most placement rules.
@@ -38,6 +41,11 @@ func placementSpecs() []Spec {
 		{
 			Code:    PlacementNoMatch,
 			Meaning: "no placement rule of the namespace matches the new unit, so the server does not make it",
+			Args:    nil,
+		},
+		{
+			Code:    PlacementUnavailable,
+			Meaning: "the server keeps no placement rules, so it cannot place a new unit and does not make it",
 			Args:    nil,
 		},
 		{Code: PlacementRuleNotFound, Meaning: "the namespace holds no placement rule with the ID", Args: nil},

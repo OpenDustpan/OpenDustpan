@@ -35,9 +35,9 @@ type placementRuleList struct {
 }
 
 // TestPlacementRuleAPI proves the placement rule routes of a namespace through
-// the real server on each store. No CLI reads or writes a rule, and the server
-// does not apply the rules to a new stack yet, so the steps call the routes
-// only. The steps make, list, read, replace, move and delete rules, refuse a
+// the real server on each store. No CLI reads or writes a rule, so the steps call
+// the routes only. TestPlacement proves that the server applies the rules to a
+// new stack. The steps make, list, read, replace, move and delete rules, refuse a
 // rule that a hidden rule would make, and refuse a caller that holds no
 // namespace:manage-placement-rules.
 func TestPlacementRuleAPI(t *testing.T) {

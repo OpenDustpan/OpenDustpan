@@ -138,9 +138,9 @@ type Config struct {
 	// stack. It is required. A server whose store keeps no gates gives the
 	// guard of stategate.Off with its reason.
 	StateGuard stategate.Guard
-	// Placer puts each new stack in the collection of the first placement rule
-	// that matches it. Nil means the server keeps no placement rules: a new
-	// stack then gets no collection.
+	// Placer chooses the collection of each new stack from the first placement
+	// rule that matches it. Nil means the server keeps no placement rules: it
+	// then refuses to make a stack.
 	Placer *Placer
 }
 
@@ -650,18 +650,17 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	if _, err := h.stacks.Create(ctx, ref, req.Tags); err != nil {
-		h.writeNamespaceNotFound(ctx, w, p, ref.Namespace, err)
+	placed, err := stackPlacement(r, p, ref, at)
+	if err != nil {
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	if h.placer != nil {
-		if err := h.putInCollection(r, p, ref, at); err != nil {
-			h.writeError(ctx, w, err)
+	if _, err := h.stacks.CreatePlaced(ctx, ref, req.Tags, placed); err != nil {
+		h.writeNamespaceNotFound(ctx, w, p, ref.Namespace, err)
 
-			return
-		}
+		return
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, createStackResponse{})
@@ -1177,7 +1176,6 @@ func classifyStack(err error) (failure, bool) {
 		return coded(http.StatusBadRequest, hasResourcesMessage, errcode.StackHasResources), true
 	case errors.Is(err, stack.ErrAlreadyExists):
 		return coded(http.StatusConflict, err.Error(), errcode.StackAlreadyExists), true
-
 	case errors.Is(err, stack.ErrOtherSecretsProvider):
 		return coded(http.StatusConflict, err.Error(), errcode.StackOtherSecretsProvider), true
 	}
@@ -1191,6 +1189,8 @@ func classifyPlacement(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, collection.ErrNoPlacement):
 		return coded(http.StatusUnprocessableEntity, err.Error(), errcode.PlacementNoMatch), true
+	case errors.Is(err, errPlacementOff), errors.Is(err, stack.ErrPlacementUnsupported):
+		return coded(http.StatusNotImplemented, err.Error(), errcode.PlacementUnavailable), true
 	case errors.Is(err, collection.ErrNotFound):
 		// The rule names a collection that does not exist (any more).
 		return coded(http.StatusConflict, err.Error(), errcode.CollectionNotFound), true

@@ -49,6 +49,7 @@ func newUpdateFixtureWithAddressGate(
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -237,6 +238,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,

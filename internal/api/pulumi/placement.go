@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -21,19 +20,17 @@ type PlacementRules interface {
 	Place(ctx context.Context, ns namespace.Name, tool, project, stackName string) (collection.Rule, error)
 }
 
-// PlacementCollections reads a collection and puts a unit in it.
+// PlacementCollections reads a collection of a placement rule.
 type PlacementCollections interface {
 	// CollectionID returns the stable ID of the collection obj, and false when
 	// the collection does not exist.
 	CollectionID(ctx context.Context, obj identity.Object) (string, bool, error)
-	// SetUnit puts a unit that has no collection in the collection m.To and
-	// appends by in the same transaction.
-	SetUnit(ctx context.Context, m collection.Move, by audit.Entry) error
 }
 
-// Placer chooses the collection of a new stack and puts the stack in it. The
-// server gives the Placer the placement rules and the collections of the
-// installation.
+// Placer chooses the collection of a new stack. The stack store then makes the
+// stack and its membership in one transaction. The server gives the Placer the
+// placement rules and the collections of the installation. Without a Placer
+// the server makes no stack.
 type Placer struct {
 	Rules       PlacementRules
 	Collections PlacementCollections
@@ -63,7 +60,17 @@ func (h *Handler) choosePlacement(
 	var none placement
 
 	if h.placer == nil {
-		return none, true
+		// A namespace that does not exist gets its own error first, as it does
+		// when a rule is missing.
+		if _, nsErr := h.namespaces.WritableHere(ctx, ref.Namespace); nsErr != nil {
+			h.writeNamespaceNotFound(ctx, w, p, ref.Namespace, fmt.Errorf("create stack %s: %w", ref, nsErr))
+
+			return none, false
+		}
+
+		h.writeError(ctx, w, errPlacementOff)
+
+		return none, false
 	}
 
 	rule, err := h.placer.Rules.Place(ctx, ref.Namespace, unitTool, ref.Project.String(), ref.Stack.String())
@@ -111,46 +118,28 @@ func (h *Handler) choosePlacement(
 	return placement{rule: rule, id: id}, true
 }
 
-// putInCollection puts the new stack ref in the collection of at and records
-// the rule that chose it. When the move fails, it deletes the new stack, so
-// that no stack stays without the collection that the rule gave. It returns
-// the error of the move.
-func (h *Handler) putInCollection(
-	r *http.Request, p identity.Principal, ref stack.Ref, at placement,
-) error {
-	ctx := r.Context()
+// errPlacementOff reports a server with no Placer: it keeps no placement
+// rules, so it cannot put a new stack in a collection and makes no stack.
+var errPlacementOff = errors.New(
+	"this server keeps no placement rules, so it cannot place a new stack: use a store with collections and placement rules",
+)
 
+// stackPlacement returns the placement that puts the new stack ref in the
+// collection of at, with the audit entry that names the rule and the caller.
+func stackPlacement(r *http.Request, p identity.Principal, ref stack.Ref, at placement) (stack.Placement, error) {
 	obj, err := unitObject(ref)
 	if err != nil {
-		return err
+		return stack.Placement{}, err
 	}
 
-	entry := changeEntry(ctx, changeAudit{
+	entry := changeEntry(r.Context(), changeAudit{
 		request: r, principal: p, object: obj, action: identity.ActionCollectionCreateUnit,
 	})
 	entry.Version = "from=none;to=" + at.rule.Collection.String() + ";rule=" + at.rule.ID
 
-	unit := collection.UnitRef{
-		Namespace: ref.Namespace, Tool: unitTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
-	}
-	move := collection.Move{
-		Unit: unit, From: "", To: collection.Ref{Namespace: ref.Namespace, Name: at.rule.Collection},
-		ToID: at.id, EndsLock: false,
-	}
-
-	moveErr := h.placer.Collections.SetUnit(ctx, move, entry)
-	if moveErr == nil {
-		return nil
-	}
-
-	undo := changeEntry(ctx, changeAudit{
-		request: r, principal: p, object: obj, action: identity.ActionUnitManage,
-	})
-	undo.Version = "undo create: the unit could not be put in its collection"
-
-	if delErr := h.stacks.Delete(ctx, ref, undo); delErr != nil {
-		return errors.Join(moveErr, fmt.Errorf("delete stack %s after a failed placement: %w", ref, delErr))
-	}
-
-	return moveErr
+	return stack.Placement{
+		Collection:   collection.Ref{Namespace: ref.Namespace, Name: at.rule.Collection},
+		CollectionID: at.id,
+		Entry:        entry,
+	}, nil
 }

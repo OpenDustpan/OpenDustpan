@@ -5,3 +5,4 @@ placement.invalid-tool
 placement.no-match
 placement.rule-not-found
 placement.too-many-rules
+placement.unavailable

@@ -13,6 +13,7 @@ package collectiontest
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -27,12 +28,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
+// toolPulumi is the tool name of the Pulumi stacks of the suite.
+const toolPulumi = "pulumi"
+
 // Store is every persistence port the suite exercises.
 type Store interface {
 	collection.Store
 	namespace.Store
 	workspace.Store
 	stack.Store
+	stack.PlacedStore
 	inventory.Reader
 }
 
@@ -73,6 +78,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "the unit IDs of a collection hold its units only", test: testListCollectionUnitIDs},
 		{name: "the unit IDs of a missing collection are not found", test: testListCollectionUnitIDsMissing},
 		{name: "the unit IDs of a re-created collection need its new ID", test: testListCollectionUnitIDsRecreated},
+		{name: "a placed stack is made in its collection", test: testCreateStackPlaced},
+		{name: "a placed stack that cannot join makes no stack", test: testCreateStackPlacedRefused},
+		{name: "a placed duplicate leaves the old stack as it was", test: testCreateStackPlacedDuplicate},
 	}
 
 	for _, tc := range cases {
@@ -596,7 +604,7 @@ func testStackRename(t *testing.T, s Store) {
 		t.Fatalf("CreateStack: %v", err)
 	}
 
-	unit := collection.UnitRef{Namespace: ns.Name, Tool: "pulumi", Name: "web/prod"}
+	unit := collection.UnitRef{Namespace: ns.Name, Tool: toolPulumi, Name: "web/prod"}
 	c := newCollection(t, ns.Name, "payments")
 
 	if err := createColl(t, s, c, ns.Fence()); err != nil {
@@ -996,4 +1004,136 @@ func mustWorkspaceName(t *testing.T, s string) workspace.Name {
 
 func now() time.Time {
 	return time.UnixMilli(testNowMs).UTC()
+}
+
+// placement returns the placement of a new stack into c under fence.
+func placement(c collection.Collection, fence namespace.Fence) stack.Placement {
+	return stack.Placement{Collection: c.Ref, CollectionID: c.ID, Entry: auditFor(fence)}
+}
+
+// placedUnit names the Pulumi stack web/prod of ns as the inventory keys it.
+func placedUnit(ns namespace.Name) collection.UnitRef {
+	return collection.UnitRef{Namespace: ns, Tool: toolPulumi, Name: "web/prod"}
+}
+
+// testCreateStackPlaced checks that a placed create makes the stack and its
+// membership together, and shows the stack in the inventory with its
+// collection.
+func testCreateStackPlaced(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	c := newCollection(t, ns.Name, "payments")
+
+	if err := createColl(t, s, c, ns.Fence()); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	st := newPulumiStack(ns.Name, "web", "prod")
+	if err := s.CreateStackPlaced(t.Context(), st, placement(c, ns.Fence()), ns.Fence()); err != nil {
+		t.Fatalf("CreateStackPlaced: %v", err)
+	}
+
+	got, err := s.UnitCollection(t.Context(), placedUnit(ns.Name))
+	if err != nil || got != c.Ref {
+		t.Errorf("collection of the placed stack = %v, %v; want %v", got, err, c.Ref)
+	}
+
+	if _, getErr := s.GetStack(t.Context(), st.Ref); getErr != nil {
+		t.Errorf("GetStack of the placed stack: %v", getErr)
+	}
+
+	entries, err := s.ListUnits(t.Context(), ns.Name)
+	if err != nil || len(entries) != 1 || entries[0].Collection != c.Ref.Name.String() {
+		t.Errorf("inventory after a placed create = %+v, %v; want the collection shown", entries, err)
+	}
+}
+
+// placedRefusal is one placed create that the store must refuse.
+type placedRefusal struct {
+	name  string
+	p     stack.Placement
+	fence namespace.Fence
+	want  error
+}
+
+// testCreateStackPlacedRefused checks that each refusal of a placed create
+// leaves no stack, no inventory entry and no membership: the create and the
+// placement are one transaction.
+func testCreateStackPlacedRefused(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	c := newCollection(t, ns.Name, "payments")
+
+	if err := createColl(t, s, c, ns.Fence()); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	reborn := c
+	reborn.ID = ident.NewID("col-")
+
+	foreign := placement(c, ns.Fence())
+	foreign.Entry.Namespace = "other"
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	missing := newCollection(t, ns.Name, "absent")
+
+	refusals := []placedRefusal{
+		{"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(), collection.ErrNotFound},
+		{"a collection with another ID", placement(reborn, ns.Fence()), ns.Fence(), collection.ErrCollectionChanged},
+		{"a stale fence", placement(c, stale), stale, namespace.ErrFenced},
+		{"an audit entry of another namespace", foreign, ns.Fence(), audit.ErrInvalidEntry},
+	}
+
+	for i := range refusals {
+		st := newPulumiStack(ns.Name, "api", fmt.Sprintf("refused-%d", i))
+
+		err := s.CreateStackPlaced(t.Context(), st, refusals[i].p, refusals[i].fence)
+		if !errors.Is(err, refusals[i].want) {
+			t.Errorf("%s: err = %v, want %v", refusals[i].name, err, refusals[i].want)
+		}
+
+		if _, getErr := s.GetStack(t.Context(), st.Ref); !errors.Is(getErr, stack.ErrNotFound) {
+			t.Errorf("%s: GetStack = %v, want ErrNotFound", refusals[i].name, getErr)
+		}
+	}
+
+	entries, err := s.ListUnits(t.Context(), ns.Name)
+	if err != nil || len(entries) != 0 {
+		t.Errorf("inventory after the refusals = %+v, %v; want no unit", entries, err)
+	}
+
+	ids, err := s.ListCollectionUnitIDs(t.Context(), c.Ref, c.ID)
+	if err != nil || len(ids) != 0 {
+		t.Errorf("members after the refusals = %v, %v; want none", ids, err)
+	}
+}
+
+// testCreateStackPlacedDuplicate checks that a placed create of a stack that
+// exists is refused and leaves the old stack as it was, with no collection.
+func testCreateStackPlacedDuplicate(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	c := newCollection(t, ns.Name, "payments")
+
+	if err := createColl(t, s, c, ns.Fence()); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	st := newPulumiStack(ns.Name, "web", "prod")
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+
+	err := s.CreateStackPlaced(t.Context(), st, placement(c, ns.Fence()), ns.Fence())
+	if !errors.Is(err, stack.ErrAlreadyExists) {
+		t.Errorf("duplicate: err = %v, want ErrAlreadyExists", err)
+	}
+
+	_, err = s.UnitCollection(t.Context(), placedUnit(ns.Name))
+	if !errors.Is(err, collection.ErrNoCollection) {
+		t.Errorf("duplicate: collection of the old stack: err = %v, want ErrNoCollection", err)
+	}
 }
