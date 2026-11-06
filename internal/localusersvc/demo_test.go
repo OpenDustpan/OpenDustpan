@@ -1,17 +1,24 @@
 package localusersvc_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
+	"fmt"
+	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -26,7 +33,7 @@ func demoSeedFor(t *testing.T, f *fixture, kind installation.Kind) (*localusersv
 
 	return localusersvc.NewDemoSeed(localusersvc.DemoConfig{
 		Passwords: f.store, Principals: f.principals, Grants: f.store, Namespaces: f.store, Hasher: f.hasher,
-		Kind: kind, Now: nil, Random: nil,
+		Blocklist: blocklist.Embedded(), Kind: kind, Now: nil, Random: nil,
 	})
 }
 
@@ -225,7 +232,7 @@ func TestDemoSeedRefusesAProductionKind(t *testing.T) {
 
 		seed, err := localusersvc.NewDemoSeed(localusersvc.DemoConfig{
 			Passwords: f.store, Principals: f.principals, Grants: f.store, Namespaces: f.store, Hasher: f.hasher,
-			Kind: installation.KindDev, Now: nil, Random: nil,
+			Blocklist: blocklist.Embedded(), Kind: installation.KindDev, Now: nil, Random: nil,
 		})
 		if err != nil {
 			t.Fatalf("new demo seed: %v", err)
@@ -245,5 +252,96 @@ func TestDemoPersonSubjectsMatch(t *testing.T) {
 
 	if principal.DemoSubject != localuser.DemoSubject {
 		t.Fatalf("principal.DemoSubject = %q, localuser.DemoSubject = %q", principal.DemoSubject, localuser.DemoSubject)
+	}
+}
+
+// demoPasswordForm is the form of the demo password: 5 groups of 4 lowercase
+// letters and digits, joined by hyphens.
+var demoPasswordForm = regexp.MustCompile(`^([a-z0-9]{4}-){4}[a-z0-9]{4}$`)
+
+// TestDemoSeedPasswordForm proves the form of the demo password, and that the
+// seed makes a new password when a password rule refuses one: the first bytes
+// give a password with no digit, which the rules refuse.
+func TestDemoSeedPasswordForm(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	if _, err := f.store.ClaimKind(t.Context(), installation.KindDev); err != nil {
+		t.Fatalf("claim kind: %v", err)
+	}
+
+	// The byte 1 is the letter b: 20 of them make "bbbb-bbbb-bbbb-bbbb-bbbb".
+	letters := bytes.Repeat([]byte{1}, localuser.DemoPasswordGroups*localuser.DemoPasswordGroupLength)
+
+	seed, err := localusersvc.NewDemoSeed(localusersvc.DemoConfig{
+		Passwords: f.store, Principals: f.principals, Grants: f.store, Namespaces: f.store, Hasher: f.hasher,
+		Blocklist: blocklist.Embedded(), Kind: installation.KindDev, Now: nil,
+		Random: io.MultiReader(bytes.NewReader(letters), rand.Reader),
+	})
+	if err != nil {
+		t.Fatalf("new demo seed: %v", err)
+	}
+
+	password, err := seed.Run(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if !demoPasswordForm.MatchString(password) || password == "bbbb-bbbb-bbbb-bbbb-bbbb" ||
+		!strings.ContainsAny(password, "0123456789") {
+		t.Fatalf("demo password has the wrong form or is the refused one (length %d)", len(password))
+	}
+
+	if len(password) != localuser.DemoPasswordGroups*(localuser.DemoPasswordGroupLength+1)-1 {
+		t.Fatalf("demo password length = %d, want 24", len(password))
+	}
+}
+
+// TestDemoPasswordIsInNoAuditEntry proves that the password is in no audit
+// entry of the seed, in the scope of the installation and in each namespace.
+func TestDemoPasswordIsInNoAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	seed, err := demoSeedFor(t, f, installation.KindDev)
+	if err != nil {
+		t.Fatalf("new demo seed: %v", err)
+	}
+
+	names := makeNamespaces(t, f, "dev", "demo-platform")
+
+	password, err := seed.Run(t.Context(), names)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	scopes := []namespace.Name{audit.ServerScope, "dev", "demo-platform"}
+	seen := 0
+
+	for _, scope := range scopes {
+		page, listErr := f.store.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+		if listErr != nil {
+			t.Fatalf("list entries of %s: %v", scope, listErr)
+		}
+
+		for i := range page.Entries {
+			seen++
+
+			if text := fmt.Sprintf("%+v", page.Entries[i]); strings.Contains(text, password) {
+				t.Errorf("an audit entry of %s holds the demo password: action %s", scope, page.Entries[i].Action)
+			}
+
+			if page.Entries[i].Subject == localusersvc.DemoCreator &&
+				page.Entries[i].Reason != localusersvc.DemoReason {
+				t.Errorf("entry %s has the reason %q, want %q", page.Entries[i].Action, page.Entries[i].Reason,
+					localusersvc.DemoReason)
+			}
+		}
+	}
+
+	if seen == 0 {
+		t.Fatal("the seed wrote no audit entry")
 	}
 }
