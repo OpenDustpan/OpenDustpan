@@ -125,7 +125,11 @@ func TestBlueprintValidate(t *testing.T) {
 				Revision: "v2.4.1",
 			}, Component: nil}
 		}, nil},
-		{"a newer schema version", func(b *selfservice.Blueprint) { b.SchemaVersion = 2 }, selfservice.ErrSchemaVersion},
+		{
+			"a newer schema version",
+			func(b *selfservice.Blueprint) { b.SchemaVersion = 2 },
+			selfservice.ErrSchemaVersion,
+		},
 		{"a version range", func(b *selfservice.Blueprint) { b.Program = registry("~> 2.4") }, selfservice.ErrInvalid},
 		{"a module and a component", func(b *selfservice.Blueprint) {
 			b.Program.Component = &selfservice.Component{Package: "p", Version: "1.0.0", Type: "t"}
@@ -139,15 +143,24 @@ func TestBlueprintValidate(t *testing.T) {
 		{"an input maps to a platform value", func(b *selfservice.Blueprint) {
 			b.Inputs[3].Maps = "backup_retention_days"
 		}, selfservice.ErrOneHome},
-		{"two inputs with one name", func(b *selfservice.Blueprint) { b.Inputs[1].Name = "size" }, selfservice.ErrInvalid},
 		{
-			"a default of another type", func(b *selfservice.Blueprint) { b.Inputs[3].Default = json.RawMessage(`"20"`) },
+			"two inputs with one name",
+			func(b *selfservice.Blueprint) { b.Inputs[1].Name = "size" },
+			selfservice.ErrInvalid,
+		},
+		{
+			"a default of another type",
+			func(b *selfservice.Blueprint) { b.Inputs[3].Default = json.RawMessage(`"20"`) },
 			selfservice.ErrInvalid,
 		},
 		{"a default that is not an integer", func(b *selfservice.Blueprint) {
 			b.Inputs[3].Default = json.RawMessage(`20.5`)
 		}, selfservice.ErrInvalid},
-		{"required with a default", func(b *selfservice.Blueprint) { b.Inputs[0].Required = true }, selfservice.ErrInvalid},
+		{
+			"required with a default",
+			func(b *selfservice.Blueprint) { b.Inputs[0].Required = true },
+			selfservice.ErrInvalid,
+		},
 		{"a choice on an integer", func(b *selfservice.Blueprint) {
 			b.Inputs[3].Choice = &selfservice.Choice{Source: nil, Values: []string{"20"}}
 		}, selfservice.ErrInvalid},
@@ -170,9 +183,14 @@ func TestBlueprintValidate(t *testing.T) {
 			"two choices in a loop", func(b *selfservice.Blueprint) { source(b, 1).Where = onInput("subnetGroup") },
 			selfservice.ErrChoiceCycle,
 		},
-		{"a chain at the limit", func(b *selfservice.Blueprint) { b.Inputs = chain(selfservice.MaxChoiceDepth + 1) }, nil},
 		{
-			"a chain over the limit", func(b *selfservice.Blueprint) { b.Inputs = chain(selfservice.MaxChoiceDepth + 2) },
+			"a chain at the limit",
+			func(b *selfservice.Blueprint) { b.Inputs = chain(selfservice.MaxChoiceDepth + 1) },
+			nil,
+		},
+		{
+			"a chain over the limit",
+			func(b *selfservice.Blueprint) { b.Inputs = chain(selfservice.MaxChoiceDepth + 2) },
 			selfservice.ErrLimit,
 		},
 		{"a filter with an object value", func(b *selfservice.Blueprint) {
@@ -225,7 +243,11 @@ func TestBlueprintValidate(t *testing.T) {
 			b.Delivery = selfservice.Delivery{Git: nil, Default: selfservice.HomeGit, Homes: nil}
 		}, selfservice.ErrInvalid},
 		{"an unknown tool", func(b *selfservice.Blueprint) { b.Tool = "terraform" }, selfservice.ErrInvalid},
-		{"a module for Pulumi", func(b *selfservice.Blueprint) { b.Tool = selfservice.ToolPulumi }, selfservice.ErrInvalid},
+		{
+			"a module for Pulumi",
+			func(b *selfservice.Blueprint) { b.Tool = selfservice.ToolPulumi },
+			selfservice.ErrInvalid,
+		},
 		{"maps to a key that is not an HCL identifier", func(b *selfservice.Blueprint) {
 			b.Inputs[0].Maps = "size\"\nresource \"x\""
 		}, selfservice.ErrInvalid},

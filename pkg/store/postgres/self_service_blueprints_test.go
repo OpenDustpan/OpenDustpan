@@ -82,7 +82,10 @@ func selfServiceBlueprintHarness(base string) selfservicetest.BlueprintFactory {
 
 		s := openURL(t, isolatedURL(t, base))
 
-		return selfservicetest.BlueprintHarness{Blueprints: s.SelfServiceBlueprints(), Domain: blueprintDomain{t: t, s: s}}
+		return selfservicetest.BlueprintHarness{
+			Blueprints: s.SelfServiceBlueprints(),
+			Domain:     blueprintDomain{t: t, s: s},
+		}
 	}
 }
 

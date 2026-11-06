@@ -359,7 +359,12 @@ func TestRequirements(t *testing.T) {
 		Namespace: "payments",
 		Blueprint: "postgres",
 	}
-	ns := selfservice.Object{Unit: identity.Object{}, Kind: selfservice.ObjectNamespace, Namespace: "payments", Blueprint: ""}
+	ns := selfservice.Object{
+		Unit:      identity.Object{},
+		Kind:      selfservice.ObjectNamespace,
+		Namespace: "payments",
+		Blueprint: "",
+	}
 	on := selfservice.Object{Unit: u, Kind: selfservice.ObjectUnit, Namespace: "payments", Blueprint: "postgres"}
 
 	target := func(op selfservice.Operation, unit identity.Object, breakGlass bool) selfservice.Target {
@@ -398,7 +403,10 @@ func TestRequirements(t *testing.T) {
 			nil,
 		},
 		{
-			"an update with no unit", selfservice.OpSubmit, target(selfservice.OperationUpdate, identity.Object{}, false), nil,
+			"an update with no unit",
+			selfservice.OpSubmit,
+			target(selfservice.OperationUpdate, identity.Object{}, false),
+			nil,
 			selfservice.ErrInvalid,
 		},
 		{

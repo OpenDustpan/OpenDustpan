@@ -273,8 +273,15 @@ func testList(t *testing.T, h Harness, f fixture) {
 			want: 1,
 		},
 		{
-			filter: selfservice.ListFilter{Namespace: ns, Blueprint: "redis", UnitID: "", States: nil, After: "", Limit: 0},
-			want:   0,
+			filter: selfservice.ListFilter{
+				Namespace: ns,
+				Blueprint: "redis",
+				UnitID:    "",
+				States:    nil,
+				After:     "",
+				Limit:     0,
+			},
+			want: 0,
 		},
 		{filter: selfservice.ListFilter{
 			Namespace: ns, Blueprint: "", UnitID: f.unit.UnitID(), States: nil, After: "", Limit: 0,
@@ -296,8 +303,15 @@ func testList(t *testing.T, h Harness, f fixture) {
 			Limit:     0,
 		}, want: 0},
 		{
-			filter: selfservice.ListFilter{Namespace: "other", Blueprint: "", UnitID: "", States: nil, After: "", Limit: 0},
-			want:   0,
+			filter: selfservice.ListFilter{
+				Namespace: "other",
+				Blueprint: "",
+				UnitID:    "",
+				States:    nil,
+				After:     "",
+				Limit:     0,
+			},
+			want: 0,
 		},
 	}
 

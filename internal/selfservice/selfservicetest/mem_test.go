@@ -609,7 +609,12 @@ func (m *memDB) PutDraft(_ context.Context, b selfservice.Blueprint, version int
 	ref := selfservice.BlueprintRef{Namespace: fence.Namespace, Name: b.Name}
 
 	if _, ok := m.drafts[ref]; !ok && version == 0 && m.blueprintsIn(fence.Namespace) >= selfservice.MaxBlueprints {
-		return 0, fmt.Errorf("%w: %s has %d blueprints", selfservice.ErrLimit, fence.Namespace, selfservice.MaxBlueprints)
+		return 0, fmt.Errorf(
+			"%w: %s has %d blueprints",
+			selfservice.ErrLimit,
+			fence.Namespace,
+			selfservice.MaxBlueprints,
+		)
 	}
 
 	if m.drafts[ref].version != version {
@@ -740,7 +745,12 @@ func (m *memDB) Publish(_ context.Context, p selfservice.Publication, fence name
 	}
 
 	if len(m.versions[p.Ref]) >= selfservice.MaxVersions {
-		return selfservice.Version{}, fmt.Errorf("%w: %s has %d versions", selfservice.ErrLimit, p.Ref, selfservice.MaxVersions)
+		return selfservice.Version{}, fmt.Errorf(
+			"%w: %s has %d versions",
+			selfservice.ErrLimit,
+			p.Ref,
+			selfservice.MaxVersions,
+		)
 	}
 
 	v := selfservice.Version{

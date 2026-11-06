@@ -251,7 +251,11 @@ func TestCheckPublication(t *testing.T) {
 			"a reference that names another blueprint",
 		},
 		{func(p *selfservice.Publication) { p.DraftVersion = 0 }, selfservice.ErrConflict, "draft version 0"},
-		{func(p *selfservice.Publication) { p.Blueprint.Title = "" }, selfservice.ErrInvalid, "a document that fails Validate"},
+		{
+			func(p *selfservice.Publication) { p.Blueprint.Title = "" },
+			selfservice.ErrInvalid,
+			"a document that fails Validate",
+		},
 		{
 			func(p *selfservice.Publication) { p.Blueprint.ExprVersion = "v1\n2" },
 			selfservice.ErrInvalid,
@@ -329,7 +333,8 @@ func TestCheckStoredDraft(t *testing.T) {
 		t.Fatalf("CheckStoredDraft(another document) = %v, want ErrInvalid", checkErr)
 	}
 
-	if checkErr := selfservicestore.CheckStoredDraft(ref, "{", &same); !errors.Is(checkErr, selfservicestore.ErrCorrupt) {
+	checkErr := selfservicestore.CheckStoredDraft(ref, "{", &same)
+	if !errors.Is(checkErr, selfservicestore.ErrCorrupt) {
 		t.Fatalf("CheckStoredDraft(a stored draft that is not JSON) = %v, want ErrCorrupt", checkErr)
 	}
 }

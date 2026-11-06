@@ -51,7 +51,11 @@ func TestSizeLayer(t *testing.T) {
 		{"deep unary", strings.Repeat("!", 2000) + "true", selfservice.ErrLimit},
 		{"deep array", strings.Repeat("[", 1000) + strings.Repeat("]", 1000) + " == nil", selfservice.ErrLimit},
 		{"deep call", strings.Repeat("len(", 500) + "inputs" + strings.Repeat(")", 500) + " > 0", selfservice.ErrLimit},
-		{"deep ternary", strings.Repeat("true ? ", 600) + "true" + strings.Repeat(" : false", 600), selfservice.ErrLimit},
+		{
+			"deep ternary",
+			strings.Repeat("true ? ", 600) + "true" + strings.Repeat(" : false", 600),
+			selfservice.ErrLimit,
+		},
 		{"many terms", strings.Repeat("1 + ", 300) + "1 > 0", selfservice.ErrLimit},
 	}
 
@@ -110,7 +114,8 @@ func TestNameLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := newEvaluator(t).Compile(tc.source, selfservice.ResultBool); !errors.Is(err, selfservice.ErrInvalid) {
+			err := newEvaluator(t).Compile(tc.source, selfservice.ResultBool)
+			if !errors.Is(err, selfservice.ErrInvalid) {
 				t.Fatalf("Compile() = %v, want ErrInvalid", err)
 			}
 
@@ -179,7 +184,8 @@ func TestSyntaxLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := newEvaluator(t).Compile(tc.source, selfservice.ResultBool); !errors.Is(err, selfservice.ErrInvalid) {
+			err := newEvaluator(t).Compile(tc.source, selfservice.ResultBool)
+			if !errors.Is(err, selfservice.ErrInvalid) {
 				t.Fatalf("Compile() = %v, want ErrInvalid", err)
 			}
 

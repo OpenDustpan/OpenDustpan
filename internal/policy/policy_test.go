@@ -468,7 +468,8 @@ func TestCedar(t *testing.T) {
 	resource := policy.CedarEntity{Type: policy.CedarBlueprint, ID: "payments/postgres"}
 	reqs := policy.CedarRequests("alice", []string{"dev"}, policy.KindSelfServiceRequest, resource, []byte("{}"))
 
-	if reqs[0].Action.ID != "self-service.request" || reqs[1].Action.ID != "self-service.request"+policy.CedarWithoutApproval {
+	if reqs[0].Action.ID != "self-service.request" ||
+		reqs[1].Action.ID != "self-service.request"+policy.CedarWithoutApproval {
 		t.Fatalf("actions = %q, %q", reqs[0].Action.ID, reqs[1].Action.ID)
 	}
 

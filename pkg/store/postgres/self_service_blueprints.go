@@ -150,7 +150,10 @@ func insertSelfServiceDraft(ctx context.Context, q *db.Queries, w selfServiceDra
 }
 
 // Draft implements selfservice.BlueprintStore.
-func (c SelfServiceBlueprintStore) Draft(ctx context.Context, ref selfservice.BlueprintRef) (selfservice.Blueprint, int64, error) {
+func (c SelfServiceBlueprintStore) Draft(
+	ctx context.Context,
+	ref selfservice.BlueprintRef,
+) (selfservice.Blueprint, int64, error) {
 	row, err := c.s.queries.GetSelfServiceBlueprintDraft(
 		ctx, db.GetSelfServiceBlueprintDraftParams{Namespace: ref.Namespace.String(), Name: ref.Name},
 	)
@@ -203,7 +206,12 @@ func (c SelfServiceBlueprintStore) Publish(
 // checks, in this order: the draft is at p.DraftVersion, p holds the stored
 // draft, the draft version has no version, and the blueprint is below its
 // limit of versions. It sets row.Number.
-func publishNext(ctx context.Context, q *db.Queries, p *selfservice.Publication, row *selfservicestore.VersionRow) error {
+func publishNext(
+	ctx context.Context,
+	q *db.Queries,
+	p *selfservice.Publication,
+	row *selfservicestore.VersionRow,
+) error {
 	if err := checkDraftOfPublication(ctx, q, p); err != nil {
 		return err
 	}
@@ -239,7 +247,10 @@ func publishNext(ctx context.Context, q *db.Queries, p *selfservice.Publication,
 func checkDraftOfPublication(ctx context.Context, q *db.Queries, p *selfservice.Publication) error {
 	ns := p.Ref.Namespace.String()
 
-	stored, err := q.GetSelfServiceBlueprintDraft(ctx, db.GetSelfServiceBlueprintDraftParams{Namespace: ns, Name: p.Ref.Name})
+	stored, err := q.GetSelfServiceBlueprintDraft(
+		ctx,
+		db.GetSelfServiceBlueprintDraftParams{Namespace: ns, Name: p.Ref.Name},
+	)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && stored.DraftVersion != p.DraftVersion) {
 		return fmt.Errorf("%w: draft %s is not at version %d", selfservice.ErrConflict, p.Ref, p.DraftVersion)
 	}
@@ -257,7 +268,13 @@ func checkDraftOfPublication(ctx context.Context, q *db.Queries, p *selfservice.
 		db.GetSelfServiceBlueprintVersionOfDraftParams{Namespace: ns, Name: p.Ref.Name, DraftVersion: p.DraftVersion},
 	)
 	if err == nil {
-		return fmt.Errorf("%w: %s draft %d is version %d", selfservice.ErrAlreadyPublished, p.Ref, p.DraftVersion, number)
+		return fmt.Errorf(
+			"%w: %s draft %d is version %d",
+			selfservice.ErrAlreadyPublished,
+			p.Ref,
+			p.DraftVersion,
+			number,
+		)
 	}
 
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -268,7 +285,11 @@ func checkDraftOfPublication(ctx context.Context, q *db.Queries, p *selfservice.
 }
 
 // Version implements selfservice.BlueprintStore.
-func (c SelfServiceBlueprintStore) Version(ctx context.Context, ref selfservice.BlueprintRef, n int) (selfservice.Version, error) {
+func (c SelfServiceBlueprintStore) Version(
+	ctx context.Context,
+	ref selfservice.BlueprintRef,
+	n int,
+) (selfservice.Version, error) {
 	row, err := c.s.queries.GetSelfServiceBlueprintVersion(ctx, db.GetSelfServiceBlueprintVersionParams{
 		Namespace: ref.Namespace.String(), Name: ref.Name, Number: int64(n),
 	})
@@ -302,7 +323,10 @@ func (c SelfServiceBlueprintStore) Version(ctx context.Context, ref selfservice.
 // ListBlueprints implements selfservice.BlueprintStore. A row that fails its checks
 // is an error, not a gap in the list, so a damaged blueprint never reads as a
 // blueprint that does not exist.
-func (c SelfServiceBlueprintStore) ListBlueprints(ctx context.Context, ns namespace.Name) ([]selfservice.Version, error) {
+func (c SelfServiceBlueprintStore) ListBlueprints(
+	ctx context.Context,
+	ns namespace.Name,
+) ([]selfservice.Version, error) {
 	rows, err := c.s.queries.ListSelfServiceBlueprintLatest(ctx, ns.String())
 	if err != nil {
 		return nil, fmt.Errorf("select blueprints: %w", err)

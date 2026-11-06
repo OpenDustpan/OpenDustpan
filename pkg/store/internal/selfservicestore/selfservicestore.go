@@ -205,7 +205,13 @@ func Version(r VersionRow) (selfservice.Version, error) {
 		return selfservice.Version{}, fmt.Errorf("%w: %s version %d has draft version %d",
 			ErrCorrupt, ref, r.Number, r.DraftVersion)
 	case r.Retired != 0 && r.Retired != 1:
-		return selfservice.Version{}, fmt.Errorf("%w: %s version %d has retired %d", ErrCorrupt, ref, r.Number, r.Retired)
+		return selfservice.Version{}, fmt.Errorf(
+			"%w: %s version %d has retired %d",
+			ErrCorrupt,
+			ref,
+			r.Number,
+			r.Retired,
+		)
 	}
 
 	b.ExprVersion = r.ExprVersion

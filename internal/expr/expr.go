@@ -157,7 +157,12 @@ type runResult struct {
 	err error
 }
 
-func (e *Evaluator) run(ctx context.Context, source string, kind selfservice.ResultKind, env *selfservice.Env) (any, error) {
+func (e *Evaluator) run(
+	ctx context.Context,
+	source string,
+	kind selfservice.ResultKind,
+	env *selfservice.Env,
+) (any, error) {
 	if env == nil {
 		return nil, fmt.Errorf("%w: there is no environment", selfservice.ErrRuleFailed)
 	}

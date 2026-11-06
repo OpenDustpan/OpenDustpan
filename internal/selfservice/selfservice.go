@@ -1,4 +1,4 @@
-// Package self-service is the self-service gateway of OpenDustpan. A principal
+// Package selfservice is the self-service gateway of OpenDustpan. A principal
 // sends a Self-service request: a declarative JSON document that asks for one
 // unit from one blueprint, with the answers to the inputs of the blueprint.
 // The request states the result, never the steps or the code of a tool.

@@ -79,7 +79,13 @@ func publish(t *testing.T, h BlueprintHarness, f fixture, name string, draft int
 	}
 
 	b.ExprVersion = "v1.17.8"
-	p := selfservice.Publication{At: time.Now().UTC(), Ref: bref(name), By: "platform", Blueprint: b, DraftVersion: draft}
+	p := selfservice.Publication{
+		At:           time.Now().UTC(),
+		Ref:          bref(name),
+		By:           "platform",
+		Blueprint:    b,
+		DraftVersion: draft,
+	}
 
 	v, err := h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
 	if err != nil {
@@ -151,7 +157,13 @@ func testPublishStale(t *testing.T, h BlueprintHarness, f fixture) {
 	// A person changes the draft after the check of the publish.
 	putDraft(t, h, f, blueprint("postgres", "Changed"), 1)
 
-	p := selfservice.Publication{At: time.Now().UTC(), Ref: bref("postgres"), By: "platform", Blueprint: b, DraftVersion: 1}
+	p := selfservice.Publication{
+		At:           time.Now().UTC(),
+		Ref:          bref("postgres"),
+		By:           "platform",
+		Blueprint:    b,
+		DraftVersion: 1,
+	}
 	_, err = h.Blueprints.Publish(t.Context(), p, f.fence, blueprintEntries())
 	if !errors.Is(err, selfservice.ErrConflict) {
 		t.Fatalf("Publish(stale draft) = %v, want ErrConflict", err)
@@ -369,9 +381,11 @@ func testBlueprintNamespaces(t *testing.T, h BlueprintHarness, f fixture) {
 		t.Fatalf("PutDraft(entry of another namespace) = %v, want ErrInvalidEntry", err)
 	}
 
-	if _, _, err := h.Blueprints.Draft(t.Context(), selfservice.BlueprintRef{Namespace: other, Name: "redis"}); !errors.Is(
-		err, selfservice.ErrNotFound,
-	) {
+	_, _, err = h.Blueprints.Draft(
+		t.Context(),
+		selfservice.BlueprintRef{Namespace: other, Name: "redis"},
+	)
+	if !errors.Is(err, selfservice.ErrNotFound) {
 		t.Fatalf("Draft(redis) after a refused write = %v, want ErrNotFound", err)
 	}
 }
@@ -574,7 +588,8 @@ func testRefOfAnotherNamespace(t *testing.T, h BlueprintHarness, f fixture) {
 		)
 	}
 
-	if _, verErr := h.Blueprints.Version(t.Context(), bref("postgres"), 1); !errors.Is(verErr, selfservice.ErrNotFound) {
+	_, verErr := h.Blueprints.Version(t.Context(), bref("postgres"), 1)
+	if !errors.Is(verErr, selfservice.ErrNotFound) {
 		t.Fatalf("Version(payments, 1) = %v, want ErrNotFound: the publish wrote under the fence", verErr)
 	}
 
@@ -896,7 +911,8 @@ func testPublishRace(t *testing.T, h BlueprintHarness, f fixture) {
 		}
 	}
 
-	if _, err := h.Blueprints.Version(t.Context(), bref("postgres"), racers+1); !errors.Is(err, selfservice.ErrNotFound) {
+	_, err := h.Blueprints.Version(t.Context(), bref("postgres"), racers+1)
+	if !errors.Is(err, selfservice.ErrNotFound) {
 		t.Fatalf("Version(%d) = %v, want ErrNotFound", racers+1, err)
 	}
 

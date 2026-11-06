@@ -64,7 +64,11 @@ func TestParseDocument(t *testing.T) {
 		{"an unknown field", head + `,"comment":"x"}`, selfservice.ErrInvalid},
 		{"a duplicate key", head + `,"inputs":{"size":"small","size":"large"}}`, selfservice.ErrInvalid},
 		{"a duplicate key at the top", head + `,"name":"other"}`, selfservice.ErrInvalid},
-		{"a string version", strings.Replace(minimalDocument, `"version":3`, `"version":"3"`, 1), selfservice.ErrInvalid},
+		{
+			"a string version",
+			strings.Replace(minimalDocument, `"version":3`, `"version":"3"`, 1),
+			selfservice.ErrInvalid,
+		},
 		{"version 0", strings.Replace(minimalDocument, `"version":3`, `"version":0`, 1), selfservice.ErrInvalid},
 		{"a name with a capital", strings.Replace(minimalDocument, "orders-db", "Orders", 1), selfservice.ErrInvalid},
 		{"a null answer", head + `,"inputs":{"size":null}}`, selfservice.ErrInvalid},
@@ -203,11 +207,26 @@ func TestOperationFor(t *testing.T) {
 	}{
 		{last: "", ensure: selfservice.EnsurePresent, want: selfservice.OperationCreate, err: nil},
 		{last: "", ensure: "", want: selfservice.OperationCreate, err: nil},
-		{last: selfservice.EnsurePresent, ensure: selfservice.EnsurePresent, want: selfservice.OperationUpdate, err: nil},
-		{last: selfservice.EnsurePresent, ensure: selfservice.EnsureAbsent, want: selfservice.OperationDestroy, err: nil},
+		{
+			last:   selfservice.EnsurePresent,
+			ensure: selfservice.EnsurePresent,
+			want:   selfservice.OperationUpdate,
+			err:    nil,
+		},
+		{
+			last:   selfservice.EnsurePresent,
+			ensure: selfservice.EnsureAbsent,
+			want:   selfservice.OperationDestroy,
+			err:    nil,
+		},
 		{last: "", ensure: selfservice.EnsureAbsent, want: "", err: selfservice.ErrInvalid},
 		{last: selfservice.EnsureAbsent, ensure: selfservice.EnsureAbsent, want: selfservice.OperationNone, err: nil},
-		{last: selfservice.EnsureAbsent, ensure: selfservice.EnsurePresent, want: selfservice.OperationCreate, err: nil},
+		{
+			last:   selfservice.EnsureAbsent,
+			ensure: selfservice.EnsurePresent,
+			want:   selfservice.OperationCreate,
+			err:    nil,
+		},
 		{last: "", ensure: "maybe", want: "", err: selfservice.ErrInvalid},
 	}
 
