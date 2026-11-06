@@ -578,14 +578,16 @@ var Settings = []*Setting{
 
 	stringSetting(
 		history.PlanRetentionFlag, history.PlanRetentionEnv, retentionDefault,
-		"how long a stored plan stays ("+history.PlanRetentionEnv+")",
-		"`"+retentionDefault+"` (400 days). A Go duration",
-	),
+		"how long a stored plan stays, from 24h to 87600h ("+history.PlanRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration from `24h` to `87600h`. Each plan records its end of "+
+			"retention when it is made, so a change applies to later plans",
+	).WithFile(history.PlanRetentionFlag),
 	stringSetting(
 		history.JobLogRetentionFlag, history.JobLogRetentionEnv, retentionDefault,
-		"how long a version of a job log stays ("+history.JobLogRetentionEnv+")",
-		"`"+retentionDefault+"` (400 days). A Go duration",
-	),
+		"how long a version of a job log stays, from 24h to 87600h ("+history.JobLogRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration from `24h` to `87600h`. Each log version records its "+
+			"end of retention when it is made, so a change applies to later versions",
+	).WithFile(history.JobLogRetentionFlag),
 	stepInput("DUSTPAN_JOB_ID", "The ID of the job that the step belongs to."),
 	stepInput("DUSTPAN_PHASE", "The name of the phase of the job that the step belongs to."),
 	stepInput("DUSTPAN_STEP", "The name of the step."),

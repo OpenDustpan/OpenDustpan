@@ -53,6 +53,8 @@ the same list.
 | `--audit-signing-key-file` | `DUSTPAN_AUDIT_SIGNING_KEY_FILE` | `audit-signing-key-file` | (none) |
 | `--audit-verify-keys-file` | `DUSTPAN_AUDIT_VERIFY_KEYS_FILE` | `audit-verify-keys-file` | (none) |
 | `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
+| `--plan-retention` | `DUSTPAN_PLAN_RETENTION` | `plan-retention` | `9600h` (400 days). A Go duration from `24h` to `87600h`. Each plan records its end of retention when it is made, so a change applies to later plans |
+| `--job-log-retention` | `DUSTPAN_JOB_LOG_RETENTION` | `job-log-retention` | `9600h` (400 days). A Go duration from `24h` to `87600h`. Each log version records its end of retention when it is made, so a change applies to later versions |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 | `--destination-ports` | `DUSTPAN_DESTINATION_PORTS` | `destination-ports` | (none: port 443 only). For example `8443,9443` |
 | `--oidc-issuer` | `DUSTPAN_OIDC_ISSUER` | `oidc-issuer` | (none: no console sign-in). The identity of a person does not hold the issuer. To use another issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a person of the old issuer with the same `sub`. |
