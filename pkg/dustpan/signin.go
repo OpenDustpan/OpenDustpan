@@ -109,7 +109,8 @@ func newSignIn(
 
 	in := &serverapi.SignIn{
 		Service: nil, Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, Passkeys: nil, DevCode: nil,
+		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, Passkeys: nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+		DevCode: nil,
 		DevAdmin: noDevAdmin, OnDevRefused: devRefusalAudit(cfg),
 	}
 
@@ -440,7 +441,8 @@ func setSignInLimiters(gates signInGates, tokens *accesstoken.Service, in *serve
 	// store keeps tokens, and the assembly passes them here. This check stays
 	// so that a new order of the assembly or a new caller cannot start the
 	// sign-in routes with no failure limit.
-	if tokens != nil && (gates.signInGate == nil || gates.passwordGate == nil) {
+	if tokens != nil && (gates.signInGate == nil || gates.passwordGate == nil || gates.passkeyGate == nil ||
+		gates.passkeyBeginGate == nil) {
 		return errSignInUngated
 	}
 
@@ -450,6 +452,14 @@ func setSignInLimiters(gates signInGates, tokens *accesstoken.Service, in *serve
 
 	if gates.passwordGate != nil {
 		in.PasswordLimiter = gates.passwordGate
+	}
+
+	if gates.passkeyGate != nil {
+		in.PasskeyLimiter = gates.passkeyGate
+	}
+
+	if gates.passkeyBeginGate != nil {
+		in.PasskeyBeginLimiter = gates.passkeyBeginGate
 	}
 
 	return nil

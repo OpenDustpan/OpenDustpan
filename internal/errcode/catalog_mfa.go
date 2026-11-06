@@ -9,6 +9,8 @@ const (
 	MFACeremonyNotOpen = "mfa.ceremony-not-open"
 	// MFACeremonyWrongPerson means that the passkey ceremony belongs to another person or session.
 	MFACeremonyWrongPerson = "mfa.ceremony-wrong-person"
+	// MFABreakGlassReasonRequired means that the sign-in of a break-glass account needs a reason that the person types.
+	MFABreakGlassReasonRequired = "mfa.break-glass-reason-required"
 	// MFAFreshStepRequired means that the write needs a fresh authentication step.
 	MFAFreshStepRequired = "mfa.fresh-step-required"
 	// MFAKeyExists means that a person already holds the passkey of the authenticator.
@@ -25,6 +27,8 @@ const (
 	MFARateLimited = "mfa.rate-limited"
 	// MFASessionRequired means that the passkey route needs the console session of a person.
 	MFASessionRequired = "mfa.session-required"
+	// MFASignInFailed means that the passkey sign-in failed and the person starts it again.
+	MFASignInFailed = "mfa.sign-in-failed"
 	// MFAUnavailable means that the passkey store cannot answer.
 	MFAUnavailable = "mfa.unavailable"
 )
@@ -45,6 +49,11 @@ func mfaSpecs() []Spec {
 		{
 			Code:    MFACeremonyWrongPerson,
 			Meaning: "the passkey ceremony belongs to another person or session",
+			Args:    nil,
+		},
+		{
+			Code:    MFABreakGlassReasonRequired,
+			Meaning: "the sign-in of a break-glass account needs a reason that the person types",
 			Args:    nil,
 		},
 		{Code: MFAFreshStepRequired, Meaning: "the write needs a fresh authentication step", Args: nil},
@@ -73,6 +82,11 @@ func mfaSpecs() []Spec {
 		{
 			Code:    MFASessionRequired,
 			Meaning: "the passkey route needs the console session of a person",
+			Args:    nil,
+		},
+		{
+			Code:    MFASignInFailed,
+			Meaning: "the passkey sign-in failed and the person starts it again",
 			Args:    nil,
 		},
 		{Code: MFAUnavailable, Meaning: "the passkey store cannot answer", Args: nil},

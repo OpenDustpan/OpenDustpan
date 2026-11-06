@@ -36,12 +36,19 @@ type signInGates struct {
 	// a guess of a password never slows another sign-in. gatedAuthenticator
 	// sets it with gate; nil mounts no such route.
 	passwordGate *authgate.Gate
+	// passkeyGate is the per-address limit of the failed responses of a
+	// passkey sign-in, and passkeyBeginGate is the per-address limit of the
+	// begins of a passkey sign-in. Each has its own budget, so a passkey
+	// ceremony never slows another sign-in. gatedAuthenticator sets them with
+	// gate; nil mounts no passkey sign-in route.
+	passkeyGate      *authgate.Gate
+	passkeyBeginGate *authgate.Gate
 }
 
 // noSignInGates returns the gates of a store that keeps no access tokens:
 // no gate.
 func noSignInGates() signInGates {
-	return signInGates{gate: nil, signInGate: nil, passwordGate: nil}
+	return signInGates{gate: nil, signInGate: nil, passwordGate: nil, passkeyGate: nil, passkeyBeginGate: nil}
 }
 
 // gatedAuthenticator returns the authenticator that every adapter and the
@@ -97,7 +104,28 @@ func gatedAuthenticator(
 		return nil, none, fmt.Errorf("password gate: %w", err)
 	}
 
-	gates := signInGates{gate: gate, signInGate: signInGate, passwordGate: passwordGate}
+	passkeyGate, err := authgate.New(authgate.Config{
+		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
+		Failures: failures, Window: 0, CounterErrors: nil, Scope: passkeyGateScope,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, none, fmt.Errorf("passkey gate: %w", err)
+	}
+
+	passkeyBeginGate, err := authgate.New(authgate.Config{
+		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
+		Failures: failures, Window: 0, CounterErrors: nil, Scope: passkeyBeginGateScope,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, none, fmt.Errorf("passkey begin gate: %w", err)
+	}
+
+	gates := signInGates{
+		gate: gate, signInGate: signInGate, passwordGate: passwordGate, passkeyGate: passkeyGate,
+		passkeyBeginGate: passkeyBeginGate,
+	}
 
 	return identity.Chain{next, gate}, gates, nil
 }
@@ -109,6 +137,14 @@ const signInGateScope = "signin"
 // passwordGateScope names the budget of the routes that check a password or
 // a one-time code of a local user in the shared count.
 const passwordGateScope = "password"
+
+// passkeyGateScope names the budget of the failed responses of a passkey
+// sign-in in the shared count.
+const passkeyGateScope = "passkey"
+
+// passkeyBeginGateScope names the budget of the begins of a passkey sign-in in
+// the shared count.
+const passkeyBeginGateScope = "passkeybegin"
 
 // refuseAll is the Next of the sign-in gate. The sign-in routes never look
 // up a token through that gate; if one does, it gets no principal.
@@ -178,7 +214,7 @@ func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: in.principals, Disabler: records, Generations: generations, Sessions: in.sessions,
-		Audit: in.audit, Groups: nil, Logger: in.logger, OnAuditFailure: in.onAuditFailure,
+		Audit: in.audit, Groups: nil, States: generations, Logger: in.logger, OnAuditFailure: in.onAuditFailure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sign-in service: %w", err)
