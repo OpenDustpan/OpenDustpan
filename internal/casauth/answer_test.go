@@ -90,6 +90,14 @@ func TestParseResponse(t *testing.T) {
 		{name: "a second root", body: open + "<cas:user>alice</cas:user>" + closing + open +
 			"<cas:user>bob</cas:user>" + closing},
 		{name: "an element after the root", body: open + "<cas:user>alice</cas:user>" + closing + "<x/>"},
+		{name: "a stray end tag and a second root", body: open + "<cas:user>alice</cas:user>" + closing + "</x>" +
+			open + "<cas:user>bob</cas:user>" + closing},
+		{name: "a stray end tag and an element after the root", body: open + "<cas:user>alice</cas:user>" +
+			closing + "</x><x/>"},
+		{name: "a stray end tag after the root", body: open + "<cas:user>alice</cas:user>" + closing + "</x>"},
+		{name: "a stray end tag before the root", body: "</x>" + open + "<cas:user>alice</cas:user>" + closing},
+		{name: "text after the root", body: open + "<cas:user>alice</cas:user>" + closing + "junk text"},
+		{name: "text before the root", body: "junk" + open + "<cas:user>alice</cas:user>" + closing},
 		{name: "an attribute in another namespace", body: open + `<cas:user>a</cas:user><cas:attributes>` +
 			`<x:memberOf xmlns:x="urn:other">ops</x:memberOf></cas:attributes>` + closing},
 		{name: "an attribute with an element", body: open + `<cas:user>a</cas:user><cas:attributes>` +
@@ -116,34 +124,58 @@ func TestParseResponse(t *testing.T) {
 }
 
 // roots returns the count of the elements at the top level of b, read
-// with its own decoder. It returns 1 when the decoder cannot read b, so the
-// caller checks only what the decoder can read.
+// with its own decoder. It returns -1 for an end tag with no open element
+// and for text outside the elements that is not whitespace, so that the
+// caller sees each of them as a wrong count. It returns 1 when the decoder
+// cannot read b, so the caller checks only what the decoder can read.
 func roots(b []byte) int {
 	d := xml.NewDecoder(bytes.NewReader(b))
-	depth, n := 0, 0
+
+	var c rootCount
 
 	for {
 		tok, err := d.RawToken()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return n
-			}
+		if errors.Is(err, io.EOF) {
+			return c.n
+		}
 
+		if err != nil {
 			return 1
 		}
 
-		switch tok.(type) {
-		case xml.StartElement:
-			if depth == 0 {
-				n++
-			}
-
-			depth++
-		case xml.EndElement:
-			depth--
-		default:
+		if !c.add(tok) {
+			return -1
 		}
 	}
+}
+
+// rootCount is the state of roots: the depth and the count of the
+// elements at the top level.
+type rootCount struct {
+	depth int
+	n     int
+}
+
+// add counts tok. It returns false for an end tag with no open element
+// and for text outside the elements that is not whitespace.
+func (c *rootCount) add(tok xml.Token) bool {
+	switch v := tok.(type) {
+	case xml.StartElement:
+		if c.depth == 0 {
+			c.n++
+		}
+
+		c.depth++
+	case xml.EndElement:
+		c.depth--
+
+		return c.depth >= 0
+	case xml.CharData:
+		return c.depth != 0 || len(bytes.TrimSpace(v)) == 0
+	default:
+	}
+
+	return true
 }
 
 // FuzzParseResponse checks that the parser never panics, and that each
