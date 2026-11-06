@@ -1576,11 +1576,7 @@ func checkPeriods(cfg *settings) error {
 		return err
 	}
 
-	if err := checkAuditChainInterval(cfg.auditChainInterval); err != nil {
-		return err
-	}
-
-	return checkJobRetention(cfg.jobRetention)
+	return checkAuditChainInterval(cfg.auditChainInterval)
 }
 
 // checkSettings validates the required options and the TLS and public URL
@@ -1635,7 +1631,11 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, errors.Join(checkIssuerBaseURL(cfg.issuerBaseURL), checkRetention(cfg.softDeleteRetention))
+	return base, errors.Join(
+		checkIssuerBaseURL(cfg.issuerBaseURL),
+		checkRetention(cfg.softDeleteRetention),
+		checkJobRetention(cfg.jobRetention),
+	)
 }
 
 // checkIssuerBaseURL refuses an issuer base URL that does not parse. An empty
