@@ -122,19 +122,74 @@ func CheckInputs(s *Spec, in Value) error {
 			continue
 		}
 
-		if f.Secret && !leaf.Secret {
-			return fmt.Errorf("%w: the input %s must come from a secret", profile.ErrInvalid, f.Name)
-		}
-
-		if err := checkType(f.Type, leaf.Value); err != nil {
-			return fmt.Errorf("the input %s: %w", f.Name, err)
+		if err := checkInput(f, leaf); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
+// MaxDepth is the deepest nesting of lists and maps in one value.
+const MaxDepth = 32
+
+// CheckTree checks that v and every value inside it is a string, a bool, a
+// number (float64, int or int64), nil, a []any or a map[string]any, with at
+// most MaxDepth levels. It returns profile.ErrInvalid for any other value, so
+// that a value that a copy would share, for example a []string or a pointer,
+// never reaches an adapter, a result or the caller.
+func CheckTree(v any) error {
+	return checkTreeAt(v, 0)
+}
+
+func checkTreeAt(v any, depth int) error {
+	if depth > MaxDepth {
+		return fmt.Errorf("%w: a value is nested deeper than %d levels", profile.ErrInvalid, MaxDepth)
+	}
+
+	switch x := v.(type) {
+	case nil, string, bool, float64, int, int64:
+		return nil
+	case []any:
+		for _, e := range x {
+			if err := checkTreeAt(e, depth+1); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	case map[string]any:
+		for _, e := range x {
+			if err := checkTreeAt(e, depth+1); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	default:
+		return fmt.Errorf("%w: a value holds a type other than string, bool, number, list or map",
+			profile.ErrInvalid)
+	}
+}
+
 // checkType returns profile.ErrInvalid when v is not of the type t.
+// checkInput checks one input against its field.
+func checkInput(f *Field, leaf Leaf) error {
+	if f.Secret && !leaf.Secret {
+		return fmt.Errorf("%w: the input %s must come from a secret", profile.ErrInvalid, f.Name)
+	}
+
+	if err := checkType(f.Type, leaf.Value); err != nil {
+		return fmt.Errorf("the input %s: %w", f.Name, err)
+	}
+
+	if err := CheckTree(leaf.Value); err != nil {
+		return fmt.Errorf("the input %s: %w", f.Name, err)
+	}
+
+	return nil
+}
+
 func checkType(t Type, v any) error {
 	ok := false
 

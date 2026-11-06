@@ -40,8 +40,10 @@ type Call struct {
 	// Late receives each token that the issuer signed for a block after
 	// the block ended. Its value never reached the adapter, but the issuer
 	// signed it, so the caller commits its entry too. Run can call Late from
-	// another goroutine, also after Run returned. An open with a block that
-	// mints tokens needs Late.
+	// other goroutines, also after Run returned, and two calls can run at
+	// the same time, so the receiver must be safe for concurrent calls. A
+	// call that comes after the transaction of the open commits its entry
+	// on its own. An open with a block that mints tokens needs Late.
 	Late func(Issued)
 	// Limit is the deadline of the whole open, the checks of the blocks
 	// included. Zero means MaxRunTime. A caller can set a shorter limit,
@@ -151,6 +153,12 @@ func (r *Registry) Run(ctx context.Context, blocks []Block, c Call) (Outcome, er
 	limit := c.Limit
 	if limit == 0 {
 		limit = MaxRunTime
+	}
+
+	// The claims reach every adapter. A value that the deep copy would
+	// share is refused before any block runs.
+	if err := CheckTree(map[string]any(c.Claims)); err != nil {
+		return out, fmt.Errorf("the claims of the open: %w", err)
 	}
 
 	rctx, cancel := context.WithTimeoutCause(ctx, limit, errRunLimit)
@@ -290,8 +298,8 @@ func (r *Registry) open(
 
 	if e.spec.MintsTokens {
 		tokens = &recordingTokens{
-			next: c.Tokens(b.Name), late: c.Late, block: b.Name, values: nil, issued: nil, mu: sync.Mutex{},
-			closed: false,
+			next: c.Tokens(b.Name), late: c.Late, done: bctx.Done(), block: b.Name, values: nil, issued: nil,
+			mu: sync.Mutex{}, closed: false,
 		}
 		req.Tokens = tokens
 	}
@@ -354,7 +362,11 @@ func callCheck(ctx context.Context, p Provider, in Value) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("%w: the check of the block did not end before the limit of the open", ErrUnavailable)
+		if errors.Is(context.Cause(ctx), errRunLimit) {
+			return fmt.Errorf("%w: the check of the block did not end before the limit of the open", ErrUnavailable)
+		}
+
+		return fmt.Errorf("%w: the open ended before the check of the block", ErrUnavailable)
 	}
 }
 
@@ -431,6 +443,11 @@ func checkOutputs(s *Spec, v Value) error {
 
 		if checkType(f.Type, leaf.Value) != nil {
 			return fmt.Errorf("%w: the output %s is not of the type %s", ErrAdapter, f.Name, f.Type)
+		}
+
+		if CheckTree(leaf.Value) != nil {
+			return fmt.Errorf("%w: the output %s holds a value of a type that a result cannot hold", ErrAdapter,
+				f.Name)
 		}
 	}
 
@@ -554,8 +571,12 @@ var errClosed = errors.New("the block ended, and its token source is closed")
 // calls no issuer, and it hands a token that the issuer signed during the
 // close to late.
 type recordingTokens struct {
-	next   TokenSource
-	late   func(Issued)
+	next TokenSource
+	late func(Issued)
+	// done is the Done channel of the context of the block. The source calls
+	// no issuer after it is closed, also for an adapter that ignores its
+	// context.
+	done   <-chan struct{}
 	block  string
 	values []string
 	issued []Issued
@@ -572,7 +593,7 @@ func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime t
 	closed := t.closed
 	t.mu.Unlock()
 
-	if closed {
+	if closed || t.ended() {
 		return profile.Token{}, fmt.Errorf("%w: %w", ErrUnavailable, errClosed)
 	}
 
@@ -598,6 +619,16 @@ func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime t
 	}
 
 	return tok, nil
+}
+
+// ended reports whether the context of the block ended.
+func (t *recordingTokens) ended() bool {
+	select {
+	case <-t.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // record keeps a token that the issuer signed. It returns the token for late
@@ -692,6 +723,9 @@ func cloneAny(v any) any {
 
 		return out
 	default:
+		// CheckTree lets only immutable values reach this branch: a
+		// string, a bool, a number or nil. Each list and map is copied
+		// above, so the copy shares no memory with v.
 		return v
 	}
 }
