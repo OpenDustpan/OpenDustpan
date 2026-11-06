@@ -1,7 +1,10 @@
 package casauth_test
 
 import (
+	"bytes"
+	"encoding/xml"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -43,6 +46,10 @@ func TestParseResponse(t *testing.T) {
 			body: `<cas:serviceResponse xmlns:cas="http://www.yale.edu/tp/cas">` +
 				`<cas:authenticationFailure code="INVALID_TICKET">no</cas:authenticationFailure></cas:serviceResponse>`,
 		},
+		{
+			name: "a comment and space after the root", user: "alice", code: "",
+			body: open + "<cas:user>alice</cas:user>" + closing + "\n<!-- end -->\n",
+		},
 		{name: "the depth of the limit", user: "", code: "INVALID_TICKET", body: deep(casauth.MaxAnswerDepth)},
 	}
 
@@ -77,6 +84,12 @@ func TestParseResponse(t *testing.T) {
 			`<cas:authenticationSuccess><cas:user>a</cas:user></cas:authenticationSuccess>` +
 			`<cas:authenticationFailure code="INVALID_TICKET"/></cas:serviceResponse>`},
 		{name: "no user", body: open + closing},
+		{name: "an element in the user", body: open + "<cas:user>al<cas:x>mallory</cas:x>ice</cas:user>" + closing},
+		{name: "an element in the user of another namespace", body: open +
+			`<cas:user>al<x:x xmlns:x="urn:other"/>ice</cas:user>` + closing},
+		{name: "a second root", body: open + "<cas:user>alice</cas:user>" + closing + open +
+			"<cas:user>bob</cas:user>" + closing},
+		{name: "an element after the root", body: open + "<cas:user>alice</cas:user>" + closing + "<x/>"},
 		{name: "an attribute in another namespace", body: open + `<cas:user>a</cas:user><cas:attributes>` +
 			`<x:memberOf xmlns:x="urn:other">ops</x:memberOf></cas:attributes>` + closing},
 		{name: "an attribute with an element", body: open + `<cas:user>a</cas:user><cas:attributes>` +
@@ -102,9 +115,40 @@ func TestParseResponse(t *testing.T) {
 	}
 }
 
+// roots returns the count of the elements at the top level of b, read
+// with its own decoder. It returns 1 when the decoder cannot read b, so the
+// caller checks only what the decoder can read.
+func roots(b []byte) int {
+	d := xml.NewDecoder(bytes.NewReader(b))
+	depth, n := 0, 0
+
+	for {
+		tok, err := d.RawToken()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return n
+			}
+
+			return 1
+		}
+
+		switch tok.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				n++
+			}
+
+			depth++
+		case xml.EndElement:
+			depth--
+		default:
+		}
+	}
+}
+
 // FuzzParseResponse checks that the parser never panics, and that each
-// answer that it accepts is exactly one success with a user or one failure
-// with a code.
+// answer that it accepts has one element at the top level and is exactly
+// one success with a user or one failure with a code.
 func FuzzParseResponse(f *testing.F) {
 	f.Add([]byte(open + "<cas:user>alice</cas:user><cas:attributes><cas:a>b</cas:a></cas:attributes>" + closing))
 	f.Add([]byte(`<cas:serviceResponse xmlns:cas="http://www.yale.edu/tp/cas">` +
@@ -125,6 +169,10 @@ func FuzzParseResponse(f *testing.F) {
 		if len(b) > casauth.MaxAnswerBytes || strings.Contains(string(b), "<!ENTITY") ||
 			strings.Contains(string(b), "<!DOCTYPE") {
 			t.Fatal("ParseResponse() accepted an answer with a declaration or over the limit")
+		}
+
+		if n := roots(b); n != 1 {
+			t.Fatalf("ParseResponse() accepted an answer with %d elements at the top level, want 1", n)
 		}
 
 		if got.Success == (got.FailureCode != "") {

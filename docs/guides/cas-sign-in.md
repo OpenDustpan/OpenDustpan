@@ -120,8 +120,9 @@ the future.
 | Redirects | none |
 
 The server refuses an answer with a document type declaration (DTD), an
-entity, or a processing instruction other than the XML declaration. The
-answer must be UTF-8.
+entity, or a processing instruction other than the XML declaration. It also
+refuses an answer with an element after its root element, and a user or an
+attribute value that holds an element. The answer must be UTF-8.
 
 ## Outbound connections
 
