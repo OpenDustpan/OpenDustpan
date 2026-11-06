@@ -6,6 +6,32 @@ provider is not available. Keep two enabled accounts, unless a self-hosted
 operator sets the recovery mode `none`. The server enforces a lower bound
 only: at least one enabled account stays.
 
+## Sign in and the alert
+
+A break-glass account has no password. It signs in with a passkey and a reason
+that the person types. See
+[Sign in with a passkey](passkeys.md#sign-in-with-a-passkey) for the two
+requests.
+
+Each break-glass sign-in does these things in one database transaction:
+
+- It starts the session.
+- It writes an audit entry in the scope `@server` with the action
+  `session:sign-in`, the reason, and the change `breakGlass` set to `true`.
+- It writes the notification `break-glass.used` to the outbox of the
+  installation. The severity is `critical`, and the recipients are the
+  administrators. The notification holds the ID of the session and the ID of
+  the account.
+
+A sign-in without a valid reason, or with a response that fails a check, starts
+no session and writes no notification. It writes an audit entry with the real
+cause.
+
+The review of the use after the fact is not part of this version. The
+notification `break-glass.used` and the audit entry are the records that the
+review reads. The session of a break-glass account has the length of every
+other session of the installation.
+
 ## The rule
 
 The server refuses to disable or delete the last enabled break-glass

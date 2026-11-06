@@ -5,8 +5,9 @@ public key and never the private key. A person adds a passkey to the own
 account, and removes it again. This guide shows how to do both in the console
 and with the API.
 
-This version adds and removes passkeys only. A passkey does not sign anyone in
-yet, and the server does not ask for it as a second factor. The page
+A local user or a break-glass account can also sign in with a passkey. See
+[Sign in with a passkey](#sign-in-with-a-passkey). The server does not ask for
+a passkey as a second factor yet. The page
 [Passkeys API](../reference/passkeys-api.md) lists the routes.
 
 ## What you need
@@ -103,6 +104,74 @@ that fails a check of the passkey protocol answers 400 with the error code
 `mfa.ceremony-failed`. The checks include the origin, the relying party ID,
 the signature and the user verification. Start the ceremony again after a
 failure.
+
+## Sign in with a passkey
+
+A local user signs in with a passkey and does not type a user name or a
+password. A local user with no password can sign in only in this way. A
+break-glass account signs in only in this way.
+
+1. `POST /api/dustpan/v1/sign-in/passkey/begin` answers 200 with the request
+   options. The options name no person.
+2. The browser gives the options to `navigator.credentials.get`. The device
+   shows the passkeys that it holds for this server. The person chooses one and
+   unlocks the device. The server requires this user verification.
+3. `POST /api/dustpan/v1/sign-in/passkey/finish` takes the credential that the
+   browser made. It answers 204 and sets the session cookie.
+
+```sh
+curl -i -X POST "$SERVER/api/dustpan/v1/sign-in/passkey/begin"
+```
+
+```sh
+curl -i -X POST "$SERVER/api/dustpan/v1/sign-in/passkey/finish" \
+  -H "Content-Type: application/json" \
+  -d '{"response": { ... the credential ... }}'
+```
+
+Both routes are public. The server records the sign-in as a sign-in with two
+factors: the passkey, and the user verification on the device. A session of
+this sign-in is a fresh session, so the person can make an access token or add
+a passkey at once.
+
+### A break-glass account
+
+The body of the second request also holds a `reason`. The person types it, for
+example `the identity provider is down`. Without a reason the server answers
+400 with the error code `mfa.break-glass-reason-required` and starts no
+session. Start again from the first request.
+
+A break-glass sign-in does three things in one database transaction: it starts
+the session, it writes the audit entry of the sign-in with the reason, and it
+raises the alert `break-glass.used` with the severity `critical` to the
+administrators. If one write fails, the person gets no session. The page
+[Keep a break-glass account](break-glass-accounts.md) has the rest.
+
+### Why a sign-in fails
+
+Every failure answers 401 with the error code `mfa.sign-in-failed` and one
+text, whatever the cause. The audit log has the real cause. These causes fail
+the sign-in:
+
+- The challenge expired, or it was used before.
+- The response came from another origin or for another relying party ID.
+- The device did not check the user (no user verification).
+- The passkey belongs to another person than the user handle names.
+- The signature counter of the passkey did not grow. The server suspends the
+  passkey.
+- The passkey is suspended.
+- The person is disabled, or is not a local user and not a break-glass
+  account.
+
+### Limits
+
+Each source address has a budget of starts and a budget of failed responses.
+A start writes a challenge row, so each start spends one unit of the first
+budget. A source at a limit gets 429 with the error code `auth.rate-limited`,
+and no ceremony starts. The failures count by source address and never by
+credential, so a person who knows a credential ID cannot lock the owner out.
+The sign-in with a passkey reads no lock of a user name. A lock of the password
+sign-in does not stop it.
 
 ## List the passkeys
 
