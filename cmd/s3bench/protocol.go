@@ -328,7 +328,7 @@ func auditCheck() family {
 			return r.get(ctx, r.readPrefix+"/"+strconv.Itoa(i%protoSeedCount)+"/old")
 		},
 		new: func(ctx context.Context, r *protoRun, i int) error {
-			listed, err := r.target.adapter.List(ctx, r.readPrefix+"/"+strconv.Itoa(i%protoSeedCount)+"/new")
+			listed, err := listAll(ctx, r.target.adapter, r.readPrefix+"/"+strconv.Itoa(i%protoSeedCount)+"/new")
 			if err != nil {
 				return fmt.Errorf("list: %w", err)
 			}
@@ -590,7 +590,7 @@ func (p protocolRunner) oneRun(ctx context.Context, spec runSpec, done map[strin
 
 // cleanSeed deletes the seeded objects of a read family.
 func (p protocolRunner) cleanSeed(ctx context.Context, prefix string) error {
-	listed, err := p.target.adapter.List(ctx, prefix)
+	listed, err := listAll(ctx, p.target.adapter, prefix)
 	if err != nil {
 		return fmt.Errorf("list the seed: %w", err)
 	}

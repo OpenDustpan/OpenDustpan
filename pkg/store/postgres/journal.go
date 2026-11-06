@@ -110,11 +110,18 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 }
 
 // checkJournalRow runs the checks of a batch that the write needs before its retry
-// check: the blob key, the lease, the update kind, a journaled update, and an open
+// check: the attempt window, the blob key, the lease, the update kind, a
+// journaled update, and an open
 // journal. A version 0 update saves checkpoints, so it refuses every batch with
 // ErrNotJournaled. A closed journal refuses every batch, so no batch can land
 // after the build.
 func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
+	// The caller locked the update row first, so a wait for the lock counts
+	// in the attempt window.
+	if err := checkAttempt(ctx, q, row.AttemptStartedAt); err != nil {
+		return err
+	}
+
 	if err := checkJournalKey(ctx, q, stackID, row); err != nil {
 		return err
 	}
@@ -315,6 +322,33 @@ func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.
 	}
 
 	return journalBlobKeys(rows), nil
+}
+
+// JournalBatches implements stack.JournalStore. It is keyed by the stack ID, as the
+// blob keys are. A missing update yields no batches.
+func (s *Store) JournalBatches(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalBatchRef, error) {
+	rows, err := s.queries.JournalBatchRefs(
+		ctx,
+		db.JournalBatchRefsParams{StackID: stackID.String(), UpdateID: update.String()},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("select journal batches: %w", err)
+	}
+
+	refs := make([]stack.JournalBatchRef, 0, len(rows))
+
+	for i := range rows {
+		ref, refErr := stack.NewJournalBatchRef(rows[i].BlobKey, rows[i].Sha256, rows[i].Size)
+		if refErr != nil {
+			return nil, fmt.Errorf("select journal batches: %w", refErr)
+		}
+
+		refs = append(refs, ref)
+	}
+
+	return refs, nil
 }
 
 // RecordJournalRefusal implements stack.JournalStore. It stores one refused or
@@ -635,7 +669,7 @@ func (s *Store) PutBuiltCheckpoint(
 			return lockErr
 		}
 
-		if writeErr := writeCheckpoint(ctx, q, cp, stackID, row); writeErr != nil {
+		if _, writeErr := writeCheckpoint(ctx, q, cp, stackID, row); writeErr != nil {
 			return writeErr
 		}
 

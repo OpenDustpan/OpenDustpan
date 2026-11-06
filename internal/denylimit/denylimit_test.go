@@ -372,3 +372,78 @@ func TestAllowWindow(t *testing.T) {
 		t.Fatalf("long key after the hour: Write = %v, Suppressed = %d, want true and 2", d.Write, d.Suppressed)
 	}
 }
+
+// TestReleaseGivesTheWindowBack checks that a released write does not hide
+// the next denial of its key, and that its count is not lost.
+func TestReleaseGivesTheWindowBack(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 0, MaxFlush: 0, Now: c.now, MaxKeysPerPrincipal: 0},
+	)
+
+	first := l.Allow(key("bo"))
+	if !first.Write {
+		t.Fatal("the first denial did not write")
+	}
+
+	l.Release(key("bo"), first)
+
+	d := l.Allow(key("bo"))
+	if !d.Write || d.Suppressed != 1 {
+		t.Fatalf("the denial after a release = %+v, want a write that carries the released denial", d)
+	}
+
+	if d := l.Allow(key("bo")); d.Write {
+		t.Fatalf("a denial after the written one = %+v, want no write in the window", d)
+	}
+
+	// A decision that did not write gives nothing back.
+	l.Release(key("bo"), denylimit.Decision{Write: false, Suppressed: 0, Overflow: false, Flush: nil})
+
+	if d := l.Allow(key("bo")); d.Write {
+		t.Fatalf("a denial after a release of no write = %+v, want no write", d)
+	}
+}
+
+// TestReleaseOfTheOverflowAndTheAggregate checks a release of the aggregate
+// of a principal and of the overflow of the table.
+func TestReleaseOfTheOverflowAndTheAggregate(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 2, MaxFlush: 0, Now: c.now, MaxKeysPerPrincipal: 1},
+	)
+
+	if d := l.Allow(key("bo")); !d.Write {
+		t.Fatal("the first key of bo did not write")
+	}
+
+	// bo is at its bound: a new key of bo goes to the aggregate of bo.
+	other := denylimit.Key{Principal: "bo", Action: "unit:read", Kind: "unit", Scope: "team"}
+
+	agg := l.Allow(other)
+	if !agg.Write {
+		t.Fatal("the aggregate of bo did not write")
+	}
+
+	l.Release(other, agg)
+
+	if d := l.Allow(other); !d.Write || d.Suppressed != 1 {
+		t.Fatalf("the aggregate after a release = %+v, want a write that carries 1", d)
+	}
+
+	// The table is full: a key of ann goes to the overflow.
+	over := l.Allow(key("ann"))
+	if !over.Write || !over.Overflow {
+		t.Fatalf("the first overflow = %+v, want a write of the overflow", over)
+	}
+
+	l.Release(key("ann"), over)
+
+	if d := l.Allow(key("ann")); !d.Write || !d.Overflow || d.Suppressed != 1 {
+		t.Fatalf("the overflow after a release = %+v, want a write that carries 1", d)
+	}
+}

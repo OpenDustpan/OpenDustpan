@@ -4,7 +4,7 @@ package backup
 const portColImportID = "import_id"
 
 // portableImportTables is the portable description of the tables of the
-// import tool (imports, imports_purged, import_units and import_ledger), in
+// import tool (imports, imports_purged, import_units, import_ledger and import_upload_commits), in
 // the order of Tables.
 func portableImportTables() []PortableTable {
 	return append(portableImportRecords(), portableImportUnits()...)
@@ -46,7 +46,8 @@ func portableImportRecords() []PortableTable {
 	}
 }
 
-// portableImportUnits describes import_units and import_ledger.
+// portableImportUnits describes import_units, import_ledger and
+// import_upload_commits.
 func portableImportUnits() []PortableTable {
 	return []PortableTable{
 		{
@@ -56,7 +57,7 @@ func portableImportUnits() []PortableTable {
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: portColImportID, Kind: KindText},
 				{Name: "id", Kind: KindText},
-				{Name: "position", Kind: KindInteger},
+				{Name: portColPosition, Kind: KindInteger},
 				{Name: "source_tool", Kind: KindText},
 				{Name: "source_name", Kind: KindText},
 				{Name: "target_name", Kind: KindText},
@@ -85,6 +86,18 @@ func portableImportUnits() []PortableTable {
 				{Name: "item_unit_id", Kind: KindText},
 				{Name: "item_kind", Kind: KindText},
 				{Name: "item_id", Kind: KindText},
+				{Name: "committed_at_ms", Kind: KindTime},
+			},
+		},
+		{
+			Table:   "import_upload_commits",
+			OrderBy: []string{portColNamespaceID, portColImportID, "unit_dir", "sequence"},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: portColImportID, Kind: KindText},
+				{Name: "unit_dir", Kind: KindText},
+				{Name: "sequence", Kind: KindInteger},
+				{Name: "facts", Kind: KindText},
 				{Name: "committed_at_ms", Kind: KindTime},
 			},
 		},

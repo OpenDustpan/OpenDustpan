@@ -61,31 +61,37 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 // builds a service for the routes is "api" even though every process builds it.
 // The metrics route of a worker-only process takes the CORS rule, and the
 // request log of that process takes the client address rule, so buildMux and
-// newClientIPResolver are "all". The IP allowlists check the namespace of an
-// object, and the metrics route has none, so wireTokens stays "api".
+// routes are "all". The IP allowlists check the namespace of an
+// object, and the metrics route has none, so newAuthPorts stays "api".
 var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals // A fixed declaration table.
 	"consoleDir":     {"mountAPI": "api"},
 	"consoleHeaders": {"checkSettings": "api", "mountAPI": "api"},
 	"allowedOrigins": {"buildMux": "all", "checkSettings": "api", "mountAPI": "api", "newSignIn": "api"},
 	"publicURL": {
 		"checkSettings":       "api",
+		"newExchanger":        "api",
 		"newInventoryHandler": "api",
 		"newIssuerService":    "api",
 		"newRunnerHandler":    "api",
+		"newServerExtras":     "api",
 		"newSignIn":           "api",
 		"newTrustRuleService": "api",
 		"storedSignInReady":   "api",
 	},
 	"issuerBaseURL": {"checkSettings": "api", "newIssuerService": "api"},
-	"proxies":       {"newClientIPResolver": "all"},
+	"proxies":       {"routes": "all"},
 	"ipAllowlists": {
-		"checkTLSAndAllowlist": "api", "newIPAllowlistService": "api", "newPulumiHandler": "api",
-		"newTFEHandler": "api", "wireTokens": "api",
+		"checkTLSAndAllowlist": "api", "newServerExtras": "api", "newPulumiHandler": "api",
+		"newAuthPorts": "api", "newTFEHandler": "api",
 	},
 	// The ranges apply to the connections that the routes of a namespace make.
-	"gitHost": {"newGitHostService": "api"},
+	"gitHost": {"newGitHostService": "api", "newUnitSettingsHandler": "api"},
 	"oidcProviders": {
-		"bindingOf": "api", "hasStaticSignIn": "api", "newProviderAdmin": "api", "staticSignInProviders": "api",
+		"bindingOf":             "api",
+		"hasStaticSignIn":       "api",
+		"identityProviders":     "api",
+		"newProviderAdmin":      "api",
+		"staticSignInProviders": "api",
 	},
 	// The cache wraps the blob store that the purge of deleted objects also uses.
 	"blobCacheBytes":          {"wrapBlobCache": "all"},

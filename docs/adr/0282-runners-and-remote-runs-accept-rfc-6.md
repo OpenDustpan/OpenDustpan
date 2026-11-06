@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-30. Decided by the project owner on 30 October 2026. Accepts [RFC 6](../rfc/0006-runners-and-remote-runs.md). Accepts ADR 139 and supersedes its decision 4. Moves the open gaps of RFC 6 to RFCs 107 to 110
 
+Changed by:
+
+- ADR 304 changes decision 5: the answer to the `terragrunt run-all` question.
+
 ## Context
 
 [RFC 6](../rfc/0006-runners-and-remote-runs.md) asks how OpenDustpan starts

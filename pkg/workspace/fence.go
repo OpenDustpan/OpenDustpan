@@ -74,10 +74,7 @@ func (s *Service) releaseWithFence(
 	sv.FinalizedAt = sv.CreatedAt
 	sv.Size = size
 
-	released := w
-	released.Lock = Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
-	released.UpdatedAt = sv.FinalizedAt
-	released.Revision++
+	released := w.released(sv.FinalizedAt, by, ReleaseForced)
 
 	entry.Version = strconv.FormatInt(sv.Serial, 10)
 

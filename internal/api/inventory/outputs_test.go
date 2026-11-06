@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -77,6 +78,7 @@ func (s *outputsSource) Outputs(_ context.Context, _ identity.Object, _ string) 
 // outputsEntry returns the inventory entry of a unit.
 func outputsEntry(ns namespace.Name, tool, name, id string) coreinventory.Entry {
 	return coreinventory.Entry{
+		LastRelease: nil,
 		LastChanged: time.Time{}, Namespace: ns, Tool: tool, Name: name, UnitID: id, DisplayName: "", Status: "",
 		ResourceCount: nil, Lock: nil, ManualLock: nil, Collection: "", Labels: map[string]string{},
 	}
@@ -135,12 +137,13 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 	}, err: nil}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Outputs: reader, OutputSharing: nil, Views: nil, Namespaces: nsSvc, Units: reads,
+		Placements: nil,
+		Outputs:    reader, OutputSharing: nil, Views: nil, Namespaces: nsSvc, Units: reads,
 		Deleted: &memDeleted{entries: nil}, History: nil, Lifecycles: testLifecycles(),
 		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: nil, Moves: nil,
 		Authenticator: subjectAuthenticator{}, Authorizer: authz, Audit: orTestAudit(auditStore),
 		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, PublicURL: "", Logger: slog.New(slog.DiscardHandler),
-		Now: nil, StateGuard: nil,
+		Now: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

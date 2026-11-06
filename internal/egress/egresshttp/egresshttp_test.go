@@ -24,6 +24,15 @@ func TestControl(t *testing.T) {
 		{"[::1]:8443", false},
 		{"169.254.169.254:80", false},
 		{"[::ffff:10.0.0.1]:443", false},
+		{"[::ffff:169.254.169.254]:443", false},
+		{"[::ffff:a9fe:a9fe]:443", false},
+		{"10.0.0.5:443", false},
+		{"169.254.1.1:443", false},
+		{"[fd00::1]:443", false},
+		{"[fd00:ec2::254]:80", false},
+		{"[fe80::1]:443", false},
+		{"[fe80::1%eth0]:443", false},
+		{"0.0.0.0:443", false},
 		{"not-an-address", false},
 	}
 

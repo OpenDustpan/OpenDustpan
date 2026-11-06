@@ -2,12 +2,16 @@ package dustpan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -37,6 +41,9 @@ const (
 	signInPruneScheduleName = "signin-prune"
 	idempotencyScheduleName = "idempotency-sweep"
 	auditChainScheduleName  = "audit-chain-check"
+	// nameLockPruneScheduleName is the schedule of the prune of the counts
+	// of the lockout by name.
+	nameLockPruneScheduleName = "name-lock-prune"
 
 	jobScheduleVersion = 1
 )
@@ -51,6 +58,8 @@ const (
 	kindSignInPrune durable.Kind = signInPruneScheduleName
 	kindIdempotency durable.Kind = idempotencyScheduleName
 	kindAuditChain  durable.Kind = auditChainScheduleName
+
+	kindNameLockPrune durable.Kind = nameLockPruneScheduleName
 )
 
 // durableOwner returns the owner name of the job runner: the instance ID
@@ -110,6 +119,20 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	if s.nameLocks.locks != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: nameLockPruneScheduleName, Kind: kindNameLockPrune, Version: jobScheduleVersion,
+			Interval: localusersvc.Prune().Interval, Input: nil,
+		})
+	}
+
+	if s.artifactSweeper != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: job.ArtifactSweepName, Kind: job.KindArtifactSweep, Version: job.ArtifactSweepVersion,
+			Interval: job.ArtifactSweepInterval, Input: nil,
+		})
+	}
+
 	return append(specs, s.issuerRotateSchedule()...)
 }
 
@@ -142,6 +165,14 @@ func (s *Server) jobKinds() []durable.KindSpec {
 		kinds = append(kinds, s.reconcileKind())
 	}
 
+	if s.nameLocks.locks != nil {
+		kinds = append(kinds, s.nameLockPruneKind())
+	}
+
+	if s.artifactSweeper != nil {
+		kinds = append(kinds, s.artifactSweepKind())
+	}
+
 	return append(kinds, s.issuerRotateKindSpec()...)
 }
 
@@ -166,6 +197,91 @@ func (s *Server) reconcileKind() durable.KindSpec {
 			}},
 		},
 	}
+}
+
+// artifactSweepKind returns the runner kind of the schedule of the artifact
+// sweep. Its step returns the error of a run, so the runner counts a failed
+// run as a failed attempt. The output of the step is the result of the run in
+// JSON: its counts and the keys that it deleted. The sweep also appends one
+// audit entry for each run, and the step writes one log line.
+func (s *Server) artifactSweepKind() durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       job.KindArtifactSweep,
+		Version:    job.ArtifactSweepVersion,
+		MinVersion: job.ArtifactSweepVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				res, err := s.artifactSweeper.Sweep(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("job artifact sweep: %w", err)
+				}
+
+				s.logger.InfoContext(ctx, "job artifact sweep: deleted the blobs that no row names",
+					slog.Int("jobs", res.Jobs), slog.Int("deleted", res.Deleted),
+					slog.Int("unknown", res.Unknown), slog.Int("failed", res.Failed), slog.Bool("held", res.Held),
+					slog.String("skipped", res.Skipped))
+
+				// The output of the step is the record of the run: the counts
+				// and the deleted keys.
+				out, err := json.Marshal(res)
+				if err != nil {
+					return nil, fmt.Errorf("job artifact sweep: encode the result: %w", err)
+				}
+
+				return out, nil
+			}},
+		},
+	}
+}
+
+// nameLockPruneKind returns the runner kind of the schedule of the prune of
+// the name counts. Its step returns the error of a run, so the runner counts
+// a failed run as a failed attempt. The store appends one audit entry for
+// each run, in the transaction of the delete, with the count that it
+// deleted. The output of the step is the result of the run in JSON, and the
+// step writes one log line.
+func (s *Server) nameLockPruneKind() durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       kindNameLockPrune,
+		Version:    jobScheduleVersion,
+		MinVersion: jobScheduleVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				res, err := localusersvc.PruneLocks(ctx, s.nameLocks.locks, s.now())
+				if err != nil {
+					return nil, fmt.Errorf("name lock prune: %w", err)
+				}
+
+				s.logger.InfoContext(ctx, "name lock prune: deleted the counts past their age",
+					slog.Int64("deleted", res.Deleted), slog.Int64("age_seconds", res.AgeSeconds),
+					slog.Int("max_rows", res.MaxRows))
+
+				out, err := json.Marshal(res)
+				if err != nil {
+					return nil, fmt.Errorf("name lock prune: encode the result: %w", err)
+				}
+
+				return out, nil
+			}},
+		},
+	}
+}
+
+// nameLockPrune holds the counts of the lockout by name that the schedule
+// name-lock-prune prunes. A nil counter runs no prune.
+type nameLockPrune struct {
+	locks authgate.NameLockCounter
+}
+
+// nameLocksOf returns the counts of the lockout by name of the store of cfg.
+// A store that keeps no such counts gives a nil counter, and the server runs
+// no prune of them.
+func nameLocksOf(cfg *settings) nameLockPrune {
+	if locks, ok := cfg.namespaceStore.(authgate.NameLockCounter); ok {
+		return nameLockPrune{locks: locks}
+	}
+
+	return nameLockPrune{locks: nil}
 }
 
 // jobKind returns the runner kind of a job with one step that runs body.

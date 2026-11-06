@@ -57,6 +57,11 @@ var (
 	// ErrPrincipalDisabled reports a principal that the inactivity disable
 	// ended. It cannot sign in until an administrator enables it.
 	ErrPrincipalDisabled = errors.New("principal is disabled")
+	// ErrGenerationChanged reports a session whose generation is not the
+	// stored session generation of its principal: a password write, a reset
+	// or another change ended every session of the principal after the
+	// sign-in read the generation.
+	ErrGenerationChanged = errors.New("the session generation of the principal changed")
 )
 
 // Default limits of a console session: 15 minutes with no use, and 12 hours
@@ -112,7 +117,10 @@ const (
 // CreatedAt. LastSeenAt is the time of the last recorded use. EndedAt is
 // zero for a session that no sign-out and no administrator ended, and
 // EndReason is empty then. SourceIP and UserAgent describe the browser at
-// the sign-in, for a person who reviews the sessions.
+// the sign-in, for a person who reviews the sessions. Generation is the
+// session generation of the principal that the sign-in read: the session
+// authenticates only while it is the stored generation. A new session with
+// the generation 0 takes the stored generation in the write that stores it.
 type Session struct {
 	CreatedAt   time.Time
 	LastSeenAt  time.Time
@@ -124,6 +132,7 @@ type Session struct {
 	EndReason   EndReason
 	SourceIP    string
 	UserAgent   string
+	Generation  uint64
 }
 
 // ActiveBounds are the times after which the last use and the creation of
@@ -186,13 +195,15 @@ type Owner struct {
 // Match is the answer of a lookup by digest: the session, its owner, the
 // digest that the store keeps, and the policies of the installation at the
 // time of the lookup. The policies come from the same read as the session,
-// so a change applies to the next lookup on every instance.
+// so a change applies to the next lookup on every instance. Generation is
+// the stored session generation of the owner, from the same read.
 type Match struct {
-	Session  Session
-	Owner    Owner
-	Digest   Digest
-	Policy   Policy
-	Accounts AccountPolicy
+	Session    Session
+	Owner      Owner
+	Digest     Digest
+	Policy     Policy
+	Accounts   AccountPolicy
+	Generation uint64
 }
 
 // AccountPolicy is the part of the access token policy that a console
@@ -208,7 +219,9 @@ type AccountPolicy struct {
 // callback. ReturnPath is where the browser goes after the sign-in: a path
 // of this server. MaxAge is the max_age that the start sent to the provider,
 // when HasMaxAge is true: the callback refuses an authentication older
-// than it. A request expires at ExpiresAt and works once.
+// than it. A request expires at ExpiresAt. A stored request works once. A
+// request in a sealed sign-in request cookie works until ExpiresAt, and the
+// identity provider gives each code once.
 type Request struct {
 	CreatedAt  time.Time
 	ExpiresAt  time.Time

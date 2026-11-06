@@ -93,7 +93,7 @@ func (s *Store) portableStage(
 func (s *Store) loadPortableStaging(
 	ctx context.Context, schema string, open backup.PortableOpener, index map[string]backup.PortableFile,
 ) error {
-	clearErr := inBackupTx(ctx, s.pool, readWriteTx(), func(tx pgx.Tx) error {
+	clearErr := s.inLongTx(ctx, backupBound(), readWriteTx(), func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(schema)); err != nil {
 			return fmt.Errorf("set staging search path: %w", backup.ErrExportRead)
 		}
@@ -180,7 +180,7 @@ func (s *Store) loadPortableTable(
 func (s *Store) insertPortableBatch(
 	ctx context.Context, schema string, table backup.PortableTable, rows [][]any,
 ) error {
-	return inBackupTx(ctx, s.pool, readWriteTx(), func(tx pgx.Tx) error {
+	return s.inLongTx(ctx, backupBound(), readWriteTx(), func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(schema)); err != nil {
 			return fmt.Errorf("set staging search path: %w", backup.ErrExportRead)
 		}
@@ -261,7 +261,7 @@ func pgValues(table backup.PortableTable, values []any, notNull map[string]bool)
 
 // notNullColumns returns the NOT NULL columns of table in the staging schema.
 func (s *Store) notNullColumns(ctx context.Context, schema, table string) (map[string]bool, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.reads.Query(ctx,
 		`SELECT column_name, is_nullable FROM information_schema.columns`+
 			` WHERE table_schema = $1 AND table_name = $2`,
 		schema, table,

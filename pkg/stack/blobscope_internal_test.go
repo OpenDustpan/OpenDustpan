@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -73,7 +75,26 @@ func (c *countingStore) Delete(_ context.Context, key blob.Key) error {
 	return nil
 }
 
-func (c *countingStore) List(_ context.Context, prefix string) ([]blob.Object, error) {
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (c *countingStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := c.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
+}
+
+func (c *countingStore) Ping(context.Context) error { return nil }
+
+func (c *countingStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -89,8 +110,6 @@ func (c *countingStore) List(_ context.Context, prefix string) ([]blob.Object, e
 
 	return out, nil
 }
-
-func (c *countingStore) Ping(context.Context) error { return nil }
 
 // count returns the number of calls that reached the store.
 func (c *countingStore) count() int {
@@ -283,7 +302,7 @@ func TestScopedBlobsRefuseHostilePrefixes(t *testing.T) {
 
 			b, store, rec := newScopeFixture(t, nil)
 
-			if _, err := b.List(t.Context(), tc.prefix); !errors.Is(err, blob.ErrOutOfScope) {
+			if _, err := blobtest.ListAll(t.Context(), b, tc.prefix); !errors.Is(err, blob.ErrOutOfScope) {
 				t.Fatalf("list %q: err = %v, want blob.ErrOutOfScope", tc.prefix, err)
 			}
 
@@ -323,7 +342,7 @@ func TestScopedBlobsServeTheirOwnKeys(t *testing.T) {
 		t.Fatalf("get = %q, want body", got)
 	}
 
-	listed, listErr := b.List(ctx, b.updatePrefix("stk-1", "upd-1"))
+	listed, listErr := blobtest.ListAll(ctx, b, b.updatePrefix("stk-1", "upd-1"))
 	if listErr != nil || len(listed) != 1 {
 		t.Fatalf("list = %v, %v; want one object", listed, listErr)
 	}
@@ -421,7 +440,10 @@ func TestBlobAccessRefusesBadInput(t *testing.T) {
 func TestCheckJournalBlobKey(t *testing.T) {
 	t.Parallel()
 
-	const good = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/3"
+	const (
+		stem = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/"
+		good = stem + "3-k3j9x0a1b2c3d4e5f6g7"
+	)
 
 	tests := []struct {
 		name string
@@ -430,15 +452,17 @@ func TestCheckJournalBlobKey(t *testing.T) {
 		ok   bool
 	}{
 		{"a batch of the update", scopeNS, good, true},
+		{"a batch without an attempt ID", scopeNS, stem + "3", false},
+		{"a bad attempt ID", scopeNS, stem + "3-ABCDEFGH", false},
 		{"another namespace", scopeOther2, good, false},
-		{"another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/journal/3", false},
-		{"another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/journal/3", false},
-		{"old layout", scopeNS, "pulumi/stk-1/upd-1/journal/3", false},
+		{"another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/journal/3-abcdefgh", false},
+		{"another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/journal/3-abcdefgh", false},
+		{"old layout", scopeNS, "pulumi/stk-1/upd-1/journal/3-abcdefgh", false},
 		{"a checkpoint key", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3", false},
 		{"no sequence", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/", false},
-		{"nested", scopeNS, good + "/4", false},
-		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/journal/3", false},
-		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/../3", false},
+		{"nested", scopeNS, good + "/4-abcdefgh", false},
+		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/journal/3-abcdefgh", false},
+		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/../3-abcdefgh", false},
 		{"empty key", scopeNS, "", false},
 		{"invalid namespace ID", "acme", good, false},
 		{"empty namespace ID", "", good, false},
@@ -471,7 +495,10 @@ const scopeOther2 = namespace.ID(scopeOther)
 func TestCheckCheckpointBlobKey(t *testing.T) {
 	t.Parallel()
 
-	const good = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3"
+	const (
+		stem = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/"
+		good = stem + "3-k3j9x0a1b2c3d4e5f6g7"
+	)
 
 	tests := []struct {
 		name string
@@ -480,19 +507,31 @@ func TestCheckCheckpointBlobKey(t *testing.T) {
 		ok   bool
 	}{
 		{"a save of the update", scopeNS, good, true},
-		{"the first save", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/0", true},
+		{"the first save", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/0-abcdefgh", true},
+		{"a save without an attempt ID", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3", false},
+		{"an attempt ID that is too short", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3-abc", false},
+		{"an attempt ID that is too long", scopeNS, stem + "3-" + strings.Repeat("a", 65), false},
+		{"an attempt ID with a capital letter", scopeNS, stem + "3-ABCDEFGHIJ", false},
+		{"an attempt ID with a dot", scopeNS, stem + "3-abcdefgh.ij", false},
+		{"an empty attempt ID", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3-", false},
+		{"a second dash", scopeNS, stem + "3-abcdefgh-ijklmnop", false},
+		{"a leading zero", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/03-abcdefgh", false},
+		{"a sign", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/+3-abcdefgh", false},
 		{"another namespace", scopeOther2, good, false},
-		{"same namespace, another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/3", false},
-		{"same namespace, stack ID as a string prefix", scopeNS, "namespaces/ns-scope-a/pulumi/stk-10/upd-1/3", false},
-		{"same namespace, another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/3", false},
-		{"old layout", scopeNS, "pulumi/stk-1/upd-1/3", false},
+		{"same namespace, another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/3-abcdefgh", false},
+		{
+			"same namespace, stack ID as a string prefix",
+			scopeNS, "namespaces/ns-scope-a/pulumi/stk-10/upd-1/3-abcdefgh", false,
+		},
+		{"same namespace, another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/3-abcdefgh", false},
+		{"old layout", scopeNS, "pulumi/stk-1/upd-1/3-abcdefgh", false},
 		{"a journal key", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/3", false},
 		{"no number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/", false},
 		{"not a number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/x", false},
 		{"negative number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/-1", false},
-		{"nested", scopeNS, good + "/4", false},
-		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/3", false},
-		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/../3", false},
+		{"nested", scopeNS, good + "/4-abcdefgh", false},
+		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/3-abcdefgh", false},
+		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/../3-abcdefgh", false},
 		{"empty key", scopeNS, "", false},
 		{"invalid namespace ID", "acme", good, false},
 		{"empty namespace ID", "", good, false},
@@ -591,11 +630,17 @@ type foreignLister struct {
 	*countingStore
 }
 
-func (foreignLister) List(context.Context, string) ([]blob.Object, error) {
-	return []blob.Object{
+// ListPage implements blob.Store: it answers keys of two other stacks, whatever
+// the prefix is.
+func (foreignLister) ListPage(_ context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	return blob.PageOf([]blob.Object{
 		{Key: "namespaces/ns-scope-a/pulumi/stk-1/upd-1/1", ModifiedAt: time.Time{}},
 		{Key: "namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", ModifiedAt: time.Time{}},
-	}, nil
+	}, req), nil
 }
 
 // TestListRefusesAKeyOutsideTheStack checks the layer under the delete of a
@@ -617,12 +662,105 @@ func TestListRefusesAKeyOutsideTheStack(t *testing.T) {
 		t.Fatalf("scope: %v", err)
 	}
 
-	listed, err := b.List(t.Context(), b.stackPrefix(scopeStack))
+	listed, err := blobtest.ListAll(t.Context(), b, b.stackPrefix(scopeStack))
 	if !errors.Is(err, blob.ErrOutOfScope) || len(listed) != 0 {
 		t.Fatalf("list = %v, %v; want no key and blob.ErrOutOfScope", listed, err)
 	}
 
 	if len(rec.got) != 1 || rec.got[0].op != "list" || rec.got[0].where != scopeaudit.OutsideUnitDirectory {
 		t.Fatalf("refusals = %+v, want one list refusal in the stack directory", rec.got)
+	}
+}
+
+// nextFault answers a Next key that it was given, and counts the requests that
+// reach it, as an adapter that does not check the request would.
+type nextFault struct {
+	*countingStore
+
+	next blob.Key
+}
+
+func (n *nextFault) ListPage(context.Context, blob.PageRequest) (blob.Page, error) {
+	n.mu.Lock()
+	n.calls++
+	n.mu.Unlock()
+
+	return blob.Page{Objects: nil, Next: n.next}, nil
+}
+
+// listRun is the outcome of listRefusal: the page and the error of the call,
+// the refusals that the view recorded and the count of requests that reached
+// the store.
+type listRun struct {
+	err      error
+	refusals []recordedRefusal
+	page     blob.Page
+	calls    int
+}
+
+// listRefusal lists the stack through a store that answers next, with the
+// position after.
+func listRefusal(t *testing.T, after, next blob.Key) listRun {
+	t.Helper()
+
+	rec := &scopeRecorder{err: nil, got: nil}
+	store := &nextFault{countingStore: newCountingStore(), next: next}
+
+	access, err := newBlobAccess(store, rec)
+	if err != nil {
+		t.Fatalf("access: %v", err)
+	}
+
+	b, err := access.scope(scopeNS, scopeStack)
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+
+	req := blob.PageRequest{Prefix: b.stackPrefix(scopeStack), After: after, Limit: 10}
+	page, err := b.ListPage(t.Context(), req)
+
+	return listRun{err: err, refusals: rec.got, page: page, calls: store.calls}
+}
+
+// TestListPageChecksAfterAndNextAgainstTheStack checks that the layer under the
+// delete of a purge and of a sweep refuses a position outside the directory of
+// the stack: an After key of another stack never reaches the store, and a Next
+// key of another stack never reaches the caller.
+func TestListPageChecksAfterAndNextAgainstTheStack(t *testing.T) {
+	t.Parallel()
+
+	other := blob.Key("namespaces/" + string(scopeNS) + "/pulumi/stk-2/upd-1/1")
+	elsewhere := blob.Key("namespaces/" + scopeOther + "/pulumi/stk-1/upd-1/1")
+
+	cases := []struct {
+		name      string
+		after     blob.Key
+		next      blob.Key
+		wantCalls int
+		want      scopeaudit.Where
+	}{
+		{"after of another stack", other, "", 0, scopeaudit.OutsideUnitDirectory},
+		{"after of another namespace", elsewhere, "", 0, scopeaudit.OutsideNamespace},
+		{"next of another stack", "", other, 1, scopeaudit.OutsideUnitDirectory},
+		{"next of another namespace", "", elsewhere, 1, scopeaudit.OutsideNamespace},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := listRefusal(t, tc.after, tc.next)
+			if !errors.Is(run.err, blob.ErrOutOfScope) || len(run.page.Objects) != 0 || run.page.Next != "" {
+				t.Fatalf("page = %v, err = %v; want an empty page and blob.ErrOutOfScope", run.page, run.err)
+			}
+
+			if run.calls != tc.wantCalls {
+				t.Fatalf("store saw %d calls, want %d", run.calls, tc.wantCalls)
+			}
+
+			if len(run.refusals) != 1 || run.refusals[0].op != "list" || run.refusals[0].where != tc.want {
+				t.Fatalf("refusals = %+v, want one list refusal at %v", run.refusals, tc.want)
+			}
+		})
 	}
 }

@@ -104,11 +104,11 @@ func TestNewRestoreServiceNeedsEveryPort(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			service, err := newRestoreService(
+			service, err := newRestoreService(restoreInputsOf(
 				addBackupTarget(t, restoreSettings(t, tc.store)),
 				restoreDeps(t, base),
 				nil,
-			)
+			))
 			checkMissingPort(t, service, err, tc.missing)
 		})
 	}
@@ -143,11 +143,11 @@ func TestNewRestoreServiceWithEveryPort(t *testing.T) {
 	base := openRestoreStore(t)
 
 	// The service only holds the maintenance service; the test never enters it.
-	service, err := newRestoreService(
+	service, err := newRestoreService(restoreInputsOf(
 		addBackupTarget(t, restoreSettings(t, base)),
 		restoreDeps(t, base),
 		new(maintenance.Service),
-	)
+	))
 	if err != nil || service == nil {
 		t.Fatalf("restore service = %v, %v, want a service", service, err)
 	}
@@ -161,7 +161,7 @@ func TestNewRestoreServiceWithoutTargetNeedsNoPort(t *testing.T) {
 	base := openRestoreStore(t)
 	store := withoutKindReader{baseRestoreStore: base, Fencer: base, RestoreOperations: base, RestoreStaging: base}
 
-	service, err := newRestoreService(restoreSettings(t, store), restoreDeps(t, base), nil)
+	service, err := newRestoreService(restoreInputsOf(restoreSettings(t, store), restoreDeps(t, base), nil))
 	if err != nil || service != nil {
 		t.Fatalf("restore service = %v, %v, want none and no error", service, err)
 	}
@@ -197,6 +197,17 @@ func restoreSettings(t *testing.T, store namespace.Store) *settings {
 	return cfg
 }
 
+// restoreInputsOf returns the inputs of newRestoreService that the
+// assembly gives for cfg, deps and maint.
+func restoreInputsOf(cfg *settings, deps installationDeps, maint *maintenance.Service) restoreInputs {
+	return restoreInputs{
+		settings: cfg.backup, store: cfg.namespaceStore, blobs: cfg.blobStore, watch: cfg.watch,
+		backups: deps.backups, maint: maint, chain: deps.chain, key: cfg.secretWrapper,
+		installation: cfg.installation.String(), owner: durableOwner(cfg), lease: cfg.operationLease,
+		now: cfg.now, logger: cfg.logger,
+	}
+}
+
 // openRestoreBlobs opens a file blob store in a new directory and closes it
 // at the end of the test.
 func openRestoreBlobs(t *testing.T, name string) *fs.Store {
@@ -220,7 +231,7 @@ func openRestoreBlobs(t *testing.T, name string) *fs.Store {
 func addBackupTarget(t *testing.T, cfg *settings) *settings {
 	t.Helper()
 
-	cfg.backupTarget = openRestoreBlobs(t, "target")
+	cfg.backup.target = openRestoreBlobs(t, "target")
 	cfg.blobStore = openRestoreBlobs(t, "live-blobs")
 
 	return cfg

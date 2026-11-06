@@ -159,6 +159,15 @@ func (l *restoreServiceLive) ConfirmRestoreMaintenance(
 	return entered, l.recordFence(ctx, f, id, result)
 }
 
+// CheckRestoreFence implements backup.RestoreOperations.
+func (l *restoreServiceLive) CheckRestoreFence(ctx context.Context, f durable.StepFence, id backup.RestoreID) error {
+	if err := l.checkFence(ctx, f, id); err != nil {
+		return err
+	}
+
+	return l.requireRunning(ctx, id)
+}
+
 // RecordRestoreEvent implements backup.RestoreOperations.
 func (l *restoreServiceLive) RecordRestoreEvent(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, object string,
@@ -220,9 +229,17 @@ func (l *restoreServiceLive) RestoreMaintenanceEntered(ctx context.Context, id b
 
 // MarkRestoreApplying implements backup.RestoreOperations.
 func (l *restoreServiceLive) MarkRestoreApplying(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID,
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID, result []byte,
 ) error {
-	if err := l.recordFence(ctx, f, id, nil); err != nil {
+	l.mu.Lock()
+	hook := l.onApplying
+	l.mu.Unlock()
+
+	if hook != nil {
+		hook()
+	}
+
+	if err := l.recordFence(ctx, f, id, result); err != nil {
 		return err
 	}
 
@@ -371,7 +388,13 @@ func (l *restoreServiceLive) StageRestore(
 
 	l.mu.Lock()
 	l.areas = append(l.areas, a)
+	after := l.afterStage
+	sum.Blobs = append(slices.Clone(sum.Blobs), l.stageBlobs...)
 	l.mu.Unlock()
+
+	if after != nil {
+		after()
+	}
 
 	return sum, report, nil
 }

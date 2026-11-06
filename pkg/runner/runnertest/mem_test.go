@@ -25,7 +25,7 @@ func TestReferenceStore(t *testing.T) {
 	runnertest.Run(t, func(*testing.T) runnertest.Harness {
 		m := newMem()
 
-		return runnertest.Harness{Pools: m, Members: m, Sessions: m, Domain: m}
+		return runnertest.Harness{Pools: m, Members: m, Sessions: m, Domain: m, Canceler: m}
 	})
 }
 
@@ -40,6 +40,8 @@ type op struct {
 	recorded  bool
 	job       string
 	phase     int
+	// canceled is true after Cancel. The claim stays live.
+	canceled bool
 }
 
 // nonceKey is a nonce of one subject.
@@ -129,7 +131,7 @@ func (m *mem) ClaimLease(
 	expires := time.Now().Add(lease)
 	m.ops[id] = op{
 		kind: kind, owner: owner, token: 1, expires: expires, claimedAt: time.Time{}, recorded: false, job: "",
-		phase: 0,
+		phase: 0, canceled: false,
 	}
 
 	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: expires}, nil
@@ -165,6 +167,21 @@ func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error
 	m.ops[c.Operation] = o
 
 	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: o.expires}, nil
+}
+
+func (m *mem) Cancel(_ context.Context, c durable.Claim) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !liveClaim(m, c) {
+		return durable.ErrClaimLost
+	}
+
+	o := m.ops[c.Operation]
+	o.canceled = true
+	m.ops[c.Operation] = o
+
+	return nil
 }
 
 func (m *mem) End(_ context.Context, c durable.Claim) error {
@@ -672,8 +689,8 @@ func (m *mem) Retire(_ context.Context, id string, now time.Time, fence namespac
 // expireAllClaims ends every live claim of the runner id, as an expiry
 // does: the next claim of each operation gets a new token.
 func expireAllClaims(m *mem, id string) {
-	for k, o := range m.ops {
-		if o.owner == id {
+	for k := range m.ops {
+		if m.ops[k].owner == id {
 			releaseOp(m, k)
 		}
 	}
@@ -684,8 +701,8 @@ func expireAllClaims(m *mem, id string) {
 func expireWaitingClaims(m *mem, id string) []string {
 	var ended []string
 
-	for k, o := range m.ops {
-		if o.owner == id && !hasSession(m, k, o.token) {
+	for k := range m.ops {
+		if m.ops[k].owner == id && !hasSession(m, k, m.ops[k].token) {
 			releaseOp(m, k)
 
 			ended = append(ended, string(k))
@@ -868,6 +885,44 @@ func (m *mem) RunnerRenew(
 		return durable.Claim{}, err
 	}
 
+	o := m.ops[c.Operation]
+	o.expires = time.Now().Add(d)
+	m.ops[c.Operation] = o
+	c.ExpiresAt = o.expires
+
+	return c, nil
+}
+
+func (m *mem) SessionRenew(
+	_ context.Context, id string, fence namespace.Fence, d time.Duration,
+) (durable.Claim, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := checkFence(m, fence); err != nil {
+		return durable.Claim{}, err
+	}
+
+	if d <= 0 {
+		return durable.Claim{}, fmt.Errorf("%w: a renewal needs a positive lease", runner.ErrInvalid)
+	}
+
+	s, ok := m.sessions[id]
+	if !ok {
+		return durable.Claim{}, runner.ErrNotFound
+	}
+
+	if rn, found := m.runners[s.Runner]; !found || !rn.RetiredAt.IsZero() {
+		return durable.Claim{}, runner.ErrRetired
+	}
+
+	c := durable.Claim{Operation: durable.ID(s.Operation), Owner: s.Runner, Token: s.Token, ExpiresAt: time.Time{}}
+	if !liveClaim(m, c) {
+		return durable.Claim{}, runner.ErrClaimLost
+	}
+
+	// A cancel does not stop the renewal: the launcher still writes its log
+	// and its finish.
 	o := m.ops[c.Operation]
 	o.expires = time.Now().Add(d)
 	m.ops[c.Operation] = o

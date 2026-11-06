@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -82,6 +83,15 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		return
 	}
 
+	// A write under a lock that the caller holds met the gates at that lock,
+	// a forced write too. Each other write met no gate at a lock, so the
+	// gates run here, before the body streams and before the transaction.
+	if !holdsNamedLock(ws, in.LockID, c.principal.Subject) && !h.guardStateWrite(ctx, w, c, stateCheck{
+		action: identity.ActionUnitWriteUnlocked, op: gate.OperationUnlockedWrite,
+	}) {
+		return
+	}
+
 	auth := workspace.StreamAuthority{Allow: allow, Record: h.recordOverride(r, c.principal, obj)}
 
 	_, err = h.ws.WriteState(ctx, ws.ID, in, auth, r.Body)
@@ -93,6 +103,18 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// holdsNamedLock reports whether lockID names the current lock of ws and
+// holder holds it. Only such a write skips the gates, because its lock met
+// them.
+//
+// Defense in depth: the domain refuses a write whose lock ID is not the
+// current lock of its holder. This check does not rely on that refusal: a
+// lock ID that is empty, that names no lock, or that names the lock of
+// another holder meets the gates here all the same.
+func holdsNamedLock(ws workspace.Workspace, lockID, holder string) bool {
+	return lockID != "" && ws.Lock.Locked() && ws.Lock.ID == lockID && ws.Lock.Holder == holder
 }
 
 // writeBusy answers a state write that arrived while the gate is full. It
@@ -138,7 +160,14 @@ func contentMD5(r *http.Request) (string, error) {
 // lock: a force-unlock (ADR 49, decision 6). It needs unit:write-forced. The
 // unlock writes the fence version of a unit with state; a client-encrypted state
 // unlocks unfenced only while the forced-write switches are on (ADR 44).
-func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace) {
+//
+// expect is the lock that the release must end: the lock that the caller read
+// on a locked workspace, or the lock of the record of the last release on a
+// free workspace. On a free workspace the service answers success only for a
+// repeat of the forced release of the caller, and changes nothing.
+func (h *Handler) forceUnlockWorkspace(
+	w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace, expect workspace.Lock,
+) {
 	ctx := r.Context()
 
 	obj, err := unitObject(c.ref)
@@ -165,16 +194,21 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
+	if !h.guardStateWrite(ctx, w, c, stateCheck{action: identity.ActionUnitWriteForced, op: gate.OperationUnlock}) {
+		return
+	}
+
 	record := func() error {
 		return h.appendOverrideAudit(r, c.principal, obj, identity.ActionUnitWriteForced, "")
 	}
 
 	// The lock the caller saw is the one that must still be held: its ID and its
-	// holder come from the same read (ADR 49, decision 6).
+	// holder come from the same read. On a free workspace, expect names the lock
+	// of the record of the last release, which a repeat must match.
 	_, _, err = h.ws.ForceUnlockLock(
 		ctx,
 		ws.ID,
-		ws.Lock,
+		expect,
 		c.principal.Subject,
 		allow,
 		record,

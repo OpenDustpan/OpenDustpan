@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18 · supersedes parts of ADRs 100, 103, 120, 122, 124 and 125 (see "What this ADR replaces"). Decisions 11 to 13 superseded in part by ADR 190. The age of the confirmation of decision 7 superseded by ADR 227
 
+Changed by:
+
+- ADR 190 changes decisions 11, 12 and 13: no job thread on a job of a change
+  order.
+- ADR 222 changes decision 7: the confirmation uses the one window.
+- ADR 227 changes decision 7: the age of a confirmation.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Three designs merged on 2026-10-18 in parallel:

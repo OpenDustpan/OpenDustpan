@@ -18,6 +18,23 @@ func breakGlassPerson(t *testing.T, s principal.Store, id, subject string) {
 	mustCreatePrincipal(t, s, p)
 }
 
+// testBreakGlassPasswordRefused states that a write that sets the
+// break-glass flag on a person with a local password fails with
+// principal.ErrBreakGlassPassword under the row lock of the principal. It
+// skips while no write sets the break-glass flag on a person that exists:
+// only the create of a principal sets it, so no person can hold a password
+// and get the flag.
+func testBreakGlassPasswordRefused(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	if s == nil {
+		t.Fatal("the case needs a store")
+	}
+
+	t.Skip("no port sets the break-glass flag on an existing person, so no break-glass person " +
+		"holds a password; the local user store checks the flag in each write that would")
+}
+
 // wantEnabled fails the test unless the principal id exists and is enabled.
 func wantEnabled(t *testing.T, s principal.Store, id string) {
 	t.Helper()

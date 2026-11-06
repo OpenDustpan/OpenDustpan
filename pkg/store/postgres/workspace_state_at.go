@@ -19,16 +19,12 @@ var _ workspace.StateAtReader = (*Store)(nil)
 func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.Time) (workspace.StateAt, error) {
 	// One snapshot, so that the state version and the first finalize time
 	// come from the same state of the database.
-	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
+	tx, err := s.txs.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
 		return workspace.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
 	}
 
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			_ = rollbackErr
-		}
-	}()
+	defer rollbackRead(ctx, tx)
 
 	q := s.queries.WithTx(tx)
 

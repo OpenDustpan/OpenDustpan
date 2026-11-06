@@ -280,7 +280,9 @@ func (m *modelRun) put(ctx context.Context, mode string, n int) (string, error) 
 // listPrefix lists the directory of the run, as the backup, the restore and
 // the audit checkpoint writer list their directory before a write.
 func (m *modelRun) listPrefix(ctx context.Context) error {
-	if _, err := m.target.adapter.List(ctx, m.prefix+"/list"); err != nil {
+	page := blob.PageRequest{Prefix: m.prefix + "/list", After: "", Limit: blob.MaxPageLimit}
+
+	if _, err := m.target.adapter.ListPage(ctx, page); err != nil {
 		return fmt.Errorf("list: %w", err)
 	}
 
@@ -521,7 +523,13 @@ func runSweep(ctx context.Context, t *s3Target, db *pgModel, dir string, objects
 	out := sweepResult{Objects: objects, Deleted: 0, ListMs: 0, KeysMs: 0, DeletesMs: 0, TotalMs: 0, Error: ""}
 	start := time.Now()
 
-	listed, err := t.adapter.List(ctx, dir)
+	var listed []blob.Object
+
+	err := blob.Walk(ctx, t.adapter, dir, func(o blob.Object) error {
+		listed = append(listed, o)
+
+		return nil
+	})
 	out.ListMs = msSince(start)
 
 	if err != nil {

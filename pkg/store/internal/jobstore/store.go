@@ -37,8 +37,9 @@ type Store struct {
 }
 
 var (
-	_ job.Store       = (*Store)(nil)
-	_ job.FreezeStore = (*Store)(nil)
+	_ job.Store              = (*Store)(nil)
+	_ job.FreezeStore        = (*Store)(nil)
+	_ job.FinalVersionReader = (*Store)(nil)
 )
 
 // New returns the job stores over run.
@@ -152,6 +153,7 @@ func (s *Store) List(ctx context.Context, f job.Filter) ([]job.Job, error) {
 		rows, err := tx.List(ctx, Query{
 			Namespace: f.Namespace, UnitID: f.UnitID, States: f.States, Limit: limit, After: f.After,
 			StateChangedBeforeMs: millisOrZero(f.StateChangedBefore),
+			StateChangedAfterMs:  millisOrZero(f.StateChangedAfter),
 		})
 		if err != nil {
 			return err
@@ -192,6 +194,49 @@ func (s *Store) Orphans(ctx context.Context, limit int) ([]job.Orphan, error) {
 	})
 
 	return out, err
+}
+
+// FinalVersion implements job.FinalVersionReader.
+func (s *Store) FinalVersion(ctx context.Context, ns namespace.Name, unitID string) (job.FinalVersion, bool, error) {
+	if ns == "" {
+		return job.FinalVersion{}, false, fmt.Errorf("%w: the namespace of a final version is empty", job.ErrInvalid)
+	}
+
+	if unitID == "" {
+		return job.FinalVersion{}, false, fmt.Errorf("%w: the unit of a final version is empty", job.ErrInvalid)
+	}
+
+	var (
+		out job.FinalVersion
+		ok  bool
+	)
+
+	err := s.run.Read(ctx, func(tx Tx) error {
+		row, found, err := tx.FinalVersion(ctx, ns, unitID)
+		if err != nil {
+			return err
+		}
+
+		if !found {
+			return nil
+		}
+
+		out = job.FinalVersion{
+			UnitID:    row.UnitID,
+			VersionID: row.VersionID,
+			Commit:    row.Commit,
+			Job:       row.Job,
+			At:        row.At,
+		}
+		ok = true
+
+		return nil
+	})
+	if err != nil {
+		return job.FinalVersion{}, false, fmt.Errorf("final version of unit %s: %w", unitID, err)
+	}
+
+	return out, ok, nil
 }
 
 // CreateFreeze implements job.FreezeStore.

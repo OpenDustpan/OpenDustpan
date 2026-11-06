@@ -1,7 +1,6 @@
 # S3-compatible object storage
 
 This guide shows how to hold state content in S3-compatible storage.
-It follows ADR 31.
 The `blobtest` suite covers the adapter.
 `make test-s3` runs that suite against a live S3-compatible server.
 
@@ -58,6 +57,29 @@ A second write that succeeds means the store ignores conditional writes.
 The open then fails and the server does not start.
 The error names the endpoint and the bucket.
 It holds no credential.
+
+A probe step tries again after these errors:
+- a connection reset, a connection refused, an end of file or a timeout
+- a DNS error that the resolver marks as temporary
+- an answer with status 500, 502, 503, 504 or 429, or with the code `SlowDown`
+
+The wait between tries grows from 100 ms to 5 s.
+Each retry writes a warning to the log.
+The write steps of the probe have a total time of 30 seconds.
+All deletes of probe objects after a failure share one time of 5 seconds.
+The worst case of the start is therefore about 35 seconds.
+When the time ends, the start fails and the error names the last cause.
+These times are fixed. The `serve` command has no setting for them.
+
+All other errors fail at once, with no retry.
+Examples are access denied, a missing bucket, a bad signature, a DNS name that does not exist, status 400 and status 501.
+The key of the probe object is random.
+When the first write finds its key in place, the object is the probe's own.
+The store got an earlier try, but the answer was a 5xx answer or did not arrive.
+The probe then deletes that object and uses a new key.
+
+The error text of the store is untrusted.
+The start deletes control characters from the error code of the store and cuts it to 128 bytes.
 
 ## Write-once use and the size limit
 

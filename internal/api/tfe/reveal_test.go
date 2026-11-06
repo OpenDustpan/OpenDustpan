@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -216,7 +217,7 @@ func revealConfig(
 		MaxStateBytes:  0,
 		OnAuditFailure: onFail,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	}
 }
 
@@ -596,8 +597,12 @@ func TestRevealAuditFailureAnswers500(t *testing.T) {
 		t.Fatalf("log misses the failure line: %q", line)
 	}
 
-	if !strings.Contains(line, path) {
-		t.Fatalf("log misses the path: %q", line)
+	if strings.Contains(line, path) {
+		t.Fatalf("log holds the path, which is request data: %q", line)
+	}
+
+	if !strings.Contains(line, "op=reveal.audit") && !strings.Contains(line, `"op":"reveal.audit"`) {
+		t.Fatalf("log misses the op: %q", line)
 	}
 
 	if strings.Contains(line, "pw-s3cr3t") {

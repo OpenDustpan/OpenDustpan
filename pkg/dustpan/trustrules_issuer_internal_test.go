@@ -82,7 +82,7 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 
 	cfg := defaultSettings()
 	cfg.namespaceStore = st
-	cfg.trustRules = st.TrustRules()
+	cfg.trustRules.store = st.TrustRules()
 	cfg.authorizer = identity.AdminOnly{}
 	cfg.publicURL = "https://api.example.com"
 

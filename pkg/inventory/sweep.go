@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -76,13 +77,18 @@ func (e DeletedEntry) Reference() string {
 // another installation is the home of their namespace, a restore took them
 // first, or the server stopped the sweep before their purge.
 // FinishedBlobPurges counts the blob purge records that the sweep finished,
-// and PendingBlobPurges the records that stay.
+// and PendingBlobPurges the records that stay. WaitingBlobPurges counts the
+// records that stay because a backup or a restore runs, and WaitingFor names
+// that work, for example "backup bkp-...", or is empty. A record that waits
+// counts in PendingBlobPurges too, and not in Failed.
 type SweepResult struct {
 	Purged             []DeletedEntry
 	Failed             int
 	Skipped            int
 	FinishedBlobPurges int
 	PendingBlobPurges  int
+	WaitingBlobPurges  int
+	WaitingFor         string
 }
 
 // SweepLocker makes one retention sweep run at a time on a store, for every
@@ -163,7 +169,10 @@ func NewSweeper(cfg SweeperConfig) (*Sweeper, error) {
 // store, also a sweep of another server process, and another error only when
 // it cannot take the lock, or cannot read the units or the records.
 func (s *Sweeper) Sweep(ctx context.Context, e audit.Entry) (SweepResult, error) {
-	res := SweepResult{Purged: []DeletedEntry{}, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0}
+	res := SweepResult{
+		Purged: []DeletedEntry{}, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
+	}
 
 	release, lockErr := s.cfg.Lock.TryLockSweep(ctx)
 	if lockErr != nil {
@@ -329,10 +338,13 @@ func (s *Sweeper) finishOne(ctx context.Context, r BlobPurge, now time.Time, res
 		return
 	}
 
-	if !s.deletePurgedBlobs(ctx, r) {
+	if waiting, ok := s.deletePurgedBlobs(ctx, r); !ok {
 		res.PendingBlobPurges++
 
-		if !stopped(ctx) {
+		if waiting != "" {
+			res.WaitingBlobPurges++
+			res.WaitingFor = waiting
+		} else if !stopped(ctx) {
 			res.Failed++
 		}
 
@@ -356,15 +368,18 @@ func (s *Sweeper) finishOne(ctx context.Context, r BlobPurge, now time.Time, res
 }
 
 // deletePurgedBlobs deletes the blobs of the unit of r and reports whether
-// no blob remains. A failure logs a warning without a blob key, unless the
-// server stopped the sweep, and the record stays pending.
-func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
+// no blob remains. When a backup or a restore runs, the tool keeps the blobs:
+// the first result names that work, for example "backup bkp-...", and the
+// record stays pending with an INFO line and no failure. Any other failure
+// logs a warning without a blob key, unless the server stopped the sweep, and
+// the record stays pending.
+func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) (string, bool) {
 	tool, ok := s.cfg.Tools[r.Tool]
 	if !ok {
 		s.cfg.Logger.WarnContext(ctx, "retention sweep cannot delete the blobs of an unknown tool",
 			slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID), slog.String("error_kind", "unknown_tool"))
 
-		return false
+		return "", false
 	}
 
 	// A record whose namespace could not be matched has no namespace ID, and a
@@ -379,20 +394,28 @@ func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
 			slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
 			slog.String("error_kind", errorKindNoNamespace))
 
-		return false
+		return "", false
 	}
 
 	if err := tool.DeletePurgedBlobs(ctx, r.NamespaceID, r.UnitID); err != nil {
+		if wait, isWait := errors.AsType[*blobguard.WaitError](err); isWait {
+			s.cfg.Logger.InfoContext(ctx, "blobs of a purged unit wait for a running backup or restore",
+				slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
+				slog.String("running", wait.Work.String()))
+
+			return wait.Work.String(), false
+		}
+
 		if !stopped(ctx) {
 			s.cfg.Logger.WarnContext(ctx, "blobs of a purged unit remain after the retention sweep",
 				slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
 				slog.String("error_kind", ErrorKind(err)))
 		}
 
-		return false
+		return "", false
 	}
 
-	return true
+	return "", true
 }
 
 // errorKindNoNamespace is the error kind of a blob purge record whose

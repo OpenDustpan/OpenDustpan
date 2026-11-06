@@ -393,8 +393,8 @@ func (u Update) end(now time.Time, status UpdateStatus) Update {
 // Without the delta capability the CLI sends whole checkpoints with no
 // sequence number, and the last write wins. Sequence numbers arrive only with
 // verbatim and delta checkpoints, which this server does not advertise yet.
-// Every save still writes its own blob key, so a repeated save without a
-// sequence number mints the next key of its update.
+// Every save writes the key of its own attempt, so a repeated save without a
+// sequence number never writes a key twice.
 //
 // The content lives in the blob store under BlobKey. The checkpoint store
 // keeps only the metadata, so Deployment is empty on a read from the store.
@@ -423,13 +423,18 @@ type Checkpoint struct {
 	// It is stored as sent.
 	Invalid bool
 	// BlobKey names the gzip content in the blob store:
-	// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>. The
-	// store refuses a write without it, and a write with another key.
+	// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>.
+	// The store refuses a write without it, and a write with another key.
 	BlobKey blob.Key
 	// BlobSize is the size of the stored gzip bytes.
 	BlobSize int64
 	// BlobMD5 is the MD5 of the stored gzip bytes, for backups.
 	BlobMD5 [md5.Size]byte
+	// AttemptStartedAt is the time at which the write attempt of the blob
+	// started, by the clock of the writer. The store checks it with
+	// blob.CheckAttempt against the clock of the database, in the transaction
+	// of the commit. The store does not keep it, and a read gives it as zero.
+	AttemptStartedAt time.Time
 }
 
 // CheckpointInput is a checkpoint as a client submits it.

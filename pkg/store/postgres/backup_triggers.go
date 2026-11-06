@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/triggerstore"
@@ -34,7 +33,7 @@ func pgCopyTriggerTables() []pgCopyTable {
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedTriggers(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedTriggers(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT n.name, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace, " +
 		"t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, " +
 		"t.updated_at_ms FROM " +

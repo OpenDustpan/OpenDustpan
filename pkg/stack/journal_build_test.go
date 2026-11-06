@@ -15,8 +15,11 @@ import (
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -98,6 +101,23 @@ func (m *journalMemStore) JournalKeys(
 
 	for i := range rows {
 		out = append(out, rows[i].BlobKey)
+	}
+
+	return out, nil
+}
+
+// JournalBatches implements stack.JournalStore.
+func (m *journalMemStore) JournalBatches(
+	_ context.Context, _ stack.ID, update stack.UpdateID,
+) ([]stack.JournalBatchRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rows := m.journal[update]
+	out := make([]stack.JournalBatchRef, 0, len(rows))
+
+	for i := range rows {
+		out = append(out, stack.JournalBatchRef{Key: rows[i].BlobKey, SHA256: rows[i].SHA256, Size: rows[i].Size})
 	}
 
 	return out, nil
@@ -385,7 +405,23 @@ func newBuildFixtureWith(
 ) *buildFixture {
 	t.Helper()
 
+	return newBuildFixtureGuarded(t, clk, replayer, wrap, blobguardtest.None{})
+}
+
+// newBuildFixtureGuarded is newBuildFixtureWith with guard as the guard of
+// the blob deletes.
+func newBuildFixtureGuarded(
+	t *testing.T,
+	clk *clock,
+	replayer stack.JournalReplayer,
+	wrap func(*journalMemStore) stack.CheckpointStore,
+	guard blobguard.Watch,
+) *buildFixture {
+	t.Helper()
+
 	store := newJournalMemStore()
+	// The database runs on the clock of the test, as the service does.
+	store.dbNow = clk.Now
 
 	var checkpoints stack.CheckpointStore = store
 	if wrap != nil {
@@ -419,6 +455,8 @@ func newBuildFixtureWith(
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,
 		Checkpoints:        checkpoints,

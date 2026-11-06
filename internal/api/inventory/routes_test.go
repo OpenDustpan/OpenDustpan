@@ -13,6 +13,7 @@ import (
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -82,6 +83,7 @@ func newTestHandler(t *testing.T) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         testViewsConfig(t),
@@ -100,7 +102,7 @@ func newTestHandler(t *testing.T) testHandler {
 		Now:           nil,
 		PublicURL:     "",
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -122,6 +124,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,
@@ -140,7 +143,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 		Now:           nil,
 		PublicURL:     "",
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -154,6 +157,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 func enforcingUnitEntries() map[namespace.Name][]coreinventory.Entry {
 	return map[namespace.Name][]coreinventory.Entry{
 		"acme": {{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "acme",

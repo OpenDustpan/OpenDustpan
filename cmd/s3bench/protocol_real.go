@@ -95,7 +95,7 @@ func (r *protoRun) del(ctx context.Context, key string) error {
 
 // list lists the objects under prefix and answers their count.
 func (r *protoRun) list(ctx context.Context, prefix string) (int, error) {
-	listed, err := r.target.adapter.List(ctx, prefix)
+	listed, err := listAll(ctx, r.target.adapter, prefix)
 	if err != nil {
 		return 0, fmt.Errorf("list: %w", err)
 	}
@@ -441,4 +441,21 @@ func auditVerifyModel(name, newPath string) family {
 		old:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeOld) },
 		new:     func(ctx context.Context, r *protoRun, i int) error { return op(ctx, r, i, modeNew) },
 	}
+}
+
+// listAll lists every object under prefix, in key order. It walks the pages
+// of the store, so a seed of more than one page is complete.
+func listAll(ctx context.Context, store blob.Store, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, store, prefix, func(obj blob.Object) error {
+		out = append(out, obj)
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk %s: %w", prefix, err)
+	}
+
+	return out, nil
 }

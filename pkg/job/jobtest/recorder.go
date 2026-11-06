@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +31,7 @@ type RecorderHarness struct {
 	Harness
 
 	// Recorder is the job.Recorder under test.
-	Recorder job.Recorder
+	Recorder job.CheckedRecorder
 	// Reader is the job.ArtifactReader under test.
 	Reader job.ArtifactReader
 	// Records is the job.RecordStore under the recorder. The cases call its
@@ -181,6 +184,7 @@ func stepCases() []recorderCase {
 		{"steps: the steps of an earlier claim stay after a takeover", testStepTakeover},
 		{"steps: after a takeover a begin of a step that the replaced claim ended is new", testStepTakeoverEnded},
 		{"steps: the steps of a deliver phase are commit and review-request", testStepDeliver},
+		{"steps: a checked end with another log is ErrConflict and changes nothing", testStepEndChecked},
 	}
 }
 
@@ -335,6 +339,73 @@ func testStepBeginEnd(t *testing.T, h RecorderHarness) {
 	got = stepsOf(t, h, a)
 	if len(got) != chunksPair || got[1].Name != stepApply || got[1].ExitCode != -1 {
 		t.Fatalf("steps = %+v, want prepare then apply with exit code -1", got)
+	}
+}
+
+// testStepEndChecked proves that a checked end compares the log before it
+// writes: a count or a hash that differs leaves the step and its log open, and
+// the right count and hash end the step. A retry of the right end changes
+// nothing, and a retry with another log is ErrConflict.
+func testStepEndChecked(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	a := openApply(t, h, setUp(t, h.Harness), "unit-0")
+
+	mustBegin(t, h, a, stepPrepare)
+	mustAppend(t, h, a, 0, "line 0\n")
+	mustAppend(t, h, a, 1, "line 1\n")
+
+	sum := sha256.Sum256([]byte("line 0\nline 1\n"))
+	right := job.LogExpectation{Chunks: chunksPair, SHA256: hex.EncodeToString(sum[:])}
+	wrongHash := job.LogExpectation{Chunks: chunksPair, SHA256: strings.Repeat("0", len(right.SHA256))}
+
+	refused := map[string]job.LogExpectation{
+		"hash":  wrongHash,
+		"count": {Chunks: 1, SHA256: right.SHA256},
+		"none":  {Chunks: 0, SHA256: ""},
+	}
+
+	for name, want := range refused {
+		err := h.Recorder.EndStepChecked(t.Context(), a.Claim, endRecord(a, stepPrepare, 0), want)
+		if !errors.Is(err, job.ErrConflict) {
+			t.Fatalf("EndStepChecked(%s differs) = %v, want ErrConflict", name, err)
+		}
+
+		if got := stepsOf(t, h, a); !stepAndLogOpen(got) {
+			t.Fatalf("steps after the refused end (%s) = %+v, want the step and its log open", name, got)
+		}
+	}
+
+	endCheckedAgain(t, h, a, right, wrongHash)
+}
+
+// stepAndLogOpen reports whether steps is one step with an open log.
+func stepAndLogOpen(steps []job.StepRecord) bool {
+	return len(steps) == 1 && steps[0].FinishedAt.IsZero() && steps[0].Log != nil && steps[0].Log.ClosedAt.IsZero()
+}
+
+// endCheckedAgain ends the step with the right log, retries the end, and
+// retries it with the wrong log.
+func endCheckedAgain(t *testing.T, h RecorderHarness, a *job.Assignment, right, wrong job.LogExpectation) {
+	t.Helper()
+
+	if err := h.Recorder.EndStepChecked(t.Context(), a.Claim, endRecord(a, stepPrepare, 0), right); err != nil {
+		t.Fatalf("EndStepChecked(right log) = %v", err)
+	}
+
+	got := stepsOf(t, h, a)
+	if len(got) != 1 || got[0].FinishedAt.IsZero() || got[0].Log == nil || got[0].Log.ClosedAt.IsZero() ||
+		got[0].Log.Chunks != chunksPair || got[0].Log.SHA256 != right.SHA256 {
+		t.Fatalf("steps after the end = %+v, want the step ended with the log closed", got)
+	}
+
+	if err := h.Recorder.EndStepChecked(t.Context(), a.Claim, endRecord(a, stepPrepare, 0), right); err != nil {
+		t.Fatalf("EndStepChecked(retry) = %v, want nil", err)
+	}
+
+	err := h.Recorder.EndStepChecked(t.Context(), a.Claim, endRecord(a, stepPrepare, 0), wrong)
+	if !errors.Is(err, job.ErrConflict) {
+		t.Fatalf("EndStepChecked(retry with another log) = %v, want ErrConflict", err)
 	}
 }
 
@@ -796,10 +867,23 @@ func blobsUnder(t *testing.T, h RecorderHarness, ns namespace.Name) []blob.Objec
 		t.Fatalf("GetNamespace(%s) = %v", ns, err)
 	}
 
-	objects, err := h.Blobs.List(t.Context(), "namespaces/"+n.ID.String()+"/job/")
+	objects, err := listBlobs(t.Context(), h.Blobs, "namespaces/"+n.ID.String()+"/job/")
 	if err != nil {
 		t.Fatalf("list the plan and log blobs: %v", err)
 	}
 
 	return objects
+}
+
+// listBlobs walks every page under prefix and returns the objects.
+func listBlobs(ctx context.Context, store blob.Store, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, store, prefix, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+
+	return out, err
 }

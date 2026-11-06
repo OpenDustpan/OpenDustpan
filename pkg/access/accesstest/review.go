@@ -113,7 +113,7 @@ func everyRow(scope access.ReviewScope) access.ReviewQuery {
 // allScope is the scope of every grant.
 func allScope() access.ReviewScope {
 	return access.ReviewScope{
-		Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		Object: identity.Object{}, Namespace: "", Inside: nil, Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: true,
 	}
 }
@@ -154,7 +154,7 @@ func testReviewScopes(t *testing.T, s access.Store) {
 	review(t, rs, "every grant", everyRow(allScope()), "grt-1", "grt-2", "grt-3", "grt-4", "grt-5", "grt-6")
 
 	review(t, rs, "namespace acme", everyRow(access.ReviewScope{
-		Namespace: "acme", Object: identity.Object{}, Containers: []string{"@server"},
+		Namespace: "acme", Object: identity.Object{}, Inside: nil, Containers: []string{"@server"},
 		ContainerRoles: []string{access.RoleAccountAdministrator}, TokenNamespace: "",
 		TokenNamespaceRoles: nil, All: false,
 	}), "grt-2", "grt-3", "grt-4", "grt-5")
@@ -162,6 +162,27 @@ func testReviewScopes(t *testing.T, s access.Store) {
 	review(t, rs, "collection acme/payments", everyRow(access.ReviewScope{
 		Namespace:      "",
 		Object:         identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
+		Inside:         nil,
+		Containers:     []string{"@server", "acme"},
+		ContainerRoles: []string{access.RoleAccountAdministrator, access.RoleWriter},
+		TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
+	}), "grt-2", "grt-3", "grt-4")
+
+	// The grants on the units of Inside are in the scope; a unit that is not
+	// listed, also one of another namespace, never is.
+	review(t, rs, "collection acme/payments with its units", everyRow(access.ReviewScope{
+		Namespace:      "",
+		Object:         identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
+		Inside:         []string{"unit:stk-acme-web", "unit:stk-beta-other"},
+		Containers:     []string{"@server", "acme"},
+		ContainerRoles: []string{access.RoleAccountAdministrator, access.RoleWriter},
+		TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
+	}), "grt-2", "grt-3", "grt-4", "grt-5")
+
+	review(t, rs, "collection acme/payments with a unit that has no grant", everyRow(access.ReviewScope{
+		Namespace:      "",
+		Object:         identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
+		Inside:         []string{"unit:stk-acme-api"},
 		Containers:     []string{"@server", "acme"},
 		ContainerRoles: []string{access.RoleAccountAdministrator, access.RoleWriter},
 		TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
@@ -169,7 +190,7 @@ func testReviewScopes(t *testing.T, s access.Store) {
 
 	// A container grant with a role outside ContainerRoles stays out.
 	review(t, rs, "namespace beta", everyRow(access.ReviewScope{
-		Namespace: "beta", Object: identity.Object{}, Containers: []string{"@server"},
+		Namespace: "beta", Object: identity.Object{}, Inside: nil, Containers: []string{"@server"},
 		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}), "grt-6")
 }
@@ -195,7 +216,7 @@ func testReviewTokenNamespace(t *testing.T, s access.Store) {
 		identity.ServerObject()))
 
 	scope := access.ReviewScope{
-		Object: bot, Namespace: "", Containers: []string{"@server"},
+		Object: bot, Namespace: "", Inside: nil, Containers: []string{"@server"},
 		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "acme",
 		TokenNamespaceRoles: []string{access.RoleAdmin}, All: false,
 	}
@@ -415,7 +436,7 @@ func testReviewUnit(t *testing.T, s access.Store) {
 
 	scope := func(obj identity.Object) access.ReviewScope {
 		return access.ReviewScope{
-			Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+			Object: obj, Namespace: "", Inside: nil, Containers: nil, ContainerRoles: nil, TokenNamespace: "",
 			TokenNamespaceRoles: nil, All: false,
 		}
 	}

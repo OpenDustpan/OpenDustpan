@@ -121,10 +121,12 @@ type swapPlan struct {
 	// keepAccess keeps the current rows of the access tables.
 	keepAccess bool
 	// before runs in the swap transaction after the swap lock and before
-	// the first change: the check of the step fence.
+	// the first change: the first check of the step fence, with no lock on
+	// the row of the operation, and the check of the installation state.
 	before func(tx pgx.Tx) error
-	// after runs at the end of the swap transaction with the result of the
-	// swap: the record of the step.
+	// after runs at the end of the swap transaction, after the copy of the
+	// durable control tables, with the result of the swap: the check of the
+	// step fence and the record of the step.
 	after func(tx pgx.Tx, kept backup.KeepAccessResult) error
 }
 
@@ -157,7 +159,7 @@ func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (int64, error) {
 
 	var dropped int64
 
-	err := inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	err := s.inLongTx(ctx, backupBound(), opts, func(tx pgx.Tx) error {
 		return s.swapTx(ctx, tx, plan, &dropped)
 	})
 
@@ -195,6 +197,10 @@ func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *i
 	// also the access tables that a swap that keeps them does not take.
 	if err := s.checkSwap(ctx, tx, plan.staging); err != nil {
 		return err
+	}
+
+	if s.swapHook != nil {
+		s.swapHook(ctx)
 	}
 
 	if err := s.swapIn(ctx, tx, live, plan, dropped); err != nil {
@@ -261,6 +267,14 @@ type swapNames struct {
 // the restored schema live (see fenceRestored). The installation, backups,
 // restores and revocation journal tables live in the control schema, which
 // the swap never renames, so they stay across the swap with no copy.
+//
+// The check of the step fence under the lock of the row of the operation
+// comes after all of this, at the end of the swap transaction. So a renewal
+// of the claim of the restore does not wait for the checks of the staging
+// area and the renames. It still waits from the lock of the durable control
+// tables in keepControlTables to the commit: through the copy of those
+// tables, the replay of the revocations and the fence of the namespaces.
+// That time grows with the size of the installation.
 func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) error {
 	live, previous, staging := names.live, names.previous, names.staging
 

@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/blob/blobfault"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -273,7 +274,7 @@ func TestArtifactBlobsKeepTheKeyLayout(t *testing.T) {
 		t.Fatalf("PutLogChunk = %v", err)
 	}
 
-	objects, err := inner.List(t.Context(), "namespaces/"+ns.String()+"/job/")
+	objects, err := blobtest.ListAll(t.Context(), inner, "namespaces/"+ns.String()+"/job/")
 	if err != nil {
 		t.Fatalf("List = %v", err)
 	}

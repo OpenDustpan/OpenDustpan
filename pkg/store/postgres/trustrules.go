@@ -162,3 +162,43 @@ func trustRuleRow(r *db.TrustRule) trustrulestore.Row {
 		PrincipalID: r.PrincipalID, CreatedBy: r.CreatedBy, CreatedAtMs: r.CreatedAtMs,
 	}
 }
+
+var _ trustrule.ExchangeStore = TrustRules{s: nil}
+
+// RecordExchange implements trustrule.ExchangeStore.
+func (t TrustRules) RecordExchange(
+	ctx context.Context, x trustrule.Exchange, fence namespace.Fence, e audit.Entry,
+) error {
+	if err := trustrulestore.CheckExchange(&x); err != nil {
+		return err
+	}
+
+	return t.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		row, err := q.GetTrustRule(ctx, db.GetTrustRuleParams{Namespace: fence.Namespace.String(), ID: string(x.Rule)})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return trustrule.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select the trust rule of the exchange: %w", err)
+		}
+
+		if ruleErr := trustrulestore.CheckExchangeRule(trustRuleRow(&row), x.Token.PrincipalID); ruleErr != nil {
+			return ruleErr
+		}
+
+		p, err := q.GetExchangePrincipal(ctx, x.Token.PrincipalID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("select the principal of the exchange: %w", err)
+		}
+
+		check := trustrulestore.PrincipalRow{
+			Kind: p.Kind, Namespace: p.Namespace, DeletedAtMs: p.DeletedAtMs, Found: err == nil,
+		}
+		if checkErr := trustrulestore.CheckExchangePrincipal(check, p.DisabledAtMs, fence.Namespace); checkErr != nil {
+			return checkErr
+		}
+
+		return insertToken(ctx, q, x.Token, x.Digest)
+	})
+}

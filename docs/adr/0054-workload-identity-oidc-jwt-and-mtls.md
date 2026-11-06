@@ -1,6 +1,18 @@
 # 54. Workload identity: OIDC and JWT token exchange, and mTLS
 
-Status: accepted · 2026-10-13 · decision 3 changed in part by ADR 204. Decision 5 extended by ADR 223
+Status: accepted · 2026-10-13 · decision 3 changed in part by ADR 204. Decision 5 extended by ADR 223. Decision 3 and the first item of the consequences amended by ADR 284
+
+Changed by:
+
+- ADR 69 extends: the lifetime of an exchanged workload token.
+- ADR 70 changes decisions 5 and 8: trust rules name only a principal its
+  author can act as.
+- ADR 204 changes decision 3: trust rules refuse each issuer of this
+  installation.
+- ADR 222 extends decision 5: an access limit holds for a trust rule token.
+- ADR 223 extends decision 5: an access limit holds for a trust rule token.
+- ADR 284 changes decision 3: the trust rules refuse the issuers of this
+  installation.
 
 ## Context
 

@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 115 decision 13, the name of ADR 135 decision 6, and ADR 144 decision 14. Supersedes in part ADR 194 decisions 6 and 8, and ADR 201 decision 5. Accepts RFC 49. Decision 4 superseded in part by ADR 240. The `state.write` fact schema extended by ADR 241. Decision 7 extended by ADR 258
 
+Changed by:
+
+- ADR 240 changes decision 4: principal.kind takes the record kinds, no agent.
+- ADR 241 extends decision 4: the state.write fact schema gets the import
+  object.
+- ADR 258 extends decision 7: a third built-in gate of wider scope.
+- ADR 263 changes decision 7: a refresh has no plan phase, except a drift
+  check.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The policy input of a job start holds the key paths of the edits and their

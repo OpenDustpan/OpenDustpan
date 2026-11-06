@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-19. The project owner decided it. Supersedes in part ADR 237 decision 12 (who the session of the link belongs to). Applies ADR 250 to the dev sign-in.
 
+Changed by:
+
+- ADR 253 extends decision 7: two more layers before dev data arrives.
+
 ## Context
 
 ADR 237 decision 12 says that the one-time code signs a browser in "as the

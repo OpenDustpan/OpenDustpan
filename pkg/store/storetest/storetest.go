@@ -58,6 +58,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a taken namespace ID or name is ErrAlreadyExists", test: testNamespaceIDTaken},
 		{name: "ping answers on an open store and fails after close", test: testPing},
 		{name: "stack round trip", test: testStackRoundTrip},
+		{name: "a stack has no last released lock in the inventory", test: testStackInventoryHasNoLastRelease},
 		{name: "duplicate stack is ErrAlreadyExists", test: testDuplicateStack},
 		{name: "stale fence is ErrFenced", test: testStaleFence},
 		{name: "stack in missing namespace is namespace.ErrNotFound", test: testStackMissingNamespace},

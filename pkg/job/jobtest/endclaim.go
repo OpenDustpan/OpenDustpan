@@ -74,7 +74,7 @@ func (s *hookJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
 // hooked returns a claimer over the stores of h whose job store runs hook
 // after its first Get.
 func hooked(h Harness, hook func()) *job.DurableClaimer {
-	return job.NewClaimer(&hookJobs{Store: h.Jobs, once: sync.Once{}, hook: hook}, h.Durable, h.Namespaces)
+	return job.NewClaimer(&hookJobs{Store: h.Jobs, once: sync.Once{}, hook: hook}, h.Durable, h.Namespaces, NoGates{})
 }
 
 // endCall is a call that ends a claim, with the states that it leaves when it

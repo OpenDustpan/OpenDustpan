@@ -2,6 +2,21 @@
 
 Status: accepted · 2026-10-17 · decision 10 superseded in part by ADR 133
 
+Changed by:
+
+- ADR 110 extends decision 3: an edit on a missing file creates it.
+- ADR 130 extends decisions 12 and 14: pool purpose, concurrency, isolation
+  and limits.
+- ADR 131 extends decisions 2, 13 and 15: the runner protocol paths, renewals
+  and cancel.
+- ADR 133 changes decision 10: the launcher is the credentials helper, not the
+  runner.
+- ADR 133 extends: answers the open question on runner credentials.
+- ADR 134 extends decisions 7, 10 and 13: the launcher contract.
+- ADR 164 extends decisions 7, 10, 14 and 15: pool purpose, sweep claims,
+  credential flag rule and argument masks.
+- ADR 300 changes decision 1: a job with no profile is valid. It runs with no cloud credentials.
+
 ## Context
 
 ADR 100 defines jobs, phases and their states. A job needs an executor:

@@ -47,6 +47,14 @@ func (s *connSet) remove(conn net.Conn) {
 	delete(s.conns, conn)
 }
 
+// reopen lets add hold connections again after closeAll.
+func (s *connSet) reopen() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.closed = false
+}
+
 // closeAll closes every held connection and every later one.
 func (s *connSet) closeAll() {
 	s.mu.Lock()
@@ -253,6 +261,18 @@ func copyThenClose(dst, src net.Conn) {
 
 	_ = dst.Close() //nolint:errcheck // Both ends close; the peers see the close.
 	_ = src.Close() //nolint:errcheck // Both ends close; the peers see the close.
+}
+
+// cut closes every connection of the proxy and refuses each new one until
+// resume, as a database does that fails over: the listener stays, and the
+// peers see a closed connection.
+func (p *connProxy) cut() {
+	p.conns.closeAll()
+}
+
+// resume lets the proxy forward new connections again after cut.
+func (p *connProxy) resume() {
+	p.conns.reopen()
 }
 
 // close stops the proxy: it closes the listener and every connection, and

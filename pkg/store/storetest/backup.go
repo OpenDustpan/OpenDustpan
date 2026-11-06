@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -53,6 +54,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	workspace.StateStore
 	backup.KeyPeeker
 	backup.Registry
+	blobguard.Watch
 	// GetRestore and ListRestores read the restores table, as
 	// backup.RestoreOperations does. The cases that write restore rows
 	// assert the store to the restore operation ports.
@@ -114,6 +116,9 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "one backup runs at a time", test: testBackupOneRunning},
 		{name: "starting a backup stores the row and the operation together", test: testBackupStart},
 		{name: "a refused start leaves no operation", test: testBackupStartRefused},
+		{name: "a claimed start runs the operation under the claim of the starter", test: testBackupStartClaimed},
+		{name: "a refused claimed start leaves no row and no operation", test: testBackupStartClaimedRefused},
+		{name: "a worker takes a claimed start after its claim expires", test: testBackupStartClaimedTakeover},
 		{name: "a start with an invalid request stores no row", test: testBackupStartInvalid},
 		{name: "a start with a foreign key or kind stores no row", test: testBackupStartForeign},
 		{name: "finishing a backup records the step in the same call", test: testBackupFinishRecordsStep},
@@ -126,6 +131,11 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "live operations keep their running rows", test: testBackupFailEndedLive},
 		{name: "an expired claim keeps its running row", test: testBackupFailEndedExpiredClaim},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
+		{name: "the running work read returns none for an empty store", test: testRunningNone},
+		{name: "the running work read returns the running backup", test: testRunningBackup},
+		{name: "the running work read returns none when every backup ended", test: testRunningEnded},
+		{name: "a takeover leaves the backup row running", test: testRunningTakeover},
+		{name: "a refused start gives no running work", test: testRunningRefusedStart},
 	}
 
 	for _, tc := range cases {
@@ -233,7 +243,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	})
 	checkpoint := f.checkpoint(t, running, 0, resourcedDeployment)
 
-	if err := s.PutCheckpoint(ctx, checkpoint, f.fence); err != nil {
+	if _, err := s.PutCheckpoint(ctx, checkpoint, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -943,6 +953,7 @@ func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
 	policy := accesstoken.Policy{
 		UpdatedAt: now(), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
 		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: false,
+		ExchangeLifetime: accesstoken.DefaultExchangeLifetime,
 	}
 
 	_, err := ts.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {

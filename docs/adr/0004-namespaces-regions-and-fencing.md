@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-08 · the first two decisions (home region, standby regions) superseded by ADR 248
 
+Changed by:
+
+- ADR 38 extends: a restore increments the failover version.
+- ADR 248 changes: the first two items, the home region and the standby
+  regions, and the consequences.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Pulumi Cloud's organizations are called namespaces here. Enterprises want

@@ -15,8 +15,20 @@ const (
 	GateApproversUserInvalid = "gate.approvers-user-invalid"
 	// GateDenied means that a gate refused the request.
 	GateDenied = "gate.denied"
+	// GateFinal means that a final gate forbids the change to the gate configuration, or that the change needs a
+	// reason.
+	GateFinal = "gate.final"
+	// GateInvalid means that a gate, an access limit or another object of the gate configuration is not valid.
+	GateInvalid = "gate.invalid"
+	// GateLimit means that a write to the gate configuration is over a limit of its scope.
+	GateLimit = "gate.limit"
+	// GateNotFound means that the gate configuration has no such object at the scope.
+	GateNotFound = "gate.not-found"
 	// GateUnavailable means that the gates could not decide the request, so the server refuses it.
 	GateUnavailable = "gate.unavailable"
+	// GateVersionConflict means that the stored version of a gate configuration object is not the version of the
+	// request.
+	GateVersionConflict = "gate.version-conflict"
 )
 
 // gateSpecs are the codes of a request that a gate or an access limit
@@ -37,6 +49,18 @@ func gateSpecs() []Spec {
 		},
 		{Code: GateApproversUserInvalid, Meaning: "an approver user name is not a valid name", Args: nil},
 		{Code: GateDenied, Meaning: "a gate refused the request", Args: nil},
+		{
+			Code:    GateFinal,
+			Meaning: "a final gate forbids the change to the gate configuration, or the change needs a reason",
+			Args:    nil,
+		},
+		{
+			Code:    GateInvalid,
+			Meaning: "a gate, an access limit or another object of the gate configuration is not valid",
+			Args:    nil,
+		},
+		{Code: GateLimit, Meaning: "a write to the gate configuration is over a limit of its scope", Args: nil},
+		{Code: GateNotFound, Meaning: "the gate configuration has no such object at the scope", Args: nil},
 		{Code: GateLimited, Meaning: "an access limit forbids the request", Args: nil},
 		{
 			Code:    GateRuleFailed,
@@ -44,5 +68,10 @@ func gateSpecs() []Spec {
 			Args:    nil,
 		},
 		{Code: GateUnavailable, Meaning: "the gates could not decide the request, so the server refuses it", Args: nil},
+		{
+			Code:    GateVersionConflict,
+			Meaning: "the stored version of a gate configuration object is not the version of the request",
+			Args:    nil,
+		},
 	}
 }

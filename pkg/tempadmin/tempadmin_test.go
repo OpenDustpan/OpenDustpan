@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/breakglass"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -301,6 +302,102 @@ func TestValidateReasonFitsAnAuditEntry(t *testing.T) {
 
 	if err := tempadmin.ValidateReason(strings.Repeat("a", audit.MaxReasonLen+1)); err == nil {
 		t.Fatal("reason over the limit was accepted")
+	}
+}
+
+func TestValidateReasonNamesNoOtherFeature(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{name: "empty", reason: "", want: "invalid reason: a reason is required"},
+		{name: "blank", reason: "   ", want: "invalid reason: a reason is required"},
+		{name: "not UTF-8", reason: "lost\xffaccess", want: "invalid reason: the reason is not UTF-8"},
+		{
+			name:   "too long",
+			reason: strings.Repeat("a", audit.MaxReasonLen+1),
+			want:   "invalid reason: the reason is longer than 500 characters",
+		},
+		{
+			name:   "bell",
+			reason: "lost\x07access",
+			want:   "invalid reason: the reason holds a control or format character",
+		},
+		{
+			name:   "direction override",
+			reason: "lost" + string(rune(0x202e)) + "access",
+			want:   "invalid reason: the reason holds a control or format character",
+		},
+		{
+			name:   "line separator",
+			reason: "lost" + string(rune(0x2028)) + "access",
+			want:   "invalid reason: the reason holds a control or format character",
+		},
+		{name: "at the limit", reason: strings.Repeat("a", audit.MaxReasonLen), want: ""},
+		{name: "plain text", reason: testReason, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkReasonRow(t, tc.reason, tc.want)
+		})
+	}
+
+	r := tempadmin.TempAdmin{
+		CreatedAt:      baseTime(),
+		ExpiresAt:      baseTime().Add(time.Hour),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    "prn-alice",
+		Subject:        "alice",
+		CreatedBy:      "host",
+		Reason:         strings.Repeat("a", audit.MaxReasonLen+1),
+	}
+
+	err := r.Validate()
+	if !errors.Is(err, tempadmin.ErrInvalid) || !errors.Is(err, tempadmin.ErrInvalidReason) {
+		t.Fatalf("Validate() = %v, want both tempadmin.ErrInvalid and tempadmin.ErrInvalidReason", err)
+	}
+}
+
+// checkReasonRow checks one row of TestValidateReasonNamesNoOtherFeature. An
+// empty want means that the reason is accepted. Any other want means that the
+// reason is refused with exactly that text, and that the error names only the
+// tempadmin sentinel.
+func checkReasonRow(t *testing.T, reason, want string) {
+	t.Helper()
+
+	err := tempadmin.ValidateReason(reason)
+
+	if want == "" {
+		if err != nil {
+			t.Fatalf("ValidateReason(%q) = %v, want nil", reason, err)
+		}
+
+		return
+	}
+
+	if err == nil {
+		t.Fatalf("ValidateReason(%q) = nil, want %q", reason, want)
+	}
+
+	if !errors.Is(err, tempadmin.ErrInvalidReason) {
+		t.Fatalf("error %v does not wrap tempadmin.ErrInvalidReason", err)
+	}
+
+	if errors.Is(err, history.ErrInvalidReason) {
+		t.Fatalf("error %v wraps history.ErrInvalidReason, want the tempadmin sentinel only", err)
+	}
+
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+
+	if strings.Contains(err.Error(), "redaction") {
+		t.Fatalf("error %q names another feature", err.Error())
 	}
 }
 
@@ -1249,7 +1346,10 @@ func TestValidateRefusesHiddenRunes(t *testing.T) {
 		t.Fatalf("valid record: %v", err)
 	}
 
-	for _, bad := range []string{"lost\u202eaccess", "lost\u200baccess", "lost\x07access", "lost\u0085access"} {
+	for _, bad := range []string{
+		"lost\u202eaccess", "lost\u200baccess", "lost\x07access", "lost\u0085access",
+		"lost\u2028access", "lost\u2029access",
+	} {
 		reason := base
 		reason.Reason = bad
 
