@@ -409,10 +409,10 @@ The full Pulumi and OpenTofu scenarios of milestones 1 to 5 still pass.
 |---------|---------------------------------------------------------------------------------|-------------------------|-------|
 | server  | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | all                     | accepted; domain core built |
 | server  | [RFC 43](rfc/0043-ephemeral-units.md) Ephemeral units                           | all                     | draft; design needed |
-| server  | [RFC 55](rfc/0055-environment-promotion.md) Environment promotion               | all                     | draft; design needed |
+| server  | [RFC 55](rfc/0055-environment-promotion.md) Environment promotion               | all                     | draft; design needed; in milestone 6 (ADR 331) |
 | server  | [RFC 10](rfc/0010-artifact-registry-and-curated-upstreams.md) Artifact registry | all, with curated upstreams | accepted in part (ADR 257); providers done; design needed for curation |
 | server  | [RFC 56](rfc/0056-upgrade-pull-requests.md) Upgrade pull requests               | all                     | draft; design needed |
-| server  | [RFC 16](rfc/0016-egress-proxy.md) Job proxy                                    | all                     | discussing; accepted in part (ADR 327); items P1 to P17 and P19 wait for the owner |
+| server  | [RFC 16](rfc/0016-egress-proxy.md) Job proxy                                    | all                     | discussing; accepted in part (ADR 327, ADR 330); items P13 to P17 and P19 wait for the owner |
 | server  | [RFC 114](rfc/0114-review-requests-and-change-orders.md) Review requests and change orders | review modes 1 and 3 | accepted (ADR 299, ADR 328) |
 | console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | accepted; domain core built |
 
