@@ -372,6 +372,8 @@ How-to guides:
   that each instance shares, for the target design.
 - [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
   provider.
+- [CAS sign-in](docs/guides/cas-sign-in.md): the checks of a sign-in through
+  a CAS server.
 
 Reference:
 

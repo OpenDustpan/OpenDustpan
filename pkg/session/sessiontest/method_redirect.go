@@ -40,6 +40,9 @@ type RedirectFixture struct {
 	// ReportsDisabled is true for a method whose provider can report a
 	// person as disabled.
 	ReportsDisabled bool
+	// CAS holds the hooks of the cases of the CAS protocol. It is nil for
+	// each other kind.
+	CAS *CASFixture
 }
 
 // redirectCase is one case of RunRedirectMethod.
@@ -78,7 +81,9 @@ func RunRedirectMethod(t *testing.T, factory func(t *testing.T) RedirectFixture)
 		})
 	}
 
-	if kind := probe.Method.Kind(); kind == session.MethodSAML || kind == session.MethodCAS {
+	if kind := probe.Method.Kind(); kind == session.MethodCAS {
+		runCASCases(t, probe, factory)
+	} else if kind == session.MethodSAML {
 		unwrittenCases(t, kind, redirectProtocolCases()[kind])
 	}
 }
@@ -112,19 +117,6 @@ func redirectProtocolCases() map[session.MethodKind][]string {
 			"AProviderThatDoesNotAnswerInTimeIsErrMethodUnavailable",
 			"AnotherRequestIDIsErrRequestBinding",
 		},
-		session.MethodCAS: {
-			"FinishReturnsTheSubjectOfTheConfiguredAttribute",
-			"ACASValidationWithRenewSetsTheAuthTime",
-			"ACASValidationWithoutRenewHasAuthTimeKnownFalseWithNoAuthenticationDate",
-			"TheServiceURLComesFromTheServerNotFromTheCallback",
-			"ATicketOutsideTheAllowlistIsErrMethodInput",
-			"AnXMLAnswerWithADTDIsErrMethodAnswer",
-			"AnXMLAnswerDeeperThanTheLimitIsErrMethodAnswer",
-			"EachOutboundConnectionGoesThroughTheEgressRules",
-			"AnEndpointThatResolvesToARefusedAddressIsErrMethodUnavailable",
-			"ASecondUseOfATicketIsErrReplay",
-			"AProviderThatDoesNotAnswerInTimeIsErrMethodUnavailable",
-		},
 	}
 }
 
@@ -152,11 +144,13 @@ func begin(t *testing.T, f RedirectFixture, fresh bool) session.Redirect {
 	return r
 }
 
-// alice is the person of most cases.
+// alice is the person of most cases. Her provider sends an empty groups
+// value, so that a method with groups on accepts her too. A case of the
+// groups sets her groups itself.
 func alice() TestPerson {
 	return TestPerson{
 		AuthTime: time.Time{}, Subject: "alice-0001", UserName: "alice", Name: "Alice Example",
-		Email: "alice@example.com", Groups: nil, GroupsPresent: false, Disabled: false,
+		Email: "alice@example.com", Groups: []string{}, GroupsPresent: true, Disabled: false,
 	}
 }
 
@@ -489,8 +483,11 @@ func rdAGroupLongerThanTheLimitIsErrMethodAnswer(t *testing.T, f RedirectFixture
 func rdGroupsOnAndNoGroupsIsErrGroupsMissing(t *testing.T, f RedirectFixture) {
 	t.Helper()
 
+	p := alice()
+	p.Groups, p.GroupsPresent = nil, false
+
 	r := begin(t, f, false)
-	a, err := f.Method.Finish(t.Context(), f.Answer(t, r, alice()))
+	a, err := f.Method.Finish(t.Context(), f.Answer(t, r, p))
 	checkRefused(t, a, err, session.ErrGroupsMissing)
 }
 
@@ -637,8 +634,8 @@ func rdEachErrorExceptErrSubjectDisabledReturnsTheZeroAssertion(t *testing.T, f 
 	for _, change := range []func(cb *session.Callback){
 		func(cb *session.Callback) { cb.Pending = nil },
 		func(cb *session.Callback) { cb.State = "b3RoZXI" },
-		func(cb *session.Callback) { cb.Code = "" },
-		func(cb *session.Callback) { cb.Code, cb.ProviderError = "", "server_error" },
+		func(cb *session.Callback) { cb.Code, cb.Ticket = "", "" },
+		func(cb *session.Callback) { cb.Code, cb.Ticket, cb.ProviderError = "", "", "server_error" },
 		func(cb *session.Callback) { cb.Ticket = "ST-1" },
 		func(cb *session.Callback) { cb.Code = "not-a-code-of-the-provider" },
 	} {
