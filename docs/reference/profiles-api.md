@@ -117,8 +117,11 @@ exports:
   has only `A-Z`, `a-z`, `0-9`, `.`, `_`, `~` and `-`.
 - Each other field is exactly one reference into `values`, for example
   `${ values.grafana.token }`. Literal text answers 400.
-- `value`, `password` and `key` must read a `$secret` value or a computed
-  value. A plain value answers 400.
+- `value`, `password` and `key` must read a secret source, directly or
+  through other values: a `$secret` value, the output of a provider or a
+  rotator, a value of another profile (`imports[...]` or `profiles[...]`),
+  or a path that only an import gives. A plain value, a literal expression
+  such as `${ 'key' }`, and an expression that reads `$env` answer 400.
 - A field cannot read a map or a list.
 - The text of a `header` field or of a `basic` field cannot hold a control
   character, for example CR or LF. A `basic` user cannot hold `:`.

@@ -24,6 +24,16 @@ values:
   multi: { $secret: "a\r\nX-Evil: 1" }
   colon: "ad:min"
   nested: { a: 1 }
+  static: "${ 'static-key' }"
+  dollar: "static${"
+  staticEntry: { $value: "${ 'static' }" }
+  escaped: "$${ values.grafana.token }"
+  bearer: "Bearer ${ values.grafana.token }"
+  fromProvider: "${ providers.db.password }"
+  fromImport: '${ imports["shared/keys"].values.k }'
+  envRead: "${ $env.TOKEN }"
+  cycleA: "${ values.cycleB }"
+  cycleB: "${ values.cycleA }"
 exports:
   proxy:
 ` + body
@@ -59,7 +69,58 @@ func TestParseProxyExport(t *testing.T) {
 			"    g: { type: header, name: X-Key, value: \"${ values.shared.key }\" }\n",
 			nil,
 		},
-		{"computed secret", "    g: { type: header, name: X-Key, value: \"${ values.computed }\" }\n", nil},
+		{
+			"computed from plain values", "    g: { type: header, name: X-Key, value: \"${ values.computed }\" }\n",
+			profile.ErrInvalid,
+		},
+		{"computed from a secret", "    g: { type: header, name: X-Key, value: \"${ values.bearer }\" }\n", nil},
+		{"provider output", "    g: { type: header, name: X-Key, value: \"${ values.fromProvider }\" }\n", nil},
+		{"value of an import", "    g: { type: header, name: X-Key, value: \"${ values.fromImport }\" }\n", nil},
+		{
+			"literal expression",
+			"    g: { type: header, name: X-Key, value: \"${ values.static }\" }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"plain string with ${", "    g: { type: header, name: X-Key, value: \"${ values.dollar }\" }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"entry with a literal expression",
+			"    g: { type: header, name: X-Key, value: \"${ values.staticEntry }\" }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"escaped expression",
+			"    g: { type: header, name: X-Key, value: \"${ values.escaped }\" }\n",
+			profile.ErrInvalid,
+		},
+		{"read of env", "    g: { type: header, name: X-Key, value: \"${ values.envRead }\" }\n", profile.ErrInvalid},
+		{
+			"cycle of plain reads",
+			"    g: { type: header, name: X-Key, value: \"${ values.cycleA }\" }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"basic user literal", "    g: { type: basic, user: admin, password: \"${ values.grafana.token }\" }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"basic password literal", "    g: { type: basic, user: \"${ values.user }\", password: abc }\n",
+			profile.ErrInvalid,
+		},
+		{"query value literal", "    g: { type: query, name: api_key, value: abc }\n", profile.ErrInvalid},
+		{
+			"client certificate literal",
+			"    g: { type: client-certificate, certificate: PEM, key: \"${ values.grafana.token }\" }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"client key literal",
+			"    g: { type: client-certificate, certificate: \"${ values.cert }\", key: abc }\n",
+			profile.ErrInvalid,
+		},
+		{"ca certificates literal", "    g: { type: ca, certificates: PEM }\n", profile.ErrInvalid},
 		{"bracket path", "    g: { type: header, name: X-Key, value: \"${ values[\\\"grafana\\\"].token }\" }\n", nil},
 		{
 			"unknown type",
@@ -355,12 +416,15 @@ exports:
 }
 
 func FuzzParseProxyExport(f *testing.F) {
-	f.Add(proxyMap(profile.MaxProxyExports), "X-Key", "${ values.t }")
-	f.Add(proxyMap(profile.MaxProxyExports+1), "Authorization", "${ values[\"t\"] }")
-	f.Add(proxyMap(2), "a\r\nb", "abc")
+	f.Add(proxyMap(profile.MaxProxyExports), "header", "name", "X-Key", "value", "${ values.t }")
+	f.Add(proxyMap(profile.MaxProxyExports+1), "header", "name", "Authorization", "value", "${ values[\"t\"] }")
+	f.Add(proxyMap(2), "basic", "user", "a\r\nb", "password", "abc")
+	f.Add(proxyMap(1), "client-certificate", "certificate", "${ values.t }", "key", "${ values.t }")
+	f.Add(proxyMap(1), "ca", "certificates", "${ values.t }", "extra", "x")
+	f.Add(proxyMap(1), "query", "name", "k", "value", "${ 'static' }")
 
-	f.Fuzz(func(t *testing.T, base, name, value string) {
-		doc := base + fmt.Sprintf("    fuzz: { type: header, name: %q, value: %q }\n", name, value)
+	f.Fuzz(func(t *testing.T, base, typ, key1, val1, key2, val2 string) {
+		doc := base + fmt.Sprintf("    fuzz: { type: %q, %q: %q, %q: %q }\n", typ, key1, val1, key2, val2)
 
 		d, err := profile.ParseDocument([]byte(doc))
 		if err != nil {
@@ -401,8 +465,14 @@ func checkFuzzProxy(t *testing.T, got profile.Exports) {
 
 	for k := range proxy {
 		e := proxy[k]
-		if strings.ContainsAny(e.Name, "\r\n") || !strings.HasPrefix(e.Value, "${") {
-			t.Fatalf("credential %q passed with name %q and value %q", k, e.Name, e.Value)
+		if strings.ContainsAny(e.Name, "\r\n") {
+			t.Fatalf("credential %q passed with name %q", k, e.Name)
+		}
+
+		for _, ref := range []string{e.Value, e.User, e.Password, e.Certificate, e.Key, e.Certificates} {
+			if ref != "" && !strings.HasPrefix(ref, "${") {
+				t.Fatalf("credential %q of type %q passed with the literal %q", k, e.Type, ref)
+			}
 		}
 	}
 }
