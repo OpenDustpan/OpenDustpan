@@ -9,10 +9,10 @@ on:
 permissions: {}
 
 concurrency:
-  # Keep this equal to the group in ci.yml for a pull request that is not a
-  # draft. A merge group has its own group in ci.yml, so this run never
-  # cancels a run of the merge queue.
-  group: ci-${{ github.event.pull_request.number }}-false
+  # Keep this equal to the group in ci.yml for a pull request. A merge group
+  # has its own group in ci.yml, so this run never cancels a run of the merge
+  # queue.
+  group: ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
