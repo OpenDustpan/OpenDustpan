@@ -401,7 +401,8 @@ type RequestMethod interface {
 	// peer that is not a trusted proxy, before a handler reads it.
 	Headers() []string
 	// FromRequest returns the Assertion of the request. It returns
-	// ErrNoAssertion for a request with none of the headers,
+	// ErrNoAssertion for a request without the header that carries the
+	// person,
 	// ErrUntrustedSource for a peer that is not a trusted proxy or a
 	// request with no valid second proof of the proxy, ErrMethodInput for
 	// a header of the wrong form, ErrMethodAnswer for a signed header that
