@@ -97,7 +97,7 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 	trivy fs $(TRIVY_LICENSE_FLAGS) --format json --output bin/trivy-canary.json testdata/trivy-canary
 	python3 -I scripts/trivy-license-gate.py canary bin/trivy-canary.json
 
-# Scans the commits of every local branch, not the uncommitted files. Each
+# Scans the commits that HEAD reaches, not the uncommitted files. Each
 # candidate is sent to its provider for verification. "unknown" is a candidate
 # that could not be verified (for example, the provider did not answer), so a
 # network failure can fail this target. Exit code 183 means a secret was found.
