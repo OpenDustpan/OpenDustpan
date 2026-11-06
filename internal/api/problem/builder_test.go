@@ -36,8 +36,8 @@ func answerOf(t *testing.T, p problem.Problem) *httptest.ResponseRecorder {
 func TestMaxMessageBytes(t *testing.T) {
 	t.Parallel()
 
-	if problem.MaxMessageBytes != 300 {
-		t.Fatalf("MaxMessageBytes = %d, want 300", problem.MaxMessageBytes)
+	if problem.MaxMessageBytes != 1280 {
+		t.Fatalf("MaxMessageBytes = %d, want 1280", problem.MaxMessageBytes)
 	}
 }
 
