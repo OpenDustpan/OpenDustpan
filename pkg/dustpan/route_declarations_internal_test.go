@@ -161,9 +161,12 @@ func knownScopes() map[reflect.Type]scopeValues {
 			credential: nil,
 		},
 		reflect.TypeFor[runnerapi.Scope](): {
-			public:     nil,
-			signedIn:   ints(int64(runnerapi.ScopeAuthorized)),
-			credential: ints(int64(runnerapi.ScopeJoinToken), int64(runnerapi.ScopeRunnerKey)),
+			public:   nil,
+			signedIn: ints(int64(runnerapi.ScopeAuthorized)),
+			credential: ints(
+				int64(runnerapi.ScopeJoinToken), int64(runnerapi.ScopeRunnerKey),
+				int64(runnerapi.ScopeHandoffToken), int64(runnerapi.ScopeSessionKey),
+			),
 		},
 		reflect.TypeFor[pulumi.Scope](): {
 			public: ints(int64(pulumi.ScopePublic)), signedIn: ints(int64(pulumi.ScopeAuthorized)),

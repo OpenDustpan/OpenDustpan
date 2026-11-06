@@ -1117,6 +1117,7 @@
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
             "lock.locked": "#/components/schemas/LockLockedError",
             "maintenance.active-work": "#/components/schemas/MaintenanceActiveWorkError",
+            "mfa.passkey-limit": "#/components/schemas/MfaPasskeyLimitError",
             "password.too-short": "#/components/schemas/PasswordTooShortError",
             "preferences.field-invalid": "#/components/schemas/PreferencesFieldInvalidError",
             "preferences.field-read-only": "#/components/schemas/PreferencesFieldReadOnlyError",
@@ -1153,6 +1154,9 @@
           },
           {
             "$ref": "#/components/schemas/MaintenanceActiveWorkError"
+          },
+          {
+            "$ref": "#/components/schemas/MfaPasskeyLimitError"
           },
           {
             "$ref": "#/components/schemas/PasswordTooShortError"
@@ -1306,7 +1310,20 @@
           "maintenance.in-maintenance",
           "maintenance.invalid-state",
           "maintenance.unavailable",
+          "mfa.break-glass-reason-required",
+          "mfa.ceremony-failed",
+          "mfa.ceremony-not-open",
+          "mfa.ceremony-wrong-person",
           "mfa.fresh-step-required",
+          "mfa.passkey-exists",
+          "mfa.passkey-invalid",
+          "mfa.passkey-limit",
+          "mfa.passkey-not-found",
+          "mfa.passkey-suspended",
+          "mfa.rate-limited",
+          "mfa.session-required",
+          "mfa.sign-in-failed",
+          "mfa.unavailable",
           "namespace.already-exists",
           "namespace.fenced",
           "namespace.invalid-name",
@@ -1571,6 +1588,21 @@
         },
         "required": [
           "token"
+        ],
+        "type": "object"
+      },
+      "FinishPasskeyRegistrationRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "response": {
+            "description": "A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name."
+          }
+        },
+        "required": [
+          "name",
+          "response"
         ],
         "type": "object"
       },
@@ -2739,6 +2771,20 @@
         ],
         "type": "object"
       },
+      "ListPasskeysResponse": {
+        "properties": {
+          "passkeys": {
+            "items": {
+              "$ref": "#/components/schemas/Passkey"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "passkeys"
+        ],
+        "type": "object"
+      },
       "ListPlacementRulesResponse": {
         "properties": {
           "rules": {
@@ -3220,6 +3266,47 @@
         ],
         "type": "object"
       },
+      "MfaPasskeyLimitError": {
+        "description": "The error answer with the code mfa.passkey-limit.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/MfaPasskeyLimitErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "mfa.passkey-limit"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "MfaPasskeyLimitErrorArgs": {
+        "description": "The arguments of the text of the error with the code mfa.passkey-limit.",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
       "ModuleRelease": {
         "properties": {
           "archive": {
@@ -3462,6 +3549,81 @@
         },
         "required": [
           "newUnitDefault"
+        ],
+        "type": "object"
+      },
+      "Passkey": {
+        "properties": {
+          "backupEligible": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "suspendedAt": {
+            "type": "string"
+          },
+          "transports": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "backupEligible",
+          "createdAt",
+          "id",
+          "lastUsedAt",
+          "name",
+          "suspendedAt",
+          "transports"
+        ],
+        "type": "object"
+      },
+      "PasskeyCreationOptions": {
+        "properties": {
+          "publicKey": {
+            "description": "A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name."
+          }
+        },
+        "required": [
+          "publicKey"
+        ],
+        "type": "object"
+      },
+      "PasskeyRequestOptions": {
+        "properties": {
+          "publicKey": {
+            "description": "A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name."
+          }
+        },
+        "required": [
+          "publicKey"
+        ],
+        "type": "object"
+      },
+      "PasskeySignInRequest": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "response": {
+            "description": "A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name."
+          }
+        },
+        "required": [
+          "reason",
+          "response"
         ],
         "type": "object"
       },
@@ -7214,6 +7376,163 @@
           {
             "action": "server:manage-sign-in",
             "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/passkeys": {
+      "get": {
+        "operationId": "listPasskeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListPasskeysResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "passkeys"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/passkeys/register/begin": {
+      "post": {
+        "operationId": "beginPasskeyRegistration",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyCreationOptions"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "passkeys"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:manage-sign-in",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/passkeys/register/finish": {
+      "post": {
+        "operationId": "finishPasskeyRegistration",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishPasskeyRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Passkey"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "passkeys"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:manage-sign-in",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/passkeys/{id}": {
+      "delete": {
+        "operationId": "removePasskey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "passkeys"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:manage-sign-in",
+            "object": "caller"
           }
         ]
       }
@@ -15065,6 +15384,73 @@
         ]
       }
     },
+    "/api/dustpan/v1/sign-in/passkey/begin": {
+      "post": {
+        "operationId": "beginPasskeySignIn",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyRequestOptions"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "passkeys"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
+    "/api/dustpan/v1/sign-in/passkey/finish": {
+      "post": {
+        "operationId": "finishPasskeySignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeySignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "passkeys"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
     "/api/dustpan/v1/sign-in/password": {
       "post": {
         "operationId": "signInWithPassword",
@@ -15289,6 +15675,9 @@
     },
     {
       "name": "outputs"
+    },
+    {
+      "name": "passkeys"
     },
     {
       "name": "placement"

@@ -25,6 +25,8 @@ import (
 const (
 	rawBase   = "0123456789abcdef0123456789abcdef01234567"
 	rawCommit = "89abcdef0123456789abcdef0123456789abcdef"
+	// rawIdentity is the login of the user of the token of rawForge.
+	rawIdentity = "acme"
 )
 
 // rawClient is the forge for the server of rawForge.
@@ -38,7 +40,49 @@ type rawClient struct {
 func rawForge(t *testing.T, basePath string, h http.HandlerFunc) rawClient {
 	t.Helper()
 
-	srv := httptest.NewUnstartedServer(h)
+	return rawForgeAs(t, basePath, http.StatusOK, `{"id":777,"login":"`+rawIdentity+`"}`, h)
+}
+
+// rawForgeAs is rawForge with the answer of the call for the user of the token,
+// which is the identity that the connection commits as.
+func rawForgeAs(t *testing.T, basePath string, userStatus int, userBody string, h http.HandlerFunc) rawClient {
+	t.Helper()
+
+	return rawForgeWith(t, basePath, rawOptions{
+		userStatus: userStatus, userBody: userBody, repoStatus: http.StatusOK, repoBody: `{"id":` + rawRepoID + `}`,
+		prover: testProver{},
+	}, h)
+}
+
+// rawOptions are the answers of rawForgeWith for the calls that every raw
+// server answers by itself, and the Prover of the connection.
+type rawOptions struct {
+	// userStatus and userBody are the answer for the user of the token.
+	userStatus int
+	userBody   string
+	// repoStatus and repoBody are the answer for the repository, which has the
+	// ID that a proof binds.
+	repoStatus int
+	repoBody   string
+	prover     github.Prover
+}
+
+// rawForgeWith is rawForgeAs with more options.
+func rawForgeWith(t *testing.T, basePath string, opts rawOptions, h http.HandlerFunc) rawClient {
+	t.Helper()
+
+	withUser := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == basePath+"/user":
+			answer(w, opts.userStatus, opts.userBody)
+		case r.Method == http.MethodGet && r.URL.Path == basePath+"/repos/acme/infra":
+			answer(w, opts.repoStatus, opts.repoBody)
+		default:
+			h(w, r)
+		}
+	}
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(withUser))
 	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
@@ -46,7 +90,7 @@ func rawForge(t *testing.T, basePath string, h http.HandlerFunc) rawClient {
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
 
-	o, err := github.NewOpener(github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: nil})
+	o, err := github.NewOpener(github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: opts.prover})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +124,7 @@ func answer(w http.ResponseWriter, status int, body string) {
 func oneCommit(base string) forge.CommitRequest {
 	return forge.CommitRequest{
 		Branch: "main", NewBranch: false, Base: base, Message: "Change\n\nDustpan-Job: j-1",
+		Trailer: "Dustpan-Job: j-1",
 		Author:  forge.Person{Name: "Ada Lovelace", Email: "ada@example.com"},
 		Changes: []forge.FileChange{{Path: "a.txt", Content: []byte("a"), Delete: false}},
 	}
@@ -332,7 +377,8 @@ func checkMutation(t *testing.T, input wireCommitInput) {
 		t.Errorf("expected head %q, branch %+v", input.ExpectedHeadOid, input.Branch)
 	}
 
-	wantBody := "Dustpan-Job: j-1\nCo-authored-by: Ada Lovelace <ada@example.com>"
+	wantBody := "Dustpan-Job: j-1\nCo-authored-by: Ada Lovelace <ada@example.com>\n" +
+		testProofLine(rawRepoID, "Dustpan-Job: j-1", rawBase)
 	if input.Message != (wireMessage{Headline: "Change", Body: wantBody}) {
 		t.Errorf("message %+v", input.Message)
 	}
@@ -364,15 +410,18 @@ func TestCommitMessageHasTheAuthorAsCoAuthor(t *testing.T) {
 		want    string
 	}{
 		{"a trailer block gets the line", "Change\n\nDustpan-Job: j-1", ada, "Change\n\nDustpan-Job: j-1\n" + line},
-		{"a headline only", "Change", ada, "Change\n\n" + line},
-		{"a text and no trailer", "Change\n\nSome text", ada, "Change\n\nSome text\n\n" + line},
+		{
+			"a trailer block of two trailers",
+			"Change\n\nDustpan-Job: j-1\nSigned-off-by: Bob <bob@example.com>",
+			ada,
+			"Change\n\nDustpan-Job: j-1\nSigned-off-by: Bob <bob@example.com>\n" + line,
+		},
 		{
 			"a text and a trailer",
 			"Change\n\nSome text\n\nDustpan-Job: j-1\n",
 			ada,
 			"Change\n\nSome text\n\nDustpan-Job: j-1\n" + line,
 		},
-		{"a line that is no trailer", "Change\n\nDustpan-Job j-1", ada, "Change\n\nDustpan-Job j-1\n\n" + line},
 		{"CRLF line ends", "Change\r\n\r\nDustpan-Job: j-1\r\n", ada, "Change\n\nDustpan-Job: j-1\n" + line},
 		{"no author", "Change\n\nDustpan-Job: j-1", forge.Person{Name: "", Email: ""}, "Change\n\nDustpan-Job: j-1"},
 	}
@@ -393,8 +442,62 @@ func TestCommitMessageHasTheAuthorAsCoAuthor(t *testing.T) {
 			}
 
 			head, err := o.host.Head(conformanceRepo, githubfake.DefaultBranch)
-			if err != nil || head.ID != got.ID || head.Message != tt.want {
-				t.Fatalf("message %q (%v), want %q", head.Message, err, tt.want)
+			if err != nil || head.ID != got.ID {
+				t.Fatalf("head %+v (%v), want the commit %q", head, err, got.ID)
+			}
+
+			// The proof is the last line. Its text depends on the repository ID.
+			text, proof, found := strings.Cut(head.Message, "\nDustpan-Proof: ")
+			if !found || proof == "" || text != tt.want {
+				t.Fatalf("message %q, want %q and a proof line", head.Message, tt.want)
+			}
+		})
+	}
+}
+
+// TestCommitNeedsATrailerInTheLastBlock gives requests whose trailer the
+// adapter could not put at a place that FindCommit reads. Each is invalid, and
+// the adapter makes no call.
+func TestCommitNeedsATrailerInTheLastBlock(t *testing.T) {
+	t.Parallel()
+
+	ada := forge.Person{Name: "Ada Lovelace", Email: "ada@example.com"}
+
+	tests := []struct {
+		name    string
+		message string
+		trailer string
+	}{
+		{"a headline only", "Change", "Dustpan-Job: j-1"},
+		{"a text and no trailer", "Change\n\nSome text", "Dustpan-Job: j-1"},
+		{"a trailer in the first paragraph", "Change\n\nDustpan-Job: j-1\n\nSome text", "Dustpan-Job: j-1"},
+		{"a last paragraph that is no block of trailers", "Change\n\nDustpan-Job: j-1\nsome text", "Dustpan-Job: j-1"},
+		{"a line that is no trailer", "Change\n\nDustpan-Job j-1", "Dustpan-Job: j-1"},
+		{"another trailer", "Change\n\nDustpan-Job: j-2", "Dustpan-Job: j-1"},
+		{"a trailer that is a prefix", "Change\n\nDustpan-Job: j-10", "Dustpan-Job: j-1"},
+		{"a proof line in the message", "Change\n\nDustpan-Job: j-1\nDustpan-Proof: AAAA", "Dustpan-Job: j-1"},
+		{"a proof line in other letters", "Change\n\nDustpan-Job: j-1\ndustpan-proof: AAAA", "Dustpan-Job: j-1"},
+		{"the trailer is a proof line", "Change\n\nDustpan-Proof: AAAA", "Dustpan-Proof: AAAA"},
+		{"no trailer", "Change\n\nDustpan-Job: j-1", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			o := openHost(t, forge.AuthToken)
+			base := headOf(t, o.host)
+			before := o.host.Calls()
+
+			req := oneCommit(base.ID)
+			req.Message, req.Trailer, req.Author = tt.message, tt.trailer, ada
+
+			if _, err := o.fg.Commit(t.Context(), conformanceRepo, req); !errors.Is(err, forge.ErrInvalid) {
+				t.Fatalf("Commit = %v, want ErrInvalid", err)
+			}
+
+			if after := o.host.Calls(); after != before {
+				t.Fatalf("an invalid commit made %d calls, want none", after-before)
 			}
 		})
 	}
@@ -483,7 +586,13 @@ func TestInstallationThatCannotWriteDoesNotCommit(t *testing.T) {
 			t.Fatalf("Commit = %v after %d calls, want ErrUnsupported and no call", err, o.host.Calls()-before)
 		}
 
-		_, err = o.fg.FindCommit(t.Context(), conformanceRepo, "main", "Dustpan-Job: j-1", time.Unix(0, 0))
+		_, err = o.fg.FindCommit(
+			t.Context(),
+			conformanceRepo,
+			"main",
+			forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: base.ID},
+			time.Unix(0, 0),
+		)
 		if !errors.Is(err, forge.ErrUnsupported) {
 			t.Fatalf("FindCommit = %v, want ErrUnsupported", err)
 		}
@@ -491,13 +600,21 @@ func TestInstallationThatCannotWriteDoesNotCommit(t *testing.T) {
 }
 
 // commitJSON is one commit of a list.
+//
+// The message gets the proof line of the job j-1 on the base rawBase, as a commit
+// of the connection has, after the last line of the message.
 func commitJSON(sha, message string, at time.Time) map[string]any {
+	message = strings.TrimRight(message, " \t\r\n") + "\n" + testProofLine(rawRepoID, "Dustpan-Job: j-1", rawBase)
+
 	return map[string]any{
 		"sha": sha,
 		"commit": map[string]any{
-			"message":   message,
-			"committer": map[string]any{"date": at.UTC().Format(time.RFC3339)},
+			"message":      message,
+			"committer":    map[string]any{"date": at.UTC().Format(time.RFC3339)},
+			"verification": map[string]any{"verified": true},
 		},
+		"author":    map[string]any{"login": rawIdentity},
+		"committer": map[string]any{"login": "web-flow"},
 	}
 }
 
@@ -645,7 +762,9 @@ func TestFindCommitReadsHostDataWithCare(t *testing.T) {
 
 			fg := rawForge(t, "", func(w http.ResponseWriter, _ *http.Request) { answer(w, 200, body) })
 
-			got, err := fg.FindCommit(t.Context(), "acme/infra", "main", trailer, since)
+			got, err := fg.FindCommit(
+				t.Context(), "acme/infra", "main", forge.Delivery{Trailer: trailer, Base: rawBase}, since,
+			)
 			if !errors.Is(err, tt.err) || got.ID != tt.want {
 				t.Fatalf("FindCommit = %+v, %v; want %q and %v", got, err, tt.want, tt.err)
 			}
@@ -742,7 +861,13 @@ func TestFindCommitAsksForTheRefAndTheTime(t *testing.T) {
 			p := newPages(tt.withOnPg, since)
 			c := rawForge(t, "", p.serve)
 
-			got, err := c.FindCommit(t.Context(), "acme/infra", "dustpan/j-1", "Dustpan-Job: j-1", since)
+			got, err := c.FindCommit(
+				t.Context(),
+				"acme/infra",
+				"dustpan/j-1",
+				forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: rawBase},
+				since,
+			)
 			if !errors.Is(err, tt.wantErr) || got.ID != tt.wantID {
 				t.Fatalf("FindCommit = %+v, %v; want %q and %v", got, err, tt.wantID, tt.wantErr)
 			}
@@ -775,7 +900,9 @@ func TestFindCommitListLongerThanAPageIsNotRead(t *testing.T) {
 
 	c := rawForge(t, "", func(w http.ResponseWriter, _ *http.Request) { answer(w, http.StatusOK, string(data)) })
 
-	_, err = c.FindCommit(t.Context(), "acme/infra", "main", "Dustpan-Job: j-1", time.Unix(0, 0))
+	_, err = c.FindCommit(
+		t.Context(), "acme/infra", "main", forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: rawBase}, time.Unix(0, 0),
+	)
 	if !errors.Is(err, forge.ErrUnavailable) {
 		t.Fatalf("FindCommit = %v, want ErrUnavailable", err)
 	}
@@ -804,6 +931,8 @@ func TestCommitFollowsAMovedBranchAtMostThreeTimes(t *testing.T) {
 			answer(w, http.StatusOK, `{"object":{"sha":"`+shaN(1000+heads)+`"}}`)
 		case strings.Contains(r.URL.Path, "/compare/"):
 			answer(w, http.StatusOK, aheadOf(rawBase))
+		case strings.Contains(r.URL.Path, "/git/trees/"):
+			answer(w, http.StatusOK, `{"tree":[]}`)
 		case r.URL.Path == "/graphql":
 			mutations++
 
@@ -881,8 +1010,8 @@ func TestCommitNeedsTheBaseToBeAnAncestor(t *testing.T) {
 					answer(w, http.StatusOK, `{"object":{"sha":"`+rawCommit+`"}}`)
 				case strings.Contains(r.URL.Path, "/compare/"):
 					answer(w, tt.status, tt.body)
-				case strings.Contains(r.URL.Path, "/contents/"):
-					answer(w, http.StatusNotFound, `{"message":"Not Found"}`)
+				case strings.Contains(r.URL.Path, "/git/trees/"):
+					answer(w, http.StatusOK, `{"tree":[]}`)
 				case mutations == 0:
 					mutations++
 

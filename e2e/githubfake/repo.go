@@ -26,28 +26,80 @@ var (
 // DefaultBranch is the default branch of each repository.
 const DefaultBranch = "main"
 
+// repoIDBase is added to a counter to make the ID of a repository, so that an
+// ID does not look like the ID of an account.
+const repoIDBase = 700000
+
 // Commit is a commit of a repository of the fake.
 type Commit struct {
 	ID      string
 	Parent  string
 	Message string
 	Time    time.Time
+	// Author and Committer are the logins that GitHub shows for the commit.
+	// An empty login is an email that no account has.
+	Author    string
+	Committer string
+	// Verified is whether GitHub shows the commit as verified.
+	Verified bool
 }
 
-// commit is a commit with its files. The tree maps a path to a blob ID.
+// Signature says who made a commit and whether GitHub verifies it.
+type Signature struct {
+	Author    string
+	Committer string
+	Verified  bool
+}
+
+// Logins that the fake gives to the makers of commits.
+const (
+	// WebFlow is the committer of a commit that GitHub makes itself, as the
+	// mutation createCommitOnBranch does.
+	WebFlow = "web-flow"
+	// OtherAuthor is a person with push access who is not the connection.
+	OtherAuthor = "other-dev"
+)
+
+// commit is a commit with its files. The tree maps a path to a blob ID, or to
+// the commit ID of a submodule. The modes map a path to a mode that is not
+// the mode of a regular file; a path with no mode in the map is a regular file.
 type commit struct {
-	meta Commit
-	tree map[string]string
+	meta  Commit
+	tree  map[string]string
+	modes map[string]string
+}
+
+// The modes of a tree entry that is not a regular file.
+const (
+	modeSymlink   = "120000"
+	modeSubmodule = "160000"
+	modeRegular   = "100644"
+	modeTree      = "040000"
+)
+
+// modeOf returns the mode of the entry at path.
+func (c *commit) modeOf(path string) string {
+	if m, found := c.modes[path]; found {
+		return m
+	}
+
+	return modeRegular
 }
 
 // repo is one repository: its commits, blobs, branches and tags.
 type repo struct {
-	name      string
-	commits   map[string]*commit
-	blobs     map[string][]byte
-	branches  map[string]string
-	tags      map[string]string
-	protected map[string]bool
+	name string
+	// id is the number that GitHub gives to the repository. It stays the same
+	// when the repository is renamed.
+	id int64
+	// defaultBranch is the default branch that the repository call answers.
+	defaultBranch string
+	pulls         []*pull
+	commits       map[string]*commit
+	blobs         map[string][]byte
+	branches      map[string]string
+	tags          map[string]string
+	protected     map[string]bool
 }
 
 // idLength is the number of hex digits in an ID of a blob or a commit. It
@@ -95,6 +147,18 @@ func commitID(parent string, tree map[string]string, message string, at time.Tim
 	return digest(parts...)
 }
 
+// commitIDWithModes is commitID for a tree whose entries have modes. A regular
+// file adds nothing, so the ID of a tree of regular files is the same.
+func commitIDWithModes(parent string, tree, modes map[string]string, message string, at time.Time) string {
+	marked := maps.Clone(tree)
+
+	for p, m := range modes {
+		marked[p] += ":" + m
+	}
+
+	return commitID(parent, marked, message, at)
+}
+
 // AddRepo makes the repository fullName ("owner/name") with the branch main
 // and one commit that holds files. It returns that commit.
 func (f *Fake) AddRepo(fullName string, files map[string][]byte) (Commit, error) {
@@ -106,12 +170,15 @@ func (f *Fake) AddRepo(fullName string, files map[string][]byte) (Commit, error)
 	}
 
 	r := &repo{
-		name:      fullName,
-		commits:   map[string]*commit{},
-		blobs:     map[string][]byte{},
-		branches:  map[string]string{},
-		tags:      map[string]string{},
-		protected: map[string]bool{},
+		name:          fullName,
+		id:            f.nextRepoID(),
+		defaultBranch: DefaultBranch,
+		pulls:         nil,
+		commits:       map[string]*commit{},
+		blobs:         map[string][]byte{},
+		branches:      map[string]string{},
+		tags:          map[string]string{},
+		protected:     map[string]bool{},
 	}
 	f.repos[fullName] = r
 
@@ -121,30 +188,122 @@ func (f *Fake) AddRepo(fullName string, files map[string][]byte) (Commit, error)
 	return c.meta, nil
 }
 
+// CloneRepo makes the repository dst ("owner/name") with every commit, blob,
+// branch and tag of the repository src and a new repository ID, as a copy of a
+// repository does before anyone commits to it.
+func (f *Fake) CloneRepo(src, dst string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	from, found := f.repos[src]
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNoRepo, src)
+	}
+
+	if _, found = f.repos[dst]; found {
+		return fmt.Errorf("%w: %s", ErrExists, dst)
+	}
+
+	f.repos[dst] = &repo{
+		name:          dst,
+		id:            f.nextRepoID(),
+		defaultBranch: from.defaultBranch,
+		pulls:         nil,
+		commits:       maps.Clone(from.commits),
+		blobs:         maps.Clone(from.blobs),
+		branches:      maps.Clone(from.branches),
+		tags:          maps.Clone(from.tags),
+		protected:     maps.Clone(from.protected),
+	}
+
+	return nil
+}
+
 // commit adds a commit on top of parent. A nil value in files deletes the
 // path. The caller holds the lock.
 func (r *repo) commit(parent string, files map[string][]byte, message string, at time.Time) *commit {
-	tree := map[string]string{}
+	return r.commitChange(
+		parent,
+		change{files: files, entries: nil},
+		message,
+		at,
+		Signature{Author: "", Committer: "", Verified: false},
+	)
+}
 
-	if p, found := r.commits[parent]; found {
-		maps.Copy(tree, p.tree)
+// entrySpec is an entry that is not a regular file.
+type entrySpec struct {
+	mode string
+	id   string
+}
+
+// change is what a commit changes: regular files (a nil value deletes the
+// path) and entries that are not regular files.
+type change struct {
+	files   map[string][]byte
+	entries map[string]entrySpec
+}
+
+// place sets the entry at path. As git does, it removes a file at a parent
+// name of path and every entry below path.
+func (c *commit) place(path, id, mode string) {
+	for parent := path; strings.Contains(parent, "/"); {
+		parent = parent[:strings.LastIndex(parent, "/")]
+		c.remove(parent)
 	}
 
-	for path, content := range files {
+	for p := range c.tree {
+		if strings.HasPrefix(p, path+"/") {
+			c.remove(p)
+		}
+	}
+
+	c.tree[path] = id
+
+	if mode != modeRegular {
+		c.modes[path] = mode
+	} else {
+		delete(c.modes, path)
+	}
+}
+
+// remove deletes the entry at path.
+func (c *commit) remove(path string) {
+	delete(c.tree, path)
+	delete(c.modes, path)
+}
+
+// commitChange adds a commit on top of parent. The caller holds the lock.
+func (r *repo) commitChange(parent string, ch change, message string, at time.Time, sig Signature) *commit {
+	c := &commit{meta: Commit{
+		ID: "", Parent: "", Message: "", Time: time.Time{}, Author: "", Committer: "", Verified: false,
+	}, tree: map[string]string{}, modes: map[string]string{}}
+
+	if p, found := r.commits[parent]; found {
+		maps.Copy(c.tree, p.tree)
+		maps.Copy(c.modes, p.modes)
+	}
+
+	for _, path := range slices.Sorted(maps.Keys(ch.files)) {
+		content := ch.files[path]
 		if content == nil {
-			delete(tree, path)
+			c.remove(path)
 
 			continue
 		}
 
 		id := BlobID(content)
 		r.blobs[id] = slices.Clone(content)
-		tree[path] = id
+		c.place(path, id, modeRegular)
 	}
 
-	c := &commit{
-		meta: Commit{ID: commitID(parent, tree, message, at), Parent: parent, Message: message, Time: at},
-		tree: tree,
+	for _, path := range slices.Sorted(maps.Keys(ch.entries)) {
+		c.place(path, ch.entries[path].id, ch.entries[path].mode)
+	}
+
+	c.meta = Commit{
+		ID: commitIDWithModes(parent, c.tree, c.modes, message, at), Parent: parent, Message: message, Time: at,
+		Author: sig.Author, Committer: sig.Committer, Verified: sig.Verified,
 	}
 	r.commits[c.meta.ID] = c
 
@@ -168,7 +327,88 @@ func (f *Fake) Push(fullName, branch string, files map[string][]byte, message st
 		parent = r.branches[DefaultBranch]
 	}
 
-	c := r.commit(parent, files, message, f.now())
+	c := r.commitChange(
+		parent, change{files: files, entries: nil}, message, f.now(),
+		Signature{Author: OtherAuthor, Committer: OtherAuthor, Verified: false},
+	)
+	r.branches[branch] = c.meta.ID
+
+	return c.meta, nil
+}
+
+// PushSigned is Push with a message and a signature that the test chooses, so
+// that a commit can pose as a commit of the connection or of GitHub.
+func (f *Fake) PushSigned(
+	fullName, branch string, files map[string][]byte, message string, sig Signature,
+) (Commit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	r, found := f.repos[fullName]
+	if !found {
+		return Commit{}, fmt.Errorf("%w: %s", ErrNoRepo, fullName)
+	}
+
+	parent, found := r.branches[branch]
+	if !found {
+		parent = r.branches[DefaultBranch]
+	}
+
+	c := r.commitChange(parent, change{files: files, entries: nil}, message, f.now(), sig)
+	r.branches[branch] = c.meta.ID
+
+	return c.meta, nil
+}
+
+// EntryKind is the kind of an entry that is not a regular file.
+type EntryKind int
+
+// The kinds of entry that PushEntry makes.
+const (
+	// Symlink is a symbolic link. The variant is its target.
+	Symlink EntryKind = iota + 1
+	// Submodule is a submodule. The variant picks its commit.
+	Submodule
+	// Directory is a directory at the path, with one file named by the variant.
+	Directory
+)
+
+// PushEntry commits an entry that is not a regular file at path on branch
+// with no check, as another author does, and returns the commit. A file or an
+// entry at path is replaced. The variant makes two entries of one kind differ.
+func (f *Fake) PushEntry(fullName, branch, path string, kind EntryKind, variant string) (Commit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	r, found := f.repos[fullName]
+	if !found {
+		return Commit{}, fmt.Errorf("%w: %s", ErrNoRepo, fullName)
+	}
+
+	parent, found := r.branches[branch]
+	if !found {
+		parent = r.branches[DefaultBranch]
+	}
+
+	ch := change{files: nil, entries: nil}
+
+	switch kind {
+	case Symlink:
+		id := BlobID([]byte(variant))
+		r.blobs[id] = []byte(variant)
+		ch.entries = map[string]entrySpec{path: {mode: modeSymlink, id: id}}
+	case Submodule:
+		ch.entries = map[string]entrySpec{path: {mode: modeSubmodule, id: digest("submodule ", variant)}}
+	case Directory:
+		ch.files = map[string][]byte{path + "/" + variant: []byte(variant + "\n")}
+	default:
+		return Commit{}, fmt.Errorf("%w: entry kind %d", ErrNoRef, kind)
+	}
+
+	c := r.commitChange(
+		parent, ch, "Push an entry to "+branch, f.now(),
+		Signature{Author: OtherAuthor, Committer: OtherAuthor, Verified: false},
+	)
 	r.branches[branch] = c.meta.ID
 
 	return c.meta, nil

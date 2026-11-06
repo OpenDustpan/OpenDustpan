@@ -290,6 +290,7 @@ func startSignInEnvWith(ctx context.Context, tb testing.TB, cli Install, store S
 		issuer:            opts.issuer,
 		signIn:            true,
 		signInRealTime:    realTime,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,

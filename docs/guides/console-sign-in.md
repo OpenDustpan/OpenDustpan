@@ -232,6 +232,16 @@ The `__Host-dustpan_signin` cookie is `SameSite=Lax`, so the browser sends it
 when the provider sends the browser back. The `__Host-dustpan_session`
 cookie is `SameSite=Strict`.
 
+### Sign in with a passkey
+
+Local users and break-glass accounts do not use a provider. They can sign in
+with a passkey and no user name. The console calls
+`POST /api/dustpan/v1/sign-in/passkey/begin`, gives the options to the
+browser, and sends the result to `POST /api/dustpan/v1/sign-in/passkey/finish`.
+The second route sets the same `__Host-dustpan_session` cookie. The steps,
+the limits and the reasons for a failure are in
+[Sign in with a passkey](passkeys.md#sign-in-with-a-passkey).
+
 ## The session
 
 - `GET /api/server/session` answers the session and its CSRF value.
@@ -337,13 +347,39 @@ provider names before it finds the principal:
   more than 1 minute before the start of the sign-in.
 
 The server refuses an answer that breaks a limit. It never cuts a value to
-the limit. The audit entry of the refused sign-in has one of these reasons:
+the limit. The audit entry of each refused sign-in records the real reason,
+the provider ID and the method kind (`oidc` or `oauth`) in its changes with
+the keys `reason`, `provider` and `method`. The reason is one of these:
 
-- `ID token was refused`: the sign-in method refused the answer of the
-  provider. This reason is the same for a plain OAuth 2.0 provider.
+- `callback does not match the sign-in request`: the state, the sign-in
+  cookie or the stored sign-in request does not match, or the request was
+  used before.
+- `identity provider answered an error`: the provider sent an error in the
+  callback, or its token endpoint refused the code.
+- `ID token was refused`: an OpenID Connect provider sent an ID token that
+  failed a check. A plain OAuth 2.0 provider has no ID token and never has
+  this reason.
+- `identity provider answer failed a check`: another answer of the provider
+  failed a check, for example the user-info answer of a plain OAuth 2.0
+  provider.
+- `identity provider is not available`: the provider did not answer, or the
+  network refused the connection.
+- `sign-in provider is off`: the provider is turned off.
 - `sign-in assertion is not valid`: the sign-in method accepted the answer,
   and the second check of the server refused it. The password sign-in of a
   local user has this check and this reason too.
+- `sign-in input is not valid`: the callback failed the form check of the
+  method.
+- `sign-in value was used before`: a one-use value came a second time.
+- `sign-in method failed for a reason that the service does not know`: the
+  method returned an error of no known class. The sign-in fails closed.
+- `no principal`, `principal is disabled`, `principal cannot sign in through
+  an identity provider`, `subject is not valid` and `subject over 255
+  bytes`: the answer was good, and the server refused the person. These
+  refusals answer `403` with the reason.
+- `assertion names another provider than the route` and `assertion method is
+  not the method of the provider`: the method returned a person of another
+  provider or of another kind than the provider of the route.
 
 The server log has the rule that failed.
 

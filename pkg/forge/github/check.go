@@ -67,18 +67,31 @@ func (f *gitHub) learn(login string, permissions map[string]string) {
 		write = contentsGranted
 	}
 
+	pulls := contentsMissing
+	if permissions[permPulls] == levelWrite {
+		pulls = contentsGranted
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.owner, f.contents, f.writes = login, read, write
+	f.owner, f.contents, f.writes, f.pulls = login, read, write, pulls
 }
 
 // The names of the permission and of its levels that the adapter reads.
 const (
 	permContents = "contents"
 	permMetadata = "metadata"
+	permPulls    = "pull_requests"
 	levelRead    = "read"
 	levelWrite   = "write"
+	// levelReview is the level of a token for the review request calls. It is
+	// not a permission level of GitHub: it asks for the write of the contents
+	// and of the pull requests.
+	levelReview = "review"
+	// levelReviewRead is the level of a token for a review request call that
+	// only reads: the read of the contents and of the pull requests.
+	levelReviewRead = "review-read"
 )
 
 // installation is the part of the installation answer that Check reads.

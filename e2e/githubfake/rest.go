@@ -27,7 +27,9 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("GET /app/installations/{id}", f.getInstallation)
 	mux.HandleFunc("POST /app/installations/{id}/access_tokens", f.createInstallationToken)
 	mux.HandleFunc("DELETE /installation/token", f.revokeInstallationToken)
+	mux.HandleFunc("GET /app", f.getApp)
 	mux.HandleFunc("GET /user", f.getUser)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/git/trees/{sha}", f.getTree)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits", f.listCommits)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{ref...}", f.getCommit)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/compare/{spec...}", f.compare)
@@ -35,6 +37,13 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("POST /repos/{owner}/{repo}/git/refs", f.createRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/blobs/{sha}", f.getBlob)
+	mux.HandleFunc("GET /repos/{owner}/{repo}", f.getRepo)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/branches/{branch...}", f.getBranch)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/pulls", f.createPull)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls", f.listPulls)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls/{number}", f.getPull)
+	mux.HandleFunc("PATCH /repos/{owner}/{repo}/pulls/{number}", f.patchPull)
+	mux.HandleFunc("DELETE /repos/{owner}/{repo}/git/refs/{ref...}", f.deleteRef)
 	mux.HandleFunc("POST /graphql", f.graphql)
 	// GitHub answers a path that it does not have, and a method that a path does
 	// not have, with the same JSON 404. Without this pattern, the mux answers
@@ -295,11 +304,30 @@ func wireCommitOf(c *commit) wireCommit {
 		parents = append(parents, wireParent{SHA: c.meta.Parent})
 	}
 
-	return wireCommit{
-		SHA:     c.meta.ID,
-		Commit:  wireCommitBody{Message: c.meta.Message, Author: person(c.meta.Time), Committer: person(c.meta.Time)},
-		Parents: parents,
+	reason := "unsigned"
+	if c.meta.Verified {
+		reason = "valid"
 	}
+
+	return wireCommit{
+		SHA: c.meta.ID,
+		Commit: wireCommitBody{
+			Message: c.meta.Message, Author: person(c.meta.Time), Committer: person(c.meta.Time),
+			Verification: wireVerification{Verified: c.meta.Verified, Reason: reason},
+		},
+		Parents:   parents,
+		Author:    loginOf(c.meta.Author),
+		Committer: loginOf(c.meta.Committer),
+	}
+}
+
+// loginOf returns the account for a login, or nil for no account.
+func loginOf(login string) *wireLogin {
+	if login == "" {
+		return nil
+	}
+
+	return &wireLogin{Login: login}
 }
 
 // Limits of the list of commits, as GitHub has them.
@@ -542,7 +570,10 @@ func (f *Fake) getContents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		f.writeJSON(w, http.StatusOK, fileEntry(rp, p, blob, true))
+		entry := fileEntry(rp, p, blob, true)
+		entry.Type = contentsType(c.modeOf(p))
+
+		f.writeJSON(w, http.StatusOK, entry)
 
 		return
 	}
@@ -631,10 +662,25 @@ func dirEntries(rp *repo, c *commit, dir string) []wireEntry {
 			continue
 		}
 
-		out = append(out, fileEntry(rp, prefix+name, kinds[name], false))
+		entry := fileEntry(rp, prefix+name, kinds[name], false)
+		entry.Type = contentsType(c.modeOf(prefix + name))
+		out = append(out, entry)
 	}
 
 	return out
+}
+
+// contentsType returns the type that the contents call gives for an entry
+// with the mode.
+func contentsType(mode string) string {
+	switch mode {
+	case modeSymlink:
+		return "symlink"
+	case modeSubmodule:
+		return "submodule"
+	default:
+		return "file"
+	}
 }
 
 func (f *Fake) getBlob(w http.ResponseWriter, r *http.Request) {

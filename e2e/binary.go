@@ -43,8 +43,10 @@ const (
 	serverEnv = "E2E_SERVER"
 	// binaryServer names the proof variant.
 	binaryServer = "binary"
-	// binaryBuildTimeout bounds the `go build` of the server binary.
-	binaryBuildTimeout = 5 * time.Minute
+	// binaryBuildTimeout bounds the `go build` of the server binary. A race
+	// build on a 4-core CI runner, next to 16 parallel tests, can take more
+	// than 5 minutes.
+	binaryBuildTimeout = 15 * time.Minute
 	// binaryStartTimeout bounds the wait for the backend's /health/live.
 	binaryStartTimeout = 30 * time.Second
 	// binaryStartPoll sets how often the wait checks /health/live.
@@ -104,6 +106,10 @@ type envInput struct {
 	// real time instead of a TestClock, for tests that need time to pass.
 	// The server binary always keeps the real time.
 	signInRealTime bool
+	// passkeys gives the server a public URL with the host name localhost
+	// in place of its address, because a passkey relying party ID is never an
+	// IP address.
+	passkeys bool
 	// journalRefuser corrupts one outputs-only journal batch on the way to
 	// the server, so the server refuses it and records the refusal. Nil
 	// passes every batch through untouched.

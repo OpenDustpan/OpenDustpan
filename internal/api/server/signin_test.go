@@ -266,21 +266,22 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		SignIn: &apiserver.SignIn{
+			Service:         newTestSignInService(t, st, sessions, principals),
 			OnDevRefused:    nil,
 			DevCode:         nil,
 			DevAdmin:        noBootstrapAdmin,
 			Sessions:        sessions,
 			Limiter:         limiter,
 			PasswordLimiter: nil,
-			Stored:          stored,
-			Admin:           admin,
-			Origins:         []string{signInBase, consoleOrigin},
+			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+			Stored:  stored,
+			Admin:   admin,
+			Origins: []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
 				{
 					Method: hostileMethod(redirectMethod(t, client, "corp", clock.Now), opts.hostile), ID: "corp",
 					DisplayName: "Corp",
 					AutoCreate:  opts.autoCreate, Stored: false,
-					Source: principal.SourceOIDC,
 				},
 			},
 		},
@@ -456,8 +457,14 @@ func (e signInEnv) refusedReason(t *testing.T) (string, audit.Outcome) {
 	entries := e.serverEntries(t)
 	for i := range slices.Backward(entries) {
 		en := &entries[i]
-		if en.Action == session.ActionSignIn && en.Outcome != audit.OutcomeSuccess && len(en.Changes) == 1 {
-			return en.Changes[0].New, en.Outcome
+		if en.Action != session.ActionSignIn || en.Outcome == audit.OutcomeSuccess {
+			continue
+		}
+
+		for _, c := range en.Changes {
+			if c.Key == "reason" {
+				return c.New, en.Outcome
+			}
 		}
 	}
 
@@ -902,13 +909,13 @@ func TestSignInCallbackRefusals(t *testing.T) {
 		reason string
 	}{
 		{
-			name: "no sign-in cookie", reason: "state does not match",
+			name: "no sign-in cookie", reason: "callback does not match the sign-in request",
 			mutate: func(_ *testing.T, _ signInEnv, _ *http.Cookie, q url.Values) (url.Values, []*http.Cookie) {
 				return q, nil
 			},
 		},
 		{
-			name: "other state", reason: "state does not match",
+			name: "other state", reason: "callback does not match the sign-in request",
 			mutate: func(_ *testing.T, _ signInEnv, b *http.Cookie, q url.Values) (url.Values, []*http.Cookie) {
 				q.Set("state", q.Get("state")+"x")
 
@@ -916,7 +923,7 @@ func TestSignInCallbackRefusals(t *testing.T) {
 			},
 		},
 		{
-			name: "cookie of another sign-in", reason: "state does not match",
+			name: "cookie of another sign-in", reason: "callback does not match the sign-in request",
 			mutate: func(t *testing.T, e signInEnv, _ *http.Cookie, q url.Values) (url.Values, []*http.Cookie) {
 				t.Helper()
 
@@ -934,7 +941,7 @@ func TestSignInCallbackRefusals(t *testing.T) {
 			},
 		},
 		{
-			name: "wrong code", reason: "ID token was refused",
+			name: "wrong code", reason: "identity provider answered an error",
 			mutate: func(_ *testing.T, _ signInEnv, b *http.Cookie, q url.Values) (url.Values, []*http.Cookie) {
 				q.Set("code", "not-a-code")
 
@@ -982,7 +989,7 @@ func TestSignInCallbackWorksOnce(t *testing.T) {
 		t.Fatalf("second callback = %d, want 400", rec.Code)
 	}
 
-	if reason, _ := e.refusedReason(t); reason != "sign-in request is unknown or expired" {
+	if reason, _ := e.refusedReason(t); reason != "callback does not match the sign-in request" {
 		t.Errorf("audit reason = %q", reason)
 	}
 }
@@ -1185,6 +1192,7 @@ func TestSignInProviderDown(t *testing.T) {
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		SignIn: &apiserver.SignIn{
+			Service:      newTestSignInService(t, st, sessions, principals),
 			OnDevRefused: nil,
 			DevCode:      nil,
 			DevAdmin:     noBootstrapAdmin,
@@ -1192,10 +1200,11 @@ func TestSignInProviderDown(t *testing.T) {
 			Limiter:         limiter,
 			Origins:         nil,
 			PasswordLimiter: nil,
+			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
 				{
 					Method: redirectMethod(t, downOIDC{}, "corp", time.Now), ID: "corp", DisplayName: "Corp",
-					AutoCreate: true, Stored: false, Source: "",
+					AutoCreate: true, Stored: false,
 				},
 			},
 		},
@@ -1488,8 +1497,10 @@ func checkLengthRefusalEntry(t *testing.T, e signInEnv, sub string) {
 			t.Fatalf("audit entry keeps the long subject: %+v", entries[i])
 		}
 
-		if entries[i].Action != session.ActionSignIn || len(entries[i].Changes) != 1 ||
-			entries[i].Changes[0].New != "subject over 255 bytes" {
+		if entries[i].Action != session.ActionSignIn ||
+			!slices.ContainsFunc(entries[i].Changes, func(c audit.Change) bool {
+				return c.Key == "reason" && c.New == "subject over 255 bytes"
+			}) {
 			continue
 		}
 

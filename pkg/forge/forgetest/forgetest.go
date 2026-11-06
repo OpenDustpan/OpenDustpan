@@ -9,8 +9,8 @@
 //
 // The cases come before the first adapter. A case with no body skips with
 // "not implemented", and gets its body before an adapter implements the
-// methods that it covers. The cases of the groups "The connection" and
-// "Files" have bodies, and so do most cases of the group "Commits".
+// methods that it covers. The cases of the groups "The connection", "Files",
+// "Commits" and "Review requests" have bodies.
 // CaseNamesWithBody lists the cases that have a body. A case whose capability the forge does not list
 // skips for that forge, and the case "an operation outside the
 // capabilities is unsupported" checks that such a method returns
@@ -61,6 +61,31 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	// Push commits files on branch with no check, as another author does,
 	// and returns the commit. A nil value deletes the file.
 	Push(ctx context.Context, branch string, files map[string][]byte) (forge.Commit, error)
+	// PushAs commits files on branch with no check, with the message and the
+	// origin that the case gives, and returns the commit. It lets a case make
+	// a commit that poses as a commit of the connection. A nil value
+	// deletes the file.
+	PushAs(
+		ctx context.Context,
+		branch string,
+		files map[string][]byte,
+		message string,
+		origin Origin,
+	) (forge.Commit, error)
+	// CommitMessage returns the full message of the commit commitID in the
+	// repository repo, as the forge shows it. A case copies the message of a
+	// commit of the connection, with its proof, into a commit that it pushes.
+	CommitMessage(ctx context.Context, repo, commitID string) (string, error)
+	// Clone makes another repository on the forge, in the same account, with
+	// the commits and the branches of the repository of the case and another
+	// repository ID, and returns its path. The connection can commit to it.
+	Clone(ctx context.Context) (string, error)
+	// PushEntry commits an entry that is not a regular file at path on
+	// branch with no check, as another author does, and returns the commit.
+	// The entry replaces the file or the entry that the path has. The
+	// variant makes two entries of one kind differ: the target of a symlink,
+	// the commit of a submodule, the name of the file in a directory.
+	PushEntry(ctx context.Context, branch, path string, kind EntryKind, variant string) (forge.Commit, error)
 	// Rewrite replaces the history of branch with one new commit that has no
 	// parent and holds exactly files, as a force push does, and returns it.
 	// The commits before stay in the repository.
@@ -72,6 +97,26 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	Tag(ctx context.Context, name, commitID string) error
 	// Merge merges the review request id, as a person does in the forge.
 	Merge(ctx context.Context, id string) error
+	// Close closes the review request id with no merge, as a person does in
+	// the forge.
+	Close(ctx context.Context, id string) error
+	// Branch makes the branch name at the head of main with no new commit.
+	Branch(ctx context.Context, name string) error
+	// SetDefaultBranch makes branch the default branch that the forge
+	// answers for the repository. The forge does not refuse a delete of it.
+	SetDefaultBranch(ctx context.Context, branch string) error
+	// ForkReview makes a fork of the repository, in the account of another
+	// person, with the branch of the same name as branch and its commits. The
+	// person opens a review request from the branch of the fork into target
+	// of the repository, and the method returns its ID.
+	ForkReview(ctx context.Context, branch, target string) (string, error)
+	// SetMergeState makes the forge answer the merge state state, as a text of
+	// the forge, for the review request id. The text "unknown" is the state
+	// before the forge computes the merge.
+	SetMergeState(ctx context.Context, id, state string) error
+	// Oversize makes the forge answer each review request with a body above
+	// the size limit of the adapter, until the returned function restores it.
+	Oversize(ctx context.Context) (restore func(), err error)
 	// Event returns a request of kind as the forge sends it, signed with
 	// secret. The kind may be one that the port does not name, to test
 	// ErrUnsupported.
@@ -173,20 +218,104 @@ func cases() []testCase {
 		{"find commit with no such trailer is not found", forge.CapCommit, caseFindCommitNoTrailer},
 		{"find commit on a missing ref is not found", forge.CapCommit, caseFindCommitMissingRef},
 		{"find commit with a bad trailer or ref is invalid and makes no call", forge.CapCommit, caseFindCommitInvalid},
+		{
+			"find commit never returns a pushed commit that has the trailer",
+			forge.CapCommit,
+			caseFindCommitIgnoresPushedTrailer,
+		},
+		{
+			"find commit stops at a pushed commit with the trailer that is newer than the own",
+			forge.CapCommit,
+			caseFindCommitPushedTrailerBeforeOwn,
+		},
+		{
+			"find commit needs the trailer line to equal the line of the commit",
+			forge.CapCommit,
+			caseFindCommitTrailerIsExact,
+		},
+		{
+			"find commit needs a proof for the trailer, the base commit and the job",
+			forge.CapCommit,
+			caseFindCommitNeedsTheProof,
+		},
+		{
+			"find commit never counts the proof of a commit in another repository",
+			forge.CapCommit,
+			caseFindCommitProofIsOfThisRepository,
+		},
+		{
+			"commit after a symlink, a submodule or a directory at a changed path is a conflict",
+			forge.CapCommit,
+			caseCommitMovedHeadEntry,
+		},
 
 		// Review requests.
-		{"open review request", forge.CapReview, nil},
-		{"open review request twice answers the first", forge.CapReview, nil},
-		{"open review request of the same branch into another target opens another", forge.CapReview, nil},
-		{"open review request of a missing branch is not found", forge.CapReview, nil},
-		{"open review request that the forge does not allow is refused", forge.CapReview, nil},
-		{"read an open review request has its head", forge.CapReview, nil},
-		{"read review request after a merge has the merge time and commit", forge.CapReview, nil},
-		{"read review request after a close with no merge", forge.CapReview, nil},
-		{"read a missing review request is not found", forge.CapReview, nil},
-		{"close review request twice is nil", forge.CapReview, nil},
-		{"close a missing review request is not found", forge.CapReview, nil},
-		{"close of a merged review request is a conflict", forge.CapReview, nil},
+		{"open review request", forge.CapReview, caseReviewOpen},
+		{"open review request twice answers the first", forge.CapReview, caseReviewOpenTwice},
+		{
+			"open review request of the same branch into another target opens another",
+			forge.CapReview,
+			caseReviewOpenOtherTarget,
+		},
+		{
+			"open review request of a missing branch or target is not found",
+			forge.CapReview,
+			caseReviewOpenMissingBranch,
+		},
+		{"open review request that the forge does not allow is refused", forge.CapReview, caseReviewOpenRefused},
+		{
+			"open review request that fails validation is invalid and makes no call",
+			forge.CapReview,
+			caseReviewOpenInvalid,
+		},
+		{"open review request never answers the review request of a fork", forge.CapReview, caseReviewOpenIgnoresFork},
+		{"read an open review request has its head, base and test merge", forge.CapReview, caseReviewReadHead},
+		{"read review request after a merge has the merge time and commit", forge.CapReview, caseReviewReadMerged},
+		{"read review request after a close with no merge", forge.CapReview, caseReviewReadClosed},
+		{"read a missing review request is not found", forge.CapReview, caseReviewReadMissing},
+		{
+			"read or close with an ID that is not a number is invalid and makes no call",
+			forge.CapReview,
+			caseReviewIDInvalid,
+		},
+		{"read review request from a fork shows another head repository", forge.CapReview, caseReviewReadFork},
+		{
+			"read review request maps each merge state, and an unknown one is unknown",
+			forge.CapReview,
+			caseReviewMergeStates,
+		},
+		{
+			"read review request with an unknown merge state has no test merge",
+			forge.CapReview,
+			caseReviewUnknownHasNoTestMerge,
+		},
+		{"close review request twice is nil", forge.CapReview, caseReviewCloseTwice},
+		{"close a missing review request is not found", forge.CapReview, caseReviewCloseMissing},
+		{"close of a merged review request is a conflict", forge.CapReview, caseReviewCloseMerged},
+		{"close of a review request outside the write-back is refused", forge.CapReview, caseReviewCloseForeign},
+		{
+			"close of a closed review request outside the write-back is refused",
+			forge.CapReview,
+			caseReviewCloseForeignClosed,
+		},
+		{"delete branch of a write-back", forge.CapReview, caseDeleteBranch},
+		{
+			"delete the base of an open review request is refused",
+			forge.CapReview,
+			caseDeleteBranchBaseOfOpenReview,
+		},
+		{"delete a missing branch is not found", forge.CapReview, caseDeleteBranchMissing},
+		{
+			"delete a branch outside the write-back is invalid and makes no call",
+			forge.CapReview,
+			caseDeleteBranchOutsideWriteBack,
+		},
+		{"delete the default branch is refused", forge.CapReview, caseDeleteDefaultBranch},
+		{"delete the head of an open review request is refused", forge.CapReview, caseDeleteBranchWithOpenReview},
+		{"delete a protected branch is refused", forge.CapReview, caseDeleteProtectedBranch},
+		{"review methods on a forge that fails are ErrUnavailable", forge.CapReview, caseReviewServerError},
+		{"review methods on an answer that does not parse are ErrUnavailable", forge.CapReview, caseReviewGarbled},
+		{"review methods on an answer above the size limit are ErrUnavailable", forge.CapReview, caseReviewOversize},
 
 		// Tokens.
 		{"repo token of an app reads its repository only", forge.CapRepoToken, nil},

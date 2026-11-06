@@ -104,7 +104,34 @@ type auditStore interface {
 func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
 	t.Helper()
 
+	return newAccessFixtureFull(t, entries, nil)
+}
+
+// newAccessFixtureFull builds the fixture of newAccessFixtureWith with the
+// passkey service passkeys. With nil, the handler gets a real passkey service
+// over the store.
+func newAccessFixtureFull(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureSignIn(t, entries, passkeys, nil)
+}
+
+// newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
+// tweak change the console sign-in before the handler reads it. With nil, the
+// sign-in stays as it is.
+func newAccessFixtureSignIn(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+	tweak func(in *apiserver.SignIn, st *sqlite.Store),
+) accessFixture {
+	t.Helper()
+
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+
+	if passkeys == nil {
+		passkeys = newRoutePasskeys(t, st)
+	}
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
@@ -162,6 +189,16 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 
 	passwords := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
+	signIn := &apiserver.SignIn{
+		Service:      newTestSignInService(t, st, sessions, principals),
+		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
+		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
+		Passkeys: passkeys, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+	}
+	if tweak != nil {
+		tweak(signIn, st)
+	}
+
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
@@ -195,10 +232,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
-		SignIn: &apiserver.SignIn{
-			OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
-			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
-		},
+		SignIn:           signIn,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,

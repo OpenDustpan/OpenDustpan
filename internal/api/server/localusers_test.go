@@ -418,7 +418,7 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 
 	_, secret, err := f.sessions.Start(t.Context(), e, session.Start{
 		AuthTime: now.Add(-24 * time.Hour), PrincipalID: "prn-admin", Provider: localuser.ProviderID,
-		SourceIP: "192.0.2.1", UserAgent: "test", Generation: 0, Stored: false,
+		SourceIP: "192.0.2.1", UserAgent: "test", Generation: 0, Stored: false, Alert: nil,
 	})
 	if err != nil {
 		t.Fatalf("start the session: %v", err)
@@ -484,7 +484,16 @@ func TestPasswordSignInRefusesAHostileAssertion(t *testing.T) {
 			t.Parallel()
 
 			f := newAccessFixture(t)
-			in := localSignedIn(createRouteLocalUser(t, f))
+			principalID := createRouteLocalUser(t, f)
+			in := localSignedIn(principalID)
+
+			// The session of a valid sign-in carries the generation of the record.
+			state, err := f.store.PrincipalState(t.Context(), principalID)
+			if err != nil {
+				t.Fatalf("principal state: %v", err)
+			}
+
+			in.SessionGeneration = state.Generation
 			tc.change(&in)
 
 			failures := f.passwords.count()
@@ -492,7 +501,7 @@ func TestPasswordSignInRefusesAHostileAssertion(t *testing.T) {
 				http.NoBody)
 			rec := httptest.NewRecorder()
 
-			if got := f.handler.AcceptLocalAssertionForTest(rec, req, in); got != tc.ok {
+			if got := f.handler.CompleteLocalForTest(rec, req, in); got != tc.ok {
 				t.Fatalf("accepted = %v, want %v", got, tc.ok)
 			}
 
@@ -524,17 +533,31 @@ func checkLocalRefusal(t *testing.T, f accessFixture, rec *httptest.ResponseReco
 		t.Fatalf("password failures = %d, want %d", got, before+1)
 	}
 
-	entries := serverEntries(t, f.store)
+	reason, found := lastRefusalReason(serverEntries(t, f.store))
+	if !found {
+		t.Fatal("no refused sign-in entry")
+	}
+
+	if reason != "sign-in assertion is not valid" {
+		t.Fatalf("audit reason = %q, want the reason of an Assertion that is not valid", reason)
+	}
+}
+
+// lastRefusalReason returns the reason of the last refused sign-in entry of
+// entries, and false when there is none.
+func lastRefusalReason(entries []audit.Entry) (string, bool) {
 	for i := range slices.Backward(entries) {
 		en := &entries[i]
-		if en.Action == session.ActionSignIn && en.Outcome != audit.OutcomeSuccess && len(en.Changes) == 1 {
-			if en.Changes[0].New != "sign-in assertion is not valid" {
-				t.Fatalf("audit reason = %q, want the reason of an Assertion that is not valid", en.Changes[0].New)
-			}
+		if en.Action != session.ActionSignIn || en.Outcome == audit.OutcomeSuccess {
+			continue
+		}
 
-			return
+		for _, c := range en.Changes {
+			if c.Key == "reason" {
+				return c.New, true
+			}
 		}
 	}
 
-	t.Fatal("no refused sign-in entry")
+	return "", false
 }

@@ -47,6 +47,39 @@ is on.
 `TestNewServerAuthenticatorChain` checks this order through a real request.
 When you change the chain, change the test in the same commit.
 
+Every service authorizes through the one chain. `NewServer` builds the auth
+ports with `newAuthPorts` and writes the chain into `cfg.authenticator` and
+`cfg.authorizer` before `newServices`. So a constructor that runs after that
+write cannot read the bare configured port. Only `newIdentityServices` runs
+before the write and can see it. A service that checks an action takes the
+wrapped authorizer as an argument. The manual lock service is one example:
+its lock, unlock and manage checks pass the IP allowlist gate and the
+namespace service rule.
+
+What guarantees this is the order in `NewServer`. The test proves less:
+`TestNewServerAuthenticatorChain` checks each `Authorize` call that it
+records, and it records only the calls that it makes. A call that does not
+come through the whole chain fails the test, unless the function that makes
+the call is named in `bareAuthorizerCallers`
+(`pkg/dustpan/authchain_internal_test.go`). A service that holds the bare port
+and that the test does not call is not found by the test. When you add a
+service that checks an action, add a call of it to the test.
+
+The named exceptions are the two callers that run before the write. This
+layer has no IP allowlist gate and no namespace service rule. The routes in
+front of them use the chain, but these layers do not rely on that. The test
+does not exercise these entries, because with the recording authorizer they
+build their own `*access.Authorizer`.
+
+- `access.(*Service)`: the escalation check of a grant needs the grant model
+  of the concrete `*access.Authorizer` (the stored roles and grants). It is
+  not a check of a request.
+- `accesstoken.(*Service)`: it gets that authorizer of the access service for
+  the escalation check of a token for another principal.
+
+To add an exception, add the name and the reason to that list in the same
+commit.
+
 `NewServer` writes the two chains into `cfg.authenticator` and
 `cfg.authorizer` one time, for the adapter code that is not in an area file
 yet. An area file must not read them from `settings`. Its caller passes them

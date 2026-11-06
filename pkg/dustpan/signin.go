@@ -19,7 +19,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -109,9 +108,24 @@ func newSignIn(
 	}
 
 	in := &serverapi.SignIn{
-		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, DevCode: nil,
-		DevAdmin: noDevAdmin, OnDevRefused: devRefusalAudit(cfg),
+		Service:   nil,
+		Sessions:  sessions,
+		Limiter:   nil,
+		Stored:    nil,
+		Admin:     nil,
+		Providers: providers,
+		Origins: append(
+			[]string{origin},
+			cfg.allowedOrigins...,
+		),
+		PasswordLimiter:     nil,
+		Passkeys:            nil,
+		PasskeySignIn:       nil,
+		PasskeyBeginLimiter: nil,
+		PasskeyLimiter:      nil,
+		DevCode:             nil,
+		DevAdmin:            noDevAdmin,
+		OnDevRefused:        devRefusalAudit(cfg),
 	}
 
 	if cfg.devSignIn != nil {
@@ -422,7 +436,6 @@ func signInProvider(
 
 	return serverapi.SignInProvider{
 		Method: method, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
-		Source: principal.SourceOIDC,
 	}, nil
 }
 
@@ -442,7 +455,8 @@ func setSignInLimiters(gates signInGates, tokens *accesstoken.Service, in *serve
 	// store keeps tokens, and the assembly passes them here. This check stays
 	// so that a new order of the assembly or a new caller cannot start the
 	// sign-in routes with no failure limit.
-	if tokens != nil && (gates.signInGate == nil || gates.passwordGate == nil) {
+	if tokens != nil && (gates.signInGate == nil || gates.passwordGate == nil || gates.passkeyGate == nil ||
+		gates.passkeyBeginGate == nil) {
 		return errSignInUngated
 	}
 
@@ -452,6 +466,14 @@ func setSignInLimiters(gates signInGates, tokens *accesstoken.Service, in *serve
 
 	if gates.passwordGate != nil {
 		in.PasswordLimiter = gates.passwordGate
+	}
+
+	if gates.passkeyGate != nil {
+		in.PasskeyLimiter = gates.passkeyGate
+	}
+
+	if gates.passkeyBeginGate != nil {
+		in.PasskeyBeginLimiter = gates.passkeyBeginGate
 	}
 
 	return nil

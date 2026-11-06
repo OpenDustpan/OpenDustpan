@@ -71,6 +71,13 @@ var (
 	// adapter calls the forge, or connection parameters that the adapter
 	// cannot use.
 	ErrInvalid = errors.New("invalid Git host request")
+	// ErrUntrustedCommit reports a commit that has the trailer of a write-back
+	// but that the connection did not make: another author, another
+	// committer, or a commit that the host does not show as verified. The
+	// commit is not the delivery of the job. A caller must not record it as
+	// the delivery, and must not retry: an operator reads the audit record
+	// and decides.
+	ErrUntrustedCommit = errors.New("a commit with the trailer was not made by the connection")
 )
 
 // UnavailableError is an ErrUnavailable with the wait time that the forge
@@ -251,11 +258,26 @@ type Commits interface {
 	// FindCommit returns the newest commit on ref, at or after since,
 	// whose message has the trailer line trailer, for example
 	// "Dustpan-Job: j-123", in its last paragraph. A line of the text of a
-	// message is not a trailer. It returns ErrNotFound when no such commit
-	// exists, and ErrInvalid for a trailer that is not one line of the form
+	// message is not a trailer, and the line must equal trailer: a longer
+	// or shorter line is another trailer. Only a commit that the connection
+	// made counts: its author is the identity that the connection commits
+	// as, its committer is the Git host, and the host reports it as
+	// verified. It returns
+	// ErrNotFound when no such commit exists, ErrUntrustedCommit when the
+	// newest commit with the trailer fails one of these checks, and
+	// ErrInvalid for a trailer that is not one line of the form
 	// "Key: value". A takeover of a write-back calls it before a second
 	// commit.
-	FindCommit(ctx context.Context, repo, ref, trailer string, since time.Time) (Commit, error)
+	//
+	// d names the commit by the Trailer and the Base of the CommitRequest
+	// that made it. Commit adds a proof to the commit that binds the
+	// trailer, the base and the repository, and FindCommit counts a commit
+	// only when its proof opens for the same three values. A commit with no
+	// proof, or with the proof of another trailer, base or repository, is
+	// ErrUntrustedCommit. It returns ErrInvalid for a base that is not a
+	// full commit ID, and ErrUnsupported when the connection has no key to
+	// open the proof.
+	FindCommit(ctx context.Context, repo, ref string, d Delivery, since time.Time) (Commit, error)
 }
 
 // Reviews manages review requests: a pull request of GitHub or a merge
@@ -263,19 +285,47 @@ type Commits interface {
 type Reviews interface {
 	// OpenReview opens a review request from req.Branch into req.Target.
 	// When an open review request for the same req.Branch and the same
-	// req.Target exists, it returns that one and opens no second one. It
-	// returns ErrNotFound for a missing branch, and ErrRefused when the
-	// forge does not allow the review request.
+	// req.Target exists, it returns that one and opens no second one. When
+	// the forge says that a review request exists for the branch, and it is
+	// not one of the base repository (for example one from a fork with a
+	// branch of the same name), it returns ErrConflict: a retry fails the
+	// same way. It
+	// returns ErrInvalid for a request that fails ValidateReviewRequest,
+	// before any call. It returns ErrNotFound for a missing repository,
+	// branch or target, and ErrRefused when the forge does not allow the
+	// review request, for example when the branch has no commit that the
+	// target lacks, or when the credential cannot write review requests.
 	OpenReview(ctx context.Context, repo string, req ReviewRequest) (Review, error)
-	// ReadReview returns the review request id with its state, its head
-	// commit and, for a merge, the merge time and the merge commit. It
-	// returns ErrNotFound for a review request that does not exist.
+	// ReadReview returns the review request id with its state, its base,
+	// its head commit and head repository, its author, whether the forge
+	// lets it merge and, for a merge, the merge time and the merge commit.
+	// It returns ErrInvalid for an id that is not a review number, before
+	// any call, and ErrNotFound for a review request that does not exist.
+	// An answer that the adapter cannot check is ErrUnavailable: the
+	// adapter never returns a review request that it did not check. A
+	// review request whose merge state the forge has not computed yet has
+	// Mergeable MergeUnknown. ReadReview does not wait and does not retry:
+	// the caller reads the review request again later.
 	ReadReview(ctx context.Context, repo, id string) (Review, error)
 	// CloseReview closes the review request id with no merge. A review
 	// request that is closed already returns nil. It returns ErrNotFound
-	// for a review request that does not exist, and ErrConflict for a
-	// review request that merged.
+	// for a review request that does not exist, ErrConflict for a
+	// review request that merged, and ErrRefused for a review request that
+	// is not one of the write-back. The rule is fixed: CloseReview acts on a
+	// review request only when its head branch passes IsWriteBackBranch and
+	// its head repository is the base repository (see Review.FromFork). It
+	// checks this first, for each state: a review request of a person, or from
+	// a fork, is never closed, and also gets ErrRefused when it is closed or
+	// merged already.
 	CloseReview(ctx context.Context, repo, id string) error
+	// DeleteBranch deletes the branch of a write-back after its review
+	// request closed or merged. It returns ErrInvalid for a name that
+	// fails IsWriteBackBranch, before any call, and ErrRefused for the
+	// default branch of the repository, for a protected branch, for a
+	// branch that an open review request has as its head or its base, and for a missing
+	// permission. It returns ErrNotFound for a missing repository or branch,
+	// so a caller that wants an idempotent delete ignores ErrNotFound.
+	DeleteBranch(ctx context.Context, repo, branch string) error
 }
 
 // Tokens gives a token for the git protocol. The source fetch of the server
@@ -397,13 +447,27 @@ const (
 // adapter writes it as the git author, or as a Co-authored-by trailer when
 // the forge makes the commit as the account of the connection. The
 // committer is always the connection.
+//
+// Trailer is the trailer line that FindCommit searches for, for example
+// "Dustpan-Job: j-123". It must be a line of the last paragraph of Message.
+// The adapter adds a proof next to it that binds Trailer, Base and the
+// repository, so that FindCommit can tell this commit from a commit that a
+// person pushed with the same line.
 type CommitRequest struct {
 	Branch    string
 	NewBranch bool
 	Base      string
 	Message   string
+	Trailer   string
 	Author    Person
 	Changes   []FileChange
+}
+
+// Delivery names a commit that a write-back made: the trailer line and the base
+// commit of its CommitRequest. FindCommit takes it.
+type Delivery struct {
+	Trailer string
+	Base    string
 }
 
 // ValidateCommit checks req before an adapter calls the forge. It returns
@@ -419,6 +483,10 @@ func ValidateCommit(req CommitRequest) error {
 
 	if req.Message == "" {
 		return fmt.Errorf("%w: the commit message is empty", ErrInvalid)
+	}
+
+	if req.Trailer == "" {
+		return fmt.Errorf("%w: the commit has no trailer line", ErrInvalid)
 	}
 
 	if len(req.Message) > MaxMessageBytes {
@@ -615,6 +683,91 @@ type ReviewRequest struct {
 	Body   string
 }
 
+// Limits of a review request that the port accepts.
+const (
+	// MaxReviewTitleBytes is the most bytes of the title of a review request.
+	MaxReviewTitleBytes = 256
+	// MaxReviewBodyBytes is the most bytes of the description of a review
+	// request.
+	MaxReviewBodyBytes = 64 << 10
+)
+
+// WriteBackBranchPrefix starts the name of each branch that write-back makes
+// for a review request: "dustpan/" and the ID of the job. DeleteBranch and
+// CloseReview act on such a branch only.
+const WriteBackBranchPrefix = "dustpan/"
+
+// IsWriteBackBranch reports whether name is a valid branch name that starts
+// with WriteBackBranchPrefix. A valid branch name has no empty part, so the
+// name has more text after the prefix.
+func IsWriteBackBranch(name string) bool {
+	return strings.HasPrefix(name, WriteBackBranchPrefix) && validateRef(name) == nil
+}
+
+// ValidateReviewRequest checks req before an adapter calls the forge. It
+// returns an error that wraps ErrInvalid or ErrTooLarge.
+func ValidateReviewRequest(req ReviewRequest) error {
+	if err := validateRef(req.Branch); err != nil {
+		return err
+	}
+
+	if err := validateRef(req.Target); err != nil {
+		return err
+	}
+
+	if req.Branch == req.Target {
+		return fmt.Errorf("%w: the branch and the target of a review request are the same", ErrInvalid)
+	}
+
+	if err := validateReviewTitle(req.Title); err != nil {
+		return fmt.Errorf("the review request title: %w", err)
+	}
+
+	if err := validateReviewBody(req.Body); err != nil {
+		return fmt.Errorf("the review request description: %w", err)
+	}
+
+	return nil
+}
+
+// validateReviewTitle checks the title of a review request: one line of valid
+// UTF-8 that is not empty and has no control character. A title above
+// MaxReviewTitleBytes is ErrTooLarge.
+func validateReviewTitle(text string) error {
+	switch {
+	case len(text) > MaxReviewTitleBytes:
+		return fmt.Errorf("%w: the text has more than %d bytes", ErrTooLarge, MaxReviewTitleBytes)
+	case !utf8.ValidString(text):
+		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
+	case strings.TrimSpace(text) == "":
+		return fmt.Errorf("%w: the text is empty", ErrInvalid)
+	case strings.ContainsFunc(text, unicode.IsControl):
+		return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+	}
+
+	return nil
+}
+
+// validateReviewBody checks the description of a review request: valid UTF-8
+// with no control character, except the line break and the tab. A description
+// above MaxReviewBodyBytes is ErrTooLarge.
+func validateReviewBody(text string) error {
+	switch {
+	case len(text) > MaxReviewBodyBytes:
+		return fmt.Errorf("%w: the text has more than %d bytes", ErrTooLarge, MaxReviewBodyBytes)
+	case !utf8.ValidString(text):
+		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
+	}
+
+	for _, r := range text {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+		}
+	}
+
+	return nil
+}
+
 // ReviewState is the state of a review request.
 type ReviewState string
 
@@ -625,18 +778,69 @@ const (
 	ReviewClosed ReviewState = "closed"
 )
 
+// MergeState says whether the forge lets a review request merge.
+type MergeState string
+
+// The merge states. Only MergeClean says that the forge lets the review
+// request merge now. Each other value, and each value that an adapter does
+// not know, is a reason to wait or to refuse: a caller treats it as "not
+// mergeable".
+const (
+	// MergeUnknown is a merge state that the forge has not computed yet, or
+	// that the adapter does not know.
+	MergeUnknown MergeState = "unknown"
+	// MergeClean is a review request with no conflict and no rule that stops
+	// the merge.
+	MergeClean MergeState = "clean"
+	// MergeConflict is a review request whose head conflicts with the base.
+	MergeConflict MergeState = "conflict"
+	// MergeBlocked is a review request that a rule of the forge stops: a
+	// required review or a required check.
+	MergeBlocked MergeState = "blocked"
+	// MergeBehind is a review request whose head lacks commits of the base,
+	// and a rule requires an up-to-date head.
+	MergeBehind MergeState = "behind"
+	// MergeUnstable is a review request whose checks that are not required
+	// fail.
+	MergeUnstable MergeState = "unstable"
+	// MergeDraft is a review request that is a draft.
+	MergeDraft MergeState = "draft"
+)
+
 // Review is a review request on the forge. ID is the number or the ID that
-// the forge gives, as a string. MergedAt and MergeCommit are set when
+// the forge gives, as a string. Branch is the head branch and Target the
+// base branch. BaseCommit is the commit at the head of Target that the forge
+// compared with the head. Head is the head commit. BaseRepoID and HeadRepoID
+// are the stable IDs of the repository of the base and of the head, as
+// strings: a review request from a fork has another HeadRepoID, and a name is
+// never the key. AuthorID is the stable ID of the account that opened it.
+// TestMergeCommit is the commit that the forge made to test the merge of an
+// open review request, empty when the forge made none. Mergeable says
+// whether the forge lets it merge. MergedAt and MergeCommit are set when
 // State is ReviewMerged.
 type Review struct {
-	ID          string
-	URL         string
-	State       ReviewState
-	Branch      string
-	Target      string
-	Head        string
-	MergedAt    time.Time
-	MergeCommit string
+	ID              string
+	URL             string
+	State           ReviewState
+	Branch          string
+	Target          string
+	Head            string
+	BaseCommit      string
+	BaseRepoID      string
+	HeadRepoID      string
+	AuthorID        string
+	TestMergeCommit string
+	Mergeable       MergeState
+	MergedAt        time.Time
+	MergeCommit     string
+}
+
+// FromFork reports whether the head of the review request is in another
+// repository than its base. It is true also when the forge gave no ID for
+// the head or for the base, for example after the delete of the fork, so that
+// a caller never takes an unknown origin for the base repository.
+func (r Review) FromFork() bool {
+	return r.BaseRepoID == "" || r.HeadRepoID == "" || r.BaseRepoID != r.HeadRepoID
 }
 
 // Token is a token for the git protocol over HTTPS. Username is the user
@@ -695,7 +899,7 @@ const (
 	CapCompare Capability = "compare"
 	// CapCommit covers Commit and FindCommit.
 	CapCommit Capability = "commit"
-	// CapReview covers OpenReview, ReadReview and CloseReview.
+	// CapReview covers OpenReview, ReadReview, CloseReview and DeleteBranch.
 	CapReview Capability = "review"
 	// CapGitAccess covers RepoToken: a token for the git protocol,
 	// with Scoped set or not.

@@ -150,6 +150,7 @@ func joinLabels() map[string]apidesc.Label {
 	maps.Copy(labels, gateObjectLabels())
 	maps.Copy(labels, storeCheckOperationLabels())
 	maps.Copy(labels, localUserOperationLabels())
+	maps.Copy(labels, passkeyOperationLabels())
 
 	return labels
 }

@@ -224,7 +224,7 @@ func (r *reporter) remove(ctx context.Context, q Querier, d Dialect) error {
 
 // dangling removes the rows that name a principal that the staging area does
 // not hold: grants, group memberships, sessions, access tokens,
-// preferences and trust rules. The
+// preferences, trust rules, local users, session generations and passkeys. The
 // foreign keys of the staged data may be wrong already, so the strip does not
 // rely on them.
 func (r *reporter) dangling(ctx context.Context, q Querier) error {
@@ -243,6 +243,7 @@ func (r *reporter) dangling(ctx context.Context, q Querier) error {
 		{table: backup.TableTrustRules, where: "principal_id " + missing},
 		{table: backup.TableLocalUsers, where: "principal_id " + missing},
 		{table: backup.TableSessionGenerations, where: "principal_id " + missing},
+		{table: backup.TablePasskeys, where: "principal_id " + missing},
 	} {
 		n, err := q.Exec(ctx, "DELETE FROM "+step.table+" WHERE "+step.where)
 		if err != nil {

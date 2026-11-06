@@ -272,6 +272,9 @@ type settings struct {
 	// jobClaimer builds the claimer of the phases of runner jobs for the
 	// runners of the protocol, or is nil. See WithJobClaimer.
 	jobClaimer JobClaimerFunc
+	// jobRecorder records the steps and the log chunks of the launchers of
+	// the runner protocol, or is nil. See WithJobRecorder.
+	jobRecorder job.CheckedRecorder
 	// components are the components this process runs. See WithComponents.
 	components Components
 	// operationLease is the lease period of a claim on a durable operation,
@@ -534,6 +537,7 @@ type Server struct {
 	secretKeys    secret.KeyStore
 	secretWrapper secret.Wrapper
 	workspaces    *workspace.Service
+	manualLocks   *manuallock.Service // Only the tests read it.
 	backups       *backup.Service
 	restores      *backup.RestoreService
 	storeChecks   *storecheck.Service
@@ -733,6 +737,7 @@ func defaultSettings() *settings {
 		sourceFilters:           nil,
 		trustRules:              trustRuleSettings{store: nil, cas: nil, loopback: false},
 		jobClaimer:              nil,
+		jobRecorder:             nil,
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
@@ -772,7 +777,24 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc, err := newServices(cfg, tokens)
+	// The auth ports need only the token service, so they exist before the
+	// services. From the write below, each later reader of cfg.authenticator
+	// and cfg.authorizer gets the chain, and no constructor after this point
+	// can read the bare configured port. The bare port is visible only to
+	// newIdentityServices above (the access service and the token service),
+	// which are the named exceptions in bareAuthorizerCallers
+	// (authchain_internal_test.go). This is the one write of the chain into
+	// cfg: an area constructor takes the ports as arguments instead, and
+	// newServices gets the authorizer as an argument for the manual lock
+	// service.
+	ports, err := newAuthPorts(cfg, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
+
+	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
 		return nil, err
 	}
@@ -796,17 +818,6 @@ func NewServer(opts ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	ports, err := newAuthPorts(cfg, svc.tokens)
-	if err != nil {
-		return nil, err
-	}
-
-	// The adapter code that reads cfg.authenticator and cfg.authorizer gets
-	// the wrapped ports from here. The services that newServices built above
-	// keep the configured authorizer. This is the one write of the chain into
-	// cfg: an area constructor takes the ports as arguments instead.
-	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
@@ -997,7 +1008,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		flushDenials: flushDenials,
 		handler:      withStartGate(handlers.served, started, cfg.logger),
 		started:      started,
-		ungated:      handlers.ungated, mounted: &mount, root: handlers.root,
+		ungated:      handlers.ungated, mounted: &mount, root: handlers.root, manualLocks: svc.manualLocks,
 		logger:        cfg.logger,
 		listenAddr:    cfg.listenAddr,
 		listener:      cfg.listener,
@@ -1808,7 +1819,11 @@ func checkTLSAndAllowlist(cfg *settings) error {
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
+//
+// The authorizer is the wrapped authorizer of the one chain (newAuthPorts).
+// The manual lock service gets it, so its lock, unlock and manage checks pass
+// the IP allowlist gate and the namespace service rule too.
+func newServices(cfg *settings, tokens *accesstoken.Service, authz identity.Authorizer) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Installation: cfg.installation},
 	)
@@ -1825,7 +1840,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	manual, err := newManualLockService(cfg)
+	manual, err := newManualLockService(cfg.namespaceStore, cfg.jobStore, cfg.now, authz)
 	if err != nil {
 		return services{}, err
 	}
@@ -2999,38 +3014,6 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 	}
 
 	return authz, nil
-}
-
-// newManualLockService builds the manual lock service on the namespace store
-// when that store also holds manual locks. A custom store without them gets no
-// service: the lock routes are not served and the tools take their own locks
-// as before.
-func newManualLockService(cfg *settings) (*manuallock.Service, error) {
-	store, ok := cfg.namespaceStore.(manuallock.Store)
-	if !ok {
-		return nil, nil //nolint:nilnil // No manual lock service: the store holds no manual locks.
-	}
-
-	// The clock of the job store lets a tool lock request with the job token of
-	// a phase that started before a manual lock pass that lock. Without a job
-	// store the clock stays nil, and no job token passes any lock.
-	var phases manuallock.PhaseClock
-	if cfg.jobStore != nil {
-		phases = job.PhaseClock{Jobs: cfg.jobStore}
-	}
-
-	svc, err := manuallock.NewService(manuallock.Config{
-		Store:      store,
-		Namespaces: cfg.namespaceStore,
-		Authorizer: cfg.authorizer,
-		Now:        cfg.now,
-		Phases:     phases,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("manual lock service: %w", err)
-	}
-
-	return svc, nil
 }
 
 // newCollectionService builds the collection service on the namespace store

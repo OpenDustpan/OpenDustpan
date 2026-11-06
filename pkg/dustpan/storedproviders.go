@@ -12,7 +12,6 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/oauth"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -225,10 +224,10 @@ func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) 
 
 	var client oauth.MethodClient
 
-	source, kind := principal.SourceOIDC, session.MethodOIDC
+	kind := session.MethodOIDC
 	if p.Mode == session.ModeOAuth {
 		client, err = s.plainClient(p, clientSecret)
-		source, kind = principal.SourceOAuth, session.MethodOAuth
+		kind = session.MethodOAuth
 	} else {
 		client, err = s.openIDClient(p, clientSecret)
 	}
@@ -244,7 +243,6 @@ func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) 
 
 	return serverapi.SignInProvider{
 		Method: method, ID: p.ID, DisplayName: p.DisplayName, AutoCreate: p.AutoCreate, Stored: true,
-		Source: source,
 	}, nil
 }
 

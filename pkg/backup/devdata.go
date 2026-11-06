@@ -130,6 +130,8 @@ const (
 	// RemovedSessionGenerations counts the session generation rows of a
 	// removed principal.
 	RemovedSessionGenerations DevRemovalClass = "session-generations"
+	// RemovedPasskeys counts the passkeys of a removed principal.
+	RemovedPasskeys DevRemovalClass = "passkeys"
 	// RemovedApprovers counts dev subjects removed from Approvers.Users of
 	// approval rules, approval defaults and ownership rules. The rule stays.
 	// A rule that loses its last approver gets Users with the value
@@ -138,8 +140,8 @@ const (
 	// DevStripReport.Approvers.
 	RemovedApprovers DevRemovalClass = "approvers"
 	// RemovedDangling counts grants, group memberships, sessions, tokens,
-	// preferences, trust rules, local user records and session generations
-	// that name a principal
+	// preferences, trust rules, local user records, session generations and
+	// passkeys that name a principal
 	// that does not exist, or a subject with the reserved prefix and no
 	// principal row. Data that was already wrong
 	// before the restore is in this class.
@@ -162,8 +164,8 @@ type DevRemoval struct {
 	// Counts holds the count of removed rows for each class that a principal
 	// owns: RemovedGrants, RemovedGroupMembers, RemovedSessions,
 	// RemovedAccessTokens, RemovedPreferences, RemovedTempAdmins,
-	// RemovedTrustRules, RemovedLocalUsers and RemovedSessionGenerations. The
-	// other classes are not in it.
+	// RemovedTrustRules, RemovedLocalUsers, RemovedSessionGenerations and
+	// RemovedPasskeys. The other classes are not in it.
 	Counts map[DevRemovalClass]int64 `json:"counts"`
 }
 

@@ -4999,6 +4999,64 @@ DELETE FROM local_user_resets WHERE digest = sqlc.arg('digest') AND expires_at_m
 -- name: PruneLocalUserResets :execrows
 DELETE FROM local_user_resets WHERE expires_at_ms <= ?;
 
+-- name: CountLivePasskeys :one
+-- The passkeys of a person that are not suspended, read under the lock of the
+-- principal. A suspended passkey cannot sign in, so the rule of the last
+-- credential counts only these.
+SELECT COUNT(*) FROM passkeys WHERE principal_id = ? AND suspended_at_ms = 0;
+
+-- name: CountOpenPasskeyChallenges :one
+-- The challenges of one kind that have not expired at the given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = ? AND expires_at_ms > ?;
+
+-- name: CountPasskeys :one
+-- The passkeys of a person, read under the lock of the principal.
+SELECT COUNT(*) FROM passkeys WHERE principal_id = ?;
+
+-- name: CreatePasskey :execrows
+INSERT INTO passkeys (id, principal_id, name, credential_id, public_key, transports, aaguid, sign_count,
+                      backup_eligible, created_at_ms, last_used_at_ms, suspended_at_ms)
+VALUES (sqlc.arg('id'), sqlc.arg('principal_id'), sqlc.arg('name'), sqlc.arg('credential_id'), sqlc.arg('public_key'),
+        sqlc.arg('transports'), sqlc.arg('aaguid'), sqlc.arg('sign_count'), sqlc.arg('backup_eligible'),
+        sqlc.arg('created_at_ms'), 0, 0)
+ON CONFLICT DO NOTHING;
+
+-- name: CreatePasskeyChallenge :execrows
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteExpiredPasskeyChallenges :execrows
+DELETE FROM passkey_challenges WHERE expires_at_ms <= ?;
+
+-- name: DeletePasskey :execrows
+DELETE FROM passkeys WHERE id = sqlc.arg('id') AND principal_id = sqlc.arg('principal_id');
+
+-- name: GetPasskey :one
+SELECT * FROM passkeys WHERE id = ?;
+
+-- name: GetPasskeyByCredentialID :one
+SELECT * FROM passkeys WHERE credential_id = ?;
+
+-- name: ListPasskeys :many
+SELECT * FROM passkeys WHERE principal_id = ? ORDER BY created_at_ms, id;
+
+-- name: RecordPasskeyUse :execrows
+-- The use of a passkey that is not suspended, when the new counter is above
+-- the stored counter or both are 0. A use that changes no row is a
+-- regression, a suspended passkey or no passkey.
+UPDATE passkeys SET sign_count = sqlc.arg('sign_count'), last_used_at_ms = sqlc.arg('at_ms')
+WHERE id = sqlc.arg('id') AND suspended_at_ms = 0
+  AND (sign_count < sqlc.arg('sign_count') OR (sign_count = 0 AND sqlc.arg('sign_count') = 0));
+
+-- name: SuspendPasskey :execrows
+UPDATE passkeys SET suspended_at_ms = sqlc.arg('at_ms') WHERE id = sqlc.arg('id') AND suspended_at_ms = 0;
+
+-- name: TakePasskeyChallenge :one
+-- The delete of a challenge returns it, so that a challenge works once,
+-- also after its expiry: the caller checks the expiry.
+DELETE FROM passkey_challenges WHERE digest = ? RETURNING *;
+
 -- name: EnsureNameLock :exec
 -- Makes the count of a name and a sub-key in a scope when it does not exist,
 -- so the read that follows finds a row.

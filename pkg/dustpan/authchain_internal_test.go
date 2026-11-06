@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"runtime"
 	"slices"
 	"strings"
@@ -13,8 +14,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -27,6 +30,10 @@ type callRecorder struct {
 	method string
 	mu     sync.Mutex
 	calls  [][]string
+	// stacks holds, for each call, every function on the stack above the
+	// recording method, innermost first. The list of the callers that use the
+	// bare port on purpose reads it.
+	stacks [][]string
 }
 
 // record adds the methods named r.method on the stack of the caller.
@@ -36,11 +43,12 @@ func (r *callRecorder) record() {
 	n := runtime.Callers(2, pcs)
 	frames := runtime.CallersFrames(pcs[:n])
 
-	var chain []string
+	var chain, stack []string
 
 	for {
 		frame, more := frames.Next()
 		name := frame.Function[strings.LastIndex(frame.Function, "/")+1:]
+		stack = append(stack, name)
 
 		if wrapper, ok := strings.CutSuffix(name, "."+r.method); ok {
 			chain = append(chain, wrapper)
@@ -55,6 +63,16 @@ func (r *callRecorder) record() {
 	defer r.mu.Unlock()
 
 	r.calls = append(r.calls, chain)
+	r.stacks = append(r.stacks, stack)
+}
+
+// recordedStacks returns a copy of the stacks of the recorded calls, in the
+// order of recorded.
+func (r *callRecorder) recordedStacks() [][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return slices.Clone(r.stacks)
 }
 
 // recorded returns a copy of the recorded calls.
@@ -111,8 +129,8 @@ func (a recordingAuthorizer) Authorize(
 func TestNewServerAuthenticatorChain(t *testing.T) {
 	t.Parallel()
 
-	authn := &callRecorder{method: "AuthenticateToken", mu: sync.Mutex{}, calls: nil}
-	authz := &callRecorder{method: "Authorize", mu: sync.Mutex{}, calls: nil}
+	authn := &callRecorder{method: "AuthenticateToken", mu: sync.Mutex{}, calls: nil, stacks: nil}
+	authz := &callRecorder{method: "Authorize", mu: sync.Mutex{}, calls: nil, stacks: nil}
 
 	w := newWiredSignIn(t, func(st *sqlite.Store) []Option {
 		return []Option{
@@ -154,7 +172,29 @@ func TestNewServerAuthenticatorChain(t *testing.T) {
 		"identity.NamespaceServiceRule",
 		"ipallow.Gate",
 	}
+	// The manual lock service is reachable with no route in front of it. Each
+	// of its checks must come through the whole chain: it is not on the list
+	// of the callers that use the bare port.
+	ctx := clientip.WithAddr(t.Context(), netip.MustParseAddr("198.51.100.7"))
+	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "admin",
+		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+
+	locks := w.srv.ManualLocks()
+	if locks == nil {
+		t.Fatal("the server has no manual lock service")
+	}
+
+	target := manuallock.NamespaceTarget("acme")
+	// The namespace does not exist, so the read fails after the check. The
+	// check itself must allow the administrator.
+	if _, err := locks.Get(ctx, admin, target); err == nil || errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("manual lock read = %v, want an error that is not a denial", err)
+	}
+
 	assertSomeCall(t, "authorizer", authz.recorded(), wantAuthz)
+	assertEveryCall(t, "authorizer", authz, wantAuthz, bareAuthorizerCallers())
 
 	in := w.srv.mounted.signIn
 	if in == nil {
@@ -170,9 +210,91 @@ func TestNewServerAuthenticatorChain(t *testing.T) {
 	}
 }
 
-// assertSomeCall fails t unless one of calls starts with want. The services
-// that NewServer builds before the wrappers hold the configured port itself,
-// so not each call comes through the wrappers.
+// bareAuthorizerCallers names the code that calls the configured authorizer
+// with no wrapper of the chain, on purpose. The key is the prefix of the name
+// of the function that calls the authorizer. The value is the reason.
+//
+// The entries are declared, and this test does not exercise them: with the
+// recording authorizer, these callers build their own *access.Authorizer, so
+// no call of theirs reaches the recorder. A stale entry is not found by the
+// test.
+//
+// Both callers hold the bare port because they run before NewServer writes
+// the chain into the settings (newIdentityServices). This layer has no IP
+// allowlist gate and no namespace service rule. The routes in front of them
+// use the chain, but this layer does not rely on that.
+func bareAuthorizerCallers() map[string]string {
+	return map[string]string{
+		// The grant check of the access service needs the grant model of the
+		// concrete *access.Authorizer (the stored roles and grants). It is a
+		// check of the escalation of a grant, and not a check of a request.
+		"access.(*Service)": "escalation check of a grant needs the concrete *access.Authorizer",
+		// The access token service gets that authorizer of the access service
+		// for the escalation check of a token for another principal.
+		"accesstoken.(*Service)": "escalation check of a token needs the concrete *access.Authorizer",
+	}
+}
+
+// assertEveryCall fails t when a call of rec does not start with want, unless
+// the function that makes the call starts with a key of bare. It checks only
+// the calls that the test makes: a service that holds the configured port and
+// that the test does not drive is not found here. NewServer closes that
+// window in its structure: it writes the chain into the settings before
+// newServices, so a later constructor cannot read the bare port. The manual
+// lock service is not in bare, so a call of it that skips the chain fails.
+func assertEveryCall(t *testing.T, name string, rec *callRecorder, want []string, bare map[string]string) {
+	t.Helper()
+
+	calls, stacks := rec.recorded(), rec.recordedStacks()
+	if len(calls) == 0 {
+		t.Fatalf("the %s recorded no call", name)
+	}
+
+	for i, call := range calls {
+		if len(call) >= len(want) && slices.Equal(call[:len(want)], want) {
+			continue
+		}
+
+		if onBareList(stacks[i], bare) {
+			continue
+		}
+
+		t.Errorf("a call of the %s did not come through the wrappers %v; call: %v; stack: %v",
+			name, want, call, stacks[i])
+	}
+}
+
+// onBareList reports whether the function that makes the call starts with a
+// key of bare. stack starts with the recording method. The function that makes
+// the call is the first one after it that is not an Authorize method of a
+// wrapper. A frame further up the stack does not count, so a named caller
+// cannot exempt the call of another service that it calls.
+func onBareList(stack []string, bare map[string]string) bool {
+	rest := stack
+	if len(rest) > 0 {
+		rest = rest[1:]
+	}
+
+	for len(rest) > 0 && strings.HasSuffix(rest[0], ".Authorize") {
+		rest = rest[1:]
+	}
+
+	if len(rest) == 0 {
+		return false
+	}
+
+	for prefix := range bare {
+		if strings.HasPrefix(rest[0], prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// assertSomeCall fails t unless one of calls starts with want. It proves that
+// the wrappers are in the order of want; assertEveryCall proves that no call
+// skips them.
 func assertSomeCall(t *testing.T, name string, calls [][]string, want []string) {
 	t.Helper()
 
