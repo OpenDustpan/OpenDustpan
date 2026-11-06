@@ -96,13 +96,13 @@ func (m *Method) open(ctx context.Context) (*ldap.Conn, func(), error) {
 
 	raw, err := dialer.DialContext(dialCtx, "tcp", m.endpoint.address)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: connect to the directory: %w", session.ErrMethodUnavailable, err)
+		return nil, nil, m.fail(ctx, session.ErrMethodUnavailable, "connect to the directory", err)
 	}
 
 	conn, err := m.secure(dialCtx, raw)
 	if err != nil {
 		if cerr := raw.Close(); cerr != nil {
-			return nil, nil, errors.Join(err, cerr)
+			m.logDetail(ctx, "close the connection", cerr)
 		}
 
 		return nil, nil, err
@@ -119,12 +119,7 @@ func (m *Method) open(ctx context.Context) (*ldap.Conn, func(), error) {
 	if err := conn.Bind(m.bindDN, m.bindPassword.Reveal()); err != nil {
 		done()
 
-		if network(err) {
-			return nil, nil, fmt.Errorf("%w: bind as the service account: %w", session.ErrMethodUnavailable, err)
-		}
-
-		return nil, nil, fmt.Errorf("%w: the directory refused the service account",
-			session.ErrMethodUnavailable)
+		return nil, nil, m.serviceBindError(ctx, err)
 	}
 
 	return conn, done, nil
@@ -143,7 +138,7 @@ func (m *Method) secure(ctx context.Context, raw net.Conn) (*ldap.Conn, error) {
 	case transportLDAPS:
 		tc := tls.Client(raw, tlsConfig)
 		if err := tc.HandshakeContext(ctx); err != nil {
-			return nil, fmt.Errorf("%w: TLS handshake with the directory: %w", session.ErrMethodUnavailable, err)
+			return nil, m.fail(ctx, session.ErrMethodUnavailable, "TLS handshake with the directory", err)
 		}
 
 		conn := ldap.NewConn(tc, true)
@@ -159,19 +154,19 @@ func (m *Method) secure(ctx context.Context, raw net.Conn) (*ldap.Conn, error) {
 		if err := raw.SetDeadline(deadline); err != nil {
 			m.closeConn(ctx, conn)
 
-			return nil, fmt.Errorf("%w: set the deadline of the handshake: %w", session.ErrMethodUnavailable, err)
+			return nil, m.fail(ctx, session.ErrMethodUnavailable, "set the deadline of the handshake", err)
 		}
 
 		if err := conn.StartTLS(tlsConfig); err != nil {
 			m.closeConn(ctx, conn)
 
-			return nil, fmt.Errorf("%w: StartTLS with the directory: %w", session.ErrMethodUnavailable, err)
+			return nil, m.fail(ctx, session.ErrMethodUnavailable, "StartTLS with the directory", err)
 		}
 
 		if err := raw.SetDeadline(time.Time{}); err != nil {
 			m.closeConn(ctx, conn)
 
-			return nil, fmt.Errorf("%w: clear the deadline of the handshake: %w", session.ErrMethodUnavailable, err)
+			return nil, m.fail(ctx, session.ErrMethodUnavailable, "clear the deadline of the handshake", err)
 		}
 
 		return conn, nil
@@ -216,4 +211,30 @@ func network(err error) bool {
 	}
 
 	return le.ResultCode >= ldap.ErrorNetwork
+}
+
+// serviceBindError returns the error of a failed bind as the service
+// account.
+func (m *Method) serviceBindError(ctx context.Context, err error) error {
+	if network(err) {
+		return m.fail(ctx, session.ErrMethodUnavailable, "bind as the service account", err)
+	}
+
+	return m.fail(ctx, session.ErrMethodUnavailable, "the directory refused the service account", err)
+}
+
+// fail logs err, the error of the library, the network or the directory,
+// with the step, and returns sentinel with the step only. So the text of the
+// directory and of the network reaches the log of the operator, never an
+// error that a caller can show to a person.
+func (m *Method) fail(ctx context.Context, sentinel error, step string, err error) error {
+	m.logDetail(ctx, step, err)
+
+	return fmt.Errorf("%w: %s", sentinel, step)
+}
+
+// logDetail logs err with the step.
+func (m *Method) logDetail(ctx context.Context, step string, err error) {
+	m.logger.LogAttrs(ctx, slog.LevelInfo, "ldap directory error", slog.String("provider", m.providerID),
+		slog.String("step", step), slog.String("error", err.Error()))
 }

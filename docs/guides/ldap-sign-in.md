@@ -39,7 +39,8 @@ The server refuses the sign-in in these cases:
   referral, because a referral can send the password to another server.
 - The directory answers that the search is over its size limit. The server
   never uses a part of an answer.
-- The directory does not answer in 10 seconds.
+- The directory does not answer in 10 seconds, or the read of the groups
+  takes more than 30 seconds.
 - The entry of the person is outside the base DN.
 
 ## Settings
@@ -64,7 +65,8 @@ The server replaces each `{user}` in the user filter with the user name.
 It escapes the user name first (RFC 4515), so a user name such as
 `*)(uid=*` is one value, not a filter. The server also checks that the
 filter with the user name has the same items as the filter with a plain
-value. It refuses a user name that changes the filter.
+value. It refuses a user name that changes the filter. It does the same
+check on each group filter.
 
 The server builds each DN that it sends again from its parts. It escapes
 each value (RFC 4514), so a value of the directory cannot add a part to a
@@ -121,9 +123,12 @@ values:
 
 - Active Directory: the attribute `userAccountControl` with the mask `2`.
   The server reads the value as a decimal number. A value that is not a
-  number refuses the sign-in.
+  number refuses the sign-in. An entry with no value also refuses the
+  sign-in, because each entry of Active Directory has this attribute: no
+  value can mean that the service account cannot read it.
 - 389 Directory Server: the attribute `nsAccountLock` with the value
-  `true`. The server compares the values with no case.
+  `true`. The server compares the values with no case. An entry with no
+  value is not disabled.
 
 When the directory reports the person as disabled, the server sends no
 password bind. The sign-in service then disables the principal of that
@@ -168,3 +173,8 @@ in `memberOf`.
 | User name | 256 bytes |
 | Password | 1024 bytes |
 | Groups of one person | 1000 |
+| Read of the groups of one sign-in | 30 seconds |
+
+An error of a sign-in never holds the text of the directory or of the
+network. The server writes that text to its log, with the provider ID and
+the step that failed.

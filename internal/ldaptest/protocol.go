@@ -129,6 +129,10 @@ func write(c net.Conn, id int64, op *ber.Packet) error {
 // result returns an LDAPResult of the tag, with the referral URL when it
 // is not empty.
 func result(tag uint64, code int64, diagnostic, referral string) *ber.Packet {
+	if code != resultSuccess {
+		diagnostic = DiagnosticPrefix + diagnostic
+	}
+
 	p := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ber.Tag(tag), nil, "result")
 	p.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, code, "code"))
 	p.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "matched DN"))
@@ -264,7 +268,7 @@ func (s *Server) search(c net.Conn, id int64, op *ber.Packet) error {
 
 	fault := s.currentFault()
 
-	if fault == FaultSlow {
+	if fault == FaultSlow || fault == FaultSlowGroups && isGroupBase(req.base) {
 		timer := time.NewTimer(slowFor)
 		defer timer.Stop()
 
@@ -337,7 +341,7 @@ func (s *Server) match(req searchRequest) ([]entry, bool) {
 	all := s.entries()
 	found := false
 
-	var out []entry
+	out := make([]entry, 0, len(all))
 
 	for _, e := range all {
 		if e.dn.EqualFold(base) {
@@ -495,4 +499,12 @@ func movedDN(fault Fault, dn string, scope int64) string {
 	default:
 		return dn
 	}
+}
+
+// isGroupBase reports whether the search base dn is GroupsDN or below it.
+func isGroupBase(dn string) bool {
+	lower := strings.ToLower(dn)
+	groups := strings.ToLower(GroupsDN)
+
+	return lower == groups || strings.HasSuffix(lower, ","+groups)
 }

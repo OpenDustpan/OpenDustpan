@@ -75,7 +75,7 @@ func (s setup) baseConfig(ds sessiontest.DirectorySettings) ldapauth.Config {
 		Disabled:       ldapauth.Disabled{Attribute: "userAccountControl", Values: nil, Mask: 2},
 		Groups:         groups,
 		Egress:         egress.Rules{Allow: nil, LoopbackForTests: !ds.EgressRefused},
-		ConnectTimeout: 0, OperationTimeout: ds.OperationTimeout, StartTLS: false,
+		ConnectTimeout: 0, OperationTimeout: ds.OperationTimeout, GroupTimeout: 0, StartTLS: false,
 	}
 }
 

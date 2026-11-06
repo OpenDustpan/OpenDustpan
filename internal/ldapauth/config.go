@@ -32,6 +32,9 @@ const (
 	// MaxTimeout is the longest time for a connection and for one
 	// operation. It is also the default.
 	MaxTimeout = 10 * time.Second
+	// MaxGroupTimeout is the longest time for the read of the groups of
+	// one sign-in, nested groups included. It is also the default.
+	MaxGroupTimeout = 30 * time.Second
 	// MaxGroups is the most groups that one sign-in reads, nested groups
 	// included. More groups refuse the sign-in.
 	MaxGroups = session.MaxAssertionGroups
@@ -180,6 +183,9 @@ type Config struct {
 	// OperationTimeout is the time for one LDAP operation. Zero is
 	// MaxTimeout. It is at most MaxTimeout.
 	OperationTimeout time.Duration
+	// GroupTimeout is the time for the read of the groups of one sign-in.
+	// Zero is MaxGroupTimeout. It is at most MaxGroupTimeout.
+	GroupTimeout time.Duration
 	// StartTLS starts TLS on an ldap:// URL before the first bind.
 	StartTLS bool
 }
@@ -237,16 +243,18 @@ func checkBasics(cfg Config) error {
 		return configError("the password of the service account is empty")
 	case len(cfg.BindPassword.Reveal()) > MaxPassword:
 		return configError(fmt.Sprintf("the password of the service account is longer than %d bytes", MaxPassword))
-	case !validTimeout(cfg.ConnectTimeout) || !validTimeout(cfg.OperationTimeout):
-		return configError(fmt.Sprintf("a timeout must be 0 to %s", MaxTimeout))
+	case !validTimeout(cfg.ConnectTimeout, MaxTimeout) || !validTimeout(cfg.OperationTimeout, MaxTimeout) ||
+		!validTimeout(cfg.GroupTimeout, MaxGroupTimeout):
+		return configError(fmt.Sprintf("a timeout must be 0 to %s, and the group timeout 0 to %s", MaxTimeout,
+			MaxGroupTimeout))
 	default:
 		return nil
 	}
 }
 
-// validTimeout reports whether d is 0 to MaxTimeout.
-func validTimeout(d time.Duration) bool {
-	return d >= 0 && d <= MaxTimeout
+// validTimeout reports whether d is 0 to limit.
+func validTimeout(d, limit time.Duration) bool {
+	return d >= 0 && d <= limit
 }
 
 // errURLForm is the reason of a URL of the wrong form.
@@ -410,4 +418,10 @@ func plainHostAllowed(host string) bool {
 	a, err := netip.ParseAddr(host)
 
 	return err == nil && a.Unmap().IsLoopback()
+}
+
+// groupFilter returns the filter of a group search for the member DN, which
+// is already escaped.
+func groupFilter(g Groups, escapedMember string) string {
+	return "(&" + g.Filter + "(" + g.MemberAttribute + "=" + escapedMember + "))"
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,8 @@ type Method struct {
 	groups           Groups
 	egress           egress.Rules
 	filterNodes      int
+	groupFilterNodes int
+	groupTimeout     time.Duration
 	connectTimeout   time.Duration
 	operationTimeout time.Duration
 }
@@ -91,13 +94,19 @@ func NewMethod(cfg Config) (*Method, error) {
 		return nil, configError("the user filter does not compile")
 	}
 
+	groupNodes, err := filterNodes(groupFilter(cfg.Groups, "x"))
+	if cfg.Groups.Source == GroupsSearch && err != nil {
+		return nil, configError("the group filter does not compile")
+	}
+
 	return &Method{
 		enabled: cfg.Enabled, allowPlainFn: cfg.AllowPlain, now: orNow(cfg.Now), logger: orDiscard(cfg.Logger),
 		rootCAs: cfg.RootCAs, baseDN: base, groupBaseDN: groupBase, providerID: cfg.ProviderID, bindDN: bindDN,
 		baseDNText: baseText, groupBaseText: groupBaseText, userFilter: cfg.UserFilter,
 		userNameAttr: cfg.UserNameAttribute, emailAttr: cfg.EmailAttribute, nameAttr: cfg.NameAttribute,
 		bindPassword: cfg.BindPassword, endpoint: ep, subject: cfg.Subject, disabled: cfg.Disabled,
-		groups: cfg.Groups, egress: cfg.Egress, filterNodes: nodes,
+		groups: cfg.Groups, egress: cfg.Egress, filterNodes: nodes, groupFilterNodes: groupNodes,
+		groupTimeout:   orDefault(cfg.GroupTimeout, MaxGroupTimeout),
 		connectTimeout: orMax(cfg.ConnectTimeout), operationTimeout: orMax(cfg.OperationTimeout),
 	}, nil
 }
@@ -122,8 +131,13 @@ func orDiscard(l *slog.Logger) *slog.Logger {
 
 // orMax returns d, or MaxTimeout when d is zero.
 func orMax(d time.Duration) time.Duration {
+	return orDefault(d, MaxTimeout)
+}
+
+// orDefault returns d, or def when d is zero.
+func orDefault(d, def time.Duration) time.Duration {
 	if d == 0 {
-		return MaxTimeout
+		return def
 	}
 
 	return d
@@ -136,7 +150,10 @@ func (m *Method) Kind() session.MethodKind {
 
 // Verify implements session.PasswordMethod. On any error the Assertion is
 // the zero value, except for session.ErrSubjectDisabled. Each error and each
-// log record holds no password.
+// log record holds no password. An error holds only the fixed text of the
+// method, never the text of the directory or of the network: the method
+// logs that text. The HTTP route of the sign-in maps each error to a fixed
+// reason, and must never write the error text into its answer.
 func (m *Method) Verify(ctx context.Context, c session.Credentials, gate session.BindGate) (session.Assertion, error) {
 	var none session.Assertion
 
@@ -173,7 +190,7 @@ func (m *Method) signIn(ctx context.Context, c session.Credentials, gate session
 	}
 	defer done()
 
-	entry, userDN, err := m.findUser(conn, c.UserName)
+	entry, userDN, err := m.findUser(ctx, conn, c.UserName)
 	if err != nil {
 		return none, err
 	}
@@ -197,11 +214,11 @@ func (m *Method) signIn(ctx context.Context, c session.Credentials, gate session
 
 	authTime := m.now().Truncate(time.Millisecond)
 
-	if berr := m.bindUser(conn, userDN, c.Password); berr != nil {
+	if berr := m.bindUser(ctx, conn, userDN, c.Password); berr != nil {
 		return none, berr
 	}
 
-	groups, err := m.groupsOf(conn, entry, userDN)
+	groups, err := m.groupsOf(ctx, conn, entry, userDN)
 	if err != nil {
 		return none, err
 	}
@@ -258,17 +275,23 @@ func (m *Method) checkFilter(f string) (string, error) {
 	// Defense in depth: EscapeFilter escapes each special byte, and the
 	// boundary check refuses control characters. This check stays so that a
 	// change of the escape cannot add an item to the filter.
-	n, err := filterNodes(f)
-	if err != nil || n != m.filterNodes {
+	if !sameShape(f, m.filterNodes) {
 		return "", fmt.Errorf("%w: the user name changes the structure of the filter", session.ErrMethodInput)
 	}
 
 	return f, nil
 }
 
+// sameShape reports whether the filter f compiles to want items.
+func sameShape(f string, want int) bool {
+	n, err := filterNodes(f)
+
+	return err == nil && n == want
+}
+
 // findUser searches for the one entry of the user name, and returns it
 // with its canonical DN.
-func (m *Method) findUser(conn *ldap.Conn, userName string) (*ldap.Entry, string, error) {
+func (m *Method) findUser(ctx context.Context, conn *ldap.Conn, userName string) (*ldap.Entry, string, error) {
 	filter, err := m.userFilterFor(userName)
 	if err != nil {
 		return nil, "", err
@@ -280,7 +303,7 @@ func (m *Method) findUser(conn *ldap.Conn, userName string) (*ldap.Entry, string
 
 	res, err := conn.Search(req)
 	if err != nil {
-		return nil, "", searchError("the user search", err)
+		return nil, "", m.searchError(ctx, "the user search", err)
 	}
 
 	switch {
@@ -328,47 +351,41 @@ func (m *Method) userAttributes() []string {
 }
 
 // searchError translates an error of a search.
-func searchError(what string, err error) error {
+func (m *Method) searchError(ctx context.Context, what string, err error) error {
 	switch {
 	case ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded):
-		return fmt.Errorf("%w: %s is over the size limit of the directory", session.ErrMethodAnswer, what)
+		return m.fail(ctx, session.ErrMethodAnswer, what+" is over the size limit of the directory", err)
 	case ldap.IsErrorWithCode(err, ldap.LDAPResultReferral):
-		return fmt.Errorf("%w: %s answered a referral, which the method never follows", session.ErrMethodAnswer,
-			what)
+		return m.fail(ctx, session.ErrMethodAnswer, what+" answered a referral, which the method never follows", err)
 	case network(err):
-		return fmt.Errorf("%w: %s: %w", session.ErrMethodUnavailable, what, err)
+		return m.fail(ctx, session.ErrMethodUnavailable, what+" got no answer", err)
 	default:
-		return fmt.Errorf("%w: %s: %w", session.ErrMethodAnswer, what, err)
+		return m.fail(ctx, session.ErrMethodAnswer, what+" answered an error", err)
 	}
 }
 
 // checkDisabled returns session.ErrSubjectDisabled when the entry e has
-// the disabled value of the setting. A value that does not parse fails
-// closed with session.ErrMethodAnswer.
+// the disabled value of the setting. A value that does not parse, and no
+// value with a mask, fail closed with session.ErrMethodAnswer.
 func (m *Method) checkDisabled(e *ldap.Entry) error {
 	d := m.disabled
 	if d.Attribute == "" {
 		return nil
 	}
 
-	for _, v := range e.GetEqualFoldAttributeValues(d.Attribute) {
-		if d.Mask != 0 {
-			n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
-			if err != nil {
-				return fmt.Errorf("%w: the disabled attribute is not a number", session.ErrMethodAnswer)
-			}
+	values := e.GetEqualFoldAttributeValues(d.Attribute)
 
-			if n&d.Mask != 0 {
-				return session.ErrSubjectDisabled
-			}
+	// A number with flags, for example userAccountControl, is on each
+	// entry. An entry with no value can mean that the service account
+	// cannot read it, so the state is not known and the sign-in fails
+	// closed.
+	if d.Mask != 0 && len(values) == 0 {
+		return fmt.Errorf("%w: the entry has no value of the disabled attribute", session.ErrMethodAnswer)
+	}
 
-			continue
-		}
-
-		for _, want := range d.Values {
-			if strings.EqualFold(v, want) {
-				return session.ErrSubjectDisabled
-			}
+	for _, v := range values {
+		if err := d.check(v); err != nil {
+			return err
 		}
 	}
 
@@ -376,7 +393,7 @@ func (m *Method) checkDisabled(e *ldap.Entry) error {
 }
 
 // bindUser binds as the user of dn with the password.
-func (m *Method) bindUser(conn *ldap.Conn, dn string, password session.Password) error {
+func (m *Method) bindUser(ctx context.Context, conn *ldap.Conn, dn string, password session.Password) error {
 	// Defense in depth: checkInput refuses an empty password. This check
 	// stays so that a new caller cannot make an unauthenticated bind.
 	if password.Reveal() == "" {
@@ -389,11 +406,12 @@ func (m *Method) bindUser(conn *ldap.Conn, dn string, password session.Password)
 	case err == nil:
 		return nil
 	case ldap.IsErrorWithCode(err, ldap.LDAPResultReferral):
-		return fmt.Errorf("%w: the bind answered a referral, which the method never follows",
-			session.ErrMethodAnswer)
+		return m.fail(ctx, session.ErrMethodAnswer, "the bind answered a referral, which the method never follows", err)
 	case network(err):
-		return fmt.Errorf("%w: bind as the user: %w", session.ErrMethodUnavailable, err)
+		return m.fail(ctx, session.ErrMethodUnavailable, "bind as the user", err)
 	default:
+		m.logDetail(ctx, "bind as the user", err)
+
 		return errRefused
 	}
 }
@@ -438,4 +456,28 @@ func (m *Method) attr(e *ldap.Entry, name string) string {
 	}
 
 	return e.GetEqualFoldAttributeValue(name)
+}
+
+// check returns session.ErrSubjectDisabled when the value v marks a
+// disabled person, and ErrMethodAnswer for a value that does not parse
+// with a mask.
+func (d Disabled) check(v string) error {
+	if d.Mask != 0 {
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return fmt.Errorf("%w: the disabled attribute is not a number", session.ErrMethodAnswer)
+		}
+
+		if n&d.Mask != 0 {
+			return session.ErrSubjectDisabled
+		}
+
+		return nil
+	}
+
+	if slices.ContainsFunc(d.Values, func(want string) bool { return strings.EqualFold(v, want) }) {
+		return session.ErrSubjectDisabled
+	}
+
+	return nil
 }

@@ -1,6 +1,7 @@
 package ldapauth
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -51,18 +52,22 @@ func (w *groupWalk) result() []string {
 // userDN, nested groups included, as a flat list. It binds again as the
 // service account first. It returns nil when the groups are off, and
 // session.ErrGroupsMissing when they are on and the person has none.
-func (m *Method) groupsOf(conn *ldap.Conn, e *ldap.Entry, userDN string) ([]string, error) {
+func (m *Method) groupsOf(ctx context.Context, conn *ldap.Conn, e *ldap.Entry, userDN string) ([]string, error) {
 	if m.groups.Source == GroupsOff {
 		return nil, nil
 	}
 
 	if err := conn.Bind(m.bindDN, m.bindPassword.Reveal()); err != nil {
-		if network(err) {
-			return nil, fmt.Errorf("%w: bind again as the service account: %w", session.ErrMethodUnavailable, err)
-		}
-
-		return nil, fmt.Errorf("%w: the directory refused the service account", session.ErrMethodUnavailable)
+		return nil, m.serviceBindError(ctx, err)
 	}
+
+	// One deadline covers the whole read of the groups. At the deadline
+	// the connection closes, so an operation that waits ends too.
+	walkCtx, cancel := context.WithTimeout(ctx, m.groupTimeout)
+	defer cancel()
+
+	stop := context.AfterFunc(walkCtx, func() { m.closeConn(ctx, conn) })
+	defer stop()
 
 	w := &groupWalk{seen: map[string]struct{}{}, names: map[string]struct{}{}, queue: nil}
 
@@ -72,15 +77,20 @@ func (m *Method) groupsOf(conn *ldap.Conn, e *ldap.Entry, userDN string) ([]stri
 	case GroupsOff:
 		return nil, nil
 	case GroupsSearch:
-		err = m.searchGroups(conn, w, userDN)
+		err = m.searchGroups(walkCtx, conn, w, userDN)
 	case GroupsMemberOf:
-		err = m.memberOfGroups(conn, w, e)
+		err = m.memberOfGroups(walkCtx, conn, w, e)
 	default:
 		// Fail closed: NewMethod refuses another source.
 		err = fmt.Errorf("%w: the group source is not known", session.ErrMethodAnswer)
 	}
 
 	if err != nil {
+		if walkCtx.Err() != nil && ctx.Err() == nil {
+			return nil, fmt.Errorf("%w: the read of the groups took more than %s", session.ErrMethodUnavailable,
+				m.groupTimeout)
+		}
+
 		return nil, err
 	}
 
@@ -95,20 +105,28 @@ func (m *Method) groupsOf(conn *ldap.Conn, e *ldap.Entry, userDN string) ([]stri
 // searchGroups finds the groups whose member attribute holds the DN of the
 // person, then the groups whose member attribute holds the DN of each group
 // that it found.
-func (m *Method) searchGroups(conn *ldap.Conn, w *groupWalk, userDN string) error {
+func (m *Method) searchGroups(ctx context.Context, conn *ldap.Conn, w *groupWalk, userDN string) error {
 	w.queue = append(w.queue, userDN)
 
 	for len(w.queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("%w: the read of the groups stopped", session.ErrMethodUnavailable)
+		}
+
 		member := w.queue[0]
 		w.queue = w.queue[1:]
 
-		filter := "(&" + m.groups.Filter + "(" + m.groups.MemberAttribute + "=" + EscapeFilter(member) + "))"
+		filter, err := m.checkGroupFilter(groupFilter(m.groups, EscapeFilter(member)))
+		if err != nil {
+			return err
+		}
+
 		req := ldap.NewSearchRequest(m.groupBaseText, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, MaxGroups+1,
 			int(m.operationTimeout/time.Second), false, filter, []string{m.groups.NameAttribute}, nil)
 
 		res, err := conn.Search(req)
 		if err != nil {
-			return searchError("the group search", err)
+			return m.searchError(ctx, "the group search", err)
 		}
 
 		if len(res.Entries) > MaxGroups {
@@ -127,10 +145,14 @@ func (m *Method) searchGroups(conn *ldap.Conn, w *groupWalk, userDN string) erro
 
 // memberOfGroups reads the memberOf attribute of the person, then the
 // memberOf attribute of each group that it found.
-func (m *Method) memberOfGroups(conn *ldap.Conn, w *groupWalk, e *ldap.Entry) error {
+func (m *Method) memberOfGroups(ctx context.Context, conn *ldap.Conn, w *groupWalk, e *ldap.Entry) error {
 	w.queue = append(w.queue, e.GetEqualFoldAttributeValues(m.groups.MemberOfAttribute)...)
 
 	for len(w.queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("%w: the read of the groups stopped", session.ErrMethodUnavailable)
+		}
+
 		if len(w.queue) > 2*MaxGroups {
 			return fmt.Errorf("%w: the person has more than %d groups", session.ErrMethodAnswer, MaxGroups)
 		}
@@ -138,17 +160,12 @@ func (m *Method) memberOfGroups(conn *ldap.Conn, w *groupWalk, e *ldap.Entry) er
 		raw := w.queue[0]
 		w.queue = w.queue[1:]
 
-		dn, parsed, err := canonicalDN(raw)
+		dn, read, err := m.toRead(w, raw)
 		if err != nil {
-			return fmt.Errorf("%w: a memberOf value is not a valid DN", session.ErrMethodAnswer)
+			return err
 		}
 
-		// A group outside the group base DN is not read and not returned.
-		if !m.groupBaseDN.AncestorOfFold(parsed) {
-			continue
-		}
-
-		if _, ok := w.seen[strings.ToLower(dn)]; ok {
+		if !read {
 			continue
 		}
 
@@ -158,7 +175,7 @@ func (m *Method) memberOfGroups(conn *ldap.Conn, w *groupWalk, e *ldap.Entry) er
 
 		res, err := conn.Search(req)
 		if err != nil {
-			return searchError("the read of a group", err)
+			return m.searchError(ctx, "the read of a group", err)
 		}
 
 		if len(res.Entries) != 1 {
@@ -172,6 +189,24 @@ func (m *Method) memberOfGroups(conn *ldap.Conn, w *groupWalk, e *ldap.Entry) er
 	}
 
 	return nil
+}
+
+// toRead returns the canonical DN of the memberOf value raw, and whether
+// the method reads it: a group outside the group base DN is not read and
+// not returned, and a group that w holds is read once.
+func (m *Method) toRead(w *groupWalk, raw string) (string, bool, error) {
+	dn, parsed, err := canonicalDN(raw)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: a memberOf value is not a valid DN", session.ErrMethodAnswer)
+	}
+
+	if !m.groupBaseDN.AncestorOfFold(parsed) {
+		return dn, false, nil
+	}
+
+	_, seen := w.seen[strings.ToLower(dn)]
+
+	return dn, !seen, nil
 }
 
 // addGroup adds the group entry g to w. With want set, the DN of g must be
@@ -212,4 +247,19 @@ func (m *Method) addGroup(w *groupWalk, g *ldap.Entry, want *string) error {
 	}
 
 	return nil
+}
+
+// checkGroupFilter returns f, or ErrMethodAnswer when the count of the
+// items of f is not the count of the group filter with a plain value, so
+// that a DN of the directory that adds an item never reaches it.
+func (m *Method) checkGroupFilter(f string) (string, error) {
+	// Defense in depth: EscapeFilter escapes each special byte of the DN.
+	// This check stays so that a change of the escape cannot add an item
+	// to the filter.
+	if !sameShape(f, m.groupFilterNodes) {
+		return "", fmt.Errorf("%w: a DN of the directory changes the structure of the group filter",
+			session.ErrMethodAnswer)
+	}
+
+	return f, nil
 }

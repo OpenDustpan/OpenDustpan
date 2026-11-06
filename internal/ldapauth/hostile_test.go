@@ -287,7 +287,8 @@ func TestANamedSubjectAttributeIsTheSubject(t *testing.T) {
 
 	s := newSetup(t)
 	s.dir.AddUser(ldaptest.User{
-		Attributes: map[string][]string{"employeeNumber": {"E-1042"}}, UserName: "alice", Password: goodPassword,
+		Attributes: map[string][]string{"employeeNumber": {"E-1042"}, "userAccountControl": {"512"}},
+		UserName:   "alice", Password: goodPassword,
 	})
 
 	m := newMethod(t, s.configWith(func(c *ldapauth.Config) {
@@ -320,6 +321,8 @@ func TestTheDisabledRule(t *testing.T) {
 		{name: "a negative number", rule: mask, value: "-2", want: session.ErrMethodAnswer},
 		{name: "a value of the list", rule: values, value: "TRUE", want: session.ErrSubjectDisabled},
 		{name: "a value not in the list", rule: values, value: "false", want: nil},
+		{name: "no value with a mask", rule: mask, value: "", want: session.ErrMethodAnswer},
+		{name: "no value with a list", rule: values, value: "", want: nil},
 	}
 
 	for _, tc := range cases {
@@ -328,12 +331,12 @@ func TestTheDisabledRule(t *testing.T) {
 
 			s := newSetup(t)
 			s.addUser(t, testPerson("bob"), goodPassword, nil)
-			s.dir.AddUser(ldaptest.User{
-				Attributes: map[string][]string{
-					"entryUUID": {"6ba7b810-9dad-11d1-80b4-00c04fd430c8"}, tc.rule.Attribute: {tc.value},
-				},
-				UserName: "alice", Password: goodPassword,
-			})
+			attrs := map[string][]string{"entryUUID": {"6ba7b810-9dad-11d1-80b4-00c04fd430c8"}}
+			if tc.value != "" {
+				attrs[tc.rule.Attribute] = []string{tc.value}
+			}
+
+			s.dir.AddUser(ldaptest.User{Attributes: attrs, UserName: "alice", Password: goodPassword})
 
 			m := newMethod(t, s.configWith(func(c *ldapauth.Config) { c.Disabled = tc.rule }))
 
@@ -622,4 +625,121 @@ func TestAnEntryOutsideTheBaseIsErrMethodAnswer(t *testing.T) {
 // the service account.
 func boundAsUser(binds []string) bool {
 	return slices.ContainsFunc(binds, func(dn string) bool { return !strings.EqualFold(dn, ldaptest.ServiceDN) })
+}
+
+// TestAGroupFilterThatChangesItsStructureIsRefused is layer 2 for the
+// group filter: a filter with an added item is refused, as if the escape of
+// the DN had failed.
+func TestAGroupFilterThatChangesItsStructureIsRefused(t *testing.T) {
+	t.Parallel()
+
+	m := newMethod(t, newSetup(t).configWith(func(c *ldapauth.Config) {
+		c.Groups = ldapauth.Groups{
+			Source: ldapauth.GroupsSearch, BaseDN: ldaptest.GroupsDN, Filter: "(objectClass=groupOfNames)",
+			MemberAttribute: "member", MemberOfAttribute: "", NameAttribute: "cn",
+		}
+	}))
+
+	for _, f := range []string{
+		"(&(objectClass=groupOfNames)(member=*))(member=*)",
+		"(&(objectClass=groupOfNames)(|(member=x)(member=*)))",
+		"(&(objectClass=groupOfNames)(member=x)",
+	} {
+		if _, err := ldapauth.CheckGroupFilterForTest(m, f); !errors.Is(err, session.ErrMethodAnswer) {
+			t.Fatalf("checkGroupFilter(%q) = %v, want ErrMethodAnswer", f, err)
+		}
+	}
+
+	if _, err := ldapauth.CheckGroupFilterForTest(m, `(&(objectClass=groupOfNames)(member=uid\3dx))`); err != nil {
+		t.Fatalf("checkGroupFilter() of an escaped DN = %v, want nil", err)
+	}
+}
+
+// TestTheReadOfTheGroupsHasOneDeadline is layer 3 for the groups: one
+// deadline covers the whole read of the groups, shorter than the time of
+// one operation.
+func TestTheReadOfTheGroupsHasOneDeadline(t *testing.T) {
+	t.Parallel()
+
+	const deadline = 300 * time.Millisecond
+
+	s := newSetup(t)
+	p := testPerson("alice")
+	p.Groups, p.GroupsPresent = []string{"ops"}, true
+	s.addUser(t, p, goodPassword, nil)
+	s.dir.SetFault(ldaptest.FaultSlowGroups)
+
+	m := newMethod(t, s.configWith(func(c *ldapauth.Config) {
+		c.GroupTimeout = deadline
+		c.Groups = ldapauth.Groups{
+			Source: ldapauth.GroupsSearch, BaseDN: ldaptest.GroupsDN, Filter: "(objectClass=groupOfNames)",
+			MemberAttribute: "member", MemberOfAttribute: "", NameAttribute: "cn",
+		}
+	}))
+
+	start := time.Now()
+
+	a, err := m.Verify(t.Context(), credentials("alice", goodPassword), openGate{})
+	if !errors.Is(err, session.ErrMethodUnavailable) || a.Subject != "" {
+		t.Fatalf("Verify() = %+v, %v, want ErrMethodUnavailable", a, err)
+	}
+
+	if took := time.Since(start); took > ldapauth.MaxTimeout/2 {
+		t.Fatalf("Verify took %v, want about %v", took, deadline)
+	}
+}
+
+// TestNoDirectoryTextInAnError checks that an error of the method holds no
+// diagnostic text of the directory, which a caller could show to a person,
+// and that the log of the operator holds it.
+func TestNoDirectoryTextInAnError(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		change func(c *ldapauth.Config)
+		fault  ldaptest.Fault
+	}{
+		"a wrong password": {change: func(*ldapauth.Config) {}, fault: ldaptest.FaultNone},
+		"a refused service account": {
+			change: func(c *ldapauth.Config) { c.BindPassword = session.NewPassword(wrongPassword) },
+			fault:  ldaptest.FaultNone,
+		},
+		"a base DN that is missing": {
+			change: func(c *ldapauth.Config) { c.BaseDN = "dc=other,dc=org" },
+			fault:  ldaptest.FaultNone,
+		},
+		"a size limit":             {change: func(*ldapauth.Config) {}, fault: ldaptest.FaultSizeLimit},
+		"a referral of the search": {change: func(*ldapauth.Config) {}, fault: ldaptest.FaultSearchReferral},
+		"a referral of the bind":   {change: func(*ldapauth.Config) {}, fault: ldaptest.FaultBindReferral},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t)
+			s.addUser(t, testPerson("alice"), goodPassword, nil)
+			s.dir.SetFault(tc.fault)
+
+			var logs syncBuffer
+
+			m := newMethod(t, s.configWith(func(c *ldapauth.Config) {
+				tc.change(c)
+				c.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			}))
+
+			_, err := m.Verify(t.Context(), credentials("alice", wrongPassword), openGate{})
+			if err == nil {
+				t.Fatal("Verify() = nil, want an error")
+			}
+
+			if text := fmt.Sprintf("%v %+v", err, err); strings.Contains(text, ldaptest.DiagnosticPrefix) {
+				t.Fatalf("error %q holds the text of the directory", text)
+			}
+
+			if !strings.Contains(logs.String(), ldaptest.DiagnosticPrefix) {
+				t.Fatalf("the log holds no text of the directory:\n%s", logs.String())
+			}
+		})
+	}
 }

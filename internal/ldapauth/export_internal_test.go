@@ -1,6 +1,7 @@
 package ldapauth
 
 import (
+	"context"
 	"syscall"
 
 	"opendustpan.org/opendustpan/pkg/egress"
@@ -33,5 +34,11 @@ func DialControlForTest(rules egress.Rules, rule plainRule) func(string, string,
 // BindUserForTest calls bindUser with no connection, so a test can check
 // that an empty password stops before the connection is used.
 func BindUserForTest(m *Method, password session.Password) error {
-	return m.bindUser(nil, "uid=alice,dc=example,dc=org", password)
+	return m.bindUser(context.Background(), nil, "uid=alice,dc=example,dc=org", password)
+}
+
+// CheckGroupFilterForTest calls checkGroupFilter, so a test can give it a
+// filter that EscapeFilter never makes.
+func CheckGroupFilterForTest(m *Method, f string) (string, error) {
+	return m.checkGroupFilter(f)
 }

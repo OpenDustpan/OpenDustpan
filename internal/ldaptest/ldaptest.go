@@ -46,6 +46,9 @@ const (
 	FaultNone Fault = iota
 	// FaultSlow answers no search until the server stops.
 	FaultSlow
+	// FaultSlowGroups answers no search below GroupsDN until the server
+	// stops. Each other search gets its answer.
+	FaultSlowGroups
 	// FaultSizeLimit answers each search with at most one entry and the
 	// result sizeLimitExceeded.
 	FaultSizeLimit
@@ -67,6 +70,11 @@ const (
 	// of another group below GroupsDN.
 	FaultGroupOtherEntry
 )
+
+// DiagnosticPrefix starts the diagnostic message of each result of the
+// directory that is not a success, so a test can find the text of the
+// directory in an error or a log.
+const DiagnosticPrefix = "ldaptest-diagnostic: "
 
 // OutsideDN is the base of the DNs of FaultUserOutsideBase and
 // FaultGroupOutsideBase. It is outside the tree of the directory.
