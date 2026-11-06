@@ -122,7 +122,7 @@ func (f *Fake) listComments(w http.ResponseWriter, r *http.Request, number strin
 		return
 	}
 
-	var all []map[string]any
+	all := []map[string]any{}
 
 	for _, c := range rp.comments {
 		if c.number == p.number {
