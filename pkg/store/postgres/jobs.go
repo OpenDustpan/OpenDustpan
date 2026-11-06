@@ -671,14 +671,14 @@ func (t *jobTx) Chunk(ctx context.Context, ns namespace.Name, log string, seq in
 
 	if err != nil {
 		return job.ChunkRow{
-				SHA256:    "",
-				Size:      0,
-				Confirmed: false,
-				BlobKey:   "",
-			}, false, fmt.Errorf(
-				"select log chunk: %w",
-				err,
-			)
+			SHA256:    "",
+			Size:      0,
+			Confirmed: false,
+			BlobKey:   "",
+		}, false, fmt.Errorf(
+			"select log chunk: %w",
+			err,
+		)
 	}
 
 	return job.ChunkRow{

@@ -119,7 +119,11 @@ func TestStartTrigger(t *testing.T) {
 			"the service principal with no source", serviceActor, "", ref, job.ErrInvalid,
 		},
 		{
-			"the service principal with the source self-service", serviceActor, job.SourceSelfService, ref, job.ErrInvalid,
+			"the service principal with the source self-service",
+			serviceActor,
+			job.SourceSelfService,
+			ref,
+			job.ErrInvalid,
 		},
 		{
 			"the service principal with no trigger", serviceActor, job.SourceTrigger, nil, job.ErrInvalid,
