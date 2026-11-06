@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/launcher"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
@@ -20,6 +21,13 @@ var ErrStepRefused = errors.New("the launcher does not start the step")
 // command returns the process of the step: its program, its arguments, its
 // directory and its environment. It starts nothing.
 func (r *phaseRun) command(step *protocol.Step) (*exec.Cmd, error) {
+	// Defense in depth: the server stores only the roles tool and hook;
+	// this check stays so that an unknown role from another release fails
+	// closed and never runs as a hook.
+	if step.Role != string(job.RoleTool) && step.Role != string(job.RoleHook) {
+		return nil, fmt.Errorf("%w: the role of the step is not tool or hook", ErrStepRefused)
+	}
+
 	prog, err := r.program(step.Args)
 	if err != nil {
 		return nil, err

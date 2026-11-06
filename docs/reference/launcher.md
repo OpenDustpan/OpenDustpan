@@ -39,7 +39,10 @@ git.
 | `--secrets-dir` | The memory-backed volume of the credential files. The default is `/dustpan/secrets`. It must be on `tmpfs` or `ramfs`. |
 | `--coordinator`, `--ca-file`, `--token-file` | For the handoff `kubernetes` only. |
 
-No flag and no environment variable carries a credential. An unknown flag, a
+No flag and no environment variable carries a credential. The launcher
+reads the proxy variables `HTTPS_PROXY` and `NO_PROXY` of its own
+environment for its calls to the server. A step never gets them from the
+launcher. An unknown flag, a
 flag twice or a flag with no value stops the launcher with the exit code 64.
 
 The handoff `pipe` reads the token from file descriptor 3. The handoff `stdin`
@@ -71,7 +74,9 @@ once, closes the pipe, and never writes the token to its output or to a log.
       2 seconds, to `PUT /runner/v1/session/steps/{step}/logs/{seq}`, after
       the masks.
    4. ends the process group of the step, also the processes that the step
-      left running.
+      left running in that group. A process that makes its own session or
+      process group with `setsid` or `setpgid` leaves the group, and this
+      release does not end it.
    5. records the end of the step with its exit code, the number of chunks
       and the SHA-256 of the log.
 6. It finishes the phase at `POST /runner/v1/session/finish`. The phase
