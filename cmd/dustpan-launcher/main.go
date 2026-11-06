@@ -119,7 +119,7 @@ func runMode(args *launcher.Args, log *slog.Logger) launcher.ExitCode {
 
 	defer removeSecrets(args.SecretsDir, secrets, log)
 
-	token, code := readHandoff(args.Handoff, log)
+	handoff, code := readHandoff(args.Handoff, log)
 	if code != launcher.ExitOK {
 		return code
 	}
@@ -145,7 +145,7 @@ func runMode(args *launcher.Args, log *slog.Logger) launcher.ExitCode {
 	client := &session.Client{Server: args.Server, Transport: transport, Release: release(), Now: nil}
 
 	return run.Run(context.Background(), &run.Config{
-		Client: client, Handoff: token, WorkDir: args.WorkDir, Path: os.Getenv("PATH"), Logger: log, Stop: stop,
+		Client: client, Handoff: handoff, WorkDir: args.WorkDir, Path: os.Getenv("PATH"), Logger: log, Stop: stop,
 		Grace: nil, RenewEvery: 0, ChunkSize: 0, FlushEvery: 0, Retry: 0,
 	})
 }
@@ -171,14 +171,14 @@ func readHandoff(h runner.Handoff, log *slog.Logger) (string, launcher.ExitCode)
 		return "", launcher.ExitUsage
 	}
 
-	token, err := launcher.ReadHandoff(f)
+	handoff, err := launcher.ReadHandoff(f)
 	if err != nil {
 		log.Error("read the handoff", slog.Any("error", err))
 
 		return "", launcher.ExitHandoff
 	}
 
-	return token, launcher.ExitOK
+	return handoff, launcher.ExitOK
 }
 
 // release returns the release that the launcher sends. A development build

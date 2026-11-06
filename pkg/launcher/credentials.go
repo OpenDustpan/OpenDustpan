@@ -177,8 +177,9 @@ type TokenSource interface {
 // session. A value that a chunk boundary splits is still hidden.
 type Masker interface {
 	// Add adds a secret value. Values shorter than 4 bytes are not masked,
-	// because they would hide common text.
-	Add(value []byte)
+	// because they would hide common text. It returns an error when the
+	// masker cannot hold the value; the step then fails before it starts.
+	Add(value []byte) error
 	// Write masks p and writes it to the log, holding back the end of p
 	// that could start a secret value.
 	Write(p []byte) (int, error)

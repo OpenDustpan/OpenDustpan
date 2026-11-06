@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"sync"
 )
@@ -16,8 +17,25 @@ const MaskText = "[masked]"
 // shorter value would hide common text.
 const MinMaskLen = 4
 
-// ErrMaskerClosed reports a write to a masker after Close.
-var ErrMaskerClosed = errors.New("the log masker is closed")
+// Limits of a masker. The bounds keep each buffer of the masker small and
+// its size computable without overflow.
+const (
+	// MaxMaskValues is the most secret values that one masker holds.
+	MaxMaskValues = 256
+	// MaxMaskLen is the longest secret value that a masker holds.
+	MaxMaskLen = 64 << 10
+	// maskPiece is the most bytes of a write that the masker handles at a
+	// time.
+	maskPiece = 64 << 10
+)
+
+var (
+	// ErrMaskerClosed reports a write to a masker after Close.
+	ErrMaskerClosed = errors.New("the log masker is closed")
+	// ErrMaskerFull reports a secret value that a masker cannot hold: too
+	// long, or one value too many. The step fails before it starts.
+	ErrMaskerFull = errors.New("the log masker cannot hold the secret value")
+)
 
 // StreamMasker is the Masker of the launcher: it hides each secret value in
 // a stream of bytes, also when the value arrives in two writes. It holds
@@ -39,22 +57,34 @@ func NewMasker(out io.Writer) *StreamMasker {
 }
 
 // Add adds a secret value. A value shorter than MinMaskLen is not masked.
-func (m *StreamMasker) Add(value []byte) {
+// It returns an error that wraps ErrMaskerFull, and adds nothing, for a
+// value longer than MaxMaskLen or a value above MaxMaskValues.
+func (m *StreamMasker) Add(value []byte) error {
 	if len(value) < MinMaskLen {
-		return
+		return nil
+	}
+
+	if len(value) > MaxMaskLen {
+		return fmt.Errorf("%w: a value has more than %d bytes", ErrMaskerFull, MaxMaskLen)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if slices.ContainsFunc(m.secrets, func(s []byte) bool { return bytes.Equal(s, value) }) {
-		return
+		return nil
+	}
+
+	if len(m.secrets) >= MaxMaskValues {
+		return fmt.Errorf("%w: more than %d values", ErrMaskerFull, MaxMaskValues)
 	}
 
 	m.secrets = append(m.secrets, bytes.Clone(value))
 	// The longest value is tried first, so a value that holds a shorter
 	// value is hidden as one.
 	slices.SortFunc(m.secrets, func(a, b []byte) int { return len(b) - len(a) })
+
+	return nil
 }
 
 // Write masks p and writes it, holding back the end of p that could start a
@@ -67,17 +97,13 @@ func (m *StreamMasker) Write(p []byte) (int, error) {
 		return 0, ErrMaskerClosed
 	}
 
-	buf := make([]byte, 0, len(m.pending)+len(p))
-	buf = append(buf, m.pending...)
-	buf = append(buf, p...)
-
-	out, keep := m.mask(buf)
-	m.pending = bytes.Clone(buf[keep:])
-
-	if len(out) > 0 {
-		if _, err := m.out.Write(out); err != nil {
-			return 0, fmt.Errorf("write the masked log: %w", err)
+	for done := 0; done < len(p); {
+		piece := p[done:min(len(p), done+maskPiece)]
+		if err := m.writePiece(piece); err != nil {
+			return done, err
 		}
+
+		done += len(piece)
 	}
 
 	return len(p), nil
@@ -96,6 +122,37 @@ func (m *StreamMasker) Close() error {
 	m.closed = true
 	out := m.maskAll(m.pending)
 	m.pending = nil
+
+	if len(out) == 0 {
+		return nil
+	}
+
+	if _, err := m.out.Write(out); err != nil {
+		return fmt.Errorf("write the masked log: %w", err)
+	}
+
+	return nil
+}
+
+// errMaskSize reports a buffer whose size does not fit an int.
+var errMaskSize = errors.New("the log masker buffer is too large")
+
+// writePiece masks one piece of at most maskPiece bytes. The caller holds
+// mu.
+func (m *StreamMasker) writePiece(piece []byte) error {
+	// The held-back part is shorter than the longest value (MaxMaskLen),
+	// and a piece has at most maskPiece bytes, so the sum fits. The check
+	// stays so that the size never overflows.
+	if len(piece) > maskPiece || len(m.pending) > math.MaxInt-maskPiece {
+		return errMaskSize
+	}
+
+	buf := make([]byte, 0, len(m.pending)+len(piece))
+	buf = append(buf, m.pending...)
+	buf = append(buf, piece...)
+
+	out, keep := m.mask(buf)
+	m.pending = bytes.Clone(buf[keep:])
 
 	if len(out) == 0 {
 		return nil

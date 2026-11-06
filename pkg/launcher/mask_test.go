@@ -3,6 +3,7 @@ package launcher_test
 import (
 	"bytes"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -18,7 +19,9 @@ func maskAll(t *testing.T, secrets []string, parts ...string) string {
 
 	m := launcher.NewMasker(&out)
 	for _, s := range secrets {
-		m.Add([]byte(s))
+		if err := m.Add([]byte(s)); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
 	}
 
 	for _, p := range parts {
@@ -100,5 +103,71 @@ func TestMaskerRefusesAWriteAfterClose(t *testing.T) {
 
 	if _, err := m.Write([]byte("x")); !errors.Is(err, launcher.ErrMaskerClosed) {
 		t.Fatalf("Write after Close = %v, want ErrMaskerClosed", err)
+	}
+}
+
+// TestMaskerBounds checks the limits of the masker at their bounds: a value
+// of MaxMaskLen bytes and MaxMaskValues values fit, one byte or one value
+// more is refused, and the masker holds nothing of a refused value.
+func TestMaskerBounds(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	m := launcher.NewMasker(&out)
+
+	if err := m.Add(bytes.Repeat([]byte("a"), launcher.MaxMaskLen)); err != nil {
+		t.Fatalf("Add of MaxMaskLen bytes = %v, want nil", err)
+	}
+
+	if err := m.Add(bytes.Repeat([]byte("b"), launcher.MaxMaskLen+1)); !errors.Is(err, launcher.ErrMaskerFull) {
+		t.Fatalf("Add of MaxMaskLen+1 bytes = %v, want ErrMaskerFull", err)
+	}
+
+	for i := 1; i < launcher.MaxMaskValues; i++ {
+		if err := m.Add([]byte("value-" + strconv.Itoa(i))); err != nil {
+			t.Fatalf("Add of value %d = %v, want nil", i+1, err)
+		}
+	}
+
+	if err := m.Add([]byte("one-value-too-many")); !errors.Is(err, launcher.ErrMaskerFull) {
+		t.Fatalf("Add above MaxMaskValues = %v, want ErrMaskerFull", err)
+	}
+
+	// A value that is already there is no new value.
+	if err := m.Add([]byte("value-1")); err != nil {
+		t.Fatalf("Add of a known value = %v, want nil", err)
+	}
+
+	if _, err := m.Write([]byte("value-7 one-value-too-many")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got := out.String(); got != "[masked] one-value-too-many" {
+		t.Fatalf("masked = %q", got)
+	}
+}
+
+// TestMaskerLargeWrite masks one write far larger than the pieces of the
+// masker, with a value across each border of a piece.
+func TestMaskerLargeWrite(t *testing.T) {
+	t.Parallel()
+
+	const value = "dph_value-across-the-pieces"
+
+	var text strings.Builder
+
+	for range 5 {
+		text.WriteString(strings.Repeat("x", 64<<10-10))
+		text.WriteString(value)
+	}
+
+	got := maskAll(t, []string{value}, text.String())
+	if strings.Contains(got, value) || strings.Count(got, launcher.MaskText) != 5 {
+		t.Fatalf("masked %d values, want 5, and no secret", strings.Count(got, launcher.MaskText))
 	}
 }
