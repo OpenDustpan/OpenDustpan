@@ -41,14 +41,21 @@ func (r *phaseRun) runStep(ctx context.Context, step *protocol.Step) stepResult 
 		return stepResult{exitCode: -1, reason: "the step name is not valid"}
 	}
 
+	logs := newLogSink(ctx, r, step.Name)
+	masker := launcher.NewMasker(logs)
+
+	// Defense in depth: a handoff token has at most launcher.MaxHandoff
+	// bytes, so the masker holds it; this check stays so that a step whose
+	// secrets the masker cannot hold never starts.
+	if err := masker.Add([]byte(r.cfg.Handoff)); err != nil {
+		return stepResult{exitCode: -1, reason: "the launcher cannot mask the secrets of the step"}
+	}
+
 	if err := r.retry(ctx, func() error { return r.sess.BeginStep(ctx, step.Name) }); err != nil {
 		return r.callFailed("record the begin of the step", err)
 	}
 
 	started := time.Now()
-	logs := newLogSink(ctx, r, step.Name)
-	masker := launcher.NewMasker(logs)
-	masker.Add([]byte(r.cfg.Handoff))
 
 	stopFlush := logs.flushEvery(r.flushEvery())
 	res := r.execStep(ctx, step, masker)
