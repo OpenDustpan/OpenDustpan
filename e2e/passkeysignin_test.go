@@ -292,6 +292,8 @@ func runBreakGlassPasskeyOnStore(t *testing.T, env *e2e.Env) {
 		t.Fatalf("alerts after a refused sign-in = %+v, want none", notes)
 	}
 
+	checkBreakGlassLimitSetting(t, env)
+
 	const reason = "the identity provider is down"
 
 	body := p.finishBody(t, webauthntest.For(p.begin(t)), reason)
@@ -310,6 +312,34 @@ func runBreakGlassPasskeyOnStore(t *testing.T, env *e2e.Env) {
 	if !hasBreakGlassEntry(entries, reason) {
 		t.Fatalf("no sign-in entry of break-glass:ana with the reason %q in %d entries", reason, len(entries))
 	}
+}
+
+// checkBreakGlassLimitSetting reads the settings resource and checks that it
+// shows the effective limit of a break-glass session: 1 hour, from the default.
+func checkBreakGlassLimitSetting(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(t.Context(), http.MethodGet, settingsRoute, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("read the settings = %d, %v: %s", status, err, body)
+	}
+
+	var doc settingsDoc
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode the settings: %v", err)
+	}
+
+	for i := range doc.Settings {
+		if doc.Settings[i].Key == "session.breakGlassMaxLength" {
+			if doc.Settings[i].Value != "1h0m0s" || doc.Settings[i].Source != "default" {
+				t.Fatalf("break-glass session limit = %+v, want 1h0m0s from the default", doc.Settings[i])
+			}
+
+			return
+		}
+	}
+
+	t.Fatal("the settings resource has no session.breakGlassMaxLength")
 }
 
 // breakGlassAlerts returns the alerts of a break-glass use in notes.

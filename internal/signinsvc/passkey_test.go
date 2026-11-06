@@ -270,9 +270,13 @@ func TestCompletePasskeyBreakGlassRaisesTheAlert(t *testing.T) {
 	req := passkeyRequest()
 	req.Reason = "  the identity provider is down  "
 
-	_, err := passkeyService(t, w, stateOf(breakGlassOwner(), 4)).CompletePasskey(t.Context(), req)
+	res, err := passkeyService(t, w, stateOf(breakGlassOwner(), 4)).CompletePasskey(t.Context(), req)
 	if err != nil {
 		t.Fatalf("CompletePasskey() = %v", err)
+	}
+
+	if !res.BreakGlass {
+		t.Error("the result of a break-glass sign-in does not say so")
 	}
 
 	if len(w.starts) != 1 || w.starts[0].Alert == nil {
@@ -292,9 +296,17 @@ func TestCompletePasskeyBreakGlassRaisesTheAlert(t *testing.T) {
 	}
 }
 
+// reasonWith returns "down", then the rune r, then "now". It builds the
+// hidden characters from their code points, so that no source line holds one.
+func reasonWith(r rune) string {
+	return "down" + string(r) + "now"
+}
+
 // TestCompletePasskeyBreakGlassNeedsAReason checks that a break-glass sign-in
 // with no reason, or with a reason that is not valid text, starts no session
-// and raises no alert.
+// and raises no alert. The invalid text holds a control character, a character
+// that the audit log hides (format, line separator and paragraph separator
+// characters), or more than the most bytes.
 func TestCompletePasskeyBreakGlassNeedsAReason(t *testing.T) {
 	t.Parallel()
 
@@ -313,6 +325,12 @@ func TestCompletePasskeyBreakGlassNeedsAReason(t *testing.T) {
 		{"control character", "down\x00now", signinsvc.ReasonPasskeyReasonText},
 		{"newline", "down\nnow", signinsvc.ReasonPasskeyReasonText},
 		{"too long", string(long), signinsvc.ReasonPasskeyReasonText},
+		{"right-to-left override", reasonWith(0x202e), signinsvc.ReasonPasskeyReasonText},
+		{"zero-width space", reasonWith(0x200b), signinsvc.ReasonPasskeyReasonText},
+		{"left-to-right isolate", reasonWith(0x2066), signinsvc.ReasonPasskeyReasonText},
+		{"pop directional isolate", reasonWith(0x2069), signinsvc.ReasonPasskeyReasonText},
+		{"line separator", reasonWith(0x2028), signinsvc.ReasonPasskeyReasonText},
+		{"paragraph separator", reasonWith(0x2029), signinsvc.ReasonPasskeyReasonText},
 	}
 
 	for _, tc := range cases {

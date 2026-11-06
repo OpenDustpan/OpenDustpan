@@ -29,8 +29,35 @@ cause.
 
 The review of the use after the fact is not part of this version. The
 notification `break-glass.used` and the audit entry are the records that the
-review reads. The session of a break-glass account has the length of every
-other session of the installation.
+review reads.
+
+The reason has 1 to 500 characters. The server refuses a reason with a
+control character or a hidden format character, for example U+202E (right-to-left
+override) or U+200B (zero-width space), because the administrators read the
+reason in the alert and a hidden character could show other text than the
+stored text.
+
+## The session limit
+
+A session of a break-glass account ends 1 hour after the sign-in. The limit is
+absolute: no use of the session moves it, and it is shorter than the maximum
+length of the session policy. The cookie of the session ends at the same time.
+The sessions of other people keep the limits of the session policy.
+
+The setting `session.breakGlassMaxLength` holds the limit. Its default is
+`1h0m0s`. It takes 5 minutes to 12 hours, as a Go duration in whole seconds.
+`GET /api/dustpan/v1/settings` shows its effective value and the layer that
+gave it. A change to a longer limit needs a fresh sign-in. A value that the
+server cannot read gives the default of 1 hour, never no limit.
+
+## The alert after failed assertions
+
+Each failed passkey response for a credential of a break-glass account counts
+for that account. At 10 failures the server writes an alert to the
+administrators, with the severity `warning`. One account gets at most one alert
+in each hour. The alert is not a lock: the owner can sign in at once, and the
+count blocks no one. The count is by account and not by credential, so it
+needs no credential ID from the person who sends the response.
 
 ## The rule
 

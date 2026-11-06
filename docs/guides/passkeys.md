@@ -167,8 +167,15 @@ the sign-in:
 
 Each source address has a budget of starts and a budget of failed responses.
 A start writes a challenge row, so each start spends one unit of the first
-budget. A source at a limit gets 429 with the error code `auth.rate-limited`,
-and no ceremony starts. The failures count by source address and never by
+budget (30 starts, then one more each 2 seconds). 20 failed responses refuse
+the address for 15 minutes. A source at a limit gets 429 with the error code
+`auth.rate-limited` at once, with no wait, and no ceremony starts. The address
+is the client address that the server resolves: a forwarding header counts only
+when a trusted proxy sent it.
+
+The installation also holds at most 10,000 open sign-in challenges. Over that
+count a start answers 503 with the error code `mfa.unavailable` and stores no
+row. A challenge ends after 5 minutes. The failures count by source address and never by
 credential, so a person who knows a credential ID cannot lock the owner out.
 The sign-in with a passkey reads no lock of a user name. A lock of the password
 sign-in does not stop it.

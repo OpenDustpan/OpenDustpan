@@ -290,7 +290,13 @@ func (h *Handler) completePasskey(
 
 	switch {
 	case err == nil:
-		http.SetCookie(w, sessionCookie(res.Secret.Reveal(), h.sessionLength(ctx, res.Session)))
+		length := h.sessionLength(ctx, res.Session)
+		if res.BreakGlass {
+			// The cookie of a break-glass session ends at its limit too.
+			length = min(length, h.signIn.sessions.BreakGlassMaxLength(ctx))
+		}
+
+		http.SetCookie(w, sessionCookie(res.Secret.Reveal(), length))
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, signinsvc.ErrReasonRequired):
 		// The sign-in service refused the sign-in of the break-glass account
