@@ -6,6 +6,8 @@ on:
   pull_request:
     types: [ closed ]
 
+permissions: {}
+
 concurrency:
   # Keep this equal to the group in ci.yml for a pull request that is not a
   # draft. A merge group has its own group in ci.yml, so this run never
