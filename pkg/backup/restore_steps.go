@@ -206,7 +206,7 @@ func permanentRestoreError(err error) bool {
 	for _, sentinel := range []error{
 		ErrCorrupt, ErrSchemaMismatch, ErrSchemaBeforeBaseline, ErrNotFound, ErrInvalidID, ErrFailed,
 		ErrDevBackupRefused, ErrDevStripIncomplete, ErrRestoreAccessMismatch, ErrManifestKindInvalid,
-		ErrInvalidRestoreID, ErrKeyUnchecked, maintenance.ErrActiveWork, secret.ErrKeyNotConfigured,
+		ErrInvalidRestoreID, ErrKeyUnchecked, ErrPreBackupForeign, maintenance.ErrActiveWork, secret.ErrKeyNotConfigured,
 		secret.ErrWrapperMismatch, secret.ErrDecrypt,
 	} {
 		if errors.Is(err, sentinel) {
@@ -239,6 +239,10 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 		ID: in.ID, State: RestoreFailed, Error: text, EndedAt: s.now().UTC(), DevReport: nil, LeaveMaintenance: !held,
 	}
 
+	if code := restoreErrorCode(cause); code != "" {
+		end.DevReport = refusedReport(sc.Operation, cause, code)
+	}
+
 	_, swapped := sc.Operation.Step(RestoreStepSwap)
 	if swapped {
 		if stop := s.auditAfterSwap(ctx, sc, in, &end); stop != nil {
@@ -255,7 +259,7 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 	switch {
 	case finishErr == nil, errors.Is(finishErr, durable.ErrStepDone), errors.Is(finishErr, ErrRestoreNotRunning):
 		if !swapped && finishErr == nil {
-			s.appendEvents(ctx, in)
+			s.appendEvents(ctx, in, restoreEndFailed)
 		}
 
 		s.logRestore(ctx, restoreOutcome{
@@ -271,6 +275,26 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 	}
 }
 
+// refusedReport returns the final report of a restore of op that a refusal
+// with code stopped: the report of the stage step, with code and, for a stop
+// at the live blobs, the findings of the backup before the restore.
+func refusedReport(op durable.Operation, cause error, code RestoreErrorCode) *DevStripReport {
+	report := emptyDevReport()
+	if st, _, err := stageResultOf(op); err == nil {
+		report = st.Report
+	}
+
+	report.ErrorCode = code
+
+	if refused, ok := errors.AsType[*LiveBlobsError](cause); ok && refused != nil {
+		found := refused.Findings
+		found.Keys = slices.Clone(found.Keys)
+		report.PreBackupFound = &found
+	}
+
+	return &report
+}
+
 // auditAfterSwap writes the audit entries of a restore that fails after its
 // swap, under the fence of the after-apply step, unless that step recorded
 // them. A failed append adds the warning audit-append-failed to end. It
@@ -282,7 +306,7 @@ func (s *RestoreService) auditAfterSwap(
 		return nil
 	}
 
-	entries, err := s.afterApplyEntries(ctx, sc.Operation, in)
+	entries, err := s.afterApplyEntries(ctx, sc.Operation, in, swappedFailed)
 	if err == nil {
 		_, err = s.live.AppendRestoreAudit(ctx, sc.Operation.Claim.Step(RestoreStepAfterApply), in.ID, entries)
 	}
@@ -307,11 +331,34 @@ func (s *RestoreService) auditAfterSwap(
 	return nil
 }
 
+// swappedEnd says how a restore that swapped ended, for its audit entry.
+type swappedEnd string
+
+const (
+	// swappedFinished is a restore that ran its after-apply step.
+	swappedFinished swappedEnd = "finished"
+	// swappedFailed is a restore that failed or stopped after its swap.
+	swappedFailed swappedEnd = "failed"
+)
+
+// Values of the end of a restore before its swap, for its audit entry.
+const (
+	// restoreEndFailed is a restore that a failure stopped before its swap.
+	restoreEndFailed = "failed"
+	// restoreEndCanceled is a restore that a cancel stopped before its swap.
+	restoreEndCanceled = "canceled"
+	// restoreEndStopped is a restore that stopped before its swap with no
+	// end write and no cancel.
+	restoreEndStopped = "stopped"
+)
+
 // appendEvents writes the audit entries of the audit events of restore in
 // into the audit log of the installation, for a restore that ended before
-// its swap: the audit log is still the one from before the restore. A lost
+// its swap: the audit log is still the one from before the restore. Then it
+// writes the entry of the end, with the outcome failure, which says how the
+// restore ended and that the live data did not change. A lost
 // entry does not change the end: the log line keeps the record.
-func (s *RestoreService) appendEvents(ctx context.Context, in restoreInput) {
+func (s *RestoreService) appendEvents(ctx context.Context, in restoreInput, end string) {
 	store, ok := s.live.(serverAuditAppender)
 	if !ok {
 		return
@@ -328,6 +375,13 @@ func (s *RestoreService) appendEvents(ctx context.Context, in restoreInput) {
 		if _, err := store.AppendServer(ctx, s.restoreAuditEntry(in, object)); err != nil {
 			s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", in.ID.String()))
 		}
+	}
+
+	last := s.restoreAuditEntry(in, endBeforeSwapAuditObject(in, end))
+	last.Outcome = audit.OutcomeFailure
+
+	if _, err := store.AppendServer(ctx, last); err != nil {
+		s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", in.ID.String()))
 	}
 }
 
@@ -443,6 +497,7 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 
 	dev.checkOnly = in.CheckOnly
 	dev.report.Warnings = dev.warnings()
+	dev.report.NotHeld = dev.notHeld
 
 	out, err := json.Marshal(stageResult{
 		Area: area.String(), SQLSize: pinned.sqlSize, SQLSHA: hex.EncodeToString([]byte(pinned.sqlSHA)),
@@ -504,9 +559,16 @@ func (s *RestoreService) stageInput(
 		return StagingArea{Restore: "", Token: 0}, none, verifyErr
 	}
 
-	wantBlobs, err := parseManifestBlobs(manifest, in.BackupID)
+	wantBlobs, err := restoreWantBlobs(manifest, in.BackupID)
 	if err != nil {
 		return StagingArea{Restore: "", Token: 0}, none, err
+	}
+
+	// A backup before an earlier restore holds no copy of the blobs that it
+	// found missing or damaged. The restore leaves those keys as they are,
+	// and its answer names them.
+	if notHeld := findingsOf(manifest); !notHeld.Empty() {
+		dev.notHeld = &notHeld
 	}
 
 	area, err := NewStagingArea(in.ID, fence.Token)
@@ -680,15 +742,26 @@ func canceledOf(res maintenance.EnterResult, err error) []string {
 }
 
 // stepPreBackup takes the backup of the live data as its own durable
-// operation, waits for it, and moves the restore to applying with its ID. A
-// takeover waits for the same backup.
+// operation, runs it on this step, waits for it, and moves the restore to
+// applying with its ID. The start claims the backup for this instance, so a
+// backup worker never runs it while this step does. A takeover finds the
+// backup started and waits for it with Await. When no instance holds a
+// claim, Await runs a pending backup operation: the next one that the
+// runner claims, not one that it picks by ID. That is this backup, because
+// only one backup runs at a time.
+//
+// The backup records each live blob that it found missing or damaged, and
+// this step stores one audit event of the restore with the counts. Then it
+// stops the restore before any change of the live data when the backup found
+// a damaged live blob, or more missing live blobs than the bound allows. A
+// restore never writes over a live blob.
 func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepContext, in restoreInput) ([]byte, error) {
 	if in.CheckOnly {
 		return nil, nil
 	}
 
-	if err := s.backups.Start(ctx, in.PreBackupID); err != nil && !errors.Is(err, ErrAlreadyExists) {
-		return nil, fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
+	if err := s.startPreBackup(ctx, sc.Fence, in); err != nil {
+		return nil, err
 	}
 
 	pre, err := s.backups.Await(ctx, in.PreBackupID)
@@ -696,11 +769,126 @@ func (s *RestoreService) stepPreBackup(ctx context.Context, sc durable.StepConte
 		return nil, fmt.Errorf("backup live data before restore %s: %w", in.ID, err)
 	}
 
-	if err := s.live.MarkRestoreApplying(ctx, sc.Fence, in.ID, pre.ID); err != nil {
+	manifest, err := readManifest(ctx, s.target, pre.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	found := findingsOf(manifest)
+
+	if recordErr := s.recordPreBackupFindings(ctx, sc.Fence, in, pre.ID, found); recordErr != nil {
+		return nil, recordErr
+	}
+
+	if refused := checkLiveFindings(manifest, EffectiveMissingBlobLimit()); refused != nil {
+		return nil, refused
+	}
+
+	out, err := json.Marshal(preBackupResult{Found: found})
+	if err != nil {
+		return nil, fmt.Errorf("encode the pre-backup result of restore %s: %w", in.ID, err)
+	}
+
+	if err := s.live.MarkRestoreApplying(ctx, sc.Fence, in.ID, pre.ID, out); err != nil {
 		return nil, fmt.Errorf("mark restore %s applying: %w", in.ID, err)
 	}
 
 	return nil, nil
+}
+
+// startPreBackup starts the backup before restore in and runs it to its end
+// on this step. A backup with that ID
+// that exists already counts only when the input of its operation names this
+// restore: an earlier try of this step, before a takeover. Any other backup,
+// for example one that another restore or a person started, stops the
+// restore with ErrPreBackupForeign and its audit event: the restore must not
+// take the findings of a backup that did not read the live data for it.
+func (s *RestoreService) startPreBackup(ctx context.Context, fence durable.StepFence, in restoreInput) error {
+	err := s.backups.RunBeforeRestore(ctx, in.PreBackupID, in.ID)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, ErrAlreadyExists) {
+		return fmt.Errorf("start the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	owner, err := s.backups.StartedForRestore(ctx, in.PreBackupID)
+	if err != nil {
+		return fmt.Errorf("read the backup of the live data before restore %s: %w", in.ID, err)
+	}
+
+	if owner != in.ID {
+		return s.failWithEvent(ctx, in, fence, preBackupForeignAuditObject(in),
+			fmt.Errorf("backup %s: %w", in.PreBackupID, ErrPreBackupForeign))
+	}
+
+	return nil
+}
+
+// preBackupResult is the result of the pre-backup step, stored in the step
+// record under the fence of the step: what the backup before the restore
+// found at the live blobs.
+type preBackupResult struct {
+	Found BlobFindings `json:"found"`
+}
+
+// preBackupFindingsOf returns what the backup before the restore of op found,
+// from the stored result of the pre-backup step. It reports false for a step
+// with no result, or with a result that does not decode.
+func preBackupFindingsOf(op durable.Operation) (BlobFindings, bool) {
+	none := BlobFindings{Named: 0, Missing: 0, Damaged: 0, Keys: nil}
+
+	rec, ok := op.Step(RestoreStepPreBackup)
+	if !ok || len(rec.Result) == 0 {
+		return none, false
+	}
+
+	var res preBackupResult
+	if err := json.Unmarshal(rec.Result, &res); err != nil {
+		return none, false
+	}
+
+	return res.Found, true
+}
+
+// checkPreBackupResult refuses the copy of blobs when the operation of sc
+// holds no stored result of its pre-backup step, or when the result names
+// damaged live blobs or more missing live blobs than the bound allows.
+func (s *RestoreService) checkPreBackupResult(ctx context.Context, sc durable.StepContext, in restoreInput) error {
+	found, ok := preBackupFindingsOf(sc.Operation)
+	if !ok {
+		return s.failWithEvent(ctx, in, sc.Fence, preBackupForeignAuditObject(in),
+			fmt.Errorf("no result of the pre-backup step: %w", ErrPreBackupForeign))
+	}
+
+	if refused := checkFindings(found, EffectiveMissingBlobLimit(), found.Keys, found.Keys); refused != nil {
+		return s.failWithEvent(ctx, in, sc.Fence, copyRefusedAuditObject(in, found), refused)
+	}
+
+	return nil
+}
+
+// recordPreBackupFindings stores one audit event of restore in when the
+// backup pre before it found live blobs missing or damaged. The event is
+// stored before the step is recorded and before the check of the bound, and
+// a second store of one event changes nothing.
+func (s *RestoreService) recordPreBackupFindings(
+	ctx context.Context, fence durable.StepFence, in restoreInput, pre ID, found BlobFindings,
+) error {
+	if found.Empty() {
+		return nil
+	}
+
+	if err := s.live.RecordRestoreEvent(ctx, fence, in.ID, preBackupFindingsAuditObject(in, pre, found)); err != nil {
+		return fmt.Errorf("record the missing and damaged live blobs of restore %s: %w", in.ID, err)
+	}
+
+	s.logger.WarnContext(ctx, "backup before restore found live blobs that are missing or damaged",
+		slog.String("restore_id", in.ID.String()), slog.String("backup_id", pre.String()),
+		slog.Int("missing", found.Missing), slog.Int("damaged", found.Damaged), slog.Int("named", found.Named))
+
+	return nil
 }
 
 // stepCopyBlobs pins the manifest again and copies each blob that it names
@@ -713,6 +901,16 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 	st, _, err := stageResultOf(sc.Operation)
 	if err != nil {
 		return nil, err
+	}
+
+	// Defense in depth: the pre-backup step stops the restore at damaged
+	// live blobs and at missing live blobs above the bound, and it refuses a
+	// backup that this restore did not start. This check stays so that a
+	// pre-backup step that was skipped, or a result that is gone, cannot let
+	// the first write of a blob happen. It reads only the step record of
+	// this operation, not the backup target or the backups table.
+	if refused := s.checkPreBackupResult(ctx, sc, in); refused != nil {
+		return nil, refused
 	}
 
 	manifest, err := s.readPinnedManifest(ctx, in.BackupID, st.pinned())
@@ -847,7 +1045,7 @@ func (s *RestoreService) stepAfterApply(ctx context.Context, sc durable.StepCont
 		return nil, err
 	}
 
-	entries, err := s.afterApplyEntries(ctx, sc.Operation, in)
+	entries, err := s.afterApplyEntries(ctx, sc.Operation, in, swappedFinished)
 	if err != nil {
 		return nil, err
 	}
@@ -894,7 +1092,7 @@ func (s *RestoreService) afterApplyChecks(ctx context.Context, sc durable.StepCo
 // and the live blobs that it refused to overwrite), which the swap removed with the old
 // audit log, and the entries of the dev data report.
 func (s *RestoreService) afterApplyEntries(
-	ctx context.Context, op durable.Operation, in restoreInput,
+	ctx context.Context, op durable.Operation, in restoreInput, end swappedEnd,
 ) ([]audit.Entry, error) {
 	st, _, err := stageResultOf(op)
 	if err != nil {
@@ -906,7 +1104,12 @@ func (s *RestoreService) afterApplyEntries(
 		return nil, fmt.Errorf("read the audit events of restore %s: %w", in.ID, err)
 	}
 
-	entries := []audit.Entry{s.restoreAuditEntry(in, s.restoreAuditObject(in))}
+	own := s.restoreAuditEntry(in, s.restoreAuditObject(in, end))
+	if end == swappedFailed {
+		own.Outcome = audit.OutcomeFailure
+	}
+
+	entries := []audit.Entry{own}
 
 	for _, object := range events {
 		entries = append(entries, s.restoreAuditEntry(in, object))
@@ -1046,6 +1249,8 @@ func (s *RestoreService) stepFinish(ctx context.Context, sc durable.StepContext,
 		report.Warnings = append(slices.Clone(report.Warnings), WarnAuditAppendFailed)
 	}
 
+	report = withPreBackupFindings(report, sc.Operation)
+
 	end := RestoreEnd{
 		ID: in.ID, State: RestoreSucceeded, Error: "", EndedAt: s.now().UTC(), DevReport: &report,
 		LeaveMaintenance: false,
@@ -1058,6 +1263,24 @@ func (s *RestoreService) stepFinish(ctx context.Context, sc durable.StepContext,
 	s.logRestore(ctx, restoreOutcome{id: in.ID, req: in.request(), state: RestoreSucceeded, errText: "", full: nil})
 
 	return nil, nil
+}
+
+// withPreBackupFindings returns report with what the backup before the
+// restore of op found at the live blobs, and the warning of missing live
+// blobs when it found any. A restore that went on found no damaged blob.
+func withPreBackupFindings(report DevStripReport, op durable.Operation) DevStripReport {
+	found, ok := preBackupFindingsOf(op)
+	if !ok || found.Empty() {
+		return report
+	}
+
+	report.PreBackupFound = &found
+
+	if found.Missing > 0 {
+		report.Warnings = append(slices.Clone(report.Warnings), WarnMissingLiveBlobs)
+	}
+
+	return report
 }
 
 // withClass returns classes with n added to class.
@@ -1145,6 +1368,36 @@ func differingBlobAuditObject(in restoreInput, key string) string {
 		" whose bytes differ from backup " + in.BackupID.String()
 }
 
+// preBackupFindingsAuditObject names what the backup pre before restore in
+// found at the live blobs, for its audit entry: the counts and the first
+// keys. The keys come from checked entries of the manifest, quoted.
+func preBackupFindingsAuditObject(in restoreInput, pre ID, found BlobFindings) string {
+	quoted := make([]string, 0, len(found.Keys))
+	for _, key := range found.Keys {
+		quoted = append(quoted, strconv.Quote(key))
+	}
+
+	return "backup " + pre.String() + " before restore " + in.ID.String() + " found " +
+		strconv.Itoa(found.Missing) + " missing and " + strconv.Itoa(found.Damaged) + " damaged live blobs of " +
+		strconv.Itoa(found.Named) + ", first " + strings.Join(quoted, ", ")
+}
+
+// copyRefusedAuditObject names the stop of restore in at the copy step, for
+// its audit entry: the stored result of the backup before it names damaged
+// live blobs, or more missing live blobs than the bound allows.
+func copyRefusedAuditObject(in restoreInput, found BlobFindings) string {
+	return "restore " + in.ID.String() + " refused to copy blobs: the backup before it found " +
+		strconv.Itoa(found.Missing) + " missing and " + strconv.Itoa(found.Damaged) + " damaged live blobs of " +
+		strconv.Itoa(found.Named)
+}
+
+// preBackupForeignAuditObject names the stop of restore in at a backup before
+// it that it did not start, for its audit entry.
+func preBackupForeignAuditObject(in restoreInput) string {
+	return "restore " + in.ID.String() + " refused backup " + in.PreBackupID.String() +
+		" as the backup before it: this restore did not start it"
+}
+
 // stagedDiffersAuditObject names the stop of restore in at a blob whose staged
 // copy differs from the backup, for its audit entry. The restore wrote
 // nothing to the live key.
@@ -1168,15 +1421,29 @@ func canceledAuditObject(id RestoreID, token int64, unit string) string {
 		" canceled the active work: " + unit
 }
 
-// restoreAuditObject names one restore for its audit entry, with whether
-// the access tables were replaced or kept.
-func (s *RestoreService) restoreAuditObject(in restoreInput) string {
+// endBeforeSwapAuditObject names the end of restore in before its swap, for
+// its audit entry. The swap did not run, so the live state, the history and
+// the access tables did not change. The text names no table as replaced.
+func endBeforeSwapAuditObject(in restoreInput, end string) string {
+	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() + " " + end +
+		" before the swap. The live state, history and access tables did not change."
+}
+
+// restoreAuditObject names one restore that swapped for its audit entry, with
+// whether the access tables were replaced or kept, and, when end is swappedFailed,
+// that the restore failed after the swap.
+func (s *RestoreService) restoreAuditObject(in restoreInput, end swappedEnd) string {
 	mode := "replaced"
 	if in.KeepAccessTables {
 		mode = "kept"
 	}
 
-	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() + " (access tables " + mode +
+	verb := ""
+	if end == swappedFailed {
+		verb = " failed after the swap"
+	}
+
+	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() + verb + " (access tables " + mode +
 		s.devFlagText() + ")"
 }
 
@@ -1248,8 +1515,8 @@ func (s *RestoreService) copyBlob(
 }
 
 // copyCheckedKey copies one blob of the backup into the live store with
-// checked bytes. It never replaces a live key that it saw, and it never
-// deletes one:
+// checked bytes. Blobs are write-once: it never replaces a live key that it
+// saw, and it never deletes one:
 //
 //  1. A live key that holds the bytes of the manifest stays.
 //  2. A live key with other bytes stops the restore with ErrCorrupt. The audit
@@ -1350,7 +1617,8 @@ func (s *RestoreService) writeStaged(
 // on. It reports true when the key is absent. It reports false with no error
 // when the key holds the bytes of the manifest, so there is nothing to write.
 // Other bytes stop the restore as corrupt, with the audit event of the
-// refusal. Any other error, for example a throttled store, returns as it is.
+// refusal: a restore never writes over a live blob. Any other error, for
+// example a throttled store, returns as it is.
 func (s *RestoreService) liveKeyIsAbsent(
 	ctx context.Context, in restoreInput, fence durable.StepFence, ref ManifestBlob,
 ) (bool, error) {

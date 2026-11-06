@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -186,5 +187,47 @@ func TestMoveOutOfALockedCollection(t *testing.T) {
 
 			checkMoveCase(t, tc, f, f.move(t, "new"))
 		})
+	}
+}
+
+// TestMoveOutRefusalTextIsExact proves the exact error code and message of a
+// refused move out of a locked collection. The message names the lock and the
+// route that removes it.
+func TestMoveOutRefusalTextIsExact(t *testing.T) {
+	t.Parallel()
+
+	old := manuallock.CollectionTarget(collection.Ref{Namespace: "acme", Name: "old"})
+	store := coveringLocks{memLocks: newMemLocks(), lock: lockOf(old), err: nil}
+
+	var authz identity.Authorizer = objectDenier{action: identity.ActionUnitManage, object: "pulumi:acme/web/prod"}
+	f := newMoveFixtureFull(t, authz, allowMoves{}, nil, lockService(t, store, authz))
+
+	rec := f.move(t, "new")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	var body struct {
+		Message   string `json:"message"`
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", rec.Body.String(), err)
+	}
+
+	const wantCode = "lock.locked"
+
+	const wantMessage = "stack or workspace acme/web/prod is in collection acme/old, which has a manual lock " +
+		"by alice since 2026-10-19T10:00:00Z: change window closed: moving it out of the collection " +
+		"needs unit:manage on it. To remove the lock, the holder sends DELETE " +
+		"/api/dustpan/v1/namespaces/acme/collections/old/lock."
+
+	if body.ErrorCode != wantCode {
+		t.Errorf("errorCode = %q, want %q", body.ErrorCode, wantCode)
+	}
+
+	if body.Message != wantMessage {
+		t.Errorf("message = %q, want %q", body.Message, wantMessage)
 	}
 }

@@ -1,8 +1,8 @@
 package sqlite
 
 // sqliteLocalUserBackupTables holds the backup columns of the table of local
-// users and of the table of session generations, in the order of
-// backup.Tables.
+// users, of the table of session generations and of the table of passkeys, in
+// the order of backup.Tables.
 func sqliteLocalUserBackupTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
 		{
@@ -16,6 +16,32 @@ func sqliteLocalUserBackupTables() []sqliteBackupTable {
 			table:   "principal_session_generations",
 			columns: []string{backupColPrincipalID, "generation"},
 		},
+		{
+			table: "passkeys",
+			columns: []string{
+				"id",
+				backupColPrincipalID,
+				backupColName,
+				"credential_id",
+				"public_key",
+				"transports",
+				"aaguid",
+				"sign_count",
+				"backup_eligible",
+				backupColCreatedAtMs,
+				"last_used_at_ms",
+				"suspended_at_ms",
+			},
+		},
+	}
+}
+
+// sqlitePasskeyChallengeColumns holds the columns of the table of open
+// passkey ceremonies, which a backup leaves out.
+func sqlitePasskeyChallengeColumns() []string {
+	return []string{
+		backupColDigest, backupColKind, backupColPrincipalID, "pending_id", "session_id", backupColCreatedAtMs,
+		"expires_at_ms",
 	}
 }
 

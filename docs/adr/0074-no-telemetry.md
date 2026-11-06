@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-17
 
+Changed by:
+
+- ADR 315 extends decision 6: no visit counting on the docs site.
+
 ## Context
 
 `README.md` and the security model say that the server sends no telemetry.

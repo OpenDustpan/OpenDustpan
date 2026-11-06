@@ -495,10 +495,14 @@ type PrincipalStateStore interface {
 	PrincipalState(ctx context.Context, id string) (PrincipalState, error)
 	// BumpGeneration adds 1 to the session generation of the principal id
 	// and appends e, in one transaction, and returns the new generation. It
-	// needs no clock. It returns ErrInvalid for a cause that ValidBumpCause
-	// refuses, ErrPrincipalNotFound as PrincipalState does, and
-	// audit.ErrInvalidEntry for an entry that fails validation.
-	BumpGeneration(ctx context.Context, id string, cause BumpCause, e audit.Entry) (uint64, error)
+	// needs no clock. An expected generation other than 0 makes the bump a
+	// compare-and-swap: when the stored generation is another one, it
+	// returns ErrGenerationChanged and writes nothing. Two bumps with the
+	// same expected generation never both pass. It returns ErrInvalid for a
+	// cause that ValidBumpCause refuses, ErrPrincipalNotFound as
+	// PrincipalState does, and audit.ErrInvalidEntry for an entry that fails
+	// validation.
+	BumpGeneration(ctx context.Context, id string, cause BumpCause, expected uint64, e audit.Entry) (uint64, error)
 }
 
 // ProofTarget is the request that a refresh proof must name: the method and

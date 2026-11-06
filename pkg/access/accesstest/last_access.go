@@ -232,6 +232,7 @@ func mustSession(t *testing.T, ss sessionStore, id, principalID string, minute i
 	sess := session.Session{
 		CreatedAt: at(minute), LastSeenAt: at(minute), AuthTime: at(minute), EndedAt: time.Time{}, ID: id,
 		PrincipalID: principalID, Provider: "corp", EndReason: "", SourceIP: "192.0.2.1", UserAgent: "test",
+		Generation: 1,
 	}
 
 	digest := session.Digest(sha256.Sum256([]byte(id)))

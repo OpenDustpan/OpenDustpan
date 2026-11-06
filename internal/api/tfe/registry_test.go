@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -207,7 +208,7 @@ func buildRegistryFixture(
 	handler, err := tfe.NewHandler(tfe.Config{
 		Sessions:      nil,
 		SessionPolicy: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 		Authenticator: authn,
 		Authorizer:    authz,
 		AddressGate:   nil,
@@ -716,7 +717,7 @@ func TestNewHandlerRefusesAShortRegistryKey(t *testing.T) {
 	t.Parallel()
 
 	_, err := tfe.NewHandler(tfe.Config{
-		Sessions: nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    allowAll(),
 		AddressGate:   nil,

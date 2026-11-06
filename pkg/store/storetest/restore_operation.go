@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"bytes"
 	"errors"
 	"slices"
 	"strconv"
@@ -135,6 +136,22 @@ func mustHaveStep(t *testing.T, s durable.Store, id durable.ID, step string) {
 
 	if _, ok := op.Step(step); !ok {
 		t.Fatalf("operation %s has the steps %+v, want %q", id, op.Steps, step)
+	}
+}
+
+// mustStepResult fails the test unless operation id recorded step with
+// result.
+func mustStepResult(t *testing.T, s durable.Store, id durable.ID, step string, result []byte) {
+	t.Helper()
+
+	op, err := s.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get operation %s: %v", id, err)
+	}
+
+	rec, ok := op.Step(step)
+	if !ok || !bytes.Equal(rec.Result, result) {
+		t.Fatalf("result of step %q = %q (recorded %v), want %q", step, rec.Result, ok, result)
 	}
 }
 
@@ -386,11 +403,20 @@ func testRestoreOpFencedWrites(t *testing.T, newStore RestoreFactory) {
 
 	mustHaveStep(t, durableOps, held.ID, backup.RestoreStepCheck)
 
-	if err := ops.MarkRestoreApplying(ctx, held.Claim.Step(backup.RestoreStepPreBackup), id, "bkp-pre"); err != nil {
+	result := []byte(`{"digest":"abc","damaged":1,"created":true}`)
+	err := ops.MarkRestoreApplying(
+		ctx,
+		held.Claim.Step(backup.RestoreStepPreBackup),
+		id,
+		"bkp-pre",
+		result,
+	)
+	if err != nil {
 		t.Fatalf("mark applying: %v", err)
 	}
 
 	mustHaveStep(t, durableOps, held.ID, backup.RestoreStepPreBackup)
+	mustStepResult(t, durableOps, held.ID, backup.RestoreStepPreBackup, result)
 
 	ended := now()
 	final := devReport(2)
@@ -423,6 +449,7 @@ func testRestoreOpFencedWrites(t *testing.T, newStore RestoreFactory) {
 func devReport(n int64) backup.DevStripReport {
 	return backup.DevStripReport{
 		Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Approvers: nil, Warnings: nil,
+		PreBackupFound: nil, NotHeld: nil, ErrorCode: "",
 		Classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: n},
 	}
 }
@@ -479,7 +506,7 @@ func testRestoreOpFenceRefused(t *testing.T, newStore RestoreFactory) {
 			held := mustClaimRestoreOp(t, durableOps, "instance-a")
 			fence := tc.fence(t, durableOps, held)
 
-			if err := ops.MarkRestoreApplying(t.Context(), fence, id, "bkp-pre"); !errors.Is(err, tc.want) {
+			if err := ops.MarkRestoreApplying(t.Context(), fence, id, "bkp-pre", nil); !errors.Is(err, tc.want) {
 				t.Fatalf("mark applying with %s: error = %v, want %v", tc.name, err, tc.want)
 			}
 
@@ -964,7 +991,14 @@ func testRestoreOpAudit(t *testing.T, newStore RestoreFactory) {
 	id := mustStartRestoreOp(t, ops)
 	held := mustClaimRestoreOp(t, durableOps, "instance-a")
 
-	if err := ops.MarkRestoreApplying(ctx, held.Claim.Step(backup.RestoreStepPreBackup), id, "bkp-pre"); err != nil {
+	err := ops.MarkRestoreApplying(
+		ctx,
+		held.Claim.Step(backup.RestoreStepPreBackup),
+		id,
+		"bkp-pre",
+		nil,
+	)
+	if err != nil {
 		t.Fatalf("mark applying: %v", err)
 	}
 

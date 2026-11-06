@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -77,6 +78,7 @@ func newUpdateFixtureWithGate(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -162,6 +164,7 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,

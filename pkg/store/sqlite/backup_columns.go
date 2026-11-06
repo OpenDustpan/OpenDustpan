@@ -220,6 +220,11 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"lock_holder",
 				"lock_since_ms",
 				"lock_operation",
+				"last_release_lock_id",
+				"last_release_holder",
+				"last_release_by",
+				"last_release_kind",
+				"last_release_at_ms",
 			},
 		},
 		{
@@ -271,8 +276,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColKind,
 				"id",
 				"level",
-				backupColTool,
-				"unit_name",
+				backupColUnitID,
 				backupColVersion,
 				backupColBody,
 				backupColUpdatedAtMs,
@@ -530,7 +534,27 @@ func sqliteControlTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(core, sqliteRevocationControlTables(), sqliteRunnerControlTables())
+	return slices.Concat(
+		core, sqliteRevocationControlTables(), sqliteRunnerControlTables(), sqliteNameLockControlTables(),
+	)
+}
+
+// sqliteNameLockControlTables lists the columns of the counts of the lockout
+// by name and of the key of their names.
+func sqliteNameLockControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				"scope", backupColName, "sub", "failures", "locked_until_ms", "level", "last_failure_ms",
+				"last_lock_end_ms", "reset_after_ms",
+			},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", "key"},
+		},
+	}
 }
 
 // sqliteRevocationControlTables lists the column list of the control table that
@@ -586,6 +610,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TableLocalUserResets,
 			columns: sqliteLocalUserResetColumns(),
 		},
+		{
+			table:   backup.TablePasskeyChallenges,
+			columns: sqlitePasskeyChallengeColumns(),
+		},
 	}
 }
 
@@ -607,6 +635,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"end_reason",
 				"source_ip",
 				"user_agent",
+				"generation",
 			},
 		},
 		{

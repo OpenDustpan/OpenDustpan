@@ -165,7 +165,7 @@ type lockCall struct {
 // "is locked by User" and the holder, so the CLI waits and retries under
 // -lock-timeout.
 func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
-	if !h.guardStateWrite(c.w, c.r, c.p, c.obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
+	if !h.guardStateWrite(c.w, c.r, c.p, c.obj, lockCheck()) {
 		return false
 	}
 
@@ -340,7 +340,7 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWriteForced, op: gate.OperationUnlock}) {
+	if !h.guardStateWrite(w, r, p, obj, forceUnlockCheck()) {
 		return
 	}
 
@@ -362,6 +362,27 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
+	h.logForceUnlock(ctx, p, obj, holder)
+
+	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
+}
+
+// logForceUnlock writes the info line of a force-unlock that answered 200. A
+// release with no holder at the read is a repeat of the last forced release.
+// It changes nothing, so its line does not claim a release.
+func (h *Handler) logForceUnlock(ctx context.Context, p identity.Principal, obj identity.Object, holder string) {
+	if holder == "" {
+		h.logger.InfoContext(
+			ctx,
+			"force-unlock repeated with no change",
+			slog.String("action", "force-unlock"),
+			slog.String("object", obj.String()),
+			slog.String("principal", p.Subject),
+		)
+
+		return
+	}
+
 	h.logger.InfoContext(
 		ctx,
 		"force-unlock completed",
@@ -370,6 +391,14 @@ func (h *Handler) forceUnlockWorkspace(
 		slog.String("principal", p.Subject),
 		slog.String("released", holder),
 	)
+}
 
-	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
+// lockCheck is the state check of the lock of a workspace.
+func lockCheck() stateCheck {
+	return newStateCheck(identity.ActionUnitWrite, gate.OperationLock)
+}
+
+// forceUnlockCheck is the state check of a force-unlock of a workspace.
+func forceUnlockCheck() stateCheck {
+	return newStateCheck(identity.ActionUnitWriteForced, gate.OperationUnlock)
 }

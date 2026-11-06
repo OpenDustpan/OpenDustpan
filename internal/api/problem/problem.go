@@ -2,7 +2,8 @@
 // owns the error body, the classes of error that every tool-neutral API
 // shares (authentication, a fixed answer, the Idempotency-Key, the
 // namespace and maintenance), the headers of an error answer and the log
-// rules: a 500 logs its status only, a fenced write logs its wrap, and a
+// rules: a 500 logs its status, a cause class from a closed list and the
+// request ID, never the error text; a fenced write logs its wrap, and a
 // refusal whose answer is not its error text logs that text at Debug.
 //
 // Every answer has a code of the catalog. The package writes no code of its
@@ -35,6 +36,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -67,6 +69,9 @@ type Problem struct {
 	// answer is the finished code and arguments of an error that already
 	// holds them, or the zero Answer.
 	answer errcode.Answer
+	// cause is the safe cause class of a 500, from the closed list of Cause,
+	// or "" for an answer that is not a 500.
+	cause string
 }
 
 // Unit is a unit that an answer names: its ID, the label of its tool and its
@@ -188,6 +193,9 @@ type Writer struct {
 // carries Cache-Control: no-store. WriteProblem holds the rest.
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	p := wr.Problem(err)
+	if p.Status == http.StatusInternalServerError {
+		p.cause = faultlog.Cause(err)
+	}
 
 	switch {
 	case errors.Is(err, namespace.ErrFenced):
@@ -203,9 +211,10 @@ func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 }
 
 // WriteProblem writes the answer p, for a route that builds its own answer.
-// A 500 logs its status only, never the error text: the text may hold driver
-// detail, a token or state. A code or a value that the catalog refuses logs
-// the code and answers server.internal.
+// A 500 logs its status, a cause class from the closed list of Cause and the
+// request ID when it is safe. It never logs the error text: the text may hold
+// driver detail, a token or state. A code or a value that the catalog refuses
+// logs the code and answers server.internal.
 func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Problem) {
 	var (
 		made    errcode.Answer
@@ -216,14 +225,14 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 	if codeErr != nil {
 		// A code or a value that the catalog refuses is a bug of the adapter.
 		// The log names the code only.
-		wr.Logger.ErrorContext(ctx, "error code refused", slog.String("error_code", p.Code))
+		faultlog.LogInternal(ctx, wr.Logger, "error code refused", faultlog.CauseUnclassified, p.Code)
 
 		p = Internal()
 		made = errcode.Internal()
 	}
 
 	if p.Status == http.StatusInternalServerError {
-		wr.Logger.ErrorContext(ctx, "request failed", slog.Int("status", p.Status))
+		faultlog.LogInternal(ctx, wr.Logger, "request failed", p.cause, "")
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -480,7 +489,7 @@ func Built(status int, message, code string, a errcode.Answer, err error) Proble
 func answer(status int, code, message string) Problem {
 	return Problem{
 		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
-		Units: nil, answer: errcode.Answer{},
+		Units: nil, answer: errcode.Answer{}, cause: "",
 	}
 }
 

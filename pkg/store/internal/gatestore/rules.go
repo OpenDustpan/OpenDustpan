@@ -82,7 +82,7 @@ func requireReads(ctx context.Context, tx Tx, scope gate.Scope, reads []gate.ID)
 func scopeNames(found []Located) string {
 	names := make([]string, len(found))
 	for i, f := range found {
-		names[i] = f.ScopeKey
+		names[i] = f.name()
 	}
 
 	return strings.Join(names, ", ")
@@ -118,7 +118,7 @@ func widerHolders(ctx context.Context, tx Tx, scope gate.Scope, ref Ref) ([]Loca
 		}
 
 		if ok {
-			out = append(out, Located{ScopeKey: w.Key(), Row: row})
+			out = append(out, Located{ScopeKey: w.Key(), Label: w.Key(), Row: row})
 		}
 	}
 
@@ -313,48 +313,37 @@ func requireNoFinalReader(ctx context.Context, tx Tx, scope gate.Scope, ref Ref,
 	}
 
 	for _, r := range readers {
-		g, ok, derr := finalGate(r)
+		ok, derr := isFinalGate(r)
 		if derr != nil {
 			return derr
 		}
 
 		if ok {
 			return fmt.Errorf("%w: the final gate %s names the %s %q: give a reason to change it", gate.ErrFinal,
-				g.PolicyID(), ref.Kind, ref.ID)
+				readerName(r), ref.Kind, ref.ID)
 		}
 	}
 
 	return nil
 }
 
-// finalGate decodes r when it is a final gate.
-func finalGate(r Located) (gate.Gate, bool, error) {
+// isFinalGate reports whether r is a final gate.
+func isFinalGate(r Located) (bool, error) {
 	if r.Row.Kind != KindGate {
-		return zeroGate(), false, nil
+		return false, nil
 	}
 
 	scope, err := ParseScope(r.ScopeKey)
 	if err != nil {
-		return zeroGate(), false, err
+		return false, err
 	}
 
 	g, err := decodeGate(scope, r.Row)
 	if err != nil {
-		return zeroGate(), false, err
+		return false, err
 	}
 
-	return g, g.Final, nil
-}
-
-// zeroGate returns the empty gate.
-func zeroGate() gate.Gate {
-	return gate.Gate{
-		Scope: gate.Scope{}, ID: "", Version: 0, DecisionPoint: "", Condition: "", Unless: "", Outcome: "", Message: "",
-		Mode: "", OnError: "", Final: false, CheckedWith: gate.CheckedWith{Engine: "", Schema: gate.SchemaVersion{
-			Subject: "", Major: 0, Minor: 0,
-		}},
-		State: "", Reads: nil,
-	}
+	return g.Final, nil
 }
 
 // checkDeleteReferenced runs the checks of the removal of an approval rule or
@@ -387,11 +376,11 @@ func checkDeleteReferenced(ctx context.Context, tx Tx, scope gate.Scope, ref Ref
 func readerName(r Located) string {
 	switch {
 	case r.Row.Kind == KindGate:
-		return r.ScopeKey + "/" + r.Row.ID
+		return r.name() + "/" + r.Row.ID
 	case r.Row.ID == "":
-		return r.Row.Kind + " of " + r.ScopeKey
+		return r.Row.Kind + " of " + r.name()
 	default:
-		return r.Row.Kind + " " + r.ScopeKey + "/" + r.Row.ID
+		return r.Row.Kind + " " + r.name() + "/" + r.Row.ID
 	}
 }
 

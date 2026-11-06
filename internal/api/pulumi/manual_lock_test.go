@@ -120,7 +120,7 @@ func TestUpdateStartMeetsAManualLock(t *testing.T) {
 
 			lock := heldCollectionLock()
 			f := newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
-				manual: manualLockHolder{lock: lock}, checker: nil, limit: 0, cutoff: 0, replayer: nil,
+				manual: manualLockHolder{lock: lock}, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: nil,
 			})
 
 			status, body := startUpdate(t, f, tc.createPath)

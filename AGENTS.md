@@ -46,6 +46,9 @@ Consider a change done only when `make check` passes with zero findings:
   goroutine continues to run after the tests. Add this file to each new test
   package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
+  Resolve a conflict in a generated file (the API description, the clients,
+  the golden files, `internal/db`) with a new run of its generator on the
+  merged code, never by hand.
 - A feature that a user can see has its page in the user documentation in
   the same pull request (ADR 214).
 
@@ -92,6 +95,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   history/             domain: unit history, redaction, item keys of history items, tombstones, retention
   job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
   runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
+  launcher/            domain: the launcher contract (Command, Parse, BuildEnv, the credential file rules); the runner module imports it
   objectcontext/       domain: context on every object and the context read API
   graph/               domain: the unit graph, blast radius and focus view
   drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
@@ -111,10 +115,11 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
-  agent/, dependency/, launcher/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
+  agent/, dependency/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
   calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
                        features with their own package and suite (<name>test/)
+  expr/                the built-in Expr engine (catalog.Evaluator); the only package that imports the Expr library
   registry/            the registry service (service/), the release check (releasecheck/) and the signature fixture (pgpfixture/)
   egress/egresshttp/   the HTTP client that applies the egress rules
   breakglass/, graph/, history/, store/, blob/, notify/
@@ -197,14 +202,21 @@ The platform must be observable and intuitive. A user must be able to see and ex
 - Writes inside a namespace carry a `namespace.Fence` and the store checks it in
   the same transaction. Never add a write path that skips the fence.
 - SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
-  and generate them with sqlc. Dynamic queries are hand-written in the adapter.
-  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`.
-  Never edit a migration file that a tag shipped. An applied file that no tag
-  shipped stays frozen until the collapse before the next tag, which merges
-  all such files into one (ADR 73). Give the collapsed file a version number
-  above every file that it replaces, so that the migration check refuses a
-  database from an untagged build with `ErrSchemaDiverged`. TestFrozenMigrations in each store adapter
-  holds the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
+  and generate them with sqlc. Put a new query block in its place in the name
+  order of `queries.sql`, never at the end of the file: next to the queries of
+  its area, in the name order of those queries. Do not sort the existing
+  blocks. Dynamic queries are hand-written in the adapter.
+  Until the first tag, each dialect has one migration file, the baseline in
+  `pkg/store/<dialect>/migrations/` (ADR 322). To change the schema, edit the
+  baseline of each dialect in place. Put a new object in its place in the
+  name order of the baseline, not at the end, so that parallel changes edit
+  different lines. An edit of a comment changes the SHA-256 too, and forces
+  a `dev reset`. Do not add a numbered migration. Do not
+  write migration, upgrade, alias or data-conversion code for a shape that no
+  tag shipped. The store records the SHA-256 of each migration and refuses a
+  database of another version of the baseline with `ErrSchemaDiverged`. For
+  dev, run `opendustpan dev reset` (ADR 324). Timestamps are Unix
+  milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,

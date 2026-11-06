@@ -231,10 +231,10 @@ func (f *Fake) PullRequestEvent(action ReviewAction, fullName string, pr PullReq
 	owner, name, _ := strings.Cut(fullName, "/")
 
 	return event("pull_request", map[string]any{
-		"action": string(action),
-		"number": pr.Number,
+		"action":    string(action),
+		fieldNumber: pr.Number,
 		"pull_request": map[string]any{
-			"number": pr.Number, "state": state, "merged": pr.Merged,
+			fieldNumber: pr.Number, "state": state, "merged": pr.Merged,
 			"head": branchRef{Ref: pr.HeadBranch, SHA: pr.Head.ID},
 			"base": branchRef{Ref: pr.BaseBranch, SHA: ""},
 		},

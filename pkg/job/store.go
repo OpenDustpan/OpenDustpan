@@ -166,8 +166,8 @@ type Store interface {
 	// Create persists j as queued with its wait reason j.Wait, with e, and
 	// returns it. When dispatch is not nil, the job starts dispatched and
 	// the store starts the durable operation in the same transaction, with
-	// the checks of a dispatch in Apply: ErrLocked, ErrUnitBusy and
-	// ErrFrozen. Such an error stores nothing. Service.Start then calls
+	// the checks of a dispatch in Apply: ErrLocked, ErrUnitGone, ErrUnitBusy
+	// and ErrFrozen. Such an error stores nothing. Service.Start then calls
 	// Create again with no dispatch and j.Wait set to WaitLocked for
 	// ErrLocked or WaitUnitBusy for ErrUnitBusy, and the reconcile schedule
 	// dispatches the job when the unit is free. A create with no dispatch
@@ -190,10 +190,13 @@ type Store interface {
 	//   - EventDispatch of any phase, also a plan phase: ErrLocked while a
 	//     manual lock covers the unit (its own lock, the lock of its
 	//     collection now, or the lock of its namespace). Break-glass does not
-	//     pass it. The adapter reads the lock in the transaction of the
-	//     change, with the same coverage as manuallock.Store.CoveringLock. A
-	//     SQL adapter under READ COMMITTED reads the lock in a statement that
-	//     runs after the transaction holds the namespace row FOR UPDATE. The
+	//     pass it. ErrUnitGone when the inventory holds no unit with the unit
+	//     ID of the job: no lock can be read, so the dispatch fails closed,
+	//     and the job stays queued. The adapter reads the lock in the
+	//     transaction of the change, with the same coverage as
+	//     manuallock.Store.CoveringLock. A SQL adapter under READ COMMITTED
+	//     reads the lock in a statement that runs after the transaction holds
+	//     the namespace row FOR UPDATE. The
 	//     append of the audit entry takes that row in every fenced audited
 	//     change, and so do PutLock and this change. A manual lock that
 	//     committed before is then seen, and a PutLock that starts later waits
@@ -280,6 +283,27 @@ type Store interface {
 	// this method returns: a change that began fails the job,
 	// and a canceling job with no change ends canceled.
 	Orphans(ctx context.Context, limit int) ([]Orphan, error)
+}
+
+// FinalVersion is the last final state version of one unit, as
+// Store.ObserveStateVersion recorded it.
+type FinalVersion struct {
+	UnitID    string
+	VersionID string
+	Commit    string
+	Job       ID
+	At        time.Time
+}
+
+// FinalVersionReader reads the last final state version of a unit. It is a
+// separate port, so that other implementations of Store stay valid, as for
+// FreezeStore.
+type FinalVersionReader interface {
+	// FinalVersion returns the last final state version of the unit unitID
+	// in ns. It returns false and no error when the store recorded no final
+	// version for the unit in ns. It returns an error that wraps ErrInvalid
+	// for an empty ns or an empty unitID. It changes nothing.
+	FinalVersion(ctx context.Context, ns namespace.Name, unitID string) (FinalVersion, bool, error)
 }
 
 // Orphan is a job that Store.Orphans returns. Missing is true when the

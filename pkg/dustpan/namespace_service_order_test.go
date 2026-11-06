@@ -27,7 +27,7 @@ type orderCase struct {
 // of the wired authorizer. The namespace service rule answers first, and the
 // IP allowlist gate answers only when the rule allows. So when both would
 // refuse, the caller gets the refusal of the rule, not the address refusal.
-// A swap of the two layers in wireTokens lets an address outside the list use
+// A swap of the two layers in newAuthPorts lets an address outside the list use
 // the one action of the principal, which this test catches.
 func TestNamespaceServiceRuleAnswersBeforeAllowlist(t *testing.T) {
 	t.Parallel()

@@ -273,6 +273,7 @@ func TestPortableManifestFormat(t *testing.T) {
 		},
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
+		Damaged:          nil,
 	}
 
 	raw, err := json.Marshal(manifest)

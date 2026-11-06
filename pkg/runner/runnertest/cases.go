@@ -929,6 +929,187 @@ func testRunnerRenewStaleFence(t *testing.T, h Harness) {
 	}
 }
 
+// sessionOf opens the job session of the claim that handoffSetUp made.
+func sessionOf(t *testing.T, h Harness, l *handoff) runner.Session {
+	t.Helper()
+
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+
+	return s
+}
+
+func testSessionRenew(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	s := sessionOf(t, h, &l)
+
+	check := func(what string) {
+		t.Helper()
+
+		lo := time.Now().Truncate(time.Millisecond)
+
+		got, err := h.Sessions.SessionRenew(t.Context(), s.ID, l.f.fence, runner.DefaultLease)
+		if err != nil {
+			t.Fatalf("SessionRenew %s: %v", what, err)
+		}
+
+		if got.Operation != l.c.Operation || got.Token != l.c.Token || got.Owner != l.r.ID {
+			t.Fatalf("SessionRenew %s = %+v, want the claim of the session", what, got)
+		}
+
+		// The expiry comes from the clock of the database, not from the
+		// lease that the claim had.
+		earliest, latest := lo.Add(runner.DefaultLease), time.Now().Add(runner.DefaultLease)
+		if got.ExpiresAt.Before(earliest) || got.ExpiresAt.After(latest) {
+			t.Fatalf("SessionRenew %s expiry = %v, want between %v and %v: the database time plus the lease", what,
+				got.ExpiresAt, earliest, latest)
+		}
+
+		if _, err = h.Sessions.Session(t.Context(), s.ID); err != nil {
+			t.Fatalf("Session after SessionRenew %s: %v", what, err)
+		}
+	}
+
+	check("of a live claim")
+
+	// A cancel does not stop the renewal: the launcher stops its step with
+	// the grace period and still writes its log and its finish.
+	if err := h.Canceler.Cancel(t.Context(), l.c); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	check("during a cancel")
+}
+
+// sessionRenewRefusal returns a case: setup changes the state of the claim of
+// the session, and SessionRenew with the lease d then fails with want. The id
+// that setup returns replaces the ID of the session.
+func sessionRenewRefusal(
+	d time.Duration, want error, setup func(t *testing.T, h Harness, l *handoff, s runner.Session) string,
+) func(t *testing.T, h Harness) {
+	return func(t *testing.T, h Harness) {
+		t.Helper()
+
+		l := handoffSetUp(t, h)
+		s := sessionOf(t, h, &l)
+
+		id := setup(t, h, &l, s)
+
+		_, err := h.Sessions.SessionRenew(t.Context(), id, l.f.fence, d)
+		wantErr(t, "SessionRenew", err, want)
+	}
+}
+
+// sessionRenewRefusals returns the cases of a SessionRenew that fails. Each
+// case has its own harness, because each makes its own namespace.
+func sessionRenewRefusals() []struct {
+	name string
+	run  func(t *testing.T, h Harness)
+} {
+	type refusal = struct {
+		name string
+		run  func(t *testing.T, h Harness)
+	}
+
+	same := func(_ *testing.T, _ Harness, _ *handoff, s runner.Session) string { return s.ID }
+
+	return []refusal{
+		{"a renewal with no lease changes nothing", sessionRenewRefusal(0, runner.ErrInvalid, same)},
+		{"a renewal of an unknown session is not found", sessionRenewRefusal(runner.DefaultLease, runner.ErrNotFound,
+			func(_ *testing.T, _ Harness, _ *handoff, _ runner.Session) string {
+				return runner.SessionIDPrefix + "unknown"
+			})},
+		{"a renewal of a session that a takeover replaced is lost", sessionRenewRefusal(
+			runner.DefaultLease, runner.ErrClaimLost,
+			func(t *testing.T, h Harness, l *handoff, s runner.Session) string {
+				t.Helper()
+
+				if _, err := h.Domain.Takeover(t.Context(), durableClaim(s, l.r)); err != nil {
+					t.Fatalf("Takeover: %v", err)
+				}
+
+				return s.ID
+			},
+		)},
+		{"a renewal of a session whose lease passed is lost", sessionRenewRefusal(
+			runner.DefaultLease, runner.ErrClaimLost,
+			func(t *testing.T, h Harness, l *handoff, s runner.Session) string {
+				t.Helper()
+
+				lapse(t, h, l.c)
+
+				return s.ID
+			},
+		)},
+		{"a renewal of a session whose claim ended is lost", sessionRenewRefusal(
+			runner.DefaultLease, runner.ErrClaimLost,
+			func(t *testing.T, h Harness, l *handoff, s runner.Session) string {
+				t.Helper()
+
+				if err := h.Domain.End(t.Context(), l.c); err != nil {
+					t.Fatalf("End: %v", err)
+				}
+
+				return s.ID
+			},
+		)},
+		{"a renewal of a session of a retired runner is refused", sessionRenewRefusal(
+			runner.DefaultLease, runner.ErrRetired,
+			func(t *testing.T, h Harness, l *handoff, s runner.Session) string {
+				t.Helper()
+
+				if err := h.Members.Retire(t.Context(), l.r.ID, now, l.f.fence, entries(l.f.fence)); err != nil {
+					t.Fatalf("Retire: %v", err)
+				}
+
+				return s.ID
+			},
+		)},
+	}
+}
+
+func testSessionRenewStaleFence(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	s := sessionOf(t, h, &l)
+
+	newer, err := h.Domain.BumpFence(t.Context(), l.f.fence)
+	if err != nil {
+		t.Fatalf("BumpFence: %v", err)
+	}
+
+	if _, err = h.Sessions.SessionRenew(t.Context(), s.ID, newer, runner.DefaultLease); err != nil {
+		t.Fatalf("SessionRenew with the new fence: %v", err)
+	}
+
+	// Shorten the lease, and then renew with the stale fence. A refused
+	// renewal changes nothing, so the claim still ends at the short expiry.
+	shorter, err := h.Domain.Shorten(t.Context(), l.c, shortLease)
+	if err != nil {
+		t.Fatalf("Shorten: %v", err)
+	}
+
+	_, err = h.Sessions.SessionRenew(t.Context(), s.ID, l.f.fence, runner.DefaultLease)
+	wantErr(t, "SessionRenew with a stale fence", err, namespace.ErrFenced)
+
+	timer := time.NewTimer(time.Until(shorter.ExpiresAt) + leaseMargin)
+	defer timer.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatal("the case ended before the lease passed")
+	case <-timer.C:
+	}
+
+	_, err = h.Sessions.Session(t.Context(), s.ID)
+	wantErr(t, "Session after a refused renewal and the end of the short lease", err, runner.ErrClaimLost)
+}
+
 func testSessionNearWaitLimit(t *testing.T, h Harness) {
 	t.Helper()
 

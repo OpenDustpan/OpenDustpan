@@ -224,8 +224,7 @@ type GateObject struct {
 	Kind        string
 	ID          string
 	Level       string
-	Tool        string
-	UnitName    string
+	UnitID      string
 	Version     int64
 	Body        string
 	UpdatedAtMs int64
@@ -426,17 +425,22 @@ type InstanceVersion struct {
 }
 
 type Inventory struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount pgtype.Int8
-	LockHolder    pgtype.Text
-	LockSinceMs   pgtype.Int8
-	LockOperation pgtype.Text
+	Namespace         string
+	Tool              string
+	Name              string
+	UnitID            string
+	DisplayName       string
+	LastChangedMs     int64
+	Status            string
+	ResourceCount     pgtype.Int8
+	LockHolder        pgtype.Text
+	LockSinceMs       pgtype.Int8
+	LockOperation     pgtype.Text
+	LastReleaseLockID string
+	LastReleaseHolder string
+	LastReleaseBy     string
+	LastReleaseKind   string
+	LastReleaseAtMs   int64
 }
 
 type InventoryChange struct {
@@ -614,6 +618,23 @@ type ManualLock struct {
 	SinceMs   int64
 }
 
+type NameLock struct {
+	Scope         string
+	Name          string
+	Sub           string
+	Failures      int64
+	LockedUntilMs int64
+	Level         int64
+	LastFailureMs int64
+	LastLockEndMs int64
+	ResetAfterMs  int64
+}
+
+type NameLockKey struct {
+	ID  int32
+	Key []byte
+}
+
 type Namespace struct {
 	Name                 string
 	PrimaryInstallation  string
@@ -741,6 +762,31 @@ type OidcProvider struct {
 	ProviderID  string
 	Issuer      string
 	CreatedAtMs int64
+}
+
+type Passkey struct {
+	ID             string
+	PrincipalID    string
+	Name           string
+	CredentialID   []byte
+	PublicKey      []byte
+	Transports     string
+	Aaguid         []byte
+	SignCount      int64
+	BackupEligible bool
+	CreatedAtMs    int64
+	LastUsedAtMs   int64
+	SuspendedAtMs  int64
+}
+
+type PasskeyChallenge struct {
+	Digest      string
+	Kind        string
+	PrincipalID string
+	PendingID   string
+	SessionID   string
+	CreatedAtMs int64
+	ExpiresAtMs int64
 }
 
 type PersonPreference struct {
@@ -961,6 +1007,7 @@ type SchemaMigration struct {
 	Version          int64
 	Name             string
 	MinBinaryVersion string
+	Sha256           string
 }
 
 type SecretKey struct {
@@ -983,6 +1030,7 @@ type Session struct {
 	EndReason    string
 	SourceIp     string
 	UserAgent    string
+	Generation   int64
 }
 
 type SessionPolicy struct {

@@ -151,7 +151,7 @@ func testFreshAccountDisable(t *testing.T, a, b Store) {
 
 	_, secret, err := sessions.Start(t.Context(), entry("ses-1", now), session.Start{
 		AuthTime: now, PrincipalID: "prn-1", Provider: "corp-idp", SourceIP: "192.0.2.10", UserAgent: "sessiontest",
-		Stored: false,
+		Generation: 0, Stored: false, Alert: nil,
 	})
 	if err != nil {
 		t.Fatalf("start session: %v", err)

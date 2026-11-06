@@ -172,10 +172,11 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a dispatch of a renamed unit still obeys the lock of the unit", testRenamedUnitOwnLock},
 		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
+		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
 	}, createRuleCases(), reconcileCases())
 
-	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases(), claimGateCases()) {
+	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases(), claimGateCases(), finalVersionCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))

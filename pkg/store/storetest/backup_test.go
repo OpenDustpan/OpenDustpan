@@ -1622,6 +1622,20 @@ func (s *fakeBackupStore) FenceAndUnlock(
 func (s *fakeBackupStore) FinalizeStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
+	return backupFinalize(s, sv, fence, nil)
+}
+
+// FinalizeStateVersionExpecting implements workspace.StateStore.
+func (s *fakeBackupStore) FinalizeStateVersionExpecting(
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	return backupFinalize(s, sv, fence, &expect)
+}
+
+// backupFinalize finalizes sv, and checks the current version when expect is set.
+func backupFinalize(
+	s *fakeBackupStore, sv workspace.StateVersion, fence namespace.Fence, expect *workspace.StateVersionID,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1655,6 +1669,10 @@ func (s *fakeBackupStore) FinalizeStateVersion(
 
 	if err := checkBackupFinalize(s.data, w, sv); err != nil {
 		return err
+	}
+
+	if expect != nil && s.data.current[w.ID.String()] != expect.String() {
+		return workspace.ErrConcurrentModification
 	}
 
 	s.data.states[sv.ID.String()] = sv
@@ -2012,6 +2030,37 @@ func (s *fakeBackupStore) StartBackup(ctx context.Context, r backup.Record, star
 	}
 
 	return nil
+}
+
+// StartBackupClaimed implements backup.Registry as StartBackup does, and
+// claims the new operation for claim in the same write.
+func (s *fakeBackupStore) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return durable.Operation{}, errFakeClosed
+	}
+
+	if err := start.Validate(); err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup operation: %w", err)
+	}
+
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return durable.Operation{}, fmt.Errorf("start backup %s: operation %q: %w", r.ID, start.Key,
+			durable.ErrKeyConflict)
+	}
+
+	hooks := durabletest.Hooks{Before: nil, After: func() error { return s.createBackupLocked(r) }}
+
+	op, err := s.mem.StartClaimedWith(ctx, start, claim, hooks)
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup operation: %w", err)
+	}
+
+	return op, nil
 }
 
 // FinishBackup implements backup.Registry. The row change runs inside the
@@ -2979,6 +3028,7 @@ func (s *fakeBackupStore) stackIDOf(ref stack.Ref) (string, error) {
 func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed time.Time) {
 	name := ref.Project.String() + "/" + ref.Stack.String()
 	s.data.entries[inventoryKey(ref.Namespace, "pulumi", name)] = inventory.Entry{
+		LastRelease:   nil,
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,
@@ -2999,6 +3049,7 @@ func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed tim
 func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, changed time.Time) {
 	name := ref.Name.String()
 	s.data.entries[inventoryKey(ref.Namespace, "opentofu", name)] = inventory.Entry{
+		LastRelease:   nil,
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,

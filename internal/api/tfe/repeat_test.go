@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -157,7 +158,7 @@ func newTFERepeatEnv(t *testing.T) tfeRepeatEnv {
 		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Workspaces: workspaces,
 		OutputChecker: newTestOutputChecker(t, allowAll(), workspaces), BaseURL: baseurl.Resolver{},
 		Audit: newTestAudit(), Gate: nil, MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
-		Sessions: nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

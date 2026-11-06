@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-22. Decisions 1 to 6 and 8 are owner decisions. Decision 7 is a PM decision, taken on the owner's behalf. The package name in decision 2 is a proposal of the author, and the first publish fixes it. Amends decisions O6 and O7 and rule A3 of amendment 1 of RFC 99. Amends ADR 7 in part (the age rule for dependencies). Follows ADR 264
 
+Changed by:
+
+- ADR 323 changes decision 8: until the first release, `info.version` stays
+  fixed and its test is disabled.
+
 ## Context
 
 Amendment 1 of [RFC 99](../rfc/0099-the-api-description-and-the-generated-sdks.md)

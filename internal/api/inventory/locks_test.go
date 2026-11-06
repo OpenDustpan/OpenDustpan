@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -253,7 +254,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 		PublicURL:      "",
 		Logger:         slog.New(slog.DiscardHandler),
 		Now:            nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)
@@ -732,7 +733,8 @@ func TestListUnitsManualLockField(t *testing.T) {
 	since := changeTime()
 	entry := func(name, id string, lock *coreinventory.ManualLock) coreinventory.Entry {
 		return coreinventory.Entry{
-			ManualLock: lock, Collection: "", LastChanged: since, Namespace: ns, Tool: "pulumi", Name: name,
+			LastRelease: nil,
+			ManualLock:  lock, Collection: "", LastChanged: since, Namespace: ns, Tool: "pulumi", Name: name,
 			UnitID: id, DisplayName: name, Status: "", ResourceCount: nil, Lock: nil, Labels: nil,
 		}
 	}

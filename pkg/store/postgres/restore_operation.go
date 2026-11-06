@@ -127,6 +127,19 @@ func recordedRestore(ctx context.Context, q *db.Queries, f durable.StepFence, id
 	return insertStep(ctx, q, stepAt{row: row, now: now}, f, nil)
 }
 
+// recordedRestoreWith checks f as fencedRestore does, and records the step of
+// f with result, in the transaction of q.
+func recordedRestoreWith(
+	ctx context.Context, q *db.Queries, f durable.StepFence, id backup.RestoreID, result []byte,
+) error {
+	row, now, err := fencedRestore(ctx, q, f, id)
+	if err != nil {
+		return err
+	}
+
+	return insertStep(ctx, q, stepAt{row: row, now: now}, f, result)
+}
+
 // runningRestore returns the state and the maintenance flag of the running
 // restore id in the transaction of q: ErrRestoreNotFound when it does not
 // exist, and ErrRestoreNotRunning when it ended.
@@ -325,10 +338,10 @@ func (s *Store) ConfirmRestoreMaintenance(
 
 // MarkRestoreApplying implements backup.RestoreOperations.
 func (s *Store) MarkRestoreApplying(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID,
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID, result []byte,
 ) error {
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := recordedRestore(ctx, q, f, id); err != nil {
+		if err := recordedRestoreWith(ctx, q, f, id, result); err != nil {
 			return err
 		}
 
@@ -802,45 +815,36 @@ func (s *Store) ApplyRestoreArea(
 		return backup.KeepAccessResult{}, err
 	}
 
-	var (
-		row db.DurableOperation
-		now int64
-	)
+	// staged is the error of a swap whose staged schema does not exist. The
+	// swap reports it after the checks of the fence and of the state.
+	var staged error
+	if !exists {
+		staged = fmt.Errorf("apply staging area %s: %w", a, backup.ErrCorrupt)
+	}
 
 	plan := swapPlan{
 		staging: schema, previous: previous, keepAccess: keepAccess,
 		before: func(tx pgx.Tx) error {
-			// The fence comes first in the swap transaction and locks the row
-			// of the operation, so a cancel before the swap and the swap have
-			// one winner. The record of the step follows at the end of the
-			// same transaction, with the result of the swap.
+			return s.checkSwapStart(ctx, s.queries.WithTx(tx), f, a, staged)
+		},
+		after: func(tx pgx.Tx, kept backup.KeepAccessResult) error {
+			// The fence comes after the copy of the durable control tables,
+			// under the lock of that copy, so the restored schema holds the
+			// last committed row of the operation. The check locks that row,
+			// so a cancel before the swap and the swap have one winner: a
+			// cancel that committed before the copy fails the check, and a
+			// cancel after it waits for the commit and finds the step
+			// recorded. The swap takes the row only here, at its end, so a
+			// renewal of the claim does not wait for the checks and the
+			// renames. It waits from the lock of the copy to the commit.
 			q := s.queries.WithTx(tx)
 
-			var fenceErr error
-
-			if row, now, fenceErr = fencedRestore(ctx, q, f, a.Restore); fenceErr != nil {
+			row, now, fenceErr := fencedRestore(ctx, q, f, a.Restore)
+			if fenceErr != nil {
 				return fenceErr
 			}
 
-			// The swap runs only in maintenance mode, so no tool traffic
-			// writes during it. The lock holds the state until the commit.
-			state, stateErr := q.LockInstallationState(ctx)
-			if stateErr != nil {
-				return fmt.Errorf("read installation state postgres database: %w", maintenance.ErrUnavailable)
-			}
-
-			if maintenance.State(state) != maintenance.StateMaintenance {
-				return fmt.Errorf("swap restore area %s in state %q: %w", a, state, maintenance.ErrStateChanged)
-			}
-
-			if !exists {
-				return fmt.Errorf("apply staging area %s: %w", a, backup.ErrCorrupt)
-			}
-
-			return nil
-		},
-		after: func(tx pgx.Tx, kept backup.KeepAccessResult) error {
-			return insertStep(ctx, s.queries.WithTx(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept))
+			return insertStep(ctx, q, stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept))
 		},
 	}
 
@@ -850,6 +854,40 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
+}
+
+// checkSwapStart runs the checks at the start of the swap of area a with the
+// fence f, in the transaction of q, before the first change: the fence, the
+// installation state, and then staged, the error of a staged schema that does
+// not exist, or nil.
+func (s *Store) checkSwapStart(
+	ctx context.Context, q *db.Queries, f durable.StepFence, a backup.StagingArea, staged error,
+) error {
+	// The first check of the fence reads the row of the operation with no
+	// lock, so that a stale holder fails before any change, with the error
+	// of the fence. It takes no lock: a renewal of the claim must not wait
+	// for the rest of the swap. The check that counts is the one under the
+	// lock, at the end of the swap.
+	if err := peekStep(ctx, q, f); err != nil {
+		return err
+	}
+
+	if err := ownsRestore(ctx, q, f, a.Restore); err != nil {
+		return err
+	}
+
+	// The swap runs only in maintenance mode, so no tool traffic writes
+	// during it. The lock holds the state until the commit.
+	state, err := q.LockInstallationState(ctx)
+	if err != nil {
+		return fmt.Errorf("read installation state postgres database: %w", maintenance.ErrUnavailable)
+	}
+
+	if maintenance.State(state) != maintenance.StateMaintenance {
+		return fmt.Errorf("swap restore area %s in state %q: %w", a, state, maintenance.ErrStateChanged)
+	}
+
+	return staged
 }
 
 // schemaExists reports whether the schema name exists in this database.
