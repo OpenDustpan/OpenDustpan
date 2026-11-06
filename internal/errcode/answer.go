@@ -40,24 +40,36 @@ type Value struct {
 	text   string
 	number int64
 	at     time.Time
+	limit  int
 }
 
 // Identifier returns the argument name with a name as its value, for example
 // the name of a stack. It is never a sentence and never a value of the
 // request body.
 func Identifier(name, value string) Value {
-	return Value{name: name, kind: KindIdentifier, text: value, number: 0, at: time.Time{}}
+	return Value{name: name, kind: KindIdentifier, text: value, number: 0, at: time.Time{}, limit: MaxIdentifier}
+}
+
+// IdentifierUpTo is Identifier with its own length limit, in characters, for
+// an argument that holds a qualified name longer than MaxIdentifier. A limit
+// below MaxIdentifier is MaxIdentifier. The limit belongs to this one value, so
+// every other identifier keeps MaxIdentifier.
+func IdentifierUpTo(name, value string, limit int) Value {
+	return Value{
+		name: name, kind: KindIdentifier, text: value, number: 0, at: time.Time{},
+		limit: max(limit, MaxIdentifier),
+	}
 }
 
 // Quantity returns the argument name with an integer as its value, for
 // example a count or a limit.
 func Quantity(name string, value int64) Value {
-	return Value{name: name, kind: KindQuantity, text: "", number: value, at: time.Time{}}
+	return Value{name: name, kind: KindQuantity, text: "", number: value, at: time.Time{}, limit: 0}
 }
 
 // Time returns the argument name with an instant as its value.
 func Time(name string, value time.Time) Value {
-	return Value{name: name, kind: KindTime, text: "", number: 0, at: value}
+	return Value{name: name, kind: KindTime, text: "", number: 0, at: value, limit: 0}
 }
 
 // Answer is the code and the arguments of one error answer. New is the only
@@ -156,7 +168,7 @@ func (s Spec) arg(name string) (Arg, bool) {
 func (v Value) wire() (any, error) {
 	switch v.kind {
 	case KindIdentifier:
-		if !validIdentifier(v.text) {
+		if !validIdentifier(v.text, v.limit) {
 			return nil, ErrArgValue
 		}
 
@@ -178,11 +190,11 @@ func (v Value) wire() (any, error) {
 	}
 }
 
-// validIdentifier reports whether s is 1 to MaxIdentifier characters of
+// validIdentifier reports whether s is 1 to limit characters of
 // valid UTF-8 with no control character. A line break or a control character
 // can only come from text that is not a name.
-func validIdentifier(s string) bool {
-	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxIdentifier {
+func validIdentifier(s string, limit int) bool {
+	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > limit {
 		return false
 	}
 
