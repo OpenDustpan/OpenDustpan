@@ -899,8 +899,13 @@ func decodeReviewCursor(c string) (reviewPosition, error) {
 
 	var nums [4]int64
 
+	// The last number is the count of bootstrap rows and becomes an int. Its
+	// bit size is the size of int, so a value that an int cannot hold is
+	// rejected here and never wraps.
+	bits := [4]int{64, 64, 64, strconv.IntSize}
+
 	for i, part := range []string{parts[0], parts[1], parts[3], parts[5]} {
-		if nums[i], err = strconv.ParseInt(part, 10, 64); err != nil || nums[i] < 0 {
+		if nums[i], err = strconv.ParseInt(part, 10, bits[i]); err != nil || nums[i] < 0 {
 			return zero, bad
 		}
 	}
