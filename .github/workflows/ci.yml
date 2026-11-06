@@ -25,16 +25,14 @@ permissions:
 
 # A new push to a pull request cancels the run for the older head of that
 # pull request. Runs on main and runs of the merge queue are never canceled.
-# The draft state is part of the group, so a run for a draft (all jobs
-# skipped) and a run for a ready pull request never cancel each other. A
-# scheduled run has its own group, so it never replaces a pending push run
-# for the same commit. A merge group has no pull request number, so its group
-# holds the commit of the merge group. The push run after a merge can have the
-# same commit, so the merge-group suffix keeps the two groups apart.
-# cancel-closed-pr.yml must keep the group of a pull request that is not a
-# draft.
+# A draft pull request runs every job, as a ready one does. A scheduled run
+# has its own group, so it never replaces a pending push run for the same
+# commit. A merge group has no pull request number, so its group holds the
+# commit of the merge group. The push run after a merge can have the same
+# commit, so the merge-group suffix keeps the two groups apart.
+# cancel-closed-pr.yml must keep the group of a pull request.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft == true }}${{ github.event_name == 'schedule' && '-schedule' || '' }}${{ github.event_name == 'merge_group' && '-merge-group' || '' }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}${{ github.event_name == 'schedule' && '-schedule' || '' }}${{ github.event_name == 'merge_group' && '-merge-group' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Each job has its own GitHub-hosted runner (ubuntu-latest), so the jobs share
@@ -49,7 +47,6 @@ concurrency:
 jobs:
   # The checks that need no database. They run apart from the tests.
   lint:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,7 +121,7 @@ jobs:
   # job. A new commit is needed to change their result, so they do not run on
   # the schedule.
   golangci-lint:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,7 +144,7 @@ jobs:
   # (make journal-guard) stays clean. The install-only step puts
   # golangci-lint on the PATH and skips the lint cache of the action.
   golangci-lint-journal:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -166,7 +163,7 @@ jobs:
       - *go-cache-save
 
   nilaway:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -182,7 +179,6 @@ jobs:
       - *go-cache-save
 
   go:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -224,7 +220,7 @@ jobs:
   # and a new commit is needed to change their result, so they do not run on
   # the schedule.
   bench:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -240,7 +236,7 @@ jobs:
   # The tests of the journal recording build. This build has its own tag, so
   # the go job does not run these tests. The make target holds the tag.
   journal-test:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -259,7 +255,6 @@ jobs:
   # that it does not share the cores of a runner with the other or with the
   # rest of go test.
   store:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -313,7 +308,7 @@ jobs:
   # the upstream releases, and each archive is checked against the SHA-256
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     env:
       TRIVY_VERSION: 0.75.0
@@ -356,7 +351,7 @@ jobs:
   # The runner image has Helm. kubeconform is built from the pinned version of
   # its module, as make nilaway and make vuln build their tools.
   chart-lint:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -376,7 +371,7 @@ jobs:
   # The gate for every endpoint (AGENTS.md): real Pulumi CLI and OpenTofu
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 70
     services:
@@ -431,7 +426,7 @@ jobs:
   # upgrade, a crash and network faults. Each one runs in a job of its own,
   # next to the e2e suite.
   e2e-journal:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 70
     services:
@@ -452,7 +447,7 @@ jobs:
       - *go-cache-save
 
   upgrade-test:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
@@ -477,7 +472,7 @@ jobs:
       - *go-cache-save
 
   crash-test:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
@@ -498,7 +493,7 @@ jobs:
       - *go-cache-save
 
   faults:
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
