@@ -14,8 +14,9 @@ spike comes first, and that the names are "job proxy", "outbound guard" and
 of the spike on 2026-10-26, kept all of this RFC in milestone 6 on
 2026-11-01, and chose the word "proxy rule" on 2026-11-01 (D4). ADR 327
 records the parts of the decisions of the section "Proposal (2026-10-30)"
-that have an owner source. The section "Proposed (PM), waiting for the
-owner" holds the rest, D5 included. The section "Open questions" lists the
+that have an owner source. ADR 330 accepts items P1 to P12 of the section
+"Proposed (PM), waiting for the owner". That section holds P13 to P17 and
+P19 as proposals, D5 included. The section "Open questions" lists the
 questions that stay open. The example rules below say "egress rule", the
 word of the first draft.
 
@@ -1071,12 +1072,10 @@ The PM proposed the items below. On 6 November 2026 the owner accepted
 items P1 to P12 as proposed, and [ADR 330](../adr/0330-the-job-proxy-core-decisions.md)
 holds them. Items P13 to P17 and P19 are still proposals. The owner has not
 accepted them, so no ADR holds them. Each item has the number of its decision in the
-section "Proposal (2026-10-30)". Items P1, P2, P4, P6, P7, P8 and P10 give
-the full text of a proposal decision. ADR 327 accepts only the part of it
-that the owner decided on 2026-10-26, and the item waits for the rest. An item that the owner accepts goes into a
+section "Proposal (2026-10-30)". An item that the owner accepts goes into a
 new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
 
-- **P1. One binary, a separate process (accepted, ADR 330).** The full text of proposal decision 1. ADR 327 decision 1 accepts only the part that the owner decided on 2026-10-26.
+- **P1. One binary, a separate process (accepted, ADR 330).**
    The job proxy is our own code in Go, with `net/http` and `crypto/tls`,
    and no new dependency. It is the mode `proxy` of `dustpan-launcher`.
    One release carries it, and the skew rules of ADR 132 apply. It always
@@ -1084,7 +1083,7 @@ new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
    steps. It shares no file system, no process space and no memory with a
    step or with the launcher of the steps.
 
-- **P2. Where it runs, for each isolation kind (accepted, ADR 330).** The full text of proposal decision 2. ADR 327 decision 2 accepts only the part that the owner decided on 2026-10-26.
+- **P2. Where it runs, for each isolation kind (accepted, ADR 330).**
    - `firecracker` and `gvisor`: the machine coordinator starts the job
      proxy on the host for each claim of a unit with proxy rules, as a
      user of its own. The network namespace of the sandbox gets one route,
@@ -1117,7 +1116,7 @@ new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
    a built-in tunnel rule for the host of the server only. The launcher
    keeps its own TLS check of the server.
 
-- **P4. Proxy rules are plain data (accepted, ADR 330).** The full text of proposal decision 4. ADR 327 decision 4 accepts only the part that the owner decided on 2026-10-26. A
+- **P4. Proxy rules are plain data (accepted, ADR 330).** A
    proxy rule set is a JSON document that a namespace, a blueprint version
    (field `proxy`) or a unit holds. The proxy rule sets of the scopes of a
    unit are joined. A proxy rule only allows. A proxy rule has:
@@ -1159,7 +1158,7 @@ new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
    rule that names an export that no attached profile gives fails the job
    start with `jobproxy.ErrCredential`. The tool gets a placeholder, for
    example `dustpan-placeholder`, in the variable that the proxy rule names.
-- **P6. The CA of a claim (accepted, ADR 330).** The full text of proposal decision 6. ADR 327 decision 6 accepts only the part that the owner decided on 2026-10-26. At start,
+- **P6. The CA of a claim (accepted, ADR 330).** At start,
    the job proxy makes an ECDSA P-256 key and a CA certificate in memory.
    The CA has a name constraint to the hosts of the `inspect` proxy rules
    and the lifetime of the claim. Only the job proxy holds the key. The job
@@ -1170,7 +1169,7 @@ new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
    `REQUESTS_CA_BUNDLE` and `AWS_CA_BUNDLE`. `HTTPS_PROXY` and `HTTP_PROXY`
    name the job proxy, and `NO_PROXY` is empty.
 
-- **P7. Each request (accepted, ADR 330).** The full text of proposal decision 7. ADR 327 decision 7 accepts only the part that the owner decided on 2026-10-26. For a CONNECT,
+- **P7. Each request (accepted, ADR 330).** For a CONNECT,
    the job proxy does these steps:
    1. It refuses a host that no proxy rule names, with 403, before any TLS.
    2. For `tunnel`, it resolves the host, checks each address with the
@@ -1197,7 +1196,7 @@ new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
    The job proxy refuses a credential over plain `http`, unless a proxy
    rule opts in, and then only to loopback.
 
-- **P8. The outbound guard and the upstream proxy (accepted, ADR 330).** The full text of proposal decision 8. ADR 327 decision 8 accepts only the part that the owner decided on 2026-10-26. The job proxy dials with the rules of `pkg/egress`. It
+- **P8. The outbound guard and the upstream proxy (accepted, ADR 330).** The job proxy dials with the rules of `pkg/egress`. It
    never opens the always-denied addresses. It opens a private address
    only in a range that the runner pool allows
    (`egress.ParseAllowedRanges`). A pool can name an upstream proxy, with a
@@ -1214,7 +1213,7 @@ new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
    version: `enabled`, `rules` (the count), `ruleSetDigest`,
    `credentialHosts` (a set of hosts), `plainHttp` and `learnMode`. A gate
    decides on the change. A gate never matches one request of a job.
-- **P10. Records (accepted, ADR 330).** The full text of proposal decision 10. ADR 327 decision 10 accepts only the part that the owner decided on 2026-10-26. The job proxy writes
+- **P10. Records (accepted, ADR 330).** The job proxy writes
     one record for each request: the job, the phase, the unit, the
     operation, the mode, the method, the host, the path when it is
     canonical, the proxy rule, the decision, a fixed reason, the status,
@@ -1324,9 +1323,9 @@ new ADR. Item P19 is the PM answer to D5 of 2026-10-31.
 ## Open questions
 
 ADR 327 accepts the decisions of the section "Proposal (2026-10-30)" that
-have an owner source, and answers D4. The items of the section "Proposed
-(PM), waiting for the owner" are open until the owner accepts them. These
-questions stay open too:
+have an owner source, and answers D4. ADR 330 accepts items P1 to P12 of
+the section "Proposed (PM), waiting for the owner". Items P13 to P17 and
+P19 are open until the owner accepts them. These questions stay open too:
 
 - **Open:** the name "release mode". The proposal of decision 5 uses the
   export key `proxy` and the consumer `job-proxy`, and the owner did not
