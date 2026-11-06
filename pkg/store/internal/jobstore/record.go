@@ -294,14 +294,14 @@ func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkCo
 
 	if !ok {
 		return chunkOutcome{
-			won:    false,
-			repeat: false,
-		}, fmt.Errorf(
-			"%w: chunk %d of log %s was not reserved",
-			job.ErrInvalid,
-			c.Seq,
-			c.Version,
-		)
+				won:    false,
+				repeat: false,
+			}, fmt.Errorf(
+				"%w: chunk %d of log %s was not reserved",
+				job.ErrInvalid,
+				c.Seq,
+				c.Version,
+			)
 	}
 
 	changed, err := job.ConfirmChunkRecord(&j, stepKey(pc, c.Step), c.Version, c.Seq, row)

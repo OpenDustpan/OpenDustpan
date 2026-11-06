@@ -128,7 +128,7 @@ func TestMemEngineConformance(t *testing.T) {
 	t.Parallel()
 
 	for _, kinds := range [][]policy.Kind{
-		{policy.KindCatalogRequest, policy.KindJobStart},
+		{policy.KindSelfServiceRequest, policy.KindJobStart},
 		{policy.KindJobStart},
 	} {
 		policytest.Run(t, kinds, func(_ *testing.T, p policytest.Policy) policy.Engine {

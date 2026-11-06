@@ -11,7 +11,7 @@
 //
 // The package holds the port Counter. The default adapter is a counter in
 // the database of the namespace, in the SQL store adapter that also holds
-// the Catalog records, so that a reservation and the revision that holds it
+// Self-service records, so that a reservation and the revision that holds it
 // commit in one transaction (Tx). The package imports no transport and no
 // store.
 package quota

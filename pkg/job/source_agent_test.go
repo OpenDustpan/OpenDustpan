@@ -41,7 +41,7 @@ func TestStartSourceOfAnAgentRefused(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []job.SourceKind{
-		job.SourceAPI, job.SourceSchedule, job.SourceTrigger, job.SourceForge, job.SourceCatalog, "cron",
+		job.SourceAPI, job.SourceSchedule, job.SourceTrigger, job.SourceForge, job.SourceSelfService, "cron",
 	} {
 		t.Run(string(source), func(t *testing.T) {
 			t.Parallel()

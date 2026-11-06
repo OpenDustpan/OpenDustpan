@@ -698,12 +698,12 @@ func (s *RestoreService) enterOrRecheck(
 	entered, err := s.live.RestoreMaintenanceEntered(ctx, id)
 	if err != nil {
 		return maintenance.EnterResult{
-			Canceled: nil,
-		}, fmt.Errorf(
-			"read the maintenance flag of restore %s: %w",
-			id,
-			err,
-		)
+				Canceled: nil,
+			}, fmt.Errorf(
+				"read the maintenance flag of restore %s: %w",
+				id,
+				err,
+			)
 	}
 
 	if !entered {
@@ -713,12 +713,12 @@ func (s *RestoreService) enterOrRecheck(
 	state, err := s.maintenance.Get(ctx)
 	if err != nil {
 		return maintenance.EnterResult{
-			Canceled: nil,
-		}, fmt.Errorf(
-			"read the installation state for restore %s: %w",
-			id,
-			err,
-		)
+				Canceled: nil,
+			}, fmt.Errorf(
+				"read the installation state for restore %s: %w",
+				id,
+				err,
+			)
 	}
 
 	if state != maintenance.StateMaintenance {

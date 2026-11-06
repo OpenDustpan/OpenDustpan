@@ -329,7 +329,7 @@ type Attachment struct {
 	Producer identity.Object
 	// Authority is the principal ID of the attachment authority, which the
 	// attachment stores: the principal that made the attachment, or the
-	// blueprint publisher of a Catalog attachment. A block of an imported
+	// blueprint publisher of a self-service attachment. A block of an imported
 	// profile uses the authority of the attachment through which the job
 	// reached it.
 	Authority string

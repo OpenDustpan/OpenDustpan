@@ -1,33 +1,33 @@
-// Package expr is the built-in Expr engine. It implements catalog.Evaluator
+// Package expr is the built-in Expr engine. It implements selfservice.Evaluator
 // with github.com/expr-lang/expr, and it is the only package that imports
 // that library (depguard holds this rule).
 //
 // An expression is untrusted text that a person wrote. Each layer below stops
 // a hostile expression alone, and each has its own test:
 //
-//   - Size: Compile refuses source above catalog.MaxExprBytes before the
-//     parser reads it, and a tree above catalog.MaxExprNodes. A run refuses an
+//   - Size: Compile refuses source above selfservice.MaxExprBytes before the
+//     parser reads it, and a tree above selfservice.MaxExprNodes. A run refuses an
 //     environment above MaxEnvBytes.
-//   - Names: the environment is catalog.Env, a type with no method, and the
+//   - Names: the environment is selfservice.Env, a type with no method, and the
 //     compiler checks every name against it. The builtins are exactly
-//     catalog.ExprBuiltins. No function of Go, no reflection and no
+//     selfservice.ExprBuiltins. No function of Go, no reflection and no
 //     environment variable is reachable.
 //   - Syntax: Compile refuses let, the range operator, a closure inside a
 //     closure and a matches pattern that is not a string literal.
-//   - Memory: the virtual machine has the budget catalog.ExprMemoryBudget,
-//     and the operator + refuses a string above catalog.MaxConcatBytes.
+//   - Memory: the virtual machine has the budget selfservice.ExprMemoryBudget,
+//     and the operator + refuses a string above selfservice.MaxConcatBytes.
 //   - Work: each string function and each operator that reads a string
 //     counts the bytes that it reads, with the budget MaxWorkUnits for one
 //     run. This bounds a loop over the groups that reads a long string in
 //     each turn, and it ends a run at its next call after the time limit.
-//   - Time: a run that passes catalog.ExprTimeoutMillis, or whose context
-//     ends, returns catalog.ErrRuleFailed to the caller at that time. The
+//   - Time: a run that passes selfservice.ExprTimeoutMillis, or whose context
+//     ends, returns selfservice.ErrRuleFailed to the caller at that time. The
 //     virtual machine of Expr cannot be stopped from outside, so the
 //     goroutine of such a run ends at its next counted call. An operation
 //     that no counter covers, for example the compare of two strings, runs
 //     to its end; the environment limit and the node limit bound it.
 //   - Runs: at most MaxConcurrentRuns runs of one Evaluator have not ended,
-//     and a run that finds no room fails with catalog.ErrRuleFailed. A run
+//     and a run that finds no room fails with selfservice.ErrRuleFailed. A run
 //     that passed its time limit counts until its goroutine ends.
 //   - Result: a run that gives another type than the expression compiled to,
 //     or that fails in any way, never gives true.
@@ -47,7 +47,7 @@ import (
 	"github.com/expr-lang/expr/vm"
 	exprruntime "github.com/expr-lang/expr/vm/runtime"
 
-	"opendustpan.org/opendustpan/internal/catalog"
+	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
 var (
@@ -65,17 +65,17 @@ const (
 	concatName = "dustpan +"
 )
 
-// Evaluator is the catalog.Evaluator of the built-in Expr engine. It has no
+// Evaluator is the selfservice.Evaluator of the built-in Expr engine. It has no
 // state: use one value for all goroutines.
 type Evaluator struct {
 	// timeout is the time limit of one run. New sets it to
-	// catalog.ExprTimeoutMillis.
+	// selfservice.ExprTimeoutMillis.
 	timeout time.Duration
 	// limiter holds one slot for each run that has not ended.
 	limiter *Limiter
 }
 
-var _ catalog.Evaluator = (*Evaluator)(nil)
+var _ selfservice.Evaluator = (*Evaluator)(nil)
 
 // ErrNoLimiter reports a call of New with no Limiter.
 var ErrNoLimiter = errors.New("an Evaluator needs a Limiter")
@@ -89,7 +89,7 @@ func New(limiter *Limiter) (*Evaluator, error) {
 		return nil, ErrNoLimiter
 	}
 
-	return &Evaluator{timeout: catalog.ExprTimeoutMillis * time.Millisecond, limiter: limiter}, nil
+	return &Evaluator{timeout: selfservice.ExprTimeoutMillis * time.Millisecond, limiter: limiter}, nil
 }
 
 // Version returns the version of the Expr library in the build, for example
@@ -115,38 +115,38 @@ func (*Evaluator) Version() string {
 	return ""
 }
 
-// Compile implements catalog.Evaluator.
-func (*Evaluator) Compile(source string, kind catalog.ResultKind) error {
+// Compile implements selfservice.Evaluator.
+func (*Evaluator) Compile(source string, kind selfservice.ResultKind) error {
 	_, err := compile(source, kind, true, newMeter(func() error { return nil }))
 
 	return err
 }
 
-// Bool implements catalog.Evaluator.
-func (e *Evaluator) Bool(ctx context.Context, source string, env *catalog.Env) (bool, error) {
-	out, err := e.run(ctx, source, catalog.ResultBool, env)
+// Bool implements selfservice.Evaluator.
+func (e *Evaluator) Bool(ctx context.Context, source string, env *selfservice.Env) (bool, error) {
+	out, err := e.run(ctx, source, selfservice.ResultBool, env)
 	if err != nil {
 		return false, err
 	}
 
 	b, ok := out.(bool)
 	if !ok {
-		return false, fmt.Errorf("%w: the result is %T, want a boolean", catalog.ErrRuleFailed, out)
+		return false, fmt.Errorf("%w: the result is %T, want a boolean", selfservice.ErrRuleFailed, out)
 	}
 
 	return b, nil
 }
 
-// String implements catalog.Evaluator.
-func (e *Evaluator) String(ctx context.Context, source string, env *catalog.Env) (string, error) {
-	out, err := e.run(ctx, source, catalog.ResultString, env)
+// String implements selfservice.Evaluator.
+func (e *Evaluator) String(ctx context.Context, source string, env *selfservice.Env) (string, error) {
+	out, err := e.run(ctx, source, selfservice.ResultString, env)
 	if err != nil {
 		return "", err
 	}
 
 	s, ok := out.(string)
 	if !ok {
-		return "", fmt.Errorf("%w: the result is %T, want a string", catalog.ErrRuleFailed, out)
+		return "", fmt.Errorf("%w: the result is %T, want a string", selfservice.ErrRuleFailed, out)
 	}
 
 	return s, nil
@@ -157,24 +157,24 @@ type runResult struct {
 	err error
 }
 
-func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultKind, env *catalog.Env) (any, error) {
+func (e *Evaluator) run(ctx context.Context, source string, kind selfservice.ResultKind, env *selfservice.Env) (any, error) {
 	if env == nil {
-		return nil, fmt.Errorf("%w: there is no environment", catalog.ErrRuleFailed)
+		return nil, fmt.Errorf("%w: there is no environment", selfservice.ErrRuleFailed)
 	}
 
 	// Defense in depth: the caller bounds the groups of a requester too; this
 	// check stays so that a new caller cannot skip it.
-	if n := len(env.Request.Requester.Groups); n > catalog.MaxEnvGroups {
+	if n := len(env.Request.Requester.Groups); n > selfservice.MaxEnvGroups {
 		return nil, fmt.Errorf("%w: the requester is in %d groups, the limit is %d",
-			catalog.ErrRuleFailed, n, catalog.MaxEnvGroups)
+			selfservice.ErrRuleFailed, n, selfservice.MaxEnvGroups)
 	}
 
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, err)
+		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, err)
 	}
 
 	if err := checkEnvSize(env); err != nil {
-		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, err)
+		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
@@ -187,13 +187,13 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 	if err != nil {
 		// An expression that does not compile cannot run. The caller never
 		// counts this as a pass.
-		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, err)
+		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, err)
 	}
 
 	select {
 	case e.limiter.slots <- struct{}{}:
 	default:
-		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, errBusy)
+		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, errBusy)
 	}
 
 	// The virtual machine of Expr has no way to stop a run from outside. The
@@ -207,7 +207,7 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 	go func() {
 		defer func() { <-e.limiter.slots }()
 
-		machine := vm.VM{Stack: nil, Scopes: nil, Variables: nil, MemoryBudget: catalog.ExprMemoryBudget}
+		machine := vm.VM{Stack: nil, Scopes: nil, Variables: nil, MemoryBudget: selfservice.ExprMemoryBudget}
 		out, err := machine.Run(program, owned)
 		done <- runResult{out: out, err: err}
 	}()
@@ -215,26 +215,26 @@ func (e *Evaluator) run(ctx context.Context, source string, kind catalog.ResultK
 	select {
 	case r := <-done:
 		if r.err != nil {
-			return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, clip(r.err))
+			return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, clip(r.err))
 		}
 
 		return r.out, nil
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: %w", catalog.ErrRuleFailed, ctx.Err())
+		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, ctx.Err())
 	}
 }
 
 // compile checks the limits and the syntax, and compiles source. With typed it
 // also checks that source gives kind.
-func compile(source string, kind catalog.ResultKind, typed bool, m *meter) (*vm.Program, error) {
-	if source == "" || len(source) > catalog.MaxExprBytes {
+func compile(source string, kind selfservice.ResultKind, typed bool, m *meter) (*vm.Program, error) {
+	if source == "" || len(source) > selfservice.MaxExprBytes {
 		return nil, fmt.Errorf("%w: an expression has 1 to %d bytes, this one has %d",
-			catalog.ErrLimit, catalog.MaxExprBytes, len(source))
+			selfservice.ErrLimit, selfservice.MaxExprBytes, len(source))
 	}
 
 	options := []exprlang.Option{
 		exprlang.Env(schema()),
-		exprlang.MaxNodes(catalog.MaxExprNodes),
+		exprlang.MaxNodes(selfservice.MaxExprNodes),
 		exprlang.DisableAllBuiltins(),
 		exprlang.Function(concatName, concat, concatTypes()...),
 		exprlang.Operator("+", concatName),
@@ -242,7 +242,7 @@ func compile(source string, kind catalog.ResultKind, typed bool, m *meter) (*vm.
 
 	options = append(options, m.stringFunctions()...)
 
-	for _, name := range catalog.ExprBuiltins() {
+	for _, name := range selfservice.ExprBuiltins() {
 		// The meter gives these as functions that count their work.
 		if !isMetered(name) {
 			options = append(options, exprlang.EnableBuiltin(name))
@@ -250,11 +250,11 @@ func compile(source string, kind catalog.ResultKind, typed bool, m *meter) (*vm.
 	}
 
 	switch {
-	case kind != catalog.ResultBool && kind != catalog.ResultString:
-		return nil, fmt.Errorf("%w: the result kind %q is not known", catalog.ErrInvalid, kind)
+	case kind != selfservice.ResultBool && kind != selfservice.ResultString:
+		return nil, fmt.Errorf("%w: the result kind %q is not known", selfservice.ErrInvalid, kind)
 	case !typed:
 		options = append(options, exprlang.AsAny())
-	case kind == catalog.ResultBool:
+	case kind == selfservice.ResultBool:
 		options = append(options, exprlang.AsBool())
 	default:
 		options = append(options, exprlang.AsKind(reflect.String))
@@ -267,7 +267,7 @@ func compile(source string, kind catalog.ResultKind, typed bool, m *meter) (*vm.
 	prog, err := safeCompile(source, options)
 
 	if found := slices.Concat(refused.found, rewrite.failed); len(found) > 0 {
-		return nil, fmt.Errorf("%w: %s", catalog.ErrInvalid, found[0])
+		return nil, fmt.Errorf("%w: %s", selfservice.ErrInvalid, found[0])
 	}
 
 	if err != nil {
@@ -288,7 +288,7 @@ func safeCompile(source string, options []exprlang.Option) (*vm.Program, error) 
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("%w: %v", catalog.ErrInvalid, r)
+				err = fmt.Errorf("%w: %v", selfservice.ErrInvalid, r)
 			}
 		}()
 
@@ -303,14 +303,14 @@ func safeCompile(source string, options []exprlang.Option) (*vm.Program, error) 
 
 // schema returns the value that the compiler reads the types of the
 // environment from. Env has the same fields at each run.
-func schema() catalog.Env {
-	return catalog.Env{
+func schema() selfservice.Env {
+	return selfservice.Env{
 		Value:  nil,
 		Inputs: nil,
 		Usage:  nil,
 		Input:  nil,
-		Request: catalog.RequestEnv{
-			Requester: catalog.Requester{Subject: "", Agent: "", Groups: nil},
+		Request: selfservice.RequestEnv{
+			Requester: selfservice.Requester{Subject: "", Agent: "", Groups: nil},
 			Namespace: "",
 			Name:      "",
 		},
@@ -321,14 +321,14 @@ func schema() catalog.Env {
 // and ErrInvalid for the rest.
 func classify(err error) error {
 	if isNodeLimit(err.Error()) {
-		return fmt.Errorf("%w: an expression has at most %d nodes", catalog.ErrLimit, catalog.MaxExprNodes)
+		return fmt.Errorf("%w: an expression has at most %d nodes", selfservice.ErrLimit, selfservice.MaxExprNodes)
 	}
 
-	return fmt.Errorf("%w: %s", catalog.ErrInvalid, firstLine(err.Error()))
+	return fmt.Errorf("%w: %s", selfservice.ErrInvalid, firstLine(err.Error()))
 }
 
 // concat is the function behind the operator +. It gives a string only when
-// the result has at most catalog.MaxConcatBytes bytes, because the memory
+// the result has at most selfservice.MaxConcatBytes bytes, because the memory
 // budget of Expr does not count strings.
 func concat(params ...any) (any, error) {
 	if len(params) != concatArgs {
@@ -339,9 +339,9 @@ func concat(params ...any) (any, error) {
 	b, bok := params[1].(string)
 
 	if aok && bok {
-		if len(a)+len(b) > catalog.MaxConcatBytes {
+		if len(a)+len(b) > selfservice.MaxConcatBytes {
 			return nil, fmt.Errorf("%w: %d bytes, the limit is %d",
-				errConcatLimit, len(a)+len(b), catalog.MaxConcatBytes)
+				errConcatLimit, len(a)+len(b), selfservice.MaxConcatBytes)
 		}
 
 		return a + b, nil
@@ -381,7 +381,7 @@ func (r *refusals) Visit(node nodeRef) {
 		// The parser of the library reads a builtin that takes a closure
 		// (reduce, sortBy, groupBy and others) even when it is disabled, so
 		// the list of builtins is checked here too.
-		if !slices.Contains(catalog.ExprBuiltins(), n.Name) {
+		if !slices.Contains(selfservice.ExprBuiltins(), n.Name) {
 			r.add("the builtin " + n.Name + " is not allowed")
 		}
 	case *ast.BinaryNode:
@@ -393,7 +393,7 @@ func (r *refusals) Visit(node nodeRef) {
 
 		if depth.nested {
 			r.add(fmt.Sprintf("a closure inside a closure is not allowed, the depth limit is %d",
-				catalog.MaxClosureDepth))
+				selfservice.MaxClosureDepth))
 		}
 	default:
 	}

@@ -78,12 +78,12 @@ A check:
   "account": {"id": "99", "login": "acme-org", "expiresAt": null, "noExpiry": false,
               "scopes": ["contents:read", "metadata:read"]},
   "capabilities": ["files"],
-  "missing": {"write-back": ["compare", "commit"], "catalog": []}
+  "missing": {"write-back": ["compare", "commit"], "self-service": []}
 }
 ```
 
 `missing` has one list for each of the features `write-back`,
-`write-back-review`, `fetch`, `runner-git`, `catalog` and `cause-diff`. The list
+`write-back-review`, `fetch`, `runner-git`, `self-service` and `cause-diff`. The list
 of a feature that the connection can serve is empty.
 
 For an app, `scopes` lists the permissions of the installation, for example
