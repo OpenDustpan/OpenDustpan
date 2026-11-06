@@ -37,8 +37,8 @@ These are the project owner's own instructions. They hold until the owner change
   report arrives, act on it, then archive that watchdog session at once.
 
 - mergiraf is installed in all new sessions (owner, 2026-10-16). It resolves many list and import conflicts on merge,
-  but its result can be wrong: it once kept a migration twice in schema.go. A worker still runs make generate, make
-  check and make e2e after every merge. Workers started before this date may not have it.
+  but its result can be wrong: it once kept a migration twice in schema.go. A worker still runs make generate and the
+  local gates after every merge. Workers started before this date may not have it.
 
 - Repowise (owner, 2026-10-17): every session has the read-only Repowise tools (mcp__Repowise_OpenDustpan__*; see `docs/agents/local-setup.md` for the local setup) over both
   repositories. Worker and reviewer prompts say: use get_context, search_codebase and get_symbol to find code before
