@@ -417,7 +417,7 @@ func owns(k mfa.Ceremony, c mfa.Challenge, h mfa.ResponseHead, key mfa.Passkey) 
 // Passkeys returns the passkeys of the caller.
 func (s *Service) Passkeys(ctx context.Context, a Actor) ([]mfa.Passkey, error) {
 	if a.PrincipalID == "" {
-		return nil, mfa.ErrWrongPerson
+		return nil, s.refuse(ctx, a.Entry, on(ActionListRefused, unknownObject), "no caller", mfa.ErrWrongPerson)
 	}
 
 	keys, err := s.store.Passkeys(ctx, a.PrincipalID)

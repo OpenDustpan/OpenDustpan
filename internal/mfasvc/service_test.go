@@ -576,6 +576,17 @@ func ownRemoval(t *testing.T, f *fixture, _, _ *webauthntest.Credential) {
 	f.wantRefusal(t, "remove a passkey of bob", err, mfa.ErrNotFound, mfasvc.ActionRemoveRefused)
 }
 
+// TestListRefusesAnEmptyCaller proves that a list for a caller with no person
+// is refused and has an audit entry.
+func TestListRefusesAnEmptyCaller(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	_, err := f.svc.Passkeys(t.Context(), actor("", "ses-none"))
+	f.wantRefusal(t, "list with no caller", err, mfa.ErrWrongPerson, mfasvc.ActionListRefused)
+}
+
 // TestBoundaryRefusesBadInput sends hostile input to the boundary of each
 // step: a name that the rules refuse, a response that is too large or is no
 // JSON, and a passkey ID that no passkey can have.
