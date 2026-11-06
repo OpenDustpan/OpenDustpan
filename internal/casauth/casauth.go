@@ -319,7 +319,7 @@ func (m *Method) Finish(ctx context.Context, cb session.Callback) (session.Asser
 // use records the ticket as used. It fails closed: an error of the store
 // refuses the sign-in.
 func (m *Method) use(ctx context.Context, ticket string) error {
-	err := m.tickets.Use(ctx, ticket, m.now().Add(session.UsedTicketTTL))
+	err := m.tickets.Use(ctx, m.providerID, ticket, m.now().Add(session.UsedTicketTTL))
 
 	switch {
 	case err == nil:
