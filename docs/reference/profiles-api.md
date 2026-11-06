@@ -72,6 +72,61 @@ A document has at most 256 KiB, 4,096 leaves in `values`, a depth of 32
 levels, 64 provider blocks, 16 rotator blocks and 32 imports. A namespace
 has at most 1,000 profiles. An answer with status 422 names the limit.
 
+## Exports
+
+`exports` says what each consumer of the profile gets. It holds the keys
+`variables`, `files`, `pulumi`, `opentofu` and `proxy`. Any other key
+answers 400.
+
+| Key | Consumer |
+| --- | --- |
+| `variables`, `files`, `pulumi`, `opentofu` | The launcher of a run command or a step |
+| `proxy` | The job proxy only |
+
+The launcher never gets `proxy`, and the job proxy gets only `proxy`. So a
+credential in `proxy` never reaches the job.
+
+`proxy` is a map from a credential name to a credential. A credential name
+has 1 to 63 characters of `a-z`, `0-9`, `_` and `-`, and starts with a
+letter or a digit. `proxy` holds at most 64 credentials. Each credential has
+a `type` and exactly the fields of its type:
+
+| `type` | Fields |
+| --- | --- |
+| `header` | `name`, `value` |
+| `basic` | `user`, `password` |
+| `query` | `name`, `value` |
+| `client-certificate` | `certificate`, `key` |
+| `ca` | `certificates` |
+
+```yaml
+values:
+  grafana:
+    token: { $secret: glsa_example }
+exports:
+  proxy:
+    grafana-admin:
+      type: header
+      name: Authorization
+      value: ${ values.grafana.token }
+```
+
+- `name` is literal text. A header name has only the token characters of
+  HTTP, and cannot be a header that frames or routes a request, for example
+  `Host`, `Content-Length` or `Proxy-Authorization`. A query parameter name
+  has only `A-Z`, `a-z`, `0-9`, `.`, `_`, `~` and `-`.
+- Each other field is exactly one reference into `values`, for example
+  `${ values.grafana.token }`. Literal text answers 400.
+- `value`, `password` and `key` must read a `$secret` value or a computed
+  value. A plain value answers 400.
+- A field cannot read a map or a list.
+- The text of a `header` field or of a `basic` field cannot hold a control
+  character, for example CR or LF. A `basic` user cannot hold `:`.
+- A path that only an import gives is checked when the profile opens.
+
+A change of a value that `proxy` reads, directly or through other
+expressions, is a routing change (see "Routing changes").
+
 ## Secrets
 
 The server seals each secret with a data key of the profile before it
