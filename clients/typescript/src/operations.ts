@@ -79,6 +79,7 @@ import {
   decodeJobLocation,
   decodeJobLocationRequest,
   decodeJobLog,
+  decodeJobLogEntry,
   decodeJobPhase,
   decodeJobPlan,
   decodeJobPlanPart,
@@ -94,6 +95,7 @@ import {
   decodeListGatesResponse,
   decodeListGitHostConnectionsResponse,
   decodeListGitHostInstallationsResponse,
+  decodeListJobsResponse,
   decodeListModuleReleasesResponse,
   decodeListNotificationSinksResponse,
   decodeListPasskeysResponse,
@@ -340,6 +342,7 @@ import type {
   JobLocation,
   JobLocationRequest,
   JobLog,
+  JobLogEntry,
   JobPhase,
   JobPlan,
   JobPlanPart,
@@ -355,6 +358,7 @@ import type {
   ListGatesResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListJobsResponse,
   ListModuleReleasesResponse,
   ListNotificationSinksResponse,
   ListPasskeysResponse,
@@ -1098,6 +1102,20 @@ export interface GetJobInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getJobLog. */
+export interface GetJobLogInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+    readonly phase: string;
+  };
+  readonly query?: {
+    /** The seq of the last entry that the client has. The stream starts after it. */
+    readonly after?: number;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getLocalUserLocks. */
 export interface GetLocalUserLocksInput {
   readonly query?: {
@@ -1435,6 +1453,28 @@ export interface ListGitHostConnectionsInput {
 
 /** The input of the operation listGitHostInstallations. */
 export interface ListGitHostInstallationsInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listJobs. */
+export interface ListJobsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly query?: {
+    /** The largest number of jobs on the page. */
+    readonly pageSize?: number;
+    /** The nextPageToken of the page before, for the same query. */
+    readonly pageToken?: string;
+    /** Keeps the jobs with this purpose. The only value is drift-check. */
+    readonly purpose?: string;
+    /** Keeps the jobs in this state. One of the states must match. */
+    readonly status?: ReadonlyArray<string>;
+    /** Keeps the jobs that this run trigger started. */
+    readonly trigger?: string;
+    /** Keeps the jobs of the unit with this unit ID. */
+    readonly unit?: string;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -3086,6 +3126,23 @@ export const operations = {
     },
     ref(() => decodeJob),
   ),
+  getJobLog: operation<JobLogEntry>(
+    {
+      id: "getJobLog",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/logs/{phase}",
+      pathParameters: ["namespace", "job_id", "phase"],
+      queryParameters: ["after"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeJobLogEntry),
+  ),
   getLocalUserLocks: operation<LocalUserLocks>(
     {
       id: "getLocalUserLocks",
@@ -3714,6 +3771,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListGitHostInstallationsResponse),
+  ),
+  listJobs: operation<ListJobsResponse>(
+    {
+      id: "listJobs",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs",
+      pathParameters: ["namespace"],
+      queryParameters: ["pageSize", "pageToken", "purpose", "status", "trigger", "unit"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListJobsResponse),
   ),
   listModuleReleases: operation<ListModuleReleasesResponse>(
     {

@@ -61,6 +61,10 @@ type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Princi
 //
 //  1. identity.ActionNamespaceRead on the namespace of the path.
 //  2. Reads on the unit of the job.
+//  3. Actions on the unit of the job. A caller that may read the job already
+//     knows that it exists, so a refusal of these answers 403.
+//
+// The handler of a route with Filters then checks them on each item.
 type Route struct {
 	// Method is the HTTP method, for example GET.
 	Method string
@@ -71,6 +75,13 @@ type Route struct {
 	// Reads lists the read actions that the route needs on the unit of the
 	// job.
 	Reads []identity.Action
+	// Actions lists the other actions that the route needs on the unit of the
+	// job, after Reads. A refusal answers 403.
+	Actions []identity.Action
+	// Filters lists the read actions that the handler checks on the unit of
+	// each item of its answer. The wrapper cannot check them: a list holds
+	// many units. An item that the caller may not read is not in the answer.
+	Filters []identity.Action
 	// Writes lists the actions that the job service checks on the unit that
 	// the request body names, before it does anything. The wrapper cannot
 	// check them: the body names the unit, and the action depends on the
@@ -99,17 +110,42 @@ type Route struct {
 func (h *Handler) buildRoutes() []Route {
 	routes := []Route{
 		{
-			Method: http.MethodGet, Path: jobPath,
-			Scope: ScopeAuthorized, Reads: []identity.Action{identity.ActionJobRead}, Writes: nil,
-			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.getJob,
+			Method:         http.MethodGet,
+			Path:           jobPath,
+			Scope:          ScopeAuthorized,
+			Reads:          []identity.Action{identity.ActionJobRead},
+			Actions:        nil,
+			Filters:        nil,
+			Writes:         nil,
+			IdempotencyKey: false,
+			ETag:           true,
+			Resolve:        h.resolveJob,
+			Serve:          h.getJob,
 		},
+		{
+			// The handler checks job:read on the unit of each job of the page.
+			Method: http.MethodGet, Path: jobsPath,
+			Scope: ScopeAuthorized, Reads: nil, Actions: nil, Writes: nil,
+			Filters:        []identity.Action{identity.ActionJobRead},
+			IdempotencyKey: false, ETag: false, Resolve: h.resolveNamespace, Serve: h.listJobs,
+		},
+	}
+
+	// Without an artifact reader the server serves no log.
+	if h.artifacts != nil {
+		routes = append(routes, Route{
+			Method: http.MethodGet, Path: logPath,
+			Scope: ScopeAuthorized, Reads: []identity.Action{identity.ActionJobRead},
+			Actions: []identity.Action{identity.ActionJobReadLogs}, Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: false, Resolve: h.resolveJob, Serve: h.getLog,
+		})
 	}
 
 	// Without a job service the server starts no job, so it serves no route
 	// that would only answer an error.
 	if h.starter != nil {
 		routes = append(routes, Route{
-			Method: http.MethodPost, Path: jobsPath, Scope: ScopeAuthorized, Reads: nil,
+			Method: http.MethodPost, Path: jobsPath, Scope: ScopeAuthorized, Reads: nil, Actions: nil, Filters: nil,
 			Writes:         []identity.Action{identity.ActionUnitRunPlan},
 			IdempotencyKey: true, ETag: true, Resolve: h.resolveNamespace, Serve: h.startJob,
 		})
@@ -121,15 +157,19 @@ func (h *Handler) buildRoutes() []Route {
 const (
 	jobsPath = "/api/dustpan/v1/namespaces/{namespace}/jobs"
 	jobPath  = jobsPath + "/{job_id}"
+	logPath  = jobPath + "/logs/{phase}"
 )
 
 // Routes returns a copy of the route table. The action lists are copied too,
 // so callers cannot mutate handler state through the result.
 func (h *Handler) Routes() []Route {
 	out := make([]Route, len(h.routes))
-	for i, rt := range h.routes {
-		out[i] = rt
+	for i := range h.routes {
+		rt := &h.routes[i]
+		out[i] = *rt
 		out[i].Reads = append([]identity.Action(nil), rt.Reads...)
+		out[i].Actions = append([]identity.Action(nil), rt.Actions...)
+		out[i].Filters = append([]identity.Action(nil), rt.Filters...)
 		out[i].Writes = append([]identity.Action(nil), rt.Writes...)
 	}
 
@@ -271,7 +311,7 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		checks := route.Checks{
 			Namespace:     identity.NamespaceObject(t.ns.Name),
 			Reads:         rt.Reads,
-			Actions:       nil,
+			Actions:       rt.Actions,
 			NotFound:      errNotFound,
 			RequireAction: false,
 		}

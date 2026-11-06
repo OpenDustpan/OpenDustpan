@@ -86,6 +86,20 @@ func TestJobsAPI(t *testing.T) {
 		})
 	}
 
+	// The list and the log read need a launcher session, which has its own
+	// server of each store.
+	t.Run("list_and_log", func(t *testing.T) {
+		t.Parallel()
+
+		for _, store := range stores {
+			t.Run(string(store), func(t *testing.T) {
+				t.Parallel()
+
+				listAndLog(t, e2e.NewEnvWithRealTimeSignIn(t.Context(), t, e2e.NoCLI(), store))
+			})
+		}
+	})
+
 	// The session round trip has its own server of each store: the read of
 	// the stored log stops the server.
 	t.Run("session_round_trip", func(t *testing.T) {

@@ -85,6 +85,10 @@ func notBodies() map[string]map[string]string {
 			"maintenanceRunnerError": "the 503 of the runner protocol, which has its own codes and its own versions",
 			"maintenanceTFEDocument": "the JSON:API document around maintenanceTFEError, which is gated",
 		},
+		"jobs": {
+			"logFailureBody": "the last line of a log stream that stopped on an error, after the status 200 is sent; " +
+				"it repeats a catalog code",
+		},
 		"server": {
 			"devCodeRequest":     "the request body of the dev sign-in; code is the sign-in code",
 			"restoreWarningJSON": "a warning in the report of a restore that succeeded; it is no error answer",

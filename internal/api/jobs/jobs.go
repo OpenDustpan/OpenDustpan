@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -45,6 +46,9 @@ const (
 type Config struct {
 	Namespaces *namespace.Service
 	Jobs       job.Store
+	// Artifacts opens the logs of jobs. Nil serves no log route: a server
+	// that lacks a port of the artifact reader has no log to read.
+	Artifacts job.ArtifactReader
 	// Starter starts jobs. Nil serves the read route only: a server that lacks
 	// a port of the job service starts no job.
 	Starter job.Starter
@@ -68,12 +72,18 @@ type Config struct {
 	DenialLimiter *denylimit.Limiter
 	Sessions      *sessionauth.Checker
 	Logger        *slog.Logger
+	// LogPoll is the time between two reads of a running phase by a log
+	// stream. Zero takes the default.
+	LogPoll time.Duration
 }
 
 // Handler serves the jobs API under /api/dustpan/v1/.
 type Handler struct {
 	namespaces *namespace.Service
 	jobs       job.Store
+	artifacts  job.ArtifactReader
+	authz      identity.Authorizer
+	logPoll    time.Duration
 	starter    job.Starter
 	workers    admit.Source
 	pools      runner.PoolReader
@@ -111,6 +121,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		jobs:       cfg.Jobs,
+		artifacts:  cfg.Artifacts,
+		authz:      cfg.Authorizer,
+		logPoll:    cfg.LogPoll,
 		starter:    cfg.Starter,
 		workers:    cfg.Workers,
 		pools:      cfg.Pools,
@@ -123,8 +136,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h.routes = h.buildRoutes()
-	for _, route := range h.routes {
-		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	for i := range h.routes {
+		route := &h.routes[i]
+		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(*route))
 	}
 
 	return h, nil
@@ -182,6 +196,12 @@ func classify(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.JobNotFound, errNotFound.Error()), true
+	case errors.Is(err, errLogNotAvailable):
+		return problem.New(http.StatusNotFound, errcode.JobLogNotAvailable, errLogNotAvailable.Error()), true
+	case errors.Is(err, errPageToken):
+		return problem.New(http.StatusBadRequest, errcode.RequestPageTokenInvalid, err.Error()), true
+	case errors.Is(err, errInvalidQuery):
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	default:
 		return classifyStart(err)
 	}

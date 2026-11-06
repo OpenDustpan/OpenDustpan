@@ -425,6 +425,10 @@ type notFoundWriter struct {
 	notFound bool
 }
 
+// Unwrap returns the writer below, so a handler can flush a stream through
+// http.ResponseController.
+func (c *notFoundWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
+
 // WriteHeader swallows a 404 without the JSON media type and records it.
 // Every other status passes through.
 func (c *notFoundWriter) WriteHeader(status int) {

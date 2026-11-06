@@ -39,9 +39,24 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		pools = cfg.runners
 	}
 
+	// A nil reader must stay a nil interface: a typed nil would pass the nil
+	// check of the handler and panic at the first log read.
+	var artifacts job.ArtifactReader
+
+	reader, canRead, err := newJobArtifactReader(svc, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if canRead {
+		artifacts = reader
+	}
+
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     svc.namespaces,
 		Jobs:           cfg.jobStore,
+		Artifacts:      artifacts,
+		LogPoll:        0,
 		Starter:        starter,
 		Workers:        cfg.watch,
 		Pools:          pools,
@@ -59,3 +74,42 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 
 	return handler, nil
 }
+
+// newJobArtifactReader builds the reader of job logs over the record store of
+// the job store, the blob store and the item key sealer. It returns nil when
+// the server lacks one of them (false): the server then serves no log route.
+func newJobArtifactReader(svc services, cfg *settings) (*job.ArtifactReads, bool, error) {
+	records, ok := cfg.jobStore.(job.RecordStore)
+	if !ok || cfg.blobStore == nil || svc.namespaces == nil || cfg.updateStore == nil || cfg.namespaceStore == nil {
+		return nil, false, nil
+	}
+
+	refusals, err := blobRefusalsOf(cfg.namespaceStore, job.ArtifactBlobFamily(), cfg.now)
+	if err != nil {
+		return nil, false, err
+	}
+
+	blobs, err := job.NewArtifactBlobs(cfg.blobStore, refusals)
+	if err != nil {
+		return nil, false, fmt.Errorf("job log blobs: %w", err)
+	}
+
+	sealer, err := newItemSealerOf(&itemSealerInputs{
+		updates: cfg.updateStore, blobs: cfg.blobStore, namespaces: cfg.namespaceStore,
+		wrapper: cfg.secretWrapper, now: cfg.now,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("job log reader: %w", err)
+	}
+
+	reader, err := job.NewArtifactReader(records, blobs, sealer, jobNamespaces{namespaces: svc.namespaces})
+	if err != nil {
+		return nil, false, fmt.Errorf("job log reader: %w", err)
+	}
+
+	return reader, true, nil
+}
+
+// Unwrap returns the writer below, so a handler can flush a stream, such as a
+// job log, through http.ResponseController.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

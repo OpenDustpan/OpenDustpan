@@ -33,7 +33,7 @@ func TestStartNeedsAWorker(t *testing.T) {
 			t.Parallel()
 
 			starter := newFakeStarter(t)
-			deps := handlerDeps{jobs: newFakeJobs(), starter: starter, entries: nil}
+			deps := handlerDeps{jobs: newFakeJobs(), starter: starter, entries: nil, artifacts: nil}
 			h := newWorkerHandler(t, newAuthorizer(readsNamespace()...), deps, tc.workers)
 
 			rec := post(t, h, testToken, goodBody)
