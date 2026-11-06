@@ -338,7 +338,18 @@ func (s *Server) match(req searchRequest) ([]entry, bool) {
 		return nil, false
 	}
 
-	all := s.entries()
+	all, index := s.entries()
+
+	// A read of one entry finds it in the index. A base with another
+	// spelling of the same DN falls back to the scan below.
+	if i, ok := index[strings.ToLower(req.base)]; ok && req.scope == ldap.ScopeBaseObject {
+		if matches(req.filter, all[i]) {
+			return []entry{all[i]}, true
+		}
+
+		return []entry{}, true
+	}
+
 	found := false
 
 	out := make([]entry, 0, len(all))
@@ -423,15 +434,13 @@ func isDNAttribute(name string) bool {
 
 // equal reports whether a value of the attribute name of e equals v.
 func (e entry) equal(name string, v []byte) bool {
+	if isDNAttribute(name) {
+		_, ok := e.dnKeys[strings.ToLower(name)][dnKey(string(v))]
+
+		return ok
+	}
+
 	for _, have := range e.values(name) {
-		if isDNAttribute(name) {
-			if sameDN(string(have), string(v)) {
-				return true
-			}
-
-			continue
-		}
-
 		if bytes.EqualFold(have, v) {
 			return true
 		}

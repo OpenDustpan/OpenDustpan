@@ -743,3 +743,43 @@ func TestNoDirectoryTextInAnError(t *testing.T) {
 		})
 	}
 }
+
+// TestNestedGroupsOverTheLimitAreErrMethodAnswer is layer 3 for the walk of
+// nested groups: the person is in one group, and that group reaches more
+// groups than the limit through a chain.
+func TestNestedGroupsOverTheLimitAreErrMethodAnswer(t *testing.T) {
+	t.Parallel()
+
+	for _, groups := range []ldapauth.Groups{
+		{
+			Source: ldapauth.GroupsSearch, BaseDN: ldaptest.GroupsDN, Filter: "(objectClass=groupOfNames)",
+			MemberAttribute: "member", MemberOfAttribute: "", NameAttribute: "cn",
+		},
+		{
+			Source: ldapauth.GroupsMemberOf, BaseDN: ldaptest.GroupsDN, Filter: "", MemberAttribute: "",
+			MemberOfAttribute: "memberOf", NameAttribute: "cn",
+		},
+	} {
+		t.Run(string(groups.Source), func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t)
+			s.addUser(t, testPerson("alice"), goodPassword, nil)
+			s.dir.AddGroup(ldaptest.Group{Name: "g-0", Users: []string{"alice"}, Groups: nil, Link: ldaptest.LinkBoth})
+
+			for i := 1; i <= ldapauth.MaxGroups; i++ {
+				s.dir.AddGroup(ldaptest.Group{
+					Name: fmt.Sprintf("g-%d", i), Users: nil, Groups: []string{fmt.Sprintf("g-%d", i-1)},
+					Link: ldaptest.LinkBoth,
+				})
+			}
+
+			m := newMethod(t, s.configWith(func(c *ldapauth.Config) { c.Groups = groups }))
+
+			a, err := m.Verify(t.Context(), credentials("alice", goodPassword), openGate{})
+			if !errors.Is(err, session.ErrMethodAnswer) || a.Subject != "" {
+				t.Fatalf("Verify() = %+v, %v, want ErrMethodAnswer", a, err)
+			}
+		})
+	}
+}

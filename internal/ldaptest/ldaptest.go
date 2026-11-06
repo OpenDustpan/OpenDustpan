@@ -130,6 +130,8 @@ type Server struct {
 	servicePassword string
 	conns           map[net.Conn]struct{}
 	closeErrs       []error
+	cache           []entry
+	index           map[string]int
 	users           []User
 	groups          []Group
 	binds           []string
@@ -173,6 +175,8 @@ func Start(t *testing.T) *Server {
 		servicePassword: rand.Text(),
 		conns:           map[net.Conn]struct{}{},
 		closeErrs:       nil,
+		cache:           nil,
+		index:           nil,
 		users:           nil,
 		groups:          nil,
 		binds:           nil,
@@ -294,6 +298,7 @@ func (s *Server) AddUser(u User) string {
 	defer s.mu.Unlock()
 
 	s.users = append(s.users, u)
+	s.cache, s.index = nil, nil
 
 	return UserDN(u.UserName)
 }
@@ -304,6 +309,7 @@ func (s *Server) AddGroup(g Group) {
 	defer s.mu.Unlock()
 
 	s.groups = append(s.groups, g)
+	s.cache, s.index = nil, nil
 }
 
 // SetFault makes the directory answer with the fault f.

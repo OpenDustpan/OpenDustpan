@@ -11,10 +11,11 @@ import (
 // entry is one entry of the directory, built at each search from the users
 // and the groups.
 type entry struct {
-	dn    *ldap.DN
-	attrs map[string][][]byte
-	names map[string]string
-	text  string
+	dn     *ldap.DN
+	attrs  map[string][][]byte
+	names  map[string]string
+	dnKeys map[string]map[string]struct{}
+	text   string
 }
 
 // newEntry returns the entry of dn with no attribute.
@@ -25,7 +26,10 @@ func newEntry(dn string) entry {
 		parsed = &ldap.DN{RDNs: nil}
 	}
 
-	return entry{dn: parsed, attrs: map[string][][]byte{}, names: map[string]string{}, text: dn}
+	return entry{
+		dn: parsed, attrs: map[string][][]byte{}, names: map[string]string{},
+		dnKeys: map[string]map[string]struct{}{}, text: dn,
+	}
 }
 
 // add adds the values to the attribute name.
@@ -37,7 +41,32 @@ func (e entry) add(name string, values ...string) {
 
 	for _, v := range values {
 		e.attrs[key] = append(e.attrs[key], []byte(v))
+
+		if isDNAttribute(key) {
+			if e.dnKeys[key] == nil {
+				e.dnKeys[key] = map[string]struct{}{}
+			}
+
+			e.dnKeys[key][dnKey(v)] = struct{}{}
+		}
 	}
+}
+
+// dnKey returns one text for each spelling of the DN v: the parsed DN in
+// lowercase, or v in lowercase when it does not parse.
+func dnKey(v string) string {
+	// A DN with no escape, no quote, no multi-valued RDN and no space has
+	// one spelling apart from the case. It needs no parse.
+	if !strings.ContainsAny(v, "\\\"+# ") {
+		return strings.ToLower(v)
+	}
+
+	parsed, err := ldap.ParseDN(v)
+	if err != nil {
+		return strings.ToLower(v)
+	}
+
+	return strings.ToLower(parsed.String())
 }
 
 // values returns the values of the attribute name.
@@ -87,9 +116,16 @@ func (e entry) packet(attrs []string) *ber.Packet {
 // entries returns each entry of the directory: the tree, the service
 // account, the users and the groups, with the member and memberOf values
 // of each link.
-func (s *Server) entries() []entry {
+func (s *Server) entries() ([]entry, map[string]int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// The entries change only with AddUser and AddGroup, which clear the
+	// cache. A search reads the cache, so a test with many groups does not
+	// build each entry again for each search.
+	if s.cache != nil {
+		return s.cache, s.index
+	}
 
 	base := newEntry(BaseDN)
 	base.add("objectClass", "top", "domain")
@@ -139,7 +175,14 @@ func (s *Server) entries() []entry {
 		out = append(out, e)
 	}
 
-	return out
+	s.cache = out
+	s.index = make(map[string]int, len(out))
+
+	for i, e := range out {
+		s.index[strings.ToLower(e.text)] = i
+	}
+
+	return s.cache, s.index
 }
 
 // memberOf returns the memberOf values of each member DN, in lowercase,

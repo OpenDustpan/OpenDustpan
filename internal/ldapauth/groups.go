@@ -146,7 +146,12 @@ func (m *Method) searchGroups(ctx context.Context, conn *ldap.Conn, w *groupWalk
 // memberOfGroups reads the memberOf attribute of the person, then the
 // memberOf attribute of each group that it found.
 func (m *Method) memberOfGroups(ctx context.Context, conn *ldap.Conn, w *groupWalk, e *ldap.Entry) error {
-	w.queue = append(w.queue, e.GetEqualFoldAttributeValues(m.groups.MemberOfAttribute)...)
+	direct, err := m.directGroups(e)
+	if err != nil {
+		return err
+	}
+
+	w.queue = append(w.queue, direct...)
 
 	for len(w.queue) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -169,26 +174,32 @@ func (m *Method) memberOfGroups(ctx context.Context, conn *ldap.Conn, w *groupWa
 			continue
 		}
 
-		req := ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1,
-			int(m.operationTimeout/time.Second), false, "(objectClass=*)",
-			[]string{m.groups.NameAttribute, m.groups.MemberOfAttribute}, nil)
-
-		res, err := conn.Search(req)
-		if err != nil {
-			return m.searchError(ctx, "the read of a group", err)
-		}
-
-		if len(res.Entries) != 1 {
-			return fmt.Errorf("%w: the read of a group found %d entries, not 1", session.ErrMethodAnswer,
-				len(res.Entries))
-		}
-
-		if err := m.addGroup(w, res.Entries[0], &dn); err != nil {
+		if err := m.readGroup(ctx, conn, w, dn); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// readGroup reads the one group entry of the canonical DN dn and adds it
+// to w.
+func (m *Method) readGroup(ctx context.Context, conn *ldap.Conn, w *groupWalk, dn string) error {
+	req := ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1,
+		int(m.operationTimeout/time.Second), false, "(objectClass=*)",
+		[]string{m.groups.NameAttribute, m.groups.MemberOfAttribute}, nil)
+
+	res, err := conn.Search(req)
+	if err != nil {
+		return m.searchError(ctx, "the read of a group", err)
+	}
+
+	if len(res.Entries) != 1 {
+		return fmt.Errorf("%w: the read of a group found %d entries, not 1", session.ErrMethodAnswer,
+			len(res.Entries))
+	}
+
+	return m.addGroup(w, res.Entries[0], &dn)
 }
 
 // toRead returns the canonical DN of the memberOf value raw, and whether
@@ -262,4 +273,30 @@ func (m *Method) checkGroupFilter(f string) (string, error) {
 	}
 
 	return f, nil
+}
+
+// directGroups returns the memberOf values of the person. It refuses more
+// direct groups below the group base DN than the limit before any read.
+func (m *Method) directGroups(e *ldap.Entry) ([]string, error) {
+	direct := e.GetEqualFoldAttributeValues(m.groups.MemberOfAttribute)
+	if m.inGroupBase(direct) > MaxGroups {
+		return nil, fmt.Errorf("%w: the person has more than %d groups", session.ErrMethodAnswer, MaxGroups)
+	}
+
+	return direct, nil
+}
+
+// inGroupBase returns the count of the DNs of values below the group base
+// DN. A value that does not parse counts too: the walk refuses it later.
+func (m *Method) inGroupBase(values []string) int {
+	n := 0
+
+	for _, v := range values {
+		parsed, err := ldap.ParseDN(v)
+		if err != nil || m.groupBaseDN.AncestorOfFold(parsed) {
+			n++
+		}
+	}
+
+	return n
 }
