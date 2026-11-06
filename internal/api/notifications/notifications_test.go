@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -309,7 +310,7 @@ func TestCreateRefusals(t *testing.T) {
 		{
 			"a chat URL with user information",
 			"admin",
-			chat("https://u:p@hooks.slack.com/" + canary),
+			chat(fakecred.URL("https", "u", "p", "hooks.slack.com", "") + canary),
 			400,
 			"sink.invalid",
 		},

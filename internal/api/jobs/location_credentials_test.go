@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"opendustpan.org/opendustpan/internal/fakecred"
 )
 
 // TestStartRefusesRepositoryCredentials proves that a job start with a
@@ -14,7 +16,7 @@ func TestStartRefusesRepositoryCredentials(t *testing.T) {
 	t.Parallel()
 
 	for _, repo := range []string{
-		"https://user:hunter2@example.com/r.git", "https://user@example.com/r.git", "file:///etc",
+		fakecred.URL("https", "user", "hunter2", "example.com", "r.git"), "https://user@example.com/r.git", "file:///etc",
 		"ssh://git@example.com/r.git", "git@example.com:r.git",
 	} {
 		t.Run(repo, func(t *testing.T) {

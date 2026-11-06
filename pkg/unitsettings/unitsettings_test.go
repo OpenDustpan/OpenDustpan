@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -95,7 +96,9 @@ func hostileCases() []hostileCase {
 		{"ref with a control character", func(s *unitsettings.Settings) { s.CodeLocation.Ref = "main\x00" }},
 		{
 			"repository with a user name",
-			func(s *unitsettings.Settings) { s.CodeLocation.Repository = "https://u:p@host/a/b" },
+			func(s *unitsettings.Settings) {
+				s.CodeLocation.Repository = fakecred.URL("https", "u", "p", "host", "a/b")
+			},
 		},
 		{
 			"repository with a metadata address host",

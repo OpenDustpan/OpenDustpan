@@ -11,6 +11,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/chat"
 )
@@ -490,7 +491,7 @@ func testRenderInvalid(t *testing.T, h Harness) {
 		"too many fields":          func(c *chat.Content) { c.Fields = tooMany.Fields },
 		"a field with no key":      func(c *chat.Content) { c.Fields = []chat.Field{{Label: "", Value: "v"}} },
 		"a javascript link":        func(c *chat.Content) { c.Links[0].URL = "javascript:alert(1)" },
-		"a link with a user":       func(c *chat.Content) { c.Links[0].URL = "https://user:pw@console.example/" },
+		"a link with a user":       func(c *chat.Content) { c.Links[0].URL = fakecred.URL("https", "user", "pw", "console.example", "") },
 		"a link with no host":      func(c *chat.Content) { c.Links[0].URL = "https:///path" },
 	}
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -213,7 +214,7 @@ func TestChatURLIsCheckedBeforeATestSends(t *testing.T) {
 		{"http scheme", "hooks.slack.com", "http://hooks.slack.com/services/x"},
 		{"private address", "10.0.0.1", "https://10.0.0.1/services/x"},
 		{"metadata address", "169.254.169.254", "https://169.254.169.254/latest"},
-		{"user information", "hooks.slack.com", "https://u:p@hooks.slack.com/services/x"},
+		{"user information", "hooks.slack.com", fakecred.URL("https", "u", "p", "hooks.slack.com", "services/x")},
 		{"closed port", "hooks.slack.com:22", "https://hooks.slack.com:22/services/x"},
 	}
 

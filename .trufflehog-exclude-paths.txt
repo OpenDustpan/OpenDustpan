@@ -1,5 +1,6 @@
-# a vendored agent skill, where a Markdown link that names a file looks like a credential to a detector
-^\.agents/skills/setup-matt-pocock-skills/SKILL\.md$
+# Do not add a path. A fake credential in a test now comes from internal/fakecred, or its line carries
+# a trufflehog:ignore tag with a reason. The scan reads the whole Git history, and old commits have
+# neither. So each entry below stays while a commit in history holds a fake credential in that path.
 # test files with a fake URL that holds a user name and a password, to test the refusal or the masking of credentials
 ^pkg/notify/notify_test\.go$
 # files that no longer exist in the tree; an old commit holds a fake credential in each of them
