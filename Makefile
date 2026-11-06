@@ -106,8 +106,9 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # Each entry stays only because an old commit holds a fake credential in that
 # path. A test builds a fake credential with internal/fakecred, and a raw one
 # carries a trufflehog:ignore tag with a reason. Do not add a path.
+# Scan only the history reachable from HEAD, so a commit on another branch cannot fail this scan.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
+	trufflehog git file://. --branch=HEAD --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
