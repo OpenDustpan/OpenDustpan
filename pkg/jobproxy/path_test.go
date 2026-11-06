@@ -67,6 +67,13 @@ func TestCanonicalPath(t *testing.T) {
 		{"encoded one dot leader", "/a/%E2%80%A4", false},
 		{"encoded two dot leader", "/a/%E2%80%A5", false},
 		{"encoded ellipsis", "/a/%E2%80%A6", false},
+		{"raw fullwidth solidus", "/a/x\uFF0Fb", false},
+		{"raw fullwidth reverse solidus", "/a/x\uFF3Cb", false},
+		{"raw division slash", "/a/x\u2215b", false},
+		{"raw set minus", "/a/x\u2216b", false},
+		{"raw fullwidth full stops", "/a/\uFF0E\uFF0E", false},
+		{"raw one dot leader", "/a/\u2024", false},
+		{"raw two dot leader", "/a/\u2025", false},
 	}
 
 	for _, tc := range tests {
