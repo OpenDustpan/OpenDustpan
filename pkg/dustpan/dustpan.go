@@ -208,6 +208,7 @@ type settings struct {
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
 	softDeleteRetention  time.Duration
+	jobRetention         jobRetention
 	maxBodyBytesInFlight int64
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
@@ -716,6 +717,7 @@ func defaultSettings() *settings {
 		maxSecretBatchBytes:     0,
 		maxStateBytes:           0,
 		softDeleteRetention:     0,
+		jobRetention:            defaultJobRetention(),
 		maxBodyBytesInFlight:    0,
 		backup:                  defaultBackupSettings(),
 		beforeServe:             nil,
@@ -1574,7 +1576,11 @@ func checkPeriods(cfg *settings) error {
 		return err
 	}
 
-	return checkAuditChainInterval(cfg.auditChainInterval)
+	if err := checkAuditChainInterval(cfg.auditChainInterval); err != nil {
+		return err
+	}
+
+	return checkJobRetention(cfg.jobRetention)
 }
 
 // checkSettings validates the required options and the TLS and public URL
