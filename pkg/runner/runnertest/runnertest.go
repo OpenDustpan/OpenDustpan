@@ -36,6 +36,17 @@ type Harness struct {
 	Members  runner.MemberStore
 	Sessions runner.SessionStore
 	Domain   Domain
+	// Canceler requests a cancel, for the cases of a launcher that renews
+	// during a cancel.
+	Canceler Canceler
+}
+
+// Canceler requests the cancel of an operation. It is a port of its own, so
+// that Domain stays small.
+type Canceler interface {
+	// Cancel requests the cancel of the operation of the live claim c, as the
+	// cancel of a job does. The claim stays live.
+	Cancel(ctx context.Context, c durable.Claim) error
 }
 
 // Domain makes the rows that the stores need and that other ports own,
@@ -106,6 +117,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a nonce is good for one proof up to and at its expiry", testNonce},
 		{"a runner renews a claim until the session wait limit", testRunnerRenew},
 		{"a renewal with a stale fence changes nothing", testRunnerRenewStaleFence},
+		{"a launcher renews the claim of its session, also during a cancel", testSessionRenew},
+		{"a renewal of a session with a stale fence changes nothing", testSessionRenewStaleFence},
 		{"a session opens up to the session wait limit", testSessionNearWaitLimit},
 		{"a session of a claim that a takeover replaced is lost", testSessionAfterTakeover},
 		{"a recorded claim keeps the database time, the job and the phase", testRecordClaim},
@@ -116,7 +129,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"each change appends its audit entry", testAuditEntries},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range append(cases, sessionRenewRefusals()...) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))

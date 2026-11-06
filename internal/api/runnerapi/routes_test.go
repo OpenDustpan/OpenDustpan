@@ -23,6 +23,13 @@ func protocolPaths() map[string]identity.Action {
 		protocol.PathClaimHandoff: identity.ActionRunnerClaim,
 		protocol.PathClaimRenew:   identity.ActionRunnerClaim,
 		protocol.PathClaimRelease: identity.ActionRunnerClaim,
+
+		protocol.PathSession:          identity.ActionRunnerClaim,
+		protocol.PathSessionRenew:     identity.ActionRunnerClaim,
+		protocol.PathSessionStepBegin: identity.ActionRunnerClaim,
+		protocol.PathSessionStepEnd:   identity.ActionRunnerClaim,
+		protocol.PathSessionLog:       identity.ActionRunnerClaim,
+		protocol.PathSessionFinish:    identity.ActionRunnerClaim,
 	}
 }
 
@@ -109,8 +116,15 @@ func checkProtocolRoute(t *testing.T, route *runnerapi.Route, paths map[string]i
 	}
 
 	wantScope := runnerapi.ScopeRunnerKey
-	if route.Path == protocol.PathJoin {
+
+	switch {
+	case route.Path == protocol.PathJoin:
 		wantScope = runnerapi.ScopeJoinToken
+	case route.Path == protocol.PathSession:
+		wantScope = runnerapi.ScopeHandoffToken
+	case strings.HasPrefix(route.Path, protocol.PathSession+"/"):
+		wantScope = runnerapi.ScopeSessionKey
+	default:
 	}
 
 	if route.Scope != wantScope {

@@ -146,6 +146,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		ready:            nil,
 		drainPeriod:      0,
 		tempAdmins:       nil,
+		manualLocks:      nil,
 		reconciler:       nil,
 		artifactSweeper:  nil,
 		nameLocks:        nameLockPrune{locks: nil},

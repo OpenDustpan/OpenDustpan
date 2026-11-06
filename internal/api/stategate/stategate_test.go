@@ -595,3 +595,57 @@ func TestAdmitRefusesAStateAboveALimitWithTheLimitCode(t *testing.T) {
 		t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
 	}
 }
+
+// TestStateUnreadableLimit proves the refusal of a state read error by its
+// cause. A limit cause refuses with gate.limit and does not wrap
+// gate.ErrUnavailable, because a limit is a refusal and not an outage. Any other
+// cause refuses with gate.unavailable and wraps gate.ErrUnavailable. Both
+// refusals carry the state text, no record, one audit entry, and the guard is
+// not asked.
+func TestStateUnreadableLimit(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		cause       error
+		code        string
+		unavailable bool
+	}{
+		{"limit", gate.ErrLimit, "gate.limit", false},
+		{"wrapped limit", fmt.Errorf("x: %w", gate.ErrLimit), "gate.limit", false},
+		{"other read error", errStateDown, "gate.unavailable", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+			rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+			w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+			w.StateErr = tc.cause
+
+			out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)
+
+			checkRefused(t, out, rec, tc.code)
+
+			if !slices.Equal(out.Refusal.Messages, []string{stategate.StateUnreadableText}) {
+				t.Fatalf("messages = %q, want [%q]", out.Refusal.Messages, stategate.StateUnreadableText)
+			}
+
+			if out.Refusal.Record != "" {
+				t.Fatalf("record = %q, want none", out.Refusal.Record)
+			}
+
+			got := errors.Is(out.Refusal, gate.ErrUnavailable)
+			if got != tc.unavailable {
+				t.Fatalf("errors.Is(refusal, gate.ErrUnavailable) = %v, want %v: "+
+					"a limit is a refusal, not an outage", got, tc.unavailable)
+			}
+
+			if len(guard.asked()) != 0 {
+				t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
+			}
+		})
+	}
+}

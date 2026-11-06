@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -36,59 +37,59 @@ func TestCause(t *testing.T) {
 		{
 			name: "deadline wrapped",
 			err:  fmt.Errorf("store: %w", context.DeadlineExceeded),
-			want: problem.CauseDeadlineExceeded,
+			want: faultlog.CauseDeadlineExceeded,
 		},
 		{
 			name: "canceled",
 			err:  fmt.Errorf("store: %w", context.Canceled),
-			want: problem.CauseCanceled,
+			want: faultlog.CauseCanceled,
 		},
 		{
 			name: "unexpected EOF",
 			err:  io.ErrUnexpectedEOF,
-			want: problem.CauseUnexpectedEOF,
+			want: faultlog.CauseUnexpectedEOF,
 		},
 		{
 			name: "EOF",
 			err:  io.EOF,
-			want: problem.CauseUnexpectedEOF,
+			want: faultlog.CauseEOF,
 		},
 		{
 			name: "EOF wrapped",
 			err:  fmt.Errorf("read: %w", io.EOF),
-			want: problem.CauseUnexpectedEOF,
+			want: faultlog.CauseEOF,
 		},
 		{
 			name: "missing file",
 			err:  fmt.Errorf("open: %w", fs.ErrNotExist),
-			want: problem.CauseFileMissing,
+			want: faultlog.CauseFileMissing,
 		},
 		{
 			name: "permission",
 			err:  fmt.Errorf("open: %w", fs.ErrPermission),
-			want: problem.CauseFilePermission,
+			want: faultlog.CauseFilePermission,
 		},
 		{
 			name: "network",
 			err: &net.OpError{
 				Op: "dial", Net: "tcp", Source: nil, Addr: nil, Err: errSecretNetwork,
 			},
-			want: problem.CauseNetwork,
+			want: faultlog.CauseNetwork,
 		},
 		{
 			name: "driver text",
 			err:  errDriver,
-			want: problem.CauseUnclassified,
+			want: faultlog.CauseUnclassified,
 		},
 		{
 			name: "hostile text",
 			err:  errHostileText,
-			want: problem.CauseUnclassified,
+			want: faultlog.CauseUnclassified,
 		},
 		{
 			name: "nil",
 			err:  nil,
-			want: problem.CauseUnclassified,
+			want: faultlog.CauseUnclassified,
 		},
 	}
 
@@ -96,7 +97,7 @@ func TestCause(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := problem.Cause(tc.err); got != tc.want {
+			if got := faultlog.Cause(tc.err); got != tc.want {
 				t.Errorf("Cause() = %q, want %q", got, tc.want)
 			}
 		})

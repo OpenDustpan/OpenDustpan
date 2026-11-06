@@ -1,7 +1,6 @@
 # Run the soak harness
 
 This guide shows how to run the soak harness and how to read its reports.
-It follows ADR 40.
 
 ## What the run does
 
@@ -80,8 +79,7 @@ over total CLI runs passes 0.01:
 | Open file descriptors | 1.0 |
 | Database connections | 1.0 (no data, never fails) |
 
-The first nightly run records values, and a person accepts them as budgets
-(ADR 40).
+The first nightly run records values, and a person accepts them as budgets.
 Until then these thresholds are starting points, not budgets.
 
 Short runs of about a minute prove the harness only: workers, sampling

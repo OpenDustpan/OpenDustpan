@@ -1,8 +1,11 @@
 package dustpan
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +115,7 @@ func TestTriggerDispatcherVersionsOfJobStore(t *testing.T) {
 		name    string
 		st      job.Store
 		wantNil bool
+		wantLog int
 	}{
 		{
 			name: "store with the port",
@@ -120,11 +124,13 @@ func TestTriggerDispatcherVersionsOfJobStore(t *testing.T) {
 				job.FinalVersionReader
 			}{Store: nil, FinalVersionReader: nil},
 			wantNil: false,
+			wantLog: 0,
 		},
 		{
 			name:    "store without the port",
 			st:      struct{ job.Store }{Store: nil},
 			wantNil: true,
+			wantLog: 1,
 		},
 	}
 
@@ -132,14 +138,20 @@ func TestTriggerDispatcherVersionsOfJobStore(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			var buf bytes.Buffer
 			cfg := new(settings)
 			cfg.jobStore = tc.st
+			cfg.logger = slog.New(slog.NewTextHandler(&buf, nil))
 			got := triggerDispatcherConfig(cfg, &triggerPorts{records: nil, entries: nil}, triggerParts{
 				starter: nil, savers: nil, units: nil, fences: nil,
 			}).Versions
 
 			if (got == nil) != tc.wantNil {
 				t.Fatalf("Versions nil = %t, want %t", got == nil, tc.wantNil)
+			}
+
+			if n := strings.Count(buf.String(), "no final version reader"); n != tc.wantLog {
+				t.Fatalf("warn records = %d, want %d; log: %q", n, tc.wantLog, buf.String())
 			}
 		})
 	}

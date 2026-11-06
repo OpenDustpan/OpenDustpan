@@ -15,10 +15,10 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -52,25 +52,6 @@ const (
 // no return path.
 const defaultReturnPath = "/"
 
-// Reasons of a refused sign-in, in the audit entry. No reason holds a
-// code, a token, a state or a cookie value.
-const (
-	reasonProviderError = "identity provider answered an error"
-	reasonState         = "state does not match"
-	reasonRequest       = "sign-in request is unknown or expired"
-	reasonIDCheck       = "ID token was refused"
-	reasonNoPrincipal   = "no principal"
-	reasonDisabled      = "principal is disabled"
-	reasonNotTarget     = "principal cannot sign in through an identity provider"
-	reasonSubject       = "subject is not valid"
-	reasonSubjectLength = "subject over 255 bytes"
-)
-
-// maxSubjectLen caps the composed subject of a sign-in, in bytes. It
-// matches the principal subject limit, so a longer subject is refused
-// before the subject reaches the audit entry.
-const maxSubjectLen = 255
-
 // Errors of the sign-in routes.
 var (
 	errUnknownProvider = errors.New("unknown sign-in provider")
@@ -84,17 +65,6 @@ var (
 	errFreshParam      = errors.New(`the query parameter fresh must be "1" or absent`)
 )
 
-// OIDCClient is the client of one OpenID Connect provider. *oauth.Lazy
-// meets it.
-type OIDCClient interface {
-	// Begin returns the authorization URL and the pending request. It
-	// returns an error that wraps oauth.ErrProvider when the provider
-	// cannot be reached.
-	Begin(ctx context.Context, opts oauth.Options) (string, oauth.Pending, error)
-	// Finish exchanges the code and checks the ID token against p.
-	Finish(ctx context.Context, code string, p oauth.Pending) (oauth.Identity, error)
-}
-
 // SignInLimiter is the per-address limit of the sign-in routes. It has its
 // own budget, apart from the token lookups. *authgate.Gate meets it.
 type SignInLimiter interface {
@@ -105,23 +75,20 @@ type SignInLimiter interface {
 	Fail(ctx context.Context)
 }
 
-// SignInProvider is one OpenID Connect provider of the console sign-in.
-// ID is part of the subject of each principal that signs in through it,
-// so it must never change after the first sign-in. AutoCreate makes a
-// principal at the first sign-in of a person; with false, an
+// SignInProvider is one redirect provider of the console sign-in: OpenID
+// Connect or plain OAuth 2.0. Method is its sign-in method, for example an
+// *oauth.Method. ID is part of the subject of each principal that signs in
+// through it, so it must never change after the first sign-in. AutoCreate
+// makes a principal at the first sign-in of a person; with false, an
 // administrator makes each principal first.
 type SignInProvider struct {
-	Client      OIDCClient
+	Method      session.RedirectMethod
 	ID          string
 	DisplayName string
 	AutoCreate  bool
 	// Stored reports a provider that the API keeps. Its session is created
 	// in the same write as a check that the provider is still enabled.
 	Stored bool
-	// Source is the source of a principal that the first sign-in of a
-	// person makes: principal.SourceOIDC, or principal.SourceOAuth for a
-	// plain OAuth 2.0 provider. Empty is principal.SourceOIDC.
-	Source principal.Source
 }
 
 // SignIn configures the console sign-in. Sessions is required. A nil
@@ -134,7 +101,10 @@ type SignInProvider struct {
 // nil Admin, no provider route is mounted. A provider of the
 // configuration wins over a stored provider with the same ID.
 type SignIn struct {
-	Sessions  *session.Sessions
+	Sessions *session.Sessions
+	// Service is the sign-in service. It is required: the callback and the
+	// password sign-in start a session only through it.
+	Service   *signinsvc.Service
 	Limiter   SignInLimiter
 	Stored    StoredProviders
 	Admin     *session.ProviderAdmin
@@ -146,6 +116,21 @@ type SignIn struct {
 	// its own, so these routes never spend the budget of the other sign-ins.
 	// Nil mounts none of these routes.
 	PasswordLimiter SignInLimiter
+	// Passkeys is the service of the passkeys of the caller. A passkey needs
+	// the console session of a person, so it belongs to the console sign-in.
+	// Nil mounts no passkey route: the server keeps no passkeys, or its public
+	// URL gives no relying party.
+	Passkeys PasskeyService
+	// PasskeySignIn is the part of the service of the passkeys that the
+	// passkey sign-in uses. Nil mounts no passkey sign-in route.
+	PasskeySignIn PasskeySignInService
+	// PasskeyBeginLimiter is the per-address budget of the begins of a passkey
+	// sign-in. Each begin writes a challenge row. Nil mounts no passkey
+	// sign-in route.
+	PasskeyBeginLimiter SignInLimiter
+	// PasskeyLimiter is the per-address budget of the failed responses of a
+	// passkey sign-in. Nil mounts no passkey sign-in route.
+	PasskeyLimiter SignInLimiter
 	// DevCode is the one-time code of opendustpan dev. With it, the handler
 	// mounts the route that signs a browser in as the dev administrator.
 	// Nil mounts no such route.
@@ -169,15 +154,22 @@ type StoredProviders interface {
 
 // signInState is the sign-in of a handler.
 type signInState struct {
+	service   *signinsvc.Service
 	sessions  *session.Sessions
 	limiter   SignInLimiter
 	passwords SignInLimiter
-	stored    StoredProviders
-	admin     *session.ProviderAdmin
-	providers map[string]SignInProvider
-	checker   *sessionauth.Checker
-	devCode   *devcode.Code
-	devAdmin  identity.Principal
+	passkeys  PasskeyService
+	// passkeySignIn, passkeyBegins and passkeyFailures are the passkey
+	// sign-in and its two budgets.
+	passkeySignIn   PasskeySignInService
+	passkeyBegins   SignInLimiter
+	passkeyFailures SignInLimiter
+	stored          StoredProviders
+	admin           *session.ProviderAdmin
+	providers       map[string]SignInProvider
+	checker         *sessionauth.Checker
+	devCode         *devcode.Code
+	devAdmin        identity.Principal
 }
 
 // provider returns the sign-in provider id: a provider of the
@@ -190,12 +182,11 @@ func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, 
 
 	if s.stored == nil {
 		return SignInProvider{
-			Client:      nil,
+			Method:      nil,
 			ID:          "",
 			DisplayName: "",
 			AutoCreate:  false,
 			Stored:      false,
-			Source:      "",
 		}, false, nil
 	}
 
@@ -217,10 +208,14 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 		return nil, fmt.Errorf("%w: sign-in sessions", ErrMissingDependency)
 	}
 
+	if cfg.Service == nil {
+		return nil, fmt.Errorf("%w: sign-in service", ErrMissingDependency)
+	}
+
 	providers := make(map[string]SignInProvider, len(cfg.Providers))
 	for _, p := range cfg.Providers {
-		if p.Client == nil {
-			return nil, fmt.Errorf("%w: client of sign-in provider %q", ErrMissingDependency, p.ID)
+		if p.Method == nil {
+			return nil, fmt.Errorf("%w: method of sign-in provider %q", ErrMissingDependency, p.ID)
 		}
 
 		providers[p.ID] = p
@@ -237,15 +232,19 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 	}
 
 	return &signInState{
-		sessions:  cfg.Sessions,
-		limiter:   cfg.Limiter,
-		passwords: cfg.PasswordLimiter,
-		stored:    cfg.Stored,
-		admin:     cfg.Admin,
-		providers: providers,
-		checker:   checker,
-		devCode:   cfg.DevCode,
-		devAdmin:  cfg.DevAdmin,
+		service:       cfg.Service,
+		sessions:      cfg.Sessions,
+		limiter:       cfg.Limiter,
+		passwords:     cfg.PasswordLimiter,
+		passkeys:      cfg.Passkeys,
+		passkeySignIn: cfg.PasskeySignIn, passkeyBegins: cfg.PasskeyBeginLimiter,
+		passkeyFailures: cfg.PasskeyLimiter,
+		stored:          cfg.Stored,
+		admin:           cfg.Admin,
+		providers:       providers,
+		checker:         checker,
+		devCode:         cfg.DevCode,
+		devAdmin:        cfg.DevAdmin,
 	}, nil
 }
 
@@ -345,9 +344,9 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	authURL, pending, err := provider.Client.Begin(
+	redirect, err := provider.Method.Begin(
 		ctx,
-		oauth.Options{State: state.Reveal(), MaxAge: 0, HasMaxAge: fresh},
+		session.BeginInput{ProviderID: provider.ID, State: state.Reveal(), Fresh: fresh},
 	)
 	if err != nil {
 		h.logger.WarnContext(ctx, "identity provider not available", slog.String("provider", provider.ID),
@@ -357,9 +356,14 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	// The stored request has a max_age only when the start sent one: a
+	// fresh start of an OIDC provider sends max_age=0. A plain OAuth 2.0
+	// provider has no such parameter.
+	pending := redirect.Pending
+
 	err = h.signIn.sessions.BeginRequest(ctx, session.Begin{
 		State: state, Provider: provider.ID, Nonce: pending.Nonce, Verifier: pending.Verifier, ReturnPath: returnPath,
-		MaxAge: pending.MaxAge, HasMaxAge: pending.HasMaxAge,
+		MaxAge: 0, HasMaxAge: pending.Fresh && provider.Method.Kind() == session.MethodOIDC,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -369,13 +373,13 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 
 	noStore(w)
 	http.SetCookie(w, browserCookie(SignInCookie, state.Reveal(), session.RequestLifetime, http.SameSiteLaxMode))
-	http.Redirect(w, r, authURL, http.StatusFound)
+	http.Redirect(w, r, redirect.URL, http.StatusFound)
 }
 
-// finishSignIn is the callback of a sign-in: it checks the state against
-// the sign-in cookie, takes the sign-in request once, checks the answer of
-// the identity provider, finds or makes the principal, starts a session,
-// and sends the browser to the return path of the request.
+// finishSignIn is the callback of a sign-in: it parses the callback, calls
+// the method of the provider, gives the result to the sign-in service, and
+// answers. The service does the steps of a sign-in and writes the audit
+// entry of each refusal.
 func (h *Handler) finishSignIn(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -396,174 +400,124 @@ func (h *Handler) finishSignIn(w http.ResponseWriter, r *http.Request, _ identit
 		return
 	}
 
-	cb, reason := h.callbackIdentity(r, provider)
-	if reason != "" {
-		h.refuseSignIn(w, r, refusal{err: errSignInFailed, providerID: provider.ID, idpSubject: "", reason: reason})
+	cb := h.parseCallback(r, provider)
+
+	var assertion session.Assertion
+
+	methodErr := cb.err
+	if methodErr == nil {
+		assertion, methodErr = provider.Method.Finish(ctx, cb.callback)
+	}
+
+	res, err := h.signIn.service.Complete(ctx, &signinsvc.Request{
+		MethodErr: methodErr, Entry: signInEntry(r, "", session.ActionSignIn),
+		Provider: signinsvc.Provider{
+			ID: provider.ID, Kind: provider.Method.Kind(), AutoCreate: provider.AutoCreate, Stored: provider.Stored,
+		},
+		Assertion: assertion,
+	})
+	if err != nil {
+		h.answerSignInError(ctx, w, err)
 
 		return
 	}
 
-	h.startSession(w, r, provider, cb.identity, cb.returnPath)
+	http.SetCookie(w, sessionCookie(res.Secret.Reveal(), h.sessionLength(ctx, res.Session)))
+	// The return path passed session.ValidReturnPath when the request was
+	// stored: it is a path of this server.
+	http.Redirect(w, r, cb.returnPath, http.StatusSeeOther)
 }
 
-// callback is what a valid callback gives: the identity that the provider
-// signed in and the return path of the sign-in request.
-type callback struct {
-	identity   oauth.Identity
+// answerSignInError counts the failure of the address and answers the error
+// of the sign-in service. A refusal has its audit entry already.
+func (h *Handler) answerSignInError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, session.ErrProviderDisabled) || errors.Is(err, session.ErrProviderNotFound) {
+		// The provider was disabled or deleted after the lookup of this
+		// callback: answer as for a start of a disabled provider.
+		h.failSignIn(ctx)
+		h.writeError(ctx, w, errUnknownProvider)
+
+		return
+	}
+
+	refusal, ok := errors.AsType[*signinsvc.RefusedError](err)
+	if !ok {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.failSignIn(ctx)
+
+	if refusal.Answer == signinsvc.AnswerRefused {
+		// The reason is safe to show: it names no code, token or state.
+		h.writeError(ctx, w, signInRefusalError{reason: refusal.Reason})
+
+		return
+	}
+
+	h.writeError(ctx, w, errSignInFailed)
+}
+
+// parsedCallback is what the parse of a callback gives: the input of the
+// method, the return path of the sign-in request, and the error of the parse.
+type parsedCallback struct {
+	err        error
+	callback   session.Callback
 	returnPath string
 }
 
-// refused is the answer of callbackIdentity for a refused callback.
-func refused(reason string) (callback, string) {
-	var none callback
-
-	return none, reason
-}
-
-// callbackIdentity checks the callback r of provider and returns what it
-// gives, or the reason of a refusal.
-func (h *Handler) callbackIdentity(r *http.Request, provider SignInProvider) (callback, string) {
+// parseCallback copies the fields of the callback r of provider into a
+// session.Callback. It checks the state against the sign-in cookie and takes
+// the sign-in request once. A callback that does not belong to a request
+// gives an error of the class session.ErrRequestBinding, which the sign-in
+// service records. The method is not called for it.
+func (h *Handler) parseCallback(r *http.Request, provider SignInProvider) parsedCallback {
 	ctx := r.Context()
 	q := queryOf(r)
 
-	if q.Get("error") != "" {
-		return refused(reasonProviderError)
+	binding := func(why string) parsedCallback {
+		return parsedCallback{
+			err: fmt.Errorf("%w: %s", session.ErrRequestBinding, why),
+			callback: session.Callback{
+				Pending: nil, State: "", Code: "", Ticket: "", ProviderError: "", SAMLResponse: nil,
+			},
+			returnPath: "",
+		}
 	}
 
 	//nolint:forbidigo // An identity provider calls the sign-in callback, which is outside the description.
 	cookie, err := r.Cookie(SignInCookie)
 	if err != nil {
-		return refused(reasonState)
+		return binding("the browser holds no sign-in request")
 	}
 
-	pending := oauth.Pending{State: cookie.Value, Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false}
-	if oauth.CheckState(q.Get("state"), pending) != nil {
-		return refused(reasonState)
+	if oauth.CheckState(q.Get("state"), oauth.Pending{
+		State: cookie.Value, Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false,
+	}) != nil {
+		return binding("the state does not match")
 	}
 
 	state, err := session.ParseSecret(cookie.Value)
 	if err != nil {
-		return refused(reasonState)
+		return binding("the sign-in cookie is not a state")
 	}
 
 	// The request works once: TakeRequest deletes it before the exchange.
 	req, err := h.signIn.sessions.TakeRequest(ctx, state)
 	if err != nil || req.Provider != provider.ID {
-		return refused(reasonRequest)
+		return binding("the sign-in request is unknown or expired")
 	}
 
-	pending.Nonce, pending.Verifier, pending.MaxAge, pending.HasMaxAge = req.Nonce, req.Verifier, req.MaxAge,
-		req.HasMaxAge
-
-	id, err := provider.Client.Finish(ctx, q.Get("code"), pending)
-	if err != nil {
-		// The oauth errors hold no code, token, state or nonce.
-		h.logger.WarnContext(ctx, "sign-in refused", slog.String("provider", provider.ID),
-			slog.String("error", err.Error()))
-
-		return refused(reasonIDCheck)
-	}
-
-	return callback{identity: id, returnPath: req.ReturnPath}, ""
-}
-
-// startSession finds or makes the principal of id, starts its session,
-// sets the session cookie and sends the browser to returnPath.
-func (h *Handler) startSession(
-	w http.ResponseWriter, r *http.Request, provider SignInProvider, id oauth.Identity, returnPath string,
-) {
-	ctx := r.Context()
-
-	subject := provider.ID + ":" + id.Subject
-	// Refuse before the subject reaches the audit entry: the entry keeps
-	// the composed subject. The refusal names the provider only.
-	if len(subject) > maxSubjectLen {
-		h.refuseSignIn(w, r, refusal{
-			err: errSignInRefused, providerID: provider.ID, idpSubject: "", reason: reasonSubjectLength,
-		})
-
-		return
-	}
-
-	e := signInEntry(r, subject, id.Subject, session.ActionSignIn)
-
-	p, _, err := h.principals.SignInPrincipal(ctx, e, principal.SignInInput{
-		Subject: subject, Source: provider.Source, Names: []string{id.Name, id.PreferredUsername, id.Email},
-		Create: provider.AutoCreate,
-	})
-	if reason := principalRefusal(err); reason != "" {
-		h.refuseSignIn(
-			w,
-			r,
-			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: id.Subject, reason: reason},
-		)
-
-		return
-	}
-
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
-		AuthTime: id.AuthTime, PrincipalID: p.ID, Provider: provider.ID, SourceIP: e.SourceIP, UserAgent: e.UserAgent,
-		Generation: 0, Stored: provider.Stored,
-	})
-
-	switch {
-	case errors.Is(err, session.ErrProviderDisabled) || errors.Is(err, session.ErrProviderNotFound):
-		// The provider was disabled or deleted after the lookup of this
-		// callback: refuse as a start of a disabled provider.
-		h.failSignIn(ctx)
-		h.writeError(ctx, w, errUnknownProvider)
-
-		return
-	case errors.Is(err, session.ErrPrincipalDisabled):
-		h.refuseSignIn(
-			w,
-			r,
-			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: id.Subject, reason: reasonDisabled},
-		)
-
-		return
-	case errors.Is(err, session.ErrPrincipalNotFound):
-		h.refuseSignIn(
-			w,
-			r,
-			refusal{err: errSignInRefused, providerID: provider.ID, idpSubject: id.Subject, reason: reasonNotTarget},
-		)
-
-		return
-	case err != nil:
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
-	// The return path passed session.ValidReturnPath when the request was
-	// stored: it is a path of this server.
-	http.Redirect(w, r, returnPath, http.StatusSeeOther)
-}
-
-// principalRefusal returns the reason for which a sign-in cannot name a
-// principal, or "" for a found principal or an error of the store.
-func principalRefusal(err error) string {
-	switch {
-	case err == nil:
-		return ""
-	case errors.Is(err, principal.ErrNotFound):
-		return reasonNoPrincipal
-	case errors.Is(err, principal.ErrDisabled):
-		return reasonDisabled
-	case errors.Is(err, principal.ErrNotSignInTarget):
-		return reasonNotTarget
-	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject):
-		return reasonSubject
-	default:
-		return ""
+	return parsedCallback{
+		err: nil, returnPath: req.ReturnPath,
+		callback: session.Callback{
+			Pending: &session.PendingRedirect{
+				StartedAt: req.CreatedAt, ProviderID: req.Provider, State: cookie.Value, Nonce: req.Nonce,
+				Verifier: req.Verifier, RequestID: "", PrincipalID: "", SignInID: "", Fresh: req.HasMaxAge,
+			},
+			State: q.Get("state"), Code: q.Get("code"), Ticket: "", ProviderError: q.Get("error"), SAMLResponse: nil,
+		},
 	}
 }
 
@@ -581,54 +535,6 @@ func (h *Handler) sessionLength(ctx context.Context, sess session.Session) time.
 	return time.Until(sess.CreatedAt.Add(limits.MaxLength))
 }
 
-// refusal is a refused sign-in: the provider, the subject at the identity
-// provider ("" before the provider named one), the reason for the audit
-// entry, and the error to answer.
-type refusal struct {
-	err        error
-	providerID string
-	idpSubject string
-	reason     string
-}
-
-// refuseSignIn counts the failure of the address, writes the audit entry
-// of the refused sign-in rf, and answers its error.
-func (h *Handler) refuseSignIn(w http.ResponseWriter, r *http.Request, rf refusal) {
-	ctx := r.Context()
-	providerID, idpSubject, reason, err := rf.providerID, rf.idpSubject, rf.reason, rf.err
-
-	h.failSignIn(ctx)
-
-	subject := "sign-in:" + providerID
-	if idpSubject != "" {
-		subject = providerID + ":" + idpSubject
-	}
-
-	outcome := audit.OutcomeFailure
-	if errors.Is(err, identity.ErrDenied) {
-		outcome = audit.OutcomeDenied
-	}
-
-	e := signInEntry(r, subject, idpSubject, session.ActionSignIn)
-	e.At = h.signIn.sessions.Now()
-	e.Namespace = audit.ServerScope
-	e.Kind = audit.KindChange
-	e.Outcome = outcome
-	e.Object = "sign-in-provider:" + providerID
-	e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
-
-	if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
-		h.failAudit(ctx)
-	}
-
-	if errors.Is(err, errSignInRefused) {
-		// The reason is safe to show: it names no code, token or state.
-		err = signInRefusalError{reason: reason}
-	}
-
-	h.writeError(ctx, w, err)
-}
-
 // signInRefusalError is errSignInRefused with the reason of the refusal. The reason
 // is safe to show.
 type signInRefusalError struct{ reason string }
@@ -640,9 +546,9 @@ func (signInRefusalError) Unwrap() error { return errSignInRefused }
 
 // signInEntry is the audit entry of a sign-in or a sign-out from the
 // console.
-func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entry {
+func signInEntry(r *http.Request, subject, action string) audit.Entry {
 	return audit.Entry{
-		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: idpSubject, TokenID: "", Action: action,
+		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: "", TokenID: "", Action: action,
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
 		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
@@ -718,7 +624,7 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request, p identity.Pri
 		return
 	}
 
-	e := signInEntry(r, p.Subject, "", session.ActionSignOut)
+	e := signInEntry(r, p.Subject, session.ActionSignOut)
 	if err := h.signIn.sessions.SignOut(ctx, e, caller.Match.Owner.ID, caller.Match.Session.ID); err != nil {
 		h.writeError(ctx, w, err)
 

@@ -164,3 +164,4 @@ both together.
 | [115](0115-terragrunt-run-all-fan-out-on-runners.md) | Terragrunt run-all fan-out on runners | draft |
 | [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
 | [119](0119-gates-on-facts-that-an-operation-does-not-fill.md) | Gates that read a fact which an operation does not fill | discussing |
+| [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |

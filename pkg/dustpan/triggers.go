@@ -175,8 +175,15 @@ type triggerParts struct {
 func triggerDispatcherConfig(cfg *settings, ports *triggerPorts, parts triggerParts) trigger.DispatcherConfig {
 	var versions trigger.Versions
 
+	// Defense in depth: the job store interfaces of the SQL adapters embed the
+	// reader, which is the first layer. The assertion stays for job stores of
+	// other builds, so a new caller cannot skip it. The log below is the third
+	// layer: it makes a missing reader visible at start.
 	if r, ok := cfg.jobStore.(job.FinalVersionReader); ok {
 		versions = finalVersions{reader: r}
+	} else {
+		// Runs at server construction, which has no context.
+		cfg.logger.Warn("the job store has no final version reader: run triggers refuse every upstream check")
 	}
 
 	return trigger.DispatcherConfig{

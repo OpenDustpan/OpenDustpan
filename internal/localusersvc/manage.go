@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // CreateInput names a new local user: the user name, the display name of the
@@ -449,6 +450,10 @@ func (s *Service) checkCurrent(ctx context.Context, a Actor, u localuser.User, i
 // ActionNameCountsKept records it.
 func (s *Service) clearCurrent(ctx context.Context, a Actor, object string, keys lockKeys) {
 	err := s.ClearLocks(ctx, SignedIn{
+		Assertion: session.Assertion{
+			AuthTime: time.Time{}, ProviderID: "", PrincipalID: "", Subject: "", UserName: "", Email: "", Method: "",
+			Names: nil, Groups: nil, Factors: nil, EmailVerified: false, GroupsPresent: false, AuthTimeKnown: false,
+		},
 		PrincipalID: "", UserID: "", locks: keys, SessionGeneration: 0, ChangeRequired: false,
 	})
 	if err == nil {

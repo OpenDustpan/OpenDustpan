@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -19,6 +20,7 @@ import (
 
 var (
 	_ session.Store       = (*Store)(nil)
+	_ session.AlertStore  = (*Store)(nil)
 	_ session.PolicyStore = (*Store)(nil)
 )
 
@@ -33,6 +35,31 @@ func (s *Store) CreateSession(ctx context.Context, ss session.Session, d session
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
 		return insertSession(ctx, q, ss, d)
+	})
+}
+
+// CreateSessionWithAlert implements session.AlertStore. The session, the
+// entry and the notification commit together, or none does.
+func (s *Store) CreateSessionWithAlert(
+	ctx context.Context, ss session.Session, d session.Digest, e audit.Entry, n notify.Notification,
+) error {
+	if err := ss.Validate(); err != nil {
+		return err
+	}
+
+	if err := n.Validate(); err != nil {
+		return fmt.Errorf("alert of a session: %w", err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		if err := insertSession(ctx, q, ss, d); err != nil {
+			return err
+		}
+
+		return appendNotifications(ctx, q, audit.ServerScope, []notify.Notification{n})
 	})
 }
 

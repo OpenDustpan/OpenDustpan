@@ -15,7 +15,7 @@ func TestErrorsAreDistinct(t *testing.T) {
 	all := []error{
 		mfa.ErrNotFound, mfa.ErrAlreadyExists, mfa.ErrInvalid, mfa.ErrLimit,
 		mfa.ErrCounterRegressed, mfa.ErrSuspended, mfa.ErrVoid, mfa.ErrEnrollmentRequired,
-		mfa.ErrLastCredential, mfa.ErrUnavailable,
+		mfa.ErrLastCredential, mfa.ErrUnavailable, mfa.ErrVerification, mfa.ErrWrongPerson,
 	}
 
 	for i, a := range all {

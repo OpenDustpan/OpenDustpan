@@ -564,8 +564,12 @@ func TestRevealAuditFailureAnswers500(t *testing.T) {
 		t.Fatalf("log misses the failure line: %q", line)
 	}
 
-	if !strings.Contains(line, path) {
-		t.Fatalf("log misses the path: %q", line)
+	if strings.Contains(line, path) {
+		t.Fatalf("log holds the path, which is request data: %q", line)
+	}
+
+	if !strings.Contains(line, "op=reveal.audit") && !strings.Contains(line, `"op":"reveal.audit"`) {
+		t.Fatalf("log misses the op: %q", line)
 	}
 
 	if strings.Contains(line, revealSecretValue) {
@@ -670,8 +674,12 @@ func TestRevealOtherProviderAuditFailureAnswers500(t *testing.T) {
 		t.Fatalf("log misses the failure line: %q", line)
 	}
 
-	if !strings.Contains(line, path) {
-		t.Fatalf("log misses the path: %q", line)
+	if strings.Contains(line, path) {
+		t.Fatalf("log holds the path, which is request data: %q", line)
+	}
+
+	if !strings.Contains(line, "op=reveal.audit") && !strings.Contains(line, `"op":"reveal.audit"`) {
+		t.Fatalf("log misses the op: %q", line)
 	}
 
 	if strings.Contains(line, revealSecretValue) {

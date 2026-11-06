@@ -29,20 +29,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
-	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -76,18 +73,6 @@ type Problem struct {
 	// or "" for an answer that is not a 500.
 	cause string
 }
-
-// The cause classes of a 500. Each value is a fixed string that the code
-// writes. A cause class never holds a part of an error text.
-const (
-	CauseDeadlineExceeded = "deadline_exceeded"
-	CauseCanceled         = "canceled"
-	CauseNetwork          = "network"
-	CauseUnexpectedEOF    = "unexpected_eof"
-	CauseFileMissing      = "file_missing"
-	CauseFilePermission   = "file_permission"
-	CauseUnclassified     = "unclassified"
-)
 
 // Unit is a unit that an answer names: its ID, the label of its tool and its
 // name.
@@ -209,7 +194,7 @@ type Writer struct {
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	p := wr.Problem(err)
 	if p.Status == http.StatusInternalServerError {
-		p.cause = Cause(err)
+		p.cause = faultlog.Cause(err)
 	}
 
 	switch {
@@ -240,24 +225,14 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 	if codeErr != nil {
 		// A code or a value that the catalog refuses is a bug of the adapter.
 		// The log names the code only.
-		wr.Logger.ErrorContext(ctx, "error code refused", slog.String("error_code", p.Code))
+		faultlog.LogInternal(ctx, wr.Logger, "error code refused", faultlog.CauseUnclassified, p.Code)
 
 		p = Internal()
 		made = errcode.Internal()
 	}
 
 	if p.Status == http.StatusInternalServerError {
-		cause := p.cause
-		if cause == "" {
-			cause = CauseUnclassified
-		}
-
-		attrs := []any{slog.Int("status", p.Status), slog.String("cause", cause)}
-		if id, ok := safeRequestID(requestid.FromContext(ctx)); ok {
-			attrs = append(attrs, slog.String("request_id", id))
-		}
-
-		wr.Logger.ErrorContext(ctx, "request failed", attrs...)
+		faultlog.LogInternal(ctx, wr.Logger, "request failed", p.cause, "")
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -516,57 +491,6 @@ func answer(status int, code, message string) Problem {
 		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 		Units: nil, answer: errcode.Answer{}, cause: "",
 	}
-}
-
-// Cause returns the cause class of err: one value of the closed list of the
-// Cause constants, never a part of err.Error(). The order is part of the
-// contract, because context.DeadlineExceeded also implements net.Error. A nil
-// error returns CauseUnclassified.
-func Cause(err error) string {
-	switch {
-	case err == nil:
-		return CauseUnclassified
-	case errors.Is(err, context.DeadlineExceeded):
-		return CauseDeadlineExceeded
-	case errors.Is(err, context.Canceled):
-		return CauseCanceled
-	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
-		return CauseUnexpectedEOF
-	case errors.Is(err, fs.ErrNotExist):
-		return CauseFileMissing
-	case errors.Is(err, fs.ErrPermission):
-		return CauseFilePermission
-	}
-
-	// Defense in depth: AsType returns a non-nil error when ok is true. The nil
-	// check stays so that a future change to the match cannot return the class
-	// for an empty match.
-	if netErr, ok := errors.AsType[net.Error](err); ok && netErr != nil {
-		return CauseNetwork
-	}
-
-	return CauseUnclassified
-}
-
-// safeRequestID returns id and true only when id is 1 to 64 lowercase hex
-// bytes, the form that requestid.New makes. Otherwise it returns "" and false.
-func safeRequestID(id string) (string, bool) {
-	if id == "" || len(id) > 64 {
-		return "", false
-	}
-
-	// Defense in depth: requestid.New makes hex only, but the context value may
-	// come from a caller that is not the root middleware. This check stays so
-	// that a value with CR, LF or a secret never reaches the log, and it does
-	// not rely on the slog handler quoting.
-	for i := range len(id) {
-		c := id[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return "", false
-		}
-	}
-
-	return id, true
 }
 
 // WriteJSON writes body as JSON with status. A failed write logs a warning:

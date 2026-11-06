@@ -9,9 +9,9 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -30,8 +30,11 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
 	go run ./cmd/subtestcheck .
 
+# Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
+LINT_FLAGS ?=
+
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
-	golangci-lint run --build-tags e2e,journalrecording ./...
+	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
@@ -102,8 +105,9 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # one regular expression per line. Each entry needs the owner's approval.
 # Today it holds one vendored agent skill, where a Markdown link that names a
 # file looks like a credential to a detector, two API reference pages, and
-# twelve test files whose fake URLs with a user name and a password test the
-# refusal or the masking of credentials.
+# test files whose fake URLs with a user name and a password test the refusal
+# or the masking of credentials. Four of these files no longer exist, but
+# their history still holds a fake credential.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
@@ -135,6 +139,18 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+
+# With no VERSION there is no tag to check, so the target runs the cases that
+# exist without one: the script against an empty record, a record of another
+# version, a record with a CR or a NUL byte, and a missing record. With
+# VERSION=vX.Y.Z on the command line it checks the record for that tag, as a
+# release does. A VERSION in the environment does not change the mode.
+release-record-check: ## Check the release record: the cases that need no tag, or VERSION=vX.Y.Z for a tag.
+ifeq ($(origin VERSION),command line)
+	./scripts/check-release-record.sh '$(VERSION)'
+else
+	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
+endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
 	$(ADR_INDEX)

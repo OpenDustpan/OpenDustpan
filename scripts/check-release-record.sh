@@ -35,6 +35,15 @@ if [[ ! -f "$record" ]]; then
   exit 1
 fi
 
+# A CR or a NUL byte can hide a difference from awk and from the shell, so the
+# record that holds one is not valid. Defense in depth: this check does not
+# rely on the later comparison of the lines, and that comparison does not rely
+# on this check.
+if ! LC_ALL=C tr -d '\000\r' < "$record" | cmp -s - "$record"; then
+  echo "check-release-record: $record has a CR or NUL byte; remove it" >&2
+  exit 1
+fi
+
 for dialect in sqlite postgres; do
   dir="$root/pkg/store/$dialect/migrations"
   want="$(cd "$dir" && sha256sum -- [0-9]*.sql | awk '{print $2, $1}' | sort)"
