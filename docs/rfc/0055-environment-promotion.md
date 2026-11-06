@@ -367,4 +367,7 @@ _Avoid_: Preview environment, ephemeral environment, PR environment
 
 ## Outcome
 
-None yet.
+None yet. On 6 November 2026 the owner put environment promotion in milestone
+6, under the owner rule of 1 November 2026 that no feature gets cut
+([ADR 331](../adr/0331-environment-promotion-is-in-milestone-6.md)). This RFC is
+the research for it. The ordered rollout stays later (ADR 318 decision 3).
