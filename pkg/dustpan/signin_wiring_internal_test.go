@@ -245,6 +245,13 @@ func TestNewServerSessionsApplyInactivity(t *testing.T) {
 		t.Fatalf("session of an active person = %d, want 200", code)
 	}
 
+	// This test is about the inactivity rule. The limit of a break-glass session
+	// is 1 hour by default and would end the session first, so the limit is the
+	// longest that the setting allows.
+	w.srv.signInRequests.SetBreakGlassLimit(func(context.Context) (time.Duration, error) {
+		return session.MaxBreakGlassMaxLength, nil
+	})
+
 	w.clock.advance(2 * time.Hour)
 
 	if code := w.readSession(t, alice); code != http.StatusUnauthorized {
