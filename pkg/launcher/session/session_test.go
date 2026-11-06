@@ -277,6 +277,7 @@ func TestErrorsMapToSentinels(t *testing.T) {
 		{"no error body", 404, "", "404 page not found", nil, session.ErrRefused},
 		{"gateway with no body", 502, "", "<html>bad gateway</html>", nil, session.ErrUnavailable},
 		{"proxy rate limit with no body", 429, "", "slow down", nil, session.ErrUnavailable},
+		{"server error with no body", 500, "", "internal error", nil, session.ErrUnavailable},
 		{"no answer", 0, "", "", errReset, session.ErrUnavailable},
 	}
 
