@@ -143,6 +143,8 @@ func seedCanaryNamespace(t *testing.T, st *sqlite.Store) {
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
+
+	seedCatchAllPlacement(t, st, "acme")
 }
 
 // canaryCall sends call and names the canary values it carries, so the test
@@ -219,7 +221,9 @@ func canaryCalls() []canaryCall {
 				path:      "/api/stacks/acme/web",
 				auth:      "token " + adminToken,
 				requestID: "",
-				body:      `{"stackName":"` + bodyCanary + `"}`,
+				// The canary is a tag value and not the stack name: the audit
+				// entry of a placed stack names the stack on purpose.
+				body: `{"stackName":"body-canary-stack","tags":{"note":"` + bodyCanary + `"}}`,
 			},
 		},
 		{

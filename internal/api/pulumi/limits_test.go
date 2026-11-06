@@ -78,6 +78,7 @@ func newUpdateFixtureWithGate(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -164,6 +165,7 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

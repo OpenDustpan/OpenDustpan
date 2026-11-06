@@ -440,6 +440,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -493,6 +494,16 @@ func newGuardedEnforcingHandler(
 ) (*pulumi.Handler, *recordingStackStore) {
 	t.Helper()
 
+	return newPlacingHandler(t, authz, entries, guard, nil)
+}
+
+// newPlacingHandler is newGuardedEnforcingHandler with placer as the Placer of
+// the handler.
+func newPlacingHandler(
+	t *testing.T, authz identity.Authorizer, entries audit.Store, guard stategate.Guard, placer *pulumi.Placer,
+) (*pulumi.Handler, *recordingStackStore) {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
@@ -519,6 +530,7 @@ func newGuardedEnforcingHandler(
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		StateGuard:              guard,
+		Placer:                  placer,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1660,6 +1672,7 @@ func newDeleteHandlerWithAudit(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

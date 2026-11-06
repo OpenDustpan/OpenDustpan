@@ -90,6 +90,7 @@ func newUpdateFixtureWithAddressGate(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -290,6 +291,7 @@ func newSharedLeaseFixture(t *testing.T, setup sharedLeaseSetup, gate pulumi.Add
 	t.Helper()
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

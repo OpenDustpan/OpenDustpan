@@ -97,6 +97,8 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 		if nsErr := st.CreateNamespace(t.Context(), ns); nsErr != nil {
 			t.Fatalf("create namespace %s: %v", name, nsErr)
 		}
+
+		seedCatchAllPlacement(t, st, name)
 	}
 
 	at := time.Unix(0, 0)
