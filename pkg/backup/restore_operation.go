@@ -125,25 +125,32 @@ package backup
 //   - The restore never deletes a live key. A failed check deletes only the
 //     temporary key. Cleanup deletes the temporary keys of the restore.
 //   - A live key that exists is verified. When its bytes differ, the restore
-//     stores the repair as an audit event under the fence, then overwrites
-//     the key with the checked bytes, or fails with ErrCorrupt when the store
-//     refuses the overwrite.
+//     stores the refusal as an audit event under the fence and fails with
+//     ErrCorrupt. It writes nothing over the key, on every store.
+//   - The restore reads and checks the staged copy before it writes the live key.
+//     A staged copy that differs stops the restore with ErrCorrupt and writes
+//     nothing to the live key.
+//   - The claim is checked, with no write, just before each Put to a live key,
+//     and the live key is read once more after that check. A store that ignores
+//     conditional writes can still take a write of another writer between the
+//     last read and the Put. Maintenance mode stops the other writers.
 //   - The copy from the temporary key to the live key reads the temporary key
 //     a second time, and checks those bytes after the Put. A temporary key
 //     that answers other bytes the second time leaves a live key with bytes
-//     that do not match, and the step fails. A retry overwrites them on a
-//     store with no conditional writes; a store with conditional writes
-//     fails the restore with ErrCorrupt.
+//     that do not match, and the step fails. A retry finds that live key,
+//     sees that its bytes differ, and fails the restore with ErrCorrupt, on
+//     every store.
 //   - After the swap, after-apply checks that each blob that the restored
 //     data names exists, and copies a missing one again from the pinned
 //     backup, before leave-maintenance.
 //
-// No blob deleter waits for a running restore yet: the guard port of the
-// blob deletes does not exist. So the after-apply check is the only
-// protection, and a deleter that runs at any time during the restore, and
-// deletes a key after that check, can delete a blob that the restored data
-// names. The guard must count a restore row that is checking or applying as
-// running.
+// A restore that is checking or applying counts as running work for the guard
+// of the blob deletes (blobguard.Watch): the store answers it from the
+// restores row, in the same read that finds a running backup. So the deleters
+// of the blobs that a backup or restored data can name wait while the restore
+// runs. A deleter that read the guard before the restore started, and stalls
+// until after the check of after-apply, can still delete a blob that the
+// restored data names. The check of after-apply cannot close that window.
 //
 // # Failure, cancel and the end of the operation
 //
@@ -200,7 +207,7 @@ package backup
 // the fence protects: each of its fenced writes fails. Outside the fence it
 // can write into its own staging area, copy checked bytes to a live key,
 // copy a temporary key, and, with force, cancel active work, as above. Each
-// cancel and each repair is stored as an audit event of the restore under
+// cancel and each refusal to overwrite a live key is stored as an audit event of the restore under
 // the fence before it happens, so a holder that stops after it leaves the
 // record. The after-apply step, or the end of a failed restore, writes the
 // audit entries of the events.
@@ -435,8 +442,9 @@ type RestoreOperations interface {
 	) (entered bool, err error)
 
 	// MarkRestoreApplying moves the restore id from checking to applying,
-	// records the pre-backup ID and the step of f.
-	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id RestoreID, preBackupID ID) error
+	// records the pre-backup ID and the step of f with result, in one
+	// transaction. A nil result records the step with no result.
+	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id RestoreID, preBackupID ID, result []byte) error
 
 	// AppendRestoreAudit appends entries, in order, to the audit log of the
 	// installation and records the step of f, in one transaction, so the
@@ -457,6 +465,14 @@ type RestoreOperations interface {
 	// ValidateRestoreEvent. It returns the errors of the fence,
 	// ErrRestoreNotFound, ErrRestoreNotRunning and ErrRestoreEventInvalid.
 	RecordRestoreEvent(ctx context.Context, f durable.StepFence, id RestoreID, object string) error
+
+	// CheckRestoreFence checks, with no write, that f is the live claim of
+	// the operation of the checking or applying restore id. It records no
+	// step and changes no row. A restore calls it before it writes a live
+	// blob, because the write changes a store that the fence does not guard.
+	// It checks f with the rules of durable.Store.RecordStep. It returns the
+	// errors of the fence, ErrRestoreNotFound and ErrRestoreNotRunning.
+	CheckRestoreFence(ctx context.Context, f durable.StepFence, id RestoreID) error
 
 	// RestoreEvents returns the audit events of the restore id in the order
 	// that RecordRestoreEvent added them, with no fence. It returns
@@ -755,7 +771,7 @@ const restoreEventOverflowHead = "restore audit events past the limit of 999: "
 // restoreEventOverflow returns the summary event of count events past the
 // limit.
 func restoreEventOverflow(count int64) string {
-	return restoreEventOverflowHead + strconv.FormatInt(count, 10) + " more cancels or repairs, in the log lines"
+	return restoreEventOverflowHead + strconv.FormatInt(count, 10) + " more cancels or refusals, in the log lines"
 }
 
 // restoreEventOverflowCount returns the count of a summary event, and

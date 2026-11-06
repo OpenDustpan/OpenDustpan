@@ -14,13 +14,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/breakglass"
-	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -33,6 +31,11 @@ var (
 	ErrAlreadyExists = errors.New("temporary administrator already exists")
 	// ErrInvalid reports a record or an input that fails validation.
 	ErrInvalid = errors.New("invalid temporary administrator")
+	// ErrInvalidReason reports a reason of a temporary administrator that is
+	// empty, that is not UTF-8, that is longer than audit.MaxReasonLen
+	// characters, or that holds a control character, a format character or a
+	// line or paragraph separator.
+	ErrInvalidReason = errors.New("invalid reason")
 	// ErrExpired reports a use after the expiry of the record.
 	ErrExpired = errors.New("temporary administrator expired")
 	// ErrMissingDependency reports a Config without a required port.
@@ -97,7 +100,7 @@ func (r TempAdmin) Validate() error {
 		return fmt.Errorf("%w: missing creator", ErrInvalid)
 	}
 
-	if hasHiddenRune(r.CreatedBy) {
+	if strings.ContainsFunc(r.CreatedBy, audit.IsHiddenRune) {
 		return fmt.Errorf("%w: the creator holds a control or format character", ErrInvalid)
 	}
 
@@ -120,38 +123,35 @@ func (r TempAdmin) Validate() error {
 }
 
 // ValidateReason reports whether reason is a usable reason of a temporary
-// administrator: history.ValidateReason accepts it, it holds no format
-// character, such as a direction override, that could hide text in the
-// audit log, and it is a valid reason of an audit entry, at most
-// audit.MaxReasonLen characters.
+// administrator: not blank, UTF-8, at most audit.MaxReasonLen characters, and
+// with no control character, format character, or line or paragraph
+// separator, so that it is a valid reason of an audit entry. It returns
+// ErrInvalidReason otherwise.
 func ValidateReason(reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: a reason is required", ErrInvalidReason)
+	}
+
+	if !utf8.ValidString(reason) {
+		return fmt.Errorf("%w: the reason is not UTF-8", ErrInvalidReason)
+	}
+
 	if utf8.RuneCountInString(reason) > audit.MaxReasonLen {
-		return fmt.Errorf("%w: the reason is longer than %d characters", history.ErrInvalidReason, audit.MaxReasonLen)
+		return fmt.Errorf("%w: the reason is longer than %d characters", ErrInvalidReason, audit.MaxReasonLen)
 	}
 
-	if err := history.ValidateReason(reason); err != nil {
-		return err
+	if strings.ContainsFunc(reason, audit.IsHiddenRune) {
+		return fmt.Errorf("%w: the reason holds a control or format character", ErrInvalidReason)
 	}
 
-	if hasHiddenRune(reason) {
-		return fmt.Errorf("%w: the reason holds a format character", history.ErrInvalidReason)
-	}
-
-	// The audit entry of the create holds the reason, so the reason must
-	// also be a valid reason of an entry.
+	// Defense in depth: the checks above refuse each reason that
+	// audit.ValidateReason refuses. This check stays so that a new rule of
+	// the audit entry also applies here.
 	if err := audit.ValidateReason(reason); err != nil {
-		return fmt.Errorf("%w: %w", history.ErrInvalidReason, err)
+		return fmt.Errorf("%w: %w", ErrInvalidReason, err)
 	}
 
 	return nil
-}
-
-// hasHiddenRune reports whether s holds a control character (Cc) or a
-// format character (Cf).
-func hasHiddenRune(s string) bool {
-	return strings.ContainsFunc(s, func(r rune) bool {
-		return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)
-	})
 }
 
 // ReviewUse returns the break-glass use of r that ends at end: the expiry

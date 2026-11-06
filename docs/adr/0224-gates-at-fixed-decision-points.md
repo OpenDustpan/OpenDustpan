@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 17 ("A policy check on every change"). Supersedes ADR 103 decision 1, ADR 112 decisions 6 and 7, and ADR 113 decisions 8 and 9 in part. Supersedes ADR 114, except decision 4 and the request signature of decision 8. Supersedes the `expr` rules of ADR 115 decision 2, and ADR 201 decision 11. Decision 16 extended by ADR 241
 
+Changed by:
+
+- ADR 241 extends decision 16: the operation kind unit-import at state.write.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+- ADR 313 extends decision 1: the authorization object of a profile.
+- ADR 317 changes decision 1: the key of the gate rows of a unit.
+
 ## Context
 
 ADR 17 asks for a policy check on each change, with the outcomes deny and

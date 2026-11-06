@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-12 · the deferred restore into another region amended by ADR 248
 
+Changed by:
+
+- ADR 248 changes: the deferred restore into another region in the
+  consequences is moot.
+- ADR 253 changes decision 4: the manifest format number rises from 2 to 3.
+
 ## Context
 
 ADR 30 captures the SQL part of a backup in the format of its dialect. SQLite

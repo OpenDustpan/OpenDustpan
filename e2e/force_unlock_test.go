@@ -280,7 +280,8 @@ func (r *forceUnlockRun) checkMismatch(t *testing.T, body string) {
 
 // checkAllowed proves that an admin releases the lock with the CLI, which sends
 // no body, and with the API, with a reason and the lock that the caller saw; and
-// that a force-unlock of an unlocked workspace answers 409 with its code.
+// that a repeat by the releaser succeeds with no change, and that a force-unlock
+// of an unlocked workspace that names another lock answers 409 with its code.
 func (r *forceUnlockRun) checkAllowed(t *testing.T) {
 	t.Helper()
 
@@ -306,9 +307,97 @@ func (r *forceUnlockRun) checkAllowed(t *testing.T) {
 		t.Fatalf("lock after the API force-unlock is %+v, want none", still)
 	}
 
+	// The admin repeats the force-unlock, as OpenTofu does when it loses the
+	// answer: the repeat succeeds and changes nothing.
 	status, respBody = r.forceUnlock(t, r.admin, "")
+	if status != http.StatusOK {
+		t.Fatalf("repeat of the force-unlock by the releaser answers %d %q, want 200", status, respBody)
+	}
+
+	if still := r.current(t); still.id != "" {
+		t.Fatalf("lock after the repeated force-unlock is %+v, want none", still)
+	}
+
+	// The unit view of the tool-neutral API names the record that made the
+	// repeat succeed. The TFE workspace document keeps its shape and shows none.
+	r.checkLastRelease(t, held.id, held.holder)
+
+	// A force-unlock that names another lock is not a repeat: it answers 409.
+	other := `{"data":{"attributes":{"lock-id":"lock-other","lock-holder":"` + held.holder + `"}}}`
+
+	status, respBody = r.forceUnlock(t, r.admin, other)
 	if status != http.StatusConflict || errorCode(t, respBody) != "workspace.not-locked" {
-		t.Fatalf("force-unlock of an unlocked workspace answers %d %q, want 409 workspace.not-locked", status, respBody)
+		t.Fatalf("force-unlock that names another lock answers %d %q, want 409 workspace.not-locked", status, respBody)
+	}
+}
+
+// lastReleaseBody is the lastRelease object of one unit of the unit list.
+type lastReleaseBody struct {
+	LockID     string `json:"id"`
+	Holder     string `json:"holder"`
+	ReleasedBy string `json:"releasedBy"`
+	ReleasedAt string `json:"releasedAt"`
+	Kind       string `json:"kind"`
+}
+
+// lastReleaseUnit is the part of one unit of the unit list that the last
+// release check reads.
+type lastReleaseUnit struct {
+	LastRelease *lastReleaseBody `json:"lastRelease"`
+	Tool        string           `json:"tool"`
+	Name        string           `json:"name"`
+}
+
+// workspaceLastRelease reads the unit list of the namespace and returns the
+// last release of the OpenTofu workspace web, or nil when the unit shows none.
+func (r *forceUnlockRun) workspaceLastRelease(t *testing.T) *lastReleaseBody {
+	t.Helper()
+
+	status, body, err := r.env.APIStatus(
+		t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/"+refusalNamespace+"/units", "",
+	)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list units answers %d %q: %v", status, body, err)
+	}
+
+	var list struct {
+		Units []lastReleaseUnit `json:"units"`
+	}
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode the unit list %q: %v", body, err)
+	}
+
+	for _, u := range list.Units {
+		if u.Tool == "OpenTofu" && u.Name == "web" {
+			return u.LastRelease
+		}
+	}
+
+	t.Fatalf("the unit list has no workspace web: %s", body)
+
+	return nil
+}
+
+// checkLastRelease proves that the unit list of the tool-neutral API shows the
+// last released lock of the workspace web: the lock ID, the holder, a releaser,
+// the time and the forced kind. It also proves that the TFE workspace document
+// shows no such record.
+func (r *forceUnlockRun) checkLastRelease(t *testing.T, lockID, holder string) {
+	t.Helper()
+
+	got := r.workspaceLastRelease(t)
+	if got == nil {
+		t.Fatal("the unit list shows no last release for the workspace web")
+	}
+
+	if got.LockID != lockID || got.Holder != holder || got.Kind != "forced" ||
+		got.ReleasedBy == "" || got.ReleasedAt == "" {
+		t.Fatalf("last release = %+v, want lock %q, holder %q, kind forced, a releaser and a time", got, lockID, holder)
+	}
+
+	_, doc := r.call(t, r.admin, http.MethodGet, "/api/v2/workspaces/"+r.id, "")
+	if strings.Contains(strings.ToLower(doc), "release") {
+		t.Fatalf("the TFE workspace document shows the last release: %s", doc)
 	}
 }
 

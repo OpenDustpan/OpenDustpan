@@ -64,8 +64,9 @@ func (d *jobDomain) CreateUnit(
 		w := workspace.Workspace{
 			NamespaceID: "",
 			CreatedAt:   now, UpdatedAt: now,
-			Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
+			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			LastRelease: workspace.NoRelease(),
+			ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
 			Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 		}
 
@@ -254,7 +255,7 @@ func TestJobConformance(t *testing.T) {
 		ops := s.DurableOperationsPort()
 
 		return jobtest.Harness{
-			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
+			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: &jobDomain{s: s},
 		}
 	})
@@ -266,28 +267,62 @@ func TestRecorderConformance(t *testing.T) {
 	jobtest.RunRecorder(t, func(t *testing.T) jobtest.RecorderHarness {
 		t.Helper()
 
-		s := open(t)
-		j := s.Jobs()
-		ops := s.DurableOperationsPort()
-
-		blobs, err := blobfs.Open(t.TempDir())
-		if err != nil {
-			t.Fatalf("open blob store: %v", err)
-		}
-
-		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
-
-		return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
-			Harness: jobtest.Harness{
-				Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
-				Domain: &jobDomain{s: s},
-			},
-			Records:  j,
-			ItemKeys: s,
-			Blobs:    blobs,
-			Wrapper:  nil,
-		})
+		return newRecorderHarness(t).h
 	})
+}
+
+func TestArtifactSweepConformance(t *testing.T) {
+	t.Parallel()
+
+	jobtest.RunArtifactSweep(t, func(t *testing.T) jobtest.ArtifactSweepHarness {
+		t.Helper()
+
+		r := newRecorderHarness(t)
+
+		return jobtest.ArtifactSweepHarness{RecorderHarness: r.h, Names: r.names, Clock: r.store, Audit: r.store}
+	})
+}
+
+// recorderStores are the recorder harness over a fresh store and the job store
+// of that store, which serves the artifact names.
+type recorderStores struct {
+	h     jobtest.RecorderHarness
+	names job.ArtifactKeyStore
+	store *sqlite.Store
+}
+
+// newRecorderHarness returns the recorder harness over a fresh store, with
+// the job store that serves the artifact names.
+func newRecorderHarness(t *testing.T) recorderStores {
+	t.Helper()
+
+	s := open(t)
+	j := s.Jobs()
+	ops := s.DurableOperationsPort()
+
+	blobs, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := blobs.Close(); err != nil {
+			t.Errorf("close blob store: %v", err)
+		}
+	})
+
+	h := jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
+		Harness: jobtest.Harness{
+			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
+			Domain: &jobDomain{s: s},
+		},
+		Records:  j,
+		ItemKeys: s,
+		Blobs:    blobs,
+		Wrapper:  nil,
+	})
+
+	return recorderStores{h: h, names: j, store: s}
 }
 
 func TestJobBackupKeepsTheDefaultedValues(t *testing.T) {

@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18. Supersedes decision 9 of ADR 103 in part. Decisions 1, 4, 6, 9 and 14 superseded in part by ADR 149. Route paths superseded in part by ADR 210. An open question answered by ADR 213 decision 10
 
+Changed by:
+
+- ADR 149 changes decisions 1, 6 and 9: server-made schedule and freeze IDs
+  and the hourly cleanup.
+- ADR 149 extends decisions 4 and 14: the occurrence ID refusal and 404
+  outside the scope.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 213 extends: the open question on a freeze of a collection or unit.
+
 ## Context
 
 [ADR 103](0103-job-gates-actions-and-audit.md) decisions 4 to 6 make change

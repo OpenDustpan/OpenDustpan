@@ -14,6 +14,8 @@ import (
 //   - its object is in the namespace Namespace (the namespace itself, its
 //     collections and its units), or
 //   - its object is Object (a unit matches by its stable ID), or
+//   - its object is one of Inside (the targets of the units in the
+//     collection Object, each as "unit:" and the stable ID), or
 //   - its object is one of Containers and its role is one of
 //     ContainerRoles, or, in a history, any custom role (a deleted one
 //     included): the actions of a role at the time of a grant are not
@@ -30,6 +32,7 @@ type ReviewScope struct {
 	Object              identity.Object
 	Namespace           string
 	Containers          []string
+	Inside              []string
 	ContainerRoles      []string
 	TokenNamespace      string
 	TokenNamespaceRoles []string

@@ -24,11 +24,7 @@ func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.T
 		return workspace.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
 	}
 
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			_ = rollbackErr
-		}
-	}()
+	defer rollbackRead(ctx, tx)
 
 	q := s.queries.WithTx(tx)
 

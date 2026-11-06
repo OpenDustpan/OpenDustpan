@@ -97,7 +97,7 @@ func newSweepFixture(t *testing.T) sweepFixture {
 	// The manual lock service needs an authorizer, which a started server always has.
 	cfg.authorizer = identity.AdminOnly{}
 
-	svc, err := newServices(cfg, nil)
+	svc, err := newServices(cfg, nil, cfg.authorizer)
 	if err != nil {
 		t.Fatalf("services: %v", err)
 	}

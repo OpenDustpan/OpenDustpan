@@ -133,7 +133,7 @@ func DevSessionRow(id, principalID, provider string) map[string]any {
 	return map[string]any{
 		"id": id, "principal_id": principalID, "digest": "digest-" + id, "provider": provider,
 		"created_at_ms": 1, "last_seen_at_ms": 1, "auth_time_ms": 1, "ended_at_ms": nil,
-		"end_reason": "", "source_ip": "", "user_agent": "",
+		"end_reason": "", "source_ip": "", "user_agent": "", "generation": 1,
 	}
 }
 
@@ -151,6 +151,30 @@ func DevTokenRow(id, principalID string) map[string]any {
 func DevPreferencesRow(principalID string) map[string]any {
 	return map[string]any{
 		"principal_id": principalID, "document": `{"language":"ar"}`, "updated_at_ms": 1,
+	}
+}
+
+// DevLocalUserRow returns a local_users row with a password hash.
+func DevLocalUserRow(id, principalID string) map[string]any {
+	return map[string]any{
+		"id": id, "principal_id": principalID, "user_name": "demo",
+		"password_hash": "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$" +
+			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"password_set_at_ms": 1, "change_required": false, "demo": true, "created_by": "system", "created_at_ms": 1,
+	}
+}
+
+// DevSessionGenerationRow returns a principal_session_generations row.
+func DevSessionGenerationRow(principalID string) map[string]any {
+	return map[string]any{"principal_id": principalID, "generation": 3}
+}
+
+// DevPasskeyRow returns a passkeys row.
+func DevPasskeyRow(id, principalID string) map[string]any {
+	return map[string]any{
+		"id": id, "principal_id": principalID, "name": "laptop", "credential_id": []byte("credential-" + id),
+		"public_key": []byte{0xa5, 0x01, 0x02}, "transports": "internal", "aaguid": make([]byte, 16),
+		"sign_count": 0, "backup_eligible": true, "created_at_ms": 1, "last_used_at_ms": 0, "suspended_at_ms": 0,
 	}
 }
 
@@ -207,6 +231,6 @@ func DevIssuerRow(id string) map[string]any {
 func DevGateObjectRow(kind, id, body string) map[string]any {
 	return map[string]any{
 		"namespace_id": "", "scope_key": "installation", "kind": kind, "id": id, "level": "installation",
-		"tool": "", "unit_name": "", "version": 1, "body": body, "updated_at_ms": 1,
+		"unit_id": "", "version": 1, "body": body, "updated_at_ms": 1,
 	}
 }

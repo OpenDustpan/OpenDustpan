@@ -20,13 +20,16 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -66,10 +69,13 @@ type memUpdateStore struct {
 	stackVersion map[stack.Ref]int64
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
-	journal      map[stack.UpdateID][]blob.Key
+	journal      map[stack.UpdateID][]stack.JournalBatchRef
 	refusals     map[stack.UpdateID][]stack.JournalRefusal
 	seqs         map[stack.UpdateID][]int64
-	mu           sync.Mutex
+	// stacks resolves the stack ID of the item key of a new update, as the
+	// Stacks of the update service does.
+	stacks stack.CheckpointStacks
+	mu     sync.Mutex
 }
 
 func newMemUpdateStore() *memUpdateStore {
@@ -78,14 +84,32 @@ func newMemUpdateStore() *memUpdateStore {
 		stackVersion: map[stack.Ref]int64{},
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
-		journal:      map[stack.UpdateID][]blob.Key{},
+		journal:      map[stack.UpdateID][]stack.JournalBatchRef{},
 		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
 		seqs:         map[stack.UpdateID][]int64{},
+		stacks:       nil,
 		mu:           sync.Mutex{},
 	}
 }
 
-func (m *memUpdateStore) CreateUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+func (m *memUpdateStore) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
+	st, err := m.stacks.GetStack(ctx, u.Ref)
+	if err != nil {
+		return err
+	}
+
+	item, err := key.RefFor(u.Ref.Namespace, st.ID, u.ID)
+	if err != nil {
+		return err
+	}
+
+	// The fake has no transaction: a sealer of the tests needs none.
+	if _, err := key.NewKey(ctx, nil, item, fence); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -193,13 +217,13 @@ func (m *memUpdateStore) ListUpdates(_ context.Context, ref stack.Ref, _ stack.P
 	return list, nil
 }
 
-func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) error {
+func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.checkpoints[cp.Update] = cp
 
-	return nil
+	return false, nil
 }
 
 // StateAt implements stack.StateAtReader for the one stack that the fixture
@@ -356,8 +380,10 @@ func (m *memUpdateStore) ReferencedBlobKeys(
 		}
 	}
 
-	for _, keys := range m.journal {
-		out = append(out, keys...)
+	for _, refs := range m.journal {
+		for i := range refs {
+			out = append(out, refs[i].Key)
+		}
 	}
 
 	slices.Sort(out)
@@ -409,6 +435,13 @@ func (m *memUpdateStore) ListEvents(
 	}
 
 	return out, nil
+}
+
+// resolving sets the stack resolver of m and returns m.
+func (m *memUpdateStore) resolving(stacks stack.CheckpointStacks) *memUpdateStore {
+	m.stacks = stacks
+
+	return m
 }
 
 // memBlob is an in-memory blob.Store. Writes are write-once, as the port
@@ -508,6 +541,10 @@ type updateFixture struct {
 	// mem is the update store of the fixture, or nil for a fixture that
 	// builds its own store.
 	mem *memUpdateStore
+	// sealer and audit are the item sealer and the audit log of the fixture,
+	// or nil for a fixture that builds its own.
+	sealer *secrettest.MemorySealer
+	audit  *testAudit
 }
 
 // newUpdateFixture builds a Handler whose update routes work end to end.
@@ -540,7 +577,7 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
+		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil, guard: nil},
 	)
 }
 
@@ -554,6 +591,9 @@ type fixtureOptions struct {
 	limit    int
 	cutoff   int
 	replayer stack.JournalReplayer
+	// guard is the state guard of the handler. Nil gives the guard of
+	// stategate.Off.
+	guard stategate.Guard
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
@@ -595,10 +635,14 @@ func newUpdateFixtureWithAuthenticator(
 
 	mem := newMemUpdateStore()
 	blobs := newMemBlob()
+	sealer := secrettest.NewMemorySealer()
+	auditLog := newTestAudit()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             sealer,
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        opts.manual,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
@@ -616,7 +660,13 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("updates service: %v", err)
 	}
 
+	var guard stategate.Guard = stategate.Off("the test keeps no gates")
+	if opts.guard != nil {
+		guard = opts.guard
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              guard,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -631,7 +681,7 @@ func newUpdateFixtureWithAuthenticator(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   newTestAudit(),
+		Audit:                   auditLog,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
 		DenialLimiter:           nil,
@@ -645,7 +695,7 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem, sealer: sealer, audit: auditLog}
 }
 
 // allowAll authorizes every action.
@@ -2828,8 +2878,10 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
@@ -2848,6 +2900,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	_, err = pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,

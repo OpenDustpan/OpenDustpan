@@ -2,6 +2,16 @@
 
 Status: accepted · 2026-10-17. Route paths superseded in part by ADR 210. Decisions 8 and 9 superseded in part by ADR 224
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 222 changes decisions 8 and 9: the recheck points are the decision
+  points.
+- ADR 224 changes decisions 8 and 9: the recheck points are the decision
+  points.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 The owner decided on 17 October 2026: choices come from unit outputs.

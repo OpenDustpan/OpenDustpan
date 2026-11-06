@@ -106,7 +106,7 @@ func (s *Updates) PreviousDeployment(ctx context.Context, ref Ref, st SelectedSt
 // secrets provider other than the service provider, the only provider whose
 // values the server can decrypt.
 func CheckServiceSecrets(deployment []byte) error {
-	if provider := SecretsProvider(deployment); provider != serviceSecretsProvider {
+	if provider := SecretsProvider(deployment); provider != ServiceSecretsProvider {
 		return fmt.Errorf("%w: %q", ErrOtherSecretsProvider, provider)
 	}
 

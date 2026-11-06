@@ -13,7 +13,7 @@ project's name, logo or colors as ours. As a label for a tool, in the console
 and in API values, write "Pulumi" or "OpenTofu" (see "Tool name" in
 `GLOSSARY.md`).
 
-Read `docs/adr/` and `docs/rfc/` before changing architecture. An ADR is a
+Read `docs/adr/INDEX.md`, `docs/adr/` and `docs/rfc/` before changing architecture. An ADR is a
 decision. An RFC is an open question (ADR 15). For an open question, write an
 RFC. Write an ADR only after the project owner accepts a decision. If a change
 contradicts an ADR, write an RFC first. Use the terms in `GLOSSARY.md` in code, docs and
@@ -46,6 +46,9 @@ Consider a change done only when `make check` passes with zero findings:
   goroutine continues to run after the tests. Add this file to each new test
   package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
+  Resolve a conflict in a generated file (the API description, the clients,
+  the golden files, `internal/db`) with a new run of its generator on the
+  merged code, never by hand.
 - A feature that a user can see has its page in the user documentation in
   the same pull request (ADR 214).
 
@@ -71,6 +74,8 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   access/              domain: roles, grants and the decision of what a principal can do on an object
   accesstoken/         domain: the access tokens that the server issues to principals
   session/             domain: the console sessions that the server issues after a sign-in
+  localuser/           domain: local users, their passwords, reset codes and the demo user of a dev installation
+  mfa/                 domain: the built-in factors of a person: passkeys, recovery codes, pending sign-ins, the MFA policy
   tempadmin/           domain: temporary administrators of an installation
   ipallow/             domain: per-namespace IP allowlists
   audit/               domain: the tool-neutral audit log, with a hash chain for each namespace
@@ -90,12 +95,14 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   history/             domain: unit history, redaction, item keys of history items, tombstones, retention
   job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
   runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
+  launcher/            domain: the launcher contract (Command, Parse, BuildEnv, the credential file rules); the runner module imports it
   objectcontext/       domain: context on every object and the context read API
   graph/               domain: the unit graph, blast radius and focus view
   drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
   trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
   outputshare/         domain: sharing rules, the output sharing setting of a namespace and the read check of outputs (RFC 15)
   savedview/           domain: saved views, a named query of the unit list (RFC 100)
+  unitsettings/        domain: the settings of each unit: code location, executor, pool, write-back options, steps; the unit defaults of a namespace
   preferences/         domain: the preferences of a person (theme, language, formats, time zone), the merge patch and its checks
   registry/            domain: the private registry: the address, the release and the store port; registry/pgpverify checks signatures
   gate/                domain: gates, access limits, approval rules, facts and decision records
@@ -108,10 +115,11 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
-  agent/, dependency/, launcher/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
+  agent/, dependency/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
   calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
                        features with their own package and suite (<name>test/)
+  expr/                the built-in Expr engine (catalog.Evaluator); the only package that imports the Expr library
   registry/            the registry service (service/), the release check (releasecheck/) and the signature fixture (pgpfixture/)
   egress/egresshttp/   the HTTP client that applies the egress rules
   breakglass/, graph/, history/, store/, blob/, notify/
@@ -136,7 +144,7 @@ load/                  load harness that replays recorded CLI traffic (make load
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
   githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
-docs/adr/              architecture decision records: accepted decisions only
+docs/adr/              architecture decision records: accepted decisions only; INDEX.md lists their change links
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
 GLOSSARY.md            the project's domain language: one word per concept
 ```
@@ -179,7 +187,7 @@ The platform must be observable and intuitive. A user must be able to see and ex
 
 - Domain packages (the `pkg/` packages that the `domain` rule of `.golangci.yml` lists, for example
   `namespace`, `stack`, `secret`, `workspace`, `identity`, `backup`, `history`, `job`, `runner`,
-  `objectcontext`, `graph`, `drift`, `trigger`, `outputshare`, `savedview`, `registry`, `preferences`,
+  `objectcontext`, `graph`, `drift`, `trigger`, `outputshare`, `savedview`, `unitsettings`, `registry`, `preferences`,
   `gate`, `forge`, and the ones in `internal/` that the rule lists, for example `agent`, `dependency`,
   `launcher`, `source`, `stepup`, `unmanaged`, `unitimport`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
@@ -194,14 +202,21 @@ The platform must be observable and intuitive. A user must be able to see and ex
 - Writes inside a namespace carry a `namespace.Fence` and the store checks it in
   the same transaction. Never add a write path that skips the fence.
 - SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
-  and generate them with sqlc. Dynamic queries are hand-written in the adapter.
-  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`.
-  Never edit a migration file that a tag shipped. An applied file that no tag
-  shipped stays frozen until the collapse before the next tag, which merges
-  all such files into one (ADR 73). Give the collapsed file a version number
-  above every file that it replaces, so that the migration check refuses a
-  database from an untagged build with `ErrSchemaDiverged`. TestFrozenMigrations in each store adapter
-  holds the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
+  and generate them with sqlc. Put a new query block in its place in the name
+  order of `queries.sql`, never at the end of the file: next to the queries of
+  its area, in the name order of those queries. Do not sort the existing
+  blocks. Dynamic queries are hand-written in the adapter.
+  Until the first tag, each dialect has one migration file, the baseline in
+  `pkg/store/<dialect>/migrations/` (ADR 322). To change the schema, edit the
+  baseline of each dialect in place. Put a new object in its place in the
+  name order of the baseline, not at the end, so that parallel changes edit
+  different lines. An edit of a comment changes the SHA-256 too, and forces
+  a `dev reset`. Do not add a numbered migration. Do not
+  write migration, upgrade, alias or data-conversion code for a shape that no
+  tag shipped. The store records the SHA-256 of each migration and refuses a
+  database of another version of the baseline with `ErrSchemaDiverged`. For
+  dev, run `opendustpan dev reset` (ADR 324). Timestamps are Unix
+  milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
@@ -346,19 +361,37 @@ command as `rtk proxy <cmd>` only when its result is unusable: empty when
 output was clearly expected, contradicting its exit code, or garbled.
 <!-- /rtk-instructions -->
 
+## Decisions
+
+For a question about a decision, for example "what did we decide" or "which rule applies
+now", do these steps before you use other tools:
+
+1. Read `docs/adr/INDEX.md`. Find the ADR and the ADRs in its "Current rule" column.
+2. Run `rg` over `docs/adr` and `docs/rfc` for the subject of the question.
+3. Read each ADR in the "Current rule" column. A later ADR can change an earlier ADR.
+
+Do not use Repowise as the source for a decision.
+
+When a new ADR changes an earlier ADR, write the item in the "Changes:" list of the new ADR
+and the reverse item in the "Changed by:" list of the earlier ADR. Then run
+`make adr-index`. ADR 296 gives the form of the items.
+
 ## Repowise
 
-The Repowise MCP server gives indexed documentation, symbols, history, decisions and code
-health for this workspace. The index has no checkout. It shows pushed commits only. The
-checkout is the truth.
+The Repowise MCP server gives indexed documentation, symbols, history and code health for
+this workspace. Use it for the structure of the code, for symbols and for history. The index
+has no checkout. It shows pushed commits only. The checkout is the truth.
 
 - Call `list_repos` first. Pass `repo` (`opendustpan-opendustpan` or `opendustpan-console`)
   to limit a call to one repository. `get_symbol` always needs `repo`.
-- Call `get_answer` for a question about how, where or why. Call `search_codebase` to find
-  a symbol, a file or a concept. Call `get_context` for a summary of files.
+- Call `get_answer` for a question about how or where the code does a thing. Call
+  `search_codebase` to find a symbol, a file or a concept. Call `get_context` for a summary
+  of files.
 - `get_symbol` returns a signature, a location and graph edges. It does not return source.
   Read the file at the returned line range.
-- Call `get_risk` before you edit a hotspot. Call `get_why` before you refactor.
+- Call `get_risk` before you edit a hotspot. Call `get_why` for the history of the code
+  before you refactor. For the decision that applies to the code, do the steps in
+  "Decisions".
 - `get_change_risk` scores one pushed commit by its sha. It does not score a range or
   uncommitted work.
 - Read the file again when `_meta.stale_warning` is present, when `confidence` is `low`, or
@@ -366,4 +399,5 @@ checkout is the truth.
 - Use `rg` to find every call site for a rename.
 
 The skills `codebase-exploration`, `pre-modification-check`, `change-review`, `code-health`,
-`dead-code-cleanup` and `architectural-decisions` in `.agents/skills/` use these tools.
+`dead-code-cleanup` and `architectural-decisions` in `.agents/skills/` use these tools. For a
+question about a decision, do the steps in "Decisions" before you use these skills.

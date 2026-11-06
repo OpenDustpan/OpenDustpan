@@ -75,6 +75,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 		CreatedAt:   ns.CreatedAt,
 		UpdatedAt:   ns.CreatedAt,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "web")},
 		Revision:    1,
@@ -142,4 +143,14 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 			t.Errorf("audit log lacks %q; entries: %v", want, got)
 		}
 	}
+}
+
+func TestPlacementConformance(t *testing.T) {
+	t.Parallel()
+
+	collectiontest.RunPlacement(t, func(t *testing.T) collectiontest.PlacementStore {
+		t.Helper()
+
+		return open(t)
+	})
 }

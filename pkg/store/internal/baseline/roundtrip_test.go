@@ -13,8 +13,22 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/releaserecord"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
+
+// currentRecord returns the release record of the tree. A record that does
+// not parse fails the test: it never counts as "not released".
+func currentRecord(t *testing.T) releaserecord.Record {
+	t.Helper()
+
+	rec, err := releaserecord.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rec
+}
 
 // committedBaseline reads the baseline file of dialect from the repository
 // and returns it split. It fails the test when the file does not start with
@@ -40,6 +54,14 @@ func committedBaseline(t *testing.T, dialect string) baselineFile {
 func TestSQLiteBaselineRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	// Off until the release record lists a shipped migration. Until then a
+	// change to the schema edits the baseline by hand, so it no longer has the
+	// form of a dump. The release runs make regenerate-baseline before it
+	// writes the record.
+	if why := currentRecord(t).Off("TestSQLiteBaselineRoundTrip"); why != "" {
+		t.Skip(why)
+	}
+
 	body := committedBaseline(t, "sqlite").body
 
 	if !strings.HasPrefix(body, sqliteSchemaPrefix) {
@@ -63,6 +85,14 @@ func TestSQLiteBaselineRoundTrip(t *testing.T) {
 
 func TestPostgresBaselineRoundTrip(t *testing.T) {
 	t.Parallel()
+
+	// Off until the release record lists a shipped migration. Until then a
+	// change to the schema edits the baseline by hand, so it no longer has the
+	// form of a dump. The release runs make regenerate-baseline before it
+	// writes the record.
+	if why := currentRecord(t).Off("TestPostgresBaselineRoundTrip"); why != "" {
+		t.Skip(why)
+	}
 
 	base := os.Getenv(envPostgres)
 	if base == "" {
@@ -105,7 +135,7 @@ func TestPostgresBaselineRoundTrip(t *testing.T) {
 }
 
 // checkSQLiteVersionColumns fails t unless the version table of db holds
-// exactly the version, name and minimum columns in order.
+// exactly the version, name, minimum and SHA-256 columns in order.
 func checkSQLiteVersionColumns(t *testing.T, db *sql.DB) {
 	t.Helper()
 
@@ -136,14 +166,14 @@ func checkSQLiteVersionColumns(t *testing.T, db *sql.DB) {
 		t.Fatalf("read the version table columns: %v", rowsErr)
 	}
 
-	want := []string{"version", "name", "min_binary_version"}
+	want := []string{"version", "name", "min_binary_version", "sha256"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the version table columns are %v, want %v", got, want)
 	}
 }
 
 // checkPostgresVersionColumns fails t unless the version table visible to
-// conn holds exactly the version, name and minimum columns in order.
+// conn holds exactly the version, name, minimum and SHA-256 columns in order.
 func checkPostgresVersionColumns(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	t.Helper()
 
@@ -172,7 +202,7 @@ func checkPostgresVersionColumns(ctx context.Context, t *testing.T, conn *pgx.Co
 		t.Fatalf("read the version table columns: %v", rowsErr)
 	}
 
-	want := []string{"version", "name", "min_binary_version"}
+	want := []string{"version", "name", "min_binary_version", "sha256"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the version table columns are %v, want %v", got, want)
 	}

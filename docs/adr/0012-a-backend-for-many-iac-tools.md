@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-10 · a sentence of the decision superseded in part by ADR 209 · "home regions" amended by ADR 248 (primary installations)
 
+Changed by:
+
+- ADR 13 extends: units, shared access, the inventory and the mapping in a
+  tool ADR.
+- ADR 15 extends: a new tool starts as an RFC before its ADR.
+- ADR 35 changes: the path of the HTTP adapter of a tool.
+- ADR 209 changes: the sentence no client plugins or wrappers.
+- ADR 248 changes: home regions and fencing reads primary installations and
+  fencing.
+- ADR 305 extends: the operator is a tool-neutral client.
+
 ## Context
 
 OpenDustpan started as a self-hosted backend for the Pulumi CLI (ADRs 1 to 8).

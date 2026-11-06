@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -85,6 +86,9 @@ type devParts struct {
 	noAdmin    bool
 	grantFails bool
 	noCode     bool
+	// stateWrite is the effective value of the state.write gates that the
+	// capabilities document shows.
+	stateWrite stategate.Effective
 }
 
 // errGrantStore is the error of failingGrants.
@@ -154,7 +158,9 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Authenticator:    tokenAuthenticator{},
@@ -183,11 +189,16 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 		Now:              nil,
 		AuditSinks:       nil,
 		SignIn: &apiserver.SignIn{
+			Service:      newTestSignInService(t, d.st, d.sessions, d.principals),
 			OnDevRefused: nil,
 			Sessions:     d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
-			Providers: nil, DevCode: handlerCode, DevAdmin: devAdmin,
+			PasswordLimiter: nil,
+			Passkeys:        nil,
+			Providers:       nil, DevCode: handlerCode, DevAdmin: devAdmin,
+			PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 		},
 		InstallationKind: parts.kind,
+		StateWriteGates:  parts.stateWrite,
 		Workers:          nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
@@ -260,7 +271,7 @@ func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
 
 	handler := deps.handler(t, devParts{
 		kind: opts.kind, code: nil, noAccess: opts.noAccess, noAdmin: opts.noAdmin, grantFails: opts.grantFails,
-		noCode: opts.noCode,
+		noCode: opts.noCode, stateWrite: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 	})
 
 	return devEnv{
@@ -619,6 +630,91 @@ func checkCapabilities(t *testing.T, rec *httptest.ResponseRecorder, wantKind st
 	}
 }
 
+// TestCapabilitiesShowStateWriteGates proves that the capabilities document
+// shows the effective value of the state.write gates and its reason to a
+// caller with caller:read, and hides it from any other caller.
+func TestCapabilitiesShowStateWriteGates(t *testing.T) {
+	t.Parallel()
+
+	off := stategate.Effective{
+		Mode: stategate.ModeOff, Reason: "the namespace store keeps no gates", Checked: []stategate.WritePath{},
+		Unchecked: []stategate.WritePath{stategate.PathTFELock, stategate.PathPulumiUpdate},
+	}
+	on := stategate.Effective{
+		Mode:   stategate.ModeOn,
+		Reason: stategate.ReasonOn,
+		Checked: []stategate.WritePath{
+			stategate.PathTFELock,
+		},
+		Unchecked: []stategate.WritePath{stategate.PathPulumiUpdate},
+	}
+	allow := selectiveAuthorizer{deny: nil}
+	denyCaller := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionCallerRead: true}}
+
+	tests := []struct {
+		name  string
+		value stategate.Effective
+		authz identity.Authorizer
+		token string
+		want  string
+	}{
+		{
+			"off", off, allow, "test-token",
+			`"stateWriteGates":{"mode":"off","reason":"the namespace store keeps no gates","checked":[],` +
+				`"unchecked":["opentofu.tfe.lock","pulumi.update"]}`,
+		},
+		{
+			"on", on, allow, "test-token",
+			`"stateWriteGates":{"mode":"on","reason":"` + stategate.ReasonOn + `","checked":["opentofu.tfe.lock"],` +
+				`"unchecked":["pulumi.update"]}`,
+		},
+		{
+			"nil lists are empty lists",
+			stategate.Effective{Mode: stategate.ModeOn, Reason: "r", Checked: nil, Unchecked: nil},
+			allow, "test-token",
+			`"stateWriteGates":{"mode":"on","reason":"r","checked":[],"unchecked":[]}`,
+		},
+		{"no sign-in", off, allow, "", ""},
+		{"signed in without caller:read", off, denyCaller, "test-token", ""},
+		{"no value", stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil}, allow, "test-token", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newDevEnv(t, devEnvOptions{
+				authz: tt.authz, kind: installation.KindProduction, noCode: true,
+				noAccess: false, noAdmin: false, grantFails: false,
+			})
+			handler := env.rebuild(devParts{
+				kind: installation.KindProduction, code: nil, noAccess: false, noAdmin: false, grantFails: false,
+				noCode: true, stateWrite: tt.value,
+			})
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, capabilitiesRoute, nil)
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			body := rec.Body.String()
+
+			switch {
+			case rec.Code != http.StatusOK:
+				t.Fatalf("status = %d, want 200: %s", rec.Code, body)
+			case tt.want == "" && strings.Contains(body, "stateWriteGates"):
+				t.Fatalf("body = %s, want no stateWriteGates", body)
+			case tt.want != "" && !strings.Contains(body, tt.want):
+				t.Fatalf("body = %s, want %s", body, tt.want)
+			default:
+			}
+		})
+	}
+}
+
 // TestCapabilitiesWithDevSession proves that the browser session of the dev
 // sign-in reads the installation kind.
 func TestCapabilitiesWithDevSession(t *testing.T) {
@@ -755,7 +851,7 @@ func TestDevCodeHandlerRefusesOtherKinds(t *testing.T) {
 				noAccess:   false,
 				noAdmin:    false,
 				grantFails: false,
-				noCode:     false,
+				noCode:     false, stateWrite: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 			})
 
 			if again := postTo(t, dev, codeBody(env.code)); again.Code != http.StatusNoContent {
@@ -777,10 +873,22 @@ func TestDevCodeFailsClosedAndStaysUnspent(t *testing.T) {
 		parts devParts
 	}{
 		{name: "no access service", parts: devParts{
-			kind: installation.KindDev, code: nil, noAccess: true, noAdmin: false, grantFails: false, noCode: false,
+			kind:       installation.KindDev,
+			code:       nil,
+			noAccess:   true,
+			noAdmin:    false,
+			grantFails: false,
+			noCode:     false,
+			stateWrite: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		}},
 		{name: "no bootstrap administrator", parts: devParts{
-			kind: installation.KindDev, code: nil, noAccess: false, noAdmin: true, grantFails: false, noCode: false,
+			kind:       installation.KindDev,
+			code:       nil,
+			noAccess:   false,
+			noAdmin:    true,
+			grantFails: false,
+			noCode:     false,
+			stateWrite: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		}},
 	}
 
@@ -878,7 +986,13 @@ func TestDevCodeGrantFails(t *testing.T) {
 	}
 
 	ok := postTo(t, env.rebuild(devParts{
-		kind: installation.KindDev, code: code, noAccess: false, noAdmin: false, grantFails: false, noCode: false,
+		kind:       installation.KindDev,
+		code:       code,
+		noAccess:   false,
+		noAdmin:    false,
+		grantFails: false,
+		noCode:     false,
+		stateWrite: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 	}), codeBody(text))
 	if ok.Code != http.StatusNoContent {
 		t.Fatalf("sign-in with a new code: status = %d, want 204: %s", ok.Code, ok.Body)
@@ -955,7 +1069,13 @@ func TestProductionRefusesDevSession(t *testing.T) {
 
 	for _, kind := range []installation.Kind{"", installation.KindProduction} {
 		prod := env.rebuild(devParts{
-			kind: kind, code: nil, noAccess: false, noAdmin: false, grantFails: false, noCode: true,
+			kind:       kind,
+			code:       nil,
+			noAccess:   false,
+			noAdmin:    false,
+			grantFails: false,
+			noCode:     true,
+			stateWrite: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		})
 
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/principals", http.NoBody)

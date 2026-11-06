@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-11. Decisions 1, 5 and 8 superseded in part by ADR 241. Decision 5 also by ADR 242. Decision 6 extended by ADR 244
 
+Changed by:
+
+- ADR 241 changes decisions 1, 5 and 8: the server runs imports and keeps
+  history.
+- ADR 242 changes decision 5: an import moves history from DIY and versioned
+  S3 buckets.
+- ADR 244 extends decision 6: the move check does the checks through the API.
+
 ## Context
 
 [RFC 42](../rfc/0042-migration-import.md) asks for a careful move of state,

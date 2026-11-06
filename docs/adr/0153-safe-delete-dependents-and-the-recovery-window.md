@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-17. Route paths and `server:` action names superseded in part by ADR 210. Decision 4 extended by ADR 213 decision 1. The home region of the source amended by ADR 248 (primary installation)
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 213 extends decision 4: an edge for each job output read.
+- ADR 248 changes decision 4: the home region of the source reads primary
+  installation.
+- ADR 309 changes decision 9: the override of the delete guard needs its own permission.
+
 ## Context
 
 The project owner asked for a safe delete of a unit or a resource: a check

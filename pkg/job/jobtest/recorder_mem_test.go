@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -43,7 +44,11 @@ func newMemRecorderHarness(t *testing.T) jobtest.RecorderHarness {
 		t.Fatalf("open blob store: %v", err)
 	}
 
-	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if err := blobs.Close(); err != nil {
+			t.Errorf("close blob store: %v", err)
+		}
+	})
 
 	return buildRecorderHarness(t, db, newMemKeyIndex(db), blobs)
 }
@@ -56,8 +61,12 @@ func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob
 
 	return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
-			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Namespaces: db,
-			Domain: db,
+			Jobs:       db,
+			Durable:    db.durable,
+			Freezes:    db,
+			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
+			Namespaces: db,
+			Domain:     db,
 		},
 		Records:  db,
 		ItemKeys: keys,
@@ -473,8 +482,18 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 		return false, fmt.Errorf("confirm log chunk: %w", err)
 	}
 
+	// A repeat of a confirm that the row holds with the same key answers true
+	// at any age.
+	if row.Confirmed && row.BlobKey == c.BlobKey {
+		return true, nil
+	}
+
+	if err := blob.CheckAttempt(c.AttemptStartedAt, time.Now()); err != nil {
+		return false, fmt.Errorf("confirm log chunk: %w", err)
+	}
+
 	if row.Confirmed {
-		return row.BlobKey == c.BlobKey, nil
+		return false, nil
 	}
 
 	row.Confirmed = true
@@ -727,4 +746,91 @@ func (m *memDB) Log(_ context.Context, ns namespace.Name, version string) (job.A
 	}
 
 	return job.ArtifactRecord{}, job.ErrNotFound
+}
+
+// ArtifactNames implements job.ArtifactKeyStore.
+func (m *memDB) ArtifactNames(_ context.Context, ns namespace.Name, id job.ID) (job.ArtifactNames, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	j, ok := m.lookup(id)
+	if !ok || j.Spec.Unit.Namespace() != ns {
+		return job.ArtifactNames{}, job.ErrNotFound
+	}
+
+	out := job.ArtifactNames{Plans: []string{}, ChunkKeys: []string{}}
+
+	for planID := range m.records.plans {
+		if m.records.plans[planID].job == id {
+			out.Plans = append(out.Plans, planID)
+		}
+	}
+
+	for version, e := range m.records.logs {
+		if e.job != id {
+			continue
+		}
+
+		for seq := range m.records.chunks[version] {
+			if c := m.records.chunks[version][seq]; c.Confirmed {
+				out.ChunkKeys = append(out.ChunkKeys, c.BlobKey)
+			}
+		}
+	}
+
+	slices.Sort(out.Plans)
+	slices.Sort(out.ChunkKeys)
+
+	return out, nil
+}
+
+func TestMemArtifactSweep(t *testing.T) {
+	t.Parallel()
+
+	jobtest.RunArtifactSweep(t, func(t *testing.T) jobtest.ArtifactSweepHarness {
+		t.Helper()
+
+		db := newMemDB()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := blobs.Close(); err != nil {
+				t.Errorf("close blob store: %v", err)
+			}
+		})
+
+		return jobtest.ArtifactSweepHarness{
+			RecorderHarness: buildRecorderHarness(t, db, newMemKeyIndex(db), blobs), Names: db,
+			Clock: machineClock{}, Audit: &memServerAudit{mu: sync.Mutex{}, entries: nil},
+		}
+	})
+}
+
+// machineClock is the clock of the database of the memory store: the clock of
+// the machine.
+type machineClock struct{}
+
+func (machineClock) DatabaseNow(context.Context) (time.Time, error) { return time.Now(), nil }
+
+// memServerAudit keeps the audit entries of the scope of the server.
+type memServerAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+func (a *memServerAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append server entry: %w", err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
 }

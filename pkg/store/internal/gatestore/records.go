@@ -101,7 +101,23 @@ func (s *Records) Put(ctx context.Context, r gate.Record, fence namespace.Fence)
 	})
 }
 
+// insertRecord stores row as a record of ns. It returns gate.ErrConflict for
+// a used ID and namespace.ErrNotFound for a namespace that does not exist.
 func insertRecord(ctx context.Context, tx Tx, ns namespace.Name, row RecordRow) error {
+	// A record of a namespace goes in with one statement, which checks the ID
+	// and finds the namespace. When that statement stores nothing, the checks
+	// below tell a used ID from a namespace that does not exist.
+	if ns != audit.ServerScope {
+		inserted, err := tx.InsertNewRecord(ctx, ns, row)
+		if err != nil {
+			return err
+		}
+
+		if inserted {
+			return nil
+		}
+	}
+
 	exists, err := tx.RecordExists(ctx, row.ID)
 	if err != nil {
 		return err

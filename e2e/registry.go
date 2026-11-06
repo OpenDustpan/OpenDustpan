@@ -3,9 +3,11 @@
 package e2e
 
 import (
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -44,7 +46,24 @@ func inprocessPublicURL(in envInput, ts *httptest.Server) string {
 		return ""
 	}
 
-	return "https://" + ts.Listener.Addr().String()
+	return "https://" + publicHost(in, ts.Listener.Addr().String())
+}
+
+// publicHost returns the host and the port of the public URL for the listener
+// address addr. A passkey env names the host localhost, with the port of the
+// listener: a passkey relying party ID is never an IP address. Another env
+// keeps addr.
+func publicHost(in envInput, addr string) string {
+	if !in.passkeys {
+		return addr
+	}
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+
+	return net.JoinHostPort("localhost", port)
 }
 
 // binaryPublicURL returns the public URL of a server binary that OpenTofu
@@ -56,7 +75,7 @@ func binaryPublicURL(in envInput, proxy *recordingProxy) string {
 		return ""
 	}
 
-	return proxy.publicURL()
+	return "https://" + publicHost(in, strings.TrimPrefix(proxy.publicURL(), "https://"))
 }
 
 // WriteRegistryProject writes main.tf in a directory of its own, apart from the

@@ -13,6 +13,7 @@
 package runnerapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,6 +60,13 @@ type Config struct {
 	Claimer    job.Claimer
 	Sweeps     runner.SweepClaimer
 	Operations durable.Store
+	// Recorder records the steps and the log chunks of a launcher. Without
+	// it, the step and log paths of a job session answer not-found. A
+	// Recorder needs Jobs: NewHandler refuses the one without the other.
+	Recorder job.CheckedRecorder
+	// Jobs reads the job of a session, for its assignment. Without it, the
+	// session exchange answers not-found before it uses the handoff token.
+	Jobs JobReader
 
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
@@ -89,6 +97,12 @@ type Config struct {
 	PollInterval time.Duration
 }
 
+// JobReader is the part of job.Store that the session exchange needs.
+type JobReader interface {
+	// Get returns the job id, or job.ErrNotFound.
+	Get(ctx context.Context, id job.ID) (job.Job, error)
+}
+
 // Handler serves the runner protocol and the runner management API. The 429
 // for a second concurrent poll of one runner holds for each server instance.
 type Handler struct {
@@ -99,6 +113,8 @@ type Handler struct {
 	claimer    job.Claimer
 	sweeps     runner.SweepClaimer
 	operations durable.Store
+	recorder   job.CheckedRecorder
+	jobs       JobReader
 	authn      identity.Authenticator
 	authz      identity.Authorizer
 	guard      *refusal.Recorder
@@ -134,13 +150,17 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: logger", ErrMissingDependency)
 	case cfg.ServerURL == "":
 		return fmt.Errorf("%w: server URL", ErrMissingDependency)
+	case cfg.Recorder != nil && cfg.Jobs == nil:
+		// A recorder with no job reader would let a step end skip the check of
+		// its phase, so the server does not start.
+		return fmt.Errorf("%w: job reader, which a recorder needs", ErrMissingDependency)
 	}
 
 	return nil
 }
 
 // NewHandler returns a Handler. Every Config field except Claimer, Sweeps,
-// Operations, Sessions, Now and PollInterval is required.
+// Operations, Recorder, Jobs, Sessions, Now and PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -174,6 +194,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		claimer:    cfg.Claimer,
 		sweeps:     cfg.Sweeps,
 		operations: cfg.Operations,
+		recorder:   cfg.Recorder,
+		jobs:       cfg.Jobs,
 		authn:      cfg.Authenticator,
 		authz:      cfg.Authorizer,
 		sessions:   cfg.Sessions,

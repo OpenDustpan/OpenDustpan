@@ -51,6 +51,12 @@ import (
 var (
 	// ErrNotFound reports a role or a grant that does not exist.
 	ErrNotFound = errors.New("not found")
+	// ErrCollectionMissing reports that the collection of a grant check or a
+	// move does not exist. It always comes with ErrNotFound.
+	ErrCollectionMissing = errors.New("collection missing")
+	// ErrUnitMissing reports that the unit of a grant check or a move does not
+	// exist. It always comes with ErrNotFound.
+	ErrUnitMissing = errors.New("unit missing")
 	// ErrAlreadyExists reports a role name or a grant that exists.
 	ErrAlreadyExists = errors.New("already exists")
 	// ErrInvalid reports a role or a grant that fails validation.
@@ -115,7 +121,8 @@ var families = map[identity.Action]Family{
 	identity.ActionServerReadInstances:  FamilyOperator,
 	identity.ActionServerDeleteInstance: FamilyOperator,
 	identity.ActionServerReadAudit:      FamilyOperator,
-	// The installation settings (ADR 63); RFC 68 decides their API.
+	// The settings resource of the installation.
+	identity.ActionServerReadSettings:   FamilyOperator,
 	identity.ActionServerManageSettings: FamilyOperator,
 	// A change of the audit chain. Off also needs the administration
 	// action below.
@@ -157,9 +164,14 @@ var families = map[identity.Action]Family{
 	identity.ActionNamespaceManageTrustRules:      FamilyData,
 	identity.ActionNamespaceReadGates:             FamilyData,
 	identity.ActionNamespaceManageGates:           FamilyData,
+	identity.ActionNamespaceReadSettings:          FamilyData,
+	identity.ActionNamespaceManageSettings:        FamilyData,
 	// The connections of a namespace to a Git host.
 	identity.ActionNamespaceReadGitHostConnections:   FamilyData,
 	identity.ActionNamespaceManageGitHostConnections: FamilyData,
+	identity.ActionNamespaceUseGitHostConnection:     FamilyData,
+	identity.ActionNamespaceReadPlacementRules:       FamilyData,
+	identity.ActionNamespaceManagePlacementRules:     FamilyData,
 	identity.ActionCollectionRead:                    FamilyData,
 	identity.ActionCollectionCreate:                  FamilyData,
 	identity.ActionCollectionUpdate:                  FamilyData,
@@ -204,6 +216,7 @@ var families = map[identity.Action]Family{
 	identity.ActionRoleRead:                FamilySelf,
 	identity.ActionTokenManageOwn:          FamilySelf,
 	identity.ActionCallerManagePreferences: FamilySelf,
+	identity.ActionCallerManageSignIn:      FamilySelf,
 }
 
 // FamilyOf returns the family of action, and false when the core does not

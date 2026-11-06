@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-14. The `server:` action names superseded in part by ADR 210. Decision 7 superseded in part by ADR 215: persons, workloads and groups of a namespace
 
+Changed by:
+
+- ADR 70 changes decisions 2, 3, 4 and 5: reach checks on token rights and
+  personal tokens.
+- ADR 70 extends decision 6: the access review flags tokens and lists trust
+  rule authors.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 215 changes decision 7: persons, workloads and groups of a namespace.
+
 ## Context
 
 ADR 53 decision 3 makes the issue of each kind of access token an action of

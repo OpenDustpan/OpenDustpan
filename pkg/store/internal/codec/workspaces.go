@@ -30,6 +30,13 @@ type WorkspaceRow struct {
 	UpdatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	// The record of the last released lock. A workspace without a record
+	// keeps empty text columns and a zero time.
+	LastReleaseLockID string
+	LastReleaseHolder string
+	LastReleaseBy     string
+	LastReleaseKind   string
+	LastReleaseAtMs   int64
 }
 
 // StateVersionRow is the column representation of a state version. The upload
@@ -79,6 +86,11 @@ func ToWorkspaceRow(w workspace.Workspace) WorkspaceRow {
 		UpdatedAtMs:         Millis(w.UpdatedAt),
 		AllowForcedWrites:   w.Overrides.Forced,
 		AllowUnlockedWrites: w.Overrides.Unlocked,
+		LastReleaseLockID:   w.LastRelease.LockID,
+		LastReleaseHolder:   w.LastRelease.Holder,
+		LastReleaseBy:       w.LastRelease.By,
+		LastReleaseKind:     string(w.LastRelease.Kind),
+		LastReleaseAtMs:     OptionalMillis(w.LastRelease.At),
 	}
 }
 
@@ -98,6 +110,29 @@ func FromWorkspaceRow(row WorkspaceRow) workspace.Workspace {
 		Ref:         workspace.Ref{Namespace: namespace.Name(row.Namespace), Name: workspace.Name(row.Name)},
 		Overrides:   namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
 		Revision:    row.Revision,
+		LastRelease: releaseFromRow(row),
+	}
+}
+
+// releaseFromRow returns the record of the last release of a workspace row.
+// A kind that is not a release kind gives no record, so a row from another
+// version or a changed row never matches a repeated request.
+//
+// Defense in depth: the CHECK of the column refuses such a kind at each
+// write, and a restore refuses it before the copy. This check stays so that a
+// row that skips both still reads as no record.
+func releaseFromRow(row WorkspaceRow) workspace.Release {
+	kind := workspace.ReleaseKind(row.LastReleaseKind)
+	if !kind.Valid() {
+		return workspace.Release{At: time.Time{}, LockID: "", Holder: "", By: "", Kind: ""}
+	}
+
+	return workspace.Release{
+		At:     FromOptionalMillis(row.LastReleaseAtMs),
+		LockID: row.LastReleaseLockID,
+		Holder: row.LastReleaseHolder,
+		By:     row.LastReleaseBy,
+		Kind:   kind,
 	}
 }
 

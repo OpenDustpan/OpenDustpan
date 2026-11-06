@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18 · ADRs 201 to 209 give the parts · accepts parts of RFC 5. ADR 210 decision 6 amends decision 9: the replay record holds a keyed hash (HMAC-SHA-256), not a plain SHA-256. Decision 3 superseded in part by ADRs 224 and 225
 
+Changed by:
+
+- ADR 210 changes decision 9: the replay record holds a keyed hash.
+- ADR 222 changes decision 3: profile checks become gates.
+- ADR 224 changes decision 3: profile rules become gates, with ADR 225.
+- ADR 225 changes decision 3: the ErrOpenRule error of a job start.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Teams give the same values to many units: regions, account IDs, API keys,

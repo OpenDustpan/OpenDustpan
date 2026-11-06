@@ -27,6 +27,7 @@ func TestEveryRouteDeclaresItsActions(t *testing.T) {
 		guard:          nil,
 		mux:            nil,
 		routes:         nil,
+		admit:          nil,
 	}
 	routes := h.buildRoutes()
 

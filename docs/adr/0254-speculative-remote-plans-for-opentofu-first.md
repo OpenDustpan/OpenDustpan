@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Accepts part of RFC 30. Supersedes in part ADR 25 decisions 1 and 3 (no remote plans, `operations: false` and `execution-mode: local` for each workspace). Uses ADRs 100, 102, 135 and 199
 
+Changed by:
+
+- ADR 300 changes decision 6: the log read of OpenTofu uses a signed URL for each job, phase and principal.
+- ADR 310 extends decision 4: the run options target, replace and refresh-only.
+- ADR 310 extends decision 5: per-run values.
+
 ## Context
 
 Decided by the product manager under the owner's delegation of 20 October

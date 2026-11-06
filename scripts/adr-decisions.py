@@ -296,6 +296,9 @@ def load(adr_dir):
     for path in sorted(adr_dir.iterdir()):
         if path.suffix != ".md":
             continue
+        # INDEX.md is the generated list of change links. It is not an ADR.
+        if path.name == "INDEX.md":
+            continue
         # Do not follow a link out of the ADR directory.
         if path.is_symlink() or not path.is_file():
             raise ADRError(f"{path.name}: not a regular file")

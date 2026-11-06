@@ -38,6 +38,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"sinks", a.sinks},
 		{"jobs", a.jobs},
 		{"triggers", a.triggers},
+		{"unitsettings", a.unitSettings},
 		{"drift", a.drift},
 		{"registry", a.registry},
 		{"sourcefilter", a.sourceFilter},

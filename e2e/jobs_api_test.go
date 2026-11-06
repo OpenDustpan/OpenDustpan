@@ -85,6 +85,20 @@ func TestJobsAPI(t *testing.T) {
 			jobsScenario(t, env)
 		})
 	}
+
+	// The session round trip has its own server of each store: the read of
+	// the stored log stops the server.
+	t.Run("session_round_trip", func(t *testing.T) {
+		t.Parallel()
+
+		for _, store := range stores {
+			t.Run(string(store), func(t *testing.T) {
+				t.Parallel()
+
+				sessionRoundTrip(t, e2e.NewEnvWithRealTimeSignIn(t.Context(), t, e2e.NoCLI(), store))
+			})
+		}
+	})
 }
 
 // jobPath returns the job route of the job id in the namespace ns.
@@ -132,6 +146,7 @@ func jobsScenario(t *testing.T, env *e2e.Env) {
 	defaultsAndPools(ctx, t, env)
 	missingJobsAnswerNotFound(ctx, t, env, started)
 	memberStartsNothing(ctx, t, env, started)
+	aGateStopsAClaim(ctx, t, env)
 }
 
 // startsAJob starts the plan job, starts it again with the same key, and
@@ -510,14 +525,14 @@ func gatesAndLimitsRefuseAStart(ctx context.Context, t *testing.T, env *e2e.Env)
 	}
 
 	audited := func(reasonPrefix string) {
-		entries, auditErr := env.AuditEntries(ctx, ns)
+		entries, auditErr := fetchAuditEntries(ctx, env, string(ns))
 		if auditErr != nil {
 			t.Fatalf("audit entries: %v", auditErr)
 		}
 
 		for i := range entries {
 			e := &entries[i]
-			if e.Action == string(identity.ActionUnitRunPlan) && e.Outcome == audit.OutcomeDenied &&
+			if e.Action == string(identity.ActionUnitRunPlan) && e.Outcome == string(audit.OutcomeDenied) &&
 				strings.HasPrefix(e.Reason, reasonPrefix) {
 				return
 			}

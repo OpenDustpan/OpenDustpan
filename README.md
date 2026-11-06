@@ -261,8 +261,10 @@ logging with `--log-level` and `--log-format`. Check readiness at
 
 - **You need it in production now.** It is pre-alpha and has no release.
   Formats and APIs can change.
-- **You need more than one node.** The server runs on one node. High
-  availability is a plan, not a feature.
+- **You need more than one site.** One installation runs several instances on
+  one database and one object store (see
+  [High availability](docs/guides/high-availability.md)). It has no
+  replication between installations and no active-active across sites.
 - **You need users, teams or roles.** Every token signs in as an
   administrator. Single sign-on and scoped tokens do not exist yet.
 - **You need remote runs.** OpenDustpan stores state. It does not run
@@ -335,6 +337,18 @@ How-to guides:
   workspace, fire it by hand, and see what the server checks.
 - [The planner role](docs/guides/planner-role.md): what a planner can do, what
   it cannot do, and the limit of the role on a workstation.
+- [Principals and groups](docs/guides/principals-and-groups.md): create, change,
+  disable and delete principals, and manage the members of a group.
+- [Roles and grants](docs/guides/roles-and-grants.md): the built-in roles, custom
+  roles, and the grants that give a role to a principal or a group.
+- [Access review](docs/guides/access-review.md): read the grants of an installation,
+  a namespace, a unit or a principal, and save the review.
+- [Access tokens](docs/guides/access-tokens.md): personal, service and principal
+  tokens, rotation, inactivity, expiry warnings and the token policy.
+- [Collections and placement rules](docs/guides/collections-and-placement.md): make
+  a collection, move a unit into it, and write the rules that place new stacks.
+- [IP allowlists](docs/guides/ip-allowlists.md): limit the client addresses of a
+  namespace, read the effective state, and recover from a lock-out.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.
@@ -367,12 +381,21 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Write attempts](docs/reference/write-attempts.md): the attempt deadline of
+  the writes that store a blob, and the grace period of the sweep.
+- [Placement rules API](docs/reference/placement-rules-api.md): the rules that
+  choose the collection of a new stack, their patterns and their routes.
 - [Gate configuration API](docs/reference/gate-config-api.md): the routes that store,
   read and delete gates and access limits.
 - [Audit checkpoint layout](docs/reference/audit-checkpoint-layout.md): the
   keys and the bodies of the signed audit checkpoints in the blob store.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Passkeys API](docs/reference/passkeys-api.md): the routes that add, list and
+  delete the passkeys of a person.
+- [Settings API](docs/reference/settings-api.md): the routes that read the
+  settings of the installation and of a namespace, with the source of each
+  value, and change them.
 - [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the
   stable codes that tell a missing permission, the IP allowlist and the session
   checks apart.

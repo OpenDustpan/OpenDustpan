@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-08
 
+Changed by:
+
+- ADR 275 changes: the two-week age rule for dependencies.
+
 ## Context
 
 Much of the code is written with AI agents. Linters are cheap, fast and do not

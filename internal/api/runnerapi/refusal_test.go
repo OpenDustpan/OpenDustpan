@@ -209,7 +209,15 @@ func TestJoinIsRefused(t *testing.T) {
 		},
 		{
 			"a name of a runner that is online",
-			func() (int, []byte) { return e.newRunner("builder-1").join(pool, e.joinToken(pool)) },
+			func() (int, []byte) {
+				// The runner joins in this subtest, so the wait of the subtest for a
+				// parallel slot cannot make it go offline before the second join.
+				if status, body := e.newRunner("builder-8").join(pool, e.joinToken(pool)); status != http.StatusOK {
+					return status, body
+				}
+
+				return e.newRunner("builder-8").join(pool, e.joinToken(pool))
+			},
 			http.StatusConflict, protocol.ErrorConflict,
 		},
 		{

@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-13 · decision 2 refined by ADR 245: the setting `--recovery-mode` holds the mode, and the host command refuses mode 3
 
+Changed by:
+
+- ADR 70 changes decision 4: the recovery token makes a temporary
+  administrator.
+- ADR 245 changes decision 2: the recovery-mode setting and the refusal of
+  mode 3.
+
 ## Context
 
 ADR 46 adds built-in MFA with recovery codes. It leaves open how a person

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/sinkstore"
 )
@@ -34,7 +32,7 @@ func pgCopySinkTables() []pgCopyTable {
 		},
 		{
 			table:   "notification_sink_secrets",
-			columns: []string{sinkColScope, sinkColRef, sinkColSinkID, "position", sinkColCiphertext},
+			columns: []string{sinkColScope, sinkColRef, sinkColSinkID, pgColPosition, sinkColCiphertext},
 			orderBy: []string{sinkColScope, sinkColRef},
 		},
 		{
@@ -110,7 +108,7 @@ func pgCopyOutboxTables() []pgCopyTable {
 // checkStagedSinks checks the sink tables of a staged backup with the rules of
 // a stored sink. A row that fails makes the backup corrupt. It returns
 // backup.ErrCorrupt.
-func checkStagedSinks(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedSinks(ctx context.Context, pool pgQuerier, staging string) error {
 	sinks, err := stagedSinkRows(ctx, pool, staging)
 	if err != nil {
 		return err
@@ -133,7 +131,7 @@ func checkStagedSinks(ctx context.Context, pool *pgxpool.Pool, staging string) e
 	return nil
 }
 
-func stagedSinkRows(ctx context.Context, pool *pgxpool.Pool, staging string) ([]sinkstore.Row, error) {
+func stagedSinkRows(ctx context.Context, pool pgQuerier, staging string) ([]sinkstore.Row, error) {
 	query := "SELECT id, scope, kind, name, platform, target, created_by, version FROM " +
 		stagingTable(staging, "notification_sinks") + ` ORDER BY id COLLATE "C"`
 
@@ -167,7 +165,7 @@ func stagedSinkRows(ctx context.Context, pool *pgxpool.Pool, staging string) ([]
 	return out, nil
 }
 
-func stagedSinkSecrets(ctx context.Context, pool *pgxpool.Pool, staging string) ([]sinkstore.Secret, error) {
+func stagedSinkSecrets(ctx context.Context, pool pgQuerier, staging string) ([]sinkstore.Secret, error) {
 	query := "SELECT scope, ref, sink_id FROM " + stagingTable(staging, "notification_sink_secrets") +
 		` ORDER BY sink_id COLLATE "C", position`
 
@@ -197,7 +195,7 @@ func stagedSinkSecrets(ctx context.Context, pool *pgxpool.Pool, staging string) 
 	return out, nil
 }
 
-func stagedSinkRefs(ctx context.Context, pool *pgxpool.Pool, staging string) (map[string]bool, error) {
+func stagedSinkRefs(ctx context.Context, pool pgQuerier, staging string) (map[string]bool, error) {
 	query := "SELECT scope, ref FROM " + stagingTable(staging, "notification_sink_refs")
 
 	rows, err := pool.Query(ctx, query)

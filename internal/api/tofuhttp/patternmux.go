@@ -1,6 +1,10 @@
 package tofuhttp
 
-import "net/http"
+import (
+	"net/http"
+
+	"opendustpan.org/opendustpan/internal/requestid"
+)
 
 // patternMux is an http.ServeMux that records every pattern registered on
 // it, so that RegisteredPatterns lists what the mux serves and not what the
@@ -20,7 +24,7 @@ func newPatternMux() *patternMux {
 // HandleFunc registers pattern and records it.
 func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, http.HandlerFunc(handler)))
 }
 
 // ServeHTTP implements http.Handler.

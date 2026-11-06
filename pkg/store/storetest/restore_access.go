@@ -212,6 +212,7 @@ func createKeepSession(t *testing.T, ports keepAccessPorts) {
 		EndReason:   "",
 		SourceIP:    "192.0.2.10",
 		UserAgent:   "storetest",
+		Generation:  1,
 	}
 
 	entry := ServerChange(now(), "session:ses-keep")
@@ -1126,6 +1127,7 @@ func createLiveOnlyPrincipal(t *testing.T, ports keepAccessPorts) {
 		EndReason:   "",
 		SourceIP:    "192.0.2.11",
 		UserAgent:   "storetest",
+		Generation:  1,
 	}
 
 	digest := session.Digest(sha256.Sum256([]byte("live-only session")))

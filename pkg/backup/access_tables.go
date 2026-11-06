@@ -44,6 +44,23 @@ const (
 	// principals table: a restore that kept the principals and took the
 	// preferences of the backup would leave rows with no person.
 	TablePersonPreferences = "person_preferences"
+	// TableLocalUsers holds the user name and the password hash of each
+	// local user. A row names a principal by a foreign key and is a
+	// credential of that principal, so the table moves with the principals
+	// table: a restore without server:restore-access never brings in a
+	// password.
+	TableLocalUsers = "local_users"
+	// TableSessionGenerations holds the session generation of each
+	// principal that a password write or a reset bumped. It moves with the
+	// principals table: a restore that took older generations without the
+	// principals could make a session that a bump ended work again.
+	TableSessionGenerations = "principal_session_generations"
+	// TablePasskeys holds the passkeys of each person: the credential ID,
+	// the public key and the signature counter. A row names a principal by
+	// a foreign key and is a credential of that principal, so the table
+	// moves with the principals table: a restore without
+	// server:restore-access never brings in a passkey.
+	TablePasskeys = "passkeys"
 	// TableTrustRules holds the workload trust rules of each namespace. A
 	// rule names a principal by a foreign key and lets a workload act as
 	// that principal, so the table moves with the principals table: a
@@ -72,6 +89,9 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	TablePersonPreferences,
+	TableLocalUsers,
+	TableSessionGenerations,
+	TablePasskeys,
 	TableTrustRules,
 }
 

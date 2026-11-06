@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -67,7 +68,7 @@ func (h *Handler) getState(w http.ResponseWriter, r *http.Request, c call) {
 
 	if err := h.appendDownloadAudit(c.request, c.principal, obj, sv.ID.String()); err != nil {
 		// The log names no error text: the text may hold driver detail.
-		h.logger.ErrorContext(ctx, "audit append failed")
+		faultlog.LogInternal(ctx, h.logger, "audit append failed", faultlog.Cause(err), "")
 
 		if h.onAuditFailure != nil {
 			h.onAuditFailure()

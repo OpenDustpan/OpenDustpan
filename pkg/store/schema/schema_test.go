@@ -356,3 +356,32 @@ func TestInstancesBelowMinimumErrorNamesTheRows(t *testing.T) {
 		}
 	}
 }
+
+// TestValidSHA256 sends hostile values directly to the form check of a
+// recorded SHA-256.
+func TestValidSHA256(t *testing.T) {
+	t.Parallel()
+
+	good := strings.Repeat("0123456789abcdef", 4)
+
+	if !schema.ValidSHA256(good) {
+		t.Fatalf("ValidSHA256(%q) = false, want true", good)
+	}
+
+	for name, value := range map[string]string{
+		"empty":       "",
+		"short":       good[:63],
+		"long":        good + "0",
+		"upper case":  strings.ToUpper(good),
+		"line end":    good[:62] + "\r\n",
+		"not hex":     good[:63] + "g",
+		"space":       " " + good[1:],
+		"null byte":   good[:63] + "\x00",
+		"multi-byte":  good[:62] + "é",
+		"sql comment": good[:62] + "--",
+	} {
+		if schema.ValidSHA256(value) {
+			t.Errorf("%s: ValidSHA256(%q) = true, want false", name, value)
+		}
+	}
+}

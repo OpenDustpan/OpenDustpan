@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-30. Accepted by [ADR 282](0282-runners-and-remote-runs-accept-rfc-6.md), from owner decisions of 18 and 26 October 2026. Decides the choices that ADR 136 decision 9 and ADR 137 decision 4 park. Decision 4 superseded by ADR 282 decision 4: the runner lives in its own repository, `OpenDustpan/dustpan-runner`
 
+Changed by:
+
+- ADR 282 supersedes decision 4: the runner as a nested Go module.
+
 ## Context
 
 [ADR 136](0136-the-kubernetes-coordinator.md) decision 9 parks the choice

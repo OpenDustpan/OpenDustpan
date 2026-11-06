@@ -114,7 +114,7 @@ func newFakeWith(t *testing.T, permissions map[string]string, classic bool) (*gi
 	t.Helper()
 
 	f := githubfake.New(t, githubfake.Config{
-		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 99, Login: "acme"},
+		AppID: "", AppSlug: "", InstallationID: "", Owner: githubfake.Account{ID: 99, Login: "acme"},
 		User: githubfake.Account{ID: 0, Login: ""}, UserToken: userValue, ClassicToken: classic,
 		Permissions: permissions, ContentsLimit: 0, Key: nil, Now: nil, WebhookClient: nil,
 	})

@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18. Decisions 1, 3 and 15 superseded in part by ADR 149. Route paths superseded in part by ADR 210
 
+Changed by:
+
+- ADR 149 changes decisions 1 and 3: server-made schedule IDs and the rules of
+  on-call overrides.
+- ADR 149 extends decision 15: a schedule of another namespace is 404.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 [ADR 160](0160-context-on-every-object.md) gives every object an `onCall`

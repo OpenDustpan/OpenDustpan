@@ -1,3 +1,4 @@
+update.attempt-expired
 update.checkpoint-conflict
 update.checkpoint-stale
 update.concurrent-modification
@@ -5,6 +6,7 @@ update.conflict
 update.console-session
 update.delta-invalid
 update.invalid
+update.item-key-unavailable
 update.lease-expired
 update.lease-invalid
 update.not-found

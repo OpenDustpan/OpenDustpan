@@ -1,8 +1,12 @@
 package migrate_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -11,11 +15,19 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
+// sumOf returns a SHA-256 in lowercase hex that stands for the SQL of
+// migration v in these tests.
+func sumOf(v int64) string {
+	digest := sha256.Sum256([]byte(strconv.FormatInt(v, 10)))
+
+	return hex.EncodeToString(digest[:])
+}
+
 func migrations(versions ...int64) []migrate.Migration {
 	out := make([]migrate.Migration, 0, len(versions))
 	for _, v := range versions {
-		//nolint:exhaustruct_v5 // The test compares versions only; names and SQL stay empty.
-		out = append(out, migrate.Migration{Version: v})
+		//nolint:exhaustruct_v5 // The test compares versions and sums only; names and SQL stay empty.
+		out = append(out, migrate.Migration{Version: v, SHA256: sumOf(v)})
 	}
 
 	return out
@@ -134,7 +146,9 @@ func TestUnknownRecorded(t *testing.T) {
 func applied(minimums map[int64]string, versions ...int64) []schema.AppliedMigration {
 	out := make([]schema.AppliedMigration, 0, len(versions))
 	for _, v := range versions {
-		out = append(out, schema.AppliedMigration{Version: v, Name: "", MinBinaryVersion: minimums[v]})
+		out = append(out, schema.AppliedMigration{
+			Version: v, Name: "", MinBinaryVersion: minimums[v], SHA256: sumOf(v),
+		})
 	}
 
 	return out
@@ -331,7 +345,9 @@ func TestCheckRefusesStoredMinimumWithPendingMigrations(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
-	recorded := applied(map[int64]string{1: "v0.3.0"}, 1)
+	recorded := []schema.AppliedMigration{{
+		Version: 1, Name: embedded[0].Name, MinBinaryVersion: "v0.3.0", SHA256: embedded[0].SHA256,
+	}}
 
 	_, err = migrate.Check(recorded, embedded, "v0.2.0")
 	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
@@ -424,7 +440,7 @@ func TestCheckInstances(t *testing.T) {
 	t.Parallel()
 
 	contract := func(name, minimum string) migrate.Migration {
-		return migrate.Migration{Name: name, SQL: "", MinBinaryVersion: minimum, Version: 0}
+		return migrate.Migration{Name: name, SQL: "", MinBinaryVersion: minimum, SHA256: "", Version: 0}
 	}
 
 	rows := []schema.InstanceRow{
@@ -515,5 +531,87 @@ func checkInstancesCase(t *testing.T, wantName string, wantNamed []string, err e
 
 	if !slices.Equal(named, wantNamed) {
 		t.Errorf("named rows = %v, want %v", named, wantNamed)
+	}
+}
+
+// TestCheckRefusesAChangedSchema sends recorded rows that differ from the
+// embedded migration of the same version directly to Check: another SHA-256,
+// another name, no SHA-256 and a value that is not a SHA-256. Each one fails
+// with schema.ErrSchemaDiverged and plans nothing.
+func TestCheckRefusesAChangedSchema(t *testing.T) {
+	t.Parallel()
+
+	embedded := []migrate.Migration{{
+		Name: schema.BaselineName, SQL: "CREATE TABLE a (b INTEGER);", MinBinaryVersion: "",
+		SHA256: sumOf(schema.BaselineVersion), Version: schema.BaselineVersion,
+	}}
+
+	row := func(name, digest string) []schema.AppliedMigration {
+		return []schema.AppliedMigration{{
+			Version: schema.BaselineVersion, Name: name, MinBinaryVersion: "", SHA256: digest,
+		}}
+	}
+
+	cases := map[string][]schema.AppliedMigration{
+		"another sum":         row(schema.BaselineName, sumOf(1)),
+		"another name":        row("1000_other.sql", sumOf(schema.BaselineVersion)),
+		"no sum":              row(schema.BaselineName, ""),
+		"upper-case sum":      row(schema.BaselineName, strings.ToUpper(sumOf(schema.BaselineVersion))),
+		"short sum":           row(schema.BaselineName, sumOf(schema.BaselineVersion)[:63]),
+		"sum with a line end": row(schema.BaselineName, sumOf(schema.BaselineVersion)[:62]+"\r\n"),
+		"long sum":            row(schema.BaselineName, sumOf(schema.BaselineVersion)+"0"),
+	}
+
+	for name, recorded := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			plan, err := migrate.Check(recorded, embedded, "dev")
+			if !errors.Is(err, schema.ErrSchemaDiverged) {
+				t.Fatalf("Check = %v, want %v", err, schema.ErrSchemaDiverged)
+			}
+
+			if len(plan.Pending) != 0 {
+				t.Fatalf("Check planned %d migrations, want none", len(plan.Pending))
+			}
+		})
+	}
+
+	plan, err := migrate.Check(row(schema.BaselineName, sumOf(schema.BaselineVersion)), embedded, "dev")
+	if err != nil || len(plan.Pending) != 0 {
+		t.Fatalf("Check of the same schema = %+v, %v, want no pending migration and no error", plan, err)
+	}
+}
+
+// TestCheckIgnoresTheSumOfAnUnknownVersion proves that Check compares only
+// the versions that the binary embeds: a newer migration that the binary
+// does not know keeps the rule for a newer schema.
+func TestCheckIgnoresTheSumOfAnUnknownVersion(t *testing.T) {
+	t.Parallel()
+
+	recorded := applied(nil, 1)
+	recorded = append(recorded, schema.AppliedMigration{Version: 2, Name: "", MinBinaryVersion: "", SHA256: "x"})
+
+	plan, err := migrate.Check(recorded, migrations(1), "dev")
+	if err != nil || len(plan.Pending) != 0 {
+		t.Fatalf("Check = %+v, %v, want no pending migration and no error", plan, err)
+	}
+}
+
+// TestLoadRecordsTheSum proves that Load gives each migration the SHA-256
+// of its file.
+func TestLoadRecordsTheSum(t *testing.T) {
+	t.Parallel()
+
+	fsys := fstest.MapFS{"m/0001_a.sql": mapFile("SELECT 1;")}
+
+	all, err := migrate.Load(fsys, "m")
+	if err != nil || len(all) != 1 {
+		t.Fatalf("Load = %v, %v, want one migration", all, err)
+	}
+
+	digest := sha256.Sum256([]byte("SELECT 1;"))
+	if got := all[0].SHA256; got != hex.EncodeToString(digest[:]) {
+		t.Fatalf("SHA256 = %s, want the SHA-256 of the file", got)
 	}
 }

@@ -77,7 +77,7 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 		return nil, nil //nolint:nilnil // No trigger API: there is no job service to start a plan.
 	}
 
-	manager, err := newTriggerManager(svc, cfg, &ports, jobs)
+	manager, err := newTriggerManager(svc, cfg, &ports, jobs, trigger.NewDispatcher)
 	if err != nil {
 		return nil, err
 	}
@@ -103,9 +103,27 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 	return handler, nil
 }
 
+// finalVersions gives the dispatcher the last final state version of a unit,
+// read from the job store.
+type finalVersions struct {
+	reader job.FinalVersionReader
+}
+
+// LastFinal implements trigger.Versions.
+func (f finalVersions) LastFinal(ctx context.Context, unit graph.Unit) (string, bool, error) {
+	row, ok, err := f.reader.FinalVersion(ctx, unit.Namespace, unit.ID)
+	if err != nil {
+		return "", false, fmt.Errorf("final state version of %s: %w", unit, err)
+	}
+
+	return row.VersionID, ok, nil
+}
+
 // newTriggerManager builds the manager of triggers over the ports of the
-// server and the job service.
+// server and the job service. It builds the dispatcher with newDispatcher, which
+// the server passes as trigger.NewDispatcher.
 func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs job.Starter,
+	newDispatcher func(trigger.DispatcherConfig) (trigger.Dispatcher, error),
 ) (*trigger.Manager, error) {
 	units := triggerUnits{reader: cfg.inventoryReader}
 
@@ -123,10 +141,9 @@ func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs jo
 
 	fences := jobFences{namespaces: svc.namespaces}
 
-	dispatcher, err := trigger.NewDispatcher(trigger.DispatcherConfig{
-		Store: cfg.triggerStore, Starter: starter, Savers: savers, Units: units, Audit: ports.entries,
-		Fences: fences, Versions: nil, Now: cfg.now,
-	})
+	parts := triggerParts{starter: starter, savers: savers, units: units, fences: fences}
+
+	dispatcher, err := newDispatcher(triggerDispatcherConfig(cfg, ports, parts))
 	if err != nil {
 		return nil, fmt.Errorf("trigger dispatcher: %w", err)
 	}
@@ -140,6 +157,39 @@ func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs jo
 	}
 
 	return manager, nil
+}
+
+// triggerParts are the ports of the trigger wiring that the server builds
+// before the dispatcher.
+type triggerParts struct {
+	starter trigger.Starter
+	savers  trigger.SaverCheck
+	units   trigger.Units
+	fences  trigger.Fences
+}
+
+// triggerDispatcherConfig returns the ports of the dispatcher of triggers. The
+// versions come from the job store when it has the final version reader. A
+// store without the port gives no versions, so Dispatcher.Upstream fails closed
+// with trigger.ErrVersionMismatch.
+func triggerDispatcherConfig(cfg *settings, ports *triggerPorts, parts triggerParts) trigger.DispatcherConfig {
+	var versions trigger.Versions
+
+	// Defense in depth: the job store interfaces of the SQL adapters embed the
+	// reader, which is the first layer. The assertion stays for job stores of
+	// other builds, so a new caller cannot skip it. The log below is the third
+	// layer: it makes a missing reader visible at start.
+	if r, ok := cfg.jobStore.(job.FinalVersionReader); ok {
+		versions = finalVersions{reader: r}
+	} else {
+		// Runs at server construction, which has no context.
+		cfg.logger.Warn("the job store has no final version reader: run triggers refuse every upstream check")
+	}
+
+	return trigger.DispatcherConfig{
+		Store: cfg.triggerStore, Starter: parts.starter, Savers: parts.savers, Units: parts.units,
+		Audit: ports.entries, Fences: parts.fences, Versions: versions, Now: cfg.now,
+	}
 }
 
 // triggerUnits is the trigger.Units over the inventory.

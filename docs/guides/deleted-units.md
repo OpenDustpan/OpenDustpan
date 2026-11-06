@@ -31,7 +31,12 @@ It needs the action `namespace:read` on the namespace. The list holds only
 the units that you can read: a grant of `unit:read` on the installation or
 on the namespace shows every deleted unit of the namespace. A grant on one
 unit shows nothing after the unit is deleted, because a grant on a unit
-follows a unit that exists.
+follows a unit that exists. A grant of `unit:read` on a collection shows
+each deleted unit of that collection in the namespace, because a deleted unit
+keeps its collection until the collection is deleted. A grant on a collection
+of another namespace shows nothing. A grant on the collection alone gives 403,
+because the list also needs `namespace:read` on the namespace. The server
+checks `namespace:read` first, and then the grant of `unit:read`.
 
 These query values filter and page the list:
 
@@ -75,6 +80,10 @@ project. The server checks the new name with the name rules of the tool and
 answers 400 for a name that is not valid. The answer is the live unit with
 the same `unitID`.
 
+The gates and the access limits of the unit stay with it through the delete
+and the restore, also under a new name. A live unit that has the name of the
+deleted unit has its own gates and access limits.
+
 ## Purge a deleted unit
 
 `DELETE /api/inventory/deleted-units/<tool>/<unitID>?organization=<namespace>`
@@ -87,13 +96,11 @@ A purge cannot be undone.
 - 404: the namespace has no deleted unit with this tool and ID. A live unit
   or a purged unit also answers 404.
 - 409: a live unit holds the name, or a failover fenced the write.
-- 409: the new name holds the gates of a deleted unit. Purge or restore that
-  unit first.
-- 409: a live unit holds the name of the deleted unit and shares its gates.
-  Delete the live unit, then restore the deleted unit under its name.
-- 403: a gate or an access limit refuses the restore or the purge. The message
-  holds the message of the gate, the error code and the ID of the decision record.
-  See [Gates and access limits on state writes](state-write-gates.md).
+- 403: a gate or an access limit of the deleted unit, of its collection or of
+  its namespace refuses the restore or the purge. The message holds the message
+  of the gate, the error code and the ID of the decision record. The server
+  checks the gates of the deleted unit, not the gates of a live unit that has
+  its name now. See [Gates and access limits on state writes](state-write-gates.md).
 - 409: a gate gave an error. The message holds the error code and the ID of the
   decision record.
 - 503: the policy engine did not answer.
@@ -145,12 +152,45 @@ counts the other outcomes:
   "failed": 0,
   "skipped": 0,
   "finishedBlobPurges": 1,
-  "pendingBlobPurges": 2
+  "pendingBlobPurges": 2,
+  "waitingBlobPurges": 1,
+  "waitingFor": "backup bkp-1"
 }
 ```
 
+`waitingBlobPurges` counts the pending records whose blobs the run did not
+delete because a backup or a restore runs. `waitingFor` names that backup or
+restore. It is an empty string when no record waits. A waiting record is not a
+failure. See "Blob deletes wait for a backup or a restore" below.
+
 The metric `dustpan_deleted_unit_sweep_total` counts the outcomes of each
 expiry run. See [Observe](observe.md).
+
+## Blob deletes wait for a backup or a restore
+
+A backup reads the data of the installation at one point in time, and then
+copies each blob that this data names. A restore copies blobs into the live
+store before it swaps the data. The server deletes no blob that such a
+backup or restore can need while the backup or the restore runs. This applies
+to the blobs of a purged stack or workspace, to checkpoints that a new
+checkpoint replaces, to the journal of an update that the server builds into a
+checkpoint, and to the blobs that no row names.
+
+- A purge commits at once. When a backup or a restore runs, the purge keeps
+  the blobs and the blob purge record. The server logs one INFO line with the
+  tool, the unit ID and the backup or restore ID.
+- The expiry run deletes the blobs of such a record when it is older than 24
+  hours and no backup or restore runs. It counts the record in
+  `waitingBlobPurges`.
+- A checkpoint that a new save replaces, and the journal blobs of a built
+  checkpoint, stay as unused blobs of the update. A later save or the start of
+  a later update of the stack deletes them when no backup or restore runs.
+- If the server cannot read whether a backup or a restore runs, it deletes
+  nothing. It logs a warning with the error kind, and a later run tries again.
+
+A long backup holds the deletes back for its whole run. A backup that
+stops without an end keeps them back until the server marks it failed. See
+[Back up, restore and upgrade](backup-restore-upgrade.md).
 
 ## After an upgrade or an installation restore
 

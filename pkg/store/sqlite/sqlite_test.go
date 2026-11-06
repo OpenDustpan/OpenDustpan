@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -772,6 +773,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestBlobDeleteDuringBackup(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunBlobDelete(t, func(t *testing.T) storetest.BlobDeleteStore {
+		t.Helper()
+
+		st, ok := openBackup(t).(storetest.BlobDeleteStore)
+		if !ok {
+			t.Fatal("the backup store is not a storetest.BlobDeleteStore")
+		}
+
+		return st
+	})
+}
+
 func TestPortableExportConformance(t *testing.T) {
 	t.Parallel()
 
@@ -985,6 +1001,10 @@ var (
 	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
 )
 
+// errNoDatabaseClock reports a wrapped store that does not read the clock of
+// the database.
+var errNoDatabaseClock = errors.New("wrapped store does not read the clock of the database")
+
 // errNoJournalCount reports a wrapped store without the journaled count.
 var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
 
@@ -1009,6 +1029,22 @@ func openSQLUpdates(t *testing.T) *sqlUpdatesStore {
 	})
 
 	return &sqlUpdatesStore{UpdatesStore: s, path: path}
+}
+
+// DatabaseNow forwards to the wrapped store, whose method the embedded
+// UpdatesStore interface hides.
+func (s *sqlUpdatesStore) DatabaseNow(ctx context.Context) (time.Time, error) {
+	clock, ok := s.UpdatesStore.(blob.DatabaseClock)
+	if !ok {
+		return time.Time{}, fmt.Errorf("database now: %w", errNoDatabaseClock)
+	}
+
+	now, err := clock.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("database now: %w", err)
+	}
+
+	return now, nil
 }
 
 // CountRunningJournaledUpdates forwards to the wrapped store, whose method

@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18. Accepts the "Errors from the server" section of RFC 11. Route paths superseded in part by ADR 210. Decision 5 superseded in part by ADR 234. Decisions 4 and 7 superseded in part by ADR 276
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 234 changes decision 5: the server never translates now holds for errors
+  and logs only.
+- ADR 276 changes decisions 4 and 7: the time argument kind and the one
+  catalog.
+- ADR 276 extends: a code for every 4xx and 5xx answer, one catalog.
+
 ## Context
 
 The API sends error text in English, in STE (ADR 14). The CLIs of the tools

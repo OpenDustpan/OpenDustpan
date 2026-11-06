@@ -255,6 +255,8 @@ func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, erro
 		BlobKey:       key,
 		BlobSize:      row.BlobSize,
 		BlobMD5:       sum,
+		// The row does not keep the start of the write attempt.
+		AttemptStartedAt: time.Time{},
 	}, nil
 }
 

@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-22. Records decisions 15.1 to 15.7 of the owner and the product manager. Accepts RFC 15. Supersedes in part ADR 213 decision 1, ADR 207 decision 7 and ADR 267 decision 14 (the action of check 2). Supersedes in part ADR 216 decision 8 and ADR 220 decision 12, for sharing rules only. Answers the open item of ADR 213 on a rule that names a unit of another namespace
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 [RFC 15](../rfc/0015-output-sharing.md) asks how one unit reads the outputs

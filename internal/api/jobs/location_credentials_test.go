@@ -38,3 +38,37 @@ func TestStartRefusesRepositoryCredentials(t *testing.T) {
 		})
 	}
 }
+
+// TestStartRefusesRepositoryAddressHost proves that a job start with an https
+// repository URL whose host is an IP address, a number or localhost is
+// refused at the boundary, never reaches the job service, and is not echoed.
+// Each host could make a fetch of the code reach an internal service.
+func TestStartRefusesRepositoryAddressHost(t *testing.T) {
+	t.Parallel()
+
+	for _, host := range []string{
+		"10.0.0.5", "169.254.169.254", "[fd00::1]", "[fe80::1%25eth0]", "[::ffff:127.0.0.1]", "2130706433",
+		"0x7f000001", "0177.0.0.1", "localhost", "git.localhost",
+	} {
+		t.Run(host, func(t *testing.T) {
+			t.Parallel()
+
+			starter := newFakeStarter(t)
+			entries := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+			h := newStartHandler(t, newAuthorizer(readsNamespace()...), newFakeJobs(), starter, entries)
+
+			repo := "https://" + host + "/acme/infra.git"
+			body := strings.Replace(goodBody, `"repository":"acme/infra"`, `"repository":"`+repo+`"`, 1)
+
+			rec := post(t, h, testToken, body)
+			if rec.Code != http.StatusBadRequest || starter.calls() != 0 {
+				t.Fatalf("POST = %d %s with %d starts, want 400 and none", rec.Code, rec.Body.String(),
+					starter.calls())
+			}
+
+			if strings.Contains(rec.Body.String(), host+"/acme") {
+				t.Fatalf("the answer echoes the repository: %s", rec.Body.String())
+			}
+		})
+	}
+}
