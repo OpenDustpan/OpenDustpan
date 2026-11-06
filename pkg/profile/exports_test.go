@@ -78,7 +78,11 @@ func TestParseProxyExport(t *testing.T) {
 			profile.ErrInvalid,
 		},
 		{"provider output", "    g: { type: header, name: X-Key, value: \"${ values.fromProvider }\" }\n", nil},
-		{"value of an import", "    g: { type: header, name: X-Key, value: \"${ values.fromImport }\" }\n", nil},
+		{
+			"value of an import that is not declared",
+			"    g: { type: header, name: X-Key, value: \"${ values.fromImport }\" }\n",
+			profile.ErrInvalid,
+		},
 		{
 			"literal expression",
 			"    g: { type: header, name: X-Key, value: \"${ values.static }\" }\n",

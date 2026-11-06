@@ -119,8 +119,9 @@ exports:
   `${ values.grafana.token }`. Literal text answers 400.
 - `value`, `password` and `key` must read a secret source: a `$secret`
   value, the output of a provider or a rotator (`${ providers.<name>.<output> }`),
-  a value of another profile (`${ imports["<profile>"].values.<path> }` or
-  `${ profiles["<profile>"].values.<path> }`), or a path that the document
+  a value of another profile (`${ profiles["<profile>"].values.<path> }`, or
+  `${ imports["<profile>"].values.<path> }` for a profile that `imports`
+  lists), or a path that the document
   does not hold when the document has imports. A field can read such a
   source through other values, but each value on the way must be exactly
   one reference, for example `${ values.token }`. A plain value, a literal,

@@ -121,10 +121,14 @@ var (
 	queryName = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 	// soleSecretRef is a string that is exactly one reference to a value:
 	// a path under values (group 1), an output of a provider or a rotator, or
-	// a value of another profile. Any other shape (an operator, a function,
-	// a literal, text around the reference) does not match.
+	// a value of another profile (group 2 holds the name of imports[...]).
+	// Any other shape (an operator, a function, a literal, text around the
+	// reference) does not match. The pattern accepts only a chain of names
+	// and quoted indexes, which the expression language reads as a plain
+	// read of that path.
 	soleSecretRef = regexp.MustCompile(`^\$\{\s*(?:(values` + pathSegments + `)|(?:providers|rotators)` +
-		pathSegments + `|(?:imports|profiles)\[\s*"[^"\\]*"\s*\]\.values` + pathSegments + `)\s*\}$`)
+		pathSegments + `|imports\[\s*"([^"\\]*)"\s*\]\.values` + pathSegments + `|profiles\[\s*"[^"\\]*"\s*\]\.values` +
+		pathSegments + `)\s*\}$`)
 	// soleValuesRef is a string that is exactly one reference into values.
 	soleValuesRef = regexp.MustCompile(`^\$\{\s*(values` + pathSegments + `)\s*\}$`)
 )
@@ -508,9 +512,14 @@ func (d *Document) refReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth 
 		return false
 	}
 
+	if m[2] != "" {
+		// imports[...] reads only an import that the document declares.
+		return d.declaresImport(m[2])
+	}
+
 	if m[1] == "" {
 		// An output of a provider or a rotator, or a value of another
-		// profile.
+		// profile that profiles[...] names.
 		return true
 	}
 
@@ -531,6 +540,28 @@ func (d *Document) refReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth 
 	}
 
 	return d.readsSecret(target, seen, depth+1)
+}
+
+// declaresImport reports whether imports of the document holds name, with
+// or without its tag.
+func (d *Document) declaresImport(name string) bool {
+	imports := mapGet(d.root, topImports)
+	if imports == nil || imports.Kind != yaml.SequenceNode {
+		return false
+	}
+
+	base, _, _ := strings.Cut(name, "@")
+
+	for _, item := range imports.Content {
+		declared := importName(item)
+		declaredBase, _, _ := strings.Cut(declared, "@")
+
+		if declared == name || declaredBase == base && !strings.Contains(name, "@") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // hasImports reports whether the document imports at least one profile.
