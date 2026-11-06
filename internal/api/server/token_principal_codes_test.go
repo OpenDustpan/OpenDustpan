@@ -86,7 +86,7 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 		},
 		{"page query", apiserver.ErrPageQueryForTest, http.StatusBadRequest, errcode.RequestPageSizeInvalid, nil, ""},
 		{
-			"body too large", apiserver.ErrBodyTooLargeForTest, http.StatusRequestEntityTooLarge,
+			"body too large", apiserver.BodyTooLargeForTest(16384), http.StatusRequestEntityTooLarge,
 			errcode.RequestBodyTooLarge, bodyLimit, "",
 		},
 		{"principal exists", principal.ErrAlreadyExists, http.StatusConflict, errcode.PrincipalAlreadyExists, nil, ""},
