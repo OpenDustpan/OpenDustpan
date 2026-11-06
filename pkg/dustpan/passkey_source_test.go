@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/mfa"
 )
 
 // Targets of the sign-in routes with a WebAuthn credential.
@@ -86,8 +87,10 @@ func TestWebauthnGatesUseTheResolvedSourceAddress(t *testing.T) {
 	}{
 		// 20 failed responses refuse the address on the next request.
 		{"failed responses", webauthnFinishRoute, 20},
-		// A start spends a unit of a budget of 30.
-		{"starts", webauthnBeginRoute, 30},
+		// A start writes a challenge row, and one address holds at most 20 open
+		// ones, which is fewer than the budget of starts (30): the count of
+		// open challenges of the resolved address refuses the next start.
+		{"starts", webauthnBeginRoute, mfa.MaxOpenSignInChallengesPerSource},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
