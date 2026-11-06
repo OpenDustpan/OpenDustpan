@@ -84,6 +84,10 @@ func checkedErrorVariants(variants []ErrorVariant, codes []string, bodies object
 	out := slices.Clone(variants)
 	slices.SortFunc(out, func(a, b ErrorVariant) int { return strings.Compare(a.Code, b.Code) })
 
+	// schemaCodes maps each generated schema name to the code that gave it.
+	// Two codes can give one name, for example a.b-c and a-b.c.
+	schemaCodes := map[string]string{}
+
 	for i, v := range out {
 		if i > 0 && out[i-1].Code == v.Code {
 			return nil, fmt.Errorf("%w: error variant %q is listed twice", ErrInvalidBody, v.Code)
@@ -92,6 +96,16 @@ func checkedErrorVariants(variants []ErrorVariant, codes []string, bodies object
 		if err := checkedVariant(v, codes, bodies); err != nil {
 			return nil, err
 		}
+
+		name := variantSchemaName(v.Code)
+
+		if other, clash := schemaCodes[name]; clash {
+			return nil, fmt.Errorf(
+				"%w: error variants %q and %q give the same schema name", ErrInvalidBody, other, v.Code,
+			)
+		}
+
+		schemaCodes[name] = v.Code
 	}
 
 	return out, nil

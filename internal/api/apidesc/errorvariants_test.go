@@ -28,6 +28,9 @@ func TestBuildRefusesBadErrorVariants(t *testing.T) {
 			{Code: "a.b", Args: []apidesc.ErrorArg{arg}}, {Code: "a.b", Args: []apidesc.ErrorArg{arg}},
 		}},
 		{"no argument", codes, []apidesc.ErrorVariant{{Code: "a.b", Args: nil}}},
+		{"two codes give one schema name", []string{"a.b-c", "a-b.c"}, []apidesc.ErrorVariant{
+			{Code: "a.b-c", Args: []apidesc.ErrorArg{arg}}, {Code: "a-b.c", Args: []apidesc.ErrorArg{arg}},
+		}},
 		{"argument twice", codes, []apidesc.ErrorVariant{{Code: "a.b", Args: []apidesc.ErrorArg{arg, arg}}}},
 		{
 			"unknown type",
