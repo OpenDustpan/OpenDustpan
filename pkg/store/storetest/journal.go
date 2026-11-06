@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -71,6 +72,8 @@ func journalRowAttempt(t *testing.T, s UpdatesStore, u stack.Update, w journalWr
 		OperationIDs: ops,
 		HasRebuild:   false,
 		Verify:       acceptEntries,
+		// The attempt starts now, so the store accepts it in its time window.
+		AttemptStartedAt: time.Now(),
 	}
 }
 

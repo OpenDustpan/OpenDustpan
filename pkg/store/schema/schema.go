@@ -30,8 +30,29 @@ var ErrBinaryBelowMinimum = errors.New("binary version is below the minimum of t
 var ErrBadMinimum = errors.New("minimum binary version must have the form vMAJOR.MINOR.PATCH")
 
 // ErrSchemaDiverged reports a database that records migrations the binary
-// does not embed and lacks migrations the binary embeds.
+// does not embed and lacks migrations the binary embeds, or that records a
+// migration that the binary embeds under another name or with another
+// SHA-256 of its SQL.
 var ErrSchemaDiverged = errors.New("database schema and binary have diverged")
+
+// sha256HexLen is the length of a SHA-256 in hex.
+const sha256HexLen = 64
+
+// ValidSHA256 reports whether value is a SHA-256 as 64 lowercase hex digits.
+// The stores record this form, and every other value is refused.
+func ValidSHA256(value string) bool {
+	if len(value) != sha256HexLen {
+		return false
+	}
+
+	for _, c := range value {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+
+	return true
+}
 
 // ErrMigrationsPending reports a database with migrations that the binary
 // embeds and has not applied, opened by a caller that applies none.
@@ -391,10 +412,10 @@ func CheckMinimum(minimum, binaryVersion string) error {
 // BaselineVersion is the version of the baseline migration. The baseline
 // replaced every migration before it, so a database that records a version
 // below it is from before the baseline, and no binary can upgrade it.
-const BaselineVersion int64 = 100
+const BaselineVersion int64 = 168
 
 // BaselineName is the file name of the baseline migration.
-const BaselineName = "0100_baseline.sql"
+const BaselineName = "0168_baseline.sql"
 
 // ErrSchemaBeforeBaseline reports a database that records a migration
 // version from before the baseline.
@@ -485,6 +506,9 @@ type AppliedMigration struct {
 	// MinBinaryVersion is the minimum binary version that the migration
 	// sets, or "" when it sets none.
 	MinBinaryVersion string
+	// SHA256 is the SHA-256 of the SQL of the migration as lowercase hex,
+	// or "" when the database recorded none.
+	SHA256 string
 }
 
 // ErrBadMigrationName reports a migration file not named

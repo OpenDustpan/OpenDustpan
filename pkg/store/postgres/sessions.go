@@ -12,14 +12,17 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/generationstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 var (
 	_ session.Store       = (*Store)(nil)
+	_ session.AlertStore  = (*Store)(nil)
 	_ session.PolicyStore = (*Store)(nil)
 )
 
@@ -31,6 +34,28 @@ func (s *Store) CreateSession(ctx context.Context, ss session.Session, d session
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
 		return insertSession(ctx, q, ss, d)
+	})
+}
+
+// CreateSessionWithAlert implements session.AlertStore. The session, the
+// entry and the notification commit together, or none does.
+func (s *Store) CreateSessionWithAlert(
+	ctx context.Context, ss session.Session, d session.Digest, e audit.Entry, n notify.Notification,
+) error {
+	if err := ss.Validate(); err != nil {
+		return err
+	}
+
+	if err := n.Validate(); err != nil {
+		return fmt.Errorf("alert of a session: %w", err)
+	}
+
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		if err := insertSession(ctx, q, ss, d); err != nil {
+			return err
+		}
+
+		return appendNotifications(ctx, q, audit.ServerScope, []notify.Notification{n})
 	})
 }
 
@@ -73,6 +98,11 @@ func checkProviderEnabled(ctx context.Context, q *db.Queries, id string) error {
 // insertSession inserts ss with the digest d and sets the last sign-in of
 // its principal, in the transaction of q.
 func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d session.Digest) error {
+	gen, err := generationstore.ToRow(ss.Generation)
+	if err != nil {
+		return err
+	}
+
 	n, err := q.CreateSession(ctx, db.CreateSessionParams{
 		ID:          ss.ID,
 		Digest:      d.String(),
@@ -82,13 +112,14 @@ func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d ses
 		SourceIp:    ss.SourceIP,
 		UserAgent:   ss.UserAgent,
 		PrincipalID: ss.PrincipalID,
+		Generation:  gen,
 	})
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
 	}
 
 	if n != 1 {
-		return refusedSession(ctx, q, ss.PrincipalID)
+		return refusedSession(ctx, q, ss.PrincipalID, gen)
 	}
 
 	last := db.SetLastSignInParams{AtMs: codec.Millis(ss.CreatedAt), ID: ss.PrincipalID}
@@ -99,9 +130,11 @@ func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d ses
 	return nil
 }
 
-// refusedSession names why the insert of a session of the principal id
-// inserted nothing: the principal, or a taken ID or digest.
-func refusedSession(ctx context.Context, q *db.Queries, id string) error {
+// refusedSession names why the insert of a session of the principal id, with
+// the session generation gen that the sign-in read (0 for none),
+// inserted nothing: the principal, a changed generation, or a taken ID or
+// digest.
+func refusedSession(ctx context.Context, q *db.Queries, id string, gen int64) error {
 	p, err := q.GetSessionPrincipal(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return session.ErrPrincipalNotFound
@@ -116,6 +149,8 @@ func refusedSession(ctx context.Context, q *db.Queries, id string) error {
 		return fmt.Errorf("%w: the principal is a %s", session.ErrPrincipalNotFound, p.Kind)
 	case p.DisabledAtMs.Valid:
 		return session.ErrPrincipalDisabled
+	case gen != 0 && p.Generation != gen:
+		return session.ErrGenerationChanged
 	default:
 		return session.ErrAlreadyExists
 	}
@@ -143,6 +178,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (session.Session, err
 		EndReason:   session.EndReason(row.EndReason),
 		SourceIP:    row.SourceIp,
 		UserAgent:   row.UserAgent,
+		Generation:  generationstore.OfSession(row.Generation),
 	}, nil
 }
 
@@ -162,6 +198,11 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 		return session.Match{}, fmt.Errorf("session %q: stored digest: %w", row.ID, err)
 	}
 
+	ownerGeneration, err := generationstore.FromRow(row.PrincipalGeneration)
+	if err != nil {
+		return session.Match{}, err
+	}
+
 	return session.Match{
 		Session: session.Session{
 			CreatedAt:   codec.FromMillis(row.CreatedAtMs),
@@ -174,6 +215,7 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			EndReason:   session.EndReason(row.EndReason),
 			SourceIP:    row.SourceIp,
 			UserAgent:   row.UserAgent,
+			Generation:  generationstore.OfSession(row.Generation),
 		},
 		Owner: session.Owner{
 			ActiveAt:    codec.FromMillis(row.PrincipalActiveAtMs),
@@ -189,7 +231,8 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			IdleMs: row.PolicyIdleMs, MaxLengthMs: row.PolicyMaxLengthMs, UpdatedAtMs: row.PolicyUpdatedAtMs,
 			TokenFreshnessMs: row.PolicyTokenFreshnessMs.Int64, TokenFreshnessSet: row.PolicyTokenFreshnessMs.Valid,
 		}),
-		Accounts: codec.FromSessionAccountsRow(row.AccountsInactivityMs, row.AccountsDisable),
+		Accounts:   codec.FromSessionAccountsRow(row.AccountsInactivityMs, row.AccountsDisable),
+		Generation: ownerGeneration,
 	}, nil
 }
 

@@ -34,7 +34,7 @@ func readableDeployment(deployment []byte) bool {
 // member name of a deployment.
 func readableMember(name string, raw json.RawMessage) bool {
 	switch {
-	case strings.EqualFold(name, "manifest"), strings.EqualFold(name, secretsProvidersMember):
+	case strings.EqualFold(name, "manifest"), strings.EqualFold(name, SecretsProvidersMember):
 		return raw[0] == '{' || raw[0] == 'n'
 	case strings.EqualFold(name, "pending_operations"):
 		return readableEntries(raw)

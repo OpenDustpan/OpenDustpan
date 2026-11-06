@@ -20,8 +20,10 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -139,6 +141,10 @@ type Config struct {
 	// keeps none: the preferences routes answer 501. Both SQL adapters keep
 	// them.
 	Preferences *preferences.Service
+	// LocalUsers is the service of the local users and of the password
+	// sign-in. Nil means the server keeps no local users: their routes are
+	// not mounted.
+	LocalUsers *localusersvc.Service
 	// Settings keeps the settings resource of the installation and of the
 	// namespaces. Nil means the store keeps none: the settings routes answer
 	// 501. Both SQL adapters keep them.
@@ -155,6 +161,10 @@ type Config struct {
 	// InstallationKind is the kind that the capabilities document answers
 	// to a signed-in caller. Empty means production.
 	InstallationKind installation.Kind
+	// StateWriteGates is the effective value of the state.write gates, which
+	// the capabilities document answers to a signed-in caller. A zero value
+	// means that the wiring gives none, and the document leaves it out.
+	StateWriteGates stategate.Effective
 	// GitHost keeps the registration of the GitHub App of the installation, the
 	// map of its installations and the connections of the namespaces. Nil
 	// means the store keeps none: the Git host routes are not mounted. Both SQL
@@ -221,14 +231,20 @@ type Handler struct {
 	workers        WorkerSource
 	signIn         *signInState
 	kind           installation.Kind
+	stateWrite     stategate.Effective
 	preferences    *preferences.Service
-	settings       *setting.Service
-	gitHost        *forge.Service
-	idem           *idempotent.Middleware
-	instances      installation.InstanceStore
-	storeChecks    *storecheck.Service
-	mux            *patternMux
-	routes         []Route
+	localUsers     *localusersvc.Service
+	// passkeys is the passkey service of the console sign-in. With no
+	// sign-in there is no service.
+	passkeys      PasskeyService
+	passkeyBegins *beginLimiter
+	settings      *setting.Service
+	gitHost       *forge.Service
+	idem          *idempotent.Middleware
+	instances     installation.InstanceStore
+	storeChecks   *storecheck.Service
+	mux           *patternMux
+	routes        []Route
 }
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
@@ -279,17 +295,24 @@ func NewHandler(cfg Config) (*Handler, error) {
 		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
+		stateWrite:     cfg.StateWriteGates,
 		preferences:    cfg.Preferences,
-		settings:       cfg.Settings,
-		gitHost:        cfg.GitHost,
-		idem:           cfg.Idempotency,
-		instances:      cfg.Instances, storeChecks: cfg.StoreChecks,
+		localUsers:     cfg.LocalUsers,
+		passkeys:       nil, passkeyBegins: newBeginLimiter(),
+		settings:  cfg.Settings,
+		gitHost:   cfg.GitHost,
+		idem:      cfg.Idempotency,
+		instances: cfg.Instances, storeChecks: cfg.StoreChecks,
 		mux:    newPatternMux(),
 		routes: nil,
 	}
 
 	if h.now == nil {
 		h.now = time.Now
+	}
+
+	if signIn != nil {
+		h.passkeys = signIn.passkeys
 	}
 
 	h.routes = h.buildRoutes()
@@ -466,17 +489,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		return
 	}
 
-	wr := problemWriter(h.logger)
-
-	if wr.Problem(err).Status == http.StatusInternalServerError {
-		// The log names the status, the code and the type of the cause,
-		// never the error text: the text may hold driver detail, a token,
-		// or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", http.StatusInternalServerError),
-			slog.String("error_code", errcode.ServerInternal), slog.String("cause", causeType(err)))
-	}
-
-	wr.Write(ctx, w, err)
+	// problem.Writer logs a 500 with a cause from the closed list and the
+	// request ID, and never the error text.
+	problemWriter(h.logger).Write(ctx, w, err)
 }
 
 // problemWriter returns the writer of the error answers of the installation

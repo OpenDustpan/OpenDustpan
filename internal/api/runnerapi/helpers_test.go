@@ -174,6 +174,14 @@ func backends() []backend {
 	return list
 }
 
+// wiringBackends returns SQLite alone. A test of the wiring of the handler
+// replaces the store behind the check under test with a double, or refuses the
+// request before it reaches the store. The dialect of the store does not
+// change such a test, and an environment of PostgreSQL costs about a second.
+func wiringBackends() []backend {
+	return backends()[:1]
+}
+
 func openSQLite(t *testing.T) stores {
 	t.Helper()
 
@@ -219,6 +227,18 @@ func newEnvWith(
 ) *env {
 	t.Helper()
 
+	return newEnvServing(t, open, func(s stores, opts *serveOptions) {
+		if phases != nil {
+			opts.claimer = phases(s)
+		}
+	})
+}
+
+// newEnvServing opens a store with open, creates the namespace acme, and
+// serves the handler with the options that set changes.
+func newEnvServing(t *testing.T, open func(t *testing.T) stores, set func(s stores, opts *serveOptions)) *env {
+	t.Helper()
+
 	s := open(t)
 
 	ns := namespace.Namespace{
@@ -233,17 +253,22 @@ func newEnvWith(
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	var claimer job.Claimer
-	if phases != nil {
-		claimer = phases(s)
+	clock := &skewClock{offset: atomic.Int64{}}
+	opts := serveOptions{
+		now:      clock.now,
+		authz:    identity.AdminOnly{},
+		claimer:  nil,
+		recorder: nil,
+		jobs:     nil,
+		logger:   nil,
+		mutate:   nil,
 	}
 
-	clock := &skewClock{offset: atomic.Int64{}}
-	h, srv, ops := serve(
-		t,
-		s,
-		serveOptions{now: clock.now, authz: identity.AdminOnly{}, claimer: claimer},
-	)
+	if set != nil {
+		set(s, &opts)
+	}
+
+	h, srv, ops := serve(t, s, opts)
 
 	return &env{t: t, store: s, server: srv, handler: h, claimer: ops, fence: ns.Fence(), clock: clock}
 }
@@ -251,8 +276,8 @@ func newEnvWith(
 // lapseLease is the lease that lapse sets, and lapseMargin is the time to
 // wait after its expiry.
 const (
-	lapseLease  = 200 * time.Millisecond
-	lapseMargin = 200 * time.Millisecond
+	lapseLease  = 20 * time.Millisecond
+	lapseMargin = 30 * time.Millisecond
 )
 
 // lapse ends the claim of the operation. A case polls with the lease of the
@@ -301,11 +326,38 @@ type serveOptions struct {
 	authz identity.Authorizer
 	// claimer replaces the claimer of the test, which has no jobs.
 	claimer job.Claimer
+	// recorder and jobs are the recorder and the job reader of the session
+	// paths. Nil leaves them out.
+	recorder job.CheckedRecorder
+	jobs     runnerapi.JobReader
+	// logger replaces the logger that discards.
+	logger *slog.Logger
+	// mutate changes the Config before the handler is built, for a test that
+	// leaves out a dependency or wraps one.
+	mutate func(cfg *runnerapi.Config)
 }
 
 // serve returns a handler over s on a test server. Two calls with the stores
 // of two instances of one installation give two replicas of the server.
 func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *httptest.Server, *opsClaimer) {
+	t.Helper()
+
+	cfg, claimer := configFor(t, s, opts)
+
+	h, err := runnerapi.NewHandler(cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	return h, srv, claimer
+}
+
+// configFor returns the configuration of the handler that serve builds, with
+// the change of opts.mutate.
+func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *opsClaimer) {
 	t.Helper()
 
 	service, err := namespace.NewService(
@@ -322,22 +374,34 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		phases = opts.claimer
 	}
 
-	h, err := runnerapi.NewHandler(runnerapi.Config{
-		Audit: newTestAudit(), OnAuditFailure: nil,
-		Namespaces: service, Pools: s.runners, Members: s.runners, Handoffs: s.runners, Claimer: phases, Sweeps: nil,
-		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: opts.authz,
-		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL,
-		Now: opts.now, PollInterval: 20 * time.Millisecond,
-		DenialLimiter: nil,
-	})
-	if err != nil {
-		t.Fatalf("handler: %v", err)
+	cfg := runnerapi.Config{
+		Audit:          newTestAudit(),
+		OnAuditFailure: nil,
+		Namespaces:     service,
+		Pools:          s.runners,
+		Members:        s.runners,
+		Handoffs:       s.runners,
+		Claimer:        phases,
+		Sweeps:         nil,
+		Operations:     s.operations,
+		Recorder:       opts.recorder,
+		Jobs:           opts.jobs,
+		Authenticator:  adminAuthenticator{},
+		Authorizer:     opts.authz,
+		Sessions:       nil,
+		Logger:         loggerOf(opts),
+		Release:        serverRelease(),
+		ServerURL:      serverURL,
+		Now:            opts.now,
+		PollInterval:   20 * time.Millisecond,
+		DenialLimiter:  nil,
 	}
 
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
+	if opts.mutate != nil {
+		opts.mutate(&cfg)
+	}
 
-	return h, srv, claimer
+	return cfg, claimer
 }
 
 // admin sends a request of the management API as the administrator.
@@ -683,4 +747,13 @@ func (e *env) auditActions() map[string]bool {
 	}
 
 	return out
+}
+
+// loggerOf returns the logger of the options, or a logger that discards.
+func loggerOf(opts serveOptions) *slog.Logger {
+	if opts.logger != nil {
+		return opts.logger
+	}
+
+	return slog.New(slog.DiscardHandler)
 }

@@ -74,6 +74,8 @@ func restoreWorkerCases() []restoreCase {
 	}
 
 	cases = append(cases, restoreCrashCases()...)
+	cases = append(cases, restoreEndAuditCases()...)
+	cases = append(cases, restoreDamagedCases()...)
 
 	return append(cases, []restoreCase{
 		{name: "a holder stopped in the swap transaction cannot swap after a takeover", test: testWorkerSwapKill},

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
@@ -576,7 +577,7 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
+		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil, guard: nil},
 	)
 }
 
@@ -590,6 +591,9 @@ type fixtureOptions struct {
 	limit    int
 	cutoff   int
 	replayer stack.JournalReplayer
+	// guard is the state guard of the handler. Nil gives the guard of
+	// stategate.Off.
+	guard stategate.Guard
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
@@ -656,7 +660,13 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("updates service: %v", err)
 	}
 
+	var guard stategate.Guard = stategate.Off("the test keeps no gates")
+	if opts.guard != nil {
+		guard = opts.guard
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              guard,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -2890,6 +2900,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	_, err = pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,

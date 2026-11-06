@@ -116,7 +116,8 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 	w := workspace.Workspace{
 		NamespaceID: "",
 		CreatedAt:   at, UpdatedAt: at, Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID: id, Ref: workspace.Ref{Namespace: ns.Name, Name: workspace.Name("web")}, Revision: 1,
+		LastRelease: workspace.NoRelease(),
+		ID:          id, Ref: workspace.Ref{Namespace: ns.Name, Name: workspace.Name("web")}, Revision: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if createErr := s.CreateWorkspace(ctx, w, ns.Fence()); createErr != nil {

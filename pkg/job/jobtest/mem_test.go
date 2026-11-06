@@ -404,6 +404,8 @@ func selects(f *job.Filter, j *job.Job) bool {
 		return false
 	case len(f.States) > 0 && !slices.Contains(f.States, j.State):
 		return false
+	case !f.StateChangedAfter.IsZero() && !j.StateChangedAt.After(f.StateChangedAfter):
+		return false
 	default:
 		return f.StateChangedBefore.IsZero() || j.StateChangedAt.Before(f.StateChangedBefore)
 	}
@@ -473,6 +475,35 @@ func settle(next *job.Job, to job.State, c *job.Change, prev int64, now time.Tim
 	if to.Terminal() {
 		next.Reason = c.Reason
 	}
+}
+
+// FinalVersion implements job.FinalVersionReader.
+func (m *memDB) FinalVersion(_ context.Context, ns namespace.Name, unitID string) (job.FinalVersion, bool, error) {
+	if ns == "" {
+		return job.FinalVersion{}, false, fmt.Errorf("%w: the namespace of a final version is empty", job.ErrInvalid)
+	}
+
+	if unitID == "" {
+		return job.FinalVersion{}, false, fmt.Errorf("%w: the unit of a final version is empty", job.ErrInvalid)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	v, ok := m.finals[unitID]
+	if !ok || v.Unit.Namespace() != ns {
+		var none job.FinalVersion
+
+		return none, false, nil
+	}
+
+	return job.FinalVersion{
+		UnitID:    unitID,
+		VersionID: v.VersionID,
+		Commit:    v.Commit,
+		Job:       v.Job,
+		At:        v.At,
+	}, true, nil
 }
 
 // ObserveStateVersion implements job.Store.
@@ -773,7 +804,7 @@ func (m *memDB) checkManualLock(j *job.Job) error {
 
 	ref, ok := m.units[unit.UnitID()]
 	if !ok || ref.Namespace != unit.Namespace() {
-		return fmt.Errorf("check the manual locks of unit %s: %w", unit, errNotInInventory)
+		return fmt.Errorf("check the manual locks of unit %s: %w: %w", unit, job.ErrUnitGone, errNotInInventory)
 	}
 
 	for _, t := range []manuallock.Target{manuallock.UnitTarget(ref), manuallock.NamespaceTarget(unit.Namespace())} {

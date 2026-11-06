@@ -9,9 +9,7 @@ import (
 	"strings"
 	"time"
 
-	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
-	"opendustpan.org/opendustpan/internal/api/tfe"
-	"opendustpan.org/opendustpan/internal/api/tofuhttp"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -25,32 +23,72 @@ import (
 // the name of the package out of the files that name gate for the body gate.
 type gateService = gate.Service
 
-// newCollectionAndGateServices returns the collection service and the gate
-// service. Each one is nil when the store does not hold its data.
+// reasonNoGateStore is the reason of the effective value "state.write gates:
+// off". It is the only case where the gates are off.
+const reasonNoGateStore = "the namespace store keeps no gates: it does not implement gate.Store"
+
+// errGateParts means that the store keeps gates and the server lacks a part
+// that the gate service needs. The server does not start: it never runs with
+// a store that keeps gates and no check of them.
+var errGateParts = errors.New("the namespace store keeps gates, so the gate service needs the inventory reader " +
+	"and the namespace service")
+
+// stateWriteGates is the rule of the state.write gates of a server, which the
+// tool adapters and the claimer of the runner protocol share: a store that
+// keeps gates gives the gate service, and a store that keeps no gates gives
+// the explicit guard of stategate.Off with its reason. A store that keeps
+// gates with a part missing stops the start.
+type stateWriteGates struct {
+	// svc is the gate service. It is nil only when the gates are off.
+	svc *gate.Service
+	// guard is svc, or the guard of stategate.Off. It is never nil.
+	guard stategate.Guard
+}
+
+// effective returns the effective value of the state.write gates.
+func (g stateWriteGates) effective() stategate.Effective {
+	return stategate.EffectiveOf(g.guard)
+}
+
+// newCollectionAndGateServices returns the collection service and the
+// state.write gates. The collection service is nil when the store holds no
+// collections.
 func newCollectionAndGateServices(
 	cfg *settings, namespaces *namespace.Service,
-) (*collection.Service, *gateService, error) {
+) (*collection.Service, stateWriteGates, error) {
 	collections, err := newCollectionService(cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, stateWriteGates{svc: nil, guard: nil}, err
 	}
 
-	gates, err := newGateService(cfg, namespaces)
+	gates, err := newStateWriteGates(cfg, namespaces)
 	if err != nil {
-		return nil, nil, err
+		return nil, stateWriteGates{svc: nil, guard: nil}, err
 	}
 
 	return collections, gates, nil
 }
 
-// newGateService returns the service that checks each write of state against
-// the access limits and the gates of state.write, or nil when the store
-// keeps no gates or the server has no inventory. Both SQL adapters keep gates.
-// The tool adapters then check no write.
-func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service, error) {
+// newStateWriteGates returns the state.write gates of the server: the gate
+// service when the store keeps gates, and the guard of stategate.Off when it
+// keeps none. Both SQL adapters keep gates. A store that keeps gates on a
+// server with no inventory reader or no namespace service is an error, so
+// the server does not start: it fails closed.
+func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWriteGates, error) {
+	none := stateWriteGates{svc: nil, guard: nil}
+
 	store, ok := cfg.namespaceStore.(gate.Store)
-	if !ok || cfg.inventoryReader == nil || namespaces == nil {
-		return nil, nil //nolint:nilnil // A store without gates is a valid setup: no write is checked.
+	if !ok {
+		return stateWriteGates{svc: nil, guard: stategate.Off(reasonNoGateStore)}, nil
+	}
+
+	// Defense in depth: the option check refuses a server with no inventory
+	// reader, and the namespace service is always built before this call.
+	// This check stays so that a new path to this call cannot run a store
+	// that keeps gates with no gate service. It does not rely on the option
+	// check.
+	if cfg.inventoryReader == nil || namespaces == nil {
+		return none, fmt.Errorf("%w: %w", ErrMissingOption, errGateParts)
 	}
 
 	facts := newInventoryFacts(cfg)
@@ -62,14 +100,14 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 
 	svc, err := gate.NewService(gate.ServiceConfig{
 		Store: store, Engine: newGateEngine(), Producers: nil,
-		Members: facts, Units: facts, Subjects: principalSubjects{}, Fences: namespaceFences{namespaces: namespaces},
+		Units: facts, Subjects: principalSubjects{}, Fences: namespaceFences{namespaces: namespaces},
 		Now: cfg.now, Log: log,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("gate service: %w", err)
+		return none, fmt.Errorf("gate service: %w", err)
 	}
 
-	return svc, nil
+	return stateWriteGates{svc: svc, guard: svc}, nil
 }
 
 // newGateEngine returns the linked policy engine. It knows each action of the
@@ -121,13 +159,19 @@ func (f inventoryFacts) Collection(ctx context.Context, unit identity.Object) (c
 	return collection.Name(e.Collection), nil
 }
 
-// Labels implements gate.UnitSource. The labels are sorted key=value strings.
-func (f inventoryFacts) Labels(ctx context.Context, unit identity.Object) ([]string, error) {
+// Unit implements gate.UnitSource: the collection and the labels of unit
+// from one read of its inventory entry.
+func (f inventoryFacts) Unit(ctx context.Context, unit identity.Object) (gate.UnitInfo, error) {
 	e, err := f.entry(ctx, unit)
 	if err != nil {
-		return nil, err
+		return gate.UnitInfo{Collection: "", Labels: nil}, err
 	}
 
+	return gate.UnitInfo{Collection: collection.Name(e.Collection), Labels: entryLabels(e)}, nil
+}
+
+// entryLabels returns the labels of e as sorted key=value strings.
+func entryLabels(e inventory.Entry) []string {
 	labels := make([]string, 0, len(e.Labels))
 	for k, v := range e.Labels {
 		labels = append(labels, k+"="+v)
@@ -135,7 +179,7 @@ func (f inventoryFacts) Labels(ctx context.Context, unit identity.Object) ([]str
 
 	slices.Sort(labels)
 
-	return labels, nil
+	return labels
 }
 
 // entry returns the inventory entry of unit. A unit that is not in the
@@ -196,6 +240,7 @@ func (f inventoryFacts) deletedEntry(ctx context.Context, unit identity.Object) 
 	}
 
 	return inventory.Entry{
+		LastRelease: nil,
 		LastChanged: time.Time{}, Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName(),
 		UnitID: unit.UnitID(), DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, ManualLock: nil,
 		Collection: facts.Collection, Labels: facts.Labels,
@@ -306,39 +351,4 @@ func (f namespaceFences) Fence(ctx context.Context, ns namespace.Name) (namespac
 	}
 
 	return n.Fence(), nil
-}
-
-// stateGuardOf returns svc as the guard of the TFE-compatible API, and an
-// untyped nil for a nil service: a typed nil in the interface would call a
-// nil service.
-//
-//nolint:ireturn // The adapter takes the port, and nil must stay an untyped nil.
-func stateGuardOf(svc *gateService) tfe.StateGuard {
-	if svc == nil {
-		return nil
-	}
-
-	return svc
-}
-
-// inventoryGuardOf is stateGuardOf for the tool-neutral inventory API.
-//
-//nolint:ireturn // The adapter takes the port, and nil must stay an untyped nil.
-func inventoryGuardOf(svc *gateService) inventoryapi.StateGuard {
-	if svc == nil {
-		return nil
-	}
-
-	return svc
-}
-
-// tofuHTTPGuardOf is stateGuardOf for the OpenTofu http backend.
-//
-//nolint:ireturn // The adapter takes the port, and nil must stay an untyped nil.
-func tofuHTTPGuardOf(svc *gateService) tofuhttp.StateGuard {
-	if svc == nil {
-		return nil
-	}
-
-	return svc
 }

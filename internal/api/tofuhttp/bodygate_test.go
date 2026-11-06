@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -32,7 +33,7 @@ func newGateHandler(t *testing.T, units tofuhttp.WorkspaceService, gate *bodygat
 		Gate:           gate,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

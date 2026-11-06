@@ -157,3 +157,36 @@ func TestGraphQLOtherQueriesAndNoCredential(t *testing.T) {
 		http.StatusUnauthorized,
 	)
 }
+
+func TestCreateCommitOnBranchRefusesTheDeleteOfAMissingFile(t *testing.T) {
+	t.Parallel()
+
+	f, first := newFake(t)
+	c := newClient(t, f)
+
+	// The mutation deletes stacks/stage.yaml. The second call deletes it again.
+	done := decode[gqlOut](
+		t,
+		c.do(http.MethodPost, "/graphql", f.UserToken(), mutation(t, "main", first.ID, "x", "x")).body,
+	)
+	if done.Data.Create == nil {
+		t.Fatalf("first answer = %+v", done)
+	}
+
+	again := decode[gqlOut](
+		t,
+		c.do(
+			http.MethodPost,
+			"/graphql",
+			f.UserToken(),
+			mutation(t, "main", done.Data.Create.Commit.OID, "y", "y"),
+		).body,
+	)
+	if len(again.Errors) != 1 || again.Errors[0].Type != "UNPROCESSABLE" || again.Data.Create != nil {
+		t.Fatalf("second answer = %+v", again)
+	}
+
+	if head, err := f.Head("acme/infra", "main"); err != nil || head.ID != done.Data.Create.Commit.OID {
+		t.Fatalf("head = %+v, %v; want the first commit", head, err)
+	}
+}

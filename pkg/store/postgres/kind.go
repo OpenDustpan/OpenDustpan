@@ -51,10 +51,23 @@ func (s *Store) ClaimKind(ctx context.Context, kind installation.Kind) (installa
 
 // checkKind compares the kind in the database with the kind of the command
 // before the migrations run. The caller holds the migration lock in tx. It
-// does nothing without a command kind, and when the installation table has
-// no kind column yet: the migrations add the column, and the claim decides.
+// does nothing without a command kind, and on a new database with no
+// installation table: the baseline makes the table, and the claim decides.
+// An installation table without the kind column fails closed with
+// installation.ErrUnavailable: the baseline makes the column, so such a table
+// is damaged, and an unknown kind is never a dev kind.
 func checkKind(ctx context.Context, tx pgx.Tx, want installation.Kind) error {
 	if want == "" {
+		return nil
+	}
+
+	var table bool
+
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('installation') IS NOT NULL`).Scan(&table); err != nil {
+		return fmt.Errorf("check installation table: %w", err)
+	}
+
+	if !table {
 		return nil
 	}
 
@@ -69,7 +82,8 @@ func checkKind(ctx context.Context, tx pgx.Tx, want installation.Kind) error {
 	}
 
 	if !present {
-		return nil
+		return fmt.Errorf("read installation kind: the installation table has no kind column: %w",
+			installation.ErrUnavailable)
 	}
 
 	var raw pgtype.Text

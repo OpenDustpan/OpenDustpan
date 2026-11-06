@@ -282,6 +282,8 @@ func deleteInlineCheckpoint(ref stack.Ref, id, deployment string) stack.Checkpoi
 		BlobKey:       "",
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: time.Time{},
 	}
 }
 

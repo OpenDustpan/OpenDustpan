@@ -427,6 +427,12 @@ func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, 
 	return nil
 }
 
+func (fakeStates) FinalizeStateVersionExpecting(
+	context.Context, workspace.StateVersion, namespace.Fence, workspace.StateVersionID,
+) error {
+	return nil
+}
+
 func (fakeStates) FenceAndUnlock(
 	context.Context, workspace.Workspace, workspace.StateVersion, workspace.StateVersionID, namespace.Fence,
 	audit.Entry,
@@ -705,10 +711,11 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 			Holder:   "admin",
 			Reason:   "apply",
 		},
-		ID:        "ws-1",
-		Ref:       workspace.Ref{Namespace: testNamespace, Name: parsed},
-		Revision:  2,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          "ws-1",
+		Ref:         workspace.Ref{Namespace: testNamespace, Name: parsed},
+		Revision:    2,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	f.workspaces.workspaces[w.ID] = w
 }

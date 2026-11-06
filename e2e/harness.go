@@ -284,6 +284,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -354,6 +355,19 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	return startEnv(ctx, in)
 }
 
+// NewEnvWithPasskeys starts a server as NewEnv does, with a public URL whose
+// host name is localhost, so the server can serve the passkey routes. A
+// passkey relying party ID is a host name and never an IP address. The server
+// still listens on its address, and the public URL names the same port.
+func NewEnvWithPasskeys(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.passkeys = true
+
+	return startEnv(ctx, in)
+}
+
 // journalTestInput returns the input of an env for cli and store with new
 // tokens, a new directory and journaling on, so the journal fault tests only
 // set their own fault.
@@ -368,6 +382,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -428,6 +443,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -721,7 +737,9 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
 	tb.Helper()
 
-	return append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+	opts := append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+
+	return append(opts, dustpan.WithComponents(apiOnly(tb)))
 }
 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
@@ -818,6 +836,22 @@ func startServing(ctx context.Context, tb testing.TB, srv *dustpan.Server) {
 	}
 
 	startBackupWorker(ctx, tb, srv)
+}
+
+// apiOnly returns the api component alone. The in-process server runs Start
+// and serves its handler, but it never runs the claim loop of the worker, so a
+// worker component would fail the claim-loop readiness check once the server
+// has a durable store and 2 claim intervals have passed. The real binary
+// covers the worker component.
+func apiOnly(tb testing.TB) dustpan.Components {
+	tb.Helper()
+
+	c, err := dustpan.ParseComponents(string(dustpan.ComponentAPI))
+	if err != nil {
+		tb.Fatalf("parse components: %v", err)
+	}
+
+	return c
 }
 
 // startBackupWorker runs the backup worker of srv until the test ends.

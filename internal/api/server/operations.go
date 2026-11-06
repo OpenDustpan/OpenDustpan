@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -55,7 +56,11 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodGet, capabilitiesPath): apidesc.Name("getCapabilities", "capabilities").
-		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities")),
+		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities",
+			apidesc.Named[stateWriteGatesBody]("StateWriteGates"),
+			apidesc.DeclareOpenEnum[stategate.Mode]("StateWriteGatesMode",
+				string(stategate.ModeOn), string(stategate.ModeOff)),
+			apidesc.DeclareOpenEnum[stategate.WritePath]("StateWritePath", writePaths()...))),
 	apidesc.Pattern(http.MethodGet, openAPIPath): apidesc.Name("getApiDescription", "description").
 		WithBodies(apidesc.NoBody, apidesc.Free("ApiDescription")),
 	apidesc.Pattern(http.MethodGet, preferencesPath): apidesc.Name("getPreferences", tagPreferences).
@@ -144,6 +149,8 @@ func joinLabels() map[string]apidesc.Label {
 	maps.Copy(labels, gitHostOperationLabels)
 	maps.Copy(labels, gateObjectLabels())
 	maps.Copy(labels, storeCheckOperationLabels())
+	maps.Copy(labels, localUserOperationLabels())
+	maps.Copy(labels, passkeyOperationLabels())
 
 	return labels
 }
@@ -168,4 +175,17 @@ func actionNames(actions []identity.Action) []string {
 // userAgent returns the User-Agent header of a request, for the audit record.
 func userAgent(r *http.Request) string {
 	return apidesc.Header(r, "User-Agent")
+}
+
+// writePaths returns the names of every write path of the state.write gates,
+// the values of the enum StateWritePath.
+func writePaths() []string {
+	all := append(stategate.CheckedPaths(), stategate.UncheckedPaths()...)
+	out := make([]string, 0, len(all))
+
+	for _, p := range all {
+		out = append(out, string(p))
+	}
+
+	return out
 }

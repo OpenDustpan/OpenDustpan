@@ -341,32 +341,69 @@ func checkCheckpointKey(ctx context.Context, q *db.Queries, stackID string, cp s
 	return stack.CheckCheckpointBlobKey(namespace.ID(nsID), stack.ID(stackID), cp.Update, cp.BlobKey)
 }
 
-// writeCheckpoint checks the key, the lease, rejects previews, checks the sequence,
-// then upserts the checkpoint of its update. It returns true when the last checkpoint of the
-// update has the same sequence and digest: the write is a replay and the row keeps its blob key.
+// writeCheckpoint runs writeCheckpointRows and makes sure that the attempt
+// window of cp was checked against the clock of the database after every lock
+// wait of the transaction. The upsert returns the time of that clock after its
+// own lock wait, so the common save pays no round trip for the check. A write
+// that did not reach the upsert (a replay) or that lost it reads the clock
+// here, after the last lock wait. A refusal returns the error, and the caller
+// rolls the transaction back: the attempt writes nothing, also when it repeats
+// a committed checkpoint.
 func writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) (bool, error) {
+	write, err := writeCheckpointRows(ctx, q, cp, stackID, row)
+	if err != nil {
+		return false, err
+	}
+
+	if write.checked {
+		return write.known, nil
+	}
+
+	if attemptErr := checkAttempt(ctx, q, cp.AttemptStartedAt); attemptErr != nil {
+		return false, attemptErr
+	}
+
+	return write.known, nil
+}
+
+// checkpointWrite is the result of writeCheckpointRows. known is true for a
+// replay. checked is true when the upsert wrote the row and the attempt window
+// was checked with the clock that the upsert returned.
+type checkpointWrite struct {
+	known   bool
+	checked bool
+}
+
+// writeCheckpointRows checks the key, the lease, rejects previews, checks the sequence,
+// then upserts the checkpoint of its update. It returns true when the last checkpoint of the
+// update has the same sequence and digest: the write is a replay and the row keeps its blob key.
+// The result says whether the upsert wrote the row, and so whether the attempt window was checked
+// with the clock that the upsert returned.
+func writeCheckpointRows(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+) (checkpointWrite, error) {
 	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
-		return false, keyErr
+		return checkpointWrite{known: false, checked: false}, keyErr
 	}
 
 	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
-		return false, leaseErr
+		return checkpointWrite{known: false, checked: false}, leaseErr
 	}
 
 	if previewErr := checkMutates(ctx, q, stackID, cp.Update); previewErr != nil {
-		return false, previewErr
+		return checkpointWrite{known: false, checked: false}, previewErr
 	}
 
 	if cp.Sequence > 0 {
 		retried, seqErr := checkSequence(ctx, q, cp, stackID)
 		if seqErr != nil || retried {
-			return retried, seqErr
+			return checkpointWrite{known: retried, checked: false}, seqErr
 		}
 	}
 
-	written, putErr := q.PutCheckpoint(ctx, db.PutCheckpointParams{
+	nowMs, putErr := q.PutCheckpoint(ctx, db.PutCheckpointParams{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
 		LeaseDigest:   row.LeaseDigest,
@@ -381,15 +418,22 @@ func writeCheckpoint(
 		BlobSize:      sql.NullInt64{Int64: row.BlobSize, Valid: true},
 		BlobMd5:       row.BlobMD5,
 	})
+	if errors.Is(putErr, sql.ErrNoRows) {
+		// The write lost the race and wrote no row.
+		raced, raceErr := lostCheckpointRace(ctx, q, cp, stackID)
+
+		return checkpointWrite{known: raced, checked: false}, raceErr
+	}
+
 	if putErr != nil {
-		return false, fmt.Errorf("upsert checkpoint: %w", putErr)
+		return checkpointWrite{known: false, checked: false}, fmt.Errorf("upsert checkpoint: %w", putErr)
 	}
 
-	if written == 0 {
-		return lostCheckpointRace(ctx, q, cp, stackID)
+	if attemptErr := checkAttemptAt(cp.AttemptStartedAt, nowMs); attemptErr != nil {
+		return checkpointWrite{known: false, checked: false}, attemptErr
 	}
 
-	return false, nil
+	return checkpointWrite{known: false, checked: true}, nil
 }
 
 // lostCheckpointRace answers an upsert that wrote no row: a write of the same

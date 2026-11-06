@@ -17,8 +17,10 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -59,7 +61,12 @@ type WorkspaceService interface {
 	LockWithIDForJob(ctx context.Context, id workspace.ID, req workspace.LockRequest) (workspace.Workspace, error)
 	// UnlockLock releases holder's lock when it is lockID (ADR 49, decision 6). A
 	// lock that changed after the caller read the unit is refused, not released.
+	// On a free workspace, a request that repeats the last normal release of
+	// holder succeeds without a change.
 	UnlockLock(ctx context.Context, id workspace.ID, lockID, holder string) (workspace.Workspace, error)
+	// RepeatsRelease reports whether q repeats the last release of w, at the
+	// time of the clock of the service (see workspace.Workspace.RepeatsRelease).
+	RepeatsRelease(w workspace.Workspace, q workspace.ReleaseRepeat) bool
 	// ForceUnlockLock releases the lock expect names, whoever holds it, writing
 	// the fence version of a unit with state (ADR 44, decision 1). It reports an
 	// unfenced release.
@@ -98,8 +105,9 @@ type Config struct {
 	DenialLimiter *denylimit.Limiter
 	// StateGuard checks each LOCK, each force-unlock and each state version
 	// with no lock against the access limits and the gates of state.write.
-	// Nil means that the server keeps no gates, and no write is checked.
-	StateGuard StateGuard
+	// It is required. A server whose store keeps no gates gives the guard of
+	// stategate.Off with its reason.
+	StateGuard stategate.Guard
 }
 
 // Handler serves the http backend under /tofu/state/.
@@ -119,8 +127,8 @@ type Handler struct {
 	routes []Route
 	// onAuditFailure counts a download whose audit entry was lost. It may be nil.
 	onAuditFailure func()
-	// stateGuard is nil when the server keeps no gates.
-	stateGuard StateGuard
+	// admit asks the state.write guard before each checked write.
+	admit *stategate.Admitter
 }
 
 // call is the authorized request that a route handler serves.
@@ -164,6 +172,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
+	admit, err := stategate.New(cfg.StateGuard, cfg.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("%w: state guard: %w", ErrMissingDependency, err)
+	}
+
 	h := &Handler{
 		authn:      cfg.Authenticator,
 		authz:      cfg.Authorizer,
@@ -177,7 +190,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		routes:     nil,
 
 		onAuditFailure: cfg.OnAuditFailure,
-		stateGuard:     cfg.StateGuard,
+		admit:          admit,
 	}
 
 	if h.gate == nil {
@@ -307,11 +320,12 @@ func unitObject(ref workspace.Ref) (identity.Object, error) {
 }
 
 // writeError answers an error with a plain status and a message that holds no
-// driver or request detail. The log keeps the status only.
+// driver or request detail. The log keeps the status, a cause from the closed
+// list and the request ID.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+		faultlog.LogInternal(ctx, h.logger, "request failed", faultlog.Cause(err), "")
 	}
 
 	if errors.Is(err, namespace.ErrFenced) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -335,4 +336,76 @@ type ArtifactStore interface {
 	// history.Redactor, with history.CauseRequest.
 	ReplaceLog(ctx context.Context, ns namespace.Name, from string, body io.Reader, by string,
 		fence namespace.Fence) (LogRef, error)
+}
+
+// ArtifactKey is what a blob key in the directory of one job names: one part
+// of a plan, or one write attempt of a chunk of a log version. Exactly one of
+// Plan and Version is set.
+type ArtifactKey struct {
+	// Plan is the ID of the plan of a plan part, and Kind its part.
+	Plan string
+	Kind OutputKind
+	// Version is the ID of the log version of a chunk, and Seq its number.
+	Version string
+	Seq     int
+}
+
+// ParseArtifactKey returns what the blob key rel names in the directory of
+// the job id. rel is relative to the namespace, as PlanPartKey and
+// LogChunkAttemptKey make it. Any other text, also the key of another job, is
+// ErrInvalid. It is an allowlist: the sweep of the artifact blobs deletes
+// only a key that it parses.
+func ParseArtifactKey(id ID, rel string) (ArtifactKey, error) {
+	parts := strings.Split(rel, "/")
+
+	const segments = 5
+
+	invalid := fmt.Errorf("%w: %q is not an artifact blob key of job %s", ErrInvalid, rel, id)
+
+	if len(parts) != segments || parts[0] != artifactDir || parts[1] != string(id) {
+		return ArtifactKey{}, invalid
+	}
+
+	switch parts[2] {
+	case "plan":
+		return parsePlanPart(id, rel, parts[3], OutputKind(parts[4]), invalid)
+	case "log":
+		return parseChunkAttempt(id, rel, parts[3], parts[4], invalid)
+	default:
+		return ArtifactKey{}, invalid
+	}
+}
+
+// parsePlanPart returns the key of the part kind of the plan, when rel is
+// exactly the key that PlanPartKey makes for them, else invalid.
+func parsePlanPart(id ID, rel, plan string, kind OutputKind, invalid error) (ArtifactKey, error) {
+	if checkParts(id, PlanIDPrefix, plan) != nil || (kind != OutputPlanDisplay && kind != OutputPlanApply) {
+		return ArtifactKey{}, invalid
+	}
+
+	if key, err := PlanPartKey(id, plan, kind); err != nil || key.String() != rel {
+		return ArtifactKey{}, invalid
+	}
+
+	return ArtifactKey{Plan: plan, Kind: kind, Version: "", Seq: 0}, nil
+}
+
+// parseChunkAttempt returns the key of the chunk of the log version, when rel
+// is exactly the key of an attempt that ChunkBlobKey accepts, else invalid.
+func parseChunkAttempt(id ID, rel, version, name string, invalid error) (ArtifactKey, error) {
+	digits, _, ok := strings.Cut(name, "-")
+	if !ok || checkParts(id, LogVersionIDPrefix, version) != nil {
+		return ArtifactKey{}, invalid
+	}
+
+	seq, err := strconv.Atoi(digits)
+	if err != nil || seq < 0 || seq >= MaxLogChunks {
+		return ArtifactKey{}, invalid
+	}
+
+	if key, keyErr := ChunkBlobKey(id, version, seq, rel); keyErr != nil || key.String() != rel {
+		return ArtifactKey{}, invalid
+	}
+
+	return ArtifactKey{Plan: "", Kind: "", Version: version, Seq: seq}, nil
 }

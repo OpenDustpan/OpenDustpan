@@ -88,7 +88,7 @@ func providerOf(t *testing.T, st consoleBackend, publicURL string) *oauthtest.Pr
 			WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
 			AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
 			IssuedIn: 0, IgnoreMaxAge: false, TokenType: "", UserinfoStatus: 0, UserinfoBody: "",
-			UserinfoType: "", UserinfoRedirect: "", TokenRedirect: "",
+			UserinfoType: "", UserinfoRedirect: "", TokenRedirect: "", AuthTime: time.Time{},
 		},
 		TLS: true,
 	})
@@ -175,7 +175,7 @@ func loginFor(t *testing.T, st consoleBackend, person string, now func() time.Ti
 
 	_, secret, err := sessions.Start(t.Context(), entry, session.Start{
 		AuthTime: at, PrincipalID: person, Provider: "corp", SourceIP: "192.0.2.1",
-		UserAgent: "test", Stored: false,
+		UserAgent: "test", Generation: 0, Stored: false, Alert: nil,
 	})
 	if err != nil {
 		t.Fatalf("start the console session: %v", err)

@@ -237,6 +237,14 @@ _Avoid_: VCS integration, VCS provider, app (alone)
 A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. One change order carries each review request. The review mode of its units decides which approvals count and who merges (ADR 299).
 _Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
 
+**Merge state**:
+What the Git host says about whether a review request can merge now: clean, conflict, blocked, behind, unstable, draft or unknown. Only clean means that the Git host lets the review request merge. Unknown means that the Git host did not compute the merge yet, or that the server does not know the value. A caller treats each state except clean as "not mergeable".
+_Avoid_: Mergeable (alone)
+
+**Test merge commit**:
+The commit that the Git host makes to test the merge of an open review request. It is not on a branch. It changes when the base or the head of the review request moves. The server reads it from the Git host and never makes one.
+_Avoid_: Preview merge
+
 **Forge capability**:
 One group of operations of the `Forge` port that a forge connection can do, for example `commit`, `review` or `repo-token`. A method outside the capabilities of a connection returns `ErrUnsupported`. The server checks the capabilities that a feature needs when a person names the connection for it.
 _Avoid_: Feature (alone), scope (that is a token permission of the forge), permission
@@ -302,8 +310,12 @@ The copy of the rows and blobs of one namespace in the portable format (ADR 218 
 _Avoid_: Partial backup, namespace export
 
 **Baseline migration**:
-The one migration of each dialect that replaced every migration before it, before the first tag. Its version is 100. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
+The one migration of each dialect that replaced every migration before it, before the first tag. Until the first tag, a change to the schema edits it in place, and the store refuses a database that another version of it made. Its version is 168. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
 _Avoid_: Squash, initial migration
+
+**Release record**:
+The committed file `internal/releaserecord/shipped.txt` that lists each migration file that a release tag shipped, with its SHA-256 (ADR 325). The release adds its lines in the commit that it tags. It is the one fact in the tree that tells whether a tag shipped. While it lists no file, the checks that hold the shipped migrations and the description version are off, and the baseline collapse can run. From its first line on, the checks run and the collapse is refused.
+_Avoid_: Release marker, tag file
 
 **Portable format**:
 The dialect-neutral format of the SQL part of a backup: one compressed file of JSON rows for each table (ADR 42). It is the only backup format. It replaces the native format of ADR 30.
@@ -354,6 +366,14 @@ _Avoid_: Retention sweep, sweep (that is the Sweep feature), garbage collection,
 **Orphan cleanup**:
 The task that deletes a key blob with no record (ADR 151 decision 22). It waits a grace period of 24 hours from the write of the blob. So it never deletes the key blob of an item whose transaction has not ended.
 _Avoid_: Orphan sweep, sweep (that is the Sweep feature)
+
+**Attempt deadline**:
+The time that one write attempt has from its start to the commit of its row: 30 minutes (ADR 281 decision 11). The row names the blob of the attempt. The commit compares the start time with the database clock and refuses a later commit with `blob.ErrAttemptExpired`. A sweep of blobs that no row names waits 1 hour, longer than the deadline. In code this time is `blob.UnnamedGracePeriod`. So a sweep never deletes the blob of an attempt that can still commit.
+_Avoid_: Timeout (that is a bound on one request), lease
+
+**Artifact sweep**:
+The schedule `job.artifact-sweep` that deletes the plan and log blobs of a job that no row names. It runs one time each hour. It waits the grace period of `blob.UnnamedGracePeriod` after the write of a blob, and it deletes nothing while a backup or a restore runs. It is not the **Orphan cleanup** of key blobs.
+_Avoid_: Job reaper, garbage collection
 
 **Blob purge record**:
 A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention expiry deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period. It covers the live blob store only. The tombstone of the purge covers the backup targets (ADR 151).
@@ -456,7 +476,7 @@ _Avoid_: Principal scope, tenant, realm
 Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal, and through a plain OAuth 2.0 provider an `oauth` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
 
 **Sign-in provider**:
-An OpenID Connect provider or a plain OAuth 2.0 provider through which persons sign in to the console. Its mode is `oidc` or `oauth`. A plain OAuth 2.0 provider identifies a person by a claim of its user-info answer. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
+A configured identity provider through which persons sign in to the console. Its mode is `oidc` or `oauth`, and the adapters of ADR 321 add `saml`, `cas`, `ldap` and `header`. A plain OAuth 2.0 provider identifies a person by a claim of its user-info answer. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
 _Avoid_: Identity source, IdP connection
 
 **Installation scope**:
@@ -471,6 +491,26 @@ _Avoid_: API key, password
 **Sign-in**:
 The step in which a sign-in method, such as an identity provider, proves who a person is. The method only proves the identity. The server then issues its own session.
 _Avoid_: Login, log-in (as a noun). The verb is "sign in".
+
+**Sign-in method**:
+A way to prove who a person is. It has one of three shapes. A redirect method sends the browser to the identity provider: OIDC, plain OAuth 2.0, SAML and CAS. A password method checks a password at a directory: LDAP. A request method reads the trusted header of a proxy. The local password and the passkey of a local user are sign-in methods too. Each method returns a sign-in assertion. It never makes a principal, a membership or a session (ADR 320).
+_Avoid_: Auth provider, authenticator (the `Authenticator` port resolves access tokens), login method
+
+**Sign-in assertion**:
+What a sign-in method returns. It holds the provider ID, the subject at the identity provider, the names and the email. It holds the groups, and whether the method sent groups. It holds the authentication time, and whether the method proves it. It also holds the kind of the method and the factors that OpenDustpan checked itself. In code, `session.Assertion` (ADR 320).
+_Avoid_: Identity, claims (alone), SAML assertion (that is one input of the SAML method)
+
+**Group claim**:
+The list of groups that an identity provider gives for a person at a sign-in. It is a claim of OIDC or OAuth 2.0, or an attribute of SAML or CAS. It is also the groups of an LDAP directory, or a header of a trusted proxy. A group mapping turns each value into groups. One function applies them to the memberships of the person, with the rules for groups from an identity provider. With no group mapping, it joins no group. It changes only the memberships of its own provider, and never makes a group (ADR 320).
+_Avoid_: Role claim, team sync
+
+**Group mapping**:
+The stored setting of one identity provider that turns a group value into zero or more groups of the home of the person. It is a sensitive setting. The server never infers it from a group name (ADR 320).
+_Avoid_: Group link, claim rule
+
+**Proxy proof**:
+The second proof that a request of the trusted header comes from the trusted proxy. The first proof is the address of the peer, which must be in the proxy list of the provider. The second proof is a signed JWT of the proxy, a shared secret header, or a TLS client certificate of the proxy. A header from a trusted address alone is never enough (ADR 321).
+_Avoid_: Proxy secret (alone), header auth
 
 **Session**:
 The proof of a sign-in that the console holds in two sealed cookies: the access cookie and the refresh cookie (ADR 297). The server keeps no record of a session. A session belongs to one person. It ends at a sign-out in that browser and at a bump of the session generation of the person. It also ends after a period with no refresh, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
@@ -497,7 +537,7 @@ The random ID, with the prefix `sin-`, that names one sign-in. The cookies of th
 _Avoid_: Session ID
 
 **Session generation**:
-A count, one for each principal, that starts at 1. Each cookie of a session carries the generation that its issue read, and works only while it equals the stored count. A sign-out everywhere and an end of the sessions by an administrator add 1 to it. A disable and a change of a password or a factor do the same (ADR 297).
+A count, one for each principal, that starts at 1. Each cookie of a session carries the generation that its issue read, and works only while it equals the stored count. A sign-out everywhere and an end of the sessions by an administrator add 1 to it. A disable and a change of a password or a factor do the same (ADR 297). One port reads and bumps it: `session.PrincipalStateStore`. Each bump writes the audit entry `session:generation-bumped` with its cause.
 _Avoid_: Valid-after time, revocation list, token epoch
 
 **Server nonce**:
@@ -705,6 +745,10 @@ _Avoid_: Preview (for OpenTofu), dry run, diff (a diff compares two state versio
 **Workspace lock**:
 The lock that one principal holds on a workspace while it changes the state of the workspace. The lock stays until the principal or an administrator releases it.
 _Avoid_: Lease
+
+**Last release**:
+The record of the last released lock of a workspace. It holds the lock ID, the holder, the releaser, the time of the release and the kind of release. The kind is "normal" when the holder released the lock, and "forced" after a force-unlock. For 24 hours after the release, the record lets an unlock or a force-unlock that OpenTofu sends again succeed with no change.
+_Avoid_: Unlock history, lock log
 
 **Override switch**:
 A setting of a namespace or of a unit that allows an override (ADR 44, decision 6). Both settings are off by default. A unit setting only narrows the setting of its namespace.
@@ -953,7 +997,7 @@ The work that one executor does with one claim (ADR 100 decision 4). A phase has
 _Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
 
 **Gate**:
-A stored rule at one decision point (ADR 224). Its condition is the body of one Cedar policy over the fact document of the decision point. Its outcome is data: `deny`, `approval:<rule>` or `warn`. Its mode is `enforce` or `evaluate`. Its `onError` is `fail` (the default) or `skip`, and an error of a gate with `fail` stops the change. A gate ID is unique in its scope, and its Cedar policy ID is `<scope key>/<id>`. A gate can be final (see Final gate). A gate has a scope: the installation, a namespace, a collection or a unit. A blueprint version or a profile can also hold gates. Any `deny` wins. Else the change waits for each named approval rule. Else each `warn` gives a warning, and a warning stops auto-apply. Else the change goes on. Any Cedar error of a gate in `enforce` mode stops the change with `gate.ErrRuleFailed`. A gate is stored in the server and configured through the API, never in a repository file. A lock, a freeze, a switch and the agent controls are fixed controls, not gates.
+A stored rule at one decision point (ADR 224). Its condition is the body of one Cedar policy over the fact document of the decision point. Its outcome is data: `deny`, `approval:<rule>` or `warn`. Its mode is `enforce` or `evaluate`. Its `onError` is `fail` (the default) or `skip`, and an error of a gate with `fail` stops the change. A gate ID is unique in its scope, and its Cedar policy ID is `<scope key>/<id>`. A gate can be final (see Final gate). A gate has a scope: the installation, a namespace, a collection or a unit. The gates of a unit key on its stable unit ID, not on its name (ADR 317). A rename and a move between collections keep them. A new unit with the name of a deleted unit has none. A blueprint version or a profile can also hold gates. Any `deny` wins. Else the change waits for each named approval rule. Else each `warn` gives a warning, and a warning stops auto-apply. Else the change goes on. Any Cedar error of a gate in `enforce` mode stops the change with `gate.ErrRuleFailed`. A gate is stored in the server and configured through the API, never in a repository file. A lock, a freeze, a switch and the agent controls are fixed controls, not gates.
 _Avoid_: Policy (alone), check, approval gate (the requirements of a change come from approval rules), guardrail
 
 **Approval wait**:
@@ -1049,11 +1093,19 @@ The static binary `dustpan-launcher` that runs the steps of one claim inside the
 _Avoid_: Executor (that is write-back or runners, ADR 100 decision 19), runner binary, shim
 
 **Job proxy**:
-A proxy between one runner job and the network. RFC 16 proposes it, and the owner has not decided its design. In the proposal, a rule for the unit and the operation must match the host, the method and the path of a request. Else the proxy refuses the request. It may add a credential to an allowed request, so that the job never holds that credential. The proposal has it hold the credentials and run apart from the steps. Its outbound connections may go through the outbound guard, and through an upstream proxy when the team has one.
+A proxy between one runner job and the network (ADR 327). It runs next to each job of a unit with proxy rules. A proxy rule must allow the host, the method and the path of a request. Else the job proxy refuses the request. Only the job proxy holds the key of the CA of the job. It applies the outbound guard to each rule host, also through an upstream proxy. How it adds a credential, so that the job never holds that credential, is a proposal (RFC 16).
 _Avoid_: Egress proxy, egress gateway, sidecar (as the name of the feature), firewall
 
+**Proxy rule**:
+One allow line of the job proxy (ADR 327). It matches the host, the method and the path of a request, with `*` and `**` in a path pattern. A proxy rule only allows. A request that no proxy rule allows is refused. Always write "proxy rule", not "rule" alone.
+_Avoid_: Egress rule (the egress words are for the outbound guard and the egress allowlist), request rule, ACL, network policy (that is Kubernetes' word), permission
+
+**Proxy rule set**:
+The set of proxy rules of a unit (ADR 327). The job start renders their templates once. The document format and the scopes that hold a proxy rule set are a proposal (RFC 16).
+_Avoid_: Egress policy, proxy policy, proxy config
+
 **Upstream proxy**:
-A proxy of the team's network that the job proxy sends its outbound connections through, with CONNECT (RFC 16, a proposal). The team runs it, and OpenDustpan does not configure its rules. The job proxy is its only client in a job: the job itself never reaches it. Its proxy credential is a secret of the job proxy, never of the job.
+A proxy of the team's network that carries the outbound connections of the job proxy (ADR 327). The team runs it, and it applies its own rules. OpenDustpan does not configure them. How the job proxy finds it and its credential is a proposal (RFC 16).
 _Avoid_: Egress proxy, corporate proxy (alone), parent proxy, next hop
 
 **Runner protocol**:
@@ -1410,12 +1462,12 @@ The durable operation that checks a model connection before the document becomes
 _Avoid_: Health check, connection test, ping
 
 **Outbound guard**:
-The rules of the package `pkg/egress` for each outbound request that the server makes to an address that a principal gives. Examples are the delivery of a notification to a webhook and the read of an iCal feed. The rules apply to the URL when a principal saves or tests it. They also apply to the resolved IP address of each connection. So a DNS answer that changes after the check cannot pass them. The adapter `egresshttp` applies them to each connection. The job proxy can use the same rules for its own outbound connections (RFC 16, a proposal).
+The rules of the package `pkg/egress` for each outbound request that the server makes to an address that a principal gives. Examples are the delivery of a notification to a webhook and the read of an iCal feed. The rules apply to the URL when a principal saves or tests it. They also apply to the resolved IP address of each connection. So a DNS answer that changes after the check cannot pass them. The adapter `egresshttp` applies them to each connection. The job proxy uses the same rules for its own outbound connections (ADR 327).
 _Avoid_: Egress proxy, egress filter, SSRF filter, firewall
 
 **Egress allowlist**:
 The list of hosts and CIDR ranges that a model call of the installation can reach (ADR 129 decision 25). A private address or an IP literal needs a CIDR entry with one port, and `http` needs an entry with `"http": true`. No entry overrides the always-denied list of link-local, metadata, unspecified, broadcast and multicast addresses. With no entry, no model call goes out.
-_Avoid_: Egress rule (that is for a job, RFC 16), firewall, IP allowlist (that is for requests to a namespace)
+_Avoid_: Egress rule, proxy rule (that is for a job), firewall, IP allowlist (that is for requests to a namespace)
 
 **Reaper**:
 The durable operation that ends each agent run whose turn ended with no step that ends the run (ADR 120 decision 10). Its kind is `agent.KindReap`, and it runs every minute on one instance. It first deletes each sealed reveal past its hard expiry. It then ends each such run as canceled, or as failed with the stop reason `turn-failed`.

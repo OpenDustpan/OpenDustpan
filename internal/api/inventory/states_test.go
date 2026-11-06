@@ -30,6 +30,7 @@ func lockCombinationEntries() []coreinventory.Entry {
 
 	entry := func(id string, l *coreinventory.Lock, m *coreinventory.ManualLock) coreinventory.Entry {
 		return coreinventory.Entry{
+			LastRelease: nil,
 			LastChanged: changeTime(), Namespace: "acme", Tool: "opentofu", Name: id, UnitID: id,
 			DisplayName: id, Status: "", ResourceCount: nil, Lock: l, ManualLock: m, Collection: "", Labels: nil,
 		}

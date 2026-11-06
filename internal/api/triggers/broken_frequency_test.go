@@ -51,8 +51,8 @@ func TestBrokenFrequencyAnswersAFailure(t *testing.T) {
 		t.Errorf("record lines = %d, want 1: %s", n, logged)
 	}
 
-	if !strings.Contains(logged, "trigger_id=trg-broken") {
-		t.Errorf("log does not name the trigger: %s", logged)
+	if !strings.Contains(logged, "op=trigger.frequency") || strings.Contains(logged, "trg-broken") {
+		t.Errorf("log must name the op and no trigger ID: %s", logged)
 	}
 
 	if strings.Contains(logged, "stored schedule frequency") {

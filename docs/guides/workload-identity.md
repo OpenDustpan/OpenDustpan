@@ -81,9 +81,16 @@ for a token that names an unknown key.
    POST /api/server/namespaces/acme/grants        {"subject":"principal:<id>","role":"maintainer"}
    ```
 
+   The grant needs a console session with a recent sign-in. An access token,
+   also the bootstrap admin token, gets 403 with the error code
+   `mfa.fresh-step-required`. Sign in to the console first. See
+   [Console sign-in](console-sign-in.md#tokens-from-a-console-session).
+
 2. Make a trust rule for it. You need `namespace:manage-trust-rules` on the
-   namespace and `principal:manage-tokens` on the principal, and you must sign
-   in to the console: an access token cannot make a rule. See
+   namespace and `principal:manage-tokens` on the principal. Only a person who
+   signed in to the console, or the bootstrap admin token, can make a rule. Any
+   other access token gets 403 with the error code
+   `trust-rule.sign-in-required`. See
    [the trust rules API](../reference/trust-rules-api.md).
 
 ### GitHub Actions

@@ -485,6 +485,8 @@ var keepControlStatements = []string{
 	`DELETE FROM main.maintenance_revocations`,
 	`DELETE FROM main.instance_versions`,
 	`DELETE FROM main.store_checks`,
+	`DELETE FROM main.name_locks`,
+	`DELETE FROM main.name_lock_key`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
@@ -516,7 +518,16 @@ var keepControlStatements = []string{
 		`SELECT id, binary_version, started_at_ms FROM live.instance_versions`,
 	`INSERT INTO main.store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report) ` +
 		`SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report FROM live.store_checks`,
+	`INSERT INTO main.name_locks (` + nameLockColumns + `) SELECT ` + nameLockColumns + ` FROM live.name_locks`,
+	`INSERT INTO main.name_lock_key (id, key) SELECT id, key FROM live.name_lock_key`,
 }
+
+// nameLockColumns lists every column of name_locks, for the copy of the
+// control tables. A restore keeps the live counts and the live key of their
+// names, so a restore never ends a lock and never changes the digests of the
+// names.
+const nameLockColumns = `scope, name, sub, failures, locked_until_ms, level, last_failure_ms, ` +
+	`last_lock_end_ms, reset_after_ms`
 
 // The columns of the control tables of the runner protocol, for the copy of
 // the control tables. A restore keeps the live handoff tokens and job

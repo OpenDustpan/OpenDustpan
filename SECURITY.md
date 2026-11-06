@@ -2,10 +2,8 @@
 
 ## Report a vulnerability
 
-<!-- Placeholder: private vulnerability reporting must be on in the
-repository settings before these steps work. The project owner turns it on. -->
-
-Report a vulnerability in private, through GitHub:
+Report a vulnerability in private, through the private vulnerability reporting
+of GitHub:
 
 1. Open the **Security** tab of this repository on GitHub.
 2. Select **Report a vulnerability**.

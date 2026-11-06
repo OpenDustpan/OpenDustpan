@@ -22,3 +22,6 @@ bench-s3-out/
 
 # Soak run reports (make soak writes CSV and Markdown here)
 soak-reports/
+
+# Local agent config (see docs/agents/local-setup.md)
+/opencode.local.jsonc

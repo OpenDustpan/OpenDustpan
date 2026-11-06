@@ -106,8 +106,8 @@ subject, the method, the path with its query, the SHA-256 of the body, the time
 and the nonce. The server refuses a time more than 60 seconds from its clock.
 On `/rotate`, `/poll` and `/claims/{operation}/handoff`, it keeps the nonce for
 two minutes and refuses a second proof with the same nonce. The exchange of a
-handoff token for a job session is the fourth path that needs a nonce. It comes
-with the session paths.
+handoff token for a job session (`POST /session`) is the fourth path that needs
+a nonce.
 
 The join has no proof of an existing key. The join token and the signature of
 the new key over the join challenge authenticate it. A join with the name of a
@@ -149,8 +149,58 @@ the end of a claim. When no step that changes resources began, the phase waits
 for the next claim. Else the phase fails. A release of a claim that has a job
 session fails with 409, because the launcher holds the claim.
 
-The paths of the job session (the launcher), the steps, the logs and the plans
-are not part of this API yet.
+## The job session
+
+The launcher of a claim exchanges its handoff token for a job session, and then
+calls these paths. They need a job session and never accept a runner key. A
+runner key cannot call them.
+
+| Method and path | Body | Answer |
+| --- | --- | --- |
+| `POST /session` | the handoff token, the new public key, the signature of the session challenge, the release | the session, its lease, and the assignment |
+| `POST /session/renew` | none | the new expiry, `canceled` |
+| `POST /session/steps/{step}/begin` | none | 204 |
+| `POST /session/steps/{step}/end` | the exit code, the times, the number of chunks and the SHA-256 of the log | 204 |
+| `PUT /session/steps/{step}/logs/{seq}` | one chunk of the log, at most 1 MiB | 204 |
+| `POST /session/finish` | `succeeded` and a reason | 204 |
+
+The exchange has no proof of an existing key. The handoff token and the
+signature of the new key authenticate it. Its `Dustpan-Proof` subject is the
+SHA-256 of the handoff token in hex, and the new key signs the proof. A second
+exchange with one token gets `token-used`. The exchange of a claim that is not
+live, or that the launcher asks for more than 30 minutes after the claim, gets
+`claim-lost`. The assignment holds the steps of the phase, the unit, the tool
+and the git credential mode of the pool. It holds no secret. It has no source
+and no plan yet.
+
+Every other path of the session has a `Dustpan-Proof` whose subject is the
+session ID, signed with the key of the session. A session that does not exist,
+and a proof that does not match its key, get the same `bad-proof` answer. A
+session whose claim is no longer live gets `claim-lost`. This holds for a lease
+that passed, for a claim that another runner took, and for a claim that the
+launcher ended. A runner that an administrator retired gets `retired`.
+
+A renewal moves the expiry of the claim to the lease of the pool from now. It
+also works during a cancel, and then it answers `canceled: true`. The launcher
+stops its step with the grace period of the step, and still sends its last log
+chunks and its finish. During a cancel, the request for a new step gets `canceled`.
+
+A log chunk has a number from 0. If the launcher sends a chunk again with the same
+number and the same body, the server stores it once. A known number with another body
+gets `conflict`. The header `Dustpan-Content-SHA256` has the SHA-256 of the body
+in hex, and the proof signs that value. The server compares it with the hash of
+the bytes that it received before it stores any of them, and answers
+`bad-proof` for another body. A step has at most 20,000 chunks.
+
+The end of a step names the number of chunks and the SHA-256 of the whole log.
+The server compares both with the log that it stored, and answers `conflict`
+when they differ. A step end that repeats the first one changes nothing. A
+finish ends the phase once. A second finish gets `claim-lost`, because the
+phase has no live claim.
+
+The paths for the source, the credentials, the plan and the report of a sweep
+are not part of this API yet. A session of a sweep has no steps, no logs and no
+finish.
 
 ## Errors of the protocol
 

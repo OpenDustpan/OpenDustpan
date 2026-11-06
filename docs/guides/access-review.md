@@ -20,6 +20,7 @@ action for that object.
 | --- | --- | --- |
 | `GET /api/server/access-review` | `server:read-access` | The installation |
 | `GET /api/server/namespaces/{namespace}/access-review` | `namespace:read-access` | The namespace |
+| `GET /api/server/namespaces/{namespace}/collections/{collection}/access-review` | `collection:read-access` | The collection |
 | `GET /api/server/namespaces/{namespace}/unit-access-review?tool=<tool>&unit=<name>` | `unit:read-access` | The unit |
 | `GET /api/server/principals/{principal}/access-review` | `server:read-access` on the principal | The principal |
 
@@ -27,7 +28,22 @@ The principal route works for a service principal only. For any other kind
 of principal, the answer is `400`. The unit route needs both `tool` and `unit`.
 
 The collection route, `GET /api/server/namespaces/{namespace}/collections/{collection}/access-review`,
-answers `501` in this release. Use the namespace route and filter by subject.
+lists the grants on the collection, the grants on each unit that is in the
+collection, and the grants on the namespace and on the installation. A grant on
+the namespace or the installation appears only when its role gives a data action
+or manages access, and its row has `inheritedFrom`. A deleted unit
+that is not purged stays in the list, with `objectState` set to `deleted`.
+
+The route takes the same query values as the other routes: `limit`, `cursor`,
+`from` and `to`, `subject`, and `expand`. An unknown collection gets `404`.
+
+The route answers `501` in three cases:
+
+- The server runs without its access store, so it keeps no roles and grants.
+- The store cannot read an access review. Both built-in stores, PostgreSQL and
+  SQLite, can read one.
+- The server cannot list the units of the collection. A review without those
+  units would be partial, so the server answers `501` and gives no list.
 
 ## Query values
 
@@ -72,7 +88,7 @@ A row holds these fields:
 | `role` | The role of the grant. |
 | `object` | The object of the grant. |
 | `objectState` | `live`, `deleted` or `purged`. |
-| `inheritedFrom` | The container grant that gives this row, when there is one. |
+| `inheritedFrom` | The object that holds the grant of this row, when the row comes from a container of the reviewed object. `@server` is the installation. |
 | `grantedBy`, `grantedAtMs` | Who made the grant, and when. |
 | `revokedBy`, `revokedAtMs` | Who ended the grant, and when. `null` for a current grant. |
 | `effectiveFromMs`, `effectiveUntilMs` | The period in which the grant applies. |
@@ -81,8 +97,10 @@ A row holds these fields:
 | `via` | For a member row, the group, the member and the period of the membership. |
 | `canGrantAccess` | Whether the caller can give this access to another principal. |
 
-A bootstrap row is the bootstrap administrator token. It is listed on the
-installation and namespace reviews when no `subject` filter is set.
+A bootstrap row is the bootstrap administrator token. Every review lists it when
+the request has no `subject` filter. On the installation review it has no
+`inheritedFrom`. On any other review, `inheritedFrom` is `@server`, the
+installation.
 
 ## Read a history
 
@@ -167,6 +185,7 @@ read them.
 | --- | --- |
 | Installation | A principal that holds `server:read-access` on the installation. |
 | Namespace | A principal that holds `namespace:read-access` on the namespace. |
+| Collection | A principal that holds `collection:read-access` on the collection. |
 | Unit | A principal that holds `unit:read-access` on the unit. |
 | Principal | A principal that holds `server:read-access` on the service principal. |
 

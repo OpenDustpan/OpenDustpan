@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 248 changes decision 11: resume continues on the new primary
   installation.
+- ADR 313 extends: Kubernetes operators as import sources.
 
 ## Context
 

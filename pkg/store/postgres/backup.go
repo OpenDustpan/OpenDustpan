@@ -45,6 +45,7 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
 	pgColName        = "name"
+	pgColKey         = "key"
 	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
@@ -244,6 +245,8 @@ func pgCopyScopeTables() []pgCopyTable {
 				pgColNamespace, pgColTool, pgColName, pgColUnitID, pgColDisplayName,
 				"last_changed_ms", pgColStatus, "resource_count",
 				"lock_holder", "lock_since_ms", "lock_operation",
+				"last_release_lock_id", "last_release_holder", "last_release_by", "last_release_kind",
+				"last_release_at_ms",
 			},
 			orderBy: []string{pgColNamespace, pgColTool, pgColName},
 		},
@@ -338,6 +341,8 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", pgColNamespace, pgColName, pgColRevision, "lock_id", "lock_holder",
 				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, pgColUpdatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes", pgColDeletedAtMs, pgColDeletedName,
+				"last_release_lock_id", "last_release_holder", "last_release_by", "last_release_kind",
+				"last_release_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -445,7 +450,27 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables())
+	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables(), pgNameLockControlTables())
+}
+
+// pgNameLockControlTables holds the COPY columns of the counts of the
+// lockout by name and of the key of their names.
+func pgNameLockControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				sinkColScope, pgColName, "sub", "failures", "locked_until_ms", "level", "last_failure_ms",
+				"last_lock_end_ms", "reset_after_ms",
+			},
+			orderBy: []string{sinkColScope, pgColName, "sub"},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", pgColKey},
+			orderBy: []string{"id"},
+		},
+	}
 }
 
 // pgStoreCheckControlTables lists the column list of the store check rows,
@@ -490,6 +515,11 @@ func pgEmptiedTables() []pgCopyTable {
 			columns: pgLocalUserResetColumns(),
 			orderBy: []string{"id"},
 		},
+		{
+			table:   backup.TablePasskeyChallenges,
+			columns: pgPasskeyChallengeColumns(),
+			orderBy: []string{pgColDigest},
+		},
 	}
 }
 
@@ -501,7 +531,7 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sessions",
 			columns: []string{
 				"id", pgColPrincipalID, pgColDigest, "provider", pgColCreatedAtMs, "last_seen_at_ms", "auth_time_ms",
-				"ended_at_ms", "end_reason", "source_ip", "user_agent",
+				"ended_at_ms", "end_reason", "source_ip", "user_agent", "generation",
 			},
 			orderBy: []string{"id"},
 		},
@@ -1568,6 +1598,65 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 // when the ID is taken, and ErrAlreadyRunning when the unique index on
 // running backups refuses the row. A failed start changes nothing.
 func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error {
+	if err := checkBackupStart(r, start); err != nil {
+		return err
+	}
+
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
+		_, err := startBackupTx(ctx, q, r, start)
+
+		return err
+	})
+}
+
+// StartBackupClaimed implements backup.Registry: it starts backup r as
+// StartBackup does, and claims the new operation for claim in the same
+// transaction. It returns the claimed operation.
+func (s *Store) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	if err := claim.Validate(); err != nil {
+		return durable.Operation{}, err
+	}
+
+	if err := checkBackupStart(r, start); err != nil {
+		return durable.Operation{}, err
+	}
+
+	var op durable.Operation
+
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
+		started, err := startBackupTx(ctx, q, r, start)
+		if err != nil {
+			return err
+		}
+
+		row, err := q.ClaimStartedDurableOperation(ctx, db.ClaimStartedDurableOperationParams{
+			Owner: claim.Owner, LeaseMs: claim.Lease.Milliseconds(), ID: string(started.ID),
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The start created the operation in this transaction, so it is
+			// pending: no row means that the claim cannot be taken.
+			return fmt.Errorf("claim the started backup operation %s: %w", started.ID, durable.ErrClaimLost)
+		}
+
+		if err != nil {
+			return fmt.Errorf("claim the started backup operation %s: %w", started.ID, translate(err))
+		}
+
+		op = operationFromRow(row, nil)
+
+		return nil
+	})
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	return op, nil
+}
+
+// checkBackupStart checks the operation start of backup r before a start.
+func checkBackupStart(r backup.Record, start durable.StartRequest) error {
 	if err := start.Validate(); err != nil {
 		return err
 	}
@@ -1580,36 +1669,42 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
 	}
 
-	return s.inMinimumTx(ctx, func(q *db.Queries) error {
-		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
-			ID:          r.ID.String(),
-			State:       string(backup.StateRunning),
-			StartedAtMs: codec.Millis(r.StartedAt),
-			EndedAtMs:   backupEndedAt(time.Time{}),
-			Target:      r.Target,
-			Error:       "",
-		})
-		if err != nil {
-			return fmt.Errorf("insert backup: %w", err)
-		}
+	return nil
+}
 
-		if n == 0 {
-			return backupConflict(ctx, q, r.ID)
-		}
-
-		_, created, err := startOperation(ctx, q, start)
-		if err != nil {
-			return err
-		}
-
-		if !created {
-			// A new row needs a new operation: a taken key is a start of
-			// another backup.
-			return fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
-		}
-
-		return nil
+// startBackupTx stores r as a running backup and starts the operation start,
+// in the transaction of q, and returns the new operation.
+func startBackupTx(
+	ctx context.Context, q *db.Queries, r backup.Record, start durable.StartRequest,
+) (durable.Operation, error) {
+	n, err := q.CreateBackup(ctx, db.CreateBackupParams{
+		ID:          r.ID.String(),
+		State:       string(backup.StateRunning),
+		StartedAtMs: codec.Millis(r.StartedAt),
+		EndedAtMs:   backupEndedAt(time.Time{}),
+		Target:      r.Target,
+		Error:       "",
 	})
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("insert backup: %w", err)
+	}
+
+	if n == 0 {
+		return durable.Operation{}, backupConflict(ctx, q, r.ID)
+	}
+
+	op, created, err := startOperation(ctx, q, start)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	if !created {
+		// A new row needs a new operation: a taken key is a start of
+		// another backup.
+		return durable.Operation{}, fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
+	}
+
+	return op, nil
 }
 
 // FinishBackup implements backup.Registry: it checks the fence f, records

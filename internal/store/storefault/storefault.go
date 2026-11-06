@@ -109,6 +109,7 @@ type Inner interface {
 	inventory.BlobPurgeCounter
 	inventory.SweepLocker
 	maintenance.Store
+	blob.DatabaseClock
 
 	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 }
@@ -352,6 +353,15 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 	}
 
 	return s.inner.ListUpdates(ctx, ref, page)
+}
+
+// DatabaseNow returns the clock of the database, unless a fault fires first.
+func (s *Store) DatabaseNow(ctx context.Context) (time.Time, error) {
+	if err := s.before(ctx, "DatabaseNow"); err != nil {
+		return time.Time{}, err
+	}
+
+	return s.inner.DatabaseNow(ctx)
 }
 
 // PutCheckpoint saves cp as the state of its update, unless a fault fires first.
@@ -720,6 +730,19 @@ func (s *Store) FinalizeStateVersion(
 	}
 
 	return s.inner.FinalizeStateVersion(ctx, sv, fence)
+}
+
+// FinalizeStateVersionExpecting finalizes as FinalizeStateVersion does and
+// also checks the current version, unless a fault fires first. The fault name
+// is the one of FinalizeStateVersion.
+func (s *Store) FinalizeStateVersionExpecting(
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	if err := s.before(ctx, "FinalizeStateVersion"); err != nil {
+		return err
+	}
+
+	return s.inner.FinalizeStateVersionExpecting(ctx, sv, fence, expect)
 }
 
 // FenceAndUnlock releases the lock and makes the fence version current,

@@ -48,7 +48,6 @@ import (
 const (
 	envIn       = "DUSTPAN_TEST_BASELINE_IN"
 	envOut      = "DUSTPAN_TEST_BASELINE_OUT"
-	envRef      = "DUSTPAN_TEST_BASELINE_REF"
 	envPostgres = "DUSTPAN_TEST_POSTGRES_URL"
 )
 
@@ -70,8 +69,8 @@ const pgDumpLine = "-- pg_dump major version: "
 const versionTable = "schema_migrations"
 
 // sqliteSchemaPrefix holds the statements that start the SQLite baseline
-// body: the version-table statements of the folded migration that added the
-// minimum binary version column.
+// body: the version-table statements of the folded migrations that added the
+// minimum binary version column and the SHA-256 column.
 const sqliteSchemaPrefix = `CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER NOT NULL PRIMARY KEY,
     name    TEXT    NOT NULL
@@ -79,11 +78,13 @@ const sqliteSchemaPrefix = `CREATE TABLE IF NOT EXISTS schema_migrations (
 
 ALTER TABLE schema_migrations ADD COLUMN min_binary_version TEXT NOT NULL DEFAULT '';
 
+ALTER TABLE schema_migrations ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';
+
 `
 
 // postgresSchemaPrefix holds the statements that start the PostgreSQL
-// baseline body: the version-table statements of the folded migration that
-// added the minimum binary version column.
+// baseline body: the version-table statements of the folded migrations that
+// added the minimum binary version column and the SHA-256 column.
 const postgresSchemaPrefix = `CREATE TABLE IF NOT EXISTS schema_migrations (
     version BIGINT NOT NULL PRIMARY KEY,
     name    TEXT   NOT NULL
@@ -91,17 +92,30 @@ const postgresSchemaPrefix = `CREATE TABLE IF NOT EXISTS schema_migrations (
 
 ALTER TABLE schema_migrations ADD COLUMN min_binary_version TEXT NOT NULL DEFAULT '';
 
+ALTER TABLE schema_migrations ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';
+
 `
 
-// header returns the comment block that starts the baseline file of dialect,
-// written from the migrations of ref. extra holds more comment lines, each
-// with its line end, or nothing. The generator writes the rest.
-func header(dialect, ref, extra string) string {
+// addSumColumn adds the SHA-256 column to the version table of a database
+// that the old migrations made. The new baseline adds the column in its
+// prefix, so the version tables of the two databases then compare equal. The
+// column holds no data that a dump keeps. An input that holds a baseline with
+// the column already has it, so the generator runs it only when the column is
+// missing.
+const addSumColumn = `ALTER TABLE schema_migrations ADD COLUMN sha256 TEXT NOT NULL DEFAULT ''`
+
+// header returns the comment block that starts the baseline file of dialect.
+// extra holds more comment lines, each with its line end, or nothing. The
+// text names no Git ref: the SHA-256 of the file covers the header, so a
+// regeneration with no change of the schema must give the same bytes.
+func header(dialect, extra string) string {
 	return minimumLine + `
--- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the ` + dialect + ` migrations of ` + ref + `.
--- This baseline replaced every migration before it. No binary opens a
--- database or restores a backup from before it.
+-- The baseline of the ` + dialect + ` store. It replaced every migration
+-- before it. No binary opens a database or restores a backup from before it.
+-- Until the first tag, a change to the schema edits this file in place and
+-- adds no numbered migration. The server refuses a database that another
+-- version of this file made. make regenerate-baseline writes it again from
+-- the numbered migrations of a Git ref.
 ` + extra
 }
 
@@ -211,16 +225,40 @@ func inputMigrations(t *testing.T, in, dialect string) []migrate.Migration {
 }
 
 // collapseVersion returns the version of the new baseline: above every
-// input migration of every dialect, so both dialects get one version.
+// input migration of every dialect, so both dialects get one version. When
+// the input of each dialect is one baseline alone, the new baseline keeps its
+// version: it replaces no other file, and a regeneration with no change of
+// the schema keeps the name and the SHA-256 of the file.
 func collapseVersion(t *testing.T, in string) int64 {
 	t.Helper()
 
+	inputs := make([][]migrate.Migration, 0, len(dialects))
+	for _, dialect := range dialects {
+		inputs = append(inputs, inputMigrations(t, in, dialect))
+	}
+
+	return versionOf(inputs)
+}
+
+// versionOf returns the version of the new baseline for the input migrations
+// of each dialect. See collapseVersion.
+func versionOf(inputs [][]migrate.Migration) int64 {
 	var versions []int64
 
-	for _, dialect := range dialects {
-		for _, m := range inputMigrations(t, in, dialect) {
+	alone := true
+
+	for _, input := range inputs {
+		if len(input) != 1 || !holdsBaseline(input) {
+			alone = false
+		}
+
+		for _, m := range input {
 			versions = append(versions, m.Version)
 		}
+	}
+
+	if alone && len(versions) > 0 && slices.Min(versions) == slices.Max(versions) {
+		return versions[0]
 	}
 
 	return migrate.CollapseVersion(versions)
@@ -253,27 +291,19 @@ func after(t *testing.T, dialect string) string {
 	return string(data)
 }
 
-// target names the baseline file that a write test writes: its dialect,
-// its file name and the extra header lines.
+// target names the baseline file that a write test writes: its dialect and
+// its file name.
 type target struct {
 	dialect string
 	name    string
-	extra   string
 }
 
-// writeBaseline writes body as the baseline file of to, after the header
-// with the extra header lines.
-func writeBaseline(t *testing.T, out string, to target, body string) {
+// writeBaseline writes content as the baseline file of to, with its hash
+// file.
+func writeBaseline(t *testing.T, out string, to target, content string) {
 	t.Helper()
 
-	ref := os.Getenv(envRef)
-	if ref == "" {
-		t.Fatalf("set %s to the Git ref of the old migrations", envRef)
-	}
-
 	path := filepath.Join(out, "pkg", "store", to.dialect, "migrations", to.name)
-
-	content := header(to.dialect, ref, to.extra) + "\n" + body
 
 	//nolint:gosec // out is the repository root that the regeneration script passes; the test writes only there.
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -292,10 +322,21 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 	t.Parallel()
 
 	dir := dirs(t)
-	ctx := t.Context()
 
 	name := baselineName(collapseVersion(t, dir.in))
-	input := inputMigrations(t, dir.in, "sqlite")
+	content := generateSQLite(t, inputMigrations(t, dir.in, "sqlite"), name)
+
+	writeBaseline(t, dir.out, target{dialect: "sqlite", name: name}, content)
+}
+
+// generateSQLite applies the input migrations to an empty database and
+// returns the baseline named name: the header, the version-table statements,
+// and the schema and the rows of that database. It fails the test unless the
+// baseline gives the same schema and rows on a second empty database.
+func generateSQLite(t *testing.T, input []migrate.Migration, name string) string {
+	t.Helper()
+
+	ctx := t.Context()
 	old := openSQLite(t)
 
 	for _, m := range input {
@@ -304,6 +345,10 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 
 	if !holdsBaseline(input) {
 		execSQLite(ctx, t, old, "after-sqlite.sql", after(t, "sqlite"))
+	}
+
+	if !sqliteHasSum(ctx, t, old) {
+		execSQLite(ctx, t, old, "the SHA-256 column", addSumColumn)
 	}
 
 	dumped := dumpSQLite(ctx, t, old)
@@ -318,7 +363,26 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 
 	checkSQLiteVersionTable(t, old, fresh)
 
-	writeBaseline(t, dir.out, target{dialect: "sqlite", name: name, extra: ""}, body)
+	t.Logf("sqlite: the %d migrations and the baseline give the same dump of %d schema objects and rows",
+		len(input), strings.Count(dumped, ";\n"))
+
+	return header("sqlite", "") + "\n" + body
+}
+
+// sqliteHasSum reports whether the version table of db has the sha256
+// column.
+func sqliteHasSum(ctx context.Context, t *testing.T, db *sql.DB) bool {
+	t.Helper()
+
+	var count int64
+
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'sha256'`).Scan(&count)
+	if err != nil {
+		t.Fatalf("read the version table columns: %v", err)
+	}
+
+	return count > 0
 }
 
 func TestWritePostgresBaseline(t *testing.T) {
@@ -330,6 +394,17 @@ func TestWritePostgresBaseline(t *testing.T) {
 	if base == "" {
 		t.Fatalf("set %s to write the PostgreSQL baseline", envPostgres)
 	}
+
+	name := baselineName(collapseVersion(t, dir.in))
+	content := generatePostgres(t, base, inputMigrations(t, dir.in, "postgres"), name)
+
+	writeBaseline(t, dir.out, target{dialect: "postgres", name: name}, content)
+}
+
+// generatePostgres applies the input migrations to an empty schema and
+// returns the baseline named name. See generateSQLite.
+func generatePostgres(t *testing.T, base string, input []migrate.Migration, name string) string {
+	t.Helper()
 
 	ctx := t.Context()
 
@@ -345,15 +420,16 @@ func TestWritePostgresBaseline(t *testing.T) {
 			"install postgresql-client-%d and put its pg_dump first in PATH", dumpMajor, server, server)
 	}
 
-	name := baselineName(collapseVersion(t, dir.in))
-	input := inputMigrations(t, dir.in, "postgres")
-
 	for _, m := range input {
 		execPostgres(ctx, t, old, m.Name, m.SQL)
 	}
 
 	if !holdsBaseline(input) {
 		execPostgres(ctx, t, old, "after-postgres.sql", after(t, "postgres"))
+	}
+
+	if !postgresHasSum(ctx, t, old) {
+		execPostgres(ctx, t, old, "the SHA-256 column", addSumColumn)
 	}
 
 	dumped := postgresBody(t, base, oldSchema.name)
@@ -370,12 +446,27 @@ func TestWritePostgresBaseline(t *testing.T) {
 	checkPostgresTables(ctx, t, old, fresh)
 	checkPostgresVersionTable(ctx, t, old, fresh)
 
-	writeBaseline(
-		t,
-		dir.out,
-		target{dialect: "postgres", name: name, extra: pgDumpLine + strconv.Itoa(dumpMajor) + "\n"},
-		body,
-	)
+	t.Logf("postgres: the %d migrations and the baseline give the same pg_dump output and the same %d tables",
+		len(input), len(postgresTables(ctx, t, old)))
+
+	return header("postgres", pgDumpLine+strconv.Itoa(dumpMajor)+"\n") + "\n" + body
+}
+
+// postgresHasSum reports whether the version table in the current schema of
+// conn has the sha256 column.
+func postgresHasSum(ctx context.Context, t *testing.T, conn *pgx.Conn) bool {
+	t.Helper()
+
+	var exists bool
+
+	err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'schema_migrations' AND column_name = 'sha256')`).
+		Scan(&exists)
+	if err != nil {
+		t.Fatalf("read the version table columns: %v", err)
+	}
+
+	return exists
 }
 
 // serverMajor returns the major version of the PostgreSQL server of conn.
@@ -793,7 +884,10 @@ func newPostgresSchema(t *testing.T, base string) pgSchema {
 	}
 
 	q := u.Query()
-	q.Set("search_path", name)
+	// The search path of the adapter holds the live schema and its control
+	// schema, and the migrations depend on it. No space: the URL form of the
+	// value keeps a plus sign as it is.
+	q.Set("search_path", name+","+name+controlSuffix)
 	u.RawQuery = q.Encode()
 
 	return pgSchema{url: u.String(), name: name}
@@ -837,9 +931,39 @@ func execPostgres(ctx context.Context, t *testing.T, conn *pgx.Conn, name, state
 // control schema, which holds the tables that a restore never renames.
 const controlSuffix = "_control"
 
-// controlTables returns the tables that live in the control schema.
-func controlTables() []string {
-	return []string{"installation", "backups", "restores"}
+// controlTables returns the tables of schema name in the database at base,
+// ordered by name. The migrations move a table to the control schema in
+// more than one place, so the list comes from the database.
+func controlTables(t *testing.T, base, name string) []string {
+	t.Helper()
+
+	conn := connectPostgres(t, base)
+
+	rows, err := conn.Query(t.Context(), `SELECT table_name FROM information_schema.tables
+		WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name`, name)
+	if err != nil {
+		t.Fatalf("list the control tables: %v", err)
+	}
+
+	defer rows.Close()
+
+	var out []string
+
+	for rows.Next() {
+		var table string
+
+		if scanErr := rows.Scan(&table); scanErr != nil {
+			t.Fatalf("list the control tables: %v", scanErr)
+		}
+
+		out = append(out, table)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("list the control tables: %v", rowsErr)
+	}
+
+	return out
 }
 
 // postgresBody returns the baseline text of the live schema name and of its
@@ -862,7 +986,7 @@ func postgresBody(t *testing.T, base, name string) string {
 
 	var move strings.Builder
 
-	for _, table := range controlTables() {
+	for _, table := range controlTables(t, base, name+controlSuffix) {
 		move.WriteString("  EXECUTE format('ALTER TABLE %I." + table + " SET SCHEMA %I', live, ctl);\n")
 	}
 

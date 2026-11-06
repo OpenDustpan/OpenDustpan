@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/source"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // PortableOpener opens the file at path of a portable backup for reading. The
@@ -188,7 +189,8 @@ func checkManualLockReason(value any) error {
 // checkPortableValue runs the check of the column that has one: the ID, the
 // output sharing setting and the source filter of a namespace, the reason of a manual lock,
 // the document of the preferences of a person, the user name and the password
-// hash of a local user, and the unit settings.
+// hash of a local user, the kind of the last release of a workspace and the
+// unit settings.
 func checkPortableValue(table, column string, value any) error {
 	switch {
 	case table == portTableNamespaces && column == "id":
@@ -206,11 +208,16 @@ func checkPortableValue(table, column string, value any) error {
 	}
 }
 
-// checkOtherValue runs the checks of the local users and of the unit
-// settings, so that checkPortableValue stays short.
+// checkOtherValue runs the checks of the local users, of the kind of the last
+// release of a workspace and of the unit settings, so that checkPortableValue
+// stays short.
 func checkOtherValue(table, column string, value any) error {
 	if table == TableLocalUsers {
 		return checkLocalUserValue(column, value)
+	}
+
+	if (table == portTableWorkspaces || table == portTableInventory) && column == portColLastReleaseKind {
+		return checkLastReleaseKind(value)
 	}
 
 	return checkUnitSettingsValue(table, column, value)
@@ -226,6 +233,35 @@ func checkNamespaceID(value any) error {
 
 	if _, err := namespace.ParseID(id); err != nil {
 		return fmt.Errorf("namespace row has an invalid ID: %w: %w", err, ErrCorrupt)
+	}
+
+	return nil
+}
+
+// portTableWorkspaces is the table of the workspaces.
+const portTableWorkspaces = "workspaces"
+
+// portTableInventory is the table of the inventory entries.
+const portTableInventory = "inventory"
+
+// portColLastReleaseKind is the column of the kind of the last released lock
+// of a workspace.
+const portColLastReleaseKind = "last_release_kind"
+
+// checkLastReleaseKind refuses a workspace or inventory row whose kind of the last release
+// is not empty, normal or forced. It returns ErrCorrupt.
+//
+// Defense in depth: the CHECK of the column refuses such a value at the copy,
+// and the store reads such a value as no record. This check stays so that a
+// restored backup fails before it reaches the database.
+func checkLastReleaseKind(value any) error {
+	kind, isText := value.(string)
+	if !isText {
+		return fmt.Errorf("row has a last release kind that is not text: %w", ErrCorrupt)
+	}
+
+	if kind != "" && !workspace.ReleaseKind(kind).Valid() {
+		return fmt.Errorf("row has an invalid last release kind: %w", ErrCorrupt)
 	}
 
 	return nil

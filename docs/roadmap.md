@@ -246,6 +246,9 @@ cut. Each row of the table ships as planned. The owner also decided:
   pre-merge apply, from the branch of the pull request, is an option of a
   unit. It is not the default. The docs say that the project does not
   recommend it.
+- **Review modes 2 and 4 ship in this milestone** (owner, 2026-11-01, ADR
+  328). Mode 2 is "OpenDustpan merges", and mode 4 is "no change orders"
+  (ADR 299). Modes 1 and 3 ship in milestone 6.
 
 **Exit test.** On Linux, on SQLite and on PostgreSQL, through the real binary
 over TLS, the e2e suite starts a runner pool with real runners of the
@@ -330,6 +333,7 @@ workstations, with no runner.
 | server  | [RFC 5](rfc/0005-profiles.md) Profiles                                      | all                             | discussing; core accepted |
 | server  | [RFC 12](rfc/0012-api-edits-and-write-back.md) API edits and write-back     | all                             | accepted in part |
 | server  | [RFC 13](rfc/0013-policy-and-approvals.md) Policy and approvals             | all: the gates and approvals of ADRs 222 to 230 | accepted |
+| server  | [RFC 114](rfc/0114-review-requests-and-change-orders.md) Review requests and change orders | review modes 2 and 4 | accepted (ADR 299, ADR 328) |
 | server  | [RFC 28](rfc/0028-stored-plans.md) Stored plans                             | all                             | accepted |
 | server  | [RFC 27](rfc/0027-pull-request-automation.md) Pull request automation       | all; first slice: a plan, one status, one summary comment; apply after the merge by default, pre-merge apply as an option | draft; owner direction 2026-10-30; design needed |
 | server  | [RFC 30](rfc/0030-opentofu-remote-execution.md) CLI-driven remote execution | all                             | accepted in part (ADR 254, plans); design needed for the apply |
@@ -344,7 +348,9 @@ workstations, with no runner.
 promote units from them, inside guard rails.
 
 **Scope.** The owner decided on 2026-10-30 that milestone 6 has no scope
-cut. Each row of the table ships as planned.
+cut. Each row of the table ships as planned. Review modes 1 and 3 of ADR 299
+ship in this milestone (owner, 2026-11-01, ADR 328). Mode 1 is "merged
+approvals", and mode 3 is "no review requests".
 
 **Exit test.** On Linux, on SQLite and on PostgreSQL, through the real binary
 over TLS, with the runner pool and the fake GitHub API of the milestone 5
@@ -384,13 +390,15 @@ version in its matrix:
    request on the fake forge that changes the pin. Its plan runs as in
    milestone 5 step 7. Design needed: RFC 56 is a draft. The step proves the
    behavior that the design gives.
-7. **The egress proxy.** A job of a unit with the proxy on can reach only
-   the proxy. A request that an egress rule allows reaches the test endpoint
-   with the credential that the proxy adds. The job never holds that
-   credential, and the job log does not show it. A request that no rule
-   allows is refused, and the refusal writes an audit entry. A plan phase
-   cannot make a write that only the apply rule allows. Design needed:
-   RFC 16 is a draft. The step proves the behavior that the design gives.
+7. **The job proxy.** A job of a unit with proxy rules runs next to its
+   job proxy. The job proxy applies the outbound guard to each rule host. A
+   request that no proxy rule allows is refused, and the job log shows
+   "blocked by the job proxy" with the host and the path. Design needed
+   (RFC 16 P2, P4, P5, P10): the job reaches only the job proxy, the job
+   proxy adds the credential and the job never holds it, the record and
+   the audit entry of a phase, and a plan phase that cannot make a write
+   that only the proxy rule of the apply allows. The step proves the
+   behavior that the design gives.
 8. **Console.** The browser tests of the console repository run against the
    server of the suite. They open the catalog, fill the create form of a
    blueprint, see the error of a bad input, and make a unit.
@@ -404,7 +412,8 @@ The full Pulumi and OpenTofu scenarios of milestones 1 to 5 still pass.
 | server  | [RFC 55](rfc/0055-environment-promotion.md) Environment promotion               | all                     | draft; design needed |
 | server  | [RFC 10](rfc/0010-artifact-registry-and-curated-upstreams.md) Artifact registry | all, with curated upstreams | accepted in part (ADR 257); providers done; design needed for curation |
 | server  | [RFC 56](rfc/0056-upgrade-pull-requests.md) Upgrade pull requests               | all                     | draft; design needed |
-| server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all: the job proxy      | draft; design needed |
+| server  | [RFC 16](rfc/0016-egress-proxy.md) Job proxy                                    | all                     | discussing; accepted in part (ADR 327); items P1 to P17 and P19 wait for the owner |
+| server  | [RFC 114](rfc/0114-review-requests-and-change-orders.md) Review requests and change orders | review modes 1 and 3 | accepted (ADR 299, ADR 328) |
 | console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | accepted; domain core built |
 
 ## Milestone 7. High availability on one database
@@ -544,6 +553,14 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
 - [ ] Release workflows for the binaries, the image and the console tarball
   ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
+- [ ] In the commit that it tags: `make regenerate-baseline`, `DocumentVersion`
+  in `internal/api/apidesc/document.go` set for the release, a new pin of
+  the description, and the lines of the tag in
+  `internal/releaserecord/shipped.txt`. The record turns on the checks of
+  the shipped migrations and of the description version, and the collapse
+  script refuses from then on. `scripts/release-build.sh` refuses a version
+  that the record does not list
+  ([ADR 325](adr/0325-the-release-record-turns-the-shipped-migration-checks-on.md)).
 
 ## Milestone 8. Concurrent applies on one state
 
@@ -645,7 +662,7 @@ fact that it names.
    that starts meanwhile waits for it. The history shows the lock holder.
 7. **A runner-only feature in a local run.** Secret masking is a feature
    that works only in runners today: the launcher masks each secret value
-   of a phase in the step log (`Masker` in `internal/launcher`). Pass: a
+   of a phase in the step log (`Masker` in `pkg/launcher`). Pass: a
    local wrapper run of a change that prints a secret value of its profile
    shows the masked value in the log that the server stores, and the
    plain text appears nowhere in the log. The job token credential of the

@@ -8,7 +8,7 @@ import (
 )
 
 // Verifier is the stepup.Verifier for SSH step-up keys. It accepts the key
-// types ssh-ed25519 and sk-ssh-ed25519@openssh.com.
+// types ssh-ed25519, sk-ssh-ed25519@openssh.com and ecdsa-sha2-nistp256.
 type Verifier struct{}
 
 // The interface check.
@@ -65,7 +65,7 @@ func checkKey(k stepup.Key) (PublicKey, error) {
 		)
 	}
 
-	if k.Type != TypeEd25519 && k.Type != TypeSKEd25519 {
+	if k.Type != TypeEd25519 && k.Type != TypeSKEd25519 && k.Type != TypeECDSAP256 {
 		return PublicKey{}, fmt.Errorf("%w: SSH key type %q not allowed", stepup.ErrInvalid, printable(k.Type))
 	}
 

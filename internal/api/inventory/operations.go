@@ -176,6 +176,7 @@ var (
 		apidesc.Named[unitEntry]("Unit"),
 		apidesc.Named[stateEntry]("UnitState"),
 		apidesc.Named[lockEntry]("UnitLock"),
+		apidesc.Named[lastReleaseEntry]("UnitLastRelease"),
 	)
 	collectionBody    = apidesc.Typed[collectionEntry]("Collection")
 	placementRuleBody = apidesc.Typed[placementRuleEntry]("PlacementRule")

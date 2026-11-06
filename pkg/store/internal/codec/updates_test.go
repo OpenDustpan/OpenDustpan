@@ -43,6 +43,8 @@ func TestToCheckpointRowBoundsMemory(t *testing.T) {
 		BlobKey:       mustBlobKey(t, "namespaces/ns-test/pulumi/stk-test/upd-test/3"),
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: time.Time{},
 	}
 
 	if _, err := codec.ToCheckpointRow(cp, stack.ID("stk-test")); err != nil {
@@ -101,6 +103,8 @@ func TestToCheckpointRowRefusesNoKey(t *testing.T) {
 		BlobKey:       "",
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: time.Time{},
 	}
 
 	if _, err := codec.ToCheckpointRow(cp, stack.ID("stk-test")); !errors.Is(err, stack.ErrCheckpointNoKey) {
