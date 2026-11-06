@@ -96,6 +96,24 @@ func TestWriteErrorLogs500Cause(t *testing.T) {
 	}
 }
 
+// TestWriteRegistryDenialLogs500Cause checks that an Authorizer error that is
+// not a denial answers 500 and logs a line with the cause, and no error text.
+func TestWriteRegistryDenialLogs500Cause(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	h := new(Handler)
+	h.logger = slog.New(slog.NewTextHandler(&buf, nil))
+
+	rec := httptest.NewRecorder()
+	h.writeRegistryDenial(requestid.WithContext(t.Context(), "0123abcd"), rec, errDriver)
+
+	check500Log(t, rec, buf.String(),
+		[]string{"registry authorization failed", "status=500", "cause=unclassified", "error_code=server.internal", "request_id=0123abcd"},
+		[]string{"hunter2"})
+}
+
 // check500Log checks the answer and the log of a 500: the answer holds no
 // error text, the log is one line, and it holds each text of want and none of
 // the texts of no.
